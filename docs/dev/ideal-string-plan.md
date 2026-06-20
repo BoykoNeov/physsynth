@@ -41,3 +41,21 @@ the string *and the rig that measures its deviation from theory*, not just a str
 - Energy drift → suspect the cross-time term first, then SBP/boundary. Never relax the tolerance.
 - Convergence at λ=1 is exact → measure at λ<1, and prefer higher modes (larger, cleaner dispersion error).
 - Headless core: matplotlib must never be importable from `physsynth/core`.
+
+## Results — achieved (Milestone 1 complete)
+
+All five acceptance criteria pass. Measured numbers (canonical string c=200 m/s, f1=100 Hz):
+
+| # | Criterion | Bar | Achieved |
+|---|-----------|-----|----------|
+| 1 | Lossless energy drift `max|Eⁿ−E⁰|/E⁰` (2 s, λ∈{1,.99,.9,.7,.5}) | < 1e-10 | **~3–7e-14** (λ=1: 6.1e-15); free BC 5.7e-14 |
+| 1 | Passivity (σ>0): monotonic decrease | non-increasing | max positive step **0.0**; decay matches `e^{-2σt}` to <2% |
+| 2 | Partials vs `n·c/2L`, first 10 at λ=1 | ~1 cent | **0.003 cents** worst |
+| 3 | Convergence order at λ=0.9, mode 8 | ~2 | **[2.015, 2.006]** |
+| 4 | No NaN over λ∈(0,1]; λ>1 rejected at construction | — | pass (7-λ sweep finite; `ValueError` on λ=1.05) |
+| 5 | Diagnostics render | — | `out/ideal_string_diagnostics.png`, `_spectrum.png`, `.gif` |
+
+35 pytest cases pass; `ruff check` clean. Run `python scripts/diagnose_ideal_string.py` to reproduce.
+
+**Next (Phase 2):** stiff string — add `-κ²·u_xxxx` (biharmonic), stretched partials
+`fₙ = n·f₁·√(1+B·n²)`, tighter CFL. The harness (energy/modal/convergence) carries over.
