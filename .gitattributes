@@ -1,0 +1,9 @@
+# Normalize line endings to LF in the repo for all text files (CI runs on Linux;
+# the DSP core is meant to port to C++/Rust later). Working trees may render CRLF.
+* text=auto eol=lf
+
+# Binary / generated artifacts — never normalize or diff.
+*.png binary
+*.wav binary
+*.npz binary
+*.ipynb -text
