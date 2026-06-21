@@ -73,3 +73,55 @@ def test_core_is_headless():
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert result.returncode == 0, f"core imported forbidden libraries: {result.stdout.strip()}"
+
+
+# --- portability contract (docs/dev/portability-contract.md) ----------------------------------
+
+# Boilerplate run in a *fresh* interpreter: import every submodule of physsynth.core so these
+# guards auto-cover new core modules (e.g. a future string_stiff.py) with no edits here.
+_IMPORT_ALL_CORE = (
+    "import sys, importlib, pkgutil;"
+    "import physsynth.core as _core;"
+    "[importlib.import_module(m.name) "
+    " for m in pkgutil.iter_modules(_core.__path__, _core.__name__ + '.')];"
+)
+
+
+def _run_core_probe(body: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-c", _IMPORT_ALL_CORE + body], capture_output=True, text=True
+    )
+
+
+def test_core_dependency_allowlist():
+    # Stronger than the blocklist above: after importing the whole core, the ONLY third-party
+    # top-level packages allowed in sys.modules are the permitted numeric ones. This catches any
+    # future leak (torch, requests, PIL, ...), not just the named offenders.
+    body = (
+        "allowed={'physsynth','numpy','scipy'};"
+        "stdlib=set(sys.stdlib_module_names);"
+        "builtin=set(sys.builtin_module_names);"
+        "tops={n.split('.')[0] for n in sys.modules};"
+        "third=sorted(t for t in tops if t not in allowed and t not in stdlib "
+        "and t not in builtin and not t.startswith('_'));"
+        "print(','.join(third));"
+        "sys.exit(1 if third else 0)"
+    )
+    result = _run_core_probe(body)
+    assert result.returncode == 0, (
+        f"core pulled in non-allowlisted third-party module(s): {result.stdout.strip()}"
+    )
+
+
+def test_core_does_not_import_sibling_layers():
+    # The dependency arrow points one way: analysis/viz/io depend on core, never the reverse.
+    body = (
+        "bad={'physsynth.viz','physsynth.analysis','physsynth.io'};"
+        "hit=sorted(m for m in sys.modules if any(m==b or m.startswith(b+'.') for b in bad));"
+        "print(','.join(hit));"
+        "sys.exit(1 if hit else 0)"
+    )
+    result = _run_core_probe(body)
+    assert result.returncode == 0, (
+        f"core imported a sibling layer (must not): {result.stdout.strip()}"
+    )
