@@ -94,22 +94,33 @@ def _run_core_probe(body: str) -> subprocess.CompletedProcess:
 
 
 def test_core_dependency_allowlist():
-    # Stronger than the blocklist above: after importing the whole core, the ONLY third-party
-    # top-level packages allowed in sys.modules are the permitted numeric ones. This catches any
-    # future leak (torch, requests, PIL, ...), not just the named offenders.
-    body = (
-        "allowed={'physsynth','numpy','scipy'};"
-        "stdlib=set(sys.stdlib_module_names);"
-        "builtin=set(sys.builtin_module_names);"
-        "tops={n.split('.')[0] for n in sys.modules};"
-        "third=sorted(t for t in tops if t not in allowed and t not in stdlib "
-        "and t not in builtin and not t.startswith('_'));"
-        "print(','.join(third));"
-        "sys.exit(1 if third else 0)"
+    # Stronger than the blocklist above: the core may use the numpy/scipy numeric stack and whatever
+    # it *transitively* pulls, but must add NO third-party dependency of its own beyond that. We
+    # establish the numeric stack's import closure as a baseline, then assert that importing every
+    # core submodule introduces nothing new. This catches a real leak (torch, requests, PIL, ...)
+    # while not flagging scipy's own unavoidable baggage (charset_normalizer, cython_runtime, the
+    # compiled-mypyc runtime) -- which a bare {numpy, scipy} name set does not capture, and whose
+    # hash-suffixed names would make a hardcoded allowlist brittle (the opposite of portable).
+    probe = (
+        "import sys, importlib, pkgutil;"
+        "stdlib=set(sys.stdlib_module_names)|set(sys.builtin_module_names);"
+        "thirdparty=lambda: {n.split('.')[0] for n in list(sys.modules)"
+        "                    if n.split('.')[0] not in stdlib and not n.startswith('_')};"
+        # baseline = the declared numeric stack (numpy + the scipy submodules core uses) and its
+        # transitive closure, captured BEFORE any core import.
+        "import numpy, scipy, scipy.linalg, scipy.sparse;"
+        "baseline=thirdparty();"
+        # now import every core submodule (auto-discovers new ones, e.g. string_stiff).
+        "import physsynth.core as _core;"
+        "[importlib.import_module(m.name) "
+        " for m in pkgutil.iter_modules(_core.__path__, _core.__name__ + '.')];"
+        "added=sorted(thirdparty() - baseline - {'physsynth'});"
+        "print(','.join(added));"
+        "sys.exit(1 if added else 0)"
     )
-    result = _run_core_probe(body)
+    result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True)
     assert result.returncode == 0, (
-        f"core pulled in non-allowlisted third-party module(s): {result.stdout.strip()}"
+        f"core pulled third-party module(s) beyond the numpy/scipy stack: {result.stdout.strip()}"
     )
 
 

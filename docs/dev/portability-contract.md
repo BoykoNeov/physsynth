@@ -62,7 +62,7 @@ would not have fixed the thing we were worried about.
 | Test | Guards |
 |------|--------|
 | `test_core_is_headless` | Blocklist of common offenders (matplotlib, audio, GUI) — named, with a clear failure message. |
-| `test_core_dependency_allowlist` | **Allowlist:** importing every `core/` submodule in a fresh interpreter may pull in *only* `numpy`/`scipy` as third-party packages. Auto-discovers new submodules, so it catches *any* future leak (`torch`, `requests`, `PIL`, …), not just the named ones. |
+| `test_core_dependency_allowlist` | **No deps beyond the numeric stack:** importing every `core/` submodule must add *no* third-party package beyond `numpy`/`scipy` **and their transitive closure** (the baseline is captured by importing the numeric stack first, so scipy's own unavoidable baggage — `charset_normalizer`, `cython_runtime`, the hash-suffixed mypyc runtime — is permitted, while a real leak like `torch`/`requests`/`PIL` is not). Auto-discovers new submodules, so it catches *any* future leak. |
 | `test_core_does_not_import_sibling_layers` | `core/` must not import `physsynth.viz` / `analysis` / `io` — enforces the one-way dependency arrow. |
 
 ## When we *do* port

@@ -18,6 +18,7 @@ from numpy.typing import NDArray  # noqa: E402
 __all__ = [
     "plot_energy",
     "plot_partials",
+    "plot_stiff_partials",
     "plot_displacement_snapshots",
     "plot_convergence",
     "plot_spectrum",
@@ -50,6 +51,35 @@ def plot_partials(ax, analytic: NDArray, detected: NDArray) -> None:
     worst = np.nanmax(np.abs(err_cents))
     ax.set_title(f"Detected vs analytic $f_n = n\\,c/2L$  (worst |err| = {worst:.3f} cents)")
     ax.grid(True, alpha=0.3)
+
+
+def plot_stiff_partials(
+    ax, detected: NDArray, stretched: NDArray, f0: float, B: float
+) -> None:
+    """Stiff-string partials: the *stretch* off the harmonic series, detected vs theory.
+
+    Plotted as deviation in cents from the plain harmonic grid ``n f0`` (so a perfectly harmonic
+    string would sit on zero). Bending pushes every partial sharp by ``sqrt(1 + B n^2)``, a curve
+    that grows with ``n`` — the audible inharmonicity. The detected partials (markers) must land on
+    the continuum stretched law (solid line); their agreement is the validation, their rise off zero
+    is the physics.
+    """
+    n = np.arange(1, len(detected) + 1)
+    harmonic = n * f0
+    detected_cents = 1200.0 * np.log2(detected / harmonic)
+    theory_cents = 1200.0 * np.log2(stretched / harmonic)
+    ax.axhline(0.0, color="k", lw=0.8, label=r"harmonic series $n f_0$")
+    ax.plot(n, theory_cents, "-", color="C3", lw=1.4,
+            label=r"theory $n f_0\sqrt{1+Bn^2}$")
+    ax.plot(n, detected_cents, "o", color="C0", ms=6, label="detected (FDTD)")
+    ax.set_xlabel("partial number $n$")
+    ax.set_ylabel("stretch off $n f_0$ (cents)")
+    worst = float(np.nanmax(np.abs(detected_cents - theory_cents)))
+    ax.set_title(
+        f"Stretched partials (inharmonicity $B$ = {B:.2e};  detected−theory < {worst:.3f} cents)"
+    )
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8, loc="upper left")
 
 
 def plot_displacement_snapshots(ax, x: NDArray, snapshots, fs: float) -> None:

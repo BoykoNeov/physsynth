@@ -27,9 +27,9 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-from .modal import discrete_mode_frequency
+from .modal import discrete_mode_frequency, discrete_stiff_mode_frequency
 
-__all__ = ["dispersion_frequencies", "phase_velocity"]
+__all__ = ["dispersion_frequencies", "stiff_dispersion_frequencies", "phase_velocity"]
 
 
 def dispersion_frequencies(
@@ -42,6 +42,25 @@ def dispersion_frequencies(
     """
     return np.array(
         [discrete_mode_frequency(c, L, N, lam, int(m)) for m in np.atleast_1d(modes)]
+    )
+
+
+def stiff_dispersion_frequencies(
+    c: float, L: float, N: int, kappa: float, k: float, theta: float, modes: NDArray[np.int_]
+) -> NDArray[np.float64]:
+    """Discrete stiff-string frequencies (Hz) for each mode -- the vectorised stiff oracle.
+
+    Wraps :func:`physsynth.analysis.modal.discrete_stiff_mode_frequency` (the single source of
+    truth). Unlike the ideal case the curve droops *more* steeply with mode number: bending adds a
+    ``kappa^2 p^4`` term to ``Q`` that stiffens high partials, so the phase velocity rises with mode
+    (the partials sharpen) while numerical dispersion drags it the other way -- the net is the
+    measured dispersion curve.
+    """
+    return np.array(
+        [
+            discrete_stiff_mode_frequency(c, L, N, kappa, k, int(m), theta)
+            for m in np.atleast_1d(modes)
+        ]
     )
 
 
