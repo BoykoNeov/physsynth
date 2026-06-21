@@ -93,34 +93,42 @@ def _run_core_probe(body: str) -> subprocess.CompletedProcess:
     )
 
 
+# Hardcoded allowlist of top-level third-party packages the core is permitted to pull in: the
+# declared numeric stack (numpy + scipy) plus the compiled-extension runtime baggage that stack
+# unavoidably drags along. Verified empirically -- importing the numpy/scipy stack alone pulls
+# exactly {numpy, scipy, charset_normalizer, cython_runtime, <hash>__mypyc}; a bare interpreter
+# pulls none of these. Anything outside this set (torch, requests, PIL, sounddevice, ...) is a real
+# portability leak and must fail the test. The mypyc runtime is named with a per-build hash prefix
+# (e.g. "81d243...__mypyc"), so it is matched structurally by its "__mypyc" suffix, not by name.
+_CORE_DEP_ALLOWLIST = {"numpy", "scipy", "charset_normalizer", "cython_runtime", "physsynth"}
+
+
 def test_core_dependency_allowlist():
-    # Stronger than the blocklist above: the core may use the numpy/scipy numeric stack and whatever
-    # it *transitively* pulls, but must add NO third-party dependency of its own beyond that. We
-    # establish the numeric stack's import closure as a baseline, then assert that importing every
-    # core submodule introduces nothing new. This catches a real leak (torch, requests, PIL, ...)
-    # while not flagging scipy's own unavoidable baggage (charset_normalizer, cython_runtime, the
-    # compiled-mypyc runtime) -- which a bare {numpy, scipy} name set does not capture, and whose
-    # hash-suffixed names would make a hardcoded allowlist brittle (the opposite of portable).
+    # Stronger than the blocklist above: the core may use ONLY the allowlisted numeric stack and
+    # its compiled-runtime baggage -- no third-party dependency of its own. Import every core
+    # submodule (auto-discovers new ones, e.g. string_stiff) and assert nothing outside the
+    # allowlist appears. Underscore-private modules (_csparsetools, editable-install finders, ...)
+    # are internal plumbing, excluded by the leading-underscore rule; the hash-suffixed mypyc
+    # runtime is excluded by its "__mypyc" suffix.
+    allowed = sorted(_CORE_DEP_ALLOWLIST)
     probe = (
         "import sys, importlib, pkgutil;"
         "stdlib=set(sys.stdlib_module_names)|set(sys.builtin_module_names);"
-        "thirdparty=lambda: {n.split('.')[0] for n in list(sys.modules)"
-        "                    if n.split('.')[0] not in stdlib and not n.startswith('_')};"
-        # baseline = the declared numeric stack (numpy + the scipy submodules core uses) and its
-        # transitive closure, captured BEFORE any core import.
-        "import numpy, scipy, scipy.linalg, scipy.sparse;"
-        "baseline=thirdparty();"
-        # now import every core submodule (auto-discovers new ones, e.g. string_stiff).
         "import physsynth.core as _core;"
         "[importlib.import_module(m.name) "
         " for m in pkgutil.iter_modules(_core.__path__, _core.__name__ + '.')];"
-        "added=sorted(thirdparty() - baseline - {'physsynth'});"
-        "print(','.join(added));"
-        "sys.exit(1 if added else 0)"
+        "allowed=set(" + repr(allowed) + ");"
+        "tp={n.split('.')[0] for n in list(sys.modules)"
+        "    if n.split('.')[0] not in stdlib and not n.startswith('_')"
+        "    and not n.endswith('__mypyc')};"
+        "leaked=sorted(tp - allowed);"
+        "print(','.join(leaked));"
+        "sys.exit(1 if leaked else 0)"
     )
     result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True)
     assert result.returncode == 0, (
-        f"core pulled third-party module(s) beyond the numpy/scipy stack: {result.stdout.strip()}"
+        f"core pulled third-party module(s) outside the allowlist {allowed}: "
+        f"{result.stdout.strip()}"
     )
 
 

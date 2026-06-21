@@ -62,7 +62,7 @@ would not have fixed the thing we were worried about.
 | Test | Guards |
 |------|--------|
 | `test_core_is_headless` | Blocklist of common offenders (matplotlib, audio, GUI) — named, with a clear failure message. |
-| `test_core_dependency_allowlist` | **No deps beyond the numeric stack:** importing every `core/` submodule must add *no* third-party package beyond `numpy`/`scipy` **and their transitive closure** (the baseline is captured by importing the numeric stack first, so scipy's own unavoidable baggage — `charset_normalizer`, `cython_runtime`, the hash-suffixed mypyc runtime — is permitted, while a real leak like `torch`/`requests`/`PIL` is not). Auto-discovers new submodules, so it catches *any* future leak. |
+| `test_core_dependency_allowlist` | **No deps beyond the numeric stack:** importing every `core/` submodule must add *no* third-party package outside a **hardcoded allowlist** — `numpy`, `scipy`, plus the compiled-extension runtime baggage that stack unavoidably drags in (`charset_normalizer`, `cython_runtime`, and the per-build hash-suffixed `…__mypyc` runtime, matched by its `__mypyc` suffix). Underscore-private plumbing (`_csparsetools`, editable-install finders, …) is excluded by convention. A real leak — `torch`/`requests`/`PIL`/`sounddevice` — fails the test. Auto-discovers new submodules, so it catches *any* future leak. If a new platform's scipy drags in a name not yet listed, add it to `_CORE_DEP_ALLOWLIST` (a deliberate, reviewed edit — that visibility is the point of hardcoding). |
 | `test_core_does_not_import_sibling_layers` | `core/` must not import `physsynth.viz` / `analysis` / `io` — enforces the one-way dependency arrow. |
 
 ## When we *do* port
