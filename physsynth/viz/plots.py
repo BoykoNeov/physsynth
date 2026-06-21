@@ -19,6 +19,7 @@ __all__ = [
     "plot_energy",
     "plot_partials",
     "plot_stiff_partials",
+    "plot_decay_rates",
     "plot_displacement_snapshots",
     "plot_convergence",
     "plot_spectrum",
@@ -77,6 +78,43 @@ def plot_stiff_partials(
     worst = float(np.nanmax(np.abs(detected_cents - theory_cents)))
     ax.set_title(
         f"Stretched partials (inharmonicity $B$ = {B:.2e};  detected−theory < {worst:.3f} cents)"
+    )
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8, loc="upper left")
+
+
+def plot_decay_rates(
+    ax,
+    modes: NDArray,
+    measured: NDArray,
+    oracle_with: NDArray,
+    oracle_without: NDArray,
+) -> None:
+    """Per-mode energy decay rate ``Gamma_m`` vs mode -- the frequency-dependent-loss cure, drawn.
+
+    Three curves over the in-band mode range:
+
+    - ``oracle_with`` (solid, rising) -- the closed-form discrete rate *with* ``sigma1 > 0``: high
+      partials decay faster, as real strings do;
+    - markers (``measured``) -- the rate measured from single-mode FDTD runs, landing on that line;
+    - ``oracle_without`` (dashed, falling) -- the same string with ``sigma1 = 0`` (model #2's
+      frequency-*independent* loss): the rate *droops* with mode (high partials under-damp), the
+      audibly backwards artifact ``sigma1`` cures.
+
+    The contrast -- markers on the rising solid line, the dashed line sloping the other way -- is
+    the whole point: ``sigma1`` flips the high-vs-low decay ordering.
+    """
+    modes = np.asarray(modes)
+    ax.plot(modes, oracle_with, "-", color="C0", lw=1.4,
+            label=r"oracle, $\sigma_1>0$ (highs die faster)")
+    ax.plot(modes, measured, "o", color="C0", ms=6, label="measured (FDTD)")
+    ax.plot(modes, oracle_without, "--", color="C3", lw=1.4,
+            label=r"oracle, $\sigma_1=0$ (model #2: highs under-damp)")
+    ax.set_xlabel("mode number $m$")
+    ax.set_ylabel(r"energy decay rate $\Gamma_m$ (1/s)")
+    worst = float(np.nanmax(np.abs(measured - oracle_with) / oracle_with))
+    ax.set_title(
+        rf"Per-mode decay: $E_m(t)\sim e^{{-\Gamma_m t}}$  (measured vs oracle < {worst:.1e})"
     )
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=8, loc="upper left")
