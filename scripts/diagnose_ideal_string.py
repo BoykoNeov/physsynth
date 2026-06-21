@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
-from physsynth.analysis import modal, spectrum  # noqa: E402
+from physsynth.analysis import dispersion, modal, spectrum  # noqa: E402
 from physsynth.core.engine import simulate  # noqa: E402
 from physsynth.core.exciter import triangular_pluck  # noqa: E402
 from physsynth.core.string_ideal import IdealString  # noqa: E402
@@ -53,6 +53,35 @@ def run_convergence(lam: float = 0.9, mode: int = 8, grids=(64, 128, 256)):
     return step_sizes, errors, orders
 
 
+def run_dispersion(N: int = 128, lams=(1.0, 0.9, 0.7), modes=None):
+    """Measure the phase-velocity dispersion curve v_p(m)/c for several Courant numbers.
+
+    Each mode is excited alone (an exact discrete eigenvector), so its modal coordinate
+    q(t) = <u(t), phi_m> is a pure tone; projecting onto phi_m gives a node-free measurement for
+    every mode. Returns ``(modes, cases)`` where each case is ``(lam, vp_measured/c, vp_oracle/c)``.
+    """
+    if modes is None:
+        modes = np.arange(2, int(0.8 * N) + 1, 4)
+    cases = []
+    for lam in lams:
+        measured = []
+        for m in modes:
+            s = build(N, lam)
+            phi = modal.mode_shape(s.x, L, int(m))
+            s.set_state(phi * 1e-3)
+            res = simulate(s, num_steps=int(0.5 * s.fs), snapshot_stride=1)
+            states = np.array([st for _, st in res.snapshots])
+            q = states @ phi
+            f_oracle = modal.discrete_mode_frequency(C, L, N, lam, int(m))
+            measured.append(spectrum.measure_partials_near(q, res.fs, np.array([f_oracle]))[0])
+        measured = np.array(measured)
+        vp_meas = dispersion.phase_velocity(measured, L, modes) / C
+        f_oracle = dispersion.dispersion_frequencies(C, L, N, lam, modes)
+        vp_oracle = dispersion.phase_velocity(f_oracle, L, modes) / C
+        cases.append((lam, vp_meas, vp_oracle))
+    return modes, cases
+
+
 def main() -> None:
     os.makedirs(OUT, exist_ok=True)
 
@@ -77,6 +106,9 @@ def main() -> None:
     # --- convergence sweep --------------------------------------------------------------------
     hs, errors, orders = run_convergence()
 
+    # --- dispersion sweep (phase velocity vs mode, HANDOFF §6.5) ------------------------------
+    disp_modes, disp_cases = run_dispersion()
+
     # --- figures ------------------------------------------------------------------------------
     fig, axes = plt.subplots(2, 2, figsize=(13, 9))
     plots.plot_energy(axes[0, 0], res.time, res.energy, drift=res.energy_drift)
@@ -97,6 +129,13 @@ def main() -> None:
     fig2.savefig(spec_path, dpi=130)
     plt.close(fig2)
 
+    fig3, ax3 = plt.subplots(figsize=(9, 5))
+    plots.plot_dispersion(ax3, disp_modes, disp_cases)
+    fig3.tight_layout()
+    disp_path = os.path.join(OUT, "ideal_string_dispersion.png")
+    fig3.savefig(disp_path, dpi=130)
+    plt.close(fig3)
+
     gif_path = os.path.join(OUT, "ideal_string.gif")
     gif_ok = plots.save_displacement_animation(gif_path, s_snap.x, snapshots, snap_res.fs)
 
@@ -109,9 +148,17 @@ def main() -> None:
     print(f"  [2] worst partial error           = {worst_cents:.4f} cents   (tol ~1 cent)")
     print(f"  [3] convergence orders (lam=0.9)   = {np.array2string(orders, precision=3)}   (~2)")
     print(f"  [3] errors (Hz)                    = {np.array2string(errors, precision=4)}")
+    top_m = int(disp_modes[-1])
+    for lam, vp_meas, vp_oracle in disp_cases:
+        worst = float(np.max(np.abs(vp_meas - vp_oracle)))
+        print(
+            f"  [5] dispersion lam={lam:<4g} v_p/c @ m={top_m:<3d} = "
+            f"{vp_meas[-1]:.4f} (oracle {vp_oracle[-1]:.4f}, |meas-oracle|<{worst:.1e})"
+        )
     print("  figures:")
     print(f"      {panel_path}")
     print(f"      {spec_path}")
+    print(f"      {disp_path}")
     print(f"      {gif_path}" if gif_ok else "      (GIF skipped: no pillow writer)")
     print("=" * 70)
 

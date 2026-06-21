@@ -21,6 +21,7 @@ __all__ = [
     "plot_displacement_snapshots",
     "plot_convergence",
     "plot_spectrum",
+    "plot_dispersion",
     "save_displacement_animation",
 ]
 
@@ -93,6 +94,35 @@ def plot_spectrum(ax, freqs: NDArray, mag: NDArray, detected: NDArray, f_max: fl
     ax.set_ylim(-120, 5)
     ax.set_title("Pickup spectrum with detected partials")
     ax.grid(True, alpha=0.3)
+
+
+def plot_dispersion(ax, modes: NDArray, cases) -> None:
+    """Phase-velocity dispersion curve ``v_p/c`` vs mode number for one or more lambda cases.
+
+    ``cases`` is a sequence of ``(lam, measured_vp_over_c, oracle_vp_over_c)``. Markers are the
+    measured FDTD phase velocities; the solid line is the closed-form discrete-dispersion oracle.
+    The dashed line at ``1.0`` is the continuum (dispersionless) reference: ``lambda = 1`` sits on
+    it, while ``lambda < 1`` droops below as the mode number rises (high partials travel too slow).
+    """
+    modes = np.asarray(modes)
+    cmap = plt.get_cmap("viridis")
+    n = len(cases)
+    ax.axhline(1.0, color="k", ls="--", lw=0.9, alpha=0.7, label=r"continuum ($v_p = c$)")
+    for j, (lam, vp_measured, vp_oracle) in enumerate(cases):
+        color = cmap(0.15 + 0.7 * j / max(n - 1, 1))
+        ax.plot(modes, vp_oracle, "-", color=color, lw=1.2, alpha=0.9)
+        ax.plot(
+            modes, vp_measured, "o", color=color, ms=5,
+            label=rf"$\lambda = {lam:g}$ (measured)",
+        )
+    # One neutral proxy so the reader knows the solid lines are the closed-form oracle (the markers
+    # sit on them — that coincidence is the result).
+    ax.plot([], [], "-", color="0.4", lw=1.2, label="closed-form oracle")
+    ax.set_xlabel("mode number $m$")
+    ax.set_ylabel(r"phase velocity $v_p / c$")
+    ax.set_title(r"Numerical dispersion: $v_p(m) = 2L f_m / m$")
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8, loc="lower left")
 
 
 def save_displacement_animation(path, x: NDArray, snapshots, fs: float) -> bool:

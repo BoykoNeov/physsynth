@@ -44,7 +44,9 @@ the string *and the rig that measures its deviation from theory*, not just a str
 
 ## Results — achieved (Milestone 1 complete)
 
-All five acceptance criteria pass. Measured numbers (canonical string c=200 m/s, f1=100 Hz):
+All five acceptance criteria pass, and the HANDOFF §6.5 dispersion relation is now measured and
+validated too (the one §6 test that was outstanding). Measured numbers (canonical string c=200 m/s,
+f1=100 Hz):
 
 | # | Criterion | Bar | Achieved |
 |---|-----------|-----|----------|
@@ -53,9 +55,30 @@ All five acceptance criteria pass. Measured numbers (canonical string c=200 m/s,
 | 2 | Partials vs `n·c/2L`, first 10 at λ=1 | ~1 cent | **0.003 cents** worst |
 | 3 | Convergence order at λ=0.9, mode 8 | ~2 | **[2.015, 2.006]** |
 | 4 | No NaN over λ∈(0,1]; λ>1 rejected at construction | — | pass (7-λ sweep finite; `ValueError` on λ=1.05) |
-| 5 | Diagnostics render | — | `out/ideal_string_diagnostics.png`, `_spectrum.png`, `.gif` |
+| 5 | Diagnostics render | — | `out/ideal_string_diagnostics.png`, `_spectrum.png`, `_dispersion.png`, `.gif` |
+| §6.5 | Dispersion: measured `v_p(m)/c` vs the discrete oracle (full mode sweep) | matches | λ=1 flat on continuum (**worst 8e-10**); λ=0.8 measured↔oracle **worst 1.3e-5**, v_p/c droops monotonically to 0.88 @ m=96 |
 
-35 pytest cases pass; `ruff check` clean. Run `python scripts/diagnose_ideal_string.py` to reproduce.
+42 pytest cases pass; `ruff check` clean. Run `python scripts/diagnose_ideal_string.py` to reproduce.
+(35 from the milestone proper + 2 portability-contract guards + 5 dispersion.)
+
+### Dispersion — design notes (HANDOFF §6.5)
+
+- **Oracle:** `analysis/dispersion.py` (`dispersion_frequencies`, `phase_velocity`), pure, wrapping
+  the closed form in `modal.discrete_mode_frequency` so the relation has one source of truth.
+- **Measurement:** each mode is excited *alone* as an exact discrete eigenvector `sin(mπx/L)`; the
+  field stays `u(t)=q(t)·φ_m`, so the modal coordinate `q(t)=⟨u(t),φ_m⟩` is a pure tone measured by
+  the existing FFT tooling. Projection (not a point pickup) — a point pickup can land on a node
+  (mode N/2 vanishes at every even grid node), the projection never does, for any N.
+- **What it adds over the existing modal/convergence tests:** those cover the λ=1 corner and the
+  h→0 *rate*; dispersion checks `step()` reproduces the predicted frequency across the *whole mode
+  range at λ<1* — where a coefficient/indexing bug hides while staying invisible at λ=1. Anchored to
+  physics by also asserting the λ=1 sweep matches the *continuum* (not just the recurrence-derived
+  oracle) and that the λ<1 phase velocity droops monotonically below c.
+- **Tolerances provisional** (§11.5 still open): `ORACLE_RTOL=1e-4`, `CONTINUUM_RTOL=1e-7`, set a few
+  × above the observed clean residuals.
 
 **Next (Phase 2):** stiff string — add `-κ²·u_xxxx` (biharmonic), stretched partials
-`fₙ = n·f₁·√(1+B·n²)`, tighter CFL. The harness (energy/modal/convergence) carries over.
+`fₙ = n·f₁·√(1+B·n²)`, tighter CFL. Scheme decision (HANDOFF §11.2): **go straight to implicit**
+(θ/μ-scheme, unconditionally stable) — the human's call, made 2026-06-21. The harness
+(energy/modal/convergence/**dispersion**) carries over; the stiff string has its *own* richer
+dispersion relation `f_n = n·f₁·√(1+B·n²)`, so this curve becomes a direct stretched-partials check.
