@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-__all__ = ["triangular_pluck", "raised_cosine"]
+__all__ = ["triangular_pluck", "raised_cosine", "raised_cosine_2d"]
 
 
 def triangular_pluck(
@@ -56,3 +56,27 @@ def raised_cosine(
     u0[0] = 0.0
     u0[-1] = 0.0
     return u0
+
+
+def raised_cosine_2d(
+    X: NDArray[np.float64],
+    Y: NDArray[np.float64],
+    center: tuple[float, float],
+    width: float,
+    amplitude: float = 1.0,
+) -> NDArray[np.float64]:
+    """Smooth (C^1) radial raised-cosine hump on a 2D grid, zero outside radius ``width``.
+
+    The 2D analogue of :func:`raised_cosine`: a band-limited bump centred at ``center = (xc, yc)``,
+    falling smoothly to zero at radial distance ``width``. Returns a field of shape ``X.shape``;
+    feed it (or its masked selection) to :meth:`physsynth.core.membrane.Membrane.set_state`. Excites
+    a broad band of modes without the slowly-converging high partials of a cornered shape.
+    """
+    if width <= 0:
+        raise ValueError("width must be > 0.")
+    xc, yc = center
+    d = np.sqrt((X - xc) ** 2 + (Y - yc) ** 2)
+    field = np.zeros_like(X)
+    inside = d < width
+    field[inside] = amplitude * 0.5 * (1.0 + np.cos(np.pi * d[inside] / width))
+    return field

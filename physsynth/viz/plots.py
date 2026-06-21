@@ -25,6 +25,9 @@ __all__ = [
     "plot_spectrum",
     "plot_dispersion",
     "save_displacement_animation",
+    "plot_membrane_field",
+    "plot_membrane_partials",
+    "save_membrane_animation",
 ]
 
 
@@ -191,6 +194,81 @@ def plot_dispersion(ax, modes: NDArray, cases) -> None:
     ax.set_title(r"Numerical dispersion: $v_p(m) = 2L f_m / m$")
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=8, loc="lower left")
+
+
+def plot_membrane_field(
+    ax, X: NDArray, Y: NDArray, field: NDArray, mask: NDArray | None = None, title: str = ""
+) -> None:
+    """Heatmap of a 2D membrane field (a mode shape or a displacement snapshot).
+
+    Dead (rim) nodes are masked to white so the domain — a rectangle or a staircased disk — reads as
+    its actual shape. The colour scale is symmetric about zero (diverging) so nodal lines sit at the
+    neutral colour: this *is* the Chladni-style visual the project is after (HANDOFF §7).
+    """
+    f = np.array(field, dtype=float)
+    if mask is not None:
+        f = np.where(mask, f, np.nan)
+    vmax = float(np.nanmax(np.abs(f))) or 1.0
+    im = ax.pcolormesh(X, Y, f, cmap="RdBu_r", vmin=-vmax, vmax=vmax, shading="auto")
+    ax.set_aspect("equal")
+    ax.set_xlabel("x (m)")
+    ax.set_ylabel("y (m)")
+    if title:
+        ax.set_title(title)
+    return im
+
+
+def plot_membrane_partials(ax, detected: NDArray, oracle: NDArray, labels=None) -> None:
+    """Detected membrane partials vs the analytic oracle (Bessel for a disk), error in cents.
+
+    The 2D analogue of :func:`plot_partials`. ``labels`` (optional) are mode tags like ``"0,1"`` for
+    the x-axis; the staircased-disk error is the looser, ~O(h) convergence-tier deviation (not the
+    ~1-cent string bar), so the worst-case cents is annotated to keep that honest.
+    """
+    detected = np.asarray(detected, dtype=float)
+    oracle = np.asarray(oracle, dtype=float)
+    idx = np.arange(len(detected))
+    err_cents = 1200.0 * np.log2(detected / oracle)
+    ax.axhline(0.0, color="k", lw=0.8)
+    ax.stem(idx, err_cents, basefmt=" ")
+    ax.set_xlabel("mode")
+    ax.set_ylabel("error (cents)")
+    if labels is not None:
+        ax.set_xticks(idx)
+        ax.set_xticklabels(labels, fontsize=7, rotation=45)
+    worst = float(np.nanmax(np.abs(err_cents)))
+    ax.set_title(f"Detected vs analytic membrane partials (worst |err| = {worst:.2f} cents)")
+    ax.grid(True, alpha=0.3)
+
+
+def save_membrane_animation(path, X: NDArray, Y: NDArray, snapshots, fs: float, mask=None) -> bool:
+    """Write a GIF of the membrane vibrating (displacement heatmap over time).
+
+    ``snapshots`` is the engine's ``[(step, field2d), ...]``. Returns False if no GIF writer is
+    available. The seed of the later interactive web viewer — same precomputed-frames model.
+    """
+    from matplotlib import animation
+
+    if not animation.writers.is_available("pillow"):
+        return False
+
+    vmax = max(float(np.nanmax(np.abs(s))) for _, s in snapshots) or 1.0
+    fig, ax = plt.subplots(figsize=(5, 4.5))
+
+    def draw(frame):
+        ax.clear()
+        step, field = snapshots[frame]
+        f = np.where(mask, field, np.nan) if mask is not None else field
+        ax.pcolormesh(X, Y, f, cmap="RdBu_r", vmin=-vmax, vmax=vmax, shading="auto")
+        ax.set_aspect("equal")
+        ax.set_title(f"t = {1e3 * step / fs:6.2f} ms")
+        ax.set_xlabel("x (m)")
+        ax.set_ylabel("y (m)")
+
+    anim = animation.FuncAnimation(fig, draw, frames=len(snapshots), interval=40)
+    anim.save(path, writer="pillow", fps=25)
+    plt.close(fig)
+    return True
 
 
 def save_displacement_animation(path, x: NDArray, snapshots, fs: float) -> bool:

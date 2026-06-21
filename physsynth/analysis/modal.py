@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy import special
 
 __all__ = [
     "harmonic_frequencies",
@@ -23,6 +24,12 @@ __all__ = [
     "stiff_harmonic_frequencies",
     "discrete_stiff_mode_frequency",
     "cents",
+    # 2D membrane (model #4)
+    "rectangular_membrane_freqs",
+    "rectangular_mode_field",
+    "rectangular_discrete_eigenvalues",
+    "circular_membrane_freqs",
+    "discrete_membrane_eigenfrequency",
 ]
 
 
@@ -111,3 +118,84 @@ def discrete_stiff_mode_frequency(
 def cents(f: float | NDArray[np.float64], f_ref: float | NDArray[np.float64]):
     """Pitch error in cents: ``1200 * log2(f / f_ref)``. Scalar or elementwise on arrays."""
     return 1200.0 * np.log2(np.asarray(f, dtype=float) / np.asarray(f_ref, dtype=float))
+
+
+# -- 2D membrane (model #4) --------------------------------------------------------------------
+
+
+def rectangular_membrane_freqs(
+    c: float, Lx: float, Ly: float, modes: list[tuple[int, int]]
+) -> NDArray[np.float64]:
+    """Continuum rectangular-membrane frequencies ``f_{mn} = (c/2) sqrt((m/Lx)² + (n/Ly)²)``.
+
+    ``modes`` is a list of ``(m, n)`` mode indices (both >= 1). Fixed-rim modes are
+    ``sin(mπx/Lx) sin(nπy/Ly)``. This is the exact, O(h²)-clean oracle for the harness unit-test
+    geometry (the rectangle), used before the staircase error enters on the circle.
+    """
+    mn = np.asarray(modes, dtype=float)
+    return 0.5 * c * np.sqrt((mn[:, 0] / Lx) ** 2 + (mn[:, 1] / Ly) ** 2)
+
+
+def rectangular_mode_field(
+    X: NDArray[np.float64], Y: NDArray[np.float64], Lx: float, Ly: float, m: int, n: int
+) -> NDArray[np.float64]:
+    """The ``(m, n)`` fixed-rim mode ``sin(mπx/Lx) sin(nπy/Ly)`` sampled on grid ``(X, Y)``.
+
+    An *exact* discrete eigenvector of the 5-point Laplacian (tensor product of the 1D
+    ``sin(mπl/N)`` eigenvector), so a single-mode initial condition stays one clean tone — the 2D
+    analogue of :func:`mode_shape`.
+    """
+    return np.sin(m * np.pi * X / Lx) * np.sin(n * np.pi * Y / Ly)
+
+
+def rectangular_discrete_eigenvalues(
+    h: float, Nx: int, Ny: int, modes: list[tuple[int, int]]
+) -> NDArray[np.float64]:
+    """Closed-form eigenvalues ``Λ_{mn}`` of ``-Δ_h`` on a rectangle (``-L`` is SPD, ``Λ > 0``).
+
+    ``Λ_{mn} = (4/h²)[sin²(mπ/(2Nx)) + sin²(nπ/(2Ny))]`` for ``m = 1..Nx-1``, ``n = 1..Ny-1`` — the
+    2D tensor product of the 1D second-difference spectrum (see
+    :func:`physsynth.core.operators.second_difference_matrix`). The assembled masked Laplacian must
+    reproduce these to machine precision, which is what proves the operator is wired correctly
+    before any continuum/Bessel comparison.
+    """
+    mn = np.asarray(modes, dtype=float)
+    sx = np.sin(mn[:, 0] * np.pi / (2 * Nx)) ** 2
+    sy = np.sin(mn[:, 1] * np.pi / (2 * Ny)) ** 2
+    return (4.0 / (h * h)) * (sx + sy)
+
+
+def circular_membrane_freqs(
+    c: float, a: float, n_modes: int, m_max: int = 12, n_max: int = 12
+) -> list[tuple[int, int, float, int]]:
+    """Lowest ``n_modes`` circular-membrane frequencies, each tagged ``(m, n, freq, degeneracy)``.
+
+    ``f_{mn} = c · j_{m,n} / (2π a)`` where ``j_{m,n}`` is the n-th positive zero of the Bessel
+    function ``J_m`` (mode shape ``J_m(j_{m,n} r/a)·{cos,sin}(mθ)``). ``m = 0`` modes are
+    non-degenerate (``degeneracy = 1``); ``m >= 1`` come as a cos/sin pair (``degeneracy = 2``).
+    Returned sorted by frequency. ``m_max, n_max`` bound the search grid of zeros (raise if
+    ``n_modes`` is large). The drumhead oracle (HANDOFF §5 row 4).
+    """
+    entries: list[tuple[int, int, float, int]] = []
+    for m in range(0, m_max + 1):
+        zeros = special.jn_zeros(m, n_max)  # first n_max positive zeros of J_m
+        deg = 1 if m == 0 else 2
+        for n_i, z in enumerate(zeros, start=1):
+            entries.append((m, n_i, c * z / (2.0 * np.pi * a), deg))
+    entries.sort(key=lambda e: e[2])
+    return entries[:n_modes]
+
+
+def discrete_membrane_eigenfrequency(
+    Lambda: float | NDArray[np.float64], c: float, k: float
+) -> NDArray[np.float64]:
+    """Discrete temporal frequency (Hz) of an eigenmode with Laplacian eigenvalue ``Λ`` (of ``-L``).
+
+    Inserting ``u^n = z^n φ`` with ``L φ = -Λ φ`` into the explicit scheme gives
+    ``cos(ω k) = 1 − c²k²Λ/2``, hence ``f = arccos(1 − c²k²Λ/2) / (2π k)``. As ``k → 0`` this tends
+    to the continuum ``f = c sqrt(Λ_cont)/(2π)``. The temporal companion to the spatial eigenvalue
+    test: spectrum (``Λ`` of the masked Laplacian) → measurable frequency.
+    """
+    Lambda = np.asarray(Lambda, dtype=float)
+    arg = 1.0 - 0.5 * (c * k) ** 2 * Lambda
+    return np.arccos(np.clip(arg, -1.0, 1.0)) / (2.0 * np.pi * k)
