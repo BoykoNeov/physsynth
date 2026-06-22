@@ -24,6 +24,7 @@ physsynth/
   core/        # headless DSP: operators, resonators, exciters, engine (no I/O, no graphics)
   analysis/    # analytic oracles (modal frequencies) + spectral partial detection
   viz/         # diagnostic plots (matplotlib, Agg backend) — imports core, never vice versa
+web/           # interactive viewer (wrapper): local HTTP backend + static frontend — imports core
 tests/         # validation harness: energy, modal, convergence, stability
 scripts/       # runnable diagnostics (e.g. diagnose_ideal_string.py)
 docs/dev/      # per-feature dev-docs (plan / context / tasks)
@@ -55,10 +56,26 @@ python scripts/diagnose_ideal_string.py
 
 Writes `out/` figures: energy-vs-time, detected-vs-analytic partials, and a grid-convergence plot.
 
+## Interactive web viewer
+
+A local backend recomputes a model **offline** on each parameter change and streams the displacement
+field + audio + energy to a browser, which animates the string (slow-motion, so the vibration is
+visible), plays the sound, and shows the live energy-drift / passivity and partials diagnostics.
+Accuracy-first: no in-browser physics, no real-time port — the validated Python core stays the single
+source of truth (architecture B; see `docs/dev/web-viewer-plan.md`).
+
+```bash
+python web/server.py            # then open http://localhost:8000
+```
+
+The physics lives entirely in `physsynth/core`; `web/` is a wrapper (`serialize.py` packs the payload,
+`server.py` is a thin `ThreadingHTTPServer` shell) and never the other way around.
+
 ## Status
 
-**Milestone 1 (current):** ideal-string FDTD solver + validation harness (HANDOFF §10). The deliverable
-is the string *and the rig that measures its deviation from theory*. See `docs/dev/` for the live plan.
+Models #1–4 complete and validated (string family: ideal / stiff / damped; 2D circular membrane) plus
+the interactive web viewer for the string family (Phase A). The deliverable for each model is the
+resonator *and the rig that measures its deviation from theory*. See `docs/dev/` for the live plans.
 
 ## License
 

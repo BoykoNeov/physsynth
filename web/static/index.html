@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Physical Synthesis — viewer</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Physical Synthesis <span class="sub">— string viewer</span></h1>
+    <div class="status" id="status">ready</div>
+  </header>
+
+  <main>
+    <!-- ░░ controls ░░ -->
+    <aside class="panel">
+      <div class="group">
+        <label class="field">
+          <span>Model</span>
+          <select id="model">
+            <option value="ideal">Ideal string</option>
+            <option value="stiff">Stiff string</option>
+            <option value="damped">Damped stiff string</option>
+          </select>
+        </label>
+      </div>
+
+      <fieldset class="group">
+        <legend>Physical</legend>
+        <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N"></div>
+        <div class="slider" data-param="rho" data-min="0.001" data-max="0.02" data-step="0.0005" data-val="0.005" data-unit="kg/m" data-fixed="4"></div>
+        <div class="slider" data-param="L"   data-min="0.25" data-max="2.0"  data-step="0.05"  data-val="1.0"   data-unit="m"></div>
+      </fieldset>
+
+      <fieldset class="group">
+        <legend>Discretization</legend>
+        <div class="slider" data-param="N"      data-min="16"  data-max="512" data-step="1"    data-val="128"></div>
+        <div class="slider" data-param="lambda" data-min="0.5" data-max="2.0" data-step="0.01" data-val="1.0"></div>
+        <p class="hint" id="lambda-hint"></p>
+      </fieldset>
+
+      <fieldset class="group" data-show="stiff damped">
+        <legend>Stiffness</legend>
+        <div class="slider" data-param="kappa" data-min="0" data-max="8"   data-step="0.05" data-val="1.0" data-unit="m²/s"></div>
+        <div class="slider" data-param="theta" data-min="0.25" data-max="1" data-step="0.01" data-val="0.28"></div>
+      </fieldset>
+
+      <fieldset class="group" data-show="ideal stiff">
+        <legend>Loss</legend>
+        <div class="slider" data-param="sigma" data-min="0" data-max="20" data-step="0.1" data-val="0"></div>
+      </fieldset>
+
+      <fieldset class="group" data-show="damped">
+        <legend>Loss (frequency-dependent)</legend>
+        <div class="slider" data-param="sigma0" data-min="0" data-max="20"   data-step="0.1"   data-val="1.0"></div>
+        <div class="slider" data-param="sigma1" data-min="0" data-max="0.01" data-step="0.0001" data-val="0.002" data-fixed="4"></div>
+      </fieldset>
+
+      <fieldset class="group">
+        <legend>Excitation</legend>
+        <div class="slider" data-param="pluck_position"  data-min="0.02" data-max="0.98" data-step="0.01" data-val="0.3"></div>
+        <div class="slider" data-param="pickup_position" data-min="0.02" data-max="0.98" data-step="0.01" data-val="0.1"></div>
+      </fieldset>
+
+      <fieldset class="group">
+        <legend>Render</legend>
+        <div class="slider" data-param="audio_duration"   data-min="0.2" data-max="6"    data-step="0.1"  data-val="2.0" data-unit="s"></div>
+        <div class="slider" data-param="animation_window" data-min="0.01" data-max="0.3" data-step="0.005" data-val="0.06" data-unit="s" data-fixed="3"></div>
+      </fieldset>
+
+      <button id="render" class="primary">Render</button>
+      <label class="check"><input type="checkbox" id="autorender" checked /> auto-render on change</label>
+    </aside>
+
+    <!-- ░░ stage ░░ -->
+    <section class="stage">
+      <div class="canvas-wrap">
+        <canvas id="string" width="900" height="380"></canvas>
+        <div class="overlay" id="canvas-msg">Press <b>Render</b> to simulate.</div>
+      </div>
+
+      <div class="transport">
+        <button id="anim-toggle">⏸ Pause</button>
+        <label class="speed">
+          slow-mo
+          <input type="range" id="speed" min="0.002" max="0.5" step="0.002" value="0.02" />
+          <span id="speed-val" class="mono">0.020×</span>
+        </label>
+        <input type="range" id="scrub" min="0" max="0" step="1" value="0" />
+        <button id="play-audio" class="primary">▶ Play sound</button>
+        <label class="check"><input type="checkbox" id="loop-audio" /> loop</label>
+      </div>
+
+      <div class="diagnostics">
+        <div class="diag-card">
+          <h3>Energy <span id="energy-verdict" class="badge"></span></h3>
+          <canvas id="energy" width="430" height="170"></canvas>
+          <p class="readout" id="energy-readout"></p>
+        </div>
+        <div class="diag-card">
+          <h3>Partials <span class="sub">detected vs analytic</span></h3>
+          <canvas id="partials" width="430" height="170"></canvas>
+          <p class="readout" id="partials-readout"></p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
