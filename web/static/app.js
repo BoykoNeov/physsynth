@@ -7,12 +7,15 @@
 // ── element handles ─────────────────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
 const modelSel = $("model");
+const domainSel = $("domain");
 const renderBtn = $("render");
 const autoRender = $("autorender");
 const statusEl = $("status");
 const stringCv = $("string");
 const energyCv = $("energy");
 const partialsCv = $("partials");
+const partialsTitle = $("partials-title");
+const partialsSub = $("partials-sub");
 const scrub = $("scrub");
 const speedInput = $("speed");
 const speedVal = $("speed-val");
@@ -26,11 +29,24 @@ const LABELS = {
   kappa: "stiffness κ", theta: "θ (time-avg)", sigma: "loss σ", sigma0: "loss σ₀ (flat)",
   sigma1: "loss σ₁ (HF)", pluck_position: "pluck pos", pickup_position: "pickup pos",
   audio_duration: "audio length", animation_window: "anim window",
+  radius: "radius a", Lx: "width Lx", Ly: "height Ly",
+  pluck_x: "strike x", pluck_y: "strike y", pluck_width: "strike width",
+  pickup_x: "pickup x", pickup_y: "pickup y",
+};
+
+// Per-model slider ranges that differ from the HTML defaults (membrane: lower N cap below the cost
+// cliff, λ capped at the 2D CFL 1/√2 so the slider isn't mostly-erroring; backend mirrors these).
+const MODEL_RANGES = {
+  membrane: { N: { max: 100, val: 80 }, lambda: { max: 0.7, val: 0.6 } },
+  _default: { N: { max: 512 }, lambda: { max: 2.0 } },
 };
 
 const sliders = {};      // param -> <input>
+const updaters = {};     // param -> fn() that refreshes its value label
 let payload = null;
+let dims = 1;            // 1 = string polyline, 2 = membrane heatmap
 let frames = null, nFrames = 0, width = 0, fieldAmp = 1, animDt = 1e-3;
+let gridNx = 0, gridNy = 0, maskData = null, gridMeta = null, heatCv = null;
 let audioSamples = null, audioFs = 48000, audioBuf = null, audioCtx = null, audioSrc = null;
 let speed = 0.02, animPlaying = true, scrubbing = false, currentFrame = 0, animStart = 0;
 let autoTimer = null;
@@ -60,23 +76,50 @@ function buildSliders() {
     input.addEventListener("input", () => { update(); onControlChange(d.param); });
     update();
     sliders[d.param] = input;
+    updaters[d.param] = update;
   });
 }
 
 function param(name) { return sliders[name] ? +sliders[name].value : undefined; }
 
-// ── model-dependent visibility + hints ──────────────────────────────────────────────────────
+function setSlider(name, val) {
+  if (!sliders[name]) return;
+  sliders[name].value = val;
+  if (updaters[name]) updaters[name]();
+}
+
+// ── model-dependent visibility, ranges + hints ───────────────────────────────────────────────
 function updateVisibility() {
-  const m = modelSel.value;
+  const m = modelSel.value, d = domainSel ? domainSel.value : "circle";
   document.querySelectorAll("[data-show]").forEach((el) => {
     el.hidden = !el.dataset.show.split(" ").includes(m);
   });
+  // Geometry sliders are gated by the *domain* select (only meaningful while model=membrane).
+  document.querySelectorAll("[data-domain]").forEach((el) => {
+    el.hidden = m !== "membrane" || el.dataset.domain !== d;
+  });
+}
+
+// Re-bound N/λ to the per-model caps (membrane has a much lower N ceiling + a 1/√2 CFL on λ).
+function applyModelRanges() {
+  const r = MODEL_RANGES[modelSel.value] || MODEL_RANGES._default;
+  for (const pkey of ["N", "lambda"]) {
+    const spec = (r[pkey]) || MODEL_RANGES._default[pkey] || {};
+    if (sliders[pkey] && spec.max !== undefined) {
+      sliders[pkey].max = String(spec.max);
+      if (+sliders[pkey].value > spec.max) setSlider(pkey, spec.val !== undefined ? spec.val : spec.max);
+    }
+    if (sliders[pkey] && spec.val !== undefined && modelSel.value === "membrane") setSlider(pkey, spec.val);
+  }
 }
 
 function updateLambdaHint() {
   const m = modelSel.value, lam = param("lambda");
   const hint = $("lambda-hint");
-  if (m === "ideal" && lam > 1.0) {
+  if (m === "membrane") {
+    hint.textContent = `λ = c·k/h = ${lam.toFixed(2)}  (2D CFL: λ ≤ 1/√2 ≈ 0.71; no λ is dispersionless)`;
+    hint.style.color = lam > 0.708 ? "var(--bad)" : "var(--muted)";
+  } else if (m === "ideal" && lam > 1.0) {
     hint.textContent = "λ>1 breaks the explicit ideal string's CFL (will error). Stiff/damped allow it.";
     hint.style.color = "var(--bad)";
   } else {
@@ -93,10 +136,12 @@ function onControlChange(name) {
 }
 
 modelSel.addEventListener("change", () => {
+  applyModelRanges();
   updateVisibility();
   updateLambdaHint();
   scheduleAuto();
 });
+if (domainSel) domainSel.addEventListener("change", () => { updateVisibility(); scheduleAuto(); });
 
 function scheduleAuto() {
   if (!autoRender.checked) return;
@@ -108,6 +153,7 @@ function scheduleAuto() {
 // ── networking ──────────────────────────────────────────────────────────────────────────────
 function gatherParams() {
   const p = { model: modelSel.value };
+  if (domainSel) p.domain = domainSel.value;
   for (const k in sliders) p[k] = +sliders[k].value;
   return p;
 }
@@ -152,13 +198,28 @@ function b64ToFloat32(b64) {
   return new Float32Array(bytes.buffer);
 }
 
+function b64ToUint8(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
 function applyPayload(data) {
   payload = data;
+  dims = (data.frames && data.frames.dims) || 1;
   frames = b64ToFloat32(data.frames.b64);
   nFrames = data.frames.n_frames;
   width = data.frames.width;
   fieldAmp = data.field_amp || 1;
   animDt = data.anim_dt || 1e-3;
+  if (dims === 2) {
+    gridNx = data.frames.nx; gridNy = data.frames.ny;
+    maskData = data.mask ? b64ToUint8(data.mask.b64) : null;
+    gridMeta = data.grid;
+    heatCv = document.createElement("canvas");   // offscreen field-resolution buffer
+    heatCv.width = gridNx; heatCv.height = gridNy;
+  }
   audioSamples = b64ToFloat32(data.audio.b64);
   audioFs = data.audio.fs;
   audioBuf = null;                       // rebuilt lazily on first Play
@@ -167,7 +228,7 @@ function applyPayload(data) {
   scrub.value = 0;
   hideOverlay();
   drawEnergy();
-  drawPartials();
+  drawDiagnostics();
 }
 
 // ── string animation ────────────────────────────────────────────────────────────────────────
@@ -214,9 +275,61 @@ function tick(ts) {
       currentFrame = Math.floor(physElapsed / animDt) % nFrames;
       scrub.value = currentFrame;
     }
-    drawString(currentFrame);
+    (dims === 2 ? drawHeatmap : drawString)(currentFrame);
   }
   requestAnimationFrame(tick);
+}
+
+// ── membrane heatmap ─────────────────────────────────────────────────────────────────────────
+// Diverging colormap centred at 0: cool (cyan/blue) for displacement < 0, warm (orange/red) for
+// > 0, near-black at rest. t is signed displacement / field_amp, clamped to [-1, 1].
+function divColor(t) {
+  const a = Math.min(1, Math.abs(t));
+  if (t >= 0) return [20 + a * 235, 24 + a * 96, 30 + a * 6];     // dark → orange/red
+  return [20 + a * 24, 24 + a * 162, 30 + a * 225];               // dark → cyan/blue
+}
+
+function drawHeatmap(idx) {
+  const g = stringCv.getContext("2d");
+  const W = stringCv.width, H = stringCv.height;
+  g.clearRect(0, 0, W, H);
+  if (!frames || nFrames === 0 || !heatCv) return;
+
+  // Paint the decimated field into the offscreen buffer (one device pixel per node), masking
+  // the exterior to the panel background so the domain shape (incl. the staircased rim) reads.
+  const hctx = heatCv.getContext("2d");
+  const img = hctx.createImageData(gridNx, gridNy);
+  const amp = fieldAmp > 0 ? fieldAmp : 1;
+  const base = idx * gridNx * gridNy;
+  for (let p = 0; p < gridNx * gridNy; p++) {
+    const o = p * 4;
+    if (maskData && maskData[p] === 0) {            // outside the membrane
+      img.data[o] = 22; img.data[o + 1] = 27; img.data[o + 2] = 34; img.data[o + 3] = 255;
+      continue;
+    }
+    const c = divColor(frames[base + p] / amp);
+    img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 255;
+  }
+  hctx.putImageData(img, 0, 0);
+
+  // Blit to the main canvas preserving the physical aspect ratio (snapped Ly for a rectangle).
+  const extX = (gridMeta && gridMeta.extent_x) || 1, extY = (gridMeta && gridMeta.extent_y) || 1;
+  const pad = 14, availW = W - 2 * pad, availH = H - 2 * pad;
+  const scale = Math.min(availW / extX, availH / extY);
+  const dw = extX * scale, dh = extY * scale;
+  const dx = (W - dw) / 2, dy = (H - dh) / 2;
+  g.imageSmoothingEnabled = true;
+  g.drawImage(heatCv, dx, dy, dw, dh);
+
+  // Pickup marker (x, y) in domain fractions → screen.
+  const pkx = param("pickup_x"), pky = param("pickup_y");
+  if (pkx !== undefined && pky !== undefined) {
+    const mx = dx + pkx * dw, my = dy + pky * dh;
+    g.strokeStyle = "rgba(255,207,92,.9)"; g.lineWidth = 1.5;
+    g.beginPath(); g.arc(mx, my, 5, 0, 7); g.stroke();
+    g.beginPath(); g.moveTo(mx - 8, my); g.lineTo(mx + 8, my);
+    g.moveTo(mx, my - 8); g.lineTo(mx, my + 8); g.stroke();
+  }
 }
 
 // ── energy diagnostic ───────────────────────────────────────────────────────────────────────
@@ -260,6 +373,71 @@ function drawEnergy() {
       `measured 2σ = ${meas == null ? "—" : meas.toFixed(3)} s⁻¹` +
       `  (flat-loss oracle ${e.lossy.oracle_2sigma.toFixed(3)})`;
   }
+}
+
+// ── second diagnostic panel: partials (string) | mode spectrum (membrane) ────────────────────
+function drawDiagnostics() {
+  if (dims === 2) {
+    partialsTitle.firstChild.textContent = "Mode spectrum ";
+    partialsSub.textContent = "FFT vs discrete eigenmodes";
+    drawSpectrum();
+  } else {
+    partialsTitle.firstChild.textContent = "Partials ";
+    partialsSub.textContent = "detected vs analytic";
+    drawPartials();
+  }
+}
+
+// Membrane: pickup magnitude spectrum with vertical markers at the discrete eigenfreqs (where the
+// time-stepper actually rings — peaks landing on these = self-consistency) and fainter markers at
+// the continuum oracle (the O(h) staircase offset; shown, NOT scored). Cf. advisor review 3.
+function drawSpectrum() {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height, padL = 26, padB = 16, top = 8;
+  g.clearRect(0, 0, W, H);
+  const out = $("partials-readout");
+  const sp = payload && payload.meta && payload.meta.spectrum;
+  if (!sp) { out.textContent = "no spectrum"; return; }
+
+  const plotW = W - padL - 8, plotH = H - padB - top;
+  const x0 = padL, y0 = top + plotH;
+  const fmax = sp.fmax || (sp.freq[sp.freq.length - 1] || 1);
+  const fx = (f) => x0 + (f / fmax) * plotW;
+
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(x0, top, plotW, plotH);
+
+  // continuum (Bessel / rectangular) markers — faint, the geometry-tier reference
+  g.strokeStyle = "rgba(139,152,168,.35)"; g.lineWidth = 1; g.setLineDash([3, 3]);
+  (sp.modes_continuum || []).forEach((f) => {
+    if (f == null || f > fmax) return;
+    g.beginPath(); g.moveTo(fx(f), top); g.lineTo(fx(f), y0); g.stroke();
+  });
+  g.setLineDash([]);
+  // discrete eigenmode markers — the honest lines the FFT peaks should land on
+  g.strokeStyle = "rgba(76,194,255,.55)"; g.lineWidth = 1;
+  (sp.modes_discrete || []).forEach((f) => {
+    if (f == null || f > fmax) return;
+    g.beginPath(); g.moveTo(fx(f), top); g.lineTo(fx(f), y0); g.stroke();
+  });
+
+  // FFT magnitude (normalized 0..1)
+  g.strokeStyle = "#5ad17a"; g.lineWidth = 1.5; g.beginPath();
+  for (let i = 0; i < sp.freq.length; i++) {
+    const m = sp.mag[i] == null ? 0 : sp.mag[i];
+    const x = fx(sp.freq[i]), y = y0 - m * (plotH - 4);
+    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.stroke();
+
+  g.fillStyle = "#8b98a8"; g.font = "10px ui-monospace, monospace";
+  g.fillText("|X(f)|", 3, top + 10);
+  g.fillText(`${Math.round(fmax)} Hz`, W - 54, H - 4);
+
+  const cf = sp.cents_fundamental, cg = sp.cents_geometry;
+  out.textContent =
+    `f₁ = ${sp.f1_discrete.toFixed(2)} Hz (discrete)   peaks on blue lines = self-consistent\n` +
+    `fundamental detected vs discrete: ${cf == null ? "—" : cf.toFixed(3) + " cents"}` +
+    `   ·   geometry tier (O(h) staircase): ${cg == null ? "—" : cg.toFixed(2) + " cents, char."}`;
 }
 
 // ── partials diagnostic ─────────────────────────────────────────────────────────────────────
@@ -335,7 +513,19 @@ playAudioBtn.addEventListener("click", playAudio);
 renderBtn.addEventListener("click", render);
 
 // ── boot ────────────────────────────────────────────────────────────────────────────────────
+// Optional deep-link: ?model=membrane&domain=circle preselects the model/domain before the first
+// render (also what the headless-browser verification drives).
+function applyUrlParams() {
+  const q = new URLSearchParams(location.search);
+  const m = q.get("model");
+  if (m && [...modelSel.options].some((o) => o.value === m)) modelSel.value = m;
+  const d = q.get("domain");
+  if (d && domainSel && [...domainSel.options].some((o) => o.value === d)) domainSel.value = d;
+}
+
 buildSliders();
+applyUrlParams();
+applyModelRanges();
 updateVisibility();
 updateLambdaHint();
 speedVal.textContent = speed.toFixed(3) + "×";

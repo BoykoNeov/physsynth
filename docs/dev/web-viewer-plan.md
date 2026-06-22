@@ -7,12 +7,17 @@
 > validation numbers. This honours the non-negotiables: **accuracy-first**, **real-time deferred to
 > Phase 5** (no audio-callback / RT-safety work, no WASM), **headless core untouched**.
 
-> **Status:** Phase A (string family) **built, tested, and browser-verified.** 20 web tests in
-> `tests/test_web_backend.py` pin the payload contract (180 total, green); a headless-Chrome render of
-> the live page confirmed the end-to-end pipeline — sliders build, `/simulate` round-trips, the
-> base64→Float32 field decodes to the *correct* pluck shape (not byte-order garbage), and the energy
-> (`drift 5.51e-14 → PASS`) + partials (`worst 0.002 cents`) panels show the real backend numbers.
-> Phase B (membrane heatmap) is the next step.
+> **Status:** Phase A (string family) **+ Phase B (2D membrane) both built, tested, and
+> browser-verified.** 37 web tests in `tests/test_web_backend.py` pin the payload contract (197 total,
+> green); a headless-Chrome render (`scripts/verify_web_headless.py`, CDP over `websocket-client`)
+> confirms the end-to-end pipeline for both — sliders build, `/simulate` round-trips, the base64 field
+> decodes to the *correct* shape (string pluck / membrane mode, not byte-order garbage), and every
+> panel shows the real backend numbers. Browser-verified energy drift survives in 2D: circle
+> `5.07e-15`, rectangle `3.93e-15`, both **PASS** (conservation ⊥ geometry, as in the core); the
+> string is unchanged at `5.51e-14`. Mode spectrum: FFT peaks land on the discrete eigenmode lines
+> (fundamental `0.002 cents`), geometry tier circle `-13.94 c` vs rectangle `-0.05 c` — the O(h)
+> staircase shown, not scored. **The web viewer (Phase 3.5) is complete;** next physics-ladder item is
+> model #5, the Kirchhoff plate.
 
 ## Decisions (resolved with the human)
 
@@ -133,13 +138,43 @@ couple of params (κ/B for stiff, σ₁ for damped).
 - Live panels: **energy-vs-time trace + drift readout** (the project signature) and detected-vs-
   analytic partials (reuse `analysis.spectrum` / `analysis.modal`).
 
-**Phase B — 2D membrane (the showpiece).** Heatmap render + the data-size handling.
+**Phase B — 2D membrane (the showpiece). DONE.** Heatmap render + the data-size handling. Split off
+as `_build_payload_membrane` (the string path stays bit-for-bit unchanged); shared sub-blocks
+(`_energy_block`, `_resample_normalize`, `_b64f32`) reused.
 - `state` is a full 2D field (`membrane.py` embeds dead nodes as 0); frames = 2D, base64 float32 +
-  `{nx, ny}`. **Decimate spatially** to a ~64×64 *display* grid (display res ≪ sim res) and
-  **temporally** to display_fps — full sample rate stays only in the audio. (Advisor's data-size
-  trap: a raw 2D field over thousands of steps balloons; decimate before the first bundle.)
-- Render: Canvas2D `ImageData` heatmap (diverging colormap), circle + rectangle domains.
-- Pickup as an (x,y) fraction → `membrane.pickup_index_at`.
+  `{nx, ny, dims:2}`. **Decimated spatially** to a ≤`DISPLAY_MAX`(=64) *display* grid (`stride =
+  ceil(max(ny,nx)/64)`, same stride on field **and** mask so they stay aligned) and **temporally**
+  at the fundamental-resolving stride (catch #2) — full sample rate stays only in the audio.
+  `field_amp` + the colour scale come from the *decimated* frames we actually ship (not the full
+  field), and the range is fixed symmetric `[−amp, +amp]` so decay stays visible.
+- Render: Canvas2D `ImageData` heatmap (diverging cool/warm colormap, centred at 0) blitted to the
+  main canvas at the physical aspect ratio (snapped `Ly` for a rectangle, read back off the ctor);
+  the decimated mask blanks the exterior so the staircased rim reads. Circle + rectangle domains.
+- Pickup as an (x,y) fraction → `membrane.pickup_index_at`; an (x,y) strike via `raised_cosine_2d`.
+- **Modal panel = a mode *spectrum*, not per-partial cents bars** (advisor review 3): the FFT
+  magnitude with vertical markers at the **discrete** eigenfreqs (`eigsh(-L)` →
+  `discrete_membrane_eigenfrequency` — where the time-stepper actually rings; peaks landing on them =
+  self-consistency) and fainter markers at the continuum oracle (Bessel/rect — the geometry tier,
+  *shown not scored*). Two headline numbers: fundamental detected-vs-discrete cents (robust — the
+  (0,1) mode is always excited) and the discrete-vs-continuum "geometry tier (O(h) staircase)" gap.
+  Per-mode cents bars are a trap here: a struck drum rings high/odd modes weakly, so
+  `measure_partials_near` would lock onto noise for unexcited targets and report confident garbage;
+  and the Bessel gap is ~9 c *by design*. **Energy stays the hard pass/fail signature.**
+- **Cost must be bounded by the actual problem size, not N** (advisor review 4 caught this — the
+  first cut clamped N only and a thin rectangle still hung for ~45 s). Profiled: cost is pure FDTD
+  (`eigsh` is ~0.06 s, negligible — *not* the bottleneck), with **two** independent drivers the
+  sliders push:
+  - per-step cost ∝ `n_live`, with a **razor-sharp ~3.2× cache cliff at `n_live ≈ 10_000`** (87 µs →
+    281 µs/step as the working set crosses L2). A thin rectangle reaches it fast: `n_live ~
+    N²·(Ly/Lx)`, so `Lx=0.3, Ly=2.0, N=100` is ~66k nodes. ⇒ `MEMBRANE_NLIVE_MAX=9_900` keeps
+    `n_live` strictly below the cliff (admits a square/disk at N=100).
+  - step count ∝ `fs = c/(λ·h) ∝ 1/min_dimension` — a small drum / fine grid inflates steps (the
+    audio is resampled to 48 kHz regardless, so a high sim rate buys *no* fidelity). ⇒
+    `MEMBRANE_WORK_MAX = 7e8` node-steps caps `n_live × total_steps` (audio + animation runs).
+  - plus `MEMBRANE_N_MAX=100` (coarse gate), `MEMBRANE_AUDIO_MAX=2.0`, λ ≤ `1/√2`, and `eigsh
+    k=min(12, n_live−1)`. Under all guards the worst *passing* render ≈ 5.6 s; the default (N=80
+    disk) ≈ 2.7 s; the work budget scales with duration so a small drum still renders at short audio.
+    The string's `N_MAX=2000` would OOM/hang in 2D.
 
 ## Tests — `tests/test_web_backend.py` (web wrapper, not core; keep core count stable)
 
@@ -151,7 +186,19 @@ Drive the pure `simulate_to_payload` with short durations:
 4. **Guard propagation:** `lambda > 1` (string) / `> 1/√2` (membrane) → raises at construction,
    surfaced as a clean error payload, not a 500/NaN.
 5. **Passivity smoke:** `damped`, σ>0 → decimated energy monotone non-increasing.
-6. **(Phase B)** membrane payload: spatial decimation actually shrinks the field; `{nx,ny}` correct.
+6. **(Phase B) membrane payload** (17 tests): lossless drift `< 1e-10` through the 2D wrapper;
+   `{nx,ny}` match the decoded buffer + frame_times and stay `≤ 64`; spatial decimation strictly
+   shrinks the field at N=80; decoded peak `== field_amp` and exterior (mask==0) nodes clamp to 0 in
+   every frame (the 2D analogue of the string boundary test — catches byte-order garbage *and* a
+   field/mask stride mismatch); rectangle extent uses the snapped `Ly`; spectrum fundamental
+   self-consistent `< 5 c`; σ>0 passivity at 2σ; the full guard battery (CFL `1/√2`, N ceiling, bad
+   domain/geometry/pluck) → clean error payloads.
+
+**Headless browser smoke (`scripts/verify_web_headless.py`, not in the pytest suite — needs Chrome +
+a live server):** a minimal CDP driver (`websocket-client`, no Selenium/Puppeteer) navigates the
+`?model=…&domain=…` deep-link, waits for the *real* "ok" status (not a virtual-time guess — the
+`requestAnimationFrame` loop never goes idle), samples the canvas pixels to prove the field painted
+(not background-only), and screenshots each case to `out/viewer_*.png`.
 
 ## Traps (pre-flagged; ✎ = added in advisor review 2)
 
