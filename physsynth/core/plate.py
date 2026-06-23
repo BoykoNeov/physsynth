@@ -3,46 +3,55 @@
 Implements HANDOFF section 5 model #5 (see ``docs/dev/plate-plan.md``). The plate is the
 composition of the two prior 2D/4th-order advances, with no fundamentally new machinery:
 
-- the membrane's **masked Laplacian** ``L`` (:func:`physsynth.core.operators2d.laplacian_from_mask`),
+- the membrane's **masked Laplacian** ``L``
+  (:func:`physsynth.core.operators2d.laplacian_from_mask`),
 - the stiff string's **implicit theta-scheme** + **biharmonic-by-squaring** (1D ``(δ_xx)²`` -> 2D
   ``∇⁴ = (∇²)² = L @ L``).
 
 PDE — **bending only, no membrane tension** (transverse displacement ``u(x, y, t)``):
 
-    u_tt = -kappa² ∇⁴u - 2 sigma u_t,    kappa² = D / rho_s   (D = flexural rigidity, kg-free m⁴/s²)
+    u_tt = -kappa² ∇⁴u - 2 sigma u_t,    kappa² = D / rho_s
+    (D = flexural rigidity, kg-free m⁴/s²)
 
 The biharmonic ``B = L @ L`` is built from the *Dirichlet* Laplacian, so it bakes in **both**
 simply-supported (Navier) conditions ``u = 0`` and ``∇²u = 0`` automatically and keeps
-``sin(mπx/Lx) sin(nπy/Ly)`` an *exact* discrete eigenvector (eigenvalue ``Λ_{mn}²``). There is **no**
-``c²∇²`` wave term — the modal law ``f_{mn} = (π/2)√(D/rho_s)[(m/Lx)² + (n/Ly)²]`` is pure 4th-power.
+``sin(mπx/Lx) sin(nπy/Ly)`` an *exact* discrete eigenvector (eigenvalue ``Λ_{mn}²``). There is
+**no** ``c²∇²`` wave term — the modal law
+``f_{mn} = (π/2)√(D/rho_s)[(m/Lx)² + (n/Ly)²]`` is pure 4th-power.
 
-Treating ``∇⁴`` explicitly forces a brutal ``kappa² k² / h⁴`` CFL (``μ = kappa k / h² <= 1/4``), so
+Treating ``∇⁴`` explicitly forces a brutal ``kappa² k² / h⁴`` CFL
+(``μ = kappa k / h² <= 1/4``), so
 the whole spatial operator ``𝓛 = -kappa² B`` is time-averaged with a theta weight:
 
     δ_tt u = 𝓛 (theta u^{n+1} + (1-2 theta) u^n + theta u^{n-1}) - 2 sigma δ_t. u
 
-which is **unconditionally stable for theta >= 1/4** (no CFL limit — coarse grids / large timesteps
+which is **unconditionally stable for theta >= 1/4** (no CFL limit — coarse grids / large
+timesteps
 the explicit plate could not run are admissible). Rearranged, each step is one sparse SPD solve with
 the constant matrix
 
     A = (1 + sigma k) I - theta k² 𝓛 = (1 + sigma k) I + theta k² kappa² B.
 
-``B = L²`` is a 13-point stencil (bandwidth ~2 Nx), so — unlike the 1D pentadiagonal case — there is
+``B = L²`` is a 13-point stencil (bandwidth ~2 Nx), so — unlike the 1D pentadiagonal case — there
+is
 no useful banded structure and scipy has no sparse Cholesky; ``A`` (SPD) is factored once with
 ``scipy.sparse.linalg.splu`` and back-substituted each step.
 
-**Energy** (theta-dependent; reduces to the cross-time form at theta = 1/4) — bending-only potential:
+**Energy** (theta-dependent; reduces to the cross-time form at theta = 1/4) — bending-only
+potential:
 
     E^n = rho_s [ 1/2 ||δ_t- u^n||²
                   + (theta/2)(P_nn + P_pp) + (1/2 - theta) P_np ]
 
-with ``P(f,g) = <-𝓛 f, g> = kappa² <B f, g> >= 0`` (B positive-definite). ``P`` is evaluated through
+with ``P(f,g) = <-𝓛 f, g> = kappa² <B f, g> >= 0`` (B positive-definite). ``P`` is evaluated
+through
 the *same* matrix ``B`` used in the update, so conservation ``E^{n+1} = E^n`` is an exact algebraic
 identity (machine precision lossless; monotone decreasing at ``e^{-2 sigma t}`` lossy).
 
 > **Damping caveat (broader than the stiff string).** The theta-time-average makes
 > frequency-independent loss effectively frequency-*dependent*: mode ``m`` decays at
-> ``2 sigma (1 - theta Q k²)`` with ``Q = kappa² Λ²``. Because ``Q`` is 4th-power across the *whole*
+> ``2 sigma (1 - theta Q k²)`` with ``Q = kappa² Λ²``. Because ``Q`` is 4th-power across the
+> *whole*
 > spectrum (no gentle ``c²p²`` term as in the stiff string), the under-damping bites mid-spectrum,
 > not only the top partials. Passivity still holds unconditionally; the *rate*, not the sign, is
 > wrong above low modes. Cure = frequency-dependent loss (a later model). See the plan.
@@ -78,13 +87,15 @@ class Plate:
         Rectangle side lengths (m). ``Ly`` is snapped to an integer number of cells so cells stay
         square; the snapped value is stored back on :attr:`Ly`.
     kappa : float
-        Stiffness coefficient ``kappa = sqrt(D / rho_s)`` (units m²/s), the single bending parameter
+        Stiffness coefficient ``kappa = sqrt(D / rho_s)`` (units m²/s), the single bending
+        parameter
         (Poisson's ratio drops out for simply-supported edges). Larger ``kappa`` -> higher modes.
     rho : float
         Areal density ``rho_s`` (kg/m²); scales the energy (Joules) but not the frequencies.
     fs : float
         Sample rate (Hz); timestep ``k = 1/fs``. **No CFL limit** (unconditionally stable for
-        ``theta >= 1/4``) -- coarse grids / large timesteps the explicit plate could not run are fine.
+        ``theta >= 1/4``) -- coarse grids / large timesteps the explicit plate could not run are
+        fine.
     N : int
         Number of spatial segments along x; spacing ``h = Lx/N`` (square cells). The bounding-box
         edge nodes are the clamped Dirichlet rim; the interior nodes are the unknowns.
@@ -93,7 +104,8 @@ class Plate:
         broad damping caveat in the module docstring.
     theta : float
         Time-averaging weight in ``(0, 1]``. ``>= 1/4`` is unconditionally stable; smaller theta is
-        more accurate (less numerical dispersion) but only conditionally stable. Default a hair above
+        more accurate (less numerical dispersion) but only conditionally stable. Default a hair
+        above
         ``1/4``.
     boundary : {"supported"}
         Simply-supported (Navier) edges -- the only boundary with a clean closed-form oracle.
@@ -164,7 +176,8 @@ class Plate:
         if self.n_live < 1:
             raise ValueError("the plate has no interior (live) nodes; refine the grid.")
 
-        # A = (1 + sigma k) I + theta k^2 kappa^2 B  (SPD, 13-point, constant in time -> factor once).
+        # A = (1 + sigma k) I + theta k^2 kappa^2 B
+        # (SPD, 13-point, constant in time -> factor once).
         sk = self.sigma * self.k
         coeff = self.theta * self.k * self.k * self.kappa * self.kappa
         A = (1.0 + sk) * sparse.identity(self.n_live, format="csc") + coeff * self.B
@@ -192,7 +205,8 @@ class Plate:
 
         ``u0`` may be a full 2D field (shape ``mask.shape``) or a flat live-node vector
         (length ``n_live``). Uses the consistent second-order start
-        ``u^{-1} = u^0 - k v^0 + 1/2 k² 𝓛 u^0 = u^0 - k v^0 - 1/2 k² kappa² (B u^0)`` so a single
+        ``u^{-1} = u^0 - k v^0 + 1/2 k² 𝓛 u^0 = u^0 - k v^0 - 1/2 k² kappa² (B u^0)`` so a
+        single
         eigenmode oscillates as a clean discrete cosine and zero initial velocity is exact to second
         order. Dead (rim) nodes stay clamped.
         """
@@ -249,7 +263,8 @@ class Plate:
         """Discrete energy ``E^n`` (Joules) for the implicit theta-scheme (bending-only potential).
 
         ``E^n = rho_s [ 1/2 ||δ_t- u||² + (theta/2)(P_nn + P_pp) + (1/2 - theta) P_np ]`` with
-        ``P(f,g) = <-𝓛 f, g> = kappa² <B f, g> >= 0``. Lossless -> conserved to machine precision;
+        ``P(f,g) = <-𝓛 f, g> = kappa² <B f, g> >= 0``. Lossless -> conserved to machine
+        precision;
         lossy -> monotone decreasing.
         """
         h2 = self.h * self.h

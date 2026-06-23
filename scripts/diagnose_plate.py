@@ -97,7 +97,9 @@ def main() -> None:
         plots.plot_membrane_field(
             ax, p.X, p.Y, field, mask=p.mask, title=f"mode {labels[j]}  {f_disc[j]:.1f} Hz"
         )
-    fig.suptitle("Simply-supported plate low modes — nodal GRID (free-edge Chladni curves deferred)")
+    fig.suptitle(
+        "Simply-supported plate low modes — nodal GRID (free-edge Chladni curves deferred)"
+    )
     fig.tight_layout()
     fig.savefig(os.path.join(OUT, "plate_modes.png"), dpi=110)
     plt.close(fig)
@@ -112,7 +114,9 @@ def main() -> None:
 
     print("\nDetected vs continuum SS oracle (N=96, the tight tier):")
     for (m, n, _), fd, fc in zip(oracle, f_disc, f_cont, strict=True):
-        print(f"  mode {m},{n}  disc={fd:8.3f}  oracle={fc:8.3f}  err={modal.cents(fd, fc):+6.3f} c")
+        print(
+            f"  mode {m},{n}  disc={fd:8.3f}  oracle={fc:8.3f}  err={modal.cents(fd, fc):+6.3f} c"
+        )
 
     # --- 3. Passivity under loss ---
     pd = build(48, 2.0, sigma=8.0)

@@ -1,9 +1,10 @@
 """Plate (model #5): modal frequencies vs the analytic simply-supported oracle.
 
 Unlike the staircased membrane circle, the simply-supported rectangle has **machine-precise
-eigenvalues** (``sin·sin`` is an exact discrete eigenvector of ``B = L²`` with eigenvalue ``Λ²``), so
-we hold a **tight** bar — operator eigenvalues to machine precision, continuum convergence at
-O(h²), and low modes within ~1 cent. There is no κ=0 reduction to lean on (κ=0 ⇒ u_tt=0, degenerate);
+eigenvalues** (``sin·sin`` is an exact discrete eigenvector of ``B = L²`` with eigenvalue ``Λ²``),
+so we hold a **tight** bar — operator eigenvalues to machine precision, continuum convergence at
+O(h²), and low modes within ~1 cent. There is no κ=0 reduction to lean on (κ=0 ⇒ u_tt=0,
+degenerate);
 operator correctness is proved instead by the ``B``-eigenvalue == ``Λ²`` money test.
 """
 
@@ -22,14 +23,17 @@ THETA = 0.28
 
 # -- Money test: the assembled biharmonic B = L² reproduces the squared Laplacian spectrum. --
 def test_biharmonic_eigenvalues_are_squared_laplacian():
-    """Replaces the (nonexistent) κ=0 anchor: B's eigenvalues must equal Λ² to machine precision."""
+    """Replaces the (nonexistent) κ=0 anchor: B's eigenvalues must equal Λ² to machine
+    precision."""
     N = 24
     p = make_plate(N=N, mu=1.0)
     Ny = round(p.Ly / p.h)
     modes = [(1, 1), (2, 1), (1, 2), (2, 2), (3, 1), (1, 3)]
     lap = np.sort(modal.rectangular_discrete_eigenvalues(p.h, N, Ny, modes))
     bih_oracle = lap ** 2
-    bih_numeric = np.sort(eigsh(p.B, k=len(modes), sigma=0.0, which="LM", return_eigenvectors=False))
+    bih_numeric = np.sort(
+        eigsh(p.B, k=len(modes), sigma=0.0, which="LM", return_eigenvectors=False)
+    )
     rel = np.max(np.abs(bih_numeric - bih_oracle) / bih_oracle)
     assert rel < 1e-10, f"biharmonic eigenvalue mismatch {rel:.2e} (B is mis-assembled)"
 
@@ -39,7 +43,8 @@ def test_biharmonic_eigenvalues_are_squared_laplacian():
     assert d.nnz == 0 or np.abs(d.data).max() < 1e-12, "biharmonic_from_mask != Plate's assembled B"
 
 
-# -- Continuum frequency error converges at O(h²) (k ∝ h² at fixed mu, so temporal error ∝ h⁴). --
+# -- Continuum frequency error converges at O(h²) (k ∝ h² at fixed mu, so temporal error ∝ h⁴).
+# --
 def test_rectangle_continuum_convergence_order():
     Ns = [16, 32, 64, 128]
     mu, Lx = 1.0, 1.0
@@ -71,7 +76,8 @@ def test_low_modes_within_one_cent():
     assert np.max(err_cents) < 1.0, f"max error {np.max(err_cents):.3f} cents > 1 (tight bar)"
 
 
-# -- eigsh on the actual assembled L, mapped through the scheme oracle, tracks the analytic series. --
+# -- eigsh on the actual assembled L, mapped through the scheme oracle, tracks the analytic
+# series. --
 def test_low_spectrum_via_eigsh_matches_oracle():
     N = 64
     p = make_plate(N=N, mu=0.5)
@@ -95,6 +101,10 @@ def test_fft_peak_at_fundamental():
     p.set_state(field)
     pickup = p.pickup_index_at(0.3 * p.Lx, 0.28 * p.Ly)
     res = simulate(p, num_steps=int(0.5 * p.fs), pickup_index=pickup)
-    found = spectrum.measure_partials_near(res.output, res.fs, np.array([f_disc]), search_hz=20.0)[0]
+    found = spectrum.measure_partials_near(
+        res.output, res.fs, np.array([f_disc]), search_hz=20.0
+    )[0]
     cents = abs(modal.cents(found, f_disc))
-    assert cents < 5.0, f"FFT fundamental off by {cents:.2f} cents (found {found:.2f}, want {f_disc:.2f})"
+    assert cents < 5.0, (
+        f"FFT fundamental off by {cents:.2f} cents (found {found:.2f}, want {f_disc:.2f})"
+    )

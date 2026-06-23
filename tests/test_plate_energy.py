@@ -6,7 +6,8 @@ HANDOFF §6.1-§6.2 for the flexural (bending-only) operator. The headline check
   explicit bound 1/4** — the unconditional-stability win the implicit theta-scheme buys (a regime
   the explicit plate could not run at all);
 - with loss, energy is monotone non-increasing, and a *single low mode* decays at ~2 sigma. The
-  caveat (mid/high modes under-damp because Q = kappa² Λ² is 4th-power across the whole spectrum) is
+  caveat (mid/high modes under-damp because Q = kappa² Λ² is 4th-power across the whole spectrum)
+  is
   itself pinned as a test: a higher mode decays strictly slower than a lower one.
 """
 
@@ -33,7 +34,8 @@ def _run(p, secs=1.0):
     return simulate(p, num_steps=int(secs * p.fs))
 
 
-# -- Conservation: lossless energy is flat to machine precision, across mu (incl. explicit-illegal). --
+# -- Conservation: lossless energy is flat to machine precision, across mu (incl.
+# explicit-illegal). --
 @pytest.mark.parametrize("mu", [0.5, 2.0, 8.0])
 def test_energy_conserved(mu):
     # mu > 1/4 is unstable for an EXPLICIT plate; the implicit theta-scheme conserves regardless.
@@ -79,7 +81,8 @@ def test_decay_rate_matches_2sigma_low_mode():
 
 
 def test_higher_mode_underdamps_relative_to_lower():
-    """The damping caveat, pinned: rate 2 sigma (1 - theta Q k²) falls with mode (Q = kappa² Λ²),
+    """The damping caveat, pinned: rate 2 sigma (1 - theta Q k²) falls with mode
+    (Q = kappa² Λ²),
 
     so a higher mode retains MORE energy than a lower one after the same time — the opposite of a
     real plate, and the reason frequency-dependent loss (a later model) is needed. We compare a low

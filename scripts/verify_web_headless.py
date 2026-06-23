@@ -2,8 +2,9 @@
 
 Drives a real Chrome over the DevTools protocol (no Selenium/Puppeteer needed — just the
 ``websocket-client`` package): launch headless Chrome, navigate to the running viewer with a
-``?model=…&domain=…`` deep-link, wait for the *real* "ok" render status (not a virtual-time guess),
-then (a) read the energy/spectrum readouts the page actually rendered and (b) sample the main canvas
+``?model=…&domain=…`` deep-link, wait for the *real* "ok" render status (not a virtual-time
+guess), then (a) read the energy/spectrum readouts the page actually rendered and (b) sample the
+main canvas
 pixels to prove the field painted (a byte-order bug would paint background-only or uniform garbage).
 A screenshot is saved per case for eyeballing.
 
@@ -43,7 +44,8 @@ CHROME_CANDIDATES = [
     "chromium",
 ]
 
-# JS run after each render: returns the rendered readouts + a histogram of canvas pixel "temperature"
+# JS run after each render: returns the rendered readouts + a histogram of canvas pixel
+# "temperature"
 # (warm = positive displacement, cool = negative, bg = exterior/at-rest), so we can assert the field
 # actually painted into the interior rather than leaving a flat background.
 PROBE = r"""
@@ -154,7 +156,9 @@ def main() -> int:
         for _ in range(60):
             try:
                 targets = json.load(urllib.request.urlopen(f"http://localhost:{PORT}/json"))
-                pages = [t for t in targets if t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
+                pages = [
+                    t for t in targets if t.get("type") == "page" and t.get("webSocketDebuggerUrl")
+                ]
                 if pages:
                     page = pages[0]
                     break

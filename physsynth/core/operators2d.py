@@ -122,9 +122,10 @@ def biharmonic_from_mask(
     """Symmetric 2D biharmonic ``∇⁴ = (∇²)²`` on the live nodes, built as ``B = L @ L``.
 
     The plate's flexural operator (HANDOFF §5 model #5). ``L`` is the *Dirichlet* (zero-ghost)
-    5-point Laplacian from :func:`laplacian_from_mask`, so ``w = L u`` already satisfies ``w = 0`` on
-    the rim; applying ``L`` again therefore enforces **both** simply-supported (Navier) conditions —
-    ``u = 0`` *and* ``∇²u = 0`` — automatically, with no hand-coded 13-point boundary rows. This is
+    5-point Laplacian from :func:`laplacian_from_mask`, so ``w = L u`` already satisfies ``w = 0``
+    on the rim; applying ``L`` again therefore enforces **both** simply-supported (Navier)
+    conditions — ``u = 0`` *and* ``∇²u = 0`` — automatically, with no hand-coded 13-point boundary
+    rows. This is
     the 2D analogue of the 1D ``(δ_xx)²`` biharmonic (see
     :func:`physsynth.core.operators.biharmonic_matrix`).
 

@@ -7,14 +7,15 @@ so it is unit-tested directly (``tests/test_web_backend.py``). The HTTP shell (`
 a thin wrapper over this function.
 
 Design decisions baked in (see ``docs/dev/web-viewer-plan.md``, advisor review 2):
-  * **catch #1** — the pickup is resampled to a fixed :data:`AUDIO_FS` (48 kHz); ``fs_sim`` rides N
-    and c (sliders) and can blow past the browser ``AudioBuffer`` cap. ``audio.fs`` means 48 kHz.
+  * **catch #1** — the pickup is resampled to a fixed :data:`AUDIO_FS` (48 kHz); ``fs_sim`` rides
+    N and c (sliders) and can blow past the browser ``AudioBuffer`` cap. ``audio.fs`` means 48 kHz.
   * **catch #2** — the animation captures only ``animation_window`` seconds at a stride that
     resolves the *fundamental* (~:data:`FRAMES_PER_PERIOD` frames/period), decoupled from the audio
     length; the frontend plays it in slow motion. A wall-clock 60 fps stride would alias the wiggle.
   * **catch #4** — energy is reported as a *correctness drift* only when lossless; with loss it is
     reported as a passivity (monotone-decrease + decay-rate) check, not a scary "drift" number.
-  * **catch #5** — per-model constructor params and partials oracle (see :func:`_build_resonator`).
+  * **catch #5** — per-model constructor params and partials oracle
+    (see :func:`_build_resonator`).
 
 Depends on ``physsynth.core`` + ``physsynth.analysis``; never imported by the core.
 """
@@ -56,24 +57,30 @@ ANIM_WIN_MAX = 2.0
 SPEED_MAX = 8.0
 
 # --- membrane (2D, Phase B) clamps + display budget ---
-# Cost is ~cubic in N (nlive ~ N², fs rides N so steps ~ N, plus an eigsh shift-invert factorization
-# of L) — the string's N_MAX is catastrophic in 2D, so the membrane gets its own, much lower ceiling
-# and a shorter audio cap, both verified to keep a worst-case local render to a few seconds.
+# Cost is ~cubic in N (nlive ~ N², fs rides N so steps ~ N, plus an eigsh shift-invert
+# factorization of L) — the string's N_MAX is catastrophic in 2D, so the membrane gets its own,
+# much lower ceiling and a shorter audio cap, both verified to keep a worst-case local render to a
+# few seconds.
 # Cost must be bounded by the *actual problem size*, not N alone. Profiled: the cost is pure FDTD
 # (eigsh is ~0.06 s, negligible), and it has TWO independent drivers the sliders can push:
-#   • per-step cost ∝ n_live, with a razor-sharp ~3.2× CACHE CLIFF at n_live ≈ 10_000 (87 µs →
-#     281 µs/step as the working set crosses L2). A thin rectangle reaches it fast: n_live ~
-#     N²·(Ly/Lx), so Lx=0.3, Ly=2.0, N=100 is ~66k nodes. ⇒ keep n_live strictly BELOW the cliff.
-#   • step count ∝ fs = c/(λ·h) ∝ 1/min_dimension: a small drum / fine grid inflates steps (the
-#     audio is resampled to 48 kHz regardless, so a high sim rate buys no fidelity — pure cost).
-# So: an n_live cap below the cache cliff (keeps per-step on the fast side, where time ∝ work), and a
-# work-budget cap on n_live × total steps (covers both the audio and the slow-mo animation runs).
+#   • per-step cost ∝ n_live, with a razor-sharp ~3.2× CACHE CLIFF at n_live ≈ 10_000
+#     (87 µs → 281 µs/step as the working set crosses L2). A thin rectangle reaches it fast:
+#     n_live ~ N²·(Ly/Lx), so Lx=0.3, Ly=2.0, N=100 is ~66k nodes. ⇒ keep n_live strictly BELOW
+#     the cliff.
+#   • step count ∝ fs = c/(λ·h) ∝ 1/min_dimension: a small drum / fine grid inflates steps
+#     (the audio is resampled to 48 kHz regardless, so a high sim rate buys no fidelity — pure
+#     cost).
+# So: an n_live cap below the cache cliff (keeps per-step on the fast side, where time ∝ work),
+# and a work-budget cap on n_live × total steps (covers both the audio and the slow-mo animation
+# runs).
 MEMBRANE_N_MAX = 100
 MEMBRANE_NLIVE_MAX = 9_900     # below the n_live≈10_000 L2 cliff; admits a square/disk at N=100
-MEMBRANE_WORK_MAX = 7.0e8      # node-steps budget: square@N=100, 2 s audio ≈ 6.7e8 ≈ ~6 s locally
+# node-steps budget: square@N=100, 2 s audio ≈ 6.7e8 ≈ ~6 s locally
+MEMBRANE_WORK_MAX = 7.0e8
 MEMBRANE_AUDIO_MAX = 2.0
 MEMBRANE_LAMBDA_MAX = 1.0 / math.sqrt(2.0)   # 2D CFL ceiling (5-point Laplacian: λ ≤ 1/√2)
-DISPLAY_MAX = 64             # heatmap display grid is decimated to <= this per axis (data-size trap)
+# heatmap display grid is decimated to <= this per axis (data-size trap)
+DISPLAY_MAX = 64
 N_MEMBRANE_MODES = 12        # discrete eigenmodes marked on the spectrum panel
 N_SPEC_POINTS = 420          # decimated magnitude-spectrum length for the plot
 
@@ -317,7 +324,9 @@ def _build_payload_string(p: dict[str, Any]) -> dict[str, Any]:
     audio_res = simulate(b.res, num_steps=n_audio, pickup_index=pickup_idx)
     pickup = np.asarray(audio_res.output, dtype=float)
     if not np.all(np.isfinite(pickup)):
-        raise ParamError("simulation produced non-finite output (instability) — adjust parameters.")
+        raise ParamError(
+            "simulation produced non-finite output (instability) — adjust parameters."
+        )
 
     # --- animation run: fresh resonator, short window, fundamental-resolving stride (catch #2) ----
     anim = _build_resonator(p).res
@@ -364,25 +373,28 @@ def _build_payload_string(p: dict[str, Any]) -> dict[str, Any]:
 # == membrane (2D, Phase B) ========================================================================
 #
 # The 2D path is split off from the string path (above) so the string contract stays bit-for-bit
-# unchanged. What differs: frames are 2D heatmap fields (decimated to a <= DISPLAY_MAX display grid —
-# the data-size trap), the excitation/pickup are (x, y) fractions, and the modal panel is a *magnitude
-# spectrum with mode-marker lines* rather than per-partial cents bars. The reason for the latter
-# (advisor review 3): the continuum Bessel oracle is off by ~O(h) staircase (≈9 cents at N=128) *by
-# design*, so scoring it as "error" reads as a bug; and an off-centre struck drum rings high/odd modes
-# only weakly, so `measure_partials_near` would lock onto noise for unexcited targets and report
+# unchanged. What differs: frames are 2D heatmap fields (decimated to a <= DISPLAY_MAX display
+# grid — the data-size trap), the excitation/pickup are (x, y) fractions, and the modal panel is a
+# *magnitude spectrum with mode-marker lines* rather than per-partial cents bars. The reason for
+# the latter (advisor review 3): the continuum Bessel oracle is off by ~O(h) staircase (≈9 cents
+# at N=128) *by design*, so scoring it as "error" reads as a bug; and an off-centre struck drum
+# rings high/odd modes only weakly, so `measure_partials_near` would lock onto noise for unexcited
+# targets and report
 # confident-but-meaningless cents. Instead we show the FFT with vertical lines at the **discrete**
 # eigenfreqs (peaks landing on lines = self-consistency) and fainter lines at the continuum oracle
 # (the staircase offset, shown not scored). Two headline numbers: the robust fundamental
-# detected-vs-discrete cents, and the discrete-vs-continuum "geometry tier" gap. Energy stays the hard
-# pass/fail signature (conservation σ=0 / passivity σ>0), reused verbatim from the string path.
+# detected-vs-discrete cents, and the discrete-vs-continuum "geometry tier" gap. Energy stays the
+# hard pass/fail signature (conservation σ=0 / passivity σ>0), reused verbatim from the string
+# path.
 
 
 def _build_membrane(p: dict[str, Any]) -> tuple[Membrane, float, float, float, str, dict[str, Any]]:
     """Construct a fresh :class:`Membrane` from params.
 
     Returns ``(res, c, fs, sigma, domain, geom)``. ``fs = c/(λ·h)`` reproduces the requested λ
-    exactly (``h`` from the geometry: ``2·radius/N`` for a disk, ``Lx/N`` for a rectangle). ``geom``
-    holds the *snapped* geometry read back off the resonator (the ctor snaps ``Ly`` to whole cells).
+    exactly (``h`` from the geometry: ``2·radius/N`` for a disk, ``Lx/N`` for a rectangle).
+    ``geom`` holds the *snapped* geometry read back off the resonator (the ctor snaps ``Ly`` to
+    whole cells).
     """
     domain = str(p.get("domain", "circle"))
     if domain not in ("circle", "rectangle"):
@@ -451,7 +463,8 @@ def _length_scale(domain: str, geom: dict[str, Any]) -> float:
 
 
 def _discrete_eigenfreqs(res: Membrane, c: float, k_request: int) -> NDArray[np.float64]:
-    """Lowest discrete eigenfrequencies (Hz) via ``eigsh(-L)`` → ``discrete_membrane_eigenfrequency``.
+    """Lowest discrete eigenfrequencies (Hz) via ``eigsh(-L)`` →
+    ``discrete_membrane_eigenfrequency``.
 
     These are the frequencies the time-stepper *actually* rings at (the operator's own spectrum), so
     they are the honest marker lines for the FFT panel. ``k`` is clamped below ``n_live`` so a small
@@ -505,7 +518,8 @@ def _membrane_spectrum_block(
     if m.size == 0:
         return None
 
-    # Max-pool to ~N_SPEC_POINTS so spectral *peaks* survive the decimation (mean would wash them out).
+    # Max-pool to ~N_SPEC_POINTS so spectral *peaks* survive the decimation (mean would wash them
+    # out).
     npts = min(N_SPEC_POINTS, int(m.size))
     edges = np.linspace(0, m.size, npts + 1).astype(int)
     f_ds = np.empty(npts)
@@ -569,8 +583,9 @@ def _build_payload_membrane(p: dict[str, Any]) -> dict[str, Any]:
     res, c, fs, sigma, domain, geom = _build_membrane(p)
 
     # Work budget: the FDTD cost is n_live × steps (both the audio run and the slow-mo animation
-    # run), with a cache penalty at high n_live. fs ∝ 1/min_dimension, so a small drum or fine grid
-    # inflates the step count past N_MAX/n_live alone — bound the product before stepping anything.
+    # run), with a cache penalty at high n_live. fs ∝ 1/min_dimension, so a small drum or fine
+    # grid inflates the step count past N_MAX/n_live alone — bound the product before stepping
+    # anything.
     n_audio = max(1, round(audio_dur * fs))
     n_anim_est = max(1, round(anim_win * fs))
     work = res.n_live * (n_audio + n_anim_est)
@@ -594,7 +609,9 @@ def _build_payload_membrane(p: dict[str, Any]) -> dict[str, Any]:
     audio_res = simulate(res, num_steps=n_audio, pickup_index=pickup_idx)
     pickup = np.asarray(audio_res.output, dtype=float)
     if not np.all(np.isfinite(pickup)):
-        raise ParamError("simulation produced non-finite output (instability) — adjust parameters.")
+        raise ParamError(
+            "simulation produced non-finite output (instability) — adjust parameters."
+        )
 
     # --- animation run: fresh membrane, short window, fundamental-resolving stride (catch #2) -----
     anim = _build_membrane(p)[0]

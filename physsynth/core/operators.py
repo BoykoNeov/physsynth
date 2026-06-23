@@ -23,6 +23,7 @@ __all__ = [
     "norm2",
     "second_difference_matrix",
     "biharmonic_matrix",
+    "free_beam_stiffness",
 ]
 
 
@@ -96,6 +97,62 @@ def biharmonic_matrix(N: int, h: float) -> sparse.csr_matrix:
     """
     d2 = second_difference_matrix(N, h)
     return (d2 @ d2).tocsr()
+
+
+def free_beam_stiffness(N: int, h: float) -> tuple[sparse.csr_matrix, sparse.csr_matrix]:
+    """Energy-first free-free Euler–Bernoulli bending operator on the ``N+1`` nodes.
+
+    Returns ``(K, W)`` — the building block for the **free** flexural resonator (the 1D rehearsal
+    of the free-edge Chladni plate, ``docs/dev/plate-free-edge-plan.md`` Part 0). Unlike the
+    simply-supported :func:`biharmonic_matrix` (clamped/Dirichlet ends), **both ends are free
+    unknowns**, so the operator acts on the *full* node set:
+
+    - ``K`` is the symmetric **positive-semidefinite** stiffness representing the bending energy
+      ``∫(u_xx)² dx ≈ uᵀ K u``. It is assembled *from the energy* as a Gram product
+      ``K = D2ᵀ Wc D2`` with ``D2`` the ``(N-1)×(N+1)`` **interior** second-difference operator
+      (curvature at nodes ``1 .. N-1``) and ``Wc = h·I`` the curvature-quadrature weight, i.e.
+      ``K = h · D2ᵀ D2``. Because ``D2`` annihilates linear data, ``K``'s nullspace is **exactly the
+      rigid-body space ``{1, x}``** (translation + tilt) — the free-free natural BCs ``u_xx = 0``
+      and ``u_xxx = 0`` are enforced by construction, with no hand-coded boundary rows.
+    - ``W`` is the diagonal **trapezoidal** mass (lumped quadrature): ``h`` at interior nodes,
+      ``h/2`` at the two end nodes. It sits on the LHS of ``W u_tt = -kappa² K u``.
+
+    **Why no special end stiffness rows are needed (the de-risk payoff):** the mass-normalised
+    operator ``W⁻¹K`` comes out as Bilbao's energy-conserving free-free bar exactly — end row
+    ``(1/h⁴)[2,-4,2]``, next row ``(1/h⁴)[-2,5,-4,1]``, interior ``(1/h⁴)[1,-4,6,-4,1]``. The factor
+    of two at the very end is supplied by the ``h/2`` mass cell, **not** by a hand-written stiffness
+    stencil. The free-edge closure falls out of the mass lumping; in 2D the edge-½/corner-¼ ``W`` is
+    expected to supply the corner closure the same way (see the plan). Second-order accurate; the
+    low eigenvalues converge at O(h²) (there is no exact discrete eigenvector here — free edges have
+    no ``sin·sin`` analogue).
+
+    ``K`` is only PSD (the ``{1, x}`` nullspace), so a generalized eigensolve ``K φ = μ W φ`` needs
+    a small **negative** shift; the time-step matrix ``A = (1+σk)W + θk²κ²K`` is still SPD because
+    ``W`` is. Pairs with :func:`physsynth.analysis.modal.free_free_beam_freqs` (the closed-form
+    oracle ``f_n = kappa (β_n L)²/(2π L²)``).
+    """
+    if N < 2:
+        raise ValueError("N must be >= 2 (need at least one interior curvature).")
+    n_curv = N - 1
+    inv_h2 = 1.0 / (h * h)
+
+    # D2: interior second difference. Row r (r = 0 .. N-2) is the curvature at node l = r+1, with
+    # entries [1, -2, 1]/h² at columns l-1, l, l+1.
+    nodes = np.arange(1, N)  # interior node indices l = 1 .. N-1
+    rows = np.repeat(np.arange(n_curv), 3)
+    cols = np.empty(3 * n_curv, dtype=np.int64)
+    cols[0::3] = nodes - 1
+    cols[1::3] = nodes
+    cols[2::3] = nodes + 1
+    data = np.tile(np.array([inv_h2, -2.0 * inv_h2, inv_h2]), n_curv)
+    D2 = sparse.coo_matrix((data, (rows, cols)), shape=(n_curv, N + 1)).tocsr()
+
+    K = (h * (D2.T @ D2)).tocsr()  # = D2ᵀ (h I) D2, curvature-quadrature weight Wc = h
+
+    w = np.full(N + 1, h)
+    w[0] = w[-1] = 0.5 * h  # trapezoidal: half cells at the two free ends
+    W = sparse.diags(w, format="csr")
+    return K, W
 
 
 def inner(f: NDArray[np.float64], g: NDArray[np.float64], h: float) -> float:

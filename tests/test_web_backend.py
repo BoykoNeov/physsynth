@@ -1,9 +1,10 @@
 """Web-viewer backend: the pure ``simulate_to_payload`` seam (wrapper, not core).
 
-These exercise the serialization layer directly — no socket — so the contract the frontend depends
-on is pinned by tests (HANDOFF §6 spirit, applied to the wrapper). The energy *signature* must
-survive the wrapper unaltered (criterion 1); the rest pins frame/audio bookkeeping, the loss-gated
-energy report (advisor catch #4), and clean error payloads for guard violations (no 500/NaN).
+These exercise the serialization layer directly — no socket — so the contract the frontend
+depends on is pinned by tests (HANDOFF §6 spirit, applied to the wrapper). The energy *signature*
+must survive the wrapper unaltered (criterion 1); the rest pins frame/audio bookkeeping, the
+loss-gated energy report (advisor catch #4), and clean error payloads for guard violations
+(no 500/NaN).
 
 This file imports ``web.serialize`` (the wrapper) and ``physsynth`` (the core) — it does NOT touch
 ``physsynth.core`` internals, so the core dependency-allowlist guard is unaffected.
@@ -207,7 +208,9 @@ def _membrane_params(**overrides):
 
 
 def test_membrane_lossless_drift_survives_wrapper():
-    """The energy signature must survive the 2D wrapper too (HANDOFF §6.1 — conservation ⊥ geometry)."""
+    """The energy signature must survive the 2D wrapper too
+    (HANDOFF §6.1 — conservation ⊥ geometry).
+    """
     payload = simulate_to_payload(_membrane_params())
     assert "error" not in payload, payload.get("error")
     assert payload["model"] == "membrane" and payload["frames"]["dims"] == 2
@@ -245,9 +248,10 @@ def test_membrane_spatial_decimation_shrinks_field():
 def test_membrane_frames_decode_to_field_values_and_mask():
     """Decoded *values* are sane: peak == field_amp, and dead (exterior) nodes stay clamped at 0.
 
-    The 2D analogue of the string boundary test — a length-only check passes on byte-order garbage.
-    The decimated mask must align with the decimated field (same stride): every mask==0 cell is 0 in
-    every frame, and the decoded peak equals the ``field_amp`` the heatmap colour scale uses.
+    The 2D analogue of the string boundary test — a length-only check passes on byte-order
+    garbage. The decimated mask must align with the decimated field (same stride): every mask==0
+    cell is 0 in every frame, and the decoded peak equals the ``field_amp`` the heatmap colour
+    scale uses.
     """
     payload = simulate_to_payload(_membrane_params(N=64, audio_duration=0.12))
     fr = payload["frames"]
@@ -341,13 +345,17 @@ def test_membrane_thin_rectangle_rejected_by_nlive_guard():
 
 
 def test_membrane_small_geometry_rejected_by_work_budget():
-    """A small drum inflates fs (∝ 1/min_dimension) → step count past the work budget. Reject."""
-    # radius 0.2 at N=100 stays under the n_live cap but fs ≈ 83 kHz → ~1.3e9 node-steps > budget.
+    """A small drum inflates fs (∝ 1/min_dimension) → step count past the work budget.
+    Reject.
+    """
+    # radius 0.2 at N=100 stays under the n_live cap but fs ≈ 83 kHz → ~1.3e9 node-steps >
+    # budget.
     payload = simulate_to_payload(_membrane_params(domain="circle", radius=0.2, N=100,
                                                    audio_duration=2.0))
     assert "error" in payload
     assert "node-steps" in payload["error"]["message"]
-    # the SAME geometry with short audio fits the budget (work scales with duration) — not a hard ban
+    # the SAME geometry with short audio fits the budget (work scales with duration) — not a hard
+    # ban
     ok = simulate_to_payload(_membrane_params(domain="circle", radius=0.2, N=100,
                                               audio_duration=0.3))
     assert "error" not in ok, ok.get("error")

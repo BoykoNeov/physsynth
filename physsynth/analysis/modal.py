@@ -15,6 +15,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 from scipy import special
+from scipy.optimize import brentq
 
 __all__ = [
     "harmonic_frequencies",
@@ -33,6 +34,10 @@ __all__ = [
     # 2D plate (model #5)
     "rectangular_plate_freqs",
     "discrete_plate_eigenfrequency",
+    # 1D free-free beam (model #5b-pre)
+    "free_free_beam_betaL",
+    "free_free_beam_freqs",
+    "discrete_beam_eigenfrequency",
 ]
 
 
@@ -234,8 +239,8 @@ def discrete_plate_eigenfrequency(
 
     ``Lambda_lap`` is the **Laplacian** eigenvalue magnitude ``Λ`` (of ``-L``); the *biharmonic*
     eigenvalue is ``Λ²``, so the plate's modal stiffness is ``Q = kappa²·Λ²`` (4th power — easy to
-    under-square or double-square, so it is pinned here). Inserting ``u^n = z^n φ`` with ``B φ = Λ² φ``
-    into ``δ_tt u = -kappa² B (θ u^{n+1} + (1-2θ) u^n + θ u^{n-1})`` gives
+    under-square or double-square, so it is pinned here). Inserting ``u^n = z^n φ`` with
+    ``B φ = Λ² φ`` into ``δ_tt u = -kappa² B (θ u^{n+1} + (1-2θ) u^n + θ u^{n-1})`` gives
 
         sin²(ω k / 2) = s = Q k² / (4 + 4 θ Q k²),   f = arcsin(sqrt(s)) / (π k).
 
@@ -245,5 +250,66 @@ def discrete_plate_eigenfrequency(
     """
     Lambda_lap = np.asarray(Lambda_lap, dtype=float)
     Q = kappa * kappa * Lambda_lap * Lambda_lap
+    s = Q * k * k / (4.0 + 4.0 * theta * Q * k * k)
+    return np.arcsin(np.sqrt(s)) / (np.pi * k)
+
+
+# -- 1D free-free Euler-Bernoulli beam (model #5b-pre): the free-edge plate de-risk ------------
+
+
+def free_free_beam_betaL(n_modes: int) -> NDArray[np.float64]:
+    """First ``n_modes`` positive roots ``β_n L`` of the free-free frequency equation.
+
+    The elastic modes of a free-free Euler–Bernoulli beam satisfy ``cos(βL)·cosh(βL) = 1``. The
+    roots are found by ``brentq`` on the overflow-safe rearrangement ``cos(x) − sech(x) = 0``
+    (``sech`` underflows harmlessly for large ``x``); root ``i`` lives in ``(iπ, (i+1)π)`` and tends
+    to ``(2i+1)π/2`` from above. The first few are ``4.730041, 7.853205, 10.995608, 14.137165, …``.
+
+    The double root at ``x = 0`` (the two rigid-body modes ``u ≡ 1`` and ``u ≡ x``, ``ω = 0``) is
+    **not** returned — those are the operator's nullspace, checked separately.
+    """
+    if n_modes < 1:
+        raise ValueError("n_modes must be >= 1.")
+    f = lambda x: np.cos(x) - 1.0 / np.cosh(x)  # noqa: E731
+    return np.array([brentq(f, i * np.pi, (i + 1) * np.pi) for i in range(1, n_modes + 1)])
+
+
+def free_free_beam_freqs(kappa: float, L: float, n_modes: int) -> NDArray[np.float64]:
+    """Closed-form free-free Euler–Bernoulli bending frequencies (the Part-0 oracle).
+
+    With stiffness ``kappa = sqrt(E I / (rho A))`` (same convention as the stiff string), the
+    bending PDE ``u_tt = -kappa² u_xxxx`` on a *free-free* beam has ``ω_n = kappa·β_n²`` where
+    ``β_n L`` are the roots of ``cos(βL)·cosh(βL) = 1`` (:func:`free_free_beam_betaL`), hence
+
+        f_n = kappa · (β_n L)² / (2π L²).
+
+    This is a *genuine closed form* (unlike the 2D free plate), which is exactly why the beam is
+    built first: it gives a tight oracle for the free-edge stencil before the 2D corners and Poisson
+    term. Returns the lowest ``n_modes`` elastic frequencies (the two ``ω = 0`` rigid-body modes
+    excluded).
+    """
+    bl = free_free_beam_betaL(n_modes)
+    return kappa * bl * bl / (2.0 * np.pi * L * L)
+
+
+def discrete_beam_eigenfrequency(
+    mu: float | NDArray[np.float64], kappa: float, k: float, theta: float
+) -> NDArray[np.float64]:
+    """Discrete temporal frequency (Hz) of a beam eigenmode, implicit theta-scheme.
+
+    ``mu`` is the **4th-power spatial eigenvalue** ``ω²/κ²`` — the generalized eigenvalue of
+    ``K φ = mu W φ`` for the energy-first operator
+    (:func:`physsynth.core.operators.free_beam_stiffness`), ``mu → β⁴`` in the continuum. The modal
+    stiffness is ``Q = kappa²·mu = ω²``. Inserting ``u^n = z^n φ`` into
+    ``W δ_tt u = -kappa² K (θ u^{n+1} + (1-2θ) u^n + θ u^{n-1})`` gives the same
+    relation as the plate (with ``Q`` from the beam operator rather than ``kappa²Λ²``):
+
+        sin²(ω k / 2) = s = Q k² / (4 + 4 θ Q k²),    f = arcsin(sqrt(s)) / (π k).
+
+    As ``k → 0`` this tends to the spatial ``f = kappa·sqrt(mu)/(2π)``. Unconditionally stable for
+    ``θ >= 1/4``; depends on ``θ``, so callers pass the resonator's own ``theta``.
+    """
+    mu = np.asarray(mu, dtype=float)
+    Q = kappa * kappa * mu
     s = Q * k * k / (4.0 + 4.0 * theta * Q * k * k)
     return np.arcsin(np.sqrt(s)) / (np.pi * k)
