@@ -27,6 +27,7 @@ __all__ = [
     "disk_mask",
     "grid_coords",
     "laplacian_from_mask",
+    "biharmonic_from_mask",
     "embed",
     "inner2d",
     "norm2_2d",
@@ -113,6 +114,30 @@ def laplacian_from_mask(
         shape=(nlive, nlive),
     ).tocsr()
     return L, index_map
+
+
+def biharmonic_from_mask(
+    mask: NDArray[np.bool_], h: float
+) -> tuple[sparse.csr_matrix, NDArray[np.int64]]:
+    """Symmetric 2D biharmonic ``∇⁴ = (∇²)²`` on the live nodes, built as ``B = L @ L``.
+
+    The plate's flexural operator (HANDOFF §5 model #5). ``L`` is the *Dirichlet* (zero-ghost)
+    5-point Laplacian from :func:`laplacian_from_mask`, so ``w = L u`` already satisfies ``w = 0`` on
+    the rim; applying ``L`` again therefore enforces **both** simply-supported (Navier) conditions —
+    ``u = 0`` *and* ``∇²u = 0`` — automatically, with no hand-coded 13-point boundary rows. This is
+    the 2D analogue of the 1D ``(δ_xx)²`` biharmonic (see
+    :func:`physsynth.core.operators.biharmonic_matrix`).
+
+    Returns ``(B, index_map)`` sharing ``L``'s ``index_map``. Because ``L`` is symmetric, ``B = L²``
+    is **symmetric positive-(semi)definite** — its eigenvalues are ``Λ²`` where ``-Λ`` are ``L``'s
+    (so ``Λ > 0`` for the Dirichlet interior, hence ``B`` is positive-definite). The ``sin·sin``
+    rectangular modes stay *exact* discrete eigenvectors (eigenvalue ``Λ_{mn}²``). Energy
+    conservation for the plate needs only this symmetry — exactly as the membrane's conservation
+    needed only ``L``'s. See ``docs/dev/plate-plan.md``.
+    """
+    L, index_map = laplacian_from_mask(mask, h)
+    B = (L @ L).tocsr()
+    return B, index_map
 
 
 def embed(

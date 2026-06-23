@@ -30,6 +30,9 @@ __all__ = [
     "rectangular_discrete_eigenvalues",
     "circular_membrane_freqs",
     "discrete_membrane_eigenfrequency",
+    # 2D plate (model #5)
+    "rectangular_plate_freqs",
+    "discrete_plate_eigenfrequency",
 ]
 
 
@@ -199,3 +202,48 @@ def discrete_membrane_eigenfrequency(
     Lambda = np.asarray(Lambda, dtype=float)
     arg = 1.0 - 0.5 * (c * k) ** 2 * Lambda
     return np.arccos(np.clip(arg, -1.0, 1.0)) / (2.0 * np.pi * k)
+
+
+# -- 2D plate (model #5): simply-supported rectangle ------------------------------------------
+
+
+def rectangular_plate_freqs(
+    kappa: float, Lx: float, Ly: float, modes: list[tuple[int, int]]
+) -> NDArray[np.float64]:
+    """Continuum simply-supported rectangular-plate frequencies (HANDOFF §5 row 5).
+
+    With stiffness ``kappa = sqrt(D/rho_s)`` (D = flexural rigidity, rho_s = areal density), the
+    Navier modes are ``sin(mπx/Lx) sin(nπy/Ly)`` with ``ω_{mn} = kappa·γ_{mn}`` where
+    ``γ_{mn} = (mπ/Lx)² + (nπ/Ly)²`` is the Laplacian eigenvalue magnitude, hence
+
+        f_{mn} = kappa·γ_{mn} / (2π) = (π/2)·kappa·[(m/Lx)² + (n/Ly)²].
+
+    Pure 4th-power in the wavenumbers (no tension term — the plate is bending-only). ``modes`` is a
+    list of ``(m, n)`` indices (both >= 1). Poisson's ratio drops out for simply-supported edges, so
+    ``kappa`` is the single stiffness parameter.
+    """
+    mn = np.asarray(modes, dtype=float)
+    gamma = (mn[:, 0] * np.pi / Lx) ** 2 + (mn[:, 1] * np.pi / Ly) ** 2
+    return kappa * gamma / (2.0 * np.pi)
+
+
+def discrete_plate_eigenfrequency(
+    Lambda_lap: float | NDArray[np.float64], kappa: float, k: float, theta: float
+) -> NDArray[np.float64]:
+    """Discrete temporal frequency (Hz) of a plate eigenmode, implicit theta-scheme.
+
+    ``Lambda_lap`` is the **Laplacian** eigenvalue magnitude ``Λ`` (of ``-L``); the *biharmonic*
+    eigenvalue is ``Λ²``, so the plate's modal stiffness is ``Q = kappa²·Λ²`` (4th power — easy to
+    under-square or double-square, so it is pinned here). Inserting ``u^n = z^n φ`` with ``B φ = Λ² φ``
+    into ``δ_tt u = -kappa² B (θ u^{n+1} + (1-2θ) u^n + θ u^{n-1})`` gives
+
+        sin²(ω k / 2) = s = Q k² / (4 + 4 θ Q k²),   f = arcsin(sqrt(s)) / (π k).
+
+    As ``k → 0`` this tends to the continuum ``f = kappa·Λ/(2π)``. Unconditionally stable for
+    ``θ >= 1/4`` (``s <= 1``); the frequency depends on ``θ`` (the temporal scheme), so callers must
+    pass the resonator's own ``theta``.
+    """
+    Lambda_lap = np.asarray(Lambda_lap, dtype=float)
+    Q = kappa * kappa * Lambda_lap * Lambda_lap
+    s = Q * k * k / (4.0 + 4.0 * theta * Q * k * k)
+    return np.arcsin(np.sqrt(s)) / (np.pi * k)

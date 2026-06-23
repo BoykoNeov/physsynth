@@ -12,6 +12,7 @@ from scipy.sparse.linalg import eigsh
 from physsynth.analysis import modal, spectrum
 from physsynth.core.engine import simulate
 from physsynth.core.membrane import Domain, Membrane
+from physsynth.core.plate import Plate
 from physsynth.core.string_damped import DampedStiffString
 from physsynth.core.string_ideal import Boundary, IdealString
 from physsynth.core.string_stiff import THETA_DEFAULT, StiffString
@@ -24,6 +25,14 @@ RHO_DEFAULT = 0.005  # -> c = sqrt(T/rho) = 200 m/s, fundamental f1 = c/(2L) = 1
 RHO_AREAL_DEFAULT = 0.005  # kg/m^2  -> c = 200 m/s with T_DEFAULT = 200 N/m
 RADIUS_DEFAULT = 0.5  # m  -> circular fundamental f_01 = c*j_{0,1}/(2*pi*a) ~ 153.1 Hz
 KAPPA_DEFAULT = 2.0  # -> B = pi^2 kappa^2 / (c^2 L^2) ~ 9.87e-4, a piano-ish inharmonicity
+
+# Plate (model #5): stiffness kappa = sqrt(D/rho_s) (m^2/s). On the 1x1 m plate the fundamental is
+# f_11 = (pi/2) kappa [1 + 1] = pi kappa ~ 62.8 Hz at kappa = 20, with modes spreading quadratically.
+KAPPA_PLATE_DEFAULT = 20.0
+# Plate "Courant" number mu = kappa k / h^2: the EXPLICIT-scheme stability parameter (explicit needs
+# mu <= 1/4). The implicit theta-scheme has no limit, so the default sits well past 1/4 -- a regime
+# the explicit plate could not run. make_plate solves fs from mu: fs = kappa / (mu h^2).
+MU_PLATE_DEFAULT = 2.0
 
 
 def wave_speed(T: float = T_DEFAULT, rho: float = RHO_DEFAULT) -> float:
@@ -161,6 +170,46 @@ def make_membrane(
     if domain == "rectangle":
         return Membrane(domain=domain, T=T, rho=rho, fs=fs, N=N, Lx=Lx, Ly=Ly, sigma=sigma)
     return Membrane(domain=domain, T=T, rho=rho, fs=fs, N=N, radius=radius, sigma=sigma)
+
+
+def make_plate(
+    *,
+    N: int,
+    mu: float = MU_PLATE_DEFAULT,
+    kappa: float = KAPPA_PLATE_DEFAULT,
+    sigma: float = 0.0,
+    theta: float = THETA_DEFAULT,
+    Lx: float = 1.0,
+    Ly: float = 1.0,
+    rho: float = RHO_AREAL_DEFAULT,
+) -> Plate:
+    """Build a simply-supported plate at plate-Courant number ``mu = kappa k / h^2``.
+
+    ``h = Lx/N`` is fixed by the geometry, so the sample rate is solved for to hit the target
+    ``mu``: ``fs = kappa / (mu h^2)``. There is no CFL ceiling (the implicit theta-scheme is
+    unconditionally stable for ``theta >= 1/4``), so ``mu`` above the explicit bound ``1/4`` is a
+    feature -- a coarse-grid / large-timestep regime the explicit plate could not run. Smaller ``mu``
+    means a finer timestep (less numerical dispersion), used for the tight modal tests.
+    """
+    h = Lx / N
+    fs = kappa / (mu * h * h)
+    return Plate(Lx=Lx, Ly=Ly, kappa=kappa, rho=rho, fs=fs, N=N, sigma=sigma, theta=theta)
+
+
+def plate_low_eigenfrequencies(plate: Plate, n_modes: int) -> np.ndarray:
+    """The ``n_modes`` lowest discrete modal frequencies (Hz) of ``plate`` (ascending).
+
+    Uses shift-invert ``eigsh`` (around 0) on the SPD operator ``-L`` to get the smallest
+    **Laplacian** eigenvalues ``Λ`` robustly, then maps each through
+    :func:`modal.discrete_plate_eigenfrequency` (the theta-scheme's exact ``Λ -> f`` relation, with
+    biharmonic stiffness ``Q = kappa² Λ²``). Degeneracy-robust: it returns sorted values, so the
+    square plate's ``(m,n)<->(n,m)`` pairs appear as the near-equal entries they are.
+    """
+    lam_vals = eigsh(-plate.L, k=n_modes, sigma=0.0, which="LM", return_eigenvectors=False)
+    lam_vals = np.sort(lam_vals)
+    return np.asarray(
+        modal.discrete_plate_eigenfrequency(lam_vals, plate.kappa, plate.k, plate.theta)
+    )
 
 
 def membrane_low_eigenfrequencies(membrane: Membrane, n_modes: int) -> np.ndarray:
