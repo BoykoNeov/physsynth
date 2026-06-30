@@ -7,16 +7,22 @@ metadata:
   originSessionId: 8232fb2b-c7b2-4556-bdf9-553bd1dcba6f
 ---
 
-At the end of a work batch, or whenever the human says "session end", **always**: (1) update
-memory and docs to reflect the finished state, (2) commit, and (3) push to `main`. This is durable
-standing authorization — no need to ask before committing/pushing at a batch boundary (overrides the
-default "commit only when asked" harness rule for *this* repo's batch-end checkpoints).
+At the end of any of these: a work batch, a docs update, a memory update, or a planning stage
+— **always**: (1) update memory and docs to reflect the finished state, (2) commit, and (3) push
+to `main`. This is durable standing authorization — no need to ask before committing/pushing at
+any of these boundaries (overrides the default "commit only when asked" harness rule).
 
-**Why:** the human wants each batch to land as a durable, pushed checkpoint with docs/memory in
-sync — not left as an uncommitted working tree they have to chase.
+**Commit ⟹ push, always paired (human, 2026-06-30):** "commit and push" are a single action here.
+When the human says just "commit" (or I reach a commit boundary), **push in the same step** — never
+commit-only and hold the push back as a separate outward-facing approval gate. Do not split them.
 
-**How to apply:** treat a completed deliverable (e.g. the §6.5 dispersion polish) as a batch end.
-Keep logically separate changes as separate commits (see [[milestone-1-state]] commit boundaries).
+**Why:** the human wants every meaningful checkpoint to land as a durable pushed commit — code
+batches, docs/memory refreshes, and planning milestones alike. Nothing left in an uncommitted
+working tree.
+
+**How to apply:** treat the end of a work batch, any docs/memory write, or a planning stage as a
+commit boundary. Keep logically separate changes as separate commits (see [[milestone-1-state]]
+commit boundaries).
 Remote is now configured (2026-06-21): `origin` = git@github.com:BoykoNeov/physsynth.git (PUBLIC),
 local `main` tracks `origin/main`, so `git push` works directly at batch end.
 
