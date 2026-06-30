@@ -38,6 +38,9 @@ __all__ = [
     "free_free_beam_betaL",
     "free_free_beam_freqs",
     "discrete_beam_eigenfrequency",
+    # 2D free-edge (FFFF) plate (model #5b)
+    "free_plate_ffff_square_lambdas",
+    "free_plate_freq_from_lambda",
 ]
 
 
@@ -290,6 +293,55 @@ def free_free_beam_freqs(kappa: float, L: float, n_modes: int) -> NDArray[np.flo
     """
     bl = free_free_beam_betaL(n_modes)
     return kappa * bl * bl / (2.0 * np.pi * L * L)
+
+
+# -- 2D free-edge (FFFF) plate (model #5b): the curved-Chladni plate, no closed form -------------
+
+
+def free_plate_ffff_square_lambdas() -> NDArray[np.float64]:
+    """Tabulated dimensionless frequencies of the **completely free (FFFF) square** plate, ν = 0.3.
+
+    The free plate has **no closed-form** modal oracle (unlike the simply-supported plate or the
+    free-free beam), so this is the *absolute* percent-level anchor for the free-edge plate. The
+    values are the dimensionless frequency parameters
+
+        λ = ω a² √(ρ_s / D) = ω a² / κ        (a = square side length, κ = √(D/ρ_s)),
+
+    so the physical frequency is ``f = λ κ / (2π a²)`` (:func:`free_plate_freq_from_lambda`).
+
+    Returned are the **lowest 5 elastic modes** (the 3 rigid-body modes ``{1, x, y}`` are excluded):
+
+        λ = [13.468, 19.596, 24.270, 34.801, 34.801]
+
+    The **fundamental is the saddle/twist** (diagonal nodal lines, λ₁ ≈ 13.47) — *not* a drum-like
+    bulge; a bulge-shaped lowest mode signals a wrong (ν-dropped) operator. Modes 4 and 5 are a
+    degenerate pair (the square's symmetry), so the comparison must be by **sorted eigenvalue**, not
+    per-mode label.
+
+    Source (exact digits, not remembered): Y. Narita, "Natural Frequencies of Isotropic Rectangular
+    Plates in Improved Accuracy", *EPI International Journal of Engineering* **5**(1), 2022,
+    pp. 26–36 (DOI 10.25042/epi-ije.022022.05), Table 1, F-F-F-F, a/b = 1, 12×12 Ritz. These are
+    converged upper-bound Ritz values that *improve on* Leissa's classic 1969 monograph
+    (NASA SP-160), whose corresponding parameters (≈13.49, 19.79, 24.43, 35.02) are slightly higher.
+    """
+    return np.array([13.468, 19.596, 24.270, 34.801, 34.801])
+
+
+def free_plate_freq_from_lambda(
+    lam: float | NDArray[np.float64], kappa: float, a: float
+) -> NDArray[np.float64]:
+    """Convert a dimensionless free-plate frequency parameter ``λ`` to a physical frequency (Hz).
+
+    With ``λ = ω a² √(ρ_s/D) = ω a²/κ`` (``κ = √(D/ρ_s)``, ``a`` = square side length), the
+    frequency is
+
+        f = ω / (2π) = λ κ / (2π a²).
+
+    No areal-density or thickness factor to fumble — ``κ`` is the single stiffness parameter (as for
+    the simply-supported plate). Pairs with :func:`free_plate_ffff_square_lambdas`.
+    """
+    lam = np.asarray(lam, dtype=float)
+    return lam * kappa / (2.0 * np.pi * a * a)
 
 
 def discrete_beam_eigenfrequency(

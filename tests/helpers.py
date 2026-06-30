@@ -205,6 +205,62 @@ def make_plate(
     return Plate(Lx=Lx, Ly=Ly, kappa=kappa, rho=rho, fs=fs, N=N, sigma=sigma, theta=theta)
 
 
+def make_free_plate(
+    *,
+    N: int,
+    mu: float = MU_PLATE_DEFAULT,
+    kappa: float = KAPPA_PLATE_DEFAULT,
+    nu: float = 0.3,
+    sigma: float = 0.0,
+    theta: float = THETA_DEFAULT,
+    a: float = 1.0,
+    rho: float = RHO_AREAL_DEFAULT,
+) -> Plate:
+    """Build a **completely free** square plate (side ``a``) at plate-Courant number ``mu``.
+
+    The free-edge (FFFF, curved-Chladni) counterpart of :func:`make_plate` (model #5b). Square by
+    construction (``Lx = Ly = a``, no ``Ly``-snapping), which is the geometry of the Leissa anchor.
+    ``h = a/N`` is fixed, so ``fs = kappa/(mu h²)`` hits the target ``mu`` (no CFL ceiling — the
+    implicit theta-scheme is unconditionally stable for ``theta >= 1/4``). ``nu`` (Poisson's ratio,
+    default 0.3) re-enters for free edges.
+    """
+    h = a / N
+    fs = kappa / (mu * h * h)
+    return Plate(
+        Lx=a, Ly=a, kappa=kappa, rho=rho, fs=fs, N=N, sigma=sigma, theta=theta,
+        boundary="free", nu=nu,
+    )
+
+
+def free_plate_low_eigenfrequencies(
+    plate: Plate, n_modes: int, *, return_rigid: bool = False
+):
+    """The ``n_modes`` lowest **elastic** eigenfrequencies (Hz) of a free ``plate`` (ascending).
+
+    Solves the generalized eigenproblem ``K φ = mu W φ`` (``mu = ω²/κ²``, the 4th-power spatial
+    eigenvalue). ``K`` is only **positive-semidefinite** (the 3-dim ``{1, x, y}`` rigid-body
+    nullspace), so shift-invert at ``sigma = 0`` is singular -- a small **negative** shift is used
+    (``K - sigma W`` SPD). The **3** rigid-body modes (``mu ≈ 0``) are discarded; each remaining
+    ``mu`` maps to ``f = kappa·sqrt(mu)/(2π)``. Degeneracy-robust (returns sorted values, so the
+    square plate's degenerate pairs appear as the near-equal entries they are). With
+    ``return_rigid=True`` the 3 discarded near-zero ``mu`` are also returned (a free cross-check of
+    the nullspace). The free-plate analogue of :func:`beam_low_eigenfrequencies`.
+    """
+    n_total = n_modes + 3  # + the 3 rigid-body modes to discard
+    a = plate.Lx
+    mu1_est = (13.0 / (a * a)) ** 2  # lambda_1 ~ 13.47 -> a safe (< mu_1) negative shift scale
+    sigma = -1e-3 * mu1_est
+    mu = eigsh(
+        plate.K, k=n_total, M=plate.W, sigma=sigma, which="LM", return_eigenvectors=False
+    )
+    mu = np.sort(mu)
+    rigid, elastic = mu[:3], mu[3:n_total]
+    freqs = plate.kappa * np.sqrt(np.clip(elastic, 0.0, None)) / (2.0 * np.pi)
+    if return_rigid:
+        return freqs, rigid
+    return freqs
+
+
 def make_beam(
     *,
     N: int,

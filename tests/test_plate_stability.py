@@ -12,7 +12,7 @@ stays within the allowlist).
 
 import numpy as np
 import pytest
-from helpers import make_plate
+from helpers import make_free_plate, make_plate
 
 from physsynth.core.engine import simulate
 from physsynth.core.exciter import raised_cosine_2d
@@ -32,6 +32,23 @@ def test_no_nan_across_mu(mu):
     res = _run(p)
     assert np.all(np.isfinite(res.output))
     assert np.all(np.isfinite(res.energy))
+
+
+@pytest.mark.parametrize("mu", [0.1, 0.5, 2.0, 8.0, 32.0])
+def test_free_no_nan_across_mu(mu):
+    # The free branch (W-weighted SPD solve) is likewise unconditionally stable -- no CFL ceiling.
+    p = make_free_plate(N=32, mu=mu)
+    res = _run(p)
+    assert np.all(np.isfinite(res.output))
+    assert np.all(np.isfinite(res.energy))
+
+
+def test_free_explicit_unstable_config_runs_stably():
+    p = make_free_plate(N=32, mu=50.0)
+    assert p.mu > 0.25
+    res = _run(p, secs=0.5)
+    assert np.all(np.isfinite(res.energy))
+    assert res.energy_drift < 1e-9  # still conserves, just at a coarse timestep
 
 
 def test_explicit_unstable_config_runs_stably():
@@ -57,7 +74,10 @@ def test_explicit_unstable_config_runs_stably():
         {"N": 1},
         {"theta": 0.0},
         {"theta": 1.5},
-        {"boundary": "free"},
+        {"nu": 0.5},  # ν must be < 1/2 (energy positive-definite, physical range)
+        {"nu": 1.0},
+        {"nu": -1.0},
+        {"boundary": "clamped"},  # only "supported" / "free" are implemented
     ],
 )
 def test_invalid_parameters_rejected(kwargs):
@@ -67,3 +87,11 @@ def test_invalid_parameters_rejected(kwargs):
     base.update(kwargs)
     with pytest.raises(ValueError):
         Plate(**base)
+
+
+def test_free_boundary_is_accepted():
+    # The free branch lands in this batch: boundary="free" must now CONSTRUCT, not raise (the
+    # inverse of the deferred-state assertion this test used to carry).
+    p = Plate(Lx=1.0, Ly=1.0, kappa=20.0, rho=0.005, fs=50000.0, N=20, boundary="free", nu=0.3)
+    assert p.boundary == "free"
+    assert p.n_live == (p.N + 1) ** 2  # every node is a free unknown (no Dirichlet rim)

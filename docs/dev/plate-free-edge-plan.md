@@ -1,6 +1,7 @@
 # Free-edge plate (Chladni) — Phase 3 Plan (model #5b, free rectangular plate)
 
-> **Status: Part 0 DONE (2026-06-23), Part 1 PLANNED.** Follow-on to the simply-supported plate
+> **Status: Part 0 DONE (2026-06-23), Part 1 DONE (2026-06-30).** Follow-on to the simply-supported
+> plate
 > (`docs/dev/plate-plan.md`, model #5). This is the *visual showpiece* half of HANDOFF §5 row 5 — the
 > iconic curved Chladni nodal figures, which require **free** edges. Built **energy-first** per the Bilbao framework (CLAUDE.md #2);
 > validated against the free-free **closed-form 1D beam** oracle, the **rigid-body nullspace**, **O(h²)
@@ -141,6 +142,24 @@ entire point of doing the beam first. Reference: Bilbao *Numerical Sound Synthes
 ---
 
 ## Part 1 — 2D free-edge Kirchhoff plate (model #5b)
+
+> **Built & green (2026-06-30).** `operators2d.free_plate_stiffness(Nx, Ny, h, nu) → (K, W,
+> index_map)`, `Plate(boundary="free", nu=…)` (W-weighted θ-scheme, splu),
+> `analysis/modal.{free_plate_ffff_square_lambdas, free_plate_freq_from_lambda}`,
+> `viz/plots.plot_chladni`, `tests/test_free_plate_{modal,energy}.py` (+ flipped
+> `test_plate_stability`), `scripts/diagnose_free_plate.py`. **The advisor's collapse held: the only
+> genuinely new code was the ν-coupling.** Bending-diagonal = the validated free *beam* operator per
+> axis (`K = C2xᵀWaC2x + C2yᵀWaC2y + ν·cross + 2(1-ν)·h²·DxyᵀDxy`, `Wa = kron(m_y,m_x)` →
+> edge-½/corner-¼ for free); twist = **cell-centered** `kron(d1y,d1x)` (no checkerboard mode). Money
+> tests: `‖K−Kᵀ‖=0`; `K{1,x,y}=0` ~1e-18 with `K(xy)≠0` scaling **exactly** ∝ (1-ν); **exactly 3**
+> near-zero generalized eigenvalues; kron build == an independent explicit-loop assembly. Validation:
+> O(h²) self-convergence (order ≈ 2.1–2.3); **Leissa FFFF-square anchor matched to 0.01 %** at N=80
+> (λ = 13.467/19.598/24.269/34.803/34.803 vs Narita-table 13.468/19.596/24.270/34.801/34.801);
+> energy drift 1e-13 even at mu = 16; fundamental = the **saddle/twist** (not a bulge). Chladni
+> figures rendered (cross, X, ring, S-curves, stripes). **NB:** the Narita (2022) values *improve on*
+> Leissa's classic monograph; cited in `modal.free_plate_ffff_square_lambdas`. The portability
+> allowlist test (`test_stability.py`) was also fixed to measure the *delta* of core-pulled modules,
+> not the absolute set (excludes the Windows pywin32 startup baggage that newly leaked in).
 
 ### Physics
 

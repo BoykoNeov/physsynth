@@ -28,6 +28,7 @@ __all__ = [
     "grid_coords",
     "laplacian_from_mask",
     "biharmonic_from_mask",
+    "free_plate_stiffness",
     "embed",
     "inner2d",
     "norm2_2d",
@@ -139,6 +140,127 @@ def biharmonic_from_mask(
     L, index_map = laplacian_from_mask(mask, h)
     B = (L @ L).tocsr()
     return B, index_map
+
+
+def _collocated_d2_1d(N: int, h: float) -> sparse.csr_matrix:
+    """``(N+1)×(N+1)`` collocated second difference: interior rows ``[1,-2,1]/h²``, **zero ends**.
+
+    Row ``l`` (``l = 1 .. N-1``) is the curvature ``(u[l+1]-2u[l]+u[l-1])/h²``; rows ``0`` and ``N``
+    are identically zero (no normal curvature *centered* at a free edge — the 1D beam's choice,
+    where curvature was evaluated at interior nodes only). Annihilates linear data exactly.
+    """
+    inv_h2 = 1.0 / (h * h)
+    li = np.arange(1, N)  # interior rows only
+    rows = np.repeat(li, 3)
+    cols = np.empty(3 * (N - 1), dtype=np.int64)
+    cols[0::3], cols[1::3], cols[2::3] = li - 1, li, li + 1
+    data = np.tile(np.array([inv_h2, -2.0 * inv_h2, inv_h2]), N - 1)
+    return sparse.coo_matrix((data, (rows, cols)), shape=(N + 1, N + 1)).tocsr()
+
+
+def _forward_d1_1d(N: int, h: float) -> sparse.csr_matrix:
+    """``N×(N+1)`` forward first difference: row ``i`` is ``(u[i+1]-u[i])/h`` on cell ``i``.
+
+    Lives on the ``N`` cell midpoints (the dual grid). Annihilates constants; its tensor product
+    :func:`free_plate_stiffness` uses for the **cell-centered** twist ``u_xy`` — chosen over the
+    collocated centred mixed difference, whose checkerboard ``(-1)^{i+j}`` nullspace would inject
+    spurious near-zero modes into the low plate spectrum.
+    """
+    i = np.arange(N)
+    rows = np.repeat(i, 2)
+    cols = np.empty(2 * N, dtype=np.int64)
+    cols[0::2], cols[1::2] = i, i + 1
+    data = np.tile(np.array([-1.0 / h, 1.0 / h]), N)
+    return sparse.coo_matrix((data, (rows, cols)), shape=(N, N + 1)).tocsr()
+
+
+def free_plate_stiffness(
+    Nx: int, Ny: int, h: float, nu: float
+) -> tuple[sparse.csr_matrix, sparse.csr_matrix, NDArray[np.int64]]:
+    """Energy-first free-edge Kirchhoff-plate bending operator on the full ``(Nx+1)×(Ny+1)`` grid.
+
+    Returns ``(K, W, index_map)`` — the building block for the **free** flexural resonator (the
+    curved-Chladni plate, ``docs/dev/plate-free-edge-plan.md`` Part 1). The 2D generalisation of
+    :func:`physsynth.core.operators.free_beam_stiffness`: **every node is a free unknown** (no
+    Dirichlet rim, so the simply-supported ``B = L²`` trick of :func:`biharmonic_from_mask` does not
+    apply), and the operator is assembled **from the strain energy** so symmetry, the natural free
+    boundary conditions (zero bending moment, zero Kirchhoff shear, corner force) and the rigid-body
+    nullspace all fall out *by construction* — never ghost-point elimination on a 13-point stencil.
+
+    **The bilinear form.** The Kirchhoff bending energy is ``U = (rho_s κ²/2)·fᵀ K f`` with ``K``
+    representing (``ν`` = Poisson's ratio)
+
+        P(f, g) = ∫∫ [ f_xx g_xx + f_yy g_yy + ν(f_xx g_yy + f_yy g_xx) + 2(1-ν) f_xy g_xy ] dA
+
+    (the standard form; ``ν = 1`` collapses to ``∫(∇²f)(∇²g)``, the simply-supported part, and the
+    Gaussian-curvature ``(1-ν)`` term is what re-enters for free edges — it is the part that makes
+    the saddle ``xy`` carry energy, the tell for a correct ``ν``).
+
+    **Construction (separable Gram form, reusing the validated 1D beam pieces).** Let ``C2x`` /
+    ``C2y`` be the collocated second differences (:func:`_collocated_d2_1d`, zero at the respective
+    free edges) applied along x / y, ``Dxy`` the **cell-centered** mixed difference
+    ``(u[i+1,j+1]-u[i+1,j]-u[i,j+1]+u[i,j])/h²`` (a tensor product of forward first differences,
+    :func:`_forward_d1_1d`), and ``Wa`` the **diagonal area weight** ``= kron(m_y, m_x)`` of the 1D
+    trapezoidal masses (``h`` interior, ``h/2`` edge). Then
+
+        K = C2xᵀ Wa C2x + C2yᵀ Wa C2y + ν(C2xᵀ Wa C2y + C2yᵀ Wa C2x) + 2(1-ν)·h²·Dxyᵀ Dxy,
+        W = Wa   (interior h², edge h²/2, corner h²/4 — the lumped mass / area quadrature).
+
+    ``Wa`` supplies the edge-½ / corner-¼ weighting *automatically* (the 2D echo of the beam's
+    ``h/2`` end cells), and the two bending-diagonal blocks equal ``kron(M_y,S_x) + kron(S_y,M_x)``
+    with ``S = free_beam_stiffness`` — i.e. the free plate's bending is the **validated free beam
+    operator** per direction, so symmetry, the per-line ``{1, x}`` nullspace and O(h²) are
+    inherited, not re-earned.
+
+    **Nullspace (the operator money test).** ``K`` is symmetric positive-semidefinite with nullspace
+    **exactly** the rigid-body space ``{1, x, y}`` (3-dimensional): the bending-diagonal blocks kill
+    everything linear-per-line (so ``{1, x, y, xy}``), the twist block kills the additively
+    separable fields ``{a(x)+b(y)}``, and the intersection (bilinear ∩ separable) is ``{1, x, y}``.
+    ``K @ (x·y) ≠ 0`` — supplied solely by the ``2(1-ν)`` twist term and scaling with ``(1-ν)`` — so
+    a dropped-``ν`` bug that spuriously kills the saddle is caught immediately. ``K`` being PSD, a
+    generalized eigensolve ``K φ = μ W φ`` needs a small **negative** shift; the time-step matrix
+    ``A = (1+σk)W + θk²κ²K`` is still SPD because ``W`` is.
+
+    ``index_map`` is the trivial full-grid map (all nodes live): ``index_map[j, i] = j*(Nx+1) + i``,
+    matching the C-order (``j`` outer, ``i`` inner) flattening used by :func:`embed` and the
+    Kronecker products here. ``nu`` must lie in ``(-1, 1/2)`` (energy positive-definite, physical).
+    """
+    if Nx < 2 or Ny < 2:
+        raise ValueError("Nx, Ny must be >= 2 (need at least one interior node per axis).")
+    if not (-1.0 < nu < 0.5):
+        raise ValueError(f"nu (Poisson's ratio) must be in (-1, 1/2), got {nu}.")
+
+    ix = sparse.identity(Nx + 1, format="csr")
+    iy = sparse.identity(Ny + 1, format="csr")
+    c2x_1d = _collocated_d2_1d(Nx, h)
+    c2y_1d = _collocated_d2_1d(Ny, h)
+
+    # Second differences applied along one axis (kron(y_factor, x_factor) matches C-order order).
+    C2x = sparse.kron(iy, c2x_1d, format="csr")  # u_xx at every node (0 at the x free edges)
+    C2y = sparse.kron(c2y_1d, ix, format="csr")  # u_yy at every node (0 at the y free edges)
+
+    # Cell-centered twist u_xy = (forward-x) ⊗ (forward-y) on the Nx·Ny cells.
+    Dxy = sparse.kron(_forward_d1_1d(Ny, h), _forward_d1_1d(Nx, h), format="csr")
+
+    # Diagonal area weight Wa = kron(m_y, m_x): interior h², edge h²/2, corner h²/4.
+    mx = np.full(Nx + 1, h)
+    mx[0] = mx[-1] = 0.5 * h
+    my = np.full(Ny + 1, h)
+    my[0] = my[-1] = 0.5 * h
+    wa = np.kron(my, mx)  # C-order: node (j, i) -> my[j] * mx[i]
+    Wa = sparse.diags(wa, format="csr")
+
+    cross = C2x.T @ (Wa @ C2y)
+    K = (
+        C2x.T @ (Wa @ C2x)
+        + C2y.T @ (Wa @ C2y)
+        + nu * (cross + cross.T)
+        + 2.0 * (1.0 - nu) * (h * h) * (Dxy.T @ Dxy)
+    ).tocsr()
+    W = Wa
+
+    index_map = np.arange((Nx + 1) * (Ny + 1), dtype=np.int64).reshape(Ny + 1, Nx + 1)
+    return K, W, index_map
 
 
 def embed(

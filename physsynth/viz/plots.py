@@ -27,6 +27,7 @@ __all__ = [
     "save_displacement_animation",
     "plot_membrane_field",
     "plot_membrane_partials",
+    "plot_chladni",
     "save_membrane_animation",
 ]
 
@@ -239,6 +240,31 @@ def plot_membrane_partials(ax, detected: NDArray, oracle: NDArray, labels=None) 
     worst = float(np.nanmax(np.abs(err_cents)))
     ax.set_title(f"Detected vs analytic membrane partials (worst |err| = {worst:.2f} cents)")
     ax.grid(True, alpha=0.3)
+
+
+def plot_chladni(
+    ax, X: NDArray, Y: NDArray, field: NDArray, title: str = ""
+) -> None:
+    """A Chladni figure: the mode-shape heatmap with its **nodal lines** (zero contour) overlaid.
+
+    The free-edge plate's iconic deliverable (``docs/dev/plate-free-edge-plan.md``). The
+    displacement heatmap is diverging about zero (so the nodal set sits at the neutral colour, as in
+    :func:`plot_membrane_field`); the solid black contour is the ``u = 0`` set — exactly the
+    *curved* nodal lines that sand on a vibrating free plate collects into (the lines the SS plate,
+    with its plain rectangular nodal grid, cannot show). Rendered straight from an ``eigsh``
+    eigenvector, so it is independent of the time-stepper and doubles as a qualitative oracle (the
+    low FFFF-square patterns — diagonal saddle cross, ring, grid — are textbook).
+    """
+    f = np.array(field, dtype=float)
+    vmax = float(np.nanmax(np.abs(f))) or 1.0
+    ax.pcolormesh(X, Y, f, cmap="RdBu_r", vmin=-vmax, vmax=vmax, shading="auto")
+    # The nodal lines: the zero level set of the mode shape (the sand pattern).
+    ax.contour(X, Y, f, levels=[0.0], colors="k", linewidths=1.3)
+    ax.set_aspect("equal")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    if title:
+        ax.set_title(title, fontsize=9)
 
 
 def save_membrane_animation(path, X: NDArray, Y: NDArray, snapshots, fs: float, mask=None) -> bool:
