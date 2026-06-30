@@ -96,10 +96,10 @@ def _run_core_probe(body: str) -> subprocess.CompletedProcess:
 # Hardcoded allowlist of top-level third-party packages the core is permitted to pull in: the
 # declared numeric stack (numpy + scipy) plus the compiled-extension runtime baggage that stack
 # unavoidably drags along. Verified empirically -- importing the numpy/scipy stack alone pulls
-# exactly {numpy, scipy, charset_normalizer, cython_runtime, <hash>__mypyc}; a bare interpreter
-# pulls none of these. Anything outside this set (torch, requests, PIL, sounddevice, ...) is a real
-# portability leak and must fail the test. The mypyc runtime is named with a per-build hash prefix
-# (e.g. "81d243...__mypyc"), so it is matched structurally by its "__mypyc" suffix, not by name.
+# exactly {numpy, scipy, charset_normalizer, cython_runtime, <hash>__mypyc}. Anything outside this
+# set (torch, requests, PIL, sounddevice, ...) is a real portability leak and must fail the test.
+# The mypyc runtime is named with a per-build hash prefix (e.g. "81d243...__mypyc"), so it is
+# matched structurally by its "__mypyc" suffix, not by name.
 _CORE_DEP_ALLOWLIST = {"numpy", "scipy", "charset_normalizer", "cython_runtime", "physsynth"}
 
 
@@ -107,18 +107,22 @@ def test_core_dependency_allowlist():
     # Stronger than the blocklist above: the core may use ONLY the allowlisted numeric stack and
     # its compiled-runtime baggage -- no third-party dependency of its own. Import every core
     # submodule (auto-discovers new ones, e.g. string_stiff) and assert nothing outside the
-    # allowlist appears. Underscore-private modules (_csparsetools, editable-install finders, ...)
-    # are internal plumbing, excluded by the leading-underscore rule; the hash-suffixed mypyc
-    # runtime is excluded by its "__mypyc" suffix.
+    # allowlist appears. We measure the DELTA -- modules pulled *by importing the core*, not the
+    # absolute set -- by snapshotting sys.modules first: this excludes interpreter-startup baggage
+    # injected via a .pth (e.g. Windows pywin32's pywin32_bootstrap/pywin32_system32), which is
+    # present for *any* subprocess and is not something the core pulls. Underscore-private modules
+    # (_csparsetools, editable-install finders, ...) are internal plumbing, excluded by the
+    # leading-underscore rule; the hash-suffixed mypyc runtime is excluded by its "__mypyc" suffix.
     allowed = sorted(_CORE_DEP_ALLOWLIST)
     probe = (
         "import sys, importlib, pkgutil;"
         "stdlib=set(sys.stdlib_module_names)|set(sys.builtin_module_names);"
+        "before=set(sys.modules);"
         "import physsynth.core as _core;"
         "[importlib.import_module(m.name) "
         " for m in pkgutil.iter_modules(_core.__path__, _core.__name__ + '.')];"
         "allowed=set(" + repr(allowed) + ");"
-        "tp={n.split('.')[0] for n in list(sys.modules)"
+        "tp={n.split('.')[0] for n in set(sys.modules) - before"
         "    if n.split('.')[0] not in stdlib and not n.startswith('_')"
         "    and not n.endswith('__mypyc')};"
         "leaked=sorted(tp - allowed);"
