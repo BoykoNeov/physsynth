@@ -29,6 +29,7 @@ __all__ = [
     "laplacian_from_mask",
     "biharmonic_from_mask",
     "free_plate_stiffness",
+    "VonKarmanBracket",
     "embed",
     "inner2d",
     "norm2_2d",
@@ -174,6 +175,39 @@ def _forward_d1_1d(N: int, h: float) -> sparse.csr_matrix:
     return sparse.coo_matrix((data, (rows, cols)), shape=(N, N + 1)).tocsr()
 
 
+def _centered_d2_1d(N: int, h: float) -> sparse.csr_matrix:
+    """``(N+1)×(N+1)`` standard collocated second difference ``[1,-2,1]/h²`` at **every** node.
+
+    Unlike :func:`_collocated_d2_1d` (which zeroes the two end rows for the free beam's natural
+    edge), the end rows here keep the one-sided Dirichlet-ghost curvature ``(u[1]-2u[0])/h²`` — the
+    ordinary tridiagonal second difference. This is the ``δ_xx`` used by the von Kármán bracket's
+    *straight* terms (:class:`VonKarmanBracket`); for a field that vanishes on the rim (the
+    simply-supported case) the end-row values are multiplied by a zero test field and drop out of
+    the trilinear form, so only the interior curvature matters.
+    """
+    inv_h2 = 1.0 / (h * h)
+    main = np.full(N + 1, -2.0 * inv_h2)
+    off = np.full(N, inv_h2)
+    return sparse.diags([off, main, off], [-1, 0, 1], format="csr")
+
+
+def _avg_d1_1d(N: int) -> sparse.csr_matrix:
+    """``N×(N+1)`` node→cell averaging ``(u[i]+u[i+1])/2`` on cell ``i`` — the transpose-partner of
+    :func:`_forward_d1_1d`.
+
+    Its tensor product ``kron(avg_y, avg_x)`` maps a node field to the 0.25-weighted average of the
+    four corner nodes of each cell; the *adjoint* of that (``.T``) scatters a cell-centered quantity
+    back onto nodes. :class:`VonKarmanBracket` uses it to bring the cell-centered twist product back
+    to nodes — the step that makes the trilinear form exactly triple self-adjoint.
+    """
+    i = np.arange(N)
+    rows = np.repeat(i, 2)
+    cols = np.empty(2 * N, dtype=np.int64)
+    cols[0::2], cols[1::2] = i, i + 1
+    data = np.tile(np.array([0.5, 0.5]), N)
+    return sparse.coo_matrix((data, (rows, cols)), shape=(N, N + 1)).tocsr()
+
+
 def free_plate_stiffness(
     Nx: int, Ny: int, h: float, nu: float
 ) -> tuple[sparse.csr_matrix, sparse.csr_matrix, NDArray[np.int64]]:
@@ -261,6 +295,100 @@ def free_plate_stiffness(
 
     index_map = np.arange((Nx + 1) * (Ny + 1), dtype=np.int64).reshape(Ny + 1, Nx + 1)
     return K, W, index_map
+
+
+class VonKarmanBracket:
+    """Discrete von Kármán / Monge–Ampère bracket ``l(a, b)`` on the full ``(Nx+1)×(Ny+1)`` grid.
+
+    The bracket (HANDOFF §5 model #6; ``docs/dev/von-karman-plate-plan.md``)
+
+        L(a, b) = a_xx b_yy + a_yy b_xx − 2 a_xy b_xy
+
+    is the *nonlinear* coupling of the Föppl–von Kármán plate: ``l(w, w)`` sources the Airy stress
+    function and ``l(w, F)`` is the membrane restoring force. ``L(a, b) = L(b, a)`` and, with the
+    right boundary conditions, its trilinear form ``T(a, b, c) = ⟨L(a, b), c⟩`` is **fully symmetric
+    under any permutation of the three arguments** ("triple self-adjointness"). Energy conservation
+    of the whole nonlinear scheme rests on the *discrete* bracket reproducing that symmetry to
+    machine precision — the operator money test, with no 1D analogue.
+
+    **Construction (empirically pinned, then cross-checked against Bilbao's cell-centered form).**
+    The naive collocated bracket is *not* self-adjoint: moving a straight second difference across
+    the inner product drags the other factor along and leaves an O(1) remainder. The remainder is
+    cancelled **exactly** only if the twist term ``−2 a_xy b_xy`` is discretised on **cell centres**
+    (forward-forward mixed differences, the ``Dxy`` already used by :func:`free_plate_stiffness`)
+    and its product averaged back to nodes by the adjoint of the corner average. With
+
+        l(a, b) = (δ_xx a)(δ_yy b) + (δ_yy a)(δ_xx b)  −  2 · Aᵀ[ (D_xy a)(D_xy b) ]
+
+    — ``δ_xx, δ_yy`` the collocated second differences (:func:`_centered_d2_1d`), ``D_xy`` the
+    cell-centered twist (``kron`` of :func:`_forward_d1_1d`), ``A`` the node→cell corner average
+    (``kron`` of :func:`_avg_d1_1d`) — the trilinear form is triple self-adjoint **to machine
+    precision for fields that vanish on the rim** (the simply-supported ``w = 0, F = 0`` edge), and
+    ``l(a, b) → L(a, b)`` at O(h²). Both properties are verified in ``tests/test_vk_bracket.py``.
+
+    **Domain requirement (not a bug — a contract).** The exact cancellation is a discrete
+    summation-by-parts identity with *no leftover boundary term* only when the fields are zero on
+    the bounding-box rim. On fields with a non-zero border the trilinear form is asymmetric at O(1);
+    that
+    is expected and is why the simply-supported case (Dirichlet ``w = F = 0``) is the natural first
+    home for the nonlinear plate. Callers pass **full-grid** vectors of length ``(Nx+1)(Ny+1)`` with
+    the rim held at zero.
+
+    Parameters
+    ----------
+    Nx, Ny : int
+        Number of segments along x / y (grid is ``(Nx+1)×(Ny+1)`` nodes). Both must be ``>= 2``.
+    h : float
+        Grid spacing (square cells). Must be positive.
+    """
+
+    def __init__(self, Nx: int, Ny: int, h: float) -> None:
+        if Nx < 2 or Ny < 2:
+            raise ValueError("Nx, Ny must be >= 2 (need at least one interior node per axis).")
+        if h <= 0:
+            raise ValueError("h (grid spacing) must be positive.")
+        self.Nx = int(Nx)
+        self.Ny = int(Ny)
+        self.h = float(h)
+        self.n_nodes = (Nx + 1) * (Ny + 1)
+
+        ix = sparse.identity(Nx + 1, format="csr")
+        iy = sparse.identity(Ny + 1, format="csr")
+        # Straight collocated second differences applied along one axis (C-order: y outer, x inner).
+        self.Sxx = sparse.kron(iy, _centered_d2_1d(Nx, h), format="csr")
+        self.Syy = sparse.kron(_centered_d2_1d(Ny, h), ix, format="csr")
+        # Cell-centered twist D_xy = (forward-y) ⊗ (forward-x) on the Nx·Ny cells, and the node→cell
+        # corner average A = (avg-y) ⊗ (avg-x). A.T scatters the cell twist product back to nodes.
+        self.Dxy = sparse.kron(_forward_d1_1d(Ny, h), _forward_d1_1d(Nx, h), format="csr")
+        self.Acell = sparse.kron(_avg_d1_1d(Ny), _avg_d1_1d(Nx), format="csr")
+
+    def __call__(
+        self, a: NDArray[np.float64], b: NDArray[np.float64]
+    ) -> NDArray[np.float64]:
+        """The nodal field ``l(a, b)`` (full-grid vector, length :attr:`n_nodes`).
+
+        ``a, b`` are full-grid vectors (rim held at zero for the simply-supported plate). Symmetric
+        in its two arguments by construction (the two straight terms swap, the twist product is
+        symmetric).
+        """
+        a = np.asarray(a, dtype=float).ravel()
+        b = np.asarray(b, dtype=float).ravel()
+        straight = (self.Sxx @ a) * (self.Syy @ b) + (self.Syy @ a) * (self.Sxx @ b)
+        twist = self.Acell.T @ ((self.Dxy @ a) * (self.Dxy @ b))
+        return straight - 2.0 * twist
+
+    def trilinear(
+        self,
+        a: NDArray[np.float64],
+        b: NDArray[np.float64],
+        c: NDArray[np.float64],
+    ) -> float:
+        """The trilinear form ``T(a, b, c) = ⟨l(a, b), c⟩ = h² Σ l(a, b) c`` (full-grid vectors).
+
+        Triple self-adjoint — ``T(a, b, c) = T(a, c, b) = T(c, b, a)`` to machine precision —
+        **iff** the fields vanish on the rim. The quantity the energy-conservation crux stands on.
+        """
+        return inner2d(self(a, b), np.asarray(c, dtype=float).ravel(), self.h)
 
 
 def embed(

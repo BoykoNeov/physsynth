@@ -1,6 +1,8 @@
 # Nonlinear (von Kármán) plate — Phase 4 Plan (model #6)
 
-> **Status: PLAN — ready for human review before Part 1 (2026-06-30).** Human decisions taken
+> **Status: Part 1 (discrete bracket + money test) BUILT & GREEN (2026-07-01).** The bracket
+> `VonKarmanBracket` lives in `operators2d.py`; `tests/test_vk_bracket.py` (15 tests) passes,
+> full suite 309 green, ruff clean. See "Part 1 — done" below. Human decisions taken
 > (2026-06-30): **(1) SS-first de-risk, then free-edge follow-on** ✅; **(2) core parameter surface
 > `(kappa, E, e, nu)`** ✅ (derive `D`, membrane coeff `Ee`, `κ`); **(3) human reviews this doc before
 > any code is written** ✅. Still to pin *from the source at implementation*: the discrete-bracket
@@ -219,6 +221,23 @@ If #2 fails, **stop** — the time loop cannot conserve energy. This is the gate
 1. **Discrete bracket `l(·,·)` + its test (`operators2d.py`, `tests/test_vk_bracket.py`).** Pin the
    stencil from NSS Ch. 13; reuse the cell-centered `Dxy`. **Gate: triple self-adjointness +
    linear-annihilation to machine precision.** No time-stepping yet. *This is the whole de-risk.*
+   **✅ DONE (2026-07-01).** The stencil was **pinned empirically** (advisor: the money test is a
+   self-certifying gate, so any construction that passes it *plus a consistency check* is correct)
+   rather than transcribed from the book, then confirmed to match Bilbao's cell-centered-twist form.
+   Decisive probe results (`M:/claud_projects/temp/vk-bracket-probe/`):
+   - **Straight collocated terms + centered twist = O(1) asymmetric** (0.5–0.8); every naive
+     combination fails. **Straight + *cell-centered* (forward-forward) twist, product scattered back
+     to nodes by the corner-average adjoint = triple self-adjoint to 1e-15.** The twist's asymmetry
+     *exactly cancels* the straight terms' — Bilbao's actual contribution, reproduced.
+   - **Domain contract discovered & tested:** the cancellation is a discrete SBP identity with **no
+     leftover boundary term only when the fields vanish on the rim** (the SS `w = F = 0` edge). On
+     non-zero borders the form is O(1) asymmetric — *expected, not a bug*, and the reason SS is the
+     natural first home. The money test therefore uses rim-vanishing random fields (a naive
+     full-grid-random test would have *failed a correct bracket*).
+   - **Consistency added (advisor's key catch — `l ≡ 0` passes symmetry):** `l(a,b)` converges to
+     the analytic bracket at **O(h²)** (rate 2.00→1.98) on smooth manufactured data.
+   Field form: `l(a,b) = (δxx a)(δyy b) + (δyy a)(δxx b) − 2·Aᵀ[(Dxy a)(Dxy b)]`, reusing
+   `_forward_d1_1d` for `Dxy` and new `_centered_d2_1d` / `_avg_d1_1d` 1D pieces.
 2. **F elliptic solve (`B_F`, prefactored `splu`).** Pin & implement the SS `F`-BC. **Gate: `∇⁴F =
    source` solves; `F → 0` as `w → 0`; a manufactured-solution check (`F` of known curvature).**
 3. **Coupled resonator (`core/plate.py`, `boundary="supported"` + `nonlinear=True` or a `VKPlate`).**
