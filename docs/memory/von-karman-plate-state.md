@@ -7,9 +7,59 @@ metadata:
   originSessionId: 4b4bd7cd-a9b8-46a4-bd14-4e7f78d0211d
 ---
 
-Phase-4 **model #6 — von Kármán nonlinear plate**: **Part 1 (discrete bracket + money test) BUILT &
-GREEN (2026-07-01)**; Parts 2–5 still to build. `VonKarmanBracket` in `operators2d.py`,
-`tests/test_vk_bracket.py` (15 tests), full suite **309** green, ruff clean.
+Phase-4 **model #6 — von Kármán nonlinear plate**: **Parts 1–3 (+ Part-4 validation) BUILT & GREEN
+(2026-07-01)**; Parts 5 (diagnostics) + 6 (free-edge) still to build. `VonKarmanBracket` (P1) +
+`AiryStressSolver` (P2) in `operators2d.py`; **`VKPlate` coupled resonator (P3)** in `core/plate.py`.
+`tests/test_vk_bracket.py` (15) + `test_vk_airy.py` (13) + `test_vk_{energy,modal,stability}.py` (27),
+full suite **349** green, ruff clean.
+
+**Part 3 DONE — coupled `VKPlate` (`core/plate.py`), conservative Picard-iterated scheme:** new class,
+model #5's `Plate` **left untouched** — `nonlinear=False` is **bit-identical** to `Plate(supported)`
+(regression, exact-arithmetic `u_prev` match). Materials surface **`(E, e, ν, ρ)`** (human decision #3,
+2026-07-01; the memory's old "(kappa,…)" was self-contradictory) → derive `ρ_s=ρe`, `D=Ee³/(12(1-ν²))`,
+`κ=√(D/ρ_s)`, `Y=Ee`. **Scheme (advisor-derived from first principles — Bilbao FD PDF NOT on disk):**
+`ρ_s δ_tt w = -D B(θ-avg w) + l(μ_{t·}w, μ_{t·}F)`, `F^m` solved from `w^m`, `μ_{t·}g=(g^{n+1}+g^{n-1})/2`.
+Coupling `⟨l(μw,μF),w^{n+1}-w^{n-1}⟩` telescopes **exactly** to `-(H_mem^{n+1}-H_mem^{n-1})` via P1
+triple-self-adjointness (`l(w^m,w^m)=-(2/Y)B_F F^m`; Wa-vs-h² harmless: F=0 on rim). **Went straight to
+IMPLICIT Picard, NOT the plan's explicit `l(w^n,F^n)`** — the membrane potential is **quartic**, so any
+frozen-coeff explicit coupling drifts at O(k²), never `<1e-10`; exact conservation *requires* the new
+level → implicitness unavoidable (the plan's blessed "fallback", built directly). Per-step: predictor
+`2w^n-w^{n-1}`, sweeps of one prefactored `B_F`-solve (`F^{n+1}`) + one `A`-solve (`+k²·coupling/ρ_s`,
+`A`=model-#5 verbatim), converge `‖Δw‖/‖w‖≤couple_tol=1e-13` (≤11 sweeps at `w≈e`; `converged`/
+`last_residual` exposed for the cascade). **Live↔full-grid seam** (advisor catch): `self.u` is
+live/interior, bracket+Airy want full-grid rim-0 → `embed`→bracket/solve→restrict `[mask.ravel()]`.
+**F-cache bookkeeping:** `self.F`/`self.F_prev` always track `(u, u_prev)`; coupling uses `F_prev`
+(=F^{n-1}), energy uses F^{n+1},F^n. **Energy = half-step-averaged** `E_lin + ½(H_mem(F^{n+1})+H_mem(F^n))`
+(advisor: raw integer-membrane sum is a 2-step odd/even invariant → spurious oscillation); the ½ factor
+is *certified by* the high-membrane-fraction drift test (57 %→2.6e-13; a 1× factor would give
+tens-of-%). **Gates (all green):** lossless drift **2.6e-13** at `w≈3e` (membrane **57 %** of H — real
+bracket exercise, not linear re-test; 93 % at w=10e still drift 9e-13), **drift ∝ couple_tol**
+(1e-4→3.5e-5 … 1e-12→9.3e-13 — the machine-precision self-cert absent a closed form), non-negativity,
+passivity **exact** (worst rise 0.0), `w→0`→model-#5 fundamental (reldiff **0**), **pitch-glide
+hardening** monotone (+74 % at w=5e), **Richardson O(h²)** ratio **4.40** (N=24/48/96 smooth-IC; N=16
+pre-asymptotic ~3 since `l(w,w)` doubles wavenumbers). Probed in `M:/claud_projects/temp/vk_*.py`.
+Next: Part 5 (`scripts/diagnose_vk_plate.py` + viz: energy trace w/ membrane broken out, pitch-glide
+spectrogram, w/e sweep), then Part 6 free-edge cymbal (swap `B→K`, free F-BC; bracket/F-solve/energy
+carry over).
+
+**Part 2 DONE — F elliptic solve (`AiryStressSolver`):** F-BC **resolved with human = CLAMPED
+`F=0, F,n=0`** (physically-correct SS-*movable* edge; DT DAFx-15 §4.2 Eq.11 `F,tt=F,nt=0`; the plan's
+old `L²`/Navier `F=0,ΔF=0` default is a *different, nonstandard* edge — advisor). Built **energy-first**
+(advisor: simpler + symmetric-by-construction vs a hand-assembled 13-pt stencil): `B_F = Lc_rᵀ Wa Lc_r`
+squaring the **clamped Laplacian** `Lc = kron(iy,c2c_x)+kron(c2c_y,ix)`, `c2c = _clamped_d2_1d` = the
+`_centered_d2_1d` end rows with off-diag **doubled 1→2** (ghost mirror `F_{-1}=F_1` from `F,n=0`).
+**Trapezoidal `Wa` (reused from `free_plate_stiffness`) is load-bearing:** 1D Gram then reproduces the
+textbook clamped biharmonic exactly (diag `7,6,…,6,7`, off `-4,1`); `Wa=I` gives wrong `9`. Symmetric
+SPD, **empty** nullspace (clamping kills `{1,x,y}`), `splu`-prefactored. Repr: full-grid `Lc`, drop rim
+**columns** keep all **rows**; `solve(source_full)`→restrict→**`Wa`-weighted Galerkin load (interior
+`h²`)**→solve→embed rim=0. **Advisor's subtle bug:** manufactured RHS must be `Wa`-weighted
+(`B_F F = Wa·∇⁴F`). **Discriminator (proves clamped≠`L²`):** manufactured `(1−cos)(1−cos)` (F=F,n=0
+but ΔF≠0 on rim) → clamped recovers O(h²) (rates 2.01→2.00), SS `biharmonic_from_mask` *saturates* at
+O(1) (ratio 185→2941). **Real `F→0` gate + P1↔P2 seam test** (advisor): `bracket(w,w)→solve` end-to-end,
+`F ∝ ‖w‖²` so doubling `w` → **4×** F (bilinear bracket × linear solve; advisor slipped saying 16×,
+verified 4×). Part-3 energy closure re-derived by advisor & closes (Wa-vs-h² mismatch harmless: F=0 on
+rim). Part-3 membrane energy = plain `(1/2Ee)·Fᵀ B_F F` (`laplacian_norm_sq`).
+Probed in `M:/claud_projects/temp/vk-Bf-probe/` (caught my `∇⁴F` sign: `g''''=−a⁴cos`).
 Plan `docs/dev/von-karman-plate-plan.md` (commit 1938941, 2026-06-30). The deep end of
 HANDOFF §5 row 6 — gongs/cymbals, pitch glide, the crash/shimmer cascade. **First model with genuine
 nonlinear coupling and NO analytic modal oracle** → energy conservation becomes *the* correctness
@@ -66,10 +116,10 @@ new `_centered_d2_1d`/`_avg_d1_1d`. **Get Bilbao PDF (downloaded, unread) for Pa
 operators** — no cheap self-cert there (advisor).
 
 **Build order (de-risk, each gate green first):** (1) bracket `l()` + triple-self-adjointness test
-[DONE ✅] → (2) F elliptic solve `B_F` + manufactured-soln check → (3)
-coupled `core/plate.py` resonator (keep linear SS/free branches byte-identical) → (4) validation
-tests → (5) diagnostics (pitch-glide spectrogram) → (6) Part 2 free-edge cymbal (swap B→K + free
-F-BC; bracket/F-solve/energy all carry over).
+[DONE ✅] → (2) F elliptic solve `B_F` + manufactured-soln check [DONE ✅ clamped] → (3)
+coupled `VKPlate` resonator (`nonlinear=False` bit-identical to model #5) [DONE ✅] → (4) validation
+tests [DONE ✅, 27 tests] → (5) diagnostics (pitch-glide spectrogram) [TODO] → (6) Part 2 free-edge
+cymbal (swap B→K + free F-BC; bracket/F-solve/energy all carry over) [TODO].
 
 **Sources:** Bilbao 2008 "A Family of Conservative FD Schemes for the Dynamical von Kármán Plate
 Equations" (Numer. Methods PDEs 24(1):193–216) + NSS 2009 Ch.13 = primary FD source (pin bracket +

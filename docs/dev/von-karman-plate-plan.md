@@ -1,11 +1,17 @@
 # Nonlinear (von Kármán) plate — Phase 4 Plan (model #6)
 
-> **Status: Parts 1–2 BUILT & GREEN (2026-07-01).** Part 1 = discrete bracket + money test
+> **Status: Parts 1–3 BUILT & GREEN (2026-07-01).** Part 1 = discrete bracket + money test
 > (`VonKarmanBracket`, `tests/test_vk_bracket.py`, 15 tests). Part 2 = Airy stress-function elliptic
 > solve `B_F` (`AiryStressSolver`, `tests/test_vk_airy.py`, 13 tests) — **clamped** `F = 0, F,n = 0`
 > BC (human decision #2, 2026-07-01), energy-first `B_F = Lc_rᵀ Wa Lc_r`, `splu`-prefactored,
 > manufactured-solution O(h²) + clamped-vs-Navier discriminator + the `VonKarmanBracket → solve` seam
-> (F ∝ ‖w‖², the 4× doubling check). Both in `operators2d.py`; full suite **322** green, ruff clean. See "Part 1 — done" and "Part 2 — done" below. Human decisions taken
+> (F ∝ ‖w‖², the 4× doubling check). **Part 3 = the coupled `VKPlate` resonator** (`core/plate.py`,
+> materials surface `(E, e, ν, ρ)` per human decision #3) — conservative θ-scheme + Picard-iterated
+> `l(μ_{t·}w, μ_{t·}F)` coupling, `tests/test_vk_{energy,modal,stability}.py` (27 tests). Lossless
+> drift **2.6e-13** at `w≈3e` (membrane 57 % of `H`), drift∝`couple_tol` self-cert, passivity exact,
+> small-amp→#5 (reldiff 0), pitch-glide hardening (+74 % at `w=5e`), Richardson O(h²) (4.40),
+> `nonlinear=False` **bit-identical** to model #5. All in `operators2d.py` / `plate.py`; full suite
+> **349** green, ruff clean. See "Part 1/2/3 — done" below. Human decisions taken
 > (2026-06-30): **(1) SS-first de-risk, then free-edge follow-on** ✅; **(2) core parameter surface
 > `(kappa, E, e, nu)`** ✅ (derive `D`, membrane coeff `Ee`, `κ`); **(3) human reviews this doc before
 > any code is written** ✅. Still to pin *from the source at implementation*: the discrete-bracket
@@ -154,11 +160,21 @@ breaks.
 - `A = (1+σk)·M + θk²κ²·B_bend` is **model #5's matrix verbatim** (SS: `M=I` scalar `h²`,
   `B_bend = B = L²`). `B_F` is a **separate** biharmonic for the stress function — different BCs,
   different matrix, its own `splu`. "One factorization serves both" is the trap (advisor point 2).
-- The nonlinear coupling `l(w^n, F^n)` is evaluated at the known time level `n` → the per-step solve
-  stays **linear** (no Newton iteration), the `A`/`B_F` factors stay constant. The conservation and
-  stability bookkeeping decide *exactly* how the coupling and the membrane energy are time-averaged
-  (e.g. `F` defined from `μ_{t·}w` or a two-time-level product) — **pin the averaging from NSS so the
-  discrete energy identity closes**; a naively centred coupling drifts.
+- **DEVIATION (Part 3, as built — and why):** the plan above sketched an *explicit* `l(w^n, F^n)`
+  coupling ("per-step solve stays linear, no Newton") with the implicit variant as a "fallback." The
+  build went **straight to implicit Picard** — deliberately, not by oversight. Reason (advisor-derived
+  & confirmed): the membrane potential is a **quartic** in `w`, so *any* frozen-coefficient explicit
+  coupling conserves only to `O(k²)` truncation, never the project's `< 1e-10` machine bar. Exact
+  discrete conservation *requires* the new level (`H_mem^{n+1}` contains `w^{n+1}`), hence some
+  implicitness is unavoidable. The averaging that closes the identity is the **symmetric two-level**
+  form `l(μ_{t·}w, μ_{t·}F)` with `μ_{t·}g = (g^{n+1}+g^{n-1})/2` and `F^m` solved from `w^m`; its
+  trilinear form telescopes **exactly** to `-(H_mem^{n+1}-H_mem^{n-1})` via triple self-adjointness
+  (derived from first principles, since the Bilbao FD PDF is not on disk — the energy-drift test is
+  the self-cert). The step is solved by **fixed-point (Picard)** iteration on the *prefactored* `A`
+  and `B_F` (predictor `2w^n - w^{n-1}`; ≤11 sweeps at `w≈e`), converging on `‖Δw‖/‖w‖ ≤ couple_tol`.
+  The energy is reported half-step-averaged (`E_lin + ½(H_mem^{n+1}+H_mem^n)`) to kill a spurious
+  odd/even oscillation. The cross-time `ψ`/SAV variant that would linearise the step is documented as
+  a future optimisation only (it trades the prefactored `A` for a dense per-step operator).
 - **Stability is not free.** Re-derive the energy-non-negativity bound for the coupled scheme; it may
   be amplitude-dependent. The fully-conservative implicit variant (Bilbao 2008) extends the linear
   unconditional bound to the nonlinear system at the cost of an implicit (iterative) step — keep that
@@ -267,8 +283,24 @@ If #2 fails, **stop** — the time loop cannot conserve energy. This is the gate
    F-solve → θ-scheme `w`-update with `l(w,F)`; energy with the membrane term. **Keep the linear SS
    and free branches byte-identical** (regression). **Gate: lossless energy drift `< 1e-10` at large
    amplitude; non-negativity; small-amplitude → #5.**
+   **✅ DONE (2026-07-01).** New **`VKPlate`** class (model #5's `Plate` left untouched; `nonlinear=False`
+   is **bit-identical** to `Plate(boundary="supported")`, the regression). Materials surface
+   `(E, e, ν, ρ)` (human decision #3) → derive `ρ_s=ρe`, `D=Ee³/(12(1-ν²))`, `κ=√(D/ρ_s)`, `Y=Ee`.
+   Conservative **Picard-iterated** implicit scheme (see the DEVIATION note above): predictor
+   `2w^n-w^{n-1}`, each sweep one prefactored `B_F`-solve (`F^{n+1}`) + one `A`-solve (with
+   `+k²l(μ_{t·}w,μ_{t·}F)/ρ_s`), `couple_tol=1e-13`; the **live↔full-grid seam** (`embed`→bracket/Airy
+   →restrict) bridges the interior `w`-state and the full-grid bracket/`F`. `converged`/`last_residual`
+   exposed so a cascade run sees silent non-convergence. Half-step-averaged energy. Empirical gates
+   (all green): drift **2.6e-13** at `w≈3e` (**membrane 57 %** of `H` — a real bracket exercise, not a
+   linear re-test), **drift ∝ couple_tol** (1e-4→3.5e-5, 1e-12→9.3e-13 — the machine-precision
+   self-cert), non-negativity, passivity exact, `w→0`→model-#5 fundamental (reldiff 0).
 4. **Validation (`tests/test_vk_{energy,modal,stability}.py`, `analysis/`).** Large-amplitude drift,
    small-amplitude modal recovery, pitch-glide measurement, Richardson, passivity, params.
+   **✅ DONE (2026-07-01)** alongside Part 3 (27 tests): energy (drift, non-negativity, drift-vs-tol
+   self-cert, passivity, regression, component accessors, Picard convergence), modal (small-amp→#5
+   trajectory + fundamental, **pitch-glide hardening** monotone +74 % by `w=5e`), stability
+   (**Richardson O(h²)** ratio 4.40 on N=24/48/96 smooth-IC, derived materials, `Ly`-snap, param
+   validation). `analysis/` diagnostics deferred to Part 5.
 5. **Diagnostics (`scripts/diagnose_vk_plate.py`, `viz/`).** Energy trace (with the membrane
    component broken out), spectrogram showing the pitch glide, displacement animation, `w/e` sweep.
 6. **(Part 2, follow-on) Free-edge** — swap `B_bend → K` (model #5b free stiffness) and the free
