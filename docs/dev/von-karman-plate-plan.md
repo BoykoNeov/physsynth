@@ -2,10 +2,10 @@
 
 > **Status: Parts 1–2 BUILT & GREEN (2026-07-01).** Part 1 = discrete bracket + money test
 > (`VonKarmanBracket`, `tests/test_vk_bracket.py`, 15 tests). Part 2 = Airy stress-function elliptic
-> solve `B_F` (`AiryStressSolver`, `tests/test_vk_airy.py`, 12 tests) — **clamped** `F = 0, F,n = 0`
+> solve `B_F` (`AiryStressSolver`, `tests/test_vk_airy.py`, 13 tests) — **clamped** `F = 0, F,n = 0`
 > BC (human decision #2, 2026-07-01), energy-first `B_F = Lc_rᵀ Wa Lc_r`, `splu`-prefactored,
-> manufactured-solution O(h²) + clamped-vs-Navier discriminator. Both in `operators2d.py`; full suite
-> **321** green, ruff clean. See "Part 1 — done" and "Part 2 — done" below. Human decisions taken
+> manufactured-solution O(h²) + clamped-vs-Navier discriminator + the `VonKarmanBracket → solve` seam
+> (F ∝ ‖w‖², the 4× doubling check). Both in `operators2d.py`; full suite **322** green, ruff clean. See "Part 1 — done" and "Part 2 — done" below. Human decisions taken
 > (2026-06-30): **(1) SS-first de-risk, then free-edge follow-on** ✅; **(2) core parameter surface
 > `(kappa, E, e, nu)`** ✅ (derive `D`, membrane coeff `Ee`, `κ`); **(3) human reviews this doc before
 > any code is written** ✅. Still to pin *from the source at implementation*: the discrete-bracket

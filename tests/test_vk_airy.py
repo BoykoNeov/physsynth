@@ -21,6 +21,7 @@ from scipy.sparse.linalg import splu
 
 from physsynth.core.operators2d import (
     AiryStressSolver,
+    VonKarmanBracket,
     _clamped_d2_1d,
     biharmonic_from_mask,
     rectangle_mask,
@@ -110,6 +111,32 @@ def test_zero_source_gives_zero_field():
     solver = AiryStressSolver(12, 10, 0.05)
     F = solver.solve(np.zeros(solver.n_nodes))
     assert np.max(np.abs(F)) == 0.0
+
+
+def test_couples_with_bracket_quadratic_in_w():
+    """The real ``F → 0`` gate + the ``VonKarmanBracket → solve`` seam (the first place the two
+    Part-6 components touch). ``source = -(Ee/2)·l(w, w)`` is bilinear, the solve is linear, so
+    ``F`` scales **quadratically** with the transverse amplitude: doubling ``w`` gives ``4×`` (not
+    ``16×`` — both bracket arguments scale, ``l(2w,2w) = 4·l(w,w)``, then a linear solve). This
+    exercises the shared full-grid C-order representation and the interior restriction end-to-end.
+    """
+    Nx, Ny = 18, 14
+    h = Lx / Nx
+    bracket = VonKarmanBracket(Nx, Ny, h)
+    solver = AiryStressSolver(Nx, Ny, h)
+    xs = np.linspace(0.0, Lx, Nx + 1)
+    ys = np.linspace(0.0, Ly, Ny + 1)
+    X, Y = np.meshgrid(xs, ys)
+    w = (np.sin(np.pi * X / Lx) * np.sin(np.pi * Y / Ly)).ravel()  # rim-vanishing
+
+    f1 = solver.solve(bracket(w, w))
+    f2 = solver.solve(bracket(2.0 * w, 2.0 * w))
+
+    assert np.all(np.isfinite(f1))
+    assert np.max(np.abs(f1)) > 0.0  # a real, nonzero stress field builds from a nonzero w
+    fg = f1.reshape(solver.mask.shape)
+    assert np.all(fg[0, :] == 0.0) and np.all(fg[:, 0] == 0.0)  # F clamped to zero on the rim
+    assert np.max(np.abs(f2 - 4.0 * f1)) / np.max(np.abs(f1)) < 1e-10  # quadratic-in-w scaling
 
 
 def test_solved_field_is_rim_vanishing():
