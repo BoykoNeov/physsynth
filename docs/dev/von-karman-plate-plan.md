@@ -1,8 +1,11 @@
 # Nonlinear (von Kármán) plate — Phase 4 Plan (model #6)
 
-> **Status: Part 1 (discrete bracket + money test) BUILT & GREEN (2026-07-01).** The bracket
-> `VonKarmanBracket` lives in `operators2d.py`; `tests/test_vk_bracket.py` (15 tests) passes,
-> full suite 309 green, ruff clean. See "Part 1 — done" below. Human decisions taken
+> **Status: Parts 1–2 BUILT & GREEN (2026-07-01).** Part 1 = discrete bracket + money test
+> (`VonKarmanBracket`, `tests/test_vk_bracket.py`, 15 tests). Part 2 = Airy stress-function elliptic
+> solve `B_F` (`AiryStressSolver`, `tests/test_vk_airy.py`, 12 tests) — **clamped** `F = 0, F,n = 0`
+> BC (human decision #2, 2026-07-01), energy-first `B_F = Lc_rᵀ Wa Lc_r`, `splu`-prefactored,
+> manufactured-solution O(h²) + clamped-vs-Navier discriminator. Both in `operators2d.py`; full suite
+> **321** green, ruff clean. See "Part 1 — done" and "Part 2 — done" below. Human decisions taken
 > (2026-06-30): **(1) SS-first de-risk, then free-edge follow-on** ✅; **(2) core parameter surface
 > `(kappa, E, e, nu)`** ✅ (derive `D`, membrane coeff `Ee`, `κ`); **(3) human reviews this doc before
 > any code is written** ✅. Still to pin *from the source at implementation*: the discrete-bracket
@@ -240,6 +243,26 @@ If #2 fails, **stop** — the time loop cannot conserve energy. This is the gate
    `_forward_d1_1d` for `Dxy` and new `_centered_d2_1d` / `_avg_d1_1d` 1D pieces.
 2. **F elliptic solve (`B_F`, prefactored `splu`).** Pin & implement the SS `F`-BC. **Gate: `∇⁴F =
    source` solves; `F → 0` as `w → 0`; a manufactured-solution check (`F` of known curvature).**
+   **✅ DONE (2026-07-01).** BC **pinned & resolved with the human = clamped `F = 0, F,n = 0`** (the
+   physically-correct SS-*movable* edge, DT DAFx-15 §4.2 Eq. 11 `F,tt = F,nt = 0`; the plan's earlier
+   `L²`/Navier default is a *different, nonstandard* edge — see Open Decisions #2). `AiryStressSolver`
+   in `operators2d.py`, `tests/test_vk_airy.py` (12 tests). Built **energy-first** (advisor-confirmed,
+   simpler than a hand-assembled 13-point stencil): `B_F = Lc_rᵀ Wa Lc_r`, squaring the **clamped
+   Laplacian** `Lc = kron(iy, c2c_x) + kron(c2c_y, ix)` where `c2c` = `_clamped_d2_1d` (the
+   `_centered_d2_1d` end rows with the off-diagonal **doubled 1→2**: ghost mirror `F_{-1}=F_1` from
+   `F,n=0`). `Wa` = the trapezoidal area weight (reused from `free_plate_stiffness`) — **load-bearing,
+   not polish**: it makes the 1D Gram reproduce the textbook clamped biharmonic exactly (diag
+   `7,6,…,6,7`, off `-4,1`); `Wa=I` gives a wrong `9`. Symmetric SPD by construction (Gram; clamping
+   ⇒ **empty** nullspace, no `{1,x,y}`), `splu`-prefactored. Representation: full-grid `Lc`, drop rim
+   **columns** (`F=0`) keep all **rows**; `solve(source_full)` restricts → `Wa`-weighted Galerkin
+   load (interior weight `h²`) → solve → embed rim=0. **The subtle bug** (advisor): the manufactured
+   RHS must be `Wa`-weighted (`B_F F = Wa·∇⁴F`, not `∇⁴F`) — else O(1) error against a fine operator.
+   **The discriminator** (proves clamped, *not* `L²`): manufactured `F=(1−cos)(1−cos)` has `F=F,n=0`
+   but `ΔF≠0` on the rim, so the clamped solve recovers it at O(h²) (rates 2.01→2.00) while the
+   SS/Navier `biharmonic_from_mask` solve *saturates* at O(1) error (ratio grows 185→2941 with `N`).
+   Part-3 membrane energy is the plain quadratic `(1/2Ee)·Fᵀ B_F F` (`Wa` folded in;
+   `laplacian_norm_sq`). Empirically de-risked in `M:/claud_projects/temp/vk-Bf-probe/` first
+   (caught: my analytic `∇⁴F` sign — `g''''=−a⁴cos`, both `xxxx`/`yyyy` terms negative).
 3. **Coupled resonator (`core/plate.py`, `boundary="supported"` + `nonlinear=True` or a `VKPlate`).**
    F-solve → θ-scheme `w`-update with `l(w,F)`; energy with the membrane term. **Keep the linear SS
    and free branches byte-identical** (regression). **Gate: lossless energy drift `< 1e-10` at large
@@ -261,11 +284,17 @@ If #2 fails, **stop** — the time loop cannot conserve energy. This is the gate
    handling (`B = L²` reused for both factorizations) and a clean small-amplitude → model-#5 check.
    It will sound like a **nonlinear drum/tom with pitch glide**, **not** a cymbal — the cymbal/gong
    is the *free-edge* follow-on (Part 2).
-2. **`F` in-plane boundary condition.** ⏳ **TO PIN FROM SOURCE at implementation (Part 1, step 2).**
-   Defaulting to the self-consistent SS pairing `F = 0, ΔF = 0` (→ `B_F = L²`, reuse model #5)
-   pending confirmation against Bilbao's canonical SS choice. Flagged per advisor; will pin from NSS
-   Ch. 13 and state explicitly in code + here. Mostly "use Bilbao's textbook SS case" — not a
-   free-choice knob.
+2. **`F` in-plane boundary condition.** ✅ **RESOLVED (human, 2026-07-01): CLAMPED `F = 0, F,n = 0`.**
+   Pinned from Ducceschi–Touzé DAFx-15 §4.2 Eq. (11): the true SS-movable in-plane condition is
+   `F,tt = F,nt = 0`; the clamped pairing `F = 0, F,n = 0` satisfies it **exactly** (F=0→F,tt=0;
+   F,n=0→F,nt=0) while leaving `F,nn`=σ_tt free (a movable edge *does* carry tangential membrane
+   stress). The plan's earlier default `F = 0, ΔF = 0` (→ `B_F = L²`) is **wrong for this plate**:
+   `ΔF=0` forces `F,nn=0` (a constraint (11) does not ask for) *and* leaves `F,nt`≠0 (which (11)
+   requires to vanish) — a different, nonstandard edge (advisor). Energy conservation holds for either
+   symmetric `B_F` with `F=0` on the rim (Part-1 bracket result), so the BC is a *fidelity* choice,
+   and on fidelity clamped wins. `B_F` = a genuinely new symmetric **clamped biharmonic** (not `L²`);
+   its membrane-energy form `H_mem = (1/2Ee)⟨F, B_F F⟩` must use the *same* operator. (DT is the modal
+   ref; Bilbao FD PDF not on disk — stale memory — but DT + the derivation settle it without it.)
 3. **Parameter surface: `(kappa, E, e, nu)`.** ✅ **RESOLVED (human, 2026-06-30).** The nonlinearity
    onset is at `w ≈ e` (thickness), so `e` becomes a *physically meaningful* new input — unlike the
    linear models where only `κ` mattered. Core surface `(kappa, E, e, nu)` → derive `D`, the membrane

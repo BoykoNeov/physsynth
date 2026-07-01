@@ -21,6 +21,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 from scipy import sparse
+from scipy.sparse.linalg import SuperLU, splu
 
 __all__ = [
     "rectangle_mask",
@@ -30,6 +31,7 @@ __all__ = [
     "biharmonic_from_mask",
     "free_plate_stiffness",
     "VonKarmanBracket",
+    "AiryStressSolver",
     "embed",
     "inner2d",
     "norm2_2d",
@@ -189,6 +191,31 @@ def _centered_d2_1d(N: int, h: float) -> sparse.csr_matrix:
     main = np.full(N + 1, -2.0 * inv_h2)
     off = np.full(N, inv_h2)
     return sparse.diags([off, main, off], [-1, 0, 1], format="csr")
+
+
+def _clamped_d2_1d(N: int, h: float) -> sparse.csr_matrix:
+    """``(N+1)×(N+1)`` second difference with the **clamped** ghost mirror at both ends.
+
+    Interior rows are the ordinary ``[1, -2, 1]/h²`` (as :func:`_centered_d2_1d`); the two end rows
+    **double** their single off-diagonal (``1 → 2``). The clamped edge condition ``F,n = 0`` gives
+    the ghost mirror ``F_{-1} = F_1``, so the boundary-node curvature is
+    ``(F_1 - 2F_0 + F_{-1})/h² = (2F_1 - 2F_0)/h²`` — row 0 becomes ``[-2, 2, 0, …]/h²`` (and the
+    high edge symmetrically). The matrix itself is **not symmetric** (the end rows are one-sided),
+    but the Gram form ``Lc.T @ Wa @ Lc`` (:class:`AiryStressSolver`, with the trapezoidal area
+    weight ``Wa``) is, and reproduces the standard clamped-plate biharmonic **exactly**:
+    near-boundary diagonal ``7``, interior ``6``, off-diagonals ``-4`` and ``1``. This is the
+    contrast with the Dirichlet/Navier ``[1, -2, 1]`` end rows of :func:`_centered_d2_1d`, which
+    square to the simply-supported ``B = L²`` operator (``F = 0, ΔF = 0``) instead of the
+    clamped ``F = F,n = 0``. Trapezoidal ``Wa`` is load-bearing: with ``Wa = I`` the near-boundary
+    diagonal comes out ``9`` (a different, wrong operator).
+    """
+    inv_h2 = 1.0 / (h * h)
+    main = np.full(N + 1, -2.0 * inv_h2)
+    off = np.full(N, inv_h2)
+    M = sparse.diags([off, main, off], [-1, 0, 1], format="lil")
+    M[0, 1] = 2.0 * inv_h2  # ghost mirror F_{-1} = F_1 at the low edge
+    M[N, N - 1] = 2.0 * inv_h2  # ... and the high edge
+    return M.tocsr()
 
 
 def _avg_d1_1d(N: int) -> sparse.csr_matrix:
@@ -389,6 +416,120 @@ class VonKarmanBracket:
         **iff** the fields vanish on the rim. The quantity the energy-conservation crux stands on.
         """
         return inner2d(self(a, b), np.asarray(c, dtype=float).ravel(), self.h)
+
+
+class AiryStressSolver:
+    """Elliptic solve for the von Kármán **Airy stress function** ``F`` (model #6, Part 2).
+
+    Solves the in-plane (membrane) equation of the Föppl–von Kármán plate,
+
+        ∇⁴F = source        (source = ``−(E e / 2) l(w, w)`` in the coupled scheme),
+
+    on a rectangular grid with the **clamped** in-plane boundary condition ``F = 0, F,n = 0``.
+    This is the physically-correct simply-supported *movable*-edge condition (Ducceschi–Touzé
+    DAFx-15 §4.2, Eq. 11: the true in-plane SS condition is ``F,tt = F,nt = 0``, which
+    ``F = F,n = 0`` satisfies exactly while leaving ``F,nn = σ_tt`` free — a movable edge carries
+    tangential membrane stress). It is **not** the ``B = L²`` (Navier, ``F = 0, ΔF = 0``) operator
+    of :func:`biharmonic_from_mask`, which forces ``σ_tt = 0`` and leaves ``σ_nt ≠ 0`` — a
+    different, nonstandard edge. See ``docs/dev/von-karman-plate-plan.md`` (open decision #2).
+
+    **Energy-first construction (symmetric SPD by squaring a clamped Laplacian).** The membrane
+    energy is ``(1 / (2 E e))·‖∇²F‖²``; for clamped edges ``‖∇²F‖² = ∫(F_xx² + 2F_xy² + F_yy²)``
+    (the two integrands differ by a boundary term that vanishes when ``F = F,n = 0``), so no mixed
+    ``F_xy`` term is needed — a single Laplacian, squared. With ``Lc`` the full-grid Laplacian built
+    from the **clamped** 1D second difference (:func:`_clamped_d2_1d`, the ghost-mirror end rows),
+    and ``Wa = kron(m_y, m_x)`` the trapezoidal area weight (as in :func:`free_plate_stiffness`:
+    ``h²`` interior / ``h²/2`` edge / ``h²/4`` corner),
+
+        B_F = Lc_rᵀ Wa Lc_r,
+
+    where ``Lc_r`` drops the rim **columns** (``F = 0`` on the rim) but keeps all **rows**.
+    Curvature is sampled at every node, including the ghost-mirror rim rows, which is what makes the
+    near-boundary biharmonic diagonal ``7`` rather than the Navier ``6``. ``B_F`` is symmetric
+    positive-definite by construction (a Gram product; clamping removes all rigid-body modes, so —
+    unlike the free plate's ``{1, x, y}`` nullspace — the nullspace here is **empty**), and is
+    factored once with :func:`scipy.sparse.linalg.splu`.
+
+    **Galerkin load (the subtle bit).** Because ``Wa`` lives *inside* ``B_F``, the consistent
+    right-hand side is the **``Wa``-weighted** load ``Wa · source`` (the interior area weights are
+    all ``h²``), not the bare ``source``. Forgetting the weight yields O(1) error against a fine
+    operator. :meth:`solve` applies it; the matching Part-3 membrane energy is then the plain
+    quadratic ``(1 / (2 E e))·Fᵀ B_F F`` (:meth:`laplacian_norm_sq`).
+
+    **Interoperation.** ``F`` and the ``source`` are passed as **full-grid** vectors of length
+    ``(Nx+1)(Ny+1)`` with the rim held at zero — the same representation the
+    :class:`VonKarmanBracket` uses, so the pipeline is
+    ``l(w, w)`` (full grid) → :meth:`solve` → ``F`` (full grid, rim 0) → ``l(w, F)``. The bracket's
+    uniform-``h²`` inner product and this solver's trapezoidal ``Wa`` agree on the interior (they
+    differ only at rim nodes, where the paired field vanishes), so Part-1 triple self-adjointness
+    transfers to the ``Wa``-weighted membrane energy unchanged.
+
+    Parameters
+    ----------
+    Nx, Ny : int
+        Number of segments along x / y (grid is ``(Nx+1)×(Ny+1)`` nodes). Both must be ``>= 2``.
+    h : float
+        Grid spacing (square cells). Must be positive.
+    """
+
+    def __init__(self, Nx: int, Ny: int, h: float) -> None:
+        if Nx < 2 or Ny < 2:
+            raise ValueError("Nx, Ny must be >= 2 (need at least one interior node per axis).")
+        if h <= 0:
+            raise ValueError("h (grid spacing) must be positive.")
+        self.Nx = int(Nx)
+        self.Ny = int(Ny)
+        self.h = float(h)
+        self.n_nodes = (Nx + 1) * (Ny + 1)
+
+        self.mask = rectangle_mask(Nx, Ny)  # interior unknowns (F = 0 on the bounding-box rim)
+        self._cols = self.mask.ravel()
+        self.n_interior = int(self.mask.sum())
+        self.index_map = np.full(self.mask.shape, -1, dtype=np.int64)
+        self.index_map[self.mask] = np.arange(self.n_interior)
+
+        ix = sparse.identity(Nx + 1, format="csr")
+        iy = sparse.identity(Ny + 1, format="csr")
+        # Full-grid clamped Laplacian Lc = ∂xx + ∂yy (C-order: y outer, x inner).
+        Lc = sparse.kron(iy, _clamped_d2_1d(Nx, h)) + sparse.kron(_clamped_d2_1d(Ny, h), ix)
+
+        # Trapezoidal area weight Wa = kron(m_y, m_x): interior h², edge h²/2, corner h²/4.
+        mx = np.full(Nx + 1, h)
+        mx[0] = mx[-1] = 0.5 * h
+        my = np.full(Ny + 1, h)
+        my[0] = my[-1] = 0.5 * h
+        wa = np.kron(my, mx)
+        Wa = sparse.diags(wa, format="csr")
+
+        Lc_r = Lc.tocsc()[:, self._cols]  # drop rim columns (F = 0); keep all rows
+        self.Bf: sparse.csc_matrix = (Lc_r.T @ Wa @ Lc_r).tocsc()
+        # Interior Galerkin load weights (all h² for a rectangle — the rim half-weights are dropped
+        # with the rim columns), used to form Wa · source in solve().
+        self._load_weight = wa[self._cols]
+        self._lu: SuperLU = splu(self.Bf)
+
+    def solve(self, source: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Solve ``∇⁴F = source`` for ``F`` (both full-grid, rim held at zero).
+
+        ``source`` is the full-grid right-hand-side field (length :attr:`n_nodes`) — e.g.
+        ``−(E e / 2) l(w, w)`` from :class:`VonKarmanBracket`; its rim values are ignored. Returns
+        ``F`` as a full-grid vector with the rim at zero (ready for the ``l(w, F)`` coupling call).
+        The interior load is ``Wa``-weighted internally (see the class docstring), so the caller
+        passes the physical source directly and never has to remember the quadrature weight.
+        """
+        source = np.asarray(source, dtype=float).ravel()
+        rhs = self._load_weight * source[self._cols]
+        f_interior = self._lu.solve(rhs)
+        return embed(f_interior, self.index_map).ravel()
+
+    def laplacian_norm_sq(self, F: NDArray[np.float64]) -> float:
+        """Discrete ``‖∇²F‖² = Fᵀ B_F F`` (full-grid ``F``; area weights are folded into ``B_F``).
+
+        The Part-3 membrane energy is ``(1 / (2 E e))`` times this — a plain quadratic form, no
+        extra weighting. ``>= 0`` (``B_F`` is positive-definite).
+        """
+        fi = np.asarray(F, dtype=float).ravel()[self._cols]
+        return float(fi @ (self.Bf @ fi))
 
 
 def embed(
