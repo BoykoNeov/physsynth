@@ -82,8 +82,11 @@ Complete and validated:
   conservative Picard resonator, validation, pitch-glide/energy-exchange diagnostics, and Part 6 the
   **free-edge cymbal/gong** — energy-conserving nonlinear coupling on a free rectangle, with the
   crash cascade and curved-Chladni modes).
-- **Web viewer** — interactive offline recompute for the string family (Phase A) and the membrane
-  (Phase B).
+- **Web viewer** — interactive offline recompute for every model: the string family (Phase A), the
+  membrane (Phase B), and both Kirchhoff plates (#5 supported, #5b free) and the von Kármán
+  nonlinear plate (#6 supported gong + free cymbal) as 2D heatmap models. The nonlinear panel reads
+  the energy verdict through a Picard-convergence gate and the spectrum as an amplitude *hardening
+  shift* (not a cents error).
 
 The deliverable for each model is the resonator *and the rig that measures its deviation from
 theory*. See `docs/dev/` for the live plans.

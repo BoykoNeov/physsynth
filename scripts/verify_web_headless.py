@@ -35,7 +35,7 @@ except ImportError:  # pragma: no cover - optional dev dep
     sys.exit(2)
 
 PORT = 9333
-BASE = "http://localhost:8000"
+BASE = os.environ.get("VIEWER_BASE", "http://localhost:8000")  # override if the server moved ports
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "out")
 CHROME_CANDIDATES = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -177,6 +177,10 @@ def main() -> int:
             ("membrane_circle", "model=membrane&domain=circle"),
             ("membrane_rect", "model=membrane&domain=rectangle"),
             ("string_ideal", "model=ideal"),
+            ("plate_supported", "model=plate&domain=supported"),
+            ("plate_free", "model=plate&domain=free"),
+            ("vk_supported", "model=vk&domain=supported"),
+            ("vk_free", "model=vk&domain=free"),
         ]
         results = [run_case(cdp, n, q) for n, q in cases]
         print(f"\n{sum(results)}/{len(results)} cases passed; screenshots in out/viewer_*.png")

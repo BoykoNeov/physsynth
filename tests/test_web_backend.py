@@ -21,6 +21,9 @@ from web.serialize import (
     LOSSLESS_TOL,
     MEMBRANE_LAMBDA_MAX,
     MEMBRANE_N_MAX,
+    PLATE_N_MAX,
+    VK_N_MAX,
+    VK_WOVERE_MAX,
     simulate_to_payload,
 )
 
@@ -359,3 +362,200 @@ def test_membrane_small_geometry_rejected_by_work_budget():
     ok = simulate_to_payload(_membrane_params(domain="circle", radius=0.2, N=100,
                                               audio_duration=0.3))
     assert "error" not in ok, ok.get("error")
+
+
+# == Kirchhoff plate (2D, model #5 / #5b) =========================================================
+
+
+def _plate_params(**overrides):
+    """Short plate run — the secondary 'domain' select carries the plate boundary."""
+    p = {
+        "model": "plate", "domain": "supported",
+        "kappa": 20.0, "rho": 0.005, "Lx": 1.0, "Ly": 1.0,
+        "N": 40, "mu": 1.0, "sigma": 0.0, "nu": 0.3,
+        "pluck_x": 0.4, "pluck_y": 0.55, "pluck_width": 0.3, "amplitude": 1e-3,
+        "pickup_x": 0.62, "pickup_y": 0.58,
+        "audio_duration": 0.2, "animation_window": 0.02, "playback_speed": 0.02,
+    }
+    p.update(overrides)
+    return p
+
+
+@pytest.mark.parametrize("boundary", ["supported", "free"])
+def test_plate_lossless_drift_survives_wrapper(boundary):
+    """Both plate boundaries conserve energy through the wrapper (HANDOFF §6.1)."""
+    payload = simulate_to_payload(_plate_params(domain=boundary))
+    assert "error" not in payload, payload.get("error")
+    assert payload["model"] == "plate" and payload["boundary"] == boundary
+    assert payload["frames"]["dims"] == 2
+    energy = payload["energy"]
+    assert energy["sigma_is_zero"] is True and "lossy" not in energy
+    assert energy["lossless"]["drift"] < LOSSLESS_TOL
+    assert energy["lossless"]["pass"] is True
+
+
+@pytest.mark.parametrize("boundary", ["supported", "free"])
+def test_plate_frame_bookkeeping_2d(boundary):
+    """2D frames + mask: declared shapes match the decoded buffers and the display budget."""
+    payload = simulate_to_payload(_plate_params(domain=boundary))
+    fr = payload["frames"]
+    nf, nx, ny = fr["n_frames"], fr["nx"], fr["ny"]
+    assert nx <= DISPLAY_MAX and ny <= DISPLAY_MAX
+    assert _decode_f32(fr["b64"]).size == nf * nx * ny
+    mask = _decode_u8(payload["mask"]["b64"])
+    assert mask.size == nx * ny
+    assert nf == len(payload["frame_times"]) and nf >= 2
+    assert payload["grid"]["dims"] == 2 and payload["grid"]["domain"] == "rectangle"
+
+
+def test_plate_supported_spectrum_is_tight_tier():
+    """Simply-supported: the FFT rings on the discrete line, and the continuum (Navier) tier is
+    tight (~1 cent) — unlike the membrane's O(h) staircase.
+    """
+    payload = simulate_to_payload(_plate_params(domain="supported", N=40, audio_duration=0.3))
+    sp = payload["meta"]["spectrum"]
+    assert sp is not None and sp["kind"] == "plate"
+    assert len(sp["modes_discrete"]) > 0 and len(sp["modes_continuum"]) > 0
+    assert abs(sp["cents_fundamental"]) < 5.0
+    assert abs(sp["cents_geometry"]) < 15.0            # SS Navier tier is tight (not a staircase)
+
+
+def test_plate_free_spectrum_has_leissa_only_when_square():
+    """The free plate's continuum reference is the Leissa square anchor — present for a square,
+    empty for an off-square rectangle (no closed form to mislabel).
+    """
+    sq = simulate_to_payload(_plate_params(domain="free", Lx=1.0, Ly=1.0))
+    assert "error" not in sq, sq.get("error")
+    assert len(sq["meta"]["spectrum"]["modes_continuum"]) > 0
+    rect = simulate_to_payload(_plate_params(domain="free", Lx=1.4, Ly=0.7))
+    assert "error" not in rect, rect.get("error")
+    assert rect["meta"]["spectrum"]["modes_continuum"] == []
+
+
+def test_plate_lossy_reports_passivity():
+    """σ>0 → monotone passive decay at 2σ, not a drift number (catch #4)."""
+    payload = simulate_to_payload(_plate_params(sigma=6.0, audio_duration=0.25))
+    assert "error" not in payload, payload.get("error")
+    energy = payload["energy"]
+    assert energy["sigma_is_zero"] is False and "lossless" not in energy
+    assert energy["lossy"]["monotone"] is True
+    assert energy["lossy"]["oracle_2sigma"] == pytest.approx(12.0)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"mu": 0.0},
+        {"mu": -1.0},
+        {"N": 1},
+        {"N": PLATE_N_MAX + 1},
+        {"domain": "clamped"},
+        {"kappa": 0.0},
+        {"Lx": 0.0},
+        {"audio_duration": 0.0},
+    ],
+)
+def test_plate_bad_params_give_error_payload(bad):
+    """Out-of-range plate params return a clean error payload, never an exception/500."""
+    payload = simulate_to_payload(_plate_params(**bad))
+    assert "error" in payload
+    assert payload["error"]["message"]
+
+
+def test_plate_low_mu_rejected_by_work_budget():
+    """fs = κ/(μh²) explodes at LOW μ → step blow-up; the guard rejects and points at μ."""
+    payload = simulate_to_payload(_plate_params(mu=0.25, N=80, audio_duration=2.0))
+    assert "error" in payload
+    msg = payload["error"]["message"].lower()
+    assert "node-steps" in msg and "mu" in msg
+
+
+# == von Kármán nonlinear plate (2D, model #6) ====================================================
+
+
+def _vk_params(**overrides):
+    """Short von Kármán run — small N + brief audio (each step Picard-iterates two solves)."""
+    p = {
+        "model": "vk", "domain": "supported",
+        "E": 2.0e11, "e": 1.0e-3, "nu": 0.3, "rho": 7800.0,
+        "Lx": 0.15, "Ly": 0.15, "N": 14, "fs": 48000.0, "sigma": 0.0,
+        "nonlinear": True, "w_over_e": 3.0,
+        "pluck_x": 0.5, "pluck_y": 0.5, "pluck_width": 0.28,
+        "pickup_x": 0.47, "pickup_y": 0.53,
+        "audio_duration": 0.12, "animation_window": 0.01, "playback_speed": 0.02,
+    }
+    p.update(overrides)
+    return p
+
+
+def test_vk_supported_conserves_converges_and_hardens():
+    """Supported gong, w/e=3: lossless energy conserves at a *converged* Picard fixed point, and
+    the fundamental hardens ABOVE its linear value (the amplitude pitch glide).
+    """
+    payload = simulate_to_payload(_vk_params())
+    assert "error" not in payload, payload.get("error")
+    assert payload["model"] == "vk" and payload["boundary"] == "supported"
+    energy = payload["energy"]
+    assert energy["sigma_is_zero"] is True
+    assert energy["convergence"]["all_converged"] is True
+    assert energy["lossless"]["drift"] < LOSSLESS_TOL
+    assert energy["lossless"]["pass"] is True
+    sp = payload["meta"]["spectrum"]
+    assert sp["kind"] == "vk"
+    assert sp["f0_detected"] is not None and sp["shift_pct"] > 5.0   # genuine hardening
+
+
+def test_vk_linear_toggle_has_no_convergence_block_and_no_shift():
+    """nonlinear=False reproduces the *linear* plate: no Picard convergence block, ~0 hardening."""
+    payload = simulate_to_payload(_vk_params(nonlinear=False, w_over_e=0.5))
+    assert "error" not in payload, payload.get("error")
+    assert payload["nonlinear"] is False
+    assert "convergence" not in payload["energy"]
+    assert payload["energy"]["lossless"]["pass"] is True
+    assert abs(payload["meta"]["spectrum"]["shift_pct"]) < 1.0       # no coupling -> no glide
+
+
+def test_vk_free_cymbal_conserves_without_a_fundamental():
+    """Free-edge cymbal: energy conserves (converged), but the crash is a mode wash with no clean
+    fundamental — f0/shift are reported as unavailable, never a lying number.
+    """
+    payload = simulate_to_payload(_vk_params(domain="free", Lx=0.2, Ly=0.2, N=14, w_over_e=3.0))
+    assert "error" not in payload, payload.get("error")
+    assert payload["boundary"] == "free"
+    assert payload["energy"]["convergence"]["all_converged"] is True
+    assert payload["energy"]["lossless"]["drift"] < LOSSLESS_TOL
+    sp = payload["meta"]["spectrum"]
+    assert sp["kind"] == "vk"
+    assert sp["f0_detected"] is None and sp["shift_pct"] is None
+
+
+def test_vk_lossy_reports_passivity():
+    """σ>0 → monotone passive decay; the convergence block still rides along (catch: gate both)."""
+    payload = simulate_to_payload(_vk_params(sigma=3.0, w_over_e=2.0, audio_duration=0.12))
+    assert "error" not in payload, payload.get("error")
+    energy = payload["energy"]
+    assert energy["sigma_is_zero"] is False and "lossless" not in energy
+    assert energy["lossy"]["monotone"] is True
+    assert "convergence" in energy                       # verdict gate available in the lossy path
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"fs": 500.0},
+        {"fs": 200000.0},
+        {"N": 1},
+        {"N": VK_N_MAX + 1},
+        {"domain": "clamped"},
+        {"E": 0.0},
+        {"e": 0.0},
+        {"w_over_e": 0.0},
+        {"w_over_e": VK_WOVERE_MAX + 1.0},
+        {"audio_duration": 0.0},
+    ],
+)
+def test_vk_bad_params_give_error_payload(bad):
+    """Out-of-range von Kármán params return a clean error payload, never an exception/500/NaN."""
+    payload = simulate_to_payload(_vk_params(**bad))
+    assert "error" in payload
+    assert payload["error"]["message"]

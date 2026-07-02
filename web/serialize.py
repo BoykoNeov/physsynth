@@ -36,6 +36,7 @@ from physsynth.analysis import modal, spectrum
 from physsynth.core.engine import SimResult, simulate
 from physsynth.core.exciter import raised_cosine_2d, triangular_pluck
 from physsynth.core.membrane import Membrane
+from physsynth.core.plate import Plate, VKPlate
 from physsynth.core.string_damped import DampedStiffString
 from physsynth.core.string_ideal import IdealString
 from physsynth.core.string_stiff import StiffString
@@ -83,6 +84,33 @@ MEMBRANE_LAMBDA_MAX = 1.0 / math.sqrt(2.0)   # 2D CFL ceiling (5-point Laplacian
 DISPLAY_MAX = 64
 N_MEMBRANE_MODES = 12        # discrete eigenmodes marked on the spectrum panel
 N_SPEC_POINTS = 420          # decimated magnitude-spectrum length for the plot
+
+# --- Kirchhoff plate (2D, model #5 / #5b) clamps + display budget ---
+# The plate is implicit (unconditionally stable for theta >= 1/4), so its time control is the
+# *plate Courant number* mu = kappa*k/h^2 (the explicit-scheme stability parameter, reported only):
+# fs = kappa/(mu*h^2) rides N^2 (h = Lx/N), so a fine grid inflates the step count exactly like the
+# membrane. Same cost drivers (n_live per-step + fs step-count), so it reuses the membrane's cliff /
+# work-budget shape with plate-appropriate ceilings.
+PLATE_N_MAX = 80
+PLATE_NLIVE_MAX = 9_900        # below the n_live~10_000 L2 cliff (shared with the membrane)
+PLATE_WORK_MAX = 7.0e8         # n_live x total steps (audio + animation)
+PLATE_AUDIO_MAX = 2.0
+PLATE_MU_MAX = 32.0            # implicit -> no CFL; large mu is just coarse (dispersive), stable
+N_PLATE_MODES = 6             # discrete eigenmodes marked on the spectrum panel
+
+# --- von Karman nonlinear plate (2D, model #6) clamps + Picard-aware budget ---
+# The nonlinear plate is the expensive corner: each step Picard-iterates (up to couple_max_iter
+# sweeps of an F-solve + an A-solve), so the true problem size is n_live x steps x couple_max_iter.
+# Energy conservation holds *only at the Picard fixed point*, so the defaults sit squarely in the
+# proven convergent regime (N ~ 24, w/e ~ 1-3, drift ~ 1e-13) and N/amplitude are capped hard.
+VK_N_MAX = 32
+VK_NLIVE_MAX = 1_600           # ~ (VK_N_MAX+1)^2; a free VK plate is every-node-live
+VK_AUDIO_MAX = 1.0
+VK_FS_MIN, VK_FS_MAX = 8_000.0, 96_000.0   # oversample around the nonlinearity (HANDOFF §8)
+VK_COUPLE_MAX_ITER = 50        # Picard safety cap (also the worst-case cost multiplier)
+VK_WORK_MAX = 2.0e9            # n_live x steps x couple_max_iter (Picard-aware)
+VK_WOVERE_MAX = 6.0            # strike amplitude in thickness units (w/e); the hardening knob
+N_VK_MODES = 6               # linear eigenmodes marked on the spectrum panel
 
 
 class ParamError(ValueError):
@@ -218,8 +246,20 @@ def _resample_normalize(x: NDArray[np.float64], fs_in: float) -> tuple[NDArray[n
     return x, peak
 
 
-def _energy_block(res: SimResult, sigma_zero: bool, oracle_2sigma: float) -> dict[str, Any]:
-    """Energy report, gated by loss (catch #4): drift-vs-tol when lossless, passivity when lossy."""
+def _energy_block(
+    res: SimResult,
+    sigma_zero: bool,
+    oracle_2sigma: float,
+    convergence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Energy report, gated by loss (catch #4): drift-vs-tol when lossless, passivity when lossy.
+
+    ``convergence`` (von Kármán only) folds in the Picard convergence gate: the energy identity
+    telescopes *only at the fixed point*, so a run with any non-converged step has a drift number
+    that is iteration noise, not physics. When supplied, the lossless verdict additionally requires
+    every step to have converged, and the block carries a ``convergence`` sub-block so the frontend
+    can say "did not converge — verdict N/A" instead of a lying pass/fail.
+    """
     t, E = res.time, res.energy
     idx = np.linspace(0, len(E) - 1, min(len(E), N_ENERGY_POINTS)).astype(int)
     block: dict[str, Any] = {
@@ -227,9 +267,16 @@ def _energy_block(res: SimResult, sigma_zero: bool, oracle_2sigma: float) -> dic
         "time": _finite_list(t[idx], 6),
         "value": _finite_list(E[idx]),
     }
+    if convergence is not None:
+        block["convergence"] = convergence
+
     if sigma_zero:
         drift = res.energy_drift
-        block["lossless"] = {"drift": drift, "tol": LOSSLESS_TOL, "pass": drift < LOSSLESS_TOL}
+        converged = convergence["all_converged"] if convergence is not None else True
+        block["lossless"] = {
+            "drift": drift, "tol": LOSSLESS_TOL,
+            "pass": bool(drift < LOSSLESS_TOL and converged),
+        }
         return block
 
     E0 = float(E[0])
@@ -286,9 +333,14 @@ def simulate_to_payload(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_payload(p: dict[str, Any]) -> dict[str, Any]:
-    """Dispatch on geometry: the 1D string family vs the 2D membrane (Phase B)."""
-    if str(p.get("model", "ideal")) == "membrane":
+    """Dispatch on model: the 1D string family, the 2D membrane, or the 2D plate family."""
+    model = str(p.get("model", "ideal"))
+    if model == "membrane":
         return _build_payload_membrane(p)
+    if model == "plate":
+        return _build_payload_plate(p)
+    if model == "vk":
+        return _build_payload_vk(p)
     return _build_payload_string(p)
 
 
@@ -502,24 +554,33 @@ def _membrane_continuum_oracle(
     return np.sort(np.asarray(f, dtype=float))[:n_modes]
 
 
-def _membrane_spectrum_block(
-    pickup: NDArray[np.float64],
-    fs: float,
-    f_disc: NDArray[np.float64],
-    f_cont: NDArray[np.float64],
-) -> dict[str, Any] | None:
-    """Magnitude spectrum (max-pooled) + mode-marker lines + the two headline cents numbers."""
-    if f_disc.size == 0:
-        return None
-    fmax = float(np.max(f_disc)) * 1.25
+def _decimate_field_mask(
+    frames_full: NDArray[np.float64], mask_full: NDArray[np.bool_]
+) -> tuple[NDArray[np.float64], NDArray[np.bool_]]:
+    """Spatially decimate a ``(nf, ny, nx)`` field and its ``(ny, nx)`` mask to the display grid.
+
+    The 2D data-size trap (shared by every heatmap model): the same stride is applied to the field
+    AND the mask so they stay aligned, and the shipped ``field_amp`` / colour scale come from the
+    decimated frames the frontend actually receives (not the full field). Cf. advisor review 3.
+    """
+    ny_full, nx_full = mask_full.shape
+    stride = max(1, math.ceil(max(ny_full, nx_full) / DISPLAY_MAX))
+    return frames_full[:, ::stride, ::stride], mask_full[::stride, ::stride]
+
+
+def _pooled_spectrum(
+    pickup: NDArray[np.float64], fs: float, fmax: float
+) -> tuple[NDArray[np.float64], NDArray[np.float64]] | None:
+    """Magnitude spectrum over ``[0, fmax]`` max-pooled to ~:data:`N_SPEC_POINTS` points.
+
+    Max-pooling (not mean) so spectral *peaks* survive the decimation, then normalized to 0..1.
+    Shared by every heatmap model's spectrum panel. Returns ``(freq, mag)`` or ``None`` if empty.
+    """
     freqs, mag, _ = spectrum.magnitude_spectrum(pickup, fs)
     keep = (freqs >= 0.0) & (freqs <= fmax)
     f, m = freqs[keep], mag[keep]
     if m.size == 0:
         return None
-
-    # Max-pool to ~N_SPEC_POINTS so spectral *peaks* survive the decimation (mean would wash them
-    # out).
     npts = min(N_SPEC_POINTS, int(m.size))
     edges = np.linspace(0, m.size, npts + 1).astype(int)
     f_ds = np.empty(npts)
@@ -531,8 +592,47 @@ def _membrane_spectrum_block(
     mmax = float(m_ds.max()) if m_ds.size else 0.0
     if mmax > 0:
         m_ds = m_ds / mmax
+    return f_ds, m_ds
 
-    # Robust headline: the (0,1) fundamental is always excited -> detected-vs-discrete cents.
+
+def _zero_cross_fundamental(sig: NDArray[np.float64], fs: float) -> float:
+    """Fundamental from the mean zero-crossing spacing — robust to the von Kármán pitch shift.
+
+    The hardened fundamental drifts +tens of % with amplitude, so an FFT window on the *linear*
+    frequency would miss it; zero-crossing spacing tracks the moving fundamental directly (the
+    method proven in ``test_pitch_glide_hardening`` / ``diagnose_vk_plate``).
+    """
+    sig = np.asarray(sig, dtype=float)
+    sig = sig - sig.mean()
+    zc = np.where(np.diff(np.signbit(sig)))[0]
+    if len(zc) < 3:
+        return float("nan")
+    return fs / (2.0 * float(np.mean(np.diff(zc))))
+
+
+def _modal_spectrum_block(
+    pickup: NDArray[np.float64],
+    fs: float,
+    f_disc: NDArray[np.float64],
+    f_cont: NDArray[np.float64],
+    kind: str,
+) -> dict[str, Any] | None:
+    """Magnitude spectrum (max-pooled) + mode-marker lines + the two headline cents numbers.
+
+    Shared by the *linear* heatmap models (``membrane``, ``plate``): the FFT panel marks the
+    **discrete** eigenfreqs (``f_disc`` — where the stepper actually rings) and the fainter
+    continuum oracle (``f_cont`` — the geometry tier, shown not scored). ``kind`` selects the
+    frontend readout wording (Bessel/rect staircase vs the plate's tight SS tier).
+    """
+    if f_disc.size == 0:
+        return None
+    fmax = float(np.max(f_disc)) * 1.25
+    pooled = _pooled_spectrum(pickup, fs, fmax)
+    if pooled is None:
+        return None
+    f_ds, m_ds = pooled
+
+    # Robust headline: the fundamental is always excited -> detected-vs-discrete cents.
     f1 = float(f_disc[0])
     detected = float(
         spectrum.measure_partials_near(pickup, fs, np.asarray([f1]), search_hz=0.3 * f1)[0]
@@ -543,6 +643,7 @@ def _membrane_spectrum_block(
     )
 
     return {
+        "kind": kind,
         "freq": _finite_list(f_ds, 3),
         "mag": _finite_list(m_ds, 5),
         "fmax": round(fmax, 3),
@@ -553,6 +654,16 @@ def _membrane_spectrum_block(
         "cents_fundamental": round(cents_fund, 4) if cents_fund is not None else None,
         "cents_geometry": round(cents_geom, 4) if cents_geom is not None else None,
     }
+
+
+def _membrane_spectrum_block(
+    pickup: NDArray[np.float64],
+    fs: float,
+    f_disc: NDArray[np.float64],
+    f_cont: NDArray[np.float64],
+) -> dict[str, Any] | None:
+    """Membrane spectrum panel (thin wrapper over :func:`_modal_spectrum_block`, membrane kind)."""
+    return _modal_spectrum_block(pickup, fs, f_disc, f_cont, "membrane")
 
 
 def _build_payload_membrane(p: dict[str, Any]) -> dict[str, Any]:
@@ -665,5 +776,516 @@ def _build_payload_membrane(p: dict[str, Any]) -> dict[str, Any]:
             "num_steps": int(n_audio),
             "n_frames": int(nf),
             "spectrum": _membrane_spectrum_block(pickup, fs, f_disc, f_cont),
+        },
+    }
+
+
+# == Kirchhoff plate (2D, model #5 / #5b) ==========================================================
+#
+# The plate reuses the membrane's 2D heatmap machinery (decimated field + mask, max-pooled spectrum
+# with discrete/continuum marker lines) with two differences: the domain is always a *rectangle*
+# (there is no disk plate), and the secondary "domain" select is repurposed as the plate
+# **boundary** — ``"supported"`` (simply-supported #5, closed-form oracle) or ``"free"`` (FFFF #5b,
+# the curved Chladni plate, no closed form → Leissa square anchor only). The time control is the
+# plate Courant ``mu = kappa k / h²`` (implicit → no CFL; large mu is coarse-but-stable): ``fs =
+# kappa / (mu h²)``, so cost explodes at *low* mu (high fs → step blow-up), the opposite of a max.
+
+
+def _plate_discrete_eigenfreqs(res: Any, k_request: int) -> NDArray[np.float64]:
+    """Lowest discrete plate eigenfrequencies (Hz) — the lines the stepper actually rings at.
+
+    Duck-typed across :class:`Plate` / :class:`VKPlate` and both boundaries (attributes shared by
+    both classes: ``.boundary``, ``.L`` / ``.K`` / ``.W``, ``.kappa``, ``.k``, ``.theta``):
+
+    * ``"supported"`` — ``eigsh(-L)`` gives the **Laplacian** magnitude ``Λ``;
+      :func:`modal.discrete_plate_eigenfrequency` squares it internally (``Q = κ²Λ²``), so we pass
+      ``Λ`` — **not** ``B``'s eigenvalue ``Λ²`` (that would double-square).
+    * ``"free"`` — the generalized eig ``K φ = μ W φ`` (``μ = ω²/κ²``); drop the **3** rigid
+      zero-modes, pass the rest to :func:`modal.discrete_beam_eigenfrequency`. Duck-typed on the
+      matrix ``.W`` (never ``.w`` / ``.wdiag`` — those names diverge between Plate and VKPlate). The
+      shift is strictly negative (``K`` is only PSD; a >= 0 shift lands on the rigid nullspace).
+    """
+    if res.boundary == "supported":
+        k = min(int(k_request), res.n_live - 1)
+        if k < 1:
+            return np.asarray([], dtype=float)
+        lam = eigsh(-res.L, k=k, sigma=0.0, which="LM", return_eigenvectors=False)
+        Lambda = np.sort(np.asarray(lam, dtype=float))
+        f = modal.discrete_plate_eigenfrequency(Lambda, res.kappa, res.k, res.theta)
+        return np.sort(np.asarray(f, dtype=float))
+    k = min(int(k_request) + 3, res.n_live - 1)
+    if k < 4:
+        return np.asarray([], dtype=float)
+    a2 = res.Lx * res.Ly  # ~ a² for a (near-)square; only seeds the shift magnitude
+    mu1 = (13.0 / a2) ** 2  # lambda_1 ~ 13.47 -> a safe negative shift off the rigid nullspace
+    vals = eigsh(
+        res.K.tocsc(), k=k, M=res.W.tocsc(), sigma=-1e-3 * mu1, which="LM",
+        return_eigenvectors=False,
+    )
+    vals = np.sort(np.asarray(vals, dtype=float))
+    elastic = np.clip(vals[3:], 0.0, None)  # drop the 3 rigid-body modes {1, x, y}
+    f = modal.discrete_beam_eigenfrequency(elastic, res.kappa, res.k, res.theta)
+    return np.sort(np.asarray(f, dtype=float))
+
+
+def _plate_continuum(res: Any, n_modes: int) -> NDArray[np.float64]:
+    """Continuum plate frequencies — the *geometry-tier* reference (shown, not scored).
+
+    ``"supported"`` — the Navier law ``f_{mn} = (π/2)κ[(m/Lx)²+(n/Ly)²]`` over an ``(m, n)`` grid
+    (nearly coincident with the discrete lines — the SS plate is a *tight* tier, ~1 cent).
+    ``"free"`` — the free plate has **no closed form**, so we fall back to the Leissa
+    FFFF-**square** anchor and only when the plate is (near-)square; otherwise return empty (a
+    reference that would be meaningless off-square is better omitted than mislabelled).
+    """
+    if n_modes < 1:
+        return np.asarray([], dtype=float)
+    if res.boundary == "supported":
+        rng = range(1, n_modes + 1)
+        modes = [(m, n) for m in rng for n in rng]
+        f = modal.rectangular_plate_freqs(res.kappa, res.Lx, res.Ly, modes)
+        return np.sort(np.asarray(f, dtype=float))[:n_modes]
+    if abs(res.Lx - res.Ly) > 0.02 * max(res.Lx, res.Ly):
+        return np.asarray([], dtype=float)  # Leissa anchor is square-only
+    a2 = res.Lx * res.Ly  # ~ a² for a near-square plate
+    f = modal.free_plate_ffff_square_lambdas() * res.kappa / (2.0 * np.pi * a2)
+    return np.sort(np.asarray(f, dtype=float))
+
+
+def _build_plate(p: dict[str, Any]) -> tuple[Plate, float, str, dict[str, Any]]:
+    """Construct a fresh :class:`Plate`. Returns ``(res, fs, boundary, geom)``.
+
+    The secondary "domain" select carries the plate **boundary** (``supported`` / ``free``). The
+    time control is the plate Courant ``mu = kappa k / h²``: ``fs = kappa / (mu h²)`` with
+    ``h = Lx/N`` reproduces the requested ``mu`` exactly. ``geom`` holds the *snapped* geometry read
+    back off the ctor (``Ly`` is snapped to whole cells).
+    """
+    boundary = str(p.get("domain", "supported"))
+    if boundary not in ("supported", "free"):
+        raise ParamError(f"boundary must be 'supported' or 'free', got {boundary!r}.")
+    kappa = _fnum(p, "kappa", 20.0)
+    rho = _fnum(p, "rho", 0.005)  # areal density (kg/m²) — Plate.rho IS areal (cf. VKPlate)
+    Lx = _fnum(p, "Lx", 1.0)
+    Ly = _fnum(p, "Ly", 1.0)
+    mu = _fnum(p, "mu", 1.0)
+    sigma = _fnum(p, "sigma", 0.0)
+    nu = _fnum(p, "nu", 0.3)
+    theta = _fnum(p, "theta", 0.28)
+    try:
+        N = int(p.get("N", 60))
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"N must be an integer, got {p.get('N')!r}.") from exc
+
+    if not (N_MIN <= N <= PLATE_N_MAX):
+        raise ParamError(f"N must be in [{N_MIN}, {PLATE_N_MAX}] for the plate, got {N}.")
+    if min(kappa, rho, Lx, Ly) <= 0:
+        raise ParamError("kappa, rho, Lx, Ly must all be positive.")
+    if sigma < 0:
+        raise ParamError(f"sigma (loss) must be >= 0, got {sigma}.")
+    if not (0.0 < mu <= PLATE_MU_MAX):
+        raise ParamError(f"mu (plate Courant) must be in (0, {PLATE_MU_MAX}], got {mu}.")
+
+    h = Lx / N
+    fs = kappa / (mu * h * h)
+    res = Plate(
+        Lx=Lx, Ly=Ly, kappa=kappa, rho=rho, fs=fs, N=N, sigma=sigma, boundary=boundary,
+        nu=nu, theta=theta,
+    )
+    geom = {"Lx": float(res.Lx), "Ly": float(res.Ly)}
+    if res.n_live > PLATE_NLIVE_MAX:
+        raise ParamError(
+            f"this geometry has {res.n_live} interior nodes (> {PLATE_NLIVE_MAX}); reduce N or use "
+            "a less extreme aspect ratio."
+        )
+    return res, fs, boundary, geom
+
+
+def _build_payload_plate(p: dict[str, Any]) -> dict[str, Any]:
+    audio_dur = _fnum(p, "audio_duration", 1.0)
+    anim_win = _fnum(p, "animation_window", 0.03)
+    playback_speed = _fnum(p, "playback_speed", 0.02)
+    amplitude = _fnum(p, "amplitude", 1e-3)
+    pluck_fx = _fnum(p, "pluck_x", 0.4)
+    pluck_fy = _fnum(p, "pluck_y", 0.55)
+    pluck_wfrac = _fnum(p, "pluck_width", 0.3)
+    pickup_fx = _fnum(p, "pickup_x", 0.62)
+    pickup_fy = _fnum(p, "pickup_y", 0.58)
+    fpp = max(1, int(_fnum(p, "frames_per_period", FRAMES_PER_PERIOD)))
+
+    if not (0.0 < audio_dur <= PLATE_AUDIO_MAX):
+        raise ParamError(f"audio_duration must be in (0, {PLATE_AUDIO_MAX}] s, got {audio_dur}.")
+    if not (0.0 < anim_win <= ANIM_WIN_MAX):
+        raise ParamError(f"animation_window must be in (0, {ANIM_WIN_MAX}] s, got {anim_win}.")
+    if not (0.0 < playback_speed <= SPEED_MAX):
+        raise ParamError(f"playback_speed must be in (0, {SPEED_MAX}], got {playback_speed}.")
+    for name, v in (("pluck_x", pluck_fx), ("pluck_y", pluck_fy),
+                    ("pickup_x", pickup_fx), ("pickup_y", pickup_fy)):
+        if not (0.0 < v < 1.0):
+            raise ParamError(f"{name} must be in (0, 1), got {v}.")
+    if not (0.0 < pluck_wfrac <= 1.0):
+        raise ParamError(f"pluck_width must be in (0, 1], got {pluck_wfrac}.")
+
+    res, fs, boundary, geom = _build_plate(p)
+    Lx, Ly = geom["Lx"], geom["Ly"]
+
+    # Work budget (n_live × steps). fs = kappa/(mu h²) rides 1/mu and N², so cost explodes at LOW mu
+    # / high N — the message points there (opposite of the membrane's lambda cap).
+    n_audio = max(1, round(audio_dur * fs))
+    n_anim_est = max(1, round(anim_win * fs))
+    work = res.n_live * (n_audio + n_anim_est)
+    if work > PLATE_WORK_MAX:
+        raise ParamError(
+            f"this configuration needs ~{work / 1e6:.0f}M node-steps (over the "
+            f"~{PLATE_WORK_MAX / 1e6:.0f}M budget); RAISE mu, reduce N, or shorten the audio."
+        )
+
+    f_disc = _plate_discrete_eigenfreqs(res, N_PLATE_MODES)
+    f_cont = _plate_continuum(res, int(f_disc.size))
+    f1 = float(f_disc[0]) if f_disc.size else res.kappa / (2.0 * min(Lx, Ly) ** 2)
+
+    # --- audio run: broad raised-cosine strike, single (x, y) pickup, no snapshots ---------------
+    wc = pluck_wfrac * min(Lx, Ly)
+    pcx, pcy = pluck_fx * Lx, pluck_fy * Ly
+    res.set_state(raised_cosine_2d(res.X, res.Y, (pcx, pcy), wc, amplitude=amplitude))
+    pickup_idx = res.pickup_index_at(pickup_fx * Lx, pickup_fy * Ly)
+    audio_res = simulate(res, num_steps=n_audio, pickup_index=pickup_idx)
+    pickup = np.asarray(audio_res.output, dtype=float)
+    if not np.all(np.isfinite(pickup)):
+        raise ParamError("simulation produced non-finite output (instability) — adjust parameters.")
+
+    # --- animation run: fresh plate, short window, fundamental-resolving stride (catch #2) --------
+    anim = _build_plate(p)[0]
+    anim.set_state(raised_cosine_2d(anim.X, anim.Y, (pcx, pcy), wc, amplitude=amplitude))
+    anim_stride = max(1, round((fs / f1) / fpp))
+    n_anim = max(anim_stride, round(anim_win * fs))
+    if n_anim // anim_stride > MAX_FRAMES:
+        anim_stride = max(1, math.ceil(n_anim / MAX_FRAMES))
+    anim_res = simulate(anim, num_steps=n_anim, snapshot_stride=anim_stride)
+    frames_full = np.array([st for _, st in anim_res.snapshots], dtype=float)  # (nf, ny, nx)
+    frame_steps = np.array([i for i, _ in anim_res.snapshots], dtype=float)
+
+    frames_dec, mask_dec = _decimate_field_mask(frames_full, res.mask)
+    nf, ny_dec, nx_dec = frames_dec.shape
+    field_amp = float(np.max(np.abs(frames_dec))) if frames_dec.size else 0.0
+
+    audio48, peak = _resample_normalize(pickup, fs)
+
+    return {
+        "model": "plate",
+        "boundary": boundary,
+        "fs_sim": round(fs, 3),
+        "mu": round(float(res.mu), 6),
+        "grid": {
+            "dims": 2, "nx": int(nx_dec), "ny": int(ny_dec),
+            "extent_x": round(Lx, 6), "extent_y": round(Ly, 6), "domain": "rectangle",
+        },
+        "frames": {
+            "b64": _b64f32(frames_dec.ravel()),
+            "n_frames": int(nf), "nx": int(nx_dec), "ny": int(ny_dec),
+            "width": int(nx_dec), "dims": 2,
+        },
+        "mask": {"b64": _b64u8(mask_dec.ravel()), "nx": int(nx_dec), "ny": int(ny_dec)},
+        "frame_times": _finite_list(frame_steps / fs, 6),
+        "anim_dt": float(anim_stride / fs),
+        "playback_speed": playback_speed,
+        "field_amp": field_amp,
+        "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
+        "energy": _energy_block(audio_res, res.sigma == 0.0, 2.0 * res.sigma),
+        "meta": {
+            "kappa": round(res.kappa, 4),
+            "f1": round(f1, 3),
+            "num_steps": int(n_audio),
+            "n_frames": int(nf),
+            "spectrum": _modal_spectrum_block(pickup, fs, f_disc, f_cont, "plate"),
+        },
+    }
+
+
+# == von Kármán nonlinear plate (2D, model #6) =====================================================
+#
+# The expensive corner: two coupled fields (transverse w + Airy stress F), a Picard fixed-point per
+# step, and **no analytic modal oracle** — energy conservation *is* the correctness test, but it
+# telescopes only at the Picard fixed point, so the verdict is convergence-gated (catch: a
+# non-converged run has a drift number that is iteration noise, not physics). The material surface
+# is ``(E, e, nu, rho)`` (rho volumetric; the linear plates took kappa directly), and ``e``
+# (thickness) is the amplitude scale — the strike is ``w_over_e · e`` metres. The pitch **hardens**
+# with amplitude, so the spectrum panel's marker lines are the *linear* (w→0) modes and the real
+# peaks sit **above** them (the hardening shift — the opposite reading of a linear model, where
+# peaks-on-lines = good). The hardened fundamental is read by zero-crossing spacing (robust),
+# and **only for** ``boundary="supported"`` + a broad centered strike — a free-edge crash is a mode
+# wash where zero-cross returns noise, so the free path reports a crash cascade, not a glide %.
+
+
+def _as_bool(v: Any, default: bool) -> bool:
+    """Coerce a JSON/query value to bool (accepts bool, ``"true"``/``"false"``, 1/0)."""
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return default
+    if isinstance(v, (int, float)):
+        return bool(v)
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _build_vk(p: dict[str, Any]) -> tuple[VKPlate, float, str, bool, dict[str, Any]]:
+    """Construct a fresh :class:`VKPlate`. Returns ``(res, fs, boundary, nonlinear, geom)``.
+
+    Material surface ``(E, e, nu, rho)`` (``rho`` volumetric → ``rho_s = rho·e`` inside the ctor);
+    ``kappa, D, Y_mem`` are derived. The time control is ``fs`` **directly** (oversample around the
+    nonlinearity, HANDOFF §8) — not a Courant number, because ``kappa`` is itself derived. The
+    "domain" select carries the **boundary** (``supported`` gong / ``free`` cymbal).
+    """
+    boundary = str(p.get("domain", "supported"))
+    if boundary not in ("supported", "free"):
+        raise ParamError(f"boundary must be 'supported' or 'free', got {boundary!r}.")
+    E = _fnum(p, "E", 2.0e11)
+    e = _fnum(p, "e", 1.0e-3)
+    nu = _fnum(p, "nu", 0.3)
+    rho = _fnum(p, "rho", 7800.0)  # VKPlate.rho is VOLUMETRIC (kg/m³); rho_s = rho·e derived
+    Lx = _fnum(p, "Lx", 0.4)
+    Ly = _fnum(p, "Ly", 0.4)
+    fs = _fnum(p, "fs", 32_000.0)
+    sigma = _fnum(p, "sigma", 0.0)
+    nonlinear = _as_bool(p.get("nonlinear", True), True)
+    try:
+        N = int(p.get("N", 20))
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"N must be an integer, got {p.get('N')!r}.") from exc
+
+    if not (N_MIN <= N <= VK_N_MAX):
+        raise ParamError(f"N must be in [{N_MIN}, {VK_N_MAX}] for the von Kármán plate, got {N}.")
+    if min(E, e, rho, Lx, Ly) <= 0:
+        raise ParamError("E, e, rho, Lx, Ly must all be positive.")
+    if sigma < 0:
+        raise ParamError(f"sigma (loss) must be >= 0, got {sigma}.")
+    if not (VK_FS_MIN <= fs <= VK_FS_MAX):
+        raise ParamError(f"fs must be in [{VK_FS_MIN:.0f}, {VK_FS_MAX:.0f}] Hz, got {fs}.")
+
+    res = VKPlate(
+        Lx=Lx, Ly=Ly, E=E, e=e, nu=nu, rho=rho, fs=fs, N=N, sigma=sigma,
+        boundary=boundary, nonlinear=nonlinear, couple_max_iter=VK_COUPLE_MAX_ITER,
+    )
+    geom = {"Lx": float(res.Lx), "Ly": float(res.Ly)}
+    if res.n_live > VK_NLIVE_MAX:
+        raise ParamError(
+            f"this plate has {res.n_live} live nodes (> {VK_NLIVE_MAX}); reduce N or "
+            "the aspect ratio."
+        )
+    return res, fs, boundary, nonlinear, geom
+
+
+def _run_vk(
+    vk: VKPlate, num_steps: int, pickup_index: int | None = None, snapshot_stride: int = 0
+) -> tuple[SimResult, dict[str, Any]]:
+    """Run a :class:`VKPlate` like :func:`engine.simulate` but also track Picard convergence.
+
+    Mirrors the engine's capture (energy always, optional pickup + snapshots) and additionally
+    accumulates the convergence stats the energy verdict is gated on: how many steps failed to reach
+    ``couple_tol``, the worst residual, and the max Picard sweeps used. Returns
+    ``(SimResult, convergence)``.
+    """
+    if num_steps < 1:
+        raise ValueError("num_steps must be >= 1.")
+    n = num_steps + 1
+    energy = np.empty(n)
+    output = np.empty(n) if pickup_index is not None else None
+    snapshots: list[tuple[int, NDArray[np.float64]]] = []
+    n_not_conv = 0
+    worst_res = 0.0
+    max_iters = 0
+
+    energy[0] = vk.energy()
+    if output is not None:
+        output[0] = vk.displacement_at(pickup_index)  # type: ignore[arg-type]
+    if snapshot_stride:
+        snapshots.append((0, vk.state))
+    for i in range(1, n):
+        vk.step()
+        if not vk.converged:
+            n_not_conv += 1
+        worst_res = max(worst_res, vk.last_residual)
+        max_iters = max(max_iters, vk.n_iters)
+        energy[i] = vk.energy()
+        if output is not None:
+            output[i] = vk.displacement_at(pickup_index)  # type: ignore[arg-type]
+        if snapshot_stride and (i % snapshot_stride == 0):
+            snapshots.append((i, vk.state))
+
+    res = SimResult(
+        time=np.arange(n) * vk.k, energy=energy, output=output, fs=1.0 / vk.k, snapshots=snapshots
+    )
+    convergence = {
+        "all_converged": n_not_conv == 0,
+        "n_not_converged": int(n_not_conv),
+        "worst_residual": float(worst_res),
+        "max_iters": int(max_iters),
+        "couple_tol": float(vk.couple_tol),
+    }
+    return res, convergence
+
+
+def _vk_spectrum_block(
+    pickup: NDArray[np.float64], fs: float, f_lin: NDArray[np.float64], f0: float
+) -> dict[str, Any] | None:
+    """von Kármán spectrum panel: FFT + **linear** (w→0) marker lines + the hardening shift.
+
+    Unlike the linear models, the marker lines are the *linear* eigenfrequencies and the real peaks
+    sit **above** them by the amplitude hardening — so ``kind="vk"`` tells the frontend to read the
+    gap as a *hardening shift*, never a "cents error". ``f0`` is the honest hardened fundamental
+    (from zero-crossings; ``nan`` on the free-edge crash where it is meaningless). ``shift_pct`` is
+    percent rise of ``f0`` over the linear fundamental (``None`` when ``f0`` is unavailable).
+    """
+    if f_lin.size == 0:
+        return None
+    f1_lin = float(f_lin[0])
+    fmax = float(np.max(f_lin)) * 1.6
+    if math.isfinite(f0) and f0 > 0:
+        fmax = max(fmax, f0 * 1.6)
+    pooled = _pooled_spectrum(pickup, fs, fmax)
+    if pooled is None:
+        return None
+    f_ds, m_ds = pooled
+    shift_pct = (
+        100.0 * (f0 / f1_lin - 1.0) if (math.isfinite(f0) and f0 > 0 and f1_lin > 0) else None
+    )
+    return {
+        "kind": "vk",
+        "freq": _finite_list(f_ds, 3),
+        "mag": _finite_list(m_ds, 5),
+        "fmax": round(fmax, 3),
+        "modes_linear": _finite_list(f_lin, 4),
+        "f1_linear": round(f1_lin, 4),
+        "f0_detected": round(float(f0), 4) if math.isfinite(f0) else None,
+        "shift_pct": round(shift_pct, 2) if shift_pct is not None else None,
+    }
+
+
+def _vk_strike(
+    res: VKPlate, boundary: str, amplitude: float, pcx: float, pcy: float, wc: float
+) -> NDArray[np.float64]:
+    """Excitation field for a :class:`VKPlate`.
+
+    ``"supported"`` — the **(1,1) eigenmode** ``sin(πx/Lx) sin(πy/Ly)`` (peak ``amplitude``). A pure
+    mode is what makes the hardened fundamental read cleanly off zero-crossings: a broad multi-mode
+    strike would make the zero-cross count *overcount* and report a bogus glide (this mirrors
+    ``diagnose_vk_plate``'s sweep, which uses ``mode11`` for exactly this reason). Pluck position is
+    therefore ignored for the supported gong. ``"free"`` — a broad centered raised-cosine *crash* at
+    ``(pcx, pcy)`` (a mode wash; no clean fundamental — the frontend shows a cascade, not a glide).
+    """
+    if boundary == "supported":
+        field = amplitude * np.sin(np.pi * res.X / res.Lx) * np.sin(np.pi * res.Y / res.Ly)
+    else:
+        field = raised_cosine_2d(res.X, res.Y, (pcx, pcy), wc, amplitude=amplitude)
+    field[~res.mask] = 0.0
+    return field
+
+
+def _build_payload_vk(p: dict[str, Any]) -> dict[str, Any]:
+    audio_dur = _fnum(p, "audio_duration", 0.5)
+    anim_win = _fnum(p, "animation_window", 0.02)
+    playback_speed = _fnum(p, "playback_speed", 0.02)
+    w_over_e = _fnum(p, "w_over_e", 2.0)
+    pluck_fx = _fnum(p, "pluck_x", 0.5)
+    pluck_fy = _fnum(p, "pluck_y", 0.5)
+    pluck_wfrac = _fnum(p, "pluck_width", 0.28)
+    pickup_fx = _fnum(p, "pickup_x", 0.47)
+    pickup_fy = _fnum(p, "pickup_y", 0.53)
+    fpp = max(1, int(_fnum(p, "frames_per_period", FRAMES_PER_PERIOD)))
+
+    if not (0.0 < audio_dur <= VK_AUDIO_MAX):
+        raise ParamError(f"audio_duration must be in (0, {VK_AUDIO_MAX}] s, got {audio_dur}.")
+    if not (0.0 < anim_win <= ANIM_WIN_MAX):
+        raise ParamError(f"animation_window must be in (0, {ANIM_WIN_MAX}] s, got {anim_win}.")
+    if not (0.0 < playback_speed <= SPEED_MAX):
+        raise ParamError(f"playback_speed must be in (0, {SPEED_MAX}], got {playback_speed}.")
+    if not (0.0 < w_over_e <= VK_WOVERE_MAX):
+        raise ParamError(f"w_over_e must be in (0, {VK_WOVERE_MAX}], got {w_over_e}.")
+    for name, v in (("pluck_x", pluck_fx), ("pluck_y", pluck_fy),
+                    ("pickup_x", pickup_fx), ("pickup_y", pickup_fy)):
+        if not (0.0 < v < 1.0):
+            raise ParamError(f"{name} must be in (0, 1), got {v}.")
+    if not (0.0 < pluck_wfrac <= 1.0):
+        raise ParamError(f"pluck_width must be in (0, 1], got {pluck_wfrac}.")
+
+    res, fs, boundary, nonlinear, geom = _build_vk(p)
+    Lx, Ly = geom["Lx"], geom["Ly"]
+
+    # Picard-aware work budget: n_live × steps × couple_max_iter (worst-case sweeps every step).
+    n_audio = max(1, round(audio_dur * fs))
+    n_anim_est = max(1, round(anim_win * fs))
+    iters = res.couple_max_iter if nonlinear else 1
+    work = res.n_live * (n_audio + n_anim_est) * iters
+    if work > VK_WORK_MAX:
+        raise ParamError(
+            f"this configuration needs up to ~{work / 1e6:.0f}M coupled node-solves (over the "
+            f"~{VK_WORK_MAX / 1e6:.0f}M budget); reduce N, lower fs, or shorten the audio."
+        )
+
+    # Linear (w→0) eigenmodes: the marker lines. The hardened peaks sit ABOVE these.
+    f_lin = _plate_discrete_eigenfreqs(res, N_VK_MODES)
+    f1_lin = float(f_lin[0]) if f_lin.size else res.kappa / (2.0 * min(Lx, Ly) ** 2)
+
+    # --- audio run: broad centered strike of w_over_e·e metres, single (x, y) pickup -------------
+    amplitude = w_over_e * res.e
+    wc = pluck_wfrac * min(Lx, Ly)
+    pcx, pcy = pluck_fx * Lx, pluck_fy * Ly
+    res.set_state(_vk_strike(res, boundary, amplitude, pcx, pcy, wc))
+    pickup_idx = res.pickup_index_at(pickup_fx * Lx, pickup_fy * Ly)
+    audio_res, convergence = _run_vk(res, n_audio, pickup_index=pickup_idx)
+    pickup = np.asarray(audio_res.output, dtype=float)
+    if not np.all(np.isfinite(pickup)):
+        raise ParamError("simulation produced non-finite output (instability) — adjust parameters.")
+
+    # Hardened fundamental via zero-crossings — ONLY honest for supported + a broad centered strike
+    # (a free-edge crash is a mode wash where zero-cross returns noise; report a cascade, not a %).
+    f0 = _zero_cross_fundamental(pickup, fs) if boundary == "supported" else float("nan")
+
+    # --- animation run: fresh plate, short window, fundamental-resolving stride ------------------
+    anim = _build_vk(p)[0]
+    anim.set_state(_vk_strike(anim, boundary, amplitude, pcx, pcy, wc))
+    anim_stride = max(1, round((fs / max(f1_lin, 1.0)) / fpp))
+    n_anim = max(anim_stride, round(anim_win * fs))
+    if n_anim // anim_stride > MAX_FRAMES:
+        anim_stride = max(1, math.ceil(n_anim / MAX_FRAMES))
+    anim_res, _ = _run_vk(anim, n_anim, snapshot_stride=anim_stride)
+    frames_full = np.array([st for _, st in anim_res.snapshots], dtype=float)  # (nf, ny, nx)
+    frame_steps = np.array([i for i, _ in anim_res.snapshots], dtype=float)
+
+    frames_dec, mask_dec = _decimate_field_mask(frames_full, res.mask)
+    nf, ny_dec, nx_dec = frames_dec.shape
+    field_amp = float(np.max(np.abs(frames_dec))) if frames_dec.size else 0.0
+
+    audio48, peak = _resample_normalize(pickup, fs)
+
+    return {
+        "model": "vk",
+        "boundary": boundary,
+        "nonlinear": nonlinear,
+        "fs_sim": round(fs, 3),
+        "grid": {
+            "dims": 2, "nx": int(nx_dec), "ny": int(ny_dec),
+            "extent_x": round(Lx, 6), "extent_y": round(Ly, 6), "domain": "rectangle",
+        },
+        "frames": {
+            "b64": _b64f32(frames_dec.ravel()),
+            "n_frames": int(nf), "nx": int(nx_dec), "ny": int(ny_dec),
+            "width": int(nx_dec), "dims": 2,
+        },
+        "mask": {"b64": _b64u8(mask_dec.ravel()), "nx": int(nx_dec), "ny": int(ny_dec)},
+        "frame_times": _finite_list(frame_steps / fs, 6),
+        "anim_dt": float(anim_stride / fs),
+        "playback_speed": playback_speed,
+        "field_amp": field_amp,
+        "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
+        "energy": _energy_block(
+            audio_res, res.sigma == 0.0, 2.0 * res.sigma,
+            convergence=convergence if nonlinear else None,
+        ),
+        "meta": {
+            "kappa": round(res.kappa, 4),
+            "e": res.e,
+            "f1": round(f1_lin, 3),
+            "num_steps": int(n_audio),
+            "n_frames": int(nf),
+            "spectrum": _vk_spectrum_block(pickup, fs, f_lin, f0),
         },
     }
