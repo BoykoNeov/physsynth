@@ -12,7 +12,7 @@ from scipy.sparse.linalg import eigsh
 from physsynth.analysis import modal, spectrum
 from physsynth.core.beam import FreeBeam
 from physsynth.core.body import ModalBody
-from physsynth.core.connection import StringBodyBridge
+from physsynth.core.connection import StringBodyBridge, StringPlateBridge
 from physsynth.core.engine import simulate
 from physsynth.core.membrane import Domain, Membrane
 from physsynth.core.plate import Plate
@@ -392,6 +392,48 @@ def make_bridge(
     )
     body = ModalBody(freqs=body_freqs, fs=fs, sigmas=sigma_body, masses=masses, phi=phi)
     return StringBodyBridge(string=string, body=body, K=K)
+
+
+# Plate bridge (string terminus <-> grid plate body). A coarse plate (N_plate small) so the per-step
+# sparse solve is cheap; its per-node mass rho_s h^2 is comparable to the string's end half-cell, so
+# the body genuinely loads the string. K well under the exact Sherman-Morrison guard.
+KAPPA_PLATE_BRIDGE = 20.0
+K_PLATE_BRIDGE_DEFAULT = 3000.0
+
+
+def make_plate_bridge(
+    *,
+    N_string: int = 100,
+    N_plate: int = 16,
+    lam: float = 0.9,
+    K: float = K_PLATE_BRIDGE_DEFAULT,
+    sigma_string: float = 0.0,
+    sigma_plate: float = 0.0,
+    kappa: float = KAPPA_PLATE_BRIDGE,
+    drive_index: int | None = None,
+    L: float = L_DEFAULT,
+    T: float = T_DEFAULT,
+    rho: float = RHO_DEFAULT,
+    Lx: float = 1.0,
+    Ly: float = 1.0,
+    rho_plate: float = RHO_AREAL_DEFAULT,
+) -> StringPlateBridge:
+    """Build a fixed/free string terminated on a simply-supported grid :class:`Plate` body.
+
+    Both parts share ``fs = c N_string / (L lam)`` (``lam < 1`` gives the coupled system headroom
+    below the string's Nyquist mode). The plate's sample rate is fixed by the string, so its
+    plate-Courant ``mu = kappa k / h^2`` follows from ``N_plate`` (the implicit theta-scheme has no
+    CFL limit, so any ``mu`` is fine). The default ``K`` sits well inside the exact stability guard.
+    """
+    c = wave_speed(T, rho)
+    fs = c * N_string / (L * lam)
+    string = IdealString(
+        L=L, T=T, rho=rho, fs=fs, N=N_string, boundary=("fixed", "free"), sigma=sigma_string
+    )
+    plate = Plate(
+        Lx=Lx, Ly=Ly, kappa=kappa, rho=rho_plate, fs=fs, N=N_plate, sigma=sigma_plate
+    )
+    return StringPlateBridge(string=string, plate=plate, K=K, drive_index=drive_index)
 
 
 def discrete_sho_frequency(f: float, k: float) -> float:

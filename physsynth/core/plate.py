@@ -221,6 +221,10 @@ class Plate:
 
         self.u: NDArray[np.float64] = np.zeros(self.n_live)
         self.u_prev: NDArray[np.float64] = np.zeros(self.n_live)
+        # Transverse acceleration u'' of the most recent step, taken from the *actual* second
+        # difference so it captures every force -- including an external driving-point force when
+        # the plate is coupled as a body (the radiation read-out reads this). See :meth:`pressure`.
+        self._accel: NDArray[np.float64] = np.zeros(self.n_live)
         self.n: int = 0  # completed steps
 
     # -- initial conditions -------------------------------------------------------------
@@ -270,16 +274,29 @@ class Plate:
             accel_term = half_k2_kappa2 * (self.K @ u0) / self.w  # +1/2 k² kappa² W⁻¹ K u^0
         self.u = u0
         self.u_prev = u0 - self.k * v0_live - accel_term
+        # Initial acceleration a^0 = 𝓛 u^0 (lossless free response), so pressure() is meaningful
+        # before the first step. "supported": -kappa² B u^0; "free": -kappa² W⁻¹ K u^0.
+        if self.boundary == "supported":
+            self._accel = -self.kappa * self.kappa * (self.B @ u0)
+        else:
+            self._accel = -self.kappa * self.kappa * (self.K @ u0) / self.w
         self.n = 0
 
     # -- time stepping ------------------------------------------------------------------
 
-    def step(self) -> None:
+    def step(self, f_ext: NDArray[np.float64] | None = None) -> None:
         """Advance one timestep via the prefactored sparse SPD solve (rolls the history).
 
         ``"supported"`` uses the ``I``-based update (the SS mass factors out); ``"free"`` uses the
         **W-weighted** update ``W δ_tt u = -kappa² K(…)`` (the free beam's scheme in 2D), so ``W``
         multiplies the inertial terms on the RHS.
+
+        ``f_ext`` is an optional external nodal force (live vector, N) applied at time ``n`` — the
+        driving-point coupling used when the plate is a body node (:class:`StringPlateBridge`). It
+        enters ``δ_tt u`` as ``force / mass`` at each node, so it is added to the RHS **before** the
+        implicit solve (a post-solve correction is invalid — the ``A``-solve couples all nodes). The
+        per-node mass is ``rho_s h²`` for ``"supported"`` and ``rho_s W_ii`` for ``"free"`` (the
+        ``W`` divide is handled by the ``A``-solve, so only ``rho_s`` is divided out here).
         """
         sk = self.sigma * self.k
         k2 = self.k * self.k
@@ -294,6 +311,8 @@ class Plate:
                 + self.theta * k2 * Lop_prev
                 + sk * self.u_prev
             )
+            if f_ext is not None:
+                rhs = rhs + k2 * f_ext / (self.rho * self.h * self.h)
         else:  # free: W-weighted inertial terms (W u_tt = -kappa² K u)
             Lop_u = -kappa2 * (self.K @ self.u)  # = W a^n
             Lop_prev = -kappa2 * (self.K @ self.u_prev)
@@ -303,7 +322,10 @@ class Plate:
                 + self.theta * k2 * Lop_prev
                 + sk * (self.W @ self.u_prev)
             )
+            if f_ext is not None:
+                rhs = rhs + k2 * f_ext / self.rho
         u_next = self._lu.solve(rhs)
+        self._accel = (u_next - 2.0 * self.u + self.u_prev) / k2  # true u'' (all forces)
         self.u_prev = self.u
         self.u = u_next
         self.n += 1
@@ -348,6 +370,19 @@ class Plate:
         ys = self.Y[live]
         d2 = (xs - x) ** 2 + (ys - y) ** 2
         return int(np.argmin(d2))
+
+    def pressure(self) -> float:
+        """Radiated pressure read-out ``p = sum_i area_i u_i''`` (monopole ∝ volume acceleration).
+
+        Uses :attr:`_accel`, the transverse acceleration from the *actual* second difference of the
+        last step, so it reflects every force acting on the plate — including a driving-point force
+        when the plate is coupled as a body. (Reconstructing ``u'' = -kappa² B u`` would silently
+        omit that coupling term, exactly as the modal body's read-out warns.) The nodal area weight
+        is the scalar ``h²`` for ``"supported"`` and the lumped cell area ``W_ii`` for ``"free"``.
+        """
+        if self.boundary == "supported":
+            return self.h * self.h * float(np.sum(self._accel))
+        return float(np.dot(self.w, self._accel))
 
     # -- internals ----------------------------------------------------------------------
 
