@@ -82,6 +82,15 @@ Complete and validated:
   conservative Picard resonator, validation, pitch-glide/energy-exchange diagnostics, and Part 6 the
   **free-edge cymbal/gong** — energy-conserving nonlinear coupling on a free rectangle, with the
   crash cascade and curved-Chladni modes).
+- **Bowed string** — the first continuous **nonlinear exciter** (`core/bow.py`): a friction bow on
+  a damped string, closing the `exciter →` leg of the abstraction. Stick-slip via the smooth
+  friction curve `Φ(v)=F·√(2a)·v·e^{-av²+½}`, evaluated at the *centered* relative velocity — so the
+  force is implicit and reduces to one scalar equation (rank-1 driving-point admittance `a=A⁻¹eᵢ`,
+  continuation-seeded Newton + bracketed fallback through the multivalued Helmholtz regime). The
+  friction force is applied *exactly*, so the discrete **energy balance** `E − E₀ = bow_work` holds
+  to machine precision (the bow is *active*, not conservative). Reproduces sustained **Helmholtz
+  motion** (one slip per period, slip fraction = β, bow-speed-independent pitch, amplitude ∝ bow
+  speed) and the **Schelleng** min/max-force playability wedge.
 - **Body / radiation** — the third node of `exciter → resonator → body/radiation`: a **modal body**
   (bank of damped oscillators, `core/body.py`) coupled to a string *terminus* through an
   **energy-conserving bridge** (`core/connection.py`). The linear spring makes the whole system one

@@ -251,6 +251,18 @@ class DampedStiffString:
         """Displacement at grid node ``index`` -- a pickup for spectral analysis."""
         return float(self.u[index])
 
+    def apply_Ainv(self, rhs_int: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Solve ``A x = rhs_int`` for the interior unknowns (the same banded SPD factor a
+        :meth:`step` uses). ``A = (1 + sigma0 k) I - theta k^2 L - sigma1 k D2`` is the update
+        matrix; this exposes its inverse action so a coupled element can precompute the string's
+        one-step **driving-point admittance** ``a = A^{-1} e_i`` (used, e.g., by
+        :class:`~physsynth.core.bow.BowedString` to reduce the implicit friction force to a single
+        scalar equation). ``rhs_int`` has length ``N - 1`` (the interior nodes ``1 .. N-1``)."""
+        rhs_int = np.asarray(rhs_int, dtype=float)
+        if rhs_int.shape != (self.N - 1,):
+            raise ValueError(f"rhs_int must have shape {(self.N - 1,)}, got {rhs_int.shape}.")
+        return cho_solve_banded((self._chol, False), rhs_int)
+
     # -- internals ----------------------------------------------------------------------
 
     def _P(self, f: NDArray[np.float64], g: NDArray[np.float64]) -> float:

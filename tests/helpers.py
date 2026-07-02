@@ -12,6 +12,7 @@ from scipy.sparse.linalg import eigsh
 from physsynth.analysis import modal, spectrum
 from physsynth.core.beam import FreeBeam
 from physsynth.core.body import ModalBody
+from physsynth.core.bow import BowedString
 from physsynth.core.connection import StringBodyBridge, StringPlateBridge
 from physsynth.core.engine import simulate
 from physsynth.core.membrane import Domain, Membrane
@@ -472,6 +473,54 @@ def make_free_plate_bridge(
         boundary="free", nu=nu,
     )
     return StringPlateBridge(string=string, plate=plate, K=K, drive_index=drive_index)
+
+
+# Bowed string (nonlinear friction exciter). A flexible (kappa=0), fixed-end damped string bowed
+# near the nut. The defaults sit in the multivalued Helmholtz regime (helmholtz_number > 1) so a
+# note self-sustains, and carry a little frequency-dependent loss (sigma1 > 0) which rounds the
+# Helmholtz corner into clean single-slip motion (else the sharp corner excites raucous multi-slip).
+BOW_POSITION_DEFAULT = 0.13    # m -> beta ~ 0.13 (bow near the nut; slip fraction of period ~ beta)
+V_BOW_DEFAULT = 0.1            # m/s
+BOW_FORCE_DEFAULT = 1.0        # N  (peak friction)
+BOW_SHARPNESS_DEFAULT = 60.0   # s^2/m^2
+BOW_SIGMA0_DEFAULT = 0.5       # frequency-independent loss
+BOW_SIGMA1_DEFAULT = 0.05      # frequency-dependent loss (rounds the corner -> clean Helmholtz)
+
+
+def make_bowed_string(
+    *,
+    N: int = 100,
+    lam: float = 0.9,
+    sigma0: float = BOW_SIGMA0_DEFAULT,
+    sigma1: float = BOW_SIGMA1_DEFAULT,
+    kappa: float = 0.0,
+    bow_position: float = BOW_POSITION_DEFAULT,
+    v_bow: float = V_BOW_DEFAULT,
+    force: float = BOW_FORCE_DEFAULT,
+    sharpness: float = BOW_SHARPNESS_DEFAULT,
+    theta: float = THETA_DEFAULT,
+    L: float = L_DEFAULT,
+    T: float = T_DEFAULT,
+    rho: float = RHO_DEFAULT,
+) -> BowedString:
+    """Build a bowed string (nonlinear friction exciter on a :class:`DampedStiffString`).
+
+    ``kappa = 0`` gives a flexible fixed-end string (``f_1 = c/2L = 100 Hz`` on the canonical rig)
+    so the bow physics is isolated. ``lam < 1`` because the friction couples through the string's
+    dynamics much like a bridge spring; a hair of headroom below the Nyquist mode keeps the coupled
+    solve clean. ``sigma0 > 0`` lets the note reach a steady Helmholtz amplitude instead of growing
+    without bound; ``sigma1 > 0`` damps the high partials so the Helmholtz corner stays sharp-but-
+    clean (one slip per period) rather than raucous. Pass ``sigma0 = sigma1 = 0`` for the lossless
+    energy-balance test, or ``force = 0`` to decouple the bow entirely (the string just decays).
+    """
+    c = wave_speed(T, rho)
+    fs = c * N / (L * lam)
+    string = DampedStiffString(
+        L=L, T=T, rho=rho, fs=fs, N=N, kappa=kappa, sigma0=sigma0, sigma1=sigma1, theta=theta
+    )
+    return BowedString(
+        string=string, bow_position=bow_position, v_bow=v_bow, force=force, sharpness=sharpness
+    )
 
 
 def discrete_sho_frequency(f: float, k: float) -> float:
