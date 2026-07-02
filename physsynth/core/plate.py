@@ -381,9 +381,9 @@ class VKPlate:
     with the Monge–Ampère bracket ``l`` (:class:`VonKarmanBracket`, Part 1), the clamped ``F``-solve
     ``B_F`` (:class:`AiryStressSolver`, Part 2, in-plane BC ``F = 0, F,n = 0``), ρ_s = ρ e the areal
     density, ``D = E e³ / (12(1-ν²))`` the flexural rigidity, ``κ = √(D/ρ_s)`` the bending speed and
-    ``Y = E e`` the membrane coefficient. The onset of nonlinearity is at ``w ≈ e`` (thickness), so
-    ``e`` is a *physically meaningful* input (the linear models used ``κ`` alone): the material
-    surface is ``(E, e, ν, ρ)`` and ``κ, D, Y, ρ_s`` are derived.
+    ``Y_mem = E e`` the membrane coefficient. The onset of nonlinearity is at ``w ≈ e`` (thickness),
+    so ``e`` is a *physically meaningful* input (the linear models used ``κ`` alone): the material
+    surface is ``(E, e, ν, ρ)`` and ``κ, D, Y_mem, ρ_s`` are derived.
 
     **The conservative scheme (exactly energy-conserving to machine precision).** The bending is
     model #5's implicit θ-scheme verbatim; the membrane coupling is time-averaged so the discrete
@@ -429,7 +429,8 @@ class VKPlate:
         Poisson's ratio, in ``(-1, 1/2)``. Enters ``D`` (hence ``κ``); the SS bending law is
         otherwise ν-independent. Retained for the free-edge follow-on (Part 2).
     rho : float
-        Volumetric density (kg/m³); areal density ``ρ_s = ρ e``.
+        Volumetric density (kg/m³), stored as :attr:`rho_v`; areal density ``ρ_s = ρ e`` on
+        :attr:`rho_s`. (Distinct from :class:`Plate`, whose ``rho`` *is* the areal density.)
     fs : float
         Sample rate (Hz); timestep ``k = 1/fs``. **Oversample around the nonlinearity** (HANDOFF §8)
         — the quadratic/cubic coupling folds HF energy down; render high.
@@ -499,11 +500,11 @@ class VKPlate:
         self.E = float(E)
         self.e = float(e)
         self.nu = float(nu)
-        self.rho = float(rho)
-        self.rho_s = self.rho * self.e  # areal density
+        self.rho_v = float(rho)  # volumetric density (kg/m^3); cf. Plate.rho = areal density
+        self.rho_s = self.rho_v * self.e  # areal density
         self.D = self.E * self.e**3 / (12.0 * (1.0 - self.nu**2))  # flexural rigidity
         self.kappa = float(np.sqrt(self.D / self.rho_s))  # bending speed sqrt(D/rho_s)
-        self.Y = self.E * self.e  # membrane coefficient E*e
+        self.Y_mem = self.E * self.e  # membrane coefficient E*e
         self.fs = float(fs)
         self.N = int(N)
         self.sigma = float(sigma)
@@ -520,7 +521,7 @@ class VKPlate:
         self.Ly = Ny * self.h  # snapped so cells are square
         xs = np.linspace(0.0, self.Lx, self.N + 1)
         ys = np.linspace(0.0, self.Ly, Ny + 1)
-        self.X, self.Y_grid = np.meshgrid(xs, ys)
+        self.X, self.Y = np.meshgrid(xs, ys)
 
         # Plate "Courant" number mu = kappa k / h^2 (explicit-scheme parameter; reported only).
         self.mu = self.kappa * self.k / (self.h * self.h)
@@ -565,7 +566,7 @@ class VKPlate:
 
     def _airy_F(self, w_full: NDArray[np.float64]) -> NDArray[np.float64]:
         """Solve ``∇⁴F = -(Y/2) l(w, w)`` for the stress function from a full-grid ``w`` (rim 0)."""
-        return self.airy.solve(-0.5 * self.Y * self.bracket(w_full, w_full))
+        return self.airy.solve(-0.5 * self.Y_mem * self.bracket(w_full, w_full))
 
     # -- initial conditions -------------------------------------------------------------
 
@@ -702,7 +703,7 @@ class VKPlate:
 
     def _membrane_energy(self, f_full: NDArray[np.float64]) -> float:
         """Membrane potential ``(1/2Y) Fᵀ B_F F = (1/2Y)‖∇²F‖²`` (>= 0) for a full-grid ``F``."""
-        return self.airy.laplacian_norm_sq(f_full) / (2.0 * self.Y)
+        return self.airy.laplacian_norm_sq(f_full) / (2.0 * self.Y_mem)
 
     def membrane_energy(self) -> float:
         """Half-step membrane energy ``½(H_mem(F^{n+1})+H_mem(F^n))`` (>= 0; 0 if linear)."""
@@ -737,7 +738,7 @@ class VKPlate:
         """Flat live-node index nearest the physical point ``(x, y)`` (for placing a pickup)."""
         live = self.index_map >= 0
         xs = self.X[live]
-        ys = self.Y_grid[live]
+        ys = self.Y[live]
         d2 = (xs - x) ** 2 + (ys - y) ** 2
         return int(np.argmin(d2))
 

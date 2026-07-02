@@ -24,7 +24,7 @@ FS = 48000.0
 def _strike(vk, width=0.08):
     """Centered raised-Gaussian strike shape (full field, rim zeroed), peak 1.0."""
     dx = vk.X - 0.5 * Lx
-    dy = vk.Y_grid - 0.5 * vk.Ly
+    dy = vk.Y - 0.5 * vk.Ly
     s = np.exp(-((dx * dx + dy * dy) / (width * width)))
     s[~vk.mask] = 0.0
     return s

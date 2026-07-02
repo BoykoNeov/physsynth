@@ -34,7 +34,7 @@ def test_small_amplitude_tracks_model5():
     fs = 48000.0
     vk = VKPlate(Lx=Lx, Ly=Ly, fs=fs, N=20, **MAT)
     p5 = Plate(Lx=Lx, Ly=Ly, kappa=vk.kappa, rho=vk.rho_s, fs=fs, N=20, boundary="supported")
-    mode = np.sin(np.pi * vk.X / Lx) * np.sin(np.pi * vk.Y_grid / vk.Ly)  # (1,1) SS eigenmode
+    mode = np.sin(np.pi * vk.X / Lx) * np.sin(np.pi * vk.Y / vk.Ly)  # (1,1) SS eigenmode
     ic = 1e-6 * MAT["e"] * mode
     vk.set_state(ic)
     p5.set_state(ic)
@@ -55,7 +55,7 @@ def test_small_amplitude_fundamental_near_analytic():
     Lx, Ly = 0.4, 0.32
     fs = 48000.0
     vk = VKPlate(Lx=Lx, Ly=Ly, fs=fs, N=24, **MAT)
-    mode = np.sin(np.pi * vk.X / Lx) * np.sin(np.pi * vk.Y_grid / vk.Ly)
+    mode = np.sin(np.pi * vk.X / Lx) * np.sin(np.pi * vk.Y / vk.Ly)
     vk.set_state(1e-4 * MAT["e"] * mode)
     pk = vk.pickup_index_at(0.47 * Lx, 0.53 * vk.Ly)
     sig = np.empty(4000)
@@ -74,7 +74,7 @@ def test_pitch_glide_hardening():
     freqs = []
     for amp in (0.01, 1.5, 3.0, 5.0):
         vk = VKPlate(Lx=Lx, Ly=Ly, fs=fs, N=18, **MAT)
-        mode = np.sin(np.pi * vk.X / Lx) * np.sin(np.pi * vk.Y_grid / vk.Ly)
+        mode = np.sin(np.pi * vk.X / Lx) * np.sin(np.pi * vk.Y / vk.Ly)
         vk.set_state(amp * MAT["e"] * mode)
         pk = vk.pickup_index_at(0.47 * Lx, 0.53 * vk.Ly)
         sig = np.empty(5000)

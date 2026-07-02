@@ -8,8 +8,8 @@ version = "0.1.0"
 description = "Energy-based physical-modeling sound synthesis (accuracy-first FDTD core)."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
-authors = [{ name = "Physical Synthesis" }]
+license = { file = "LICENSE" }
+authors = [{ name = "Boyko Neov" }]
 dependencies = [
     "numpy>=1.24",
     "scipy>=1.10",

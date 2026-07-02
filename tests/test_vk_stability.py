@@ -29,7 +29,7 @@ def test_richardson_second_order():
 
     def center_after(N, nsteps=80):
         vk = VKPlate(Lx=Lx, Ly=Ly, fs=fs, N=N, **MAT)
-        x, y = vk.X, vk.Y_grid
+        x, y = vk.X, vk.Y
         ic = np.sin(np.pi * x / Lx) * np.sin(np.pi * y / vk.Ly) + 0.4 * np.sin(
             2 * np.pi * x / Lx
         ) * np.sin(np.pi * y / vk.Ly)
@@ -53,7 +53,7 @@ def test_derived_material_quantities():
     assert vk.rho_s == pytest.approx(rho * e)
     assert vk.D == pytest.approx(E * e**3 / (12.0 * (1.0 - nu**2)))
     assert vk.kappa == pytest.approx(np.sqrt(vk.D / vk.rho_s))
-    assert vk.Y == pytest.approx(E * e)  # membrane coefficient E e
+    assert vk.Y_mem == pytest.approx(E * e)  # membrane coefficient E e
 
 
 def test_ly_snapped_to_square_cells():

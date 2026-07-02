@@ -73,10 +73,20 @@ The physics lives entirely in `physsynth/core`; `web/` is a wrapper (`serialize.
 
 ## Status
 
-Models #1–4 complete and validated (string family: ideal / stiff / damped; 2D circular membrane) plus
-the interactive web viewer for the string family (Phase A). The deliverable for each model is the
-resonator *and the rig that measures its deviation from theory*. See `docs/dev/` for the live plans.
+Complete and validated:
+
+- **String family** — #1 ideal, #2 stiff, #3 frequency-dependent damped.
+- **2D** — #4 circular membrane, #5 simply-supported Kirchhoff plate, #5b free-edge (FFFF) plate with
+  Chladni patterns; plus the #5b-pre free–free Euler–Bernoulli beam (free-boundary de-risk).
+- **Nonlinear** — #6 von Kármán coupled plate, Parts 1–4 of 6 (bracket, Airy stress solve,
+  conservative Picard resonator, validation); diagnostics and the free-edge cymbal remain.
+- **Web viewer** — interactive offline recompute for the string family (Phase A) and the membrane
+  (Phase B).
+
+The deliverable for each model is the resonator *and the rig that measures its deviation from
+theory*. See `docs/dev/` for the live plans.
 
 ## License
 
-MIT.
+Boyko Non-Commercial License v1.0 (BNCL-1.0) — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+Non-commercial use only; commercial use requires a separate license from the copyright holder.
