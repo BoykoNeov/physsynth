@@ -311,9 +311,105 @@ If #2 fails, **stop** — the time loop cannot conserve energy. This is the gate
    spectrogram — the fundamental **glides down** from ~370 Hz onto the 214 Hz linear limit
    (0 non-converged steps); (d) bonus `w`+Airy-`F` stress-field snapshot at peak membrane energy;
    (e) struck-plate GIF. Console prints drift, membrane fraction, glide table, Picard residuals.
-6. **(Part 2, follow-on) Free-edge** — swap `B_bend → K` (model #5b free stiffness) and the free
-   `F`-BC; deliver the iconic gong/cymbal. The bracket, F-solve, and energy bookkeeping all carry
-   over; only the two boundary operators change.
+6. **(Part 6, follow-on) Free-edge cymbal** — swap `B_bend → K` (model #5b free stiffness, `I → W`
+   lumped mass) and reuse the nonlinear machinery. The one-line "only the two boundary operators
+   change" was **wrong** — see the dedicated Part-6 section below. **✅ CRUX DE-RISKED (2026-07-02,
+   empirically in `M:/claud_projects/temp/vk-free-bracket-probe/`); build pending human review of
+   the plan section below.**
+
+---
+
+## Part 6 — free-edge cymbal (the plan, de-risked before code)
+
+**The trap the one-liner hid.** The discrete bracket's triple self-adjointness — the entire
+conservation spine — holds **only for rim-vanishing fields** (the Part-1 domain contract). A free
+plate has `w ≠ 0` on the rim (every node is a free unknown), so "the bracket carries over" is *not*
+inherited. This is the one genuinely-new piece of Part 6, and the advisor confirmed it is the whole
+risk. It was resolved **empirically first** (Part-1/Part-2 discipline), before any repo code.
+
+**The resolution — the crux dissolves because the Airy `F` is still clamped-zero.** The scheme never
+needs full triple self-adjointness on arbitrary fields. Working through the free-case energy
+telescoping, the coupling work is `⟨l(μ_{t·}w, μ_{t·}F), δ_{t·}w⟩` and it must equal
+`-(H_mem^{n+1} - H_mem^{n-1}) = -4c·⟨l(μ_{t·}w, δ_{t·}w), μ_{t·}F⟩`, so the **only** identity
+required is the **swap of arguments 2↔3**
+
+    ⟨ l(x, F), g ⟩  ==  ⟨ l(x, g), F ⟩        (x, g arbitrary free fields; F rim-vanishing)
+
+with `x = μw`, `g = δw` **arbitrary (nonzero on the rim)** and `F = μF` **rim-vanishing** — because
+the Airy stress function is clamped (`F = 0, F,n = 0`) *regardless* of the transverse edge. `w` never
+occupies the rim-vanishing slot; only `F` does. Empirical results (`probe2.py`, machine precision =
+`1.6e-15`):
+
+- The **existing `VonKarmanBracket`** (centered `δ_xx`, uniform-`h²` inner product) already satisfies
+  the swap identity to `1.6e-15` when `F` is rim-vanishing (`F = 0` on the rim). No new stencil.
+- Under **Wa (trapezoidal)** weighting the identity *fails* (`0.42`); it holds only under **uniform
+  `h²`**. So the coupling inner product is uniform `h²`, exactly as in the SS case.
+
+**Why the mixed weighting is right (and forced, not a coincidence).** `wa` equals `h²` everywhere
+except the rim/near-rim. The Airy `F` is clamped-zero there, so the membrane energy is *secretly*
+uniform-`h²`:
+
+    H_mem = (1/2Y) Fᵀ B_F F = -(1/4)⟨F, l(w,w)⟩_Wa = -(1/4)⟨F, l(w,w)⟩_{h²}
+
+(the two inner products agree whenever one factor is rim-vanishing). The coupling work must then match
+that same uniform-`h²` pairing under the swap identity — which is exactly the pairing that holds. So
+`AiryStressSolver` stays **Wa-weighted internally** (its clamped-biharmonic fidelity depends on `Wa`,
+Part 2) while the coupling force pairs under **uniform `h²`**; the mismatch is confined to the rim,
+where `F = 0` kills it. This mixed weighting is load-bearing.
+
+**End-to-end certification (`probe4_endtoend.py`, the seam `probe2/3` do not cover).** `probe3.py`
+isolates *coupling ↔ membrane* telescoping with the real operators (uniform `h²` → exact `5e-15`; Wa
+→ `0.14`–`0.58`). `probe4_endtoend.py` then runs the **full** free scheme (free `K/W` bending + reused
+bracket + reused clamped Airy + Picard loop) and measures `E_lin + H_mem` drift at `w ≈ 3e`: **drift
+`1.67e-13`** (`H_mem` = 57 % of `E` at `t = 0`, worst Picard residual `9.9e-14`, converged). The
+conservation mechanism is certified before repo code.
+
+**What actually changes (and what does not).**
+
+| Piece | Free-edge Part 6 | vs SS Part 3 |
+|---|---|---|
+| Discrete bracket `l(·,·)` | **reused verbatim** (`VonKarmanBracket`) | identical |
+| Airy `F`-solve `B_F` | **reused verbatim** (clamped `AiryStressSolver`; free edge is in-plane traction-free `N_nn=N_nt=0` ⇒ `F=0,F,n=0`) | identical |
+| Membrane energy `H_mem` | **reused** (`(1/2Y)FᵀB_F F`, Wa inside `B_F`) | identical |
+| Coupling inner product | **uniform `h²`** | identical |
+| Bending operator | `K` = `free_plate_stiffness` (ν re-enters) | was `B = L²` |
+| Mass / inertia | lumped `W` (edge-½/corner-¼) | was scalar `h²`·`I` |
+| Live↔full-grid seam | identity (all nodes live) | interior-only restrict |
+
+**The two coefficients to check by eye (highest bug risk — the `I → W` asymmetry).** The free coupling
+force differs from SS in *two* independent ways; the trap is applying only one. Mirror model #5b's
+**bending** acceleration (which carries the `/W` divide), not SS's coupling (which carries neither):
+
+- `step()` RHS: `rhs += k²·(h²/ρ_s)·l(μ_{t·}w, μ_{t·}F)` — the extra `h²` (because `A` now carries
+  `W`'s `h²`); **no** manual `/W` (the `A`-solve applies `W⁻¹`).
+- `set_state` `w^{-1}`: `u_prev += ½k²·(h²/ρ_s)·l(w⁰, F⁰)/w` — the `h²/ρ_s` **and** the per-node `/w`
+  (= `W⁻¹`), exactly like #5b's `accel_term = ½k²κ²(K@u0)/w`.
+
+Get the `h²`-here-but-not-there / `/W`-there-but-not-here asymmetry wrong and the drift mimics a
+bracket bug while the bracket is fine.
+
+**Class design.** Add a **`boundary="free"` branch to `VKPlate`** (mirroring how `Plate` carries both
+SS and free), *not* a separate `FreeVKPlate` — keeps the `nonlinear=False → #5b` regression alongside
+the existing `nonlinear=False → #5`, and does **not** fork the bracket/Airy code paths (they are
+boundary-agnostic). `nonlinear=False, boundary="free"` must be **bit-identical** to
+`Plate(boundary="free")`.
+
+**Build order & gates (drift-first, per Part-3 culture).**
+1. `VKPlate(boundary="free")` construction: `K/W` from `free_plate_stiffness`, all-nodes-live mask,
+   the two pinned coefficients. **First gate = large-amplitude lossless drift `< 1e-10`** (the seam
+   `probe4` validates; this is the headline, run it before the rest of the suite).
+2. `nonlinear=False, boundary="free"` **bit-identical** to `Plate(boundary="free")` (regression).
+3. `w → 0` recovers model #5b's free modes; energy non-negativity; passivity (σ>0); drift∝`couple_tol`
+   self-cert; Richardson O(h²).
+4. Diagnostics: the gong/cymbal ring-down — pitch glide + the crash/shimmer cascade, curved-Chladni
+   nodal figures of the *stiffened* plate. (Watch for low-freq creep: `Σh²·l` over the free rim is
+   nonzero — energy-neutral per `probe4`, but note it in the ring-down.)
+
+**References for this part:** the free case is **not** in Bilbao 2008 (SS-only); it lives in Bilbao
+*NSS* Ch. 13 and the gong/cymbal papers (Bilbao 2005 "A family of conservative FD schemes for
+gongs/cymbals"; Ducceschi–Bilbao). Not on disk — the empirical self-certification above stands in,
+consistent with how Parts 1–3 were pinned. If a structural issue surfaces during the build, WebSearch
+those before grinding stencil variations.
 
 ---
 

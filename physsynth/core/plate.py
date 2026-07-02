@@ -416,6 +416,21 @@ class VKPlate:
     step: ``E^{n+1/2} = E_lin^{n+1/2} + ½(H_mem(F^{n+1})+H_mem(F^n))`` (one-step conserved).
     ``F`` is cached at both stored levels (:attr:`F`, :attr:`F_prev`).
 
+    **Free-edge cymbal (``boundary="free"``, Part 6).** The bending swaps to model #5b's
+    energy-first stiffness ``K`` and lumped mass ``W`` (every node a free unknown, ``ν`` re-enters);
+    the nonlinear machinery (bracket, clamped Airy ``F``-solve, membrane energy) is
+    **boundary-agnostic and reused verbatim**. The conservation crux — the bracket's triple
+    self-adjointness holds only for rim-vanishing fields, yet a free plate has ``w != 0`` on the rim
+    — dissolves because the Airy ``F`` is *still* clamped-zero: the coupling needs only the swap
+    identity ``<l(x,F),g> = <l(x,g),F>`` with ``F`` (not ``w``) in the rim-vanishing slot, which the
+    existing bracket satisfies. The one subtlety is **mixed weighting**: the mass is ``W``
+    (trapezoidal) but the coupling force pairs under uniform ``h²`` (``H_mem`` is secretly
+    uniform-``h²`` because ``F`` is rim-vanishing, so ``wa`` equals ``h²`` wherever it is nonzero).
+    Concretely the coupling RHS factor gains an ``h²`` (``k²·h²·l/ρ_s``) while the ``set_state``
+    ``w^{-1}`` coupling carries both the ``h²/ρ_s`` and the per-node ``/W`` divide (the #5b ``W⁻¹``
+    pattern). ``nonlinear=False, boundary="free"`` is bit-identical to ``Plate(boundary="free")``.
+    See ``docs/dev/von-karman-plate-plan.md`` Part 6.
+
     Parameters
     ----------
     Lx, Ly : float
@@ -442,10 +457,19 @@ class VKPlate:
     theta : float
         θ-scheme weight in ``(0, 1]``; ``>= 1/4`` unconditionally stable for the *linear* part.
         Stability of the coupled scheme is not inherited — :meth:`energy` non-negativity is checked.
+    boundary : {"supported", "free"}
+        ``"supported"`` (default) = the simply-supported (Navier) von Kármán plate of Part 3
+        (``B = L²`` bending, scalar ``h²`` mass). ``"free"`` = the **free-edge cymbal/gong** of
+        Part 6: the bending swaps to the energy-first free stiffness ``K`` and lumped mass ``W``
+        (model #5b, ``ν`` re-enters), every node is a free unknown, and the coupling force pairs
+        under uniform ``h²`` while the mass is ``W`` (the mixed weighting — see the class docstring
+        and ``docs/dev/von-karman-plate-plan.md`` Part 6). The nonlinear machinery (bracket, clamped
+        Airy ``F``-solve, membrane energy) is **boundary-agnostic** and shared verbatim.
     nonlinear : bool
         ``True`` (default) runs the coupled von Kármán scheme. ``False`` disables the coupling
-        entirely (no ``F``-solve, single ``A``-solve) and reproduces model #5's simply-supported
-        plate **bit-for-bit** (the regression path).
+        entirely (no ``F``-solve, single ``A``-solve) and reproduces the *linear* plate
+        **bit-for-bit** — model #5 for ``boundary="supported"``, model #5b for ``boundary="free"``
+        (the regression path).
     couple_tol : float
         Picard relative-increment tolerance ``‖Δw‖/‖w‖``. Tied to the drift target (default 1e-13).
     couple_max_iter : int
@@ -472,6 +496,7 @@ class VKPlate:
         N: int,
         sigma: float = 0.0,
         theta: float = THETA_DEFAULT,
+        boundary: Boundary = "supported",
         nonlinear: bool = True,
         couple_tol: float = 1e-13,
         couple_max_iter: int = 50,
@@ -492,6 +517,8 @@ class VKPlate:
             raise ValueError(f"theta must be in (0, 1], got {theta}.")
         if not (-1.0 < nu < 0.5):
             raise ValueError(f"nu (Poisson's ratio) must be in (-1, 1/2), got {nu}.")
+        if boundary not in ("supported", "free"):
+            raise ValueError(f"boundary must be 'supported' or 'free', got {boundary!r}.")
         if couple_tol <= 0:
             raise ValueError("couple_tol must be positive.")
         if couple_max_iter < 1:
@@ -509,6 +536,7 @@ class VKPlate:
         self.N = int(N)
         self.sigma = float(sigma)
         self.theta = float(theta)
+        self.boundary: Boundary = boundary
         self.nonlinear = bool(nonlinear)
         self.couple_tol = float(couple_tol)
         self.couple_max_iter = int(couple_max_iter)
@@ -526,17 +554,24 @@ class VKPlate:
         # Plate "Courant" number mu = kappa k / h^2 (explicit-scheme parameter; reported only).
         self.mu = self.kappa * self.k / (self.h * self.h)
 
-        # Simply-supported bending operators (model #5 verbatim): B = L^2,
-        # A = (1+sk) I + theta k^2 kappa^2 B.
-        self.mask = rectangle_mask(self.N, Ny)
-        self.L, self.index_map = laplacian_from_mask(self.mask, self.h)
-        self.B = (self.L @ self.L).tocsr()
-        self.n_live = self.B.shape[0]
-        if self.n_live < 1:
-            raise ValueError("the plate has no interior (live) nodes; refine the grid.")
+        # Linear bending operators. "supported" = model #5's B = L^2 with scalar h^2 mass;
+        # "free" = model #5b's energy-first stiffness K + lumped mass W (nu re-enters).
         sk = self.sigma * self.k
         coeff = self.theta * self.k * self.k * self.kappa * self.kappa
-        A = (1.0 + sk) * sparse.identity(self.n_live, format="csc") + coeff * self.B
+        if self.boundary == "supported":
+            self.mask = rectangle_mask(self.N, Ny)
+            self.L, self.index_map = laplacian_from_mask(self.mask, self.h)
+            self.B = (self.L @ self.L).tocsr()
+            self.n_live = self.B.shape[0]
+            if self.n_live < 1:
+                raise ValueError("the plate has no interior (live) nodes; refine the grid.")
+            A = (1.0 + sk) * sparse.identity(self.n_live, format="csc") + coeff * self.B
+        else:  # free: every node is a free unknown; W-weighted update (model #5b in 2D)
+            self.mask = np.ones((Ny + 1, self.N + 1), dtype=bool)
+            self.K, self.W, self.index_map = free_plate_stiffness(self.N, Ny, self.h, self.nu)
+            self.wdiag: NDArray[np.float64] = self.W.diagonal()  # lumped area mass (h², h²/2, h²/4)
+            self.n_live = self.K.shape[0]
+            A = (1.0 + sk) * self.W + coeff * self.K
         self._lu = splu(A.tocsc())
 
         # Nonlinear pieces: the shared bracket (F-source and coupling) and the clamped Airy solve.
@@ -606,16 +641,27 @@ class VKPlate:
             v0 = np.asarray(v0, dtype=float)
             v0_live = v0[self.mask] if v0.shape == self.mask.shape else v0
 
-        # Bending part of w^{-1}, computed with model #5's exact arithmetic so the nonlinear=False
-        # path is bit-identical to Plate.  accel_term = -1/2 k^2 a0_bending = 1/2 k^2 kappa^2 B w0.
-        accel_term = (0.5 * self.k * self.k * self.kappa * self.kappa) * (self.B @ u0)
+        # Bending part of w^{-1}, computed with the linear model's exact arithmetic so the
+        # nonlinear=False path is bit-identical to Plate.  accel_term = -1/2 k^2 a0_bending;
+        # "supported": 1/2 k^2 kappa^2 B w0; "free": 1/2 k^2 kappa^2 (K w0)/W (the #5b W^-1 divide).
+        half_k2 = 0.5 * self.k * self.k
+        if self.boundary == "supported":
+            accel_term = (half_k2 * self.kappa * self.kappa) * (self.B @ u0)
+        else:
+            accel_term = (half_k2 * self.kappa * self.kappa) * (self.K @ u0) / self.wdiag
         self.u = u0
         self.u_prev = u0 - self.k * v0_live - accel_term
         if self.nonlinear:
             u0_full = self._to_full(u0)
             F0 = self._airy_F(u0_full)
-            coupling0 = self._to_live(self.bracket(u0_full, F0)) / self.rho_s
-            self.u_prev += (0.5 * self.k * self.k) * coupling0  # + 1/2 k^2 coupling/rho_s
+            # Coupling contribution to w^{-1} = +1/2 k^2 (coupling force)/mass. "supported": l/rho_s
+            # (scalar mass); "free": (h^2/rho_s) l / W (uniform-h^2 coupling, per-node W^-1 divide).
+            coupling_force = self._to_live(self.bracket(u0_full, F0))
+            if self.boundary == "supported":
+                self.u_prev += half_k2 * coupling_force / self.rho_s
+            else:
+                h2 = self.h * self.h
+                self.u_prev += half_k2 * (h2 / self.rho_s) * coupling_force / self.wdiag
             self.F = F0
             self.F_prev = self._airy_F(self._to_full(self.u_prev))
         else:
@@ -626,18 +672,32 @@ class VKPlate:
     # -- time stepping ------------------------------------------------------------------
 
     def _linear_rhs(self) -> NDArray[np.float64]:
-        """Model #5's simply-supported θ-scheme right-hand side (bending + inertia + loss)."""
+        """The linear θ-scheme right-hand side (bending + inertia + loss), matching :class:`Plate`.
+
+        ``"supported"`` = model #5's ``I``-mass form; ``"free"`` = model #5b's **W-weighted** form
+        (the inertial terms carry the lumped mass ``W``), each verbatim so ``nonlinear=False`` is
+        bit-identical to :class:`Plate`.
+        """
         sk = self.sigma * self.k
         k2 = self.k * self.k
         kappa2 = self.kappa * self.kappa
-        lop_u = -kappa2 * (self.B @ self.u)  # 𝓛 w^n
-        lop_prev = -kappa2 * (self.B @ self.u_prev)  # 𝓛 w^{n-1}
+        if self.boundary == "supported":
+            lop_u = -kappa2 * (self.B @ self.u)  # 𝓛 w^n
+            lop_prev = -kappa2 * (self.B @ self.u_prev)  # 𝓛 w^{n-1}
+            return (
+                2.0 * self.u
+                + (1.0 - 2.0 * self.theta) * k2 * lop_u
+                - self.u_prev
+                + self.theta * k2 * lop_prev
+                + sk * self.u_prev
+            )
+        lop_u = -kappa2 * (self.K @ self.u)  # = W a^n
+        lop_prev = -kappa2 * (self.K @ self.u_prev)
         return (
-            2.0 * self.u
+            self.W @ (2.0 * self.u - self.u_prev)
             + (1.0 - 2.0 * self.theta) * k2 * lop_u
-            - self.u_prev
             + self.theta * k2 * lop_prev
-            + sk * self.u_prev
+            + sk * (self.W @ self.u_prev)
         )
 
     def step(self) -> None:
@@ -660,6 +720,12 @@ class VKPlate:
             return
 
         k2 = self.k * self.k
+        # Coupling force -> RHS factor. "supported": k²·l/ρ_s (scalar mass, no h²). "free": the mass
+        # matrix A carries W's h², so the uniform-h² coupling force needs the matching h²
+        # (-> k²·h²·l/ρ_s); the /W is applied by the A-solve, NOT here. See the Part-6 plan doc.
+        couple_factor = k2 / self.rho_s
+        if self.boundary == "free":
+            couple_factor *= self.h * self.h
         w_prev_full = self._to_full(self.u_prev)  # w^{n-1}
         F_prev_full = self.F_prev  # F^{n-1} (cached)
         w_j = 2.0 * self.u - self.u_prev  # predictor w^{n+1}_(0)
@@ -673,7 +739,7 @@ class VKPlate:
             w_avg = 0.5 * (w_j_full + w_prev_full)  # μ_{t·}w
             f_avg = 0.5 * (f_new_full + F_prev_full)  # μ_{t·}F
             coupling = self._to_live(self.bracket(w_avg, f_avg))
-            rhs = rhs_lin + (k2 / self.rho_s) * coupling
+            rhs = rhs_lin + couple_factor * coupling
             w_next = self._lu.solve(rhs)
             incr = float(np.linalg.norm(w_next - w_j))
             scale = float(np.linalg.norm(w_next))
@@ -712,9 +778,16 @@ class VKPlate:
         return 0.5 * (self._membrane_energy(self.F) + self._membrane_energy(self.F_prev))
 
     def linear_energy(self) -> float:
-        """Kinetic + bending energy ``E_lin^{n+1/2}`` (Joules) — model #5's θ-scheme energy."""
+        """Kinetic + bending energy ``E_lin^{n+1/2}`` (Joules) — the linear θ-scheme energy.
+
+        ``"supported"`` = model #5's (scalar ``h²`` kinetic norm); ``"free"`` = model #5b's
+        **W-weighted** kinetic norm ``½ (δ_t- w)ᵀ W (δ_t- w)`` (the ``h²`` weights live in ``W``).
+        """
         dt_u = (self.u - self.u_prev) / self.k  # δ_{t-} w^n
-        kinetic = 0.5 * (self.h * self.h) * float(np.dot(dt_u, dt_u))
+        if self.boundary == "supported":
+            kinetic = 0.5 * (self.h * self.h) * float(np.dot(dt_u, dt_u))
+        else:
+            kinetic = 0.5 * float(np.dot(dt_u, self.wdiag * dt_u))
         p_nn = self._P(self.u, self.u)
         p_pp = self._P(self.u_prev, self.u_prev)
         p_np = self._P(self.u, self.u_prev)
@@ -745,5 +818,11 @@ class VKPlate:
     # -- internals ----------------------------------------------------------------------
 
     def _P(self, f: NDArray[np.float64], g: NDArray[np.float64]) -> float:
-        """Bending potential form ``P(f,g) = κ² h² (B f)·g >= 0`` (live vectors; model #5's)."""
-        return self.kappa * self.kappa * self.h * self.h * float(np.dot(self.B @ f, g))
+        """Bending potential form ``P(f,g) = <-𝓛 f, g> >= 0`` (live vectors), matching the update.
+
+        ``"supported"``: ``κ² h² (B f)·g`` (``B`` positive-definite). ``"free"``: ``κ² (K f)·g``
+        (``K`` positive-semidefinite, the ``h²`` weights baked into ``K``).
+        """
+        if self.boundary == "supported":
+            return self.kappa * self.kappa * self.h * self.h * float(np.dot(self.B @ f, g))
+        return self.kappa * self.kappa * float(np.dot(self.K @ f, g))
