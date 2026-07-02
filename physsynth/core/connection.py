@@ -206,10 +206,13 @@ class StringBodyBridge:
 class StringPlateBridge:
     """A string terminated on a **grid** :class:`Plate` (the body) through a linear bridge spring.
 
-    Step 4 of the body/radiation node: instead of the lumped :class:`ModalBody`, the radiating body
-    is the distributed simply-supported Kirchhoff plate (model #5). The plate has no modal
-    coordinates, so the string couples to it at a single **driving-point** node ``dp`` via a point
-    force — the *driving-point adapter* the modal bridge did not need. Everything else mirrors
+    Steps 4-5 of the body/radiation node: instead of the lumped :class:`ModalBody`, the radiating
+    body is a distributed Kirchhoff plate — the **simply-supported** rectangle (model #5, Step 4) or
+    the **free-edge** FFFF plate (model #5b, the suspended cymbal/gong, Step 5). One class covers
+    both: the plate has no modal coordinates, so the string couples to it at a single
+    **driving-point** node ``dp`` via a point force — the *driving-point adapter* the modal bridge
+    did not need — and :class:`Plate` internally branches its ``step``/``energy``/``pressure`` on
+    ``boundary``, so only the stability guard below is boundary-specific. Everything else mirrors
     :class:`StringBodyBridge`: a fixed-left / free-right string, free end loaded by a linear spring
     ``F = K eta^n`` with stretch ``eta = u_end - w_dp`` (``w_dp`` the plate displacement at ``dp``),
     Newton's third law splitting ``-F`` to the string end and ``+F`` to the plate.
@@ -227,15 +230,20 @@ class StringPlateBridge:
     ``E_conn = 1/2 K eta^n eta^{n-1}``.
 
     **Stability (exact, Sherman–Morrison — cleaner than the modal case).** The coupled leapfrog is
-    energy-stable iff the conserved quadratic form is positive-definite, i.e.
-    ``G = M_aug - (k²/4) S`` is SPD, where ``S`` is the total stiffness (string + plate bending +
-    the spring's rank-1 block ``K a a^T``, ``a = e_end - e_dp``) and ``M_aug`` absorbs the plate's
-    implicit θ-augmentation (``M_aug`` on the plate block is ``rho_s h² (I + θ k² kappa² B)``). The
-    **plate block of ``G`` is always PD**: ``M_aug - (k²/4) S`` reduces there to
-    ``rho_s h² [I + (θ - 1/4) k² kappa² B] ⪰ 0`` for ``θ >= 1/4`` — that is *why* the implicit plate
-    is unconditionally stable, and it means the plate contributes only headroom. The string block is
-    PD for ``lambda < 1``. So the *only* thing that can destabilise ``G`` is the rank-1 spring, and
-    a rank-1 negative perturbation ``G_0 - (k²/4) K a a^T`` stays PD iff (Sherman–Morrison)
+    energy-stable iff the conserved quadratic form ``G0 - (k²/4) K a a^T`` (``a = e_end - e_dp``,
+    the spring's rank-1 block) is positive-definite. ``G0`` is block-diagonal (string + plate) and
+    each block has the *same* general shape ``M + (θ - 1/4) k² S`` (mass ``M``, stiffness ``S``):
+
+    * String block (explicit leapfrog, ``θ = 0``): ``M_str - (k²/4) S_str``, PD for ``lambda < 1``.
+    * **Supported** plate block: ``rho_s h² [I + (θ - 1/4) k² kappa² B]``.
+    * **Free** plate block: ``rho_s [W + (θ - 1/4) k² kappa² K]`` — ``W`` (the lumped-area diagonal
+      mass) already carries the ``h²`` weight, so there is *no extra* ``h²`` prefactor.
+
+    Every plate block is PD for ``θ >= 1/4`` — that is *why* the implicit plate is unconditionally
+    stable, and for the free edge the diagonal ``W`` is exactly what pins the ``{1, x, y}``
+    rigid-body nullspace of ``K``, so the plate contributes only headroom. So the *only* thing that
+    can destabilise ``G0`` is the rank-1 spring, and a rank-1 negative perturbation stays PD iff
+    (Sherman–Morrison)
 
         (k²/4) K [ (G0_str^{-1})_{end,end} + (G0_plate^{-1})_{dp,dp} ]  <  1 .
 
@@ -244,13 +252,22 @@ class StringPlateBridge:
     :attr:`stability_margin`; the string is run at ``lambda < 1`` (its Nyquist mode sits marginally
     at ``lambda = 1``, and the spring pushes it unstable).
 
+    **No rigid drift on the free plate.** The single-point spring only couples to (and lifts) plate
+    modes with ``w_dp != 0``. The rigid-body modes that survive lie in ``span{1, x, y}`` with
+    ``v(dp) = 0`` (the one constraint leaves 2 of the 3), so the driving-point force is *orthogonal*
+    to them: starting from rest they are never excited — no piston/tilt drift, and the total energy
+    drifts to the same ``~1e-13`` as the supported bridge. The piston/tilt combinations with
+    ``w_dp != 0`` become genuine bounded oscillations on the spring (the plate bouncing on the
+    bridge).
+
     Parameters
     ----------
     string : IdealString
         The string; its right end must be ``"free"`` (build with ``boundary=("fixed", "free")``).
     plate : Plate
-        The body. Must be ``boundary="supported"`` (the driving-point mass ``rho_s h²`` and the
-        biharmonic ``B`` are the simply-supported forms used by the guard and the force injection).
+        The body — either ``boundary="supported"`` (model #5, a rectangular soundboard) or
+        ``boundary="free"`` (model #5b, a suspended cymbal/gong). The guard and the force injection
+        pick the matching mass/stiffness forms automatically.
     K : float
         Bridge spring stiffness (N/m). ``K = 0`` decouples the two (the bit-identity check).
     drive_index : int, optional
@@ -261,9 +278,9 @@ class StringPlateBridge:
     Raises
     ------
     ValueError
-        If the two timesteps differ, the string's right end is not free, the plate is not
-        ``"supported"``, ``K < 0``, ``drive_index`` is out of range, or the exact stability margin
-        is ``>= 1``.
+        If the two timesteps differ, the string's right end is not free, the plate boundary is not
+        ``"supported"``/``"free"``, ``K < 0``, ``drive_index`` is out of range, or the exact
+        stability margin is ``>= 1``.
     """
 
     def __init__(
@@ -284,10 +301,9 @@ class StringPlateBridge:
                 "the string's right end must be 'free' to attach a plate bridge "
                 "(build it with boundary=('fixed', 'free'))."
             )
-        if plate.boundary != "supported":
+        if plate.boundary not in ("supported", "free"):  # Plate validates this, but be explicit
             raise ValueError(
-                "the plate body must be boundary='supported' (the driving-point mass and "
-                "biharmonic used by the coupling are the simply-supported forms)."
+                f"the plate body must be 'supported' or 'free', got {plate.boundary!r}."
             )
         if string.lam >= 1.0 - _CFL_TOL:
             raise ValueError(
@@ -353,11 +369,20 @@ class StringPlateBridge:
         e_end[-1] = 1.0
         g_str_inv_end = float(spsolve(g_str, e_end)[-1])
 
-        # Plate block: G0_plate = rho_s h² [I + (θ - 1/4) k² kappa² B] (PD for θ >= 1/4).
+        # Plate block: general form G0_plate = M + (θ - 1/4) k² S (PD for θ >= 1/4).
+        #   "supported": M = rho_s h² I, S = rho_s kappa² h² B -> rho_s h² [I + (θ-1/4)k²kappa² B]
+        #   "free":      M = rho_s W,     S = rho_s kappa² K     -> rho_s [W + (θ-1/4)k²kappa² K]
+        # W already carries the h² area weight, so the free block has NO extra h² prefactor. Both
+        # are PD for θ >= 1/4: the supported identity and the free diagonal W each anchor the
+        # semidefinite bending operator -- for "free" the diagonal W is exactly what pins the
+        # {1, x, y} rigid-body nullspace of K, so the guard stays a clean two-solve computation.
         coeff = (p.theta - 0.25) * self.k * self.k * p.kappa * p.kappa
-        g_plate = (p.rho * p.h * p.h) * (
-            sparse.identity(p.n_live, format="csc") + coeff * p.B
-        )
+        if p.boundary == "supported":
+            g_plate = (p.rho * p.h * p.h) * (
+                sparse.identity(p.n_live, format="csc") + coeff * p.B
+            )
+        else:  # free: W-weighted mass + PSD stiffness K (h² baked into both W and K)
+            g_plate = p.rho * (p.W + coeff * p.K)
         e_dp = np.zeros(p.n_live)
         e_dp[self.drive_index] = 1.0
         g_plate_inv_dp = float(splu(g_plate.tocsc()).solve(e_dp)[self.drive_index])
@@ -416,5 +441,10 @@ class StringPlateBridge:
         return self.string.displacement_at(index)
 
     def pressure(self) -> float:
-        """Radiated pressure from the plate, ``h² sum u_ij''`` (monopole ∝ volume acceleration)."""
+        """Radiated pressure from the plate (monopole ∝ volume acceleration).
+
+        Delegates to :meth:`Plate.pressure`, whose area weight is ``h²`` for a supported plate and
+        the lumped-cell ``W_ii`` for a free plate; either way it reads the *actual* acceleration, so
+        it carries the driving-point coupling force.
+        """
         return self.plate.pressure()

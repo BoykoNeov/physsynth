@@ -436,6 +436,44 @@ def make_plate_bridge(
     return StringPlateBridge(string=string, plate=plate, K=K, drive_index=drive_index)
 
 
+def make_free_plate_bridge(
+    *,
+    N_string: int = 100,
+    N_plate: int = 16,
+    lam: float = 0.9,
+    K: float = K_PLATE_BRIDGE_DEFAULT,
+    sigma_string: float = 0.0,
+    sigma_plate: float = 0.0,
+    kappa: float = KAPPA_PLATE_BRIDGE,
+    nu: float = 0.3,
+    drive_index: int | None = None,
+    L: float = L_DEFAULT,
+    T: float = T_DEFAULT,
+    rho: float = RHO_DEFAULT,
+    a: float = 1.0,
+    rho_plate: float = RHO_AREAL_DEFAULT,
+) -> StringPlateBridge:
+    """Build a fixed/free string terminated on a **free-edge** (FFFF) grid :class:`Plate` body.
+
+    The Step-5 counterpart of :func:`make_plate_bridge`: a suspended cymbal/gong (model #5b) as the
+    distributed body. Same construction (shared ``fs = c N_string / (L lam)``, plate sample rate
+    fixed by the string), but ``boundary="free"`` and the Poisson ratio ``nu`` re-enters (it drops
+    out for simply-supported edges). Square by construction (``Lx = Ly = a``, no ``Ly``-snapping).
+    The free driving point at ``(0.3a, 0.4a)`` is an interior node (lumped mass ``rho_s h^2``, like
+    the supported bridge), so the same default ``K`` sits well inside the free stability guard.
+    """
+    c = wave_speed(T, rho)
+    fs = c * N_string / (L * lam)
+    string = IdealString(
+        L=L, T=T, rho=rho, fs=fs, N=N_string, boundary=("fixed", "free"), sigma=sigma_string
+    )
+    plate = Plate(
+        Lx=a, Ly=a, kappa=kappa, rho=rho_plate, fs=fs, N=N_plate, sigma=sigma_plate,
+        boundary="free", nu=nu,
+    )
+    return StringPlateBridge(string=string, plate=plate, K=K, drive_index=drive_index)
+
+
 def discrete_sho_frequency(f: float, k: float) -> float:
     """Exact discrete oscillation frequency (Hz) of the leapfrog SHO for a mode of ``f`` Hz.
 

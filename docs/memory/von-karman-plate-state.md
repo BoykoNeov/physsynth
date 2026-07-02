@@ -7,11 +7,63 @@ metadata:
   originSessionId: 4b4bd7cd-a9b8-46a4-bd14-4e7f78d0211d
 ---
 
-Phase-4 **model #6 — von Kármán nonlinear plate**: **Parts 1–3 (+ Part-4 validation) BUILT & GREEN
-(2026-07-01)**; Parts 5 (diagnostics) + 6 (free-edge) still to build. `VonKarmanBracket` (P1) +
-`AiryStressSolver` (P2) in `operators2d.py`; **`VKPlate` coupled resonator (P3)** in `core/plate.py`.
-`tests/test_vk_bracket.py` (15) + `test_vk_airy.py` (13) + `test_vk_{energy,modal,stability}.py` (27),
-full suite **349** green, ruff clean.
+Phase-4 **model #6 — von Kármán nonlinear plate**: **ALL 6 PARTS BUILT & GREEN** (P1–4 2026-07-01,
+**P5 diagnostics + P6 free-edge cymbal 2026-07-02**). `VonKarmanBracket` (P1) + `AiryStressSolver`
+(P2) in `operators2d.py`; **`VKPlate` coupled resonator (P3)** in `core/plate.py`.
+`tests/test_vk_bracket.py` (15) + `test_vk_airy.py` (13) + `test_vk_{energy,modal,stability}.py` (27)
++ **`test_vk_free.py` (12)**, full suite **362** green, ruff clean.
+
+**Part 6 DONE — free-edge cymbal/gong (`VKPlate(boundary="free")`), 2026-07-02.** The plan's
+one-liner "only the two boundary operators change" was **WRONG**: the Part-1 bracket is triple
+self-adjoint **only for rim-vanishing fields**, but a free plate has `w≠0` on the rim (every node a
+free unknown) — so conservation is NOT inherited. **It dissolves anyway** because the Airy `F` is
+**still clamped-zero** (`F=0,F,n=0`) regardless of the transverse edge: the free-case energy
+telescoping needs only the weaker **swap identity `⟨l(x,F),g⟩=⟨l(x,g),F⟩`** with `F` (not `w`) in the
+rim-vanishing slot — which the **existing `VonKarmanBracket` + existing clamped `AiryStressSolver`
+satisfy VERBATIM** (advisor-confirmed; empirically pinned in `M:/claud_projects/temp/vk-free-bracket-
+probe/`: probe2 swap-identity **1.6e-15**, probe3 real-operator telescoping **uniform-h²→5e-15 / Wa
+→fail**, probe4 end-to-end free scheme **drift 1.67e-13**). **The one subtlety = MIXED WEIGHTING:**
+mass is `W=Wa` (trapezoidal) but the coupling force pairs under **uniform h²** (`H_mem` is *secretly*
+uniform-h² since `wa≡h²` wherever `F`≠0, `F` rim-vanishing → `H_mem=-¼⟨F,l(w,w)⟩_Wa=…_{h²}`).
+Concretely: `step()` RHS gains an `h²` (`k²·h²·l/ρ_s`, the mass matrix carries `W`'s h²; /W done by
+the A-solve, NOT here); `set_state` `w^{-1}` coupling carries `h²/ρ_s` **AND** the per-node `/W`
+divide (the #5b `W⁻¹` pattern; bending accel_term likewise `½k²κ²(K@u0)/w`). **Design: a
+`boundary="free"` branch on `VKPlate`** (mirrors `Plate`; NOT a separate class — advisor's pick),
+bracket/Airy code paths unforked, all-nodes-live so the live↔full-grid seam is identity.
+`nonlinear=False,boundary="free"` is **bit-identical to `Plate(boundary="free")`** (model #5b). Gates
+(`tests/test_vk_free.py`): lossless **drift 1.67e-13** @ w≈3e (**membrane 57 %** of E — real free-rim
+bracket exercise), small-amp→#5b reldiff **2.8e-13**, **drift∝couple_tol** self-cert, passivity,
+non-negativity, Picard converges, **pitch-glide hardening +33 %** by w=3e (eigenmode-IC + FFT-peak;
+the crude zero-crossing f0 is too noisy on the multi-modal free plate, and w≫e cascade smears "the"
+fundamental → glide test stays ≤3e), **Richardson O(h²) ratio 5.66** (N=24/48/96, cos-IC, pickup
+(0.1,0.1) a node on all; degrades at long times as nonlinear phase drift accumulates → 80 steps).
+Diagnostics `scripts/diagnose_vk_free_plate.py`: energy breakdown (drift 9.5e-13, membrane 56 %) +
+w/F snapshot, **curved-Chladni elastic modes** (eigsh K/W: 20.5/29.8/36.9/53.0×2-degenerate/92.7 Hz),
+**tonal-vs-crash** spectrograms — soft w~e sings (+87 % hardened), **hard w~6e crashes** (spectral
+centroid 238→1134 Hz, 22 % energy >1 kHz, a real energy **cascade**). **Oversampling honesty
+(HANDOFF §8):** w~10e @ 96 kHz *blows up* (Picard non-contractive, 76 k non-converged + overflow —
+NOT a cascade); it converges cleanly only at 384 kHz. Diagnostic uses w~6e (0 non-converged) and
+**warns on any non-convergence** rather than draw a divergent panel (advisor-style honesty; never
+mislabel a blow-up as physics). Also confirmed: net coupling force `Σh²·l(w,F)`=**0 to 4e-17** (the
+swap identity with a constant test field → no rigid-body creep; the advisor's low-freq-creep caution
+resolved). Struck GIF. Plan doc `von-karman-plate-plan.md` has a full **Part 6**
+section. Free-case FD source is NOT Bilbao 2008 (SS-only) — NSS Ch.13 + gong/cymbal papers; empirical
+self-cert stands in (not on disk).
+
+**Part 5 DONE — `scripts/diagnose_vk_plate.py` + 3 `viz/plots.py` helpers** (`plot_energy_breakdown`,
+`plot_pitch_glide`, `plot_spectrogram`; no dedicated tests — repo grep confirms **no test imports
+`physsynth.viz.plots`**, viz is diagnostics-as-visuals verified by eye, consistent w/ the other
+`diagnose_*.py`). Four visuals, all eyeballed correct: (a) **lossless energy breakdown** — flat total
+riding over **anti-correlated** linear(kinetic+bending)↔membrane(Airy `F`) exchange, drift **8.4e-13**
+@ `w≈3e` (membrane **51 %** of E; differs from the test's 57 % only by strike shape/N=24-vs-20 —
+benign); (b) **`w/e` sweep** — zero-crossing fundamental (NOT `measure_partials_near`: its ±40 %
+window on the *linear* f0 misses the +75 % hardened peak — advisor catch), grid held fixed so the
+curve is pure physics, monotone **+75 % by w=5e**, `w→0` lands on SS law (213.4 vs 214.0 Hz); (c)
+**`σ=3` ring-down spectrogram** (needs σ>0; lossless=flat pitch) — fundamental **glides down** ~370→214
+Hz onto the linear-limit line, **0 non-converged steps**, worst Picard resid 1e-13; (d) bonus `w`+`F`
+**stress-field snapshot** at peak membrane (the unique-to-VK visual — F is blue/compressive opposite
+the red displacement dome); (e) struck GIF. Console prints drift, membrane frac, glide table, Picard
+residuals — judgeable from console alone. Advisor blessed plan + completion.
 
 **Part 3 DONE — coupled `VKPlate` (`core/plate.py`), conservative Picard-iterated scheme:** new class,
 model #5's `Plate` **left untouched** — `nonlinear=False` is **bit-identical** to `Plate(supported)`
@@ -41,9 +93,9 @@ bracket exercise, not linear re-test; 93 % at w=10e still drift 9e-13), **drift 
 passivity **exact** (worst rise 0.0), `w→0`→model-#5 fundamental (reldiff **0**), **pitch-glide
 hardening** monotone (+74 % at w=5e), **Richardson O(h²)** ratio **4.40** (N=24/48/96 smooth-IC; N=16
 pre-asymptotic ~3 since `l(w,w)` doubles wavenumbers). Probed in `M:/claud_projects/temp/vk_*.py`.
-Next: Part 5 (`scripts/diagnose_vk_plate.py` + viz: energy trace w/ membrane broken out, pitch-glide
-spectrogram, w/e sweep), then Part 6 free-edge cymbal (swap `B→K`, free F-BC; bracket/F-solve/energy
-carry over).
+Next: **Part 6 free-edge cymbal** (swap `B→K` = model #5b free stiffness, free F-BC; bracket/F-solve/
+energy all carry over — only the two boundary operators change) — the iconic gong/cymbal, the deep
+end. (Optional aside: expose VKPlate in the web viewer.)
 
 **Part 2 DONE — F elliptic solve (`AiryStressSolver`):** F-BC **resolved with human = CLAMPED
 `F=0, F,n=0`** (physically-correct SS-*movable* edge; DT DAFx-15 §4.2 Eq.11 `F,tt=F,nt=0`; the plan's
@@ -121,8 +173,11 @@ operators** — no cheap self-cert there (advisor).
 **Build order (de-risk, each gate green first):** (1) bracket `l()` + triple-self-adjointness test
 [DONE ✅] → (2) F elliptic solve `B_F` + manufactured-soln check [DONE ✅ clamped] → (3)
 coupled `VKPlate` resonator (`nonlinear=False` bit-identical to model #5) [DONE ✅] → (4) validation
-tests [DONE ✅, 27 tests] → (5) diagnostics (pitch-glide spectrogram) [TODO] → (6) Part 2 free-edge
-cymbal (swap B→K + free F-BC; bracket/F-solve/energy all carry over) [TODO].
+tests [DONE ✅, 27 tests] → (5) diagnostics (energy breakdown + pitch-glide sweep + spectrogram +
+stress-field) [DONE ✅ 2026-07-02] → (6) free-edge cymbal (swap B→K + I→W; bracket/F-solve/energy
+**reused verbatim** thanks to the clamped-zero `F` + mixed weighting) [DONE ✅ 2026-07-02].
+**Model #6 COMPLETE.** Next horizon: HANDOFF §12 (more methods/coupling) or expose VKPlate (both
+boundaries) in the web viewer.
 
 **Sources:** Bilbao 2008 "A Family of Conservative FD Schemes for the Dynamical von Kármán Plate
 Equations" (Numer. Methods PDEs 24(1):193–216) + NSS 2009 Ch.13 = primary FD source (pin bracket +
