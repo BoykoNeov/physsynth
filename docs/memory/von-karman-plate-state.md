@@ -17,7 +17,10 @@ full suite **349** green, ruff clean.
 model #5's `Plate` **left untouched** — `nonlinear=False` is **bit-identical** to `Plate(supported)`
 (regression, exact-arithmetic `u_prev` match). Materials surface **`(E, e, ν, ρ)`** (human decision #3,
 2026-07-01; the memory's old "(kappa,…)" was self-contradictory) → derive `ρ_s=ρe`, `D=Ee³/(12(1-ν²))`,
-`κ=√(D/ρ_s)`, `Y=Ee`. **Scheme (advisor-derived from first principles — Bilbao FD PDF NOT on disk):**
+`κ=√(D/ρ_s)`, `Y_mem=Ee`. **Attr names (2026-07-02 cleanup):** VKPlate grid is `self.X,self.Y`
+(conforms to membrane/Plate/free-plate convention; was `Y_grid`), membrane coeff is `self.Y_mem`
+(was `self.Y`), volumetric density is `self.rho_v` (was `self.rho`; areal stays `rho_s`). NB
+**Plate.rho is areal** — VKPlate has no `.rho`. **Scheme (advisor-derived from first principles):**
 `ρ_s δ_tt w = -D B(θ-avg w) + l(μ_{t·}w, μ_{t·}F)`, `F^m` solved from `w^m`, `μ_{t·}g=(g^{n+1}+g^{n-1})/2`.
 Coupling `⟨l(μw,μF),w^{n+1}-w^{n-1}⟩` telescopes **exactly** to `-(H_mem^{n+1}-H_mem^{n-1})` via P1
 triple-self-adjointness (`l(w^m,w^m)=-(2/Y)B_F F^m`; Wa-vs-h² harmless: F=0 on rim). **Went straight to
