@@ -30,6 +30,9 @@ from numpy.typing import NDArray
 from .operators import delta_x_forward, inner
 
 Boundary = Literal["fixed", "free"]
+# Per-end boundary: a single value applies to both ends; a (left, right) tuple sets them
+# independently (e.g. ("fixed", "free") for a string clamped at the nut and free at a body bridge).
+BoundarySpec = Boundary | tuple[Boundary, Boundary]
 
 # Courant numbers above 1 are forbidden for the explicit scheme; allow a hair of
 # floating-point slack so that a requested lambda == 1 is not spuriously rejected.
@@ -47,9 +50,11 @@ class IdealString:
         Sample rate (Hz); timestep ``k = 1/fs``.
     N : int
         Number of spatial segments; the grid has ``N + 1`` nodes, spacing ``h = L/N``.
-    boundary : {"fixed", "free"}
+    boundary : {"fixed", "free"} or (left, right) tuple of those
         ``"fixed"`` (Dirichlet, ``u = 0`` at ends) or ``"free"`` (Neumann, ``u_x = 0`` via a
-        reflected stencil). Both conserve energy in the lossless case.
+        reflected stencil). Both conserve energy in the lossless case. Pass a ``(left, right)``
+        tuple to set the two ends independently — e.g. ``("fixed", "free")`` for a string clamped at
+        the nut and free at a body bridge (the terminus that a :class:`ModalBody` connection loads).
     sigma : float
         Loss coefficient (>= 0) for the ``-2 sigma u_t`` term. ``0`` -> lossless.
 
@@ -68,7 +73,7 @@ class IdealString:
         rho: float,
         fs: float,
         N: int,
-        boundary: Boundary = "fixed",
+        boundary: BoundarySpec = "fixed",
         sigma: float = 0.0,
     ) -> None:
         if min(L, T, rho, fs) <= 0:
@@ -77,15 +82,20 @@ class IdealString:
             raise ValueError("N must be >= 2 (need at least one interior node).")
         if sigma < 0:
             raise ValueError("sigma (loss) must be >= 0.")
-        if boundary not in ("fixed", "free"):
-            raise ValueError(f"boundary must be 'fixed' or 'free', got {boundary!r}.")
+        bc_left, bc_right = (boundary, boundary) if isinstance(boundary, str) else boundary
+        if bc_left not in ("fixed", "free") or bc_right not in ("fixed", "free"):
+            raise ValueError(
+                f"each boundary end must be 'fixed' or 'free', got {boundary!r}."
+            )
 
         self.L = float(L)
         self.T = float(T)
         self.rho = float(rho)
         self.fs = float(fs)
         self.N = int(N)
-        self.boundary: Boundary = boundary
+        self.boundary: BoundarySpec = boundary
+        self._bc_left: Boundary = bc_left
+        self._bc_right: Boundary = bc_right
         self.sigma = float(sigma)
 
         self.c = float(np.sqrt(T / rho))
@@ -184,15 +194,13 @@ class IdealString:
         """
         s = np.empty_like(u)
         s[1:-1] = u[2:] - 2.0 * u[1:-1] + u[:-2]
-        if self.boundary == "free":
-            s[0] = 2.0 * (u[1] - u[0])
-            s[-1] = 2.0 * (u[-2] - u[-1])
-        else:  # fixed: boundary nodes are clamped, never updated
-            s[0] = 0.0
-            s[-1] = 0.0
+        # Each end independently: free -> reflected (Neumann) stencil; fixed -> 0 (clamped).
+        s[0] = 2.0 * (u[1] - u[0]) if self._bc_left == "free" else 0.0
+        s[-1] = 2.0 * (u[-2] - u[-1]) if self._bc_right == "free" else 0.0
         return s
 
     def _apply_boundary(self, u: NDArray[np.float64]) -> None:
-        if self.boundary == "fixed":
+        if self._bc_left == "fixed":
             u[0] = 0.0
+        if self._bc_right == "fixed":
             u[-1] = 0.0

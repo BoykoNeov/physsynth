@@ -82,6 +82,12 @@ Complete and validated:
   conservative Picard resonator, validation, pitch-glide/energy-exchange diagnostics, and Part 6 the
   **free-edge cymbal/gong** — energy-conserving nonlinear coupling on a free rectangle, with the
   crash cascade and curved-Chladni modes).
+- **Body / radiation** — the third node of `exciter → resonator → body/radiation`: a **modal body**
+  (bank of damped oscillators, `core/body.py`) coupled to a string *terminus* through an
+  **energy-conserving bridge** (`core/connection.py`). The linear spring makes the whole system one
+  leapfrog, so `E_string + E_body + E_conn` is conserved to machine precision (explicit, exact — no
+  implicit solve); an exact coupled-eigenvalue guard bounds the spring stiffness. Radiated pressure
+  is read out as `Σ aᵢ q̈ᵢ` (monopole ∝ volume acceleration).
 - **Web viewer** — interactive offline recompute for every model: the string family (Phase A), the
   membrane (Phase B), and both Kirchhoff plates (#5 supported, #5b free) and the von Kármán
   nonlinear plate (#6 supported gong + free cymbal) as 2D heatmap models. The nonlinear panel reads

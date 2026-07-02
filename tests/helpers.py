@@ -11,6 +11,8 @@ from scipy.sparse.linalg import eigsh
 
 from physsynth.analysis import modal, spectrum
 from physsynth.core.beam import FreeBeam
+from physsynth.core.body import ModalBody
+from physsynth.core.connection import StringBodyBridge
 from physsynth.core.engine import simulate
 from physsynth.core.membrane import Domain, Membrane
 from physsynth.core.plate import Plate
@@ -339,6 +341,68 @@ def membrane_low_eigenfrequencies(membrane: Membrane, n_modes: int) -> np.ndarra
     lam_vals = eigsh(-membrane.L, k=n_modes, sigma=0.0, which="LM", return_eigenvectors=False)
     lam_vals = np.sort(lam_vals)
     return np.asarray(modal.discrete_membrane_eigenfrequency(lam_vals, membrane.c, membrane.k))
+
+
+# Modal body (body/radiation node): a few guitar-top-ish modes. fs is high (audio rate) so every
+# mode sits well under the modal CFL omega*k < 2.
+BODY_FREQS_DEFAULT = np.array([110.0, 196.0, 261.0, 440.0])  # Hz
+
+
+def make_body(
+    *,
+    freqs: np.ndarray = BODY_FREQS_DEFAULT,
+    fs: float = 48000.0,
+    sigmas: np.ndarray | float = 0.0,
+    masses: np.ndarray | float = 1.0,
+    phi: np.ndarray | float = 1.0,
+) -> ModalBody:
+    """Build a modal body (soundboard) at sample rate ``fs`` with the given modal set."""
+    return ModalBody(freqs=freqs, fs=fs, sigmas=sigmas, masses=masses, phi=phi)
+
+
+# Bridge connection (string terminus <-> body). Modal masses ~0.02 kg (comparable to the string's
+# rho*L = 0.005 kg) so the body genuinely loads the string; K well under the exact stability guard.
+BODY_MASS_DEFAULT = 0.02
+K_BRIDGE_DEFAULT = 8000.0
+
+
+def make_bridge(
+    *,
+    N: int = 100,
+    lam: float = 0.9,
+    K: float = K_BRIDGE_DEFAULT,
+    sigma_string: float = 0.0,
+    sigma_body: np.ndarray | float = 0.0,
+    body_freqs: np.ndarray = BODY_FREQS_DEFAULT,
+    masses: np.ndarray | float = BODY_MASS_DEFAULT,
+    phi: np.ndarray | float = 1.0,
+    L: float = L_DEFAULT,
+    T: float = T_DEFAULT,
+    rho: float = RHO_DEFAULT,
+) -> StringBodyBridge:
+    """Build a fixed/free string terminated on a modal body through a bridge spring ``K``.
+
+    Both parts share ``fs = c N / (L lam)`` (``lam < 1`` gives the coupled system headroom below the
+    string's Nyquist mode). The default ``K`` sits well inside the exact leapfrog guard.
+    """
+    c = wave_speed(T, rho)
+    fs = c * N / (L * lam)
+    string = IdealString(
+        L=L, T=T, rho=rho, fs=fs, N=N, boundary=("fixed", "free"), sigma=sigma_string
+    )
+    body = ModalBody(freqs=body_freqs, fs=fs, sigmas=sigma_body, masses=masses, phi=phi)
+    return StringBodyBridge(string=string, body=body, K=K)
+
+
+def discrete_sho_frequency(f: float, k: float) -> float:
+    """Exact discrete oscillation frequency (Hz) of the leapfrog SHO for a mode of ``f`` Hz.
+
+    The scheme ``q^{n+1} - 2q^n + q^{n-1} = -k^2 omega^2 q^n`` has solutions ``cos(Omega n k)`` with
+    ``sin(Omega k / 2) = omega k / 2``, i.e. ``Omega = (2/k) arcsin(omega k / 2)``. Approaches the
+    continuum ``f`` as ``omega k -> 0``; used as the modal oracle.
+    """
+    omega = 2.0 * np.pi * f
+    return float(np.arcsin(0.5 * omega * k) / (np.pi * k))
 
 
 def convergence_orders(errors: np.ndarray, step_sizes: np.ndarray) -> np.ndarray:
