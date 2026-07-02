@@ -303,6 +303,14 @@ If #2 fails, **stop** — the time loop cannot conserve energy. This is the gate
    validation). `analysis/` diagnostics deferred to Part 5.
 5. **Diagnostics (`scripts/diagnose_vk_plate.py`, `viz/`).** Energy trace (with the membrane
    component broken out), spectrogram showing the pitch glide, displacement animation, `w/e` sweep.
+   **✅ DONE (2026-07-02).** `scripts/diagnose_vk_plate.py` + three `viz/plots.py` helpers
+   (`plot_energy_breakdown`, `plot_pitch_glide`, `plot_spectrogram`): (a) lossless energy breakdown —
+   flat total over anti-correlated linear/membrane exchange, **drift 8.4e-13** at `w≈3e`
+   (membrane 51 % of `E`); (b) `w/e` sweep — hardening fundamental **+75 % by `w=5e`**, sitting on
+   the SS linear limit (213.4 vs 214.0 Hz) at `w→0`, grid held fixed; (c) `σ=3` ring-down
+   spectrogram — the fundamental **glides down** from ~370 Hz onto the 214 Hz linear limit
+   (0 non-converged steps); (d) bonus `w`+Airy-`F` stress-field snapshot at peak membrane energy;
+   (e) struck-plate GIF. Console prints drift, membrane fraction, glide table, Picard residuals.
 6. **(Part 2, follow-on) Free-edge** — swap `B_bend → K` (model #5b free stiffness) and the free
    `F`-BC; deliver the iconic gong/cymbal. The bracket, F-solve, and energy bookkeeping all carry
    over; only the two boundary operators change.

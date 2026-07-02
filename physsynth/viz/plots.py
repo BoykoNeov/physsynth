@@ -28,6 +28,9 @@ __all__ = [
     "plot_membrane_field",
     "plot_membrane_partials",
     "plot_chladni",
+    "plot_energy_breakdown",
+    "plot_pitch_glide",
+    "plot_spectrogram",
     "save_membrane_animation",
 ]
 
@@ -265,6 +268,97 @@ def plot_chladni(
     ax.set_yticks([])
     if title:
         ax.set_title(title, fontsize=9)
+
+
+def plot_energy_breakdown(
+    ax,
+    time: NDArray,
+    total: NDArray,
+    linear: NDArray,
+    membrane: NDArray,
+    drift: float | None = None,
+) -> None:
+    """Von Kármán energy conservation *with exchange* — total, linear (kinetic+bending), membrane.
+
+    The nonlinear-plate signature (model #6): unlike a linear resonator, energy sloshes between the
+    bending/kinetic store and the **membrane** store (the stretched Airy field ``F``) — they
+    anti-correlate — while the **total** stays flat to machine precision. That flat total riding
+    over two oscillating, out-of-phase components is the visual proof of conservation-with-coupling
+    (there is no analytic modal oracle to check against; energy *is* the correctness test). All
+    three are normalised to ``E^0`` so the total sits at 1.
+    """
+    e0 = total[0]
+    ax.plot(time, total / e0, color="k", lw=1.4, label="total")
+    ax.plot(time, linear / e0, color="C0", lw=1.0, label="linear (kinetic + bending)")
+    ax.plot(time, membrane / e0, color="C3", lw=1.0, label="membrane (Airy $F$)")
+    ax.set_xlabel("time (s)")
+    ax.set_ylabel(r"$E / E^0$")
+    title = "VK energy: flat total over anti-correlated linear/membrane exchange"
+    if drift is not None:
+        title += f"  —  drift = {drift:.2e}"
+    ax.set_title(title, fontsize=9)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8, loc="center right")
+
+
+def plot_pitch_glide(ax, amp_over_e: NDArray, f0: NDArray, f_linear: float) -> None:
+    """Fundamental vs drive amplitude ``w/e`` — the hardening pitch glide (model #6).
+
+    The weakly-nonlinear signature: geometric (membrane) stretching stiffens the plate, so the
+    fundamental *rises* monotonically with amplitude. The dashed line is the small-amplitude
+    (``w → 0``) linear limit — the frequency of the validated model #5 plate — which the curve must
+    approach as the drive vanishes. There is no closed-form value for the shifted frequency; the
+    *sign and monotonicity* are the physics.
+    """
+    amp_over_e = np.asarray(amp_over_e, dtype=float)
+    f0 = np.asarray(f0, dtype=float)
+    ax.axhline(f_linear, color="C3", ls="--", lw=1.1, label=r"linear limit ($w\to 0$, model #5)")
+    ax.plot(amp_over_e, f0, "o-", color="C0", ms=6, lw=1.2, label="detected fundamental")
+    ax.set_xlabel(r"drive amplitude $w_{\max}/e$ (thicknesses)")
+    ax.set_ylabel("fundamental (Hz)")
+    rise = 100.0 * (f0[-1] / f0[0] - 1.0)
+    ax.set_title(
+        f"Hardening pitch glide — fundamental rises {rise:+.0f}% by $w={amp_over_e[-1]:g}e$",
+        fontsize=9,
+    )
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8, loc="upper left")
+
+
+def plot_spectrogram(
+    ax,
+    signal: NDArray,
+    fs: float,
+    f_max: float,
+    f_linear: float | None = None,
+    nperseg: int = 2048,
+) -> None:
+    """Time–frequency spectrogram of a decaying strike — the pitch glide, *seen*.
+
+    Under light loss the amplitude rings down, so the hardened fundamental **glides back down**
+    toward its linear limit as the plate quietens: a descending track in the spectrogram. (A
+    lossless run holds constant amplitude → flat pitch → no glide, so this needs ``sigma > 0``.) The
+    dashed line marks the small-amplitude linear fundamental — the asymptote the glide descends
+    toward. Uses a Hann STFT via :func:`scipy.signal.spectrogram`.
+    """
+    from scipy.signal import spectrogram
+
+    sig = np.asarray(signal, dtype=float)
+    sig = sig - sig.mean()
+    nperseg = min(nperseg, len(sig))
+    f, t, sxx = spectrogram(sig, fs=fs, window="hann", nperseg=nperseg,
+                            noverlap=nperseg * 3 // 4)
+    sel = f <= f_max
+    sxx_db = 10.0 * np.log10(sxx[sel] / (sxx[sel].max() + 1e-30) + 1e-12)
+    ax.pcolormesh(t, f[sel], sxx_db, cmap="magma", vmin=-80, vmax=0, shading="auto")
+    if f_linear is not None:
+        ax.axhline(f_linear, color="c", ls="--", lw=1.1, alpha=0.8,
+                   label=r"linear limit ($w\to 0$)")
+        ax.legend(fontsize=8, loc="upper right")
+    ax.set_xlabel("time (s)")
+    ax.set_ylabel("frequency (Hz)")
+    ax.set_title("Pitch glide over the ring-down (fundamental descends toward the linear limit)",
+                 fontsize=9)
 
 
 def save_membrane_animation(path, X: NDArray, Y: NDArray, snapshots, fs: float, mask=None) -> bool:

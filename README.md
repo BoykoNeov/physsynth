@@ -78,8 +78,9 @@ Complete and validated:
 - **String family** — #1 ideal, #2 stiff, #3 frequency-dependent damped.
 - **2D** — #4 circular membrane, #5 simply-supported Kirchhoff plate, #5b free-edge (FFFF) plate with
   Chladni patterns; plus the #5b-pre free–free Euler–Bernoulli beam (free-boundary de-risk).
-- **Nonlinear** — #6 von Kármán coupled plate, Parts 1–4 of 6 (bracket, Airy stress solve,
-  conservative Picard resonator, validation); diagnostics and the free-edge cymbal remain.
+- **Nonlinear** — #6 von Kármán coupled plate, Parts 1–5 of 6 (bracket, Airy stress solve,
+  conservative Picard resonator, validation, pitch-glide/energy-exchange diagnostics); the free-edge
+  cymbal remains.
 - **Web viewer** — interactive offline recompute for the string family (Phase A) and the membrane
   (Phase B).
 
