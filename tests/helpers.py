@@ -17,6 +17,7 @@ from physsynth.core.connection import StringBodyBridge, StringPlateBridge
 from physsynth.core.engine import simulate
 from physsynth.core.membrane import Domain, Membrane
 from physsynth.core.plate import Plate
+from physsynth.core.radiation import AirRadiation
 from physsynth.core.string_damped import DampedStiffString
 from physsynth.core.string_ideal import Boundary, IdealString
 from physsynth.core.string_stiff import THETA_DEFAULT, StiffString
@@ -521,6 +522,21 @@ def make_bowed_string(
     return BowedString(
         string=string, bow_position=bow_position, v_bow=v_bow, force=force, sharpness=sharpness
     )
+
+
+# Air radiation (the "air" node): a listener 1 m away in ambient air. fs matches the body defaults.
+RADIATION_DISTANCE_DEFAULT = 1.0  # m
+
+
+def make_radiation(
+    *,
+    fs: float = 48000.0,
+    distance: float = RADIATION_DISTANCE_DEFAULT,
+    retarded: bool = True,
+) -> AirRadiation:
+    """Build a monopole far-field radiation node at sample rate ``fs`` for a listener ``distance`` m
+    away (ambient-air ``rho0``/``c0`` defaults)."""
+    return AirRadiation(fs=fs, distance=distance, retarded=retarded)
 
 
 def discrete_sho_frequency(f: float, k: float) -> float:
