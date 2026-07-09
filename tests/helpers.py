@@ -17,7 +17,7 @@ from physsynth.core.connection import StringBodyBridge, StringPlateBridge
 from physsynth.core.engine import simulate
 from physsynth.core.membrane import Domain, Membrane
 from physsynth.core.plate import Plate
-from physsynth.core.radiation import AirRadiation
+from physsynth.core.radiation import AirRadiation, RadiatedBody
 from physsynth.core.string_damped import DampedStiffString
 from physsynth.core.string_ideal import Boundary, IdealString
 from physsynth.core.string_stiff import THETA_DEFAULT, StiffString
@@ -537,6 +537,34 @@ def make_radiation(
     """Build a monopole far-field radiation node at sample rate ``fs`` for a listener ``distance`` m
     away (ambient-air ``rho0``/``c0`` defaults)."""
     return AirRadiation(fs=fs, distance=distance, retarded=retarded)
+
+
+# Radiation load (batch 2): a modal body loaded by its own far-field radiation resistance. R here is
+# an ACOUSTIC resistance (Pa·s/m^3), sized so the body audibly sheds energy over a couple thousand
+# steps (moderate per-step R*G ~ 0.05) — the exact energy identity holds for any R, this just makes
+# the decay easy to see. The stability test overrides it with a deliberately enormous value.
+R_RADIATION_DEFAULT = 2000.0  # Pa·s/m^3
+
+
+def make_radiated_body(
+    *,
+    freqs: np.ndarray = BODY_FREQS_DEFAULT,
+    fs: float = 48000.0,
+    sigmas: np.ndarray | float = 0.0,
+    masses: np.ndarray | float = 1.0,
+    phi: np.ndarray | float = 1.0,
+    radiation: np.ndarray | float | None = None,
+    R: float = R_RADIATION_DEFAULT,
+) -> RadiatedBody:
+    """Build a modal body loaded by its own radiation resistance ``R`` (the back-reaction).
+
+    ``sigmas = 0`` (default) keeps the modes lossless so the *only* energy sink is the radiation
+    channel — then ``body.energy() + radiated_energy`` is conserved and ``radiated_energy`` accounts
+    for all the shed energy. ``R = 0`` decouples the air (bit-identical to :func:`make_body`)."""
+    body = ModalBody(
+        freqs=freqs, fs=fs, sigmas=sigmas, masses=masses, phi=phi, radiation=radiation
+    )
+    return RadiatedBody(body=body, R=R)
 
 
 def discrete_sho_frequency(f: float, k: float) -> float:

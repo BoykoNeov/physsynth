@@ -16,9 +16,23 @@ energy identity:
 
 import numpy as np
 import pytest
-from helpers import make_body, make_bridge, make_radiation
+from helpers import (
+    make_body,
+    make_bridge,
+    make_radiated_body,
+    make_radiation,
+)
 
-from physsynth.core.radiation import C0_AIR, RHO0_AIR, AirRadiation
+from physsynth.core.body import ModalBody
+from physsynth.core.connection import StringBodyBridge
+from physsynth.core.radiation import (
+    C0_AIR,
+    RHO0_AIR,
+    AirRadiation,
+    RadiatedBody,
+    monopole_radiation_resistance,
+    piston_radiation_resistance,
+)
 
 
 # -- amplitude / gain oracle: p_far = rho0/(4 pi r) * Q'' exactly ----------------------------
@@ -166,3 +180,169 @@ def test_reset_clears_the_delay_line():
 def test_rejects_nonphysical_parameters(kwargs):
     with pytest.raises(ValueError):
         AirRadiation(**kwargs)
+
+
+# =============================================================================================
+# Batch 2 — the radiation LOAD (back-reaction): a passive rank-1 dashpot on the body, with the
+# radiated energy tracked as an explicit channel. The money test is the energy identity
+# E_body + integral P_rad = const (lossless body), not a spectral match to any piston.
+# =============================================================================================
+
+
+# -- closed-form resistance oracle: Rayleigh (ka -> 0) limits, mechanical/acoustic units -------
+def test_monopole_resistance_is_the_free_space_value():
+    # R_a = rho0 omega^2 / (4 pi c0), acoustic (per volume velocity) units.
+    omega = 2.0 * np.pi * 200.0
+    r_a = monopole_radiation_resistance(omega)
+    assert r_a == pytest.approx(RHO0_AIR * omega**2 / (4.0 * np.pi * C0_AIR), rel=1e-14)
+
+
+def test_piston_rayleigh_limit_is_twice_the_free_space_monopole():
+    # As ka -> 0 the baffled piston (half-space, 2 pi) tends to exactly twice the free-space (4 pi)
+    # monopole: R_a(ka->0) -> rho0 omega^2 / (2 pi c0).
+    omega, a = 2.0 * np.pi * 5.0, 1e-3  # ka = omega a / c0 ~ 9e-5, deep in the Rayleigh regime
+    r_piston = piston_radiation_resistance(omega, a)
+    r_mono = monopole_radiation_resistance(omega)
+    assert r_piston == pytest.approx(2.0 * r_mono, rel=1e-6)
+    assert r_piston == pytest.approx(RHO0_AIR * omega**2 / (2.0 * np.pi * C0_AIR), rel=1e-6)
+
+
+def test_piston_resistance_matches_bessel_formula_away_from_the_limit():
+    from scipy.special import j1
+
+    omega, a = 2.0 * np.pi * 2000.0, 0.05  # ka ~ 1.8, well past the Rayleigh limit
+    ka = omega * a / C0_AIR
+    expected = RHO0_AIR * C0_AIR / (np.pi * a * a) * (1.0 - j1(2.0 * ka) / ka)
+    assert piston_radiation_resistance(omega, a) == pytest.approx(expected, rel=1e-12)
+
+
+# -- money test: E_body + integral P_rad is conserved for a lossless body ----------------------
+def test_energy_channel_is_conserved_for_a_lossless_body():
+    loaded = make_radiated_body(sigmas=0.0, R=2000.0)  # lossless modes: radiation is the only sink
+    loaded.set_state(np.array([1e-3, -8e-4, 6e-4, 4e-4]))
+    e0 = loaded.energy()
+    peak = 0.0
+    for _ in range(4000):
+        loaded.step()
+        peak = max(peak, abs(loaded.energy() - e0) / e0)
+    assert peak < 1e-10  # E_body + radiated_energy is conserved to machine precision
+
+
+def test_body_energy_bleeds_entirely_into_the_radiated_channel():
+    loaded = make_radiated_body(sigmas=0.0, R=3000.0)
+    loaded.set_state(np.full(4, 1e-3))
+    e_body0 = loaded.body.energy()
+    for _ in range(6000):
+        loaded.step()
+    # All the energy the body lost is now in the radiated channel (lossless modes).
+    assert loaded.body.energy() < 0.2 * e_body0            # the body has genuinely rung down
+    assert loaded.radiated_energy == pytest.approx(e_body0 - loaded.body.energy(), rel=1e-10)
+
+
+# -- passivity: body energy monotonically decreases, radiated energy monotonically increases ---
+def test_radiation_load_is_passive():
+    loaded = make_radiated_body(sigmas=0.0, R=2000.0)
+    loaded.set_state(np.array([1e-3, 5e-4, -7e-4, 2e-4]))
+    body_e, rad_e = [], []
+    for _ in range(3000):
+        loaded.step()
+        body_e.append(loaded.body.energy())
+        rad_e.append(loaded.radiated_energy)
+    body_e, rad_e = np.asarray(body_e), np.asarray(rad_e)
+    # A small cross-time ripple is allowed; assert monotone to a tiny fraction of the start energy.
+    tol = 1e-12 * body_e[0]
+    assert np.all(np.diff(body_e) <= tol)   # body sheds energy every step
+    assert np.all(np.diff(rad_e) >= -tol)   # the far field only ever gains
+
+
+# -- R = 0 is bit-identical to a bare ModalBody ------------------------------------------------
+def test_R_zero_is_bit_identical_to_a_bare_body():
+    kw = dict(freqs=np.array([110.0, 196.0, 261.0, 440.0]), fs=48000.0, masses=0.02)
+    plain = ModalBody(**kw)
+    loaded = RadiatedBody(body=ModalBody(**kw), R=0.0)
+    q0 = np.array([1e-3, -5e-4, 3e-4, 8e-4])
+    plain.set_state(q0)
+    loaded.set_state(q0)
+    for _ in range(500):
+        plain.step()
+        loaded.step()
+        assert np.array_equal(loaded.body.q, plain.q)       # bit-for-bit, not just close
+        assert np.array_equal(loaded.body.q_prev, plain.q_prev)
+        assert loaded.pressure() == plain.pressure()
+    assert loaded.radiated_energy == 0.0
+
+
+# -- unconditionally passive: no CFL, no guard, stable at an absurd R --------------------------
+def test_unconditionally_stable_at_enormous_R():
+    loaded = make_radiated_body(sigmas=0.0, R=1e12)  # far beyond any physical value; no guard
+    loaded.set_state(np.full(4, 1e-3))
+    e0 = loaded.energy()
+    for _ in range(2000):
+        loaded.step()
+        assert np.all(np.isfinite(loaded.body.q))           # never blows up
+    assert abs(loaded.energy() - e0) / e0 < 1e-10           # total still conserved
+    assert loaded.body.energy() < e0                        # (critically) over-damped, not growing
+
+
+# -- the loaded body radiates through the air node, carrying the back-reaction -----------------
+def test_loaded_body_radiates_through_the_air():
+    loaded = make_radiated_body(sigmas=0.0, R=2000.0)
+    loaded.set_state(np.full(4, 1e-3))
+    rad = make_radiation(fs=1.0 / loaded.k, retarded=False)
+    for _ in range(1000):
+        loaded.step()
+        # pressure() reflects the corrected (post-load) acceleration; the air reads it exactly.
+        assert rad.radiate(loaded) == pytest.approx(rad.gain * loaded.pressure(), rel=1e-12)
+
+
+# -- full chain: string -> bridge -> RADIATED body conserves E_str+E_body+E_conn+integral P_rad -
+def test_full_chain_with_radiation_conserves_the_total():
+    # A lossless string and lossless body modes; the ONLY sink is the radiation channel, so the
+    # bridge's own energy() (string + loaded-body.energy() + E_conn) must be conserved.
+    bridge = make_bridge(sigma_string=0.0, sigma_body=0.0, K=8000.0)
+    loaded = RadiatedBody(body=bridge.body, R=1500.0)
+    chain = StringBodyBridge(string=bridge.string, body=loaded, K=8000.0)
+    from physsynth.core.exciter import triangular_pluck
+
+    s = chain.string
+    s.set_state(triangular_pluck(s.x, s.L, 0.3 * s.L, amplitude=1e-3))
+    e0 = chain.energy()
+    peak = 0.0
+    for _ in range(6000):
+        chain.step()
+        peak = max(peak, abs(chain.energy() - e0) / abs(e0))
+    assert peak < 1e-9                          # the four-way energy identity holds
+    assert loaded.radiated_energy > 0.0         # the body genuinely radiated
+    # The radiated energy is a real fraction of the total: the chain has audibly rung down into air.
+    assert loaded.radiated_energy > 0.05 * e0
+
+
+# -- the (1 + sigma k) factor: a LOSSY body must match the exact dense coupled implicit solve ---
+def test_lossy_body_matches_the_exact_dense_coupled_solve():
+    # The ``(1 + sigma k)`` factor in G and the correction is INVISIBLE at sigma = 0 (1 + 0 = 1), so
+    # every other test (all sigma = 0) leaves it unpinned. This is the discriminating check: a lossy
+    # body's loaded step must equal the exact dense coupled implicit solve
+    #   [diag(1 + sigma k) + (k R / 2) (a/m) a^T] q^{n+1} = free_rhs + (k R / 2)(a . q^{n-1})(a/m),
+    # whose denominator carries the body's true ``1 + sigma k``. A wrong-but-consistent factor (drop
+    # it from BOTH G and corr) passes self-consistency and monotonicity but diverges from this
+    # reference at ~1e-11 (verified), so atol = 1e-13 catches it.
+    loaded = make_radiated_body(sigmas=3.0, masses=0.02, R=1500.0)
+    loaded.set_state(
+        np.array([1e-3, -6e-4, 4e-4, 7e-4]), v0=np.array([0.2, -0.1, 0.05, 0.0])
+    )
+    b = loaded.body
+    k, a, m, om = b.k, b.a, b.m, b.omega
+    sk = b.sigma * k
+    for _ in range(20):
+        q_n, q_nm1 = b.q.copy(), b.q_prev.copy()
+        free_rhs = 2.0 * q_n - (1.0 - sk) * q_nm1 - k * k * om * om * q_n  # body.step numerator
+        mmat = np.diag(1.0 + sk) + 0.5 * k * loaded.R * np.outer(a / m, a)
+        rhs = free_rhs + 0.5 * k * loaded.R * float(np.dot(a, q_nm1)) * (a / m)
+        q1_ref = np.linalg.solve(mmat, rhs)
+        loaded.step()
+        assert np.allclose(b.q, q1_ref, rtol=0, atol=1e-13)
+
+
+def test_radiated_body_rejects_negative_R():
+    with pytest.raises(ValueError):
+        RadiatedBody(body=make_body(), R=-1.0)
