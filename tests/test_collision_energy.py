@@ -32,11 +32,18 @@ def _pluck(bar, amplitude):
 
 
 def _run(bar, steps):
-    """Step ``bar`` for ``steps``, returning the per-step total-energy array."""
+    """Step ``bar`` for ``steps``, returning the per-step total-energy array.
+
+    Also asserts the vector contact solve never hits its iteration cap: energy exactness holds only
+    at the converged root (the applied force *is* the discrete gradient there), so a stall would
+    silently corrupt the balance. This documents the convergence guarantee at its source rather than
+    inferring a stall from downstream drift.
+    """
     e = np.empty(steps + 1)
     e[0] = bar.energy()
     for i in range(1, steps + 1):
         bar.step()
+        assert bar.newton_iters < bar.newton_maxiter, f"contact solve stalled at step {i}"
         e[i] = bar.energy()
     return e
 

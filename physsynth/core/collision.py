@@ -312,6 +312,17 @@ def solve_contact_vector(
             t *= 0.5
         eta = eta + t * delta
         r = residual(eta)
+    # Reached the iteration cap without converging. The applied force is exact only *at* the root
+    # (energy conservation depends on it — see the drift-vs-newton_tol test), so a stall would
+    # silently corrupt the energy balance; warn rather than fail so a long render still finishes.
+    if np.max(np.abs(r)) > newton_tol:
+        import warnings
+        warnings.warn(
+            f"vector contact solve did not converge in {maxiter} iterations "
+            f"(residual {np.max(np.abs(r)):.2e} > {newton_tol:.1e}); energy may drift. Raise "
+            f"newton_maxiter or oversample the contact.",
+            stacklevel=2,
+        )
     f = _force_total_vec(eta, eta_prev, K, alpha, lam_h, k, tol)
     return eta, f, maxiter
 
