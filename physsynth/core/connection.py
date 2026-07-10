@@ -448,3 +448,244 @@ class StringPlateBridge:
         it carries the driving-point coupling force.
         """
         return self.plate.pressure()
+
+
+class SympatheticStrings:
+    """Several strings sharing **one** bridge point on a common :class:`ModalBody` — the substrate
+    for **sympathetic resonance** and **unison coupling** (piano unisons, sitar/tanpura sympathetic
+    strings, the coupled-string family of HANDOFF §12.B).
+
+    Each string ``j`` is clamped at the nut and **free at the bridge end**, where a linear spring
+    ``K_j`` connects its end displacement ``u_{end,j}`` to the *shared* body driving-point
+    displacement ``w_b = sum_i phi_i q_i``. Because every string attaches at the **same** point, the
+    body feels the scalar sum of the bridge forces
+
+        F = sum_j F_j ,      F_j = K_j eta_j ,      eta_j = u_{end,j} - w_b ,
+
+    entering each body mode as ``phi_i F`` — so :class:`ModalBody` is used exactly as-is
+    (``body.step(force=sum_j F_j)``, the scalar path). The strings never touch directly; they talk
+    to each other *only* through the common ``w_b``. That single shared coordinate is enough to
+    produce both signatures of the family: **unison beating** between near-identical strings and
+    **sympathetic transfer**, where plucking one string rings up another tuned to one of its
+    partials. (Distinct per-string bridge points — each string sampling a different ``phi^{(j)}`` —
+    are the natural follow-on; on a lumped modal bank they would be invented spatial inputs, so the
+    shared point is built first, and it is what makes the antisymmetric energy oracle exact.)
+
+    **Why this is still one energy-conserving linear leapfrog.** Every spring is explicit
+    (``F_j = K_j eta_j^n``); the whole system (all strings + body + all springs) is again *one*
+    linear leapfrog conserving the cross-time energy ``H = E_body + sum_j E_{string,j} +
+    sum_j E_{conn,j}`` with ``E_{conn,j} = 1/2 K_j eta_j^n eta_j^{n-1}``. The per-step increments
+    telescope: string ``j`` contributes ``-k F_j delta_{t.} u_{end,j}``, its connection
+    ``+k F_j delta_{t.} eta_j`` and the body ``+k (sum_j F_j) delta_{t.} w_b``; summing over ``j``
+    and using ``eta_j = u_{end,j} - w_b`` cancels everything (the modal-bridge proof, one string per
+    spring). ``E_{string,j}`` alone is *not* conserved once coupled — **assert on the total**.
+
+    **The discriminating oracle (beyond energy).** Energy conservation and passivity follow from
+    the linear-leapfrog structure and would pass even with a flipped coupling sign or a mis-summed
+    force, so they are necessary but *not* discriminating. The sharp, machine-precision test is the
+    **antisymmetric normal mode**: two identical strings with equal springs and the body at rest,
+    started ``u_B = -u_A``. By symmetry ``F_A + F_B = -2 K w_b``, so a body that starts at
+    ``w_b = 0`` with zero velocity feels zero force and ``w_b ≡ 0`` (and ``E_body ≡ 0``) *forever*,
+    while ``u_B ≡ -u_A`` to machine precision. A wrong coupling sign or summation moves the bridge
+    and fails this immediately. Its contrast is the **symmetric** start (``u_B = +u_A``): the bridge
+    swings and energy flows into the body.
+
+    **Stability (exact, dense).** Being explicit, the coupling has a CFL. As for the single-string
+    bridge the *cheap* per-part 2-DOF bound is a footgun (a rank-1 spring lifts the top coupled
+    eigenvalue above both isolated maxima), so the guard assembles the full coupled leapfrog
+    operator ``A`` (``x^{n+1} = 2x^n - x^{n-1} - k^2 A x^n``) over the stacked state (all string
+    DOFs then the ``M`` modal coordinates) — matrix-free, from the *same* stencils :meth:`step`
+    uses — and requires ``k^2 lambda_max(A) < 4``. ``A`` is small (``sum_j N_j + M``); one dense
+    ``eigvals`` at construction is cheap and is the *trusted* guard (no hand-rolled Woodbury for the
+    rank-``J`` spring). Each string is run at ``lambda < 1`` (its Nyquist mode is marginal at
+    ``lambda = 1`` and a bridge spring pushes it unstable).
+
+    Parameters
+    ----------
+    strings : list[IdealString]
+        The strings (at least one). Each must have its right end ``"free"`` (build with
+        ``boundary=("fixed", "free")``) and run at ``lambda < 1``. They may differ in every physical
+        parameter; they must only share the timestep ``k`` with the body.
+    body : ModalBody
+        The shared soundboard/body. Its single driving point is the common bridge where every string
+        attaches (its ``phi`` samples the body modes there).
+    Ks : array_like
+        Per-string bridge stiffnesses ``K_j`` (N/m), one per string. ``K_j = 0`` decouples string
+        ``j``; all-zero reproduces the uncoupled parts bit-for-bit.
+
+    Raises
+    ------
+    ValueError
+        If ``strings`` is empty, any timestep differs from the body's, any string's right end is not
+        free or runs at ``lambda >= 1``, ``len(Ks) != len(strings)``, any ``K_j < 0``, or the exact
+        coupled CFL ``k^2 lambda_max(A) < 4`` is violated.
+    """
+
+    def __init__(
+        self,
+        *,
+        strings: list[IdealString],
+        body: ModalBody,
+        Ks: NDArray[np.float64] | list[float],
+    ) -> None:
+        strings = list(strings)
+        if len(strings) < 1:
+            raise ValueError("need at least one string.")
+        K_arr = np.atleast_1d(np.asarray(Ks, dtype=float))
+        if K_arr.shape != (len(strings),):
+            raise ValueError(
+                f"Ks must have one stiffness per string (got {K_arr.shape} for "
+                f"{len(strings)} strings)."
+            )
+        if np.any(K_arr < 0.0):
+            raise ValueError("every bridge stiffness K must be >= 0.")
+        for j, s in enumerate(strings):
+            if not np.isclose(s.k, body.k, rtol=0, atol=1e-15):
+                raise ValueError(
+                    f"string {j} and the body must share a timestep (got k={s.k:.3e} vs "
+                    f"{body.k:.3e}); build them at the same fs."
+                )
+            if s._bc_right != "free":
+                raise ValueError(
+                    f"string {j}'s right end must be 'free' to attach to the bridge "
+                    "(build it with boundary=('fixed', 'free'))."
+                )
+            if s.lam >= 1.0 - _CFL_TOL:
+                raise ValueError(
+                    f"string {j} must run at lambda < 1: its Nyquist mode is marginal at "
+                    "lambda = 1 and the bridge spring pushes it unstable. Rebuild at lambda < 1."
+                )
+
+        self.strings = strings
+        self.body = body
+        self.K = K_arr
+        self.k = body.k
+        self.J = len(strings)
+
+        # Per-string end-node inverse mass (its rho_j (h_j/2) half-cell): u_end,j -= beta_s,j F_j.
+        self.beta_s = np.array(
+            [2.0 * self.k * self.k / (s.rho * s.h) for s in strings]
+        )
+
+        # Exact guard: k^2 * lambda_max of the stacked coupled leapfrog operator A must be < 4.
+        self._offsets = np.cumsum([0] + [s.N for s in strings])  # string j -> [off_j, off_j+N_j)
+        self.spectral_radius = self._max_leapfrog_eigenvalue()
+        if self.k * self.k * self.spectral_radius >= 4.0 - _CFL_TOL:
+            raise ValueError(
+                f"connection unstable: k^2 * lambda_max(A) = "
+                f"{self.k * self.k * self.spectral_radius:.6f} >= 4. "
+                "Reduce the bridge stiffnesses, raise fs, or increase the body/string end mass."
+            )
+
+        self.n = 0
+
+    # -- stability (assembled once at construction, off the hot loop) --------------------
+
+    def _apply_A(self, x: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Apply the stacked coupled leapfrog operator ``A`` (``x^{n+1}=2x^n-x^{n-1}-k^2 A x^n``).
+
+        ``x`` stacks each string's DOFs (nodes ``1..N_j``, the clamped left node 0 excluded) in
+        order, then the ``M`` modal coordinates. Built from the same stencils :meth:`step` uses, so
+        the stability spectrum is guaranteed consistent with the integrator. All strings couple to
+        the *shared* bridge displacement ``w_b = sum_i phi_i q_i``.
+        """
+        b = self.body
+        M = b.M
+        q = x[-M:] if M else x[0:0]
+        w_b = float(np.dot(b.phi, q)) if M else 0.0
+
+        out = np.empty_like(x)
+        body_force = 0.0  # sum_j F_j = sum_j K_j eta_j, injected into the modal block
+        for j, s in enumerate(self.strings):
+            off = self._offsets[j]
+            xj = x[off : off + s.N]
+            u = np.zeros(s.N + 1)
+            u[1:] = xj  # node 0 stays clamped
+            out_u = -(s.c * s.c / (s.h * s.h)) * s._second_diff(u)[1:]
+            eta = u[-1] - w_b
+            out_u[-1] += 2.0 * self.K[j] * eta / (s.rho * s.h)  # (A x)_{end,j} += 2 K eta/(rho h)
+            out[off : off + s.N] = out_u
+            body_force += self.K[j] * eta
+
+        if M:
+            # Body internal A_body q = omega^2 q, plus the shared spring force -phi_i F / m_i.
+            out[-M:] = b.omega * b.omega * q - b.phi * body_force / b.m
+        return out
+
+    def _max_leapfrog_eigenvalue(self) -> float:
+        """Largest eigenvalue of the stacked ``A`` (real, >= 0). ``A`` is small
+        (``sum_j N_j + M``); assemble it densely by applying :meth:`_apply_A` to each basis vector
+        and take ``max Re(eig)``."""
+        n = int(self._offsets[-1]) + self.body.M
+        A = np.empty((n, n))
+        e = np.zeros(n)
+        for j in range(n):
+            e[j] = 1.0
+            A[:, j] = self._apply_A(e)
+            e[j] = 0.0
+        return float(np.max(np.linalg.eigvals(A).real))
+
+    # -- helpers ------------------------------------------------------------------------
+
+    def _bridge_displacement(self, *, prev: bool = False) -> float:
+        """Shared bridge displacement ``w_b = sum_i phi_i q_i`` now (``prev`` -> previous step)."""
+        if prev:
+            return float(np.dot(self.body.phi, self.body.q_prev))
+        return self.body.bridge_displacement()
+
+    def _stretch(self, j: int, *, prev: bool = False) -> float:
+        """Stretch ``eta_j = u_{end,j} - w_b`` of string ``j``'s spring (``prev`` -> prev step)."""
+        w_b = self._bridge_displacement(prev=prev)
+        u_end = self.strings[j].u_prev[-1] if prev else self.strings[j].u[-1]
+        return float(u_end - w_b)
+
+    def connection_forces(self) -> NDArray[np.float64]:
+        """Per-string bridge forces ``F_j = K_j eta_j^n`` (explicit; N)."""
+        w_b = self._bridge_displacement()
+        return np.array(
+            [self.K[j] * (self.strings[j].u[-1] - w_b) for j in range(self.J)]
+        )
+
+    # -- time stepping ------------------------------------------------------------------
+
+    def step(self) -> None:
+        """Advance one timestep. Each explicit spring ``F_j = K_j eta_j^n`` drives its string and
+        the shared body (which feels the scalar sum ``sum_j F_j``) at time ``n``."""
+        forces = self.connection_forces()
+        for j, s in enumerate(self.strings):
+            s.step()
+            s.u[-1] -= self.beta_s[j] * forces[j]
+        self.body.step(force=float(np.sum(forces)))
+        self.n += 1
+
+    # -- diagnostics --------------------------------------------------------------------
+
+    def energy(self) -> float:
+        """Total discrete energy ``sum_j E_{string,j} + E_body + sum_j E_{conn,j}`` (Joules).
+
+        ``E_{conn,j} = 1/2 K_j eta_j^n eta_j^{n-1}`` (cross-time). Conserved to machine precision
+        for a lossless run; monotonically decreasing when any string or body mode is lossy. No
+        single string's energy is conserved once coupled — assert on the total.
+        """
+        e = self.body.energy()
+        for j, s in enumerate(self.strings):
+            e += s.energy()
+            e += 0.5 * self.K[j] * self._stretch(j) * self._stretch(j, prev=True)
+        return e
+
+    def string_energy(self, j: int) -> float:
+        """Energy of string ``j`` alone (for the sympathetic-transfer / two-stage-decay traces)."""
+        return self.strings[j].energy()
+
+    @property
+    def state(self) -> NDArray[np.float64]:
+        """The first string's displacement field (a representative resonator for snapshots)."""
+        return self.strings[0].state
+
+    def displacement_at(self, index: int, *, string: int = 0) -> float:
+        """Pickup at node ``index`` on string ``string`` (for spectral analysis)."""
+        return self.strings[string].displacement_at(index)
+
+    def pressure(self) -> float:
+        """Radiated pressure from the shared body, ``sum_i a_i q_i''`` (∝ volume acceleration)."""
+        return self.body.pressure()

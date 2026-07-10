@@ -15,7 +15,11 @@ from physsynth.core.body import ModalBody
 from physsynth.core.bore import C0_AIR, RHO0_AIR, Bore
 from physsynth.core.bow import BowedString
 from physsynth.core.collision import BarrierString
-from physsynth.core.connection import StringBodyBridge, StringPlateBridge
+from physsynth.core.connection import (
+    StringBodyBridge,
+    StringPlateBridge,
+    SympatheticStrings,
+)
 from physsynth.core.engine import simulate
 from physsynth.core.mallet import MalletMembrane, MalletWall
 from physsynth.core.membrane import Domain, Membrane
@@ -398,6 +402,52 @@ def make_bridge(
     )
     body = ModalBody(freqs=body_freqs, fs=fs, sigmas=sigma_body, masses=masses, phi=phi)
     return StringBodyBridge(string=string, body=body, K=K)
+
+
+# Sympathetic / coupled strings: several fixed/free strings sharing one bridge point on a common
+# modal body (piano unisons, sitar sympathetics). Same rig as make_bridge; the strings talk only
+# through the shared driving-point displacement w_b.
+def make_sympathetic(
+    *,
+    n_strings: int = 2,
+    N: int = 100,
+    lam: float = 0.9,
+    K: float | np.ndarray = K_BRIDGE_DEFAULT,
+    Ts: np.ndarray | None = None,
+    sigma_string: float | np.ndarray = 0.0,
+    sigma_body: np.ndarray | float = 0.0,
+    body_freqs: np.ndarray = BODY_FREQS_DEFAULT,
+    masses: np.ndarray | float = BODY_MASS_DEFAULT,
+    phi: np.ndarray | float = 1.0,
+    L: float = L_DEFAULT,
+    rho: float = RHO_DEFAULT,
+) -> SympatheticStrings:
+    """Build ``n_strings`` fixed/free strings sharing one bridge point on a modal body.
+
+    All strings and the body share ``fs = c0 N / (L lam)`` (``c0`` from the *first* string's
+    tension, so string 0 sits at the target ``lam``); ``lam < 1`` gives the coupled system headroom
+    below the string Nyquist mode. Pass ``Ts`` (one tension per string) to **detune** the strings
+    for the sympathetic-transfer test — detune *downward* (lower tension) to keep every string at
+    ``lambda < 1``. ``K`` is a scalar (broadcast to every spring) or a per-string array; all-zero
+    decouples (bit-identical to the uncoupled parts). ``sigma_body > 0`` bleeds the body (the loss
+    channel that makes a plucked string decay through the bridge — the Weinreich two-stage decay).
+    """
+    if Ts is None:
+        Ts = np.full(n_strings, T_DEFAULT)
+    Ts = np.atleast_1d(np.asarray(Ts, dtype=float))
+    sig = np.broadcast_to(np.asarray(sigma_string, dtype=float), (n_strings,))
+    c0 = wave_speed(float(Ts[0]), rho)
+    fs = c0 * N / (L * lam)
+    strings = [
+        IdealString(
+            L=L, T=float(Ts[i]), rho=rho, fs=fs, N=N,
+            boundary=("fixed", "free"), sigma=float(sig[i]),
+        )
+        for i in range(n_strings)
+    ]
+    body = ModalBody(freqs=body_freqs, fs=fs, sigmas=sigma_body, masses=masses, phi=phi)
+    Ks = np.full(n_strings, K) if np.isscalar(K) else np.asarray(K, dtype=float)
+    return SympatheticStrings(strings=strings, body=body, Ks=Ks)
 
 
 # Plate bridge (string terminus <-> grid plate body). A coarse plate (N_plate small) so the per-step
