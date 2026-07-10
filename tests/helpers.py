@@ -19,6 +19,7 @@ from physsynth.core.engine import simulate
 from physsynth.core.membrane import Domain, Membrane
 from physsynth.core.plate import Plate
 from physsynth.core.radiation import AirRadiation, RadiatedBody
+from physsynth.core.reed import ReedBore
 from physsynth.core.string_damped import DampedStiffString
 from physsynth.core.string_ideal import Boundary, IdealString
 from physsynth.core.string_stiff import THETA_DEFAULT, StiffString
@@ -634,6 +635,44 @@ def make_radiating_bore(
         L=L, fs=fs, N=N, radius=radius, boundary=boundary, R_bell=R_bell, sigma=sigma,
         rho0=rho0, c0=c0,
     )
+
+
+# Single-reed mouthpiece (wind leg, batch 3): a dynamic reed blowing a clarinet air column. The
+# defaults are a clarinet-plausible reed (f_reed ~ 2.5 kHz, heavily lip-damped) whose closing
+# pressure p_closing = mu wr^2 H0 ~ 3 kPa; the control is gamma = p_mouth / p_closing (the note
+# speaks around gamma ~ 1/3). Default bore is a radiating clarinet so the note settles into a steady
+# regime; pass boundary=("closed", "open") + sigma=0 for the LOSSLESS energy-balance money test.
+REED_P_MOUTH_DEFAULT = 1500.0  # Pa (gamma ~ 0.5, comfortably above threshold)
+
+
+def make_reed_bore(
+    *,
+    N: int = 200,
+    lam: float = 1.0,
+    p_mouth: float = REED_P_MOUTH_DEFAULT,
+    boundary=("closed", "radiating"),
+    R_bell: float = R_BELL_DEFAULT,
+    sigma: float = 0.0,
+    f_reed: float = 2500.0,
+    q_reed: float = 4.0,
+    L: float = BORE_LENGTH_DEFAULT,
+    radius: float = BORE_RADIUS_DEFAULT,
+) -> ReedBore:
+    """Build a dynamic-reed clarinet (a :class:`ReedBore` on a :class:`Bore`) at Courant ``lam``.
+
+    The bore is the batch-1/2 clarinet (``fs = c0 / (lam h)``, left end ``"closed"`` for the
+    mouthpiece); the reed self-oscillates it under a steady mouth pressure ``p_mouth``. Default is a
+    lightly-radiating bell (``R_bell``) so the tone reaches a steady amplitude. For the lossless
+    energy-balance test pass ``boundary=("closed", "open"), sigma=0`` (then ``E = E_bore + E_reed``
+    changes only by ``mouth_work - jet_loss - reed_damp_work``). Lower ``p_mouth`` below threshold
+    to watch the note fail to speak.
+    """
+    h = L / N
+    fs = C0_AIR / (lam * h)
+    bore = Bore(
+        L=L, fs=fs, N=N, radius=radius, boundary=boundary, R_bell=R_bell, sigma=sigma
+    )
+    return ReedBore(bore=bore, p_mouth=p_mouth, f_reed=f_reed, q_reed=q_reed)
 
 
 def bore_low_eigenfrequencies(bore: Bore, n_modes: int) -> np.ndarray:

@@ -102,6 +102,7 @@ Headless: NumPy only (SciPy sparse for the modal-oracle operator).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Literal
 
 import numpy as np
@@ -109,6 +110,11 @@ from numpy.typing import NDArray
 from scipy import sparse
 
 __all__ = ["Bore", "RHO0_AIR", "C0_AIR"]
+
+# An in-place pressure-field corrector applied inside step() between the pressure and momentum
+# sub-steps: the seam through which an implicit boundary exciter (the reed) injects into a half-cell
+# node. It receives the freshly-updated p^{n+1} and mutates it. See Bore.step / ReedBore.
+SourceHook = Callable[[NDArray[np.float64]], None]
 
 # Ambient air (matches physsynth.core.radiation so the bore and its radiation load agree).
 RHO0_AIR = 1.2041  # kg/m^3
@@ -319,11 +325,25 @@ class Bore:
         div[1:] -= u    # -U_{l-1/2} at node l (l = 1 .. N)
         return div
 
-    def step(self) -> None:
-        """Advance one timestep: pressure from the current velocity, then velocity from it."""
+    def step(self, source: SourceHook | None = None) -> None:
+        """Advance one timestep: pressure from the current velocity, then velocity from it.
+
+        ``source`` is an optional callback ``source(p_next)`` invoked on the freshly-updated
+        pressure field **after** the open-end pin and **before** the momentum sub-step — the one
+        place a boundary-node injection (an implicit exciter such as the reed) can correct
+        ``p_next`` in time for the velocity ``U^{n+3/2}`` to see it (the same ordering the radiating
+        bell obeys). It modifies ``p_next`` in place; the bore stays agnostic to what drives it.
+        ``None``
+        (the default) is bit-for-bit the un-driven bore — how :func:`simulate` and every batch-1/2
+        test call it. A reed feeds volume flow into node 0's half-cell here (see
+        :class:`~physsynth.core.reed.ReedBore`)."""
         # p^{n+1} = p^n - p_pref * div(U^{n+1/2})
         p_next = self.p - self._p_pref * self._divergence(self.U)
         self._apply_open_ends(p_next)
+        # An external exciter (the reed) injects into a boundary half-cell here — before the
+        # momentum step, so U^{n+3/2} sees the corrected node pressure (same as the radiating bell).
+        if source is not None:
+            source(p_next)
         # Drain any radiating end (rank-1 scalar dashpot) *before* the momentum step, so that the
         # velocity U^{n+3/2} sees the corrected end pressure — why this must live inside step().
         self._apply_radiating_ends(p_next)
