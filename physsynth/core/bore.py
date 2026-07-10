@@ -52,7 +52,46 @@ discrete energy decrease monotonically (passivity) and a single mode decays at `
 ``sigma = 0`` is bit-for-bit the lossless scheme. This is a **placeholder** loss for the passivity
 test — the same role the ideal string's flat ``sigma`` played before model #3 — **not** the
 physical viscothermal wall loss (which scales as ``sqrt(omega)``, Zwikker–Kosten); realistic
-frequency-dependent tube losses, and the passively-lossy radiating bell, come later.
+frequency-dependent tube losses come later.
+
+**The radiating bell (batch 2) — how sound leaves.** An ideal open end reflects perfectly and
+radiates nothing. A real bell/open end presents a **radiation impedance**: the resistive part ``R``
+(acoustic, Pa·s/m³) relates the end pressure to the volume velocity leaving the tube,
+``p_end = R U_out``. That single resistor is exactly the
+:class:`~physsynth.core.radiation.RadiatedBody` pattern — a rank-1, unconditionally-passive
+dashpot — moved onto a boundary node. The terminating
+node stays a live **half-cell** DOF (like a rigid wall), drained by ``U_out`` taken at the
+**centered** end pressure ``p_bar = (p^{n+1} + p^n)/2`` so ``U_out = p_bar / R`` (implicit, the VK/
+bow/radiation-load lesson). Because the coupling is one scalar the implicit solve collapses to a
+**1×1** equation for the end node,
+
+    p_end^{n+1} = (a p_rigid - b p_end^n) / (a + b),   a = C_end / k,  b = 1 / (2 R),
+
+where ``p_rigid`` is the force-free rigid-wall step. The discrete energy then telescopes to
+``E^{n+1} - E^n = -k p_bar U_out = -k R U_out^2 <= 0``, and that shed power is booked into
+:attr:`radiated_energy` so ``E_bore + radiated_energy`` is conserved to machine precision (the
+passivity money test — the acoustic dual of the ``sigma`` channel and of ``RadiatedBody``). Since
+``a + b > 0`` for any ``R > 0`` the solve is never singular: the load is **unconditionally
+passive**, no stability guard beyond the interior CFL. ``R`` interpolates the two ideal ends —
+``R -> infinity`` recovers the rigid **closed** wall (no radiation), ``R -> 0`` the pressure-release
+**open** end — with a real, physical, energy-shedding bell in between. The independent oracle (the
+batch-2 analogue of the odd-harmonic signature) is the pressure **reflection coefficient**
+``r = (R - Z0) / (R + Z0)`` (``Z0 = rho0 c0 / S`` the tube's characteristic acoustic impedance): a
+pulse hitting the end sheds the fraction ``1 - r^2 = 4 R Z0 / (R + Z0)^2`` of its energy to the far
+field, and a **matched** load ``R = Z0`` (``r = 0``) is anechoic — it absorbs everything. ``R`` is
+constant across frequency here (evaluate a representative value from
+:func:`~physsynth.core.radiation.monopole_radiation_resistance` /
+:func:`~physsynth.core.radiation.piston_radiation_resistance` at the fundamental); the frequency-
+dependent radiation *reactance* (the end correction, ``propto sqrt(omega)``) is a later batch, the
+same placeholder philosophy as ``sigma``.
+
+**Overdamped end node (a cosmetic Nyquist artifact, by design).** At a realistic bell ``R << Z0``
+the drain ``b = 1/(2R)`` dwarfs the node compliance ``a = C_end/k``, so the update is
+``p_end^{n+1} ~ -p_end^n`` — the *raw* end-node pressure carries a marginal Nyquist ripple. It
+**cancels exactly** in ``U_out propto (p_end^{n+1} + p_end^n)``, so every validated quantity — the
+radiated energy, the far-field read-out ``pressure() = dU_out/dt``, and any **interior** pickup — is
+clean. Read the far field from ``U_out``/:meth:`pressure`, never the raw terminating node, and place
+spectral pickups in the interior (node 1), as the batch-1 tests do.
 
 **Webster from day one.** ``S(x)`` is carried as node/segment arrays throughout, so a cylinder
 (constant ``S``) is just the constant case; a cone or flare (a bell, a saxophone) is a *different
@@ -75,10 +114,13 @@ __all__ = ["Bore", "RHO0_AIR", "C0_AIR"]
 RHO0_AIR = 1.2041  # kg/m^3
 C0_AIR = 343.0     # m/s
 
-End = Literal["closed", "open"]
+End = Literal["closed", "open", "radiating"]
 # Per-end boundary: one value applies to both ends; a (left, right) tuple sets them independently.
-# A clarinet is ("closed", "open") — rigid mouthpiece wall, open bell.
+# A clarinet is ("closed", "open") — rigid mouthpiece wall, open bell; ("closed", "radiating") gives
+# it a passively-lossy, sound-shedding bell (batch 2).
 BoundarySpec = End | tuple[End, End]
+
+_ENDS = ("closed", "open", "radiating")
 
 _LAMBDA_TOL = 1e-12
 
@@ -101,20 +143,28 @@ class Bore:
     radius : float
         Bore radius (m) for a cylinder; the cross-section is ``S = pi radius^2``. Constant here (the
         cylinder case); a cone/flare is the same solver with a non-constant area profile.
-    boundary : {"closed", "open"} or (left, right) tuple
+    boundary : {"closed", "open", "radiating"} or (left, right) tuple
         Per-end termination. ``"closed"`` is a rigid wall (``U = 0``, a pressure antinode);
-        ``"open"`` is pressure-release (``p = 0``, a pressure node). Default ``("closed", "open")``
-        — the clarinet (odd-harmonic) configuration.
+        ``"open"`` is pressure-release (``p = 0``, a pressure node); ``"radiating"`` is a
+        passively-lossy bell (resistance ``R_bell``, sheds sound to the far field — batch 2), which
+        needs ``R_bell > 0``. Default ``("closed", "open")`` — the ideal (lossless) clarinet.
     sigma : float
         Viscous loss coefficient (>= 0) for the ``-2 sigma U`` drag on the air column. ``0`` ->
         lossless (energy conserved); ``> 0`` -> energy decreases monotonically (passivity).
+    R_bell : float
+        Radiation resistance ``R`` (acoustic, Pa·s/m³) of any ``"radiating"`` end — the rank-1
+        passive dashpot that lets sound leave. ``R -> infinity`` recovers a rigid wall, ``R -> 0`` a
+        pressure-release open end; a matched ``R = Z0 = rho0 c0 / S`` is anechoic. Must be ``> 0``
+        when an end radiates (``0`` when no end does). A representative value comes from
+        :func:`~physsynth.core.radiation.piston_radiation_resistance` at the fundamental.
     rho0, c0 : float
         Air density (kg/m^3) and sound speed (m/s). Default ambient air.
 
     Raises
     ------
     ValueError
-        Non-physical parameters, an unknown boundary token, or CFL ``lambda = c0 k / h > 1``.
+        Non-physical parameters, an unknown boundary token, a ``"radiating"`` end without
+        ``R_bell > 0``, or CFL ``lambda = c0 k / h > 1``.
     """
 
     def __init__(
@@ -126,6 +176,7 @@ class Bore:
         radius: float = 0.008,
         boundary: BoundarySpec = ("closed", "open"),
         sigma: float = 0.0,
+        R_bell: float = 0.0,
         rho0: float = RHO0_AIR,
         c0: float = C0_AIR,
     ) -> None:
@@ -135,10 +186,18 @@ class Bore:
             raise ValueError("N must be >= 2 (need at least one interior node).")
         if sigma < 0:
             raise ValueError("sigma (loss) must be >= 0.")
+        if R_bell < 0:
+            raise ValueError("R_bell (radiation resistance) must be >= 0.")
         bc_left, bc_right = (boundary, boundary) if isinstance(boundary, str) else boundary
-        if bc_left not in ("closed", "open") or bc_right not in ("closed", "open"):
+        if bc_left not in _ENDS or bc_right not in _ENDS:
             raise ValueError(
-                f"each boundary end must be 'closed' or 'open', got {boundary!r}."
+                f"each boundary end must be one of {_ENDS}, got {boundary!r}."
+            )
+        radiating = bc_left == "radiating" or bc_right == "radiating"
+        if radiating and R_bell <= 0.0:
+            raise ValueError(
+                "a 'radiating' end needs R_bell > 0 (the bell's radiation resistance). "
+                "Use 'open' for the ideal lossless pressure-release end (R -> 0)."
             )
 
         self.L = float(L)
@@ -149,6 +208,7 @@ class Bore:
         self._bc_left: End = bc_left
         self._bc_right: End = bc_right
         self.sigma = float(sigma)
+        self.R_bell = float(R_bell)
         self.rho0 = float(rho0)
         self.c0 = float(c0)
 
@@ -184,6 +244,22 @@ class Bore:
         self._open_left = self._bc_left == "open"
         self._open_right = self._bc_right == "open"
 
+        # Radiating ends: a live half-cell node drained by the resistor R_bell (batch 2). The node
+        # stays a free DOF (like a closed wall); the rank-1 solve uses a = C_end/k and b = 1/(2R).
+        self._rad_left = self._bc_left == "radiating"
+        self._rad_right = self._bc_right == "radiating"
+        self._a_left = self._C[0] / self.k    # node compliance rate C_end/k (= 1/p_pref), each end
+        self._a_right = self._C[-1] / self.k
+        # Characteristic acoustic impedance Z0 = rho0 c0 / S (constant cylinder); sets the
+        # reflection coefficient r = (R - Z0)/(R + Z0) and the matched (anechoic) load R = Z0.
+        self.Z0 = self.rho0 * self.c0 / area
+
+        # Energy shed to the far field through radiating ends: integral of P_rad = R U_out^2 dt.
+        # Makes E_bore + radiated_energy conserved (the passivity identity), mirroring RadiatedBody.
+        self.radiated_energy = 0.0
+        self._U_out = 0.0       # total outgoing volume velocity U_out^{n+1/2} (far-field readout)
+        self._U_out_prev = 0.0  # U_out^{n-1/2}, for the volume-acceleration read-out pressure()
+
         self.p: NDArray[np.float64] = np.zeros(self.N + 1)   # p^n
         self.U: NDArray[np.float64] = np.zeros(self.N)       # U^{n+1/2}
         self.U_prev: NDArray[np.float64] = np.zeros(self.N)  # U^{n-1/2}
@@ -217,6 +293,9 @@ class Bore:
         self.p = p0
         self.U_prev = u_prev
         self.U = self._momentum(p0, u_prev)  # U^{1/2} from U^{-1/2} and p^0
+        self.radiated_energy = 0.0           # reset the far-field energy channel for a fresh run
+        self._U_out = 0.0
+        self._U_out_prev = 0.0
         self.n = 0
 
     # -- time stepping ------------------------------------------------------------------
@@ -245,6 +324,9 @@ class Bore:
         # p^{n+1} = p^n - p_pref * div(U^{n+1/2})
         p_next = self.p - self._p_pref * self._divergence(self.U)
         self._apply_open_ends(p_next)
+        # Drain any radiating end (rank-1 scalar dashpot) *before* the momentum step, so that the
+        # velocity U^{n+3/2} sees the corrected end pressure — why this must live inside step().
+        self._apply_radiating_ends(p_next)
         # U^{n+3/2} from p^{n+1} and U^{n+1/2}
         u_next = self._momentum(p_next, self.U)
 
@@ -253,6 +335,39 @@ class Bore:
         self.p = p_next
         self.n += 1
 
+    def _apply_radiating_ends(self, p_next: NDArray[np.float64]) -> None:
+        """Correct the end node(s) for the passive radiation load and book the shed energy.
+
+        Each radiating node's un-pinned value in ``p_next`` is already the **rigid** (force-free)
+        half-cell step ``p_rigid`` (the ``_divergence`` closure). The centered resistor
+        ``U_out = (p^{n+1} + p^n) / (2R)`` turns that into the 1×1 solve
+        ``p^{n+1} = (a p_rigid - b p^n) / (a + b)`` (``a = C_end/k``, ``b = 1/2R``). One formula
+        serves either end — the outgoing direction differs but the dissipated ``k R U_out^2`` does
+        not — so a left-end sign error can only show up as energy drift (the both-ends test).
+        """
+        if self.R_bell <= 0.0:
+            return
+        b = 0.5 / self.R_bell
+        u_out_total = 0.0
+        if self._rad_left:
+            u_out_total += self._radiate_node(p_next, 0, self._a_left, b)
+        if self._rad_right:
+            u_out_total += self._radiate_node(p_next, -1, self._a_right, b)
+        self._U_out_prev = self._U_out
+        self._U_out = u_out_total
+
+    def _radiate_node(self, p_next: NDArray[np.float64], idx: int, a: float, b: float) -> float:
+        """Rank-1 dashpot at end node ``idx``: correct ``p_next[idx]`` in place, return ``U_out``.
+
+        See :meth:`_apply_radiating_ends` for the derivation of the 1×1 solve."""
+        p_old = float(self.p[idx])
+        p_rigid = float(p_next[idx])                 # force-free rigid half-cell step
+        p_new = (a * p_rigid - b * p_old) / (a + b)  # 1×1 implicit solve (a + b > 0 always)
+        p_next[idx] = p_new
+        u_out = b * (p_new + p_old)                  # = p_bar / R (Nyquist part cancels in the sum)
+        self.radiated_energy += self.k * self.R_bell * u_out * u_out  # P_rad dt = k R U_out^2 >= 0
+        return u_out
+
     # -- diagnostics --------------------------------------------------------------------
 
     @property
@@ -260,13 +375,25 @@ class Bore:
         """Current pressure field ``p^n`` (a copy, safe to store for plotting)."""
         return self.p.copy()
 
-    def energy(self) -> float:
-        """Discrete acoustic energy ``E^n`` (Joules): compliance ``p^2`` plus the **cross-time**
-        inductive ``U^{n+1/2} U^{n-1/2}`` term. Conserved to machine precision when ``sigma = 0``;
-        monotonically decreasing when ``sigma > 0`` (passivity)."""
+    def acoustic_energy(self) -> float:
+        """Energy **stored in the air column** (Joules): compliance ``p^2`` plus the **cross-time**
+        inductive ``U^{n+1/2} U^{n-1/2}`` term — the field energy alone, excluding what has already
+        radiated away. This is the quantity that *decreases* as a radiating bell sheds sound."""
         compliance = 0.5 * float(np.dot(self._C, self.p * self.p))
         inductive = 0.5 * float(np.dot(self._M, self.U * self.U_prev))
         return compliance + inductive
+
+    def energy(self) -> float:
+        """Total conserved energy ``E_bore + radiated_energy`` (Joules).
+
+        The air-column field energy (:meth:`acoustic_energy`) **plus** everything shed to the far
+        field through radiating ends (:attr:`radiated_energy`). Conserved to machine precision when
+        ``sigma = 0`` (any ``R_bell``) — the radiation channel exactly captures what the bell sheds,
+        just like :class:`~physsynth.core.radiation.RadiatedBody`; monotonically decreasing if the
+        air column is itself viscous (``sigma > 0``). Assert conservation on this total, not
+        :meth:`acoustic_energy` alone (which falls as the bell radiates). With no radiating end
+        ``radiated_energy`` stays ``0`` and this is bit-for-bit the field energy."""
+        return self.acoustic_energy() + self.radiated_energy
 
     def displacement_at(self, index: int) -> float:
         """Pressure at node ``index`` — a microphone pickup for spectral analysis."""
@@ -275,6 +402,17 @@ class Bore:
     def pressure_at(self, index: int) -> float:
         """Alias for :meth:`displacement_at` reading in the natural acoustic quantity (pressure)."""
         return float(self.p[index])
+
+    def pressure(self) -> float:
+        """Far-field monopole read-out: the bell's net volume **acceleration** ``dU_out/dt``
+        (m³/s²).
+
+        The batch-1 :class:`~physsynth.core.radiation.AirRadiation` reads exactly this — hand it the
+        bore (``AirRadiation.radiate(bore)``) to turn the radiating end into a listener's pressure.
+        Computed from the *outgoing* volume velocity ``U_out`` (whose Nyquist part has cancelled),
+        so it is clean even though the raw terminating node carries the cosmetic ripple. ``0`` when
+        no end radiates."""
+        return (self._U_out - self._U_out_prev) / self.k
 
     # -- internals ----------------------------------------------------------------------
 

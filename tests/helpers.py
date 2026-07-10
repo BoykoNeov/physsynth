@@ -600,6 +600,42 @@ def make_bore(
     )
 
 
+# Radiating bell (wind leg, batch 2): a closed-open clarinet whose open end is a passively-lossy
+# bell of acoustic resistance R (Pa·s/m^3). R_BELL_DEFAULT ~ the piston radiation resistance at the
+# fundamental (a realistic, lightly-radiating clarinet bell: R << Z0, high reflection, slow leak).
+# The characteristic impedance Z0 = rho0 c0 / S dwarfs it (~2e6 here), so the tube stays
+# odd-harmonic and only acquires finite-Q resonances. A specific reflection sweep passes R directly.
+R_BELL_DEFAULT = 650.0  # Pa·s/m^3
+
+
+def make_radiating_bore(
+    *,
+    N: int = 200,
+    lam: float = 1.0,
+    boundary=("closed", "radiating"),
+    R_bell: float = R_BELL_DEFAULT,
+    sigma: float = 0.0,
+    L: float = BORE_LENGTH_DEFAULT,
+    radius: float = BORE_RADIUS_DEFAULT,
+    rho0: float = RHO0_AIR,
+    c0: float = C0_AIR,
+) -> Bore:
+    """Build a clarinet with a **radiating** (passively-lossy) bell at Courant number ``lam``.
+
+    The batch-2 counterpart of :func:`make_bore`: identical geometry/rig (``fs = c0 / (lam h)``),
+    but the open end is replaced by a radiation resistance ``R_bell`` that sheds sound to the field.
+    Default ``R_bell`` is a realistic lightly-radiating bell (``R << Z0``); pass a larger ``R_bell``
+    (toward ``Z0``) for a heavily-absorbing / anechoic termination, or ``boundary`` to place the
+    radiating end differently. ``sigma > 0`` adds the interior viscous loss on top of the radiation.
+    """
+    h = L / N
+    fs = c0 / (lam * h)
+    return Bore(
+        L=L, fs=fs, N=N, radius=radius, boundary=boundary, R_bell=R_bell, sigma=sigma,
+        rho0=rho0, c0=c0,
+    )
+
+
 def bore_low_eigenfrequencies(bore: Bore, n_modes: int) -> np.ndarray:
     """The ``n_modes`` lowest discrete resonance frequencies (Hz) of ``bore`` (ascending).
 
