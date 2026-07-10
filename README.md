@@ -97,6 +97,16 @@ Complete and validated:
   leapfrog, so `E_string + E_body + E_conn` is conserved to machine precision (explicit, exact — no
   implicit solve); an exact coupled-eigenvalue guard bounds the spring stiffness. Radiated pressure
   is read out as `Σ aᵢ q̈ᵢ` (monopole ∝ volume acceleration).
+- **Acoustic bore** *(wind leg, batch 1 of 3)* — the first **acoustic** resonator (`core/bore.py`):
+  the 1D air column of a clarinet, a staggered pressure/volume-velocity leapfrog of Webster's horn
+  equation. Energy-first — the trapezoidal `h/2` half-cell closes a rigid wall (no ghost stencil,
+  the free-beam lesson) and the **cross-time** `Uⁿ⁺¹ᐟ² Uⁿ⁻¹ᐟ²` product conserves energy to machine
+  precision (drift ~1e-14). A **closed-open** cylinder rings the **odd** harmonics
+  `fₙ=(2n-1)c₀/4L` (the clarinet signature — even harmonics ~5·10⁵× down, confirmed both in the
+  measured spectrum *and* the operator's own eigenvalues); **open-open** gives the full series.
+  `S(x)` is carried from day one (cone/flare = a different area profile, not a rewrite). A
+  frequency-independent `-2σU` drag is the passivity placeholder (real viscothermal / bell losses
+  come with batch 2's radiating bell, then batch 3's dynamic mass-spring reed exciter).
 - **Web viewer** — interactive offline recompute for every model: the string family (Phase A), the
   membrane (Phase B), and both Kirchhoff plates (#5 supported, #5b free) and the von Kármán
   nonlinear plate (#6 supported gong + free cymbal) as 2D heatmap models. The nonlinear panel reads

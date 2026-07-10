@@ -12,6 +12,7 @@ from scipy.sparse.linalg import eigsh
 from physsynth.analysis import modal, spectrum
 from physsynth.core.beam import FreeBeam
 from physsynth.core.body import ModalBody
+from physsynth.core.bore import C0_AIR, RHO0_AIR, Bore
 from physsynth.core.bow import BowedString
 from physsynth.core.connection import StringBodyBridge, StringPlateBridge
 from physsynth.core.engine import simulate
@@ -565,6 +566,65 @@ def make_radiated_body(
         freqs=freqs, fs=fs, sigmas=sigmas, masses=masses, phi=phi, radiation=radiation
     )
     return RadiatedBody(body=body, R=R)
+
+
+# Acoustic bore (wind leg). A closed-open cylinder ~0.5 m long (clarinet-ish): the odd-harmonic
+# fundamental is f1 = c0/(4L) = 171.5 Hz on ambient air. radius small (8 mm) — it only scales the
+# absolute energy, not the resonances (which depend on L and c0 alone).
+BORE_LENGTH_DEFAULT = 0.5    # m
+BORE_RADIUS_DEFAULT = 0.008  # m
+
+
+def make_bore(
+    *,
+    N: int = 200,
+    lam: float = 1.0,
+    boundary=("closed", "open"),
+    sigma: float = 0.0,
+    L: float = BORE_LENGTH_DEFAULT,
+    radius: float = BORE_RADIUS_DEFAULT,
+    rho0: float = RHO0_AIR,
+    c0: float = C0_AIR,
+) -> Bore:
+    """Build an acoustic bore whose Courant number is exactly ``lam`` via ``fs = c0 / (lam h)``.
+
+    ``h = L/N`` is fixed by the geometry, so the sample rate is solved for to hit the target ``lam``
+    (the 1D-wave CFL ceiling is ``lam <= 1``; ``lam = 1`` is dispersionless). Default is the
+    clarinet (closed-open) cylinder. Pass ``boundary=("open", "open")`` for the full-harmonic pipe,
+    or ``sigma > 0`` for the passivity test.
+    """
+    h = L / N
+    fs = c0 / (lam * h)
+    return Bore(
+        L=L, fs=fs, N=N, radius=radius, boundary=boundary, sigma=sigma, rho0=rho0, c0=c0
+    )
+
+
+def bore_low_eigenfrequencies(bore: Bore, n_modes: int) -> np.ndarray:
+    """The ``n_modes`` lowest discrete resonance frequencies (Hz) of ``bore`` (ascending).
+
+    Solves the generalized eigenproblem ``L φ = ω² C φ`` on the **free** (non-open) pressure nodes —
+    ``L = Gᵀ M⁻¹ G`` (pressure stiffness) and ``C`` (compliance mass), both exposed by the bore,
+    for the smallest ``ω²``, then maps each through :func:`modal.discrete_bore_eigenfrequency` (the
+    leapfrog dispersion). A closed-open or open-open tube is positive-definite (an open end pins a
+    node), so plain shift-invert at ``σ = 0`` works; a fully closed tube has a constant-pressure
+    nullspace (``ω = 0``), handled with a small negative shift and dropping that mode.
+    """
+    dof = bore.dof
+    Lfree = bore.Lop[dof][:, dof]
+    Cfree = bore.Cmat[dof][:, dof]
+    n_open = int(bore._open_left) + int(bore._open_right)
+    if n_open == 0:
+        w1_scale = (np.pi * bore.c0 / bore.L) ** 2  # ~ first resonance ω² -> a safe negative shift
+        shift = -1e-3 * w1_scale
+        w2 = eigsh(
+            Lfree, k=n_modes + 1, M=Cfree, sigma=shift, which="LM", return_eigenvectors=False
+        )
+        w2 = np.sort(w2)[1 : n_modes + 1]  # drop the ω≈0 constant-pressure mode
+    else:
+        w2 = eigsh(Lfree, k=n_modes, M=Cfree, sigma=0.0, which="LM", return_eigenvectors=False)
+        w2 = np.sort(w2)
+    return np.asarray(modal.discrete_bore_eigenfrequency(w2, bore.k))
 
 
 def discrete_sho_frequency(f: float, k: float) -> float:

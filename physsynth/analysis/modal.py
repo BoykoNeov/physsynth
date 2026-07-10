@@ -41,6 +41,9 @@ __all__ = [
     # 2D free-edge (FFFF) plate (model #5b)
     "free_plate_ffff_square_lambdas",
     "free_plate_freq_from_lambda",
+    # 1D acoustic bore (wind leg)
+    "bore_resonance_frequencies",
+    "discrete_bore_eigenfrequency",
 ]
 
 
@@ -342,6 +345,58 @@ def free_plate_freq_from_lambda(
     """
     lam = np.asarray(lam, dtype=float)
     return lam * kappa / (2.0 * np.pi * a * a)
+
+
+# -- 1D acoustic bore (wind leg): the air column of a clarinet / flute ------------------------
+
+
+def bore_resonance_frequencies(
+    c0: float, L: float, n_partials: int, boundary: str = "closed-open"
+) -> NDArray[np.float64]:
+    """Continuum acoustic-tube resonances (HANDOFF §12.A, the clarinet oracle).
+
+    A tube of length ``L`` in air of sound speed ``c0`` resonates at
+
+    - ``"closed-open"`` -> ``f_n = (2n - 1) c0 / (4 L)``  — the **odd** harmonics only (a quarter-
+      wave resonator: pressure antinode at the rigid wall, node at the open end). This is the
+      clarinet signature and the model-specific correctness test for the bore.
+    - ``"open-open"`` or ``"closed-closed"`` -> ``f_n = n c0 / (2 L)`` — the **full** harmonic
+      series (half-wave resonator; symmetric ends, matching boundary condition at both).
+
+    Returns the lowest ``n_partials`` resonances (Hz), ascending. The exact air constant ``c0`` is
+    the analogue of the string's wave speed here; unlike string tension it is a property of the
+    medium, not tunable.
+    """
+    n = np.arange(1, n_partials + 1)
+    if boundary == "closed-open":
+        return (2 * n - 1) * c0 / (4.0 * L)
+    if boundary in ("open-open", "closed-closed"):
+        return n * c0 / (2.0 * L)
+    raise ValueError(
+        f"boundary must be 'closed-open', 'open-open', or 'closed-closed', got {boundary!r}."
+    )
+
+
+def discrete_bore_eigenfrequency(
+    omega2: float | NDArray[np.float64], k: float
+) -> NDArray[np.float64]:
+    """Discrete temporal frequency (Hz) of a bore eigenmode from its angular-frequency-squared.
+
+    The staggered p/U leapfrog eliminates the velocity to ``C δ_tt p = -k² L p`` (``L = Gᵀ M⁻¹ G``,
+    ``C`` the compliance mass), so an eigenmode ``L φ = ω² C φ`` obeys the same simple-harmonic
+    leapfrog as every other second-order scheme here:
+
+        sin(Ω k / 2) = (k/2) ω = (k/2) sqrt(omega2),    f = arcsin((k/2) sqrt(omega2)) / (π k).
+
+    ``omega2`` is the **generalized eigenvalue** of ``(L, C)`` restricted to the free (non-open)
+    pressure nodes — already ``ω²`` (no extra wave-speed factor: ``c0`` is baked into ``L`` and
+    ``C``). As ``k → 0`` this tends to the continuum ``f = sqrt(omega2)/(2π)``, whose values are the
+    resonances of :func:`bore_resonance_frequencies`. Stable for all valid ``λ`` (the argument stays
+    ``<= 1`` when ``λ <= 1``).
+    """
+    omega2 = np.asarray(omega2, dtype=float)
+    arg = 0.5 * k * np.sqrt(np.clip(omega2, 0.0, None))
+    return np.arcsin(np.clip(arg, -1.0, 1.0)) / (np.pi * k)
 
 
 def discrete_beam_eigenfrequency(
