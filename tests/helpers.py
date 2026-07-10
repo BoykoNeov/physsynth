@@ -16,6 +16,7 @@ from physsynth.core.bore import C0_AIR, RHO0_AIR, Bore
 from physsynth.core.bow import BowedString
 from physsynth.core.connection import StringBodyBridge, StringPlateBridge
 from physsynth.core.engine import simulate
+from physsynth.core.mallet import MalletMembrane, MalletWall
 from physsynth.core.membrane import Domain, Membrane
 from physsynth.core.plate import Plate
 from physsynth.core.radiation import AirRadiation, RadiatedBody
@@ -673,6 +674,68 @@ def make_reed_bore(
         L=L, fs=fs, N=N, radius=radius, boundary=boundary, R_bell=R_bell, sigma=sigma
     )
     return ReedBore(bore=bore, p_mouth=p_mouth, f_reed=f_reed, q_reed=q_reed)
+
+
+# Mallet-membrane collision (model #7, first contact model). A soft mallet strikes a square
+# drumhead at the centre. The defaults keep the felt half-period well-resolved (~32 steps at K=5e4,
+# M=0.02) and hand the head ~two thirds of the strike energy at peak, so the conservation money test
+# genuinely exercises the nonlinear coupling (a bracket bug can't hide behind a linear scheme).
+MALLET_MASS_DEFAULT = 0.02      # kg
+MALLET_K_DEFAULT = 5.0e4        # N/m^alpha  (felt stiffness)
+MALLET_ALPHA_DEFAULT = 2.3      # felt exponent (piano-ish)
+MALLET_VELOCITY_DEFAULT = 3.0   # m/s impact speed toward the head
+
+
+def make_mallet(
+    *,
+    N: int = 40,
+    lam: float = 0.5,
+    K: float = MALLET_K_DEFAULT,
+    mass: float = MALLET_MASS_DEFAULT,
+    alpha: float = MALLET_ALPHA_DEFAULT,
+    hysteresis: float = 0.0,
+    strike_x: float = 0.5,
+    strike_y: float = 0.5,
+    strike_velocity: float = MALLET_VELOCITY_DEFAULT,
+    gap: float = 0.0,
+    sigma: float = 0.0,
+    domain: Domain = "rectangle",
+    Lx: float = 1.0,
+    Ly: float = 1.0,
+    radius: float = RADIUS_DEFAULT,
+    T: float = T_DEFAULT,
+    rho: float = RHO_AREAL_DEFAULT,
+) -> MalletMembrane:
+    """Build a mallet striking a membrane (model #7). ``lam < 1/sqrt(2)`` (default 0.5) oversamples
+    the stiff contact; ``sigma = 0`` and ``hysteresis = 0`` give the lossless conservation money
+    test, ``sigma > 0`` or ``hysteresis > 0`` the passivity test. ``K = 0`` is not allowed (a
+    massless felt) — pass ``strike_velocity = 0`` or a large ``gap`` to keep the mallet clear."""
+    membrane = make_membrane(
+        domain=domain, N=N, lam=lam, sigma=sigma, T=T, rho=rho, Lx=Lx, Ly=Ly, radius=radius
+    )
+    return MalletMembrane(
+        membrane=membrane, mass=mass, stiffness=K, alpha=alpha, hysteresis=hysteresis,
+        strike_x=strike_x, strike_y=strike_y, strike_velocity=strike_velocity, gap=gap,
+    )
+
+
+def make_mallet_wall(
+    *,
+    K: float = MALLET_K_DEFAULT,
+    mass: float = MALLET_MASS_DEFAULT,
+    alpha: float = 1.0,
+    hysteresis: float = 0.0,
+    fs: float = 96000.0,
+    strike_velocity: float = 2.0,
+    gap: float = 0.0,
+) -> MalletWall:
+    """Build the standalone mass-vs-fixed-wall rig (model #7 closed-form oracle). ``alpha = 1``,
+    ``hysteresis = 0`` gives the analytic half-period ``pi*sqrt(M/K)`` and exact velocity reversal;
+    ``hysteresis > 0`` makes the felt lossy (restitution < 1)."""
+    return MalletWall(
+        mass=mass, stiffness=K, fs=fs, alpha=alpha, hysteresis=hysteresis,
+        strike_velocity=strike_velocity, gap=gap,
+    )
 
 
 def bore_low_eigenfrequencies(bore: Bore, n_modes: int) -> np.ndarray:

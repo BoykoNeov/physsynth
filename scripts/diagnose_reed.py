@@ -176,7 +176,7 @@ def main() -> None:
     print(f"  c0 = {C0_AIR:.1f} m/s,  L = {L} m,  f1(closed-open) = {F1:.2f} Hz")
     print(f"  p_closing = {p_closing:.0f} Pa   (gamma = p_mouth / p_closing)")
     print(f"  [1] lossless energy balance residual   = {bal:.3e}   (tol 1e-11)")
-    print(f"      breath = {mouth[-1]:.3e} J,  jet = {jet[-1]:.3e} J,  reed-damp = {damp[-1]:.3e} J")
+    print(f"      breath={mouth[-1]:.3e} J, jet={jet[-1]:.3e} J, reed-damp={damp[-1]:.3e} J")
     print(f"  [2] mouthpiece pressure amplitude       = {np.max(np.abs(mp)):.0f} Pa (beats shut)")
     print(f"  [4] speak-onset near gamma              = {onset:.2f}  (small-osc. rule ~ 1/3)")
     print(f"  figure: {path}")
