@@ -57,10 +57,21 @@ from __future__ import annotations
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.optimize import brentq
 
+from .collision import (
+    contact_force_dg,
+    contact_force_elastic,
+    contact_force_total,
+    contact_potential,
+    contact_stiffness,
+    solve_contact,
+)
 from .membrane import Membrane
 
+# The contact primitives now live in ``core.collision`` (promoted when the distributed-barrier
+# model — the second consumer — landed; see ``docs/dev/collision-barrier-plan.md``). They are
+# re-exported here so existing importers of ``mallet.contact_*`` / ``mallet.solve_contact`` still
+# resolve unchanged.
 __all__ = [
     "MalletMembrane",
     "MalletWall",
@@ -71,163 +82,6 @@ __all__ = [
     "contact_force_total",
     "solve_contact",
 ]
-
-
-# -- contact-force primitives (vector-ready: scalars are the size-1 case) ------------------------
-
-def contact_potential(eta, K: float, alpha: float):
-    """One-sided felt potential ``φ(η) = K/(α+1) · [η]₊^(α+1)`` (Joules). Zero for ``η ≤ 0``."""
-    ep = np.maximum(eta, 0.0)
-    return K / (alpha + 1.0) * ep ** (alpha + 1.0)
-
-
-def contact_force_elastic(eta, K: float, alpha: float):
-    """Elastic contact force ``φ'(η) = K [η]₊^α`` (Newtons, ``≥ 0``). Zero for ``η ≤ 0``."""
-    ep = np.maximum(eta, 0.0)
-    return K * ep ** alpha
-
-
-def contact_stiffness(eta, K: float, alpha: float):
-    """Contact stiffness ``φ''(η) = K α [η]₊^(α-1)`` (N/m). Zero for ``η ≤ 0``.
-
-    ``np.where`` guards the ``α = 1`` edge case, where ``[η]₊^0`` would otherwise be ``1`` (even at
-    ``η = 0``) and leak a nonzero stiffness into the no-contact region.
-    """
-    ep = np.maximum(eta, 0.0)
-    return np.where(ep > 0.0, K * alpha * ep ** (alpha - 1.0), 0.0)
-
-
-def contact_force_dg(eta_next: float, eta_prev: float, K: float, alpha: float, tol: float) -> float:
-    """Energy-conserving **discrete-gradient** contact force ``[DG]`` (Newtons).
-
-    ``(φ(η⁺) − φ(η⁻)) / (η⁺ − η⁻)`` with the removable ``0/0`` handled by the midpoint-derivative
-    Taylor branch ``φ'(½(η⁺+η⁻))`` when the denominator is below ``tol`` (stick / grazing).
-    """
-    da = eta_next - eta_prev
-    if abs(da) < tol:
-        return float(contact_force_elastic(0.5 * (eta_next + eta_prev), K, alpha))
-    return float(
-        (contact_potential(eta_next, K, alpha) - contact_potential(eta_prev, K, alpha)) / da
-    )
-
-
-def _contact_force_dg_deriv(
-    eta_next: float, eta_prev: float, K: float, alpha: float, tol: float
-) -> float:
-    """``∂/∂η⁺`` of :func:`contact_force_dg` (N/m) — for the Newton iteration."""
-    da = eta_next - eta_prev
-    if abs(da) < tol:
-        return float(0.5 * contact_stiffness(0.5 * (eta_next + eta_prev), K, alpha))
-    fe = float(contact_force_elastic(eta_next, K, alpha))  # φ'(η⁺)
-    phi_next = float(contact_potential(eta_next, K, alpha))
-    phi_prev = float(contact_potential(eta_prev, K, alpha))
-    return float((fe * da - (phi_next - phi_prev)) / (da * da))
-
-
-def _contact_force_hyst(
-    eta_next: float, eta_prev: float, alpha: float, lam_h: float, k: float
-) -> float:
-    """Hunt–Crossley/Stulov hysteretic force ``λ_h ⟦η⟧₊^α · δ_t·η`` (Newtons); 0 if ``λ_h = 0``."""
-    if lam_h == 0.0:
-        return 0.0
-    mid = max(0.5 * (eta_next + eta_prev), 0.0)
-    w = mid ** alpha if mid > 0.0 else 0.0
-    return float(lam_h * w * (eta_next - eta_prev) / (2.0 * k))
-
-
-def _contact_force_hyst_deriv(
-    eta_next: float, eta_prev: float, alpha: float, lam_h: float, k: float
-) -> float:
-    """``∂/∂η⁺`` of :func:`_contact_force_hyst` (N/m)."""
-    if lam_h == 0.0:
-        return 0.0
-    mid = max(0.5 * (eta_next + eta_prev), 0.0)
-    if mid <= 0.0:
-        return 0.0
-    w = mid ** alpha
-    wp = 0.5 * alpha * mid ** (alpha - 1.0)  # ∂w/∂η⁺
-    return float(lam_h / (2.0 * k) * (wp * (eta_next - eta_prev) + w))
-
-
-def contact_force_total(
-    eta_next: float, eta_prev: float, K: float, alpha: float, lam_h: float, k: float, tol: float
-) -> float:
-    """Total felt force = elastic discrete gradient + hysteretic damping (Newtons)."""
-    return (
-        contact_force_dg(eta_next, eta_prev, K, alpha, tol)
-        + _contact_force_hyst(eta_next, eta_prev, alpha, lam_h, k)
-    )
-
-
-def _contact_force_total_deriv(
-    eta_next: float, eta_prev: float, K: float, alpha: float, lam_h: float, k: float, tol: float
-) -> float:
-    return (
-        _contact_force_dg_deriv(eta_next, eta_prev, K, alpha, tol)
-        + _contact_force_hyst_deriv(eta_next, eta_prev, alpha, lam_h, k)
-    )
-
-
-def solve_contact(
-    eta_free: float,
-    eta_prev: float,
-    g: float,
-    K: float,
-    alpha: float,
-    lam_h: float,
-    k: float,
-    *,
-    tol: float,
-    seed: float,
-    newton_tol: float = 1e-14,
-    maxiter: int = 60,
-) -> tuple[float, float, bool]:
-    """Solve the scalar contact equation ``η = η_free − g · f(η)`` for the penetration ``η^{n+1}``.
-
-    ``f`` is the total felt force (:func:`contact_force_total`). The residual is monotone increasing
-    in ``η`` (convex potential + non-negative hysteresis weight), so a safeguarded Newton from
-    the previous step's penetration (*continuation*) converges fast; a guaranteed bracketed
-    fallback (scan + ``brentq``, root nearest the seed) covers any stall. Returns ``(η, f,
-    used_fallback)`` with ``f`` the applied force, so the caller injects it exactly.
-    """
-    def resid(eta: float) -> tuple[float, float]:
-        f = contact_force_total(eta, eta_prev, K, alpha, lam_h, k, tol)
-        return eta - eta_free + g * f, f
-
-    eta = seed
-    r, f = resid(eta)
-    for _ in range(maxiter):
-        if abs(r) <= newton_tol:
-            return eta, f, False
-        rp = 1.0 + g * _contact_force_total_deriv(eta, eta_prev, K, alpha, lam_h, k, tol)
-        if abs(rp) < 1e-30:
-            break
-        eta_new = eta - r / rp
-        r_new, f_new = resid(eta_new)
-        if not (abs(r_new) < abs(r)):
-            break  # no progress -> hand off to the robust bracket
-        eta, r, f = eta_new, r_new, f_new
-    if abs(r) <= newton_tol:
-        return eta, f, False
-
-    # Bracketed fallback: scan a band around eta_free for a sign change, brentq, pick nearest seed.
-    f_free = contact_force_total(eta_free, eta_prev, K, alpha, lam_h, k, tol)
-    span = abs(g * f_free) + abs(eta_free - eta_prev) + 1e-12
-    for _ in range(6):
-        vs = np.linspace(eta_free - span, eta_free + span, 1025)
-        rs = np.array([resid(v)[0] for v in vs])
-        idx = np.where(rs[:-1] * rs[1:] < 0.0)[0]
-        if len(idx):
-            roots = [brentq(lambda e: resid(e)[0], vs[j], vs[j + 1], xtol=1e-15, rtol=8.9e-16)
-                     for j in idx]
-            roots_arr = np.asarray(roots)
-            eta_b = float(roots_arr[int(np.argmin(np.abs(roots_arr - seed)))])
-            return eta_b, resid(eta_b)[1], True
-        span *= 10.0
-    raise RuntimeError(
-        "contact residual has no root in the bracket (should be impossible for the monotone "
-        "convex-potential force)."
-    )
 
 
 class MalletMembrane:

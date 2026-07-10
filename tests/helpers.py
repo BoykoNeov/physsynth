@@ -14,6 +14,7 @@ from physsynth.core.beam import FreeBeam
 from physsynth.core.body import ModalBody
 from physsynth.core.bore import C0_AIR, RHO0_AIR, Bore
 from physsynth.core.bow import BowedString
+from physsynth.core.collision import BarrierString
 from physsynth.core.connection import StringBodyBridge, StringPlateBridge
 from physsynth.core.engine import simulate
 from physsynth.core.mallet import MalletMembrane, MalletWall
@@ -735,6 +736,51 @@ def make_mallet_wall(
     return MalletWall(
         mass=mass, stiffness=K, fs=fs, alpha=alpha, hysteresis=hysteresis,
         strike_velocity=strike_velocity, gap=gap,
+    )
+
+
+# Barrier-string collision (model #8, first *distributed* contact model). A stiff/flexible string
+# vibrating against a one-sided nonlinear barrier below it (fret buzz / tanpura jawari). The default
+# is a flexible fixed-end string and a flat rail 2 mm below rest; K is a stiff felt/wood contact.
+# lam < 1 keeps the coupled solve clear of the string's Nyquist mode. A big-negative barrier (out of
+# reach) is the K=0 analog (bit-identical to the bare string).
+BARRIER_K_DEFAULT = 1.0e6      # N/m^alpha  (contact stiffness density)
+BARRIER_ALPHA_DEFAULT = 1.5    # contact exponent (Hertzian-ish)
+BARRIER_HEIGHT_DEFAULT = -2.0e-3  # m  (flat rail below the string's rest line)
+
+
+def make_barrier_string(
+    *,
+    N: int = 80,
+    lam: float = 0.9,
+    K: float = BARRIER_K_DEFAULT,
+    alpha: float = BARRIER_ALPHA_DEFAULT,
+    barrier=BARRIER_HEIGHT_DEFAULT,
+    hysteresis: float = 0.0,
+    kappa: float = 0.0,
+    sigma0: float = 0.0,
+    sigma1: float = 0.0,
+    theta: float = THETA_DEFAULT,
+    newton_tol: float = 1e-13,
+    L: float = L_DEFAULT,
+    T: float = T_DEFAULT,
+    rho: float = RHO_DEFAULT,
+) -> BarrierString:
+    """Build a string against a one-sided distributed barrier (model #8) at Courant number ``lam``.
+
+    ``fs = c N / (L lam)``; ``lam < 1`` gives the coupled contact solve headroom below the string's
+    Nyquist mode. ``sigma0 = sigma1 = 0`` and ``hysteresis = 0`` give the lossless conservation
+    money test; ``sigma > 0`` or ``hysteresis > 0`` the passivity test. ``barrier`` is a scalar flat
+    rail or an ``(N+1,)`` profile (use ``-inf`` off-support for a point fret). A big-negative
+    ``barrier`` keeps the string clear (the ``K = 0`` analog)."""
+    c = wave_speed(T, rho)
+    fs = c * N / (L * lam)
+    string = DampedStiffString(
+        L=L, T=T, rho=rho, fs=fs, N=N, kappa=kappa, sigma0=sigma0, sigma1=sigma1, theta=theta
+    )
+    return BarrierString(
+        string=string, barrier=barrier, stiffness=K, alpha=alpha, hysteresis=hysteresis,
+        newton_tol=newton_tol,
     )
 
 
