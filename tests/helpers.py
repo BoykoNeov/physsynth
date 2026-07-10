@@ -834,6 +834,74 @@ def make_barrier_string(
     )
 
 
+# Jawari / buzzing bridge (composes model #8, no new core physics): a *curved* barrier at the string
+# termination. The bridge is a downward-opening parabola tangent to the rest line at the fixed end;
+# the string wraps onto it on the downswing, its departure point travelling along the curve — the
+# "life"/shimmer of the sitar & tanpura. `clearance` is the crest's drop below rest: >0 grazes,
+# <0 preloads (the whole span contacts at rest — the static-equilibrium-oracle case). `depth` is the
+# curve's total drop over the bridge span; keep it comparable to the near-termination downswing so
+# the string wraps a wide span (too deep -> it only grazes the crest, acting like a point contact).
+JAWARI_WIDTH_FRAC_DEFAULT = 0.15   # bridge span as a fraction of L (near the termination)
+JAWARI_DEPTH_DEFAULT = 1.0e-3      # m   (crest-to-far-edge drop of the parabola)
+JAWARI_K_DEFAULT = 2.0e6           # N/m^alpha  (stiff wood/bone bridge)
+
+
+def jawari_barrier(
+    x: np.ndarray,
+    L: float,
+    *,
+    width_frac: float = JAWARI_WIDTH_FRAC_DEFAULT,
+    depth: float = JAWARI_DEPTH_DEFAULT,
+    clearance: float = 0.0,
+) -> np.ndarray:
+    """Parabolic jawari-bridge profile on the grid ``x`` (length ``N+1``): a curved barrier hugging
+    the ``x = 0`` termination, ``-inf`` (out of support) beyond the bridge span.
+
+    ``b(x) = -clearance - depth·(x/d)²`` for ``0 < x ≤ d = width_frac·L``. The crest (nearest the
+    string) is at the termination side and the surface curves away by ``depth`` at the far edge.
+    """
+    d = width_frac * L
+    b = np.full_like(np.asarray(x, dtype=float), -np.inf)
+    on = (x > 0.0) & (x <= d)
+    b[on] = -clearance - depth * (x[on] / d) ** 2
+    return b
+
+
+def make_jawari_string(
+    *,
+    N: int = 100,
+    lam: float = 0.4,
+    K: float = JAWARI_K_DEFAULT,
+    alpha: float = BARRIER_ALPHA_DEFAULT,
+    width_frac: float = JAWARI_WIDTH_FRAC_DEFAULT,
+    depth: float = JAWARI_DEPTH_DEFAULT,
+    clearance: float = 0.0,
+    hysteresis: float = 0.0,
+    kappa: float = 0.0,
+    sigma0: float = 0.0,
+    sigma1: float = 0.0,
+    theta: float = THETA_DEFAULT,
+    newton_tol: float = 1e-13,
+    L: float = L_DEFAULT,
+    T: float = T_DEFAULT,
+    rho: float = RHO_DEFAULT,
+) -> BarrierString:
+    """Build a sitar/tanpura *jawari* string: a :class:`BarrierString` (model #8) whose barrier is
+    the curved bridge of :func:`jawari_barrier`. ``N = 100`` resolves the wrap (support ~15 nodes,
+    well under the dense-solve cliff). ``sigma0 = sigma1 = hysteresis = 0`` gives the lossless
+    conservation gate; ``clearance < 0`` seats the whole bridge in contact for the static oracle."""
+    c = wave_speed(T, rho)
+    fs = c * N / (L * lam)
+    string = DampedStiffString(
+        L=L, T=T, rho=rho, fs=fs, N=N, kappa=kappa, sigma0=sigma0, sigma1=sigma1, theta=theta
+    )
+    barrier = jawari_barrier(string.x, L, width_frac=width_frac, depth=depth, clearance=clearance)
+    return BarrierString(
+        string=string, barrier=barrier, stiffness=K, alpha=alpha, hysteresis=hysteresis,
+        newton_tol=newton_tol,
+    )
+
+
 def bore_low_eigenfrequencies(bore: Bore, n_modes: int) -> np.ndarray:
     """The ``n_modes`` lowest discrete resonance frequencies (Hz) of ``bore`` (ascending).
 
