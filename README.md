@@ -75,13 +75,29 @@ The physics lives entirely in `physsynth/core`; `web/` is a wrapper (`serialize.
 
 Complete and validated:
 
-- **String family** — #1 ideal, #2 stiff, #3 frequency-dependent damped.
+- **String family** — #1 ideal, #2 stiff, #3 frequency-dependent damped, **#9 tension-modulated**
+  (nonlinear; below).
 - **2D** — #4 circular membrane, #5 simply-supported Kirchhoff plate, #5b free-edge (FFFF) plate with
   Chladni patterns; plus the #5b-pre free–free Euler–Bernoulli beam (free-boundary de-risk).
 - **Nonlinear** — #6 von Kármán coupled plate, **all 6 Parts** (bracket, Airy stress solve,
   conservative Picard resonator, validation, pitch-glide/energy-exchange diagnostics, and Part 6 the
   **free-edge cymbal/gong** — energy-conserving nonlinear coupling on a free rectangle, with the
   crash cascade and curved-Chladni modes).
+- **Tension-modulated string** — #9, the **string family's nonlinearity** (`core/string_nonlinear.py`):
+  displacing a string *stretches* it, raising tension, raising pitch — hit it hard and the note starts
+  sharp and glides down (+80 % measured). Kirchhoff–Carrier: the tension `T₀+(EA/2L)∫u_x²` is a scalar
+  functional of the whole state, so the quartic potential needs a conservative *implicit* scheme (model
+  #6's lesson) — but because it is **quadratic in the stretch**, the energy-conserving tension is just
+  the plain midpoint `T₀+(EA/2L)·Ī`, and the step reduces to a **scalar** root-find. Only the
+  *nonlinear excess* is averaged at θ=½, so `EA=0` is model #3 **bit-for-bit**. Lossless drift 3.5e-13
+  at 82 % nonlinear energy and 10× tension, and 1.4e-13 from a broadband pluck.
+  Unlike model #6 it keeps a **closed-form nonlinear oracle**: a single mode reduces *exactly* to a
+  Duffing oscillator, so hardening has an elliptic-integral frequency and a `cn` waveform the FDTD
+  lands on (1.3e-3 / 3.7e-4). It also reproduces the **parametric instability of single-mode motion** —
+  above `ΔT/T₀≈3` the tension, pumping at `2ω_m`, drives the neighbouring modes through Mathieu
+  resonance and the mode disintegrates *while energy is conserved to 1e-13* (physics, not a blow-up:
+  refinement-invariant onset and unstable modes). Planar modal exchange only — out-of-plane whirling
+  and true phantom partials need a geometrically-exact (two-polarization / longitudinal) string.
 - **Bowed string** — the first continuous **nonlinear exciter** (`core/bow.py`): a friction bow on
   a damped string, closing the `exciter →` leg of the abstraction. Stick-slip via the smooth
   friction curve `Φ(v)=F·√(2a)·v·e^{-av²+½}`, evaluated at the *centered* relative velocity — so the

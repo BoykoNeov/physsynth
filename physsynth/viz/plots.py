@@ -32,6 +32,8 @@ __all__ = [
     "plot_pitch_glide",
     "plot_spectrogram",
     "save_membrane_animation",
+    "plot_duffing_frequency_curve",
+    "plot_mode_purity",
 ]
 
 
@@ -277,23 +279,29 @@ def plot_energy_breakdown(
     linear: NDArray,
     membrane: NDArray,
     drift: float | None = None,
+    *,
+    linear_label: str = "linear (kinetic + bending)",
+    nonlinear_label: str = "membrane (Airy $F$)",
+    title: str = "VK energy: flat total over anti-correlated linear/membrane exchange",
 ) -> None:
-    """Von Kármán energy conservation *with exchange* — total, linear (kinetic+bending), membrane.
+    """Nonlinear energy conservation *with exchange* — total, linear store, nonlinear store.
 
-    The nonlinear-plate signature (model #6): unlike a linear resonator, energy sloshes between the
-    bending/kinetic store and the **membrane** store (the stretched Airy field ``F``) — they
-    anti-correlate — while the **total** stays flat to machine precision. That flat total riding
-    over two oscillating, out-of-phase components is the visual proof of conservation-with-coupling
-    (there is no analytic modal oracle to check against; energy *is* the correctness test). All
-    three are normalised to ``E^0`` so the total sits at 1.
+    The nonlinear-resonator signature: unlike a linear model, energy sloshes between the linear
+    store and the **nonlinear** store — they anti-correlate — while the **total** stays flat to
+    machine precision. That flat total riding over two oscillating, out-of-phase components is the
+    visual proof of conservation-with-coupling. All three are normalised to ``E^0``.
+
+    Defaults are model #6's (von Kármán plate: bending/kinetic ↔ the stretched Airy field ``F``);
+    the labels are overridable for model #9 (the tension-modulated string: kinetic/strain/bending ↔
+    the stretch store ``(EA/8L) I²``), whose exchange is the same shape from the same quartic
+    potential.
     """
     e0 = total[0]
     ax.plot(time, total / e0, color="k", lw=1.4, label="total")
-    ax.plot(time, linear / e0, color="C0", lw=1.0, label="linear (kinetic + bending)")
-    ax.plot(time, membrane / e0, color="C3", lw=1.0, label="membrane (Airy $F$)")
+    ax.plot(time, linear / e0, color="C0", lw=1.0, label=linear_label)
+    ax.plot(time, membrane / e0, color="C3", lw=1.0, label=nonlinear_label)
     ax.set_xlabel("time (s)")
     ax.set_ylabel(r"$E / E^0$")
-    title = "VK energy: flat total over anti-correlated linear/membrane exchange"
     if drift is not None:
         title += f"  —  drift = {drift:.2e}"
     ax.set_title(title, fontsize=9)
@@ -323,6 +331,71 @@ def plot_pitch_glide(ax, amp_over_e: NDArray, f0: NDArray, f_linear: float) -> N
     )
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=8, loc="upper left")
+
+
+def plot_duffing_frequency_curve(
+    ax,
+    amplitudes: NDArray,
+    f_measured: NDArray,
+    f_oracle: NDArray,
+    f_linear: float,
+) -> None:
+    """Measured ω(A) against the **exact** Duffing elliptic oracle — model #9's money shot.
+
+    What model #6 could never draw. The von Kármán plate had no analytic modal oracle, so its
+    pitch-glide plot could only assert *sign and monotonicity*. The Kirchhoff–Carrier string's
+    single-mode reduction is an exact Duffing oscillator, so the hardening curve has a **closed
+    form** (complete elliptic integrals) — the measured points must land *on the line*, not merely
+    rise. The dashed line is the ``A → 0`` linear limit (model #3), which both must approach.
+    """
+    amplitudes = np.asarray(amplitudes, dtype=float)
+    ax.axhline(f_linear, color="0.5", ls="--", lw=1.1, label=r"linear limit ($A\to0$, model #3)")
+    ax.plot(amplitudes, f_oracle, "-", color="C3", lw=1.6, label="exact Duffing (elliptic)")
+    ax.plot(amplitudes, f_measured, "o", color="C0", ms=5, label="measured (FDTD)")
+    ax.set_xlabel("mode amplitude $A$ (m)")
+    ax.set_ylabel("frequency (Hz)")
+    rise = 100.0 * (f_measured[-1] / f_linear - 1.0)
+    ax.set_title(
+        f"Hardening on a closed form — measured lands on the exact curve ({rise:+.0f}% by "
+        f"$A={amplitudes[-1]:g}$ m)",
+        fontsize=9,
+    )
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8, loc="upper left")
+
+
+def plot_mode_purity(
+    ax,
+    time: NDArray,
+    off_below: NDArray,
+    off_above: NDArray,
+    drift_above: NDArray,
+) -> None:
+    """The parametric instability of single-mode motion (model #9) — physics, not a blow-up.
+
+    Off-mode content vs time for a single-mode start, below and above the pump threshold
+    (``ΔT/T₀ ≈ 3``), on a log axis. Below: flat at roundoff — the Duffing reduction is dynamically
+    stable. Above: **exponential growth** (a straight line on this axis) as the tension, pumping at
+    ``2ω_m``, drives the neighbouring modes through Mathieu resonance until the mode disintegrates.
+
+    The **energy drift of the unstable run is drawn on the same axes** — and stays at ~1e-13. That
+    contrast is the whole argument: a numerical instability would grow the energy, whereas a
+    parametric one only *redistributes* it. Straight line up, flat line at machine precision.
+    """
+    ax.semilogy(time, np.maximum(off_below, 1e-18), color="C0", lw=1.2,
+                label=r"off-mode, below threshold ($\Delta T/T_0\approx2$)")
+    ax.semilogy(time, np.maximum(off_above, 1e-18), color="C3", lw=1.2,
+                label=r"off-mode, above threshold ($\Delta T/T_0\approx11$)")
+    ax.semilogy(time, np.maximum(drift_above, 1e-18), color="k", lw=1.4, ls=":",
+                label="energy drift of the UNSTABLE run")
+    ax.set_xlabel("time (s)")
+    ax.set_ylabel(r"fraction of $\|u_0\|$")
+    ax.set_title(
+        "Single-mode motion is parametrically unstable — and energy is conserved anyway",
+        fontsize=9,
+    )
+    ax.grid(True, alpha=0.3, which="both")
+    ax.legend(fontsize=8, loc="center right")
 
 
 def plot_spectrogram(

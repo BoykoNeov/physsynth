@@ -28,6 +28,7 @@ from physsynth.core.radiation import AirRadiation, RadiatedBody
 from physsynth.core.reed import ReedBore
 from physsynth.core.string_damped import DampedStiffString
 from physsynth.core.string_ideal import Boundary, IdealString
+from physsynth.core.string_nonlinear import TENSION_TOL_DEFAULT, TensionModulatedString
 from physsynth.core.string_stiff import THETA_DEFAULT, StiffString
 
 L_DEFAULT = 1.0
@@ -1011,3 +1012,81 @@ def measure_stiff_mode_frequencies(
         f_oracle = modal.discrete_stiff_mode_frequency(c, L, N, kappa, s.k, m, theta)
         out.append(spectrum.measure_partials_near(q, res.fs, np.array([f_oracle]))[0])
     return np.array(out)
+
+
+# -- model #9: tension-modulated string -------------------------------------------------
+
+EA_DEFAULT = 1.0e5
+"""Axial stiffness (N) for model #9 tests. With T_DEFAULT = 200 N this is EA/T = 500 -- squarely in
+a real steel string's range (the governing ratio is EA/T = (c_long/c)^2 ~ 150-600; see
+:func:`~physsynth.core.string_nonlinear.string_coefficients_from_material`)."""
+
+
+def make_tension_string(
+    *,
+    N: int = 100,
+    lam: float = 1.0,
+    kappa: float = KAPPA_DEFAULT,
+    EA: float = 0.0,
+    sigma0: float = 0.0,
+    sigma1: float = 0.0,
+    theta: float = THETA_DEFAULT,
+    tension_tol: float = TENSION_TOL_DEFAULT,
+    L: float = L_DEFAULT,
+    T: float = T_DEFAULT,
+    rho: float = RHO_DEFAULT,
+) -> TensionModulatedString:
+    """Build a tension-modulated string (model #9) at Courant ``lam`` via ``fs = c N/(L lam)``.
+
+    ``EA = 0`` (the default) is model #3 bit-for-bit -- pass ``EA=EA_DEFAULT`` for the nonlinearity.
+    ``lam > 1`` is allowed (the linear part is unconditionally stable), though a nonlinearity always
+    wants oversampling on its own account.
+    """
+    c = wave_speed(T, rho)
+    fs = c * N / (L * lam)
+    return TensionModulatedString(
+        L=L, T=T, rho=rho, fs=fs, N=N, kappa=kappa, EA=EA, sigma0=sigma0, sigma1=sigma1,
+        theta=theta, tension_tol=tension_tol,
+    )
+
+
+def mode_off_fraction(u: np.ndarray, shape: np.ndarray, scale: float) -> float:
+    """Off-mode content of ``u``, as a fraction of the **fixed** amplitude ``scale``.
+
+    Never normalize by the instantaneous ``||u||``: a single mode passes through ``u ~ 0`` twice a
+    period, where roundoff dominates and the ratio reports a spurious ``1.0`` that looks exactly
+    like a catastrophic bug. ``scale`` should be ``||u_0||`` (see the model #9 plan doc).
+    """
+    proj = np.dot(u, shape) / np.dot(shape, shape) * shape
+    return float(np.linalg.norm(u - proj) / scale)
+
+
+def measure_tension_mode_frequency(
+    s: TensionModulatedString,
+    shape: np.ndarray,
+    *,
+    n_crossings: int = 10,
+    max_steps: int = 400_000,
+) -> float:
+    """Measure a mode's **nonlinear** frequency (Hz) from descending zero crossings of ``q(t)``.
+
+    Steps ``s`` in place. Uses the modal projection ``q = <u, shape>/<shape, shape>`` (maximal SNR
+    for any mode and any N, unlike a point pickup that may sit on a node) and linearly interpolates
+    each crossing. Zero crossings -- **not** ``spectrum.measure_partials_near``: its search window
+    is anchored on the *linear* frequency and simply misses a peak shifted tens of percent by
+    hardening (model #6's lesson, the same trap in a new model).
+    """
+    denom = float(np.dot(shape, shape))
+    prev = float(np.dot(s.state, shape)) / denom
+    times: list[float] = []
+    for n in range(1, max_steps + 1):
+        s.step()
+        cur = float(np.dot(s.state, shape)) / denom
+        if prev > 0.0 >= cur:
+            times.append((n - 1 + prev / (prev - cur)) * s.k)
+            if len(times) >= n_crossings:
+                break
+        prev = cur
+    if len(times) < 2:
+        raise RuntimeError(f"only {len(times)} crossings in {max_steps} steps -- can't measure")
+    return 1.0 / float(np.mean(np.diff(times)))
