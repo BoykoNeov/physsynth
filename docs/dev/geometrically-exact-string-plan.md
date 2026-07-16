@@ -295,6 +295,55 @@ symmetry claims by design, which is the point:
 Tier A/2 holds in **both** columns (`w → −w` is a symmetry of `κ_u ≠ κ_w` too), which is what makes
 the whirl test honest: whirling must be seeded by a perturbation, never by the planar IC drifting.
 
+> **BUILT (batch 2, `tests/test_geometric_whirl.py`, 8 tests).** This section is the one part of the
+> plan that survived contact **intact** — every claim above measured true. What it was missing is
+> that all of it is one **Mathieu equation**, and writing that down is what turned a threshold into
+> a map. Linearising out of plane about `q_u = A cos Ωt` gives
+> `δq̈_w + [ω_w² + εA²/2 + (εA²/2)cos 2Ωt]δq_w = 0` — a parametric pump at `2Ω` on the principal
+> resonance — so with `Δ = ω_w²−ω_u²` the tongue is `|Δ − εA²/4| < εA²/4`:
+>
+> **unstable ⟺ `0 < Δ < εA²/2`**, most unstable at `Δ = εA²/4`.
+>
+> Four things follow, and the fourth is a finding this plan had in its hands and let go:
+>
+> 1. **Gough's `εA² ~ Δω₀²` is the upper edge** read in the amplitude direction: `A_c = √(2Δ/ε)`, so
+>    the threshold moves as **`√Δ`** — sharper than "moves with `Δω₀`". Measured across three runs:
+>    `A₁` whirls at `Δ₁` (25.9×), the *same* `A₁` is stable at `Δ₂ = 2Δ₁` (1.88×), and `√2·A₁` whirls
+>    again at `Δ₂` (215×). The third run is what makes it a scaling law and not a boundary sighted
+>    twice.
+> 2. **`Δ = 0` sits exactly *on* the tongue edge** — the leading-order Mathieu analysis reproduces the
+>    exact `+1,+1` Floquet result it knows nothing about. The two derivations agreeing is the
+>    cheapest evidence the reduction is right.
+> 3. **Only the *soft* plane whirls** — `Δ > 0` means the driven polarization must be the *lower*
+>    one. This is Gough's real signature and the plan does not state it: same string, same amplitude,
+>    same seed, **76.3× vs 1.00×**. It is the sharpest claim in the batch and no energy, spectrum, or
+>    amplitude measurement can make it.
+> 4. **`Ω_prec = εA²/(8ω₀)` was misattributed, not spurious.** The rejection above is correct — a
+>    degenerate string has no precession rate — and the diagnosis is correct to the word: *the
+>    averaging drops the `2ω` pump*. What went unfollowed is that the dropped pump's **strength is
+>    that very quantity**, and the pump is the entire instability. The tongue-centre growth rate is
+>    `εA²/(8Ω)`: the same expression, under `ω₀ → Ω`. It does not describe a degenerate string
+>    precessing; it describes how fast a **detuned** one whirls. (The hardening is 46 % of it —
+>    117.6/s at `ω₀` vs 80.7/s at `Ω` — which is presumably why averaging at `ω₀` looked plausible.)
+>    The full rate `(Ω/2)√(q_M²−σ²)` holds across the whole tongue to 5–11 %, systematically low:
+>    leading-order `ε`/`Ω` plus the seed's non-growing component, i.e. a Tier C residual, reported.
+>
+> **The degenerate control needs the *velocity* seed** — a displacement seed proves nothing there.
+> `δw = δA·φ` at rest **is** the rotation generator, so a degenerate string just runs planar in a
+> rotated plane and pins at `1.00×`: that is Tier A/1 restated, not marginality. Seeding `δẇ` injects
+> angular momentum and excites the secular solution. The discriminator is the envelope's *shape* over
+> four quarters, no fit: secular gives `1:2:3:4`, exponential a constant ratio. Measured
+> **`1 : 1.91 : 3.08 : 4.01`** (degenerate, 1.3 % off linear) vs `1 : 3.80 : 12.3 : 37.6` (detuned).
+> The plan's "grows secularly (linear in `t`)" — confirmed to 1.3 %.
+>
+> **The gate that makes it mean anything:** a parametric instability is energy *redistribution*, so
+> the lossless model **conserves through the blow-up** — drift ~1e-12 while `max|w|` grows 76×. That
+> is how a physical whirl is told from a diverging solve, which is the other thing that makes `|w|`
+> grow by orders of magnitude. Energy alone is not sufficient (model #9's *in-plane* exchange
+> conserves too), so the driven field is asserted single-mode: `κ_u = 0` makes `εA²/ω_u² == ΔT/T₀`
+> **exactly**, which is what lets `ΔT/T₀ = 1.5` be a *measured* half-margin to model #9's ≈3 rather
+> than a hoped-for one.
+
 ## Human decisions — SETTLED
 
 The human's steer, verbatim: *"i prefer to do extra machinery, which later we may decide we dont need,
@@ -373,7 +422,9 @@ lesson now written into Traps:
    & GREEN (6 tests)** — see *What batch 2's oracles cost* below; three of the plan's own statements
    about these two tests were wrong and are corrected there.
 6. `tests/test_geometric_whirl.py` — the `κ_u ≠ κ_w` threshold sweep (test 12) + degenerate control.
-   ⬅ **the one batch-2 item still open.**
+   ✅ **DONE & GREEN (8 tests)** — the threshold is a **Mathieu tongue**; see *Whirling, honestly*
+   above for the map, the `√Δ` scaling, the soft-plane-only asymmetry, and the resurrection of the
+   plan's discarded `εA²/(8ω₀)` as the growth rate. **Batch 2 is complete.**
 7. Tier C cross-checks vs `analysis/duffing.py` and model #9 (test 13). ✅ **DONE & GREEN**
    (`tests/test_geometric_limits.py`, 4 tests).
 8. **Convergence order — batch 1 does NOT have it, and it is a standard gate.** CLAUDE.md lists order
@@ -429,6 +480,13 @@ measurements are in `test_geometric_phantom.py`'s docstrings:
   **on** a partial. No run length fixes a physical confound. `κ=8` ⟹ gap 11.4 Hz, hardening 11 % of
   it. This exaggerates the **contrast**, not the effect: the mechanism (`r²` pumping `v`) is
   `κ`-independent; `κ` only sets where the partials sit.
+
+- **The whirl section was right, and cost the least of the three.** Batch 1 and the phantom/Tier A/3
+  work each found the *plan's tests* wrong; *Whirling, honestly* measured true in every claim. The
+  difference is instructive: that section was written from a **symmetry argument** (`w → −w`, the
+  rotation generator, the Wronskian) rather than from an averaged formula, and symmetry arguments do
+  not have a small parameter to be wrong about. Where the same section *did* reach for averaging, it
+  produced the one wrong number in it — and even then diagnosed itself correctly.
 
 **Two oracles batch 2 found that the plan did not have:**
 - **The confound-free defect.** The plan states the signature as `f₁+f₂` vs `f₃`, which needs an

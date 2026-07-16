@@ -76,7 +76,7 @@ The physics lives entirely in `physsynth/core`; `web/` is a wrapper (`serialize.
 Complete and validated:
 
 - **String family** — #1 ideal, #2 stiff, #3 frequency-dependent damped, **#9 tension-modulated**
-  (nonlinear; below).
+  and **#10 geometrically-exact** (nonlinear; both below).
 - **2D** — #4 circular membrane, #5 simply-supported Kirchhoff plate, #5b free-edge (FFFF) plate with
   Chladni patterns; plus the #5b-pre free–free Euler–Bernoulli beam (free-boundary de-risk).
 - **Nonlinear** — #6 von Kármán coupled plate, **all 6 Parts** (bracket, Airy stress solve,
@@ -98,6 +98,34 @@ Complete and validated:
   resonance and the mode disintegrates *while energy is conserved to 1e-13* (physics, not a blow-up:
   refinement-invariant onset and unstable modes). Planar modal exchange only — out-of-plane whirling
   and true phantom partials need a geometrically-exact (two-polarization / longitudinal) string.
+- **Geometrically-exact string** — #10 (`core/string_geometric.py`), which **pays both of those
+  debts**. Three coupled fields — two transverse polarizations `u`, `w` and the longitudinal `v` —
+  with the exact stretch `Λ=√((1+v_x)²+u_x²+w_x²)`, so tension is a **field**, not #9's scalar
+  functional. `EA=T₀` is model #3 bit-for-bit ×3; a discrete gradient on `mean(Λ)` (*not* `Λ(mean)`)
+  keeps the lossless drift at 1.5e-16 through it.
+  - **Phantom partials** (Conklin 1999): the excess carries `r²v_x/2`, quadratic in the transverse
+    fields and *linear* in the longitudinal one, so two partials `f₁`, `f₂` drive `v` at `f₁±f₂` and
+    `2f₁`, `2f₂` — combination tones landing where **no** partial exists, read at the bridge force
+    `EA·v_x(0)`, the channel that actually radiates in a piano. #9 has no `v` to put them in.
+  - **The polarization discriminator**: a *circular* mode holds `r²` time-independent, so the
+    longitudinal forcing is **static**. Same string, same amplitude, opposite longitudinal spectrum,
+    from polarization alone — and the null is not a quiet string: the circular run is **2× as
+    energetic and 2× as stretched**, and radiates **113,000×** less. The nonlinearity is not off; it
+    is on and silent.
+  - **Out-of-plane whirling** (Gough 1984) — and the honest version is that an isotropic string
+    **cannot** whirl: `w→−w` is a reflection symmetry, so a planar IC stays planar *bit-exactly*
+    (`max|w| == 0.0`), and the rotation generator pins both Floquet multipliers at `+1` — marginal,
+    never exponential (measured: a degenerate string's seeded envelope grows **secularly**, `1:2:3:4`
+    to 1.3 %). Whirling is a **threshold** instability and needs the degeneracy broken, which is what
+    the per-polarization `κ_u ≠ κ_w` (a non-circular cross-section) is for. Break it and the same
+    `2Ω` tension pump that disintegrates #9's planar mode aims at the *other polarization* instead of
+    the neighbouring *modes* — the same Mathieu resonance, a different target, and the one #9
+    structurally cannot have. The tongue is `0 < Δω₀² < εA²/2`, mapped: growth
+    `1.0 → 14.7 → 76.3 → 37.4 → 8.4 → 1.63×` across `Δ/εA² = 0 → 0.8`, peaking at the predicted
+    `0.25`, with the rate matching `(Ω/2)√(q_M²−σ²)` to 5–11 %. Gough's threshold `A_c=√(2Δ/ε)` moves
+    as **`√Δ`** (verified by re-crossing it), and — the sharpest claim in the model — **only the
+    *soft* plane whirls**: same string, same amplitude, same seed, **76.3× vs 1.00×**. All of it
+    while energy is flat to 1e-12, which is what separates a whirl from a blow-up.
 - **Bowed string** — the first continuous **nonlinear exciter** (`core/bow.py`): a friction bow on
   a damped string, closing the `exciter →` leg of the abstraction. Stick-slip via the smooth
   friction curve `Φ(v)=F·√(2a)·v·e^{-av²+½}`, evaluated at the *centered* relative velocity — so the
