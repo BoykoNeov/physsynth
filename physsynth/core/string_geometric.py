@@ -194,7 +194,23 @@ rule, and to keep 4x of margin on a *sharp* cliff. It **warns rather than reject
 the regime above is worth being able to *study*, just not to trust. Because
 ``c_long/c = sqrt(EA/T0) ~ 22`` at realistic stiffness, the familiar transverse ``lam = 0.5`` lands
 at ``lam_long ~ 11``: this warning will fire
-on the parameters a reader of models #1-#9 would reach for first. That is its whole purpose."""
+on the parameters a reader of models #1-#9 would reach for first. That is its whole purpose.
+
+**Not raised at ``EA == T0``** (``a == 0``), regardless of ``lam_long``. There the three fields
+decouple and the model *is* :class:`~physsynth.core.string_damped.DampedStiffString` three times
+over -- which does not warn about its own ``lambda`` either. The exemption is load-bearing rather
+than tidy: the ``EA = T0`` bit-identity anchor sits at ``lam_long == 1.0`` **exactly**, flush
+against this bar, so without it a float wobble would fire a spurious warning on this model's
+single most important regression test the day CI turns warnings into errors.
+
+**The bar is one-sided, and mind the flip.** It reads ``lam_long`` because the *longitudinal* field
+is the fast one -- but only while ``EA > T0``. Below the anchor ``c_long < c``, the **transverse**
+field becomes the fast one and plain ``lam`` governs instead; this bar then says nothing useful, and
+a caller who resolves ``lam_long`` on a softening string is under-resolving the wave that actually
+sets the timestep (measured: ``EA/T0 = 1/200`` at ``lam_long = 0.5`` means ``lam = 7`` and the
+Newton Jacobian goes singular, while the same string at ``lam = 0.5`` conserves to 1e-13).
+Softening is a deliberate opt-in (see ``allow_softening``), so this is documented rather than
+branched on."""
 
 
 class GeometricState(NamedTuple):
@@ -266,12 +282,29 @@ class GeometricString:
     newton_maxiter : int
         Iteration cap; exceeding it warns (never silently renders).
     allow_softening : bool
-        Permit ``EA < T``. **Off by default, and this is a real floor, not squeamishness**:
-        ``EA < T`` means ``EA_n = EA - T0 < 0``, a softening string whose potential is **unbounded
-        below** -- blow-up, not hyperreality. With the hatch open, :attr:`energy_floor` and the
-        drift gate are both **void**: there is no lower energy bound to conserve toward. The
-        effective-coefficient surface still stands *above* the floor -- ``(T, rho, kappa, EA)``
-        remain mutually unconstrained there.
+        Permit ``EA < T``. **Off by default -- but the line it draws is materials, not stability.**
+
+        ``EA < T`` makes ``Lambda0 = (EA - T0)/EA`` negative, and ``Lambda0`` is *both* the
+        minimizer of ``V`` *and* the natural-length ratio of an element (see :attr:`energy_floor`
+        for why it is the same number). A negative natural length is not a thing a real material
+        has: the string would be pre-stretched from an unstretched state shorter than nothing.
+
+        **What it is not is unstable, and an earlier version of this docstring said otherwise.**
+        The claim was that ``EA_n = EA - T0 < 0`` leaves the potential unbounded below. It does
+        not: the identity in :attr:`energy_floor` holds for **either sign** of ``a``, ``EA > 0`` is
+        separately enforced, so ``(EA/2)(Lambda - Lambda0)^2 >= 0`` regardless -- and the same
+        Jensen step gives ``E >= 0`` at ``a < 0`` too. A softening string cannot even go slack
+        (``tension = EA Lambda - a = EA Lambda + |a| > 0`` for every ``Lambda > 0``, where a
+        *hardening* one genuinely can). Measured, plucked, at ``EA/T0`` from ``1/2`` down to
+        ``1/200``: drift ~1e-13, ``E`` positive, ``min(tension) ~ T0``. So :attr:`energy_floor` and
+        the drift gate are **not** void with the hatch open -- both still hold, and the tests
+        assert it.
+
+        The hatch therefore reads the way [[unphysical-params-are-a-feature]] asks, from the other
+        side: the surface ``(T, rho, kappa, EA)`` stays mutually unconstrained, and the *unphysical*
+        corner is opt-in rather than forbidden. **Resolution flips here**: below ``EA = T0`` the
+        longitudinal wave is the slow one, so resolve ``lam``, not :attr:`lam_long` (see
+        :data:`LAM_LONG_WARN`).
 
     Raises
     ------
@@ -328,10 +361,15 @@ class GeometricString:
             raise ValueError(f"boundary must be 'supported', got {boundary!r}.")
         if EA < T and not allow_softening:
             raise ValueError(
-                f"EA ({EA}) < T ({T}) means a negative natural axial stiffness EA_n = EA - T0 = "
-                f"{EA - T}, i.e. a SOFTENING string whose potential is unbounded below: it will "
-                f"blow up, not sound exotic. Pass allow_softening=True to override -- but note "
-                f"that energy_floor and the drift gate are then both void."
+                f"EA ({EA}) < T ({T}) makes the natural (unstretched) length ratio Lambda0 = "
+                f"(EA - T0)/EA = {(EA - T) / EA:.4g} NEGATIVE, i.e. a SOFTENING string no real "
+                f"material can be: at rest every element is already stretched from a natural "
+                f"length below zero. The model stays well-posed there (energy still conserves, "
+                f"E >= 0 still holds, and the string cannot go slack -- tension = EA*Lambda + "
+                f"|EA - T0| > "
+                f"0 always), so this is hyperreality, not blow-up. Pass allow_softening=True to "
+                f"build it -- and mind that below EA = T0 the LONGITUDINAL wave is the slow one, "
+                f"so resolve the transverse lam, not lam_long."
             )
 
         self.L = float(L)
@@ -363,10 +401,21 @@ class GeometricString:
         self.B = float((np.pi**2) * self.kappa**2 / (self.c**2 * self.L**2))
         self.EA_over_T = self.EA / self.T
 
+        # a = EA - T0 is THE nonlinearity coefficient. a == 0.0 exactly -> the linear code path,
+        # which is what earns the bit-for-bit model #3 anchor.
+        self._a = self.EA - self.T
+
         # The one guard with no CFL behind it. Warn, do not reject: the scheme really is
         # unconditionally stable, and lam_long = 2 conserves to 1e-12 -- a hard bar would forbid
         # configurations that demonstrably work. See LAM_LONG_WARN.
-        if self.lam_long > LAM_LONG_WARN:
+        #
+        # Skipped entirely at a == 0: the model is then literally DampedStiffString x3 (the fields
+        # do not couple, and nothing rides on the longitudinal field's accuracy that model #3 does
+        # not already own), and model #3 does not warn about its own lambda. This is not cosmetic --
+        # the EA = T0 anchor lands at lam_long == 1.0 exactly, flush against the bar, so without
+        # this branch a float wobble would fire a spurious warning on the single most important
+        # regression test in the model the day CI turns warnings into errors.
+        if self._a != 0.0 and self.lam_long > LAM_LONG_WARN:
             warnings.warn(
                 f"lam_long = {self.lam_long:.2f} > {LAM_LONG_WARN}: the longitudinal field "
                 f"advances {self.lam_long:.1f} cells per timestep and is under-resolved in time. "
@@ -379,10 +428,6 @@ class GeometricString:
                 RuntimeWarning,
                 stacklevel=2,
             )
-
-        # a = EA - T0 is THE nonlinearity coefficient. a == 0.0 exactly -> the linear code path,
-        # which is what earns the bit-for-bit model #3 anchor.
-        self._a = self.EA - self.T
 
         self.x: NDArray[np.float64] = np.linspace(0.0, self.L, self.N + 1)
 

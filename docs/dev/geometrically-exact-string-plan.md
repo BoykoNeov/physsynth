@@ -255,6 +255,16 @@ is the claim model #9 structurally cannot make.
 Phantom *frequencies* are set by the well-resolved **transverse** partials, so they are safe even
 though the longitudinal field is under-resolved (below). Longitudinal *mode* frequencies are not.
 
+> **BUILT (batch 2), with three corrections.** (1) **`κ=8`, not the default 2** — at `κ=2` the
+> 1.29 Hz hardening shift *exceeds* the 0.89 Hz gap and the phantom **crosses** `f₃`; the test would
+> be wrong, not merely blurry. (2) **`f₃` from the *discrete* ladder** (`stiff_dispersion_
+> frequencies`), never `n·f₁√(1+Bn²)` — and *earned* by an `amp→0` run landing on it to `1.5e-4`,
+> which is what licenses using it for an `f₃` that is never excited. (3) The sharper,
+> **oracle-free** form of the same signature: `|f₂ − 2f₁|` (see *What batch 2's oracles cost*).
+> Also true and load-bearing: the free longitudinal modes at `n·2236 Hz` sit ~4.5× above the ≤500 Hz
+> phantom band, so that band is **purely forced response** — which is both the piano physics and why
+> band-limiting the peak search is a physical cut rather than a fudge.
+
 ### Whirling, honestly
 
 **An isotropic free string does not spontaneously whirl** (Tier A/2). Stronger: `δw = q_u(t)` is an
@@ -359,9 +369,13 @@ lesson now written into Traps:
   *relative*) and must be gated relatively.
 
 **Batch 2 — the payoff claims** (discharges model #9's two refusals)
-5. `tests/test_geometric_phantom.py` — the phantom oracle (test 10) + Tier A/3 (test 11).
+5. `tests/test_geometric_phantom.py` — the phantom oracle (test 10) + Tier A/3 (test 11). ✅ **DONE
+   & GREEN (6 tests)** — see *What batch 2's oracles cost* below; three of the plan's own statements
+   about these two tests were wrong and are corrected there.
 6. `tests/test_geometric_whirl.py` — the `κ_u ≠ κ_w` threshold sweep (test 12) + degenerate control.
-7. Tier C cross-checks vs `analysis/duffing.py` and model #9 (test 13).
+   ⬅ **the one batch-2 item still open.**
+7. Tier C cross-checks vs `analysis/duffing.py` and model #9 (test 13). ✅ **DONE & GREEN**
+   (`tests/test_geometric_limits.py`, 4 tests).
 8. **Convergence order — batch 1 does NOT have it, and it is a standard gate.** CLAUDE.md lists order
    beside conservation / passivity / modal frequency, and the family carries one Richardson number per
    model (#5b: 5.66, #6: 4.40/5.66). Batch 1 has conservation ✓, passivity ✓, modal ✓ (the
@@ -382,7 +396,46 @@ lesson now written into Traps:
     there is no `filterwarnings = error`, so it is harmless today — but a float wobble would fire a
     spurious warning on the single most important regression test the day CI makes warnings errors.
     The principled fix is probably to skip the warning when `_a == 0.0`: the model is then exactly
-    model #3 ×3, and model #3 does not warn about `λ` either.
+    model #3 ×3, and model #3 does not warn about `λ` either. ✅ **DONE** — exempted on `_a == 0`,
+    exactly as proposed; items 8 and 9 likewise (9 landed as "the guard is right, the *reason* was
+    false": the line is **materials** — `Λ₀ = a/EA < 0` is a natural length below zero — **not**
+    stability, and a softening string provably conserves, stays `E ≥ 0`, and cannot go slack).
+
+**What batch 2's oracles cost, and what they bought.** Batch 1's lesson repeated exactly: *the
+scheme was right; the plan's **tests** were wrong.* Three statements above are false, and the
+measurements are in `test_geometric_phantom.py`'s docstrings:
+
+- **Tier A/3's stated metric does not work.** "State it as *integrated longitudinal energy*, orders
+  of magnitude apart" — measured, planar/circular is **1.00×**. `v = 0` is not the longitudinal
+  equilibrium, so *both* runs radiate a broadband longitudinal transient (the free modes at
+  `n·c_long/2L`), and it dominates the energy integral **equally**. The plan's own physics says
+  where to look instead: `r²` pumps `v` **at `2Ω`**, so measure the **bridge-force spectral
+  magnitude at `2f₁`**, band-limited below the first free longitudinal mode. That separates
+  **113,000×**.
+- **The circular residual is ellipticity (`Ω`), NOT mode shape (`φ`).** The plan blames the
+  non-sine relative equilibrium: "the helix relaxes to the true (non-sine) shape and radiates a
+  transient". Measured, that is the *small* half. Drive the same **sine** helix at the KC circular
+  `Ω = √(ω₀²+εA²)` instead of the linear `Ω` and the residual pump falls **300×** (367× → 113,000×).
+  At the wrong `Ω` the circle is an *ellipse*, `r²` is no longer static, and it pumps `2Ω` like a
+  planar mode in miniature. **This retargets Tier B: the BVP's job is mostly `Ω`, not `φ`.**
+- **`κ` must be raised for the Conklin signature — and NOT for wall-clock.** At the `κ=2` default the
+  gap `f₃−(f₁+f₂) ≈ 9B·f₁` is **0.89 Hz**, but `f₁`,`f₂` are measured from the phantom run, so they
+  are *hardened*, and hardening drives the phantom **up** by a measured **1.29 Hz** — *more than the
+  gap*. The phantom would **cross** `f₃` and the test would confidently report a phantom landing
+  **on** a partial. No run length fixes a physical confound. `κ=8` ⟹ gap 11.4 Hz, hardening 11 % of
+  it. This exaggerates the **contrast**, not the effect: the mechanism (`r²` pumping `v`) is
+  `κ`-independent; `κ` only sets where the partials sit.
+
+**Two oracles batch 2 found that the plan did not have:**
+- **The confound-free defect.** The plan states the signature as `f₁+f₂` vs `f₃`, which needs an
+  oracle for the unexcited `f₃` *and* inherits the hardening confound. But for a **harmonic** string
+  `f₂−f₁ = f₁` and `2f₁ = f₂` **exactly**, so both displacements equal `|f₂ − 2f₁|` — the
+  inharmonicity defect, **measured in one run, no oracle, no confound** (hardening moves phantoms and
+  partials *together*; measured it *widens* the defect, 4.416 → 4.574 Hz, working against the claim).
+- **The circular static-stretch ratio = 2, exactly.** A planar `r²` time-averages to `A²φ'²/2`; a
+  circular one *is* `A²φ'²`. So the **DC** bridge force must be exactly **2×** planar — measured
+  **1.987×**. This is what makes the Tier A/3 null non-vacuous: the circular string is stretched
+  *twice as hard* and radiates 113,000× less. The nonlinearity is not off; it is on and **silent**.
 
 **Batch 3 — the exact circular oracle + the rig**
 8. `analysis/rotating_wave.py` (Tier B, decision #5) — the relative-equilibrium BVP solver +
@@ -484,6 +537,12 @@ lesson now written into Traps:
   longitudinal energy, orders of magnitude apart* — **not "zero"**. Bit-zero holds only from a
   converged BVP IC — which decision-#5's Tier B build now supplies, but **only after** Tier A/3 has
   landed in its honest orders-apart form. Do not wait for Tier B to state the discriminator.
+  > **MEASURED IN BATCH 2 — half of this is wrong.** (a) *Integrated longitudinal energy* is the
+  > wrong instrument: it reads **1.00×**, because the `v=0` transient dominates it equally in both
+  > runs. Use the **bridge-force magnitude at `2f₁`**, band-limited below the first free
+  > longitudinal mode ⟹ **113,000×**. (b) The residual is **ellipticity**, not the non-sine shape:
+  > tuning `Ω` to the KC circular relative equilibrium `√(ω₀²+εA²)` collapses it **300×** on an
+  > unchanged **sine** helix. "Orders apart, not zero" survives — the *reason* does not.
 - **Don't promise cents against Tier C.** Both closed forms are limits for this model, breaking by
   *different* mechanisms (phantom leakage / mode-shape deformation). Measure the scaling.
 - **`EA < T₀` is softening** (`EA_n < 0`) and the potential is unbounded below ⟹ blow-up, not

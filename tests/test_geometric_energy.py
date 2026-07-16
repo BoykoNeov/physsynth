@@ -405,12 +405,13 @@ def test_both_polarizations_share_one_wave_speed():
 
 
 def test_softening_EA_is_rejected_by_default_and_permitted_on_request():
-    """``EA < T`` ⟹ ``EA_n < 0``: a potential **unbounded below**. Blow-up, not hyperreality.
+    """``EA < T`` is rejected by default — but for a **materials** reason, not a stability one.
 
-    This is the one parameter in the family with a real floor, so the default protects — but the
-    hatch exists, because where the hyperreal line sits is the human's call, not the constructor's.
-    Above the floor the effective-coefficient surface still stands: ``(T, rho, kappa, EA)`` remain
-    mutually unconstrained.
+    ``Lambda0 = (EA - T0)/EA`` is *both* the minimizer of ``V`` and an element's natural-length
+    ratio, so ``EA < T0`` ⟹ ``Lambda0 < 0`` ⟹ an unstretched length below zero: no real material.
+    That is the guard. It is **not** the reason batch 1 shipped, which was "the potential is
+    unbounded below ⟹ blow-up, not hyperreality" — see
+    :func:`test_softening_is_hyperreal_not_unstable` for why that is false.
     """
     kw = dict(L=L_DEFAULT, T=T_DEFAULT, rho=RHO_DEFAULT, fs=12800.0, N=32)
     with pytest.raises(ValueError, match="SOFTENING"):
@@ -418,8 +419,54 @@ def test_softening_EA_is_rejected_by_default_and_permitted_on_request():
     soft = GeometricString(EA=T_DEFAULT * 0.5, allow_softening=True, **kw)
     assert soft.allow_softening
     assert soft._a < 0.0
+    # The guard's actual justification, as a number: the natural length is negative.
+    assert (soft.EA - soft.T) / soft.EA < 0.0
     # EA = T is the anchor and must remain constructible.
     assert GeometricString(EA=T_DEFAULT, **kw)._a == 0.0
+
+
+@pytest.mark.parametrize("EA", [T_DEFAULT * 0.5, T_DEFAULT * 0.1, T_DEFAULT / 200.0])
+def test_softening_is_hyperreal_not_unstable(EA):
+    """A softening string **conserves, stays positive, and cannot go slack**. The floor is real —
+    the *reason* batch 1 gave for it was not.
+
+    Batch 1 justified the guard as "``a < 0`` ⟹ potential unbounded below ⟹ blow-up". Every clause
+    is false, and this test is the refutation in code:
+
+    * ``V = (EA/2)(Lambda - Lambda0)^2 - T0^2/(2 EA) - T0 v_x`` is exact for **either sign** of
+      ``a``, and ``EA > 0`` is separately enforced ⟹ the square is ``>= 0`` ⟹ bounded below.
+    * The same Jensen step (``mean(Lambda) >= 1``, and ``Lambda0 < 0 < 1`` here) still gives
+      ``E >= 0``.
+    * ``tension = EA Lambda - a = EA Lambda + |a| > 0`` for every ``Lambda > 0``: a softening string
+      cannot go slack — where a *hardening* one demonstrably can (``test_tension_is_a_field...``).
+
+    So ``energy_floor`` and the drift gate are **not** void with the hatch open, as the parameter's
+    docstring used to claim. They hold, and this asserts them.
+
+    **Resolution flips below the anchor**: ``c_long = sqrt(EA/rho) < c`` here, so the *transverse*
+    wave is the fast one and ``lam`` sets the timestep. Passing ``lam_long`` (the helper's default,
+    right only above ``EA = T0``) means ``lam = 7`` at the extreme point and the Newton Jacobian
+    goes singular — a resolution artifact that reads exactly like the blow-up that was claimed,
+    which is plausibly how the false rationale survived.
+    """
+    N = 32
+    s = make_geometric_string(N=N, EA=EA, lam=0.5, allow_softening=True)
+    assert s._a < 0.0 and s.c_long < s.c, "below the anchor the transverse wave is the fast one"
+    s.set_state(geometric_pluck_ic(N, amp=2e-3))
+
+    E0 = s.energy()
+    energies, min_tension = [E0], s.tension.min()
+    for _ in range(3000):
+        s.step()
+        energies.append(s.energy())
+        min_tension = min(min_tension, s.tension.min())
+
+    drift = (max(energies) - min(energies)) / abs(E0)
+    assert drift < DRIFT_GATE, f"softening drifts {drift:.2e} — the potential IS bounded below"
+    assert min(energies) > 0.0, f"E >= 0 holds at a < 0 too; got {min(energies):.3e}"
+    assert min_tension > 0.0, (
+        f"a softening string cannot go slack (tension = EA*Lambda + |a|); got {min_tension:.3f}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -531,6 +578,32 @@ def test_under_resolved_longitudinal_field_warns_because_nothing_else_will():
         good = make_geometric_string(N=32, lam_long=0.5, EA=EA_DEFAULT)
     assert good.lam_long == pytest.approx(0.5, rel=1e-12)
     assert good.lam_long <= LAM_LONG_WARN
+
+
+def test_the_linear_anchor_never_warns_however_coarse_the_longitudinal_field():
+    """``EA = T`` is exempt from the ``lam_long`` bar — and the exemption is load-bearing.
+
+    At ``a == 0`` the three fields decouple and the model *is* ``DampedStiffString`` three times
+    over, which does not warn about its own ``lambda`` either: there is no nonlinear coupling for an
+    under-resolved longitudinal field to corrupt, and no Newton solve to stall.
+
+    Why it matters rather than merely tidying up: the ``EA = T`` bit-identity anchor — the single
+    most important regression test in this model — lands at ``lam_long == 1.0`` **exactly**, flush
+    against ``LAM_LONG_WARN`` with margin ``+0.0``. ``1.0 > 1.0`` is False, so it did not warn
+    before; but that is luck, not design, and a float wobble in either direction would fire a
+    spurious warning the day CI turns warnings into errors.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        anchor = make_geometric_string(N=32, lam=1.0, EA=T_DEFAULT)  # lam_long == 1.0 exactly
+        deep = make_geometric_string(N=32, lam=50.0, EA=T_DEFAULT)  # absurd, still silent
+    assert anchor._a == 0.0 and deep._a == 0.0
+    assert anchor.lam_long == pytest.approx(1.0, rel=1e-12)
+    assert deep.lam_long > 4.0, "well past the bar, and still silent because it is linear"
+
+    # The exemption is on `a`, not on lam_long: the same coarse build DOES warn once EA != T.
+    with pytest.warns(RuntimeWarning, match="under-resolved"):
+        make_geometric_string(N=32, lam=50.0, EA=T_DEFAULT * 1.000001)
 
 
 def test_tension_is_a_field_not_a_scalar():
