@@ -362,6 +362,27 @@ lesson now written into Traps:
 5. `tests/test_geometric_phantom.py` — the phantom oracle (test 10) + Tier A/3 (test 11).
 6. `tests/test_geometric_whirl.py` — the `κ_u ≠ κ_w` threshold sweep (test 12) + degenerate control.
 7. Tier C cross-checks vs `analysis/duffing.py` and model #9 (test 13).
+8. **Convergence order — batch 1 does NOT have it, and it is a standard gate.** CLAUDE.md lists order
+   beside conservation / passivity / modal frequency, and the family carries one Richardson number per
+   model (#5b: 5.66, #6: 4.40/5.66). Batch 1 has conservation ✓, passivity ✓, modal ✓ (the
+   three-linear-waves test), **order ✗** — deferred here on purpose, because the Duffing oracle it
+   should be measured against lands in this batch. Written down so a green batch-1 suite is not
+   mistaken for a complete one.
+9. **Re-derive the `EA < T₀` softening rationale — the stated reason is probably FALSE.**
+   `test_softening_EA_is_rejected_by_default_and_permitted_on_request` justifies the guard as
+   "`EA < T₀` ⟹ `a < 0` ⟹ a potential **unbounded below**". But the corrected floor identity
+   `V = (EA/2)(Λ−Λ₀)² − T₀²/(2EA) − T₀v_x` is exact **for either sign of `a`**, and the same Jensen
+   argument gives `E ≥ 0` when `a < 0` too — and `tension = EA·Λ − a = EA·Λ + |a| > 0`, so a softening
+   string cannot even go slack. The guard and its test still pass (they only check raise-vs-permit),
+   so nothing is broken — but the *reason* is inconsistent with the floor batch 1 corrected. Decide
+   what softening actually breaks (dynamic softening instability? nothing?) and either re-justify the
+   guard or drop it. **Do not reopen this inside batch 1.**
+10. **`λ_long` boundary nit:** the `EA = T₀` bit-identity anchor sits at `λ_long == 1.0` *exactly*
+    (margin `+0.0`), i.e. flush against `LAM_LONG_WARN`. It does not warn (`1.0 > 1.0` is False) and
+    there is no `filterwarnings = error`, so it is harmless today — but a float wobble would fire a
+    spurious warning on the single most important regression test the day CI makes warnings errors.
+    The principled fix is probably to skip the warning when `_a == 0.0`: the model is then exactly
+    model #3 ×3, and model #3 does not warn about `λ` either.
 
 **Batch 3 — the exact circular oracle + the rig**
 8. `analysis/rotating_wave.py` (Tier B, decision #5) — the relative-equilibrium BVP solver +
