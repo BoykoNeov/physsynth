@@ -185,11 +185,19 @@ def test_nonlinearity_depends_on_the_polarizations_only_through_r_squared():
     assert s._nl_density(rotate(q_plus)) == pytest.approx(s._nl_density(q_plus), rel=1e-12)
 
 
-def test_circular_and_planar_have_the_same_energy_but_differ_dynamically():
+def test_circular_and_planar_are_different_motions_and_not_equal_energy():
     """A sanity check that the two polarization sectors are genuinely different motions.
 
-    Not the batch-2 discriminator (that claim is about the *longitudinal spectrum*), just the
-    precondition for it: equal-energy circular and planar states must not be the same trajectory.
+    Not the batch-2 discriminator (that claim is about the *longitudinal spectrum* — see
+    ``test_geometric_phantom.py``), just the precondition for it: at the same amplitude the circular
+    and planar states must not be the same trajectory.
+
+    **They are also not the same energy, and an earlier name for this test said they were.** At
+    equal amplitude a circular mode runs *both* polarizations at full amplitude, so it carries
+    **2x** the planar energy — measured 1.99x below. Worth stating rather than quietly fixing,
+    because the batch-2 discriminator is often summarised as "same amplitude, same energy, opposite
+    longitudinal spectrum" and the middle clause is false. The true version is stronger: the
+    circular run is twice as energetic *and* twice as stretched, and still radiates ~1e5 times less.
     """
     amp = 4e-3
     planar = make_geometric_string(N=48, EA=EA_DEFAULT)
@@ -206,3 +214,6 @@ def test_circular_and_planar_have_the_same_energy_but_differ_dynamically():
     assert np.max(np.abs(circ.w)) > 1e-4, "the circular run must actually leave the plane"
     assert np.max(np.abs(planar.w)) == 0.0
     assert circ.n_not_converged == 0 and planar.n_not_converged == 0
+    assert circ.energy() / planar.energy() == pytest.approx(2.0, rel=0.05), (
+        "a circular mode runs both polarizations at full amplitude: 2x the planar energy, not 1x"
+    )

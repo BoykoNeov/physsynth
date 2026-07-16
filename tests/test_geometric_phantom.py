@@ -209,13 +209,14 @@ def test_longitudinal_peaks_are_quadratic_combinations_of_the_transverse_partial
 
 
 def test_phantoms_are_displaced_from_the_partials_by_the_inharmonicity_defect(phantom):
-    """**The Conklin signature, with no oracle and no confound.** The displacement that puts a
-    phantom in a *gap* is ``f2 - 2 f1`` — a single number, measured in this one run.
+    """**The Conklin signature — the primary form, with no oracle and no confound.** The
+    displacement that puts a phantom in a *gap* is ``f2 - 2 f1``: a single number, measured in this
+    one run.
 
     The plan states the signature as ``f1 + f2`` sitting ``~9 B f1`` below ``f3``, which needs an
     oracle for ``f3`` (mode 3 is not excited) and inherits the hardening confound with it. That
-    version is worth having and is the test below. But there is a sharper one hiding in the same
-    run, and it needs neither.
+    version is worth having and is the test below — but as the *secondary*. This one is strictly
+    better: it needs neither, and it is hiding in the same run.
 
     For a **harmonic** string the low phantoms coincide with partials *exactly*: ``f2 = 2 f1`` gives
     ``f2 - f1 = f1`` and ``2 f1 = f2``. So the distance from the difference tone to ``f1``, and the
@@ -245,9 +246,11 @@ def test_phantoms_are_displaced_from_the_partials_by_the_inharmonicity_defect(ph
 
 
 def test_the_phantom_lands_below_where_the_third_partial_would_be(phantom, linear):
-    """**The plan's headline** (Conklin 1999): ``f1 + f2`` lands ``~9 B f1`` **below** ``f3``, where
-    no transverse partial exists. Mode 3 is not excited, so this one needs an oracle — and the
-    oracle has to be earned, which is what ``linear`` is for.
+    """**The plan's headline, kept as the secondary form** (Conklin 1999): ``f1 + f2`` lands
+    ``~9 B f1`` **below** ``f3``, where no transverse partial exists. Mode 3 is not excited, so this
+    one needs an oracle — and the oracle has to be earned, which is what ``linear`` is for. The
+    test above makes the same point without either, which is why this is the second statement of it
+    and not the first.
 
     Two things make it honest rather than a formula-vs-formula check:
 
@@ -385,7 +388,7 @@ def polarization():
 
 def test_a_circular_mode_does_not_pump_the_longitudinal_field(polarization):
     """**Tier A/3, the discriminator.** Same string, same mode, same amplitude — and the
-    longitudinal spectrum five orders of magnitude apart, *purely from polarization*.
+    longitudinal spectrum five orders of magnitude apart, decided by **polarization alone**.
 
     The cleanest statement of what it means for the tension to be a **field**. A planar mode has
     ``r^2 = A^2 phi'^2 cos^2(Omega t)``, which oscillates at ``2 Omega`` and pumps ``v`` — that is
@@ -394,12 +397,15 @@ def test_a_circular_mode_does_not_pump_the_longitudinal_field(polarization):
     is *static* and there is nothing to radiate. Model #9 cannot say this in either direction — no
     ``v`` to pump, and only one polarization to pump it with.
 
-    **Why this null is not just a quiet string**, which is the only way it could cheat: the *static*
-    stretch says the nonlinearity is engaged **harder** here, not less. A planar ``r^2`` averages to
-    ``A^2 phi'^2 / 2`` while a circular one *is* ``A^2 phi'^2`` — twice as much — so the DC bridge
-    force must come out at exactly **2x** the planar one. Measured **1.987x**. So the circular run
-    stretches the string twice as hard, and radiates 113,000x less: the nonlinearity is not off, it
-    is on and *silent*. That is the claim, and energy cannot see any of it (both runs conserve).
+    **Why this null is not just a quiet string**, which is the only way it could cheat — and note
+    the circular run is emphatically *not* the quieter of the two. At equal amplitude it carries
+    **twice the energy** (both polarizations at full amplitude, not one), and the *static* stretch
+    says the nonlinearity is engaged **harder**: a planar ``r^2`` averages to ``A^2 phi'^2 / 2``
+    while a circular one *is* ``A^2 phi'^2``, so the DC bridge force must come out at exactly **2x**
+    the planar one. Measured **1.987x**. So the circular string is twice as energetic and twice as
+    stretched, and radiates **113,000x less**: the nonlinearity is not off, it is on and *silent*.
+    Energy cannot see any of this — both runs conserve, and the 2x is why "same energy" would be the
+    wrong way to say it.
 
     Measured: pump at ``2 f1`` of **1.07e+03** planar vs **9.4e-03** circular — **113,000x**.
     """
@@ -424,19 +430,22 @@ def test_the_circular_residual_is_ellipticity_not_a_defect_of_the_scheme(polariz
     """*Why* the circular null is not bit-zero — and the answer is not the one the plan expected.
 
     The plan attributes the residual to mode shape: a sine-circular IC is not the true relative
-    equilibrium, so the helix relaxes to the (non-sine) exact one and radiates. True, but measured,
-    it is a **rounding error next to the frequency**. Drive the same sine helix at the KC circular
+    equilibrium, so the helix relaxes to the (non-sine) exact one and radiates. Measured, that is
+    the *small* half. Drive the same **sine** helix at the KC circular
     ``Omega = sqrt(omega0^2 + eps A^2)`` instead of the linear ``Omega``, and the residual pump
-    falls by a factor of **300** (2.90 -> 9.4e-03), taking the discriminator from 367x to 113,000x.
+    falls by **300x** (2.90 -> 9.4e-03), taking the discriminator from 367x to 113,000x.
 
     So the residual is **ellipticity**: at the linear ``Omega`` the two polarizations run at the
     wrong rate for their amplitude, the "circle" is an ellipse, ``r^2`` is no longer static, and it
-    pumps ``v`` at ``2 Omega`` exactly like a planar mode does — in miniature. The non-sine
-    correction is what is left after that, and it is 300x smaller.
+    pumps ``v`` at ``2 Omega`` exactly like a planar mode does — in miniature.
 
-    Worth pinning because it retargets batch 3: **the BVP's job is mostly ``Omega``, not ``phi``**.
-    And it is what earns the docstring above the right to call the circular run a null rather than
-    a small number — a null with a *mechanism* for its residual, and a knob that moves it.
+    **This bounds ``phi``, it does not merely observe that ``Omega`` helps** — which is what makes
+    it worth acting on. ``phi`` is untouched across the two runs (both are sines), so *everything*
+    the shape error contributes is still present in the tuned run: its 9.4e-03 is an **upper bound**
+    on ``phi``'s share. Against the 2.90 the ``Omega`` correction removed, that is ``phi <~ 9.4e-03
+    << 2.9`` — the shape error is at most ~0.3 % of the effect. **So batch 3's BVP is mostly solving
+    for ``Omega``, not ``phi``**, and a converged ``Omega`` with a sine ``phi`` should already get
+    most of the way to Tier B's bit-zero.
     """
     naive, tuned, planar = polarization["naive"], polarization["tuned"], polarization["planar"]
     assert naive["pump"] > 50.0 * tuned["pump"], (

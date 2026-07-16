@@ -417,7 +417,11 @@ measurements are in `test_geometric_phantom.py`'s docstrings:
   transient". Measured, that is the *small* half. Drive the same **sine** helix at the KC circular
   `Ω = √(ω₀²+εA²)` instead of the linear `Ω` and the residual pump falls **300×** (367× → 113,000×).
   At the wrong `Ω` the circle is an *ellipse*, `r²` is no longer static, and it pumps `2Ω` like a
-  planar mode in miniature. **This retargets Tier B: the BVP's job is mostly `Ω`, not `φ`.**
+  planar mode in miniature. **This retargets Tier B: the BVP's job is mostly `Ω`, not `φ`** — and it
+  is a **bound on `φ`, not just an observation that `Ω` helps**: `φ` is *unchanged* across the two
+  runs (both sines), so the tuned run's 9.4e-3 residual still contains everything `φ` contributes ⟹
+  `φ ≲ 9.4e-3 ≪ 2.9` (the `Ω` correction) ⟹ the shape error is **≲0.3 %** of the effect. A
+  converged `Ω` with a **sine** `φ` should already get most of the way to Tier B's bit-zero.
 - **`κ` must be raised for the Conklin signature — and NOT for wall-clock.** At the `κ=2` default the
   gap `f₃−(f₁+f₂) ≈ 9B·f₁` is **0.89 Hz**, but `f₁`,`f₂` are measured from the phantom run, so they
   are *hardened*, and hardening drives the phantom **up** by a measured **1.29 Hz** — *more than the
@@ -436,6 +440,14 @@ measurements are in `test_geometric_phantom.py`'s docstrings:
   circular one *is* `A²φ'²`. So the **DC** bridge force must be exactly **2×** planar — measured
   **1.987×**. This is what makes the Tier A/3 null non-vacuous: the circular string is stretched
   *twice as hard* and radiates 113,000× less. The nonlinearity is not off; it is on and **silent**.
+
+**Do not say "same energy" about Tier A/3.** At equal amplitude a circular mode runs *both*
+polarizations at full amplitude ⟹ it carries **2× the planar energy** (measured 1.99×). The
+tempting summary "same amplitude, **same energy**, opposite longitudinal spectrum" is false in the
+middle clause — batch 1 had it in a *test name*
+(`test_circular_and_planar_have_the_same_energy_but_differ_dynamically`, now renamed and asserting
+the 2×). The true claim is strictly stronger: the circular run is **twice as energetic and twice as
+stretched**, and still radiates ~1e5× less.
 
 **Batch 3 — the exact circular oracle + the rig**
 8. `analysis/rotating_wave.py` (Tier B, decision #5) — the relative-equilibrium BVP solver +
