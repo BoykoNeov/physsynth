@@ -27,6 +27,7 @@ from physsynth.core.plate import Plate
 from physsynth.core.radiation import AirRadiation, RadiatedBody
 from physsynth.core.reed import ReedBore
 from physsynth.core.string_damped import DampedStiffString
+from physsynth.core.string_geometric import GeometricString
 from physsynth.core.string_ideal import Boundary, IdealString
 from physsynth.core.string_nonlinear import TENSION_TOL_DEFAULT, TensionModulatedString
 from physsynth.core.string_stiff import THETA_DEFAULT, StiffString
@@ -1019,7 +1020,29 @@ def measure_stiff_mode_frequencies(
 EA_DEFAULT = 1.0e5
 """Axial stiffness (N) for model #9 tests. With T_DEFAULT = 200 N this is EA/T = 500 -- squarely in
 a real steel string's range (the governing ratio is EA/T = (c_long/c)^2 ~ 150-600; see
-:func:`~physsynth.core.string_nonlinear.string_coefficients_from_material`)."""
+:func:`~physsynth.core.string_nonlinear.string_coefficients_from_material`). **Reused by model
+#10**, so the cross-model KC check compares like with like."""
+
+GEO_NEWTON_TOL = 1e-15
+"""Relative Newton tolerance for model #10 tests -- **tighter than the class default on purpose**.
+
+Energy drift is *proportional* to it (measured over five decades), so the drift gate is really a
+statement about this number. The tests pin it rather than inherit, so that a future change to the
+class default cannot silently loosen the 1e-10 bar.
+
+It is only *reachable* because :data:`GEO_LAM_LONG_DEFAULT` is small: the residual's round-off floor
+scales with the operator norm, which grows like ``lam_long^2``. At ``lam_long ~ 11`` the floor sits
+*above* this bar, so every step exhausts ``newton_maxiter`` and stalls -- 60 iterations per step,
+and a tolerance that can never be met. The two constants are a pair."""
+
+GEO_LAM_LONG_DEFAULT = 0.5
+"""Default **longitudinal** Courant number for model #10 tests -- the fast field sets the timestep.
+
+Measured: ``lam_long <= 2`` conserves energy to ~1e-12 across every hard case tried (plucked and
+mode-3 ICs, amplitudes to 1e-2); at ``lam_long >= 4`` the Newton solve fails and drift explodes to
+1e+3 .. 1e+5. There is no CFL to catch this -- the theta-scheme is unconditionally stable and
+reports nothing -- so 0.5 buys a 4x margin on a measured cliff. Tests that *want* the unresolved
+regime pass ``lam=`` explicitly."""
 
 
 def make_tension_string(
@@ -1048,6 +1071,82 @@ def make_tension_string(
         L=L, T=T, rho=rho, fs=fs, N=N, kappa=kappa, EA=EA, sigma0=sigma0, sigma1=sigma1,
         theta=theta, tension_tol=tension_tol,
     )
+
+
+# -- model #10: geometrically-exact string ----------------------------------------------
+
+
+def make_geometric_string(
+    *,
+    N: int = 64,
+    lam: float | None = None,
+    lam_long: float | None = None,
+    kappa: float = KAPPA_DEFAULT,
+    kappa_w: float | None = None,
+    EA: float = EA_DEFAULT,
+    sigma0: float = 0.0,
+    sigma1: float = 0.0,
+    sigma0_long: float | None = None,
+    sigma1_long: float | None = None,
+    theta: float = THETA_DEFAULT,
+    newton_tol: float = GEO_NEWTON_TOL,
+    L: float = L_DEFAULT,
+    T: float = T_DEFAULT,
+    rho: float = RHO_DEFAULT,
+    **kwargs,
+) -> GeometricString:
+    """Build a geometrically-exact string (model #10), timestep set from ``lam_long`` by default.
+
+    ``EA = T`` is model #3 bit-for-bit (the nonlinearity coefficient is ``EA - T0``); the default
+    ``EA = EA_DEFAULT`` is **the same number model #9's tests use**, so the batch-2 cross-model KC
+    check is apples-to-apples -- modulo the identification ``EA_#9 <-> (EA - T0)_#10``, a 0.2 %
+    offset at these values that is *the identification, not a discrepancy*.
+
+    **The fast field sets the timestep, so ``lam_long`` is the default knob** (see
+    ``GEO_LAM_LONG_DEFAULT``). Pass ``lam=`` to set ``fs`` from the **transverse** wave instead;
+    the two are mutually exclusive.
+
+    Why the default is this way round, and not model #1-#9's ``lam``: the longitudinal field runs at
+    ``lam_long = sqrt(EA/T) * lam``, about **22x larger** at the default ``EA/T = 500``. So the
+    familiar ``lam=0.5`` silently means ``lam_long = 11`` -- eleven cells of longitudinal travel per
+    timestep. The implicit scheme is unconditionally *stable* there and reports no CFL violation,
+    but **stable is not accurate**, and past ``lam_long ~ 4`` the Newton solve stops converging and
+    the energy gate fails by *fourteen orders of magnitude* rather than a little. ``lam=`` is
+    therefore a deliberate opt-in, not the path of least resistance. Phantom *frequencies* ride on
+    the well-resolved transverse partials and are safe either way.
+    """
+    if lam is not None and lam_long is not None:
+        raise ValueError("pass lam= or lam_long=, not both — they both set fs")
+    c = wave_speed(T, rho)
+    if lam is not None:
+        fs = c * N / (L * lam)
+    else:
+        lam_long = GEO_LAM_LONG_DEFAULT if lam_long is None else lam_long
+        fs = float(np.sqrt(EA / rho)) * N / (L * lam_long)
+    return GeometricString(
+        L=L, T=T, rho=rho, fs=fs, N=N, EA=EA, kappa=kappa, kappa_w=kappa_w, sigma0=sigma0,
+        sigma1=sigma1, sigma0_long=sigma0_long, sigma1_long=sigma1_long, theta=theta,
+        newton_tol=newton_tol, **kwargs,
+    )
+
+
+def geometric_mode_ic(N: int, m: int = 1, amp: float = 1e-3, L: float = L_DEFAULT) -> np.ndarray:
+    """A single simply-supported eigenmode ``amp * sin(m pi x / L)`` on the full ``N+1`` grid."""
+    return amp * np.sin(m * np.pi * np.linspace(0.0, L, N + 1) / L)
+
+
+def geometric_pluck_ic(
+    N: int, amp: float = 1e-3, at: float = 0.2, L: float = L_DEFAULT
+) -> np.ndarray:
+    """A triangular pluck of height ``amp`` at fractional position ``at`` (full ``N+1`` grid).
+
+    **The general-case IC, and the one that matters.** A single-mode IC is secretly a scalar Duffing
+    test: it keeps the strain field nearly uniform and never exercises the *local* tension that
+    distinguishes model #10 from model #9's spatial scalar. The pluck's corner is broadband, so the
+    stretch varies cell-to-cell -- which is the thing under test.
+    """
+    x = np.linspace(0.0, 1.0, N + 1)
+    return amp * np.where(x <= at, x / at, (1.0 - x) / (1.0 - at))
 
 
 def mode_off_fraction(u: np.ndarray, shape: np.ndarray, scale: float) -> float:
