@@ -104,7 +104,14 @@ def _evaluate(cdp: CDP, expr: str) -> object:
 def run_case(cdp: CDP, name: str, query: str) -> bool:
     cdp.cmd("Page.navigate", {"url": f"{BASE}/?{query}"})
     status = ""
-    for _ in range(200):  # up to ~40 s (a worst-case membrane render is ~5 s)
+    # Up to ~90 s. It used to be ~40 s, which was ample when a worst-case membrane render was ~5 s
+    # and the slowest case (the whirl) was ~25 s — but the geometric string's PHANTOM regime
+    # measures 0.10 s of bridge force at fs ≈ 159 kHz: ~15,900 vector Newton steps ≈ 45 s. That
+    # window is fixed physics, not a budget choice (halving it mislocates the weakest phantom by
+    # 0.52 Hz), so the wait had to grow instead. NOTE: a 40 s window would time out mid-"computing…"
+    # and report a FALSE FAIL — which is exactly what a loaded machine did to the plate cases once
+    # before; if a case fails on "computing…", check the render time before suspecting the code.
+    for _ in range(450):
         status = str(_evaluate(cdp, "document.getElementById('status').textContent") or "")
         if status.startswith("ok") or status.startswith("error") or status.startswith("network"):
             break
@@ -183,12 +190,15 @@ def main() -> int:
             ("plate_free", "model=plate&domain=free"),
             ("vk_supported", "model=vk&domain=supported"),
             ("vk_free", "model=vk&domain=free"),
-            # The geometric string's three regimes. Slowest cases in the set (~5-15 s each): every
-            # step is a 3-field Newton solve at ~22x a normal string's fs. Viz-only — these are the
-            # only cases with no audio, so `painted` is the whole verdict.
+            # The geometric string's four regimes. Slowest cases in the set: every step is a 3-field
+            # Newton solve at ~22x a normal string's fs. The first three are viz-only (the only
+            # cases with no audio, so `painted` is the whole verdict); `phantom` is the exception —
+            # it measures the bridge force, so it has both a spectrum AND 0.1 s of sound, and at
+            # ~45 s it is the slowest render in the viewer (see the wait loop in run_case).
             ("geom_rotating", "model=geometric&domain=rotating"),
             ("geom_planar", "model=geometric&domain=planar"),
             ("geom_whirl", "model=geometric&domain=whirl"),
+            ("geom_phantom", "model=geometric&domain=phantom"),
         ]
         results = [run_case(cdp, n, q) for n, q in cases]
         print(f"\n{sum(results)}/{len(results)} cases passed; screenshots in out/viewer_*.png")

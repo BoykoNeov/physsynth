@@ -112,6 +112,14 @@
         <p class="hint" id="whirl-hint" data-domain="whirl"></p>
       </fieldset>
 
+      <!-- Phantom partials: no controls of its own — κ and amplitude (above) are the whole story, and
+           the 0.10 s window is fixed physics. This is a hint box, but an earning one: it is the only
+           warning that this render takes ~45 s, and it carries the κ microscope story. -->
+      <fieldset class="group" data-show="geometric" data-domain="phantom">
+        <legend>Phantom partials — the bridge force</legend>
+        <p class="hint" id="phantom-hint" data-domain="phantom"></p>
+      </fieldset>
+
       <fieldset class="group" data-show="bow">
         <legend>Bow</legend>
         <div class="slider" data-param="bow_position" data-min="0.04" data-max="0.45" data-step="0.01" data-val="0.13" data-unit="m" data-fixed="2"></div>
@@ -160,7 +168,10 @@
              the note under the canvas — resolving its longitudinal wave forces fs ≈ 22× a normal
              string's, so a second of sound is ~10 minutes of compute. -->
         <div class="slider" data-param="audio_duration"   data-min="0.2" data-max="6"    data-step="0.1"  data-val="2.0" data-unit="s" data-show="ideal stiff damped tension bow membrane plate vk"></div>
-        <div class="slider" data-param="animation_window" data-min="0.01" data-max="0.3" data-step="0.005" data-val="0.06" data-unit="s" data-fixed="3"></div>
+        <!-- Hidden for the phantom regime: its window is fixed physics, not a preference. At 0.05 s
+             the weakest phantom (2f₁) sits inside its neighbours' leakage skirts and is mislocated
+             by 0.52 Hz (vs 0.039 Hz at 0.10 s), collapsing its margin to f₂ from 170× to 8×. -->
+        <div class="slider" data-param="animation_window" data-min="0.01" data-max="0.3" data-step="0.005" data-val="0.06" data-unit="s" data-fixed="3" data-hide-domain="phantom"></div>
       </fieldset>
 
       <button id="render" class="primary">Render</button>

@@ -25,6 +25,9 @@ from web.serialize import (
     GEOM_DT_MAX,
     GEOM_LAM_LONG_MAX,
     GEOM_N_MAX,
+    GEOM_PHANTOM_DEFECT_MIN,
+    GEOM_PHANTOM_WINDOW,
+    GEOM_PHANTOM_WORK_MAX,
     GEOM_WORK_MAX,
     LOSSLESS_TOL,
     MEMBRANE_LAMBDA_MAX,
@@ -1187,3 +1190,261 @@ def test_geometric_bad_params_give_error_payload(bad):
     d = _geom(**bad)
     assert "error" in d, f"{bad} should have been rejected"
     assert d["error"]["kind"] in ("param", "construction")
+
+
+# == phantom partials (model #10's 4th regime — the bridge-force spectrum) =========================
+# Model #9's FIRST refusal, discharged. #9's tension is a spatial *scalar*, so it has no
+# longitudinal field and nowhere to put a combination tone; #10's tension is a FIELD, and its
+# nonlinear excess carries `a r^2 v_x / 2` — quadratic in the transverse fields, linear in the
+# longitudinal one — so two transverse partials at f1, f2 drive v at f_i +- f_j. Those are Conklin's
+# phantom partials, read off the bridge force EA v_x(0): what actually radiates in a piano.
+#
+# This regime reproduces tests/test_geometric_phantom.py's rig exactly (same lam_long / 0.10 s
+# window / two-mode IC / v = 0 start / blind band-limited detector), so it inherits that suite's
+# validation. What is pinned HERE is what the *wrapper* adds and could break: the verdict gating
+# (three ways to not have a claim, each with its own honest label), the fixed window, the
+# display/measurement split, and the two budgets.
+#
+# COST: N = 16 rather than the viewer's default 32, at ~23 s for the shared fixture. The claim is
+# NOT refinement-invariant (see the coarse-grid test below — dispersion eats the defect), so N = 16
+# is the cheapest grid where it is still real: defect 3.79 Hz against the 3.0 gate.
+GEOM_PHANTOM: dict = {"model": "geometric", "domain": "phantom", "N": 16, "lam_long": 0.9,
+                      "T": 200.0, "rho": 0.005, "EA": 1.0e5, "L": 1.0, "theta": 0.28,
+                      "kappa": 8.0, "sigma0": 0.0, "sigma1": 0.0, "pickup_position": 0.25,
+                      "amplitude": 1.5e-3,
+                      # Deliberately absurd, and ignored: the window is fixed physics. Pinned by
+                      # test_phantom_window_is_fixed_physics_and_ignores_the_animation_slider.
+                      "animation_window": 0.3}
+
+
+@pytest.fixture(scope="module")
+def phantom():
+    """The phantom run (~23 s), shared by every test that reads it."""
+    return simulate_to_payload(dict(GEOM_PHANTOM))
+
+
+def test_phantom_peaks_are_the_quadratic_combinations_of_the_measured_partials(phantom):
+    """**The mechanism.** Every peak the longitudinal field carries is a *quadratic* combination of
+    the transverse partials.
+
+    This is ``a r^2 v_x/2`` made visible: ``r^2`` is quadratic in ``u``, so a transverse spectrum
+    ``{f1, f2}`` drives ``v`` at ``{f2-f1, 2f1, f1+f2, 2f2}`` and at nothing else. The four
+    strongest in-band peaks are those four combinations to ~0.04 Hz, and they dominate the strongest
+    non-combination peak by ~5x (that runner-up is the broadband ``v = 0`` startup transient, not
+    physics).
+
+    The combinations are built from the MEASURED ``f1``, ``f2`` — never predicted. Those partials
+    carry the theta-scheme's dispersion *and* the amplitude hardening, and the phantom rides on
+    whatever the partials actually are; predicting them would fold both errors into the oracle and
+    measure the formula instead of the string.
+    """
+    sp = phantom["meta"]["spectrum"]
+    assert sp["kind"] == "phantom"
+    assert sp["resolved"] is True
+    assert sp["n_peaks"] >= 4
+    assert sp["combo_err"] < 0.15, (
+        f"the 4 strongest in-band peaks are not the 4 quadratic combinations "
+        f"(max err {sp['combo_err']:.4f} Hz)"
+    )
+    assert sp["dominance"] > 3.0, (
+        f"the combinations do not dominate the spectrum: weakest combo vs strongest non-combo = "
+        f"{sp['dominance']:.2f}x"
+    )
+    # Measured, never predicted — the combinations are exact functions of the measured partials...
+    assert sp["combos"]["f1+f2"] == pytest.approx(sp["f1"] + sp["f2"], rel=1e-12)
+    assert sp["combos"]["f2-f1"] == pytest.approx(sp["f2"] - sp["f1"], rel=1e-12)
+    # ...and NOT of the ladder, which is shipped only as a shown-not-scored reference.
+    assert abs(sp["combos"]["f1+f2"] - (sp["ladder"][0] + sp["ladder"][1])) > 0.05
+
+
+def test_phantom_no_longitudinal_peak_sits_on_a_transverse_partial(phantom):
+    """The other half of the claim, and the more discriminating half.
+
+    A *linear* coupling between the fields — the bug this excludes — would reproduce the transverse
+    partials in ``v`` directly. ``f1`` and ``f2`` are the only partials actually excited, so they
+    are the only two that can be checked without an oracle: no in-band longitudinal peak comes near
+    either.
+    """
+    sp = phantom["meta"]["spectrum"]
+    for name in ("f1", "f2"):
+        near = sp[f"nearest_to_{name}"]
+        assert abs(near - sp[name]) > 3.0, (
+            f"a longitudinal peak sits on the transverse partial {name} = {sp[name]:.3f}: nearest "
+            f"peak {near:.3f}. The coupling is supposed to be quadratic."
+        )
+
+
+def test_phantom_headline_is_the_defect_measured_from_both_sides(phantom):
+    """**The headline**: the displacement that puts a phantom in a *gap* is ``f2 - 2 f1``, and it is
+    one number measured in one run — no oracle, no confound.
+
+    For a harmonic string the low phantoms coincide with partials *exactly* (``f2 - f1 = f1`` and
+    ``2 f1 = f2``), so the distance from the difference tone to ``f1`` and from ``2 f1`` to ``f2``
+    are BOTH exactly ``|f2 - 2 f1|`` — the defect, nonzero only because kappa > 0. Approaching the
+    same physical number from opposite sides is what makes it a measurement rather than an
+    assertion.
+
+    No hardening confound either: hardening moves the phantoms and the partials *together*, and
+    measured it slightly WIDENS the defect, so it works against the claim rather than for it.
+    """
+    sp = phantom["meta"]["spectrum"]
+    defect = sp["defect"]
+    assert defect == pytest.approx(sp["f2"] - 2 * sp["f1"], rel=1e-12)
+    assert defect > GEOM_PHANTOM_DEFECT_MIN
+    d1, d2 = sp["displacements"]
+    assert d1 == pytest.approx(defect, abs=0.3)
+    assert d2 == pytest.approx(defect, abs=0.3)
+    assert min(d1, d2) > 3.0, "the phantoms must land in the gaps, not on the partials"
+
+
+def test_phantom_conserves_through_the_wrapper(phantom):
+    """Criterion 1 survives 7,950 Newton steps of the most arithmetic-heavy regime in the viewer."""
+    e = phantom["energy"]
+    assert e["sigma_is_zero"] is True
+    assert e["lossless"]["drift"] < LOSSLESS_TOL
+    assert e["lossless"]["pass"] is True
+
+
+def test_phantom_window_is_fixed_physics_and_ignores_the_animation_slider(phantom):
+    """The 0.10 s window is not a preference, so the slider that sets every other regime's window is
+    ignored here (and hidden in the UI).
+
+    The fixture asks for ``animation_window = 0.3`` — 3x — and gets 0.10 s of physics anyway.
+    Halving the window does not merely cost precision: at 0.05 s the raw bins are 20 Hz wide, the
+    ``2 f1`` phantom (the weakest of the four) sits inside its neighbours' leakage skirts and is
+    mislocated by 0.52 Hz against 0.039 Hz for the worst of the four at 0.1 s, and its margin to
+    ``f2`` collapses from 170x to 8x.
+    """
+    assert GEOM_PHANTOM["animation_window"] == 0.3, "the fixture must ask for the wrong window"
+    assert phantom["meta"]["num_steps"] == round(GEOM_PHANTOM_WINDOW * phantom["fs_sim"])
+
+
+def test_phantom_display_grid_is_denser_than_the_measurement_grid(phantom):
+    """The display/measurement split, pinned structurally.
+
+    Zero-padding densifies the bin grid without adding real resolution: exactly what a *plot* needs
+    and nothing a *measurement* may lean on. So it is confined to the drawn traces, while the
+    detector keeps ``magnitude_spectrum``'s default — which is what the test rig measures, and where
+    the 0.039 Hz peak-location error comes from (parabolic refinement, independent of the display
+    grid).
+
+    At the rig's 2x pad the bins are ~5 Hz and the ~57 Hz zoom band would hold about a dozen points:
+    not a picture. This asserts the zoom strip is an order of magnitude denser than that, which can
+    only be true if the display path pads separately.
+    """
+    sp = phantom["meta"]["spectrum"]
+    zoom_hz = sp["zoom"][1] - sp["zoom"][0]
+    detector_nfft = 2 ** np.ceil(np.log2(phantom["meta"]["num_steps"] * 2))
+    detector_df = phantom["fs_sim"] / detector_nfft
+    assert len(sp["zoom_freq"]) > 10 * (zoom_hz / detector_df), (
+        f"the zoom strip has {len(sp['zoom_freq'])} points over {zoom_hz:.1f} Hz — no denser than "
+        f"the detector's {detector_df:.2f} Hz bins, so the defect will render sub-pixel"
+    )
+    assert len(sp["wide_freq"]) > 100
+
+
+def test_phantom_ships_the_audio_that_batch_3_deferred(phantom):
+    """The debt: model #10 went viz-only, promising the bridge force as its true audible signature.
+
+    This is the one geometric regime with sound, and only because its window is *already* 0.1 s of
+    the radiating channel — so the clip is free rather than affordable. It is honest about being a
+    blip: 0.1 s, and dominated by the longitudinal startup transient rather than by the phantoms.
+    """
+    assert phantom["audio"] is not None
+    assert phantom["audio"]["fs"] == AUDIO_FS
+    assert phantom["audio"]["n"] == pytest.approx(GEOM_PHANTOM_WINDOW * AUDIO_FS, rel=0.02)
+    assert phantom["audio"]["peak"] > 0.0
+    assert np.all(np.isfinite(_decode_f32(phantom["audio"]["b64"])))
+    assert "bridge force" in phantom["audio_note"]
+    # Every other regime still ships none, and says why rather than shipping a stub.
+    planar = _geom(domain="planar")
+    assert planar["audio"] is None
+    assert "viz-only" in planar["audio_note"]
+
+
+def test_phantom_linear_string_has_no_channel_to_put_a_phantom_in():
+    """**The harness control** — and it is nearly free (``EA = T0`` makes ``c_long = c``, so ``fs``
+    collapses from 159 kHz to 1.8 kHz and the run is 178 steps).
+
+    ``a = EA - T0 = 0`` kills the whole nonlinear excess, so the three fields decouple and ``v``,
+    started at rest, never leaves it: the bridge force is zero *identically*, not "small". This is
+    what rules out the readout manufacturing its own result — same IC, same readout, same blind
+    detector, and the only change is the one coefficient the phantom is supposed to come from.
+
+    It also pins the verdict ORDER, which is a real trap rather than a nicety: ``detect_peaks``
+    returns an empty list on a zero signal rather than raising, so without the ``linear`` check
+    firing first, a defect above the gate would paint "the 4 strongest peaks ARE the 4 combinations"
+    over a spectrum with no peaks in it at all.
+    """
+    d = simulate_to_payload({**GEOM_PHANTOM, "N": 8, "EA": 200.0})   # EA == T0
+    sp = d["meta"]["spectrum"]
+    assert sp["linear"] is True
+    assert sp["bridge_max"] == 0.0, "EA = T0 must leave v identically zero — not merely small"
+    assert sp["n_peaks"] == 0
+    assert sp["resolved"] is False, "no channel means no claim, whatever the defect says"
+    assert d["audio"]["peak"] == 0.0
+
+
+def test_phantom_labels_a_grid_too_coarse_to_show_the_stiffness():
+    """Label-not-fail, and the reason is a measured surprise worth pinning: **N is a second control
+    on the defect, not just kappa** — at kappa = 8, plenty of stiffness, N = 8 still cannot show it.
+
+    ``f2 - 2 f1`` is not pure stiffness. The theta-scheme's temporal dispersion drags mode 2 *flat*,
+    so it contributes a NEGATIVE defect, and what is measured is the difference of the two. Off the
+    linear ladder at kappa = 8 the defect runs +0.38 / +3.57 / +4.38 Hz at N = 8 / 16 / 32, and at
+    kappa = 0 it is pure dispersion (-0.97 / -0.43 / -0.24, converging as O(h^2)). So at N = 8 the
+    grid eats the physics and there is nothing to discriminate — a fact about the run rather than a
+    solver failure, so the panel labels it (the bow's Schelleng-window precedent).
+
+    Note this is NOT the linear control above: the channel is wide open (peaks are detected, the
+    phantoms are there), they have merely collapsed onto the partials.
+    """
+    d = simulate_to_payload({**GEOM_PHANTOM, "N": 8})
+    sp = d["meta"]["spectrum"]
+    assert sp["linear"] is False, "the phantom channel is open — this is not the a = 0 control"
+    assert sp["n_peaks"] >= 4, "the phantoms are present; they are merely not discriminating"
+    assert sp["defect"] < GEOM_PHANTOM_DEFECT_MIN
+    assert sp["resolved"] is False
+
+
+def test_phantom_defect_gate_is_one_sided_not_absolute():
+    """The gate is ``defect >= 3.0``, never ``abs(defect) >= 3.0``, and that is load-bearing.
+
+    A coarse-enough grid gives a large *negative* defect — phantoms displaced to the wrong side of
+    the partials by numerical dispersion rather than by physics — which an ``abs()`` gate would
+    happily score. Requiring a POSITIVE defect means "the partials are stretched by real stiffness,
+    by enough to see", which is the only version of this claim worth making. Driven directly rather
+    than through a run: the reachable slider range makes a large negative defect hard to reach, and
+    a guard that cannot trip in range is a guarantee, not dead code (the tension string's lesson).
+    """
+    assert GEOM_PHANTOM_DEFECT_MIN > 0
+    for defect in (-10.0, -3.5, -0.5, 0.0, 2.9):
+        assert not (defect >= GEOM_PHANTOM_DEFECT_MIN), (
+            f"defect {defect} must not be scorable: negative means the scheme's dispersion, not "
+            f"stiffness, is displacing the phantoms"
+        )
+    assert 3.79 >= GEOM_PHANTOM_DEFECT_MIN     # the measured N=16 defect clears it
+
+
+@pytest.mark.parametrize("bad", [
+    # The window is fixed, so the only way past the budget is N x lam_long: fs = c_long N/(L lam).
+    {"N": 32, "lam_long": 0.2},
+    # dT/T0 = a A^2 (p2_1 + p2_2)/(4 T) — bound the tension excess, never the amplitude (A is a
+    # proxy; EA and T move it just as hard). At A = 0.02 this lands ~2.4 against the 2.2 cap.
+    {"amplitude": 0.02},
+])
+def test_phantom_budget_and_amplitude_guards_give_clean_error_payloads(bad):
+    """Both phantom-specific guards reject at construction — no 500, no NaN render, no 45 s wait."""
+    d = simulate_to_payload({**GEOM_PHANTOM, **bad})
+    assert "error" in d, f"{bad} should have been rejected"
+    assert d["error"]["kind"] in ("param", "construction")
+
+
+def test_phantom_has_its_own_work_budget_because_it_is_the_slowest_render():
+    """Its budget is ~2.75x the other regimes'. The window is fixed physics and fs rides the
+    longitudinal wave, so ~15,900 vector Newton steps (~45 s) is the floor at the default N = 32 —
+    GEOM_WORK_MAX would reject the regime's own default parameters."""
+    default_steps = round(GEOM_PHANTOM_WINDOW * 159_009)      # N=32, lam_long=0.9, EA=1e5, rho=5e-3
+    assert GEOM_PHANTOM_WORK_MAX > GEOM_WORK_MAX
+    assert default_steps < GEOM_PHANTOM_WORK_MAX              # the N=32 default fits...
+    assert default_steps > GEOM_WORK_MAX                      # ...and would not have, before

@@ -76,8 +76,16 @@ const MODEL_RANGES = {
   // amplitude is capped well below model #9's mode-1 breakup (dT/T0 ~ 4.4 at A = 0.06 here).
   geometric: { N: { min: 8, max: 32, val: 16 }, kappa: { val: 0.0 },
                EA: { min: 5, val: 100 },
-               amplitude: { min: 0.001, max: 0.02, step: 0.001, fixed: 3, val: 0.004 },
+               amplitude: { min: 0.0005, max: 0.02, step: 0.0005, fixed: 4, val: 0.004 },
                sigma0: { val: 0 }, sigma1: { val: 0 }, pickup_position: { val: 0.25 } },
+  // Regime-level ranges, keyed "model:domain" and merged AFTER the model spec (see
+  // applyModelRanges). The phantom regime is the first customer and needs both: κ = 8 is its
+  // microscope (the geometric model defaults κ = 0, which is a HARMONIC string — every phantom
+  // would coincide with a partial exactly and the panel would render its own opposite), and N = 32
+  // is the test rig's grid, which the viewer copies so it inherits the suite's validation.
+  // The same "every param a regime re-ranges must reset one level up" discipline as _default:
+  // MODEL_RANGES.geometric already resets κ → 0 and N → 16, so switching regime away restores them.
+  "geometric:phantom": { kappa: { val: 8.0 }, N: { val: 32 }, amplitude: { val: 0.0015 } },
   // `amplitude` is shown only for the tension string, but gatherParams sends every slider — so it
   // must reset to the linear string path's historical 1e-3 on switch, or those models would silently
   // re-render at the tension default (a pure scale for a linear model, but not bit-for-bit).
@@ -108,7 +116,8 @@ const DOMAIN_OPTS = {
   vk: [["supported", "Supported gong (#6)"], ["free", "Free-edge cymbal (#6)"]],
   geometric: [["rotating", "Rotating wave — exact circle"],
               ["planar", "Planar — max|w| = 0 exactly"],
-              ["whirl", "Whirling — the Mathieu tongue"]],
+              ["whirl", "Whirling — the Mathieu tongue"],
+              ["phantom", "Phantom partials — the bridge force"]],
 };
 const DOMAIN_LABELS = { membrane: "Domain", geometric: "Regime" };
 
@@ -207,8 +216,31 @@ function updateVisibility() {
 // Re-range sliders to the current model's caps/defaults (see MODEL_RANGES). Merges _default with the
 // model spec (model wins); applies min/max/step/fixed, (re)sets `val` when the spec gives one, and
 // always clamps the current value into range. Run on model switch only, so resets are intentional.
+// True when some regime of `model` re-ranges sliders, i.e. a "model:domain" key exists. Gating on
+// this keeps the secondary select's existing behaviour intact everywhere else: a membrane
+// circle→rectangle or a plate supported→free switch must NOT reset the user's sliders, and only
+// models that declare regime ranges get re-ranged on a domain change.
+function hasRegimeRanges(model) {
+  return Object.keys(MODEL_RANGES).some((k) => k.startsWith(model + ":"));
+}
+
+// Merge range specs PER PARAM, not per layer. Object.assign is shallow, so a later layer's
+// {val: 0.0015} would REPLACE the earlier {min, max, step, fixed, val} outright rather than override
+// one field of it — the slider would then keep whatever min/max/step index.html last left on it.
+// That is not theoretical: it snapped the phantom regime's amplitude from 0.0015 to 0.002 on a stale
+// step="0.001" and quietly rendered the wrong physics. The _default-leak trap, one level down.
+function mergeSpecs(...layers) {
+  const out = {};
+  for (const layer of layers) {
+    for (const k in (layer || {})) out[k] = Object.assign({}, out[k], layer[k]);
+  }
+  return out;
+}
+
 function applyModelRanges() {
-  const spec = Object.assign({}, MODEL_RANGES._default, MODEL_RANGES[modelSel.value] || {});
+  const regimeKey = domainSel ? modelSel.value + ":" + domainSel.value : "";
+  const spec = mergeSpecs(MODEL_RANGES._default, MODEL_RANGES[modelSel.value],
+                          MODEL_RANGES[regimeKey]);
   for (const pkey in spec) {
     const inp = sliders[pkey];
     if (!inp) continue;
@@ -320,6 +352,27 @@ function updateLambdaHint() {
       wHint.textContent = "";
     }
   }
+  // Phantom: κ is a MICROSCOPE, not a thumb on the scale — the r² → v mechanism is completely
+  // κ-independent; κ only decides whether the gap a phantom lands in is visible. The defect the
+  // panel gates on is f₂−2f₁ ≈ 3B·f₁ MINUS the θ-scheme's own dispersion, which is why the hint
+  // speaks in the measured B and warns well above κ=0 (at κ≈2 the two cancel).
+  const pHint = $("phantom-hint");
+  if (pHint) {
+    if (m === "geometric" && domainSel.value === "phantom") {
+      const c = Math.sqrt(param("T") / param("rho")), L = param("L"), kap = param("kappa");
+      const B = (Math.PI ** 2 * kap * kap) / (c * c * L * L);
+      const defect = 3 * B * (c / (2 * L));         // continuum estimate; the run measures the truth
+      const fs = Math.sqrt(param("EA") * 1e3 / param("rho")) * param("N") / (L * param("lam_long"));
+      const secs = Math.round(0.1 * fs * 2.8e-3);   // ~2.8 ms/step incl. panel telemetry (measured)
+      pHint.textContent =
+        `B = ${B.toExponential(2)} ⇒ defect ≈ ${defect.toFixed(1)} Hz before dispersion. `
+        + (defect < 4 ? "TOO HARMONIC — the phantoms collapse onto the partials; raise κ. " : "")
+        + `Two modes plucked, 0.10 s of bridge force measured — about ${secs} s to render.`;
+      pHint.style.color = defect < 4 ? "var(--warn, var(--muted))" : "var(--muted)";
+    } else {
+      pHint.textContent = "";
+    }
+  }
   // Bow: Schelleng's playable force window is real but has NO closed form in the core — the tests
   // just pick known-good points — so this reports the empirical rule they use rather than inventing
   // an Fmin/Fmax. force ~ 4·v_bow holds the window across bow speeds; force <= 0.4 stays clean out
@@ -376,6 +429,7 @@ function onControlChange(name) {
   if (name === "bow_position" || name === "v_bow") updateLambdaHint();
   if (name === "lam_long" || name === "N" || name === "rho") updateLambdaHint();
   if (name === "tongue_position" || name === "dt_over_t0") updateLambdaHint();
+  if (name === "kappa") updateLambdaHint();   // the phantom hint's microscope + cost estimate
   scheduleAuto();
 }
 
@@ -387,6 +441,7 @@ modelSel.addEventListener("change", () => {
   scheduleAuto();
 });
 if (domainSel) domainSel.addEventListener("change", () => {
+  if (hasRegimeRanges(modelSel.value)) applyModelRanges();
   updateVisibility();
   updateLambdaHint();
   scheduleAuto();
@@ -863,7 +918,13 @@ function drawDiagnostics() {
     drawStickSlip();
     return;
   }
-  // The geometric string's three regimes, three panels — all 1-D, none of them cents bars.
+  // The geometric string's four regimes, four panels — all 1-D, none of them cents bars.
+  if (spec && spec.kind === "phantom") {
+    partialsTitle.firstChild.textContent = "Phantom partials ";
+    partialsSub.textContent = "combination tones in the bridge force";
+    drawPhantom();
+    return;
+  }
   if (spec && spec.kind === "whirl") {
     partialsTitle.firstChild.textContent = "Whirl growth ";
     partialsSub.textContent = "envelope of max|w|, log scale";
@@ -1135,6 +1196,144 @@ function drawStickSlip() {
 // (a sliding
 // ~1-period max), never the raw max|w|: every node crosses zero twice a period, so the instantaneous
 // value oscillates non-monotonically and the line underneath is lost in the spikes.
+// One strip of the phantom panel: a dB spectrum over [f_lo, f_hi] with two marker families.
+// dB, not linear: the four combination tones span orders of magnitude (the difference tone towers
+// over 2f₁), and on a linear axis the weakest of them is a flat line on the floor.
+function phantomStrip(g, sp, x0, y0, w, h, fLo, fHi, freq, mag, opts) {
+  const fx = (f) => x0 + ((f - fLo) / Math.max(fHi - fLo, 1e-9)) * w;
+  const DB_FLOOR = -70;
+  const dy = (m) => {
+    const db = 20 * Math.log10((m == null ? 0 : m) + 1e-12);
+    return y0 + h - Math.max(0, (db - DB_FLOOR) / -DB_FLOOR) * (h - 3);
+  };
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(x0, y0, w, h);
+
+  // Where transverse partials ARE (shown, never scored — the discrete ladder). The phantoms land
+  // in the GAPS between these; a longitudinal peak sitting ON one would mean the fields are coupled
+  // linearly, which is the bug this excludes.
+  g.strokeStyle = "rgba(255,110,110,.65)"; g.lineWidth = 1; g.setLineDash([3, 3]);
+  (opts.partials || []).forEach((f) => {
+    if (f == null || f < fLo || f > fHi) return;
+    g.beginPath(); g.moveTo(fx(f), y0); g.lineTo(fx(f), y0 + h); g.stroke();
+  });
+  g.setLineDash([]);
+  // Where the phantoms ARE: the quadratic combinations of the MEASURED partials.
+  g.strokeStyle = "#5ad17a"; g.lineWidth = 1.2;
+  (opts.combos || []).forEach((f) => {
+    if (f == null || f < fLo || f > fHi) return;
+    g.beginPath(); g.moveTo(fx(f), y0); g.lineTo(fx(f), y0 + h); g.stroke();
+  });
+
+  g.strokeStyle = "#cdd6e2"; g.lineWidth = 1; g.beginPath();
+  let started = false;
+  for (let i = 0; i < freq.length; i++) {
+    if (freq[i] < fLo || freq[i] > fHi) continue;
+    const x = fx(freq[i]), y = dy(mag[i]);
+    if (!started) { g.moveTo(x, y); started = true; } else g.lineTo(x, y);
+  }
+  g.stroke();
+
+  // Labels go over a knocked-out background: the trace's peaks reach the top of the strip, and
+  // plain text there is unreadable (the first cut was drawn straight through by the spectrum).
+  g.font = "9px ui-monospace, monospace";
+  if (opts.label) {
+    const tw = g.measureText(opts.label).width;
+    g.fillStyle = "rgba(16,20,28,.82)";
+    g.fillRect(x0 + 2, y0 + 1, tw + 5, 11);
+    g.fillStyle = "#8b98a8";
+    g.fillText(opts.label, x0 + 4, y0 + 9);
+  }
+  const hz = `${Math.round(fHi)} Hz`;
+  g.fillStyle = "rgba(16,20,28,.82)";
+  g.fillRect(x0 + w - g.measureText(hz).width - 6, y0 + h - 11, g.measureText(hz).width + 5, 10);
+  g.fillStyle = "#8b98a8";
+  g.fillText(hz, x0 + w - g.measureText(hz).width - 4, y0 + h - 3);
+  return fx;
+}
+
+// The phantom panel — model #9's first refusal, discharged. TWO strips, and that is not decoration:
+// the claim has two halves and no single axis carries both. Wide (0 → 4.8 f₁) shows the four
+// combination tones, which is the mechanism; but there the 4.6 Hz defect is ~4 px, so the half that
+// says "and NOT on a partial" renders as its own opposite — exactly the trap the diagnose figure hit
+// on a 2 kHz axis. The zoom strip frames the f₁ / (f₂−f₁) pair where 4.6 Hz is ~31 px and the two
+// lines are plainly separate.
+function drawPhantom() {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height, padL = 6, gap = 8;
+  g.clearRect(0, 0, W, H);
+  const out = $("partials-readout");
+  const sp = payload && payload.meta && payload.meta.spectrum;
+  if (!sp || !sp.wide_freq || !sp.wide_freq.length) { out.textContent = "no bridge spectrum"; return; }
+
+  const combos = Object.values(sp.combos);
+  const stripH = (H - gap - 4) / 2, plotW = W - padL - 8;
+  phantomStrip(g, sp, padL, 2, plotW, stripH, sp.band[0], sp.band[1], sp.wide_freq, sp.wide_mag,
+               { partials: sp.ladder, combos, label: "bridge force EA·v_x(0)" });
+  const fx = phantomStrip(g, sp, padL, 2 + stripH + gap, plotW, stripH, sp.zoom[0], sp.zoom[1],
+                          sp.zoom_freq, sp.zoom_mag,
+                          { partials: [sp.f1], combos: [sp.combos["f2-f1"]],
+                            label: "zoom: f₂−f₁ vs f₁" });
+
+  // The defect, drawn: a bracket between the partial and the phantom that is supposed to miss it.
+  if (sp.f1 >= sp.zoom[0] && sp.f1 <= sp.zoom[1]) {
+    const yb = 2 + stripH + gap + stripH - 12;
+    const xa = fx(sp.f1), xb = fx(sp.combos["f2-f1"]);
+    g.strokeStyle = "#ffcf5c"; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(xa, yb); g.lineTo(xb, yb); g.stroke();
+    g.fillStyle = "#ffcf5c"; g.font = "9px ui-monospace, monospace";
+    g.fillText(`${Math.abs(sp.defect).toFixed(2)} Hz`, Math.min(xa, xb) + 3, yb - 3);
+  }
+
+  const err = sp.combo_err == null ? "—" : sp.combo_err.toFixed(3);
+  const dom = sp.dominance == null ? "—" : sp.dominance.toFixed(1) + "×";
+  const d1 = sp.displacements[0], d2 = sp.displacements[1];
+  // The harness control, and it comes FIRST: on a linear string (EA = T₀ ⇒ a = 0) the phantom
+  // channel does not exist at all and the bridge force is bit-exactly zero. That is a result, not a
+  // failure — and checking it before `resolved` is what stops an empty spectrum reading as a claim.
+  if (sp.linear) {
+    out.textContent =
+      `EA = T₀ ⇒ a = 0 · the bridge force is ${sp.bridge_max === 0 ? "BIT-EXACTLY zero" : "zero"} — `
+      + `there is no phantom channel to look in\n`
+      + `the nonlinear excess a(r²v_x/2 + r⁴/8) vanishes outright, so the three fields decouple and `
+      + `v, started at rest, never leaves it. The control that proves the readout is not `
+      + `manufacturing its own result.`;
+    return;
+  }
+  // Label, never FAIL (the bow's Schelleng window, the free cymbal's null): a too-harmonic string
+  // genuinely has no phantom signature. Nothing is broken — there is just nothing to discriminate.
+  if (sp.defect < sp.defect_min) {
+    out.textContent =
+      `not discriminating · defect f₂−2f₁ = ${sp.defect.toFixed(2)} Hz (need ≥ ${sp.defect_min}), `
+      + `at κ = ${sp.kappa}, N = ${payload.frames.width - 1}\n`
+      + `the phantoms have collapsed onto the partials: on a harmonic string f₂−f₁ = f₁ and 2f₁ = f₂ `
+      + `EXACTLY, so there is no gap to land in. TWO knobs open it — κ is the microscope, but the `
+      + `θ-scheme's own dispersion drags f₂ flat and eats the stiffness on a coarse grid `
+      + `(at κ=8 the defect is +0.4 Hz at N=8 and +4.4 at N=32). Raise κ, or N, or both.`;
+    return;
+  }
+  if (!sp.resolved) {
+    out.textContent =
+      `only ${sp.n_peaks} in-band peak${sp.n_peaks === 1 ? "" : "s"} detected — fewer than the 4 `
+      + `quadratic combinations the claim is about, so nothing is scored here.`;
+    return;
+  }
+  // The lobe caveat belongs here, not on the strip: the zoom's peak is ~40 Hz wide (a 0.1 s Hann
+  // main lobe, 4/T) while the defect is ~4.6 Hz, so a reader who knows their DSP will immediately
+  // ask how a 4.6 Hz gap is claimed inside one lobe. The answer is that peak POSITION is not
+  // Rayleigh-limited — f₁ is absent from v, so the phantom has no neighbour to be resolved from,
+  // and parabolic refinement locates it to ~0.04 Hz. Answering it unasked is the difference between
+  // a panel that is trusted and one that is caught out.
+  const lobe = Math.round(4 / (payload.meta.num_steps / payload.fs_sim));
+  out.textContent =
+    `the 4 strongest in-band peaks ARE the 4 quadratic combinations (max err ${err} Hz), `
+    + `${dom} over the strongest non-combo\n`
+    + `defect f₂−2f₁ = ${sp.defect.toFixed(2)} Hz · the difference tone misses f₁ by `
+    + `${d1 == null ? "—" : d1.toFixed(2)} Hz and 2f₁ misses f₂ by ${d2 == null ? "—" : d2.toFixed(2)} `
+    + `Hz — the same number, from both sides, with no oracle\n`
+    + `(the zoom's peak is ~${lobe} Hz wide — a 0.1 s Hann lobe. Its POSITION is the claim, and `
+    + `position is not resolution: f₁ is absent from v, so nothing neighbours the phantom to blur it.)`;
+}
+
 function drawWhirl() {
   const g = partialsCv.getContext("2d");
   const W = partialsCv.width, H = partialsCv.height, padL = 34, padB = 16, top = 10;

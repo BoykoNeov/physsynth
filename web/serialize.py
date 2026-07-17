@@ -32,7 +32,7 @@ from numpy.typing import NDArray
 from scipy.signal import resample_poly
 from scipy.sparse.linalg import eigsh
 
-from physsynth.analysis import damping, duffing, modal, spectrum
+from physsynth.analysis import damping, dispersion, duffing, modal, spectrum
 from physsynth.analysis.rotating_wave import rotating_wave_history, solve_rotating_wave
 from physsynth.core.bow import BowedString
 from physsynth.core.engine import SimResult, simulate
@@ -205,8 +205,8 @@ BOW_WORK_MAX = 60_000           # total steps: audio + animation
 
 # == geometrically-exact string (model #10) ========================================================
 #
-# Three regimes, one per claim; the secondary select carries them (see GEOM_REGIMES).
-GEOM_REGIMES = ("planar", "rotating", "whirl")
+# Four regimes, one per claim; the secondary select carries them (see GEOM_REGIMES).
+GEOM_REGIMES = ("planar", "rotating", "whirl", "phantom")
 # lam_long = c_long k / h IS this model's trap, and nothing enforces it: the theta-scheme is
 # unconditionally stable, so an unresolved longitudinal wave returns quiet nonsense with no CFL
 # error at all. The core WARNS above 1 (LAM_LONG_WARN) rather than rejecting — the scheme really is
@@ -262,6 +262,120 @@ GEOM_PLANAR_WINDOW = 0.02       # s; the line needs no growth, so it needs no le
 GEOM_ORBIT_POINTS = 1_500       # (u, w) trail points shipped — 2 floats each, cheap
 GEOM_ENV_POINTS = 400           # decimated whirl-envelope length for the log-y plot
 GEOM_GROWTH_FRAC = 8            # growth = max|w| over the last 1/8 of the run / over the first 1/8
+
+# -- the phantom regime ----------------------------------------------------------------------------
+#
+# Model #9's FIRST refusal, discharged: a scalar tension has nowhere to put a combination tone, so
+# the phantom is the sharpest statement of what it means for the tension to be a FIELD. The readout
+# is the bridge force EA v_x(0) — what actually radiates in a piano, and the honest place to look:
+# below the first longitudinal resonance the v response is quasi-static, so EA v_x carries r^2
+# almost directly and the combination tones are in it by construction rather than by luck.
+#
+# This regime reproduces tests/test_geometric_phantom.py's rig EXACTLY (same N / lam_long / window /
+# two-mode IC / v = 0 start / blind band-limited detector). That is deliberate and load-bearing: the
+# viewer then inherits the suite's validation for free. In particular v is NOT initialised at its
+# quasi-static equilibrium — a held string really has settled, so v = 0 radiates a startup transient
+# that is the LARGEST feature in the full bridge spectrum, and pre-solving it away is tempting. It
+# would put a number on screen that no test backs, and it buys nothing: the free longitudinal modes
+# sit at n c_long/(2L) ~ 2236 Hz while the phantoms live below 500 Hz, so the transient is 4.5x
+# above the band and the panel never shows it. That separation is why the rig band-limits, and it
+# is why the phantom band is PURELY forced response (which is also the piano physics).
+GEOM_PHANTOM_WINDOW = 0.10
+"""Seconds of bridge force measured. **Not a slider, and not padding** — the test rig's own window.
+
+Halving it does not merely cost precision. At 0.05 s the raw bins are 20 Hz wide, the ``2 f1``
+phantom (the weakest of the four) sits inside its neighbours' leakage skirts, and it is mislocated
+by **0.52 Hz** — against 0.013-0.16 Hz for the other three, and 0.039 Hz for the worst of the four
+at 0.1 s. Its margin to ``f2`` collapses from 170x to 8x with it. So the window is physics, and the
+`animation_window` slider is ignored (and hidden) in this regime.
+"""
+GEOM_PHANTOM_AMP_DEFAULT = 1.5e-3
+GEOM_PHANTOM_KAPPA_DEFAULT = 8.0
+"""Stiffness for the phantom regime — **4x the piano-ish default**, and the choice is load-bearing.
+
+A phantom is discriminating only because it lands where no partial is. On a harmonic string (B = 0)
+every phantom coincides with a partial *exactly* — ``f2 - f1 = f1``, ``2 f1 = f2``, ``f1 + f2 = f3``
+— so there is nothing to see. Inharmonicity ``B = pi^2 kappa^2/(c^2 L^2)`` opens the gaps in
+proportion to it. This exaggerates the CONTRAST, not the EFFECT: the mechanism is ``r^2`` pumping
+``v``, which is completely kappa-independent — kappa only decides whether the gap a phantom lands
+in is visible. A microscope, not a thumb on the scale.
+
+At the kappa = 2 default the gap is 0.89 Hz, which does not merely blur — it makes the claim
+**wrong**: ``f1``/``f2`` are measured from this run so they are the *hardened* ones, and hardening
+drives the phantom at ``f1 + f2`` up by a measured 1.29 Hz, which EXCEEDS the gap. The phantom
+crosses ``f3`` and the panel would confidently report a phantom landing on a partial. Hence the
+kappa slider is live here (sliding it down and watching the discrimination die is the point) but
+the verdict is GATED on the measured defect below.
+"""
+GEOM_PHANTOM_DEFECT_MIN = 3.0
+"""Hz of defect ``f2 - 2 f1`` below which the panel LABELS instead of scoring.
+
+The tests' own floor, and ~77x the 0.039 Hz peak-location error measured at this window — so above
+it the displacement is real, and below it the phantoms have collapsed onto the partials and there is
+no discrimination left to claim. Label-not-fail, the bow's Schelleng-window precedent: a harmonic
+string genuinely has no phantom signature, which is physics rather than a solver failure.
+
+**The gate is one-sided (``>=``, not ``abs``), and that is load-bearing — measured here, and it is
+NOT what the name "inharmonicity defect" suggests.** ``f2 - 2 f1`` is not pure stiffness: the
+theta-scheme's temporal dispersion drags mode 2 *flat*, so it contributes a NEGATIVE defect, and
+what the panel measures is the difference of the two. Off the linear discrete ladder at
+``lam_long = 0.9``::
+
+    N        kappa = 0     kappa = 2     kappa = 8
+    16        -0.965        -0.677        +3.571
+    24        -0.430        -0.137        +4.168
+    32        -0.242        +0.052        +4.377
+
+At ``kappa = 0`` the defect is pure numerical dispersion and converges as O(h^2) (0.965/0.242 = 4.0
+across a 2x refinement, exactly). Two consequences. First, the ``kappa = 2`` trap is *worse* than
+recorded: at N=32 dispersion very nearly CANCELS the true inharmonicity (+0.05 Hz net), and by N=16
+it overwhelms it and the defect goes negative. Second, a coarse-enough grid gives a large *negative*
+defect — phantoms displaced to the wrong side of the partials by an artifact rather than by physics
+— which an ``abs()`` gate would happily score. Requiring a positive defect means "the partials are
+stretched by real stiffness, by enough to see", which is the only version of this claim worth
+making. (The measured in-run defect at N=32/kappa=8 is 4.574 vs the ladder's 4.377: the extra ~0.2
+is the amplitude hardening, which *widens* the defect and so works against the claim.)
+
+Scale caveat: 3.0 Hz is absolute, so a longer/slacker string (lower f0) trips it at a kappa that
+would have been fine — that under-claims, which is the safe direction for a gate that only labels.
+"""
+GEOM_PHANTOM_BAND = 4.8
+"""Display band, as a multiple of ``f1`` — **the trap the diagnose rig had to learn the hard way**.
+
+On a 0-2 kHz axis (out to the first longitudinal mode) the whole claim is sub-pixel: ``f1 + f2`` is
+11.4 Hz from the 3rd partial, the two marker families sit on top of each other, and the figure shows
+the OPPOSITE of what it says. 4.8 f1 is the tightest band that still contains all four combinations
+(``2 f2`` is the highest). The discrimination is the picture; frame it.
+"""
+GEOM_PHANTOM_ZOOM_HZ = 26.0
+"""Half-width (Hz) of the *second*, zoomed strip — the same trap one level down.
+
+The full band is ~485 Hz across a 430 px canvas, so the 4.6 Hz defect is ~4 px: on the wide strip
+the difference tone reads as sitting ON f1, which is half the claim rendered backwards. Measured
+combo-vs-ladder separations across the wide strip are 4 / 3 / 9 / 25 px — only the top two read.
+The wide strip carries "peaks at the four combinations"; a zoom around the f1 / (f2-f1) pair carries
+"and NOT on the partial" (4.56 Hz over a 56.6 Hz axis is ~31 px — plainly two lines). Both halves
+need a picture, so the panel draws both.
+"""
+GEOM_PHANTOM_DISPLAY_PAD = 32
+"""Zero-pad factor for the **drawn traces only** — the detector keeps the rig's default.
+
+At the rig's 2x pad the bins are 4.85 Hz wide, so the 56.6 Hz zoom strip gets **12 points**: not a
+picture. Zero-padding densifies the bin grid without adding real resolution — exactly what a *plot*
+needs and nothing a *measurement* may lean on. So it is confined to the display path: `detect_peaks`
+and the peak-magnitude lookup keep `magnitude_spectrum`'s 2x default, which is what the test rig
+measures (and where the 0.039 Hz peak-location error comes from — parabolic refinement, independent
+of the display grid). At 32x the zoom strip gets ~190 points and the wide strip ~1600 pre-pooling.
+"""
+GEOM_PHANTOM_WORK_MAX = 16_500
+"""Steps. Its own budget: **~45 s** at the default, well past GEOM_WORK_MAX's ~25 s.
+
+Measured, not extrapolated: the bare Newton loop is 2.2 ms/step x 15,900 = 35.6 s, and the panel
+telemetry (energy every step, the two modal projections, the field maxima) carries it to ~45 s. The
+window is fixed physics (see GEOM_PHANTOM_WINDOW) and fs rides N and lam_long, so this is really a
+cap on N x lam_long at the fixed window. **It is by far the slowest render in the viewer** — the
+headless verifier's wait had to grow for it.
+"""
 
 
 class ParamError(ValueError):
@@ -1392,10 +1506,27 @@ class _GeomRun:
         self.frames: list[NDArray[np.float64]] = []
         self.frame_steps: list[int] = []
         self.width = width
+        # Phantom regime only (see _run_geometric's `modal`): the bridge force and the two modal
+        # projections. Index 0 is the IC and is dropped before analysis, so these hold exactly the
+        # n_steps post-step samples the test rig measures.
+        self.bridge: NDArray[np.float64] | None = None
+        self.q1: NDArray[np.float64] | None = None
+        self.q2: NDArray[np.float64] | None = None
+
+
+def _bridge_force(res: GeometricString) -> float:
+    """The longitudinal end force ``EA v_x(0) = EA v[1]/h`` (N) — the piano's radiating channel."""
+    return res.EA * res.v[1] / res.h
 
 
 def _run_geometric(
-    res: GeometricString, n_steps: int, *, probe: int, anim_stride: int
+    res: GeometricString,
+    n_steps: int,
+    *,
+    probe: int,
+    anim_stride: int,
+    modal: tuple[NDArray[np.float64], NDArray[np.float64]] | None = None,
+    long_kin: bool = True,
 ) -> _GeomRun:
     """Step the string, capturing everything the panels need in ONE pass.
 
@@ -1403,8 +1534,22 @@ def _run_geometric(
     a ~2-4 ms Newton step, so the drift gate — what separates a whirl (redistribution) from
     a diverging solve — is ~4% overhead. The orbit trail is captured at full rate too (2 floats a
     step) and decimated at the end; only the 3-field snapshots ride the animation stride.
+
+    ``modal=(sin1, sin2)`` additionally records the bridge force and the two modal amplitudes (the
+    phantom regime). Modal *projections*, not a point probe: they isolate ``f1`` and ``f2`` from
+    each other, so each is a single clean peak and the parabolic refinement is not fighting a
+    neighbour's leakage skirt. Three dot products a step against a ~2 ms Newton solve — free.
+
+    ``long_kin=False`` skips the longitudinal-kinetic tracking, which only the rotating regime
+    reports. It is an allocation and a dot product per step for a number nobody reads, and the
+    phantom regime is 15,900 steps long — this is the one regime where that arithmetic shows up.
     """
     run = _GeomRun(n_steps, res.N + 1)
+    if modal is not None:
+        sin1, sin2 = modal
+        d1, d2 = float(np.dot(sin1, sin1)), float(np.dot(sin2, sin2))
+        run.bridge = np.empty(n_steps + 1)
+        run.q1, run.q2 = np.empty(n_steps + 1), np.empty(n_steps + 1)
 
     def _cap(i: int) -> None:
         st = res.state
@@ -1417,13 +1562,18 @@ def _run_geometric(
         run.w_probe[i] = res.w[probe]
         run.u_max[i] = float(np.max(np.abs(res.u)))
         run.w_max[i] = float(np.max(np.abs(res.w)))
+        if run.bridge is not None:
+            run.bridge[i] = _bridge_force(res)
+            run.q1[i] = np.dot(res.u, sin1) / d1
+            run.q2[i] = np.dot(res.u, sin2) / d2
 
     _sample(0)
     _cap(0)
     for i in range(1, n_steps + 1):
         res.step()
         _sample(i)
-        run.long_kin = max(run.long_kin, _geom_long_kinetic(res))
+        if long_kin:
+            run.long_kin = max(run.long_kin, _geom_long_kinetic(res))
         if i % anim_stride == 0:
             _cap(i)
     if not np.all(np.isfinite(run.E)):
@@ -1488,6 +1638,182 @@ def _geom_whirl_block(
     }
 
 
+def _geom_phantom_dt_over_t0(res: GeometricString, amplitude: float) -> float:
+    """The static tension excess ``dT/T0`` of the two-mode IC — the amplitude bound, exact and free.
+
+    Bound ``dT/T0``, never ``A`` (the tension string's lesson): ``A`` is a proxy, and ``EA`` and
+    ``T`` move the tension excess just as hard, so an amplitude-only cap would let ``EA = 2e5``
+    break up with none the wiser. For ``u = A(phi_1 + phi_2)`` the modes are orthogonal in the
+    stretch integral (``int phi_1' phi_2' = 0``), so the excess is just the sum of theirs::
+
+        dT = (a/(2L)) int u_x^2 dx = a A^2 (p2_1 + p2_2) / 4
+
+    with ``a = EA - T0`` the model's own nonlinear coefficient and ``p2_n`` the DISCRETE spatial
+    eigenvalue at the actual N (so the bound is refinement-invariant, as the whirl's tongue is).
+    """
+    p2_1 = damping.spatial_eigenvalue_p2(res.N, res.L / res.N, 1)
+    p2_2 = damping.spatial_eigenvalue_p2(res.N, res.L / res.N, 2)
+    return float((res.EA - res.T) * amplitude**2 * (p2_1 + p2_2) / (4.0 * res.T))
+
+
+def _geom_phantom_block(run: _GeomRun, res: GeometricString) -> dict[str, Any]:
+    """The phantom panel: the bridge spectrum, the four combination tones, and the defect verdict.
+
+    Every number here is *measured in this one run*. In particular the combinations are built from
+    the MEASURED ``f1``, ``f2`` and never predicted: those partials carry the theta-scheme's
+    temporal dispersion *and* the amplitude hardening, and the phantom rides on whatever the
+    partials actually are — predicting them would fold both errors into the oracle and measure the
+    formula instead of the string.
+
+    The headline is the **inharmonicity defect** ``f2 - 2 f1``, which is the primary form of the
+    Conklin signature and needs no oracle at all. For a harmonic string the low phantoms coincide
+    with partials exactly (``f2 - f1 = f1``, ``2 f1 = f2``), so the distance from the difference
+    tone to ``f1`` and from ``2 f1`` to ``f2`` are BOTH exactly ``|f2 - 2 f1|`` — nonzero only
+    because kappa > 0. It also carries **no hardening confound**: hardening moves the phantoms and
+    the partials together (measured, it slightly *widens* the defect: it works against the claim).
+
+    The plan's other form — ``f1 + f2`` landing ~9B f1 below ``f3`` — is deliberately NOT computed
+    here. Mode 3 is not excited, so it needs the discrete ladder as an oracle, and that oracle has
+    to be *earned* by a second amp -> 0 run. The step count is amplitude-independent, so that run
+    costs the same ~45 s as this one: 90 s for a strictly weaker statement. The ladder is still
+    shipped, as shown-not-scored reference markers (where partials would be), which is what makes
+    "the phantoms land in the gaps" a picture rather than an assertion.
+    """
+    fs = res.fs
+    bridge, q1, q2 = run.bridge[1:], run.q1[1:], run.q2[1:]   # drop the IC sample (v = 0)
+    f1 = float(spectrum.detect_peaks(q1, fs, 1, f_min=10.0)[0])
+    f2 = float(spectrum.detect_peaks(q2, fs, 1, f_min=10.0)[0])
+    combos = {"f2-f1": f2 - f1, "2f1": 2.0 * f1, "f1+f2": f1 + f2, "2f2": 2.0 * f2}
+    defect = f2 - 2.0 * f1
+    f_long1 = float(res.c_long / (2.0 * res.L))
+
+    # Blind detection, band-limited below the first free longitudinal mode. detect_peaks, NOT
+    # measure_partials_near: anchoring a search window on the frequency under test is how a spectrum
+    # test passes by construction. Nothing here tells the detector where a phantom should be. The
+    # band limit is a physical cut, not a fudge — see the regime's header comment.
+    peaks = spectrum.detect_peaks(bridge, fs, 40, f_min=10.0)
+    peaks = peaks[peaks < 0.9 * f_long1]
+    freqs, mag, _ = spectrum.magnitude_spectrum(bridge, fs)
+    mags = np.array([mag[int(np.argmin(np.abs(freqs - pk)))] for pk in peaks])
+
+    combo_err: float | None = None
+    dominance: float | None = None
+    if peaks.size >= 4:
+        strongest = np.sort(peaks[np.argsort(mags)[::-1][:4]])
+        combo_err = float(np.max(np.abs(strongest - np.sort(np.array(list(combos.values()))))))
+        is_combo = np.array([any(abs(pk - v) < 1.0 for v in combos.values()) for pk in peaks])
+        if is_combo.any() and (~is_combo).any():
+            dominance = float(mags[is_combo].min() / mags[~is_combo].max())
+
+    def _nearest(target: float) -> float | None:
+        return float(peaks[int(np.argmin(np.abs(peaks - target)))]) if peaks.size else None
+
+    near_f1, near_f2 = _nearest(f1), _nearest(f2)
+    peak_diff, peak_2f1 = _nearest(combos["f2-f1"]), _nearest(combos["2f1"])
+    # The two displacements are the same physical number approached from opposite sides — the
+    # difference tone sits `defect` BELOW f1, and 2f1 sits `defect` below f2.
+    disp = [abs(peak_diff - f1) if peak_diff is not None else None,
+            abs(peak_2f1 - f2) if peak_2f1 is not None else None]
+
+    # EA = T0 kills the nonlinear coefficient a = EA - T0 outright, so the three fields decouple and
+    # v, started at rest, never leaves it: the bridge force is zero *identically*, not "small". That
+    # is the harness control (the core suite's own), and it is a RESULT rather than an error — the
+    # phantom channel does not exist on a linear string. It must be checked before the verdict
+    # below, because with no peaks at all `resolved` would otherwise paint the claim green over an
+    # empty spectrum. detect_peaks returns [] on a zero signal rather than raising, so nothing else
+    # catches this.
+    bridge_max = float(np.max(np.abs(bridge))) if bridge.size else 0.0
+    linear = bool(bridge_max == 0.0)
+    resolved = bool(defect >= GEOM_PHANTOM_DEFECT_MIN) and not linear and peaks.size >= 4
+    # The drawn traces ride a DENSER grid than the detector — see GEOM_PHANTOM_DISPLAY_PAD. Both
+    # bands come off this one FFT.
+    d_freqs, d_mag, _ = spectrum.magnitude_spectrum(
+        bridge, fs, zero_pad_factor=GEOM_PHANTOM_DISPLAY_PAD
+    )
+    wide = _pool_band(d_freqs, d_mag, 0.0, GEOM_PHANTOM_BAND * f1)
+    # The zoom strip: the f1 / (f2-f1) pair, where the wide strip's ~1.2 Hz/px renders the claim's
+    # second half backwards. Centred between the two so both are on screen whatever the defect is.
+    z_lo = max(0.0, min(f1, combos["f2-f1"]) - GEOM_PHANTOM_ZOOM_HZ)
+    z_hi = max(f1, combos["f2-f1"]) + GEOM_PHANTOM_ZOOM_HZ
+    zoom = _pool_band(d_freqs, d_mag, z_lo, z_hi)
+    return {
+        "kind": "phantom",
+        "f1": f1, "f2": f2, "defect": defect,
+        "combos": {k: float(v) for k, v in combos.items()},
+        # Shown, never scored: the DISCRETE ladder — where *this string on this grid* puts its
+        # partials, carrying the scheme's own spatial eigenvalue and theta dispersion (the continuum
+        # sqrt(1 + B n^2) would fold both errors into the markers). The eye reads the combinations
+        # landing in the gaps between them; f1/f2's ladder entries also sit slightly below the
+        # measured ones, and that gap IS the amplitude hardening, visible for free.
+        "ladder": _finite_list(
+            dispersion.stiff_dispersion_frequencies(
+                res.c, res.L, res.N, res.kappa_u, res.k, res.theta, np.arange(1, 6)
+            ), 4
+        ),
+        "peaks": _finite_list(peaks, 4),
+        "combo_err": combo_err,
+        "dominance": dominance,
+        "nearest_to_f1": near_f1,
+        "nearest_to_f2": near_f2,
+        "displacements": disp,
+        "resolved": resolved,
+        "linear": linear,
+        "bridge_max": bridge_max,
+        "n_peaks": int(peaks.size),
+        "defect_min": GEOM_PHANTOM_DEFECT_MIN,
+        "kappa": round(float(res.kappa_u), 3),
+        "f_long1": round(f_long1, 1),
+        "band": [0.0, round(GEOM_PHANTOM_BAND * f1, 3)],
+        "zoom": [round(z_lo, 3), round(z_hi, 3)],
+        "wide_freq": _finite_list(wide[0], 3) if wide else [],
+        "wide_mag": _finite_list(wide[1], 6) if wide else [],
+        "zoom_freq": _finite_list(zoom[0], 3) if zoom else [],
+        "zoom_mag": _finite_list(zoom[1], 6) if zoom else [],
+    }
+
+
+def _geom_audio_block(run: _GeomRun, res: GeometricString, regime: str) -> dict[str, Any]:
+    """``{audio, audio_note}``. Only the phantom regime has any, and only 0.1 s of it.
+
+    The other three regimes ship ``audio: None`` rather than a stub the player would click on: their
+    windows are set by what the *picture* needs, and stretching one to a listenable second is ~10
+    minutes of compute (see the module-level regime comment).
+
+    The phantom regime is the exception because its window is already 0.1 s of the **bridge force**
+    ``EA v_x(0)`` — the channel that actually radiates in a piano — so the clip is free, already
+    measured, and is the honest form of this model's long-promised audio. Two things it is NOT, both
+    stated in ``audio_note`` rather than fixed:
+
+    * **It is 0.1 s** — a blip, not a note. Longer is not a budget choice; it is the same ~22x
+      oversampling that makes this model viz-only.
+    * **It is dominated by the longitudinal startup transient**, not by the phantoms. ``v = 0`` is
+      not the longitudinal equilibrium, so the run opens with a broadband radiating transient that
+      is the largest feature in the *full* bridge spectrum. That is a property of the IC the test
+      rig shares, and pre-solving it away would put a number on screen no test backs. The phantoms
+      live 4.5x below it in frequency, which is why the panel band-limits and the ear does not.
+    """
+    if regime != "phantom" or run.bridge is None:
+        return {
+            "audio": None,
+            "audio_note": (
+                f"viz-only: c_long/c = {math.sqrt(res.EA / res.T):.0f}x, so resolving the "
+                f"longitudinal wave forces fs = {res.fs / 1000:.0f} kHz and one second of sound "
+                "would be ~10 minutes of compute."
+            ),
+        }
+    audio48, peak = _resample_normalize(run.bridge[1:], res.fs)
+    return {
+        "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
+        "audio_note": (
+            f"the bridge force EA·v_x(0) — the piano's radiating channel — {GEOM_PHANTOM_WINDOW}s "
+            f"of it (peak {peak:.3g} N). A blip, not a note: fs = {res.fs / 1000:.0f} kHz here, so "
+            "a second would be ~10 minutes of compute. What you hear is mostly the longitudinal "
+            f"startup transient at ~{res.c_long / (2 * res.L):.0f} Hz (v = 0 is not the "
+            "longitudinal equilibrium); the phantoms are ~4.5x lower, where the panel looks."
+        ),
+    }
+
+
 def _build_payload_geometric(p: dict[str, Any]) -> dict[str, Any]:
     regime = _geom_regime(p)
     playback_speed = _fnum(p, "playback_speed", 0.02)
@@ -1517,6 +1843,10 @@ def _build_payload_geometric(p: dict[str, Any]) -> dict[str, Any]:
         if not (0.0 <= frac <= GEOM_TONGUE_MAX):
             raise ParamError(f"tongue_position must be in [0, {GEOM_TONGUE_MAX}], got {frac}.")
         kappa = 0.0
+    elif regime == "phantom":
+        amplitude = _fnum(p, "amplitude", GEOM_PHANTOM_AMP_DEFAULT)
+        if not (0.0 < amplitude <= 0.05):
+            raise ParamError(f"amplitude must be in (0, 0.05] m, got {amplitude}.")
     else:
         amplitude = _fnum(p, "amplitude", GEOM_AMP_DEFAULT)
         if not (0.0 < amplitude <= 0.05):
@@ -1574,25 +1904,54 @@ def _build_payload_geometric(p: dict[str, Any]) -> dict[str, Any]:
         # the roundness would then measure the continuation's failure, not the physics.
         diag = {"bvp_frequency": round(f_osc, 4), "bvp_iterations": int(wave.iterations),
                 "bvp_converged": bool(wave.converged)}
+    elif regime == "phantom":
+        # A DEGENERATE string (kappa_w = kappa_u): the motion is planar by construction, and planar
+        # is the phantom's precondition, not an accident — a circular mode holds r^2 static and
+        # pumps nothing (Tier A/3). Two modes, not one: a single mode gives only 2 f1, and the sum
+        # and difference tones are the whole point — they are what cannot be mistaken for a harmonic
+        # of anything.
+        res = _build_geometric(p, kappa=kappa, kappa_w=kappa)
+        sin1 = np.sin(np.pi * res.x / res.L)
+        sin2 = np.sin(2.0 * np.pi * res.x / res.L)
+        res.set_state(amplitude * (sin1 + sin2))
+        dt_over_t0 = _geom_phantom_dt_over_t0(res, amplitude)
+        if dt_over_t0 > GEOM_DT_MAX:
+            raise ParamError(
+                f"dT/T0 = {dt_over_t0:.2f} exceeds {GEOM_DT_MAX} at A = {amplitude:.4f} m: the "
+                "two-mode motion stops being two modes (model #9's planar parametric breakup), and "
+                "the partials f1, f2 the phantoms are measured against stop being clean single "
+                "peaks. Lower the amplitude or EA."
+            )
+        f_osc = float(dispersion.stiff_dispersion_frequencies(
+            res.c, res.L, res.N, res.kappa_u, res.k, res.theta, np.array([1])
+        )[0])
+        n_steps = max(1, round(GEOM_PHANTOM_WINDOW * res.fs))   # fixed window: physics, not a knob
+        diag = {"dt_over_t0": round(dt_over_t0, 4)}
     else:                                                          # planar
         res = _build_geometric(p, kappa=kappa, kappa_w=kappa)
         res.set_state(amplitude * np.sin(np.pi * res.x / res.L))
         f_osc = float(modal.stiff_harmonic_frequencies(res.c, res.L, kappa, 1)[0])
         n_steps = max(1, round(_fnum(p, "animation_window", GEOM_PLANAR_WINDOW) * res.fs))
 
-    if n_steps > GEOM_WORK_MAX:
+    work_max = GEOM_PHANTOM_WORK_MAX if regime == "phantom" else GEOM_WORK_MAX
+    if n_steps > work_max:
         raise ParamError(
-            f"work budget exceeded ({n_steps:,} steps > {GEOM_WORK_MAX:,}): every step is a vector "
+            f"work budget exceeded ({n_steps:,} steps > {work_max:,}): every step is a vector "
             "Newton solve over three coupled fields, and fs is forced ~22x higher than a "
-            "transverse-only string's by the longitudinal wave (lam_long <= 1). Lower N or the "
-            "animation window."
+            "transverse-only string's by the longitudinal wave (lam_long <= 1). "
+            + ("The phantom window is fixed physics, so lower N or lam_long."
+               if regime == "phantom" else "Lower N or the animation window.")
         )
 
     probe = min(max(1, round(probe_frac * res.N)), res.N - 1)
     anim_stride = max(1, round((res.fs / f_osc) / fpp))
     if n_steps // anim_stride > MAX_FRAMES:
         anim_stride = max(1, math.ceil(n_steps / MAX_FRAMES))
-    run = _run_geometric(res, n_steps, probe=probe, anim_stride=anim_stride)
+    run = _run_geometric(
+        res, n_steps, probe=probe, anim_stride=anim_stride,
+        modal=(sin1, sin2) if regime == "phantom" else None,
+        long_kin=(regime == "rotating"),
+    )
 
     frames = np.array(run.frames, dtype=float)                     # (n_frames, 3, N+1)
     field_amp = float(np.max(np.abs(frames))) if frames.size else 0.0
@@ -1604,6 +1963,8 @@ def _build_payload_geometric(p: dict[str, Any]) -> dict[str, Any]:
 
     if regime == "whirl":
         spectrum_block: dict[str, Any] | None = _geom_whirl_block(run, res.fs, f_osc, tongue)
+    elif regime == "phantom":
+        spectrum_block = {**_geom_phantom_block(run, res), **diag}
     elif regime == "rotating":
         r = np.hypot(run.u_probe, run.w_probe)
         spectrum_block = {
@@ -1643,13 +2004,7 @@ def _build_payload_geometric(p: dict[str, Any]) -> dict[str, Any]:
         "playback_speed": playback_speed,
         "field_amp": field_amp,
         "orbit": _geom_orbit_block(run, int(frames.shape[0])),
-        # No audio, and the payload says so rather than shipping a stub the player would click on.
-        "audio": None,
-        "audio_note": (
-            "viz-only: c_long/c = "
-            f"{math.sqrt(res.EA / res.T):.0f}x, so resolving the longitudinal wave forces "
-            f"fs = {res.fs / 1000:.0f} kHz and one second of sound would be ~10 minutes of compute."
-        ),
+        **_geom_audio_block(run, res, regime),
         "energy": _energy_block(sim, sigma_zero, 2.0 * _fnum(p, "sigma0", 0.0)),
         "meta": {
             "c": round(float(res.c), 3),
@@ -1809,16 +2164,16 @@ def _decimate_field_mask(
     return frames_full[:, ::stride, ::stride], mask_full[::stride, ::stride]
 
 
-def _pooled_spectrum(
-    pickup: NDArray[np.float64], fs: float, fmax: float
+def _pool_band(
+    freqs: NDArray[np.float64], mag: NDArray[np.float64], fmin: float, fmax: float
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]] | None:
-    """Magnitude spectrum over ``[0, fmax]`` max-pooled to ~:data:`N_SPEC_POINTS` points.
+    """Slice ``[fmin, fmax]`` out of a magnitude spectrum, max-pool to ~:data:`N_SPEC_POINTS`, and
+    normalize to 0..1. Max-pooling (not mean) so spectral *peaks* survive the decimation.
 
-    Max-pooling (not mean) so spectral *peaks* survive the decimation, then normalized to 0..1.
-    Shared by every heatmap model's spectrum panel. Returns ``(freq, mag)`` or ``None`` if empty.
+    Split out of :func:`_pooled_spectrum` so a caller that has already paid for an FFT (the phantom
+    panel, which needs one dense grid for two different bands) can pool it without running another.
     """
-    freqs, mag, _ = spectrum.magnitude_spectrum(pickup, fs)
-    keep = (freqs >= 0.0) & (freqs <= fmax)
+    keep = (freqs >= fmin) & (freqs <= fmax)
     f, m = freqs[keep], mag[keep]
     if m.size == 0:
         return None
@@ -1834,6 +2189,17 @@ def _pooled_spectrum(
     if mmax > 0:
         m_ds = m_ds / mmax
     return f_ds, m_ds
+
+
+def _pooled_spectrum(
+    pickup: NDArray[np.float64], fs: float, fmax: float
+) -> tuple[NDArray[np.float64], NDArray[np.float64]] | None:
+    """Magnitude spectrum over ``[0, fmax]`` max-pooled to ~:data:`N_SPEC_POINTS` points.
+
+    Shared by every heatmap model's spectrum panel. Returns ``(freq, mag)`` or ``None`` if empty.
+    """
+    freqs, mag, _ = spectrum.magnitude_spectrum(pickup, fs)
+    return _pool_band(freqs, mag, 0.0, fmax)
 
 
 def _zero_cross_fundamental(sig: NDArray[np.float64], fs: float) -> float:
