@@ -1129,9 +1129,10 @@ function drawStickSlip() {
 
 // ── geometric string: the whirl envelope (log-y) ─────────────────────────────────────────────
 // A straight line on log axes IS the Mathieu instability — nothing else makes max|w| climb like
-// that, and it is legible after ~2 e-foldings, long before the orbit visibly opens (that needs
-// ~0.22 s ≈ 60 s of compute, and at the affordable 0.06 s max|w|/max|u| is still ~1e-4). So this
-// panel, not the orbit, is where the whirl is proven. What is plotted is the ENVELOPE (a sliding
+// that, and it is legible after ~2 e-foldings, long before the orbit visibly opens (at the
+// affordable 0.06 s max|w|/max|u| has only reached ~0.08, which still reads as a line on equal
+// axes). So this panel, not the orbit, is where the whirl is proven. What is plotted is the ENVELOPE
+// (a sliding
 // ~1-period max), never the raw max|w|: every node crosses zero twice a period, so the instantaneous
 // value oscillates non-monotonically and the line underneath is lost in the spikes.
 function drawWhirl() {
@@ -1227,7 +1228,8 @@ function drawGeomVerdict(sp) {
   const rows = sp.kind === "planar"
     ? [["max|w|", sp.max_w === 0 ? "0.0" : sp.max_w.toExponential(2),
         sp.exact_zero ? "bit-exact ✓" : "NOT zero ✗"]]
-    : [["roundness (r_max−r_min)/r̄", sp.roundness.toExponential(2), "a true circle ✓"],
+    : [["roundness (r_max−r_min)/r̄", sp.roundness.toExponential(2),
+        sp.bvp_converged ? "a true circle ✓" : "BVP DID NOT CONVERGE ✗"],
        ["longitudinal KE / E", sp.long_kin_over_e.toExponential(2), "it does not move ✓"],
        ["BVP frequency", sp.bvp_frequency.toFixed(3) + " Hz", `${sp.bvp_iterations} Newton iters`]];
 

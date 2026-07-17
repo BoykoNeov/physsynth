@@ -979,6 +979,10 @@ def test_geometric_rotating_wave_is_a_true_circle():
     assert sp["kind"] == "rotating"
     assert sp["roundness"] < 1e-6, "the radius wanders — this is not a rotating wave"
     assert sp["bvp_frequency"] > 0.0
+    # Reported, not assumed: a BVP that stopped early is not an exact solution, so the roundness
+    # would be measuring the continuation's failure rather than the physics. The panel says so.
+    assert sp["bvp_converged"] is True
+    assert sp["bvp_iterations"] > 0, "0 iterations would be a lying number, not a fast solve"
 
 
 def test_geometric_rotating_wave_longitudinal_field_leans_but_does_not_move():

@@ -94,7 +94,9 @@
         <p class="hint" id="geom-hint" data-show="geometric"></p>
       </fieldset>
 
-      <fieldset class="group" data-show="geometric">
+      <!-- Gated on the REGIME as well as the model: every control inside is whirl-only, so without
+           the fieldset's own data-domain the planar/rotating regimes render an empty labelled box. -->
+      <fieldset class="group" data-show="geometric" data-domain="whirl">
         <legend>Whirl — the Mathieu tongue</legend>
         <!-- THE control of this model. Whirling is a parametric (Mathieu) instability, and its
              coordinate is dimensionless: frac = δ/(εA²), where δ = ω_w² − ω_u² is the detuning κ_w

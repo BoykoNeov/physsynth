@@ -1246,11 +1246,15 @@ def _build_payload_bow(p: dict[str, Any]) -> dict[str, Any]:
 #                Its oracle is its own roundness, and the longitudinal field holding still (psi is a
 #                nonzero *static* stretch — asserting v == 0 would assert the physics away).
 #   * whirl    — the Mathieu tongue. NOT drawn as an opening orbit: at the affordable 0.06 s the
-#                growth is 63x but max|w|/max|u| is still ~1e-4, i.e. a flat line on equal axes (the
-#                orbit only opens by ~0.22 s = ~60 s of compute). The honest cheap signature is the
-#                ENVELOPE of max|w| on log-y — a straight line there IS the instability — plus the
-#                energy drift holding ~1e-12 THROUGH the blow-up, which is what separates
-#                redistribution from a diverging solve.
+#                growth is ~60x, but from a 1e-3 relative seed that only reaches max|w|/max|u| ~
+#                0.08, which on equal axes still reads as a line. (Saturation — an orbit you can
+#                SEE open —
+#                needs ~0.1 s from this seed, ~7.5k steps, past the work budget; the diagnose script
+#                needs 0.22 s because its velocity seed carries no omega_u factor and so starts a
+#                thousandfold lower.) The honest cheap signature is the ENVELOPE of max|w| on
+#                log-y —
+#                a straight line there IS the instability — plus the energy drift holding ~1e-12
+#                THROUGH the blow-up, which is what separates redistribution from a diverging solve.
 
 
 def _geom_regime(p: dict[str, Any]) -> str:
@@ -1565,8 +1569,11 @@ def _build_payload_geometric(p: dict[str, Any]) -> dict[str, Any]:
         res.u_prev, res.w_prev, res.v_prev = up, wp, vp
         f_osc = float(wave.frequency)
         n_steps = max(1, round(GEOM_ROTATING_PERIODS * res.fs / f_osc))
-        diag = {"bvp_frequency": round(f_osc, 4), "bvp_iterations": int(getattr(wave, "iterations",
-                                                                               0))}
+        # `converged` is reported, not assumed: the whole claim of this regime is that the seed
+        # is an EXACT solution of the scheme, and a BVP that stopped early is simply not one —
+        # the roundness would then measure the continuation's failure, not the physics.
+        diag = {"bvp_frequency": round(f_osc, 4), "bvp_iterations": int(wave.iterations),
+                "bvp_converged": bool(wave.converged)}
     else:                                                          # planar
         res = _build_geometric(p, kappa=kappa, kappa_w=kappa)
         res.set_state(amplitude * np.sin(np.pi * res.x / res.L))

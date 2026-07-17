@@ -325,12 +325,20 @@ The second cross-cutting capability, and the viewer's **first viz-only model**. 
   silent-garbage regime the model exists to warn about. The human chose **viz-only now, with the
   phantom-partials spectrum deferred to its own increment** (see below) over a stub player.
 - **The orbit hero is the ROTATING WAVE, not the whirl** (advisor's first framing was the whirl and
-  it was wrong; corrected on measurement). The whirl's orbit only visibly opens at ~0.22 s ≈ **60 s
-  of compute**; at the affordable 0.06 s the growth is already 63× but `max|w|/max|u|` is still
-  **8e-5** — a flat line to four decimals on equal axes. (The plan's own note that 63× is "~9 % of
-  u" was wrong: it read the `1e-3` *velocity* seed as a displacement fraction.) The rotating wave
-  is an **exact solution of the scheme**, so it is round from frame 1 and needs no growth at all:
-  roundness **1.2e-12**, `long_kin/E` **1.5e-29**, in ~5 s. Pair it with the planar bit-exact line.
+  it was wrong; corrected on measurement). At the affordable 0.06 s the whirl grows ~60×, but from a
+  `1e-3` *relative* seed that only reaches `max|w|/max|u|` ≈ **0.076** — which on equal axes still
+  reads as a line (confirmed in the rendered screenshot). Saturation, an orbit you can *see* open,
+  needs ~0.1 s ≈ 7.5k steps — past the work budget. The rotating wave, by contrast, is an **exact
+  solution of the scheme**: round from frame 1, no growth needed — roundness **1.2e-12**,
+  `long_kin/E` **1.5e-29**, in ~5 s. Pair it with the planar bit-exact line.
+  - **Seed magnitude is a convention trap worth writing down.** `diagnose_geometric_string.py`'s
+    figure-3 uses `w_dot = 1e-3·A·φ` (m/s) with **no `ω_u` factor**, so its initial out-of-plane
+    *displacement* is ~`1e-3·A/Ω` — a **thousandfold** below a displacement seed of the same nominal
+    `1e-3·A`. That, and not the growth rate, is why that figure needs 0.22 s (~60 s of compute) to
+    saturate. The viewer follows the *test suite's* convention (`_whirl_run`'s `seed="vel"` →
+    `dw' = s·A·ω_u·φ`), which makes the two seed kinds start at a comparable displacement, so
+    switching kind changes the physics rather than the size of the perturbation. Measured
+    `max|w|/max|u|` at 0.06 s: disp **7.6e-2**, vel **5.2e-2** — the same order, as intended.
 - **The whirl is the growth-and-gate story, on a log-y ENVELOPE.** A straight line on log axes *is*
   the Mathieu instability. It must be the envelope (a sliding ~1-period max), never the raw
   `max|w|`: every node crosses zero twice a period, so the instantaneous spatial max is
