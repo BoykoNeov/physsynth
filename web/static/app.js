@@ -231,11 +231,29 @@ function updateLambdaHint() {
       tHint.textContent = "";
     }
   }
+  // The tension string defaults to lossless, so the out-of-box audio is a steady tone — but the
+  // downward glide is this model's audible signature, and it only exists while the amplitude is
+  // decaying. Nudge toward it; and once loss is on, say why the shift panel does NOT follow (it
+  // measures its own lossless run, since the oracle predicts ω at a fixed amplitude).
+  const tLoss = $("tension-loss-hint");
+  if (tLoss) {
+    if (m !== "tension") {
+      tLoss.textContent = "";
+    } else if (param("sigma0") === 0 && param("sigma1") === 0) {
+      tLoss.textContent = "σ = 0 → steady pitch. Add loss (σ₀ ≈ 1) to hear the tone glide down as "
+        + "the amplitude decays.";
+    } else {
+      tLoss.textContent = "the tone glides down as it decays — the shift panel measures its own "
+        + "lossless run, so it stays put.";
+    }
+    tLoss.style.color = "var(--muted)";
+  }
 }
 
 function onControlChange(name) {
   if (name === "lambda" || name === "mu" || name === "fs") updateLambdaHint();
   if (name === "amplitude" || name === "EA" || name === "T" || name === "L") updateLambdaHint();
+  if (name === "sigma0" || name === "sigma1") updateLambdaHint();
   scheduleAuto();
 }
 
