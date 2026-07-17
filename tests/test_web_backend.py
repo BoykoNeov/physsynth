@@ -15,6 +15,7 @@ import base64
 import numpy as np
 import pytest
 
+import web.serialize as web_serialize
 from web.serialize import (
     AUDIO_FS,
     DISPLAY_MAX,
@@ -22,8 +23,15 @@ from web.serialize import (
     MEMBRANE_LAMBDA_MAX,
     MEMBRANE_N_MAX,
     PLATE_N_MAX,
+    TENSION_AMP_MAX,
+    TENSION_DT_MAX,
+    TENSION_N_MAX,
+    TENSION_OFFMODE_MAX,
     VK_N_MAX,
     VK_WOVERE_MAX,
+    _measure_tension_mode1,
+    _tension_dt_over_t,
+    _tension_spectrum_block,
     simulate_to_payload,
 )
 
@@ -191,6 +199,157 @@ def test_none_params_does_not_crash():
     """Defensive: empty/None input runs on defaults rather than throwing."""
     payload = simulate_to_payload({})
     assert "error" not in payload, payload.get("error")
+
+
+# == tension-modulated string (1D nonlinear, model #9) ============================================
+# The panel's headline is the amplitude shift against the model's EXACT Duffing closed form, so
+# these pin the oracle through the wrapper, both honesty gates, and the cost budget it needs.
+
+TENSION_P: dict = {"model": "tension", "N": 128, "audio_duration": 0.4, "amplitude": 0.02}
+
+
+def test_tension_shift_matches_the_exact_duffing_oracle():
+    """**The money test.** Lead with the *shift*, never an absolute frequency: a measured ω(A)
+    carries the θ-scheme's linear temporal dispersion error, and ω(A→0) carries the same one, so
+    their difference cancels it and isolates the nonlinear physics (the core's own oracle test,
+    re-run through the wrapper)."""
+    sp = simulate_to_payload(TENSION_P)["meta"]["spectrum"]
+    assert sp["kind"] == "tension"
+    assert sp["shift_oracle"] > 1.0, "the shift should be a real, audible number of Hz"
+    assert sp["shift_measured"] == pytest.approx(sp["shift_oracle"], rel=1e-2)
+    # the residual is the scheme's O(h²)+O(k²) gap to the continuum Duffing, not crossing noise
+    assert sp["shift_rel_error"] < 1e-2
+    assert sp["f_hardened"] > sp["f_linear"], "hardening only — transverse motion can only stretch"
+
+
+def test_tension_shift_is_immune_to_loss():
+    """The shift must come from a **lossless** pair of runs, never from the audio pickup.
+
+    ``duffing_frequency_shift(A)`` predicts the frequency at a *fixed* amplitude; a lossy tension
+    string is a downward-gliding chirp, so zero-crossing the decaying pickup would report an
+    amplitude-*averaged* frequency that undershoots the oracle — and the panel would diverge from
+    the oracle as σ rose, reading as a bug that isn't one. The audio stays lossy on purpose (the
+    glide is the model's signature); the *number* must not notice.
+    """
+    quiet = simulate_to_payload({**TENSION_P})["meta"]["spectrum"]
+    lossy = simulate_to_payload({**TENSION_P, "sigma0": 5.0, "sigma1": 0.002})["meta"]["spectrum"]
+    assert not simulate_to_payload({**TENSION_P, "sigma0": 5.0})["energy"]["sigma_is_zero"]
+    # bit-identical: the measurement run forces sigma0 = sigma1 = 0 regardless of the request
+    assert lossy["shift_measured"] == quiet["shift_measured"]
+    assert lossy["f_hardened"] == quiet["f_hardened"]
+
+
+def test_tension_energy_survives_the_wrapper_and_the_nonlinearity_is_engaged():
+    """Criterion 1 through a nonlinear model — plus the model #6 lesson: a nonlinearity *hides* at
+    small amplitude, where the test merely re-runs the linear scheme. So assert the stretch term
+    actually holds a real fraction of E at the shipped default."""
+    r = simulate_to_payload(TENSION_P)
+    assert r["energy"]["lossless"]["drift"] < LOSSLESS_TOL
+    assert r["energy"]["lossless"]["pass"] is True
+    assert r["energy"]["convergence"]["all_converged"] is True
+    assert r["meta"]["nonlinear_fraction"] > 0.01, "the nonlinearity must be engaged, not hiding"
+    assert r["meta"]["EA_over_T"] == pytest.approx(500.0)
+
+
+def test_tension_ea_zero_collapses_to_the_linear_string():
+    """``EA = 0`` is model #3 bit-for-bit — the free regression the nonlinearity ships with."""
+    r = simulate_to_payload({**TENSION_P, "EA": 0.0})
+    sp = r["meta"]["spectrum"]
+    assert r["meta"]["nonlinear_fraction"] == 0.0
+    assert sp["shift_oracle"] == 0.0
+    assert sp["shift_measured"] == pytest.approx(0.0, abs=1e-6)
+    assert sp["dT_over_T"] == 0.0
+
+
+def test_tension_dt_over_t_matches_the_closed_form():
+    """``dT/T0 = EA·A²·p²/(4T)`` is exact for a single mode (the ``L`` cancels), which is what lets
+    the guard run *before* any stepping."""
+    sp = simulate_to_payload(TENSION_P)["meta"]["spectrum"]
+    p2 = web_serialize.damping.spatial_eigenvalue_p2(128, 1.0 / 128, 1)
+    # abs=1e-4: the payload rounds to 4 dp, and the run's *measured* peak is what is reported
+    assert sp["dT_over_T"] == pytest.approx(_tension_dt_over_t(1e5, 0.02, p2, 200.0), abs=1e-4)
+
+
+def test_purity_gate_nulls_the_shift_when_the_mode_breaks_up(monkeypatch):
+    """Above its threshold the single mode parametrically disintegrates into its neighbours — real,
+    energy-conserving physics, but the Duffing reduction stops describing the motion, so the shift
+    must read ``null`` and never a lying number.
+
+    Driven directly, past the ``dT/T0`` guard: that guard is exactly what makes this unreachable
+    through the public path (which is the point — a guard that cannot trip is a *guarantee*), so the
+    gate is exercised at the layer its logic actually lives.
+    """
+    monkeypatch.setattr(web_serialize, "TENSION_MEASURE_PERIODS", 20)
+    p = {"model": "tension", "N": 64}
+    broke = _measure_tension_mode1(p, 0.20)      # dT/T0 ~ 49 — far above threshold
+    assert broke["off_mode"] > TENSION_OFFMODE_MAX, "expected genuine parametric breakup"
+    assert _measure_tension_mode1(p, 0.005)["off_mode"] < TENSION_OFFMODE_MAX, "sub-threshold: pure"
+
+    fs = 200.0 * 64 / 1.0
+    w0sq, eps = web_serialize.duffing.kc_mode_coefficients(
+        c=200.0, kappa=0.0, EA=1e5, rho=0.005,
+        p2=web_serialize.damping.spatial_eigenvalue_p2(64, 1.0 / 64, 1), L=1.0,
+    )
+    sig = np.sin(2 * np.pi * 100.0 * np.arange(4096) / fs)
+    sp = _tension_spectrum_block(p, sig, fs, w0sq, eps, 0.20)
+    assert sp["purity"]["pure"] is False
+    assert sp["shift_measured"] is None, "a broken-up mode must report no shift, not a wrong one"
+    assert sp["shift_rel_error"] is None
+    assert sp["shift_oracle"] > 0.0, "the oracle is still reported — only the measurement is void"
+
+
+def test_tension_dt_guard_is_not_an_amplitude_proxy():
+    """The guard bounds ``dT/T0``, not amplitude: EA and T move it just as hard as A does, so an
+    amplitude-only cap would let ``EA = 2e5`` break up with the panel none the wiser."""
+    at_cap = {**TENSION_P, "amplitude": TENSION_AMP_MAX, "EA": 1e5, "audio_duration": 0.2}
+    assert simulate_to_payload(at_cap)["meta"]["spectrum"]["dT_over_T"] <= TENSION_DT_MAX
+    # same (legal) amplitude, stiffer string -> over the threshold -> rejected
+    err = simulate_to_payload({**at_cap, "EA": 2e5})["error"]
+    assert err["kind"] == "param"
+    assert "dT/T0" in err["message"]
+
+
+def test_tension_lossy_reports_passivity():
+    r = simulate_to_payload({**TENSION_P, "sigma0": 4.0})
+    assert r["energy"]["sigma_is_zero"] is False
+    assert r["energy"]["lossy"]["monotone"] is True
+    assert r["energy"]["lossy"]["measured_2sigma"] == pytest.approx(8.0, rel=0.25)
+
+
+def test_tension_frames_decode_to_a_mode1_sine_with_fixed_ends():
+    """The IC is the mode-1 sine the Duffing reduction needs (a triangular pluck is broadly
+    multi-mode and would make the shift a lying number). Pins the decoded *values*, not just the
+    size — a length-only check cannot catch byte-order garbage."""
+    r = simulate_to_payload(TENSION_P)
+    fr = r["frames"]
+    field = _decode_f32(fr["b64"]).reshape(fr["n_frames"], fr["width"])
+    assert fr["dims"] == 1
+    assert fr["width"] == 129
+    assert field[0][0] == pytest.approx(0.0, abs=1e-12)
+    assert field[0][-1] == pytest.approx(0.0, abs=1e-12)
+    # frame 0 IS the initial condition: a half sine peaking at mid-span
+    assert field[0][64] == pytest.approx(0.02, rel=1e-4)
+    assert np.max(np.abs(field)) == pytest.approx(r["field_amp"], rel=1e-5)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"amplitude": 0.0},
+        {"amplitude": TENSION_AMP_MAX + 0.01},
+        {"EA": -1.0},
+        {"EA": 5e5},
+        {"N": TENSION_N_MAX + 1},
+        {"audio_duration": 6.0},
+        {"N": 256, "audio_duration": 3.0},   # over the work budget (every step is a root-find)
+        {"pickup_position": 1.5},
+    ],
+)
+def test_tension_bad_params_give_error_payload(bad):
+    r = simulate_to_payload({**TENSION_P, **bad})
+    assert "error" in r, f"{bad} should be rejected"
+    assert r["error"]["kind"] in ("param", "construction")
+    assert isinstance(r["error"]["message"], str) and r["error"]["message"]
 
 
 # == membrane (2D, Phase B) =======================================================================

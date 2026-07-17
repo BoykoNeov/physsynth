@@ -43,6 +43,12 @@ const LABELS = {
 // switch back off plate/vk resets them. A spec's `val` is (re)applied on every model switch; params
 // with no `val` in the spec persist and are only clamped into range.
 const MODEL_RANGES = {
+  // Amplitude IS this model's independent variable (the shift scales as A²), so it leads the panel.
+  // The string path's inherited 1e-3 would render a 0.8-cent near-null; 0.02 gives ~270 cents. The
+  // caps are cost- and honesty-driven: every step runs a tension root-find (~2x a 2D membrane step),
+  // and dT/T0 is bounded server-side to keep the mode below its parametric-breakup threshold.
+  tension: { N: { max: 256, val: 128 }, kappa: { val: 1.0 }, audio_duration: { max: 3, val: 1 },
+             amplitude: { val: 0.02 }, sigma0: { val: 0 }, sigma1: { val: 0 } },
   membrane: { N: { max: 100, val: 80 }, lambda: { max: 0.7, val: 0.6 },
               audio_duration: { max: 2, val: 1.5 } },
   plate: { N: { max: 80, val: 60 }, kappa: { min: 2, max: 80, step: 0.5, fixed: 1, val: 20 },
@@ -51,9 +57,13 @@ const MODEL_RANGES = {
   vk: { N: { min: 8, max: 32, val: 20 },
         rho: { min: 2000, max: 12000, step: 100, fixed: 0, val: 7800, unit: "kg/m³" },
         Lx: { val: 0.3 }, Ly: { val: 0.3 }, audio_duration: { max: 1, val: 0.5 } },
+  // `amplitude` is shown only for the tension string, but gatherParams sends every slider — so it
+  // must reset to the linear string path's historical 1e-3 on switch, or those models would silently
+  // re-render at the tension default (a pure scale for a linear model, but not bit-for-bit).
   _default: { N: { min: 16, max: 512 }, lambda: { max: 2.0, val: 1.0 },
               kappa: { min: 0, max: 8, step: 0.05, fixed: 2, val: 1.0 },
               rho: { min: 0.001, max: 0.02, step: 0.0005, fixed: 4, val: 0.005, unit: "kg/m²" },
+              amplitude: { val: 0.001 },
               audio_duration: { max: 6, val: 2 } },
 };
 
@@ -206,10 +216,26 @@ function updateLambdaHint() {
       ? "supported gong: struck in its (1,1) mode — strike x/y/width are ignored (pickup still used)"
       : (m === "vk" ? "free cymbal: a positioned crash (multi-mode wash)" : "");
   }
+  // Tension string: dT/T0 = EA·A²·p₁²/(4T) is the load-bearing quantity — amplitude alone is a
+  // proxy, since EA and T move it just as hard. The server rejects above ~4.45, where the mode
+  // parametrically breaks up. Show it live so the ceiling is visible while dragging.
+  const tHint = $("tension-hint");
+  if (tHint) {
+    if (m === "tension") {
+      const A = param("amplitude"), EA = param("EA") * 1e3, T = param("T"), L = param("L");
+      const dt = EA * A * A * Math.pow(Math.PI / L, 2) / (4 * T);
+      tHint.textContent = `ΔT/T₀ = ${dt.toFixed(2)}  ·  the mode breaks up above ~4.45 (real, `
+        + `energy-conserving physics — but the Duffing shift stops applying there)`;
+      tHint.style.color = dt > 4.45 ? "var(--bad)" : "var(--muted)";
+    } else {
+      tHint.textContent = "";
+    }
+  }
 }
 
 function onControlChange(name) {
   if (name === "lambda" || name === "mu" || name === "fs") updateLambdaHint();
+  if (name === "amplitude" || name === "EA" || name === "T" || name === "L") updateLambdaHint();
   scheduleAuto();
 }
 
@@ -448,17 +474,20 @@ function drawEnergy() {
   // von Kármán convergence gate (catch): the energy identity telescopes ONLY at the Picard fixed
   // point, so a run with any non-converged step has a drift number that is iteration noise, not
   // physics. Overrides the pass/fail verdict in BOTH the lossless and lossy branches.
+  // The same gate serves the tension string, whose per-step scalar root-find is a different solver
+  // with different telemetry — so a model may supply its own `detail`/`note` wording. Absent those,
+  // the von Kármán Picard wording stands unchanged.
   const conv = e.convergence;
   if (conv && !conv.all_converged) {
     badge.textContent = "NOT CONVERGED";
     badge.className = "badge bad";
-    out.textContent =
-      `Picard did not converge: ${conv.n_not_converged} step(s), worst residual ` +
-      `${conv.worst_residual.toExponential(1)} > tol ${conv.couple_tol.toExponential(0)}\n` +
-      `energy verdict N/A — lower the strike amplitude (w/e) or raise fs`;
+    out.textContent = conv.detail ||
+      (`Picard did not converge: ${conv.n_not_converged} step(s), worst residual ` +
+       `${conv.worst_residual.toExponential(1)} > tol ${conv.couple_tol.toExponential(0)}\n` +
+       `energy verdict N/A — lower the strike amplitude (w/e) or raise fs`);
     return;
   }
-  const convNote = conv ? `  ·  Picard converged (≤ ${conv.max_iters} sweeps)` : "";
+  const convNote = conv ? (conv.note || `  ·  Picard converged (≤ ${conv.max_iters} sweeps)`) : "";
   if (e.sigma_is_zero) {
     const ok = e.lossless.pass;
     badge.textContent = ok ? "conserved" : "DRIFT";
@@ -480,6 +509,15 @@ function drawEnergy() {
 
 // ── second diagnostic panel: partials (string) | mode spectrum (2D) ──────────────────────────
 function drawDiagnostics() {
+  const spec = payload && payload.meta && payload.meta.spectrum;
+  // Checked before the dims gate: the tension string is a 1-D model that still wants a spectrum
+  // panel, not the linear per-partial cents bars (its peak moves tens of percent with amplitude).
+  if (spec && spec.kind === "tension") {
+    partialsTitle.firstChild.textContent = "Amplitude shift ";
+    partialsSub.textContent = "measured vs exact Duffing";
+    drawTensionSpectrum();
+    return;
+  }
   if (dims !== 2) {
     partialsTitle.firstChild.textContent = "Partials ";
     partialsSub.textContent = "detected vs analytic";
@@ -611,6 +649,64 @@ function drawVkSpectrum() {
       `linear modes (grey) at ${sp.f1_linear.toFixed(1)} Hz and up\n`
       + `free-edge crash: a multi-mode wash — no single hardened fundamental to report`;
   }
+}
+
+// Tension-modulated string: the headline is the *amplitude shift* ω(A) − ω(A→0), not an absolute
+// frequency — a measured ω(A) carries the θ-scheme's linear dispersion error and so does ω(A→0), so
+// their difference cancels it and isolates the nonlinear physics. Both come from a short LOSSLESS
+// pair of runs, never from the (deliberately lossy, deliberately gliding) audio pickup.
+function drawTensionSpectrum() {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height, padL = 26, padB = 16, top = 8;
+  g.clearRect(0, 0, W, H);
+  const out = $("partials-readout");
+  const sp = payload && payload.meta && payload.meta.spectrum;
+  if (!sp) { out.textContent = "no spectrum"; return; }
+
+  const plotW = W - padL - 8, plotH = H - padB - top;
+  const x0 = padL, y0 = top + plotH;
+  const fmax = sp.fmax || 1;
+  const fx = (f) => x0 + (f / fmax) * plotW;
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(x0, top, plotW, plotH);
+
+  // linear mode-1 reference (grey): the peak rides ABOVE it by the hardening
+  g.strokeStyle = "rgba(139,152,168,.6)"; g.lineWidth = 1; g.setLineDash([3, 3]);
+  if (sp.f_linear <= fmax) {
+    g.beginPath(); g.moveTo(fx(sp.f_linear), top); g.lineTo(fx(sp.f_linear), y0); g.stroke();
+  }
+  g.setLineDash([]);
+  if (sp.f_hardened != null && sp.f_hardened <= fmax) {
+    g.strokeStyle = "#ffcf5c"; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(fx(sp.f_hardened), top); g.lineTo(fx(sp.f_hardened), y0); g.stroke();
+  }
+
+  g.strokeStyle = "#5ad17a"; g.lineWidth = 1.5; g.beginPath();
+  for (let i = 0; i < sp.freq.length; i++) {
+    const m = sp.mag[i] == null ? 0 : sp.mag[i];
+    const x = fx(sp.freq[i]), y = y0 - m * (plotH - 4);
+    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.stroke();
+  g.fillStyle = "#8b98a8"; g.font = "10px ui-monospace, monospace";
+  g.fillText("|X(f)|", 3, top + 10);
+  g.fillText(`${Math.round(fmax)} Hz`, W - 54, H - 4);
+
+  const dt = `ΔT/T₀ = ${sp.dT_over_T.toFixed(2)}`;
+  if (sp.shift_measured == null) {
+    // The mode broke up (parametric instability): the Duffing reduction no longer describes the
+    // motion, so report nothing rather than a lying number.
+    out.textContent =
+      `linear f₁ = ${sp.f_linear.toFixed(2)} Hz (grey)   ·   ${dt}\n`
+      + `mode broke up (off-mode ${sp.purity.off_mode.toExponential(1)}) — shift N/A`;
+    return;
+  }
+  const err = sp.shift_rel_error == null ? "" :
+    `   ·   error ${(sp.shift_rel_error * 100).toFixed(2)}%`;
+  out.textContent =
+    `linear f₁ ${sp.f_linear.toFixed(2)} Hz (grey)  →  hardened ${sp.f_hardened.toFixed(2)} Hz `
+    + `(yellow)   ·   ${dt}\n`
+    + `shift ${sp.shift_measured.toFixed(2)} Hz vs exact Duffing ${sp.shift_oracle.toFixed(2)} Hz`
+    + `${err}   ·   ${sp.shift_cents == null ? "" : `+${sp.shift_cents.toFixed(0)} cents`}`;
 }
 
 // ── partials diagnostic ─────────────────────────────────────────────────────────────────────

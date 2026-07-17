@@ -32,13 +32,14 @@ from numpy.typing import NDArray
 from scipy.signal import resample_poly
 from scipy.sparse.linalg import eigsh
 
-from physsynth.analysis import modal, spectrum
+from physsynth.analysis import damping, duffing, modal, spectrum
 from physsynth.core.engine import SimResult, simulate
 from physsynth.core.exciter import raised_cosine_2d, triangular_pluck
 from physsynth.core.membrane import Membrane
 from physsynth.core.plate import Plate, VKPlate
 from physsynth.core.string_damped import DampedStiffString
 from physsynth.core.string_ideal import IdealString
+from physsynth.core.string_nonlinear import TensionModulatedString
 from physsynth.core.string_stiff import StiffString
 
 # -- constants -------------------------------------------------------------------------------------
@@ -111,6 +112,56 @@ VK_COUPLE_MAX_ITER = 50        # Picard safety cap (also the worst-case cost mul
 VK_WORK_MAX = 2.0e9            # n_live x steps x couple_max_iter (Picard-aware)
 VK_WOVERE_MAX = 6.0            # strike amplitude in thickness units (w/e); the hardening knob
 N_VK_MODES = 6               # linear eigenmodes marked on the spectrum panel
+
+# --- tension-modulated string (model #9) — the Kirchhoff–Carrier hardening demo ---
+# The headline is the *amplitude shift* omega(A) - omega(A->0), NOT an absolute frequency. A
+# measured omega(A) carries the theta-scheme's linear temporal dispersion error, and omega(A->0)
+# carries the same one, so their difference cancels it and isolates the nonlinear physics. That is
+# the model's own oracle (test_amplitude_shift_matches_duffing); duffing_frequency alone matches
+# only "loosely". Calibrated at the string defaults (L=1, T=200, rho=0.005 -> c=200, f1=100 Hz),
+# N=128, EA=1e5:
+#   A=0.001 -> shift  0.05 Hz (  0.8 c)  <- the string path's inherited default: a near-null; the
+#                                           flagship panel would render blank and look broken
+#   A=0.02  -> shift 16.9  Hz (270   c)  <- shipped default: plainly visible, and sub-breakup
+#   A=0.06  -> shift 80+   Hz            <- the slider cap; still sub-breakup (see TENSION_DT_MAX)
+TENSION_EA_DEFAULT = 1.0e5      # EA/T = 500 at the default T; real strings sit at 150-600
+TENSION_EA_MAX = 2.0e5
+TENSION_AMP_DEFAULT = 0.02      # amplitude IS this model's independent variable — see the table
+TENSION_AMP_MAX = 0.06          # slider bound only; the load-bearing guard is TENSION_DT_MAX below
+TENSION_REF_AMP = 1e-5          # FIXED absolute reference amplitude (a ratio of A courts zc noise)
+# 12 fundamental periods per measurement run. More does not help: at 6/12/24 periods the shift lands
+# 1.47e-3 / 1.17e-3 / 1.03e-3 from the oracle, so the residual is the scheme's genuine O(h²)+O(k²)
+# gap to the continuum Duffing, NOT crossing noise. 12 buys the accuracy at half the cost.
+TENSION_MEASURE_PERIODS = 12
+# Purity gate: sub-threshold single-mode runs sit at off-mode ~1e-11, broken-up ones at >1e-3
+# (the core's own signature tests), so any bar in between discriminates without tuning.
+TENSION_OFFMODE_MAX = 1e-6
+
+# THE load-bearing guard. Single-mode motion is parametrically unstable above a threshold in
+# dT/T0 = EA·A²·p1²/(4T) — this project's own discovery (model #9). Above it the mode disintegrates
+# into its neighbours (energy-conserving: it is *physics*, not a blow-up), and the Duffing reduction
+# stops describing the motion, so the shift oracle stops meaning anything. The threshold is NOT the
+# "~3" of the core's tests — that was measured at mode 3 and is not mode-invariant. Measured here
+# for mode 1 over a run 1000 fundamental periods long (3x the longest this model now admits, since
+# TENSION_AUDIO_MAX caps exposure at ~300 periods), at N=128:
+#   A=0.06 -> dT/T0=4.44 -> worst off-mode 3.2e-13   PURE
+#   A=0.07 -> dT/T0=6.05 -> worst off-mode 5.9e-02   BREAKS UP
+# so mode 1's threshold lies in (4.44, 6.05]. Also verified PURE at the cap with kappa=0 (off-mode
+# 3.2e-13): stiffness detunes the Mathieu resonance, so kappa=0 *looked* like the dangerous corner —
+# measured, it moves mode 1's threshold nowhere. Bounding dT/T0 (not amplitude!) keeps the panel
+# honest: A alone is a proxy — EA and T move dT/T0 just as hard, and EA=2e5 at A=0.06 would break up
+# with an amplitude-only cap none the wiser (the membrane's "bound the actual problem size" lesson).
+# Because the cap makes breakup unreachable, the purity gate is a *guarantee*, not dead code.
+# The instability deserves a viewer panel of its own (mode cascade, the Mathieu tongue) — deferred.
+TENSION_DT_MAX = 4.45
+# Cost: the tension solve is a scalar root-find (a banded re-solve per iteration) every step, so a
+# step costs ~176 µs at N=128 — about 2x a 2D membrane step, for a 1D string. The string path's
+# N_MAX=2000 / 10 s would be ~4M root-finds (minutes of hang), so this model needs its own budget.
+# Steps rise with N on their own (fs = c·N/(L·λ)), so a total-step budget already penalizes a fine
+# grid. Default (N=128, 1 s) ~ 34k steps ~ 6 s; the budget admits ~60k ~ 11 s as the worst pass.
+TENSION_N_MAX = 256
+TENSION_AUDIO_MAX = 3.0
+TENSION_WORK_MAX = 60_000       # total steps: audio + both measurement runs + animation
 
 
 class ParamError(ValueError):
@@ -215,7 +266,20 @@ def _build_resonator(p: dict[str, Any]) -> _Built:
         )
         # oracle_2sigma is the frequency-INDEPENDENT base rate (sigma1 adds a per-mode term on top).
         return _Built(res, c, L, N, fs, s0 == 0.0 and s1 == 0.0, 2.0 * s0)
-    raise ParamError(f"unknown model {model!r} (expected 'ideal' | 'stiff' | 'damped').")
+    if model == "tension":
+        s0 = _fnum(p, "sigma0", 0.0)
+        s1 = _fnum(p, "sigma1", 0.0)
+        EA = _fnum(p, "EA", TENSION_EA_DEFAULT)
+        if not (0.0 <= EA <= TENSION_EA_MAX):
+            raise ParamError(f"EA must be in [0, {TENSION_EA_MAX:.0f}] N, got {EA}.")
+        res = TensionModulatedString(
+            **common, kappa=_fnum(p, "kappa", 0.0), EA=EA, sigma0=s0, sigma1=s1,
+            theta=_fnum(p, "theta", 0.28),
+        )
+        return _Built(res, c, L, N, fs, s0 == 0.0 and s1 == 0.0, 2.0 * s0)
+    raise ParamError(
+        f"unknown model {model!r} (expected 'ideal' | 'stiff' | 'damped' | 'tension')."
+    )
 
 
 def _partials_oracle(model: str, p: dict[str, Any], c: float, L: float) -> NDArray[np.float64]:
@@ -341,6 +405,8 @@ def _build_payload(p: dict[str, Any]) -> dict[str, Any]:
         return _build_payload_plate(p)
     if model == "vk":
         return _build_payload_vk(p)
+    if model == "tension":
+        return _build_payload_tension(p)
     return _build_payload_string(p)
 
 
@@ -418,6 +484,287 @@ def _build_payload_string(p: dict[str, Any]) -> dict[str, Any]:
             "num_steps": int(n_audio),
             "n_frames": int(frames.shape[0]),
             "partials": _partials_block(pickup, fs, model, p, c, L),
+        },
+    }
+
+
+# == tension-modulated string (1D nonlinear, model #9) =============================================
+
+
+def _mode1_shape(res: Any) -> NDArray[np.float64]:
+    """The exact discrete eigenvector ``sin(pi x / L)`` on the resonator's grid.
+
+    The Kirchhoff-Carrier -> Duffing reduction is a *single-mode* ansatz, so the oracle is only
+    meaningful from a single-mode start. A triangular pluck is broadly multi-mode and would make the
+    measured shift a lying number (model #6's ``mode11`` lesson, in a new model).
+    """
+    return np.sin(np.pi * np.arange(res.N + 1) / res.N)
+
+
+def _tension_dt_over_t(EA: float, amplitude: float, p2: float, T: float) -> float:
+    """Peak tension excess ``dT/T0`` of a single mode — exact, closed form, no stepping.
+
+    The stretch of one mode is ``I = A² p² L/2`` — see
+    :func:`~physsynth.analysis.duffing.kc_mode_stretch`, exact on the discrete grid too — and the
+    tension is ``T0 + (EA/2L) I``, so the ``L`` cancels. This is what lets the guard run *before*
+    any stepping.
+    """
+    return float(EA * amplitude**2 * p2 / (4.0 * T))
+
+
+def _tension_measure_steps(fs: float, L: float, c: float) -> int:
+    """Step count of one measurement run: ``TENSION_MEASURE_PERIODS`` linear fundamental periods."""
+    return max(64, int(round(TENSION_MEASURE_PERIODS * fs * 2.0 * L / c)))
+
+
+def _interp_zero_cross_frequency(sig: NDArray[np.float64], fs: float) -> float:
+    """Fundamental (Hz) from mean zero-crossing spacing, each crossing linearly interpolated.
+
+    :func:`_zero_cross_fundamental` quantizes every crossing to a whole sample; because the mean
+    spacing telescopes to ``(zc[-1] - zc[0])/(M-1)``, that quantization lands *directly* on the
+    headline shift rather than averaging away (~0.1 Hz on a ~17 Hz shift). Interpolating removes it.
+    Kept separate so the von Kármán path stays bit-for-bit.
+    """
+    sig = np.asarray(sig, dtype=float)
+    sig = sig - sig.mean()
+    idx = np.where(np.diff(np.signbit(sig)))[0]
+    if idx.size < 3:
+        return float("nan")
+    a, b = sig[idx], sig[idx + 1]
+    span = a - b
+    frac = np.divide(a, span, out=np.zeros_like(a), where=span != 0.0)
+    t = (idx.astype(float) + frac) / fs
+    return float(1.0 / (2.0 * float(np.mean(np.diff(t)))))
+
+
+def _measure_tension_mode1(p: dict[str, Any], amplitude: float) -> dict[str, float]:
+    """Frequency, worst off-mode fraction and peak ``dT/T0`` of a **lossless, short** mode-1 run.
+
+    Deliberately NOT the audio run, and deliberately lossless. ``duffing_frequency_shift(A)``
+    predicts the frequency at a *fixed* amplitude ``A``; a lossy tension string is a downward
+    chirp (as ``A`` decays, ``omega(A) -> omega_0``), so the mean crossing spacing of the pickup
+    reports an *amplitude-averaged* frequency that undershoots the oracle badly. The audio run stays
+    lossy on purpose — the audible glide is the model's signature — but the *number* is from here.
+
+    Purity is measured against the **fixed** ``||u_0||``, never the instantaneous ``||u||``: a
+    single
+    mode passes through ``u ~ 0`` twice a period, where roundoff would report a spurious ``1.0``.
+    """
+    b = _build_resonator({**p, "sigma0": 0.0, "sigma1": 0.0})
+    res = b.res
+    shape = _mode1_shape(res)
+    res.set_state(amplitude * shape)
+    scale = float(np.linalg.norm(amplitude * shape))
+    denom = float(np.dot(shape, shape))
+    n_steps = _tension_measure_steps(b.fs, b.L, b.c)
+
+    q = np.empty(n_steps)
+    worst_off, peak_dt = 0.0, 0.0
+    for i in range(n_steps):
+        u = res.u  # read-only view; `.state` would copy the field every step for nothing
+        q[i] = float(np.dot(u, shape)) / denom
+        worst_off = max(worst_off, float(np.linalg.norm(u - q[i] * shape)) / scale)
+        peak_dt = max(peak_dt, res.tension / res.T - 1.0)
+        res.step()
+    return {
+        "f": _interp_zero_cross_frequency(q, b.fs),
+        "off_mode": worst_off,
+        "dT_over_T": peak_dt,
+        "not_converged": float(res.n_not_converged),
+    }
+
+
+def _tension_spectrum_block(
+    p: dict[str, Any], pickup: NDArray[np.float64], fs: float, w0sq: float, eps: float,
+    amplitude: float,
+) -> dict[str, Any]:
+    """The money panel: measured amplitude shift vs the **exact** Duffing closed form.
+
+    Two honesty gates, both following precedent. *Purity* — this project's own discovery is that
+    single-mode motion is parametrically unstable above ``dT/T0 ~ 3``; past that the mode breaks up
+    (energy is still conserved — it is physics, not a blow-up) and the Duffing reduction no longer
+    describes the motion, so the shift is reported as ``null`` rather than a lying number (model
+    #6's free-cymbal precedent). *Convergence* is folded into the energy block, not here.
+    """
+    f_lin = math.sqrt(w0sq) / (2.0 * math.pi)
+    shift_oracle = duffing.duffing_frequency_shift(amplitude, w0sq, eps) / (2.0 * math.pi)
+
+    run_a = _measure_tension_mode1(p, amplitude)
+    run_ref = _measure_tension_mode1(p, TENSION_REF_AMP)
+    off = max(run_a["off_mode"], run_ref["off_mode"])
+    pure = off < TENSION_OFFMODE_MAX
+    measured = math.isfinite(run_a["f"]) and math.isfinite(run_ref["f"])
+
+    shift_meas: float | None = None
+    rel_err: float | None = None
+    if pure and measured:
+        shift_meas = run_a["f"] - run_ref["f"]
+        if shift_oracle > 0.0:
+            rel_err = abs(shift_meas - shift_oracle) / shift_oracle
+
+    fmax = max(4.0 * f_lin, 1.25 * (f_lin + shift_oracle))
+    pooled = _pooled_spectrum(pickup, fs, fmax)
+    freq, mag = ([], []) if pooled is None else (
+        _finite_list(pooled[0], 3), _finite_list(pooled[1], 5)
+    )
+    return {
+        "kind": "tension",
+        "freq": freq,
+        "mag": mag,
+        "fmax": round(fmax, 3),
+        "f_linear": round(f_lin, 4),
+        "f_hardened": round(run_a["f"], 4) if measured else None,
+        "f_reference": round(run_ref["f"], 4) if measured else None,
+        "shift_measured": round(shift_meas, 4) if shift_meas is not None else None,
+        "shift_oracle": round(shift_oracle, 4),
+        "shift_rel_error": rel_err,
+        "shift_cents": (
+            round(float(modal.cents(f_lin + shift_meas, f_lin)), 3)
+            if shift_meas is not None and f_lin + shift_meas > 0 else None
+        ),
+        "dT_over_T": round(run_a["dT_over_T"], 4),
+        "purity": {"off_mode": run_a["off_mode"], "tol": TENSION_OFFMODE_MAX, "pure": bool(pure)},
+    }
+
+
+def _build_payload_tension(p: dict[str, Any]) -> dict[str, Any]:
+    audio_dur = _fnum(p, "audio_duration", 2.0)
+    anim_win = _fnum(p, "animation_window", 0.06)
+    playback_speed = _fnum(p, "playback_speed", 0.02)
+    amplitude = _fnum(p, "amplitude", TENSION_AMP_DEFAULT)
+    pickup_frac = _fnum(p, "pickup_position", 0.1)
+    fpp = max(1, int(_fnum(p, "frames_per_period", FRAMES_PER_PERIOD)))
+
+    if not (0.0 < audio_dur <= TENSION_AUDIO_MAX):
+        raise ParamError(f"audio_duration must be in (0, {TENSION_AUDIO_MAX}] s, got {audio_dur}.")
+    if not (0.0 < anim_win <= ANIM_WIN_MAX):
+        raise ParamError(f"animation_window must be in (0, {ANIM_WIN_MAX}] s, got {anim_win}.")
+    if not (0.0 < playback_speed <= SPEED_MAX):
+        raise ParamError(f"playback_speed must be in (0, {SPEED_MAX}], got {playback_speed}.")
+    if not (0.0 < amplitude <= TENSION_AMP_MAX):
+        raise ParamError(f"amplitude must be in (0, {TENSION_AMP_MAX}] m, got {amplitude}.")
+    if not (0.0 < pickup_frac < 1.0):
+        raise ParamError(f"pickup_position must be in (0, 1), got {pickup_frac}.")
+    try:
+        n_req = int(p.get("N", 128))
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"N must be an integer, got {p.get('N')!r}.") from exc
+    if n_req > TENSION_N_MAX:
+        raise ParamError(
+            f"N must be <= {TENSION_N_MAX} for the tension string (got {n_req}): every step runs a "
+            "tension root-find, so a fine grid is far costlier here than on a linear string."
+        )
+
+    b = _build_resonator(p)
+    c, L, N, fs = b.c, b.L, b.N, b.fs
+    res = b.res
+    pickup_idx = min(max(1, round(pickup_frac * N)), N - 1)
+
+    # Duffing coefficients of mode 1 on the DISCRETE grid (p2 = (4/h^2) sin^2(pi/2N)) — the
+    # eigenvalue the stepper actually rings at. The continuum (pi/L)^2 would fold O(h^2) error into
+    # the oracle the measurement is then scored against.
+    p2 = damping.spatial_eigenvalue_p2(N, res.h, 1)
+    w0sq, eps = duffing.kc_mode_coefficients(
+        c=c, kappa=res.kappa, EA=res.EA, rho=res.rho, p2=p2, L=L
+    )
+    f_lin = math.sqrt(w0sq) / (2.0 * math.pi)
+    f_hard_est = f_lin + duffing.duffing_frequency_shift(amplitude, w0sq, eps) / (2.0 * math.pi)
+
+    # Bound dT/T0, not amplitude: EA and T move it just as hard as A does (see TENSION_DT_MAX). The
+    # single-mode stretch is exact — I = A² p2 L/2, so dT/T0 = (EA/2L)·I / T = EA·A²·p2/(4T) — so
+    # this costs nothing and is checked *before* any stepping.
+    dt_over_t = _tension_dt_over_t(res.EA, amplitude, p2, res.T)
+    if dt_over_t > TENSION_DT_MAX:
+        raise ParamError(
+            f"dT/T0 = {dt_over_t:.2f} exceeds {TENSION_DT_MAX} — above this the single mode is "
+            "parametrically unstable and breaks up into its neighbours, so the Duffing shift stops "
+            "describing the motion. (The breakup is real, energy-conserving physics; it wants a "
+            "panel of its own.) Lower the amplitude or EA."
+        )
+
+    n_measure = _tension_measure_steps(fs, L, c)
+    n_audio_req = max(1, round(audio_dur * fs))
+    work = n_audio_req + 2 * n_measure + round(anim_win * fs)
+    if work > TENSION_WORK_MAX:
+        raise ParamError(
+            f"work budget exceeded ({work:,} steps > {TENSION_WORK_MAX:,}): every step runs a "
+            "tension root-find (~176 µs at N=128). Lower N or audio_duration."
+        )
+
+    shape = _mode1_shape(res)
+    res.set_state(amplitude * shape)
+    # Measured AT THE IC, which is the PEAK: the mode starts at maximum displacement with zero
+    # velocity, so all of E is potential and the stretch is maximal. The stretch oscillates twice a
+    # period, so reading this off the *final* state would instead report wherever the run happened
+    # to stop (0.115 vs 8e-6 for a 0.5 s vs 0.4 s render — same physics, meaningless difference).
+    e0 = res.energy()
+    nl_fraction = res.nonlinear_energy() / e0 if e0 > 0 else 0.0
+
+    n_audio = max(1, round(audio_dur * fs))
+    audio_res = simulate(res, num_steps=n_audio, pickup_index=pickup_idx)
+    pickup = np.asarray(audio_res.output, dtype=float)
+    if not np.all(np.isfinite(pickup)):
+        raise ParamError(
+            "simulation produced non-finite output (instability) — adjust parameters."
+        )
+
+    # Animation stride rides the *hardened* estimate, not the linear f1: at a large amplitude the
+    # motion runs up to ~2x faster, and a linear-f1 stride would under-resolve it (catch #2).
+    anim = _build_resonator(p).res
+    anim.set_state(amplitude * _mode1_shape(anim))
+    anim_stride = max(1, round((fs / f_hard_est) / fpp))
+    n_anim = max(anim_stride, round(anim_win * fs))
+    if n_anim // anim_stride > MAX_FRAMES:
+        anim_stride = max(1, math.ceil(n_anim / MAX_FRAMES))
+    anim_res = simulate(anim, num_steps=n_anim, snapshot_stride=anim_stride)
+    frames = np.array([st for _, st in anim_res.snapshots], dtype=float)
+    frame_steps = np.array([i for i, _ in anim_res.snapshots], dtype=float)
+
+    audio48, peak = _resample_normalize(pickup, fs)
+    field_amp = float(np.max(np.abs(frames))) if frames.size else 0.0
+    n_bad = int(res.n_not_converged)
+    tol = res.tension_tol
+    convergence = {
+        "all_converged": n_bad == 0,
+        "n_not_converged": n_bad,
+        "tension_tol": tol,
+        "bracket_expansions": int(res.bracket_expansions),
+        "detail": (
+            f"tension root-find did not converge: {n_bad} step(s), tol {tol:.0e}\n"
+            "energy verdict N/A — lower the amplitude or EA"
+        ),
+        "note": f"  ·  tension solve converged (tol {tol:.0e})",
+    }
+
+    return {
+        "model": "tension",
+        "fs_sim": round(fs, 3),
+        "lambda": round(float(res.lam), 6),
+        "grid": {"x": _finite_list(res.x, 6)},
+        "frames": {
+            "b64": _b64f32(frames.ravel()),
+            "n_frames": int(frames.shape[0]),
+            "width": int(frames.shape[1]) if frames.ndim == 2 else 0,
+            "dims": 1,
+        },
+        "frame_times": _finite_list(frame_steps / fs, 6),
+        "anim_dt": float(anim_stride / fs),
+        "playback_speed": playback_speed,
+        "field_amp": field_amp,
+        "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
+        "energy": _energy_block(audio_res, b.sigma_zero, b.oracle_2sigma, convergence=convergence),
+        "meta": {
+            "c": round(c, 3),
+            "f1": round(f_lin, 3),
+            "num_steps": int(n_audio),
+            "n_frames": int(frames.shape[0]),
+            # nested under meta, like every other model's spectrum — the frontend reads
+            # payload.meta.spectrum (a top-level key here would silently render nothing).
+            "spectrum": _tension_spectrum_block(p, pickup, fs, w0sq, eps, amplitude),
+            "EA_over_T": round(res.EA_over_T, 3),
+            # A nonlinearity HIDES at small amplitude, where the run merely re-plays the linear
+            # scheme (model #6's lesson) — so report the PEAK fraction of E the stretch term holds.
+            "nonlinear_fraction": round(float(nl_fraction), 6),
         },
     }
 

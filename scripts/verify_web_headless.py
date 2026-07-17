@@ -177,6 +177,7 @@ def main() -> int:
             ("membrane_circle", "model=membrane&domain=circle"),
             ("membrane_rect", "model=membrane&domain=rectangle"),
             ("string_ideal", "model=ideal"),
+            ("string_tension", "model=tension"),
             ("plate_supported", "model=plate&domain=supported"),
             ("plate_free", "model=plate&domain=free"),
             ("vk_supported", "model=vk&domain=supported"),

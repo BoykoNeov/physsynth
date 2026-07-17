@@ -176,6 +176,84 @@ as `_build_payload_membrane` (the string path stays bit-for-bit unchanged); shar
     disk) ≈ 2.7 s; the work budget scales with duration so a small drum still renders at short audio.
     The string's `N_MAX=2000` would OOM/hang in 2D.
 
+## Phase D — consolidation: the models the viewer never surfaced
+
+Phases A–C wired 6 of ~15 built models (3 strings, membrane, both plates, both von Kármán
+boundaries). Everything since — tension #9, geometric #10, bow, reed, bore, mallet #7, barrier #8,
+jawari, sympathetics, body/bridge, radiation — has no viewer at all. Against the project's
+"interactive, beautifully visualized" vision that built-vs-shown gap is the biggest one open, so
+Phase D is *consolidation*, not new physics. Group by **what the frontend needs**, not by model
+number; only the current batch is firm (there are no hard dependencies between batches, so order is
+pure value/effort and may flex).
+
+Two capabilities cross-cut the batches — build each **once**:
+- **Energy-BALANCE panel** (`E − E₀ == work_in − losses`) — a *third* verdict type beside the σ=0
+  drift check and the σ>0 monotone check. Wanted by **bow and reed**. (Mallet is *conservation* —
+  it rides the existing drift panel.)
+- **Multi-field / orbit viz** — wanted by **geometric #10** (u/w/v, the whirl) and **sympathetics**
+  (N lines).
+
+### Batch 1 (DONE) — tension-modulated string #9
+
+The de-risking pick: re-validates the seam on the cheapest model (reuses `drawString`, the 1-D line
+path, and the existing convergence gate). Load-bearing decisions, all measured rather than assumed:
+
+- **The headline is the amplitude *shift* `ω(A) − ω(A→0)`, never an absolute frequency.** A measured
+  `ω(A)` carries the θ-scheme's linear temporal dispersion error, and `ω(A→0)` carries the same one,
+  so their difference cancels it and isolates the nonlinear physics. This is the model's own oracle
+  (`test_amplitude_shift_matches_duffing`); `duffing_frequency` alone matches only "loosely".
+- **The measurement pair is LOSSLESS and short, and is NOT the audio run.** The oracle predicts the
+  frequency at a *fixed* amplitude; a lossy tension string is a downward-gliding chirp, so
+  zero-crossing the decaying pickup reports an amplitude-*averaged* frequency that undershoots — the
+  panel would then diverge from the oracle as σ rose, reading as a bug that isn't one. The audio
+  stays lossy on purpose (the glide is the signature). Two runs, two purposes. Pinned by
+  `test_tension_shift_is_immune_to_loss` (bit-identical shift at σ=0 and σ=5).
+- **IC = the mode-1 sine**, because the Kirchhoff–Carrier→Duffing reduction is a *single-mode*
+  ansatz; a triangular pluck is broadly multi-mode and the shift would be a lying number (model #6's
+  `mode11` lesson). Hence no `pluck_position` slider for this model.
+- **Amplitude is the star control, re-ranged.** The shift scales as `A²`, and the string path's
+  inherited `amplitude=1e-3` renders a 0.8-cent near-null — the flagship panel would look broken.
+  Default 0.02 → ~270 cents.
+- **Bound `dT/T0`, NOT amplitude** (`dT/T0 = EA·A²·p1²/(4T)`, exact and free). Amplitude is a proxy:
+  EA and T move `dT/T0` just as hard, and `EA=2e5` at `A=0.06` would break up with an
+  amplitude-only cap none the wiser (the membrane's "bound the actual problem size" lesson).
+- **The "~3" breakup threshold is NOT mode-invariant** — it was measured at mode 3. Measured here for
+  **mode 1** over a run 1000 fundamental periods long: `A=0.06` (`dT/T0=4.44`) stays PURE
+  (off-mode 3.2e-13), `A=0.07` (`dT/T0=6.05`) BREAKS UP — so mode 1's threshold is in (4.44, 6.05].
+  Also PURE at the cap with `kappa=0` (stiffness detunes the Mathieu resonance, so κ=0 *looked* like
+  the dangerous corner; measured, it moves the threshold nowhere).
+- **A guard that cannot trip in the reachable range is a *guarantee*, not dead code.** The cap makes
+  breakup unreachable, so the purity gate is insurance — and is unit-tested by driving
+  `_measure_tension_mode1` directly past the guard, where breakup is real and fast (N=64, A=0.20,
+  20 periods → off-mode 6.9e-2). Do **not** widen the range just to make a gate fire.
+- **This model needs its own cost budget.** Every step is a tension root-find: ~176 µs at N=128,
+  about *2× a 2D membrane step* for a 1-D string. The string path's `N_MAX=2000` / 10 s would be ~4M
+  root-finds. `TENSION_N_MAX=256`, `TENSION_AUDIO_MAX=3`, `TENSION_WORK_MAX=60_000` total steps.
+- **Measure length buys nothing past ~12 periods**: the shift lands 1.47e-3 / 1.17e-3 / 1.03e-3 from
+  the oracle at 6 / 12 / 24 periods, so the residual is the scheme's genuine `O(h²)+O(k²)` gap to the
+  continuum Duffing, not crossing noise. Crossings *are* interpolated (`_interp_zero_cross_frequency`):
+  the shared `_zero_cross_fundamental` quantizes to a whole sample and its mean spacing telescopes to
+  `(zc[-1]−zc[0])/(M−1)`, so that error lands straight on the headline.
+- `nonlinear_fraction` is read **at the IC** — the peak (max displacement, zero velocity ⇒ all of E
+  potential ⇒ stretch maximal). The stretch oscillates twice a period, so the *final* state reports
+  wherever the run stopped (0.115 vs 8e-6 for a 0.5 s vs 0.4 s render — same physics).
+- Frontend seams generalized *additively*: the convergence branch takes optional `detail`/`note`
+  wording (von Kármán's Picard text unchanged), and `drawDiagnostics` checks `kind === "tension"`
+  **before** the `dims` gate (a 1-D model that still wants a spectrum panel). `amplitude` had to be
+  added to `MODEL_RANGES._default` at 1e-3: it is shown only for tension, but `gatherParams` sends
+  *every* slider, so without the reset the linear string models would re-render at 0.02.
+
+### Later batches (rough map — not firm)
+
+- **Excited strings** — bow (builds the balance panel), barrier #8, jawari (barrier profile drawn
+  under the string).
+- **Wind** — bore + reed (new field type: pressure along an `S(x)` profile; reed reuses the balance
+  panel).
+- **Mallet #7** — cheap: conservation energy + the membrane heatmap with a strike marker.
+- **Geometric #10** — the multi-field/orbit viz; the richest panel in the project.
+- **The parametric-instability demo** deserves its own batch with real viz (energy cascading into the
+  neighbour modes, the Mathieu tongue) — *not* a bolt-on to justify batch 1's purity gate.
+
 ## Tests — `tests/test_web_backend.py` (web wrapper, not core; keep core count stable)
 
 Drive the pure `simulate_to_payload` with short durations:
