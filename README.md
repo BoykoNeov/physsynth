@@ -64,6 +64,11 @@ visible), plays the sound, and shows the live energy-drift / passivity and parti
 Accuracy-first: no in-browser physics, no real-time port — the validated Python core stays the single
 source of truth (architecture B; see `docs/dev/web-viewer-plan.md`).
 
+One model is deliberately **viz-only**: the geometrically-exact string carries a longitudinal wave at
+`c_long = sqrt(EA/rho)` ≈ 22× the transverse speed you hear, so resolving it (which is the whole
+point of that model) forces a sample rate ~22× higher and a second of audio would be ~10 minutes of
+compute. It shows orbits instead — including one thing no other model here can draw at all.
+
 ```bash
 python web/server.py            # then open http://localhost:8000
 ```
@@ -166,14 +171,20 @@ Complete and validated:
   come with batch 2's radiating bell, then batch 3's dynamic mass-spring reed exciter).
 - **Web viewer** — interactive offline recompute. Wired so far: the linear string family (Phase A),
   the membrane (Phase B), both Kirchhoff plates (#5 supported, #5b free) and the von Kármán
-  nonlinear plate (#6 supported gong + free cymbal) as 2D heatmap models (Phase C), and the
-  tension-modulated string #9 (Phase D batch 1). The nonlinear panels read the energy verdict through
+  nonlinear plate (#6 supported gong + free cymbal) as 2D heatmap models (Phase C), and — as Phase D,
+  *consolidation* — the tension-modulated string #9 (batch 1), the bowed string (batch 2) and the
+  geometrically-exact string #10 (batch 3). The nonlinear panels read the energy verdict through
   a solver-convergence gate and the spectrum as an amplitude *hardening shift* — not a cents error.
   The tension panel leads with the **shift** `ω(A) − ω(A→0)` against its exact Duffing closed form
   (the difference cancels the θ-scheme's linear dispersion error, which an absolute frequency would
   carry), measured on a *lossless* pair of runs while the audio stays lossy so the downward pitch
-  glide is audible. Phase D is *consolidation* — the exciters (bow, reed), the wind bore, the
-  collision models and the coupled/radiating chains are built and tested but not yet surfaced; see
+  glide is audible. The bow's energy panel is a third verdict type — an energy **balance**, because
+  for a driven model both older verdicts are actively wrong rather than merely weaker. The geometric
+  string's panel is the **orbit** (the plot #9 structurally cannot draw: one polarization has no
+  orbit but a point on a line): an exact rotating-wave circle, the planar bit-exact line, and the
+  whirl as a log-y growth envelope inside its Mathieu tongue — with the drift holding ~1e-12 straight
+  *through* a 63× blow-up, which is what separates redistribution from a diverging solve. Still built
+  but unsurfaced: the reed, the wind bore, the collision models and the coupled/radiating chains; see
   `docs/dev/web-viewer-plan.md`.
 
 The deliverable for each model is the resonator *and the rig that measures its deviation from

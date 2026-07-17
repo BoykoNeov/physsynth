@@ -24,6 +24,7 @@
             <option value="damped">Damped stiff string</option>
             <option value="tension">Tension-modulated string (nonlinear)</option>
             <option value="bow">Bowed string (nonlinear exciter)</option>
+            <option value="geometric">Geometrically-exact string (u·w·v)</option>
             <option value="membrane">Membrane (2D drum)</option>
             <option value="plate">Kirchhoff plate (2D)</option>
             <option value="vk">von Kármán plate (nonlinear)</option>
@@ -35,11 +36,11 @@
         </label>
       </div>
 
-      <fieldset class="group" data-show="ideal stiff damped tension bow membrane plate vk">
+      <fieldset class="group" data-show="ideal stiff damped tension bow geometric membrane plate vk">
         <legend>Physical</legend>
-        <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N" data-show="ideal stiff damped tension bow membrane"></div>
+        <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N" data-show="ideal stiff damped tension bow geometric membrane"></div>
         <div class="slider" data-param="rho" data-min="0.001" data-max="0.02" data-step="0.0005" data-val="0.005" data-unit="kg/m²" data-fixed="4"></div>
-        <div class="slider" data-param="L"   data-min="0.25" data-max="2.0"  data-step="0.05"  data-val="1.0"   data-unit="m" data-show="ideal stiff damped tension bow"></div>
+        <div class="slider" data-param="L"   data-min="0.25" data-max="2.0"  data-step="0.05"  data-val="1.0"   data-unit="m" data-show="ideal stiff damped tension bow geometric"></div>
       </fieldset>
 
       <fieldset class="group" data-show="membrane plate vk">
@@ -55,13 +56,21 @@
         <div class="slider" data-param="lambda" data-min="0.5" data-max="2.0" data-step="0.01" data-val="1.0" data-show="ideal stiff damped tension bow membrane"></div>
         <div class="slider" data-param="mu"     data-min="0.25" data-max="32" data-step="0.25" data-val="1.0" data-fixed="2" data-show="plate"></div>
         <div class="slider" data-param="fs"     data-min="8000" data-max="96000" data-step="1000" data-val="32000" data-unit="Hz" data-fixed="0" data-show="vk"></div>
+        <!-- The geometric string's knob is lam_long, NOT lambda, and that inversion is the model's
+             central trap: lam = c·k/h is the familiar one and it is the wrong one here. At the
+             lam = 0.5 a reader of models #1–#9 reaches for first, lam_long is silently ~11 and the
+             string returns quiet nonsense — the θ-scheme is unconditionally stable, so nothing
+             errors. So lam is derived (~0.04) and lam_long is what you steer. -->
+        <div class="slider" data-param="lam_long" data-min="0.2" data-max="1.0" data-step="0.05" data-val="0.9" data-fixed="2" data-show="geometric"></div>
         <p class="hint" id="lambda-hint"></p>
       </fieldset>
 
-      <fieldset class="group" data-show="stiff damped tension bow plate vk">
+      <fieldset class="group" data-show="stiff damped tension bow geometric plate vk">
         <legend>Stiffness &amp; material</legend>
-        <div class="slider" data-param="kappa" data-min="0" data-max="8"   data-step="0.05" data-val="1.0" data-unit="m²/s" data-show="stiff damped tension bow plate"></div>
-        <div class="slider" data-param="theta" data-min="0.25" data-max="1" data-step="0.01" data-val="0.28" data-show="stiff damped tension bow plate"></div>
+        <!-- κ is hidden in the whirl regime: only the SOFT plane whirls (the tongue needs δ > 0, so
+             the driven polarization must be the lower one), which forces κ_u = 0 server-side. -->
+        <div class="slider" data-param="kappa" data-min="0" data-max="8"   data-step="0.05" data-val="1.0" data-unit="m²/s" data-show="stiff damped tension bow geometric plate" data-hide-domain="whirl"></div>
+        <div class="slider" data-param="theta" data-min="0.25" data-max="1" data-step="0.01" data-val="0.28" data-show="stiff damped tension bow geometric plate"></div>
         <div class="slider" data-param="nu"    data-min="0" data-max="0.45" data-step="0.01" data-val="0.3" data-show="plate vk"></div>
         <div class="slider" data-param="E"     data-min="50" data-max="400" data-step="10" data-val="200" data-unit="GPa" data-scale="1e9" data-fixed="0" data-show="vk"></div>
         <div class="slider" data-param="e"     data-min="0.2" data-max="3.0" data-step="0.1" data-val="1.0" data-unit="mm" data-scale="1e-3" data-fixed="1" data-show="vk"></div>
@@ -73,11 +82,32 @@
         <label class="check"><input type="checkbox" id="nonlinear" checked /> nonlinear coupling (off = linear plate)</label>
       </fieldset>
 
-      <fieldset class="group" data-show="tension">
-        <legend>Nonlinearity (Kirchhoff–Carrier)</legend>
-        <div class="slider" data-param="amplitude" data-min="0.001" data-max="0.06" data-step="0.001" data-val="0.02" data-unit="m" data-fixed="3"></div>
+      <!-- amplitude + EA are SHARED with the geometric string below. One slider per backend param
+           (the frontend's standing rule), re-ranged per model via MODEL_RANGES. Mind the meaning:
+           model #9's EA is the nonlinearity coefficient, model #10's is the axial stiffness and its
+           coefficient is EA − T₀. In the whirl regime amplitude is derived from ΔT/T₀, so it hides. -->
+      <fieldset class="group" data-show="tension geometric">
+        <legend>Nonlinearity</legend>
+        <div class="slider" data-param="amplitude" data-min="0.001" data-max="0.06" data-step="0.001" data-val="0.02" data-unit="m" data-fixed="3" data-show="tension geometric" data-hide-domain="whirl"></div>
         <div class="slider" data-param="EA" data-min="0" data-max="200" data-step="5" data-val="100" data-unit="kN" data-scale="1e3" data-fixed="0"></div>
-        <p class="hint" id="tension-hint"></p>
+        <p class="hint" id="tension-hint" data-show="tension"></p>
+        <p class="hint" id="geom-hint" data-show="geometric"></p>
+      </fieldset>
+
+      <fieldset class="group" data-show="geometric">
+        <legend>Whirl — the Mathieu tongue</legend>
+        <!-- THE control of this model. Whirling is a parametric (Mathieu) instability, and its
+             coordinate is dimensionless: frac = δ/(εA²), where δ = ω_w² − ω_u² is the detuning κ_w
+             buys. Unstable ⟺ 0 < frac < ½, peaking at ¼. The slider deliberately runs past ½ —
+             watching the growth die at the edge is the point, and the upper edge is SOFT
+             (leading-order ε), so it dies gradually rather than switching off. -->
+        <div class="slider" data-param="tongue_position" data-min="0" data-max="1" data-step="0.01" data-val="0.25" data-fixed="2" data-domain="whirl"></div>
+        <!-- The amplitude is set by ΔT/T₀, never by A directly: A is a proxy, and EA and T move the
+             tension excess just as hard. At κ_u = 0 this is exactly model #9's planar-breakup
+             coordinate, so the cap is a measured margin to its ≈3, not a guess. -->
+        <div class="slider" data-param="dt_over_t0" data-min="0.1" data-max="2.2" data-step="0.05" data-val="1.5" data-unit="ΔT/T₀" data-fixed="2" data-domain="whirl"></div>
+        <label class="check" data-domain="whirl"><input type="checkbox" id="seed-velocity" /> velocity seed (injects angular momentum)</label>
+        <p class="hint" id="whirl-hint" data-domain="whirl"></p>
       </fieldset>
 
       <fieldset class="group" data-show="bow">
@@ -94,18 +124,20 @@
         <div class="slider" data-param="sigma" data-min="0" data-max="20" data-step="0.1" data-val="0"></div>
       </fieldset>
 
-      <fieldset class="group" data-show="damped tension bow">
+      <fieldset class="group" data-show="damped tension bow geometric">
         <legend>Loss (frequency-dependent)</legend>
         <div class="slider" data-param="sigma0" data-min="0" data-max="20"   data-step="0.1"   data-val="1.0"></div>
         <div class="slider" data-param="sigma1" data-min="0" data-max="0.01" data-step="0.0001" data-val="0.002" data-fixed="4"></div>
         <p class="hint" id="loss-hint"></p>
       </fieldset>
 
-      <fieldset class="group" data-show="ideal stiff damped tension bow">
+      <fieldset class="group" data-show="ideal stiff damped tension bow geometric">
         <legend>Excitation</legend>
-        <!-- pluck_position is meaningless for two models here. The tension string's IC is the
+        <!-- pluck_position is meaningless for three models here. The tension string's IC is the
              mode-1 sine the Duffing reduction needs, which has no pluck point; the bowed string
-             starts from REST and is driven by the bow itself, so there is nothing to pluck. -->
+             starts from REST and is driven by the bow itself, so there is nothing to pluck; the
+             geometric string is seeded with a mode-1 sine or the converged rotating-wave BVP.
+             For the geometric string pickup_position picks the node the ORBIT is drawn at. -->
         <div class="slider" data-param="pluck_position"  data-min="0.02" data-max="0.98" data-step="0.01" data-val="0.3" data-show="ideal stiff damped"></div>
         <div class="slider" data-param="pickup_position" data-min="0.02" data-max="0.98" data-step="0.01" data-val="0.1"></div>
       </fieldset>
@@ -122,7 +154,10 @@
 
       <fieldset class="group">
         <legend>Render</legend>
-        <div class="slider" data-param="audio_duration"   data-min="0.2" data-max="6"    data-step="0.1"  data-val="2.0" data-unit="s"></div>
+        <!-- No audio_duration for the geometric string: it is the viewer's one viz-only model. See
+             the note under the canvas — resolving its longitudinal wave forces fs ≈ 22× a normal
+             string's, so a second of sound is ~10 minutes of compute. -->
+        <div class="slider" data-param="audio_duration"   data-min="0.2" data-max="6"    data-step="0.1"  data-val="2.0" data-unit="s" data-show="ideal stiff damped tension bow membrane plate vk"></div>
         <div class="slider" data-param="animation_window" data-min="0.01" data-max="0.3" data-step="0.005" data-val="0.06" data-unit="s" data-fixed="3"></div>
       </fieldset>
 
@@ -146,7 +181,8 @@
         </label>
         <input type="range" id="scrub" min="0" max="0" step="1" value="0" />
         <button id="play-audio" class="primary">▶ Play sound</button>
-        <label class="check"><input type="checkbox" id="loop-audio" /> loop</label>
+        <label class="check" id="loop-audio-label"><input type="checkbox" id="loop-audio" /> loop</label>
+        <span class="hint" id="audio-note" hidden></span>
       </div>
 
       <div class="diagnostics">

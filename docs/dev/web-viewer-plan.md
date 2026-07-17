@@ -193,7 +193,10 @@ Two capabilities cross-cut the batches — build each **once**:
   behind `energy.kind === "balance"`); the reed gets it by passing `balance_work=` to
   `_energy_block`.
 - **Multi-field / orbit viz** — wanted by **geometric #10** (u/w/v, the whirl) and **sympathetics**
-  (N lines). Not built yet.
+  (N lines). **BUILT in batch 3** (`drawGeometric` = `drawOrbit` + `drawFields`, dispatched on
+  `payload.model`; frames carry `fields: ["u","w","v"]` with `dims` still 1, so the string path's
+  `(n_frames, width)` contract is untouched). Sympathetics reuses `drawFields`' stacked-strip layout;
+  the accumulating-trail mechanism in `drawOrbit` is the part that is geometric-specific.
 
 ### Batch 1 (DONE) — tension-modulated string #9
 
@@ -308,8 +311,82 @@ f₁ 100 Hz −37 c`. Load-bearing decisions, all measured:
   renders a wildly over-damped string on a stale range. `sigma0`/`sigma1`/`pickup_position` joined
   `amplitude` (which also fixes the same leak tension's `sigma0=0` already had).
 
+### Batch 3 (DONE) — the geometrically-exact string #10, and the orbit viz
+
+The second cross-cutting capability, and the viewer's **first viz-only model**. 24 web tests added
+(109 → 133 web). Load-bearing decisions, all measured:
+
+- **There is no audio, and the reason is physics rather than budget.** `c_long = sqrt(EA/rho)` is
+  ~22× the transverse `c` you hear (`EA/T ~ 500` on a real string), so resolving the longitudinal
+  wave — which is what `lam_long <= 1` *means* — forces `fs ~ 22×` a normal string's. Measured:
+  ~2 ms/step at small amplitude, ~4 ms on the whirl, and the cost is **N-independent** (it is
+  per-Newton-iteration Python/`splu` overhead, not grid work), so one second of listenable audio at
+  N=32 is ~318k steps ≈ **10 minutes**. There is no cheat: `lam_long > 1` is exactly the
+  silent-garbage regime the model exists to warn about. The human chose **viz-only now, with the
+  phantom-partials spectrum deferred to its own increment** (see below) over a stub player.
+- **The orbit hero is the ROTATING WAVE, not the whirl** (advisor's first framing was the whirl and
+  it was wrong; corrected on measurement). The whirl's orbit only visibly opens at ~0.22 s ≈ **60 s
+  of compute**; at the affordable 0.06 s the growth is already 63× but `max|w|/max|u|` is still
+  **8e-5** — a flat line to four decimals on equal axes. (The plan's own note that 63× is "~9 % of
+  u" was wrong: it read the `1e-3` *velocity* seed as a displacement fraction.) The rotating wave
+  is an **exact solution of the scheme**, so it is round from frame 1 and needs no growth at all:
+  roundness **1.2e-12**, `long_kin/E` **1.5e-29**, in ~5 s. Pair it with the planar bit-exact line.
+- **The whirl is the growth-and-gate story, on a log-y ENVELOPE.** A straight line on log axes *is*
+  the Mathieu instability. It must be the envelope (a sliding ~1-period max), never the raw
+  `max|w|`: every node crosses zero twice a period, so the instantaneous spatial max is
+  non-monotone (4.6e-8 → 1.8e-8 → 2.9e-7 → 1.5e-7 → 8.5e-7 on the default run) and the line is lost
+  in the spikes. Enveloped, it is monotone **399/399** points. The family's recurring "never read an
+  oscillating field at one phase" trap, in a new dress.
+- **No new energy verdict type, unlike the bow.** Nothing drives this string — it is seeded and left
+  alone — so the ordinary lossless drift check *is* the claim. What makes it a claim is what it
+  survives: a parametric instability is energy **redistribution**, so the drift holds at **7.7e-13
+  through a 63× blow-up**, which is what separates a whirl from the other thing that makes `|w|`
+  grow orders of magnitude (a diverging solve). The growth ratio is therefore printed *next to* the
+  drift, not in a panel of its own.
+- **The tongue coordinate is the control.** `frac = δ/(εA²)` (δ = ω_w² − ω_u², the detuning κ_w
+  buys) is dimensionless and **refinement-invariant**, so κ_w is recomputed from `p2` at the actual
+  N (39.05 / 39.01 / 39.00 at N = 16 / 24 / 32) rather than pinned. Amplitude is bounded via
+  **ΔT/T₀**, not A — at κ_u = 0, `εA²/ω_u² == ΔT/T₀` exactly, so the cap is model #9's own
+  planar-breakup coordinate and the margin to its ≈3 is measured, not hoped for.
+- **The rate has a closed-form oracle and it is Tier C.** `(Ω/2)√(q_M²−σ²)` with the **planar**
+  Duffing `Ω = √(ω₀²+¾εA²)` — *not* the rotating wave's circular `√(ω₀²+εA²)`; the driven motion is
+  a plane oscillation. Predicted **80.69** s⁻¹ vs measured **74.16** (ratio 0.92): the match runs
+  5–11% and *systematically* low (leading-order ε, plus the seed's non-growing component), so it is
+  reported and never scored. Measured off the **last two** quarter-envelopes — the seed is not the
+  growing Floquet mode, so quarter one is contaminated by its decaying partner.
+- **The "velocity seed, NEVER a displacement one" rule is only half right — measured.** Growth at
+  t = 0.06 s: `frac` 0 / 0.07 / 0.25 / 0.5 / 0.8 → **disp** 1.00 / 14.69 / 60.17 / 6.08 / 1.17×;
+  **vel** 6.88 / 28.52 / 63.00 / 0.85 / 0.78×. Inside the tongue a *displaced* seed grows perfectly
+  well (60× at the peak); the pinning at 1.00× happens **only at frac = 0**, on the degenerate
+  string, where `δw = δA·φ` at rest is exactly the rotation generator and the run is just planar
+  motion in a rotated plane. So the viewer ships **both**, displacement as the default (it reads the
+  tongue cleanly: 1.00× at frac=0 *is* "a degenerate string cannot whirl"), and the velocity seed as
+  a toggle for the marginality story — the degenerate string then grows **secularly** (6.88×, linear
+  in t), which the log-y envelope discriminates for free: secular *bends*, exponential is straight.
+  The disp row also reproduces the earlier map exactly at frac = 0 and 0.07 (1.00, 14.7), which is
+  what identifies that map's seed.
+- **Both bit-exact zeros are kept as gates**: planar `max|w| == 0.0` (the `w → −w` reflection
+  symmetry, not a small number — the orbit model #9 *can* draw), and the unseeded whirl at the
+  tongue's centre, also **0.0** — without which every growth ratio would partly measure a leak.
+- `lam_long` is a **hard cap in the viewer** though the core only warns (the core is right to warn:
+  the scheme is genuinely unconditionally stable there, and `λ_long = 2` still conserves to 1e-12).
+  The viewer must never render a *headline* in an unresolved regime. Its own budget:
+  `GEOM_N_MAX = 32`, `GEOM_WORK_MAX = 6_000` steps (~25 s worst case, by far the slowest model).
+- Frontend seams: `data-hide-domain` is a **new, additive** attribute — the inverse of `data-domain`,
+  for sliders SHARED with a domain-less model (κ and amplitude, which the whirl derives). Plain
+  `data-domain` would hide them under *every* model that has no secondary select. `u`/`w` share one
+  animation-wide scale (their ratio is the claim); `v` gets its own (a different quantity, orders
+  smaller) and each strip prints its own. Scales are computed once over the whole run — a per-frame
+  autoscale would renormalize the whirl's growth away.
+
 ### Later batches (rough map — not firm)
 
+- **Phantom partials (the geometric string's audio)** — promised when batch 3 went viz-only, and the
+  model's *true* audible signature: the bridge force `EA·v_x(0)`, which is what radiates in a piano.
+  Its own ~30 s run at N=32 / κ=8 / `lam_long=0.9` / T=0.1 s. The rig is already written and its
+  traps recorded (κ=8 not 2, or the hardened phantom **crosses** partial 3 and the panel reports a
+  phantom landing on a partial; `detect_peaks` blind, not `measure_partials_near`; combos from
+  MEASURED f₁,f₂; **zoom to the combination band** or the claim renders as its own opposite).
 - **Excited strings** — barrier #8, jawari (barrier profile drawn under the string). The bow landed
   in batch 2 above.
 - **Wind** — bore + reed (new field type: pressure along an `S(x)` profile). The reed now reuses
@@ -317,9 +394,10 @@ f₁ 100 Hz −37 c`. Load-bearing decisions, all measured:
   sign-definite and separately measured, so unlike the bow it can close the balance *with* loss on
   — the lossy branch may be a genuine residual there rather than an inferred one).
 - **Mallet #7** — cheap: conservation energy + the membrane heatmap with a strike marker.
-- **Geometric #10** — the multi-field/orbit viz; the richest panel in the project.
+- **Sympathetics** — N string lines; reuses batch 3's stacked-strip `drawFields`.
 - **The parametric-instability demo** deserves its own batch with real viz (energy cascading into the
-  neighbour modes, the Mathieu tongue) — *not* a bolt-on to justify batch 1's purity gate.
+  neighbour modes — model #9's IN-plane exchange, which is the SAME `2ω` pump batch 3's whirl aims at
+  the other polarization) — *not* a bolt-on to justify batch 1's purity gate.
 
 ## Tests — `tests/test_web_backend.py` (web wrapper, not core; keep core count stable)
 

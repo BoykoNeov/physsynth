@@ -34,6 +34,8 @@ const LABELS = {
   pickup_x: "pickup x", pickup_y: "pickup y",
   mu: "plate Courant μ", fs: "sample rate fs", nu: "Poisson ν",
   E: "Young's E", e: "thickness e", w_over_e: "strike w/e",
+  amplitude: "amplitude A", EA: "axial EA",
+  lam_long: "longitudinal λ", dt_over_t0: "tension ΔT/T₀", tongue_position: "tongue δ/(εA²)",
 };
 
 // Per-model slider re-ranging (min/max/step/fixed/val) applied on model switch. The backend mirrors
@@ -66,6 +68,16 @@ const MODEL_RANGES = {
   vk: { N: { min: 8, max: 32, val: 20 },
         rho: { min: 2000, max: 12000, step: 100, fixed: 0, val: 7800, unit: "kg/m³" },
         Lx: { val: 0.3 }, Ly: { val: 0.3 }, audio_duration: { max: 1, val: 0.5 } },
+  // The slowest model in the viewer, and irreducibly so: fs is forced ~22x a normal string's by the
+  // longitudinal wave (lam_long <= 1) and every step is a 3-field vector Newton solve, so N is capped
+  // at 32 and defaults to 16 — the grid the whirl rig uses, where the tongue is refinement-invariant.
+  // kappa = 0 (the soft plane; the whirl regime forces it anyway) and loss is OFF: this model's
+  // claim is that it CONSERVES straight through a 60x parametric blow-up, which needs sigma = 0.
+  // amplitude is capped well below model #9's mode-1 breakup (dT/T0 ~ 4.4 at A = 0.06 here).
+  geometric: { N: { min: 8, max: 32, val: 16 }, kappa: { val: 0.0 },
+               EA: { min: 5, val: 100 },
+               amplitude: { min: 0.001, max: 0.02, step: 0.001, fixed: 3, val: 0.004 },
+               sigma0: { val: 0 }, sigma1: { val: 0 }, pickup_position: { val: 0.25 } },
   // `amplitude` is shown only for the tension string, but gatherParams sends every slider — so it
   // must reset to the linear string path's historical 1e-3 on switch, or those models would silently
   // re-render at the tension default (a pure scale for a linear model, but not bit-for-bit).
@@ -75,23 +87,30 @@ const MODEL_RANGES = {
   // which is 25x the damped string's default AND outside its own slider max of 0.01, so without
   // the reset a bow → damped switch would silently render a wildly over-damped string on a stale
   // range. (This also fixes the same leak tension's sigma0 = 0 already had.)
+  // amplitude and EA are re-ranged by BOTH nonlinear string models, so both reset here.
   _default: { N: { min: 16, max: 512 }, lambda: { max: 2.0, val: 1.0 },
               kappa: { min: 0, max: 8, step: 0.05, fixed: 2, val: 1.0 },
               rho: { min: 0.001, max: 0.02, step: 0.0005, fixed: 4, val: 0.005, unit: "kg/m²" },
-              amplitude: { val: 0.001 },
+              amplitude: { min: 0.001, max: 0.06, step: 0.001, fixed: 3, val: 0.001 },
+              EA: { min: 0, val: 100 },
               sigma0: { min: 0, max: 20, step: 0.1, val: 1.0 },
               sigma1: { min: 0, max: 0.01, step: 0.0001, fixed: 4, val: 0.002 },
               pickup_position: { val: 0.1 },
               audio_duration: { max: 6, val: 2 } },
 };
 
-// Secondary select repurposed per model: geometry (membrane) vs boundary (plate / von Kármán).
-const DOMAIN_MODELS = ["membrane", "plate", "vk"];
+// Secondary select repurposed per model: geometry (membrane), boundary (plate / von Kármán) or
+// REGIME (the geometric string — three claims, one string, cheapest first).
+const DOMAIN_MODELS = ["membrane", "plate", "vk", "geometric"];
 const DOMAIN_OPTS = {
   membrane: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
   plate: [["supported", "Simply-supported (#5)"], ["free", "Free edge — Chladni (#5b)"]],
   vk: [["supported", "Supported gong (#6)"], ["free", "Free-edge cymbal (#6)"]],
+  geometric: [["rotating", "Rotating wave — exact circle"],
+              ["planar", "Planar — max|w| = 0 exactly"],
+              ["whirl", "Whirling — the Mathieu tongue"]],
 };
+const DOMAIN_LABELS = { membrane: "Domain", geometric: "Regime" };
 
 const sliders = {};      // param -> <input>
 const updaters = {};     // param -> fn() that refreshes its value label
@@ -102,6 +121,8 @@ let payload = null;
 let dims = 1;            // 1 = string polyline, 2 = membrane heatmap
 let frames = null, nFrames = 0, width = 0, fieldAmp = 1, animDt = 1e-3;
 let gridNx = 0, gridNy = 0, maskData = null, gridMeta = null, heatCv = null;
+// Geometric string (model #10): three stacked fields per frame + the (u, w) orbit trail.
+let isGeom = false, orbitU = null, orbitW = null, orbitPerFrame = 1, uwAmp = 1, vAmp = 1;
 let audioSamples = null, audioFs = 48000, audioBuf = null, audioCtx = null, audioSrc = null;
 let speed = 0.02, animPlaying = true, scrubbing = false, currentFrame = 0, animStart = 0;
 let autoTimer = null;
@@ -157,7 +178,7 @@ function populateDomain(model) {
   domainSel.innerHTML = opts.map(([v, l]) => `<option value="${v}">${l}</option>`).join("");
   if (opts.some(([v]) => v === prev)) domainSel.value = prev;
   const lbl = $("domain-label");
-  if (lbl) lbl.textContent = model === "membrane" ? "Domain" : "Boundary";
+  if (lbl) lbl.textContent = DOMAIN_LABELS[model] || "Boundary";
 }
 
 function updateVisibility() {
@@ -172,6 +193,14 @@ function updateVisibility() {
   // the parent fieldset's data-show, so here we only test the domain membership.
   document.querySelectorAll("[data-domain]").forEach((el) => {
     el.hidden = !usesDomain || !el.dataset.domain.split(" ").includes(d);
+  });
+  // The inverse gate, for sliders SHARED with a model that has no domains: data-domain would hide
+  // them everywhere else (a param whose element is data-domain-gated is hidden whenever the model
+  // has no secondary select at all), so "hide only in these regimes" needs its own attribute.
+  // Used by κ and amplitude, which the geometric string's whirl regime derives rather than reads.
+  document.querySelectorAll("[data-hide-domain]").forEach((el) => {
+    if (el.hidden) return;                      // model gating already hid it — leave it hidden
+    if (usesDomain && el.dataset.hideDomain.split(" ").includes(d)) el.hidden = true;
   });
 }
 
@@ -215,6 +244,16 @@ function updateLambdaHint() {
     hint.textContent = `λ = c·k/h = ${lam.toFixed(2)}  (2D CFL: λ ≤ 1/√2 ≈ 0.71; no λ is `
       + `dispersionless)`;
     hint.style.color = lam > 0.708 ? "var(--bad)" : "var(--muted)";
+  } else if (m === "geometric") {
+    // The inversion that IS this model: λ_long is the knob, λ is whatever falls out. Showing both
+    // is the point — the familiar λ reads a reassuring ~0.04 in exactly the regime that works.
+    const lamL = param("lam_long"), EA = param("EA") * 1e3, T = param("T"), rho = param("rho");
+    const cLong = Math.sqrt(EA / rho), c = Math.sqrt(T / rho);
+    const fs = cLong * param("N") / (param("L") * lamL);
+    hint.textContent = `λ_long = c_long·k/h = ${lamL.toFixed(2)} → fs = ${fmt(fs)} Hz, λ = `
+      + `${(c * param("N") / (param("L") * fs)).toFixed(3)}. c_long/c = ${(cLong / c).toFixed(0)}× — `
+      + `that ratio is the whole cost of this model.`;
+    hint.style.color = "var(--muted)";
   } else if (m === "ideal" && param("lambda") > 1.0) {
     hint.textContent = "λ>1 breaks the explicit ideal string's CFL (will error). Stiff/damped allow"
       + " it.";
@@ -247,6 +286,38 @@ function updateLambdaHint() {
       tHint.style.color = dt > 4.45 ? "var(--bad)" : "var(--muted)";
     } else {
       tHint.textContent = "";
+    }
+  }
+  // Geometric string: EA is the AXIAL stiffness here, and the nonlinearity coefficient is EA − T₀
+  // (so EA = T₀ is exactly linear — the regression anchor that reduces u bit-for-bit to model #3).
+  // The same slider means the *coefficient itself* on the tension string: mind the swap.
+  const gHint = $("geom-hint");
+  if (gHint) {
+    if (m === "geometric") {
+      const EA = param("EA") * 1e3, T = param("T");
+      gHint.textContent = `EA is the AXIAL stiffness (model #9's EA is the coefficient — here that `
+        + `is EA − T₀ = ${fmt(EA - T)} N). EA = T₀ ⇒ exactly linear. EA/T₀ = `
+        + `${(EA / T).toFixed(0)} (real strings: 150–600).`;
+      gHint.style.color = "var(--muted)";
+    } else {
+      gHint.textContent = "";
+    }
+  }
+  // Whirl: the tongue is dimensionless, so the hint speaks in frac and never in κ_w (which is
+  // derived, and moves with N). Unstable ⟺ 0 < frac < ½, peak at ¼; the upper edge is SOFT.
+  const wHint = $("whirl-hint");
+  if (wHint) {
+    if (m === "geometric" && domainSel.value === "whirl") {
+      const f = param("tongue_position");
+      const where = f === 0 ? "degenerate: κ_w = κ_u ⇒ no tongue. A displaced seed just rotates the "
+                            + "plane (1.00×); a velocity seed grows SECULARLY, not exponentially."
+        : f < 0.5 ? (Math.abs(f - 0.25) < 0.06 ? "at the tongue's peak — fastest growth"
+                                               : "inside the tongue — it whirls")
+        : "outside the tongue — the growth should die (the upper edge is soft, so it fades)";
+      wHint.textContent = `δ/(εA²) = ${f.toFixed(2)} · ${where}`;
+      wHint.style.color = f > 0 && f < 0.5 ? "var(--muted)" : "var(--warn, var(--muted))";
+    } else {
+      wHint.textContent = "";
     }
   }
   // Bow: Schelleng's playable force window is real but has NO closed form in the core — the tests
@@ -285,6 +356,12 @@ function updateLambdaHint() {
           + "note grows without bound (not musical) — that is the price of exact closure."
         : "σ > 0 → a steady Helmholtz note. Set σ₀ = σ₁ = 0 to watch E−E₀ and the bow work close "
           + "to machine precision.";
+    } else if (m === "geometric") {
+      lossHint.textContent = quiet
+        ? "σ = 0 → the claim: energy conserves to ~1e-12 straight THROUGH a 60× whirl blow-up. "
+          + "That is what separates redistribution from a diverging solve."
+        : "σ > 0 → the drift verdict becomes a passivity check, and loss competes with the whirl's "
+          + "growth: the tongue's threshold moves. Set σ = 0 to see the conservation claim.";
     } else {
       lossHint.textContent = "";
     }
@@ -297,6 +374,8 @@ function onControlChange(name) {
   if (name === "amplitude" || name === "EA" || name === "T" || name === "L") updateLambdaHint();
   if (name === "sigma0" || name === "sigma1") updateLambdaHint();
   if (name === "bow_position" || name === "v_bow") updateLambdaHint();
+  if (name === "lam_long" || name === "N" || name === "rho") updateLambdaHint();
+  if (name === "tongue_position" || name === "dt_over_t0") updateLambdaHint();
   scheduleAuto();
 }
 
@@ -314,6 +393,8 @@ if (domainSel) domainSel.addEventListener("change", () => {
 });
 const nonlinearChk = $("nonlinear");
 if (nonlinearChk) nonlinearChk.addEventListener("change", scheduleAuto);
+const seedVelChk = $("seed-velocity");
+if (seedVelChk) seedVelChk.addEventListener("change", () => { updateLambdaHint(); scheduleAuto(); });
 
 function scheduleAuto() {
   if (!autoRender.checked) return;
@@ -328,6 +409,7 @@ function gatherParams() {
   if (domainSel) p.domain = domainSel.value;
   for (const k in sliders) p[k] = +sliders[k].value * (scaleOf[k] || 1);
   if (nonlinearChk) p.nonlinear = nonlinearChk.checked;
+  if (seedVelChk) p.seed_velocity = seedVelChk.checked;
   return p;
 }
 
@@ -353,12 +435,16 @@ async function render() {
       return;
     }
     applyPayload(data);
-    const scheme = data.lambda !== undefined ? `λ ${data.lambda}`
+    const scheme = data.lam_long !== undefined ? `λ_long ${data.lam_long}`
+      : data.lambda !== undefined ? `λ ${data.lambda}`
       : data.mu !== undefined ? `μ ${data.mu}`
       : (data.nonlinear === false ? "linear" : "nonlinear");
+    // The geometric string ships no audio at all (audio: null) — see its audio_note. Reporting
+    // "0 audio samples" would read as a bug; say what it is instead.
+    const tail = data.audio ? `${data.audio.n} audio samples` : "viz-only (no audio)";
     setStatus(
       `ok — fs_sim ${fmt(data.fs_sim)} Hz · ${scheme} · ` +
-      `${data.frames.n_frames} frames · ${data.audio.n} audio samples`, "");
+      `${data.frames.n_frames} frames · ${tail}`, "");
   } catch (err) {
     setStatus("network error: " + err, "error");
   } finally {
@@ -396,15 +482,51 @@ function applyPayload(data) {
     heatCv = document.createElement("canvas");   // offscreen field-resolution buffer
     heatCv.width = gridNx; heatCv.height = gridNy;
   }
-  audioSamples = b64ToFloat32(data.audio.b64);
-  audioFs = data.audio.fs;
+  isGeom = data.model === "geometric";
+  if (isGeom) {
+    orbitU = b64ToFloat32(data.orbit.u);
+    orbitW = b64ToFloat32(data.orbit.w);
+    orbitPerFrame = data.orbit.per_frame;
+    // Scales are computed ONCE over the whole run, never per frame: a per-frame autoscale would
+    // renormalize the whirl's growth away — the picture would look identical at every instant while
+    // max|w| climbed 60×. u and w SHARE a scale (both transverse, and their ratio is exactly the
+    // claim: equal ⇒ a circle, 1e-4 ⇒ a line); v gets its own, because it is a different physical
+    // quantity (longitudinal stretch, orders smaller) and would otherwise be a flat line at 0.
+    uwAmp = 0; vAmp = 0;
+    for (let f = 0; f < nFrames; f++) {
+      for (let i = 0; i < width; i++) {
+        const u = Math.abs(frames[(f * 3 + 0) * width + i]);
+        const w = Math.abs(frames[(f * 3 + 1) * width + i]);
+        const v = Math.abs(frames[(f * 3 + 2) * width + i]);
+        if (u > uwAmp) uwAmp = u;
+        if (w > uwAmp) uwAmp = w;
+        if (v > vAmp) vAmp = v;
+      }
+    }
+  }
+  audioSamples = data.audio ? b64ToFloat32(data.audio.b64) : null;
+  audioFs = data.audio ? data.audio.fs : 48000;
   audioBuf = null;                       // rebuilt lazily on first Play
+  updateAudioTransport(data);
   currentFrame = 0; animStart = 0;
   scrub.max = Math.max(0, nFrames - 1);
   scrub.value = 0;
   hideOverlay();
   drawEnergy();
   drawDiagnostics();
+}
+
+// A model with no audio gets no player, and the note says WHY rather than leaving a dead button.
+function updateAudioTransport(data) {
+  const has = !!data.audio;
+  playAudioBtn.hidden = !has;
+  const lbl = $("loop-audio-label");
+  if (lbl) lbl.hidden = !has;
+  const note = $("audio-note");
+  if (note) {
+    note.hidden = has;
+    note.textContent = data.audio_note || "";
+  }
 }
 
 // ── string animation ────────────────────────────────────────────────────────────────────────
@@ -451,9 +573,88 @@ function tick(ts) {
       currentFrame = Math.floor(physElapsed / animDt) % nFrames;
       scrub.value = currentFrame;
     }
-    (dims === 2 ? drawHeatmap : drawString)(currentFrame);
+    (dims === 2 ? drawHeatmap : isGeom ? drawGeometric : drawString)(currentFrame);
   }
   requestAnimationFrame(tick);
+}
+
+// ── geometrically-exact string: the orbit + the three fields ─────────────────────────────────
+// The plot model #9 structurally cannot draw. It has ONE polarization, so its only orbit is a point
+// on a line; here the cross-section traces a real curve — a line (planar), a circle (the rotating
+// wave) or a slowly-opening sliver (whirling). Left panel: the (u, w) orbit at the probe node, on
+// EQUAL axes. Right: u(x), w(x), v(x) down the string.
+function drawGeometric(idx) {
+  const g = stringCv.getContext("2d");
+  const W = stringCv.width, H = stringCv.height;
+  g.clearRect(0, 0, W, H);
+  const orbW = Math.min(H, Math.round(W * 0.42));
+  drawOrbit(g, idx, 0, 0, orbW, H);
+  drawFields(g, idx, orbW, 0, W - orbW, H);
+}
+
+function drawOrbit(g, idx, x0, y0, w, h) {
+  const cx = x0 + w / 2, cy = y0 + h / 2, margin = 26;
+  const R = Math.min(w, h) / 2 - margin;
+  // EQUAL axes, always. Scaling w up to fill the box would manufacture a circle out of a whirl's
+  // 1e-4 sliver — the orbit's whole job is to show the true aspect, and the envelope panel carries
+  // the growth story instead.
+  const s = R / (uwAmp > 0 ? uwAmp : 1);
+
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(cx - R, cy); g.lineTo(cx + R, cy); g.stroke();
+  g.beginPath(); g.moveTo(cx, cy - R); g.lineTo(cx, cy + R); g.stroke();
+
+  g.fillStyle = "#8b98a8"; g.font = "11px ui-monospace, monospace";
+  g.fillText("u", cx + R + 4, cy + 4);
+  g.fillText("w", cx - 4, cy - R - 6);
+
+  if (!orbitU || orbitU.length === 0) return;
+  const upto = Math.max(2, Math.min(orbitU.length, Math.round((idx + 1) * orbitPerFrame)));
+  // The trail ACCUMULATES as the animation plays: the curve draws itself, which is what makes a
+  // circle read as a circle (a single moving dot reads as noise).
+  g.strokeStyle = "rgba(76,194,255,.55)"; g.lineWidth = 1.4; g.lineJoin = "round";
+  g.beginPath();
+  for (let i = 0; i < upto; i++) {
+    const px = cx + orbitU[i] * s, py = cy - orbitW[i] * s;
+    if (i === 0) g.moveTo(px, py); else g.lineTo(px, py);
+  }
+  g.stroke();
+  g.fillStyle = "#ffcf5c";
+  g.beginPath(); g.arc(cx + orbitU[upto - 1] * s, cy - orbitW[upto - 1] * s, 3.5, 0, 7); g.fill();
+
+  const sp = payload && payload.meta ? payload.meta.spectrum : null;
+  g.fillStyle = "#8b98a8"; g.font = "11px ui-monospace, monospace";
+  g.fillText(`orbit at x = ${payload.meta.probe_x} m · equal axes`, x0 + 10, y0 + h - 10);
+  if (sp && sp.kind === "whirl") {
+    g.fillText(`max|w|/max|u| = ${sp.w_over_u.toExponential(1)}`, x0 + 10, y0 + h - 24);
+  }
+}
+
+function drawFields(g, idx, x0, y0, w, h) {
+  const names = ["u — transverse", "w — out of plane", "v — longitudinal"];
+  const cols = ["#4cc2ff", "#ff8f4c", "#9d7bff"];
+  const stripH = h / 3, margin = 20;
+  for (let f = 0; f < 3; f++) {
+    const midY = y0 + stripH * f + stripH / 2;
+    // u and w share uwAmp; v has its own (it is a different quantity, orders smaller).
+    const amp = f === 2 ? vAmp : uwAmp;
+    const sy = (stripH / 2 - 12) / (amp > 0 ? amp : 1);
+    const sx = (w - 2 * margin) / (width - 1);
+    g.strokeStyle = "#2a3340"; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(x0 + margin, midY); g.lineTo(x0 + w - margin, midY); g.stroke();
+
+    g.strokeStyle = cols[f]; g.lineWidth = 2; g.lineJoin = "round";
+    g.beginPath();
+    for (let i = 0; i < width; i++) {
+      const px = x0 + margin + i * sx;
+      const py = midY - frames[(idx * 3 + f) * width + i] * sy;
+      if (i === 0) g.moveTo(px, py); else g.lineTo(px, py);
+    }
+    g.stroke();
+    g.fillStyle = "#8b98a8"; g.font = "11px ui-monospace, monospace";
+    // Each strip prints its OWN scale, because two of them do not share one.
+    g.fillText(`${names[f]}  ±${amp.toExponential(1)} m`, x0 + margin, y0 + stripH * f + 13);
+  }
 }
 
 // ── membrane heatmap ─────────────────────────────────────────────────────────────────────────
@@ -621,8 +822,16 @@ function drawEnergy() {
     const ok = e.lossless.pass;
     badge.textContent = ok ? "conserved" : "DRIFT";
     badge.className = "badge " + (ok ? "good" : "bad");
+    // The whirl needs NO new verdict type (unlike the bow's balance) — it is the ordinary lossless
+    // drift check. What makes it a claim is WHAT it survives: a parametric instability is energy
+    // REDISTRIBUTION between polarizations, so a correct scheme conserves straight through the
+    // blow-up. That is exactly what separates a whirl from a diverging solve, the other thing that
+    // makes |w| grow orders of magnitude — so the growth belongs next to the drift, not elsewhere.
+    const sp = payload && payload.meta ? payload.meta.spectrum : null;
+    const through = (sp && sp.kind === "whirl" && sp.seeded && sp.growth > 2)
+      ? `  ·  THROUGH a ${sp.growth.toFixed(0)}× |w| blow-up` : "";
     out.textContent =
-      `lossless · drift max|Eⁿ−E⁰|/E⁰ = ${e.lossless.drift.toExponential(2)}${convNote}\n` +
+      `lossless · drift max|Eⁿ−E⁰|/E⁰ = ${e.lossless.drift.toExponential(2)}${convNote}${through}\n` +
       `tol ${e.lossless.tol.toExponential(0)}  →  ${ok ? "PASS ✓" : "FAIL ✗"}`;
   } else {
     const mono = e.lossy.monotone;
@@ -652,6 +861,20 @@ function drawDiagnostics() {
     partialsTitle.firstChild.textContent = "Stick-slip ";
     partialsSub.textContent = "slip fraction vs β";
     drawStickSlip();
+    return;
+  }
+  // The geometric string's three regimes, three panels — all 1-D, none of them cents bars.
+  if (spec && spec.kind === "whirl") {
+    partialsTitle.firstChild.textContent = "Whirl growth ";
+    partialsSub.textContent = "envelope of max|w|, log scale";
+    drawWhirl();
+    return;
+  }
+  if (spec && (spec.kind === "rotating" || spec.kind === "planar")) {
+    partialsTitle.firstChild.textContent = spec.kind === "rotating" ? "Rotating wave " : "Planar ";
+    partialsSub.textContent = spec.kind === "rotating" ? "roundness + longitudinal rest"
+      : "the reflection symmetry";
+    drawGeomVerdict(spec);
     return;
   }
   if (dims !== 2) {
@@ -902,6 +1125,127 @@ function drawStickSlip() {
     + `slip fraction ${sp.slip_fraction.toFixed(3)} vs β = ${sp.beta.toFixed(3)}  (Δ `
     + `${sp.slip_error >= 0 ? "+" : ""}${sp.slip_error.toFixed(3)}, tol ${sp.slip_tol})  →  `
     + `${ok ? "PASS ✓" : "FAIL ✗"}`;
+}
+
+// ── geometric string: the whirl envelope (log-y) ─────────────────────────────────────────────
+// A straight line on log axes IS the Mathieu instability — nothing else makes max|w| climb like
+// that, and it is legible after ~2 e-foldings, long before the orbit visibly opens (that needs
+// ~0.22 s ≈ 60 s of compute, and at the affordable 0.06 s max|w|/max|u| is still ~1e-4). So this
+// panel, not the orbit, is where the whirl is proven. What is plotted is the ENVELOPE (a sliding
+// ~1-period max), never the raw max|w|: every node crosses zero twice a period, so the instantaneous
+// value oscillates non-monotonically and the line underneath is lost in the spikes.
+function drawWhirl() {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height, padL = 34, padB = 16, top = 10;
+  g.clearRect(0, 0, W, H);
+  const out = $("partials-readout");
+  const sp = payload && payload.meta && payload.meta.spectrum;
+  if (!sp) { out.textContent = "no whirl trace"; return; }
+
+  const plotW = W - padL - 8, plotH = H - padB - top;
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(padL, top, plotW, plotH);
+
+  // The honesty gate: unseeded, max|w| is bit-exact 0.0 — there is nothing to plot, and that is the
+  // result. Every growth ratio on this panel rests on it (without it, growth partly measures a leak).
+  if (!sp.seeded) {
+    g.fillStyle = "#5ad17a"; g.font = "12px ui-monospace, monospace";
+    g.fillText("max|w| = 0.0   (bit-exact)", padL + 14, top + plotH / 2);
+    out.textContent =
+      "honesty gate · seed = 0 → max|w| is bit-exact zero, at the tongue's centre\n"
+      + "the out-of-plane field cannot be excited by the in-plane one: nothing leaks, so every "
+      + "growth ratio here is real";
+    return;
+  }
+
+  const t = sp.time, e = sp.envelope.map((x) => (x == null || x <= 0 ? 1e-300 : x));
+  const lo = Math.log10(Math.min(...e)), hi = Math.log10(Math.max(...e));
+  const span = Math.max(hi - lo, 1e-9);
+  const tmax = Math.max(t[t.length - 1], 1e-12);
+  const px = (i) => padL + (t[i] / tmax) * plotW;
+  const py = (val) => top + plotH - ((Math.log10(val) - lo) / span) * plotH;
+
+  // decade gridlines — the eye reads "straight over N decades" off these
+  g.strokeStyle = "rgba(139,152,168,.18)"; g.lineWidth = 1;
+  for (let d = Math.ceil(lo); d <= Math.floor(hi); d++) {
+    const y = py(Math.pow(10, d));
+    g.beginPath(); g.moveTo(padL, y); g.lineTo(padL + plotW, y); g.stroke();
+    g.fillStyle = "#8b98a8"; g.font = "9px ui-monospace, monospace";
+    g.fillText(`1e${d}`, 3, y + 3);
+  }
+
+  g.strokeStyle = "#ff8f4c"; g.lineWidth = 2; g.beginPath();
+  for (let i = 0; i < e.length; i++) {
+    if (i === 0) g.moveTo(px(i), py(e[i])); else g.lineTo(px(i), py(e[i]));
+  }
+  g.stroke();
+  g.fillStyle = "#8b98a8"; g.font = "10px ui-monospace, monospace";
+  g.fillText("max|w| (log)", padL + 4, top + 10);
+  g.fillText(`${tmax.toFixed(3)} s`, W - 46, H - 5);
+
+  const rate = sp.measured_rate == null ? "—" : sp.measured_rate.toFixed(1);
+  if (sp.degenerate) {
+    // A degenerate string has no tongue — rotational symmetry forces ω_w = ω_u at any amplitude.
+    // Which seed you use decides what you learn, and the curve's SHAPE is the discriminator: a
+    // velocity kick injects angular momentum and grows SECULARLY (linear in t ⇒ bends on log axes);
+    // a displaced w is the rotation generator, so the run is just planar motion in a rotated plane.
+    out.textContent = sp.seed_velocity
+      ? `degenerate (δ = 0) · |w| grows ${sp.growth.toFixed(2)}× — but LINEARLY, not exponentially\n`
+        + `a velocity seed injects angular momentum ⇒ secular growth (it BENDS on log axes). `
+        + `Marginal, not unstable — no tongue exists at δ = 0.`
+      : `degenerate (δ = 0) · |w| grows ${sp.growth.toFixed(2)}× — it cannot whirl\n`
+        + `a displaced w IS the rotation generator: this is the same planar motion in a rotated `
+        + `plane. Tick "velocity seed" to see the marginal (secular) growth instead.`;
+    return;
+  }
+  if (!sp.in_tongue) {
+    out.textContent =
+      `outside the tongue · δ/(εA²) = ${sp.tongue_position} > ½ → |w| grows ${sp.growth.toFixed(2)}×\n`
+      + `no parametric resonance: the pump cannot reach the detuned polarization. The upper edge is `
+      + `SOFT (leading-order ε), so growth fades rather than switching off.`;
+    return;
+  }
+  // Tier C, reported and never scored: the measured rate runs 5–11% BELOW the closed form, and
+  // systematically so (leading-order ε, plus the seed's non-growing component). Dressing that as a
+  // pass/fail would invent a bar the physics does not support.
+  out.textContent =
+    `inside the tongue · δ/(εA²) = ${sp.tongue_position} (peak ${sp.peak_at}) → |w| grows `
+    + `${sp.growth.toFixed(1)}×, κ_w = ${sp.kappa_w}\n`
+    + `rate ${rate} s⁻¹ vs Mathieu (Ω/2)√(q²−σ²) = ${sp.predicted_rate.toFixed(1)} s⁻¹  `
+    + `(${sp.rate_ratio == null ? "—" : (sp.rate_ratio * 100).toFixed(0) + "%"} — runs `
+    + `systematically low; reported, not scored)`;
+}
+
+// ── geometric string: the planar + rotating verdicts ─────────────────────────────────────────
+// Both are exact statements rather than plots, so the panel is the number. Planar: max|w| == 0.0 is
+// the w → −w reflection symmetry, not a small number. Rotating: the helix is an EXACT solution of
+// the scheme, so its own roundness is the oracle, and the longitudinal field holds still.
+function drawGeomVerdict(sp) {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height;
+  g.clearRect(0, 0, W, H);
+  const out = $("partials-readout");
+  const rows = sp.kind === "planar"
+    ? [["max|w|", sp.max_w === 0 ? "0.0" : sp.max_w.toExponential(2),
+        sp.exact_zero ? "bit-exact ✓" : "NOT zero ✗"]]
+    : [["roundness (r_max−r_min)/r̄", sp.roundness.toExponential(2), "a true circle ✓"],
+       ["longitudinal KE / E", sp.long_kin_over_e.toExponential(2), "it does not move ✓"],
+       ["BVP frequency", sp.bvp_frequency.toFixed(3) + " Hz", `${sp.bvp_iterations} Newton iters`]];
+
+  g.font = "12px ui-monospace, monospace";
+  rows.forEach(([k, v, note], i) => {
+    const y = 26 + i * 34;
+    g.fillStyle = "#8b98a8"; g.fillText(k, 12, y);
+    g.fillStyle = "#e8edf3"; g.font = "15px ui-monospace, monospace";
+    g.fillText(v, 12, y + 18);
+    g.font = "12px ui-monospace, monospace";
+    g.fillStyle = "#5ad17a"; g.fillText(note, W - 12 - g.measureText(note).width, y + 18);
+  });
+
+  out.textContent = sp.kind === "planar"
+    ? "max|w| is bit-exact zero — the reflection symmetry w → −w, not a small number.\n"
+      + "This is the orbit model #9 can draw. The other two are what it structurally cannot."
+    : "The helix is an EXACT solution of the scheme, so it is round from the first frame — no\n"
+      + "growth needed. ψ (the static stretch) is NONZERO and held: v does not move, it leans.";
 }
 
 // ── partials diagnostic ─────────────────────────────────────────────────────────────────────

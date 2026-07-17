@@ -183,6 +183,12 @@ def main() -> int:
             ("plate_free", "model=plate&domain=free"),
             ("vk_supported", "model=vk&domain=supported"),
             ("vk_free", "model=vk&domain=free"),
+            # The geometric string's three regimes. Slowest cases in the set (~5-15 s each): every
+            # step is a 3-field Newton solve at ~22x a normal string's fs. Viz-only — these are the
+            # only cases with no audio, so `painted` is the whole verdict.
+            ("geom_rotating", "model=geometric&domain=rotating"),
+            ("geom_planar", "model=geometric&domain=planar"),
+            ("geom_whirl", "model=geometric&domain=whirl"),
         ]
         results = [run_case(cdp, n, q) for n, q in cases]
         print(f"\n{sum(results)}/{len(results)} cases passed; screenshots in out/viewer_*.png")

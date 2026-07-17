@@ -33,12 +33,14 @@ from scipy.signal import resample_poly
 from scipy.sparse.linalg import eigsh
 
 from physsynth.analysis import damping, duffing, modal, spectrum
+from physsynth.analysis.rotating_wave import rotating_wave_history, solve_rotating_wave
 from physsynth.core.bow import BowedString
 from physsynth.core.engine import SimResult, simulate
 from physsynth.core.exciter import raised_cosine_2d, triangular_pluck
 from physsynth.core.membrane import Membrane
 from physsynth.core.plate import Plate, VKPlate
 from physsynth.core.string_damped import DampedStiffString
+from physsynth.core.string_geometric import GeometricString
 from physsynth.core.string_ideal import IdealString
 from physsynth.core.string_nonlinear import TensionModulatedString
 from physsynth.core.string_stiff import StiffString
@@ -200,6 +202,66 @@ BOW_TRACE_PERIODS = 3                     # periods *drawn* — a plot, not the 
 BOW_N_MAX = 256
 BOW_AUDIO_MAX = 3.0
 BOW_WORK_MAX = 60_000           # total steps: audio + animation
+
+# == geometrically-exact string (model #10) ========================================================
+#
+# Three regimes, one per claim; the secondary select carries them (see GEOM_REGIMES).
+GEOM_REGIMES = ("planar", "rotating", "whirl")
+# lam_long = c_long k / h IS this model's trap, and nothing enforces it: the theta-scheme is
+# unconditionally stable, so an unresolved longitudinal wave returns quiet nonsense with no CFL
+# error at all. The core WARNS above 1 (LAM_LONG_WARN) rather than rejecting — the scheme really is
+# stable there — but the viewer must never render the headline in the warned regime, so here it is
+# a hard cap. It is also the whole cost story: c_long/c = sqrt(EA/T) ~ 22 for a real string, so
+# resolving it forces fs ~ 22x a transverse-only model's.
+GEOM_LAM_LONG_MAX = 1.0
+GEOM_LAM_LONG_DEFAULT = 0.9
+GEOM_N_MAX = 32
+# Every step is a vector Newton solve over 3 coupled fields: ~2 ms at small amplitude, ~4 ms on the
+# whirl (a bigger amplitude buys more iterations). The default whirl is 4,770 steps ~ 19 s, so this
+# ceiling is ~25 s — by far the slowest model in the viewer, and irreducibly so (see the header
+# comment on _build_payload_geometric). Bound the STEPS, not N: N and the window and lam_long all
+# move the step count, and only the product is the cost (the membrane's lesson).
+GEOM_WORK_MAX = 6_000
+# The whirl's amplitude is set by dT/T0, never by A directly — A is a proxy, and EA and T move the
+# tension excess just as hard (the tension string's lesson). kappa_u = 0 makes eps A^2/omega_u^2 ==
+# dT/T0 EXACTLY, so this is model #9's own planar-breakup coordinate: the whirl rig's 1.5 is a
+# measured half-margin to #9's ~3, and 2.16 is measured good (off-mode 0.2%).
+GEOM_DT_DEFAULT = 1.5
+GEOM_DT_MAX = 2.2
+# The Mathieu tongue's dimensionless coordinate, frac = delta / (eps A^2), where delta = w_w^2 -
+# w_u^2 is the detuning the kappa_w knob buys. Unstable <=> 0 < frac < 1/2, peak at 1/4. THE control
+# of this model: the measured map is 1.00 -> 14.7 -> 76.3 -> 37.4 -> 8.4 -> 1.63x growth at
+# frac = 0 / .07 / .25 / .41 / .5 / .8. The upper edge is SOFT (leading-order eps), so the slider
+# runs past 1/2 on purpose — watching the growth die is the point.
+GEOM_TONGUE_DEFAULT = 0.25
+GEOM_TONGUE_MAX = 1.0
+# The out-of-plane seed, as a fraction of the driven amplitude. Kept small: it must stay a
+# perturbation, or the linearised tongue is not the right oracle for what the run does.
+#
+# BOTH kinds are offered, and the difference between them IS a claim of this model — measured here,
+# because the received rule ("a velocity seed, never a displacement one: a displaced w is the
+# rotation generator, so it pins growth at 1.00x and would draw a line even inside the tongue") is
+# only half right, and the wrong half is the memorable half. Measured growth at t = 0.06 s:
+#
+#     frac        0       0.07     0.25      0.5      0.8
+#     disp     1.00x    14.69x   60.17x    6.08x    1.17x
+#     vel      6.88x    28.52x   63.00x    0.85x    0.78x
+#
+# Inside the tongue a DISPLACED seed grows perfectly well (60x at the peak) — the pinning happens
+# only at frac = 0, on the DEGENERATE string, where dw = dA phi at rest is exactly the rotation
+# generator and the run is just the same planar motion in a rotated plane (Tier A/1 restated). So:
+#   * displacement (default) reads the TONGUE cleanly — 1.00x at frac=0 is "a degenerate string
+#     cannot whirl", the claim, and the map peaks at 1/4 and dies by 0.8 exactly as predicted.
+#   * velocity injects angular momentum, so the degenerate string grows SECULARLY (linearly, 6.88x)
+#     rather than exponentially. That is marginality, not whirling — and the log-y envelope panel
+#     shows the difference free: secular growth BENDS on log axes, exponential growth is straight.
+GEOM_SEED_FRAC = 1e-3
+GEOM_AMP_DEFAULT = 4e-3         # planar / rotating: small enough that the BVP continuation is quick
+GEOM_ROTATING_PERIODS = 2.0     # revolutions drawn — the circle closes on itself
+GEOM_PLANAR_WINDOW = 0.02       # s; the line needs no growth, so it needs no length
+GEOM_ORBIT_POINTS = 1_500       # (u, w) trail points shipped — 2 floats each, cheap
+GEOM_ENV_POINTS = 400           # decimated whirl-envelope length for the log-y plot
+GEOM_GROWTH_FRAC = 8            # growth = max|w| over the last 1/8 of the run / over the first 1/8
 
 
 class ParamError(ValueError):
@@ -536,6 +598,8 @@ def _build_payload(p: dict[str, Any]) -> dict[str, Any]:
         return _build_payload_tension(p)
     if model == "bow":
         return _build_payload_bow(p)
+    if model == "geometric":
+        return _build_payload_geometric(p)
     return _build_payload_string(p)
 
 
@@ -1157,6 +1221,437 @@ def _build_payload_bow(p: dict[str, Any]) -> dict[str, Any]:
             # scheme is stable and the balance exact for any root), so it is a diagnostic only.
             "helmholtz_number": round(float(bow.helmholtz_number), 3),
             "fallbacks": int(bow.fallbacks),
+        },
+    }
+
+
+# == geometrically-exact string (1D nonlinear, 3 fields — model #10) ===============================
+#
+# The viewer's first VIZ-ONLY model, and the reason is physics, not a shortcut. This string has a
+# longitudinal wave at c_long = sqrt(EA/rho); for a real string (EA/T ~ 500) that is ~22x the
+# transverse c you actually hear. Resolving it — lam_long <= 1, the model's central trap — forces
+# fs ~ 22x a transverse-only model's, and every step is a vector Newton solve over 3 coupled fields
+# (~2-4 ms). One second of listenable audio is ~10 minutes of compute, and there is no cheat:
+# lam_long > 1 is exactly the silent-garbage regime this model exists to warn about. So it renders
+# pictures, not sound. (The phantom-partials bridge-force spectrum — EA v_x(0), the model's true
+# audible signature — is a separate ~30 s run at N=32/kappa=8 and lands in its own later increment.)
+#
+# What replaces the audio is the orbit: model #9 has ONE polarization, so its only orbit is a point
+# on a line. Three regimes, three claims, cheapest first:
+#   * planar   — a bit-exact straight line. max|w| == 0.0, not "small": it is the w -> -w reflection
+#                symmetry, and it is also the honesty gate for the whirl below (without it, every
+#                growth ratio is partly measuring a seed leak).
+#   * rotating — a true circle, from the converged rotating-wave BVP (Tier B): an EXACT solution of
+#                the scheme, so it is round from frame 1 and needs no growth to look like anything.
+#                Its oracle is its own roundness, and the longitudinal field holding still (psi is a
+#                nonzero *static* stretch — asserting v == 0 would assert the physics away).
+#   * whirl    — the Mathieu tongue. NOT drawn as an opening orbit: at the affordable 0.06 s the
+#                growth is 63x but max|w|/max|u| is still ~1e-4, i.e. a flat line on equal axes (the
+#                orbit only opens by ~0.22 s = ~60 s of compute). The honest cheap signature is the
+#                ENVELOPE of max|w| on log-y — a straight line there IS the instability — plus the
+#                energy drift holding ~1e-12 THROUGH the blow-up, which is what separates
+#                redistribution from a diverging solve.
+
+
+def _geom_regime(p: dict[str, Any]) -> str:
+    regime = str(p.get("domain", "rotating"))
+    if regime not in GEOM_REGIMES:
+        raise ParamError(f"regime must be one of {GEOM_REGIMES}, got {regime!r}.")
+    return regime
+
+
+def _geom_long_kinetic(res: GeometricString) -> float:
+    """Kinetic energy of the LONGITUDINAL field alone (J) — the rotating wave's money number.
+
+    Deliberately not "is ``v`` zero": ``psi``, the static stretch, is a *nonzero* equilibrium the
+    helix holds, so ``v == 0`` would assert the physics away (the plan's own criterion was wrong
+    here). What vanishes on a true rotating wave is the longitudinal *motion*.
+    """
+    dt_v = (res.v[1:-1] - res.v_prev[1:-1]) / res.k
+    return 0.5 * res.rho * res.h * float(np.dot(dt_v, dt_v))
+
+
+def _sliding_max(a: NDArray[np.float64], win: int) -> NDArray[np.float64]:
+    """Centred sliding-window maximum — the ENVELOPE of an oscillating signal.
+
+    The whirl's ``max|w|`` is a growing *oscillation*, not a growing number: every node crosses zero
+    twice a period, so the instantaneous spatial max is non-monotone (it reads 4.6e-8 -> 1.8e-8 ->
+    2.9e-7 -> 1.5e-7 -> 8.5e-7 on the default run) and a log-y plot of it is a mess of spikes that
+    hides the straight line underneath. A max over a ~1-period window recovers the envelope,
+    whose slope on log axes is the Mathieu growth rate. This is the family's recurring trap in
+    another dress: never read an oscillating field at one phase.
+    """
+    win = int(min(max(win, 1), a.size))
+    if win <= 1:
+        return a.copy()
+    view = np.lib.stride_tricks.sliding_window_view(a, win)
+    env = np.asarray(view.max(axis=1), dtype=float)
+    lead = (win - 1) // 2
+    tail = a.size - env.size - lead
+    return np.concatenate([np.full(lead, env[0]), env, np.full(max(tail, 0), env[-1])])[: a.size]
+
+
+def _geom_tongue(
+    *, c: float, EA: float, T: float, rho: float, L: float, N: int, dt_over_t0: float, frac: float
+) -> dict[str, float]:
+    """The whirl recipe: amplitude, ``kappa_w``, the driven frequency and the predicted rate.
+
+    Whirling is a **Mathieu tongue** and its parameters are NOT free — picking them by eye gives
+    1.1x growth and a picture of nothing. Reduce to one mode pair (a sine is exact for both ``d_xx``
+    and ``d_xxxx`` under simple support, so the two polarizations share it even when detuned) and
+    linearise out of plane about ``q_u = A cos(Omega t)``::
+
+        d_tt q_w + [w_w^2 + eps A^2/2 + (eps A^2/2) cos(2 Omega t)] q_w = 0
+
+    — a pump at ``2 Omega`` on the principal resonance, unstable iff ``0 < delta < eps A^2/2`` with
+    ``delta = w_w^2 - w_u^2``, peaking at ``delta = eps A^2/4``. ``eps`` is model #9's OWN
+    ``kc_mode_coefficients`` under ``EA -> a`` (the quartic is isotropic, so the planar reduction is
+    untouched by the third field).
+
+    Two things this encodes that cost a cycle each to learn: the driven plane must be the SOFT one
+    (``kappa_u = 0 < kappa_w``, so ``delta > 0`` — Gough's real signature; the same string driven on
+    the stiff plane gives 1.00x), and the tongue is **refinement-invariant** in the coordinate
+    ``frac``, so ``kappa_w`` must be recomputed from ``p2`` at the actual N (39.05 / 39.01 / 39.00
+    N = 16 / 24 / 32) rather than pinned to a number that was right at one grid.
+
+    The predicted rate is ``(Om/2) sqrt(qM^2 - sigma^2)``, pump strength ``qM = eps A^2/(4 Om^2)``
+    and detuning ``sigma = (delta - eps A^2/4)/Om^2`` — the tongue and its rate profile are the same
+    formula read twice, so the rate peaks at ``frac = 1/4`` and dies at both edges. ``Om`` is the
+    **planar** Duffing frequency ``sqrt(w0^2 + 3/4 eps A^2)``: the driven motion here is a plane
+    oscillation, NOT the circular ``sqrt(w0^2 + eps A^2)`` of the rotating wave.
+    """
+    p2 = damping.spatial_eigenvalue_p2(N, L / N, 1)
+    omega0_sq, eps = duffing.kc_mode_coefficients(c=c, kappa=0.0, EA=EA - T, rho=rho, p2=p2, L=L)
+    amplitude = float(np.sqrt(dt_over_t0 * omega0_sq / eps))   # kappa_u=0 => eps A^2/w0^2 == dT/T0
+    kappa_w = float(np.sqrt(frac * eps * amplitude**2 / p2**2)) if frac > 0 else 0.0
+    ea2 = eps * amplitude**2
+    omega = float(np.sqrt(omega0_sq + 0.75 * ea2))
+    q_m = ea2 / (4.0 * omega**2)
+    sigma = (frac * ea2 - ea2 / 4.0) / omega**2       # delta == frac * eps A^2, by construction
+    rate = float((omega / 2.0) * np.sqrt(max(q_m**2 - sigma**2, 0.0)))
+    return {
+        "amplitude": amplitude, "kappa_w": kappa_w, "omega": omega, "predicted_rate": rate,
+        "omega0_sq": float(omega0_sq),
+    }
+
+
+def _build_geometric(p: dict[str, Any], *, kappa: float, kappa_w: float) -> GeometricString:
+    """Construct a :class:`GeometricString` with ``fs`` driven by **lam_long**, not by lambda.
+
+    The reverse of models #1-#9, on purpose: ``lam = c k / h`` is the familiar knob and it is the
+    wrong one here — at the ``lam = 0.5`` a reader of the string family reaches for first,
+    ``lam_long`` is silently ~11 and the model returns garbage that conserves nothing. So the slider
+    IS ``lam_long`` and ``lam`` is whatever falls out (~0.04).
+    """
+    L = _fnum(p, "L", 1.0)
+    T = _fnum(p, "T", 200.0)
+    rho = _fnum(p, "rho", 0.005)
+    EA = _fnum(p, "EA", 1.0e5)
+    lam_long = _fnum(p, "lam_long", GEOM_LAM_LONG_DEFAULT)
+    theta = _fnum(p, "theta", 0.28)
+    try:
+        N = int(p.get("N", 16))
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"N must be an integer, got {p.get('N')!r}.") from exc
+    if N > GEOM_N_MAX:
+        raise ParamError(
+            f"N must be <= {GEOM_N_MAX} for the geometrically-exact string (got {N}): each step "
+            "a vector Newton solve over three coupled fields, and fs rides N."
+        )
+    if not (0.0 < lam_long <= GEOM_LAM_LONG_MAX):
+        raise ParamError(
+            f"lam_long must be in (0, {GEOM_LAM_LONG_MAX}], got {lam_long}. This is the model's "
+            "central trap: above 1 the longitudinal wave is under-resolved, and because the "
+            "theta-scheme is unconditionally stable it fails SILENTLY — no CFL error, just quiet "
+            "nonsense that stops conserving."
+        )
+    if EA <= 0:
+        raise ParamError(f"EA must be positive, got {EA}.")
+    c_long = math.sqrt(EA / rho)
+    fs = c_long * N / (L * lam_long)
+    return GeometricString(
+        L=L, T=T, rho=rho, fs=fs, N=N, EA=EA, kappa=kappa, kappa_w=kappa_w,
+        sigma0=_fnum(p, "sigma0", 0.0), sigma1=_fnum(p, "sigma1", 0.0), theta=theta,
+    )
+
+
+class _GeomRun:
+    """Per-step telemetry of a geometric run (the fields are what the panels are made of)."""
+
+    def __init__(self, n: int, width: int) -> None:
+        self.E = np.empty(n + 1)
+        self.u_probe = np.empty(n + 1)
+        self.w_probe = np.empty(n + 1)
+        self.u_max = np.empty(n + 1)
+        self.w_max = np.empty(n + 1)
+        self.long_kin = 0.0
+        self.frames: list[NDArray[np.float64]] = []
+        self.frame_steps: list[int] = []
+        self.width = width
+
+
+def _run_geometric(
+    res: GeometricString, n_steps: int, *, probe: int, anim_stride: int
+) -> _GeomRun:
+    """Step the string, capturing everything the panels need in ONE pass.
+
+    Energy every step is free here, so it is taken every step: ``energy()`` costs ~0.15 ms against
+    a ~2-4 ms Newton step, so the drift gate — what separates a whirl (redistribution) from
+    a diverging solve — is ~4% overhead. The orbit trail is captured at full rate too (2 floats a
+    step) and decimated at the end; only the 3-field snapshots ride the animation stride.
+    """
+    run = _GeomRun(n_steps, res.N + 1)
+
+    def _cap(i: int) -> None:
+        st = res.state
+        run.frames.append(np.stack([st.u, st.w, st.v]))
+        run.frame_steps.append(i)
+
+    def _sample(i: int) -> None:
+        run.E[i] = res.energy()
+        run.u_probe[i] = res.u[probe]
+        run.w_probe[i] = res.w[probe]
+        run.u_max[i] = float(np.max(np.abs(res.u)))
+        run.w_max[i] = float(np.max(np.abs(res.w)))
+
+    _sample(0)
+    _cap(0)
+    for i in range(1, n_steps + 1):
+        res.step()
+        _sample(i)
+        run.long_kin = max(run.long_kin, _geom_long_kinetic(res))
+        if i % anim_stride == 0:
+            _cap(i)
+    if not np.all(np.isfinite(run.E)):
+        raise ParamError("simulation produced non-finite energy (instability) — adjust parameters.")
+    return run
+
+
+def _geom_orbit_block(run: _GeomRun, n_frames: int) -> dict[str, Any]:
+    """The (u, w) trail at the probe node — the plot model #9 structurally cannot draw."""
+    n = run.u_probe.size
+    idx = np.linspace(0, n - 1, min(n, GEOM_ORBIT_POINTS)).astype(int)
+    return {
+        "u": _b64f32(run.u_probe[idx]),
+        "w": _b64f32(run.w_probe[idx]),
+        "n": int(idx.size),
+        # The trail accumulates as the animation plays, so the frontend needs to know how far along
+        # the trail one frame is. Float on purpose: the two strides do not divide evenly.
+        "per_frame": float(idx.size / max(n_frames, 1)),
+    }
+
+
+def _geom_whirl_block(
+    run: _GeomRun, fs: float, f_osc: float, tongue: dict[str, Any]
+) -> dict[str, Any]:
+    """The whirl panel: the log-y envelope of max|w|, the growth ratio, and the tongue coordinate.
+
+    The growth ratio uses the same definition as the diagnose rig — the max over the last eighth of
+    the run against the max over the first eighth — so the viewer and the figures report one number.
+    It is read off the **spatial** max, not a probe node, so it cannot be an artifact of where the
+    probe sits.
+
+    The measured rate comes from the **last two** quarter-envelopes, never the whole run: the seed
+    is not the growing Floquet mode, so quarter one is contaminated by its decaying partner. It is
+    reported against the closed-form Mathieu rate as a Tier-C number — the match is 5-11% and
+    *systematically low* (leading-order eps, plus the seed's non-growing component), so this is a
+    "reported, not asserted" comparison and the panel must not dress it up as a pass/fail.
+    """
+    w = run.w_max
+    env = _sliding_max(w, max(1, round(fs / max(f_osc, 1e-9))))
+    idx = np.linspace(0, env.size - 1, min(env.size, GEOM_ENV_POINTS)).astype(int)
+    eighth = max(1, w.size // GEOM_GROWTH_FRAC)
+    first = float(np.max(w[:eighth]))
+    last = float(np.max(w[-eighth:]))
+    growth = last / first if first > 0 else 0.0
+
+    q = max(1, w.size // 4)
+    quarters = [float(np.max(w[i * q : (i + 1) * q])) for i in range(4)]
+    t_total = (w.size - 1) / fs
+    measured = (float(4.0 * np.log(quarters[3] / quarters[2]) / t_total)
+                if quarters[2] > 0 and quarters[3] > 0 else None)
+    predicted = float(tongue["predicted_rate"])
+    return {
+        "kind": "whirl",
+        "time": _finite_list(idx / fs, 6),
+        "envelope": _finite_list(env[idx]),
+        "growth": growth,
+        "w_over_u": float(last / max(float(np.max(run.u_max)), 1e-300)),
+        "seeded": bool(first > 0.0),
+        "measured_rate": measured,
+        "rate_ratio": (measured / predicted) if (measured is not None and predicted > 0) else None,
+        **tongue,
+    }
+
+
+def _build_payload_geometric(p: dict[str, Any]) -> dict[str, Any]:
+    regime = _geom_regime(p)
+    playback_speed = _fnum(p, "playback_speed", 0.02)
+    probe_frac = _fnum(p, "pickup_position", 0.25)
+    fpp = max(1, int(_fnum(p, "frames_per_period", FRAMES_PER_PERIOD)))
+    if not (0.0 < playback_speed <= SPEED_MAX):
+        raise ParamError(f"playback_speed must be in (0, {SPEED_MAX}], got {playback_speed}.")
+    if not (0.0 < probe_frac < 1.0):
+        raise ParamError(f"pickup_position must be in (0, 1), got {probe_frac}.")
+
+    kappa = _fnum(p, "kappa", 0.0)
+    tongue: dict[str, Any] = {}
+    diag: dict[str, Any] = {}
+
+    if regime == "whirl":
+        # kappa_u = 0 is FORCED, not a default: only the SOFT plane whirls (delta > 0 requires the
+        # driven polarization to be the lower one). The same string driven on the stiff plane gives
+        # 1.00x — the sharpest claim here, and no energy or amplitude measurement can make it.
+        dt_over_t0 = _fnum(p, "dt_over_t0", GEOM_DT_DEFAULT)
+        frac = _fnum(p, "tongue_position", GEOM_TONGUE_DEFAULT)
+        if not (0.0 < dt_over_t0 <= GEOM_DT_MAX):
+            raise ParamError(
+                f"dT/T0 must be in (0, {GEOM_DT_MAX}], got {dt_over_t0:.3f}. Above that the DRIVEN "
+                "polarization stops being single-mode (model #9's own planar parametric breakup), "
+                "and the tongue oracle silently stops describing the run."
+            )
+        if not (0.0 <= frac <= GEOM_TONGUE_MAX):
+            raise ParamError(f"tongue_position must be in [0, {GEOM_TONGUE_MAX}], got {frac}.")
+        kappa = 0.0
+    else:
+        amplitude = _fnum(p, "amplitude", GEOM_AMP_DEFAULT)
+        if not (0.0 < amplitude <= 0.05):
+            raise ParamError(f"amplitude must be in (0, 0.05] m, got {amplitude}.")
+
+    # --- build + seed, per regime ----------------------------------------------------------------
+    if regime == "whirl":
+        probe_res = _build_geometric(p, kappa=0.0, kappa_w=0.0)   # cheap: only to read c/L/N back
+        tg = _geom_tongue(
+            c=probe_res.c, EA=probe_res.EA, T=probe_res.T, rho=probe_res.rho, L=probe_res.L,
+            N=probe_res.N, dt_over_t0=dt_over_t0, frac=frac,
+        )
+        amplitude = tg["amplitude"]
+        res = _build_geometric(p, kappa=0.0, kappa_w=tg["kappa_w"])
+        shape = np.sin(np.pi * res.x / res.L)
+        seed = _fnum(p, "seed_frac", GEOM_SEED_FRAC)
+        seed_velocity = _as_bool(p.get("seed_velocity"), False)
+        # seed = 0 is the HONESTY GATE: unseeded, at the tongue centre, max|w| is 0.0 bit-exact.
+        # Without it every growth ratio here is partly measuring a leak. See GEOM_SEED_FRAC for why
+        # both seed kinds exist and what each one is honest about.
+        if seed_velocity:
+            # The omega_u factor makes the two seeds comparable: it gives the velocity kick the same
+            # initial out-of-plane DISPLACEMENT scale (~seed*A) the displacement seed starts with,
+            # so switching kind changes the physics, not merely the size of the perturbation.
+            res.set_state(amplitude * shape,
+                          w_dot=seed * amplitude * math.sqrt(tg["omega0_sq"]) * shape)
+        else:
+            res.set_state(amplitude * shape, seed * amplitude * shape)
+        f_osc = tg["omega"] / (2.0 * math.pi)
+        n_steps = max(1, round(_fnum(p, "animation_window", 0.06) * res.fs))
+        tongue = {
+            "tongue_position": round(frac, 4), "dt_over_t0": round(dt_over_t0, 4),
+            "amplitude": amplitude, "kappa_w": round(tg["kappa_w"], 3),
+            "predicted_rate": tg["predicted_rate"], "seed_velocity": seed_velocity,
+            "degenerate": bool(frac == 0.0),
+            "in_tongue": bool(0.0 < frac < 0.5), "peak_at": 0.25,
+        }
+    elif regime == "rotating":
+        res = _build_geometric(p, kappa=kappa, kappa_w=kappa)   # a helix needs a DEGENERATE string
+        wave = solve_rotating_wave(
+            L=res.L, T=res.T, rho=res.rho, EA=res.EA, fs=res.fs, N=res.N, theta=res.theta,
+            amplitude=amplitude, mode=1, kappa=kappa,
+        )
+        # Assign the history DIRECTLY, never via set_state: set_state's y^{-1} is a 2nd-order Taylor
+        # start — consistent, not exact — and its O(k^3) history error lands straight in the
+        # longitudinal field. Exact history gives long_kin ~2e-26; set_state gives ~1e-16, which
+        # still *looks* like machine precision while being ten orders worse.
+        u0, w0, v0, up, wp, vp = rotating_wave_history(wave, fs=res.fs)
+        res.u, res.w, res.v = u0, w0, v0
+        res.u_prev, res.w_prev, res.v_prev = up, wp, vp
+        f_osc = float(wave.frequency)
+        n_steps = max(1, round(GEOM_ROTATING_PERIODS * res.fs / f_osc))
+        diag = {"bvp_frequency": round(f_osc, 4), "bvp_iterations": int(getattr(wave, "iterations",
+                                                                               0))}
+    else:                                                          # planar
+        res = _build_geometric(p, kappa=kappa, kappa_w=kappa)
+        res.set_state(amplitude * np.sin(np.pi * res.x / res.L))
+        f_osc = float(modal.stiff_harmonic_frequencies(res.c, res.L, kappa, 1)[0])
+        n_steps = max(1, round(_fnum(p, "animation_window", GEOM_PLANAR_WINDOW) * res.fs))
+
+    if n_steps > GEOM_WORK_MAX:
+        raise ParamError(
+            f"work budget exceeded ({n_steps:,} steps > {GEOM_WORK_MAX:,}): every step is a vector "
+            "Newton solve over three coupled fields, and fs is forced ~22x higher than a "
+            "transverse-only string's by the longitudinal wave (lam_long <= 1). Lower N or the "
+            "animation window."
+        )
+
+    probe = min(max(1, round(probe_frac * res.N)), res.N - 1)
+    anim_stride = max(1, round((res.fs / f_osc) / fpp))
+    if n_steps // anim_stride > MAX_FRAMES:
+        anim_stride = max(1, math.ceil(n_steps / MAX_FRAMES))
+    run = _run_geometric(res, n_steps, probe=probe, anim_stride=anim_stride)
+
+    frames = np.array(run.frames, dtype=float)                     # (n_frames, 3, N+1)
+    field_amp = float(np.max(np.abs(frames))) if frames.size else 0.0
+    e0 = float(run.E[0])
+    sim = SimResult(
+        time=np.arange(run.E.size) / res.fs, energy=run.E, output=None, fs=res.fs, snapshots=[],
+    )
+    sigma_zero = _fnum(p, "sigma0", 0.0) == 0.0 and _fnum(p, "sigma1", 0.0) == 0.0
+
+    if regime == "whirl":
+        spectrum_block: dict[str, Any] | None = _geom_whirl_block(run, res.fs, f_osc, tongue)
+    elif regime == "rotating":
+        r = np.hypot(run.u_probe, run.w_probe)
+        spectrum_block = {
+            "kind": "rotating",
+            "roundness": float((r.max() - r.min()) / r.mean()) if r.mean() > 0 else 0.0,
+            # The longitudinal field does not MOVE (psi, the static stretch, is nonzero and held).
+            "long_kin_over_e": float(run.long_kin / e0) if e0 > 0 else 0.0,
+            **diag,
+        }
+    else:
+        spectrum_block = {
+            "kind": "planar",
+            # Bit-exact zero: the w -> -w reflection symmetry, not a small number. Also the honesty
+            # gate the whirl's growth ratios rest on.
+            "max_w": float(np.max(run.w_max)),
+            "exact_zero": bool(np.max(run.w_max) == 0.0),
+        }
+
+    return {
+        "model": "geometric",
+        "regime": regime,
+        "fs_sim": round(res.fs, 3),
+        "lambda": round(float(res.lam), 6),
+        "lam_long": round(float(res.lam_long), 6),
+        "grid": {"x": _finite_list(res.x, 6)},
+        # dims stays 1 (a 1-D model) but there are THREE stacked fields per frame; the frontend
+        # dispatches on `fields`, so the string path's (n_frames, width) contract is untouched.
+        "frames": {
+            "b64": _b64f32(frames.ravel()),
+            "n_frames": int(frames.shape[0]),
+            "width": int(frames.shape[2]) if frames.ndim == 3 else 0,
+            "fields": ["u", "w", "v"],
+            "dims": 1,
+        },
+        "frame_times": _finite_list(np.array(run.frame_steps, dtype=float) / res.fs, 6),
+        "anim_dt": float(anim_stride / res.fs),
+        "playback_speed": playback_speed,
+        "field_amp": field_amp,
+        "orbit": _geom_orbit_block(run, int(frames.shape[0])),
+        # No audio, and the payload says so rather than shipping a stub the player would click on.
+        "audio": None,
+        "audio_note": (
+            "viz-only: c_long/c = "
+            f"{math.sqrt(res.EA / res.T):.0f}x, so resolving the longitudinal wave forces "
+            f"fs = {res.fs / 1000:.0f} kHz and one second of sound would be ~10 minutes of compute."
+        ),
+        "energy": _energy_block(sim, sigma_zero, 2.0 * _fnum(p, "sigma0", 0.0)),
+        "meta": {
+            "c": round(float(res.c), 3),
+            "c_long": round(float(math.sqrt(res.EA / res.rho)), 1),
+            "f1": round(f_osc, 3),
+            "num_steps": int(n_steps),
+            "n_frames": int(frames.shape[0]),
+            "probe_x": round(float(res.x[probe]), 4),
+            "spectrum": spectrum_block,
         },
     }
 

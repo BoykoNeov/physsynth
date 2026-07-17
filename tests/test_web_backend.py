@@ -22,6 +22,10 @@ from web.serialize import (
     BOW_N_MAX,
     BOW_SLIP_MATCH_TOL,
     DISPLAY_MAX,
+    GEOM_DT_MAX,
+    GEOM_LAM_LONG_MAX,
+    GEOM_N_MAX,
+    GEOM_WORK_MAX,
     LOSSLESS_TOL,
     MEMBRANE_LAMBDA_MAX,
     MEMBRANE_N_MAX,
@@ -914,3 +918,268 @@ def test_bow_work_budget_is_its_own():
     payload = simulate_to_payload({**BOW_P, "N": 256, "lambda": 0.5, "audio_duration": 3.0})
     assert "error" in payload
     assert "root-find" in payload["error"]["message"]
+
+
+# == geometrically-exact string (1D nonlinear, 3 fields — model #10) ===============================
+# The viewer's first VIZ-ONLY model. Its three regimes are three different claims, so they get
+# three different panels. What these pin: (a) the two bit-exact zeros the model rests on (planar
+# max|w|, and the unseeded whirl's honesty gate) really are zero and not merely small; (b) the
+# rotating wave is an exact solution — round, with a longitudinal field that leans without moving;
+# (c) the whirl grows only inside the Mathieu tongue, and the energy conserves straight THROUGH the
+# growth (which is what separates redistribution from a diverging solve); (d) lam_long — the trap
+# nothing in the core enforces — is a hard cap here.
+#
+# N = 8 and short windows on purpose: every step is a 3-field vector Newton solve (~2 ms), so this
+# section pays for physical time, not for grid. The tongue is refinement-invariant in the
+# dimensionless coordinate frac = delta/(eps A^2), so claims survive the coarse grid — kappa_w is
+# recomputed from p2 at the actual N, not pinned to a value that was right at some other grid.
+GEOM_P: dict = {"model": "geometric", "N": 8, "lam_long": 0.9, "T": 200.0, "rho": 0.005,
+                "EA": 1.0e5, "L": 1.0, "theta": 0.28, "kappa": 0.0, "sigma0": 0.0, "sigma1": 0.0,
+                "pickup_position": 0.25, "amplitude": 4e-3, "animation_window": 0.01}
+GEOM_WHIRL: dict = {**GEOM_P, "domain": "whirl", "dt_over_t0": 1.5, "tongue_position": 0.25,
+                    "animation_window": 0.03}
+
+
+def _geom(**overrides):
+    return simulate_to_payload({**GEOM_P, **overrides})
+
+
+def test_geometric_planar_max_w_is_bit_exact_zero():
+    """The orbit model #9 *can* draw — and the reason it is a claim, not a small number.
+
+    A planar run leaves the out-of-plane field at **bit-exact** zero forever: that is ``w -> -w``
+    reflection symmetry of the geometric nonlinearity, not a quantity that happens to be tiny. It is
+    also the gate the whirl's growth ratios rest on: without it, "|w| grew 60x" would be partly a
+    measurement of how much the in-plane motion leaks out of plane.
+    """
+    d = _geom(domain="planar")
+    sp = d["meta"]["spectrum"]
+    assert sp["kind"] == "planar"
+    assert sp["max_w"] == 0.0, "not 'small' — exactly zero, or the symmetry is broken"
+    assert sp["exact_zero"] is True
+
+
+def test_geometric_planar_conserves_through_the_wrapper():
+    """Criterion 1 for a three-field model: the energy signature survives serialization."""
+    e = _geom(domain="planar")["energy"]
+    assert e["sigma_is_zero"] is True
+    assert e["lossless"]["drift"] < LOSSLESS_TOL
+    assert e["lossless"]["pass"] is True
+
+
+def test_geometric_rotating_wave_is_a_true_circle():
+    """Tier B: the helix is an EXACT solution of the scheme, so it is round from the first frame.
+
+    No growth, no transient, nothing to wait for — which is why it, and not the whirl, is the
+    orbit this batch leads with. Its own roundness is the oracle; there is no external formula to
+    compare against, because the converged BVP *is* the answer the scheme would give.
+    """
+    d = _geom(domain="rotating")
+    sp = d["meta"]["spectrum"]
+    assert sp["kind"] == "rotating"
+    assert sp["roundness"] < 1e-6, "the radius wanders — this is not a rotating wave"
+    assert sp["bvp_frequency"] > 0.0
+
+
+def test_geometric_rotating_wave_longitudinal_field_leans_but_does_not_move():
+    """``psi`` is a NONZERO static stretch — so the claim is about motion, not about ``v`` itself.
+
+    Asserting ``v == 0`` would assert the physics away (the helix holds a real stretch; the plan's
+    own criterion was wrong here). What vanishes is the longitudinal *kinetic* energy: the field
+    leans into the stretch it should already be holding, and then stays there.
+    """
+    d = _geom(domain="rotating")
+    assert d["meta"]["spectrum"]["long_kin_over_e"] < 1e-12
+
+
+def test_geometric_frames_decode_to_three_fields_with_clamped_ends():
+    """The 2D path's byte-order test, in the shape this model needs.
+
+    A length-only check cannot catch endianness garbage (right size, wrong values), so decode and
+    look: three stacked fields per frame, ends clamped in ALL THREE components, and a ``u`` that
+    actually carries the mode-1 amplitude that was asked for.
+    """
+    d = _geom(domain="planar")
+    fr = d["frames"]
+    assert fr["dims"] == 1 and fr["fields"] == ["u", "w", "v"]
+    assert fr["width"] == len(d["grid"]["x"])
+    buf = np.frombuffer(base64.b64decode(fr["b64"]), dtype="<f4")
+    assert buf.size == fr["n_frames"] * 3 * fr["width"]
+    f = buf.reshape(fr["n_frames"], 3, fr["width"])
+    assert np.all(f[:, :, 0] == 0.0) and np.all(f[:, :, -1] == 0.0), "ends clamped in u, w AND v"
+    assert np.max(np.abs(f[:, 0, :])) == pytest.approx(GEOM_P["amplitude"], rel=0.02)
+    assert np.all(f[:, 1, :] == 0.0), "planar: w is zero in every frame"
+
+
+def test_geometric_orbit_trail_is_the_probe_node_and_indexable_by_frame():
+    """The trail the animation draws: it must decode, and one frame must map onto part of it."""
+    d = _geom(domain="rotating")
+    orb = d["orbit"]
+    u = np.frombuffer(base64.b64decode(orb["u"]), dtype="<f4")
+    w = np.frombuffer(base64.b64decode(orb["w"]), dtype="<f4")
+    assert u.size == w.size == orb["n"]
+    assert orb["per_frame"] > 0
+    # It is a circle, so the two polarizations carry the SAME amplitude — the helix's signature.
+    assert np.max(np.abs(w)) == pytest.approx(np.max(np.abs(u)), rel=0.05)
+
+
+def test_geometric_whirl_grows_inside_the_tongue_and_conserves_through_it():
+    """**The money test.** A parametric instability is energy REDISTRIBUTION, not energy creation.
+
+    So a correct lossless scheme conserves straight *through* a blow-up that grows ``max|w|`` by
+    orders of magnitude — and that is precisely what separates a whirl from the other thing that
+    makes a field grow like this, a diverging solve. Energy alone is not sufficient (model #9's
+    in-plane exchange conserves too), which is why the tongue tests below exist; but it is
+    necessary, and it is nearly free (``energy()`` is ~0.15 ms against a ~2 ms step).
+    """
+    d = simulate_to_payload(GEOM_WHIRL)
+    sp, e = d["meta"]["spectrum"], d["energy"]
+    assert sp["kind"] == "whirl" and sp["in_tongue"] is True
+    assert sp["growth"] > 3.0, "no growth at the tongue's peak — the recipe is off the tongue"
+    assert e["lossless"]["drift"] < LOSSLESS_TOL
+    assert e["lossless"]["pass"] is True
+
+
+def test_geometric_whirl_needs_no_new_energy_verdict_unlike_the_bow():
+    """The whirl rides the ORDINARY lossless drift check — no third verdict type.
+
+    Worth pinning, because the bowed string needed one: a driven model breaks both older ones, so
+    the balance had to replace them. Nothing drives this string — it is seeded and then left alone —
+    so the plain conservation check is not merely adequate, it is the whole claim.
+    """
+    e = simulate_to_payload(GEOM_WHIRL)["energy"]
+    assert "kind" not in e, "the whirl must not claim a balance/other verdict type"
+    assert "balance" not in e
+    assert "lossless" in e
+
+
+def test_geometric_whirl_is_dead_outside_the_tongue():
+    """Off the tongue there is no exponential growth *at any amplitude*: parameters are not free.
+
+    This is the claim that makes the tongue a tongue rather than "more amplitude = more whirl". The
+    upper edge is SOFT (the analysis is leading-order in eps), so the bar is generous: what must not
+    happen is the orders-of-magnitude growth the tongue's interior shows.
+    """
+    d = simulate_to_payload({**GEOM_WHIRL, "tongue_position": 0.8})
+    sp = d["meta"]["spectrum"]
+    assert sp["in_tongue"] is False
+    assert sp["growth"] < 3.0
+    assert sp["predicted_rate"] == 0.0, "outside the tongue the closed-form rate is exactly zero"
+
+
+def test_geometric_degenerate_string_cannot_whirl():
+    """An isotropic string provably cannot whirl — rotational symmetry forces ``w_w == w_u``.
+
+    With the default (displacement) seed this reads 1.00x, for a sharp reason: ``dw = dA phi`` at
+    rest **is** the rotation generator, so the run is the same planar motion in a rotated plane.
+    """
+    d = simulate_to_payload({**GEOM_WHIRL, "tongue_position": 0.0})
+    sp = d["meta"]["spectrum"]
+    assert sp["degenerate"] is True and sp["in_tongue"] is False
+    assert sp["growth"] == pytest.approx(1.0, abs=0.15)
+    assert sp["kappa_w"] == 0.0
+
+
+def test_geometric_velocity_seed_makes_the_degenerate_string_marginal_not_stable():
+    """The received rule ("a velocity seed, NEVER a displacement one") is only half right.
+
+    Measured, here and across the tongue: a *displaced* seed grows perfectly well inside the tongue
+    (the pinning at 1.00x happens only at ``delta = 0``, where it is the rotation generator). What
+    the velocity seed is genuinely for is the degenerate string: it injects angular momentum, so the
+    marginal mode grows **secularly** — linear in t, not exponential. That is not whirling, and the
+    panel must not call it whirling; the difference is the envelope's shape — hence the log-y.
+    """
+    disp = simulate_to_payload({**GEOM_WHIRL, "tongue_position": 0.0})["meta"]["spectrum"]
+    vel = simulate_to_payload({**GEOM_WHIRL, "tongue_position": 0.0,
+                               "seed_velocity": True})["meta"]["spectrum"]
+    assert disp["seed_velocity"] is False and vel["seed_velocity"] is True
+    assert vel["growth"] > disp["growth"], "a velocity kick must do what a rotation cannot"
+    # Secular, not exponential: it grows, but nothing like the tongue's interior at the same cost.
+    tongue = simulate_to_payload(GEOM_WHIRL)["meta"]["spectrum"]
+    assert vel["growth"] < tongue["growth"]
+
+
+def test_geometric_unseeded_whirl_is_the_honesty_gate():
+    """Bit-exact zero at the tongue's centre with no seed — without this, growth measures a leak.
+
+    In-plane motion cannot excite the out-of-plane field by itself, tongue or no tongue. Every
+    growth ratio in this section is a ratio *to* the seed, so if the unseeded run were merely small
+    rather than exactly zero, each of them would be partly measuring numerical leakage.
+    """
+    d = simulate_to_payload({**GEOM_WHIRL, "seed_frac": 0.0})
+    sp = d["meta"]["spectrum"]
+    assert sp["seeded"] is False
+    assert max(sp["envelope"]) == 0.0
+    assert d["energy"]["lossless"]["pass"] is True, "still conserves with nothing to redistribute"
+
+
+def test_geometric_whirl_rate_matches_the_mathieu_prediction_and_runs_low():
+    """Tier C: the rate matches the closed form to ~10%, and is *systematically* below it.
+
+    ``(Om/2) sqrt(qM^2 - sigma^2)`` is leading-order in eps, and the seed contains a non-growing
+    component, so the measurement is expected to under-run the prediction. The bar is deliberately
+    loose: this is reported to the user and never scored, and inventing a tight pass/fail here would
+    be inventing a claim the physics does not make.
+    """
+    sp = simulate_to_payload(GEOM_WHIRL)["meta"]["spectrum"]
+    assert sp["predicted_rate"] > 0.0
+    assert sp["measured_rate"] is not None
+    assert sp["rate_ratio"] == pytest.approx(1.0, abs=0.35)
+
+
+def test_geometric_has_no_audio_and_says_why():
+    """The viewer's first viz-only model — the payload must say so, not ship a stub.
+
+    A stub clip would be a click, not a note, and a silent player reads as a bug. The reason is
+    physical and irreducible: c_long/c ~ 22, so resolving the longitudinal wave (which is what
+    lam_long <= 1 means) forces fs ~ 22x a transverse-only string's.
+    """
+    d = _geom(domain="planar")
+    assert d["audio"] is None
+    assert "22" in d["audio_note"] and "minutes" in d["audio_note"]
+
+
+def test_geometric_lam_long_above_one_is_rejected():
+    """The trap nothing in the core enforces — the theta-scheme is unconditionally stable, so an
+    under-resolved longitudinal wave fails SILENTLY (no CFL error, just quiet nonsense that stops
+    conserving). The core only warns; the viewer must never render a headline in that regime."""
+    d = _geom(domain="planar", lam_long=GEOM_LAM_LONG_MAX + 0.5)
+    assert "error" in d
+    assert "lam_long" in d["error"]["message"]
+
+
+def test_geometric_lam_long_is_the_knob_and_lambda_is_derived():
+    """The inversion of models #1-#9, and the reason the trap bites: the familiar lambda reads a
+    reassuring ~0.04 in exactly the regime that works, so it cannot be the control."""
+    d = _geom(domain="planar")
+    assert d["lam_long"] == pytest.approx(GEOM_P["lam_long"], rel=1e-6)
+    assert d["lambda"] < 0.1
+    # c_long/c = sqrt(EA/T) ~ 22: the whole cost story of this model, in one ratio.
+    assert d["meta"]["c_long"] / d["meta"]["c"] == pytest.approx(22.4, rel=0.05)
+
+
+def test_geometric_work_budget_is_its_own():
+    """A 3-field Newton solve per step at ~22x the sample rate: the string budget would hang."""
+    d = _geom(domain="planar", animation_window=0.3)
+    assert "error" in d
+    assert "work budget" in d["error"]["message"]
+    assert f"{GEOM_WORK_MAX:,}" in d["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"N": GEOM_N_MAX + 1},                     # fs rides N, every step is a Newton solve
+        {"lam_long": 0.0},                           # the trap's guard, lower edge
+        {"domain": "nonsense"},                      # unknown regime
+        {"EA": 0.0},                                 # a string with no axial stiffness
+        {"domain": "whirl", "dt_over_t0": GEOM_DT_MAX + 1.0},   # the driven mode would break up
+        {"domain": "whirl", "tongue_position": -0.1},           # off the coordinate
+        {"pickup_position": 1.5},                    # the orbit probe must be ON the string
+    ],
+)
+def test_geometric_bad_params_give_error_payload(bad):
+    """Guards surface as clean error payloads — never a 500, never a NaN render."""
+    d = _geom(**bad)
+    assert "error" in d, f"{bad} should have been rejected"
+    assert d["error"]["kind"] in ("param", "construction")
