@@ -1,6 +1,9 @@
 # Geometrically-Exact String — Plan (model #10, two polarizations + longitudinal)
 
-> **Status: PLANNED — human decisions SETTLED (see below). No code yet.**
+> **Status: COMPLETE — all three batches built, green, and committed (70 + 29 = 99 family tests).**
+> Batch 1 = the resonator + its structural gates; batch 2 = phantom partials, the polarization
+> discriminator, and the whirling threshold; batch 3 = the Tier B rotating-wave BVP + the rig.
+> Model #9's two refusals are discharged.
 > Follows [model #9](tension-modulated-string-plan.md) (`TensionModulatedString`), whose closing
 > caveats this model exists to discharge. Builds on [model #3](damped-string-plan.md)
 > (`DampedStiffString`) for the linear operator, θ-scheme, and energy form, and on
@@ -507,11 +510,129 @@ middle clause — batch 1 had it in a *test name*
 the 2×). The true claim is strictly stronger: the circular run is **twice as energetic and twice as
 stretched**, and still radiates ~1e5× less.
 
-**Batch 3 — the exact circular oracle + the rig**
+**Batch 3 — the exact circular oracle + the rig** — ✅ **DONE & GREEN (29 new tests). MODEL #10
+COMPLETE.**
 8. `analysis/rotating_wave.py` (Tier B, decision #5) — the relative-equilibrium BVP solver +
-   `tests/test_geometric_rotating_wave.py` (test 16). Abandonable without loss: nothing depends on it.
-9. `viz/plots.py` + `scripts/diagnose_geometric_string.py` — longitudinal spectrum with phantom
-   markers, polarization orbit (`u` vs `w`), energy breakdown (transverse ↔ longitudinal ↔ nonlinear).
+   `tests/test_geometric_rotating_wave.py` (test 16). ✅ **DONE.** Abandonable without loss — and it
+   turned out to be the batch that *corrected* batch 2 rather than merely capping it (see below).
+9. `viz/plots.py` (3 new helpers) + `scripts/diagnose_geometric_string.py` (4 figures). ✅ **DONE.**
+
+### What batch 3 cost, and what it bought
+
+**The scheme was right a third time. Every difficulty was in the oracle** — batches 1 and 2's lesson,
+now a law of this model.
+
+**The discrete rotating wave is an EXACT solution of the scheme, and two factors say so.**
+Substituting `u_j^n = φ_j cos(Ωnk)`, `w_j^n = φ_j sin(Ωnk)`, `v_j^n = ψ_j`, the stretch `Λ` is
+time-independent (so `Λ⁺ = Λ⁻` and the DG's `mean(Λ)` averaging is *inert*), and the BVP is:
+
+```
+F_φ = ρ(1 − θk²s)·L_u φ  +  (1 − k²s/2)·Gm[a·χ·Gp φ]  +  ρ s φ  = 0     s ≡ Ω_d² = (4/k²)sin²(Ωk/2)
+F_ψ = ρ·L_v ψ  +  Gm[a(Λ − 1 − Gp ψ)/Λ]                            = 0     ← NO time factors
+F_norm = ⟨φ, sin_m⟩·(2/L)h  −  R                                    = 0
+```
+
+- **`(1 − θk²s)`** is familiar — it is `discrete_stiff_mode_frequency`'s.
+- **`cos(Ωk) = 1 − k²s/2` is the one a naive port drops.** The DG pairs `q^{n+1}` against `q^{n−1}`
+  — it spans **2k**, not `k` — so `q̄ = (q⁺+q⁻)/2` puts `cos(Ωk)` on the *transverse* strains and
+  nothing on the longitudinal ones (`ψ` is static, so its θ-average is `ψ` ∀θ).
+- The **longitudinal row is exactly the continuum statement, discretely**: `Gm`'s kernel is the
+  constants, so `Gm[∂V/∂v_x] = 0 ⟺ ∂V/∂v_x = const` — not an O(h²) version of it.
+
+**The Jacobian is NOT symmetric, and my first derivation said it was.** The reduced `(φ,ψ)` system
+*looks* variational — its cell blocks are the Hessian of `V_nl` on the **planar** slice `(p,0,z)`,
+which is symmetric — but `cos(Ωk)` multiplies the transverse row only, so
+`∂F_φ/∂ψ = cos(Ωk)·∂F_ψ/∂φ`. Measured: bit-zero against that relation, `5.4e-6` against plain
+symmetry (`= 1 − cos(Ωk)` exactly), and exactly symmetric at `time_discrete=False`. Assuming the
+symmetry and reaching for a Cholesky would stall Newton against a Jacobian wrong by 1 part in 2e5 —
+small enough to read as conditioning, not as a bug. `splu`, and **FD-check the `d/ds` column**.
+
+**Three oracles landed that the plan did not have:**
+
+1. **The `R → 0` gate is free and it is the strongest one.** The BVP collapses at zero amplitude to
+   `s = Q/(1 + θk²Q)`, *algebraically identical* to `discrete_stiff_mode_frequency`'s
+   `s = Qk²/(4+4θQk²)` — code written eight models earlier that knows nothing about helices. Matches
+   to **0.0–3e-15** across modes 1/2/5 × κ=0/2, in 2 Newton iterations. A module that dropped a time
+   factor would converge to a subtly wrong frequency and every downstream test would inherit it.
+2. **`planar_hessian_cells == 2 × core._dg_jacobian(q,q)`** — two independent derivations meeting;
+   the 2 is `d(q̄)/d(q⁺)`. It also found a (harmless) defect in the **core** — see below.
+3. **`H_zz = −a p²/Λ³` exactly**, via `(1+z)² − Λ² = −p²`. Written literally it cancels two `O(1)`
+   terms at musical strain; this form has no cancellation at all.
+
+**The `set_state` trap — the whole 1e-15 claim lives in one function.** `set_state`'s `y^{-1}` is a
+2nd-order Taylor start: *consistent*, not *exact*. Seed the helix through it and the `O(k³)` history
+error goes straight into the longitudinal field. Measured at equal amplitude: exact history
+**2e-26**, `set_state` **1e-16** — **ten orders**, and 1e-16 still *looks* like machine precision.
+Hence `helpers.seed_rotating_wave`, so no future test can reach for the wrong one.
+
+**BATCH 2 WAS WRONG ABOUT WHAT THIS BATCH WOULD SOLVE FOR — it had three unknowns and only varied
+two.** `test_the_circular_residual_is_ellipticity_not_a_defect_of_the_scheme` concluded *"batch 3's
+BVP is mostly solving for `Ω`, not `φ`"*. But every batch-2 circular IC was
+`set_state(shape, 0.0, w_dot=Ω·shape)` — **`v⁰ = 0`**, so the helix's static longitudinal stretch
+`ψ` was pinned at zero in every run and could not appear as a variable. It is the **biggest lever of
+the three**. Isolated (each ingredient wrong, the other two at BVP values, `long_kin/E`):
+
+| ingredient wrong | `long_kin/E` | vs full BVP |
+|---|---|---|
+| *nothing* | 1.3e-26 | — |
+| **`ψ = 0`** | **3.7e-03** | **23 orders** |
+| `φ = sine` | 3.3e-11 | 15 orders |
+| `Ω = KC` | 1.6e-15 | 11 orders |
+
+The reason is not subtle once seen: a helix started at `v = 0` is *released into the static stretch
+it should already be holding* and rings about it. That is a relaxation transient, not a phantom
+pump — which is exactly why batch 2's 2f₁-band metric could not see it. Batch 2's bound was not
+wrong; it was **blind to a third axis**.
+
+**An open question this batch could not close (and one refuted hypothesis).** The `φ` vs `Ω`
+ordering **inverts between metrics**: on batch 2's 2f₁ bridge-pump metric `Ω` costs ~69× more than
+`φ`; on total longitudinal motion `φ` costs ~2e4× more than `Ω`. Both perturbations are the same
+relative size (~1.2e-5). The obvious explanation — *shape error is broadband, ellipticity is a 2f₁
+pump* — was **measured and refuted**: both put ~51–57 % of their longitudinal energy at 2f₁. The
+inversion is real, reproducible, and **unexplained**. Recorded, not asserted: the tests assert only
+the `ψ` finding. (A plausible unverified sketch: the BVP family is a 1-parameter manifold in
+amplitude, so a wrong `Ω` still sits near *some* exact solution while a sine `φ` is off the manifold
+entirely. Not checked.)
+
+**Tier C/8 got its mechanism, and it is better than "a scaling".** `Ω = √(ω₀²+εR²)` assumes `φ` is a
+sine; the converged `φ` **is** the non-sine shape that explains the breakage. Measured, the
+frequency error and the shape deformation are not merely both `O(R²)` — **their ratio → 4/3, and it
+does not move with `EA/T` or the mode** (1.31–1.33 across `EA/T` = 50/100/400 × modes 1/2). The
+universality is the real claim: the deformation is a *single geometric fact about spinning a helix*,
+not a parameter-dependent accident. The sign is physical too (`Ω_BVP > Ω_KC`): tension is highest
+near the **nodes**, where `φ'` is largest, so the Rayleigh quotient beats the uniform-tension
+estimate — the thing the plan once had backwards. **It is a limit, and it expires**: the ratio is
+1.264 at R=4 mm, 1.085 at 8 mm, **0.529** at 16 mm. Asserted as a band at small R, never as `4/3`.
+
+**How non-uniform is the tension, honestly? Barely — and that is the taxonomy.** At R=16 mm the
+helix raises the tension 200 → 263.1 N and the *spread along x* is **0.5 % of the rise**. That
+smallness is not a weak test; it is *why* KC is a good oracle (error ~1e-6 at musical amplitude) and
+still a wrong one. **Model #10 exists for the 0.5 %.**
+
+**A defect found in the CORE, recorded not fixed.** `_dg_jacobian`'s `(v,v)` block assembles
+`a(χ−1) + …`, cancelling two `O(1)` terms: relative error **7e-11 at strain 1e-3**, 7e-15 at strain
+0.1 — *worse the more realistic the string*, the same pathology `_stretch_terms` was written to
+cure. **Harmless where it lives**: a Newton Jacobian only steers the iteration and the **residual**
+defines the root (measured drift is untouched). But if that Jacobian is ever reused where accuracy
+matters, this is the note. The test bars the `(v,v)` block at 1e-8 for this reason and says so.
+
+**What the rig cost — every panel lied once before it told the truth.** Worth recording because all
+four failures were *plausible-looking figures*:
+
+- **The whirl panel showed 1.1×** with hand-picked `κ_w`. Whirling is a **Mathieu tongue**
+  (`0 < Δ < εA²/2`) — parameters are *not* free. Batch 2's recipe verbatim (drive the **soft** plane,
+  `ΔT/T₀ = 1.5`, `κ_w` at the tongue's peak `Δ = εA²/4`) gives 63×. Off the tongue there is no
+  exponential growth **at any amplitude**.
+- **…and 63× still drew a flat line.** The suite only needs to *measure* the rate (batch 2's 0.06 s);
+  a **picture must saturate**. At 0.06 s `w` is 63× a 1e-3 seed — still ~9 % of `u`, which on equal
+  axes reads as planar. 0.22 s opens it to `max|w|/max|u| = 0.705`, drift **9.7e-13** straight
+  through a **61,678×** blow-up (memory's "conserves THROUGH the blow-up", visually).
+- **The tension panel rendered dead flat**, contradicting its own title, because the axis included
+  `T₀`: the rise is +63 N and the spread 0.3 N. Plot `T(x) − ⟨T⟩` — the quantity KC *discards* — and
+  the KC reference becomes exactly the zero line.
+- **The phantom spectrum showed the opposite of its claim** on a 0–2 kHz axis: `f₁+f₂ = 308 Hz` is
+  **11.4 Hz** from the 3rd partial at 319 Hz, i.e. sub-pixel, so the two marker families sat on top
+  of each other. Zoom to the combination band; the discrimination *is* the picture.
 
 ## Tests — acceptance criteria
 
@@ -538,7 +659,15 @@ stretched**, and still radiates ~1e5× less.
 15. **Portability**: auto-covered by `test_stability.py`'s `core/` sweep.
 16. **Tier B (last)**: from a converged BVP IC the helix rotates rigidly — `v` static to ~1e-15 and `Ω`
     matching the BVP eigenvalue; the **exact** circular-frequency oracle, and the mechanism behind
-    Tier C/8's breakage.
+    Tier C/8's breakage. ✅ **DONE & GREEN (29 tests, `tests/test_geometric_rotating_wave.py`).**
+    Landed *stronger* than written, and with one correction to the criterion itself: **do not assert
+    `v` static** — `ψ` is a **nonzero static stretch**, so `v == 0` asserts the physics away. What is
+    bit-zero is the longitudinal **motion**: `long_kin/E = 1.3e-26` over a full revolution, against
+    `6.6e-03` planar — **23 orders**, where batch 2 could only say five. The `Ω` claim is *not* a
+    cents-accurate frequency oracle and is not sold as one: matching the scheme to 1e-15 certifies
+    **scheme-consistency** (the scheme against its own equations). The *physics* claim is Tier C/8's,
+    and it is a limit. See *What batch 3 cost* for the `cos(Ωk)` factor, the `set_state`-trap, the `ψ`
+    correction to batch 2, and the 4/3 ratio.
 
 ## Traps (pre-flagged)
 

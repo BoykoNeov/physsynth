@@ -10,6 +10,7 @@ import numpy as np
 from scipy.sparse.linalg import eigsh
 
 from physsynth.analysis import modal, spectrum
+from physsynth.analysis.rotating_wave import rotating_wave_history, solve_rotating_wave
 from physsynth.core.beam import FreeBeam
 from physsynth.core.body import ModalBody
 from physsynth.core.bore import C0_AIR, RHO0_AIR, Bore
@@ -1189,3 +1190,50 @@ def measure_tension_mode_frequency(
     if len(times) < 2:
         raise RuntimeError(f"only {len(times)} crossings in {max_steps} steps -- can't measure")
     return 1.0 / float(np.mean(np.diff(times)))
+
+
+# -- model #10, Tier B: the rotating-wave relative equilibrium ---------------------------
+
+
+def geometric_rotating_wave(s: GeometricString, amplitude: float, mode: int = 1, **kwargs):
+    """Solve the rotating-wave BVP for the string ``s``'s **own** parameters.
+
+    Reads ``theta``, ``fs``, ``N`` and ``kappa`` off the resonator rather than taking them again:
+    the helix is a solution *of a particular scheme*, so a BVP solved at different settings than the
+    string it seeds is not an oracle, it is a near-miss. Takes ``kappa_u`` -- a rotating wave exists
+    only on a degenerate string.
+    """
+    return solve_rotating_wave(
+        L=s.L, T=s.T, rho=s.rho, EA=s.EA, fs=s.fs, N=s.N, theta=s.theta, kappa=s.kappa_u,
+        amplitude=amplitude, mode=mode, **kwargs,
+    )
+
+
+def seed_rotating_wave(s: GeometricString, wave) -> None:
+    """Seed ``s`` with the helix's **exact** two-level history.
+
+    .. warning::
+       **Never route a rotating wave through** :meth:`~physsynth.core.string_geometric.\
+GeometricString.set_state`. Its ``y^{-1}`` is a second-order Taylor start -- *consistent*, but not
+       *exact* -- so it seeds an ``O(k^3)`` history error that the helix immediately sheds into the
+       longitudinal field. Measured at the same amplitude: exact history gives
+       ``long_kin/E ~ 2e-26``, ``set_state`` gives ``~1e-16`` -- **ten orders worse**, and the
+       whole Tier B claim gone. This helper exists so no test can reach for the wrong one.
+    """
+    u0, w0, v0, up, wp, vp = rotating_wave_history(wave, fs=s.fs)
+    s.u, s.w, s.v = u0, w0, v0
+    s.u_prev, s.w_prev, s.v_prev = up, wp, vp
+    s.n = 0
+    s.converged = True
+
+
+def longitudinal_kinetic_energy(s: GeometricString) -> float:
+    """``(rho/2) h ||delta_t- v^n||^2`` (J) -- the longitudinal field's **motion** alone.
+
+    The right probe for a rotating wave, and :meth:`~physsynth.core.string_geometric.\
+GeometricString.longitudinal_energy` is the wrong one: the helix holds a **static** longitudinal
+    stretch ``psi != 0``, so its longitudinal *energy* is legitimately nonzero while its
+    longitudinal *motion* is bit-zero. Testing the total would assert the physics away.
+    """
+    dt_v = (s.v[1:-1] - s.v_prev[1:-1]) / s.k
+    return 0.5 * s.rho * s.h * float(np.dot(dt_v, dt_v))

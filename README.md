@@ -126,6 +126,19 @@ Complete and validated:
     as **`√Δ`** (verified by re-crossing it), and — the sharpest claim in the model — **only the
     *soft* plane whirls**: same string, same amplitude, same seed, **76.3× vs 1.00×**. All of it
     while energy is flat to 1e-12, which is what separates a whirl from a blow-up.
+  - **The rotating wave** (`analysis/rotating_wave.py`) — the model's *one* exact oracle, and its
+    escape from "measure the residual, don't promise cents". A helix `u=φcosΩt`, `w=φsinΩt`, `v=ψ(x)`
+    solves the full nonlinear PDE **exactly**: `r²=φ'²` is time-independent, so the stretch, the
+    tension field and the longitudinal forcing all freeze — the string is bent into a fixed shape and
+    spun. Solved as a boundary-value problem for `(φ, ψ, Ω)`, it sharpens the polarization
+    discriminator from *five* orders to **twenty-three**: seeded from a converged helix the
+    longitudinal field does not move at all (`long_kin/E = 1.3e-26`, against `6.6e-3` planar). And it
+    turns the Kirchhoff–Carrier frequency error from a bare residual into a **mechanism**: KC assumes
+    `φ` is a sine, but a rigid helix is stretched *non-uniformly* — most near the nodes, where `φ'`
+    is largest — so the true `φ` is a deformed sine and the frequency error is
+    **`(4/3)×` the shape deformation**, a ratio that holds across `EA/T` and mode number. The whole
+    discrepancy is a tension field whose spread along `x` is **0.5 % of its own rise**: that is why
+    KC is a *good* oracle, and why it is still the wrong one.
 - **Bowed string** — the first continuous **nonlinear exciter** (`core/bow.py`): a friction bow on
   a damped string, closing the `exciter →` leg of the abstraction. Stick-slip via the smooth
   friction curve `Φ(v)=F·√(2a)·v·e^{-av²+½}`, evaluated at the *centered* relative velocity — so the

@@ -34,6 +34,9 @@ __all__ = [
     "save_membrane_animation",
     "plot_duffing_frequency_curve",
     "plot_mode_purity",
+    "plot_polarization_orbit",
+    "plot_phantom_spectrum",
+    "plot_geometric_energy_breakdown",
 ]
 
 
@@ -489,3 +492,118 @@ def save_displacement_animation(path, x: NDArray, snapshots, fs: float) -> bool:
     anim.save(path, writer="pillow", fps=25)
     plt.close(fig)
     return True
+
+
+def plot_polarization_orbit(ax, u: NDArray, w: NDArray, *, title: str = "") -> None:
+    """The transverse orbit ``w`` vs ``u`` at one node — model #10's two-polarization signature.
+
+    The plot no single-polarization string can produce, and the one that makes the model's whole
+    point visible at a glance:
+
+    - a **planar** mode traces a straight line through the origin (Tier A/2: ``max|w| == 0.0``,
+      bit-exactly, forever);
+    - a **rotating wave** traces a closed circle — the helix, seen end-on down the string axis;
+    - a **whirling** string spirals *outward* from near-planar into a circle (batch 2's Mathieu
+      tongue): the orbit opening up **is** the instability.
+
+    Axes are forced equal, because the entire content is whether the orbit is a line, a circle, or
+    an ellipse — an aspect ratio that lies would turn a circle into ellipticity, which is a
+    physically different (and diagnosable) state.
+    """
+    u = np.asarray(u, dtype=float)
+    w = np.asarray(w, dtype=float)
+    n = len(u)
+    ax.plot(u, w, lw=0.7, color="C0", alpha=0.85)
+    ax.plot(u[0], w[0], "o", color="C3", ms=5, label="start")
+    ax.plot(u[n - 1], w[n - 1], "s", color="C2", ms=5, label="end")
+    ax.axhline(0.0, color="k", lw=0.5, alpha=0.3)
+    ax.axvline(0.0, color="k", lw=0.5, alpha=0.3)
+    ax.set_xlabel("$u$ (m)")
+    ax.set_ylabel("$w$ (m)")
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.set_title(title or "Polarization orbit", fontsize=9)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8, loc="upper right")
+
+
+def plot_phantom_spectrum(
+    ax,
+    freqs: NDArray,
+    mag: NDArray,
+    partials: NDArray,
+    phantoms: NDArray,
+    f_max: float,
+    *,
+    title: str = r"Longitudinal spectrum: phantoms at $f_i \pm f_j$, not at the partials",
+) -> None:
+    """Longitudinal spectrum with **two** marker families — the discriminating plot (model #10).
+
+    The whole claim is *which* lines the longitudinal field has, so one marker family would be
+    unreadable. Red = the transverse partials ``f_i`` (where the phantoms are **not**); green = the
+    quadratic combinations ``f_i ± f_j`` (where they **are**). A longitudinal peak sitting on a red
+    line would mean the transverse field is leaking into ``v`` directly — a coupling bug — rather
+    than driving it quadratically.
+
+    This is the term ``a·r²·v_x/2`` made visible: two transverse partials beat against each other
+    and drive ``v`` at their sum and difference. Model #9 is structurally incapable of it (no ``v``
+    to put a line in), which is why this plot is the batch's discharge of that refusal.
+    """
+    freqs = np.asarray(freqs, dtype=float)
+    sel = freqs <= f_max
+    mag_db = 20.0 * np.log10(mag / np.max(mag) + 1e-12)
+    for j, f in enumerate(np.asarray(partials, dtype=float)):
+        if f <= f_max:
+            ax.axvline(f, color="C3", lw=0.9, ls="--", alpha=0.55,
+                       label="transverse partials $f_i$" if j == 0 else None)
+    for j, f in enumerate(np.asarray(phantoms, dtype=float)):
+        if f <= f_max:
+            ax.axvline(f, color="C2", lw=1.1, alpha=0.75,
+                       label=r"phantoms $f_i \pm f_j$" if j == 0 else None)
+    ax.plot(freqs[sel], mag_db[sel], lw=0.8, color="k")
+    ax.set_xlabel("frequency (Hz)")
+    ax.set_ylabel("magnitude (dB)")
+    ax.set_ylim(-120, 5)
+    ax.set_title(title, fontsize=9)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8, loc="upper right")
+
+
+def plot_geometric_energy_breakdown(
+    ax,
+    time: NDArray,
+    total: NDArray,
+    transverse: NDArray,
+    longitudinal: NDArray,
+    nonlinear: NDArray,
+    drift: float | None = None,
+) -> None:
+    """Model #10's four-way energy split: total, transverse, longitudinal, nonlinear excess.
+
+    :func:`plot_energy_breakdown`'s three-way split (model #6/#9) cannot express this one, because
+    model #10 has a store those models do not: a **longitudinal field**. The reading:
+
+    - **total** — flat to machine precision, riding over everything else moving;
+    - **transverse / longitudinal** — anti-correlated, and the exchange between them *is* the
+      phantom-partial mechanism;
+    - **nonlinear excess** — plotted on a twin axis and **signed**, unlike model #9's, whose
+      stretch store is positive-definite. The ``a·r²·v_x/2`` term changes sign with ``v_x``: a
+      compressed element stores negative excess. A reader expecting model #9's always-positive
+      store would call that a bug.
+    """
+    e0 = total[0]
+    ax.plot(time, total / e0, color="k", lw=1.4, label="total")
+    ax.plot(time, transverse / e0, color="C0", lw=1.0, label="transverse ($u$, $w$)")
+    ax.plot(time, longitudinal / e0, color="C1", lw=1.0, label="longitudinal ($v$)")
+    ax.set_xlabel("time (s)")
+    ax.set_ylabel(r"$E / E^0$")
+    twin = ax.twinx()
+    twin.plot(time, nonlinear / e0, color="C3", lw=0.9, alpha=0.8)
+    twin.set_ylabel(r"nonlinear excess $/ E^0$", color="C3")
+    twin.tick_params(axis="y", labelcolor="C3")
+    ax.plot([], [], color="C3", lw=0.9, label="nonlinear excess (right axis, signed)")
+    title = "Geometric-string energy: flat total over transverse/longitudinal exchange"
+    if drift is not None:
+        title += f"  —  drift = {drift:.2e}"
+    ax.set_title(title, fontsize=9)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8, loc="center right")
