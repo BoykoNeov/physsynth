@@ -49,6 +49,15 @@ const MODEL_RANGES = {
   // and dT/T0 is bounded server-side to keep the mode below its parametric-breakup threshold.
   tension: { N: { max: 256, val: 128 }, kappa: { val: 1.0 }, audio_duration: { max: 3, val: 1 },
              amplitude: { val: 0.02 }, sigma0: { val: 0 }, sigma1: { val: 0 } },
+  // Loss is ON by default here — the OPPOSITE of the tension string above, and load-bearing:
+  // sigma0 > 0 lets the note settle to a steady Helmholtz limit cycle instead of growing without
+  // bound, and sigma1 > 0 damps the high partials so the corner stays clean (one slip per period)
+  // rather than raucous (~18). sigma1's string-path max of 0.01 is far too small for the 0.05 the
+  // bow wants, so it is re-ranged. kappa = 0 (a flexible string, f1 = c/2L) isolates the bow
+  // physics; lambda = 0.9 keeps a hair of headroom below the Nyquist mode for the coupled solve.
+  bow: { N: { max: 256, val: 100 }, lambda: { max: 1.0, val: 0.9 }, kappa: { val: 0.0 },
+         sigma0: { val: 0.5 }, sigma1: { max: 0.2, step: 0.005, fixed: 3, val: 0.05 },
+         pickup_position: { val: 0.33 }, audio_duration: { max: 3, val: 2 } },
   membrane: { N: { max: 100, val: 80 }, lambda: { max: 0.7, val: 0.6 },
               audio_duration: { max: 2, val: 1.5 } },
   plate: { N: { max: 80, val: 60 }, kappa: { min: 2, max: 80, step: 0.5, fixed: 1, val: 20 },
@@ -60,10 +69,19 @@ const MODEL_RANGES = {
   // `amplitude` is shown only for the tension string, but gatherParams sends every slider — so it
   // must reset to the linear string path's historical 1e-3 on switch, or those models would silently
   // re-render at the tension default (a pure scale for a linear model, but not bit-for-bit).
+  // Every param a model above re-ranges must be reset here to its index.html default, or it leaks
+  // into the next model on switch (gatherParams sends every slider, hidden ones included). sigma0/
+  // sigma1/pickup_position joined `amplitude` when the bow arrived: the bow needs sigma1 = 0.05,
+  // which is 25x the damped string's default AND outside its own slider max of 0.01, so without
+  // the reset a bow → damped switch would silently render a wildly over-damped string on a stale
+  // range. (This also fixes the same leak tension's sigma0 = 0 already had.)
   _default: { N: { min: 16, max: 512 }, lambda: { max: 2.0, val: 1.0 },
               kappa: { min: 0, max: 8, step: 0.05, fixed: 2, val: 1.0 },
               rho: { min: 0.001, max: 0.02, step: 0.0005, fixed: 4, val: 0.005, unit: "kg/m²" },
               amplitude: { val: 0.001 },
+              sigma0: { min: 0, max: 20, step: 0.1, val: 1.0 },
+              sigma1: { min: 0, max: 0.01, step: 0.0001, fixed: 4, val: 0.002 },
+              pickup_position: { val: 0.1 },
               audio_duration: { max: 6, val: 2 } },
 };
 
@@ -231,22 +249,46 @@ function updateLambdaHint() {
       tHint.textContent = "";
     }
   }
-  // The tension string defaults to lossless, so the out-of-box audio is a steady tone — but the
-  // downward glide is this model's audible signature, and it only exists while the amplitude is
-  // decaying. Nudge toward it; and once loss is on, say why the shift panel does NOT follow (it
-  // measures its own lossless run, since the oracle predicts ω at a fixed amplitude).
-  const tLoss = $("tension-loss-hint");
-  if (tLoss) {
-    if (m !== "tension") {
-      tLoss.textContent = "";
-    } else if (param("sigma0") === 0 && param("sigma1") === 0) {
-      tLoss.textContent = "σ = 0 → steady pitch. Add loss (σ₀ ≈ 1) to hear the tone glide down as "
-        + "the amplitude decays.";
+  // Bow: Schelleng's playable force window is real but has NO closed form in the core — the tests
+  // just pick known-good points — so this reports the empirical rule they use rather than inventing
+  // an Fmin/Fmax. force ~ 4·v_bow holds the window across bow speeds; force <= 0.4 stays clean out
+  // to beta = 0.25. Outside the window the note crushes or goes raucous: real physics, and the
+  // stick-slip panel says so rather than failing.
+  const bHint = $("bow-hint");
+  if (bHint) {
+    if (m === "bow") {
+      const beta = param("bow_position") / param("L");
+      bHint.textContent = `β = ${beta.toFixed(2)} (slip ≈ β of each period)  ·  Schelleng: `
+        + `force ≈ 4·v_bow ≈ ${(4 * param("v_bow")).toFixed(2)} N keeps the window across speeds`;
+      bHint.style.color = "var(--muted)";
     } else {
-      tLoss.textContent = "the tone glides down as it decays — the shift panel measures its own "
-        + "lossless run, so it stays put.";
+      bHint.textContent = "";
     }
-    tLoss.style.color = "var(--muted)";
+  }
+  // Loss nudges for the two nonlinear string models. They default OPPOSITE ways, each for a good
+  // reason, so each default hides something different and each needs its own nudge. The tension
+  // string renders lossless (its shift panel measures a lossless run), which hides the audible
+  // glide. The bow renders lossy (σ₀ settles the note to a steady Helmholtz cycle, σ₁ keeps the
+  // corner clean), which hides the exact balance closure.
+  const lossHint = $("loss-hint");
+  if (lossHint) {
+    const quiet = param("sigma0") === 0 && param("sigma1") === 0;
+    if (m === "tension") {
+      lossHint.textContent = quiet
+        ? "σ = 0 → steady pitch. Add loss (σ₀ ≈ 1) to hear the tone glide down as the amplitude "
+          + "decays."
+        : "the tone glides down as it decays — the shift panel measures its own lossless run, so "
+          + "it stays put.";
+    } else if (m === "bow") {
+      lossHint.textContent = quiet
+        ? "σ = 0 → every joule the bow puts in stays in the string: the two curves become one. The "
+          + "note grows without bound (not musical) — that is the price of exact closure."
+        : "σ > 0 → a steady Helmholtz note. Set σ₀ = σ₁ = 0 to watch E−E₀ and the bow work close "
+          + "to machine precision.";
+    } else {
+      lossHint.textContent = "";
+    }
+    lossHint.style.color = "var(--muted)";
   }
 }
 
@@ -254,6 +296,7 @@ function onControlChange(name) {
   if (name === "lambda" || name === "mu" || name === "fs") updateLambdaHint();
   if (name === "amplitude" || name === "EA" || name === "T" || name === "L") updateLambdaHint();
   if (name === "sigma0" || name === "sigma1") updateLambdaHint();
+  if (name === "bow_position" || name === "v_bow") updateLambdaHint();
   scheduleAuto();
 }
 
@@ -466,12 +509,80 @@ function drawHeatmap(idx) {
 }
 
 // ── energy diagnostic ───────────────────────────────────────────────────────────────────────
+// An actively DRIVEN model (the bow) reports an energy BALANCE — a third verdict type, and it
+// replaces both branches below rather than joining them, because for a driven model both are
+// actively wrong, not merely weaker: at σ=0 the bow pumps energy in, so "drift" is enormous by
+// design and would read as a catastrophic FAIL; at σ>0 the energy RISES from rest to the Helmholtz
+// limit cycle, so "monotone decrease" fails too. Either would paint a red badge on a correct run.
+// Dispatched before both, like the von Kármán convergence override.
+function drawBalance() {
+  const g = energyCv.getContext("2d");
+  const W = energyCv.width, H = energyCv.height, pad = 24;
+  const e = payload.energy, b = e.balance;
+  const t = e.time;
+  const num = (a) => a.map((x) => (x == null ? 0 : x));
+  const dE = num(b.delta_energy), work = num(b.work), diss = num(b.dissipation);
+  const tmax = t[t.length - 1] || 1;
+  const vmax = Math.max(1e-30, ...dE.map(Math.abs), ...work.map(Math.abs), ...diss.map(Math.abs));
+
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1;
+  g.strokeRect(pad, 8, W - pad - 8, H - pad - 8);
+  const plot = (arr, colour, width) => {
+    g.strokeStyle = colour; g.lineWidth = width; g.beginPath();
+    for (let i = 0; i < arr.length; i++) {
+      const x = pad + (t[i] / tmax) * (W - pad - 8);
+      const y = (H - pad) - (arr[i] / vmax) * (H - pad - 8);
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.stroke();
+  };
+  // Bow work drawn thick underneath, ΔE thin on top: at σ=0 the money test IS the visual — the two
+  // are one curve, every joule the bow put in is sitting in the string.
+  plot(work, "#e0b050", 3.5);
+  plot(diss, "#6aa9e0", 1.5);
+  plot(dE, "#5ad17a", 1.5);
+
+  g.font = "10px ui-monospace, monospace";
+  const key = [["bow work", "#e0b050"], ["E−E₀", "#5ad17a"], ["loss", "#6aa9e0"]];
+  key.forEach(([label, colour], i) => {
+    g.fillStyle = colour;
+    g.fillRect(pad + 6 + i * 68, 14, 8, 3);
+    g.fillText(label, pad + 18 + i * 68, 18);
+  });
+  g.fillStyle = "#8b98a8";
+  g.fillText(`${tmax.toFixed(2)} s`, W - 48, H - 8);
+
+  const badge = $("energy-verdict"), out = $("energy-readout");
+  if (e.sigma_is_zero) {
+    const ok = b.lossless.pass;
+    badge.textContent = ok ? "balanced" : "IMBALANCE";
+    badge.className = "badge " + (ok ? "good" : "bad");
+    out.textContent =
+      `lossless · E−E⁰ == bow work · residual ${b.lossless.residual.toExponential(2)}\n` +
+      `tol ${b.lossless.tol.toExponential(0)}  →  ${ok ? "PASS ✓" : "FAIL ✗"}` +
+      `  (the tone grows without bound — that is the price of exact closure)`;
+  } else {
+    // NOT a residual here, deliberately: with loss on, dissipation is never measured — it is
+    // INFERRED as bow_work − ΔE, so a "balance residual" would be identically zero by construction,
+    // a green tick that cannot fail. What is real is that the inferred loss only ever removes.
+    const ok = b.lossy.pass;
+    badge.textContent = ok ? "passive" : "NON-PASSIVE";
+    badge.className = "badge " + (ok ? "good" : "bad");
+    out.textContent =
+      `lossy · bow work ${b.work_total.toExponential(2)} J = stored + loss ` +
+      `${b.lossy.dissipation_total.toExponential(2)} J\n` +
+      `inferred loss ≥ 0: ${b.lossy.non_negative ? "yes ✓" : "NO ✗"}  ·  ` +
+      `never adds energy: ${b.lossy.monotone ? "yes ✓" : "NO ✗"}  →  ${ok ? "PASS ✓" : "FAIL ✗"}`;
+  }
+}
+
 function drawEnergy() {
   const g = energyCv.getContext("2d");
   const W = energyCv.width, H = energyCv.height, pad = 24;
   g.clearRect(0, 0, W, H);
   if (!payload) return;
   const e = payload.energy;
+  if (e.kind === "balance") { drawBalance(); return; }
   const t = e.time, v = e.value.map((x) => (x == null ? 0 : x));
   const tmax = t[t.length - 1] || 1;
   const vmax = Math.max(...v) || 1;
@@ -534,6 +645,13 @@ function drawDiagnostics() {
     partialsTitle.firstChild.textContent = "Amplitude shift ";
     partialsSub.textContent = "measured vs exact Duffing";
     drawTensionSpectrum();
+    return;
+  }
+  // Also before the dims gate: another 1-D model that wants its own panel rather than cents bars.
+  if (spec && spec.kind === "bow") {
+    partialsTitle.firstChild.textContent = "Stick-slip ";
+    partialsSub.textContent = "slip fraction vs β";
+    drawStickSlip();
     return;
   }
   if (dims !== 2) {
@@ -725,6 +843,65 @@ function drawTensionSpectrum() {
     + `(yellow)   ·   ${dt}\n`
     + `shift ${sp.shift_measured.toFixed(2)} Hz vs exact Duffing ${sp.shift_oracle.toFixed(2)} Hz`
     + `${err}   ·   ${sp.shift_cents == null ? "" : `+${sp.shift_cents.toFixed(0)} cents`}`;
+}
+
+// Bowed string: the bow-point relative velocity over ~3 settled periods. Helmholtz motion is a
+// two-state cycle — the string STICKS to the bow (v_rel ≈ 0, inside the shaded band) for 1−β of
+// the period, then SLIPS back once, for a fraction β. The oracle is that slip fraction == β, with
+// the bow-position slider sitting directly on its free parameter.
+//
+// It is scored ONLY when the motion really is one-slip-per-period. Outside Schelleng's force
+// window (which narrows as the bow moves off the bridge) the note crushes or goes raucous and the
+// match legitimately breaks — that is real physics faithfully reproduced, not a solver failure, so
+// the panel labels it and scores nothing rather than painting a red FAIL on a correct run.
+function drawStickSlip() {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height, padL = 26, padB = 16, top = 8;
+  g.clearRect(0, 0, W, H);
+  const out = $("partials-readout");
+  const sp = payload && payload.meta && payload.meta.spectrum;
+  if (!sp) { out.textContent = "no stick-slip trace"; return; }
+
+  const v = sp.v_rel.map((x) => (x == null ? 0 : x));
+  const plotW = W - padL - 8, plotH = H - padB - top;
+  const x0 = padL, yMid = top + plotH / 2;
+  const vmax = Math.max(1e-12, ...v.map(Math.abs)) * 1.1;
+  const vy = (val) => yMid - (val / vmax) * (plotH / 2);
+
+  // the stick band: |v_rel| < half the bow speed, the detector's own threshold
+  g.fillStyle = "rgba(90,209,122,.10)";
+  g.fillRect(x0, vy(sp.stick_threshold), plotW, vy(-sp.stick_threshold) - vy(sp.stick_threshold));
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(x0, top, plotW, plotH);
+  g.strokeStyle = "rgba(139,152,168,.5)"; g.setLineDash([3, 3]);
+  g.beginPath(); g.moveTo(x0, vy(0)); g.lineTo(x0 + plotW, vy(0)); g.stroke();
+  g.setLineDash([]);
+
+  g.strokeStyle = "#e0b050"; g.lineWidth = 1.5; g.beginPath();
+  for (let i = 0; i < v.length; i++) {
+    const x = x0 + (i / Math.max(1, v.length - 1)) * plotW;
+    if (i === 0) g.moveTo(x, vy(v[i])); else g.lineTo(x, vy(v[i]));
+  }
+  g.stroke();
+  g.fillStyle = "#8b98a8"; g.font = "10px ui-monospace, monospace";
+  g.fillText("v_rel", 4, top + 10);
+  g.fillText("stick band", x0 + 4, vy(0) - 3);
+
+  if (!sp.helmholtz) {
+    out.textContent =
+      `${sp.slips_per_period.toFixed(1)} slips/period — outside the Helmholtz window (clean `
+      + `bowing is 1)\nreal physics, not a solver failure: Schelleng's force window narrows off `
+      + `the bridge — slip = β not scored`;
+    return;
+  }
+  const ok = sp.slip_matches_beta;
+  const pitch = sp.pitch_cents == null ? "" :
+    `   ·   pitch ${sp.f_detected.toFixed(1)} Hz = f₁ ${sp.f1.toFixed(0)} Hz `
+    + `${sp.pitch_cents >= 0 ? "+" : ""}${sp.pitch_cents.toFixed(0)} c`;
+  out.textContent =
+    `Helmholtz: ${sp.slips_per_period.toFixed(2)} slips/period ✓${pitch}\n`
+    + `slip fraction ${sp.slip_fraction.toFixed(3)} vs β = ${sp.beta.toFixed(3)}  (Δ `
+    + `${sp.slip_error >= 0 ? "+" : ""}${sp.slip_error.toFixed(3)}, tol ${sp.slip_tol})  →  `
+    + `${ok ? "PASS ✓" : "FAIL ✗"}`;
 }
 
 // ── partials diagnostic ─────────────────────────────────────────────────────────────────────

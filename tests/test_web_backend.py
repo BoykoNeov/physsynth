@@ -18,6 +18,9 @@ import pytest
 import web.serialize as web_serialize
 from web.serialize import (
     AUDIO_FS,
+    BOW_BALANCE_TOL,
+    BOW_N_MAX,
+    BOW_SLIP_MATCH_TOL,
     DISPLAY_MAX,
     LOSSLESS_TOL,
     MEMBRANE_LAMBDA_MAX,
@@ -718,3 +721,196 @@ def test_vk_bad_params_give_error_payload(bad):
     payload = simulate_to_payload(_vk_params(**bad))
     assert "error" in payload
     assert payload["error"]["message"]
+
+
+# == bowed string (1D nonlinear exciter) ==========================================================
+# The viewer's first ACTIVELY DRIVEN model, and the reason the energy panel grows a third verdict
+# type. These pin (a) the balance money number, (b) that the balance *replaces* the two older
+# verdicts rather than joining them — because for a driven model both are actively wrong, not
+# merely weaker — (c) that the lossy branch is not a tautological residual, and (d) that the
+# Helmholtz oracle is claimed only where it is honest.
+
+BOW_P: dict = {"model": "bow", "N": 64, "lambda": 0.9, "kappa": 0.0, "audio_duration": 1.0,
+               "sigma0": 0.5, "sigma1": 0.05, "force": 1.0, "v_bow": 0.1,
+               "bow_position": 0.13, "sharpness": 60.0, "pickup_position": 0.33}
+BOW_QUIET: dict = {**BOW_P, "sigma0": 0.0, "sigma1": 0.0, "audio_duration": 0.4}
+
+
+def test_bow_lossless_balance_is_the_money_number():
+    """**The money test.** The bow stores no energy (friction is memoryless), so with no loss every
+    joule the bow's work put in must sit in the string: ``E - E0 == bow_work``, exactly. It holds
+    for *any* Newton residual — the force is applied exactly and the power read from the true
+    post-correction velocity — which is why (unlike von Kármán) there is no convergence gate."""
+    e = simulate_to_payload(BOW_QUIET)["energy"]
+    assert e["kind"] == "balance"
+    assert e["sigma_is_zero"] is True
+    assert e["balance"]["lossless"]["residual"] < BOW_BALANCE_TOL
+    assert e["balance"]["lossless"]["pass"] is True
+    assert e["balance"]["work_total"] > 0.0, "the bow did no net work — nothing was tested"
+
+
+def test_bow_balance_replaces_both_older_verdicts_because_both_would_lie():
+    """The *reason* the balance is a third verdict type, pinned rather than asserted in a comment.
+
+    A driven model breaks both older checks, and not subtly: at sigma=0 the bow pumps energy in, so
+    the conservation drift is astronomically past the 1e-10 bar; at sigma>0 the energy *rises* from
+    rest to the Helmholtz limit cycle, so the passivity monotone check fails. Either would paint a
+    red badge on a perfectly correct run, so the block must ship neither.
+    """
+    quiet = simulate_to_payload(BOW_QUIET)["energy"]
+    lossy = simulate_to_payload(BOW_P)["energy"]
+    for e in (quiet, lossy):
+        assert e["kind"] == "balance"
+        assert "lossless" not in e and "lossy" not in e, "the old verdicts must not ride along"
+        assert "convergence" not in e, "the balance is exact for any Newton residual — no gate"
+    # ... and prove they WOULD have lied: reconstruct what the lossless branch would have reported.
+    # The bow starts from REST, so E0 = 0 and a *ratio* drift is not even defined — which is the
+    # point twice over. SimResult.energy_drift falls back to max|E| there, and against the 1e-10
+    # conservation bar that is a failure by orders of magnitude on a perfectly correct run.
+    v = [x for x in quiet["value"] if x is not None]
+    assert v[0] == 0.0, "the bow starts from rest — that is why a ratio drift is meaningless"
+    apparent_drift = max(abs(x) for x in v)
+    assert apparent_drift > 1e3 * LOSSLESS_TOL, (
+        f"expected the conservation check to blow past its bar, got {apparent_drift:.2e}"
+    )
+    # and the lossy energy rises (non-monotone), which the passivity branch would have failed
+    lv = [x for x in lossy["value"] if x is not None]
+    assert lv[-1] > lv[0], "a bowed note must GAIN energy from rest — passivity is the wrong check"
+
+
+def test_bow_lossy_reports_inferred_dissipation_not_a_tautological_residual():
+    """With loss on, dissipation is never measured — it is *inferred* as ``bow_work - dE``. So a
+    "balance residual" here would be identically zero BY CONSTRUCTION: a green tick that cannot
+    fail. The honest content is the core's own criterion 2: the inferred loss is >= 0 and only ever
+    grows."""
+    b = simulate_to_payload(BOW_P)["energy"]["balance"]
+    assert "lossless" not in b, "a lossy residual is a tautology — it must not be shipped"
+    assert "residual" not in b["lossy"]
+    assert b["lossy"]["non_negative"] is True and b["lossy"]["monotone"] is True
+    assert b["lossy"]["pass"] is True
+    assert b["lossy"]["dissipation_total"] > 0.0, "a lossy bowed string must dissipate"
+
+
+def test_bow_balance_curves_share_one_decimation():
+    """The three curves are only comparable if they are sampled at the same instants."""
+    e = simulate_to_payload(BOW_P)["energy"]
+    b = e["balance"]
+    n = len(e["time"])
+    assert len(b["work"]) == len(b["delta_energy"]) == len(b["dissipation"]) == n
+    # dissipation == work - dE pointwise, by definition — the curve the panel draws
+    for w, d, x in zip(b["work"], b["delta_energy"], b["dissipation"], strict=True):
+        assert x == pytest.approx(w - d, abs=1e-12)
+
+
+def test_bow_helmholtz_slip_fraction_matches_beta():
+    """The panel's oracle: Helmholtz motion sticks for ``1-beta`` of the period and slips once, for
+    a fraction ``beta``. The bow-position slider sits directly on the oracle's free parameter."""
+    sp = simulate_to_payload(BOW_P)["meta"]["spectrum"]
+    assert sp["kind"] == "bow"
+    assert sp["helmholtz"] is True
+    assert sp["slips_per_period"] == pytest.approx(1.0, abs=0.25)
+    assert abs(sp["slip_fraction"] - sp["beta"]) < BOW_SLIP_MATCH_TOL
+    assert sp["slip_matches_beta"] is True
+
+
+@pytest.mark.parametrize("bow_position", [0.13, 0.2, 0.25])
+def test_bow_slip_fraction_tracks_beta_as_the_bow_moves(bow_position):
+    """Not one point but a *trend*: beta is the star control, so the slip fraction must follow it.
+    ``force = 0.4`` is inside Schelleng's window across this range (the core's own choice)."""
+    sp = simulate_to_payload(
+        {**BOW_P, "bow_position": bow_position, "force": 0.4}
+    )["meta"]["spectrum"]
+    assert sp["helmholtz"] is True, f"expected clean Helmholtz at beta~{bow_position}"
+    assert abs(sp["slip_fraction"] - sp["beta"]) < BOW_SLIP_MATCH_TOL
+
+
+def test_bow_pitch_is_the_strings_not_the_bows():
+    """The bow does not choose the pitch — the string does (the bore/reed lesson, on a string).
+    Doubling the bow speed must not move it."""
+    slow = simulate_to_payload(BOW_P)["meta"]["spectrum"]
+    fast = simulate_to_payload({**BOW_P, "v_bow": 0.2, "force": 0.8})["meta"]["spectrum"]
+    assert abs(slow["pitch_cents"]) < 60.0, "bowed pitch should lock to f1"
+    if fast["helmholtz"]:
+        assert abs(fast["f_detected"] - slow["f_detected"]) < 0.05 * slow["f1"]
+
+
+def test_bow_out_of_window_is_labelled_not_failed():
+    """**The honesty gate.** Schelleng's playable force window has a floor as well as a ceiling,
+    and both narrow as the bow moves off the bridge. Starve the bow of force and it can no longer
+    capture the string: it slides over it, no stick-slip cycle forms, and ``slip == beta`` stops
+    describing anything. That is real physics faithfully reproduced, NOT a solver failure — so it
+    must not be scored (tension's sigma-divergence and von Karman's broad-strike trap, a third
+    time). The balance, a property of the *scheme* rather than of the parameters, must still pass.
+    """
+    r = simulate_to_payload({**BOW_P, "force": 0.02})
+    sp = r["meta"]["spectrum"]
+    assert r["meta"]["helmholtz_number"] < 1.0, "expected a starved bow, below the force floor"
+    assert sp["helmholtz"] is False, "expected this corner to leave the Helmholtz window"
+    assert sp["slip_matches_beta"] is None, "an off-window beta-match must not be scored"
+    assert "note" in sp and "not scored" in sp["note"]
+    assert "slip_error" not in sp and "pitch_cents" not in sp
+    # a zero onset count is ambiguous, so the panel must say WHICH way it left the window
+    assert sp["regime"] == "never_sticks" and sp["slip_fraction"] > 0.95
+    # energy is STRUCTURAL, Helmholtz purity is DYNAMICAL: off-window motion is still exactly
+    # balanced — the scheme does not care whether the note is musical
+    assert r["energy"]["balance"]["lossy"]["pass"] is True
+
+
+def test_bow_zero_force_leaves_the_string_at_rest():
+    """``force = 0`` decouples the bow entirely — the free regression the exciter ships with. The
+    bow starts from REST (there is no pluck), so with no friction nothing ever moves."""
+    r = simulate_to_payload({**BOW_QUIET, "force": 0.0})
+    assert r["energy"]["balance"]["work_total"] == 0.0
+    assert r["field_amp"] == 0.0
+    assert np.all(_decode_f32(r["frames"]["b64"]) == 0.0)
+
+
+def test_bow_frames_decode_to_a_string_with_fixed_ends():
+    """The 1D byte-order test: right size, wrong values would pass a length check. Also pins that
+    the animation shows SETTLED motion — from rest the first frames would be near-flat."""
+    r = simulate_to_payload(BOW_P)
+    f = r["frames"]
+    field = _decode_f32(f["b64"]).reshape(f["n_frames"], f["width"])
+    assert f["width"] == len(r["grid"]["x"]) == BOW_P["N"] + 1
+    assert np.all(field[:, 0] == 0.0) and np.all(field[:, -1] == 0.0), "fixed ends must not move"
+    assert np.max(np.abs(field)) == pytest.approx(r["field_amp"], rel=1e-5)
+    assert r["field_amp"] > 1e-6, "the animation window must show the settled corner, not rest"
+
+
+def test_bow_helmholtz_number_is_reported_never_asserted():
+    """Above 1 the friction curve is multivalued — the regime of real sustained bowing — but it is
+    NOT a stability limit (friction is bounded, the scheme stable and the balance exact for any
+    root). So it must be a reported diagnostic, and a value above 1 must render fine."""
+    r = simulate_to_payload(BOW_P)
+    assert r["meta"]["helmholtz_number"] > 1.0
+    assert "error" not in r
+    assert r["energy"]["balance"]["lossy"]["pass"] is True
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"N": BOW_N_MAX + 1},
+        {"force": -1.0},
+        {"force": 99.0},
+        {"v_bow": 0.0},
+        {"sharpness": 0.0},
+        {"bow_position": 0.0},
+        {"bow_position": 2.0},
+        {"audio_duration": 0.0},
+        {"audio_duration": 99.0},
+    ],
+)
+def test_bow_bad_params_give_error_payload(bad):
+    """Out-of-range bow params return a clean error payload, never an exception/500/NaN."""
+    payload = simulate_to_payload({**BOW_P, **bad})
+    assert "error" in payload
+    assert payload["error"]["message"]
+
+
+def test_bow_work_budget_is_its_own():
+    """Every step is a friction root-find, so the string path's N_MAX/duration would hang. The
+    guard must name the reason, not just refuse."""
+    payload = simulate_to_payload({**BOW_P, "N": 256, "lambda": 0.5, "audio_duration": 3.0})
+    assert "error" in payload
+    assert "root-find" in payload["error"]["message"]

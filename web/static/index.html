@@ -23,6 +23,7 @@
             <option value="stiff">Stiff string</option>
             <option value="damped">Damped stiff string</option>
             <option value="tension">Tension-modulated string (nonlinear)</option>
+            <option value="bow">Bowed string (nonlinear exciter)</option>
             <option value="membrane">Membrane (2D drum)</option>
             <option value="plate">Kirchhoff plate (2D)</option>
             <option value="vk">von Kármán plate (nonlinear)</option>
@@ -34,11 +35,11 @@
         </label>
       </div>
 
-      <fieldset class="group" data-show="ideal stiff damped tension membrane plate vk">
+      <fieldset class="group" data-show="ideal stiff damped tension bow membrane plate vk">
         <legend>Physical</legend>
-        <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N" data-show="ideal stiff damped tension membrane"></div>
+        <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N" data-show="ideal stiff damped tension bow membrane"></div>
         <div class="slider" data-param="rho" data-min="0.001" data-max="0.02" data-step="0.0005" data-val="0.005" data-unit="kg/m²" data-fixed="4"></div>
-        <div class="slider" data-param="L"   data-min="0.25" data-max="2.0"  data-step="0.05"  data-val="1.0"   data-unit="m" data-show="ideal stiff damped tension"></div>
+        <div class="slider" data-param="L"   data-min="0.25" data-max="2.0"  data-step="0.05"  data-val="1.0"   data-unit="m" data-show="ideal stiff damped tension bow"></div>
       </fieldset>
 
       <fieldset class="group" data-show="membrane plate vk">
@@ -51,16 +52,16 @@
       <fieldset class="group">
         <legend>Discretization</legend>
         <div class="slider" data-param="N"      data-min="16"  data-max="512" data-step="1"    data-val="128"></div>
-        <div class="slider" data-param="lambda" data-min="0.5" data-max="2.0" data-step="0.01" data-val="1.0" data-show="ideal stiff damped tension membrane"></div>
+        <div class="slider" data-param="lambda" data-min="0.5" data-max="2.0" data-step="0.01" data-val="1.0" data-show="ideal stiff damped tension bow membrane"></div>
         <div class="slider" data-param="mu"     data-min="0.25" data-max="32" data-step="0.25" data-val="1.0" data-fixed="2" data-show="plate"></div>
         <div class="slider" data-param="fs"     data-min="8000" data-max="96000" data-step="1000" data-val="32000" data-unit="Hz" data-fixed="0" data-show="vk"></div>
         <p class="hint" id="lambda-hint"></p>
       </fieldset>
 
-      <fieldset class="group" data-show="stiff damped tension plate vk">
+      <fieldset class="group" data-show="stiff damped tension bow plate vk">
         <legend>Stiffness &amp; material</legend>
-        <div class="slider" data-param="kappa" data-min="0" data-max="8"   data-step="0.05" data-val="1.0" data-unit="m²/s" data-show="stiff damped tension plate"></div>
-        <div class="slider" data-param="theta" data-min="0.25" data-max="1" data-step="0.01" data-val="0.28" data-show="stiff damped tension plate"></div>
+        <div class="slider" data-param="kappa" data-min="0" data-max="8"   data-step="0.05" data-val="1.0" data-unit="m²/s" data-show="stiff damped tension bow plate"></div>
+        <div class="slider" data-param="theta" data-min="0.25" data-max="1" data-step="0.01" data-val="0.28" data-show="stiff damped tension bow plate"></div>
         <div class="slider" data-param="nu"    data-min="0" data-max="0.45" data-step="0.01" data-val="0.3" data-show="plate vk"></div>
         <div class="slider" data-param="E"     data-min="50" data-max="400" data-step="10" data-val="200" data-unit="GPa" data-scale="1e9" data-fixed="0" data-show="vk"></div>
         <div class="slider" data-param="e"     data-min="0.2" data-max="3.0" data-step="0.1" data-val="1.0" data-unit="mm" data-scale="1e-3" data-fixed="1" data-show="vk"></div>
@@ -79,22 +80,32 @@
         <p class="hint" id="tension-hint"></p>
       </fieldset>
 
+      <fieldset class="group" data-show="bow">
+        <legend>Bow</legend>
+        <div class="slider" data-param="bow_position" data-min="0.04" data-max="0.45" data-step="0.01" data-val="0.13" data-unit="m" data-fixed="2"></div>
+        <div class="slider" data-param="v_bow" data-min="0.01" data-max="1.0" data-step="0.01" data-val="0.1" data-unit="m/s" data-fixed="2"></div>
+        <div class="slider" data-param="force" data-min="0" data-max="5" data-step="0.05" data-val="1.0" data-unit="N" data-fixed="2"></div>
+        <div class="slider" data-param="sharpness" data-min="10" data-max="200" data-step="5" data-val="60" data-fixed="0"></div>
+        <p class="hint" id="bow-hint"></p>
+      </fieldset>
+
       <fieldset class="group" data-show="ideal stiff membrane plate vk">
         <legend>Loss</legend>
         <div class="slider" data-param="sigma" data-min="0" data-max="20" data-step="0.1" data-val="0"></div>
       </fieldset>
 
-      <fieldset class="group" data-show="damped tension">
+      <fieldset class="group" data-show="damped tension bow">
         <legend>Loss (frequency-dependent)</legend>
         <div class="slider" data-param="sigma0" data-min="0" data-max="20"   data-step="0.1"   data-val="1.0"></div>
         <div class="slider" data-param="sigma1" data-min="0" data-max="0.01" data-step="0.0001" data-val="0.002" data-fixed="4"></div>
-        <p class="hint" id="tension-loss-hint"></p>
+        <p class="hint" id="loss-hint"></p>
       </fieldset>
 
-      <fieldset class="group" data-show="ideal stiff damped tension">
+      <fieldset class="group" data-show="ideal stiff damped tension bow">
         <legend>Excitation</legend>
-        <!-- pluck_position is meaningless for the tension string: its IC is the mode-1 sine the
-             Duffing reduction needs, which has no pluck point. -->
+        <!-- pluck_position is meaningless for two models here. The tension string's IC is the
+             mode-1 sine the Duffing reduction needs, which has no pluck point; the bowed string
+             starts from REST and is driven by the bow itself, so there is nothing to pluck. -->
         <div class="slider" data-param="pluck_position"  data-min="0.02" data-max="0.98" data-step="0.01" data-val="0.3" data-show="ideal stiff damped"></div>
         <div class="slider" data-param="pickup_position" data-min="0.02" data-max="0.98" data-step="0.01" data-val="0.1"></div>
       </fieldset>

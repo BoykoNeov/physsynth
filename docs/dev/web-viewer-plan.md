@@ -189,9 +189,11 @@ pure value/effort and may flex).
 Two capabilities cross-cut the batches — build each **once**:
 - **Energy-BALANCE panel** (`E − E₀ == work_in − losses`) — a *third* verdict type beside the σ=0
   drift check and the σ>0 monotone check. Wanted by **bow and reed**. (Mallet is *conservation* —
-  it rides the existing drift panel.)
+  it rides the existing drift panel.) **BUILT in batch 2** (`_balance_verdict` + `drawBalance`,
+  behind `energy.kind === "balance"`); the reed gets it by passing `balance_work=` to
+  `_energy_block`.
 - **Multi-field / orbit viz** — wanted by **geometric #10** (u/w/v, the whirl) and **sympathetics**
-  (N lines).
+  (N lines). Not built yet.
 
 ### Batch 1 (DONE) — tension-modulated string #9
 
@@ -243,12 +245,77 @@ path, and the existing convergence gate). Load-bearing decisions, all measured r
   added to `MODEL_RANGES._default` at 1e-3: it is shown only for tension, but `gatherParams` sends
   *every* slider, so without the reset the linear string models would re-render at 0.02.
 
+### Batch 2 (DONE) — the bowed string, and the energy-BALANCE panel
+
+The infrastructure pick (chosen by the human over the mallet quick-win and the geometric-#10
+showcase): it builds the balance panel, which the reed batch then gets for free, and it stays on
+the 1-D `drawString` path batch 1 validated. 23 web tests added (86 → 109 web). Browser-verified:
+`bow work 1.46e-2 J = stored + loss 1.42e-2 J`, `Helmholtz: 0.97 slips/period ✓ · pitch 97.9 Hz =
+f₁ 100 Hz −37 c`. Load-bearing decisions, all measured:
+
+- **The balance is a third verdict type because both older ones are *actively wrong* for a driven
+  model — not merely weaker.** At σ=0 the bow pumps energy in, so `energy_drift` is enormous by
+  design and the lossless branch reports a catastrophic FAIL; at σ>0 the energy *rises* from rest
+  to the Helmholtz limit cycle, so the passivity/monotone branch FAILs too. Either would paint a
+  red badge on a perfectly correct run, so the balance **replaces** both rather than joining them
+  (`kind: "balance"`, dispatched before both, von-Kármán-override style). Pinned by
+  `test_bow_balance_replaces_both_older_verdicts_because_both_would_lie`, which reconstructs the
+  numbers the old branches *would* have reported.
+- **The balance is itself σ-gated, and the lossy branch is deliberately NOT a residual.** At σ=0:
+  `max|(E−E₀) − work| / (|E|+|work|)` vs 1e-11 → the money number (**2.2e-14**), the same
+  normalization as `test_bow_energy.test_lossless_energy_balance`, computed on the **full**
+  per-step arrays (a max over the decimated arrays samples fewer steps and understates it). At
+  σ>0 dissipation is never measured — it is *inferred* as `work − ΔE` — so a "balance residual"
+  there is **identically zero by construction**: a tautology, a green tick that cannot fail. The
+  honest lossy content is the core's own criterion 2: inferred dissipation ≥ 0 and monotone
+  non-decreasing.
+- **No convergence gate, unlike von Kármán.** The balance is exact for *any* Newton residual (the
+  friction force is applied exactly and the power read from the true post-correction velocity) —
+  that is the model's whole trick. Copying VK's Picard gate would gate on something that cannot
+  spoil the number.
+- **Loss defaults ON — the opposite of batch 1, and load-bearing.** σ₀>0 settles the note to a
+  steady Helmholtz limit cycle instead of growing without bound; σ₁>0 damps the high partials so
+  the corner stays clean (one slip/period) rather than raucous (~18). Each model's default hides
+  something, so each gets a nudge: tension's points at the glide, the bow's points at the exact
+  closure (and warns the σ=0 tone grows without bound — the price of seeing it).
+- **The slip-fraction oracle is claimed only inside the Helmholtz window.** `slip_fraction == β`
+  and one slip/period describe *clean* bowing; outside Schelleng's window (which has a floor and a
+  ceiling, both narrowing off the bridge) the note legitimately stops being Helmholtz. That is real
+  physics, not a solver failure, so `slips_per_period` is always *reported* and the β-match is
+  *scored* only when the motion is one-slip — else the panel labels it and scores nothing (the free
+  cymbal's `null` "crash cascade" precedent). A zero onset count is ambiguous (never sticking and
+  never slipping both give zero stick→slip transitions), so `regime` uses the slip fraction to say
+  which. **Energy is structural, Helmholtz purity is dynamical**: the balance still passes on a
+  raucous note — same split batch 1 found for the tension string.
+- **A rate needs a long window.** `slips_per_period` is an integer onset count over the measured
+  tail, so a short tail quantizes it coarsely: over 6 periods it can only land on multiples of 1/6,
+  and clean one-slip motion read **0.83 at N=64** (and 1.00 at every other N) purely from where the
+  window edge fell — straddling the 0.85 gate and mislabelling a clean note raucous. The tail is
+  the settled last 40% of the run (the core's own `_bow_to_steady` choice, ~40 periods → ~0.025
+  quantization). Caught by the tests, not by reading the code.
+- **Its own cost budget**, like tension: every step is a friction root-find. `BOW_N_MAX=256`,
+  `BOW_AUDIO_MAX=3`, `BOW_WORK_MAX=60_000` steps.
+- **The animation needed no new viz** — Helmholtz motion *is* the string's shape, so the 1-D line
+  path draws the travelling corner for free. It does need the *settled* window, though: from rest
+  the first frames are a near-flat string, so the animation runs silently up to the tail before
+  capturing.
+- **Schelleng's window has no closed form in the core** (the tests just pick known-good points), so
+  the hint reports `helmholtz_number` and the tests' empirical rule (`force ≈ 4·v_bow`; `force ≤
+  0.4` clean to β=0.25) rather than inventing an Fmin/Fmax.
+- **`_default` re-range leak, round two:** `gatherParams` sends every slider, so every param a model
+  re-ranges must reset in `MODEL_RANGES._default`. The bow wants σ₁=0.05 — 25× the damped string's
+  default *and* outside its own slider max of 0.01 — so without the reset a bow→damped switch
+  renders a wildly over-damped string on a stale range. `sigma0`/`sigma1`/`pickup_position` joined
+  `amplitude` (which also fixes the same leak tension's `sigma0=0` already had).
+
 ### Later batches (rough map — not firm)
 
-- **Excited strings** — bow (builds the balance panel), barrier #8, jawari (barrier profile drawn
-  under the string).
-- **Wind** — bore + reed (new field type: pressure along an `S(x)` profile; reed reuses the balance
-  panel).
+- **Excited strings** — barrier #8, jawari (barrier profile drawn under the string). The bow landed
+  in batch 2 above.
+- **Wind** — bore + reed (new field type: pressure along an `S(x)` profile). The reed now reuses
+  batch 2's balance panel; its telemetry differs (mouth / jet / reed-damping channels are each
+  sign-definite and separately measured, so unlike the bow it can close the balance *with* loss on
+  — the lossy branch may be a genuine residual there rather than an inferred one).
 - **Mallet #7** — cheap: conservation energy + the membrane heatmap with a strike marker.
 - **Geometric #10** — the multi-field/orbit viz; the richest panel in the project.
 - **The parametric-instability demo** deserves its own batch with real viz (energy cascading into the

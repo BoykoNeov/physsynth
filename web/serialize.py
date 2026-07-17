@@ -33,6 +33,7 @@ from scipy.signal import resample_poly
 from scipy.sparse.linalg import eigsh
 
 from physsynth.analysis import damping, duffing, modal, spectrum
+from physsynth.core.bow import BowedString
 from physsynth.core.engine import SimResult, simulate
 from physsynth.core.exciter import raised_cosine_2d, triangular_pluck
 from physsynth.core.membrane import Membrane
@@ -163,6 +164,43 @@ TENSION_N_MAX = 256
 TENSION_AUDIO_MAX = 3.0
 TENSION_WORK_MAX = 60_000       # total steps: audio + both measurement runs + animation
 
+# --- bowed string (Phase D batch 2) ---
+# Defaults are the core test rig's known-good Helmholtz point (tests/helpers.make_bowed_string):
+# beta=0.13, force=1.0, v_bow=0.1, a=60 on a kappa=0 flexible string -> f1 = c/2L = 100 Hz.
+# Loss is ON by default and that is load-bearing, the OPPOSITE of the tension string: sigma0 > 0
+# lets the note settle to a steady Helmholtz limit cycle instead of growing without bound, and
+# sigma1 > 0 damps the high partials so the corner stays clean (one slip per period) rather than
+# raucous (~18 slips/period). sigma1's string-path slider max (0.01) is far too small — re-ranged.
+BOW_POSITION_DEFAULT = 0.13     # m; beta = x_bow/L, and the slip fraction of the period ~ beta
+BOW_V_DEFAULT = 0.1             # m/s
+BOW_FORCE_DEFAULT = 1.0         # N (peak of the friction curve)
+BOW_SHARPNESS_DEFAULT = 60.0    # s^2/m^2
+BOW_SIGMA0_DEFAULT = 0.5
+BOW_SIGMA1_DEFAULT = 0.05
+BOW_FORCE_MAX = 5.0
+BOW_V_MAX = 1.0
+BOW_SHARPNESS_MAX = 200.0
+BOW_BALANCE_TOL = 1e-11         # lossless |dE - bow_work|/scale bar (tests/test_bow_energy.py)
+# Helmholtz-window gating for the slip panel (advisor): slip_fraction == beta is a *verdict* only
+# for clean one-slip-per-period motion. Outside Schelleng's window the note goes raucous and the
+# match legitimately fails — real physics, not a bug — so the panel reports it as a LABEL, never a
+# FAIL (the free-cymbal `null` "crash cascade" precedent).
+BOW_SLIPS_LO, BOW_SLIPS_HI = 0.85, 1.25   # same window as test_one_slip_per_period
+BOW_SLIP_MATCH_TOL = 0.05                 # same bar as test_slip_fraction_matches_beta
+# The statistics tail is the settled last 40% of the run — the core's own choice (_bow_to_steady),
+# and it has to be this long for a *rate*. `slips_per_period` is an integer onset count divided by
+# the periods in the window, so a short window quantizes it coarsely: over 6 periods it can only
+# land on multiples of 1/6, and clean one-slip motion reads 0.83 or 1.0 depending on where the
+# window edge falls — straddling the 0.85 gate and mislabelling a perfectly clean note as raucous.
+# Over a 40% tail (~40 periods at the default) the quantization is ~0.025.
+BOW_TAIL_FRAC = 0.4
+BOW_TRACE_PERIODS = 3                     # periods *drawn* — a plot, not the statistics window
+# Cost: like the tension string, every step is a scalar Newton root-find (plus a rank-1 correction),
+# so the string path's N_MAX=2000 / 10 s budget would hang. Same shape of budget, same reasoning.
+BOW_N_MAX = 256
+BOW_AUDIO_MAX = 3.0
+BOW_WORK_MAX = 60_000           # total steps: audio + animation
+
 
 class ParamError(ValueError):
     """A bad request parameter (out of the allowed range) — surfaced as a clean error payload."""
@@ -277,8 +315,29 @@ def _build_resonator(p: dict[str, Any]) -> _Built:
             theta=_fnum(p, "theta", 0.28),
         )
         return _Built(res, c, L, N, fs, s0 == 0.0 and s1 == 0.0, 2.0 * s0)
+    if model == "bow":
+        s0 = _fnum(p, "sigma0", BOW_SIGMA0_DEFAULT)
+        s1 = _fnum(p, "sigma1", BOW_SIGMA1_DEFAULT)
+        force = _fnum(p, "force", BOW_FORCE_DEFAULT)
+        v_bow = _fnum(p, "v_bow", BOW_V_DEFAULT)
+        sharp = _fnum(p, "sharpness", BOW_SHARPNESS_DEFAULT)
+        if not (0.0 <= force <= BOW_FORCE_MAX):
+            raise ParamError(f"force must be in [0, {BOW_FORCE_MAX}] N, got {force}.")
+        if not (0.0 < v_bow <= BOW_V_MAX):
+            raise ParamError(f"v_bow must be in (0, {BOW_V_MAX}] m/s, got {v_bow}.")
+        if not (0.0 < sharp <= BOW_SHARPNESS_MAX):
+            raise ParamError(f"sharpness must be in (0, {BOW_SHARPNESS_MAX}], got {sharp}.")
+        string = DampedStiffString(
+            **common, kappa=_fnum(p, "kappa", 0.0), sigma0=s0, sigma1=s1,
+            theta=_fnum(p, "theta", 0.28),
+        )
+        res = BowedString(
+            string=string, bow_position=_fnum(p, "bow_position", BOW_POSITION_DEFAULT),
+            v_bow=v_bow, force=force, sharpness=sharp,
+        )
+        return _Built(res, c, L, N, fs, s0 == 0.0 and s1 == 0.0, 2.0 * s0)
     raise ParamError(
-        f"unknown model {model!r} (expected 'ideal' | 'stiff' | 'damped' | 'tension')."
+        f"unknown model {model!r} (expected 'ideal' | 'stiff' | 'damped' | 'tension' | 'bow')."
     )
 
 
@@ -310,11 +369,66 @@ def _resample_normalize(x: NDArray[np.float64], fs_in: float) -> tuple[NDArray[n
     return x, peak
 
 
+def _balance_verdict(
+    E: NDArray[np.float64], w: NDArray[np.float64], sigma_zero: bool, idx: NDArray[np.int_]
+) -> dict[str, Any]:
+    """The energy-BALANCE verdict for an *actively driven* model: ``E - E0 == work_in - loss``.
+
+    A third verdict type beside the sigma=0 drift check and the sigma>0 passivity check — and it
+    *replaces* both, because for a driven model neither is merely weaker, both are actively wrong:
+    at sigma=0 the bow pumps energy in, so ``energy_drift`` is enormous by design and the lossless
+    branch would report a catastrophic FAIL; at sigma>0 the energy *rises* from rest to the
+    Helmholtz limit cycle, so the monotone/passivity branch would FAIL too. Either would read as
+    "implementation broken" when nothing is.
+
+    The verdict is itself sigma-gated, and the lossy branch is deliberately NOT a residual:
+
+    - ``sigma == 0``: nothing dissipates, so the balance must close exactly. The headline is
+      ``max|(E - E0) - w| / (|E| + |w|)`` against :data:`BOW_BALANCE_TOL` — the money number
+      (~6e-15). Same normalization as ``test_bow_energy.test_lossless_energy_balance`` (per-sample
+      scale, max over steps) computed on the **full** per-step arrays: taking the max over the
+      decimated arrays would sample fewer steps and understate it.
+    - ``sigma > 0``: the string's dissipation is never measured separately — it is *inferred* as
+      the residual ``w - (E - E0)``. A "balance residual" here would therefore be identically zero
+      BY CONSTRUCTION: a tautology, a green tick that cannot fail. The honest content is the core's
+      own criterion 2 (``test_bow_energy.test_loss_only_removes_energy``): the inferred dissipation
+      must be ``>= 0`` (loss never *adds* energy) and monotone non-decreasing (no step adds energy).
+    """
+    dE = E - E[0]
+    dissipation = w - dE                       # inferred, not measured — see above
+    block: dict[str, Any] = {
+        "work": _finite_list(w[idx]),
+        "delta_energy": _finite_list(dE[idx]),
+        "dissipation": _finite_list(dissipation[idx]),
+        "work_total": float(w[-1]),
+    }
+    if sigma_zero:
+        scale = np.abs(E) + np.abs(w) + 1e-30
+        residual = float(np.max(np.abs(dE - w) / scale))
+        block["lossless"] = {
+            "residual": residual,
+            "tol": BOW_BALANCE_TOL,
+            "pass": bool(residual < BOW_BALANCE_TOL),
+        }
+        return block
+    scale_w = abs(float(w[-1])) + 1.0
+    d_step = np.diff(dissipation)
+    block["lossy"] = {
+        "dissipation_total": float(dissipation[-1]),
+        "non_negative": bool(float(dissipation[-1]) >= -BOW_BALANCE_TOL * scale_w),
+        "monotone": bool(float(np.min(d_step)) >= -1e-9 * scale_w) if d_step.size else True,
+        "worst_step": float(np.min(d_step)) if d_step.size else 0.0,
+    }
+    block["lossy"]["pass"] = bool(block["lossy"]["non_negative"] and block["lossy"]["monotone"])
+    return block
+
+
 def _energy_block(
     res: SimResult,
     sigma_zero: bool,
     oracle_2sigma: float,
     convergence: dict[str, Any] | None = None,
+    balance_work: NDArray[np.float64] | None = None,
 ) -> dict[str, Any]:
     """Energy report, gated by loss (catch #4): drift-vs-tol when lossless, passivity when lossy.
 
@@ -323,6 +437,14 @@ def _energy_block(
     that is iteration noise, not physics. When supplied, the lossless verdict additionally requires
     every step to have converged, and the block carries a ``convergence`` sub-block so the frontend
     can say "did not converge — verdict N/A" instead of a lying pass/fail.
+
+    ``balance_work`` (driven models — the bow) switches the block to the **balance** verdict, which
+    replaces both branches above; see :func:`_balance_verdict`. It is the cumulative exciter work
+    per step, so it is decimated on the *same* ``idx`` as the energy trace and the three curves
+    stay aligned. Note there is deliberately no convergence gate on the balance: the bow applies
+    its friction force exactly and reads the power from the true post-correction velocity, so the
+    balance is exact for *any* Newton residual — that is the model's whole trick, and copying von
+    Kármán's Picard gate here would gate on something that cannot spoil the number.
     """
     t, E = res.time, res.energy
     idx = np.linspace(0, len(E) - 1, min(len(E), N_ENERGY_POINTS)).astype(int)
@@ -333,6 +455,11 @@ def _energy_block(
     }
     if convergence is not None:
         block["convergence"] = convergence
+    if balance_work is not None:
+        block["kind"] = "balance"
+        block["balance"] = _balance_verdict(E, np.asarray(balance_work, dtype=float), sigma_zero,
+                                            idx)
+        return block
 
     if sigma_zero:
         drift = res.energy_drift
@@ -407,6 +534,8 @@ def _build_payload(p: dict[str, Any]) -> dict[str, Any]:
         return _build_payload_vk(p)
     if model == "tension":
         return _build_payload_tension(p)
+    if model == "bow":
+        return _build_payload_bow(p)
     return _build_payload_string(p)
 
 
@@ -765,6 +894,269 @@ def _build_payload_tension(p: dict[str, Any]) -> dict[str, Any]:
             # A nonlinearity HIDES at small amplitude, where the run merely re-plays the linear
             # scheme (model #6's lesson) — so report the PEAK fraction of E the stretch term holds.
             "nonlinear_fraction": round(float(nl_fraction), 6),
+        },
+    }
+
+
+# == bowed string (Phase D batch 2) ================================================================
+#
+# The project's first *actively driven* model in the viewer, and the reason the energy panel grows a
+# third verdict type. Everything else shown so far is passive: it either conserves (sigma=0 drift)
+# or dissipates (sigma>0 passivity). A bow pumps energy in through a nonlinear friction curve, so
+# BOTH of those verdicts are wrong for it — see :func:`_balance_verdict`. What replaces them is the
+# balance `E - E0 == bow_work - loss`, which is exact to ~6e-15 at sigma=0.
+#
+# The animation needs no new viz: Helmholtz motion IS the string's shape, so the existing 1-D line
+# path draws the travelling corner for free. The second panel is the stick-slip trace, whose oracle
+# (slip fraction == beta) is claimed only inside the Helmholtz window — see
+# :func:`_bow_stickslip_block`.
+
+
+def _run_bow(
+    bow: BowedString,
+    num_steps: int,
+    pickup_index: int | None = None,
+    snapshot_stride: int = 0,
+    snapshot_from: int = 0,
+) -> tuple[SimResult, NDArray[np.float64], NDArray[np.float64]]:
+    """Run a :class:`BowedString` like :func:`engine.simulate`, also tracking work and ``v_rel``.
+
+    The engine captures energy (+ optional pickup/snapshots) but is generic over ``Resonator``, so
+    it knows nothing of the bow's cumulative ``bow_work`` — the balance verdict's second curve — or
+    its per-step ``v_rel``, which the stick-slip panel reads. Capturing them here keeps ``core``
+    untouched and the engine generic; the same move :func:`_run_vk` makes for its Picard telemetry.
+
+    ``snapshot_from`` delays frame capture to a given step, which is what lets the bow animate its
+    *settled* motion out of the single audio run. Every other model re-runs a second resonator for
+    the animation because its window is the attack, at ``t = 0``; the bow's window is the tail, and
+    the audio run already passes through it — so re-running would silently double the cost of a
+    model whose every step is a root-find.
+
+    Returns ``(SimResult, work, v_rel)`` with ``work`` aligned step-for-step with ``res.energy``
+    (both length ``num_steps + 1``), so the balance curves decimate on a single shared index.
+    """
+    if num_steps < 1:
+        raise ValueError("num_steps must be >= 1.")
+    n = num_steps + 1
+    energy = np.empty(n)
+    work = np.empty(n)
+    v_rel = np.empty(n)
+    output = np.empty(n) if pickup_index is not None else None
+    snapshots: list[tuple[int, NDArray[np.float64]]] = []
+
+    def _snap(i: int) -> bool:
+        if not snapshot_stride or i < snapshot_from:
+            return False
+        return (i - snapshot_from) % snapshot_stride == 0
+
+    energy[0], work[0], v_rel[0] = bow.energy(), bow.bow_work, bow.v_rel
+    if output is not None:
+        output[0] = bow.displacement_at(pickup_index)  # type: ignore[arg-type]
+    if _snap(0):
+        snapshots.append((0, bow.state))
+    for i in range(1, n):
+        bow.step()
+        energy[i], work[i], v_rel[i] = bow.energy(), bow.bow_work, bow.v_rel
+        if output is not None:
+            output[i] = bow.displacement_at(pickup_index)  # type: ignore[arg-type]
+        if _snap(i):
+            snapshots.append((i, bow.state))
+
+    res = SimResult(
+        time=np.arange(n) * bow.k, energy=energy, output=output, fs=1.0 / bow.k, snapshots=snapshots
+    )
+    return res, work, v_rel
+
+
+def _bow_stickslip_block(
+    v_rel: NDArray[np.float64],
+    pickup: NDArray[np.float64],
+    fs: float,
+    v_bow: float,
+    beta: float,
+    f1: float,
+) -> dict[str, Any]:
+    """Stick-slip panel: the ``v_rel`` trace, and the Helmholtz oracle ``slip_fraction == beta``.
+
+    Helmholtz motion is a two-state cycle: the string *sticks* to the bow (co-moving, ``v_rel ~ 0``)
+    for a fraction ``1 - beta`` of the period, then *slips* back once, for a fraction ``beta``
+    (= bow-to-nut distance / L). One slip per period, and the slip fraction equals ``beta`` — a
+    closed-form prediction with the bow-position slider sitting right on top of its free parameter.
+    Detector and bars are the core's own (``tests/test_bow_modal.py``): an absolute threshold at
+    half the bow speed, which captures the whole slip *duration* (the smooth friction curve rounds
+    the corner, so a relative-to-peak threshold would only catch the trough).
+
+    **The oracle is only honest inside Schelleng's window, and that gating is the point.** Bow force
+    has to sit between a minimum and a maximum that *narrow* as the bow moves off the bridge; drag
+    force / beta / v_bow outside that window and the motion legitimately stops being Helmholtz —
+    it crushes, or breaks into raucous multi-slip motion (~18 slips per period). That is real
+    physics faithfully reproduced, **not** a bug, so scoring ``slip_fraction`` against ``beta``
+    there would paint a red FAIL on a correct simulation — tension's sigma-divergence and von
+    Kármán's broad-strike trap, a third time. So: ``slips_per_period`` is always *reported* as an
+    observation; the beta-match is claimed as a *verdict* only when the motion is actually
+    one-slip-per-period, and otherwise the panel says "outside the Helmholtz window" and scores
+    nothing (the free cymbal's ``null`` "crash cascade" precedent).
+
+    The pitch check rides the same gate, for the same reason: a raucous note's "pitch" may be a
+    subharmonic, so comparing it to ``f1`` off-window would report a confident, meaningless number.
+    """
+    n_tail = int(min(len(v_rel), max(4, round(BOW_TAIL_FRAC * len(v_rel)))))
+    tail = v_rel[-n_tail:]
+    slipping = np.abs(tail) >= 0.5 * v_bow          # the core's absolute half-bow-speed threshold
+    slip_fraction = float(np.mean(slipping))
+    onsets = int(np.sum((~slipping[:-1]) & (slipping[1:])))
+    n_periods = len(tail) * f1 / fs
+    slips_per_period = float(onsets / n_periods) if n_periods > 0 else 0.0
+    helmholtz = bool(BOW_SLIPS_LO < slips_per_period < BOW_SLIPS_HI)
+
+    # Trace: a few periods of the settled tail, decimated for the plot.
+    n_show = int(min(len(tail), max(8, round(BOW_TRACE_PERIODS * fs / f1))))
+    trace = tail[-n_show:]
+    step = max(1, len(trace) // N_ENERGY_POINTS)
+    trace = trace[::step]
+
+    block: dict[str, Any] = {
+        "kind": "bow",
+        "v_rel": _finite_list(trace),
+        "dt": float(step / fs),
+        "v_bow": float(v_bow),
+        "stick_threshold": float(0.5 * v_bow),
+        "beta": float(beta),
+        "slip_fraction": round(slip_fraction, 4),
+        "slips_per_period": round(slips_per_period, 3),
+        "helmholtz": helmholtz,
+        "slip_tol": BOW_SLIP_MATCH_TOL,
+    }
+    if helmholtz:
+        block["slip_matches_beta"] = bool(abs(slip_fraction - beta) < BOW_SLIP_MATCH_TOL)
+        block["slip_error"] = round(slip_fraction - beta, 4)
+        # The bow does NOT set the pitch — the string does. Same lesson as the reed and the bore.
+        sig = pickup[-n_tail:] - float(np.mean(pickup[-n_tail:]))
+        detected = float(
+            spectrum.measure_partials_near(sig, fs, np.array([f1]), search_hz=0.15 * f1)[0]
+        )
+        block["f_detected"] = round(detected, 3) if math.isfinite(detected) else None
+        block["f1"] = round(f1, 3)
+        block["pitch_cents"] = (
+            round(1200.0 * math.log2(detected / f1), 2)
+            if math.isfinite(detected) and detected > 0 else None
+        )
+    else:
+        block["slip_matches_beta"] = None
+        # A zero onset count is ambiguous on its own — never sticking and never slipping both give
+        # zero stick->slip transitions — so let the slip fraction say which it was.
+        block["regime"] = "never_sticks" if slip_fraction > 0.95 else "multi_slip"
+        what = (
+            "the string never sticks to the bow (slip fraction ≈ 1), so no stick-slip cycle forms"
+            if slip_fraction > 0.95 else
+            f"{slips_per_period:.1f} slips per period (clean bowing is 1)"
+        )
+        block["note"] = (
+            f"outside the Helmholtz window — {what}. Real physics, not a solver failure: "
+            "Schelleng's playable force window has a floor and a ceiling, and both narrow as the "
+            "bow moves off the bridge. The slip = beta oracle only describes one-slip motion, so "
+            "it is not scored here."
+        )
+    return block
+
+
+def _build_payload_bow(p: dict[str, Any]) -> dict[str, Any]:
+    audio_dur = _fnum(p, "audio_duration", 2.0)
+    anim_win = _fnum(p, "animation_window", 0.06)
+    playback_speed = _fnum(p, "playback_speed", 0.02)
+    pickup_frac = _fnum(p, "pickup_position", 0.33)
+    fpp = max(1, int(_fnum(p, "frames_per_period", FRAMES_PER_PERIOD)))
+
+    if not (0.0 < audio_dur <= BOW_AUDIO_MAX):
+        raise ParamError(f"audio_duration must be in (0, {BOW_AUDIO_MAX}] s, got {audio_dur}.")
+    if not (0.0 < anim_win <= ANIM_WIN_MAX):
+        raise ParamError(f"animation_window must be in (0, {ANIM_WIN_MAX}] s, got {anim_win}.")
+    if not (0.0 < playback_speed <= SPEED_MAX):
+        raise ParamError(f"playback_speed must be in (0, {SPEED_MAX}], got {playback_speed}.")
+    if not (0.0 < pickup_frac < 1.0):
+        raise ParamError(f"pickup_position must be in (0, 1), got {pickup_frac}.")
+    try:
+        n_req = int(p.get("N", 100))
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"N must be an integer, got {p.get('N')!r}.") from exc
+    if n_req > BOW_N_MAX:
+        raise ParamError(
+            f"N must be <= {BOW_N_MAX} for the bowed string (got {n_req}): every step runs a "
+            "friction root-find, so a fine grid is far costlier here than on a linear string."
+        )
+
+    b = _build_resonator(p)
+    c, L, N, fs = b.c, b.L, b.N, b.fs
+    bow: BowedString = b.res
+    pickup_idx = min(max(1, round(pickup_frac * N)), N - 1)
+    # The string's own fundamental — the pitch the bow locks to, not one the bow chooses. Reduces
+    # to c/2L at kappa=0 (the default flexible string) and stays correct if stiffness is dialled in.
+    f1 = float(modal.stiff_harmonic_frequencies(c, L, _fnum(p, "kappa", 0.0), 1)[0])
+
+    n_audio = max(1, round(audio_dur * fs))
+    if n_audio > BOW_WORK_MAX:
+        raise ParamError(
+            f"work budget exceeded ({n_audio:,} steps > {BOW_WORK_MAX:,}): every step runs a "
+            "friction root-find. Lower N or audio_duration."
+        )
+
+    anim_stride = max(1, round((fs / f1) / fpp))
+    n_anim = min(n_audio, max(anim_stride, round(anim_win * fs)))
+    if n_anim // anim_stride > MAX_FRAMES:
+        anim_stride = max(1, math.ceil(n_anim / MAX_FRAMES))
+
+    # ONE run, and the frames come out of it. Animate the SETTLED motion, not the attack: the bow
+    # starts from rest (there is no pluck to place), so the opening frames are a near-flat string —
+    # the corner has not formed yet — and a window at t=0 would show almost nothing moving. The
+    # audio run already passes through the settled tail, so capture there rather than re-running a
+    # second resonator the way every other (attack-windowed) model does: that would double the cost
+    # of a model whose every step is a root-find, and the work budget would not see it.
+    n_settle = max(0, n_audio - n_anim)
+    audio_res, work, v_rel = _run_bow(
+        bow, n_audio, pickup_index=pickup_idx, snapshot_stride=anim_stride, snapshot_from=n_settle
+    )
+    pickup = np.asarray(audio_res.output, dtype=float)
+    if not np.all(np.isfinite(pickup)):
+        raise ParamError("simulation produced non-finite output (instability) — adjust parameters.")
+
+    frames = np.array([st for _, st in audio_res.snapshots], dtype=float)
+    # relative to the window start, so the animation clock begins at 0 like every other model's
+    frame_steps = np.array([i - n_settle for i, _ in audio_res.snapshots], dtype=float)
+
+    audio48, peak = _resample_normalize(pickup, fs)
+    field_amp = float(np.max(np.abs(frames))) if frames.size else 0.0
+
+    return {
+        "model": "bow",
+        "fs_sim": round(fs, 3),
+        "lambda": round(float(bow.string.lam), 6),
+        "grid": {"x": _finite_list(bow.string.x, 6)},
+        "frames": {
+            "b64": _b64f32(frames.ravel()),
+            "n_frames": int(frames.shape[0]),
+            "width": int(frames.shape[1]) if frames.ndim == 2 else 0,
+            "dims": 1,
+        },
+        "frame_times": _finite_list(frame_steps / fs, 6),
+        "anim_dt": float(anim_stride / fs),
+        "playback_speed": playback_speed,
+        "field_amp": field_amp,
+        "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
+        # balance_work switches the panel to the third verdict type; see _balance_verdict.
+        "energy": _energy_block(audio_res, b.sigma_zero, b.oracle_2sigma, balance_work=work),
+        "meta": {
+            "c": round(c, 3),
+            "f1": round(f1, 3),
+            "num_steps": int(n_audio),
+            "n_frames": int(frames.shape[0]),
+            "spectrum": _bow_stickslip_block(v_rel, pickup, fs, bow.v_bow, bow.beta, f1),
+            "bow_x": round(float(bow.x_bow), 4),
+            "beta": round(float(bow.beta), 4),
+            # Reported, never asserted: above 1 the friction curve is multivalued — the regime of
+            # real sustained bowing — but it is not a stability limit (friction is bounded, the
+            # scheme is stable and the balance exact for any root), so it is a diagnostic only.
+            "helmholtz_number": round(float(bow.helmholtz_number), 3),
+            "fallbacks": int(bow.fallbacks),
         },
     }
 
