@@ -206,10 +206,22 @@ function updateVisibility() {
   // The inverse gate, for sliders SHARED with a model that has no domains: data-domain would hide
   // them everywhere else (a param whose element is data-domain-gated is hidden whenever the model
   // has no secondary select at all), so "hide only in these regimes" needs its own attribute.
-  // Used by κ and amplitude, which the geometric string's whirl regime derives rather than reads.
+  // Used by κ and amplitude (which the whirl derives rather than reads) and by the animation window
+  // (which the phantom regime fixes at 0.10 s of physics).
+  //
+  // Recomputed from scratch, never read off el.hidden. The first cut early-returned when el.hidden
+  // was already true, meaning "model gating hid it, leave it" — but that also LATCHED any element a
+  // previous regime had hidden. It only worked because every element using this attribute also had
+  // data-show, whose pass above rewrites el.hidden unconditionally each time. The animation window
+  // has no data-show (it is shown for almost every model), so once you visited the phantom regime
+  // its slider stayed hidden forever — through every other regime, until a reload.
   document.querySelectorAll("[data-hide-domain]").forEach((el) => {
-    if (el.hidden) return;                      // model gating already hid it — leave it hidden
-    if (usesDomain && el.dataset.hideDomain.split(" ").includes(d)) el.hidden = true;
+    const modelHides = el.hasAttribute("data-show")
+      && !el.dataset.show.split(" ").includes(m);
+    const domainHides = el.hasAttribute("data-domain")
+      && (!usesDomain || !el.dataset.domain.split(" ").includes(d));
+    const regimeHides = usesDomain && el.dataset.hideDomain.split(" ").includes(d);
+    el.hidden = modelHides || domainHides || regimeHides;
   });
 }
 
