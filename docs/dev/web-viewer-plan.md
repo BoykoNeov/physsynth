@@ -387,14 +387,94 @@ The second cross-cutting capability, and the viewer's **first viz-only model**. 
   smaller) and each strip prints its own. Scales are computed once over the whole run — a per-frame
   autoscale would renormalize the whirl's growth away.
 
+### Batch 4 (DONE) — phantom partials, the geometric string's bridge force
+
+The debt batch 3 took on when model #10 shipped viz-only, and the discharge of model #9's **first
+refusal**: #9's tension is a spatial *scalar*, so it has no longitudinal field and nowhere to put a
+combination tone. #10's tension is a **field**, and its nonlinear excess carries `a·r²v_x/2` —
+quadratic in the transverse fields, linear in the longitudinal one — so two transverse partials at
+`f₁`, `f₂` drive `v` at `f_i ± f_j`. Conklin's phantom partials, read off the bridge force
+`EA·v_x(0)`: what actually radiates in a piano. 13 web tests added (133 → 146). Browser-verified
+13/13. Load-bearing decisions, all measured:
+
+- **It reproduces `tests/test_geometric_phantom.py`'s rig EXACTLY** — same `lam_long`, 0.10 s window,
+  two-mode IC, `v=0` start, blind band-limited detector — so the viewer *inherits the suite's
+  validation* rather than asserting something new. It reports the suite's own numbers back: max peak
+  error **0.039 Hz**, dominance **5.4×**, defect **4.57 Hz**. That match is the point, and it is also
+  how the amplitude bug below got caught (at the wrong amplitude it read 0.035 / 4.7×).
+- **`v` is NOT pre-solved to its quasi-static equilibrium**, though `v=0` is not the longitudinal
+  equilibrium and the startup transient it radiates is the **largest** feature in the *full* bridge
+  spectrum. Tempting, and wrong twice: the tests start from `v=0`, so a hand-rolled static solve puts
+  numbers on screen no test backs (straight against "validation is code"); and it buys nothing — the
+  transient sits at `c_long/2L ≈ 2236 Hz` while the phantoms live below 500 Hz, so the panel's band
+  never shows it. That 4.5× separation is *why* the rig band-limits, and why the phantom band is
+  purely forced response (which is also the piano physics).
+- **The headline is the defect `f₂ − 2f₁`, in ONE run, with no oracle.** For a harmonic string the low
+  phantoms coincide with partials *exactly* (`f₂−f₁ = f₁`, `2f₁ = f₂`), so the difference tone's
+  distance to `f₁` and `2f₁`'s distance to `f₂` are **both** exactly `|f₂ − 2f₁|` — the same physical
+  number approached from opposite sides (measured 4.56 / 4.55 against a defect of 4.57). The plan's
+  other form (`f₁+f₂` landing ~9B·f₁ below `f₃`) is deliberately **not** computed: mode 3 is not
+  excited, so it needs the discrete ladder as an oracle, and that oracle must be *earned* by a second
+  amp→0 run — whose step count is amplitude-independent, so it costs the same ~45 s. 90 s for a
+  strictly weaker statement. No hardening confound either: hardening moves phantoms and partials
+  *together*, and measured it slightly **widens** the defect (works against the claim).
+- **THE DEFECT IS NOT PURE STIFFNESS — the θ-scheme's dispersion drags `f₂` flat and contributes a
+  NEGATIVE defect.** Measured off the linear discrete ladder at `lam_long=0.9`:
+
+  | N | κ=0 | κ=2 | κ=8 |
+  |---|-----|-----|-----|
+  | 16 | −0.965 | −0.677 | +3.571 |
+  | 24 | −0.430 | −0.137 | +4.168 |
+  | 32 | −0.242 | +0.052 | +4.377 |
+
+  At κ=0 it is *pure numerical dispersion*, converging as O(h²) (0.965/0.242 = **4.00** across a 2×
+  refinement, exactly). Two consequences. **N is a second control, not just κ**: at κ=8 — plenty of
+  stiffness — N=8 still cannot show it (+0.38). And the **κ=2 trap is worse than recorded**: at N=32
+  dispersion very nearly *cancels* the true inharmonicity (+0.05 Hz net), and by N=16 it overwhelms
+  it and the defect goes negative. Hence the gate is **one-sided (`>=`, never `abs`)**: a coarse grid
+  displaces phantoms to the *wrong side* of the partials by artifact, which an `abs()` gate would
+  happily score. Requiring a positive defect means "stretched by real stiffness, by enough to see".
+- **Verdict ORDER is a trap, not a nicety.** `detect_peaks` returns `[]` on a zero signal rather than
+  raising, so the `EA = T₀` control (`a = 0` ⇒ the fields decouple ⇒ the bridge force is **bit-exactly
+  zero**) must be checked *before* the defect gate — otherwise a defect above the gate paints "the 4
+  strongest peaks ARE the 4 combinations" over a spectrum with **no peaks in it at all**. Found by
+  probing the detector, not by reading the code. That control is also nearly free: `EA = T₀` makes
+  `c_long = c`, so `fs` collapses 159 kHz → 1.8 kHz and the run is 178 steps.
+- **Two strips, because one axis cannot carry both halves of the claim.** The wide band (0 → 4.8 f₁,
+  the tightest that still contains `2f₂`) carries "peaks at the four combinations". But there the
+  4.6 Hz defect is ~4 px, so the half that says "and NOT on a partial" renders as its own opposite —
+  the diagnose figure's 2 kHz trap, one level down. The zoom strip frames the `f₁ / (f₂−f₁)` pair,
+  where 4.6 Hz over a 56.6 Hz axis is ~31 px and the two lines are plainly separate.
+- **The display grid is separated from the measurement grid.** At the rig's 2× zero-pad the bins are
+  4.85 Hz and the zoom band got **12 points** — not a picture. The drawn traces pad 32× (~190 points);
+  the detector keeps the rig's default. Padding densifies the bin grid without adding resolution:
+  exactly what a *plot* needs and nothing a *measurement* may lean on. Verified by the measured
+  numbers being **bit-identical** before and after the change.
+- **Peak POSITION is the claim, not resolution** — and the panel says so unasked. At a 0.1 s window
+  the Hann main lobe is `4/T ≈ 40 Hz`, so `f₁` and `f₂−f₁` sit inside **one lobe** and the spectrum
+  cannot resolve them. It does not have to: `f₁` is *absent* from `v`, so the phantom has no
+  neighbour to be resolved from, and parabolic refinement locates it to ~0.04 Hz.
+- **The audio debt discharges in its honest form.** This is the one geometric regime with sound, and
+  only because its window is *already* 0.1 s of the radiating channel — the clip is free, not
+  affordable. It is labelled for what it is: a 0.1 s blip, dominated by the longitudinal startup
+  transient rather than by the phantoms (which are 4.5× lower, where the panel looks).
+- **Its own budget, ~2.75× the other regimes'** (`GEOM_PHANTOM_WORK_MAX = 16_500`): ~45 s at the
+  default N=32. Measured, not extrapolated — the bare Newton loop is 35.6 s and the panel telemetry
+  carries it the rest. `GEOM_WORK_MAX` would reject the regime's own defaults. The window is fixed
+  physics (the `animation_window` slider is ignored *and* hidden), so the budget really caps N ×
+  lam_long. **The headless verifier's wait had to grow 40 s → 90 s**; at 40 s this case would have
+  timed out mid-"computing…" and reported a false FAIL.
+- **`MODEL_RANGES` merging was SHALLOW — a real bug the rendered picture caught.** A regime's
+  `{val: 0.0015}` *replaced* the whole `{min,max,step,fixed}` object instead of overriding one field,
+  so the slider kept `index.html`'s stale `step="0.001"` and snapped amplitude **0.0015 → 0.002**,
+  quietly rendering the wrong physics (and leaving N's cap at 512 against `GEOM_N_MAX=32`). Now
+  merged **per param** (`mergeSpecs`). The `_default`-leak trap, one level down — and the reason the
+  panel now reports the core suite's exact numbers. Regime ranges are keyed `"model:domain"` and
+  applied on domain change **only for models that declare them** (`hasRegimeRanges`), so a membrane
+  circle→rectangle switch still does not reset the user's sliders.
+
 ### Later batches (rough map — not firm)
 
-- **Phantom partials (the geometric string's audio)** — promised when batch 3 went viz-only, and the
-  model's *true* audible signature: the bridge force `EA·v_x(0)`, which is what radiates in a piano.
-  Its own ~30 s run at N=32 / κ=8 / `lam_long=0.9` / T=0.1 s. The rig is already written and its
-  traps recorded (κ=8 not 2, or the hardened phantom **crosses** partial 3 and the panel reports a
-  phantom landing on a partial; `detect_peaks` blind, not `measure_partials_near`; combos from
-  MEASURED f₁,f₂; **zoom to the combination band** or the claim renders as its own opposite).
 - **Excited strings** — barrier #8, jawari (barrier profile drawn under the string). The bow landed
   in batch 2 above.
 - **Wind** — bore + reed (new field type: pressure along an `S(x)` profile). The reed now reuses
