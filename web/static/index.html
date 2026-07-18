@@ -25,23 +25,24 @@
             <option value="tension">Tension-modulated string (nonlinear)</option>
             <option value="bow">Bowed string (nonlinear exciter)</option>
             <option value="geometric">Geometrically-exact string (u·w·v)</option>
+            <option value="sympathetic">Sympathetic strings (coupled, ×2)</option>
             <option value="membrane">Membrane (2D drum)</option>
             <option value="mallet">Mallet → drum (contact, #7)</option>
             <option value="plate">Kirchhoff plate (2D)</option>
             <option value="vk">von Kármán plate (nonlinear)</option>
           </select>
         </label>
-        <label class="field" data-show="membrane mallet plate vk" style="margin-top:8px">
+        <label class="field" data-show="membrane mallet plate vk geometric sympathetic" style="margin-top:8px">
           <span id="domain-label">Domain</span>
           <select id="domain"></select>
         </label>
       </div>
 
-      <fieldset class="group" data-show="ideal stiff damped tension bow geometric membrane mallet plate vk">
+      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic membrane mallet plate vk">
         <legend>Physical</legend>
-        <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N" data-show="ideal stiff damped tension bow geometric membrane mallet"></div>
+        <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N" data-show="ideal stiff damped tension bow geometric sympathetic membrane mallet"></div>
         <div class="slider" data-param="rho" data-min="0.001" data-max="0.02" data-step="0.0005" data-val="0.005" data-unit="kg/m²" data-fixed="4"></div>
-        <div class="slider" data-param="L"   data-min="0.25" data-max="2.0"  data-step="0.05"  data-val="1.0"   data-unit="m" data-show="ideal stiff damped tension bow geometric"></div>
+        <div class="slider" data-param="L"   data-min="0.25" data-max="2.0"  data-step="0.05"  data-val="1.0"   data-unit="m" data-show="ideal stiff damped tension bow geometric sympathetic"></div>
       </fieldset>
 
       <fieldset class="group" data-show="membrane mallet plate vk">
@@ -54,7 +55,7 @@
       <fieldset class="group">
         <legend>Discretization</legend>
         <div class="slider" data-param="N"      data-min="16"  data-max="512" data-step="1"    data-val="128"></div>
-        <div class="slider" data-param="lambda" data-min="0.5" data-max="2.0" data-step="0.01" data-val="1.0" data-show="ideal stiff damped tension bow membrane mallet"></div>
+        <div class="slider" data-param="lambda" data-min="0.5" data-max="2.0" data-step="0.01" data-val="1.0" data-show="ideal stiff damped tension bow sympathetic membrane mallet"></div>
         <div class="slider" data-param="mu"     data-min="0.25" data-max="32" data-step="0.25" data-val="1.0" data-fixed="2" data-show="plate"></div>
         <div class="slider" data-param="fs"     data-min="8000" data-max="96000" data-step="1000" data-val="32000" data-unit="Hz" data-fixed="0" data-show="vk"></div>
         <!-- The geometric string's knob is lam_long, NOT lambda, and that inversion is the model's
@@ -121,6 +122,17 @@
         <p class="hint" id="phantom-hint" data-domain="phantom"></p>
       </fieldset>
 
+      <!-- Sympathetic / coupled strings (J = 2): the shared bridge stiffness K, and (transfer only)
+           the neighbour's detune. K is gated by the core's exact dense stability guard, which rejects
+           an over-stiff spring with a clean error. detune is hidden in the normal-mode regime, where
+           the bit-exact w_b == 0 oracle needs the two strings identical. -->
+      <fieldset class="group" data-show="sympathetic">
+        <legend>Coupling</legend>
+        <div class="slider" data-param="K"      data-min="500" data-max="10000" data-step="100" data-val="8000" data-unit="N/m" data-fixed="0"></div>
+        <div class="slider" data-param="detune" data-min="0"   data-max="12"    data-step="0.1" data-val="0"    data-unit="semis" data-fixed="1" data-domain="transfer"></div>
+        <p class="hint" id="symp-hint"></p>
+      </fieldset>
+
       <fieldset class="group" data-show="bow">
         <legend>Bow</legend>
         <div class="slider" data-param="bow_position" data-min="0.04" data-max="0.45" data-step="0.01" data-val="0.13" data-unit="m" data-fixed="2"></div>
@@ -156,14 +168,16 @@
         <p class="hint" id="loss-hint"></p>
       </fieldset>
 
-      <fieldset class="group" data-show="ideal stiff damped tension bow geometric">
+      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic">
         <legend>Excitation</legend>
         <!-- pluck_position is meaningless for three models here. The tension string's IC is the
              mode-1 sine the Duffing reduction needs, which has no pluck point; the bowed string
              starts from REST and is driven by the bow itself, so there is nothing to pluck; the
              geometric string is seeded with a mode-1 sine or the converged rotating-wave BVP.
-             For the geometric string pickup_position picks the node the ORBIT is drawn at. -->
-        <div class="slider" data-param="pluck_position"  data-min="0.02" data-max="0.98" data-step="0.01" data-val="0.3" data-show="ideal stiff damped"></div>
+             For the geometric string pickup_position picks the node the ORBIT is drawn at. For the
+             sympathetic strings pluck_position is where the (identical, in normal / string-A, in
+             transfer) string is plucked, and pickup_position is the audio + trace node. -->
+        <div class="slider" data-param="pluck_position"  data-min="0.02" data-max="0.98" data-step="0.01" data-val="0.3" data-show="ideal stiff damped sympathetic"></div>
         <div class="slider" data-param="pickup_position" data-min="0.02" data-max="0.98" data-step="0.01" data-val="0.1"></div>
       </fieldset>
 
@@ -183,7 +197,7 @@
         <!-- No audio_duration for the geometric string: it is the viewer's one viz-only model. See
              the note under the canvas — resolving its longitudinal wave forces fs ≈ 22× a normal
              string's, so a second of sound is ~10 minutes of compute. -->
-        <div class="slider" data-param="audio_duration"   data-min="0.2" data-max="6"    data-step="0.1"  data-val="2.0" data-unit="s" data-show="ideal stiff damped tension bow membrane mallet plate vk"></div>
+        <div class="slider" data-param="audio_duration"   data-min="0.2" data-max="6"    data-step="0.1"  data-val="2.0" data-unit="s" data-show="ideal stiff damped tension bow sympathetic membrane mallet plate vk"></div>
         <!-- Hidden for the phantom regime: its window is fixed physics, not a preference. At 0.05 s
              the weakest phantom (2f₁) sits inside its neighbours' leakage skirts and is mislocated
              by 0.52 Hz (vs 0.039 Hz at 0.10 s), collapsing its margin to f₂ from 170× to 8×. -->

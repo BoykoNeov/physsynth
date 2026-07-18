@@ -34,6 +34,8 @@ from web.serialize import (
     MEMBRANE_LAMBDA_MAX,
     MEMBRANE_N_MAX,
     PLATE_N_MAX,
+    SYMP_N_MAX,
+    SYMP_WORK_MAX,
     TENSION_AMP_MAX,
     TENSION_DT_MAX,
     TENSION_N_MAX,
@@ -1578,3 +1580,148 @@ def test_phantom_has_its_own_work_budget_because_it_is_the_slowest_render():
     assert GEOM_PHANTOM_WORK_MAX > GEOM_WORK_MAX
     assert default_steps < GEOM_PHANTOM_WORK_MAX              # the N=32 default fits...
     assert default_steps > GEOM_WORK_MAX                      # ...and would not have, before
+
+
+# == sympathetic / coupled strings (1D, J=2 — model in core/connection.py) =========================
+# The viewer's first MULTI-STRING model, and the second customer of the stacked-strip drawFields.
+# It is a CLOSED, UNDRIVEN, linear-leapfrog system, so energy conservation + passivity are AUTOMATIC
+# and pass even a flipped coupling sign — table-stakes, not the claim. What these pin is the claim
+# energy cannot see: (a) the antisymmetric normal mode keeps the shared bridge EXACTLY still
+# (w_b == 0 bit-exact) while the symmetric contrast swings it and loads the body; (b) sympathetic
+# transfer drains a tuned neighbour far more than a detuned one; plus the frames/audio bookkeeping,
+# the ordinary drift verdict (no balance panel, no decay oracle), and clean error payloads.
+SYMP_NORMAL: dict = {"model": "sympathetic", "domain": "normal", "N": 60, "lambda": 0.9,
+                     "T": 200.0, "rho": 0.005, "L": 1.0, "K": 8000.0,
+                     "pluck_position": 0.3, "pickup_position": 0.1, "audio_duration": 0.4}
+SYMP_TRANSFER: dict = {**SYMP_NORMAL, "domain": "transfer", "K": 1500.0, "audio_duration": 1.5}
+
+
+def _symp(**overrides):
+    return simulate_to_payload({**SYMP_NORMAL, **overrides})
+
+
+def test_symp_antisymmetric_mode_keeps_the_bridge_bit_exact_still():
+    """THE discriminating oracle — the claim energy conservation cannot see.
+
+    Two identical strings started ``u_B = -u_A`` keep the shared bridge at **bit-exact**
+    zero forever (IEEE: the float negation of A's IC is exact, ``sum([a, -a]) == 0.0``), so the
+    body feels no force and stays at rest. A flipped coupling sign or a mis-summed force would move
+    the bridge and fail this at once, while energy conservation would pass either way.
+    """
+    sp = _symp()["meta"]["spectrum"]
+    assert sp["kind"] == "sympathetic" and sp["regime"] == "normal"
+    assert sp["anti_max"] == 0.0, "not 'small' — exactly zero, or the coupling sign/sum is wrong"
+    assert sp["anti_exact_zero"] is True
+    assert sp["body_frac_anti"] == 0.0, "a still bridge cannot load the body"
+
+
+def test_symp_symmetric_mode_is_the_contrast_that_makes_the_zero_mean_something():
+    """Its opposite: ``u_B = +u_A`` swings the bridge and floods the body — a flat zero alone reads
+    as 'broken', so both traces are shipped and the symmetric one must be genuinely large."""
+    sp = _symp()["meta"]["spectrum"]
+    assert sp["sym_max"] > 1e6 * max(sp["anti_max"], 1e-30), "the symmetric bridge barely moved"
+    assert sp["sym_max"] > 0.0
+    assert sp["body_frac_sym"] > 0.05, "the symmetric mode should load the body appreciably"
+
+
+def test_symp_detune_is_ignored_in_the_normal_regime():
+    """The bit-exact zero needs the two strings identical, so the detune slider is gated OUT of
+    normal — passing it must not perturb the oracle (the backend never reads it here)."""
+    sp = _symp(detune=5.0)["meta"]["spectrum"]
+    assert sp["anti_max"] == 0.0 and sp["anti_exact_zero"] is True
+
+
+def test_symp_normal_conserves_through_the_wrapper_ordinary_drift():
+    """A closed undriven system: the ordinary conservation-drift verdict, no balance panel and no
+    decay oracle (those are for driven / decaying models)."""
+    e = _symp()["energy"]
+    assert e["sigma_is_zero"] is True
+    assert e.get("kind") != "balance"
+    assert "convergence" not in e
+    assert e["lossless"]["drift"] < LOSSLESS_TOL
+    assert e["lossless"]["pass"] is True
+
+
+def test_symp_frames_decode_to_two_mirror_strings_with_clamped_nuts():
+    """Frames are (n_frames, J=2, N+1); dims stays 1 (the string path is untouched). In the
+    antisymmetric animation string B is the exact negation of string A, and both are clamped (0) at
+    the nut (left, fixed) with a free bridge end."""
+    d = _symp()
+    fr = d["frames"]
+    assert fr["dims"] == 1 and fr["fields"] == ["string A", "string B"]
+    assert len(fr["field_labels"]) == 2
+    buf = _decode_f32(fr["b64"]).reshape(fr["n_frames"], 2, fr["width"])
+    assert np.array_equal(buf[:, 1, :], -buf[:, 0, :]), "string B is not the antiphase of string A"
+    assert np.all(buf[:, :, 0] == 0.0), "the nut (fixed left end) is not clamped"
+
+
+def test_symp_audio_is_the_plucked_string_pickup_not_silence():
+    """Sympathetic strings are NOT viz-only (fs ~ 22 kHz, unlike the geometric string): audio is a
+    real string pickup. Body pressure would go silent on the antisymmetric mode, but the string
+    still rings, so the pickup carries it."""
+    a = _symp()["audio"]
+    assert a is not None and a["n"] > 0 and a["fs"] == AUDIO_FS
+    x = _decode_f32(a["b64"])
+    assert np.all(np.isfinite(x)) and float(np.max(np.abs(x))) > 0.0
+
+
+def test_symp_transfer_tuned_unison_drains_most_of_the_energy():
+    """Pluck string A; at unison the tuned neighbour drains most of the total energy (the classic
+    near-complete coupled-oscillator exchange), and the fraction starts at ~0 and rises."""
+    d = simulate_to_payload({**SYMP_TRANSFER, "detune": 0.0})
+    sp = d["meta"]["spectrum"]
+    assert sp["kind"] == "sympathetic" and sp["regime"] == "transfer" and sp["tuned"] is True
+    assert sp["peak_neighbour"] > 0.5, f"tuned neighbour barely rang ({sp['peak_neighbour']:.2f})"
+    assert sp["frac1"][0] < 0.05, "the neighbour starts at rest"
+    assert sp["frac0"][0] > 0.9, "the plucked string starts with essentially all the energy"
+
+
+def test_symp_transfer_detuned_neighbour_stays_quiet():
+    """Its contrast: a neighbour ~4 semitones off unison barely responds — the coupling is
+    frequency-selective, which is why a sympathetic string lights up only for the right note."""
+    tuned = simulate_to_payload({**SYMP_TRANSFER, "detune": 0.0})["meta"]["spectrum"]
+    detuned = simulate_to_payload({**SYMP_TRANSFER, "detune": 4.0})["meta"]["spectrum"]
+    assert detuned["peak_neighbour"] < 0.25, "detuned neighbour rang too much"
+    assert tuned["peak_neighbour"] > 3.0 * detuned["peak_neighbour"]
+
+
+def test_symp_transfer_conserves_and_the_fractions_stay_physical():
+    """Transfer is lossless too — the ordinary drift verdict — and each per-string energy fraction
+    is a fraction (in [0, 1] up to the body/connection share)."""
+    d = simulate_to_payload({**SYMP_TRANSFER, "detune": 0.0})
+    assert d["energy"]["lossless"]["drift"] < LOSSLESS_TOL
+    sp = d["meta"]["spectrum"]
+    for arr in (sp["frac0"], sp["frac1"]):
+        assert all(-1e-9 <= v <= 1.0 + 1e-9 for v in arr)
+
+
+def test_symp_lambda_must_be_below_one():
+    """lambda = 1 leaves the string's Nyquist mode marginal and the bridge spring pushes it
+    unstable, so the coupled system needs headroom below it (a clean error, not a 500)."""
+    r = simulate_to_payload({**SYMP_NORMAL, "lambda": 1.0})
+    assert "error" in r and "lambda must be in (0, 1)" in r["error"]["message"]
+
+
+def test_symp_over_stiff_bridge_is_rejected_by_the_core_guard():
+    """K is gated by the core's exact dense leapfrog guard (k^2 lambda_max(A) < 4), surfaced as a
+    clean construction error."""
+    r = simulate_to_payload({**SYMP_NORMAL, "K": 1.0e6})
+    assert "error" in r and "unstable" in r["error"]["message"]
+
+
+@pytest.mark.parametrize("bad", [
+    {"N": SYMP_N_MAX + 1}, {"domain": "weinreich"}, {"detune": -1.0, "domain": "transfer"},
+    {"detune": 99.0, "domain": "transfer"}, {"K": -5.0},
+])
+def test_symp_bad_params_give_error_payload(bad):
+    r = simulate_to_payload({**SYMP_NORMAL, **bad})
+    assert "error" in r, f"expected a clean error payload for {bad}"
+
+
+def test_symp_normal_work_budget_counts_both_runs():
+    """The normal regime runs TWICE (antisymmetric + symmetric contrast), so its budget is on
+    ``2 * n_steps``; a long-enough audio duration trips it with a clean error."""
+    r = simulate_to_payload({**SYMP_NORMAL, "audio_duration": 3.0, "T": 800.0, "N": 160})
+    assert "error" in r and "work budget" in r["error"]["message"]
+    # and the default sits comfortably inside it
+    assert 2 * round(0.4 * (200.0 / 0.005) ** 0.5 * 60 / 0.9) < SYMP_WORK_MAX

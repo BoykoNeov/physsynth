@@ -34,7 +34,9 @@ from scipy.sparse.linalg import eigsh
 
 from physsynth.analysis import damping, dispersion, duffing, modal, spectrum
 from physsynth.analysis.rotating_wave import rotating_wave_history, solve_rotating_wave
+from physsynth.core.body import ModalBody
 from physsynth.core.bow import BowedString
+from physsynth.core.connection import SympatheticStrings
 from physsynth.core.engine import SimResult, simulate
 from physsynth.core.exciter import raised_cosine_2d, triangular_pluck
 from physsynth.core.mallet import MalletMembrane
@@ -389,6 +391,51 @@ cap on N x lam_long at the fixed window. **It is by far the slowest render in th
 headless verifier's wait had to grow for it.
 """
 
+# == sympathetic / coupled strings (SympatheticStrings, model in core/connection.py) ===============
+#
+# Several fixed/free strings share ONE bridge point on a common ModalBody (piano unisons, sitar
+# sympathetics; HANDOFF §12.B). The viewer fixes **J = 2** — the two-string oracles (the
+# antisymmetric normal mode, sympathetic transfer) are exactly what is validated, and a free
+# string-count slider would break them. It is a CLOSED, UNDRIVEN, linear-leapfrog system, so it
+# rides the ORDINARY energy panel: sigma = 0 -> the conservation drift check (this batch is
+# lossless; body/string loss is the deferred Weinreich two-stage-decay regime). But conservation
+# and passivity are AUTOMATIC from the linear-leapfrog structure — they pass even a flipped coupling
+# sign — so they are table-stakes, NOT the claim. The claim lives in the SECOND panel: the shared
+# bridge displacement w_b(t). Two regimes carry it:
+#   * normal   — the discriminating oracle. Runs BOTH ICs (antisymmetric u_B = -u_A, keeping w_b
+#                exactly still, vs the symmetric contrast that swings the bridge) and plots both
+#                w_b traces; a flat zero alone would read as "broken". The bit-exact w_b == 0 holds
+#                only if the two strings are identical, so the detune slider is gated OUT of here.
+#   * transfer — pluck one string; a tuned unison neighbour drains most of the energy, a detuned
+#                one barely responds. The per-string energy-fraction panel carries the slosh.
+SYMP_REGIMES = ("normal", "transfer")
+SYMP_J = 2                       # fixed: the validated oracles are two-string
+SYMP_N_MAX = 160                 # each step = 2 ideal-string leapfrogs + a body step (no root-find)
+SYMP_LAM_DEFAULT = 0.9           # < 1 REQUIRED: the bridge spring pushes the Nyquist mode unstable
+SYMP_K_DEFAULT = 8000.0          # normal-mode bridge (the diagnose rig's stiff K)
+SYMP_K_TRANSFER = 1500.0         # transfer bridge: a SOFTER spring is frequency-SELECTIVE (the
+#                                  resonant transfer is the point; a stiff one couples broadly)
+SYMP_BODY_FREQS = np.array([137.0, 213.0, 330.0, 471.0, 620.0])  # diagnose rig's off-harmonic modes
+SYMP_BODY_MASS = 0.02            # ~ the string's rho*L, so the body genuinely reacts
+SYMP_AMP = 1e-3                  # pluck amplitude; the bridge-stillness claim is scale-invariant
+SYMP_NORMAL_ANIM_WIN = 0.06      # s of animation for the normal mode (a standing oscillation)
+SYMP_AUDIO_MAX = 3.0
+SYMP_TRACE_POINTS = 600          # decimated length of the w_b / energy-fraction traces
+# The w_b trace window is DECOUPLED from the audio run (catch #2 again). The bridge swings at
+# the string fundamental AND the body modes (up to ~620 Hz); index-decimating a full 2 s / 44k-step
+# run to 600 points sits their frequencies above the decimation's Nyquist, so the symmetric trace
+# aliases into a solid full-scale BAND and the flat antisymmetric oracle line is muddied where
+# they cross. A short window resolves the individual swings — "swings vs dead-flat" is the picture,
+# not "a nonzero band vs zero". The full run still feeds the audio + the energy drift.
+SYMP_TRACE_WINDOW = 0.10         # s of w_b actually plotted in the normal-mode panel
+# Total steps. The normal regime runs TWICE (antisymmetric + its symmetric contrast, both needed for
+# the panel); transfer runs ONCE over the full slosh. fs = c0 N/(L lam) rides c0 = sqrt(T/rho), so a
+# high tension inflates the step count — bound N x T x duration, not N alone (the membrane's
+# "bound the actual problem size" lesson). At the defaults (T=200, N=100, lam=0.9, 2 s) transfer is
+# ~44k steps, normal ~89k; each step is cheap (ideal-string leapfrogs, no root-find), so this budget
+# is really a frame/payload guard rather than a wall-clock one.
+SYMP_WORK_MAX = 130_000
+
 
 class ParamError(ValueError):
     """A bad request parameter (out of the allowed range) — surfaced as a clean error payload."""
@@ -740,6 +787,8 @@ def _build_payload(p: dict[str, Any]) -> dict[str, Any]:
         return _build_payload_bow(p)
     if model == "geometric":
         return _build_payload_geometric(p)
+    if model == "sympathetic":
+        return _build_payload_sympathetic(p)
     return _build_payload_string(p)
 
 
@@ -2042,6 +2091,344 @@ def _build_payload_geometric(p: dict[str, Any]) -> dict[str, Any]:
             "spectrum": spectrum_block,
         },
     }
+
+
+# == sympathetic / coupled strings (1D multi-field, model in core/connection.py) ==================
+#
+# The viewer's first MULTI-STRING model, and the second customer of the stacked-strip `drawFields`
+# viz (the geometric string's u/w/v was the first). Frames are (n_frames, J, N+1) with
+# `fields: ["string A", "string B"]` and `dims` still 1, exactly mirroring the geometric contract,
+# so the string path stays bit-for-bit and `drawFields` generalizes from 3 fixed strips to J. See
+# the SYMP_* constants block above for the two regimes and why energy is table-stakes here.
+
+
+def _symp_regime(p: dict[str, Any]) -> str:
+    regime = str(p.get("domain", "normal"))
+    if regime not in SYMP_REGIMES:
+        raise ParamError(f"regime must be one of {SYMP_REGIMES}, got {regime!r}.")
+    return regime
+
+
+def _build_sympathetic(
+    p: dict[str, Any], *, detune_semitones: float = 0.0, k_default: float = SYMP_K_DEFAULT
+) -> tuple[SympatheticStrings, float, float, int, float, float]:
+    """Build a 2-string :class:`SympatheticStrings` on a shared modal body.
+
+    ``fs = c0 N/(L lam)`` is set from string 0's tension (string 0 sits at the requested ``lam``);
+    string 1 is detuned **downward** by ``detune_semitones`` (lower tension keeps its ``lam < 1``).
+    ``k_default`` is the regime's fallback bridge stiffness when the request omits ``K`` (normal =
+    8000, transfer = 1500) — it MUST match the default the caller uses for the panel label, or a
+    request with no ``K`` would run one stiffness while the panel claims another. The core ctor is
+    the single source of truth for the ``lam < 1`` guard and the exact dense stability bound — both
+    raise ``ValueError``, surfaced upstream as a clean construction error.
+    Returns ``(symp, c0, L, N, fs, lam)``.
+    """
+    L = _fnum(p, "L", 1.0)
+    T = _fnum(p, "T", 200.0)
+    rho = _fnum(p, "rho", 0.005)
+    lam = _fnum(p, "lambda", SYMP_LAM_DEFAULT)
+    K = _fnum(p, "K", k_default)
+    try:
+        N = int(p.get("N", 100))
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"N must be an integer, got {p.get('N')!r}.") from exc
+
+    if not (N_MIN <= N <= SYMP_N_MAX):
+        raise ParamError(f"N must be in [{N_MIN}, {SYMP_N_MAX}] for sympathetic strings, got {N}.")
+    if min(L, T, rho) <= 0:
+        raise ParamError("L, T, rho must all be positive.")
+    if not (0.0 < lam < 1.0):
+        raise ParamError(
+            f"lambda must be in (0, 1), got {lam}: the string's Nyquist mode is marginal at "
+            "lambda = 1 and the bridge spring pushes it unstable, so the coupled system needs "
+            "headroom below it."
+        )
+    if K < 0:
+        raise ParamError(f"bridge stiffness K must be >= 0, got {K}.")
+
+    c0 = math.sqrt(T / rho)
+    fs = c0 * N / (L * lam)
+    tensions = [T, T * 2.0 ** (-detune_semitones / 6.0)]   # f ~ sqrt(T), so a semitone is 2^(1/12)
+    strings = [
+        IdealString(L=L, T=Tj, rho=rho, fs=fs, N=N, boundary=("fixed", "free"))
+        for Tj in tensions
+    ]
+    body = ModalBody(freqs=SYMP_BODY_FREQS, fs=fs, masses=SYMP_BODY_MASS, sigmas=0.0, phi=1.0)
+    symp = SympatheticStrings(strings=strings, body=body, Ks=[K, K])
+    return symp, c0, L, N, fs, float(strings[0].lam)
+
+
+class _SympRun:
+    """Per-step telemetry of a sympathetic run — the fields, the shared bridge, and the energies."""
+
+    def __init__(self, n: int, J: int, width: int) -> None:
+        self.E = np.empty(n + 1)                 # total (strings + body + connections)
+        self.wb = np.empty(n + 1)                # shared bridge displacement w_b
+        self.e_body = np.empty(n + 1)            # body energy alone
+        self.e_str = np.empty((J, n + 1))        # per-string energy (the transfer panel)
+        self.pickup = np.empty(n + 1)            # string displacement at the pickup node (audio)
+        self.frames: list[NDArray[np.float64]] = []
+        self.frame_steps: list[int] = []
+        self.width = width
+
+
+def _run_sympathetic(
+    symp: SympatheticStrings,
+    n_steps: int,
+    *,
+    pickup_idx: int,
+    anim_stride: int,
+    frame_until: int,
+    pickup_string: int = 0,
+) -> _SympRun:
+    """Step the coupled system, capturing everything the panels need in ONE pass.
+
+    ``SympatheticStrings.state`` is string 0's field only, and :func:`simulate` gives neither the J
+    stacked fields, nor ``w_b(t)``, nor the per-string energy — all three are what this model's
+    panels are made of — so the run is hand-rolled (the geometric/mallet pattern). Frames (the J
+    stacked displacement fields) are captured at ``anim_stride`` up to ``frame_until`` steps only
+    (the normal regime animates a short window while its w_b trace runs long); the scalar telemetry
+    is captured every step.
+    """
+    J = symp.J
+    run = _SympRun(n_steps, J, symp.strings[0].N + 1)
+
+    def _sample(i: int) -> None:
+        run.E[i] = symp.energy()
+        run.wb[i] = symp._bridge_displacement()
+        run.e_body[i] = symp.body.energy()
+        for j in range(J):
+            run.e_str[j, i] = symp.string_energy(j)
+        run.pickup[i] = float(symp.strings[pickup_string].u[pickup_idx])
+
+    def _cap(i: int) -> None:
+        run.frames.append(np.stack([s.u.copy() for s in symp.strings]))
+        run.frame_steps.append(i)
+
+    _sample(0)
+    if frame_until >= 1:
+        _cap(0)
+    for i in range(1, n_steps + 1):
+        symp.step()
+        _sample(i)
+        if i <= frame_until and i % anim_stride == 0:
+            _cap(i)
+    if not np.all(np.isfinite(run.E)):
+        raise ParamError("simulation produced non-finite energy (instability) — adjust parameters.")
+    return run
+
+
+def _symp_finish(
+    *,
+    regime: str,
+    frames_run: _SympRun,
+    energy_E: NDArray[np.float64],
+    pickup: NDArray[np.float64],
+    fields: list[str],
+    field_labels: list[str],
+    grid_x: NDArray[np.float64],
+    fs: float,
+    lam: float,
+    anim_stride: int,
+    c0: float,
+    f1: float,
+    n_steps: int,
+    probe_x: float,
+    spectrum_block: dict[str, Any],
+    playback_speed: float,
+) -> dict[str, Any]:
+    """Assemble the payload common to both regimes (frames + audio + the drift energy panel)."""
+    frames = np.array(frames_run.frames, dtype=float)             # (n_frames, J, N+1)
+    field_amp = float(np.max(np.abs(frames))) if frames.size else 0.0
+    sim = SimResult(
+        time=np.arange(energy_E.size) / fs, energy=energy_E, output=None, fs=fs, snapshots=[],
+    )
+    audio48, peak = _resample_normalize(pickup, fs)
+    return {
+        "model": "sympathetic",
+        "regime": regime,
+        "fs_sim": round(fs, 3),
+        "lambda": round(lam, 6),
+        "grid": {"x": _finite_list(grid_x, 6)},
+        "frames": {
+            "b64": _b64f32(frames.ravel()),
+            "n_frames": int(frames.shape[0]),
+            "width": int(frames.shape[2]) if frames.ndim == 3 else 0,
+            "fields": fields,
+            "field_labels": field_labels,
+            "dims": 1,
+        },
+        "frame_times": _finite_list(np.array(frames_run.frame_steps, dtype=float) / fs, 6),
+        "anim_dt": float(anim_stride / fs),
+        "playback_speed": playback_speed,
+        "field_amp": field_amp,
+        "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
+        # Lossless this batch (no loss sliders for sympathetic yet — see the deferred Weinreich
+        # regime), so the ordinary conservation-drift verdict; a closed undriven system needs no
+        # balance panel and no decay oracle.
+        "energy": _energy_block(sim, sigma_zero=True, oracle_2sigma=0.0),
+        "meta": {
+            "c": round(c0, 3),
+            "f1": round(f1, 3),
+            "num_steps": int(n_steps),
+            "n_frames": int(frames.shape[0]),
+            "probe_x": round(probe_x, 4),
+            "spectrum": spectrum_block,
+        },
+    }
+
+
+def _build_payload_sympathetic(p: dict[str, Any]) -> dict[str, Any]:
+    regime = _symp_regime(p)
+    playback_speed = _fnum(p, "playback_speed", 0.02)
+    pickup_frac = _fnum(p, "pickup_position", 0.1)
+    pluck_frac = _fnum(p, "pluck_position", 0.3)
+    audio_dur = _fnum(p, "audio_duration", 2.0)
+    fpp = max(1, int(_fnum(p, "frames_per_period", FRAMES_PER_PERIOD)))
+    if not (0.0 < playback_speed <= SPEED_MAX):
+        raise ParamError(f"playback_speed must be in (0, {SPEED_MAX}], got {playback_speed}.")
+    if not (0.0 < pickup_frac < 1.0):
+        raise ParamError(f"pickup_position must be in (0, 1), got {pickup_frac}.")
+    if not (0.0 < pluck_frac < 1.0):
+        raise ParamError(f"pluck_position must be in (0, 1), got {pluck_frac}.")
+    if not (0.0 < audio_dur <= SYMP_AUDIO_MAX):
+        raise ParamError(f"audio_duration must be in (0, {SYMP_AUDIO_MAX}] s, got {audio_dur}.")
+
+    if regime == "transfer":
+        return _symp_transfer(p, playback_speed, pickup_frac, pluck_frac, audio_dur, fpp)
+    return _symp_normal(p, playback_speed, pickup_frac, pluck_frac, audio_dur, fpp)
+
+
+def _symp_normal(
+    p: dict[str, Any], playback_speed: float, pickup_frac: float, pluck_frac: float,
+    audio_dur: float, fpp: int,
+) -> dict[str, Any]:
+    """The discriminating oracle: run BOTH ICs and plot both bridge traces.
+
+    The antisymmetric start ``u_B = -u_A`` keeps the shared bridge exactly still (``w_b == 0``
+    bit-exact, ``E_body == 0``) forever — a claim energy conservation cannot see (it is automatic
+    from the leapfrog structure). Its symmetric contrast ``u_B = +u_A`` swings the bridge and loads
+    the body. The zero is only meaningful against that contrast, so both are run and both traces are
+    shipped. The animation is the antisymmetric run (the two strings vibrate in exact antiphase over
+    a dead bridge).
+    """
+    K = _fnum(p, "K", SYMP_K_DEFAULT)
+    sy_anti, c0, L, N, fs, lam = _build_sympathetic(p)
+    sy_sym, *_ = _build_sympathetic(p)
+    f1 = c0 / (2.0 * L)
+    pickup_idx = min(max(1, round(pickup_frac * N)), N - 1)
+    x = sy_anti.strings[0].x
+    pluck = triangular_pluck(x, L, pluck_frac * L, amplitude=SYMP_AMP)
+
+    n_steps = max(1, round(audio_dur * fs))
+    if 2 * n_steps > SYMP_WORK_MAX:
+        raise ParamError(
+            f"work budget exceeded ({2 * n_steps:,} steps > {SYMP_WORK_MAX:,}): the normal-mode "
+            "regime runs twice (antisymmetric + its symmetric contrast). Lower the audio duration, "
+            "N, or the tension."
+        )
+    frame_until = max(1, round(SYMP_NORMAL_ANIM_WIN * fs))
+    anim_stride = max(1, round((fs / f1) / fpp))
+    if frame_until // anim_stride > MAX_FRAMES:
+        anim_stride = max(1, math.ceil(frame_until / MAX_FRAMES))
+
+    sy_anti.strings[0].set_state(pluck)
+    sy_anti.strings[1].set_state(-pluck)              # exact float negation -> bit-exact w_b == 0
+    run_a = _run_sympathetic(sy_anti, n_steps, pickup_idx=pickup_idx, anim_stride=anim_stride,
+                             frame_until=frame_until)
+    sy_sym.strings[0].set_state(pluck)
+    sy_sym.strings[1].set_state(pluck)                # symmetric: both push the bridge together
+    run_s = _run_sympathetic(sy_sym, n_steps, pickup_idx=pickup_idx, anim_stride=1, frame_until=0)
+
+    # The PLOTTED trace is a short window (see SYMP_TRACE_WINDOW) so the symmetric bridge's swings
+    # are resolved rather than aliased into a band; anti_max / sym_max / the body fraction are still
+    # measured over the FULL run.
+    n_trace = min(n_steps, max(1, round(SYMP_TRACE_WINDOW * fs)))
+    idx = np.linspace(0, n_trace, min(n_trace + 1, SYMP_TRACE_POINTS)).astype(int)
+    e0 = float(run_a.E[0])
+    anti_max = float(np.max(np.abs(run_a.wb)))
+    sym_max = float(np.max(np.abs(run_s.wb)))
+    spectrum_block: dict[str, Any] = {
+        "kind": "sympathetic",
+        "regime": "normal",
+        "time": _finite_list(idx / fs, 6),
+        "wb_anti": _finite_list(run_a.wb[idx]),
+        "wb_sym": _finite_list(run_s.wb[idx]),
+        "anti_max": anti_max,
+        "sym_max": sym_max,
+        "anti_exact_zero": bool(anti_max == 0.0),
+        "body_frac_anti": float(np.max(run_a.e_body) / e0) if e0 > 0 else 0.0,
+        "body_frac_sym": float(np.max(run_s.e_body) / e0) if e0 > 0 else 0.0,
+        "K": round(K, 1),
+    }
+    return _symp_finish(
+        regime="normal", frames_run=run_a, energy_E=run_a.E, pickup=run_a.pickup,
+        fields=["string A", "string B"],
+        field_labels=["string A — plucked +", "string B — antiphase −"],
+        grid_x=x, fs=fs, lam=lam, anim_stride=anim_stride, c0=c0, f1=f1, n_steps=n_steps,
+        probe_x=float(x[pickup_idx]), spectrum_block=spectrum_block, playback_speed=playback_speed,
+    )
+
+
+def _symp_transfer(
+    p: dict[str, Any], playback_speed: float, pickup_frac: float, pluck_frac: float,
+    audio_dur: float, fpp: int,
+) -> dict[str, Any]:
+    """Sympathetic transfer: pluck string A; a tuned neighbour drains the energy, a detuned one does
+    not.
+
+    A single run (string A plucked, string B at rest) over the full slosh. The per-string
+    energy-fraction panel is the hero — the beat rate moves with the detune and the bridge K, so
+    the panel carries it robustly — while the animation shows string A ringing down as string B
+    rings up. Detune (semitones down, ``0`` = unison) is live here; at unison the two-string swap
+    is near-complete, and it collapses as the neighbour is detuned off the partial.
+    """
+    K = _fnum(p, "K", SYMP_K_TRANSFER)
+    detune = _fnum(p, "detune", 0.0)
+    if not (0.0 <= detune <= 12.0):
+        raise ParamError(f"detune must be in [0, 12] semitones, got {detune}.")
+    sy, c0, L, N, fs, lam = _build_sympathetic(
+        p, detune_semitones=detune, k_default=SYMP_K_TRANSFER,
+    )
+    f1 = c0 / (2.0 * L)
+    pickup_idx = min(max(1, round(pickup_frac * N)), N - 1)
+    x = sy.strings[0].x
+
+    n_steps = max(1, round(audio_dur * fs))
+    if n_steps > SYMP_WORK_MAX:
+        raise ParamError(
+            f"work budget exceeded ({n_steps:,} steps > {SYMP_WORK_MAX:,}). Lower the audio "
+            "duration, N, or the tension."
+        )
+    anim_stride = max(1, round((fs / f1) / fpp))
+    if n_steps // anim_stride > MAX_FRAMES:
+        anim_stride = max(1, math.ceil(n_steps / MAX_FRAMES))
+
+    sy.strings[0].set_state(triangular_pluck(x, L, pluck_frac * L, amplitude=SYMP_AMP))
+    run = _run_sympathetic(sy, n_steps, pickup_idx=pickup_idx, anim_stride=anim_stride,
+                           frame_until=n_steps)
+
+    idx = np.linspace(0, n_steps, min(n_steps + 1, SYMP_TRACE_POINTS)).astype(int)
+    frac0 = run.e_str[0] / run.E
+    frac1 = run.e_str[1] / run.E
+    spectrum_block: dict[str, Any] = {
+        "kind": "sympathetic",
+        "regime": "transfer",
+        "time": _finite_list(idx / fs, 6),
+        "frac0": _finite_list(frac0[idx]),
+        "frac1": _finite_list(frac1[idx]),
+        "peak_neighbour": float(np.max(frac1)),
+        "detune": round(detune, 2),
+        "tuned": bool(detune < 0.05),
+        "K": round(K, 1),
+    }
+    return _symp_finish(
+        regime="transfer", frames_run=run, energy_E=run.E, pickup=run.pickup,
+        fields=["string A", "string B"],
+        field_labels=["string A — plucked", "string B — sympathetic"],
+        grid_x=x, fs=fs, lam=lam, anim_stride=anim_stride, c0=c0, f1=f1, n_steps=n_steps,
+        probe_x=float(x[pickup_idx]), spectrum_block=spectrum_block, playback_speed=playback_speed,
+    )
 
 
 # == membrane (2D, Phase B) ========================================================================

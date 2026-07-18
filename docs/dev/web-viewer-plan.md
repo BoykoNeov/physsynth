@@ -528,6 +528,53 @@ model #7 itself. Load-bearing, all *measured* not assumed:
   layout, and a slider div's own `.hidden` is false while its parent fieldset is hidden). The
   switch-check lives at `M:\claud_projects\temp\mallet_switch_check.py`.
 
+### Batch 6 (DONE) — sympathetic / coupled strings (the first MULTI-STRING model)
+
+The viewer's first multi-string model, the second customer of the stacked-strip `drawFields`, and
+almost pure wire-up (the multi-field viz was built in batch 3). **J is fixed at 2** — the validated
+oracles are two-string, and a free string-count slider would break them. 17 web tests (→ 178 web),
+full suite green, verifier 17/17, both PNGs eyeballed, the CDP switch-check ALL PASS. See
+`sympathetic-strings-state` memory for the core model. Load-bearing (advisor pre-build catches):
+
+- **The claim lives in the SECOND panel, not the energy panel.** Energy conservation + passivity are
+  *automatic* from the linear-leapfrog structure and pass even a flipped coupling sign → table-stakes
+  green (σ=0 drift ~4e-14). So it rides the ORDINARY drift panel (a closed undriven system: no
+  balance, no decay oracle). The money is the shared bridge displacement `w_b(t)` in the second panel.
+- **`normal` regime runs BOTH ICs.** The antisymmetric start `u_B = -u_A` keeps `w_b == 0.0`
+  *bit-exact* (IEEE float negation is exact) and `E_body == 0` forever; the symmetric contrast swings
+  the bridge and loads the body to ~61 %. A flat-zero line alone reads as "broken", so both traces
+  are shipped and plotted — the zero is only meaningful against the contrast (the whirl-needs-planar
+  lesson). **The detune slider is gated OUT of `normal`** (any per-string difference degrades the
+  bit-exact zero to ~1e-13); it belongs to `transfer` only.
+- **`transfer` regime = the money visual.** Pluck string A over the full slosh; the per-string
+  energy-fraction panel shows the classic coupled-oscillator exchange (unison: neighbour drains 88 %
+  of the total; detune 4 semis: 9 %, a >3× ratio — the frequency-selective coupling). The full-slosh
+  animation resolves the fundamental in ~1480 frames (`f1`·duration at ~10 frames/period lands just
+  under MAX_FRAMES), so string A ringing down as B rings up is animated *and* the panel carries it.
+- **A hand-rolled instrumented loop is mandatory.** `SympatheticStrings.state` is string 0 only, and
+  `simulate()` gives neither the J stacked fields, nor `w_b(t)`, nor per-string energy — all three are
+  what the panels are made of. Capture all, then *construct* a `SimResult` for `_energy_block` (the
+  geometric/mallet pattern). Frames are `(n_frames, J, N+1)`, `fields: ["string A","string B"]`,
+  `dims` still 1 — the string path is untouched and `drawFields` generalizes from 3 fixed strips to J.
+- **Audio is a real string pickup, NOT body `pressure()`** (advisor): body pressure ≈ 0 on the
+  antisym mode — that near-silence is real physics (the aftersound doesn't radiate) but would render
+  as broken. The string still rings, so its pickup carries every regime. Sympathetics is *not*
+  viz-only (fs ~22 kHz, unlike the geometric string's 22×), so audio is cheap and real.
+- **`drawFields` generalized without disturbing geometric.** Field count / per-field amps / display
+  names / a shared colour palette are module state set at load; geometric = 3 strips (u,w share
+  `uwAmp`, v its own) with its three original labels + colours (bit-identical picture, re-verified in
+  the PNG), sympathetic = J strips all sharing one amp (one string ringing up while the other rings
+  down is the picture — a per-strip autoscale would flatten it). No orbit (unlike geometric): `w_b`
+  goes in the panel, so the strings get the full canvas width.
+- **The `normal` regime runs TWICE**, so its work budget is on `2·n_steps`.
+- **Latent bug fixed in passing:** the domain-select container's `data-show` never listed
+  `geometric`, so the geometric *regime* dropdown was reachable only by `?domain=` deep-link, never
+  interactively. Added `geometric sympathetic` — the CDP switch-check confirms both regime selects now
+  work interactively (the batch-4 lesson: a deep-link verifier proves nothing about the switch).
+- The switch-check (`M:\claud_projects\temp\symp_switch_check.py`) also confirms the regime gate
+  RECOMPUTES both ways (detune hidden in normal → shown in transfer → hidden again, no latch), K
+  resets 8000↔1500 per regime, and switch-away leaves no out-of-range sliders.
+
 ### Later batches (rough map — not firm)
 
 - **Excited strings** — barrier #8, jawari (barrier profile drawn under the string). The bow landed
@@ -536,7 +583,10 @@ model #7 itself. Load-bearing, all *measured* not assumed:
   batch 2's balance panel; its telemetry differs (mouth / jet / reed-damping channels are each
   sign-definite and separately measured, so unlike the bow it can close the balance *with* loss on
   — the lossy branch may be a genuine residual there rather than an inferred one).
-- **Sympathetics** — N string lines; reuses batch 3's stacked-strip `drawFields`.
+- **Sympathetics Weinreich two-stage decay** — the deferred loss regime (batch 6 shipped `normal` +
+  `transfer`, both lossless). Needs a body-loss slider (no viewer model has one; reset in `_default`),
+  passivity via `decay_oracle=False`, and its own two-slope string-energy panel (a single 2σ fit is
+  meaningless — the two-slope knee IS the signature). Mirrors geometric's phantom split-out.
 - **The parametric-instability demo** deserves its own batch with real viz (energy cascading into the
   neighbour modes — model #9's IN-plane exchange, which is the SAME `2ω` pump batch 3's whirl aims at
   the other polarization) — *not* a bolt-on to justify batch 1's purity gate.

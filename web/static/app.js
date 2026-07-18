@@ -38,6 +38,7 @@ const LABELS = {
   lam_long: "longitudinal λ", dt_over_t0: "tension ΔT/T₀", tongue_position: "tongue δ/(εA²)",
   mass: "mallet mass M", stiffness: "felt stiffness K", alpha: "felt exponent α",
   strike_velocity: "strike speed v₀", hysteresis: "felt loss λ_h",
+  K: "bridge K", detune: "detune (semis)",
 };
 
 // Per-model slider re-ranging (min/max/step/fixed/val) applied on model switch. The backend mirrors
@@ -90,6 +91,18 @@ const MODEL_RANGES = {
                EA: { min: 5, val: 100 },
                amplitude: { min: 0.0005, max: 0.02, step: 0.0005, fixed: 4, val: 0.004 },
                sigma0: { val: 0 }, sigma1: { val: 0 }, pickup_position: { val: 0.25 } },
+  // Sympathetic / coupled strings (J = 2). A closed undriven system, lossless this batch, so it
+  // rides the ordinary conservation-drift panel; the CLAIM is the bridge trace in the second panel.
+  // K is the shared bridge stiffness (the core's exact dense guard rejects an over-stiff one). N ~
+  // 100 matches the diagnose rig; audio is the plucked string's pickup over the slosh.
+  sympathetic: { N: { min: 16, max: 160, val: 100 }, lambda: { max: 0.99, val: 0.9 },
+                 K: { val: 8000 }, detune: { val: 0 },
+                 pluck_position: { val: 0.3 }, pickup_position: { val: 0.1 },
+                 audio_duration: { max: 3, val: 2 } },
+  // Transfer regime: a SOFTER bridge is frequency-selective (the resonant transfer is the point), so
+  // K resets to 1500 and the detune slider appears (gated OUT of `normal`, where the bit-exact
+  // w_b == 0 needs two identical strings).
+  "sympathetic:transfer": { K: { val: 1500 }, detune: { val: 0 } },
   // Regime-level ranges, keyed "model:domain" and merged AFTER the model spec (see
   // applyModelRanges). The phantom regime is the first customer and needs both: κ = 8 is its
   // microscope (the geometric model defaults κ = 0, which is a HARMONIC string — every phantom
@@ -116,12 +129,14 @@ const MODEL_RANGES = {
               sigma0: { min: 0, max: 20, step: 0.1, val: 1.0 },
               sigma1: { min: 0, max: 0.01, step: 0.0001, fixed: 4, val: 0.002 },
               pickup_position: { val: 0.1 },
+              K: { min: 500, max: 10000, step: 100, fixed: 0, val: 8000 },
+              detune: { min: 0, max: 12, step: 0.1, fixed: 1, val: 0 },
               audio_duration: { max: 6, val: 2 } },
 };
 
 // Secondary select repurposed per model: geometry (membrane), boundary (plate / von Kármán) or
 // REGIME (the geometric string — three claims, one string, cheapest first).
-const DOMAIN_MODELS = ["membrane", "mallet", "plate", "vk", "geometric"];
+const DOMAIN_MODELS = ["membrane", "mallet", "plate", "vk", "geometric", "sympathetic"];
 const DOMAIN_OPTS = {
   membrane: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
   mallet: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
@@ -131,8 +146,11 @@ const DOMAIN_OPTS = {
               ["planar", "Planar — max|w| = 0 exactly"],
               ["whirl", "Whirling — the Mathieu tongue"],
               ["phantom", "Phantom partials — the bridge force"]],
+  sympathetic: [["normal", "Normal modes — the bridge oracle"],
+                ["transfer", "Sympathetic transfer"]],
 };
-const DOMAIN_LABELS = { membrane: "Domain", mallet: "Drum shape", geometric: "Regime" };
+const DOMAIN_LABELS = { membrane: "Domain", mallet: "Drum shape", geometric: "Regime",
+                        sympathetic: "Regime" };
 
 const sliders = {};      // param -> <input>
 const updaters = {};     // param -> fn() that refreshes its value label
@@ -145,6 +163,10 @@ let frames = null, nFrames = 0, width = 0, fieldAmp = 1, animDt = 1e-3;
 let gridNx = 0, gridNy = 0, maskData = null, gridMeta = null, heatCv = null;
 // Geometric string (model #10): three stacked fields per frame + the (u, w) orbit trail.
 let isGeom = false, orbitU = null, orbitW = null, orbitPerFrame = 1, uwAmp = 1, vAmp = 1;
+// Stacked-strip `drawFields` state (geometric u/w/v AND sympathetic string A/B): the field count,
+// per-field vertical scales, display names and a shared colour palette. Set once at load.
+let isSymp = false, nFields = 1, fieldAmps = [1], fieldLabels = [];
+const FIELD_COLORS = ["#4cc2ff", "#ff8f4c", "#9d7bff"];
 let audioSamples = null, audioFs = 48000, audioBuf = null, audioCtx = null, audioSrc = null;
 let speed = 0.02, animPlaying = true, scrubbing = false, currentFrame = 0, animStart = 0;
 let autoTimer = null;
@@ -311,6 +333,11 @@ function updateLambdaHint() {
       + `${(c * param("N") / (param("L") * fs)).toFixed(3)}. c_long/c = ${(cLong / c).toFixed(0)}× — `
       + `that ratio is the whole cost of this model.`;
     hint.style.color = "var(--muted)";
+  } else if (m === "sympathetic") {
+    const lam = param("lambda");
+    hint.textContent = `λ = c·k/h = ${lam.toFixed(2)}  (must be < 1: the bridge spring pushes the `
+      + `string's Nyquist mode unstable at λ = 1)`;
+    hint.style.color = lam >= 1 ? "var(--bad)" : "var(--muted)";
   } else if (m === "ideal" && param("lambda") > 1.0) {
     hint.textContent = "λ>1 breaks the explicit ideal string's CFL (will error). Stiff/damped allow"
       + " it.";
@@ -445,6 +472,27 @@ function updateLambdaHint() {
     }
     lossHint.style.color = "var(--muted)";
   }
+  // Sympathetic: the coupling story per regime — the bridge oracle vs the tuned transfer.
+  const syHint = $("symp-hint");
+  if (syHint) {
+    if (m === "sympathetic") {
+      if (domainSel.value === "transfer") {
+        const d = param("detune");
+        syHint.textContent = d < 0.05
+          ? "unison: pluck A and the tuned neighbour B rings up in sympathy. Detune B and watch the "
+            + "transfer fall away."
+          : `B is ${d.toFixed(1)} semis flat of A: off its partial the transfer weakens. `
+            + `K = ${Math.round(param("K"))} N/m sets how selective the coupling is.`;
+      } else {
+        syHint.textContent = "normal modes: A & B plucked in ± antiphase keep the bridge exactly "
+          + "still (w_b ≡ 0 bit-exact); in phase, it swings and loads the body. The zero is the "
+          + "oracle energy cannot see.";
+      }
+      syHint.style.color = "var(--muted)";
+    } else {
+      syHint.textContent = "";
+    }
+  }
   // Mallet: surface the felt-resolution guard LIVE (the ctor's warning never reaches the browser).
   // The rigid-wall estimate π√(M/K)·fs must span several steps or the stiff contact aliases — a
   // NOTE, not an error, since the energy method conserves even under-resolved. Harder felt (↑K, ↓M)
@@ -478,6 +526,7 @@ function onControlChange(name) {
   if (name === "lam_long" || name === "N" || name === "rho") updateLambdaHint();
   if (name === "tongue_position" || name === "dt_over_t0") updateLambdaHint();
   if (name === "kappa") updateLambdaHint();   // the phantom hint's microscope + cost estimate
+  if (name === "K" || name === "detune") updateLambdaHint();   // sympathetic coupling hint
   scheduleAuto();
 }
 
@@ -586,6 +635,7 @@ function applyPayload(data) {
     heatCv.width = gridNx; heatCv.height = gridNy;
   }
   isGeom = data.model === "geometric";
+  isSymp = data.model === "sympathetic";
   if (isGeom) {
     orbitU = b64ToFloat32(data.orbit.u);
     orbitW = b64ToFloat32(data.orbit.w);
@@ -606,6 +656,18 @@ function applyPayload(data) {
         if (v > vAmp) vAmp = v;
       }
     }
+    nFields = 3;
+    fieldAmps = [uwAmp, uwAmp, vAmp];
+    fieldLabels = ["u — transverse", "w — out of plane", "v — longitudinal"];
+  } else if (isSymp) {
+    // J strings, all the SAME quantity (transverse displacement), so they SHARE one scale computed
+    // over the whole run — one string ringing up while the other rings down is the picture, and a
+    // per-strip autoscale would flatten it away. Field names/count come from the payload.
+    nFields = data.frames.fields.length;
+    fieldLabels = data.frames.field_labels || data.frames.fields;
+    let amp = 0;
+    for (let k = 0; k < frames.length; k++) { const a = Math.abs(frames[k]); if (a > amp) amp = a; }
+    fieldAmps = new Array(nFields).fill(amp || 1);
   }
   audioSamples = data.audio ? b64ToFloat32(data.audio.b64) : null;
   audioFs = data.audio ? data.audio.fs : 48000;
@@ -676,7 +738,8 @@ function tick(ts) {
       currentFrame = Math.floor(physElapsed / animDt) % nFrames;
       scrub.value = currentFrame;
     }
-    (dims === 2 ? drawHeatmap : isGeom ? drawGeometric : drawString)(currentFrame);
+    (dims === 2 ? drawHeatmap : isGeom ? drawGeometric
+      : isSymp ? drawSympatheticViz : drawString)(currentFrame);
   }
   requestAnimationFrame(tick);
 }
@@ -733,31 +796,47 @@ function drawOrbit(g, idx, x0, y0, w, h) {
   }
 }
 
+// Stacked strips, one per field. Generalized from the geometric string's fixed u/w/v to nFields:
+// geometric ships 3 (u/w share a scale, v its own — see fieldAmps at load); sympathetic ships J = 2
+// strings all sharing one scale (they are the same physical quantity, and one string ringing up
+// while the other rings down is the whole picture, so a per-strip autoscale would hide it). Names,
+// colours and per-field amps are module state set once in applyPayload, so the stride and layout
+// are the only per-frame work here.
 function drawFields(g, idx, x0, y0, w, h) {
-  const names = ["u — transverse", "w — out of plane", "v — longitudinal"];
-  const cols = ["#4cc2ff", "#ff8f4c", "#9d7bff"];
-  const stripH = h / 3, margin = 20;
-  for (let f = 0; f < 3; f++) {
+  const stripH = h / nFields, margin = 20;
+  for (let f = 0; f < nFields; f++) {
     const midY = y0 + stripH * f + stripH / 2;
-    // u and w share uwAmp; v has its own (it is a different quantity, orders smaller).
-    const amp = f === 2 ? vAmp : uwAmp;
+    const amp = fieldAmps[f];
     const sy = (stripH / 2 - 12) / (amp > 0 ? amp : 1);
     const sx = (w - 2 * margin) / (width - 1);
     g.strokeStyle = "#2a3340"; g.lineWidth = 1;
     g.beginPath(); g.moveTo(x0 + margin, midY); g.lineTo(x0 + w - margin, midY); g.stroke();
 
-    g.strokeStyle = cols[f]; g.lineWidth = 2; g.lineJoin = "round";
+    g.strokeStyle = FIELD_COLORS[f % FIELD_COLORS.length]; g.lineWidth = 2; g.lineJoin = "round";
     g.beginPath();
     for (let i = 0; i < width; i++) {
       const px = x0 + margin + i * sx;
-      const py = midY - frames[(idx * 3 + f) * width + i] * sy;
+      const py = midY - frames[(idx * nFields + f) * width + i] * sy;
       if (i === 0) g.moveTo(px, py); else g.lineTo(px, py);
     }
     g.stroke();
     g.fillStyle = "#8b98a8"; g.font = "11px ui-monospace, monospace";
-    // Each strip prints its OWN scale, because two of them do not share one.
-    g.fillText(`${names[f]}  ±${amp.toExponential(1)} m`, x0 + margin, y0 + stripH * f + 13);
+    // Each strip prints its OWN scale (the geometric strips do not all share one).
+    g.fillText(`${fieldLabels[f]}  ±${amp.toExponential(1)} m`, x0 + margin, y0 + stripH * f + 13);
   }
+}
+
+// ── sympathetic / coupled strings: the J string fields, stacked ──────────────────────────────
+// No orbit (unlike the geometric string): the shared bridge displacement w_b goes in the second
+// panel, not a cross-section trail, so the strings get the full canvas width. In the normal-mode
+// animation the two strips are exact mirror images (string B = −string A over a dead bridge); in
+// transfer, string A rings down as string B rings up.
+function drawSympatheticViz(idx) {
+  const g = stringCv.getContext("2d");
+  const W = stringCv.width, H = stringCv.height;
+  g.clearRect(0, 0, W, H);
+  if (!frames || nFrames === 0) return;
+  drawFields(g, idx, 0, 0, W, H);
 }
 
 // ── membrane heatmap ─────────────────────────────────────────────────────────────────────────
@@ -1004,6 +1083,19 @@ function drawDiagnostics() {
     partialsSub.textContent = spec.kind === "rotating" ? "roundness + longitudinal rest"
       : "the reflection symmetry";
     drawGeomVerdict(spec);
+    return;
+  }
+  // Sympathetic / coupled strings: the money panel energy CANNOT see. Normal → both bridge traces
+  // (antisym ≡ 0 vs symmetric swinging); transfer → the per-string energy exchange.
+  if (spec && spec.kind === "sympathetic") {
+    if (spec.regime === "normal") {
+      partialsTitle.firstChild.textContent = "Bridge motion ";
+      partialsSub.textContent = "antisymmetric ≡ 0 vs symmetric";
+    } else {
+      partialsTitle.firstChild.textContent = "Sympathetic transfer ";
+      partialsSub.textContent = "energy reaching the neighbour";
+    }
+    drawSympathetic(spec);
     return;
   }
   // The mallet is a 2D heatmap model, but its second panel is NOT a mode spectrum: a soft felt
@@ -1593,6 +1685,74 @@ function drawGeomVerdict(sp) {
       + "This is the orbit model #9 can draw. The other two are what it structurally cannot."
     : "The helix is an EXACT solution of the scheme, so it is round from the first frame — no\n"
       + "growth needed. ψ (the static stretch) is NONZERO and held: v does not move, it leans.";
+}
+
+// ── sympathetic / coupled strings: the panel energy cannot see ───────────────────────────────
+// Normal: BOTH bridge traces — the antisymmetric mode pins w_b at zero (the discriminating oracle),
+// the symmetric mode swings it. A flat zero alone reads as "broken", so the contrast is the point.
+// Transfer: the per-string energy fractions — string A (plucked) drains into a tuned neighbour B.
+function drawSympathetic(sp) {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height, pad = 26;
+  g.clearRect(0, 0, W, H);
+  const out = $("partials-readout");
+  const t = sp.time, tmax = t[t.length - 1] || 1;
+  const num = (a) => a.map((x) => (x == null ? 0 : x));
+  const xat = (i) => pad + (t[i] / tmax) * (W - pad - 8);
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1;
+  g.strokeRect(pad, 8, W - pad - 8, H - 24);
+  g.font = "10px ui-monospace, monospace";
+
+  if (sp.regime === "normal") {
+    const anti = num(sp.wb_anti), sym = num(sp.wb_sym);
+    const vmax = Math.max(1e-30, ...sym.map(Math.abs), ...anti.map(Math.abs));
+    const mid = 8 + (H - 24) / 2;                    // signed trace: 0 at the vertical centre
+    g.strokeStyle = "#3a4452"; g.setLineDash([3, 3]);
+    g.beginPath(); g.moveTo(pad, mid); g.lineTo(W - 8, mid); g.stroke(); g.setLineDash([]);
+    const plot = (arr, colour, wdt) => {
+      g.strokeStyle = colour; g.lineWidth = wdt; g.beginPath();
+      for (let i = 0; i < arr.length; i++) {
+        const y = mid - (arr[i] / vmax) * ((H - 24) / 2 - 4);
+        if (i === 0) g.moveTo(xat(i), y); else g.lineTo(xat(i), y);
+      }
+      g.stroke();
+    };
+    plot(sym, "#ff8f4c", 1.5);                       // symmetric: swings
+    plot(anti, "#4cc2ff", 2.5);                      // antisymmetric: dead flat on the axis
+    g.fillStyle = "#4cc2ff"; g.fillText("antisym w_b", pad + 6, 20);
+    g.fillStyle = "#ff8f4c"; g.fillText("symmetric w_b", pad + 92, 20);
+    g.fillStyle = "#8b98a8"; g.fillText(`${tmax.toFixed(2)} s`, W - 46, H - 6);
+    out.textContent =
+      `antisym max|w_b| = ${sp.anti_max === 0 ? "0.0 (bit-exact ✓)" : sp.anti_max.toExponential(2)}` +
+      `  ·  symmetric max|w_b| = ${sp.sym_max.toExponential(2)} m\n` +
+      `the antiphase pair rings on a mode the bridge cannot feel (E_body → ` +
+      `${sp.body_frac_anti.toExponential(1)}); the symmetric pair loads the body to ` +
+      `${(sp.body_frac_sym * 100).toFixed(0)}%. Energy conservation passes BOTH — this is the claim ` +
+      `it cannot see.`;
+    return;
+  }
+  const f0 = num(sp.frac0), f1 = num(sp.frac1);
+  const base = H - 18, top = 22;                      // fraction axis: 0 at bottom, 1 at top
+  const plot = (arr, colour, wdt) => {
+    g.strokeStyle = colour; g.lineWidth = wdt; g.beginPath();
+    for (let i = 0; i < arr.length; i++) {
+      const y = base - Math.max(0, Math.min(1, arr[i])) * (base - top);
+      if (i === 0) g.moveTo(xat(i), y); else g.lineTo(xat(i), y);
+    }
+    g.stroke();
+  };
+  plot(f0, "#4cc2ff", 1.5);                          // string A (plucked): drains
+  plot(f1, "#ff8f4c", 2.5);                          // string B (neighbour): rings up
+  g.fillStyle = "#4cc2ff"; g.fillText("A (plucked)", pad + 6, 18);
+  g.fillStyle = "#ff8f4c"; g.fillText("B (neighbour)", pad + 86, 18);
+  g.fillStyle = "#8b98a8"; g.fillText(`${tmax.toFixed(2)} s`, W - 46, H - 6);
+  out.textContent = sp.tuned
+    ? `unison: the neighbour drains ${(sp.peak_neighbour * 100).toFixed(0)}% of the total energy — ` +
+      `near-complete coupled-oscillator exchange.\nDetune it and watch the transfer collapse ` +
+      `(the coupling is frequency-selective at K = ${sp.K} N/m).`
+    : `Δ ${sp.detune.toFixed(1)} semitones off unison: the neighbour peaks at only ` +
+      `${(sp.peak_neighbour * 100).toFixed(0)}%.\noff the partial the bridge barely couples the two ` +
+      `— why a sympathetic string lights up for the right note and no other.`;
 }
 
 // ── partials diagnostic ─────────────────────────────────────────────────────────────────────
