@@ -35,6 +35,8 @@ from web.serialize import (
     MEMBRANE_N_MAX,
     PLATE_N_MAX,
     SYMP_N_MAX,
+    SYMP_SIGMA_BODY_MAX,
+    SYMP_WEINREICH_DETUNE_MAX,
     SYMP_WORK_MAX,
     TENSION_AMP_MAX,
     TENSION_DT_MAX,
@@ -1710,8 +1712,9 @@ def test_symp_over_stiff_bridge_is_rejected_by_the_core_guard():
 
 
 @pytest.mark.parametrize("bad", [
-    {"N": SYMP_N_MAX + 1}, {"domain": "weinreich"}, {"detune": -1.0, "domain": "transfer"},
+    {"N": SYMP_N_MAX + 1}, {"domain": "nonesuch"}, {"detune": -1.0, "domain": "transfer"},
     {"detune": 99.0, "domain": "transfer"}, {"K": -5.0},
+    {"domain": "weinreich", "sigma_body": 999.0}, {"domain": "weinreich", "detune": 5.0},
 ])
 def test_symp_bad_params_give_error_payload(bad):
     r = simulate_to_payload({**SYMP_NORMAL, **bad})
@@ -1725,3 +1728,114 @@ def test_symp_normal_work_budget_counts_both_runs():
     assert "error" in r and "work budget" in r["error"]["message"]
     # and the default sits comfortably inside it
     assert 2 * round(0.4 * (200.0 / 0.005) ** 0.5 * 60 / 0.9) < SYMP_WORK_MAX
+
+
+# -- weinreich two-stage decay (the piano-unison regime, the first body-loss slider) ---------------
+# Strike ONE of two near-unison strings over a LOSSY bridge: the symmetric mode loads the bridge and
+# dies fast (prompt), the antisymmetric mode barely loads it and lingers (aftersound), so the
+# string-energy envelope shows the fast-then-slow knee. The sharp sub-claim is at detune = 0: the
+# antisymmetric mode is bit-exactly bridge-decoupled (the normal-mode oracle), so it never loads the
+# lossy body and its tail is LOSSLESS -> aftersound slope ~ 0, rising clearly with detune. The
+# contrast (strike BOTH = the pure symmetric mode) decays away single-slope with no aftersound. The
+# energy verdict is passivity with decay_oracle=False (no single-exponential oracle); sigma_body = 0
+# flips it back to the drift check.
+SYMP_WEIN: dict = {**SYMP_NORMAL, "domain": "weinreich", "K": 6000.0, "sigma_body": 20.0,
+                   "detune": 0.0, "audio_duration": 1.5}
+
+
+def _wein(**overrides):
+    return simulate_to_payload({**SYMP_WEIN, **overrides})
+
+
+def test_symp_weinreich_two_stage_knee_prompt_faster_than_aftersound():
+    """The two-stage decay: the prompt (fast, symmetric mode) dies far faster than the aftersound
+    (slow, antisymmetric mode). A single exponential is also passive-monotone but has no knee, so
+    prompt >> aftersound IS the claim energy conservation cannot see."""
+    sp = _wein()["meta"]["spectrum"]
+    assert sp["kind"] == "sympathetic" and sp["regime"] == "weinreich"
+    assert sp["prompt_rate"] > 0.5, "the prompt should decay at a visible rate"
+    assert sp["prompt_rate"] > 5.0 * max(sp["aftersound_rate"], 1e-6), "no two-stage knee"
+
+
+def test_symp_weinreich_unison_aftersound_is_lossless_rising_with_detune():
+    """THE sharp sub-claim, tied to the batch-6 normal-mode oracle. At detune = 0 the antisymmetric
+    mode is bit-exactly bridge-decoupled, so the body's damping never activates on it and the
+    aftersound is lossless (slope ~ 0). A few cents of mistune loads the bridge a little, so the
+    aftersound decays slowly — clearly faster than at unison."""
+    unison = _wein(detune=0.0)["meta"]["spectrum"]
+    mistuned = _wein(detune=0.3)["meta"]["spectrum"]
+    assert unison["aftersound_rate"] < 0.1, "the unison aftersound should be near-lossless"
+    assert mistuned["aftersound_rate"] > 2.5 * max(unison["aftersound_rate"], 1e-3), (
+        "detuning must speed the aftersound up — the antisymmetric mode now loads the bridge"
+    )
+
+
+def test_symp_weinreich_strike_both_decays_away_no_aftersound():
+    """The contrast that makes the plateau mean something: strike-one keeps a big fraction of its
+    energy in the un-decaying antisymmetric mode (the aftersound floor), while strike-both (the pure
+    symmetric mode) loads the bridge fully and falls away. The plateau is physics, not a floor."""
+    sp = _wein()["meta"]["spectrum"]
+    assert sp["floor_one"] > 0.3, "strike-one should retain a real aftersound"
+    assert sp["both_final"] < 0.15, "strike-both should decay away"
+    assert sp["floor_one"] > 2.0 * sp["both_final"], "the aftersound contrast is not clear"
+
+
+def test_symp_weinreich_lossy_body_reports_passivity_without_a_decay_oracle():
+    """A lossy body -> the passivity verdict (monotone), NOT the drift check and NOT a fitted-2σ
+    oracle: the total energy is a two-rate decay to a nonzero aftersound floor, so a single measured
+    2σ against a flat oracle would be a lying 'broken match' (the mallet's decay_oracle=False)."""
+    e = _wein()["energy"]
+    assert e["sigma_is_zero"] is False
+    assert "lossy" in e and e["lossy"]["monotone"] is True
+    assert "measured_2sigma" not in e["lossy"], "the flat-loss oracle must be dropped"
+    assert e.get("kind") != "balance" and "convergence" not in e
+
+
+def test_symp_weinreich_zero_body_loss_flips_to_the_drift_check():
+    """The body-loss slider genuinely toggles the verdict type: at sigma_body = 0 the body is
+    lossless, the whole closed system conserves, and the panel reports the conservation-drift check
+    (with both rates ~ 0 — no loss, no two-stage decay)."""
+    d = _wein(sigma_body=0.0)
+    e = d["energy"]
+    assert e["sigma_is_zero"] is True
+    assert e["lossless"]["drift"] < LOSSLESS_TOL and e["lossless"]["pass"] is True
+    sp = d["meta"]["spectrum"]
+    assert sp["sigma_zero"] is True
+    assert abs(sp["aftersound_rate"]) < 0.05 and sp["prompt_rate"] < 0.5, "nothing should decay"
+
+
+def test_symp_weinreich_envelopes_are_finite_and_normalized():
+    """Both string-energy envelopes are normalized by their own initial energy, so they start near 1
+    (the 1-period centered mean dips slightly over the prompt's fast decay) and stay finite and
+    physical (in [0, ~1.05]) — the log-y panel plots these directly."""
+    sp = _wein()["meta"]["spectrum"]
+    for key in ("env_one", "env_both"):
+        arr = sp[key]
+        assert 0.85 <= arr[0] <= 1.05, f"{key} does not start near 1 (got {arr[0]})"
+        assert all(v is not None and -1e-9 <= v <= 1.05 for v in arr)
+
+
+def test_symp_weinreich_audio_is_the_struck_string_pickup():
+    """The struck string rings audibly (the two-stage decay is an audible piano signature), so the
+    audio is a real pickup, not silence — and the frames carry both strings (B starts silent)."""
+    d = _wein()
+    a = d["audio"]
+    assert a is not None and a["fs"] == AUDIO_FS
+    assert float(np.max(np.abs(_decode_f32(a["b64"])))) > 0.0
+    fr = d["frames"]
+    assert fr["dims"] == 1 and len(fr["fields"]) == 2
+
+
+def test_symp_weinreich_work_budget_counts_both_runs():
+    """Like the normal regime, weinreich runs TWICE (strike-one + its strike-both contrast), so the
+    budget is on 2 * n_steps and a long-enough duration trips it with a clean error."""
+    r = _wein(audio_duration=3.0, T=800.0, N=160)
+    assert "error" in r and "work budget" in r["error"]["message"]
+
+
+def test_symp_weinreich_detune_range_is_fine_not_semitones():
+    """A piano unison is mistuned by a few cents, so the weinreich detune range is small (0..0.4
+    semis), distinct from transfer's 0..12 — a transfer-scale detune is rejected here."""
+    assert SYMP_WEINREICH_DETUNE_MAX < 1.0
+    assert "error" in _wein(detune=SYMP_WEINREICH_DETUNE_MAX + 0.5)
+    assert "error" in _wein(sigma_body=SYMP_SIGMA_BODY_MAX + 1.0)

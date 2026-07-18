@@ -103,6 +103,13 @@ const MODEL_RANGES = {
   // K resets to 1500 and the detune slider appears (gated OUT of `normal`, where the bit-exact
   // w_b == 0 needs two identical strings).
   "sympathetic:transfer": { K: { val: 1500 }, detune: { val: 0 } },
+  // Weinreich two-stage decay: a LOSSY bridge (the body-loss slider, weinreich-only) + a FINE detune.
+  // A piano unison is mistuned by a few cents, not semitones, so detune is re-ranged to 0..0.4 semis
+  // in 0.01-semi (~1-cent) steps — distinct from transfer's 0..12 semitones. K resets to 6000.
+  "sympathetic:weinreich": {
+    K: { val: 6000 }, sigma_body: { val: 20 },
+    detune: { min: 0, max: 0.4, step: 0.01, fixed: 2, val: 0 },
+  },
   // Regime-level ranges, keyed "model:domain" and merged AFTER the model spec (see
   // applyModelRanges). The phantom regime is the first customer and needs both: κ = 8 is its
   // microscope (the geometric model defaults κ = 0, which is a HARMONIC string — every phantom
@@ -131,6 +138,7 @@ const MODEL_RANGES = {
               pickup_position: { val: 0.1 },
               K: { min: 500, max: 10000, step: 100, fixed: 0, val: 8000 },
               detune: { min: 0, max: 12, step: 0.1, fixed: 1, val: 0 },
+              sigma_body: { min: 0, max: 80, step: 1, fixed: 0, val: 0, unit: "s⁻¹" },
               audio_duration: { max: 6, val: 2 } },
 };
 
@@ -147,7 +155,8 @@ const DOMAIN_OPTS = {
               ["whirl", "Whirling — the Mathieu tongue"],
               ["phantom", "Phantom partials — the bridge force"]],
   sympathetic: [["normal", "Normal modes — the bridge oracle"],
-                ["transfer", "Sympathetic transfer"]],
+                ["transfer", "Sympathetic transfer"],
+                ["weinreich", "Weinreich two-stage decay"]],
 };
 const DOMAIN_LABELS = { membrane: "Domain", mallet: "Drum shape", geometric: "Regime",
                         sympathetic: "Regime" };
@@ -483,6 +492,18 @@ function updateLambdaHint() {
             + "transfer fall away."
           : `B is ${d.toFixed(1)} semis flat of A: off its partial the transfer weakens. `
             + `K = ${Math.round(param("K"))} N/m sets how selective the coupling is.`;
+      } else if (domainSel.value === "weinreich") {
+        const d = param("detune"), sb = param("sigma_body");
+        syHint.textContent = sb === 0
+          ? "body loss = 0 → no bridge damping, nothing decays (the energy verdict is the drift "
+            + "check). Raise it to load the symmetric mode and split the decay in two."
+          : d < 0.005
+            ? `unison: strike ONE string over a lossy bridge — the symmetric mode dies fast (prompt), `
+              + `the antisymmetric mode is bit-exactly bridge-decoupled so it rings on LOSSLESS `
+              + `(a dead-flat aftersound: the normal-mode oracle again). Detune → a finite aftersound.`
+            : `~${(d * 100).toFixed(0)} cents mistuned: the antisymmetric mode now loads the bridge a `
+              + `little, so the aftersound decays slowly (the realistic piano unison) instead of `
+              + `flat. Body loss ${Math.round(sb)} s⁻¹ sets the prompt rate.`;
       } else {
         syHint.textContent = "normal modes: A & B plucked in ± antiphase keep the bridge exactly "
           + "still (w_b ≡ 0 bit-exact); in phase, it swings and loads the body. The zero is the "
@@ -526,7 +547,7 @@ function onControlChange(name) {
   if (name === "lam_long" || name === "N" || name === "rho") updateLambdaHint();
   if (name === "tongue_position" || name === "dt_over_t0") updateLambdaHint();
   if (name === "kappa") updateLambdaHint();   // the phantom hint's microscope + cost estimate
-  if (name === "K" || name === "detune") updateLambdaHint();   // sympathetic coupling hint
+  if (name === "K" || name === "detune" || name === "sigma_body") updateLambdaHint();  // symp hint
   scheduleAuto();
 }
 
@@ -1037,13 +1058,22 @@ function drawEnergy() {
     // verdict there; the 2σ comparison only means something for a resonator decaying toward rest.
     const hasOracle = e.lossy.measured_2sigma !== undefined;
     const meas = e.lossy.measured_2sigma;
+    // The decay_oracle=False readout is model-specific: the mallet decays from a ½M·v₀² floor, the
+    // weinreich unison is a TWO-rate decay to a nonzero aftersound floor. Neither has a single
+    // flat-loss oracle to compare against, so both report pure passivity — but for different reasons.
+    const spec2 = payload && payload.meta ? payload.meta.spectrum : null;
+    const isWein = spec2 && spec2.kind === "sympathetic" && spec2.regime === "weinreich";
     out.textContent = hasOracle
       ? `lossy · energy monotone decrease: ${mono ? "yes ✓" : "NO ✗"}${convNote}\n` +
         `measured 2σ = ${meas == null ? "—" : meas.toFixed(3)} s⁻¹` +
         `  (flat-loss oracle ${e.lossy.oracle_2sigma.toFixed(3)})`
-      : `lossy · passive: energy monotone non-increasing: ${mono ? "yes ✓" : "NO ✗"}${convNote}\n` +
-        `felt/membrane loss removes energy from a ½M·v₀² floor — no decay-rate oracle for a ` +
-        `closed struck system`;
+      : isWein
+        ? `lossy · passive: total energy monotone non-increasing: ${mono ? "yes ✓" : "NO ✗"}` +
+          `${convNote}\na two-rate decay to a nonzero aftersound floor — no single-exponential ` +
+          `oracle; the two slopes are the claim (see the two-stage-decay panel)`
+        : `lossy · passive: energy monotone non-increasing: ${mono ? "yes ✓" : "NO ✗"}${convNote}\n` +
+          `felt/membrane loss removes energy from a ½M·v₀² floor — no decay-rate oracle for a ` +
+          `closed struck system`;
   }
 }
 
@@ -1091,6 +1121,9 @@ function drawDiagnostics() {
     if (spec.regime === "normal") {
       partialsTitle.firstChild.textContent = "Bridge motion ";
       partialsSub.textContent = "antisymmetric ≡ 0 vs symmetric";
+    } else if (spec.regime === "weinreich") {
+      partialsTitle.firstChild.textContent = "Two-stage decay ";
+      partialsSub.textContent = "prompt + aftersound (log)";
     } else {
       partialsTitle.firstChild.textContent = "Sympathetic transfer ";
       partialsSub.textContent = "energy reaching the neighbour";
@@ -1731,6 +1764,61 @@ function drawSympathetic(sp) {
       `it cannot see.`;
     return;
   }
+
+  if (sp.regime === "weinreich") {
+    // Log-y string-energy envelope: strike-ONE shows the fast prompt → slow/flat aftersound knee;
+    // strike-BOTH (the pure symmetric mode) decays away single-slope with no aftersound — the
+    // contrast that proves the strike-one plateau is the un-decaying antisymmetric mode, not a
+    // floor. drawWhirl's log-axis is the precedent.
+    const padL = 30, padB = 16, top = 10;
+    const one = num(sp.env_one).map((x) => (x <= 0 ? 1e-300 : x));
+    const both = num(sp.env_both).map((x) => (x <= 0 ? 1e-300 : x));
+    const plotW = W - padL - 8, plotH = H - padB - top;
+    g.clearRect(0, 0, W, H);
+    const lo = -3, hi = Math.log10(1.5);            // fixed 1e-3 .. ~1.5 window (matches the sweep)
+    const span = hi - lo;
+    const px = (i) => padL + (t[i] / tmax) * plotW;
+    const py = (v) => top + plotH - ((Math.log10(v) - lo) / span) * plotH;
+    g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(padL, top, plotW, plotH);
+    g.strokeStyle = "rgba(139,152,168,.18)";
+    for (let d = -3; d <= 0; d++) {
+      const y = py(Math.pow(10, d));
+      g.beginPath(); g.moveTo(padL, y); g.lineTo(padL + plotW, y); g.stroke();
+      g.fillStyle = "#8b98a8"; g.font = "9px ui-monospace, monospace";
+      g.fillText(`1e${d}`, 2, y + 3);
+    }
+    const line = (arr, colour, wdt) => {
+      g.strokeStyle = colour; g.lineWidth = wdt; g.beginPath();
+      for (let i = 0; i < arr.length; i++) {
+        const y = Math.max(top, Math.min(top + plotH, py(arr[i])));
+        if (i === 0) g.moveTo(px(i), y); else g.lineTo(px(i), y);
+      }
+      g.stroke();
+    };
+    line(both, "#ff8f4c", 1.5);                     // strike-both: decays away (no aftersound)
+    line(one, "#4cc2ff", 2.5);                      // strike-one: prompt → aftersound plateau
+    g.font = "10px ui-monospace, monospace";
+    g.fillStyle = "#4cc2ff"; g.fillText("strike one", padL + 6, top + 12);
+    g.fillStyle = "#ff8f4c"; g.fillText("strike both", padL + 78, top + 12);
+    g.fillStyle = "#8b98a8"; g.fillText(`${tmax.toFixed(2)} s`, W - 46, H - 5);
+    const flat = sp.sigma_zero;
+    const ratio = sp.aftersound_rate > 1e-6 ? (sp.prompt_rate / sp.aftersound_rate) : Infinity;
+    out.textContent = flat
+      ? `body loss = 0 → nothing decays: both curves ring on flat (the energy verdict is the ` +
+        `conservation-drift check, not passivity).\nRaise body loss to load the symmetric mode and ` +
+        `split the decay into a fast prompt + a lingering aftersound.`
+      : `prompt ${sp.prompt_rate.toFixed(1)} s⁻¹ → aftersound ${sp.aftersound_rate.toFixed(2)} s⁻¹` +
+        `${ratio === Infinity ? "" : ` (${ratio.toFixed(0)}× slower)`}: strike-one keeps ` +
+        `${(sp.floor_one * 100).toFixed(0)}% of its energy in the un-decaying mode, while strike-both ` +
+        `falls to ${(sp.both_final * 100).toFixed(0)}%.\n` +
+        (sp.detune < 0.005
+          ? `at unison the aftersound is EXACTLY lossless (the antisymmetric mode is bit-exactly ` +
+            `bridge-decoupled — the normal-mode oracle). Dial detune up for a finite piano aftersound.`
+          : `~${(sp.detune * 100).toFixed(0)} cents mistuned: the antisymmetric mode loads the bridge ` +
+            `a little, so the aftersound decays slowly instead of flat — the real piano unison.`);
+    return;
+  }
+
   const f0 = num(sp.frac0), f1 = num(sp.frac1);
   const base = H - 18, top = 22;                      // fraction axis: 0 at bottom, 1 at top
   const plot = (arr, colour, wdt) => {

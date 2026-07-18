@@ -575,6 +575,60 @@ full suite green, verifier 17/17, both PNGs eyeballed, the CDP switch-check ALL 
   RECOMPUTES both ways (detune hidden in normal → shown in transfer → hidden again, no latch), K
   resets 8000↔1500 per regime, and switch-away leaves no out-of-range sliders.
 
+### Batch 7 (DONE) — Weinreich two-stage decay (the first body-loss slider)
+
+The deferred third sympathetic regime, and the FIRST body-loss slider in the viewer. Strike ONE of
+two near-unison strings over a LOSSY bridge: the symmetric normal mode loads the lossy body and dies
+fast (the "prompt"); the antisymmetric mode barely loads it and lingers (the "aftersound"). The
+string-energy envelope shows the fast-then-slow knee of a real piano unison. All-wrapper (a
+concurrent full-suite run stayed green; `physsynth/core` untouched). 11 web tests added (→ 189 web);
+verifier + CDP switch-check both fully green. Load-bearing, all *measured* not assumed:
+
+- **`sigma_body` gates the VERDICT, not just the physics.** At σ_body = 0 the closed system
+  conserves → the ordinary drift check (`sigma_zero=True`); at σ_body > 0 it flips to **passivity
+  with `decay_oracle=False`** — the total energy is a two-rate decay to a *nonzero aftersound floor*,
+  so a single fitted 2σ against a flat oracle would be a lying "broken match" (the mallet's
+  `decay_oracle=False` case, second customer). There is no closed form for the coupled modal decay
+  over an off-harmonic body, so passivity IS the honest verdict; the two slopes are the claim. The
+  guard is σ-blind (built from the lossless `omega`-only leapfrog operator), so a lossy body only
+  adds headroom — it cannot destabilise a config the σ = 0 guard passed (advisor, verified).
+- **The anchor sub-claim ties back to batch 6's normal-mode oracle.** Strike-one = ½ symmetric +
+  ½ antisymmetric; at detune = 0 the antisymmetric mode is bit-exactly bridge-decoupled (w_b ≡ 0),
+  so the body's damping *never activates on it* and its tail is **lossless in the discrete scheme,
+  exactly** → aftersound slope ≈ 0, rising clearly with detune (measured 0.02 → 0.23 s⁻¹ at
+  detune 0 → 0.3 semis). The floor value (~50 %) is *report-only* (the ~50/50 split is approximate).
+- **Two runs, and strike-both is NOT droppable.** The contrast is plucking BOTH strings (the pure
+  symmetric mode): it loads the body fully and decays away single-slope (~5 %), no aftersound. This
+  proves the strike-one plateau is the un-decaying antisymmetric mode, *not a noise floor* — remove
+  that excitation and the energy DOES decay away. Budget: 2 × n_steps, same `SYMP_WORK_MAX`
+  (default 2 s × 2 ≈ 89 k < 130 k; a high T/N trips it cleanly).
+- **The ripple trap (advisor).** String energy `E_A + E_B` EXCLUDES `E_conn`/`E_body`, so it
+  oscillates (string↔spring slosh + beating) even in a lossless tail — a raw read/polyfit measures
+  ripple, not decay. Fix: a **sliding-MEAN envelope** over one fundamental period (`uniform_filter1d`;
+  the whirl's sliding-envelope precedent, mean not max — max sits on the slosh peaks, the mean is the
+  average stored string energy). The envelope's first point dips slightly below 1 (the centered mean
+  over the prompt's fast decay) — cosmetic, tested for `[0.85, 1.05]`.
+- **The rate fit handles a SUM of exponentials.** `log(E_str)` curves through the knee (fast mode +
+  slow/flat mode), so a naive early fit reads the curvature. The antisymmetric plateau is a real
+  floor → the **prompt** rate is fit on `log(E_env − floor)` over the steep part, the **aftersound**
+  rate on `log(E_env)` over the late window. None of the rates is a validated oracle (report-only,
+  like the mallet's contact time); the sharp claim is the *aftersound-vs-detune* trend above.
+- **Params, all measured, not the diagnose rig's verbatim.** K = 6000 (its own MODEL_RANGES key),
+  σ_body default 20 (a visible prompt + a long aftersound in ~2 s; the diagnose's 10 was too weak —
+  the prompt read 0.6 s⁻¹, no visible knee), max 80 (heavier → an invisible cliff). detune re-ranged
+  to a **fine 0..0.4 semis, step 0.01 (~1 cent)** — a piano unison is mistuned by a few cents, not
+  transfer's 0..12 semitones. `_default` provides the semitone fallback range, so weinreich→transfer
+  restores it; **`sigma_body` reset in `_default`** (the recurring leak). detune default 0 leads with
+  the exact invariant; the hint dials it up for the realistic finite aftersound.
+- **Wiring gotchas cleared:** the `{"domain": "weinreich"}` bad-param test was updated to `nonesuch`
+  (weinreich is now valid); `drawEnergy`'s `decay_oracle=False` readout branched (mallet's "½M·v₀²
+  floor" wording is wrong here → "two-rate decay to a nonzero aftersound floor"); `symp-hint` +
+  `drawSympathetic` (log-y, `drawWhirl` precedent) + `drawDiagnostics` title all gained a weinreich
+  branch. The CDP switch-check (`M:\claud_projects\temp\wein_switch_check.py`) drove the sliders
+  (the deep-link verifier structurally can't): sigma_body appears only in weinreich (recomputes, no
+  latch), detune range 0.4↔12 per regime, and the RENDER checks confirm the verdict TOGGLE —
+  σ_body = 0 flips "passive"→"conserved" + "nothing decays" panel; detune 0.3 → "cents mistuned".
+
 ### Later batches (rough map — not firm)
 
 - **Excited strings** — barrier #8, jawari (barrier profile drawn under the string). The bow landed
@@ -583,10 +637,7 @@ full suite green, verifier 17/17, both PNGs eyeballed, the CDP switch-check ALL 
   batch 2's balance panel; its telemetry differs (mouth / jet / reed-damping channels are each
   sign-definite and separately measured, so unlike the bow it can close the balance *with* loss on
   — the lossy branch may be a genuine residual there rather than an inferred one).
-- **Sympathetics Weinreich two-stage decay** — the deferred loss regime (batch 6 shipped `normal` +
-  `transfer`, both lossless). Needs a body-loss slider (no viewer model has one; reset in `_default`),
-  passivity via `decay_oracle=False`, and its own two-slope string-energy panel (a single 2σ fit is
-  meaningless — the two-slope knee IS the signature). Mirrors geometric's phantom split-out.
+- **Sympathetics Weinreich two-stage decay** — DONE, batch 7 above.
 - **The parametric-instability demo** deserves its own batch with real viz (energy cascading into the
   neighbour modes — model #9's IN-plane exchange, which is the SAME `2ω` pump batch 3's whirl aims at
   the other polarization) — *not* a bolt-on to justify batch 1's purity gate.

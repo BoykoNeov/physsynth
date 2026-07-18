@@ -29,6 +29,7 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.ndimage import uniform_filter1d
 from scipy.signal import resample_poly
 from scipy.sparse.linalg import eigsh
 
@@ -397,24 +398,38 @@ headless verifier's wait had to grow for it.
 # sympathetics; HANDOFF §12.B). The viewer fixes **J = 2** — the two-string oracles (the
 # antisymmetric normal mode, sympathetic transfer) are exactly what is validated, and a free
 # string-count slider would break them. It is a CLOSED, UNDRIVEN, linear-leapfrog system, so it
-# rides the ORDINARY energy panel: sigma = 0 -> the conservation drift check (this batch is
-# lossless; body/string loss is the deferred Weinreich two-stage-decay regime). But conservation
-# and passivity are AUTOMATIC from the linear-leapfrog structure — they pass even a flipped coupling
-# sign — so they are table-stakes, NOT the claim. The claim lives in the SECOND panel: the shared
-# bridge displacement w_b(t). Two regimes carry it:
-#   * normal   — the discriminating oracle. Runs BOTH ICs (antisymmetric u_B = -u_A, keeping w_b
-#                exactly still, vs the symmetric contrast that swings the bridge) and plots both
-#                w_b traces; a flat zero alone would read as "broken". The bit-exact w_b == 0 holds
-#                only if the two strings are identical, so the detune slider is gated OUT of here.
-#   * transfer — pluck one string; a tuned unison neighbour drains most of the energy, a detuned
-#                one barely responds. The per-string energy-fraction panel carries the slosh.
-SYMP_REGIMES = ("normal", "transfer")
+# rides the ORDINARY energy panel: sigma = 0 -> the conservation drift check; a lossy BODY (the
+# weinreich regime below) flips it to passivity. But conservation and passivity are AUTOMATIC from
+# the linear-leapfrog structure — they pass even a flipped coupling sign — so they are table-stakes,
+# NOT the claim. The claim lives in the SECOND panel. Three regimes carry it:
+#   * normal    — the discriminating oracle. Runs BOTH ICs (antisymmetric u_B = -u_A, keeping w_b
+#                 exactly still, vs the symmetric contrast that swings the bridge) and plots both
+#                 w_b traces; a flat zero alone would read as "broken". The bit-exact w_b == 0 holds
+#                 only if the two strings are identical, so the detune slider is gated OUT of here.
+#   * transfer  — pluck one string; a tuned unison neighbour drains most of the energy, a detuned
+#                 one barely responds. The per-string energy-fraction panel carries the slosh.
+#   * weinreich — the piano-unison two-stage decay. Two near-unison strings over a LOSSY bridge
+#                 (a body-loss slider, the first in the viewer); strike ONE and the symmetric normal
+#                 mode loads the lossy bridge and dies fast (the "prompt"), while the antisymmetric
+#                 mode barely loads it and lingers (the "aftersound"). The string-energy envelope
+#                 shows the fast-then-slow knee. At detune = 0 the antisymmetric mode is bit-exactly
+#                 bridge-decoupled (the normal-mode oracle again), so the body's damping never
+#                 activates on it and the aftersound is EXACTLY lossless (slope -> 0) — the sharp
+#                 sub-claim; a nonzero detune gives the realistic finite aftersound. Its contrast is
+#                 plucking BOTH strings (the pure symmetric mode): single-slope, no aftersound.
+SYMP_REGIMES = ("normal", "transfer", "weinreich")
 SYMP_J = 2                       # fixed: the validated oracles are two-string
 SYMP_N_MAX = 160                 # each step = 2 ideal-string leapfrogs + a body step (no root-find)
 SYMP_LAM_DEFAULT = 0.9           # < 1 REQUIRED: the bridge spring pushes the Nyquist mode unstable
 SYMP_K_DEFAULT = 8000.0          # normal-mode bridge (the diagnose rig's stiff K)
 SYMP_K_TRANSFER = 1500.0         # transfer bridge: a SOFTER spring is frequency-SELECTIVE (the
 #                                  resonant transfer is the point; a stiff one couples broadly)
+SYMP_K_WEINREICH = 6000.0        # two-stage-decay bridge (the diagnose rig's lossy-bridge K)
+SYMP_SIGMA_BODY_DEFAULT = 20.0   # body-loss default: a visible prompt + a long aftersound in ~2 s
+SYMP_SIGMA_BODY_MAX = 80.0       # heavier only shortens the prompt to an invisible cliff
+SYMP_WEINREICH_DETUNE_MAX = 0.4  # semitones (~40 cents): a piano unison is mistuned by a few cents,
+#                                  so weinreich needs a FINE detune range, distinct from transfer's
+#                                  0..12 semitones (its slider step is 0.01 semi ~ 1 cent)
 SYMP_BODY_FREQS = np.array([137.0, 213.0, 330.0, 471.0, 620.0])  # diagnose rig's off-harmonic modes
 SYMP_BODY_MASS = 0.02            # ~ the string's rho*L, so the body genuinely reacts
 SYMP_AMP = 1e-3                  # pluck amplitude; the bridge-stillness claim is scale-invariant
@@ -2110,16 +2125,21 @@ def _symp_regime(p: dict[str, Any]) -> str:
 
 
 def _build_sympathetic(
-    p: dict[str, Any], *, detune_semitones: float = 0.0, k_default: float = SYMP_K_DEFAULT
+    p: dict[str, Any], *, detune_semitones: float = 0.0, k_default: float = SYMP_K_DEFAULT,
+    sigma_body: float = 0.0,
 ) -> tuple[SympatheticStrings, float, float, int, float, float]:
     """Build a 2-string :class:`SympatheticStrings` on a shared modal body.
 
     ``fs = c0 N/(L lam)`` is set from string 0's tension (string 0 sits at the requested ``lam``);
     string 1 is detuned **downward** by ``detune_semitones`` (lower tension keeps its ``lam < 1``).
     ``k_default`` is the regime's fallback bridge stiffness when the request omits ``K`` (normal =
-    8000, transfer = 1500) — it MUST match the default the caller uses for the panel label, or a
-    request with no ``K`` would run one stiffness while the panel claims another. The core ctor is
-    the single source of truth for the ``lam < 1`` guard and the exact dense stability bound — both
+    8000, transfer = 1500, weinreich = 6000) — it MUST match the default the caller uses for the
+    panel label, or a request with no ``K`` would run one stiffness while the panel claims another.
+    ``sigma_body`` is the modal-body loss (the weinreich two-stage decay; ``0`` -> a lossless body,
+    keeping the normal/transfer paths bit-identical). It only *adds* dissipation: the core stability
+    guard is built from the lossless leapfrog operator (it uses ``omega``, never ``sigma``), so a
+    lossy body cannot destabilise a config the ``sigma = 0`` guard passed. The core ctor is the
+    single source of truth for the ``lam < 1`` guard and the exact dense stability bound — both
     raise ``ValueError``, surfaced upstream as a clean construction error.
     Returns ``(symp, c0, L, N, fs, lam)``.
     """
@@ -2153,7 +2173,8 @@ def _build_sympathetic(
         IdealString(L=L, T=Tj, rho=rho, fs=fs, N=N, boundary=("fixed", "free"))
         for Tj in tensions
     ]
-    body = ModalBody(freqs=SYMP_BODY_FREQS, fs=fs, masses=SYMP_BODY_MASS, sigmas=0.0, phi=1.0)
+    body = ModalBody(freqs=SYMP_BODY_FREQS, fs=fs, masses=SYMP_BODY_MASS, sigmas=sigma_body,
+                     phi=1.0)
     symp = SympatheticStrings(strings=strings, body=body, Ks=[K, K])
     return symp, c0, L, N, fs, float(strings[0].lam)
 
@@ -2236,8 +2257,17 @@ def _symp_finish(
     probe_x: float,
     spectrum_block: dict[str, Any],
     playback_speed: float,
+    energy_sigma_zero: bool = True,
+    energy_decay_oracle: bool = True,
 ) -> dict[str, Any]:
-    """Assemble the payload common to both regimes (frames + audio + the drift energy panel)."""
+    """Assemble the payload common to all regimes (frames + audio + the energy panel).
+
+    ``energy_sigma_zero`` / ``energy_decay_oracle`` parametrise the energy verdict: the lossless
+    normal/transfer regimes ride the conservation-drift check (``sigma_zero=True``), while the
+    weinreich regime with a lossy body flips to passivity (``sigma_zero=False``,
+    ``decay_oracle=False`` — its total energy is a two-rate decay to a nonzero aftersound floor,
+    with no single-exponential oracle, exactly the mallet's ``decay_oracle=False`` case).
+    """
     frames = np.array(frames_run.frames, dtype=float)             # (n_frames, J, N+1)
     field_amp = float(np.max(np.abs(frames))) if frames.size else 0.0
     sim = SimResult(
@@ -2263,10 +2293,11 @@ def _symp_finish(
         "playback_speed": playback_speed,
         "field_amp": field_amp,
         "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
-        # Lossless this batch (no loss sliders for sympathetic yet — see the deferred Weinreich
-        # regime), so the ordinary conservation-drift verdict; a closed undriven system needs no
-        # balance panel and no decay oracle.
-        "energy": _energy_block(sim, sigma_zero=True, oracle_2sigma=0.0),
+        # normal/transfer are lossless (conservation-drift verdict); weinreich has a lossy body ->
+        # passivity with no decay oracle (a two-rate decay to a nonzero floor). A closed undriven
+        # system never needs the balance panel.
+        "energy": _energy_block(sim, sigma_zero=energy_sigma_zero, oracle_2sigma=0.0,
+                                decay_oracle=energy_decay_oracle),
         "meta": {
             "c": round(c0, 3),
             "f1": round(f1, 3),
@@ -2296,6 +2327,8 @@ def _build_payload_sympathetic(p: dict[str, Any]) -> dict[str, Any]:
 
     if regime == "transfer":
         return _symp_transfer(p, playback_speed, pickup_frac, pluck_frac, audio_dur, fpp)
+    if regime == "weinreich":
+        return _symp_weinreich(p, playback_speed, pickup_frac, pluck_frac, audio_dur, fpp)
     return _symp_normal(p, playback_speed, pickup_frac, pluck_frac, audio_dur, fpp)
 
 
@@ -2428,6 +2461,148 @@ def _symp_transfer(
         field_labels=["string A — plucked", "string B — sympathetic"],
         grid_x=x, fs=fs, lam=lam, anim_stride=anim_stride, c0=c0, f1=f1, n_steps=n_steps,
         probe_x=float(x[pickup_idx]), spectrum_block=spectrum_block, playback_speed=playback_speed,
+    )
+
+
+# -- weinreich two-stage decay: helpers + the regime builder ---------------------------------------
+#
+# The string energy E_A + E_B EXCLUDES E_conn and E_body, so it oscillates (string<->spring sloshing
+# + sym/antisym beating) even in a lossless tail; a pointwise read or a raw polyfit measures that
+# ripple, not the decay. So the trace is a sliding-MEAN envelope over one fundamental period (the
+# whirl's sliding-envelope precedent, mean not max: max sits on the slosh peaks, the mean is the
+# average stored string energy). E_str is also a SUM of two exponentials (a fast symmetric mode + a
+# slow/flat antisymmetric one), so log(E_str) CURVES through the knee -- a naive early-window fit
+# reads the curvature, not the prompt rate. The antisymmetric plateau is a real floor, so the prompt
+# (fast) rate is fit on log(E_env - floor) over the steep part, and the aftersound (slow) rate on
+# log(E_env) over the late window. None of the rates is a validated oracle (there is no closed form
+# for the coupled modal decay over an off-harmonic body) -- they are reported, like the mallet's
+# contact time. What IS a sharp claim is the aftersound rate at detune = 0: the antisymmetric mode
+# bit-exactly bridge-decoupled (the normal-mode oracle), so it never loads the lossy body and its
+# tail is lossless in the discrete scheme -> slope ~ 0, rising clearly with detune.
+
+
+def _weinreich_envelope(e: NDArray[np.float64], win: int) -> NDArray[np.float64]:
+    """Sliding-mean envelope of the (normalized) string energy over ``win`` samples (~1 period)."""
+    return uniform_filter1d(np.asarray(e, dtype=float), size=max(1, int(win)), mode="nearest")
+
+
+def _neg_log_slope(t: NDArray[np.float64], e: NDArray[np.float64]) -> float:
+    """Decay rate ``-d/dt log(e)`` over a window (>= 0 for a decaying segment). 0 if too short."""
+    e = np.asarray(e, dtype=float)
+    t = np.asarray(t, dtype=float)
+    mask = e > (float(np.max(e)) * 1e-9 if e.size else 1.0)
+    if mask.sum() < 2:
+        return 0.0
+    return float(-np.polyfit(t[mask], np.log(e[mask]), 1)[0])
+
+
+def _weinreich_rates(
+    t: NDArray[np.float64], env: NDArray[np.float64]
+) -> tuple[float, float, float]:
+    """``(prompt_rate, aftersound_rate, floor)`` from the string-energy envelope.
+
+    ``floor`` is the tail-mean aftersound level. ``aftersound_rate`` is the late-window (last 40 %)
+    slope -- the sharp claim (~0 at detune = 0). ``prompt_rate`` is the floor-subtracted early slope
+    (over the steep part well above the floor), a report-only "how fast the prompt dies" number.
+    """
+    n = len(env)
+    floor = float(np.mean(env[int(0.80 * n):])) if n else 0.0
+    aftersound = _neg_log_slope(t[int(0.60 * n):], env[int(0.60 * n):]) if n else 0.0
+    excess = env - floor
+    steep = excess > 0.03
+    prompt = _neg_log_slope(t[steep], excess[steep]) if steep.sum() > 3 else 0.0
+    return prompt, aftersound, floor
+
+
+def _symp_weinreich(
+    p: dict[str, Any], playback_speed: float, pickup_frac: float, pluck_frac: float,
+    audio_dur: float, fpp: int,
+) -> dict[str, Any]:
+    """Weinreich two-stage decay: strike ONE of two near-unison strings over a LOSSY bridge.
+
+    Striking one string excites the symmetric and antisymmetric normal modes in equal measure. The
+    symmetric mode loads the lossy body and dies fast (the "prompt"); the antisymmetric mode barely
+    loads it and lingers (the "aftersound"), so the string-energy envelope shows the fast-then-slow
+    knee of a real piano unison. Its contrast, run alongside, is plucking BOTH strings -- the pure
+    symmetric mode, which loads the body fully and decays away single-slope with no aftersound (the
+    "fix"). Both runs are needed: the strike-one plateau alone could be mistaken for a noise floor,
+    but strike-both proves the plateau is the un-decaying antisymmetric mode (remove that excitation
+    and the energy DOES decay away). The energy verdict is passivity with ``decay_oracle=False``
+    (a two-rate decay to a nonzero floor; ``sigma_body = 0`` flips it back to the drift check).
+    """
+    K = _fnum(p, "K", SYMP_K_WEINREICH)
+    sigma_body = _fnum(p, "sigma_body", SYMP_SIGMA_BODY_DEFAULT)
+    detune = _fnum(p, "detune", 0.0)
+    if not (0.0 <= sigma_body <= SYMP_SIGMA_BODY_MAX):
+        raise ParamError(
+            f"body loss must be in [0, {SYMP_SIGMA_BODY_MAX}], got {sigma_body}."
+        )
+    if not (0.0 <= detune <= SYMP_WEINREICH_DETUNE_MAX):
+        raise ParamError(
+            f"detune must be in [0, {SYMP_WEINREICH_DETUNE_MAX}] semitones for the weinreich "
+            f"regime (a piano unison is mistuned by a few cents), got {detune}."
+        )
+    sy_one, c0, L, N, fs, lam = _build_sympathetic(
+        p, detune_semitones=detune, k_default=SYMP_K_WEINREICH, sigma_body=sigma_body,
+    )
+    sy_both, *_ = _build_sympathetic(
+        p, detune_semitones=detune, k_default=SYMP_K_WEINREICH, sigma_body=sigma_body,
+    )
+    f1 = c0 / (2.0 * L)
+    pickup_idx = min(max(1, round(pickup_frac * N)), N - 1)
+    x = sy_one.strings[0].x
+    pluck = triangular_pluck(x, L, pluck_frac * L, amplitude=SYMP_AMP)
+
+    n_steps = max(1, round(audio_dur * fs))
+    if 2 * n_steps > SYMP_WORK_MAX:
+        raise ParamError(
+            f"work budget exceeded ({2 * n_steps:,} steps > {SYMP_WORK_MAX:,}): the weinreich "
+            "regime runs twice (strike-one + its strike-both contrast). Lower the audio duration, "
+            "N, or the tension."
+        )
+    anim_stride = max(1, round((fs / f1) / fpp))
+    if n_steps // anim_stride > MAX_FRAMES:
+        anim_stride = max(1, math.ceil(n_steps / MAX_FRAMES))
+
+    sy_one.strings[0].set_state(pluck)                    # strike ONE (sym + antisym, equal parts)
+    run_one = _run_sympathetic(sy_one, n_steps, pickup_idx=pickup_idx, anim_stride=anim_stride,
+                               frame_until=n_steps)
+    sy_both.strings[0].set_state(pluck)
+    sy_both.strings[1].set_state(pluck)                   # strike BOTH: the pure symmetric mode
+    run_both = _run_sympathetic(sy_both, n_steps, pickup_idx=pickup_idx, anim_stride=1,
+                                frame_until=0)
+
+    t_full = np.arange(n_steps + 1) / fs
+    win = max(1, round(fs / f1))
+    e_one = run_one.e_str[0] + run_one.e_str[1]
+    e_both = run_both.e_str[0] + run_both.e_str[1]
+    env_one = _weinreich_envelope(e_one / float(e_one[0]), win)
+    env_both = _weinreich_envelope(e_both / float(e_both[0]), win)
+    prompt_rate, aftersound_rate, floor_one = _weinreich_rates(t_full, env_one)
+
+    idx = np.linspace(0, n_steps, min(n_steps + 1, SYMP_TRACE_POINTS)).astype(int)
+    spectrum_block: dict[str, Any] = {
+        "kind": "sympathetic",
+        "regime": "weinreich",
+        "time": _finite_list(idx / fs, 6),
+        "env_one": _finite_list(env_one[idx]),
+        "env_both": _finite_list(env_both[idx]),
+        "prompt_rate": round(prompt_rate, 3),
+        "aftersound_rate": round(aftersound_rate, 4),
+        "floor_one": round(floor_one, 4),
+        "both_final": round(float(env_both[-1]), 4),
+        "sigma_body": round(sigma_body, 2),
+        "detune": round(detune, 3),
+        "K": round(K, 1),
+        "sigma_zero": bool(sigma_body == 0.0),
+    }
+    return _symp_finish(
+        regime="weinreich", frames_run=run_one, energy_E=run_one.E, pickup=run_one.pickup,
+        fields=["string A", "string B"],
+        field_labels=["string A — struck", "string B — silent → sympathetic"],
+        grid_x=x, fs=fs, lam=lam, anim_stride=anim_stride, c0=c0, f1=f1, n_steps=n_steps,
+        probe_x=float(x[pickup_idx]), spectrum_block=spectrum_block, playback_speed=playback_speed,
+        energy_sigma_zero=bool(sigma_body == 0.0), energy_decay_oracle=False,
     )
 
 

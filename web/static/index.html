@@ -122,14 +122,19 @@
         <p class="hint" id="phantom-hint" data-domain="phantom"></p>
       </fieldset>
 
-      <!-- Sympathetic / coupled strings (J = 2): the shared bridge stiffness K, and (transfer only)
-           the neighbour's detune. K is gated by the core's exact dense stability guard, which rejects
-           an over-stiff spring with a clean error. detune is hidden in the normal-mode regime, where
-           the bit-exact w_b == 0 oracle needs the two strings identical. -->
+      <!-- Sympathetic / coupled strings (J = 2): the shared bridge stiffness K, the neighbour's
+           detune (transfer + weinreich), and the body loss (weinreich only). K is gated by the
+           core's exact dense stability guard, which rejects an over-stiff spring with a clean error.
+           detune is hidden in the normal-mode regime, where the bit-exact w_b == 0 oracle needs the
+           two strings identical; its range is re-set per regime (0..12 semis for transfer, a fine
+           0..0.4 semis for the few-cent piano-unison mistune of weinreich). sigma_body is the FIRST
+           body-loss slider in the viewer: the lossy bridge that makes the symmetric mode die fast
+           (the prompt) while the antisymmetric mode lingers (the aftersound). -->
       <fieldset class="group" data-show="sympathetic">
         <legend>Coupling</legend>
-        <div class="slider" data-param="K"      data-min="500" data-max="10000" data-step="100" data-val="8000" data-unit="N/m" data-fixed="0"></div>
-        <div class="slider" data-param="detune" data-min="0"   data-max="12"    data-step="0.1" data-val="0"    data-unit="semis" data-fixed="1" data-domain="transfer"></div>
+        <div class="slider" data-param="K"          data-min="500" data-max="10000" data-step="100"  data-val="8000" data-unit="N/m" data-fixed="0"></div>
+        <div class="slider" data-param="detune"     data-min="0"   data-max="12"    data-step="0.1"  data-val="0"    data-unit="semis" data-fixed="1" data-domain="transfer weinreich"></div>
+        <div class="slider" data-param="sigma_body" data-min="0"   data-max="80"    data-step="1"    data-val="20"   data-unit="s⁻¹" data-fixed="0" data-domain="weinreich"></div>
         <p class="hint" id="symp-hint"></p>
       </fieldset>
 
