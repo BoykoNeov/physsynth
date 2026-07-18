@@ -26,24 +26,25 @@
             <option value="bow">Bowed string (nonlinear exciter)</option>
             <option value="geometric">Geometrically-exact string (u·w·v)</option>
             <option value="membrane">Membrane (2D drum)</option>
+            <option value="mallet">Mallet → drum (contact, #7)</option>
             <option value="plate">Kirchhoff plate (2D)</option>
             <option value="vk">von Kármán plate (nonlinear)</option>
           </select>
         </label>
-        <label class="field" data-show="membrane plate vk" style="margin-top:8px">
+        <label class="field" data-show="membrane mallet plate vk" style="margin-top:8px">
           <span id="domain-label">Domain</span>
           <select id="domain"></select>
         </label>
       </div>
 
-      <fieldset class="group" data-show="ideal stiff damped tension bow geometric membrane plate vk">
+      <fieldset class="group" data-show="ideal stiff damped tension bow geometric membrane mallet plate vk">
         <legend>Physical</legend>
-        <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N" data-show="ideal stiff damped tension bow geometric membrane"></div>
+        <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N" data-show="ideal stiff damped tension bow geometric membrane mallet"></div>
         <div class="slider" data-param="rho" data-min="0.001" data-max="0.02" data-step="0.0005" data-val="0.005" data-unit="kg/m²" data-fixed="4"></div>
         <div class="slider" data-param="L"   data-min="0.25" data-max="2.0"  data-step="0.05"  data-val="1.0"   data-unit="m" data-show="ideal stiff damped tension bow geometric"></div>
       </fieldset>
 
-      <fieldset class="group" data-show="membrane plate vk">
+      <fieldset class="group" data-show="membrane mallet plate vk">
         <legend>Geometry</legend>
         <div class="slider" data-param="radius" data-min="0.2" data-max="1.0" data-step="0.05" data-val="0.5" data-unit="m" data-domain="circle"></div>
         <div class="slider" data-param="Lx" data-min="0.1" data-max="2.0" data-step="0.05" data-val="1.0" data-unit="m" data-domain="rectangle supported free"></div>
@@ -53,7 +54,7 @@
       <fieldset class="group">
         <legend>Discretization</legend>
         <div class="slider" data-param="N"      data-min="16"  data-max="512" data-step="1"    data-val="128"></div>
-        <div class="slider" data-param="lambda" data-min="0.5" data-max="2.0" data-step="0.01" data-val="1.0" data-show="ideal stiff damped tension bow membrane"></div>
+        <div class="slider" data-param="lambda" data-min="0.5" data-max="2.0" data-step="0.01" data-val="1.0" data-show="ideal stiff damped tension bow membrane mallet"></div>
         <div class="slider" data-param="mu"     data-min="0.25" data-max="32" data-step="0.25" data-val="1.0" data-fixed="2" data-show="plate"></div>
         <div class="slider" data-param="fs"     data-min="8000" data-max="96000" data-step="1000" data-val="32000" data-unit="Hz" data-fixed="0" data-show="vk"></div>
         <!-- The geometric string's knob is lam_long, NOT lambda, and that inversion is the model's
@@ -129,7 +130,21 @@
         <p class="hint" id="bow-hint"></p>
       </fieldset>
 
-      <fieldset class="group" data-show="ideal stiff membrane plate vk">
+      <!-- Mallet #7: a lumped mass in one-sided felt contact striking the drumhead. The strike (x, y)
+           reuses the shared 2D strike sliders below; here it is the felt itself. K/M set the contact
+           hardness (harder felt → shorter contact, higher centroid), v₀ the strike speed. λ_h > 0 adds
+           Hunt-Crossley hysteresis (passive, lowers restitution). No pluck: the head starts at REST. -->
+      <fieldset class="group" data-show="mallet">
+        <legend>Mallet &amp; felt</legend>
+        <div class="slider" data-param="mass"            data-min="0.005" data-max="0.2"   data-step="0.005" data-val="0.02"  data-unit="kg" data-fixed="3"></div>
+        <div class="slider" data-param="stiffness"       data-min="5000"  data-max="500000" data-step="5000"  data-val="50000" data-unit="N/mᵃ" data-fixed="0"></div>
+        <div class="slider" data-param="alpha"           data-min="1.0"   data-max="3.5"    data-step="0.1"   data-val="2.3"   data-fixed="1"></div>
+        <div class="slider" data-param="strike_velocity" data-min="0.5"   data-max="8.0"    data-step="0.25"  data-val="3.0"   data-unit="m/s" data-fixed="2"></div>
+        <div class="slider" data-param="hysteresis"      data-min="0"     data-max="60000"  data-step="1000"  data-val="0"     data-unit="·λ_h" data-fixed="0"></div>
+        <p class="hint" id="mallet-hint"></p>
+      </fieldset>
+
+      <fieldset class="group" data-show="ideal stiff membrane mallet plate vk">
         <legend>Loss</legend>
         <div class="slider" data-param="sigma" data-min="0" data-max="20" data-step="0.1" data-val="0"></div>
       </fieldset>
@@ -152,11 +167,12 @@
         <div class="slider" data-param="pickup_position" data-min="0.02" data-max="0.98" data-step="0.01" data-val="0.1"></div>
       </fieldset>
 
-      <fieldset class="group" data-show="membrane plate vk">
+      <fieldset class="group" data-show="membrane mallet plate vk">
         <legend>Strike &amp; pickup (x, y)</legend>
         <div class="slider" data-param="pluck_x"     data-min="0.1" data-max="0.9" data-step="0.01" data-val="0.4"></div>
         <div class="slider" data-param="pluck_y"     data-min="0.1" data-max="0.9" data-step="0.01" data-val="0.55"></div>
-        <div class="slider" data-param="pluck_width" data-min="0.1" data-max="0.9" data-step="0.01" data-val="0.45"></div>
+        <!-- The mallet is a point contact — no strike WIDTH — so this pluck-shape slider is hidden for it. -->
+        <div class="slider" data-param="pluck_width" data-min="0.1" data-max="0.9" data-step="0.01" data-val="0.45" data-show="membrane plate vk"></div>
         <div class="slider" data-param="pickup_x"    data-min="0.1" data-max="0.9" data-step="0.01" data-val="0.65"></div>
         <div class="slider" data-param="pickup_y"    data-min="0.1" data-max="0.9" data-step="0.01" data-val="0.6"></div>
         <p class="hint" data-show="vk" id="vk-strike-hint"></p>
@@ -167,7 +183,7 @@
         <!-- No audio_duration for the geometric string: it is the viewer's one viz-only model. See
              the note under the canvas — resolving its longitudinal wave forces fs ≈ 22× a normal
              string's, so a second of sound is ~10 minutes of compute. -->
-        <div class="slider" data-param="audio_duration"   data-min="0.2" data-max="6"    data-step="0.1"  data-val="2.0" data-unit="s" data-show="ideal stiff damped tension bow membrane plate vk"></div>
+        <div class="slider" data-param="audio_duration"   data-min="0.2" data-max="6"    data-step="0.1"  data-val="2.0" data-unit="s" data-show="ideal stiff damped tension bow membrane mallet plate vk"></div>
         <!-- Hidden for the phantom regime: its window is fixed physics, not a preference. At 0.05 s
              the weakest phantom (2f₁) sits inside its neighbours' leakage skirts and is mislocated
              by 0.52 Hz (vs 0.039 Hz at 0.10 s), collapsing its margin to f₂ from 170× to 8×. -->

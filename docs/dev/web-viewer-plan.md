@@ -473,6 +473,61 @@ quadratic in the transverse fields, linear in the longitudinal one — so two tr
   applied on domain change **only for models that declare them** (`hasRegimeRanges`), so a membrane
   circle→rectangle switch still does not reset the user's sliders.
 
+### Batch 5 (DONE) — mallet → drum, model #7 (the first CONTACT model)
+
+The cheap pick, and it paid off: it reuses the membrane heatmap wholesale, so the whole batch is
+wire-up plus one shared-code catch. 15 mallet web tests (→ 161 web), full suite green, verifier
+15/15, both PNGs eyeballed, the CDP switch-check ALL PASS. See `mallet-collision-state` memory for
+model #7 itself. Load-bearing, all *measured* not assumed:
+
+- **CONSERVATION rides the ordinary drift panel — no new verdict type (the closed-system contrast
+  with the bow).** The mallet+felt+membrane is a *closed* system whose `energy()` includes the mallet
+  KE, so `E₀ = ½M·v₀²` is a clean nonzero denominator and the σ=0 drift check works (1.5e-12 through a
+  strike). The bow needed the balance panel only because it is driven from rest with `E₀ = 0`; this
+  model is not driven, so its money test is plain conservation.
+- **The blocking catch = `decay_oracle=False` (advisor, verified empirically before building on it).**
+  With restitution ≈ 1 the mallet flies off force-free after the felt separates, so the total energy
+  sits on a near-constant `½M·v₀²` floor with only a ~0.05 % membrane wiggle. `_fit_decay` over that
+  near-flat trace reports `measured_2σ ≈ 0.0004` against `oracle_2σ = 4.0` — a lying "broken match"
+  over physics that is actually fine. An additive flag drops the 2σ line, so the lossy verdict is
+  pure **passivity** (monotone non-increasing). There is no closed form for mallet+hysteresis+
+  membrane decay, so passivity *is* the honest lossy verdict. Ran the σ>0 probe first (0.0004 vs
+  4.0), then built — the same "verify the number before wiring the panel" discipline as batch 1.
+- **Contact duration is NOT the ~2 ms rigid-wall oracle — the coupled head yields.** On the
+  compliant membrane the local reactive dimple relaxes, so contact lasts **~40-60 ms (~20×)** and
+  scales with **√M** (M=0.02 → separates at 40 ms, restitution 0.9997, final head 0.05 %; M=0.05 →
+  59 ms; peak head ~65 % of the strike mid-contact, a transient dimple). Consequence: the contact
+  diagnostics must run over the *full* audio (which captures separation), not a short window — a
+  rigid-wall "contact time" under-reports the coupled duration by the compliance ratio.
+- **One instrumented audio loop, not `simulate()`.** `simulate()` gives energy + pickup but not the
+  mallet internals (velocity, contact force, in-contact), and the contact IS the headline — so the
+  audio run is a hand-rolled step loop capturing both, yielding the conservation number and the
+  contact diagnostics in one pass. A `SimResult` is constructed from the captured energy/time for
+  `_energy_block`. The animation run stays separate (fresh mallet from rest, fundamental stride).
+- **The headline is the CONTACT, not the tone (advisor).** A point mass is an inefficient membrane
+  exciter (restitution ≈ 1, the head keeps ~0.05 %), so the second panel is a *contact episode* — the
+  mallet velocity crossing zero into a visible bounce, the felt-force pulse, and a separation line —
+  NOT a mode spectrum, because a soft felt low-passes the strike and per-mode locking would lock onto
+  noise. Retention is read at the **peak** (the core signature-test lesson). Reported, never tuned to
+  ring louder: "a point mass barely rings a drum" is printed in the readout.
+- **Strike marker = the snapped node** (the payload reports the ctor-snapped fractions, not the raw
+  slider) — a filled red dot, distinct from the hollow yellow pickup cross. **`pluck_width` is hidden
+  for the mallet** (a point contact has no width) via a `data-show` exclusion.
+- **Its own budget, `MALLET_WORK_MAX = 3.5e8` = half the membrane's 7e8**, because a coupled step is
+  1.5-3× a bare membrane step (a ~constant ~20 µs root-find, dominant at low N). `MALLET_N_MAX = 80`;
+  both cost guards (n_live, node-steps) are reachable. Default N=60 renders in ~1.4 s, worst ~5.6 s.
+- **The switch-driving CDP check (batch-4 lesson applied — and the trap resurfaced in the harness).**
+  The deep-link verifier structurally cannot fire the model-switch handler, so a CDP-driven switch
+  (autorender off) confirmed the transitions: felt sliders in + `pluck_width` hidden + sigma reset +
+  domain populated on switch-into; mallet-only sliders out + no stale-range garbage on switch-away.
+  Meta-trap: the check script's own f-string + plain-string `}}` concatenation silently produced a JS
+  syntax error that no-op'd the switch, so it read the initial `ideal` state and (with a naive
+  `.hidden` check) reported false results — the exact "a fresh-load verifier proves nothing about
+  transitions" lesson, one level up in the *test* harness. Fixes: build the whole IIFE in one
+  f-string; check effective visibility with `closest('[hidden]')` (headless has no `offsetParent`
+  layout, and a slider div's own `.hidden` is false while its parent fieldset is hidden). The
+  switch-check lives at `M:\claud_projects\temp\mallet_switch_check.py`.
+
 ### Later batches (rough map — not firm)
 
 - **Excited strings** — barrier #8, jawari (barrier profile drawn under the string). The bow landed
@@ -481,7 +536,6 @@ quadratic in the transverse fields, linear in the longitudinal one — so two tr
   batch 2's balance panel; its telemetry differs (mouth / jet / reed-damping channels are each
   sign-definite and separately measured, so unlike the bow it can close the balance *with* loss on
   — the lossy branch may be a genuine residual there rather than an inferred one).
-- **Mallet #7** — cheap: conservation energy + the membrane heatmap with a strike marker.
 - **Sympathetics** — N string lines; reuses batch 3's stacked-strip `drawFields`.
 - **The parametric-instability demo** deserves its own batch with real viz (energy cascading into the
   neighbour modes — model #9's IN-plane exchange, which is the SAME `2ω` pump batch 3's whirl aims at

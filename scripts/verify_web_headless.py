@@ -183,6 +183,8 @@ def main() -> int:
         cases = [
             ("membrane_circle", "model=membrane&domain=circle"),
             ("membrane_rect", "model=membrane&domain=rectangle"),
+            ("mallet_circle", "model=mallet&domain=circle"),
+            ("mallet_rect", "model=mallet&domain=rectangle"),
             ("string_ideal", "model=ideal"),
             ("string_tension", "model=tension"),
             ("string_bow", "model=bow"),

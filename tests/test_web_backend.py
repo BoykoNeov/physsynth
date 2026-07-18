@@ -30,6 +30,7 @@ from web.serialize import (
     GEOM_PHANTOM_WORK_MAX,
     GEOM_WORK_MAX,
     LOSSLESS_TOL,
+    MALLET_N_MAX,
     MEMBRANE_LAMBDA_MAX,
     MEMBRANE_N_MAX,
     PLATE_N_MAX,
@@ -530,6 +531,135 @@ def test_membrane_small_geometry_rejected_by_work_budget():
     # ban
     ok = simulate_to_payload(_membrane_params(domain="circle", radius=0.2, N=100,
                                               audio_duration=0.3))
+    assert "error" not in ok, ok.get("error")
+
+
+# == Mallet → membrane collision (model #7) =======================================================
+
+
+def _mallet_params(**overrides):
+    """Short mallet run — small grid + brief audio keep the suite fast (FDTD + a root-find/step)."""
+    p = {
+        "model": "mallet", "domain": "circle",
+        "T": 200.0, "rho": 0.005, "radius": 0.5,
+        "N": 40, "lambda": 0.5, "sigma": 0.0,
+        "mass": 0.02, "stiffness": 5.0e4, "alpha": 2.3, "hysteresis": 0.0,
+        "strike_velocity": 3.0, "pluck_x": 0.5, "pluck_y": 0.5,
+        "pickup_x": 0.65, "pickup_y": 0.6,
+        "audio_duration": 0.3, "animation_window": 0.04, "playback_speed": 0.02,
+    }
+    p.update(overrides)
+    return p
+
+
+def test_mallet_lossless_conserves_through_the_wrapper():
+    """The money test: a lossless, elastic strike conserves H to machine precision (drift < 1e-10).
+
+    Model #7 is a *closed* mass+felt+membrane system, so the verdict is CONSERVATION — it rides the
+    ordinary lossless drift panel, no new verdict type (the bow needed a balance panel only because
+    it is driven from rest with E₀ = 0).
+    """
+    payload = simulate_to_payload(_mallet_params())
+    assert "error" not in payload, payload.get("error")
+    assert payload["model"] == "mallet" and payload["frames"]["dims"] == 2
+    energy = payload["energy"]
+    assert energy["sigma_is_zero"] is True and "lossy" not in energy
+    assert energy["lossless"]["drift"] < LOSSLESS_TOL
+    assert energy["lossless"]["pass"] is True
+
+
+def test_mallet_bounces_with_near_unity_restitution_and_head_barely_rings():
+    """A point mass is an inefficient membrane exciter: it bounces off with restitution ≈ 1 and the
+    head keeps only ~0.01 % of the strike (the core signature, HANDOFF §7 finding).
+
+    This is the headline the contact panel shows — physics, never tuned to ring louder.
+    """
+    sp = simulate_to_payload(_mallet_params(N=60))["meta"]["spectrum"]
+    assert sp["kind"] == "mallet"
+    assert sp["separated"] is True                        # the felt lets go within the window
+    assert sp["restitution"] > 0.99                       # near-elastic rebound
+    assert sp["final_head_pct"] < 0.5                     # head retains a tiny fraction post-strike
+    assert sp["peak_head_pct"] > 30.0                     # but a big transient dimple mid-contact
+    assert sp["contact_ms"] > 0.0 and sp["peak_force"] > 0.0
+
+
+def test_mallet_strike_marker_reports_the_snapped_node_in_fractions():
+    """The strike marker coords are the SNAPPED contact node (in (0,1) fractions) — where the felt
+    actually landed, not the raw slider — so the heatmap dot sits on the real node.
+    """
+    sp = simulate_to_payload(_mallet_params(N=40, pluck_x=0.5, pluck_y=0.5))["meta"]["spectrum"]
+    assert 0.0 < sp["strike_fx"] < 1.0 and 0.0 < sp["strike_fy"] < 1.0
+    assert sp["strike_fx"] == pytest.approx(0.5, abs=0.03)   # snaps near the requested centre
+    assert sp["strike_fy"] == pytest.approx(0.5, abs=0.03)
+
+
+def test_mallet_audio_is_the_ring_not_the_dimple():
+    """The pickup audio must be the membrane's modal ring (a real tone at the fundamental), not the
+    near-field dimple relaxation — a peak near f1_discrete confirms it (advisor sanity check).
+    """
+    payload = simulate_to_payload(_mallet_params(N=48, audio_duration=0.4))
+    assert "error" not in payload, payload.get("error")
+    a = _decode_f32(payload["audio"]["b64"]).astype(float)
+    assert np.all(np.isfinite(a)) and np.max(np.abs(a)) == pytest.approx(0.9, abs=1e-4)
+    spec = np.abs(np.fft.rfft(a * np.hanning(a.size)))
+    freqs = np.fft.rfftfreq(a.size, 1.0 / payload["audio"]["fs"])
+    f_peak = freqs[np.argmax(spec)]
+    f1 = payload["meta"]["f1"]
+    assert abs(f_peak - f1) < 0.1 * f1                    # dominant peak rides the fundamental
+
+
+def test_mallet_lossy_reports_passivity_without_a_decay_oracle():
+    """σ>0 (or hysteresis>0): the verdict is pure passivity — the 2σ decay oracle is DROPPED.
+
+    A closed struck system's total energy sits on a near-constant ½M·v₀² floor once the felt
+    separates, so a fitted 2σ would read ~0 against a nonzero oracle — a lying 'broken match'. The
+    honest lossy verdict is monotone non-increasing, and the 2σ fields must be absent so the
+    frontend can render passivity instead.
+    """
+    for extra in ({"sigma": 6.0}, {"hysteresis": 3.0e4}):
+        energy = simulate_to_payload(_mallet_params(N=48, **extra))["energy"]
+        assert energy["sigma_is_zero"] is False and "lossless" not in energy
+        lossy = energy["lossy"]
+        assert lossy["monotone"] is True
+        assert "measured_2sigma" not in lossy and "oracle_2sigma" not in lossy
+
+
+def test_mallet_hysteresis_lowers_restitution():
+    """Hunt-Crossley hysteresis is passive (removes energy on loading AND unloading), so it must
+    lower the rebound: restitution(λ_h>0) < restitution(λ_h=0).
+    """
+    elastic = simulate_to_payload(_mallet_params(N=48))["meta"]["spectrum"]["restitution"]
+    hyst = simulate_to_payload(_mallet_params(N=48, hysteresis=3.0e4))["meta"]["spectrum"]
+    assert hyst["restitution"] < elastic
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"lambda": 1.0},                       # > 1/sqrt(2): violates the 2D CFL
+        {"N": MALLET_N_MAX + 1},               # past the mallet's tighter N ceiling
+        {"mass": 0.0},                         # non-physical felt / mass
+        {"stiffness": -1.0},
+        {"alpha": 0.5},                        # felt exponent must be >= 1
+        {"strike_velocity": 0.0},
+        {"pluck_x": 1.5},                      # strike position out of (0, 1)
+        {"audio_duration": 5.0},               # past the audio cap
+    ],
+)
+def test_mallet_bad_params_give_error_payload(bad):
+    payload = simulate_to_payload(_mallet_params(**bad))
+    assert "error" in payload and "message" in payload["error"]
+
+
+def test_mallet_small_geometry_rejected_by_work_budget():
+    """A squat rectangle at N=80 with 2 s audio inflates the node-step product past the mallet
+    budget (halved vs the membrane for the per-step root-find). Reject; short audio fits.
+    """
+    heavy = simulate_to_payload(_mallet_params(domain="rectangle", Lx=0.6, Ly=0.8, N=80,
+                                               audio_duration=2.0))
+    assert "error" in heavy and "node-steps" in heavy["error"]["message"]
+    ok = simulate_to_payload(_mallet_params(domain="rectangle", Lx=0.6, Ly=0.8, N=80,
+                                            audio_duration=0.2))
     assert "error" not in ok, ok.get("error")
 
 

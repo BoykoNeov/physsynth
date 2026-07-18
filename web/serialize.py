@@ -37,6 +37,7 @@ from physsynth.analysis.rotating_wave import rotating_wave_history, solve_rotati
 from physsynth.core.bow import BowedString
 from physsynth.core.engine import SimResult, simulate
 from physsynth.core.exciter import raised_cosine_2d, triangular_pluck
+from physsynth.core.mallet import MalletMembrane
 from physsynth.core.membrane import Membrane
 from physsynth.core.plate import Plate, VKPlate
 from physsynth.core.string_damped import DampedStiffString
@@ -84,6 +85,17 @@ MEMBRANE_NLIVE_MAX = 9_900     # below the n_live≈10_000 L2 cliff; admits a sq
 MEMBRANE_WORK_MAX = 7.0e8
 MEMBRANE_AUDIO_MAX = 2.0
 MEMBRANE_LAMBDA_MAX = 1.0 / math.sqrt(2.0)   # 2D CFL ceiling (5-point Laplacian: λ ≤ 1/√2)
+
+# Mallet → membrane (model #7): reuses the membrane FDTD + heatmap, so its budget mirrors the
+# membrane's — but every step also runs a scalar contact root-find (a near-constant ~20 µs on top
+# of the FDTD), so a coupled step is ~1.5-3× a bare membrane step (the factor is largest at low N,
+# where the root-find dominates the small grid). Halving the node-step budget keeps the worst
+# passing render at the membrane's ~5-6 s wall-clock despite that per-step factor.
+MALLET_N_MAX = 80
+MALLET_WORK_MAX = 3.5e8
+MALLET_AUDIO_MAX = 2.0
+MALLET_DIAG_POINTS = 240     # decimated contact-episode trace length for the contact panel
+
 # heatmap display grid is decimated to <= this per axis (data-size trap)
 DISPLAY_MAX = 64
 N_MEMBRANE_MODES = 12        # discrete eigenmodes marked on the spectrum panel
@@ -605,6 +617,7 @@ def _energy_block(
     oracle_2sigma: float,
     convergence: dict[str, Any] | None = None,
     balance_work: NDArray[np.float64] | None = None,
+    decay_oracle: bool = True,
 ) -> dict[str, Any]:
     """Energy report, gated by loss (catch #4): drift-vs-tol when lossless, passivity when lossy.
 
@@ -621,6 +634,15 @@ def _energy_block(
     its friction force exactly and reads the power from the true post-correction velocity, so the
     balance is exact for *any* Newton residual — that is the model's whole trick, and copying von
     Kármán's Picard gate here would gate on something that cannot spoil the number.
+
+    ``decay_oracle=False`` drops the measured-vs-oracle ``2σ`` line from the lossy verdict, leaving
+    pure **passivity** (monotone non-increasing). Used by the mallet: it is a *closed* system whose
+    total energy includes the mallet's kinetic energy, and once the felt separates the mallet flies
+    off force-free at ~constant velocity (restitution ≈ 1 — a point mass barely couples to the
+    head). So E(t) sits on a near-constant floor of ``½M·v₀²`` with only a ~0.01 % membrane wiggle,
+    and ``_fit_decay`` over that near-flat trace reports ``measured_2σ ≈ 0`` against a nonzero
+    ``oracle_2σ`` — a lying "broken match" over physics that is actually fine. There is no closed
+    form for mallet + hysteresis + membrane decay, so passivity *is* the honest lossy verdict.
     """
     t, E = res.time, res.energy
     idx = np.linspace(0, len(E) - 1, min(len(E), N_ENERGY_POINTS)).astype(int)
@@ -649,12 +671,14 @@ def _energy_block(
     E0 = float(E[0])
     dE = np.diff(E)
     max_rel_inc = float(np.max(dE) / E0) if E0 > 0 else float(np.max(dE)) if dE.size else 0.0
-    block["lossy"] = {
+    lossy: dict[str, Any] = {
         "monotone": bool(max_rel_inc <= MONOTONE_TOL),
         "max_rel_increase": max_rel_inc,
-        "measured_2sigma": _fit_decay(t, E),
-        "oracle_2sigma": oracle_2sigma,
     }
+    if decay_oracle:
+        lossy["measured_2sigma"] = _fit_decay(t, E)
+        lossy["oracle_2sigma"] = oracle_2sigma
+    block["lossy"] = lossy
     return block
 
 
@@ -704,6 +728,8 @@ def _build_payload(p: dict[str, Any]) -> dict[str, Any]:
     model = str(p.get("model", "ideal"))
     if model == "membrane":
         return _build_payload_membrane(p)
+    if model == "mallet":
+        return _build_payload_mallet(p)
     if model == "plate":
         return _build_payload_plate(p)
     if model == "vk":
@@ -2383,6 +2409,297 @@ def _build_payload_membrane(p: dict[str, Any]) -> dict[str, Any]:
             "num_steps": int(n_audio),
             "n_frames": int(nf),
             "spectrum": _membrane_spectrum_block(pickup, fs, f_disc, f_cont),
+        },
+    }
+
+
+# == Mallet → membrane collision (model #7) ========================================================
+#
+# The FIRST contact model in the viewer: a lumped mass in one-sided nonlinear felt contact striking
+# a drumhead. It reuses the membrane's 2D heatmap machinery wholesale (decimated field + mask), with
+# three differences from the membrane path: (1) the head starts at REST — the mallet strikes it, so
+# there is no raised-cosine IC; (2) the verdict is CONSERVATION, not a pluck's decay — it rides the
+# ordinary energy panel (lossless → drift < 1e-10; σ>0 or hysteresis>0 → passivity), but with the
+# 2σ decay oracle DROPPED (``decay_oracle=False``): the total energy includes the mallet's KE and
+# after the felt separates the mallet flies off at ~constant velocity, so E sits on a near-constant
+# ½M·v₀² floor and a fitted "2σ" would be a lie; (3) the headline is not the tone but the CONTACT —
+# a point mass is an inefficient membrane exciter (restitution ≈ 1, the head keeps ~0.01 %), which
+# the second panel shows and never tunes away. The core solve lives in :class:`MalletMembrane`.
+
+
+def _build_mallet(
+    p: dict[str, Any],
+) -> tuple[MalletMembrane, Membrane, float, float, float, str, dict[str, Any], dict[str, Any]]:
+    """Construct a fresh ``(MalletMembrane, Membrane)`` from params.
+
+    Returns ``(mallet, membrane, c, fs, sigma, domain, geom, info)``. The membrane is force-free at
+    construction (``u = 0``) — the mallet strikes a drum at REST — unlike every other 2D model,
+    which sets a raised-cosine IC. ``info`` carries the derived contact quantities (mass, felt
+    stiffness, strike velocity, the snapped strike position in fractions, and the rigid-wall
+    steps-per-contact resolution estimate).
+    """
+    try:
+        n_req = int(p.get("N", 60))
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"N must be an integer, got {p.get('N')!r}.") from exc
+    if n_req > MALLET_N_MAX:
+        raise ParamError(
+            f"N must be <= {MALLET_N_MAX} for the mallet (each step also runs a contact "
+            f"root-find), got {n_req}."
+        )
+
+    mem, c, fs, sigma, domain, geom = _build_membrane(p)
+
+    mass = _fnum(p, "mass", 0.02)
+    stiffness = _fnum(p, "stiffness", 5.0e4)
+    alpha = _fnum(p, "alpha", 2.3)
+    hysteresis = _fnum(p, "hysteresis", 0.0)
+    v0 = _fnum(p, "strike_velocity", 3.0)
+    strike_fx = _fnum(p, "pluck_x", 0.5)   # the strike (x, y) reuses the shared 2D strike sliders
+    strike_fy = _fnum(p, "pluck_y", 0.5)
+
+    if mass <= 0.0:
+        raise ParamError(f"mallet mass must be > 0, got {mass}.")
+    if stiffness <= 0.0:
+        raise ParamError(f"felt stiffness must be > 0, got {stiffness}.")
+    if alpha < 1.0:
+        raise ParamError(f"felt exponent alpha must be >= 1, got {alpha}.")
+    if hysteresis < 0.0:
+        raise ParamError(f"hysteresis must be >= 0, got {hysteresis}.")
+    if v0 <= 0.0:
+        raise ParamError(f"strike velocity must be > 0, got {v0}.")
+    for name, v in (("pluck_x", strike_fx), ("pluck_y", strike_fy)):
+        if not (0.0 < v < 1.0):
+            raise ParamError(f"{name} (strike position) must be in (0, 1), got {v}.")
+
+    sx, sy = _frac_to_xy(domain, strike_fx, strike_fy, geom)
+    mal = MalletMembrane(
+        membrane=mem, mass=mass, stiffness=stiffness, alpha=alpha, hysteresis=hysteresis,
+        strike_x=sx, strike_y=sy, strike_velocity=v0,
+    )
+
+    # Rigid-wall contact-resolution estimate (the felt half-period must span several steps or the
+    # strike aliases). It UNDERSTATES the coupled contact duration — on a yielding membrane the head
+    # relaxes and contact lasts ~20× the wall's π√(M/K) — but it is the right guard: it bounds
+    # resolution of the stiff felt oscillation, which is what aliases. Energy conserves even when
+    # under-resolved (the whole point of the energy method), so this is a NOTE, not an error.
+    steps_per_contact = float(np.pi * np.sqrt(mass / stiffness) * fs)
+    info = {
+        "mass": mass, "stiffness": stiffness, "alpha": alpha, "hysteresis": hysteresis,
+        "strike_velocity": v0,
+        "strike_fx": round(float(_xy_to_frac(domain, mal.x_strike, mal.y_strike, geom)[0]), 4),
+        "strike_fy": round(float(_xy_to_frac(domain, mal.x_strike, mal.y_strike, geom)[1]), 4),
+        "steps_per_contact": round(steps_per_contact, 1),
+        "resolved": bool(steps_per_contact >= 8.0),
+    }
+    return mal, mem, c, fs, sigma, domain, geom, info
+
+
+def _xy_to_frac(domain: str, x: float, y: float, geom: dict[str, Any]) -> tuple[float, float]:
+    """Inverse of :func:`_frac_to_xy`: physical (x, y) → (fx, fy) in (0,1)² (strike marker)."""
+    if domain == "circle":
+        a = geom["radius"]
+        return (x / a + 1.0) / 2.0, (y / a + 1.0) / 2.0
+    return x / geom["Lx"], y / geom["Ly"]
+
+
+def _mallet_contact_block(
+    time: NDArray[np.float64],
+    mvel: NDArray[np.float64],
+    head_e: NDArray[np.float64],
+    force: NDArray[np.float64],
+    in_contact: NDArray[np.bool_],
+    ke0: float,
+    fs: float,
+    info: dict[str, Any],
+) -> dict[str, Any]:
+    """The contact-episode verdict — the mallet's headline (``kind == "mallet"``).
+
+    A point mass is an *inefficient* membrane exciter (physics, not a bug — advisor-confirmed): the
+    local reactive near-field forms a dimple that relaxes and returns almost all the energy to the
+    mallet, so it bounces off with **restitution ≈ 1** and the head keeps **~0.01 %** of the strike.
+    This block reports that story rather than a tone spectrum (a soft felt low-passes the strike, so
+    per-mode partial-locking would lock onto noise). Retention is read at the **peak** (during
+    contact the transient dimple holds ~65 %; post-separation ~0.01 %), per the core signature test.
+    """
+    n = int(mvel.size)
+    v0 = float(info["strike_velocity"])
+
+    # Find the contact episode: first sustained contact start, then its first sustained end. The
+    # in_contact flag can flicker at grazing, so require a run of >= GRAZE steps on each side.
+    graze = 10
+    start = None
+    for i in range(n - graze):
+        if in_contact[i] and bool(np.all(in_contact[i:i + graze])):
+            start = i
+            break
+    sep = None
+    if start is not None:
+        for i in range(start + 1, n - graze):
+            if (not in_contact[i]) and bool(not np.any(in_contact[i:i + graze])):
+                sep = i
+                break
+
+    if start is None:
+        # Never made real contact (K or v0 too small for the felt to load) — honest null, not a bug.
+        restitution = 1.0
+        contact_ms: float | None = None
+        separated = False
+        zoom_end = n - 1
+    elif sep is None:
+        # Still in contact at the end of the window — report what we have, flag it.
+        restitution = abs(float(np.mean(mvel[-graze:]))) / v0
+        contact_ms = None
+        separated = False
+        zoom_end = n - 1
+    else:
+        restitution = abs(float(np.mean(mvel[sep:min(sep + graze, n)]))) / v0
+        contact_ms = float(time[sep] * 1e3)
+        separated = True
+        zoom_end = min(n - 1, int(sep * 2.0))   # auto-zoom to ~2× the contact episode
+
+    peak_head_pct = float(np.max(head_e) / ke0 * 100.0) if ke0 > 0 else 0.0
+    tail = head_e[int(n * 0.9):]
+    final_head_pct = float(np.mean(tail) / ke0 * 100.0) if (ke0 > 0 and tail.size) else 0.0
+    peak_force = float(np.max(force))
+
+    # Decimate the traces over the auto-zoom window to a fixed length for the panel.
+    hi = max(2, zoom_end + 1)
+    idx = np.unique(np.linspace(0, hi - 1, min(hi, MALLET_DIAG_POINTS)).astype(int))
+    return {
+        "kind": "mallet",
+        "t": _finite_list(time[idx], 6),
+        "vel": _finite_list(mvel[idx], 5),
+        "force": _finite_list(force[idx], 5),
+        "v0": round(v0, 4),
+        "restitution": round(float(restitution), 4),
+        "separated": bool(separated),
+        "contact_ms": (round(contact_ms, 2) if contact_ms is not None else None),
+        "peak_head_pct": round(peak_head_pct, 3),
+        "final_head_pct": round(final_head_pct, 4),
+        "peak_force": round(peak_force, 3),
+        "steps_per_contact": info["steps_per_contact"],
+        "resolved": info["resolved"],
+        "strike_fx": info["strike_fx"],
+        "strike_fy": info["strike_fy"],
+    }
+
+
+def _build_payload_mallet(p: dict[str, Any]) -> dict[str, Any]:
+    audio_dur = _fnum(p, "audio_duration", 1.0)
+    anim_win = _fnum(p, "animation_window", 0.06)
+    playback_speed = _fnum(p, "playback_speed", 0.02)
+    pickup_fx = _fnum(p, "pickup_x", 0.65)
+    pickup_fy = _fnum(p, "pickup_y", 0.6)
+    fpp = max(1, int(_fnum(p, "frames_per_period", FRAMES_PER_PERIOD)))
+
+    if not (0.0 < audio_dur <= MALLET_AUDIO_MAX):
+        raise ParamError(f"audio_duration must be in (0, {MALLET_AUDIO_MAX}] s, got {audio_dur}.")
+    if not (0.0 < anim_win <= ANIM_WIN_MAX):
+        raise ParamError(f"animation_window must be in (0, {ANIM_WIN_MAX}] s, got {anim_win}.")
+    if not (0.0 < playback_speed <= SPEED_MAX):
+        raise ParamError(f"playback_speed must be in (0, {SPEED_MAX}], got {playback_speed}.")
+    for name, v in (("pickup_x", pickup_fx), ("pickup_y", pickup_fy)):
+        if not (0.0 < v < 1.0):
+            raise ParamError(f"{name} must be in (0, 1), got {v}.")
+
+    mal, mem, c, fs, sigma, domain, geom, info = _build_mallet(p)
+    lam_h = float(info["hysteresis"])
+
+    # Work budget: the same node-step product as the membrane (audio run + slow-mo animation run),
+    # capped lower (MALLET_WORK_MAX) for the per-step contact root-find.
+    n_audio = max(1, round(audio_dur * fs))
+    n_anim_est = max(1, round(anim_win * fs))
+    work = mem.n_live * (n_audio + n_anim_est)
+    if work > MALLET_WORK_MAX:
+        raise ParamError(
+            f"this configuration needs ~{work / 1e6:.0f}M node-steps (over the "
+            f"~{MALLET_WORK_MAX / 1e6:.0f}M mallet budget); reduce N, raise lambda, shorten the "
+            "audio/animation, or enlarge the drum."
+        )
+
+    f_disc = _discrete_eigenfreqs(mem, c, N_MEMBRANE_MODES)
+    f1 = float(f_disc[0]) if f_disc.size else c / (2.0 * _length_scale(domain, geom))
+
+    # --- audio + energy + contact-diagnostics run: ONE manual, instrumented loop -----------------
+    # simulate() would give energy + pickup but NOT the mallet's internal state (velocity, contact
+    # force, in-contact flag) — and the contact story IS the headline — so we step by hand and read
+    # both. The head starts at REST (no set_state); the mallet drops and strikes it.
+    pickup_idx = mem.pickup_index_at(*_frac_to_xy(domain, pickup_fx, pickup_fy, geom))
+    energy = np.empty(n_audio + 1)
+    pickup = np.empty(n_audio + 1)
+    mvel = np.empty(n_audio + 1)
+    head_e = np.empty(n_audio + 1)
+    force = np.empty(n_audio + 1)
+    in_contact = np.zeros(n_audio + 1, dtype=bool)
+    energy[0], pickup[0] = mal.energy(), mal.displacement_at(pickup_idx)
+    mvel[0], head_e[0], force[0] = mal.mallet_velocity(), mem.energy(), mal.contact_force
+    in_contact[0] = mal.in_contact
+    for i in range(1, n_audio + 1):
+        mal.step()
+        energy[i], pickup[i] = mal.energy(), mal.displacement_at(pickup_idx)
+        mvel[i], head_e[i], force[i] = mal.mallet_velocity(), mem.energy(), mal.contact_force
+        in_contact[i] = mal.in_contact
+    if not np.all(np.isfinite(pickup)):
+        raise ParamError(
+            "simulation produced non-finite output (instability) — adjust parameters."
+        )
+
+    time = np.arange(n_audio + 1, dtype=float) / fs
+    audio_res = SimResult(time=time, energy=energy, output=pickup, fs=fs, snapshots=[])
+    lossless = (sigma == 0.0 and lam_h == 0.0)
+    ke0 = 0.5 * float(info["mass"]) * float(info["strike_velocity"]) ** 2
+    contact = _mallet_contact_block(time, mvel, head_e, force, in_contact, ke0, fs, info)
+
+    # --- animation run: fresh mallet from REST, short window, fundamental-resolving stride --------
+    mal_anim = _build_mallet(p)[0]
+    anim_stride = max(1, round((fs / f1) / fpp))
+    n_anim = max(anim_stride, round(anim_win * fs))
+    if n_anim // anim_stride > MAX_FRAMES:
+        anim_stride = max(1, math.ceil(n_anim / MAX_FRAMES))
+    anim_res = simulate(mal_anim, num_steps=n_anim, snapshot_stride=anim_stride)
+    frames_full = np.array([st for _, st in anim_res.snapshots], dtype=float)  # (nf, ny, nx)
+    frame_steps = np.array([i for i, _ in anim_res.snapshots], dtype=float)
+
+    # --- spatial decimation to the display grid (identical to the membrane path) ------------------
+    ny_full, nx_full = mem.mask.shape
+    stride_s = max(1, math.ceil(max(ny_full, nx_full) / DISPLAY_MAX))
+    frames_dec = frames_full[:, ::stride_s, ::stride_s]
+    mask_dec = mem.mask[::stride_s, ::stride_s]
+    nf, ny_dec, nx_dec = frames_dec.shape
+    field_amp = float(np.max(np.abs(frames_dec))) if frames_dec.size else 0.0
+
+    audio48, peak = _resample_normalize(pickup, fs)
+    ext_x, ext_y = (2.0 * geom["radius"], 2.0 * geom["radius"]) if domain == "circle" \
+        else (geom["Lx"], geom["Ly"])
+
+    return {
+        "model": "mallet",
+        "domain": domain,
+        "fs_sim": round(fs, 3),
+        "lambda": round(float(getattr(mem, "lam", float("nan"))), 6),
+        "grid": {
+            "dims": 2, "nx": int(nx_dec), "ny": int(ny_dec),
+            "extent_x": round(ext_x, 6), "extent_y": round(ext_y, 6), "domain": domain,
+        },
+        "frames": {
+            "b64": _b64f32(frames_dec.ravel()),
+            "n_frames": int(nf), "nx": int(nx_dec), "ny": int(ny_dec),
+            "width": int(nx_dec), "dims": 2,
+        },
+        "mask": {"b64": _b64u8(mask_dec.ravel()), "nx": int(nx_dec), "ny": int(ny_dec)},
+        "frame_times": _finite_list(frame_steps / fs, 6),
+        "anim_dt": float(anim_stride / fs),
+        "playback_speed": playback_speed,
+        "field_amp": field_amp,
+        "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
+        "energy": _energy_block(audio_res, lossless, 2.0 * sigma, decay_oracle=False),
+        "meta": {
+            "c": round(c, 3),
+            "f1": round(f1, 3),
+            "num_steps": int(n_audio),
+            "n_frames": int(nf),
+            "spectrum": contact,
         },
     }
 

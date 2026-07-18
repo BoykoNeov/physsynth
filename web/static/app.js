@@ -36,6 +36,8 @@ const LABELS = {
   E: "Young's E", e: "thickness e", w_over_e: "strike w/e",
   amplitude: "amplitude A", EA: "axial EA",
   lam_long: "longitudinal λ", dt_over_t0: "tension ΔT/T₀", tongue_position: "tongue δ/(εA²)",
+  mass: "mallet mass M", stiffness: "felt stiffness K", alpha: "felt exponent α",
+  strike_velocity: "strike speed v₀", hysteresis: "felt loss λ_h",
 };
 
 // Per-model slider re-ranging (min/max/step/fixed/val) applied on model switch. The backend mirrors
@@ -62,6 +64,16 @@ const MODEL_RANGES = {
          pickup_position: { val: 0.33 }, audio_duration: { max: 3, val: 2 } },
   membrane: { N: { max: 100, val: 80 }, lambda: { max: 0.7, val: 0.6 },
               audio_duration: { max: 2, val: 1.5 } },
+  // Mallet → drum (model #7): the membrane heatmap path, but the head starts at REST and a lumped
+  // mass strikes it. N is capped at 80 (each step also runs a contact root-find) and defaults to
+  // 60 for a quick render; loss is OFF by default so the out-of-box verdict is CONSERVATION (drift
+  // < 1e-10), the mallet's money test. The felt defaults (K = 5e4, M = 0.02, α = 2.3, v₀ = 3) are
+  // the core's canonical rig, where the strike is well-resolved (~48 steps/contact) and the
+  // "inefficient point-mass exciter" story reads cleanly: restitution ≈ 1, the head keeps ~0.05 %.
+  mallet: { N: { max: 80, val: 60 }, lambda: { max: 0.7, val: 0.5 }, sigma: { val: 0 },
+            audio_duration: { max: 2, val: 1 },
+            mass: { val: 0.02 }, stiffness: { val: 50000 }, alpha: { val: 2.3 },
+            strike_velocity: { val: 3.0 }, hysteresis: { val: 0 } },
   plate: { N: { max: 80, val: 60 }, kappa: { min: 2, max: 80, step: 0.5, fixed: 1, val: 20 },
            rho: { min: 0.001, max: 0.02, step: 0.0005, fixed: 4, val: 0.005, unit: "kg/m²" },
            Lx: { val: 1.0 }, Ly: { val: 1.0 }, audio_duration: { max: 2, val: 1 } },
@@ -109,9 +121,10 @@ const MODEL_RANGES = {
 
 // Secondary select repurposed per model: geometry (membrane), boundary (plate / von Kármán) or
 // REGIME (the geometric string — three claims, one string, cheapest first).
-const DOMAIN_MODELS = ["membrane", "plate", "vk", "geometric"];
+const DOMAIN_MODELS = ["membrane", "mallet", "plate", "vk", "geometric"];
 const DOMAIN_OPTS = {
   membrane: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
+  mallet: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
   plate: [["supported", "Simply-supported (#5)"], ["free", "Free edge — Chladni (#5b)"]],
   vk: [["supported", "Supported gong (#6)"], ["free", "Free-edge cymbal (#6)"]],
   geometric: [["rotating", "Rotating wave — exact circle"],
@@ -119,7 +132,7 @@ const DOMAIN_OPTS = {
               ["whirl", "Whirling — the Mathieu tongue"],
               ["phantom", "Phantom partials — the bridge force"]],
 };
-const DOMAIN_LABELS = { membrane: "Domain", geometric: "Regime" };
+const DOMAIN_LABELS = { membrane: "Domain", mallet: "Drum shape", geometric: "Regime" };
 
 const sliders = {};      // param -> <input>
 const updaters = {};     // param -> fn() that refreshes its value label
@@ -283,7 +296,7 @@ function updateLambdaHint() {
     hint.textContent = `fs = ${Math.round(fs)} Hz  (oversample the nonlinearity: higher = truer, `
       + `more cost; κ is derived from E, e, ν, ρ)`;
     hint.style.color = "var(--muted)";
-  } else if (m === "membrane") {
+  } else if (m === "membrane" || m === "mallet") {
     const lam = param("lambda");
     hint.textContent = `λ = c·k/h = ${lam.toFixed(2)}  (2D CFL: λ ≤ 1/√2 ≈ 0.71; no λ is `
       + `dispersionless)`;
@@ -431,6 +444,29 @@ function updateLambdaHint() {
       lossHint.textContent = "";
     }
     lossHint.style.color = "var(--muted)";
+  }
+  // Mallet: surface the felt-resolution guard LIVE (the ctor's warning never reaches the browser).
+  // The rigid-wall estimate π√(M/K)·fs must span several steps or the stiff contact aliases — a
+  // NOTE, not an error, since the energy method conserves even under-resolved. Harder felt (↑K, ↓M)
+  // shortens the contact and raises the pitch, but also eats the resolution, so the two trade off.
+  const mHint = $("mallet-hint");
+  if (mHint) {
+    if (m === "mallet") {
+      const c = Math.sqrt(param("T") / param("rho"));
+      const h = domainSel.value === "circle" ? 2 * param("radius") / param("N")
+                                             : param("Lx") / param("N");
+      const fs = c / (param("lambda") * h);
+      const spc = Math.PI * Math.sqrt(param("mass") / param("stiffness")) * fs;
+      const under = spc < 8;
+      mHint.textContent = under
+        ? `~${spc.toFixed(0)} steps/contact (< 8) — the stiff felt aliases; raise λ→lower or soften `
+          + `K. Energy still conserves.`
+        : `~${spc.toFixed(0)} steps/contact (rigid-wall estimate; the yielding head stretches it ~20×). `
+          + `Harder felt (↑K) → shorter, brighter strike.`;
+      mHint.style.color = under ? "var(--bad)" : "var(--muted)";
+    } else {
+      mHint.textContent = "";
+    }
   }
 }
 
@@ -765,6 +801,18 @@ function drawHeatmap(idx) {
   g.imageSmoothingEnabled = true;
   g.drawImage(heatCv, dx, dy, dw, dh);
 
+  // Strike marker (mallet only): the SNAPPED felt-contact node, drawn as a filled dot so it reads
+  // distinctly from the hollow pickup cross. Coords come from the payload (the ctor snaps to the
+  // nearest live node), not the raw slider, so the dot sits exactly where the felt actually landed.
+  const sp = payload && payload.meta && payload.meta.spectrum;
+  if (sp && sp.kind === "mallet" && sp.strike_fx !== undefined) {
+    const sx = dx + sp.strike_fx * dw, sy = dy + sp.strike_fy * dh;
+    g.fillStyle = "rgba(255,95,109,.95)";
+    g.beginPath(); g.arc(sx, sy, 5.5, 0, 7); g.fill();
+    g.strokeStyle = "rgba(255,95,109,.55)"; g.lineWidth = 1.5;
+    g.beginPath(); g.arc(sx, sy, 9, 0, 7); g.stroke();
+  }
+
   // Pickup marker (x, y) in domain fractions → screen.
   const pkx = param("pickup_x"), pky = param("pickup_y");
   if (pkx !== undefined && pky !== undefined) {
@@ -904,11 +952,19 @@ function drawEnergy() {
     const mono = e.lossy.monotone;
     badge.textContent = mono ? "passive" : "NON-MONOTONE";
     badge.className = "badge " + (mono ? "good" : "bad");
+    // The 2σ decay oracle is dropped for a CLOSED driven-mass model (the mallet): its total energy
+    // sits on a near-constant ½M·v₀² floor once the felt separates, so a fitted "2σ" would be a
+    // meaningless ~0 against a nonzero oracle. Passivity (monotone non-increasing) is the honest
+    // verdict there; the 2σ comparison only means something for a resonator decaying toward rest.
+    const hasOracle = e.lossy.measured_2sigma !== undefined;
     const meas = e.lossy.measured_2sigma;
-    out.textContent =
-      `lossy · energy monotone decrease: ${mono ? "yes ✓" : "NO ✗"}${convNote}\n` +
-      `measured 2σ = ${meas == null ? "—" : meas.toFixed(3)} s⁻¹` +
-      `  (flat-loss oracle ${e.lossy.oracle_2sigma.toFixed(3)})`;
+    out.textContent = hasOracle
+      ? `lossy · energy monotone decrease: ${mono ? "yes ✓" : "NO ✗"}${convNote}\n` +
+        `measured 2σ = ${meas == null ? "—" : meas.toFixed(3)} s⁻¹` +
+        `  (flat-loss oracle ${e.lossy.oracle_2sigma.toFixed(3)})`
+      : `lossy · passive: energy monotone non-increasing: ${mono ? "yes ✓" : "NO ✗"}${convNote}\n` +
+        `felt/membrane loss removes energy from a ½M·v₀² floor — no decay-rate oracle for a ` +
+        `closed struck system`;
   }
 }
 
@@ -948,6 +1004,16 @@ function drawDiagnostics() {
     partialsSub.textContent = spec.kind === "rotating" ? "roundness + longitudinal rest"
       : "the reflection symmetry";
     drawGeomVerdict(spec);
+    return;
+  }
+  // The mallet is a 2D heatmap model, but its second panel is NOT a mode spectrum: a soft felt
+  // low-passes the strike, so per-mode partial-locking would lock onto noise. The headline is the
+  // CONTACT — a point mass is an inefficient membrane exciter (it bounces off with restitution ≈ 1,
+  // the head keeps ~0.05 %) — so the panel shows the contact episode, not a tone.
+  if (spec && spec.kind === "mallet") {
+    partialsTitle.firstChild.textContent = "Contact ";
+    partialsSub.textContent = "mallet bounce + felt force";
+    drawMallet(spec);
     return;
   }
   if (dims !== 2) {
@@ -1198,6 +1264,74 @@ function drawStickSlip() {
     + `slip fraction ${sp.slip_fraction.toFixed(3)} vs β = ${sp.beta.toFixed(3)}  (Δ `
     + `${sp.slip_error >= 0 ? "+" : ""}${sp.slip_error.toFixed(3)}, tol ${sp.slip_tol})  →  `
     + `${ok ? "PASS ✓" : "FAIL ✗"}`;
+}
+
+// ── mallet: the contact episode ──────────────────────────────────────────────────────────────
+// The mallet's headline, not a tone spectrum. Two curves over the (auto-zoomed) contact window:
+// the mallet velocity — which crosses zero and comes out POSITIVE, the visible signature of a
+// bounce — over a signed centred axis, and the felt force as a filled pulse underneath (its own
+// scale, since force ≥ 0). A dashed line marks separation. The readout carries the physics the
+// picture can't: restitution ≈ 1 and the head keeping ~0.05 % — a point mass is an inefficient
+// membrane exciter (the local reactive dimple returns almost all the energy to the mallet).
+function drawMallet(sp) {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height, padL = 26, padB = 16, top = 8;
+  g.clearRect(0, 0, W, H);
+  const out = $("partials-readout");
+  if (!sp || !sp.vel) { out.textContent = "no contact trace"; return; }
+
+  const vel = sp.vel.map((x) => (x == null ? 0 : x));
+  const force = sp.force.map((x) => (x == null ? 0 : x));
+  const t = sp.t.map((x) => (x == null ? 0 : x));
+  const plotW = W - padL - 8, plotH = H - padB - top;
+  const x0 = padL, yMid = top + plotH / 2;
+  const tmax = t[t.length - 1] || 1;
+  const vmax = Math.max(1e-9, ...vel.map(Math.abs)) * 1.1;
+  const fmax = Math.max(1e-9, ...force);
+  const tx = (i) => x0 + (t[i] / tmax) * plotW;
+
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(x0, top, plotW, plotH);
+  // zero-velocity line: crossing it upward IS the bounce.
+  g.strokeStyle = "rgba(139,152,168,.5)"; g.setLineDash([3, 3]);
+  g.beginPath(); g.moveTo(x0, yMid); g.lineTo(x0 + plotW, yMid); g.stroke();
+  g.setLineDash([]);
+
+  // felt force as a filled pulse from the baseline (its own scale, drawn first/underneath).
+  g.fillStyle = "rgba(224,176,80,.18)"; g.beginPath(); g.moveTo(x0, top + plotH);
+  for (let i = 0; i < force.length; i++) g.lineTo(tx(i), top + plotH - (force[i] / fmax) * plotH);
+  g.lineTo(x0 + plotW, top + plotH); g.closePath(); g.fill();
+
+  // separation marker.
+  if (sp.separated && sp.contact_ms != null) {
+    const xs = x0 + (sp.contact_ms / 1e3 / tmax) * plotW;
+    g.strokeStyle = "rgba(255,95,109,.6)"; g.lineWidth = 1; g.setLineDash([2, 3]);
+    g.beginPath(); g.moveTo(xs, top); g.lineTo(xs, top + plotH); g.stroke(); g.setLineDash([]);
+  }
+
+  // velocity trace on the signed axis.
+  g.strokeStyle = "#4cc2ff"; g.lineWidth = 1.8; g.beginPath();
+  for (let i = 0; i < vel.length; i++) {
+    const y = yMid - (vel[i] / vmax) * (plotH / 2);
+    if (i === 0) g.moveTo(tx(i), y); else g.lineTo(tx(i), y);
+  }
+  g.stroke();
+
+  g.fillStyle = "#8b98a8"; g.font = "10px ui-monospace, monospace";
+  g.fillText("mallet v", 4, top + 10);
+  g.fillText("felt force", x0 + 4, top + plotH - 4);
+  g.fillText(`${(tmax * 1e3).toFixed(0)} ms`, W - 40, H - 4);
+
+  const dur = sp.separated ? `${sp.contact_ms.toFixed(1)} ms`
+    : (sp.contact_ms == null && sp.restitution === 1 && sp.peak_force === 0
+      ? "no contact" : "still in contact at window end");
+  const note = sp.resolved ? "" :
+    `\n⚠ felt under-resolved (~${sp.steps_per_contact.toFixed(0)} steps/contact < 8) — raise fs `
+    + `(lower λ) or soften K; energy still conserves, the strike just aliases`;
+  out.textContent =
+    `restitution ${sp.restitution.toFixed(3)}  ·  contact ${dur}  ·  peak felt force `
+    + `${sp.peak_force.toFixed(2)} N\n`
+    + `head keeps ${sp.final_head_pct.toFixed(3)} % of the strike (peak ${sp.peak_head_pct.toFixed(0)} `
+    + `% mid-contact) — a point mass barely rings a drum${note}`;
 }
 
 // ── geometric string: the whirl envelope (log-y) ─────────────────────────────────────────────
