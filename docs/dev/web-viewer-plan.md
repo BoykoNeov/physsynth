@@ -750,8 +750,100 @@ every number *measured before the wiring*, in two probes:
   2.4 Windows BLAS cliff. Default render **4.9 s**; worst *passing* render **34.2 s** — *measured,
   not extrapolated* (N = 128, width_frac 0.4, 1.0 s), comfortably inside the verifier's 90 s window.
 
+### Batch 9 (PLANNED) — the acoustic bore + radiating bell (the first WIND model, new field type)
+
+The human chose the wind leg over body/bridge, the barrier family's leftovers, and the parametric
+demo. Advisor then split it: **batch 9 = the linear bore, batch 10 = the reed**, on batch 1's own
+de-risking precedent — the reed *contains* a `Bore` and both draw as pressure along the same tube,
+so the new **pressure / S(x)** viz gets built and validated on the model with no root-find per step,
+and the reed inherits a proven viz plus a whole batch for its balance panel. Every prior batch was
+one model; this stays one. All-wrapper — `physsynth/core` untouched.
+
+Pre-build probe numbers (`temp/bore-viewer-probe/`), all **measured before any wiring**:
+
+- **THE STRUCTURAL FACT THIS BATCH TURNS ON: the bell's loss is BOOKED, so the verdict stays
+  CONSERVATION — the first lossy model in the viewer that does not give up the drift panel.**
+  `Bore.energy()` is `acoustic_energy() + radiated_energy`, and the bell's `k·R·U_out²` is
+  accumulated, so σ = 0 with a *radiating* end still conserves: measured drift **3.3e-16 – 7.4e-15**
+  across N = 64/128/200 while the bell sheds **9.8 %** of `E₀` (physical `R/Z₀ ≈ 3e-4`) and **100 %**
+  at the matched `R = Z₀`. Energy leaves the tube and the book still closes. Contrast the bow, whose
+  σ-loss is *inferred* and which therefore cannot score its lossy branch at all.
+- **…and the corollary that constrains the sliders: bore viscous σ is NOT booked.** There is no
+  viscous accumulator in `bore.py` — `energy()` conserves only at σ = 0. A σ slider would silently
+  re-introduce an inferred channel and demote the conservation verdict back to a bare monotone
+  check, buying a loss the bell already provides *physically*. So **σ is fixed at 0 and not exposed;
+  `R_bell` is the loss control.** (Generalizable, and the reed batch inherits it: a measured-channel
+  verdict is only as strong as the *least*-booked channel you let the user switch on.)
+- **The bell reflection oracle is the money panel, and it is nearly free.** `r = (R−Z₀)/(R+Z₀)`: a
+  centred Gaussian splits into two halves and one bounce sheds `½(1−r²)`. Measured against oracle
+  across `R/Z₀ ∈ [0.03, 30]` → worst absolute error **1.4e-16**, with the exact **anechoic null at
+  `R = Z₀`** (shed = 0.500000 — the entire right-going half absorbed, `r = 0`). It costs only ~N
+  steps, so unlike the jawari's second run it is genuinely cheap to ship live rather than cite.
+- **`R/Z₀` is the control, not `R`.** The dimensionless ratio is the units- and geometry-invariant
+  coordinate (the tension `dT/T₀` / geometric `frac` / jawari `downswing/depth` pattern, fourth
+  customer): `Z₀ = ρ₀c₀/S` moves with the bore radius, so a raw-`R` slider would mean something
+  different at every geometry. Physical clarinet ≈ 3e-4; anechoic = 1.
+- **The exactness claim belongs to the EIGENVALUE oracle, and the measured spectrum must be
+  INTERPOLATED — a crude bin peak-pick invents a bogus N-dependence.** The first probe cut reported
+  1.69 cents at N = 100/200 and 0.00 at N = 64/128, which is not physics but which bin the
+  fundamental landed on. Through the suite's parabolic-refined `measure_partials_near` every
+  measured partial is **≤ 0.007 cents**; the eigenvalue oracle is **0.0000 cents at λ = 1 for every
+  N**, owes nothing to any FFT window, and is what structurally certifies the half-cell wall.
+  (Batch 1's interpolated-zero-crossing lesson, second customer.)
+- **The dispersion demo is an EIGENVALUE computation, not a render — and that is what keeps λ out
+  of the step budget.** At λ = 0.9 the eigenvalue oracle departs the continuum by 0.6715 / 0.2744 /
+  0.1674 / 0.0685 cents at N = 64 / 100 / 128 / 200 — a ratio of **4.01 across a 2× refinement,
+  i.e. exactly O(h²)** — collapsing to 0.0000 at λ = 1. But a λ *slider on the render* is a trap
+  (advisor): `fs = c₀N/(λL)`, so steps scale as **1/λ**, and at N_MAX = 256 / 1.5 s the cap is hit
+  at **λ = 0.878** — λ = 0.9 already sits at 293k of the 300k budget, a 2 % margin, *before* the
+  reflection run. Worse, the payoff isn't there: 0.07–0.67 cents is inaudible and invisible on a
+  spectrum, and making it *watchable* needs λ ≈ 0.5–0.7, exactly where the cost explodes — and
+  where CLAUDE.md's "tune toward λ = 1" says not to live. `bore_low_eigenfrequencies` is one
+  `eigsh` call (milliseconds), so a **cents-vs-λ curve across a dozen λ values costs nothing, shows
+  the O(h²) departure crisply, and needs no time-stepping at all.** The audio render stays pinned
+  at λ = 1. **Generalizable: when a claim is about the *operator*, compute it from the operator —
+  don't buy it with wall clock by rendering audio nobody can hear the difference in.**
+- **The energy panel must show the SPLIT, or "conserved" reads as a bug (advisor).** The σ = 0
+  drift branch fires and paints "conserved, drift 1e-15 ✓" — beside an interior pickup that
+  audibly *decays*, because acoustic energy is leaving to `radiated_energy`. A flat green line next
+  to a dying tone looks self-contradictory and hides the very physics the batch is about. So the
+  payload emits **`acoustic_energy(t)` and `radiated_energy(t)` separately** and the panel plots
+  both: acoustic falling, radiated rising, **sum flat**. That is "watch the sound leave the tube,"
+  and it is what makes `R_bell` legible (9.8 % shed at `R/Z₀ = 3e-4` vs 100 % at the anechoic
+  `R = Z₀`). `_energy_block` emits only the total today, so this is a genuine addition, not a reuse.
+- **`R_bell` defaults ON (radiating).** A σ = 0 closed-open tube with no bell rings forever at
+  constant amplitude — a sustained buzz that never decays. Loss-default-ON, the bow's and jawari's
+  pattern, third customer; here it is also the only loss channel the batch permits at all.
+- **Two ICs, and both runs counted.** The tone/signature run uses the suite's near-wall Gaussian
+  bump (the odd-harmonic claim is *boundary*-determined — only odd resonances exist for closed-open
+  — so it is robust to bump position, which is worth saying rather than assuming); the reflection
+  oracle needs a **centred** Gaussian. That is a second run, and it counts against `WORK_MAX` —
+  the jawari's "a per-run cap silently licences twice the wall clock" rule holds even though at
+  ~N steps the reflection run is negligible.
+- **The headline is the reflection oracle and the acoustic→radiated split.** Odd harmonics are
+  table-stakes (the boundary condition guarantees them); dispersion is now a free operator-side
+  panel. The two novel, *visual* claims are the 1.4e-16 reflection match with its anechoic null and
+  the energy handing itself from the tube to the field — a linear tube is the least eventful model
+  in the viewer, so it needs its claim chosen, not merely listed.
+- **The odd/even ratio is set by the FFT WINDOW, not by N or by physics — so the gate belongs at the
+  SHORTEST allowed duration.** Measured **2.29e5 at 0.5 s** but **3.6e4 at 0.25 s**, and flat in N
+  to three digits at each. Gating on the 0.5 s number would fail a legitimately-correct short
+  render. (The bow's "a rate needs a long window" lesson in spectral clothing.)
+- **Cost is the cheapest of any recent batch, but N buys the sample rate, not just the grid.** At
+  λ = 1, `fs = c₀N/L`, so N sets the step count *and* the grid: ~9–11 µs/step is flat in N
+  (vectorized), yet CPU per second of audio runs **0.43 s (N=64) → 1.48 s (N=200) → 3.15 s (N=400)**.
+  Budget on the product, not on N: `BORE_N_MAX = 256`, `BORE_AUDIO_MAX = 1.5`, `BORE_WORK_MAX =
+  300_000` steps → worst passing render ≈ **2.7 s**, against the jawari's 34.2 s.
+
+Still open, to settle while building: whether the pressure field generalizes `drawString` or earns
+its own draw path (it is 1-D with `dims = 1`, but wants the `S(x)` tube drawn *around* it and a
+standing-wave envelope); and how the radiating end is drawn as distinct from a rigid wall. The
+`MODEL_RANGES` discipline applies in full — val on its own `step` grid from `min`, reset **every**
+field in `_default`, extend the switch-check sweep to the new model.
+
 ### Later batches (rough map — not firm)
 
+- **Wind** — the reed is now **batch 10** (above); see the wind bullet below for its telemetry.
 - **Excited strings** — the jawari landed in batch 8 above; the bow in batch 2. What remains of the
   barrier family is **fret buzz / a flat rail or point fret** (model #8's *intermittent* regime, the
   physical opposite of the jawari's persistent travelling wrap) and the tanpura **cotton thread
