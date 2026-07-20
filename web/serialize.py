@@ -3942,11 +3942,22 @@ def _reed_signature_block(pickup: NDArray[np.float64], far: NDArray[np.float64],
     ftail = np.asarray(far[far.size // 2:], dtype=float)
     fac = ftail - ftail.mean()
     frms = float(np.sqrt(np.mean(fac**2)))
-    out["far_field"] = {
-        "peak": round(float(np.abs(ftail).max()), 4),
-        "crest": round(float(np.abs(fac).max() / frms), 3) if frms > 0 else None,
-        "quieter_by": round(float(np.abs(ac).max() / max(np.abs(fac).max(), 1e-30)), 1),
-    }
+    fpeak = float(np.abs(fac).max())
+    # An ideal open end RADIATES NOTHING, so there is no far field to compare the mouthpiece with.
+    # Emitting the comparison anyway divides by ~0 and puts "1.6e+33x quieter (crest null)" on
+    # screen — a lying number where the honest statement is "not applicable". Withdraw it instead,
+    # the batch-9 `applies = false` pattern (nothing to measure is not the same as wrong). Every
+    # backend test passed with the bogus number in place; only the rendered readout showed it.
+    if frms > 0.0 and fpeak > 1e-12 * max(float(np.abs(ac).max()), 1e-30):
+        out["far_field"] = {
+            "peak": round(float(np.abs(ftail).max()), 4),
+            "crest": round(fpeak / frms, 3),
+            "quieter_by": round(float(np.abs(ac).max()) / fpeak, 1),
+        }
+    else:
+        out["far_field"] = None
+        out["far_note"] = ("an ideal open end radiates nothing — there is no far field to "
+                           "compare the mouthpiece with")
     return out
 
 

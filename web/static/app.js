@@ -1073,7 +1073,10 @@ function drawJawariPane(g, idx, x0, y0, w, h, zoom) {
 // clearer than parameterizing drawString with five flags.
 function drawBore(idx) {
   const g = stringCv.getContext("2d");
-  const W = stringCv.width, H = stringCv.height, midY = H / 2;
+  const W = stringCv.width, H = stringCv.height;
+  // The reed rides its tube HIGHER and slimmer than the bare bore, to clear the reed pane
+  // along the bottom. Without this the pane and its label land on top of the lower tube wall.
+  const midY = isReed ? H * 0.40 : H / 2;
   g.clearRect(0, 0, W, H);
   if (!frames || nFrames === 0) return;
 
@@ -1084,7 +1087,7 @@ function drawBore(idx) {
   // to fill the bore, not the whole canvas.
   const room = (kind) => (kind === "radiating" ? 76 : kind === "reed" ? 46 : 34);
   const mL = room(boreEnds[0]), mR = room(boreEnds[1]);
-  const wall = Math.round(H * 0.32);
+  const wall = Math.round(H * (isReed ? 0.26 : 0.32));
   const sx = (W - mL - mR) / (width - 1);
   const sy = (wall * 0.92) / amp;
   const px = (i) => mL + i * sx;
@@ -1155,7 +1158,69 @@ function drawBore(idx) {
                            : `reed open ${gapPct}% of H₀ — watch the pressure STEP travel`,
                mL, 28);
   }
-  g.fillText("dashed: max|p| over the whole run — the standing wave", mL, H - 8);
+  g.fillText(isReed ? "dashed: max|p| over the run — FLAT-TOPPED, because a square wave superposes "
+                    + "many harmonics and fills in every node but the boundary's"
+                    : "dashed: max|p| over the whole run — the standing wave", mL, H - 8);
+  if (isReed && reedOpen && reedOpen.length > 1) drawReedPane(g, W, H, mL);
+}
+
+// THE REED PANE. Its own view and its own y-scale, because H0 = 0.4 mm against a 16 mm bore is
+// 2.5 % — drawn in the tube's units the entire headline gesture is sub-pixel (the jawari zoom-pane
+// lesson, second customer). Shows the opening over the animated window with every closure episode
+// shaded, so "the reed beats shut once a period" is something you SEE rather than a number in the
+// readout. The duty is printed because it needs no event definition at all; the debounced
+// per-period count sits beside it (a raw crossing count reads ~1.94 for one slam, because the reed
+// chatters at closure).
+function drawReedPane(g, W, H, mL) {
+  const bt = (payload.meta && payload.meta.beating) || {};
+  const n = reedOpen.length;
+  const paneW = Math.min(300, Math.round(W * 0.30));
+  const paneH = 52;
+  const x0 = mL, y0 = H - paneH - 22;
+  let peak = reedH0;
+  for (let i = 0; i < n; i++) if (reedOpen[i] > peak) peak = reedOpen[i];
+
+  g.save();
+  g.fillStyle = "rgba(20,26,34,.72)";
+  g.fillRect(x0, y0, paneW, paneH);
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1;
+  g.strokeRect(x0, y0, paneW, paneH);
+
+  const px = (i) => x0 + (i / (n - 1)) * paneW;
+  const py = (v) => y0 + paneH - 4 - (v / peak) * (paneH - 12);
+
+  // shade the closure episodes — H+ = 0, the reed against the lay
+  g.fillStyle = "rgba(255,107,107,.22)";
+  let i = 0;
+  while (i < n) {
+    if (reedOpen[i] <= 0) {
+      const st = i;
+      while (i < n && reedOpen[i] <= 0) i++;
+      g.fillRect(px(st), y0 + 1, Math.max(1, px(i - 1) - px(st)), paneH - 2);
+    } else i++;
+  }
+  // H0, the rest opening
+  g.strokeStyle = "rgba(139,152,168,.45)"; g.setLineDash([2, 3]);
+  g.beginPath(); g.moveTo(x0, py(reedH0)); g.lineTo(x0 + paneW, py(reedH0)); g.stroke();
+  g.setLineDash([]);
+  // the opening trace
+  g.strokeStyle = "#ffcf5c"; g.lineWidth = 1.5; g.beginPath();
+  for (let k = 0; k < n; k++) {
+    const x = px(k), y = py(Math.max(0, reedOpen[k]));
+    if (k === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.stroke();
+  // the playhead — this pane and the tube above it are the SAME frame
+  const cf = Math.min(n - 1, Math.max(0, currentFrame));
+  g.strokeStyle = "rgba(255,255,255,.55)"; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(px(cf), y0 + 1); g.lineTo(px(cf), y0 + paneH - 1); g.stroke();
+
+  g.fillStyle = "#8b98a8"; g.font = "10px ui-monospace, monospace";
+  g.fillText(`reed opening H⁺ (0 … ${(1e3 * peak).toFixed(2)} mm)  ·  shut `
+             + `${bt.duty != null ? (100 * bt.duty).toFixed(0) : "?"}% of the time, `
+             + `${bt.per_period != null ? bt.per_period.toFixed(2) : "?"}× per period`,
+             x0, y0 - 4);
+  g.restore();
 }
 
 // The reed opening at the current frame, normalized to H0 so the flap has a scale that means
@@ -1640,10 +1705,15 @@ function drawReedSignature() {
   if (!sw || !sw.level.length) return;
   const gam = sw.gamma, lev = sw.level;
   const gmin = Math.min(...gam), gmax = Math.max(...gam);
-  const lo = Math.log10(Math.max(1e-5, Math.min(...lev) * 0.6));
+  // A level can be EXACTLY 0 (the lossless open end below threshold is bit-silent), and log10 of a
+  // clamped 1e-9 falls far below the axis floor — the point then draws outside the panel. So the
+  // floor is the axis bound itself: a silent point sits ON the bottom, which is what it means.
+  const floor = Math.max(1e-5, Math.min(...lev.filter((v) => v > 0), 1) * 0.6);
+  const lo = Math.log10(floor);
   const hi = Math.log10(Math.max(...lev) * 1.6);
   const px = (v) => pad + ((v - gmin) / (gmax - gmin || 1)) * (W - pad - 12);
-  const py = (v) => (H - pad) - ((Math.log10(Math.max(1e-9, v)) - lo) / (hi - lo || 1)) * (H - pad - 16);
+  const py = (v) => (H - pad)
+    - ((Math.log10(Math.max(floor, v)) - lo) / (hi - lo || 1)) * (H - pad - 16);
 
   g.strokeStyle = "#2a3340"; g.lineWidth = 1;
   g.strokeRect(pad, 8, W - pad - 12, H - pad - 8);
@@ -1687,13 +1757,18 @@ function drawReedSignature() {
   g.fillText("AC rms / p_closing", 4, 16);
   g.fillText(`γ  ${gmin.toFixed(2)} … ${gmax.toFixed(2)}`, W - 96, H - 8);
 
-  const badge = $("partials-verdict"), out = $("partials-readout");
+  // This panel has NO verdict badge — every sibling folds its verdict into the readout text, and
+  // the canvas carries it too. (There is no #partials-verdict element; assuming one by analogy
+  // with the energy panel throws on a null textContent, which the render handler swallows into a
+  // generic "network error" status — invisible to every backend test.)
+  const out = $("partials-readout");
   const br = sw.bracket;
   const spoke = payload.meta.speaks;
-  badge.textContent = spoke ? "speaks" : "did not speak";
   // Below threshold is LABELLED, never FAILED — a reed blown too gently is correct physics, the
   // bow's Schelleng rule and the jawari's grazing rule, third customer.
-  badge.className = "badge " + (spoke ? "good" : "warn");
+  g.fillStyle = spoke ? "#5ad17a" : "#ffcf5c";
+  g.font = "11px system-ui, sans-serif";
+  g.fillText(spoke ? "the note SPEAKS" : "did not speak (too gentle — correct physics)", pad + 6, H - pad + 14);
   const pit = sw.pitch;
   const lines = [];
   lines.push(
@@ -1725,6 +1800,9 @@ function drawReedSignature() {
         `CAVEAT — the audio is the MOUTHPIECE (that is the square wave). Outside the bell it is ` +
         `${sp.far_field.quieter_by}× quieter and spikier (crest ${sp.far_field.crest}): ` +
         `radiation differentiates, so this is not quite what a listener hears.`);
+    } else if (sp.far_note) {
+      // Withdrawn rather than faked: with no bell there is nothing radiating to compare against.
+      lines.push(`the audio is the MOUTHPIECE square wave — ${sp.far_note}.`);
     }
   }
   out.textContent = lines.join("\n");

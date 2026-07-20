@@ -2385,6 +2385,14 @@ def test_reed_ships_the_far_field_caveat_beside_the_mouthpiece_audio():
     ff = sp["far_field"]
     assert ff["quieter_by"] > 20.0
     assert ff["crest"] > sp["crest"]
+    # ...and on an ideal open end it is WITHDRAWN, not faked. Nothing radiates there, so the
+    # comparison divides by ~0: the first cut shipped "1.6e+33x quieter (crest null)" and every
+    # backend test passed — only the rendered readout showed it. Batch 9's `applies = false`
+    # pattern: nothing to measure is not the same as wrong.
+    op = _reed(domain="open")["meta"]["spectrum"]
+    assert op["applies"] is True          # the note still speaks; only the far field is absent
+    assert op["far_field"] is None
+    assert "far_note" in op
 
 
 def test_reed_below_threshold_withdraws_the_spectrum_claims():

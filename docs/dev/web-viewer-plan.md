@@ -943,7 +943,7 @@ before it can return, so no standing wave forms and the odd-harmonic / partial c
 (`spectrum.applies = false`) — the envelope correctly degrades to the trace of a single pass. That
 is a correct render with nothing to measure, which is not the same as a wrong one.
 
-### Batch 10 (PLANNED) — the dynamic single reed: the clarinet speaks
+### Batch 10 (DONE) — the dynamic single reed: the clarinet speaks
 
 The second half of the wind split. Batch 9 built the pressure/`S(x)` field type on the model with no
 root-find per step; batch 10 puts a **self-oscillating exciter** on the mouth end of that same tube.
@@ -1140,6 +1140,66 @@ Probe `temp/reed-viewer-probe/probe_viz.py`, at the default clarinet (γ = 0.51,
   **signature** (threshold sweep with the bracket marked, pitch leverage, odd-harmonic spectrum).
   The cuttable piece is the pitch-leverage sub-panel — it is the one claim that reads fine as two
   numbers in the readout if the panel budget runs out.
+
+
+#### What the WIRING added (found by building — task 3)
+
+- **The reed is NOT σ-gated, and routing it through the bow's branch would have reported a
+  catastrophic IMBALANCE on a perfectly balanced model.** The bow's σ=0 branch scores
+  `max|ΔE − work|`, valid *only* because a lossless string has `ΔE == work`. The reed's jet and
+  lip-damping channels are on **even at bore-σ=0**, so `ΔE − mouth_work == −(jet+damp)` ≈ 60 % of
+  scale. `_balance_verdict` gained an additive `measured_loss` mode that **replaces both** σ
+  branches; `_energy_block` threads it through (the `split` / `decay_oracle` precedent). The full
+  suite re-ran clean after, which is the check that matters for a shared-code touch.
+  *Generalizable: before reusing a verdict, check the identity it assumes, not just the shape of
+  the data it wants.*
+- **The threshold turned out to be BELL-DEPENDENT, which the plan did not anticipate — and it
+  vindicated the memo key.** Measured at N = 64: `R/Z₀` = 3e-4 and 2.5e-3 bracket **(0.30, 0.338]**;
+  1e-2 gives (0.338, 0.355]; 2.4e-2 gives **(0.355, 0.372]**; and by 6.3e-2 the note **never speaks
+  at all**. So the plan's bracket (measured at 2.4e-2) and the shipped default's differ *because
+  they are different bells*, not because either is wrong — a lossier bell needs a harder blow. This
+  is exactly why `R_bell` had to be in the sweep memo key, and it is now reported in the panel.
+- **γ = 1/3 went ON the sweep grid exactly** (batch 9's anechoic-null lesson, second customer) and
+  landed on a **knife edge**: 0.0196 against a 0.02 gate at the default bell. That is *correct* —
+  1/3 IS the threshold — but it means the tests assert the **curve's shape** (three orders of
+  magnitude across the onset, monotone in γ, bracket straddling 1/3) and **never that point's
+  label**. A verdict that flips on a hair is a fine thing to *show* and a terrible thing to gate on.
+- **TWO bugs that only the RENDERED page could catch, both invisible to 233 green backend tests:**
+  - `drawReedSignature` looked up a `#partials-verdict` badge **that does not exist** — that panel
+    has only a readout, and every sibling folds its verdict into the text. Setting `.textContent`
+    on `null` throws, the render handler swallows it, and the page reports a generic
+    **"network error"** — so the symptom does not even name the cause. Fixed by drawing the verdict
+    into the canvas, as the siblings do.
+  - On the **ideal open end** the far-field caveat computed `1.6e+33× quieter (crest null)`: nothing
+    radiates there, so the comparison divides by ~0. Now **withdrawn and labelled** (batch 9's
+    `applies = false` pattern) rather than faked, and pinned by a test.
+  *Generalizable: a payload can be numerically perfect and still render a lying number or throw on a
+  DOM id — the browser check is not a formality, and "network error" can mean "a null in your draw
+  path".*
+- **The reed pane had to become a real pane, not an end decoration.** First cut drew only the flap
+  plus a caption; at H0 = 2.5 % of the bore diameter that reads as a stray tick. The pane now draws
+  the **opening over the animated window with every closure episode shaded** and the duty printed —
+  which is what makes "beats shut once a period" something you *see*. The reed's tube is also drawn
+  **higher and slimmer** (`midY = 0.40 H`, `wall = 0.26 H` vs the bore's 0.5/0.32) so the pane clears
+  the lower wall.
+- **A sweep level can be EXACTLY zero** (the lossless open end below threshold is bit-silent), and
+  `log10` of a clamped 1e-9 falls far below the axis floor, drawing the point *outside* the panel.
+  The floor is now the axis bound itself, so a silent point sits **on** the bottom — which is what
+  it means.
+- **ΔE ramps with a bell and plateaus on an open end**, and the readout says which and why: radiated
+  energy accumulates *inside* the book while the note sounds, whereas on an ideal open end the limit
+  cycle puts breath-in and jet-loss-out on the same slope. The bow's "the tone grows without bound"
+  line is true of neither. This contrast is visible in the two shipped renders and is the clearest
+  single picture of what "booked radiation" means.
+- **Cost as built:** ~5 s cold at N = 128 / 0.5 s (render ~1.4 s + the fixed-N sweeps ~3.5 s), ~1 s
+  once the sweep memo is warm. Worst passing render stays inside the verifier window.
+- **Process:** `node --check web/static/app.js` before every browser check earned its keep again —
+  it caught a syntax error where shell-collapsed `\n` escapes landed inside a double-quoted
+  `join()`. The CDP switch-check (`M:\claud_projects\temp\reed_switch_check.py`) passes 20/20
+  including the batch-4 latch and batch-8 off-grid rules; the render capture
+  (`M:\claud_projects\temp\reed_capture.py`) reads the frame index and every readout back **through
+  the DOM**, because `payload`/`currentFrame` are module-scoped `let`s and `let`/`const` never
+  become `window` properties.
 
 ### Later batches (rough map — not firm)
 
