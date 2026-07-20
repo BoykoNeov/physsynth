@@ -1476,8 +1476,102 @@ cents). Three things the build surfaced, flagged because each is a rule with a f
   *Generalizable: an automated UI check that keys on a status string must stamp a sentinel first and
   confirm the button was actually actionable — a stale "ok" is indistinguishable from a fresh one.*
 
+### Batch 12 (PLANNED) — the body speaks: string → modal body/bridge + radiation read-out
+
+The whole **coupling/radiation leg** of `exciter → resonator → body/radiation` has no viewer at all —
+the biggest built-vs-shown gap left (Phases A–C surfaced only bare resonators; everything since batch
+1 is one exciter/resonator variation after another, but the *third stage* — the body that colours the
+tone and the air that carries it — has never been shown). This batch opens it with the canonical
+case: a fixed/free string terminated on a **modal body** (`StringBodyBridge` + `ModalBody`,
+`core/connection.py` + `core/body.py`) — the guitar-like bridge — read out to the far field by
+`AirRadiation` (`core/radiation.py`). All-wrapper; `physsynth/core` stays untouched.
+
+**Scope, deliberately narrow (advisor-endorsed, matches the core's own build order).** This batch is
+the modal body + the radiation **read-out** only. Two things are explicitly *deferred* to follow-ons,
+because each is a **different energy verdict** and bundling them blurs the story:
+
+- **`StringPlateBridge`** (plate #5/#5b as a *distributed* body — the cymbal/soundboard you can watch
+  ring on the heatmap) is the visually-richer sibling but carries the harder explicit-string ↔
+  implicit-plate coupling. The human picked the modal body to lead (de-risking, the canonical
+  terminus); the plate-as-body is a clean later batch that reuses the heatmap wholesale.
+- **`RadiatedBody`** (the radiation *load* with back-reaction: `E_body + ∫P_rad = const`, the bore's
+  booked-loss channel, batch 9's pattern) is a genuinely different panel. This batch's radiation is
+  the **read-out** `AirRadiation` — a pure output transform, **no back-reaction, no `energy()`**.
+
+**Be honest about what "radiated sound" buys here (advisor).** For a *single* source `AirRadiation`'s
+output is just `body.pressure() × ρ₀/(4πr)`, integer-sample delayed — the **same spectrum**, scaled
+and delayed. So the genuinely new content of this batch is the **coupling**, not a new signal: the
+viewer's **first three-way energy decomposition** (`E_string + E_body + E_conn`), the **first time
+`E_string` alone is not conserved** (it sloshes into the body — assert on the total, the docstring's
+rule), and the body **colouring** the string's spectrum. Radiation adds far-field framing: the 1/r
+law and a **distance knob** `r`. Frame it exactly that way; do not sell the radiated pressure as a
+new sound.
+
+**The headline (MEASURE it in task 2, don't assert):** the radiated spectrum = the string's partials,
+**ω²-tilted** (a monopole radiates ∝ volume *acceleration*), **boosted near the body's modal
+frequencies — but NOT clean formants** (the body modes `[110, 196, 261, 440]` Hz are *off-harmonic*
+against the string's `100·n` Hz, so they lift neighbouring partials without forming a tidy resonance
+peak — `diagnose_body_bridge.py` already flags "no pure formants", the honest read). The supporting,
+hard pass/fail claim is **σ=0 conservation *through the coupling*** — the total drifts ~1e-13 while
+`E_string` visibly does not conserve. Same σ-gating as weinreich (batch 7): σ_body=0 → the ordinary
+**drift** panel on the total; σ_body>0 → **passivity** (monotone total, `decay_oracle` TBD in task 2
+— there is no closed form for coupled modal decay over an off-harmonic body, so it is likely
+`False`/passivity-only, but *measure* the single-exponential fit before deciding, the jawari lesson).
+
+**The money viz = the energy EXCHANGE, reusing `drawFields` (sympathetics' 2nd customer, built in
+batch 3).** A two-strip (or stacked-bar) time trace of `E_string` vs `E_body` (+ the small `E_conn`),
+showing the pluck's energy sloshing from string into body and back — the classic coupled-oscillator
+exchange, exactly the panel `transfer` used for two strings, here for string-vs-body. The string line
+is the only moving *shape* (the modal body has no spatial extent to animate — that's the cost of
+leading with the modal body over the plate). Second panel = the **radiated-pressure spectrum** with
+the string-partial ladder + faint markers at the body modal freqs (shown, the ω²-tilt + body-boost
+read off it). Audio = the far-field pressure (real, cheap — `fs ≈ 22 kHz` like sympathetics, not
+geometric's 22×).
+
+**Controls / defaults (SETTLE by measurement in task 2 — these are the starting guesses from
+`helpers.make_bridge`):** body modal set `[110, 196, 261, 440]` Hz, modal mass ~0.02 kg (≈ the
+string's `ρL = 0.005` kg, so the body genuinely loads the string), **K = 8000 N/m** the star control
+(memory: the body carries up to ~62 % of the energy at a good K; the terminus fundamental glides
+**free `c/4L` ≈ 50 Hz → clamped `c/2L` ≈ 100 Hz** as K stiffens — a second thing to show), N=100,
+λ=0.9 (`< 1` hard-required — the string Nyquist is marginal at λ=1 and the spring pushes it unstable),
+distance `r` (the 1/r knob), σ_body (the loss gate). **Each default hides something** (too-weak K =
+invisible exchange; too-strong K = near-rigid *and* near the guard ceiling) — task 2 measures the K
+that makes the exchange visible *and* stays safely below the exact guard.
+
+**Pre-flagged traps (all our own recurring lessons):**
+- **`MODEL_RANGES`/`_default` leak — K is yet ANOTHER meaning.** Bridge spring here (~8000) vs
+  sympathetic bridge (8000, same — but different model key), jawari barrier (2e6), mallet felt
+  exponent lives on `alpha`. Plus new params: modal freqs/σ_body/masses and radiation distance `r`.
+  **Every param this model re-ranges must reset in `_default`** or a switch renders stale physics with
+  nothing on screen to say so (the recurring leak, batches 2/4/7/8). Consider a distinct
+  `bridge_stiffness` name as jawari did, to avoid the collision outright.
+- **Guard: use the EXACT stability guard, never the cheap 2-DOF bound** (`connection.py` already does
+  — `k²·λ_max(A) < 4`, assembled matrix-free; the isolated `K(β_s+β_b)<4` estimate is a *footgun*,
+  the system can NaN at half that bound). Surface a guard violation as a **clean error payload**, not
+  a 500/NaN. λ<1 hard-required.
+- **The radiated spectrum == the body-pressure spectrum for one source** — do not build a second
+  "radiated" analysis that pretends otherwise. The 1/r + delay only rescale/shift it. The distance
+  knob changes *level and latency*, never the spectrum shape; say so in the readout.
+- **σ-gated verdict + `decay_oracle` decided by MEASUREMENT** (not by "it has a body so copy the
+  mallet"): probe the single-exponential fit of the lossy total first (the jawari reversal — a
+  lossless *elastic* bridge dissipates nothing; here σ_body IS a real loss, so passivity, but confirm
+  whether a clean 2σ oracle survives the off-harmonic modal spread before printing one).
+- **Instrumented loop, not `simulate()`** (geometric/mallet/sympathetic pattern): `simulate()` gives
+  energy+pickup but not the per-part `E_string`/`E_body`/`E_conn` split that IS the money panel.
+  Capture all three in one hand-rolled step loop; construct a `SimResult` for `_energy_block`.
+
+**Task breakdown (as batches 8–11):** task 1 = this plan (docs). task 2 = settle the viz design,
+**measured** in `M:\claud_projects\temp\body-viewer-probe\` before any wiring (the K that makes the
+exchange visible + stays under the guard; the actual energy split; *which* body modes boost the
+spectrum; the ω²-tilt; the 1/r law; the σ_body decay-oracle decision). task 3a = `_build_payload_body`
+backend + web tests. task 3b = frontend (energy-exchange + radiated-spectrum panels, distance/K
+sliders) + verifier case + CDP switch-check + PNG.
+
 ### Later batches (rough map — not firm)
 
+- **Body / radiation** — the modal body + radiation read-out is **batch 12** (above). The follow-ons
+  are `StringPlateBridge` (plate #5/#5b as a *distributed* body — the cymbal you watch ring) and
+  `RadiatedBody` (the radiation *load* / back-reaction, the `E_body + ∫P_rad` booked-loss panel).
 - **Wind** — the reed is **batch 10** (above); the wind leg closes with it.
 - **Excited strings** — the jawari landed in batch 8 above; the bow in batch 2; **fret buzz / the flat
   rail is batch 11** (above). What remains of the barrier family is the tanpura **cotton thread
