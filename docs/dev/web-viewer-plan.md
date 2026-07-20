@@ -1091,6 +1091,56 @@ each on its own **step grid**, batch 8's off-grid-snap rule); a hand-rolled inst
 (`simulate()` gives neither the balance channels nor the opening trace nor the frames — all three
 *are* the panels), constructing a `SimResult` for `_energy_block`.
 
+#### The viz design (SETTLED — task 2, measured 2026-07-20)
+
+Probe `temp/reed-viewer-probe/probe_viz.py`, at the default clarinet (γ = 0.51, N = 128, radiating).
+
+- **THE MONEY ANIMATION IS A TRAVELLING PRESSURE STEP — and it is the acoustic dual of batch 2's
+  Helmholtz corner.** Sampled across the tube the limit-cycle field is not a wobbling standing wave
+  but a **near-square kink that propagates mouth → bell and reflects**: three consecutive frames run
+  `−1385 … −1320, +165` / `−1423 … −122, +121` / `−1380 … −49, +19`, i.e. the transition point
+  marching down the tube. That is precisely what makes the mouthpiece signal a square wave, and it is
+  the same picture the bow gave on a string one domain over — the corner *is* the sound. It also
+  vindicates batch 9's pacing rule for a second model: the step crosses in one transit, so the
+  transit-paced stride (12 frames/transit) resolves it and an f₁-paced stride (3) would alias the
+  batch's best picture into noise.
+- **The standing-wave envelope goes nearly FLAT, and that is a RESULT, not a failure — but it must be
+  labelled or it reads as a broken overlay.** Batch 9's static `max|p(x)|` overlay drew a clean
+  single-mode bump. Here it measures **1569 / 1543 / 1552 / … / 1550 / 1435 / 932 / 56 Pa** — flat to
+  ~1 % across 85 % of the tube, then collapsing at the open end. That is exactly right: a square wave
+  is *many* harmonics superposed, each with its own node pattern, so the max-over-time envelope fills
+  in every node except the one the boundary pins. So the overlay is kept and captioned as the
+  contrast with batch 9 (**one mode → a bump; a reed-driven square wave → a flat top**), and the
+  number that carries the physics is the **mouth/bell envelope ratio = 27.9** — the closed end is a
+  pressure *antinode* and the open end a node, which is the odd-harmonic claim rendered in one figure.
+  *Generalizable: an overlay that was informative for a single mode can go featureless under a rich
+  spectrum without anything being wrong — say which it is, rather than deleting the panel or
+  "fixing" it.*
+- **The reed needs its OWN pane and its own y-scale — to scale it is invisible.** `H0` = 0.400 mm
+  against a 16 mm bore diameter = **2.5 %**, and the tail swings 0 → 442 µm. Drawn in the tube's
+  units the entire headline gesture is sub-pixel. So the mouth end renders as a hinged flap in a
+  dedicated pane with its own scale, exactly as the jawari's bridge needed a zoom pane against an
+  8 mm string swing (that lesson's second customer). `meta.ends` gains **`"reed"`**, an addition to
+  the switch batch 9 built with two cases precisely so this would not be a rewrite.
+- **Audio is the MOUTHPIECE, and the caveat ships with it.** Measured side by side over the settled
+  tail: mouthpiece **crest 1.116** (1.0 is a perfect square wave), `f₁/2f₁` = **460**, peak 1569 Pa;
+  bell far-field `pressure()` crest **3.684**, `f₁/2f₁` = **25.5**, peak **4.77 Pa**. The mouthpiece
+  is the square wave and carries the odd-harmonic signature ~18× more strongly, so it is the audio
+  and the trace. But it is emphatically **not what a listener hears** — radiation differentiates, so
+  the far field is spikier, ~300× quieter, and much less odd-dominated. The panel says so rather than
+  letting "the iconic clarinet tone" quietly mean the pressure inside the mouthpiece. (Batch 6's
+  "audio = string pickup, not body pressure" decision, arrived at from the opposite direction: there
+  the radiating channel was misleadingly *silent*, here it is misleadingly *unlike the claim*.)
+- **The beating trace is the reed pane's second job**, drawn under the flap: opening vs time with the
+  closure episodes shaded, the **debounced** count (1.00 per period, merging episodes separated by
+  < 10 % of a period) and the **duty (37 %)** printed. The duty is the primary number because it
+  needs no event definition at all.
+- Panel inventory: **tube + travelling step + flat-top envelope + reed pane** (animation);
+  **balance** (batch 2's, with the reed sub-branch — measured channels, not inferred);
+  **signature** (threshold sweep with the bracket marked, pitch leverage, odd-harmonic spectrum).
+  The cuttable piece is the pitch-leverage sub-panel — it is the one claim that reads fine as two
+  numbers in the readout if the panel budget runs out.
+
 ### Later batches (rough map — not firm)
 
 - **Wind** — the reed is **batch 10** (above); the wind leg closes with it.
