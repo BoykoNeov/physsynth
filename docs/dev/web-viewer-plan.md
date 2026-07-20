@@ -1567,6 +1567,72 @@ spectrum; the ω²-tilt; the 1/r law; the σ_body decay-oracle decision). task 3
 backend + web tests. task 3b = frontend (energy-exchange + radiated-spectrum panels, distance/K
 sliders) + verifier case + CDP switch-check + PNG.
 
+#### The viz design (SETTLED — task 2, measured 2026-07-20)
+
+All numbers from `M:\claud_projects\temp\body-viewer-probe\` at the `helpers.make_bridge` rig
+(`L=1, T=200, ρ=0.005` → string `c=200`, `f₁=100` Hz; `N=100, λ=0.9, fs=22222` Hz; body modes
+`[110, 196, 261, 440]` Hz, modal mass `0.02` kg). **Nothing was wired first.**
+
+- **THE GUARD CEILING IS LOW — `K_c ≈ 21 480 N/m` — and that shapes the K slider.** At `K=0` the
+  string's own Nyquist mode already puts `k²·λ_max(A) = 3.24` (of the 4.0 limit), so the coupling has
+  little headroom: the exact guard trips at `K ≈ 21.5k` (`K=20k` OK at 3.91; `K=50k` raises at 5.99).
+  ⟹ **K slider `[0, 19000]`, default `8000`** (leaves margin); a too-high K surfaces as a **clean
+  error payload** (the exact guard, `connection.py`, already raises — the wrapper catches it). The
+  cheap `cfl_2dof` diagnostic reads only 0.65 at the default and 1.75 at the ceiling — it is the
+  **footgun** the memory warns of (it never reaches its own "< 4" bound before the real guard fires).
+- **THE MONEY PANEL = the energy EXCHANGE, and at `K=8000` it is a BIG visible slosh (measured).**
+  Lossless pluck: `E_body` swings **0.1 % → 56.9 %** of the total (mean 26.9 %), `E_string`
+  **95.7 % → 42.6 %** in counter-phase, the body first peaking at **t ≈ 22 ms**. That is the classic
+  coupled-oscillator exchange, plotted with `drawFields` (sympathetics' `transfer` pattern) over
+  ~0.4 s. **`E_conn` must NOT be a stacked fraction bar** — being the cross-time spring term it swings
+  `[−1.1 %, +17.8 %]` and **goes negative**; plot `E_string` and `E_body` as the two exchanging
+  channels and the **flat total** as the conservation line (E_conn folded into the total, or a thin
+  separate trace). Total drift `~3e-14` through the whole slosh = the σ=0 verdict, *while `E_string`
+  alone visibly is not conserved* (that contrast is the batch's point).
+- **The terminus fundamental GLIDES `58 → 92 Hz` as K stiffens** (`K=100`→`58.3`; `8000`→`90.8`;
+  `19000`→`91.7`) — free `c/4L=50` toward clamped `c/2L=100`. It **asymptotes below 100** because the
+  guard caps K *and* the body is finite-mass (not a rigid wall) — an **honest** secondary story, shown
+  as a K-dependent readout, never claimed to hit 100. (Measured at the free end = the mode-1 antinode,
+  band 30–130 Hz; a pickup near the nut or a wide band locks onto a higher fixed/free partial at
+  50·(2n−1) Hz — the batch's own measurement gotcha.)
+- **The radiated spectrum — TWO honest claims, and a first-cut "ω²-tilt" that the advisor rightly
+  killed.** My first probe read `radiated/string-pickup` and called the rising ratio an ω² tilt; it
+  is not (`tilt/f²` spanned 60×, non-monotonic even on the *strongest* partials). The reason:
+  `p = Σ aᵢq̈ᵢ` gives ω² between the radiated pressure and the **body** motion, but the string pickup
+  reaches the output through the **resonant coupling transfer** (peaked at the body modes), so
+  `rad/pick = f² × body-transfer` — never a clean f². And there is **no `100·n` ladder to tilt**: a
+  fixed/free string rings at `50·(2n−1)`, and at K=8000 (f₁≈91) the coupled spectrum is *hybridised*,
+  fitting neither `50·(2n−1)` nor `100·n` (measured). What IS measured and honest:
+  - **The ω² monopole law, shown where it is real:** radiated-pressure spectrum ÷ **body
+    bridge-displacement** spectrum `= gain·ω²` to **ratio 1.00 at every peak** (90.8→298 Hz all read
+    1.00). Report this as a clean diagnostic number ("monopole ω² law measured/theory = 1.00 ✓"),
+    **not** as a per-string-partial tilt.
+  - **Boosted near the body modes, NOT clean formants:** every radiated peak neighbouring a body mode
+    (110/196/261/440) is lifted, and the mechanism is visible — the pickup partials come in
+    **doublets straddling each body mode** (90.8 & 115.9 around 110; 185.3 & 206.5 around 196) = the
+    coupled system's **avoided crossing / mode splitting**, the honest reason there is no tidy formant.
+  - **Panel** = the radiated-pressure FFT + **faint markers at the body modal freqs** (the boost +
+    doublet split *shown*, not scored). Peak-pick the FFT; do **not** overlay an imposed `100·n`
+    ladder (the batch-8 off-grid lesson — markers between the real partials read backwards).
+- **The 1/r law is exact** (`gain·r` constant to all digits) — the distance knob `r` changes **level
+  and latency only, never the spectrum shape**; the readout says so. `r` slider e.g. `[0.5, 4] m`.
+- **`decay_oracle = False` (passivity-only) for σ_body>0 — DECIDED BY MEASUREMENT, not by template.**
+  The lossy total is **monotone** (passive) but **NOT a single exponential**: a log-linear fit leaves
+  rms `0.038` at σ_body=5 and `0.14` at σ_body=20 (grows with loss) — the off-harmonic coupled decay
+  is genuinely multi-rate, so a single fitted `2σ` vs a flat oracle would lie (the jawari check, run
+  first, gave the opposite answer *there* because that barrier was lossless-elastic; here σ_body is a
+  real loss ⟹ passivity). **σ-gated verdict like weinreich:** σ_body=0 → the ordinary **drift** panel
+  on the total; σ_body>0 → **passivity** (monotone), no 2σ oracle line.
+- **Instrumented loop, not `simulate()`** (geometric/mallet/sympathetic pattern): `simulate()` does
+  not expose the per-part `E_string`/`E_body`/`E_conn` split that IS the money panel. One hand-rolled
+  step loop captures all three + the string pickup + the radiated pressure; a `SimResult` is
+  constructed for `_energy_block`. IC = the **raised-cosine pluck** (not a mode-1 sine) — the spectrum
+  headline needs the whole partial ladder to show the tilt + boost.
+- **Params to add + reset in `_default`** (the recurring leak): `bridge_stiffness` (distinct name to
+  dodge the K collision with sympathetic/jawari), `sigma_body`, `distance`. Body modal set/mass fixed
+  server-side (not sliders — a modal-freq editor is its own later feature). `amplitude`/`pluck_position`
+  reuse the string path's.
+
 ### Later batches (rough map — not firm)
 
 - **Body / radiation** — the modal body + radiation read-out is **batch 12** (above). The follow-ons
