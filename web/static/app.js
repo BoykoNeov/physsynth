@@ -179,6 +179,26 @@ const MODEL_RANGES = {
           bell_ratio_exp: { min: -4, max: 1.4, step: 0.1, fixed: 1, val: -2.6 },
           audio_duration: { min: 0.2, max: 1.0, step: 0.05, fixed: 2, val: 0.5 },
           animation_window: { min: 0.005, max: 0.1, step: 0.005, fixed: 3, val: 0.03 } },
+  // String → modal body + radiation (batch 12): the first coupled-resonator + far-field model. A
+  // fixed/free string terminated on a lumped modal body through a linear bridge SPRING. λ < 1 is
+  // HARD-required (the string Nyquist mode is marginal at λ = 1 and the spring pushes it unstable),
+  // so lambda is capped at 0.99 with 0.9 the default. bridge_stiffness is the STAR control and is
+  // re-ranged HARD from the jawari's contact scale: the exact dense stability guard trips at
+  // ~21.5k N/m on this rig (the string alone already sits at 3.24 of the 4.0 limit at K = 0), so the
+  // slider is [0, 19k] with margin and an over-stiff spring surfaces as a clean construction error.
+  // sigma_body defaults 0 — the σ = 0 conservation headline is the first view (raise it for the
+  // passive, multi-rate coupled decay). audio_duration caps at 3 s (BODY_AUDIO_MAX). Because
+  // gatherParams ships every slider, bridge_stiffness must reset to the jawari range one level up in
+  // _default, or a body → jawari switch would render a 100× soft jawari bridge with nothing on
+  // screen to say so (the recurring leak; the reverse — jawari's 2e6 into the body's 21.5k guard —
+  // is caught by this model's override below).
+  body: { N: { min: 16, max: 160, val: 100 },
+          lambda: { min: 0.5, max: 0.99, step: 0.01, fixed: 2, val: 0.9 },
+          bridge_stiffness: { min: 0, max: 19000, step: 500, fixed: 0, val: 8000, unit: "N/m" },
+          sigma_body: { val: 0 },
+          distance: { min: 0.5, max: 4.0, step: 0.1, fixed: 1, val: 1.0 },
+          pluck_position: { val: 0.3 },
+          audio_duration: { min: 0.2, max: 3.0, step: 0.1, fixed: 1, val: 2.0 } },
   // Regime-level ranges, keyed "model:domain" and merged AFTER the model spec (see
   // applyModelRanges). The phantom regime is the first customer and needs both: κ = 8 is its
   // microscope (the geometric model defaults κ = 0, which is a HARMONIC string — every phantom
@@ -215,6 +235,16 @@ const MODEL_RANGES = {
               K: { min: 500, max: 10000, step: 100, fixed: 0, val: 8000 },
               detune: { min: 0, max: 12, step: 0.1, fixed: 1, val: 0 },
               sigma_body: { min: 0, max: 80, step: 1, fixed: 0, val: 0, unit: "s⁻¹" },
+              // bridge_stiffness is SHARED between the jawari (contact bridge, ~2e6 N/mᵅ) and the
+              // body (linear spring, ~8k N/m) with wildly different ranges. Its index.html home is
+              // the jawari's, so _default restores the jawari range/val whenever a body → jawari (or
+              // body → anything) switch leaves the slider on the body's [0, 19k]; MODEL_RANGES.body
+              // re-overrides on the way in. distance is body-only (nothing else reads it) but is
+              // reset here too so its slider display returns to 1 m on switch-away. The leak family:
+              // every param a model re-ranges resets one level up, or gatherParams ships it stale.
+              bridge_stiffness: { min: 200000, max: 8000000, step: 100000, fixed: 0, val: 2000000,
+                                  unit: "N/mᵅ" },
+              distance: { min: 0.5, max: 4.0, step: 0.1, fixed: 1, val: 1.0 },
               audio_duration: { min: 0.2, max: 6, step: 0.1, fixed: 1, val: 2 },
               // L and animation_window joined when the bore arrived: it is the first model to
               // re-range EITHER (L → 0.5 m, and the animation window down to a 0.1 s max because
@@ -465,6 +495,14 @@ function updateLambdaHint() {
       + `${(1e3 * L / 343).toFixed(2)} ms, four times shorter than the period of f₁.`;
     hint.style.color = "var(--muted)";
   } else if (m === "sympathetic") {
+    const lam = param("lambda");
+    hint.textContent = `λ = c·k/h = ${lam.toFixed(2)}  (must be < 1: the bridge spring pushes the `
+      + `string's Nyquist mode unstable at λ = 1)`;
+    hint.style.color = lam >= 1 ? "var(--bad)" : "var(--muted)";
+  } else if (m === "body") {
+    // Explicit string + body step, coupled by a spring — the sympathetic case: λ < 1 is HARD-required
+    // (the string's Nyquist mode is marginal at λ = 1 and the spring tips it over), so the slider is
+    // capped at 0.99. Not "no CFL"; the else branch below would wrongly say so.
     const lam = param("lambda");
     hint.textContent = `λ = c·k/h = ${lam.toFixed(2)}  (must be < 1: the bridge spring pushes the `
       + `string's Nyquist mode unstable at λ = 1)`;
@@ -732,6 +770,29 @@ function updateLambdaHint() {
       boreHint.style.color = ratio > 0.05 ? "var(--warn, #ffcf5c)" : "var(--muted)";
     }
   }
+  // Body: the exact dense stability guard trips at a LOW K on this rig (~21.5k N/m — the string's
+  // own Nyquist mode already sits at 3.24 of the 4.0 limit at K = 0, leaving little headroom), and
+  // an over-stiff spring surfaces as a construction ERROR, not a degraded render. The slider is
+  // capped at 19k with margin, but the hint names how close the current K is and what σ_body decides
+  // — the live-gate idea shared with the jawari and fret, guarding a hard failure this time.
+  const bdHint = $("body-hint");
+  if (bdHint) {
+    if (m === "body") {
+      const K = param("bridge_stiffness"), sb = param("sigma_body");
+      const near = K >= 17000;
+      bdHint.textContent =
+        `bridge K = ${Math.round(K)} N/m` + (near ? " — near the ~21.5k guard ceiling" : "") + ". "
+        + (sb === 0
+          ? "σ_body = 0: the verdict is conservation drift THROUGH the coupling — the TOTAL is flat "
+            + "while E_string alone sloshes into the body (that contrast is the panel). Raise σ_body "
+            + "for the passive, multi-rate coupled decay."
+          : `σ_body = ${Math.round(sb)} s⁻¹: the coupled system decays, but off-harmonic modes make `
+            + "it multi-rate — passivity, no 2σ oracle.");
+      bdHint.style.color = near ? "var(--warn, #ffcf5c)" : "var(--muted)";
+    } else {
+      bdHint.textContent = "";
+    }
+  }
   // Mallet: surface the felt-resolution guard LIVE (the ctor's warning never reaches the browser).
   // The rigid-wall estimate π√(M/K)·fs must span several steps or the stiff contact aliases — a
   // NOTE, not an error, since the energy method conserves even under-resolved. Harder felt (↑K, ↓M)
@@ -772,6 +833,10 @@ function onControlChange(name) {
   // reaches the rail" while the rail had been dragged out of reach, i.e. the one warning meant to
   // fire BEFORE a ~10 s render is paid for was confidently saying the opposite.
   if (name === "clearance" || name === "rail_frac") updateLambdaHint();
+  // The body's live guard-ceiling warning: the exact stability guard trips at a low K on this rig,
+  // so the near-21.5k hint must track the bridge_stiffness slider (the fret/jawari precedent — the
+  // one warning that must fire BEFORE a render is paid for, or an over-stiff K just errors out).
+  if (name === "bridge_stiffness") updateLambdaHint();
   scheduleAuto();
 }
 
@@ -1004,8 +1069,9 @@ function drawString(idx) {
   const sy = (H / 2 - margin) / amp * 0.92;
   const base = idx * width;
 
-  // pickup marker
-  if (payload) {
+  // pickup marker — suppressed for the body (its audio is the far-field radiated pressure and the
+  // backend probes the terminus at x = L, so there is no movable pickup to mark).
+  if (payload && payload.model !== "body") {
     const px = margin + Math.round(param("pickup_position") * (width - 1)) * sx;
     g.strokeStyle = "rgba(255,207,92,.35)"; g.setLineDash([4, 4]); g.lineWidth = 1;
     g.beginPath(); g.moveTo(px, 8); g.lineTo(px, H - 8); g.stroke(); g.setLineDash([]);
@@ -1930,6 +1996,10 @@ function drawEnergy() {
   if (!payload) return;
   const e = payload.energy;
   if (e.kind === "balance") { drawBalance(); return; }
+  // The body (batch 12): the Energy card IS the money panel — the string ⇄ body energy EXCHANGE, not
+  // the bare conservation line. The σ-gated verdict rides the badge + readout (on the ABSOLUTE
+  // total), while the canvas shows the slosh; the bore's split-in-the-energy-panel precedent.
+  if (payload.model === "body") { drawBodyEnergy(e); return; }
   const t = e.time, v = e.value.map((x) => (x == null ? 0 : x));
   const tmax = t[t.length - 1] || 1;
   // Headroom only when the split is drawn: the total is flat AT the maximum, so without it the
@@ -2045,6 +2115,88 @@ function drawEnergy() {
         : `lossy · passive: energy monotone non-increasing: ${mono ? "yes ✓" : "NO ✗"}${convNote}\n` +
           `felt/membrane loss removes energy from a ½M·v₀² floor — no decay-rate oracle for a ` +
           `closed struck system`;
+  }
+}
+
+// ── body: the string ⇄ body energy EXCHANGE (the money panel) ────────────────────────────────
+// The batch's point is a CONTRAST, and it lives in one panel: the TOTAL conserves through the
+// coupling (badge + readout, on the absolute total) WHILE E_string alone does not (the slosh on the
+// canvas). Fractions of the instantaneous total, over a ~0.4 s window (~9 sloshes). E_conn is the
+// cross-time spring term and GOES NEGATIVE (measured [−1.1 %, +17.8 %]) — so it is drawn on its own
+// signed axis and NEVER clamped or stacked; a [0,1] clamp (the transfer panel's) would erase it.
+// The flat green line at frac = 1 is the 100 % REFERENCE the three channels sum to by construction —
+// it is NOT the conservation verdict (that is the badge, on the absolute total; at σ_body > 0 the
+// absolute total decays while this reference line stays pinned at 1).
+function drawBodyEnergy(e) {
+  const g = energyCv.getContext("2d");
+  const W = energyCv.width, H = energyCv.height, padL = 26, padB = 18, top = 18;
+  g.clearRect(0, 0, W, H);
+  const ex = payload.meta && payload.meta.exchange;
+  const badge = $("energy-verdict"), out = $("energy-readout");
+  if (!ex) { out.textContent = "no exchange data"; return; }
+  const t = ex.time, tmax = t[t.length - 1] || 1;
+  const num = (a) => a.map((x) => (x == null ? 0 : x));
+  const es = num(ex.e_string_frac), eb = num(ex.e_body_frac);
+  const ec = num(ex.e_conn_frac), tot = num(ex.total_frac);
+  // y window spans the negative E_conn excursion up to just past the 100 % reference. Never a
+  // [0,1] clamp — the whole point of E_conn as its own channel is that it dips below zero.
+  const ymin = Math.min(-0.05, ...ec) * 1.1;
+  const ymax = Math.max(1.05, ...es, ...eb, ...tot) + 0.03;
+  const plotW = W - padL - 8, plotH = H - padB - top;
+  const px = (i) => padL + (t[i] / tmax) * plotW;
+  const py = (v) => top + plotH - ((v - ymin) / (ymax - ymin)) * plotH;
+
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(padL, top, plotW, plotH);
+  // frac = 0 baseline (dashed): the axis E_conn crosses — makes its sign legible.
+  g.strokeStyle = "rgba(139,152,168,.28)"; g.setLineDash([3, 3]);
+  g.beginPath(); g.moveTo(padL, py(0)); g.lineTo(padL + plotW, py(0)); g.stroke();
+  g.setLineDash([]);
+  g.fillStyle = "#8b98a8"; g.font = "9px ui-monospace, monospace";
+  g.fillText("0", 8, py(0) + 3); g.fillText("100%", 2, py(1) + 3);
+
+  const line = (arr, colour, wdt) => {
+    g.strokeStyle = colour; g.lineWidth = wdt; g.beginPath();
+    for (let i = 0; i < arr.length; i++) {
+      const y = py(arr[i]);
+      if (i === 0) g.moveTo(px(i), y); else g.lineTo(px(i), y);
+    }
+    g.stroke();
+  };
+  line(tot, "#5ad17a", 1.2);                    // the flat 100 % reference (NOT the verdict)
+  line(ec, "#9d7bff", 1.2);                     // E_conn — the signed spring channel
+  line(es, "#4cc2ff", 2.5);                     // E_string — drains
+  line(eb, "#ff8f4c", 2.5);                     // E_body — fills
+  g.font = "10px ui-monospace, monospace";
+  [["E_string", "#4cc2ff"], ["E_body", "#ff8f4c"], ["E_conn", "#9d7bff"], ["total", "#5ad17a"]]
+    .forEach(([label, colour], i) => {
+      g.fillStyle = colour; g.fillRect(padL + 4 + i * 74, 6, 8, 3);
+      g.fillText(label, padL + 15 + i * 74, 10);
+    });
+  g.fillStyle = "#8b98a8"; g.fillText(`${tmax.toFixed(2)} s`, W - 46, H - 5);
+
+  // The σ-gated verdict — on the ABSOLUTE total (payload.energy), not on these fractions.
+  const bp = (ex.body_frac_peak * 100).toFixed(0);
+  const smin = (ex.string_frac_min * 100).toFixed(0);
+  const smax = (ex.string_frac_max * 100).toFixed(0);
+  if (e.sigma_is_zero) {
+    const ok = e.lossless.pass;
+    badge.textContent = ok ? "conserved" : "DRIFT";
+    badge.className = "badge " + (ok ? "good" : "bad");
+    out.textContent =
+      `lossless · TOTAL drift max|Eⁿ−E⁰|/E⁰ = ${e.lossless.drift.toExponential(2)} ` +
+      `(tol ${e.lossless.tol.toExponential(0)}) → ${ok ? "PASS ✓" : "FAIL ✗"}\n` +
+      `the total conserves THROUGH the bridge (K = ${ex.K} N/m) while E_string alone does NOT: it ` +
+      `sloshes ${smax}% → ${smin}% in counter-phase as the body fills to ${bp}%. ` +
+      `That contrast — conserved total, non-conserved part — is the batch.`;
+  } else {
+    const mono = e.lossy.monotone;
+    badge.textContent = mono ? "passive" : "NON-MONOTONE";
+    badge.className = "badge " + (mono ? "good" : "bad");
+    out.textContent =
+      `lossy · TOTAL energy monotone non-increasing: ${mono ? "yes ✓" : "NO ✗"}\n` +
+      `the body loss (σ_body) drains the coupled system, but the off-harmonic modal spread makes ` +
+      `the decay MULTI-RATE — no single 2σ oracle survives it (measured, not templated), so the ` +
+      `honest verdict is passivity. E_string still sloshes to ${smin}% as the body fills to ${bp}%.`;
   }
 }
 
@@ -2214,6 +2366,14 @@ function drawDiagnostics() {
     drawReedSignature();
     return;
   }
+  // The body: the second panel is the radiated-pressure spectrum — the string's partials coloured
+  // by the body (boosted near its modes, NOT clean formants — the off-harmonic avoided crossing).
+  if (spec && spec.kind === "body") {
+    partialsTitle.firstChild.textContent = "Radiated spectrum ";
+    partialsSub.textContent = "far-field |Q″(f)| · body modes marked · 1/r = level + latency only";
+    drawBodySpectrum(spec);
+    return;
+  }
   // The geometric string's four regimes, four panels — all 1-D, none of them cents bars.
   if (spec && spec.kind === "phantom") {
     partialsTitle.firstChild.textContent = "Phantom partials ";
@@ -2334,6 +2494,62 @@ function drawSpectrum() {
     `f₁ = ${sp.f1_discrete.toFixed(2)} Hz (discrete)   peaks on blue lines = self-consistent\n` +
     `fundamental detected vs discrete: ${cf == null ? "—" : cf.toFixed(3) + " cents"}` +
     `   ·   ${tierLabel}: ${cg == null ? "—" : cg.toFixed(2) + " cents"}`;
+}
+
+// ── body: the radiated-pressure spectrum ─────────────────────────────────────────────────────
+// The far-field |Q″(f)| (a monopole radiates ∝ volume ACCELERATION), normalised to its band max —
+// the SHAPE reads here, the level story is the 1/r readout. Faint dashed markers sit at the body's
+// modal freqs: every neighbouring partial is BOOSTED but there are NO clean formants — the coupled
+// system splits into doublets straddling each mode (avoided crossing), the honest reason. The
+// partials are peak-picked by the backend; NOTHING imposes a 100·n ladder (the string is fixed/free
+// and the coupled spectrum is hybridised — an overlaid ladder would read backwards, the batch-8
+// off-grid lesson). ω² consistency is a near-tautology sanity number, NOT a radiation oracle.
+function drawBodySpectrum(sp) {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height, padL = 30, padB = 16, top = 8;
+  g.clearRect(0, 0, W, H);
+  const out = $("partials-readout");
+  if (!sp || !sp.f || !sp.f.length) { out.textContent = "no radiated spectrum"; return; }
+  const plotW = W - padL - 8, plotH = H - padB - top;
+  const x0 = padL, y0 = top + plotH;
+  const fmax = sp.f_max || (sp.f[sp.f.length - 1] || 1);
+  const fx = (f) => x0 + (f / fmax) * plotW;
+
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(x0, top, plotW, plotH);
+  // body modal freqs — faint dashed, SHOWN not scored (the boost + doublet split is the story).
+  g.strokeStyle = "rgba(255,143,76,.45)"; g.lineWidth = 1; g.setLineDash([3, 3]);
+  (sp.body_modes || []).forEach((f) => {
+    if (f == null || f > fmax) return;
+    g.beginPath(); g.moveTo(fx(f), top); g.lineTo(fx(f), y0); g.stroke();
+  });
+  g.setLineDash([]);
+
+  // the radiated magnitude (normalised 0..1)
+  g.strokeStyle = "#5ad17a"; g.lineWidth = 1.5; g.beginPath();
+  for (let i = 0; i < sp.f.length; i++) {
+    const m = sp.mag[i] == null ? 0 : sp.mag[i];
+    const x = fx(sp.f[i]), y = y0 - m * (plotH - 4);
+    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.stroke();
+
+  g.fillStyle = "#8b98a8"; g.font = "10px ui-monospace, monospace";
+  g.fillText("|Q″(f)|", 3, top + 10);
+  g.fillText(`${Math.round(fmax)} Hz`, W - 58, H - 4);
+  g.fillStyle = "rgba(255,143,76,.9)";
+  g.fillText("│ body modes", padL + 6, top + 10);
+
+  // The terminus glide + the two honest read-outs (ω² sanity, 1/r shape-invariance).
+  const tf = sp.terminus_f1, o2 = sp.omega2_consistency;
+  out.textContent =
+    `terminus f₁ = ${tf == null ? "—" : tf.toFixed(1)} Hz — glides free c/4L = ${sp.f1_free} ` +
+    `toward clamped c/2L = ${sp.f1_clamped} Hz as the bridge stiffens (asymptotes below 100: the ` +
+    `guard caps K and the body is finite-mass)\n` +
+    `boosted near the body modes [${(sp.body_modes || []).map((f) => Math.round(f)).join(", ")}] Hz ` +
+    `— doublets, NOT formants (avoided crossing)  ·  monopole ω² law = ${o2 == null ? "—" : o2.toFixed(2)} ` +
+    `(sanity, not an oracle)\n` +
+    `1/r: at r = ${sp.distance} m, gain·r = ${sp.gain_times_r} (const) → distance changes LEVEL + ` +
+    `latency (${sp.latency_ms} ms) only, never this shape`;
 }
 
 // von Kármán: the marker lines are the LINEAR (w→0) modes; the real peaks sit ABOVE them by the

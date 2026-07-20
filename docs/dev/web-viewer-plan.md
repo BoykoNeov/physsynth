@@ -1476,7 +1476,7 @@ cents). Three things the build surfaced, flagged because each is a rule with a f
   *Generalizable: an automated UI check that keys on a status string must stamp a sentinel first and
   confirm the button was actually actionable — a stale "ok" is indistinguishable from a fresh one.*
 
-### Batch 12 (PLANNED) — the body speaks: string → modal body/bridge + radiation read-out
+### Batch 12 (DONE) — the body speaks: string → modal body/bridge + radiation read-out
 
 The whole **coupling/radiation leg** of `exciter → resonator → body/radiation` has no viewer at all —
 the biggest built-vs-shown gap left (Phases A–C surfaced only bare resonators; everything since batch
@@ -1632,6 +1632,48 @@ All numbers from `M:\claud_projects\temp\body-viewer-probe\` at the `helpers.mak
   dodge the K collision with sympathetic/jawari), `sigma_body`, `distance`. Body modal set/mass fixed
   server-side (not sliders — a modal-freq editor is its own later feature). `amplitude`/`pluck_position`
   reuse the string path's.
+
+#### The frontend, built (task 3b — `drawBodyEnergy` + `drawBodySpectrum`; the shared-slider fix; all green)
+
+The coupling/radiation leg finally has a viewer, and the batch's whole point rides on **one panel
+carrying two things at once**. The `#string` canvas reuses `drawString` unchanged (the string is the
+only moving shape — the modal body is lumped). The **money panel is the Energy card**, not a bare
+conservation line: `drawBodyEnergy` plots the `E_string ⇄ E_body` slosh (blue drains, orange fills,
+counter-phase over ~0.4 s) with `E_conn` on its own **signed** axis and the flat green `total` as a
+**100 % reference** — while the σ-gated verdict rides the badge + readout on the **absolute** total.
+That is the batch: *the total conserves through the bridge (drift 8.5e-14 ✓) while `E_string` alone
+sloshes 100 % → 22 % into the body.* `drawBodySpectrum` takes the second panel — the far-field
+`|Q″(f)|` with faint dashed markers at the body modes, the terminus glide (free `c/4L` → clamped
+`c/2L`), the ω² sanity number, and the 1/r "level + latency only" readout. Verified live: fresh-load
+`?model=body` renders "ok" (drift 8.5e-14, terminus 90.8 Hz); the in-place `jawari → body → jawari`
+switch re-ranges `bridge_stiffness` guard-safely (2e6 → 8k → 2e6) and body renders ok after it. Three
+things the build surfaced, each a rule with a fourth+ customer:
+
+- **A slider two models need with different ranges must be ONE element re-ranged, never duplicated.**
+  The backend reads `bridge_stiffness` for BOTH the jawari contact bridge (~2e6 N/mᵅ) and the body's
+  linear spring (~8k N/m), and `sigma_body` for both the sympathetic weinreich loss and the body. A
+  second `data-param="bridge_stiffness"` element would split the `sliders` map (keyed by param) — the
+  visible slider and the one `gatherParams`/`applyModelRanges` touch would diverge, so dragging it
+  would do nothing. The fix is the leak-family discipline: single elements, re-ranged in
+  `MODEL_RANGES.body`, **reset one level up in `_default`** (the jawari range restored on switch-away,
+  or a body → jawari switch renders a 100× soft bridge; the reverse — jawari's 2e6 into the body's
+  ~21.5k guard — is caught by the body override). *Generalizable: a shared param is a shared element.*
+- **`data-hide-domain` gates a slider a domain-model shares with a domain-LESS one — no visibility-pass
+  edit needed.** `sigma_body` must show in sympathetic's *weinreich regime only* AND for the
+  domain-less body. `data-domain="weinreich"` alone force-hides it for every non-domain model (the
+  pass overwrites unconditionally); the clean answer was `data-show="sympathetic body"` +
+  `data-hide-domain="normal transfer"` — the same inverse-gate κ and `amplitude` already use, which
+  hides only in the named regimes and otherwise defers to `data-show`. It moved out of the sympathetic
+  fieldset (a hidden parent fieldset hides its children regardless), into a shared "Bridge stiffness /
+  body & radiation" group. *Generalizable: reach for the existing inverse-gate before touching a
+  shared visibility pass — the advisor flagged a `updateVisibility` rewrite as the one edit that could
+  silently break every other slider, and `data-hide-domain` made it unnecessary.*
+- **The fresh-load verifier structurally cannot see this model's #1 trap.** A deep-link
+  `?model=body` initialises `bridge_stiffness = 8k` by construction and *never* ships a stale K — so a
+  passing PNG proves nothing about the leak. The hazard is the IN-PLACE `jawari → body` switch
+  (`gatherParams` ships the hidden 2e6). A separate CDP driver drives the real `modelSel` change
+  handler and asserts the re-range in both directions plus a post-switch "ok" render. *Generalizable:
+  a per-navigation harness tests initialisation, not transition; a leak lives in the transition.*
 
 ### Later batches (rough map — not firm)
 

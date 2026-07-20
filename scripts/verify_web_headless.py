@@ -234,6 +234,14 @@ def main() -> int:
             # fixed-N threshold sweep (~3.5 s) on top of the render, and it is memoized after.
             ("reed_radiating", "model=reed&domain=radiating"),
             ("reed_open", "model=reed&domain=open"),
+            # String → modal body + radiation (batch 12): the coupling/radiation leg, shown for
+            # the first time. ONE instrumented run; the Energy card is the string ⇄ body exchange
+            # (not the bare conservation line) and the second panel is the radiated spectrum. Cheap
+            # (fs ≈ 22 kHz, ~2 s of audio). A fresh ?model=body deep-link initialises
+            # bridge_stiffness to 8k via applyModelRanges, well under the ~21.5k exact-guard
+            # ceiling, so it renders "ok" (the jawari→body IN-PLACE leak, which this fresh-load
+            # cannot exercise, is guarded separately by the _default reset of bridge_stiffness).
+            ("body", "model=body"),
         ]
         # Optional name filters, so a single-model batch can re-check its own case without paying
         # for the whole sweep (the geometric regimes alone are ~2 minutes).
