@@ -1309,6 +1309,88 @@ which no shipped panel draws); an `|𝒞|_active` + Newton-iters trace; the ener
 brightness/pitch signature panel with the non-monotonicity labelled; `clearance` as the star control.
 Task 2 (settle the viz design, measured) comes before any wiring, as in batches 8–10.
 
+#### The viz design (SETTLED — task 2, measured 2026-07-20)
+
+Probe `temp/fret-viewer-probe/probe_viz.py`, at the default (flat rail, `clearance = 2 mm`,
+`rail_frac = 1.0`, `σ₀ = 0.5`, N = 100, mode-1 pluck `A = 5 mm`), 0.4 s = 40 periods per run. The
+physics was settled above; this measures only how it **renders and reads**.
+
+- **THE GATED CLAIM IS INTERMITTENCY — say it here so task 3 knows what the verifier checks.** The
+  raster + duty + episodes-per-period is the claim; the decay reading is a **diagnostic triple**, the
+  brightness is scoped to the test's two-point pair, and the pitch gates nothing. (Batch 6's
+  "claim = the bridge trace, NOT energy" rule, sixth customer.)
+- **THE RASTER NEEDS ≳10 TIME-COLUMNS PER PERIOD, AND ITS INK IS *NOT* THE DUTY.** OR-reducing the
+  full-rate contact mask into columns: at **400 columns** (10/period over 40 periods) the debounced
+  episode count is exactly right (49 = truth) and stays right at 800/1600; at 200 and 100 columns the
+  debounce window rounds to **less than one column**, so counting degenerates to raw-onset and
+  *fragments* — 83 and 60 apparent episodes against a truth of 49. Coarse columns do not blur the
+  slaps together, they **split them**, which is the more dangerous failure because a too-coarse raster
+  looks *busier*, not emptier. Meanwhile the ink fraction converges from above and never reaches the
+  duty: **28.8 % / 21.4 % / 18.4 %** at 400/800/1600 columns against a true **15.5 %** — a column is
+  lit if *any* step in it touched, so the image is inherently a dilation. **So the duty and the
+  episode count are computed at full rate and printed; they are never read off the picture.**
+  *Generalizable: an OR-reduced raster is an honest map of WHERE and WHEN, and a biased estimator of
+  HOW MUCH — compute the scalar from the signal, not from the pixels.*
+- **BINNING x IS FREE FOR THE PICTURE AND FATAL FOR THE NUMBER.** Dropping the support from 99 to 33
+  x-bins leaves the ink fraction **identical (6.11 %)** — the raster reads the same — but the maximum
+  simultaneous count collapses from **69 to 23**. Since `|𝒞|_active` is the batch's second headline
+  (the thing that makes this a *vector* Newton), the trace is computed on the full support and only
+  the *image* may be binned. Same lesson as the duty, one axis over.
+- **BINARY CONTACT IS ENOUGH; FORCE MAGNITUDE IS AN OPTIONAL LINEAR GREY.** Contact force spans
+  median **10.8 N** → p99 47.6 → max **77.2 N**, a dynamic range of only **7.1×**, so no log mapping
+  is needed; and the faintest half of the contact pixels carry **14.2 %** of the total impulse, i.e. a
+  binary mask does not badly over-weight grazing touches. Grayscale is a refinement, not a
+  correctness fix — it ships if the primitive is cheap, and the panel is honest either way.
+- **f₁ PACING ALIASES THE SLAP AWAY — TRANSIT PACING FIXES IT, AND CHEAPLY.** Sampling the
+  contact-any signal at **3 frames/period** (f₁-paced) recovers only **19 of 49 episodes = 38.8 %**:
+  the animation would show a string that mostly *isn't* touching, which is the exact opposite of the
+  claim. Transit-paced (`transit = L/c = 5.00 ms`, half a period) at **8 frames/period already
+  recovers 100 %**, as do 24 and 48. Notably the sampled *duty* is fine at every stride
+  (15.7 / 15.2 / 15.7 / 15.3 % vs 15.5 %) — **duty is stride-robust, episode structure is not**, so
+  the stride must be chosen for the events, not for the average. Batch 9's transit rule, **third
+  customer**, and the cheap end of it suffices: 8 frames/period, not 24.
+- **THE FRET IS THE FIRST CONTACT MODEL THAT NEEDS *NO* ZOOM PANE — the inversion is the batch's viz
+  structural point.** The jawari (b8) and the reed (b10) both needed a dedicated zoom pane because
+  their headline gesture was sub-pixel against the string/tube swing. Here the clearance is **2.0 mm
+  against a 5.33 mm peak swing over the rail = 37.5 %**, i.e. **≈75 px** in a 200 px half-height pane.
+  The string, the rail, and the gap all live at the same scale in one honest to-scale view, and the
+  raster — not a zoom — is the money panel. *Generalizable: "contact models need a zoom pane" was a
+  fact about two configurations' amplitude ratios, not about contact.*
+- **BUT `rail_frac` CAN SILENTLY KILL THE CLAIM, AND IT IS A SLIDER.** Peak swing *over the rail*
+  falls as the rail shortens toward the nut — 5.33 / 5.00 / 2.94 / 1.24 mm at `rail_frac` =
+  1.0 / 0.5 / 0.2 / 0.08 — so at the default 2 mm clearance the rail goes **out of reach**: measured
+  duty **15.3 % / 18.2 % / 8.8 % / 0.0 % / 0.0 %** at `rail_frac` = 1.0 / 0.5 / 0.2 / **0.12** /
+  0.08, with zero episodes and `|𝒞|max = 0` below ≈0.15. A user dragging `rail_frac` alone reaches a
+  blank raster and an empty claim with nothing wrong. So `rail_frac` gets a **floor at 0.2**, and the
+  panel names the interaction (a short fret needs a proportionally smaller clearance). *Same family as
+  the brightness non-monotonicity: a slider whose far end disproves — or here erases — the panel's own
+  headline. Sweep every slider to its ends before shipping its range.*
+- **AUDIO IS A NEAR-TERMINATION PICKUP AT 0.05 L, and the control is exactly clean.** Centroid
+  elevation over the out-of-reach control, by pickup: **6.03× at 0.02 L, 4.68× at 0.05 L, 3.46× at
+  0.10, 2.56× at 0.25, 2.78× at 0.50** — the buzz signature is strongest nearest the termination and
+  decays monotonically inward, while the level rises the other way (0.46 / 1.06 / 1.65 / 3.54 /
+  5.33 mm peak). **0.05 L is the knee**: 78 % of the best available elevation at 2.3× the level of the
+  0.02 L node. The control's centroid reads **exactly 100.0 Hz = f₁ at every pickup** (a mode-1 pluck
+  with no rail is a pure sinusoid), so the elevation ratio is *entirely* harmonic content the rail
+  added — an unusually clean baseline, worth printing. Inherits the jawari's near-termination pickup
+  and batch 6's "audio = string pickup" decision.
+- **THE OUT-OF-REACH CONTROL VERY NEARLY DOUBLES THE RENDER — budget it or drop it.** Measured
+  side by side, the control costs **504.7 µs/step against the default's 530.5**, i.e. **0.95×** — no
+  contact solve to skip, because the string step and the rank-`m` correction (not the `|𝒞|×|𝒞|`
+  solve) already dominate, exactly as the span-halving measurement showed. So "one run, not two" is
+  now a *number*: keeping a live control means budgeting ≈**1.95×** the render. Decision: the
+  brightness panel ships the elevation against a **short, separately budgeted** control run (a fraction
+  of the audio length — the elevation is a spectral centroid and does not need the full render), and
+  `FRET_WORK_MAX` counts `n_anim + n_audio + n_control`. *Absolute µs/step drifts run to run on this
+  machine (331 vs 530 µs for the same config in one session), so budget on the committed figures and
+  on measured ratios, never on a single fresh timing.*
+- Panel inventory: **contact raster** (money, the new primitive) + **to-scale string-on-rail
+  animation** at 8 frames/period, no zoom pane; **`|𝒞|_active` + Newton-iters trace** (full support);
+  **energy** = the jawari's σ-gated drift/passivity branch with the **diagnostic triple**;
+  **signature** (brightness elevation vs the control with the peak named, pitch as diagnostic).
+  The cuttable piece is the Newton-iters half of the trace — `max 2 / mean 1.16` reads fine as two
+  numbers in the readout if the panel budget runs out.
+
 ### Later batches (rough map — not firm)
 
 - **Wind** — the reed is **batch 10** (above); the wind leg closes with it.
