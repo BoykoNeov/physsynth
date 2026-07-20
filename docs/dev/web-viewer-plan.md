@@ -629,10 +629,119 @@ verifier + CDP switch-check both fully green. Load-bearing, all *measured* not a
   latch), detune range 0.4↔12 per regime, and the RENDER checks confirm the verdict TOGGLE —
   σ_body = 0 flips "passive"→"conserved" + "nothing decays" panel; detune 0.3 → "cents mistuned".
 
+### Batch 8 (DONE) — the jawari / buzzing bridge (the first BARRIER model in the viewer)
+
+The sitar & tanpura bridge, and the viewer's first contact model with a *distributed, persistent*
+contact (the mallet, batch 5, was a single point that separates). It is **not new core physics**: a
+`BarrierString` (model #8) whose barrier is a parabola hugging the termination. The string wraps
+onto the curve each downswing and its departure point travels along it, re-injecting high partials —
+the shimmer. All-wrapper; `physsynth/core` untouched. 11 web tests added (→ 200 web). Load-bearing,
+every number *measured before the wiring*, in two probes:
+
+- **The claim is the shimmer, NOT the energy** (batch 6's lesson in a new model). Energy
+  conservation through contact passes for a *flat rail* too — model #8 already gates it — so it is
+  table-stakes green, not what makes this a jawari. The headline is the **late-window spectral
+  centroid elevation over a clean string** (measured **3.44×**, gate 2.5×) and the second panel is
+  the **travelling wrap edge** (std **4.89** over nodes 0–14).
+- **The energy panel is the damped string's, UNCHANGED — `decay_oracle` stays TRUE.** This is the
+  batch's one genuine reversal of a prior template. The bridge is a *lossless elastic* barrier: it
+  redistributes energy into the highs but **dissipates none**, so every mode still decays at exactly
+  `2σ₀` and the flat-loss oracle survives the wrap (**measured 2σ = 1.009 against oracle 1.000, log-
+  fit rms 0.000**). Neither the mallet's nor weinreich's `decay_oracle=False` applies: the mallet is
+  a closed system on a ½Mv₀² floor, weinreich is two rates to a nonzero floor — this is a plain
+  resonator decaying toward rest, and dropping the oracle would throw away a *strictly stronger*
+  verdict for a weaker one. **Generalizable: `decay_oracle=False` is for models with no single-
+  exponential form, not for "anything with contact in it" — check the dissipation, not the vibe.**
+- **σ₀ gates the verdict** (the weinreich pattern, second customer): σ₀ = 0 → conservation drift
+  *through the sustained curved wrap* (**1.0e-12**, with contact duty 42 % of the run, so it is a
+  drift through real many-node contact, not a contact-free run proving nothing); σ₀ > 0 → passivity
+  + the 2σ₀ oracle.
+- **`sigma1` and `hysteresis` are FIXED at 0 and deliberately not exposed.** Both would break the
+  oracle above for nothing: σ₁ makes the highs decay faster than 2σ₀ (**measured 2.77 against a
+  1.00 oracle** — a 2.7× "mismatch" on correct physics), and hysteresis is contact *damping*, which
+  fights the very re-injection the model is about. The 3.44× headline is a σ₁ = 0 result.
+- **Loss defaults ON (σ₀ = 0.5) — the bow's pattern, and load-bearing here.** "SUSTAINED brightness"
+  is meaningless on a lossless string, where every mode sustains by definition. The signal exists
+  only because σ₀ would darken a clean string while the bridge keeps re-injecting highs.
+- **The IC is a mode-1 sine and there is NO pluck-position slider** (advisor's pre-build catch, the
+  one thing neither probe would have caught). The headline is a *contrast*, so the clean baseline
+  must be spectrally pure: a mode-1 start puts the clean centroid exactly on f₁ (measured 100.0 Hz
+  against f₁ = 100) and the bridge's highs stand out. A raised-cosine pluck gives the clean string
+  its own highs and shrinks the contrast — possibly under the gate. The #6 `mode11` / #9 single-mode
+  lesson, third customer.
+- **`downswing/depth` is the control, not `depth`.** What decides whether the string wraps is the
+  near-termination downswing (`≈ amplitude·π·width_frac`) against the curve's drop; the dimensionless
+  ratio is the refinement- and units-invariant coordinate (the tension `dT/T₀` / geometric `frac`
+  pattern). Measured, it is a **ONE-SIDED FLOOR, not a window** — ratio 15.1/7.5/3.8/1.9/0.9/0.6 →
+  elevation 3.48/3.75/3.44/3.15/2.33/1.63×, with the wrap contracting toward the crest (max node
+  14 → 11 → 8) as it falls. More amplitude / less depth only ever helps. **Amplitude moves it exactly
+  as hard as depth** (a depth-only guard would let an under-plucked string through none the wiser),
+  which a test pins.
+- **Below the floor → LABEL, never FAIL** (the bow's Schelleng-window rule). A too-deep bridge that
+  the string only grazes is a legitimate stiff *point* contact — just not a jawari. The panel reports
+  the elevation, the ratio, and what to change; it never paints a red verdict on real physics.
+- **Two param collisions closed, and they were silent.** `K` is the sympathetic bridge *spring*
+  (~8000 N/m; this bridge is 2e6 N/mᵅ, **250× stiffer**) and `alpha` is the mallet's felt exponent
+  (2.3 vs 1.5 here). `gatherParams` sends every slider including hidden ones, so a user who had
+  merely *visited* those models would have rendered a different bridge with nothing on screen to say
+  so. Fix: a distinct `bridge_stiffness` param, and the contact exponent fixed server-side at the
+  validated 1.5 rather than earning a slider (and a third chance to leak). Pinned by a test that
+  ships `alpha=2.3, K=8000` and asserts the render is *unchanged*, while `bridge_stiffness` still
+  bites.
+- **THE INDEXING TRAP, and a test caught it, not the eye.** `BarrierString._b` and `contact_mask()`
+  are both over the **SUPPORT** (the ~15 nodes the finite barrier covers), *not* over the grid. The
+  first cut shipped both straight through to a frontend that indexes by grid node: the barrier
+  arrived as a 15-long array drawn across the first 15 nodes, and the wrap marker landed **one node
+  short** of the contact it marks. Near a termination that looks entirely plausible — it would have
+  survived eyeballing the PNG. Both are now scattered onto the grid; the wrap *statistics* stay
+  support-relative because that is the frame the model's own tests report them in.
+  **Generalizable: when a core object exposes a masked/compacted array, the frame is part of the
+  contract — assert the length against the grid, not against itself.**
+- **THE OFF-GRID SNAP — the tests pinned a config the UI could not express, and only the CDP check
+  saw it.** `MODEL_RANGES.jawari` set `audio_duration` to 0.24 s but re-ranged no `step`, so the
+  slider kept index.html's `step="0.1"` (right for every other model's multi-second runs) and a
+  range input **silently snaps an off-grid value**: the browser shipped **0.2 s**. Nothing looked
+  wrong — the render succeeded, the verdict still read SHIMMER — but the elevation came out
+  **2.75× where the tests assert 3.44×**: a hair over the 2.5× gate instead of comfortably clear
+  of it, and the "viewer reruns the suite's exact rig" oracle was quietly false. It now renders
+  3.44× in the browser, matching the suite.
+  Fixed by re-ranging `step`/`fixed` with the val, and resetting both in `_default` (the leak rule
+  applies to `step` exactly as to `min`). **Generalizable — and now enforced for EVERY model, not
+  just this one: a `val` must lie on its own `step` grid from `min`, or the shipped number is not
+  the tested number.** The switch-check grew a sweep asserting exactly that across all 12 models
+  (all clean). This is the third distinct member of the `MODEL_RANGES` family of bugs, after the
+  shallow-merge stale-step (batch 4) and the `_default` bound leak (batches 2 and 8) — all three
+  share one shape: **a slider spec that is partially overridden keeps stale fields from the layer
+  below, and the render is wrong without being broken.**
+- **Only two runs are paid for.** The flat-rail control that separates "buzzes" from "travels" is
+  already validated in `tests/test_jawari.py` (wrap std 4.89 curve vs 2.35 flat), so the panel
+  *cites* it rather than paying for a third run — and the shipped sweep (nodes 0–14 of 15) is
+  self-evidently travelling. The work budget counts **both** runs (`2·n_steps`), because a per-run
+  cap would silently licence twice the wall clock.
+- **The viewer reruns the suite's exact rig, so the suite's numbers are a free end-to-end oracle**
+  (batch 4's win, second customer): same mode-1 8 mm IC, same σ₀ = 0.5, same curved parabola, same
+  clean contrast at clearance = 1 m. The web test asserts elevation ≈ 3.44 and wrap std ≈ 4.89 — if
+  the wrapper ever perturbs the rig (a different IC, a stale param, a shifted window) these drift.
+- **Two views in the animation, because one cannot carry both halves** (the phantom batch's two
+  spectra, one level over). The bridge spans ~15 % of the string and its curve drops ~1 mm against
+  an 8 mm swing, so in the full view it is a few pixels near the termination — you see *that* the
+  string is held off the rest line, not that it is lying along a curve. The zoom pane rescales y to
+  the bridge depth and is the money picture. The spectrum panel puts both late-window traces on **one
+  shared scale** (per-trace normalization would render two similar curves and delete the result) and
+  on a **log axis** (the re-injected partials are 1e-2–1e-3 of the fundamental — linear would flatten
+  them onto the axis exactly where the claim lives).
+- Own budget: `JAWARI_N_MAX=128`, `JAWARI_AUDIO_MAX=1.5`, `JAWARI_WORK_MAX=150_000` steps across
+  both runs. Cost is ~143 µs/step (jawari) + ~117 µs/step (clean) at fs = 50 kHz; the dense contact
+  solve is over the **support** (≤51 nodes), not N, which is why N = 100 sits safely under the NumPy
+  2.4 Windows BLAS cliff. Default render **4.9 s**; worst *passing* render **34.2 s** — *measured,
+  not extrapolated* (N = 128, width_frac 0.4, 1.0 s), comfortably inside the verifier's 90 s window.
+
 ### Later batches (rough map — not firm)
 
-- **Excited strings** — barrier #8, jawari (barrier profile drawn under the string). The bow landed
-  in batch 2 above.
+- **Excited strings** — the jawari landed in batch 8 above; the bow in batch 2. What remains of the
+  barrier family is **fret buzz / a flat rail or point fret** (model #8's *intermittent* regime, the
+  physical opposite of the jawari's persistent travelling wrap) and the tanpura **cotton thread
+  (juari)** = one more barrier node at a chosen position.
 - **Wind** — bore + reed (new field type: pressure along an `S(x)` profile). The reed now reuses
   batch 2's balance panel; its telemetry differs (mouth / jet / reed-damping channels are each
   sign-definite and separately measured, so unlike the bow it can close the balance *with* loss on

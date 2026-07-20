@@ -26,6 +26,7 @@
             <option value="bow">Bowed string (nonlinear exciter)</option>
             <option value="geometric">Geometrically-exact string (u·w·v)</option>
             <option value="sympathetic">Sympathetic strings (coupled, ×2)</option>
+            <option value="jawari">Jawari — buzzing bridge (sitar/tanpura, #8)</option>
             <option value="membrane">Membrane (2D drum)</option>
             <option value="mallet">Mallet → drum (contact, #7)</option>
             <option value="plate">Kirchhoff plate (2D)</option>
@@ -38,11 +39,11 @@
         </label>
       </div>
 
-      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic membrane mallet plate vk">
+      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari membrane mallet plate vk">
         <legend>Physical</legend>
-        <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N" data-show="ideal stiff damped tension bow geometric sympathetic membrane mallet"></div>
+        <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N" data-show="ideal stiff damped tension bow geometric sympathetic jawari membrane mallet"></div>
         <div class="slider" data-param="rho" data-min="0.001" data-max="0.02" data-step="0.0005" data-val="0.005" data-unit="kg/m²" data-fixed="4"></div>
-        <div class="slider" data-param="L"   data-min="0.25" data-max="2.0"  data-step="0.05"  data-val="1.0"   data-unit="m" data-show="ideal stiff damped tension bow geometric sympathetic"></div>
+        <div class="slider" data-param="L"   data-min="0.25" data-max="2.0"  data-step="0.05"  data-val="1.0"   data-unit="m" data-show="ideal stiff damped tension bow geometric sympathetic jawari"></div>
       </fieldset>
 
       <fieldset class="group" data-show="membrane mallet plate vk">
@@ -55,7 +56,7 @@
       <fieldset class="group">
         <legend>Discretization</legend>
         <div class="slider" data-param="N"      data-min="16"  data-max="512" data-step="1"    data-val="128"></div>
-        <div class="slider" data-param="lambda" data-min="0.5" data-max="2.0" data-step="0.01" data-val="1.0" data-show="ideal stiff damped tension bow sympathetic membrane mallet"></div>
+        <div class="slider" data-param="lambda" data-min="0.5" data-max="2.0" data-step="0.01" data-val="1.0" data-show="ideal stiff damped tension bow sympathetic jawari membrane mallet"></div>
         <div class="slider" data-param="mu"     data-min="0.25" data-max="32" data-step="0.25" data-val="1.0" data-fixed="2" data-show="plate"></div>
         <div class="slider" data-param="fs"     data-min="8000" data-max="96000" data-step="1000" data-val="32000" data-unit="Hz" data-fixed="0" data-show="vk"></div>
         <!-- The geometric string's knob is lam_long, NOT lambda, and that inversion is the model's
@@ -88,10 +89,10 @@
            (the frontend's standing rule), re-ranged per model via MODEL_RANGES. Mind the meaning:
            model #9's EA is the nonlinearity coefficient, model #10's is the axial stiffness and its
            coefficient is EA − T₀. In the whirl regime amplitude is derived from ΔT/T₀, so it hides. -->
-      <fieldset class="group" data-show="tension geometric">
+      <fieldset class="group" data-show="tension geometric jawari">
         <legend>Nonlinearity</legend>
-        <div class="slider" data-param="amplitude" data-min="0.001" data-max="0.06" data-step="0.001" data-val="0.02" data-unit="m" data-fixed="3" data-show="tension geometric" data-hide-domain="whirl"></div>
-        <div class="slider" data-param="EA" data-min="0" data-max="200" data-step="5" data-val="100" data-unit="kN" data-scale="1e3" data-fixed="0"></div>
+        <div class="slider" data-param="amplitude" data-min="0.001" data-max="0.06" data-step="0.001" data-val="0.02" data-unit="m" data-fixed="3" data-show="tension geometric jawari" data-hide-domain="whirl"></div>
+        <div class="slider" data-param="EA" data-min="0" data-max="200" data-step="5" data-val="100" data-unit="kN" data-scale="1e3" data-fixed="0" data-show="tension geometric"></div>
         <p class="hint" id="tension-hint" data-show="tension"></p>
         <p class="hint" id="geom-hint" data-show="geometric"></p>
       </fieldset>
@@ -138,6 +139,24 @@
         <p class="hint" id="symp-hint"></p>
       </fieldset>
 
+      <!-- Jawari / buzzing bridge (model #8 in its curved configuration): a parabola hugging the
+           termination that the string wraps onto each downswing. The bridge stiffness is
+           `bridge_stiffness`, NOT the `K` next door — the sympathetic bridge spring is ~8000 N/m
+           while this one is 2e6 N/mᵅ, and since every slider is sent on every render (hidden ones
+           included) sharing the name would silently render a 250× softer bridge for anyone who had
+           visited that model. The contact exponent is fixed server-side at the validated 1.5 for
+           the same reason (`alpha` belongs to the mallet's felt) and because it is not the story.
+           depth is the one to watch: it must stay comparable to the near-termination downswing
+           (~amplitude·π·width_frac) or the string merely grazes the crest and the contact degrades
+           to a stiff point — brightness measured 3.44× at downswing/depth 3.8, but 1.63× at 0.6. -->
+      <fieldset class="group" data-show="jawari">
+        <legend>Jawari bridge</legend>
+        <div class="slider" data-param="width_frac"       data-min="0.05"  data-max="0.4"   data-step="0.01"   data-val="0.15" data-unit="·L" data-fixed="2"></div>
+        <div class="slider" data-param="depth"            data-min="0.0002" data-max="0.008" data-step="0.0002" data-val="0.001" data-unit="m" data-fixed="4"></div>
+        <div class="slider" data-param="bridge_stiffness" data-min="200000" data-max="8000000" data-step="100000" data-val="2000000" data-unit="N/mᵅ" data-fixed="0"></div>
+        <p class="hint" id="jawari-hint"></p>
+      </fieldset>
+
       <fieldset class="group" data-show="bow">
         <legend>Bow</legend>
         <div class="slider" data-param="bow_position" data-min="0.04" data-max="0.45" data-step="0.01" data-val="0.13" data-unit="m" data-fixed="2"></div>
@@ -166,14 +185,19 @@
         <div class="slider" data-param="sigma" data-min="0" data-max="20" data-step="0.1" data-val="0"></div>
       </fieldset>
 
-      <fieldset class="group" data-show="damped tension bow geometric">
+      <!-- The jawari appears here for sigma0 ONLY. sigma1 is deliberately fixed at 0 server-side and
+           hidden: frequency-dependent loss makes the highs decay faster than 2·sigma0, which breaks
+           the flat-loss decay oracle the energy panel reports (measured 2.77 against a 1.00 oracle)
+           and buys nothing — the shimmer is a sigma1 = 0 result. sigma0 GATES the verdict: 0 gives
+           conservation drift through the curved wrap, > 0 passivity + the 2·sigma0 oracle. -->
+      <fieldset class="group" data-show="damped tension bow geometric jawari">
         <legend>Loss (frequency-dependent)</legend>
         <div class="slider" data-param="sigma0" data-min="0" data-max="20"   data-step="0.1"   data-val="1.0"></div>
-        <div class="slider" data-param="sigma1" data-min="0" data-max="0.01" data-step="0.0001" data-val="0.002" data-fixed="4"></div>
+        <div class="slider" data-param="sigma1" data-min="0" data-max="0.01" data-step="0.0001" data-val="0.002" data-fixed="4" data-show="damped tension bow geometric"></div>
         <p class="hint" id="loss-hint"></p>
       </fieldset>
 
-      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic">
+      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari">
         <legend>Excitation</legend>
         <!-- pluck_position is meaningless for three models here. The tension string's IC is the
              mode-1 sine the Duffing reduction needs, which has no pluck point; the bowed string
@@ -202,7 +226,7 @@
         <!-- No audio_duration for the geometric string: it is the viewer's one viz-only model. See
              the note under the canvas — resolving its longitudinal wave forces fs ≈ 22× a normal
              string's, so a second of sound is ~10 minutes of compute. -->
-        <div class="slider" data-param="audio_duration"   data-min="0.2" data-max="6"    data-step="0.1"  data-val="2.0" data-unit="s" data-show="ideal stiff damped tension bow sympathetic membrane mallet plate vk"></div>
+        <div class="slider" data-param="audio_duration"   data-min="0.2" data-max="6"    data-step="0.1"  data-val="2.0" data-unit="s" data-show="ideal stiff damped tension bow sympathetic jawari membrane mallet plate vk"></div>
         <!-- Hidden for the phantom regime: its window is fixed physics, not a preference. At 0.05 s
              the weakest phantom (2f₁) sits inside its neighbours' leakage skirts and is mislocated
              by 0.52 Hz (vs 0.039 Hz at 0.10 s), collapsing its margin to f₂ from 170× to 8×. -->

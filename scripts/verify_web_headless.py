@@ -203,11 +203,15 @@ def main() -> int:
             ("geom_phantom", "model=geometric&domain=phantom"),
             # Sympathetic / coupled strings: the two-string oracles. normal runs twice (antisym +
             # symmetric contrast) so its render is ~2x a single string's; transfer animates the full
-            # slosh; weinreich also runs twice (strike-one + strike-both contrast) over a lossy body.
+            # slosh; weinreich runs twice too (strike-one + strike-both) over a lossy body.
             # All ship real audio (a string pickup), unlike the geometric string.
             ("symp_normal", "model=sympathetic&domain=normal"),
             ("symp_transfer", "model=sympathetic&domain=transfer"),
             ("symp_weinreich", "model=sympathetic&domain=weinreich"),
+            # Jawari: also a two-run model (the string over its bridge, plus the clean contrast that
+            # turns "bright" into a number). At the defaults ~5 s; the guards admit up to ~34 s, so
+            # it sits comfortably inside the 90 s window above.
+            ("jawari", "model=jawari"),
         ]
         results = [run_case(cdp, n, q) for n, q in cases]
         print(f"\n{sum(results)}/{len(results)} cases passed; screenshots in out/viewer_*.png")

@@ -37,6 +37,7 @@ from physsynth.analysis import damping, dispersion, duffing, modal, spectrum
 from physsynth.analysis.rotating_wave import rotating_wave_history, solve_rotating_wave
 from physsynth.core.body import ModalBody
 from physsynth.core.bow import BowedString
+from physsynth.core.collision import BarrierString
 from physsynth.core.connection import SympatheticStrings
 from physsynth.core.engine import SimResult, simulate
 from physsynth.core.exciter import raised_cosine_2d, triangular_pluck
@@ -804,6 +805,8 @@ def _build_payload(p: dict[str, Any]) -> dict[str, Any]:
         return _build_payload_geometric(p)
     if model == "sympathetic":
         return _build_payload_sympathetic(p)
+    if model == "jawari":
+        return _build_payload_jawari(p)
     return _build_payload_string(p)
 
 
@@ -2606,7 +2609,391 @@ def _symp_weinreich(
     )
 
 
+# == jawari / buzzing bridge (model #8 in its curved configuration) ================================
+#
+# The sitar & tanpura bridge. NOT new core physics: a :class:`BarrierString` (model #8, string
+# against a one-sided distributed nonlinear barrier) whose barrier is a *parabola* hugging the
+# termination. The string wraps onto the curve each downswing and its departure point travels along
+# it, re-injecting high partials — the shimmer. Load-bearing decisions, all measured before wiring:
+#
+#   * **The claim is the shimmer, not energy.** Energy conservation through contact passes for a
+#     flat rail too (model #8 already gates it) — table-stakes green, not what makes it a jawari.
+#     The headline is the LATE-window spectral-centroid elevation over a clean string, and the
+#     second panel is the travelling wrap edge.
+#   * **The energy panel is the damped string's, unchanged — `decay_oracle` stays TRUE.** The bridge
+#     is a *lossless elastic* barrier: it redistributes energy into the highs but dissipates none,
+#     so every mode still decays at exactly ``2 sigma0`` and the flat-loss oracle holds (measured
+#     2sigma = 1.009 against oracle 1.000). This is the OPPOSITE of the mallet (a closed system on a
+#     ½Mv₀² floor) and of weinreich (two rates to a nonzero floor), which is why neither template
+#     applies. ``sigma0`` gates the verdict: 0 -> drift *through* the curved wrap (1.0e-12), > 0 ->
+#     passivity + the 2sigma oracle.
+#   * **`sigma1` and `hysteresis` are fixed at 0, deliberately not exposed.** Both would break the
+#     oracle above for nothing: sigma1 makes the highs decay faster than 2*sigma0 (measured
+#     2.77 against a 1.00 oracle) and hysteresis is contact *damping*, which fights the very
+#     re-injection the model is about. The shimmer needs neither (the 3.4x headline is at sigma1=0).
+#   * **The IC is a mode-1 sine and there is NO pluck-position slider.** The headline is a CONTRAST
+#     against a clean string, so the clean baseline must be spectrally pure: a mode-1 start puts the
+#     clean centroid on f1 and the bridge's highs stand out. A raised-cosine pluck gives the clean
+#     string its own highs and shrinks the contrast (the #6 mode11 / #9 single-mode lesson again).
+#   * **`amplitude / depth` is the control, not `depth`.** What decides whether the string wraps is
+#     the near-termination downswing (~``amplitude * pi * width_frac``) against the curve's drop:
+#     the dimensionless ``downswing / depth`` is refinement- and units-invariant (the tension
+#     ``dT/T0`` / geometric ``frac`` pattern). Measured, it is a ONE-SIDED FLOOR, not a window:
+#     ratio 15.1/7.5/3.8/1.9/0.9/0.6 -> elevation 3.48/3.75/3.44/3.15/2.33/1.63x, and the wrap
+#     contracts toward the crest (max node 14 -> 11 -> 8) as it falls. Below the floor the bridge
+#     grazes: a legitimate stiff point contact, just not a jawari -> **LABEL, never FAIL** (the
+#     bow's Schelleng-window rule).
+#   * **Only the jawari and clean runs are paid for.** The flat-rail control that separates "buzzes"
+#     from "travels" is already validated in ``tests/test_jawari.py`` (wrap-edge std 4.89 curve vs
+#     2.35 flat); the panel cites that rather than paying for a third run, and the shipped sweep
+#     (nodes 0..14) is self-evidently travelling.
+
+
+JAWARI_N_MAX = 128            # support ~= width_frac*N nodes; the dense contact solve is |C|x|C|
+JAWARI_AUDIO_MAX = 1.5        # ~143 us/step at fs = c*N/(L*lam) with lam = 0.4 -> fs = 50 kHz
+JAWARI_WORK_MAX = 150_000     # total steps across BOTH runs (jawari + the clean contrast)
+JAWARI_LAM_DEFAULT = 0.4      # sub-unity: the coupled contact solve wants headroom below Nyquist
+JAWARI_K_DEFAULT = 2.0e6      # N/m^alpha — stiff wood/bone bridge
+JAWARI_ALPHA_DEFAULT = 1.5    # Hertzian-ish contact exponent
+JAWARI_WIDTH_DEFAULT = 0.15   # bridge span as a fraction of L, hugging the termination
+JAWARI_DEPTH_DEFAULT = 1.0e-3         # crest-to-far-edge drop of the parabola (m)
+JAWARI_AMP_DEFAULT = 8.0e-3           # mode-1 amplitude (m) — the test suite's AMP
+JAWARI_SIGMA0_DEFAULT = 0.5           # loss defaults ON: "sustained" is meaningless without decay
+JAWARI_DEPTH_MAX = 8.0e-3
+JAWARI_AMP_MAX = 4.0e-2
+JAWARI_WIDTH_MAX = 0.4
+JAWARI_ELEVATION_GATE = 2.5   # late-window centroid elevation over the clean string (the headline)
+JAWARI_RATIO_FLOOR = 1.5      # downswing/depth below which the bridge grazes — LABEL, not FAIL
+
+
+def _jawari_profile(x: NDArray[np.float64], L: float, *, width_frac: float, depth: float,
+                    clearance: float) -> NDArray[np.float64]:
+    """Parabolic bridge hugging ``x = 0``: ``b = -clearance - depth*(x/d)^2`` on ``0 < x <= d``.
+
+    ``-inf`` off the span (out of support). Mirrors ``tests/helpers.jawari_barrier`` exactly so the
+    viewer runs the validated geometry rather than a lookalike.
+    """
+    d = width_frac * L
+    b = np.full_like(np.asarray(x, dtype=float), -np.inf)
+    on = (x > 0.0) & (x <= d)
+    b[on] = -clearance - depth * (x[on] / d) ** 2
+    return b
+
+
+def _build_jawari(p: dict[str, Any], *, clearance: float) -> tuple[BarrierString, dict[str, Any]]:
+    """Construct a jawari :class:`BarrierString` from params (the clean contrast passes a big
+    ``clearance``, which drops the whole curve out of the string's reach).
+
+    Returns ``(bar, info)`` where ``info`` carries the derived scalars the panels quote.
+    """
+    L = _fnum(p, "L", 1.0)
+    T = _fnum(p, "T", 200.0)
+    rho = _fnum(p, "rho", 0.005)
+    lam = _fnum(p, "lambda", JAWARI_LAM_DEFAULT)
+    # Deliberately NOT `K` and NOT `alpha`. Both names are already taken by other models with wildly
+    # different scales and meanings — `K` is the sympathetic bridge SPRING (~8000 N/m; this one
+    # is 2e6 N/m^alpha, 250x stiffer) and `alpha` is the mallet's felt exponent (2.3 vs 1.5 here).
+    # The frontend sends every slider, hidden ones included, so reading either would silently
+    # render a
+    # different bridge the moment the user had visited those models. A distinct name is the fix; the
+    # contact exponent is not a headline control here, so it stays fixed at the validated 1.5 rather
+    # than earning a slider (and a third chance to leak).
+    K = _fnum(p, "bridge_stiffness", JAWARI_K_DEFAULT)
+    alpha = JAWARI_ALPHA_DEFAULT
+    width_frac = _fnum(p, "width_frac", JAWARI_WIDTH_DEFAULT)
+    depth = _fnum(p, "depth", JAWARI_DEPTH_DEFAULT)
+    sigma0 = _fnum(p, "sigma0", JAWARI_SIGMA0_DEFAULT)
+    try:
+        N = int(p.get("N", 100))
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"N must be an integer, got {p.get('N')!r}.") from exc
+
+    if not (N_MIN <= N <= JAWARI_N_MAX):
+        raise ParamError(f"N must be in [{N_MIN}, {JAWARI_N_MAX}] for the jawari, got {N}.")
+    if min(L, T, rho) <= 0:
+        raise ParamError("L, T, rho must all be positive.")
+    if not (0.0 < lam < 1.0):
+        raise ParamError(
+            f"lambda must be in (0, 1), got {lam}: the coupled contact solve needs headroom below "
+            "the string's marginal Nyquist mode."
+        )
+    if not (0.0 < width_frac <= JAWARI_WIDTH_MAX):
+        raise ParamError(f"width_frac must be in (0, {JAWARI_WIDTH_MAX}], got {width_frac}.")
+    if not (0.0 < depth <= JAWARI_DEPTH_MAX):
+        raise ParamError(f"depth must be in (0, {JAWARI_DEPTH_MAX}] m, got {depth}.")
+    if K <= 0:
+        raise ParamError(f"bridge_stiffness must be positive, got {K}.")
+    if sigma0 < 0:
+        raise ParamError(f"sigma0 must be >= 0, got {sigma0}.")
+
+    c = math.sqrt(T / rho)
+    fs = c * N / (L * lam)
+    # sigma1 = hysteresis = 0 on purpose: both would break the flat-loss 2*sigma0 oracle, and the
+    # shimmer needs neither (see the section note above).
+    string = DampedStiffString(L=L, T=T, rho=rho, fs=fs, N=N, kappa=0.0, sigma0=sigma0,
+                               sigma1=0.0)
+    barrier = _jawari_profile(string.x, L, width_frac=width_frac, depth=depth,
+                              clearance=clearance)
+    bar = BarrierString(string=string, barrier=barrier, stiffness=K, alpha=alpha, hysteresis=0.0)
+    info = {
+        "c": c, "L": L, "N": N, "fs": fs, "lam": float(string.lam), "sigma0": sigma0,
+        "width_frac": width_frac, "depth": depth, "K": K, "alpha": alpha,
+        "support": int(np.isfinite(barrier).sum()),
+    }
+    return bar, info
+
+
+class _JawariRun:
+    """Per-step telemetry of a jawari run — the pickup, the wrap edge and the energy."""
+
+    def __init__(self, n: int) -> None:
+        self.E = np.empty(n + 1)
+        self.pickup = np.empty(n + 1)
+        self.wrap = np.full(n + 1, -1.0)      # furthest-in-contact node; -1 = clear of the bridge
+        self.n_contact = np.zeros(n + 1)
+        self.frames: list[NDArray[np.float64]] = []
+        self.frame_steps: list[int] = []
+
+
+def _run_jawari(bar: BarrierString, n_steps: int, *, pickup_idx: int, anim_stride: int,
+                frame_until: int, capture_wrap: bool = True) -> _JawariRun:
+    """Step the barrier string, capturing pickup + wrap edge + energy + frames in ONE pass.
+
+    Hand-rolled rather than :func:`simulate` because ``contact_mask()`` — the travelling departure
+    point, which is the second panel — is not part of a ``SimResult`` (the geometric/mallet/
+    sympathetic pattern).
+    """
+    run = _JawariRun(n_steps)
+
+    def _sample(i: int) -> None:
+        run.E[i] = bar.energy()
+        run.pickup[i] = bar.string.displacement_at(pickup_idx)
+        if capture_wrap:
+            m = bar.contact_mask()
+            n_c = int(np.count_nonzero(m))
+            run.n_contact[i] = n_c
+            if n_c:
+                run.wrap[i] = float(np.max(np.where(m)[0]))
+
+    _sample(0)
+    if frame_until >= 1:
+        run.frames.append(bar.string.u.copy())
+        run.frame_steps.append(0)
+    for i in range(1, n_steps + 1):
+        bar.step()
+        _sample(i)
+        if i <= frame_until and i % anim_stride == 0:
+            run.frames.append(bar.string.u.copy())
+            run.frame_steps.append(i)
+    if not np.all(np.isfinite(run.E)):
+        raise ParamError("simulation produced non-finite energy (instability) — adjust parameters.")
+    return run
+
+
+def _spectral_centroid(sig: NDArray[np.float64], fs: float) -> float:
+    """Amplitude-weighted mean frequency (Hz) — the brightness proxy, identical to the suite's."""
+    sig = np.asarray(sig, dtype=float)
+    if sig.size < 4:
+        return float("nan")
+    mag = np.abs(np.fft.rfft(sig * np.hanning(sig.size)))
+    freqs = np.fft.rfftfreq(sig.size, 1.0 / fs)
+    total = float(np.sum(mag))
+    return float(np.sum(freqs * mag) / total) if total > 0 else float("nan")
+
+
+def _jawari_band_spectrum(sig: NDArray[np.float64], fs: float, f_max: float,
+                          n_points: int = 240) -> tuple[list[float], list[float | None], float]:
+    """Band-limited magnitude spectrum, pooled to ``n_points`` for the plot. Returns (f, mag, norm).
+
+    Pooling is by MAX over each bin (the shimmer is a forest of narrow high partials; a mean would
+    average them into the noise floor). The normalizer is returned so the jawari and clean traces
+    can share one scale — their *relative* height is the claim.
+    """
+    sig = np.asarray(sig, dtype=float)
+    mag = np.abs(np.fft.rfft(sig * np.hanning(sig.size)))
+    freqs = np.fft.rfftfreq(sig.size, 1.0 / fs)
+    keep = freqs <= f_max
+    freqs, mag = freqs[keep], mag[keep]
+    if freqs.size <= n_points:
+        return _finite_list(freqs, 3), _finite_list(mag), float(mag.max() if mag.size else 1.0)
+    edges = np.linspace(0, freqs.size, n_points + 1).astype(int)
+    fo = np.array([freqs[a:b].mean() for a, b in zip(edges[:-1], edges[1:], strict=True)
+                   if b > a])
+    mo = np.array([mag[a:b].max() for a, b in zip(edges[:-1], edges[1:], strict=True)
+                   if b > a])
+    return _finite_list(fo, 3), _finite_list(mo), float(mo.max() if mo.size else 1.0)
+
+
+def _jawari_shimmer_block(jaw: _JawariRun, clean: _JawariRun, fs: float, f1: float,
+                          info: dict[str, Any], amplitude: float) -> dict[str, Any]:
+    """The claim: late-window brightness held up by the bridge, and the wrap edge travelling.
+
+    Both windows are halves of the SAME run, so the early/late comparison needs no second
+    simulation. The late-window *elevation* over the clean string is the robust headline; the
+    late/early *ratio* is reported but deliberately never gated — it wobbles 0.9-1.3 with the decay
+    rate and window placement (recorded in the model's own notes), so gating it would make a correct
+    render flaky.
+    """
+    half = jaw.pickup.size // 2
+    j_e = _spectral_centroid(jaw.pickup[:half], fs)
+    j_l = _spectral_centroid(jaw.pickup[half:], fs)
+    c_e = _spectral_centroid(clean.pickup[:half], fs)
+    c_l = _spectral_centroid(clean.pickup[half:], fs)
+    elevation = float(j_l / c_l) if c_l > 0 else float("nan")
+
+    f_max = min(0.45 * fs, max(20.0 * f1, 2000.0))
+    jf, jm, jn = _jawari_band_spectrum(jaw.pickup[half:], fs, f_max)
+    cf, cm, cn = _jawari_band_spectrum(clean.pickup[half:], fs, f_max)
+    norm = max(jn, cn) or 1.0
+    jm = [None if v is None else v / norm for v in jm]
+    cm = [None if v is None else v / norm for v in cm]
+
+    contacting = jaw.wrap >= 0.0
+    wrap = jaw.wrap[contacting]
+    downswing = amplitude * math.pi * info["width_frac"]
+    ratio = float(downswing / info["depth"]) if info["depth"] > 0 else float("inf")
+
+    return {
+        "kind": "jawari",
+        "centroid": {
+            "jawari_early": round(j_e, 1), "jawari_late": round(j_l, 1),
+            "clean_early": round(c_e, 1), "clean_late": round(c_l, 1),
+        },
+        "elevation": round(elevation, 3),
+        "elevation_gate": JAWARI_ELEVATION_GATE,
+        "shimmering": bool(elevation > JAWARI_ELEVATION_GATE),
+        # report-only, never gated (see the docstring)
+        "sustain_ratio": round(float(j_l / j_e), 3) if j_e > 0 else None,
+        "clean_sustain_ratio": round(float(c_l / c_e), 3) if c_e > 0 else None,
+        "downswing": downswing,
+        "depth": info["depth"],
+        "ratio": round(ratio, 2),
+        "ratio_floor": JAWARI_RATIO_FLOOR,
+        "grazing": bool(ratio < JAWARI_RATIO_FLOOR),
+        "wrap": {
+            "std": round(float(np.std(wrap)), 2) if wrap.size else None,
+            "min_node": int(wrap.min()) if wrap.size else None,
+            "max_node": int(wrap.max()) if wrap.size else None,
+            "support": int(info["support"]),
+            "duty": round(float(contacting.mean()), 4),
+            "mean_nodes": round(float(jaw.n_contact[contacting].mean()), 2) if wrap.size else None,
+            # the flat-rail control is validated in tests/test_jawari.py, not re-run here
+            "flat_rail_std": 2.35,
+            "curve_std_suite": 4.89,
+        },
+        "spectra": {
+            "f_max": round(f_max, 1),
+            "jawari": {"f": jf, "mag": jm},
+            "clean": {"f": cf, "mag": cm},
+        },
+        "f1": round(f1, 3),
+    }
+
+
+def _build_payload_jawari(p: dict[str, Any]) -> dict[str, Any]:
+    playback_speed = _fnum(p, "playback_speed", 0.02)
+    pickup_frac = _fnum(p, "pickup_position", 0.5)
+    audio_dur = _fnum(p, "audio_duration", 0.24)
+    anim_win = _fnum(p, "animation_window", 0.06)
+    amplitude = _fnum(p, "amplitude", JAWARI_AMP_DEFAULT)
+    fpp = max(1, int(_fnum(p, "frames_per_period", FRAMES_PER_PERIOD)))
+
+    if not (0.0 < playback_speed <= SPEED_MAX):
+        raise ParamError(f"playback_speed must be in (0, {SPEED_MAX}], got {playback_speed}.")
+    if not (0.0 < pickup_frac < 1.0):
+        raise ParamError(f"pickup_position must be in (0, 1), got {pickup_frac}.")
+    if not (0.0 < audio_dur <= JAWARI_AUDIO_MAX):
+        raise ParamError(f"audio_duration must be in (0, {JAWARI_AUDIO_MAX}] s, got {audio_dur}.")
+    if not (0.0 < anim_win <= ANIM_WIN_MAX):
+        raise ParamError(f"animation_window must be in (0, {ANIM_WIN_MAX}] s, got {anim_win}.")
+    if not (0.0 < amplitude <= JAWARI_AMP_MAX):
+        raise ParamError(f"amplitude must be in (0, {JAWARI_AMP_MAX}] m, got {amplitude}.")
+
+    jaw, info = _build_jawari(p, clearance=0.0)
+    fs, L, c, N = info["fs"], info["L"], info["c"], info["N"]
+    f1 = c / (2.0 * L)
+    n_steps = max(1, round(audio_dur * fs))
+    # BOTH runs are paid for (the clean contrast is what makes the elevation a number), so the work
+    # budget counts them together — a per-run cap would silently licence twice the wall clock.
+    if 2 * n_steps > JAWARI_WORK_MAX:
+        raise ParamError(
+            f"this configuration needs {2 * n_steps} steps across the jawari and clean runs "
+            f"(budget {JAWARI_WORK_MAX}): every step is a vector contact solve over the bridge "
+            f"support. Shorten audio_duration, lower N, or raise lambda."
+        )
+
+    pickup_idx = min(max(1, round(pickup_frac * N)), N - 1)
+    anim_stride = max(1, round((fs / f1) / fpp))
+    n_anim = min(n_steps, max(anim_stride, round(anim_win * fs)))
+    if n_anim // anim_stride > MAX_FRAMES:
+        anim_stride = max(1, math.ceil(n_anim / MAX_FRAMES))
+
+    shape = _mode1_shape(jaw.string) * amplitude
+    jaw.set_state(shape)
+    run = _run_jawari(jaw, n_steps, pickup_idx=pickup_idx, anim_stride=anim_stride,
+                      frame_until=n_anim)
+
+    # The clean contrast: the SAME string with the bridge dropped out of reach. Sharing the string
+    # parameters is what makes the centroid ratio attributable to the bridge and nothing else.
+    clean, _ = _build_jawari(p, clearance=1.0)
+    clean.set_state(_mode1_shape(clean.string) * amplitude)
+    clean_run = _run_jawari(clean, n_steps, pickup_idx=pickup_idx, anim_stride=1, frame_until=0,
+                            capture_wrap=False)
+
+    frames = np.array(run.frames, dtype=float)
+    field_amp = float(np.max(np.abs(frames))) if frames.size else 0.0
+    audio48, peak = _resample_normalize(run.pickup, fs)
+    sim = SimResult(time=np.arange(run.E.size) / fs, energy=run.E, output=None, fs=fs, snapshots=[])
+    # THE INDEXING TRAP. `BarrierString._b` and `contact_mask()` are both over the SUPPORT (the
+    # ~15 nodes the finite barrier covers), not over the grid — so shipping either straight to the
+    # frontend, which indexes everything by grid node, silently misplaces it. The barrier would
+    # arrive as a 15-long array drawn across the first 15 nodes, and the wrap marker would land one
+    # node short of the contact it marks (off by exactly the first support offset, which near a
+    # termination looks entirely plausible). Both are scattered back onto the grid here.
+    barrier = np.full(jaw.string.N + 1, np.nan)
+    barrier[jaw._support] = jaw._b
+    support_nodes = np.asarray(jaw._support, dtype=int)
+    wrap_grid = [int(support_nodes[int(w)]) if w >= 0 else -1
+                 for w in (run.wrap[i] for i in run.frame_steps)]
+
+    return {
+        "model": "jawari",
+        "fs_sim": round(fs, 3),
+        "lambda": round(info["lam"], 6),
+        "grid": {"x": _finite_list(jaw.string.x, 6), "barrier": _finite_list(barrier)},
+        "frames": {
+            "b64": _b64f32(frames.ravel()),
+            "n_frames": int(frames.shape[0]),
+            "width": int(frames.shape[1]) if frames.ndim == 2 else 0,
+            "dims": 1,
+        },
+        "frame_times": _finite_list(np.array(run.frame_steps, dtype=float) / fs, 6),
+        # grid-node indices (see the scatter above); the wrap STATISTICS in meta stay
+        # support-relative, because that is the frame the model's own tests report them in.
+        "wrap_frames": wrap_grid,
+        "anim_dt": float(anim_stride / fs),
+        "playback_speed": playback_speed,
+        "field_amp": field_amp,
+        "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
+        # The damped string's own verdict, unchanged: the bridge is elastic and lossless, so the
+        # flat-loss 2*sigma0 oracle survives the wrap (see the section note).
+        "energy": _energy_block(sim, sigma_zero=bool(info["sigma0"] == 0.0),
+                                oracle_2sigma=2.0 * info["sigma0"]),
+        "meta": {
+            "c": round(c, 3),
+            "f1": round(f1, 3),
+            "num_steps": int(n_steps),
+            "n_frames": int(frames.shape[0]),
+            "probe_x": round(float(jaw.string.x[pickup_idx]), 4),
+            "bridge_span": round(info["width_frac"] * L, 4),
+            "spectrum": _jawari_shimmer_block(run, clean_run, fs, f1, info, amplitude),
+        },
+    }
+
+
 # == membrane (2D, Phase B) ========================================================================
+#
+# NOTE the jawari path lives above this line (it is a 1-D string); the 2D family starts here.
 #
 # The 2D path is split off from the string path (above) so the string contract stays bit-for-bit
 # unchanged. What differs: frames are 2D heatmap fields (decimated to a <= DISPLAY_MAX display

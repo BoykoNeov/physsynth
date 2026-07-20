@@ -110,6 +110,25 @@ const MODEL_RANGES = {
     K: { val: 6000 }, sigma_body: { val: 20 },
     detune: { min: 0, max: 0.4, step: 0.01, fixed: 2, val: 0 },
   },
+  // Jawari / buzzing bridge (model #8 curved). Loss is ON by default and load-bearing: "SUSTAINED
+  // brightness" is meaningless on a lossless string, where every mode sustains by definition — the
+  // signal only exists because sigma0 would darken a clean string while the bridge keeps re-injecting
+  // highs. sigma0 also GATES the verdict (0 -> conservation drift through the wrap, > 0 -> passivity
+  // + the 2·sigma0 oracle, which survives here because the barrier is elastic and dissipates nothing).
+  // amplitude defaults to the test suite's 8 mm, which puts downswing/depth at 3.8 — comfortably
+  // above the ~1.5 floor below which the string only grazes the crest. lambda = 0.4 (not the string
+  // path's 1.0) gives the coupled contact solve headroom; N = 100 puts ~15 nodes under the bridge,
+  // enough to resolve the travelling wrap and well under the dense-solve BLAS cliff.
+  jawari: { N: { min: 32, max: 128, val: 100 }, lambda: { min: 0.2, max: 0.9, val: 0.4 },
+            amplitude: { min: 0.001, max: 0.04, step: 0.001, fixed: 3, val: 0.008 },
+            sigma0: { val: 0.5 }, sigma1: { val: 0 },
+            // step MUST be re-ranged with the val: index.html ships step = 0.1 for the long runs of
+            // every other model, and a range input SNAPS an off-grid value to its step. Without this
+            // the shipped default silently became 0.2 — the browser could not express the 0.24 the
+            // tests pin, so the tested config and the rendered one had drifted apart (elevation
+            // 3.44x tested vs 2.75x rendered, a hair over the 2.5x gate).
+            pickup_position: { val: 0.5 },
+            audio_duration: { min: 0.1, max: 1.5, step: 0.01, fixed: 2, val: 0.24 } },
   // Regime-level ranges, keyed "model:domain" and merged AFTER the model spec (see
   // applyModelRanges). The phantom regime is the first customer and needs both: κ = 8 is its
   // microscope (the geometric model defaults κ = 0, which is a HARMONIC string — every phantom
@@ -128,7 +147,14 @@ const MODEL_RANGES = {
   // the reset a bow → damped switch would silently render a wildly over-damped string on a stale
   // range. (This also fixes the same leak tension's sigma0 = 0 already had.)
   // amplitude and EA are re-ranged by BOTH nonlinear string models, so both reset here.
-  _default: { N: { min: 16, max: 512 }, lambda: { max: 2.0, val: 1.0 },
+  // The jawari re-ranges the LOWER bound of lambda (0.2 — the contact solve wants headroom) and of
+  // audio_duration (0.1 s — its runs are short and expensive), and applyModelRanges only rewrites a
+  // bound the spec actually names. So both mins are reset here to index.html's values; without them
+  // a jawari → anything switch leaves the next model able to select a lambda or duration its own
+  // path never intended. The `val`-only leak, one field over. audio_duration also resets step and
+  // fixed, because the jawari has to narrow BOTH (see its spec) and a stale 0.01 step would leave
+  // every other model's multi-second slider crawling in hundredths.
+  _default: { N: { min: 16, max: 512 }, lambda: { min: 0.5, max: 2.0, val: 1.0 },
               kappa: { min: 0, max: 8, step: 0.05, fixed: 2, val: 1.0 },
               rho: { min: 0.001, max: 0.02, step: 0.0005, fixed: 4, val: 0.005, unit: "kg/m²" },
               amplitude: { min: 0.001, max: 0.06, step: 0.001, fixed: 3, val: 0.001 },
@@ -139,7 +165,7 @@ const MODEL_RANGES = {
               K: { min: 500, max: 10000, step: 100, fixed: 0, val: 8000 },
               detune: { min: 0, max: 12, step: 0.1, fixed: 1, val: 0 },
               sigma_body: { min: 0, max: 80, step: 1, fixed: 0, val: 0, unit: "s⁻¹" },
-              audio_duration: { max: 6, val: 2 } },
+              audio_duration: { min: 0.2, max: 6, step: 0.1, fixed: 1, val: 2 } },
 };
 
 // Secondary select repurposed per model: geometry (membrane), boundary (plate / von Kármán) or
@@ -175,6 +201,8 @@ let isGeom = false, orbitU = null, orbitW = null, orbitPerFrame = 1, uwAmp = 1, 
 // Stacked-strip `drawFields` state (geometric u/w/v AND sympathetic string A/B): the field count,
 // per-field vertical scales, display names and a shared colour palette. Set once at load.
 let isSymp = false, nFields = 1, fieldAmps = [1], fieldLabels = [];
+// Jawari (model #8, curved): the bridge profile under the string + the travelling wrap edge.
+let isJawari = false, barrierProfile = null, wrapFrames = null;
 const FIELD_COLORS = ["#4cc2ff", "#ff8f4c", "#9d7bff"];
 let audioSamples = null, audioFs = 48000, audioBuf = null, audioCtx = null, audioSrc = null;
 let speed = 0.02, animPlaying = true, scrubbing = false, currentFrame = 0, animStart = 0;
@@ -514,6 +542,29 @@ function updateLambdaHint() {
       syHint.textContent = "";
     }
   }
+  // Jawari: surface the geometry gate LIVE, BEFORE the render. downswing/depth decides whether the
+  // string wraps the curve or merely grazes its crest, and it is the one setting that can turn this
+  // model into a different (legitimate, but not jawari) timbre without any error appearing. Showing
+  // it as a live dimensionless number beats letting the user discover it in the readout 30 s later.
+  const jHint = $("jawari-hint");
+  if (jHint) {
+    if (m === "jawari") {
+      const ratio = (param("amplitude") * Math.PI * param("width_frac")) / param("depth");
+      const s0 = param("sigma0");
+      jHint.textContent = ratio < 1.5
+        ? `downswing/depth ≈ ${ratio.toFixed(2)} — TOO DEEP: the string will only graze the crest `
+          + `(a stiff point contact, no travelling wrap, no shimmer). Raise amplitude or lower depth.`
+        : `downswing/depth ≈ ${ratio.toFixed(2)} — the swing clears the curve, so the string wraps `
+          + `and its departure point travels. `
+          + (s0 === 0
+            ? `σ₀ = 0: lossless, so the verdict is conservation drift THROUGH the wrap — but nothing `
+              + `decays, so "sustained" brightness has no meaning. Raise σ₀ for the shimmer.`
+            : `σ₀ = ${s0.toFixed(1)}: a clean string would darken; the bridge re-injects highs.`);
+      jHint.style.color = ratio < 1.5 ? "var(--warn, #ffcf5c)" : "var(--muted)";
+    } else {
+      jHint.textContent = "";
+    }
+  }
   // Mallet: surface the felt-resolution guard LIVE (the ctor's warning never reaches the browser).
   // The rigid-wall estimate π√(M/K)·fs must span several steps or the stiff contact aliases — a
   // NOTE, not an error, since the energy method conserves even under-resolved. Harder felt (↑K, ↓M)
@@ -657,6 +708,15 @@ function applyPayload(data) {
   }
   isGeom = data.model === "geometric";
   isSymp = data.model === "sympathetic";
+  isJawari = data.model === "jawari";
+  if (isJawari) {
+    // The bridge profile (NaN off its support) and the per-frame wrap edge, which is the marker
+    // whose travel IS the second claim. Both are in the same units as the field, so they share
+    // fieldAmp — drawing the barrier on its own scale would destroy the one thing the picture is
+    // for: how far the string has swung PAST the curve.
+    barrierProfile = data.grid.barrier || null;
+    wrapFrames = data.wrap_frames || null;
+  }
   if (isGeom) {
     orbitU = b64ToFloat32(data.orbit.u);
     orbitW = b64ToFloat32(data.orbit.w);
@@ -751,6 +811,118 @@ function drawString(idx) {
   g.beginPath(); g.arc(W - margin, midY, 3.5, 0, 7); g.fill();
 }
 
+// ── jawari: the string over its bridge, plus a zoom on the wrap ──────────────────────────────
+// Two views because one cannot carry both halves. The bridge spans ~15 % of the string and its
+// curve drops ~1 mm against an 8 mm swing, so in the full view it is a few pixels of detail near
+// the termination — you can see THAT the string is held off the rest line but not that it is lying
+// along a curve. The zoom (right) is the money picture: the string conforming to the parabola over
+// a span that grows and shrinks, with the departure point sliding. Same trap as the phantom
+// batch's two spectra, one level over.
+function drawJawariViz(idx) {
+  const g = stringCv.getContext("2d");
+  const W = stringCv.width, H = stringCv.height;
+  g.clearRect(0, 0, W, H);
+  const fullW = Math.round(W * 0.58);
+  drawJawariPane(g, idx, 0, 0, fullW, H, false);
+  drawJawariPane(g, idx, fullW, 0, W - fullW, H, true);
+}
+
+// One pane. `zoom` restricts the x-range to the bridge span (plus a margin) and rescales y to the
+// bridge depth, so the curve fills the box instead of hugging the axis.
+function drawJawariPane(g, idx, x0, y0, w, h, zoom) {
+  const sp = payload && payload.meta && payload.meta.spectrum;
+  const xs = (payload && payload.grid && payload.grid.x) || [];
+  if (!frames || nFrames === 0 || !xs.length) return;
+  const span = (payload.meta && payload.meta.bridge_span) || 0.15;
+  const Lx = xs[xs.length - 1] || 1;
+  const margin = 20;
+
+  // Node window. Zoomed: the bridge plus half again, so the string is seen ARRIVING at the curve.
+  const iMax = zoom ? Math.min(width - 1, Math.ceil((span * 1.6 / Lx) * (width - 1))) : width - 1;
+  const amp = fieldAmp > 0 ? fieldAmp : 1;
+  // Zoomed, the vertical scale follows the BRIDGE depth, not the pluck amplitude: at the full
+  // scale a 1 mm curve under an 8 mm swing is ~4 px of the box and the wrap is invisible.
+  let vAmpLocal = amp;
+  if (zoom && sp && sp.depth) vAmpLocal = Math.max(sp.depth * 3.0, amp * 0.22);
+  const midY = y0 + h * (zoom ? 0.42 : 0.5);
+  const sx = (w - 2 * margin) / iMax;
+  const sy = (Math.min(midY - y0, y0 + h - midY) - margin) / vAmpLocal * 0.92;
+  const px = (i) => x0 + margin + i * sx;
+  const py = (v) => midY - v * sy;
+
+  g.save();
+  g.beginPath(); g.rect(x0, y0, w, h); g.clip();
+
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(x0, midY); g.lineTo(x0 + w, midY); g.stroke();
+
+  // The bridge itself: a filled body below the curve reads as a solid the string rests ON, where a
+  // bare line reads as just another trace.
+  if (barrierProfile) {
+    const pts = [];
+    for (let i = 0; i <= iMax; i++) {
+      const b = barrierProfile[i];
+      if (b !== null && b !== undefined && isFinite(b)) pts.push([px(i), py(b)]);
+    }
+    if (pts.length > 1) {
+      g.beginPath();
+      g.moveTo(pts[0][0], pts[0][1]);
+      for (const [X, Y] of pts) g.lineTo(X, Y);
+      g.lineTo(pts[pts.length - 1][0], y0 + h);
+      g.lineTo(pts[0][0], y0 + h);
+      g.closePath();
+      g.fillStyle = "rgba(198,142,86,.20)"; g.fill();
+      g.strokeStyle = "#c68e56"; g.lineWidth = 2;
+      g.beginPath();
+      g.moveTo(pts[0][0], pts[0][1]);
+      for (const [X, Y] of pts) g.lineTo(X, Y);
+      g.stroke();
+    }
+  }
+
+  // The string.
+  g.strokeStyle = "#4cc2ff"; g.lineWidth = zoom ? 2.5 : 2; g.lineJoin = "round";
+  g.beginPath();
+  const base = idx * width;
+  for (let i = 0; i <= iMax; i++) {
+    const Y = py(frames[base + i]);
+    if (i === 0) g.moveTo(px(i), Y); else g.lineTo(px(i), Y);
+  }
+  g.stroke();
+
+  // The departure point — the furthest-in-contact node. -1 means the string is clear of the bridge
+  // this frame, and drawing nothing then is deliberate: the marker's absence is the intermittency.
+  const we = wrapFrames && idx < wrapFrames.length ? wrapFrames[idx] : -1;
+  if (we >= 0 && we <= iMax) {
+    const bx = px(we), by = py(barrierProfile ? barrierProfile[we] : 0);
+    g.fillStyle = "#ff6b6b";
+    g.beginPath(); g.arc(bx, by, zoom ? 5 : 3.5, 0, 7); g.fill();
+    if (zoom) {
+      g.strokeStyle = "rgba(255,107,107,.45)"; g.lineWidth = 1; g.setLineDash([3, 3]);
+      g.beginPath(); g.moveTo(bx, y0 + 6); g.lineTo(bx, y0 + h - 6); g.stroke(); g.setLineDash([]);
+    }
+  }
+
+  if (!zoom) {
+    const pk = margin + Math.round(param("pickup_position") * (width - 1)) * sx;
+    g.strokeStyle = "rgba(255,207,92,.35)"; g.setLineDash([4, 4]); g.lineWidth = 1;
+    g.beginPath(); g.moveTo(x0 + pk, y0 + 8); g.lineTo(x0 + pk, y0 + h - 8); g.stroke();
+    g.setLineDash([]);
+    g.fillStyle = "#8b98a8";
+    g.beginPath(); g.arc(px(0), midY, 3.5, 0, 7); g.fill();
+    g.beginPath(); g.arc(px(iMax), midY, 3.5, 0, 7); g.fill();
+  }
+
+  g.fillStyle = "#8b98a8"; g.font = "11px system-ui, sans-serif";
+  g.fillText(zoom ? `zoom — the bridge (0 … ${(span * 1.6).toFixed(2)} m)`
+                  : "the whole string", x0 + margin, y0 + 14);
+  if (zoom && we >= 0) {
+    g.fillStyle = "#ff6b6b";
+    g.fillText(`departure node ${we}`, x0 + margin, y0 + 28);
+  }
+  g.restore();
+}
+
 function tick(ts) {
   if (frames && nFrames > 0) {
     if (animPlaying && !scrubbing) {
@@ -760,7 +932,7 @@ function tick(ts) {
       scrub.value = currentFrame;
     }
     (dims === 2 ? drawHeatmap : isGeom ? drawGeometric
-      : isSymp ? drawSympatheticViz : drawString)(currentFrame);
+      : isSymp ? drawSympatheticViz : isJawari ? drawJawariViz : drawString)(currentFrame);
   }
   requestAnimationFrame(tick);
 }
@@ -1093,6 +1265,13 @@ function drawDiagnostics() {
     partialsTitle.firstChild.textContent = "Stick-slip ";
     partialsSub.textContent = "slip fraction vs β";
     drawStickSlip();
+    return;
+  }
+  // The jawari: a 1-D model whose claim is a spectral CONTRAST, not its own partials.
+  if (spec && spec.kind === "jawari") {
+    partialsTitle.firstChild.textContent = "Sustained shimmer ";
+    partialsSub.textContent = "late-window brightness vs a clean string";
+    drawJawari();
     return;
   }
   // The geometric string's four regimes, four panels — all 1-D, none of them cents bars.
@@ -1603,6 +1782,92 @@ function drawPhantom() {
     + `Hz — the same number, from both sides, with no oracle\n`
     + `(the zoom's peak is ~${lobe} Hz wide — a 0.1 s Hann lobe. Its POSITION is the claim, and `
     + `position is not resolution: f₁ is absent from v, so nothing neighbours the phantom to blur it.)`;
+}
+
+// ── jawari: the shimmer, as a spectral CONTRAST ──────────────────────────────────────────────
+// Two late-window spectra on ONE shared vertical scale — the jawari's and the same string with the
+// bridge dropped out of reach. Shared is the whole point: the claim is that the curved contact
+// keeps re-injecting high partials, so it is the RELATIVE height of the two traces up the band
+// that carries it. Normalizing each to its own peak would show two similar-looking curves and
+// silently delete the result.
+function drawJawari() {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height, padL = 34, padB = 16, top = 10;
+  g.clearRect(0, 0, W, H);
+  const out = $("partials-readout");
+  const sp = payload && payload.meta && payload.meta.spectrum;
+  if (!sp || !sp.spectra) { out.textContent = "no jawari spectra"; return; }
+
+  const plotW = W - padL - 8, plotH = H - padB - top;
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(padL, top, plotW, plotH);
+
+  const fMax = sp.spectra.f_max || 2000;
+  const px = (f) => padL + (f / fMax) * plotW;
+  // Log magnitude over 4 decades: the re-injected partials are 10⁻²–10⁻³ of the fundamental, which
+  // on a linear axis is a flat line along the bottom for BOTH traces — the contrast would vanish
+  // into the axis exactly where it lives.
+  const floor = 1e-4;
+  const py = (m) => {
+    const v = Math.max(m || floor, floor);
+    return top + plotH - ((Math.log10(v) - Math.log10(floor)) / 4) * plotH;
+  };
+  for (let d = 0; d >= -4; d--) {
+    const y = py(Math.pow(10, d));
+    g.strokeStyle = "rgba(139,152,168,.15)"; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(padL, y); g.lineTo(padL + plotW, y); g.stroke();
+    g.fillStyle = "#8b98a8"; g.font = "9px ui-monospace, monospace";
+    g.fillText(`1e${d}`, 3, y + 3);
+  }
+  // f1 marker: the clean string collapses onto it, the jawari does not.
+  if (sp.f1) {
+    g.strokeStyle = "rgba(255,207,92,.35)"; g.setLineDash([4, 4]);
+    g.beginPath(); g.moveTo(px(sp.f1), top); g.lineTo(px(sp.f1), top + plotH); g.stroke();
+    g.setLineDash([]);
+  }
+
+  const trace = (data, colour, wdt) => {
+    if (!data || !data.f) return;
+    g.strokeStyle = colour; g.lineWidth = wdt; g.beginPath();
+    let started = false;
+    for (let i = 0; i < data.f.length; i++) {
+      const X = px(data.f[i]), Y = py(data.mag[i]);
+      if (!started) { g.moveTo(X, Y); started = true; } else g.lineTo(X, Y);
+    }
+    g.stroke();
+  };
+  trace(sp.spectra.clean, "#8b98a8", 1.5);
+  trace(sp.spectra.jawari, "#ff8f4c", 2);
+
+  g.font = "10px ui-monospace, monospace";
+  g.fillStyle = "#ff8f4c"; g.fillText("jawari", padL + 6, top + 12);
+  g.fillStyle = "#8b98a8"; g.fillText("clean string", padL + 6, top + 24);
+  g.fillText(`${Math.round(fMax)} Hz`, W - 52, H - 5);
+
+  const c = sp.centroid;
+  const wrap = sp.wrap || {};
+  // The elevation is the gate; the sustain ratio is printed but deliberately NOT gated — it wobbles
+  // 0.9–1.3 with the decay rate and window placement, so a render could flip on nothing physical.
+  const verdict = sp.shimmering
+    ? `SHIMMER ✓  late brightness ${sp.elevation.toFixed(2)}× the clean string (gate ${sp.elevation_gate}×)`
+    : sp.grazing
+      ? `GRAZING — not a jawari at these settings (${sp.elevation.toFixed(2)}× < ${sp.elevation_gate}×)`
+      : `weak — ${sp.elevation.toFixed(2)}× < ${sp.elevation_gate}×`;
+  const geometry = sp.grazing
+    ? `\ndownswing/depth = ${sp.ratio} < ${sp.ratio_floor}: the string only grazes the crest, so the `
+      + `contact is a stiff POINT, not a wrap — raise amplitude or reduce depth. A legitimate `
+      + `config, just not this timbre.`
+    : `\ndownswing/depth = ${sp.ratio} (floor ~${sp.ratio_floor}) — the swing clears the curve, so `
+      + `the string wraps rather than grazing`;
+  out.textContent =
+    `${verdict}\n`
+    + `centroid late: jawari ${c.jawari_late} Hz vs clean ${c.clean_late} Hz  `
+    + `(early ${c.jawari_early} / ${c.clean_early})\n`
+    + `sustain jawari ${sp.sustain_ratio == null ? "—" : sp.sustain_ratio.toFixed(2)}× vs clean `
+    + `${sp.clean_sustain_ratio == null ? "—" : sp.clean_sustain_ratio.toFixed(2)}× (late/early — reported, not gated)`
+    + geometry
+    + `\nwrap edge sweeps nodes ${wrap.min_node}–${wrap.max_node} of ${wrap.support}, std `
+    + `${wrap.std}, in contact ${(wrap.duty * 100).toFixed(0)} % of the run — the suite's flat rail `
+    + `at matched clearance pins at std ${wrap.flat_rail_std} (tests/test_jawari.py)`;
 }
 
 function drawWhirl() {

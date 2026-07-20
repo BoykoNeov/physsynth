@@ -29,6 +29,12 @@ from web.serialize import (
     GEOM_PHANTOM_WINDOW,
     GEOM_PHANTOM_WORK_MAX,
     GEOM_WORK_MAX,
+    JAWARI_AMP_MAX,
+    JAWARI_DEPTH_MAX,
+    JAWARI_ELEVATION_GATE,
+    JAWARI_N_MAX,
+    JAWARI_RATIO_FLOOR,
+    JAWARI_WORK_MAX,
     LOSSLESS_TOL,
     MALLET_N_MAX,
     MEMBRANE_LAMBDA_MAX,
@@ -1839,3 +1845,146 @@ def test_symp_weinreich_detune_range_is_fine_not_semitones():
     assert SYMP_WEINREICH_DETUNE_MAX < 1.0
     assert "error" in _wein(detune=SYMP_WEINREICH_DETUNE_MAX + 0.5)
     assert "error" in _wein(sigma_body=SYMP_SIGMA_BODY_MAX + 1.0)
+
+
+# =================================================================================================
+# Jawari / buzzing bridge (model #8, curved) — the claim is the shimmer, not the energy
+# =================================================================================================
+#
+# The viewer runs the SAME rig as tests/test_jawari.py (mode-1 sine at 8 mm, sigma0 = 0.5, the
+# curved parabola, a clean contrast at clearance = 1 m), so the suite's own validated numbers come
+# back through the wrapper and act as a free end-to-end oracle: elevation ~3.4x and wrap-edge std
+# ~4.9 are not new claims invented here, they are the model's, re-measured through the payload.
+
+
+def _jaw(**over):
+    return web_serialize.simulate_to_payload({"model": "jawari", "audio_duration": 0.24, **over})
+
+
+def test_jawari_reproduces_the_suites_shimmer_and_wrap_numbers():
+    """The end-to-end oracle: the payload's headline numbers ARE tests/test_jawari.py's. The late
+    window is ~3.4x brighter than the clean string (the suite gates > 2.5x) and the wrap edge
+    sweeps with std ~4.9 (the suite's flat rail at matched clearance pins at ~2.35). If the wrapper
+    perturbed the rig — a different IC, a stale param, a shifted window — these would drift."""
+    sp = _jaw()["meta"]["spectrum"]
+    assert sp["kind"] == "jawari"
+    assert sp["elevation"] == pytest.approx(3.44, abs=0.05)
+    assert sp["shimmering"] is True and sp["elevation"] > JAWARI_ELEVATION_GATE
+    assert sp["wrap"]["std"] == pytest.approx(4.89, abs=0.05)
+    assert sp["wrap"]["min_node"] == 0 and sp["wrap"]["max_node"] == 14
+    # the clean contrast must be spectrally pure — that is what makes the elevation attributable
+    assert sp["centroid"]["clean_late"] == pytest.approx(sp["f1"], rel=0.02)
+
+
+def test_jawari_energy_keeps_the_flat_loss_oracle_unlike_the_mallet():
+    """The load-bearing verdict decision. The bridge is a LOSSLESS elastic barrier: it moves energy
+    into the highs but dissipates none, so every mode still decays at exactly 2*sigma0 and the
+    flat-loss oracle survives the wrap. This is why neither the mallet's nor weinreich's
+    decay_oracle=False applies here — dropping it would throw away a strictly stronger verdict."""
+    e = _jaw(sigma0=0.5)["energy"]
+    assert e["sigma_is_zero"] is False
+    assert e["lossy"]["monotone"] is True
+    assert e["lossy"]["oracle_2sigma"] == pytest.approx(1.0)
+    assert e["lossy"]["measured_2sigma"] == pytest.approx(1.0, rel=0.02)
+
+
+def test_jawari_sigma0_gates_the_verdict_and_conserves_through_the_curved_wrap():
+    """sigma0 = 0 flips the panel to the conservation-drift check, and the drift survives a
+    SUSTAINED many-node curved contact (~1e-12, the money gate of the jawari batch) — not a
+    contact-free run that would prove nothing about the barrier."""
+    d = _jaw(sigma0=0.0)
+    e = d["energy"]
+    assert e["sigma_is_zero"] is True
+    assert e["lossless"]["drift"] < LOSSLESS_TOL and e["lossless"]["pass"] is True
+    assert d["meta"]["spectrum"]["wrap"]["duty"] > 0.1, "must actually be in contact"
+
+
+def test_jawari_grazing_config_is_labelled_not_failed():
+    """Below the downswing/depth floor the string only grazes the crest: a legitimate stiff point
+    contact, just not a jawari. It must render with an honest label — never an error and never a
+    green shimmer badge (the bow's Schelleng-window rule: real physics gets labelled, never
+    failed)."""
+    sp = _jaw(depth=6.0e-3)["meta"]["spectrum"]
+    assert sp["grazing"] is True and sp["ratio"] < JAWARI_RATIO_FLOOR
+    assert sp["shimmering"] is False and sp["elevation"] < JAWARI_ELEVATION_GATE
+    # the mechanism, not just the score: the wrap contracts toward the crest
+    assert sp["wrap"]["max_node"] < 14
+
+
+def test_jawari_ratio_is_the_control_and_amplitude_moves_it_as_hard_as_depth():
+    """downswing/depth is the dimensionless coordinate (the tension dT/T0 pattern): depth is only
+    half of it, and quartering the amplitude degrades the shimmer exactly as deepening the bridge
+    does. A depth-only guard would let an under-plucked string through none the wiser."""
+    base = _jaw()["meta"]["spectrum"]
+    quiet = _jaw(amplitude=2.0e-3)["meta"]["spectrum"]
+    assert quiet["ratio"] == pytest.approx(base["ratio"] / 4.0, abs=0.01)  # ratio is 2-dp rounded
+    assert quiet["elevation"] < base["elevation"]
+
+
+def test_jawari_ignores_the_mallet_alpha_and_the_sympathetic_K():
+    """Param-collision guard. The frontend sends EVERY slider, so a user who visited the mallet or
+    the sympathetic strings would otherwise ship alpha = 2.3 and K = 8000 into this model — a
+    different felt exponent and a 250x softer bridge — and the render would silently change with
+    nothing on screen to say so. The jawari reads neither name; it uses bridge_stiffness."""
+    base = _jaw()["meta"]["spectrum"]
+    leaked = _jaw(alpha=2.3, K=8000)["meta"]["spectrum"]
+    assert leaked["elevation"] == base["elevation"]
+    assert leaked["wrap"]["std"] == base["wrap"]["std"]
+    # ... while the name it DOES read still bites
+    assert _jaw(bridge_stiffness=2.0e5)["meta"]["spectrum"]["elevation"] != base["elevation"]
+
+
+def test_jawari_payload_carries_the_bridge_profile_and_the_wrap_marker():
+    """The animation's two extras: the barrier profile (finite on its support, null off it — the
+    frontend draws the solid the string rests on) and the per-frame departure node."""
+    d = _jaw()
+    b = d["grid"]["barrier"]
+    assert len(b) == len(d["grid"]["x"])
+    finite = [v for v in b if v is not None]
+    assert len(finite) == d["meta"]["spectrum"]["wrap"]["support"]
+    assert all(v <= 0.0 for v in finite), "the bridge sits at or below the rest line"
+    assert finite == sorted(finite, reverse=True), "a parabola falling away from the crest"
+    assert len(d["wrap_frames"]) == d["frames"]["n_frames"]
+    # wrap_frames are GRID node indices, not support-relative ones: the core reports contact over
+    # its ~15-node support, and shipping that frame straight through puts the marker one node off
+    # the contact it marks — plausible-looking, and wrong. Every marked node must be ON the bridge.
+    assert all(w == -1 or b[w] is not None for w in d["wrap_frames"])
+    assert any(w >= 0 for w in d["wrap_frames"]), "the string must contact during the window"
+
+
+def test_jawari_late_spectra_share_one_scale():
+    """Both traces are normalized by the SAME peak, because their relative height up the band is
+    the entire claim — per-trace normalization would render two similar curves and delete it."""
+    sp = _jaw()["meta"]["spectrum"]["spectra"]
+    jm = [v for v in sp["jawari"]["mag"] if v is not None]
+    cm = [v for v in sp["clean"]["mag"] if v is not None]
+    assert max(max(jm), max(cm)) == pytest.approx(1.0)
+    assert max(jm) < 1.0 or max(cm) < 1.0, "one trace must be the normalizer, not both"
+    assert len(sp["jawari"]["f"]) == len(sp["jawari"]["mag"])
+
+
+def test_jawari_audio_is_real_and_finite():
+    d = _jaw()
+    a = d["audio"]
+    assert a is not None and a["fs"] == AUDIO_FS
+    sig = _decode_f32(a["b64"])
+    assert np.all(np.isfinite(sig)) and float(np.max(np.abs(sig))) > 0.0
+
+
+def test_jawari_work_budget_counts_both_runs_and_the_guards_are_reachable():
+    """The clean contrast is a SECOND full run, so the budget is on 2 * n_steps — a per-run cap
+    would silently licence twice the wall clock. Worst passing render measured at ~34 s."""
+    r = _jaw(audio_duration=1.5, N=128, width_frac=0.4)
+    assert "error" in r and str(JAWARI_WORK_MAX) in r["error"]["message"]
+    assert "error" in _jaw(N=JAWARI_N_MAX + 1)
+    assert "error" in _jaw(depth=JAWARI_DEPTH_MAX + 1e-3)
+    assert "error" in _jaw(amplitude=JAWARI_AMP_MAX + 1e-3)
+    assert "error" in _jaw(bridge_stiffness=0.0)
+
+
+def test_jawari_sustain_ratio_is_reported_but_never_gates():
+    """The late/early ratio wobbles 0.9-1.3 with the decay rate and window placement, so it is
+    printed and never scored — gating it would make a correct render flaky."""
+    sp = _jaw()["meta"]["spectrum"]
+    assert sp["sustain_ratio"] is not None and sp["clean_sustain_ratio"] is not None
+    assert sp["shimmering"] == (sp["elevation"] > JAWARI_ELEVATION_GATE)
