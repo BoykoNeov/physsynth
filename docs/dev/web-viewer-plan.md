@@ -1201,12 +1201,119 @@ Probe `temp/reed-viewer-probe/probe_viz.py`, at the default clarinet (γ = 0.51,
   the DOM**, because `payload`/`currentFrame` are module-scoped `let`s and `let`/`const` never
   become `window` properties.
 
+### Batch 11 (PLANNED) — the fret / flat rail: model #8 on its own terms
+
+Batch 8 shipped the **jawari**, which is a *configuration* of model #8 (a curved barrier hugging the
+termination). The general case — the **flat rail / fret**, string–fret buzz, prepared-piano rattle —
+has never been shown, and it is the jawari's physical **opposite**: not one departure point gliding
+persistently along a curve, but **slap-and-release**, an intermittent contact that springs off. That
+contrast is the batch's structural point; without it the batch collapses into "the jawari with a
+flatter barrier". All-wrapper again; `physsynth/core` stays untouched.
+
+The user's ask named the **vector-Newton contact**, so the second job is to make that machinery
+*visible during the buzz* rather than as a static demo. Geometry follows from that: a **point** fret
+collapses to `m = 1` and *is* the mallet's scalar solve (the model's own scalar-collapse test) — it
+under-exercises the very thing being shown. A **flat rail** gives genuine distributed contact, stays
+intermittent, and is the configuration `tests/test_collision_signature.py` already validates
+(`barrier ≈ -2e-3`, `lam = 0.4`) — so the viewer runs the validated geometry, not a lookalike (the
+jawari's own rule).
+
+Pre-build probe numbers (`M:\claud_projects\temp\fret-viewer-probe\`), all **measured before any
+wiring**, at `L=1, T=200, rho=0.005` (`f₁ = 100 Hz`), mode-1 pluck `A = 5 mm`, `K = 2e6`, `α = 1.5`:
+
+- **THE HEADLINE IS INTERMITTENCY, and it is measured, not asserted.** At the default (flat rail,
+  `clearance = 2 mm`, `σ₀ = 0.5`, N = 100) the string makes **1.24 contact episodes per period** at a
+  **15.4 % duty** — it slaps and springs off, never pinned. Contrast the jawari, whose claim is a
+  *travelling wrap edge* on a sustained contact. The money animation is therefore a **contact raster**
+  (x-vs-t spark map of where and when the string touches), which next to the shipped jawari reads
+  instantly as the opposite regime. Episode counting inherits the reed's **debounce** rule (merge
+  episodes closer than 10 % of a period): raw onsets and debounced episodes agree here (31 vs 31 at
+  `rail_frac = 1.0`), but the rule is cheap and the chatter regime is one slider away.
+- **THE ACTIVE SET IS GENUINELY A VECTOR, and that is the number to put on screen.** Of `m = 99`
+  support nodes, **up to 69 are simultaneously in contact** (mean 42 while touching). This is what
+  makes the solve a vector Newton rather than the mallet's scalar — so `|𝒞|_active` gets its own
+  readout and its own trace, alongside **Newton iters/step: max 2, mean 1.16**. That cheapness is
+  itself the `λ_min(J) ≥ 1` proof showing up as a measurement (unique root, global convergence, no
+  branch-picking) — the plan's central theoretical claim, visible as a number for the first time.
+- **THE 2σ₀ DECAY ORACLE DOES *NOT* TRANSFER FROM THE JAWARI — and the reason is real physics, not a
+  bug.** The jawari's energy panel keeps `decay_oracle` TRUE because its bridge is a *lossless elastic*
+  barrier, so every mode still decays at exactly `2σ₀` (measured 1.009 there). The flat rail is
+  *equally* lossless — the σ=0 drift is **7.2e-13** through genuine contact, which is proof no energy
+  is dissipated — yet its decay reads **1.07–1.09 × 2σ₀**, i.e. 6–9 % fast. The mechanism, measured:
+  the loss identity is `dE/dt = −2σ₀·(2·KE)`, so "rate == 2σ₀" is really an **equipartition**
+  assumption (`⟨KE⟩ = E/2`), which holds for harmonic motion and **not** for a string being slapped by
+  a stiff one-sided spring. Measured `⟨2KE/E⟩` against the measured rate ratio, with the **centered**
+  velocity `(u^{n+1}−u^{n−1})/2k` the identity actually uses:
+
+  | clearance | rate/(2σ₀) | ⟨2KE/E⟩ centered | err |
+  |---|---|---|---|
+  | out of reach | 1.0000 | 0.9999 | 0.01 % |
+  | 4.0 mm | 1.0069 | 1.0086 | 0.17 % |
+  | 2.0 mm | 1.0725 | 1.0724 | 0.01 % |
+  | 1.0 mm | 1.0872 | 1.0875 | 0.03 % |
+
+  So the identity is intact and the excess is the non-equipartition. **This also explains the jawari's
+  1.009 retroactively: its gentle wrap stays near-equipartitioned, so the naive oracle passed there by
+  luck rather than by transfer.** *Generalizable: an oracle that holds in one configuration of a model
+  may be passing on an accident of that configuration — re-measure it per configuration instead of
+  inheriting it.*
+- **…but the identity is a CONSISTENCY CHECK, not a gate (advisor's catch, load-bearing).** Both sides
+  come from one run of one identity, so they *must* agree if it holds — what that certifies is
+  "barrier lossless + accounting intact", which the σ=0 drift (7.2e-13) and the σ>0 passivity
+  (`max ΔE = −5.2e-18`) already certify at machine precision. And the agreement is **not uniform**:
+  with the *backward* velocity the α=1 case disagrees by **3.0 %**, collapsing to 0.41 % under
+  centering — the residual being the known α=1 discrete-gradient `(½,0,½)` weighting vs the string's
+  θ-centering. Calibrating a tight tolerance on the pretty 0.01 % number would ship a test that fails
+  at other α/λ/N for non-bug reasons. **So: gate on drift (σ=0) + passivity (σ>0); report the rate as
+  a diagnostic TRIPLE** — `rate`, `2σ₀`, and `2σ₀·⟨2KE/E⟩` side by side, which *shows* the physics
+  without pretending to be a precision oracle.
+- **BRIGHTNESS IS NON-MONOTONE IN CLEARANCE — the panel must not claim "closer is brighter".**
+  Centroid elevation over an out-of-reach control: **2.50× at 4 mm, 2.71× at 3 mm, 3.33× at 2 mm,
+  2.59× at 1 mm, 2.83× at 0.5 mm** — it *peaks at an intermediate clearance* and falls as the string
+  starts to pin against the rail. `test_closer_barrier_is_brighter` compares only 4 mm vs 1 mm and
+  passes by a hair (2.50 vs 2.59), so a monotone panel label would be **disproved by its own slider**.
+  The panel reports the measured elevation and names the peak; the monotone claim is scoped to the
+  diagnostic pair the test uses. *Generalizable: a signature validated on a two-point comparison is
+  not a monotone law — the slider samples the range the test never did.*
+- **PITCH RISES STEEPLY BUT IS DIAGNOSTIC-ONLY — do NOT build a shortened-length oracle.** Measured
+  `+69 / +225 / +598 / +690 / +1271` cents at clearance `4 / 3 / 2 / 1 / 0.5` mm. Large and clearly
+  real, but `f = c/(2·L_eff)` would **overclaim**: `test_contact_is_intermittent` is explicit that the
+  string is *not* pinned to a shorter length, and the plan only ever *mentions* pitch — it is not a
+  validated claim anywhere in the suite. Reported as a measured signature, gating nothing (the
+  Schelleng-window / grazing-ratio precedent, now fourth customer).
+- **The static-equilibrium magnitude oracle is CITED, not led.** `S u* = (K/ρ)b` held to 3.4e-15 is
+  the model's exact money test and has never been in the viewer — but it is α=1, non-musical, and its
+  "result" is a flat line that does not move. It belongs as the verdict panel's **magnitude
+  credential** (optionally a small static analytic-`u*`-vs-sim overlay), never as a co-headline
+  alongside the buzz. Lead audible, cite the oracle.
+- **Cost: this is the most expensive model in the viewer per second of audio, and the dense solve is
+  NOT the reason.** Measured µs/step (full rail): **189 / 201 / 257 / 261 / 320** at N = 64 / 80 / 96 /
+  100 / 128, i.e. ~2× the jawari's 143 µs. Halving the rail span halves `m` but buys only ~20 %
+  (N=128: 320 → 201 µs), so the `|𝒞|×|𝒞|` solve is not dominant — the string step and the rank-`m`
+  correction are. Since `fs = cN/(Lλ)` also buys the sample rate, budget the **product**: 1 s of audio
+  costs **6 s (N=64) → 13 s (N=100) → 20 s (N=128)** of wall clock. Hence `FRET_N_MAX = 100`,
+  `FRET_AUDIO_MAX = 0.6`, `FRET_WORK_MAX` counting `n_anim + n_audio` (the jawari/batch-9 rule), sized
+  so the worst passing render stays inside the verifier's 90 s window. ONE run, not two — the
+  out-of-reach brightness control is a *second* run and must be budgeted explicitly if kept (the
+  jawari paid for exactly this and said so).
+- **Slider names must not collide — the leak family, sixth member.** `K` is the sympathetic bridge
+  spring, `alpha` is the mallet's felt exponent, `bridge_stiffness`/`depth`/`width_frac` are the
+  jawari's. The rail needs its own names (`clearance`, `rail_frac`, `rail_stiffness`) **plus
+  `_default` resets on every one**, or a visit to another model silently re-renders a different fret.
+  Each on its own step grid (batch 8's off-grid-snap rule).
+
+Build surface (to be enumerated against at review time): `_build_payload_fret` behind the
+`_build_payload` dispatch; a **contact-raster** panel (the new frontend primitive — an x-vs-t image,
+which no shipped panel draws); an `|𝒞|_active` + Newton-iters trace; the energy panel = the jawari's
+σ-gated drift/passivity branch with the **decay oracle replaced by the diagnostic triple**; a
+brightness/pitch signature panel with the non-monotonicity labelled; `clearance` as the star control.
+Task 2 (settle the viz design, measured) comes before any wiring, as in batches 8–10.
+
 ### Later batches (rough map — not firm)
 
 - **Wind** — the reed is **batch 10** (above); the wind leg closes with it.
-- **Excited strings** — the jawari landed in batch 8 above; the bow in batch 2. What remains of the
-  barrier family is **fret buzz / a flat rail or point fret** (model #8's *intermittent* regime, the
-  physical opposite of the jawari's persistent travelling wrap) and the tanpura **cotton thread
+- **Excited strings** — the jawari landed in batch 8 above; the bow in batch 2; **fret buzz / the flat
+  rail is batch 11** (above). What remains of the barrier family is the tanpura **cotton thread
   (juari)** = one more barrier node at a chosen position.
 - **Sympathetics Weinreich two-stage decay** — DONE, batch 7 above.
 - **The parametric-instability demo** deserves its own batch with real viz (energy cascading into the
