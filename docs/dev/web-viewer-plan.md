@@ -713,6 +713,20 @@ every number *measured before the wiring*, in two probes:
   shallow-merge stale-step (batch 4) and the `_default` bound leak (batches 2 and 8) — all three
   share one shape: **a slider spec that is partially overridden keeps stale fields from the layer
   below, and the render is wrong without being broken.**
+- **A SCREENSHOT MUST SAY WHICH FRAME IT IS.** The verifier grabs whatever frame the animation
+  happens to be on, and for the jawari it landed on an *upswing* — string clear of the bridge. That
+  confirms the profile and layout but not the picture the zoom pane exists for. Two attempts to
+  freeze a contact frame then failed **silently**: assigning `animPlaying`/`currentFrame` from
+  `Runtime.evaluate` does not stick (it reads back `true`), so the rAF loop kept advancing and the
+  capture was of an unrelated frame that still looked plausible. The fix is to drive the **scrub
+  control** (`input` only — `change` clears `scrubbing` and hands the frame back to the clock) and,
+  crucially, to **read `currentFrame`/`wrap`/`u_mid` back at the moment of capture and print them**,
+  so a screenshot of the wrong frame can never be mistaken for evidence about the right one. With
+  that, a contact frame confirms the string lying *along* the curve and the red departure dot on the
+  node `wrapFrames` names. Independently, a field probe pinned the alignment: `wrap >= 0` on exactly
+  the frames where `u` is negative near the bridge (4–8), `-1` on exactly the positive ones (0–2,
+  9–11), and contact duty 44 %. **Generalizable: an animated viz needs its frame index in the
+  evidence, or eyeballing proves nothing about the frame you meant.**
 - **Only two runs are paid for.** The flat-rail control that separates "buzzes" from "travels" is
   already validated in `tests/test_jawari.py` (wrap std 4.89 curve vs 2.35 flat), so the panel
   *cites* it rather than paying for a third run — and the shipped sweep (nodes 0–14 of 15) is
