@@ -1675,11 +1675,105 @@ things the build surfaced, each a rule with a fourth+ customer:
   handler and asserts the re-range in both directions plus a post-switch "ok" render. *Generalizable:
   a per-navigation harness tests initialisation, not transition; a leak lives in the transition.*
 
+### Batch 13 (PLANNED) — the body you WATCH ring: string → distributed plate #5/#5b + radiation
+
+Batch 12 opened the coupling/radiation leg with the **lumped modal body** (no spatial extent — the
+string was the only moving shape). This batch swaps that body for a **distributed grid plate** —
+`StringPlateBridge` + `Plate`, `core/connection.py` + `core/plate.py` — so the third stage finally
+has a *picture*: the soundboard / cymbal **lighting up and ringing on the heatmap** as the pluck's
+energy transfers into it. The advisor-endorsed frame: this is a **wiring + viz + measurement** batch,
+not a physics one. The hard part — the explicit-string ↔ *implicit*-plate coupling and the **exact
+Sherman–Morrison stability guard** (`k²/4·K·[(G0_str⁻¹)_end + (G0_plate⁻¹)_dp] < 1`, two small solves
+at construction) — is already built and validated in core (`test_free_plate_connection.py`, 23 tests
++ the supported-bridge battery, `free-plate-bridge-state`). Drive it and measure; do not re-derive.
+All-wrapper; `physsynth/core` stays untouched.
+
+**Scope — BOTH boundaries, via the `boundary` domain selector (settled, not open).** `StringPlateBridge`
+covers `boundary="supported"` (model #5, a rectangular **soundboard** — the guitar/piano body) and
+`boundary="free"` (model #5b, the suspended **cymbal/gong**) in one class. The frontend's ranging is
+already **domain-conditional** (`MODEL_RANGES` keyed `"model:domain"`, merged in `applyModelRanges`;
+the standalone `plate`/`vk` models already use `boundary` as their domain), so this is **one model
+key `platebody`** with a supported/free `boundary` toggle — mirroring the standalone plate exactly —
+NOT two keys. That matters because **the guard ceiling differs per boundary** (`free-plate-bridge`
+memory: free `K_c ≈ 13.97k`; supported TBD; batch-12 modal was `≈ 21.5k`), so `bridge_stiffness`
+must re-range in **`MODEL_RANGES["platebody:supported"]` vs `["platebody:free"]`**, not just per model.
+
+**What is genuinely new vs batch 12 (be honest about it).** Two things, no more:
+1. **The distributed body is a second animated field.** Batch 12 animated only the 1D string; here
+   the viewer shows the 1D string canvas AND the **2D plate heatmap ringing simultaneously** — the
+   plate model's heatmap + mask renderer (`dims:2`, `nx/ny`, decimated `mask`) reused wholesale, fed
+   by `bridge.plate.state.copy()` snapshots. This *is* the batch's visual point.
+2. **The plate's spatial modes colour the spectrum** — rectangular (supported) or curved-Chladni
+   (free) — boosting radiated partials near the plate modes, shown not scored (the batch-12 rule).
+
+Everything else carries over unchanged: the three-way energy split `E_string + E_plate + E_conn`
+(the money exchange panel `drawBodyEnergy`), the radiated-pressure spectrum (`drawBodySpectrum` — the
+1/r "level + latency only" read-out, the ω² monopole sanity number), and the far-field audio
+(`AirRadiation.radiate(bridge)`, reading `bridge.pressure()` off the plate). The **hard pass/fail
+claim stays σ=0 conservation *through the coupling*** (core drifts ~1e-13/1e-14; the wrapper test
+proves the payload preserves that signature number). **Do NOT sell the radiated pressure as a new
+sound** — for one source the far field is the same spectrum, scaled 1/r and integer-delayed.
+
+**The terminus glide is the OPPOSITE story per boundary (advisor — do not copy batch-12's text).**
+- **Free plate OVERSHOOTS `c/2L`** — the diagnostic measured `60 → 118 Hz` as K stiffens, *above*
+  the rigid-clamp `c/2L = 100`, because below its first elastic mode the floating plate loads the
+  string end as a **reactive mass-spring** (its `{1,x,y}` rigid-body modes act mass-like), not a
+  rigid anchor (`free-plate-bridge-state`).
+- **Supported plate lands NEAR `c/2L ≈ 98`** — the pinned soundboard is a near-rigid termination
+  (Step-4 physics). Each read-out must state its own correct story; a shared "toward clamped c/2L"
+  line would be wrong for the free edge.
+
+**Controls / defaults (STARTING GUESSES — SETTLE by measurement in task 2).** Reuse the string rig
+(`L=1, T=200, ρ=0.005` → `c=200`, `f₁=100` Hz; `N_string=100`, `λ=0.9` **hard-required < 1**). Plate:
+`N_plate` (tests use 16; the heatmap wants enough cells to read the Chladni pattern while the work
+budget `n_live × steps` stays bounded — measure the N that reads AND renders in budget), `κ` the plate
+stiffness, `ρ_plate` areal density, `bridge_stiffness` K the **star control** (re-ranged per boundary
+under its measured guard ceiling, with margin; over-stiff → **clean construction-error payload**, the
+exact guard already raises), `sigma_plate` the loss gate (σ=0 → conservation drift on the total; σ>0
+→ passivity), `distance` r (the 1/r knob), `pluck_position`/`amplitude` reused. Body geometry
+(`Lx=Ly`, `nu` for the free edge) fixed server-side or lightly exposed — a full plate-geometry editor
+is its own later feature. **Each default hides something** (too-weak K = invisible slosh; too-strong
+= near-rigid *and* near the guard ceiling) — task 2 measures the K that makes the exchange visible
+*and* stays safely under the guard, **per boundary** (the free cymbal likely gives the biggest, most
+legible slosh — memory: free carries up to ~89 % of the energy at a good K; supported TBD).
+
+**Pre-flagged traps (our recurring lessons + this batch's new wrinkle):**
+- **The `bridge_stiffness` leak, now with a per-BOUNDARY twist.** K here (~a few kN/m, linear spring)
+  collides with the jawari contact bridge (2e6 N/mᵅ, its index.html home) AND batch-12's body
+  (~8k N/m) — and now re-ranges *differently for supported vs free*. Reset in `_default` (jawari
+  range restored on switch-away) AND override in **both** `platebody:supported` / `platebody:free`;
+  a boundary switch that failed to re-range would render a stale-guard K with nothing on screen to
+  say so (the leak family, batches 2/4/7/8/12).
+- **Use the EXACT Sherman–Morrison guard, never a cheap per-part 2-DOF bound** — `connection.py`
+  already does (two solves at construction). Surface a violation as a clean error payload, not a
+  500/NaN. `λ < 1` hard-required.
+- **One instrumented loop** (batch-12 pattern): scalar `E_string`/`E_plate`/`E_conn` + `qaccel` +
+  far-field pressure + `u_end` + `w_dp` every step; `bridge.plate.state.copy()` frames only within a
+  short **plate-animation window at a fundamental-resolving stride** — chosen *independently* of the
+  0.4 s energy-slosh trace (the plate rings at its own modal freqs; the compelling shot is the plate
+  lighting up as energy arrives ~20 ms in). No two-run split; `simulate()` cannot give the per-part
+  split. Bound the work budget on plate `n_live × steps`.
+- **σ_plate decay-oracle by MEASUREMENT** (not templated): probe the single-exponential fit of the
+  lossy total first; likely passivity-only (off-modal coupled decay is multi-rate, batch-12's read),
+  but confirm before printing a 2σ line.
+- **The radiated spectrum == the plate-pressure spectrum for one source** — the distance knob changes
+  level + latency only, never the shape; say so. Peak-pick the FFT, faint markers at the plate modes,
+  do NOT overlay an imposed harmonic ladder (the batch-8 off-grid lesson).
+
+**Task breakdown (as batches 8–12):** task 1 = this plan (docs). task 2 = settle the viz design,
+**measured** in `M:\claud_projects\temp\platebody-viewer-probe\` before any wiring (the K that makes
+the slosh visible + stays under guard, **per boundary**; the energy split; the `N_plate` that reads
+and renders in budget; which plate modes boost the spectrum; the terminus glide sign per boundary;
+the σ_plate decay-oracle decision; the 1/r + ω² sanity). task 3a = `_build_payload_platebody` backend
++ web tests. task 3b = frontend (the dual string+heatmap field view + the batch-12 energy/spectrum
+panels reused, per-boundary K sliders) + verifier case + CDP boundary/model-switch check + PNG.
+
 ### Later batches (rough map — not firm)
 
-- **Body / radiation** — the modal body + radiation read-out is **batch 12** (above). The follow-ons
-  are `StringPlateBridge` (plate #5/#5b as a *distributed* body — the cymbal you watch ring) and
-  `RadiatedBody` (the radiation *load* / back-reaction, the `E_body + ∫P_rad` booked-loss panel).
+- **Body / radiation** — the modal body + radiation read-out is **batch 12**; `StringPlateBridge`
+  (plate #5/#5b as a *distributed* body — the cymbal you watch ring) is **batch 13** (above). The
+  remaining follow-on is `RadiatedBody` (the radiation *load* / back-reaction, the `E_body + ∫P_rad`
+  booked-loss panel).
 - **Wind** — the reed is **batch 10** (above); the wind leg closes with it.
 - **Excited strings** — the jawari landed in batch 8 above; the bow in batch 2; **fret buzz / the flat
   rail is batch 11** (above). What remains of the barrier family is the tanpura **cotton thread
