@@ -212,7 +212,21 @@ def main() -> int:
             # turns "bright" into a number). At the defaults ~5 s; the guards admit up to ~34 s, so
             # it sits comfortably inside the 90 s window above.
             ("jawari", "model=jawari"),
+            # The acoustic bore: the first WIND model and a new field type (pressure along a tube,
+            # with the two ends drawn differently — the closed end is a pressure ANTINODE). Both
+            # far-end regimes are covered because they exercise different halves of drawBore: the
+            # radiating case paints the flared mouth and its glow, the open case the p = 0 node.
+            # The cheapest recent model — the worst passing render is ~3 s.
+            ("bore_radiating", "model=bore&domain=radiating"),
+            ("bore_open", "model=bore&domain=open"),
         ]
+        # Optional name filters, so a single-model batch can re-check its own case without paying
+        # for the whole sweep (the geometric regimes alone are ~2 minutes).
+        if len(sys.argv) > 1:
+            cases = [(n, q) for n, q in cases if any(a in n for a in sys.argv[1:])]
+            if not cases:
+                print(f"no case matches {sys.argv[1:]}")
+                return 2
         results = [run_case(cdp, n, q) for n, q in cases]
         print(f"\n{sum(results)}/{len(results)} cases passed; screenshots in out/viewer_*.png")
         return 0 if all(results) else 1

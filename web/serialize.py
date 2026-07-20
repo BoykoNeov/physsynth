@@ -36,6 +36,7 @@ from scipy.sparse.linalg import eigsh
 from physsynth.analysis import damping, dispersion, duffing, modal, spectrum
 from physsynth.analysis.rotating_wave import rotating_wave_history, solve_rotating_wave
 from physsynth.core.body import ModalBody
+from physsynth.core.bore import C0_AIR, RHO0_AIR, Bore
 from physsynth.core.bow import BowedString
 from physsynth.core.collision import BarrierString
 from physsynth.core.connection import SympatheticStrings
@@ -681,6 +682,7 @@ def _energy_block(
     convergence: dict[str, Any] | None = None,
     balance_work: NDArray[np.float64] | None = None,
     decay_oracle: bool = True,
+    split: dict[str, NDArray[np.float64]] | None = None,
 ) -> dict[str, Any]:
     """Energy report, gated by loss (catch #4): drift-vs-tol when lossless, passivity when lossy.
 
@@ -706,6 +708,14 @@ def _energy_block(
     and ``_fit_decay`` over that near-flat trace reports ``measured_2σ ≈ 0`` against a nonzero
     ``oracle_2σ`` — a lying "broken match" over physics that is actually fine. There is no closed
     form for mallet + hysteresis + membrane decay, so passivity *is* the honest lossy verdict.
+
+    ``split`` (the bore) carries named CHANNELS of the same total — ``{"acoustic": ...,
+    "radiated": ...}`` — decimated on the same ``idx`` as the total so all three curves stay
+    aligned (the ``balance_work`` precedent). It changes no verdict: the bore's bell is a *booked*
+    channel, so ``res.energy`` is already the conserving sum and the lossless branch fires on it
+    unchanged. The split exists because a flat "conserved ✓" beside an audibly decaying pickup
+    reads as a bug — the panel needs acoustic falling and radiated rising to make the flat sum
+    legible.
     """
     t, E = res.time, res.energy
     idx = np.linspace(0, len(E) - 1, min(len(E), N_ENERGY_POINTS)).astype(int)
@@ -714,6 +724,9 @@ def _energy_block(
         "time": _finite_list(t[idx], 6),
         "value": _finite_list(E[idx]),
     }
+    if split is not None:
+        block["split"] = {k: _finite_list(np.asarray(v, dtype=float)[idx])
+                          for k, v in split.items()}
     if convergence is not None:
         block["convergence"] = convergence
     if balance_work is not None:
@@ -807,6 +820,8 @@ def _build_payload(p: dict[str, Any]) -> dict[str, Any]:
         return _build_payload_sympathetic(p)
     if model == "jawari":
         return _build_payload_jawari(p)
+    if model == "bore":
+        return _build_payload_bore(p)
     return _build_payload_string(p)
 
 
@@ -2991,9 +3006,437 @@ def _build_payload_jawari(p: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# == bore (wind leg) — the acoustic tube + radiating bell ==========================================
+#
+# The first WIND model in the viewer and a new field type: **pressure** along a tube, not
+# displacement along a string. Linear, so nothing here root-finds per step — the reed (which
+# *contains* a ``Bore`` and draws on the same picture) inherits a validated viz.
+#
+# THE STRUCTURAL FACT THE BATCH TURNS ON: the bell's loss is **booked**. ``Bore.energy()`` is
+# ``acoustic_energy() + radiated_energy``, so a sigma = 0 tube with a *radiating* end still
+# CONSERVES (measured drift 3.3e-16 – 7.4e-15) while the bell sheds 9.8 % of E0 at a physical
+# ``R/Z0 ~ 3e-4`` and 100 % at the matched (anechoic) ``R = Z0``. It is the first lossy model in
+# the viewer that does NOT give up the conservation verdict — contrast the bow, whose sigma-loss is
+# *inferred* and which therefore cannot score its lossy branch at all.
+#
+# ...which is exactly why the energy panel must plot the SPLIT (``_energy_block(split=...)``):
+# acoustic falling, radiated rising, sum flat. A flat green "conserved, drift 1e-15 ✓" beside an
+# audibly decaying pickup reads as a bug and hides the very physics the batch is about.
+#
+# THE COROLLARY THAT CONSTRAINS THE SLIDERS: the *viscous* sigma is NOT booked — there is no
+# viscous accumulator in ``bore.py``, so ``energy()`` conserves only at sigma = 0. A sigma slider
+# would silently re-introduce an inferred channel and demote the verdict back to a bare monotone
+# check, buying a loss the bell already provides physically. So **sigma is fixed at 0 and never
+# exposed; R/Z0 is the loss control.** Generalizable, and batch 10's reed inherits it: a
+# measured-channel verdict is only as strong as the *least*-booked channel you let the user switch
+# on.
+
+BORE_N_MIN, BORE_N_MAX = 32, 256
+BORE_AUDIO_MAX = 1.5
+BORE_ANIM_MAX = 0.1           # NOT the shared ANIM_WIN_MAX = 2.0 — see the cost note in the builder
+BORE_WORK_MAX = 300_000       # total steps across the render AND the reflection run
+BORE_LAMBDA = 1.0             # pinned: lambda is an OPERATOR claim here, not a render knob
+BORE_RADIUS = 0.008           # m — scales absolute energy and Z0 only; R/Z0 is the real control
+BORE_AMP = 1e-3               # Pa — the model is LINEAR, so amplitude is pure scale, not a slider
+BORE_ODD_EVEN_GATE = 1e3      # measured 3.6e4 at the SHORTEST allowed duration (see the block)
+BORE_R_RATIO_MIN, BORE_R_RATIO_MAX = 1e-4, 30.0
+# Above this R/Z0 the bell absorbs so hard that no standing wave forms — the partial/odd-harmonic
+# claims stop applying (they are not *wrong*, there is simply nothing to measure). Labelled, never
+# failed: the anechoic null is a correct render, not a broken one.
+BORE_RESONANT_RATIO = 0.05
+BORE_LAMBDA_CURVE = (0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.94, 0.97, 1.0)
+
+
+def _bore_bump(x: NDArray[np.float64], L: float, *, center_frac: float,
+               width_frac: float = 0.06, amplitude: float = BORE_AMP) -> NDArray[np.float64]:
+    """The suite's own excitation — a Gaussian pressure bump (``tests/test_bore_modal._bump``)."""
+    c, w = center_frac * L, width_frac * L
+    return amplitude * np.exp(-((x - c) ** 2) / (2.0 * w * w))
+
+
+def _bore_eigenfrequencies(bore: Bore, n_modes: int) -> NDArray[np.float64]:
+    """The ``n_modes`` lowest discrete resonances (Hz) of ``bore``, from the OPERATOR.
+
+    Mirrors ``tests/helpers.bore_low_eigenfrequencies`` (which the wrapper cannot import): solve
+    ``L phi = omega^2 C phi`` on the free (non-open) pressure nodes and map each eigenvalue through
+    the leapfrog dispersion. This is the oracle that structurally certifies the half-cell wall — it
+    owes nothing to any FFT window, which is the whole reason it is worth carrying alongside the
+    measured spectrum.
+    """
+    dof = bore.dof
+    Lfree = bore.Lop[dof][:, dof]
+    Cfree = bore.Cmat[dof][:, dof]
+    n_open = int(bore._open_left) + int(bore._open_right)
+    if n_open == 0:
+        shift = -1e-3 * (math.pi * bore.c0 / bore.L) ** 2  # a closed tube has an omega = 0 mode
+        w2 = eigsh(Lfree, k=n_modes + 1, M=Cfree, sigma=shift, which="LM",
+                   return_eigenvectors=False)
+        w2 = np.sort(w2)[1:n_modes + 1]
+    else:
+        w2 = eigsh(Lfree, k=n_modes, M=Cfree, sigma=0.0, which="LM", return_eigenvectors=False)
+        w2 = np.sort(w2)
+    return np.asarray(modal.discrete_bore_eigenfrequency(w2, bore.k))
+
+
+def _build_bore(p: dict[str, Any]) -> tuple[Bore, dict[str, Any]]:
+    """Construct the bore from params. ``lambda`` is pinned; ``sigma`` is not a param (see above).
+
+    The control is the **dimensionless** ``R/Z0``, not a raw ``R``: ``Z0 = rho0 c0 / S`` moves with
+    the bore radius, so a raw-R slider would mean something different at every geometry (the
+    tension string's ``dT/T0`` / geometric ``frac`` / jawari ``downswing/depth`` pattern, fourth
+    customer). It arrives as a base-10 EXPONENT because the interesting range spans a physical
+    clarinet's 3e-4 to the anechoic 1 and past it — five decades no linear slider can carry.
+    """
+    L = _fnum(p, "L", 0.5)
+    N = int(_fnum(p, "N", 128))
+    ratio_exp = _fnum(p, "bell_ratio_exp", -3.5)
+    domain = str(p.get("domain", "radiating"))
+
+    if domain not in ("radiating", "open"):
+        raise ParamError(f"bore end must be 'radiating' or 'open', got {domain!r}.")
+    if not (0.1 <= L <= 2.0):
+        raise ParamError(f"L must be in [0.1, 2.0] m, got {L}.")
+    if not (BORE_N_MIN <= N <= BORE_N_MAX):
+        raise ParamError(f"N must be in [{BORE_N_MIN}, {BORE_N_MAX}] for the bore, got {N}.")
+    ratio = 10.0 ** ratio_exp
+    if not (BORE_R_RATIO_MIN <= ratio <= BORE_R_RATIO_MAX):
+        raise ParamError(
+            f"the bell's R/Z0 must be in [{BORE_R_RATIO_MIN}, {BORE_R_RATIO_MAX}], got {ratio:.3e} "
+            f"(bell_ratio_exp = {ratio_exp})."
+        )
+
+    radiating = domain == "radiating"
+    Z0 = RHO0_AIR * C0_AIR / (math.pi * BORE_RADIUS * BORE_RADIUS)
+    fs = C0_AIR / (BORE_LAMBDA * (L / N))
+    bore = Bore(
+        L=L, fs=fs, N=N, radius=BORE_RADIUS,
+        boundary=("closed", "radiating" if radiating else "open"),
+        sigma=0.0, R_bell=(ratio * Z0) if radiating else 0.0,
+    )
+    info = {
+        "L": L, "N": N, "fs": fs, "lam": bore.lam, "Z0": Z0, "c0": C0_AIR,
+        "ratio": ratio, "radiating": radiating, "R_bell": bore.R_bell,
+        "ends": ["closed", "radiating" if radiating else "open"],
+        "resonant": (not radiating) or ratio <= BORE_RESONANT_RATIO,
+    }
+    return bore, info
+
+
+class _BoreRun:
+    """Per-step telemetry of a bore run — the pickup and BOTH energy channels, kept separate."""
+
+    def __init__(self, n: int, width: int) -> None:
+        self.E_ac = np.empty(n + 1)     # acoustic energy in the tube
+        self.E_rad = np.empty(n + 1)    # cumulative energy shed to the far field (booked)
+        self.pickup = np.empty(n + 1)
+        self.env = np.zeros(width)      # running max|p(x)| over the FULL run -> the static envelope
+        self.frames: list[NDArray[np.float64]] = []
+        self.frame_steps: list[int] = []
+        self.frame_rad: list[float] = []  # per-frame cumulative radiated energy -> the mouth glow
+
+
+def _run_bore(bore: Bore, n_steps: int, *, pickup_idx: int, anim_stride: int,
+              frame_until: int) -> _BoreRun:
+    """Step the bore once, capturing pickup + the two energy channels + frames + the envelope.
+
+    ONE sim, not two (the jawari's pattern rather than the string path's): the animation window is
+    a prefix of the audio run at the same initial condition, so a second sim would buy an identical
+    picture at twice the wall clock. The envelope is a running max over the *whole* run — no single
+    instantaneous frame can show the formed node/antinode structure.
+    """
+    run = _BoreRun(n_steps, bore.N + 1)
+
+    def _sample(i: int) -> None:
+        run.E_ac[i] = bore.acoustic_energy()
+        run.E_rad[i] = bore.radiated_energy
+        run.pickup[i] = bore.pressure_at(pickup_idx)
+        np.maximum(run.env, np.abs(bore.p), out=run.env)
+
+    def _frame(i: int) -> None:
+        run.frames.append(bore.p.copy())
+        run.frame_steps.append(i)
+        run.frame_rad.append(bore.radiated_energy)
+
+    _sample(0)
+    if frame_until >= 0:
+        _frame(0)
+    for i in range(1, n_steps + 1):
+        bore.step()
+        _sample(i)
+        if i <= frame_until and i % anim_stride == 0:
+            _frame(i)
+    if not np.all(np.isfinite(run.E_ac)):
+        raise ParamError("simulation produced non-finite energy (instability) — adjust parameters.")
+    return run
+
+
+def _bore_reflection_block(info: dict[str, Any]) -> dict[str, Any]:
+    """The money panel: one bounce off the bell against the closed-form ``r = (R-Z0)/(R+Z0)``.
+
+    A **centred** Gaussian splits into two counter-propagating halves; the right-going half bounces
+    once off the bell and sheds exactly ``1/2 (1 - r^2)`` of E0. Measured worst absolute error over
+    ``R/Z0`` in [0.03, 30] is 1.4e-16, with an exact anechoic null at ``R = Z0`` (shed = 0.500000 —
+    the entire right-going half absorbed, r = 0).
+
+    The **curve** is free: ``r = (ratio - 1)/(ratio + 1)`` is geometry-invariant, so the analytic
+    sweep costs no simulation at all. Only ONE point is measured — the user's own ``R/Z0`` — and it
+    is a second initial condition, hence a second run, which the work budget counts.
+    """
+    # 1.0 is inserted EXACTLY: the anechoic null is the curve's whole point, and a logspace that
+    # merely straddles it would draw a peak of 0.499973 — a plot that quietly misses its own claim.
+    # The span must cover the SLIDER's range, not just the interesting part of the curve: the
+    # default is a physical clarinet at R/Z0 ~ 3e-4, and a curve starting at 1e-2 would put the
+    # measured point off the left edge of its own panel — invisible at the shipped defaults.
+    ratios = np.sort(np.append(np.logspace(-4.0, 1.5, 79), 1.0))
+    curve = 0.5 * (1.0 - ((ratios - 1.0) / (ratios + 1.0)) ** 2)
+    block: dict[str, Any] = {
+        "radiating": bool(info["radiating"]),
+        "curve": {"ratio": _finite_list(ratios, 5), "shed": _finite_list(curve, 6)},
+    }
+    if not info["radiating"]:
+        # An "open" end is pressure-release: r = -1, nothing is shed, and there is no bell to score.
+        block["note"] = "the ideal open end reflects perfectly (r = -1) - no radiation to measure."
+        return block
+
+    L, N, ratio = info["L"], info["N"], info["ratio"]
+    b = Bore(L=L, fs=info["fs"], N=N, radius=BORE_RADIUS, boundary=("closed", "radiating"),
+             sigma=0.0, R_bell=info["R_bell"])
+    b.set_state(_bore_bump(b.x, L, center_frac=0.5, width_frac=0.04))
+    E0 = b.energy()
+    for _ in range(N):  # lambda = 1 -> one node per step; centre -> bell -> back = N steps
+        b.step()
+    shed = float(b.radiated_energy / E0) if E0 > 0 else float("nan")
+    r = (info["R_bell"] - info["Z0"]) / (info["R_bell"] + info["Z0"])
+    oracle = 0.5 * (1.0 - r * r)
+    block.update({
+        "ratio": ratio,
+        "r": round(float(r), 6),
+        "oracle": round(float(oracle), 6),
+        "measured": round(shed, 6),
+        "abs_error": abs(shed - float(oracle)),
+        "tol": 1e-9,
+        "pass": bool(abs(shed - float(oracle)) < 1e-9),
+        "anechoic": bool(abs(ratio - 1.0) < 1e-9),
+        "steps": int(N),
+    })
+    return block
+
+
+def _bore_dispersion_block(L: float) -> dict[str, Any]:
+    """Cents-vs-lambda from the EIGENVALUE oracle — no time-stepping, so it costs milliseconds.
+
+    A lambda slider *on the render* is a trap: ``fs = c0 N / (lambda L)``, so steps scale as
+    ``1/lambda`` and at N_MAX / 1.5 s the budget is exhausted at lambda = 0.878 — before the
+    reflection run. And the payoff is not there: 0.07–0.67 cents is inaudible and invisible on a
+    spectrum, and making it *watchable* needs lambda ~ 0.5–0.7, exactly where the cost explodes and
+    exactly where CLAUDE.md's "tune toward lambda = 1" says not to live.
+
+    So the claim is computed where it lives — in the operator. Each point is one ``eigsh`` call on
+    a fixed grid (only ``fs`` moves), and the departure from the continuum falls by 4.01x across a
+    2x refinement, i.e. exactly O(h^2), collapsing to 0.0000 cents at lambda = 1.
+    **Generalizable: when a claim is about the operator, compute it from the operator — don't buy
+    it with wall clock by rendering audio nobody can hear the difference in.**
+    """
+    n_modes, n_coarse, n_fine = 5, 64, 128
+    cont = modal.bore_resonance_frequencies(C0_AIR, L, n_modes, "closed-open")
+
+    def _worst(lam: float, N: int) -> float:
+        """Worst |cents| of the first ``n_modes`` eigenfrequencies against the continuum."""
+        b = Bore(L=L, fs=C0_AIR / (lam * (L / N)), N=N, radius=BORE_RADIUS,
+                 boundary=("closed", "open"), sigma=0.0)
+        return float(np.max(np.abs(modal.cents(_bore_eigenfrequencies(b, n_modes), cont))))
+
+    # Two grids at every lambda, because the CLAIM is the ratio: a single curve shows a departure,
+    # the pair shows it is second-order in h (4.01x across a 2x refinement).
+    coarse = np.array([_worst(lam, n_coarse) for lam in BORE_LAMBDA_CURVE])
+    fine = np.array([_worst(lam, n_fine) for lam in BORE_LAMBDA_CURVE])
+    order = [round(float(c / f), 3) if f > 0 else None
+             for c, f in zip(coarse, fine, strict=True)]
+    return {
+        "lambda": [round(lam, 4) for lam in BORE_LAMBDA_CURVE],
+        "coarse": _finite_list(coarse, 5),
+        "fine": _finite_list(fine, 5),
+        "order": order,
+        "n_coarse": n_coarse, "n_fine": n_fine, "n_modes": n_modes,
+    }
+
+
+def _bore_signature_block(pickup: NDArray[np.float64], fs: float,
+                          info: dict[str, Any]) -> dict[str, Any]:
+    """The clarinet signature: odd harmonics only, and the partials against BOTH oracles.
+
+    Two oracles, deliberately: the continuum ``f_n = (2n-1) c0/4L`` is the physics, and the
+    discrete **eigenvalue** frequencies are what the scheme can actually produce. At lambda = 1 they
+    agree to 0.0000 cents at every N, which is the point — but the measured spectrum must be read
+    through the suite's parabolic-refined :func:`spectrum.measure_partials_near`, not a bin
+    peak-pick: a crude peak-pick reported 1.69 cents at N = 100/200 and 0.00 at N = 64/128, which is
+    not physics but which bin the fundamental landed on (batch 1's interpolation lesson, second
+    customer). Refined, every measured partial is <= 0.007 cents.
+
+    The odd/even ratio is set by the FFT **window**, not by N or by physics: 2.29e5 at 0.5 s but
+    3.6e4 at 0.25 s, flat in N to three digits at each. So the gate sits at the SHORTEST allowed
+    duration — gating on the 0.5 s number would fail a legitimately-correct short render (the bow's
+    "a rate needs a long window" lesson in spectral clothing).
+    """
+    L = info["L"]
+    n_partials = 5
+    cont = modal.bore_resonance_frequencies(C0_AIR, L, n_partials, "closed-open")
+    cont = cont[cont < 0.45 * fs]
+    ideal = Bore(L=L, fs=fs, N=info["N"], radius=BORE_RADIUS, boundary=("closed", "open"),
+                 sigma=0.0)
+    eig = _bore_eigenfrequencies(ideal, n_partials)[: cont.size]
+    measured = spectrum.measure_partials_near(pickup, fs, cont)
+
+    f1 = float(cont[0])
+    freqs, mag, _ = spectrum.magnitude_spectrum(pickup, fs)
+    df = float(freqs[1] - freqs[0])
+
+    def _peak_near(f: float) -> float:
+        i = int(round(f / df))
+        return float(mag[max(1, i - 2): i + 3].max())
+
+    odd = [_peak_near((2 * n - 1) * f1) for n in range(1, 6)]
+    even = [_peak_near(2 * n * f1) for n in range(1, 6)]
+    ratio = float(min(odd) / max(even)) if max(even) > 0 else float("inf")
+
+    f_max = min(0.45 * fs, 14.0 * f1)
+    sf, sm, snorm = _jawari_band_spectrum(pickup, fs, f_max)
+    sm = [None if v is None else v / (snorm or 1.0) for v in sm]
+
+    return {
+        "kind": "bore",
+        "f1": round(f1, 3),
+        # The claims below need a standing wave. At a heavily-absorbing bell there is none —
+        # LABEL, never fail (the jawari's grazing-ratio precedent).
+        "applies": bool(info["resonant"]),
+        "odd_even": {
+            "ratio": ratio, "gate": BORE_ODD_EVEN_GATE,
+            "pass": bool(ratio > BORE_ODD_EVEN_GATE),
+        },
+        "partials": {
+            "continuum": _finite_list(cont, 4),
+            "eigen": _finite_list(eig, 4),
+            "measured": _finite_list(measured, 4),
+            "cents_vs_continuum": _finite_list(modal.cents(measured, cont), 4),
+            "cents_vs_eigen": _finite_list(modal.cents(measured, eig), 4),
+            "eigen_vs_continuum": _finite_list(modal.cents(eig, cont), 5),
+        },
+        "spectrum": {"f_max": round(f_max, 1), "f": sf, "mag": sm},
+    }
+
+
+def _build_payload_bore(p: dict[str, Any]) -> dict[str, Any]:
+    playback_speed = _fnum(p, "playback_speed", 0.02)
+    pickup_frac = _fnum(p, "pickup_position", 0.1)
+    audio_dur = _fnum(p, "audio_duration", 0.5)
+    anim_win = _fnum(p, "animation_window", 0.03)
+    fpp = max(1, int(_fnum(p, "frames_per_period", FRAMES_PER_PERIOD)))
+
+    if not (0.0 < playback_speed <= SPEED_MAX):
+        raise ParamError(f"playback_speed must be in (0, {SPEED_MAX}], got {playback_speed}.")
+    if not (0.0 < pickup_frac < 1.0):
+        raise ParamError(f"pickup_position must be in (0, 1), got {pickup_frac}.")
+    if not (0.0 < audio_dur <= BORE_AUDIO_MAX):
+        raise ParamError(f"audio_duration must be in (0, {BORE_AUDIO_MAX}] s, got {audio_dur}.")
+    # NOT the shared ANIM_WIN_MAX = 2.0. THE COST HOLE: at N = 256 a 2 s window is 351,232 animation
+    # steps — over BORE_WORK_MAX on its own — and the MAX_FRAMES re-stride does NOT save it (it caps
+    # the frames emitted, not the steps simulated). Generalizable: a frame-count ceiling is not a
+    # cost ceiling.
+    if not (0.0 < anim_win <= BORE_ANIM_MAX):
+        raise ParamError(f"animation_window must be in (0, {BORE_ANIM_MAX}] s, got {anim_win}.")
+
+    bore, info = _build_bore(p)
+    fs, L, N = info["fs"], info["L"], info["N"]
+    f1 = C0_AIR / (4.0 * L)
+    n_steps = max(1, round(audio_dur * fs))
+    n_refl = N if info["radiating"] else 0
+    if n_steps + n_refl > BORE_WORK_MAX:
+        raise ParamError(
+            f"this configuration needs {n_steps + n_refl} steps across the render and the "
+            f"reflection run (budget {BORE_WORK_MAX}). At lambda = 1, fs = c0*N/L — so N buys the "
+            f"sample rate, not just the grid. Shorten audio_duration or lower N."
+        )
+
+    pickup_idx = min(max(0, round(pickup_frac * N)), N - 1)
+    # THE TRAP: pace on the TRANSIT, not on f1. One transit is L/c0 = 1.46 ms but f1 = c0/4L is
+    # 5.83 ms (four transits), so the string family's f_ref = f1 gives a measured 2.98–3.05 frames
+    # per transit at every N — the bounce-and-flip picture aliases into noise, and playback_speed
+    # cannot rescue it because the frames are already decimated in *sim* time. f_ref = c0/L makes
+    # "frames per period" read as "frames per transit": 11.6–12.8, flat in N. This needs no new
+    # mechanism — the bow substitutes f_hard_est here and the tension string f_osc.
+    # Generalizable: pace the animation on the timescale of the CLAIM the picture makes, not on the
+    # fundamental. They coincide for a string and differ 4x for a bore.
+    anim_stride = max(1, round((fs / (C0_AIR / L)) / fpp))
+    n_anim = min(n_steps, max(anim_stride, round(anim_win * fs)))
+    if n_anim // anim_stride > MAX_FRAMES:
+        anim_stride = max(1, math.ceil(n_anim / MAX_FRAMES))
+
+    bore.set_state(_bore_bump(bore.x, L, center_frac=0.12))
+    run = _run_bore(bore, n_steps, pickup_idx=pickup_idx, anim_stride=anim_stride,
+                    frame_until=n_anim)
+
+    frames = np.array(run.frames, dtype=float)
+    field_amp = float(np.max(np.abs(frames))) if frames.size else 0.0
+    audio48, peak = _resample_normalize(run.pickup, fs)
+    # THE VERDICT RIDES ON THE TOTAL. acoustic alone sheds ~10 % through the bell, so feeding it to
+    # the lossless branch would fail the drift check and demote the batch's own headline; the sum is
+    # what conserves, and the split is carried alongside for the panel.
+    E_total = run.E_ac + run.E_rad
+    sim = SimResult(time=np.arange(E_total.size) / fs, energy=E_total, output=None, fs=fs,
+                    snapshots=[])
+
+    return {
+        "model": "bore",
+        "fs_sim": round(fs, 3),
+        "lambda": round(info["lam"], 6),
+        "grid": {"x": _finite_list(bore.x, 6), "envelope": _finite_list(run.env)},
+        "frames": {
+            "b64": _b64f32(frames.ravel()),
+            "n_frames": int(frames.shape[0]),
+            "width": int(frames.shape[1]) if frames.ndim == 2 else 0,
+            "dims": 1,
+        },
+        "frame_times": _finite_list(np.array(run.frame_steps, dtype=float) / fs, 6),
+        # Per-frame cumulative radiated energy — the mouth glow, i.e. the field-side dual of the
+        # energy panel's radiated curve, so energy leaving is SEEN leaving. Normalized to E0 so the
+        # frontend needs no units. Deliberately NOT shared with the audio-run split: different sim
+        # strides, different lengths.
+        "radiated_frames": _finite_list(
+            np.array(run.frame_rad, dtype=float) / (E_total[0] or 1.0), 6),
+        "anim_dt": float(anim_stride / fs),
+        "playback_speed": playback_speed,
+        "field_amp": field_amp,
+        "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
+        "energy": _energy_block(
+            sim, sigma_zero=True, oracle_2sigma=0.0,
+            split={"acoustic": run.E_ac, "radiated": run.E_rad},
+        ),
+        "meta": {
+            "c": round(C0_AIR, 3),
+            "f1": round(f1, 3),
+            "num_steps": int(n_steps),
+            "n_frames": int(frames.shape[0]),
+            "probe_x": round(float(bore.x[pickup_idx]), 4),
+            "ends": info["ends"],
+            "radiating": bool(info["radiating"]),
+            # None, not the slider's echo, when there is no bell: reporting R/Z0 beside an ideal
+            # open end would put a live-looking number on a control that is doing nothing.
+            "r_ratio": info["ratio"] if info["radiating"] else None,
+            "Z0": info["Z0"],
+            "R_bell": info["R_bell"],
+            "radiated_frac": round(float(run.E_rad[-1] / (E_total[0] or 1.0)), 6),
+            "transit": round(L / C0_AIR, 8),
+            "frames_per_transit": round(float((fs * L / C0_AIR) / anim_stride), 2),
+            "reflection": _bore_reflection_block(info),
+            "dispersion": _bore_dispersion_block(L),
+            "spectrum": _bore_signature_block(run.pickup, fs, info),
+        },
+    }
+
+
 # == membrane (2D, Phase B) ========================================================================
 #
-# NOTE the jawari path lives above this line (it is a 1-D string); the 2D family starts here.
+# NOTE the string family and the 1-D bore live above this line; the 2D family starts here.
 #
 # The 2D path is split off from the string path (above) so the string contract stays bit-for-bit
 # unchanged. What differs: frames are 2D heatmap fields (decimated to a <= DISPLAY_MAX display

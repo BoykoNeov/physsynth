@@ -750,7 +750,7 @@ every number *measured before the wiring*, in two probes:
   2.4 Windows BLAS cliff. Default render **4.9 s**; worst *passing* render **34.2 s** — *measured,
   not extrapolated* (N = 128, width_frac 0.4, 1.0 s), comfortably inside the verifier's 90 s window.
 
-### Batch 9 (PLANNED) — the acoustic bore + radiating bell (the first WIND model, new field type)
+### Batch 9 (DONE) — the acoustic bore + radiating bell (the first WIND model, new field type)
 
 The human chose the wind leg over body/bridge, the barrier family's leftovers, and the parametric
 demo. Advisor then split it: **batch 9 = the linear bore, batch 10 = the reed**, on batch 1's own
@@ -888,6 +888,60 @@ Pre-build probe numbers (`temp/bore-viewer-probe/`), all **measured before any w
 
 The `MODEL_RANGES` discipline applies in full — val on its own `step` grid from `min`, reset
 **every** field in `_default`, extend the switch-check sweep to the new model.
+
+#### What task 3 (the wiring) actually found
+
+Every pre-build number reproduced through the payload on the first cut — drift 1.2e-14 (default) /
+3.3e-16 (anechoic), reflection error 1.4e-16, the exact anechoic 0.500000, O(h²) ratio 4.005,
+0.0000 cents at λ = 1, 11.6–12.2 frames/transit flat in N, worst passing render 3.0 s at
+N = 256 / 1.5 s. Nothing in the settled design needed re-opening. What the *wiring* added:
+
+- **`_energy_block` grew a `split` parameter, and the verdict rides on the TOTAL.** The failure
+  mode is specific and quiet: feeding `acoustic_energy` into the lossless branch fails the drift
+  check (acoustic sheds ~10–100 %), which reads as a bug and invites "fixing" it by flipping to a
+  passivity verdict — silently demoting the exact CONSERVATION claim the batch exists to make. The
+  split follows the `balance_work` precedent (same-`idx` decimation, additive, no branch rewrite);
+  the full 216-test suite re-ran clean afterwards, which is the check that matters for a shared-code
+  touch.
+- **The headline test needs BOTH halves, or it passes on broken wiring.** `drift < 1e-10` on the
+  total is necessary but not sufficient — it also passes with the bell wired to shed *nothing*. So
+  the test asserts the split actually moves: acoustic → < 5 % of E₀, radiated → > 95 %, radiated
+  monotone, sum flat. **Generalizable: when a verdict is computed from a sum, a test on the sum
+  alone cannot see a dead summand.**
+- **The analytic curve must span the SLIDER's range, not the interesting part of the curve.** The
+  first cut shipped `logspace(-2, 1.5)` — correct physics, and the default configuration's own
+  measured point (a physical clarinet at `R/Z₀ = 3e-4`) landed *off the left edge of its own panel*.
+  Only the rendered PNG showed it; every test passed. Now `logspace(-4, 1.5)`, with `1.0` inserted
+  exactly so the peak is the true 0.500000 rather than a straddling 0.499973.
+- **A conserving total plots exactly ON the frame's top edge.** `vmax = max(v)` puts the flat green
+  line on the box border, where it reads as part of the chrome and not as the result. 12 % headroom,
+  applied *only* when a split is present so every other model's panel stays pixel-identical.
+- **The mouth glow tracks the RATE, not the cumulative total.** The payload ships cumulative
+  radiated energy (monotone — the honest quantity for the energy panel), but a glow driven by it
+  only ever brightens: a steady ramp that says nothing about *when* sound leaves. Differenced in the
+  frontend, it pulses as each wavefront reaches the mouth. **Generalizable: the honest quantity for
+  a ledger is rarely the legible one for a field-side animation — difference it at the draw call,
+  not in the payload.**
+- **Asymmetric margins, because the bell draws OUTWARD.** The flare and its glow live past the mouth,
+  so a symmetric margin clipped the one element that shows energy leaving. `drawBore` sizes each
+  margin from `meta.ends` — which is also the seam batch 10's reed needs.
+- **Two `const bHint` in one scope.** `drawBore`'s hint collided with the bow's; caught by
+  `node --check`, which is worth running on `app.js` before every browser check.
+- **`_default` grew `L` and `animation_window`.** The bore is the first model to re-range either
+  (L → 0.5 m; the animation window down to a 0.1 s max, because the shared 0.3 s is a cost hole its
+  budget cannot cover). Without the resets a bore → string switch strands a 0.5 m string on a window
+  slider that can no longer reach 0.06 s — the `MODEL_RANGES` leak family, fourth member.
+- **A second regime was added beyond the plan: `open` (the ideal pressure-release end).** It costs a
+  boundary tuple, gives the lossless contrast, and — the real reason — exercises the `meta.ends`
+  switch *now*, so batch 10's reed inherits a dispatch that has been proven with more than one case.
+- **The headless verifier grew a name filter** (`python scripts/verify_web_headless.py bore`), so a
+  single-model batch can re-check its own two cases without paying for the geometric string's ~2
+  minutes.
+
+Honesty gates that fire and are LABELLED, never failed: at `R/Z₀ ≳ 0.05` the bell absorbs the pulse
+before it can return, so no standing wave forms and the odd-harmonic / partial claims stop applying
+(`spectrum.applies = false`) — the envelope correctly degrades to the trace of a single pass. That
+is a correct render with nothing to measure, which is not the same as a wrong one.
 
 ### Later batches (rough map — not firm)
 

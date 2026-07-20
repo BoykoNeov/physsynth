@@ -39,6 +39,7 @@ const LABELS = {
   mass: "mallet mass M", stiffness: "felt stiffness K", alpha: "felt exponent α",
   strike_velocity: "strike speed v₀", hysteresis: "felt loss λ_h",
   K: "bridge K", detune: "detune (semis)",
+  bell_ratio_exp: "bell log₁₀(R/Z₀)",
 };
 
 // Per-model slider re-ranging (min/max/step/fixed/val) applied on model switch. The backend mirrors
@@ -129,6 +130,21 @@ const MODEL_RANGES = {
             // 3.44x tested vs 2.75x rendered, a hair over the 2.5x gate).
             pickup_position: { val: 0.5 },
             audio_duration: { min: 0.1, max: 1.5, step: 0.01, fixed: 2, val: 0.24 } },
+  // Acoustic bore + bell (the wind leg). The first model here with NO loss slider at all: the
+  // bell's radiation is the only loss, and it is BOOKED into Bore.energy(), which is what lets a
+  // radiating tube keep the conservation verdict. λ is absent for a different reason — at λ = 1,
+  // fs = c₀N/(λL), so steps scale as 1/λ and the budget dies at λ = 0.878 before the reflection
+  // run, while the payoff (0.07–0.67 cents) is inaudible. The λ claim is served instead by an
+  // eigenvalue panel that needs no time-stepping. N buys the SAMPLE RATE, not just the grid, so
+  // cost per second of audio goes as N²; 256/1.5 s is the worst passing render at ~3 s.
+  // audio_duration's min is 0.25 because that is where the odd/even gate is measured (the ratio is
+  // set by the FFT window, not by physics). animation_window is re-ranged HARD — the shared 0.3 max
+  // is a cost hole: at N = 256 even 0.3 s is 52k animation steps on top of the render.
+  bore: { N: { min: 32, max: 256, val: 128 }, L: { val: 0.5 },
+          pickup_position: { val: 0.1 },
+          bell_ratio_exp: { min: -4, max: 1.4, step: 0.1, fixed: 1, val: -3.5 },
+          audio_duration: { min: 0.25, max: 1.5, step: 0.05, fixed: 2, val: 0.5 },
+          animation_window: { min: 0.005, max: 0.1, step: 0.005, fixed: 3, val: 0.03 } },
   // Regime-level ranges, keyed "model:domain" and merged AFTER the model spec (see
   // applyModelRanges). The phantom regime is the first customer and needs both: κ = 8 is its
   // microscope (the geometric model defaults κ = 0, which is a HARMONIC string — every phantom
@@ -165,12 +181,19 @@ const MODEL_RANGES = {
               K: { min: 500, max: 10000, step: 100, fixed: 0, val: 8000 },
               detune: { min: 0, max: 12, step: 0.1, fixed: 1, val: 0 },
               sigma_body: { min: 0, max: 80, step: 1, fixed: 0, val: 0, unit: "s⁻¹" },
-              audio_duration: { min: 0.2, max: 6, step: 0.1, fixed: 1, val: 2 } },
+              audio_duration: { min: 0.2, max: 6, step: 0.1, fixed: 1, val: 2 },
+              // L and animation_window joined when the bore arrived: it is the first model to
+              // re-range EITHER (L → 0.5 m, and the animation window down to a 0.1 s max because
+              // its own budget cannot cover the shared 0.3). Without these resets a bore → string
+              // switch would leave a 0.5 m string on a window slider that could no longer reach
+              // 0.06 s. Same `val`-only leak the jawari's mins had, two fields over.
+              L: { min: 0.25, max: 2.0, step: 0.05, val: 1.0 },
+              animation_window: { min: 0.01, max: 0.3, step: 0.005, fixed: 3, val: 0.06 } },
 };
 
 // Secondary select repurposed per model: geometry (membrane), boundary (plate / von Kármán) or
 // REGIME (the geometric string — three claims, one string, cheapest first).
-const DOMAIN_MODELS = ["membrane", "mallet", "plate", "vk", "geometric", "sympathetic"];
+const DOMAIN_MODELS = ["membrane", "mallet", "plate", "vk", "geometric", "sympathetic", "bore"];
 const DOMAIN_OPTS = {
   membrane: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
   mallet: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
@@ -183,9 +206,15 @@ const DOMAIN_OPTS = {
   sympathetic: [["normal", "Normal modes — the bridge oracle"],
                 ["transfer", "Sympathetic transfer"],
                 ["weinreich", "Weinreich two-stage decay"]],
+  // The bore's secondary select is the far END of the tube, and it is what drawBore switches on.
+  // Radiating is the default: a σ = 0 closed-open tube with no bell rings forever at constant
+  // amplitude, a sustained buzz that never decays (loss-default-ON, the bow's and jawari's rule).
+  // The ideal open end is kept as the lossless contrast — a perfect mirror, nothing radiates.
+  bore: [["radiating", "Radiating bell — sound leaves"],
+         ["open", "Ideal open end (r = −1)"]],
 };
 const DOMAIN_LABELS = { membrane: "Domain", mallet: "Drum shape", geometric: "Regime",
-                        sympathetic: "Regime" };
+                        sympathetic: "Regime", bore: "Far end" };
 
 const sliders = {};      // param -> <input>
 const updaters = {};     // param -> fn() that refreshes its value label
@@ -203,6 +232,9 @@ let isGeom = false, orbitU = null, orbitW = null, orbitPerFrame = 1, uwAmp = 1, 
 let isSymp = false, nFields = 1, fieldAmps = [1], fieldLabels = [];
 // Jawari (model #8, curved): the bridge profile under the string + the travelling wrap edge.
 let isJawari = false, barrierProfile = null, wrapFrames = null;
+// Acoustic bore: a PRESSURE field, not a displacement one — and the two ends are not alike, which
+// is the whole physics (see drawBore).
+let isBore = false, boreEnv = null, boreRad = null, boreEnds = ["closed", "open"];
 const FIELD_COLORS = ["#4cc2ff", "#ff8f4c", "#9d7bff"];
 let audioSamples = null, audioFs = 48000, audioBuf = null, audioCtx = null, audioSrc = null;
 let speed = 0.02, animPlaying = true, scrubbing = false, currentFrame = 0, animStart = 0;
@@ -369,6 +401,15 @@ function updateLambdaHint() {
     hint.textContent = `λ_long = c_long·k/h = ${lamL.toFixed(2)} → fs = ${fmt(fs)} Hz, λ = `
       + `${(c * param("N") / (param("L") * fs)).toFixed(3)}. c_long/c = ${(cLong / c).toFixed(0)}× — `
       + `that ratio is the whole cost of this model.`;
+    hint.style.color = "var(--muted)";
+  } else if (m === "bore") {
+    // λ is PINNED at 1 here and has no slider, so the hint reports the derived sample rate instead
+    // — which is the number that actually bites: fs = c₀N/L, so N buys the sample rate as well as
+    // the grid and cost per second of audio goes as N².
+    const N = param("N"), L = param("L");
+    hint.textContent = `λ = 1 (pinned, dispersionless) → fs = c₀N/L = ${fmt(343 * N / L)} Hz. N `
+      + `buys the SAMPLE RATE too, so cost per second of audio ~ N². One transit = L/c₀ = `
+      + `${(1e3 * L / 343).toFixed(2)} ms, four times shorter than the period of f₁.`;
     hint.style.color = "var(--muted)";
   } else if (m === "sympathetic") {
     const lam = param("lambda");
@@ -565,6 +606,27 @@ function updateLambdaHint() {
       jHint.textContent = "";
     }
   }
+  // Bore: R/Z₀ is a log slider, so the hint carries the LINEAR ratio — the number the physics is
+  // actually stated in — plus what that ratio means at the two landmarks (a real clarinet bell
+  // barely leaks; the matched load absorbs everything and leaves no standing wave at all).
+  const boreHint = $("bore-hint");
+  if (boreHint) {
+    if (m !== "bore") {
+      boreHint.textContent = "";
+    } else if (domainSel.value === "open") {
+      boreHint.textContent = "ideal open end: pressure-release, r = −1. A perfect mirror — nothing "
+        + "radiates, so the tube rings forever and the bell panel has nothing to score.";
+      boreHint.style.color = "var(--muted)";
+    } else {
+      const ratio = Math.pow(10, param("bell_ratio_exp"));
+      const shed = 0.5 * (1 - Math.pow((ratio - 1) / (ratio + 1), 2));
+      boreHint.textContent = `R/Z₀ = ${ratio.toExponential(2)} → one bounce sheds `
+        + `${(100 * shed).toFixed(1)} % of the incident energy. A real clarinet bell is ~3e-4 (a `
+        + `slow leak, sharp resonances); R = Z₀ is ANECHOIC — the pulse simply vanishes at the `
+        + `mouth and no standing wave forms, so the odd-harmonic claim stops applying.`;
+      boreHint.style.color = ratio > 0.05 ? "var(--warn, #ffcf5c)" : "var(--muted)";
+    }
+  }
   // Mallet: surface the felt-resolution guard LIVE (the ctor's warning never reaches the browser).
   // The rigid-wall estimate π√(M/K)·fs must span several steps or the stiff contact aliases — a
   // NOTE, not an error, since the energy method conserves even under-resolved. Harder felt (↑K, ↓M)
@@ -709,6 +771,28 @@ function applyPayload(data) {
   isGeom = data.model === "geometric";
   isSymp = data.model === "sympathetic";
   isJawari = data.model === "jawari";
+  isBore = data.model === "bore";
+  if (isBore) {
+    // The envelope is a running max|p(x)| over the FULL audio run, not a frame — it is what makes
+    // the formed node/antinode structure legible, which no single instantaneous frame can show.
+    // It shares fieldAmp with the polyline deliberately: drawn on its own scale it would stop
+    // being an envelope OF the trace and become a second, unrelated curve.
+    boreEnv = data.grid.envelope || null;
+    boreEnds = (data.meta && data.meta.ends) || ["closed", "open"];
+    // The mouth glow tracks the RATE energy leaves, not the cumulative total. The payload ships the
+    // cumulative fraction (monotone, and the honest quantity for the energy panel), but a glow
+    // driven by it would only ever brighten — a steady ramp that says nothing about WHEN sound
+    // leaves. Differencing makes it pulse as each wavefront reaches the mouth, which is the thing
+    // worth seeing. Normalized to the run's own peak rate so a 3e-4 bell is still visible.
+    const rad = data.radiated_frames || [];
+    boreRad = new Float32Array(rad.length);
+    let peak = 0;
+    for (let i = 1; i < rad.length; i++) {
+      boreRad[i] = Math.max(0, rad[i] - rad[i - 1]);
+      if (boreRad[i] > peak) peak = boreRad[i];
+    }
+    if (peak > 0) for (let i = 0; i < boreRad.length; i++) boreRad[i] /= peak;
+  }
   if (isJawari) {
     // The bridge profile (NaN off its support) and the per-frame wrap edge, which is the marker
     // whose travel IS the second claim. Both are in the same units as the field, so they share
@@ -923,6 +1007,142 @@ function drawJawariPane(g, idx, x0, y0, w, h, zoom) {
   g.restore();
 }
 
+// ── acoustic bore: pressure down the tube, and two ends that are NOT alike ────────────────────
+// Its own path rather than drawString, and the forcing reason is CORRECTNESS, not precedent.
+// drawString pins BOTH endpoints to the rest line. The bore's closed end is a pressure ANTINODE
+// (p free and large); only the open end is a node (p = 0). That asymmetry IS the odd-harmonic
+// claim, so drawString would not merely look wrong — it would draw the batch's own physics
+// backwards. The polyline/margin/scale arithmetic they share is ~8 lines; duplicating it is far
+// clearer than parameterizing drawString with five flags.
+function drawBore(idx) {
+  const g = stringCv.getContext("2d");
+  const W = stringCv.width, H = stringCv.height, midY = H / 2;
+  g.clearRect(0, 0, W, H);
+  if (!frames || nFrames === 0) return;
+
+  const amp = fieldAmp > 0 ? fieldAmp : 1;
+  // Margins are ASYMMETRIC, per end. The bell's flare and its glow are drawn OUTWARD past the
+  // mouth, so an end that radiates needs room beyond the tube or the one element that shows energy
+  // leaving is clipped by the canvas. Walls likewise sit well inside the panel: pressure is scaled
+  // to fill the bore, not the whole canvas.
+  const room = (kind) => (kind === "radiating" ? 76 : 34);
+  const mL = room(boreEnds[0]), mR = room(boreEnds[1]);
+  const wall = Math.round(H * 0.32);
+  const sx = (W - mL - mR) / (width - 1);
+  const sy = (wall * 0.92) / amp;
+  const px = (i) => mL + i * sx;
+  const py = (p) => midY - p * sy;
+  const base = idx * width;
+  const xL = px(0), xR = px(width - 1);
+
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(0, midY); g.lineTo(W, midY); g.stroke();
+  g.strokeStyle = "#55647a"; g.lineWidth = 2.5;
+  for (const s of [-1, 1]) {
+    g.beginPath(); g.moveTo(xL, midY + s * wall); g.lineTo(xR, midY + s * wall); g.stroke();
+  }
+
+  // The envelope: max|p(x)| over the WHOLE run, drawn as a static band. This is the only thing on
+  // screen that shows the FORMED standing wave — its nodes and antinodes are a property of the
+  // run, not of any instant, so no single frame can carry them. Honest caveat, printed below: at
+  // the anechoic R = Z₀ there IS no standing wave and the band correctly degrades to the trace of
+  // the pulse's single pass.
+  if (boreEnv) {
+    g.fillStyle = "rgba(76,194,255,.07)";
+    g.beginPath();
+    for (let i = 0; i < boreEnv.length; i++) g.lineTo(px(i), py(boreEnv[i]));
+    for (let i = boreEnv.length - 1; i >= 0; i--) g.lineTo(px(i), py(-boreEnv[i]));
+    g.closePath(); g.fill();
+    // Outlined as well as filled, and dashed: a bare fill at this alpha is indistinguishable from
+    // the tube's interior, so the envelope stops reading as a measured curve and starts reading as
+    // decoration — which is the opposite of its job.
+    g.strokeStyle = "rgba(76,194,255,.35)"; g.lineWidth = 1; g.setLineDash([5, 4]);
+    for (const s of [-1, 1]) {
+      g.beginPath();
+      for (let i = 0; i < boreEnv.length; i++) g.lineTo(px(i), py(s * boreEnv[i]));
+      g.stroke();
+    }
+    g.setLineDash([]);
+  }
+
+  // pickup marker
+  if (payload) {
+    const pk = px(Math.round(param("pickup_position") * (width - 1)));
+    g.strokeStyle = "rgba(255,207,92,.35)"; g.setLineDash([4, 4]); g.lineWidth = 1;
+    g.beginPath(); g.moveTo(pk, midY - wall); g.lineTo(pk, midY + wall); g.stroke();
+    g.setLineDash([]);
+  }
+
+  g.strokeStyle = "#4cc2ff"; g.lineWidth = 2.5; g.lineJoin = "round";
+  g.beginPath();
+  for (let i = 0; i < width; i++) {
+    const x = px(i), y = py(frames[base + i]);
+    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.stroke();
+
+  const glow = boreRad && idx < boreRad.length ? boreRad[idx] : 0;
+  drawBoreEnd(g, boreEnds[0], xL, midY, wall, -1, glow);
+  drawBoreEnd(g, boreEnds[1], xR, midY, wall, +1, glow);
+
+  g.fillStyle = "#8b98a8"; g.font = "11px system-ui, sans-serif";
+  g.fillText(`p(x) — pressure along the tube (${boreEnds[0]} → ${boreEnds[1]})`, mL, 14);
+  g.fillText("dashed: max|p| over the whole run — the standing wave", mL, H - 8);
+}
+
+// One end of the tube. Switching on the END TYPE, never hardcoding it, is what makes this the viz
+// batch 10 reuses: the reed IS a bore with a new end type at the mouth, so "reed" becomes another
+// case here rather than a rewrite. `dir` is +1 for the end that faces right (outward = +x).
+function drawBoreEnd(g, kind, x, midY, wall, dir, glow) {
+  if (kind === "closed") {
+    // A rigid wall: U = 0, so pressure is FREE and largest here. Drawn as a solid hatched block —
+    // you cannot pass — and deliberately not as a pinned node.
+    g.fillStyle = "#2a3340";
+    g.fillRect(x - (dir > 0 ? 0 : 9), midY - wall, 9, 2 * wall);
+    g.strokeStyle = "#4a5768"; g.lineWidth = 1;
+    for (let y = midY - wall; y < midY + wall; y += 6) {
+      g.beginPath(); g.moveTo(x - (dir > 0 ? 0 : 9), y + 6); g.lineTo(x + (dir > 0 ? 9 : 0), y);
+      g.stroke();
+    }
+    return;
+  }
+  if (kind === "open") {
+    // Pressure-release: p = 0 exactly. The tube simply stops and a dashed vertical marks the node.
+    g.strokeStyle = "rgba(139,152,168,.7)"; g.lineWidth = 1.5; g.setLineDash([3, 3]);
+    g.beginPath(); g.moveTo(x, midY - wall); g.lineTo(x, midY + wall); g.stroke();
+    g.setLineDash([]);
+    return;
+  }
+  // Radiating bell: a flared mouth plus an outward glow whose brightness tracks the BOOKED
+  // radiated power — the field-side dual of the energy panel's radiated curve, so energy leaving
+  // is SEEN leaving. At the matched R = Z₀ the pulse reaches the mouth and simply vanishes: the
+  // anechoic null, visible.
+  const flare = 16 * dir;
+  g.strokeStyle = "#7fd4a0"; g.lineWidth = 2.5;
+  for (const s of [-1, 1]) {
+    g.beginPath();
+    g.moveTo(x, midY + s * wall);
+    g.quadraticCurveTo(x + flare * 0.6, midY + s * wall, x + flare, midY + s * (wall + 12));
+    g.stroke();
+  }
+  const a = Math.min(1, Math.max(0, glow));
+  if (a > 0.01) {
+    const cx = x + flare, R = wall * 1.15;
+    const gr = g.createRadialGradient(cx, midY, 2, cx, midY, R);
+    gr.addColorStop(0, `rgba(127,212,160,${(0.45 * a).toFixed(3)})`);
+    gr.addColorStop(1, "rgba(127,212,160,0)");
+    g.save();
+    // Clipped to the OUTWARD side of the mouth: a full disc would bleed back down the tube and
+    // read as pressure inside it, which is exactly what the glow is not.
+    g.beginPath();
+    g.rect(dir > 0 ? cx : cx - R, midY - R, R, 2 * R);
+    g.clip();
+    g.fillStyle = gr;
+    g.beginPath(); g.arc(cx, midY, R, 0, 7); g.fill();
+    g.restore();
+  }
+}
+
 function tick(ts) {
   if (frames && nFrames > 0) {
     if (animPlaying && !scrubbing) {
@@ -932,7 +1152,8 @@ function tick(ts) {
       scrub.value = currentFrame;
     }
     (dims === 2 ? drawHeatmap : isGeom ? drawGeometric
-      : isSymp ? drawSympatheticViz : isJawari ? drawJawariViz : drawString)(currentFrame);
+      : isSymp ? drawSympatheticViz : isJawari ? drawJawariViz
+        : isBore ? drawBore : drawString)(currentFrame);
   }
   requestAnimationFrame(tick);
 }
@@ -1173,19 +1394,42 @@ function drawEnergy() {
   if (e.kind === "balance") { drawBalance(); return; }
   const t = e.time, v = e.value.map((x) => (x == null ? 0 : x));
   const tmax = t[t.length - 1] || 1;
-  const vmax = Math.max(...v) || 1;
+  // Headroom only when the split is drawn: the total is flat AT the maximum, so without it the
+  // conserving curve lies exactly on the frame's top edge and reads as part of the box rather than
+  // as the result. Left untouched otherwise so every other model's panel stays pixel-identical.
+  const vmax = (Math.max(...v) || 1) * (payload.energy.split ? 1.12 : 1);
 
   g.strokeStyle = "#2a3340"; g.lineWidth = 1;
   g.strokeRect(pad, 8, W - pad - 8, H - pad - 8);
-  g.strokeStyle = "#5ad17a"; g.lineWidth = 2; g.beginPath();
-  for (let i = 0; i < v.length; i++) {
-    const x = pad + (t[i] / tmax) * (W - pad - 8);
-    const y = (H - pad) - (v[i] / vmax) * (H - pad - 8);
-    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  const curve = (arr, colour, wdt) => {
+    g.strokeStyle = colour; g.lineWidth = wdt; g.beginPath();
+    for (let i = 0; i < arr.length; i++) {
+      const x = pad + (t[i] / tmax) * (W - pad - 8);
+      const y = (H - pad) - ((arr[i] == null ? 0 : arr[i]) / vmax) * (H - pad - 8);
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.stroke();
+  };
+  // The SPLIT (the bore). Without it a flat green "conserved, drift 1e-15 ✓" sits beside a pickup
+  // that audibly decays — because acoustic energy is leaving to the radiated channel — and the
+  // panel reads as self-contradictory, hiding the exact physics the model is about. With it: the
+  // acoustic curve falls, the radiated curve rises, and the total stays flat. That is "watch the
+  // sound leave the tube," and it is what makes R/Z₀ legible as a control.
+  if (e.split) {
+    curve(e.split.acoustic, "#4cc2ff", 1.5);
+    curve(e.split.radiated, "#7fd4a0", 1.5);
   }
-  g.stroke();
+  curve(v, "#5ad17a", 2);
   g.fillStyle = "#8b98a8"; g.font = "10px ui-monospace, monospace";
   g.fillText("E", 6, 16); g.fillText(`${tmax.toFixed(2)} s`, W - 48, H - 8);
+  if (e.split) {
+    [["total", "#5ad17a"], ["acoustic", "#4cc2ff"], ["radiated", "#7fd4a0"]]
+      .forEach(([label, colour], i) => {
+        g.fillStyle = colour;
+        g.fillRect(pad + 6 + i * 66, 14, 8, 3);
+        g.fillText(label, pad + 18 + i * 66, 18);
+      });
+  }
 
   const badge = $("energy-verdict"), out = $("energy-readout");
   // von Kármán convergence gate (catch): the energy identity telescopes ONLY at the Picard fixed
@@ -1272,6 +1516,15 @@ function drawDiagnostics() {
     partialsTitle.firstChild.textContent = "Sustained shimmer ";
     partialsSub.textContent = "late-window brightness vs a clean string";
     drawJawari();
+    return;
+  }
+  // The bore: a 1-D model whose headline is the BELL, not its partials. Odd harmonics are
+  // table-stakes here (the boundary condition guarantees them), so the panel spends itself on the
+  // reflection oracle instead and reports the partials as text.
+  if (spec && spec.kind === "bore") {
+    partialsTitle.firstChild.textContent = "Bell reflection ";
+    partialsSub.textContent = "measured vs r = (R−Z₀)/(R+Z₀)";
+    drawBoreOracle();
     return;
   }
   // The geometric string's four regimes, four panels — all 1-D, none of them cents bars.
@@ -1868,6 +2121,94 @@ function drawJawari() {
     + `\nwrap edge sweeps nodes ${wrap.min_node}–${wrap.max_node} of ${wrap.support}, std `
     + `${wrap.std}, in contact ${(wrap.duty * 100).toFixed(0)} % of the run — the suite's flat rail `
     + `at matched clearance pins at std ${wrap.flat_rail_std} (tests/test_jawari.py)`;
+}
+
+// ── the bell: one bounce against a closed form, on a log R/Z₀ axis ────────────────────────────
+// The curve is FREE — r = (ratio−1)/(ratio+1) is geometry-invariant, so the analytic sweep costs no
+// simulation. Only one point is measured (the user's own R/Z₀), from a centred Gaussian that splits
+// into two halves and bounces once. Log axis because the interesting range is five decades wide and
+// the two landmarks — a physical clarinet at 3e-4 and the anechoic match at 1 — are 3.5 decades
+// apart; on a linear axis every real bell would pile onto the left edge.
+function drawBoreOracle() {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height, padL = 38, padB = 18, top = 12;
+  g.clearRect(0, 0, W, H);
+  const out = $("partials-readout");
+  const m = payload && payload.meta;
+  const rb = m && m.reflection;
+  if (!rb) { out.textContent = "no bell data"; return; }
+
+  const plotW = W - padL - 10, plotH = H - padB - top;
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(padL, top, plotW, plotH);
+
+  const lo = -4, hi = 1.5;                       // log₁₀(R/Z₀) span of the shipped curve
+  const px = (r) => padL + ((Math.log10(r) - lo) / (hi - lo)) * plotW;
+  const py = (s) => top + plotH - (s / 0.55) * plotH;
+  for (let d = lo; d <= hi + 1e-9; d++) {
+    const x = px(Math.pow(10, d));
+    g.strokeStyle = "rgba(139,152,168,.15)"; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(x, top); g.lineTo(x, top + plotH); g.stroke();
+    g.fillStyle = "#8b98a8"; g.font = "9px ui-monospace, monospace";
+    g.fillText(`1e${d}`, x - 8, H - 6);
+  }
+  // The 0.5 ceiling: a centred pulse sends only HALF its energy at the bell, so even a perfect
+  // absorber cannot shed more. Marking it stops the anechoic point reading as "only 50 % — a leak".
+  g.strokeStyle = "rgba(139,152,168,.25)"; g.setLineDash([4, 4]);
+  g.beginPath(); g.moveTo(padL, py(0.5)); g.lineTo(padL + plotW, py(0.5)); g.stroke();
+  g.setLineDash([]);
+  g.fillStyle = "#8b98a8";
+  g.fillText("½ — the whole right-going half", padL + plotW - 158, py(0.5) - 5);
+
+  g.strokeStyle = "#7fd4a0"; g.lineWidth = 2; g.beginPath();
+  rb.curve.ratio.forEach((r, i) => {
+    const x = px(r), y = py(rb.curve.shed[i]);
+    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  });
+  g.stroke();
+
+  if (rb.radiating) {
+    const x = px(rb.ratio), y = py(rb.measured);
+    g.strokeStyle = "rgba(255,207,92,.4)"; g.lineWidth = 1; g.setLineDash([3, 3]);
+    g.beginPath(); g.moveTo(x, top); g.lineTo(x, top + plotH); g.stroke(); g.setLineDash([]);
+    g.fillStyle = "#ffcf5c";
+    g.beginPath(); g.arc(x, y, 4.5, 0, 7); g.fill();
+  }
+  g.font = "10px ui-monospace, monospace";
+  g.fillStyle = "#7fd4a0"; g.fillText("oracle ½(1−r²)", padL + 6, top + 12);
+  if (rb.radiating) { g.fillStyle = "#ffcf5c"; g.fillText("measured", padL + 6, top + 24); }
+
+  const sp = m.spectrum, dp = m.dispersion, pa = sp && sp.partials;
+  const verdict = !rb.radiating
+    ? "NO BELL — the ideal open end is a perfect mirror (r = −1); nothing radiates."
+    : rb.pass
+      ? `MATCH ✓  shed ${rb.measured.toFixed(6)} vs oracle ${rb.oracle.toFixed(6)} `
+        + `(|err| ${rb.abs_error.toExponential(1)}${rb.anechoic ? ", the ANECHOIC null" : ""})`
+      : `MISMATCH — shed ${rb.measured.toFixed(6)} vs oracle ${rb.oracle.toFixed(6)}`;
+  // The signature claims need a standing wave. At a heavily-absorbing bell there is none — that is
+  // a correct render with nothing to measure, so it is LABELLED, never failed.
+  const sig = !sp ? "" : sp.applies
+    ? `\nclarinet signature ✓  odd/even = ${sp.odd_even.ratio.toExponential(2)} `
+      + `(gate ${sp.odd_even.gate.toExponential(0)}) — only odd resonances exist for a closed-open `
+      + `tube, so this is the boundary condition made audible`
+      + `\npartials vs the EIGENVALUE oracle: worst `
+      + `${Math.max(...pa.cents_vs_eigen.map(Math.abs)).toFixed(4)} cents; the oracle itself sits `
+      + `${Math.max(...pa.eigen_vs_continuum.map(Math.abs)).toFixed(4)} cents off the continuum `
+      + `(λ = 1 is dispersionless, at every N)`
+    : `\nno standing wave at R/Z₀ = ${m.r_ratio.toExponential(2)}: the bell absorbs the pulse `
+      + `before it can return, so the odd-harmonic and partial claims do not apply here. Not a `
+      + `failure — there is nothing to measure. The envelope degrades to the pulse's single pass.`;
+  const disp = !dp ? "" : `\nλ (from the OPERATOR, no stepping): worst departure `
+    + `${dp.coarse[0].toFixed(3)} cents at λ = ${dp.lambda[0]} on N = ${dp.n_coarse}, `
+    + `${dp.fine[0].toFixed(3)} on N = ${dp.n_fine} — a ratio of ${dp.order[0]}, i.e. O(h²) — `
+    + `collapsing to ${dp.fine[dp.fine.length - 1].toFixed(4)} at λ = 1`;
+  // The "and it STILL conserves" line only means something when something actually left. With no
+  // bell it would boast about booking a channel that carried nothing.
+  const book = rb.radiating
+    ? `\nradiated ${(100 * m.radiated_frac).toFixed(2)} % of E₀ over the run — and the total still `
+      + `conserves, because the bell's loss is BOOKED (see the energy panel's split)`
+    : `\nnothing radiated: the split in the energy panel is the whole total, and conservation here `
+      + `is the ordinary lossless kind`;
+  out.textContent = verdict + book + sig + disp;
 }
 
 function drawWhirl() {

@@ -18,6 +18,11 @@ import pytest
 import web.serialize as web_serialize
 from web.serialize import (
     AUDIO_FS,
+    BORE_ANIM_MAX,
+    BORE_AUDIO_MAX,
+    BORE_N_MAX,
+    BORE_N_MIN,
+    BORE_ODD_EVEN_GATE,
     BOW_BALANCE_TOL,
     BOW_N_MAX,
     BOW_SLIP_MATCH_TOL,
@@ -1988,3 +1993,219 @@ def test_jawari_sustain_ratio_is_reported_but_never_gates():
     sp = _jaw()["meta"]["spectrum"]
     assert sp["sustain_ratio"] is not None and sp["clean_sustain_ratio"] is not None
     assert sp["shimmering"] == (sp["elevation"] > JAWARI_ELEVATION_GATE)
+
+
+# =================================================================================================
+# Acoustic bore + radiating bell (the wind leg) — the claim is that the loss is BOOKED
+# =================================================================================================
+#
+# Every other lossy model in the viewer gives up the conservation verdict. This one does not: the
+# bell's shed energy is accumulated into ``Bore.energy()``, so sigma = 0 with a *radiating* end
+# still conserves while up to 100 % of E0 leaves the tube. The discriminating tests below are the
+# ones that would pass on a *broken* wiring if written loosely — a total-only drift check passes
+# even if radiation is silently disabled, so the split is asserted to actually move.
+
+
+def _bore(**over):
+    return web_serialize.simulate_to_payload({"model": "bore", "audio_duration": 0.25, **over})
+
+
+def test_bore_conserves_with_the_bell_radiating_and_the_split_actually_moves():
+    """THE headline, and it needs both halves. Total drift < 1e-10 is necessary but NOT sufficient:
+    it would also pass with the bell wired to shed nothing at all. So the split must show acoustic
+    energy falling, radiated rising, and the two summing flat — that is the picture the panel makes
+    and the only assertion that distinguishes "booked" from "absent"."""
+    d = _bore(bell_ratio_exp=0.0)          # anechoic: the whole pulse leaves
+    e = d["energy"]
+    assert e["sigma_is_zero"] is True
+    assert e["lossless"]["drift"] < LOSSLESS_TOL and e["lossless"]["pass"] is True
+
+    ac = np.array(e["split"]["acoustic"], dtype=float)
+    rad = np.array(e["split"]["radiated"], dtype=float)
+    assert ac[-1] < 0.05 * ac[0], "the matched bell must drain the tube"
+    assert rad[-1] > 0.95 * ac[0], "and the drained energy must be BOOKED, not lost"
+    assert np.all(np.diff(rad) >= -1e-18), "radiated energy is cumulative — never decreases"
+    total = ac + rad
+    assert np.max(np.abs(total - total[0])) / total[0] < LOSSLESS_TOL
+    assert d["meta"]["radiated_frac"] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_bore_a_lightly_radiating_clarinet_sheds_a_little_and_still_conserves():
+    """The physical bell (R/Z0 ~ 3e-4), which is the default: a slow leak, not a drain. The verdict
+    is unchanged — which is the point. A model that could only conserve when nothing radiated would
+    be proving something much weaker."""
+    d = _bore()
+    assert d["energy"]["lossless"]["pass"] is True
+    assert 0.0 < d["meta"]["radiated_frac"] < 0.5
+    assert d["meta"]["radiating"] is True and d["meta"]["ends"] == ["closed", "radiating"]
+
+
+def test_bore_reflection_matches_the_closed_form_including_the_anechoic_null():
+    """The money oracle: one bounce off the bell sheds 1/2 (1 - r^2) with r = (R - Z0)/(R + Z0).
+    Measured to ~1e-16, and at the matched R = Z0 the reflection vanishes and exactly HALF the
+    energy (the entire right-going half of a centred pulse) is absorbed."""
+    rb = _bore()["meta"]["reflection"]
+    assert rb["radiating"] is True and rb["pass"] is True
+    assert rb["abs_error"] < 1e-12
+    assert rb["measured"] == pytest.approx(rb["oracle"], abs=1e-12)
+
+    an = _bore(bell_ratio_exp=0.0)["meta"]["reflection"]
+    assert an["anechoic"] is True
+    assert an["r"] == pytest.approx(0.0, abs=1e-12)
+    assert an["measured"] == pytest.approx(0.5, abs=1e-12)
+    # the analytic curve is free (no simulation) and must contain the null EXACTLY, not straddle it
+    shed = np.array(an["curve"]["shed"], dtype=float)
+    assert float(shed.max()) == pytest.approx(0.5, abs=1e-15)
+
+
+def test_bore_r_over_z0_is_the_control_and_it_monotonically_buys_loss():
+    """R/Z0 is the units- and geometry-invariant coordinate (Z0 moves with the bore radius, so a
+    raw-R slider would mean something different at every geometry). Turning it up toward the match
+    must monotonically increase what the bell sheds."""
+    fracs = [_bore(bell_ratio_exp=x)["meta"]["radiated_frac"] for x in (-3.5, -2.0, -1.0, 0.0)]
+    assert fracs == sorted(fracs)
+    assert fracs[0] < 0.5 < fracs[-1]
+
+
+def test_bore_ideal_open_end_is_the_lossless_contrast_with_no_bell_to_score():
+    """The 'open' regime is pressure-release (r = -1): a perfect mirror, nothing radiates. It is
+    the conservation baseline, and the reflection panel must say there is nothing to measure rather
+    than report a meaningless number — and R/Z0 must not echo a live-looking value at a control
+    that is doing nothing."""
+    d = _bore(domain="open")
+    assert d["energy"]["lossless"]["pass"] is True
+    assert d["meta"]["radiated_frac"] == pytest.approx(0.0, abs=1e-15)
+    assert d["meta"]["radiating"] is False and d["meta"]["r_ratio"] is None
+    assert d["meta"]["ends"] == ["closed", "open"]
+    assert d["meta"]["reflection"]["radiating"] is False
+    assert "note" in d["meta"]["reflection"]
+
+
+def test_bore_is_a_clarinet_odd_harmonics_only_at_the_shortest_allowed_render():
+    """The odd/even ratio is set by the FFT WINDOW, not by N or by physics (2.29e5 at 0.5 s but
+    3.6e4 at 0.25 s, flat in N at each), so the gate is checked at the SHORTEST allowed duration —
+    gating on the long-window number would fail a legitimately-correct short render."""
+    sp = _bore(audio_duration=0.25)["meta"]["spectrum"]
+    assert sp["applies"] is True
+    assert sp["odd_even"]["pass"] is True
+    assert sp["odd_even"]["ratio"] > BORE_ODD_EVEN_GATE
+    assert sp["f1"] == pytest.approx(343.0 / (4.0 * 0.5), rel=1e-3)
+
+
+def test_bore_partials_land_on_the_eigenvalue_oracle_which_is_exact_at_lambda_one():
+    """Two oracles. The EIGENVALUE frequencies owe nothing to any FFT window and are what
+    structurally certifies the half-cell wall: at lambda = 1 they sit on the continuum to 0.0000
+    cents at every N. The measured spectrum must be read through the parabolic refinement — a bin
+    peak-pick invents a bogus N-dependence (1.69 cents at N = 100/200, 0.00 at N = 64/128, which is
+    not physics but which bin the fundamental landed on)."""
+    for N in (64, 128, 200):
+        pa = _bore(N=N)["meta"]["spectrum"]["partials"]
+        assert np.max(np.abs(pa["eigen_vs_continuum"])) < 1e-3, "lambda = 1 is dispersionless"
+        assert np.max(np.abs(pa["cents_vs_eigen"])) < 0.05
+
+
+def test_bore_heavily_absorbing_bell_is_labelled_not_failed():
+    """At the anechoic match there is no standing wave, so the odd-harmonic and partial claims stop
+    applying — there is nothing to measure, which is not the same as being wrong. It must render
+    with an honest label, never an error and never a silent pass (the jawari's grazing
+    precedent)."""
+    d = _bore(bell_ratio_exp=0.0)
+    assert "error" not in d
+    sp = d["meta"]["spectrum"]
+    assert sp["applies"] is False
+    assert sp["odd_even"]["pass"] is False, "and the gate is honest about it rather than hidden"
+
+
+def test_bore_dispersion_is_an_eigenvalue_computation_showing_second_order_departure():
+    """The lambda claim is about the OPERATOR, so it is computed from the operator — no
+    time-stepping, hence no cost, hence no lambda slider on the render (where steps scale as
+    1/lambda and the budget dies at lambda = 0.878). The departure falls 4x across a 2x refinement
+    (exactly O(h^2)) and collapses to zero at lambda = 1."""
+    dp = _bore()["meta"]["dispersion"]
+    assert len(dp["lambda"]) == len(dp["coarse"]) == len(dp["fine"]) == len(dp["order"])
+    assert dp["lambda"][-1] == 1.0
+    assert dp["coarse"][-1] < 1e-3 and dp["fine"][-1] < 1e-3, "dispersionless at lambda = 1"
+    assert dp["coarse"][0] > 1.0, "and visibly off it at lambda = 0.5"
+    assert dp["order"][0] == pytest.approx(4.0, abs=0.1)
+
+
+def test_bore_animation_is_paced_on_the_transit_not_the_fundamental():
+    """THE TRAP. One transit is L/c0 = 1.46 ms but f1 = c0/4L is 5.83 ms — four transits. Pacing on
+    f1 the way every string model does gives ~3 frames per transit and aliases the bounce-and-flip
+    picture into noise, which playback_speed cannot rescue because the frames are already decimated
+    in sim time. f_ref = c0/L keeps it at ~12 frames/transit, flat in N."""
+    for N in (64, 128, 256):
+        m = _bore(N=N)["meta"]
+        assert 10.0 <= m["frames_per_transit"] <= 14.0
+        assert m["transit"] == pytest.approx(0.5 / 343.0, rel=1e-4)  # rounded for display
+
+
+def test_bore_frame_and_grid_bookkeeping_line_up():
+    """1D frame width == the pressure grid, one radiated sample per frame (the mouth glow), and the
+    envelope over the whole run on the same grid — a stride mismatch here would paint the glow and
+    the envelope against the wrong nodes."""
+    d = _bore(N=64)
+    x = d["grid"]["x"]
+    assert d["frames"]["dims"] == 1
+    assert d["frames"]["width"] == len(x) == 65
+    assert len(d["grid"]["envelope"]) == len(x)
+    assert d["frames"]["n_frames"] == len(d["frame_times"]) == len(d["radiated_frames"])
+    frames = np.frombuffer(base64.b64decode(d["frames"]["b64"]), dtype="<f4")
+    assert frames.size == d["frames"]["n_frames"] * d["frames"]["width"]
+    assert np.all(np.isfinite(frames))
+    # the closed end is a pressure ANTINODE (p free and large) and the open end a NODE — that
+    # asymmetry IS the odd-harmonic claim, so a viz that pinned both ends would draw it backwards
+    assert np.array(d["grid"]["envelope"], dtype=float)[0] > 0.0
+    open_env = np.array(_bore(N=64, domain="open")["grid"]["envelope"], dtype=float)
+    assert open_env[-1] == pytest.approx(0.0)
+
+
+def test_bore_radiated_frames_are_cumulative_and_normalized_for_the_mouth_glow():
+    """The field-side dual of the energy panel: the glow tracks the BOOKED radiated energy, so it
+    is monotone and expressed as a fraction of E0 — the frontend needs no units."""
+    rf = np.array(_bore(bell_ratio_exp=0.0)["radiated_frames"], dtype=float)
+    assert rf[0] == pytest.approx(0.0, abs=1e-12)
+    assert np.all(np.diff(rf) >= -1e-15)
+    assert 0.0 < rf[-1] <= 1.0
+
+
+def test_bore_audio_is_real_finite_and_normalized():
+    a = _bore()["audio"]
+    assert a["fs"] == AUDIO_FS and a["peak"] > 0.0
+    sig = np.frombuffer(base64.b64decode(a["b64"]), dtype="<f4")
+    assert sig.size == a["n"] and np.all(np.isfinite(sig))
+    assert float(np.max(np.abs(sig))) <= 1.0 + 1e-6
+
+
+def test_bore_work_budget_counts_the_reflection_run_and_the_guards_are_reachable():
+    """N buys the sample rate, not just the grid: at lambda = 1, fs = c0*N/L, so CPU per second of
+    audio scales as N^2. The reflection run is a SECOND initial condition and is counted, even
+    though at ~N steps it is negligible — the jawari's rule holds regardless of size."""
+    assert "error" in _bore(N=BORE_N_MAX, audio_duration=BORE_AUDIO_MAX + 0.5)
+    assert "error" in _bore(N=BORE_N_MAX + 1)
+    assert "error" in _bore(N=BORE_N_MIN - 1)
+    assert "error" in _bore(audio_duration=BORE_AUDIO_MAX + 0.1)
+    assert "error" in _bore(domain="reed")
+    assert "error" in _bore(bell_ratio_exp=3.0)
+    assert "error" in _bore(pickup_position=1.0)
+
+
+def test_bore_animation_window_has_its_own_cap_not_the_shared_one():
+    """The shared ANIM_WIN_MAX = 2.0 is a COST HOLE the bore's budget does not cover: at N = 256 a
+    2 s window is 351k animation steps, over BORE_WORK_MAX on its own, and the MAX_FRAMES re-stride
+    does not save it — it caps the frames emitted, not the steps simulated. A frame-count ceiling
+    is not a cost ceiling."""
+    assert BORE_ANIM_MAX < web_serialize.ANIM_WIN_MAX
+    assert "error" in _bore(animation_window=BORE_ANIM_MAX + 0.01)
+    assert "error" not in _bore(animation_window=BORE_ANIM_MAX)
+
+
+def test_bore_ignores_params_that_belong_to_other_models():
+    """Every model gets the whole slider panel. The bore must not read the string family's sigma0
+    (its own sigma is deliberately unexposed and pinned at 0), nor kappa, nor the jawari's depth —
+    a silently-honoured stale param would change the physics with nothing on screen to say so."""
+    base = _bore()
+    other = _bore(sigma0=0.9, sigma1=0.05, kappa=4.0, depth=0.002, T=500)
+    assert other["energy"]["sigma_is_zero"] is True
+    assert other["fs_sim"] == base["fs_sim"]
+    assert other["meta"]["radiated_frac"] == pytest.approx(base["meta"]["radiated_frac"])
