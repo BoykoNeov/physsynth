@@ -27,6 +27,16 @@ from web.serialize import (
     BOW_N_MAX,
     BOW_SLIP_MATCH_TOL,
     DISPLAY_MAX,
+    FRET_AUDIO_MAX,
+    FRET_BRIGHTNESS_PEAK,
+    FRET_CONTROL_MAX,
+    FRET_DUTY_MAX,
+    FRET_EPISODES_MIN,
+    FRET_N_MAX,
+    FRET_RAIL_FRAC_MIN,
+    FRET_RASTER_COLS_PER_PERIOD,
+    FRET_RASTER_MAX_ROWS,
+    FRET_WORK_MAX,
     GEOM_DT_MAX,
     GEOM_LAM_LONG_MAX,
     GEOM_N_MAX,
@@ -2452,3 +2462,280 @@ def test_reed_ignores_params_that_belong_to_other_models():
     assert other["fs_sim"] == base["fs_sim"]
     assert other["meta"]["budget"]["jet_frac"] == pytest.approx(base["meta"]["budget"]["jet_frac"])
     assert other["energy"]["balance"]["measured"]["residual"] < BOW_BALANCE_TOL
+
+
+# =================================================================================================
+# Fret / flat rail (model #8 on its OWN terms) — the claim is INTERMITTENCY, not the energy
+# =================================================================================================
+#
+# The jawari's physical opposite: not a departure point gliding persistently along a curve, but
+# slap-and-release. The viewer runs the geometry tests/test_collision_signature.py validates (flat
+# rail, lam = 0.4, mode-1 pluck), so the probe's committed numbers come back through the payload and
+# act as a free end-to-end oracle. Everything on screen except the intermittency is diagnostic: the
+# decay is a consistency TRIPLE (the jawari's 2*sigma0 oracle does NOT transfer), the brightness is
+# non-monotone in its own slider, and the crossing rate is deliberately not called pitch.
+
+
+def _fret(**over):
+    return web_serialize.simulate_to_payload({"model": "fret", "audio_duration": 0.4, **over})
+
+
+def test_fret_reproduces_the_probes_intermittency_numbers():
+    """The end-to-end oracle: the payload's headline numbers ARE the probe's. The string slaps the
+    rail ~1.24x per period at a ~15.4 % duty and springs off — it is never pinned. If the wrapper
+    perturbed the rig (a different IC, a stale param, a shifted window) these would drift."""
+    ct = _fret()["meta"]["contact"]
+    assert ct["kind"] == "fret"
+    assert ct["duty"] == pytest.approx(0.154, abs=0.005)
+    assert ct["episodes_per_period"] == pytest.approx(1.24, abs=0.05)
+    assert ct["intermittent"] is True
+    assert ct["out_of_reach"] is False and ct["pinned"] is False
+
+
+def test_fret_active_set_is_a_vector_and_the_newton_is_cheap():
+    """The second headline, and the reason this is model #8 proper rather than the mallet's scalar
+    collapse: of 99 support nodes up to 69 are simultaneously in contact. The Newton costs max 2 /
+    mean ~1.16 iterations — that cheapness IS the lambda_min(J) >= 1 proof (unique root, global
+    convergence, no branch-picking) showing up as a measurement."""
+    ct = _fret()["meta"]["contact"]
+    assert ct["support"] == 99
+    assert ct["active_max"] == pytest.approx(69, abs=3)
+    assert ct["active_max"] > 1, "a scalar active set would be the mallet, not a vector Newton"
+    assert ct["iters_max"] <= 3
+    assert ct["iters_mean"] == pytest.approx(1.16, abs=0.05)
+
+
+def test_fret_sigma0_gates_the_verdict_and_conserves_through_genuine_contact():
+    """sigma0 = 0 flips the panel to the conservation-drift check, and the drift survives real
+    many-node contact (~7e-13) — not a contact-free run that would prove nothing about the rail."""
+    d = _fret(sigma0=0.0)
+    e = d["energy"]
+    assert e["sigma_is_zero"] is True
+    assert e["lossless"]["drift"] < LOSSLESS_TOL and e["lossless"]["pass"] is True
+    assert d["meta"]["contact"]["duty"] > 0.1, "must actually be in contact"
+
+
+def test_fret_drops_the_jawari_decay_oracle_and_ships_the_triple_instead():
+    """THE batch's load-bearing verdict decision, and the one place the two configurations of model
+    #8 disagree. The rail is *equally* lossless (see the sigma = 0 drift above) yet decays 6-9 %
+    fast, because "rate == 2*sigma0" silently assumes EQUIPARTITION (<KE> = E/2) — true for harmonic
+    motion, false for a string slapped by a stiff one-sided spring. So the flat-loss oracle line is
+    dropped (it would print a mismatch it cannot explain) and a diagnostic triple replaces it."""
+    e = _fret(sigma0=0.5)["energy"]
+    assert e["sigma_is_zero"] is False
+    assert e["lossy"]["monotone"] is True
+    assert "measured_2sigma" not in e["lossy"], "the jawari's oracle must NOT be inherited"
+    assert "oracle_2sigma" not in e["lossy"]
+    t = e["decay_triple"]
+    assert t["oracle_2sigma"] == pytest.approx(1.0)
+    # the naive oracle is measurably WRONG here — that is the whole point of dropping it
+    assert t["ratio"] > 1.03
+    # ...and removing the equipartition assumption recovers the measured rate to well under 1 %
+    assert t["agreement"] < 0.01
+    assert t["corrected"] == pytest.approx(t["rate"], rel=0.01)
+
+
+def test_fret_equipartition_correction_tracks_the_rate_across_clearances():
+    """The mechanism, not one lucky point: as the rail is brought closer the decay runs further
+    ahead of 2*sigma0, and the <2KE/E> correction follows it every time. This is what licenses
+    REPORTING the triple — and its being one identity measured twice is why it is not GATED."""
+    ratios = []
+    for clearance in (4.0e-3, 2.0e-3, 1.0e-3):
+        t = _fret(audio_duration=0.25, clearance=clearance)["energy"]["decay_triple"]
+        assert t["agreement"] < 0.01
+        ratios.append(t["ratio"])
+    assert ratios[0] < ratios[-1], "a closer rail should break equipartition harder"
+    assert ratios[0] > 1.0
+
+
+def test_fret_out_of_reach_rail_is_labelled_not_failed():
+    """A rail the string never reaches is a correct render, not a broken one (the bow's Schelleng /
+    jawari's grazing rule, fourth customer). It must come back as a labelled payload with an empty
+    claim — never an error, and never a green intermittency badge over a blank raster."""
+    ct = _fret(clearance=6.0e-3)["meta"]["contact"]
+    assert ct["out_of_reach"] is True
+    assert ct["intermittent"] is False
+    assert ct["duty"] == 0.0 and ct["episodes"] == 0 and ct["active_max"] == 0
+
+
+def test_fret_rail_frac_floor_is_enforced_server_side():
+    """rail_frac is a slider that can silently kill the claim: peak swing over the rail falls as the
+    rail shortens, so below ~0.15 nothing touches it at all. The floor is enforced HERE and not
+    merely as a slider min, because the frontend sends whatever it likes."""
+    assert "error" in _fret(rail_frac=FRET_RAIL_FRAC_MIN - 0.05)
+    ct = _fret(rail_frac=FRET_RAIL_FRAC_MIN)["meta"]["contact"]
+    assert ct["duty"] > 0.0 and ct["intermittent"] is True, "the floor must still reach the rail"
+
+
+def test_fret_intermittency_is_structural_not_a_tuned_accident():
+    """The duty is bounded well away from "pinned" across the WHOLE rail_stiffness range, and for a
+    structural reason: a lossless one-sided spring always pushes back, so the string can never come
+    to REST on the rail. Softening the rail raises the duty monotonically but it asymptotes just
+    under 0.5 — the FREE-SINUSOID limit (a string crossing the rail line untouched), i.e. the
+    no-rail limit, NOT pinning. This is why `pinned` is a guarantee rather than a live label."""
+    duties = []
+    for stiffness in (2.0e6, 2.0e4, 2.0e2):
+        ct = _fret(audio_duration=0.08, rail_stiffness=stiffness,
+                   clearance=5.0e-4)["meta"]["contact"]
+        assert ct["intermittent"] is True and ct["pinned"] is False
+        duties.append(ct["duty"])
+    assert duties[0] < duties[-1], "a softer rail admits the string for longer"
+    assert max(duties) < 0.5 < FRET_DUTY_MAX
+
+
+def test_fret_scalars_are_computed_at_full_rate_not_read_off_the_raster():
+    """An OR-reduced raster is an honest map of WHERE and WHEN and a BIASED estimator of HOW MUCH: a
+    column is lit if *any* step in it touched, so the image is a dilation in time and its apparent
+    duty overstates the true one at every finite resolution (28.8/21.4/18.4 % at 400/800/1600
+    columns against a true 15.5 %). So the duty is computed from the signal, and here it is checked
+    to be strictly BELOW what the picture would suggest."""
+    ct = _fret()["meta"]["contact"]
+    img = _decode_u8(ct["raster"]["b64"]).reshape(ct["raster"]["n_rows"], ct["raster"]["n_cols"])
+    column_duty = float((img > 0).any(axis=0).mean())
+    assert ct["duty"] < column_duty, "the raster dilates in time; the scalar must not inherit that"
+    assert ct["duty"] == pytest.approx(0.154, abs=0.005)
+
+
+def test_fret_raster_resolves_at_least_ten_columns_per_period():
+    """Below ~10 columns/period the debounce window rounds to under one column and the episode count
+    degenerates to raw onsets and FRAGMENTS the slaps (83 and 60 apparent episodes at 200 and 100
+    columns against a truth of 49). A too-coarse raster looks BUSIER, not emptier — the more
+    dangerous failure — so the column count tracks the duration rather than being hardcoded."""
+    for duration in (0.1, 0.4, 0.6):
+        r = _fret(audio_duration=duration)["meta"]["contact"]["raster"]
+        assert r["cols_per_period"] >= FRET_RASTER_COLS_PER_PERIOD - 0.5
+        assert r["n_rows"] <= FRET_RASTER_MAX_ROWS
+
+
+def test_fret_raster_decodes_to_the_grid_and_greys_without_losing_contacts():
+    """Shape and framing are part of the contract (batch 8's indexing trap: `_b` and contact_mask()
+    are over the SUPPORT, not the grid). The uint8 grey is a strict REFINEMENT of the binary mask —
+    any genuine contact stays >= 1 so a faint touch can never round away to "no contact"."""
+    d = _fret()
+    ct = d["meta"]["contact"]
+    r = ct["raster"]
+    img = _decode_u8(r["b64"])
+    assert img.size == r["n_rows"] * r["n_cols"]
+    assert r["n_rows"] == ct["support"] and r["x_binned"] is False
+    assert 0 < img.max() <= 255 and img.min() == 0
+    assert r["force_max"] > 0.0
+    # the rail is scattered back onto GRID coordinates, so it indexes like every other field
+    assert len(d["grid"]["barrier"]) == len(d["grid"]["x"])
+    assert r["x0"] > 0.0 and r["x1"] < d["grid"]["x"][-1]
+    assert len(ct["trace"]["active"]) == r["n_cols"] == len(ct["trace"]["iters"])
+
+
+def test_fret_brightness_is_reported_with_its_non_monotonicity_named():
+    """The elevation reproduces the probe exactly (4.682x at the 0.05 L pickup) against an unusually
+    clean baseline: a mode-1 pluck with no rail is a pure sinusoid whose centroid reads EXACTLY f1,
+    so the whole elevation is harmonic content the rail added. But it PEAKS at an intermediate
+    clearance and falls either side, so no monotone label may be shipped — the slider samples a
+    range the two-point suite test never did, and would disprove it."""
+    sp = _fret()["meta"]["spectrum"]
+    assert sp["elevation"] == pytest.approx(4.682, abs=0.02)
+    assert sp["centroid_control"] == pytest.approx(sp["f1"], rel=0.001)
+    assert sp["monotone"] is False
+    assert sp["peak_clearance"] == FRET_BRIGHTNESS_PEAK
+    far = _fret(audio_duration=0.25, clearance=4.0e-3)["meta"]["spectrum"]["elevation"]
+    peak = _fret(audio_duration=0.25, clearance=2.0e-3)["meta"]["spectrum"]["elevation"]
+    near = _fret(audio_duration=0.25, clearance=1.0e-3)["meta"]["spectrum"]["elevation"]
+    assert peak > far and peak > near, "brightness must peak at an INTERMEDIATE clearance"
+
+
+def test_fret_crossing_rate_is_never_called_pitch():
+    """It rises steeply and is real, but f = c/(2 L_eff) would OVERCLAIM: the suite's
+    test_contact_is_intermittent is explicit that the string is NOT pinned to a shorter length. A
+    buzz adds zero crossings *within* a period, so this mixes the fundamental with the rail's
+    contribution — it ships under the name of the thing actually measured, and gates nothing."""
+    sp = _fret()["meta"]["spectrum"]
+    assert "pitch" not in sp and "cents" not in sp
+    assert sp["crossing_is_pitch"] is False
+    assert sp["crossing_rate_control"] == pytest.approx(sp["f1"], rel=0.01)
+    assert sp["crossing_rate"] > sp["crossing_rate_control"]
+    # the static-equilibrium oracle is CITED as the magnitude credential, never re-run as a headline
+    assert sp["static_oracle"]["residual"] < 1e-13
+
+
+def test_fret_control_window_is_independent_of_the_fret_window():
+    """The control's centroid is window-INVARIANT (a rail-free mode-1 pluck is a pure sinusoid), so
+    a short control is free — but only if the comparison does not truncate the FRET pickup to match
+    it. The fret's centroid is NOT window-invariant (468 over 0.4 s vs 442 over 0.2 s), so coupling
+    the two windows would silently report the short-window brightness under the full run's label."""
+    long_run = _fret(audio_duration=0.4)["meta"]["spectrum"]
+    assert long_run["centroid_control"] == pytest.approx(100.0, abs=0.1)
+    # the control is capped well below the fret run, and the elevation still reads the probe's value
+    assert long_run["elevation"] == pytest.approx(4.682, abs=0.02)
+    short = _fret(audio_duration=0.15)["meta"]["spectrum"]
+    assert short["centroid_control"] == pytest.approx(100.0, abs=0.2)
+    assert short["centroid_fret"] < long_run["centroid_fret"], "the fret window is NOT invariant"
+
+
+def test_fret_ignores_the_names_that_belong_to_other_models():
+    """The leak family, sixth member. `K` is the sympathetic bridge spring, `alpha` the mallet's
+    felt exponent, `bridge_stiffness`/`depth`/`width_frac` the jawari's — and the frontend sends
+    slider, hidden ones included. Merely VISITING those models must not silently re-render a
+    different fret with nothing on screen to say so."""
+    base = _fret(audio_duration=0.08)
+    other = _fret(audio_duration=0.08, alpha=2.3, K=8000, depth=1.0e-3, bridge_stiffness=1.0,
+                  width_frac=0.4, kappa=4.0, sigma1=0.05)
+    assert other["fs_sim"] == base["fs_sim"]
+    assert other["meta"]["contact"]["duty"] == base["meta"]["contact"]["duty"]
+    assert other["meta"]["contact"]["active_max"] == base["meta"]["contact"]["active_max"]
+    assert other["meta"]["spectrum"]["elevation"] == base["meta"]["spectrum"]["elevation"]
+
+
+def test_fret_work_budget_counts_both_runs_and_the_guards_are_reachable():
+    """The most expensive model in the viewer per second of audio (~2x the jawari), and the dense
+    |C|x|C| solve is NOT the reason — the string step and the rank-m correction are. So the budget
+    counts the fret run AND its control, and it must be REACHABLE: lowering lambda raises
+    fs = cN/(L*lam) and trips it inside the shipped slider range."""
+    assert "error" in _fret(N=FRET_N_MAX + 1)
+    assert "error" in _fret(audio_duration=FRET_AUDIO_MAX + 0.05)
+    assert "error" in _fret(clearance=0.0)
+    assert "error" in _fret(rail_stiffness=0.0)
+    at_cap = _fret(audio_duration=FRET_AUDIO_MAX)
+    assert "error" not in at_cap
+    assert at_cap["meta"]["num_steps"] + at_cap["meta"]["n_control_steps"] <= FRET_WORK_MAX
+    err = _fret(audio_duration=FRET_AUDIO_MAX, **{"lambda": 0.2})
+    assert "error" in err and "steps" in err["error"]["message"]
+
+
+def test_fret_control_is_bounded_and_the_animation_is_a_stride_of_one_run():
+    """Unlike the bow (whose window is a settled tail), the fret buzzes from t = 0, so the animation
+    is a stride of the SAME run — a second resonator would silently double the cost of a
+    root-find-per-step model. And the control never outgrows its own cap."""
+    d = _fret(audio_duration=0.4)
+    assert d["meta"]["n_control_steps"] <= round(FRET_CONTROL_MAX * d["fs_sim"])
+    assert d["meta"]["n_control_steps"] < d["meta"]["num_steps"]
+    # frames land on the stride, starting at t = 0 (no settling window to skip)
+    assert d["frame_times"][0] == 0.0
+    assert d["frames"]["n_frames"] == len(d["frame_times"])
+    assert d["frames"]["width"] == len(d["grid"]["x"])
+    field = _decode_f32(d["frames"]["b64"])
+    assert field.size == d["frames"]["n_frames"] * d["frames"]["width"]
+    assert np.all(np.isfinite(field))
+
+
+def test_fret_audio_is_a_near_termination_pickup_and_is_real():
+    """The buzz signature is strongest nearest the termination (6.03/4.68/3.46/2.56/2.78x elevation
+    at 0.02/0.05/0.10/0.25/0.50 L) while the level rises the other way; 0.05 L is the knee at 78 %
+    of the best available elevation for 2.3x the level. Audio is the string pickup, as for every
+    string model."""
+    d = _fret()
+    audio = _decode_f32(d["audio"]["b64"])
+    assert d["audio"]["fs"] == AUDIO_FS
+    assert audio.size == d["audio"]["n"] and np.all(np.isfinite(audio))
+    assert 0.0 < d["audio"]["peak"] <= 1.0
+    assert np.max(np.abs(audio)) == pytest.approx(0.9, abs=0.05)
+    assert d["meta"]["probe_x"] == pytest.approx(0.05, abs=0.01)
+
+
+def test_fret_episode_debounce_merges_chatter_without_inventing_it():
+    """The reed's debounce rule, second customer: episodes closer than 10 % of a period are one
+    event. At the default the raw onsets and debounced episodes agree closely (the string is not
+    chattering), so the rule must not be silently deflating a real count — but it stays in place
+    because the chatter regime is one slider away."""
+    ct = _fret()["meta"]["contact"]
+    assert ct["episodes"] <= ct["raw_onsets"]
+    assert ct["episodes"] >= 0.9 * ct["raw_onsets"], "the default must not be over-merged"
+    assert ct["episodes_per_period"] >= FRET_EPISODES_MIN

@@ -1395,6 +1395,51 @@ physics was settled above; this measures only how it **renders and reads**.
   The cuttable piece is the Newton-iters half of the trace — `max 2 / mean 1.16` reads fine as two
   numbers in the readout if the panel budget runs out.
 
+#### The backend, built (task 3a — `_build_payload_fret`, 19 web tests, all green)
+
+The rig reproduces through the payload: duty **15.45 %**, **1.225** episodes/period, `|𝒞|max` **69**
+of 99 support nodes, Newton **max 2 / mean 1.159**, contact force max **77.24 N**, σ=0 drift
+**7.14e-13**, elevation **4.682×** at the 0.05 L pickup — every one matching the probe's committed
+figure. Two things measured during the build changed the settled design, both flagged here because
+the numbers, not a preference, decided them:
+
+- **The equipartition triple is confirmed and its *absolute* ratio is duration-dependent — which is
+  itself the argument for not gating it.** Agreement between the measured rate and
+  `2σ₀·⟨2KE/E⟩` is **0.056 %** at the default, and holds under 1 % across clearances 4/2/1 mm. But
+  the raw `rate/(2σ₀)` reads 1.0927 over a 0.25 s window and 1.0872 over 0.4 s — it is a *fitted
+  average over a changing contact regime*, so no single committed value exists to gate against.
+  Reported as a triple, exactly as the plan settled, and now for a second measured reason.
+- **`pinned` is a GUARANTEE, not a live label, and the first cut of its bar was mis-calibrated.**
+  Duty is bounded away from pinning across the *whole* slider range, for a structural reason: a
+  lossless one-sided spring always pushes back, so the string can never come to **rest** on the rail.
+  Softening the rail *raises* the duty monotonically (0.188 / 0.300 / 0.434 / 0.456 / 0.466 at
+  `rail_stiffness` 2e6…2e1) but it asymptotes just under **0.5** — and 0.5 is the *free-sinusoid*
+  limit, a string crossing the rail line untouched, i.e. the **no-rail** limit, not pinning.
+  Stiffening drives it the other way (the rail repels rather than admits). A first cut put the bar
+  at 0.5 and would have shipped a "pinned" label sitting exactly on the soft-rail limit — firing on
+  the one regime where the rail does *least*. Bar moved to 0.9, where not-releasing actually lives;
+  nothing reaches it, and that unreachability is the result: **the intermittency is structural, not
+  a tuning accident.** *Generalizable: before gating on a bound, check which physical limit the
+  bound sits on — a threshold placed on the wrong asymptote fires on the opposite regime.*
+- **The control stays SHORT, as the plan settled — a deviation I made and then measured away.** A
+  first cut doubled the control to full length believing the elevation needed it (4.42 vs 4.682).
+  The control's centroid is in fact **window-invariant** — 99.996 / 99.997 / 100.002 / 100.026 Hz
+  over 0.4 / 0.2 / 0.1 / 0.05 s, elevation 4.682 / 4.682 / 4.681 / 4.680 — because a rail-free mode-1
+  pluck is a pure sinusoid. The gap came from the *comparison* truncating the **fret** pickup to the
+  control's length (`min(len_a, len_b)`), and the fret's centroid is emphatically not window-invariant
+  (468.2 over 0.4 s, 442.2 over 0.2 s). The bug was coupling the two windows, not the control's
+  length. Reverting saved ~2.7 s per render and left 20 000 steps of headroom under `FRET_WORK_MAX`.
+  *Generalizable: when a ratio moves after a window change, find out WHICH side moved before paying
+  to lengthen the other.*
+
+Also settled while building: the pitch figure ships as **`crossing_rate`**, not "pitch" — it
+reproduces the probe exactly (+1600 cents at the 0.05 L pickup, +601 at the probe's own 0.1 L) but a
+buzz adds zero crossings *within* a period, so the quantity mixes the fundamental with the rail's
+contribution. Naming it pitch would launder that into a note. It gates nothing, as the plan required.
+The work guard is **reachable** inside the shipped ranges (lowering λ raises `fs = cN/(Lλ)` and trips
+it), so it is a live guard rather than dead code; the raster's x-binning branch is **not** reachable
+through the API (`m ≤ 99 < 128`) and is inert future-proofing, claimed as nothing more.
+
 ### Later batches (rough map — not firm)
 
 - **Wind** — the reed is **batch 10** (above); the wind leg closes with it.

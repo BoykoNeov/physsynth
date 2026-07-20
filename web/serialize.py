@@ -866,6 +866,8 @@ def _build_payload(p: dict[str, Any]) -> dict[str, Any]:
         return _build_payload_sympathetic(p)
     if model == "jawari":
         return _build_payload_jawari(p)
+    if model == "fret":
+        return _build_payload_fret(p)
     if model == "bore":
         return _build_payload_bore(p)
     if model == "reed":
@@ -3050,6 +3052,581 @@ def _build_payload_jawari(p: dict[str, Any]) -> dict[str, Any]:
             "probe_x": round(float(jaw.string.x[pickup_idx]), 4),
             "bridge_span": round(info["width_frac"] * L, 4),
             "spectrum": _jawari_shimmer_block(run, clean_run, fs, f1, info, amplitude),
+        },
+    }
+
+
+# == fret / flat rail (model #8 on its OWN terms) ==================================================
+#
+# Batch 8 shipped the jawari, which is a *configuration* of model #8 — a curved barrier hugging the
+# termination, onto which the string wraps and stays. The general case is the **flat rail / fret**:
+# string-fret buzz, prepared-piano rattle. It is the jawari's physical OPPOSITE — not one departure
+# point gliding persistently along a curve, but **slap-and-release**. That contrast is the batch's
+# structural point; without it the batch collapses into "the jawari with a flatter barrier".
+# All-wrapper again: ``physsynth/core`` stays untouched, and the geometry is the one
+# ``tests/test_collision_signature.py`` already validates (flat rail, ``lam = 0.4``).
+#
+# Load-bearing decisions, ALL measured before wiring (probe ``temp/fret-viewer-probe/``):
+#
+#   * **The gated claim is INTERMITTENCY.** At the default (flat rail, clearance 2 mm, sigma0 = 0.5,
+#     N = 100) the string makes **1.24 contact episodes per period at a 15.4 % duty** — it slaps and
+#     springs off, never pinned. So the money panel is a **contact raster** (an x-vs-t spark map),
+#     which next to the shipped jawari reads instantly as the opposite regime. Everything else on
+#     screen — the decay reading, the brightness, the pitch — is diagnostic (see below).
+#   * **The active set is genuinely a VECTOR, and that is the second number on screen.** Of m = 99
+#     support nodes, up to **69 are simultaneously in contact** (mean 42 while touching), at
+#     **Newton iters max 2, mean 1.16**. That cheapness IS the ``lambda_min(J) >= 1`` proof showing
+#     up as a measurement: unique root, global convergence, no branch-picking.
+#   * **THE JAWARI'S 2*sigma0 DECAY ORACLE DOES NOT TRANSFER — and the reason is physics.** The rail
+#     is *equally* lossless (sigma = 0 drift 7.2e-13 through genuine contact) yet decays 6-9 % fast.
+#     The loss identity is ``dE/dt = -2 sigma0 (2 KE)``, so "rate == 2 sigma0" is really an
+#     **equipartition** assumption (``<KE> = E/2``) — true for harmonic motion, false for a string
+#     being slapped by a stiff one-sided spring. Measured ``<2KE/E>`` (with the **centered**
+#     velocity the identity actually uses) against the measured rate ratio: 1.0000/0.9999,
+#     1.0069/1.0086, 1.0725/1.0724, 1.0872/1.0875 at out-of-reach / 4 / 2 / 1 mm — agreeing to
+#     0.01-0.17 %. This
+#     also explains the jawari's 1.009 retroactively: its gentle wrap stays near-equipartitioned, so
+#     the naive oracle passed there by ACCIDENT rather than by transfer. *Generalizable: an oracle
+#     that holds in one configuration of a model may be passing on an accident of that
+#     configuration — re-measure it per configuration instead of inheriting it.*
+#   * **...but that identity is a CONSISTENCY CHECK, not a gate.** Both sides come from one run of
+#     one identity, so what their agreement certifies — "barrier lossless + accounting intact" — is
+#     already certified at machine precision by the sigma = 0 drift and the sigma > 0 passivity. And
+#     the agreement is NOT uniform: with the *backward* velocity the alpha = 1 case disagrees by
+#     3.0 %, collapsing to 0.41 % under centering (the residual is the known alpha = 1
+#     discrete-gradient ``(1/2, 0, 1/2)`` weighting against the string's theta-centering).
+#     Calibrating
+#     a tight tolerance on the pretty 0.01 % number would ship a test failing at other alpha/lam/N
+#     for non-bug reasons. So: **gate on drift (sigma = 0) + passivity (sigma > 0), and report the
+#     rate as a diagnostic TRIPLE** — rate, 2*sigma0, and 2*sigma0*<2KE/E> side by side, which
+#     *shows* the physics without pretending to be a precision oracle. ``decay_oracle`` is therefore
+#     FALSE here and TRUE for the jawari — the one place the two configurations of model #8 differ.
+#   * **BRIGHTNESS IS NON-MONOTONE IN CLEARANCE — the panel must not claim "closer is brighter".**
+#     Centroid elevation over an out-of-reach control: 2.50x at 4 mm, 2.71x at 3 mm, **3.33x at
+#     2 mm**, 2.59x at 1 mm, 2.83x at 0.5 mm — it PEAKS at an intermediate clearance, falling as
+#     the string starts to pin. ``test_closer_barrier_is_brighter`` compares 4 mm vs 1 mm only, and
+#     by a hair (2.50 vs 2.59), so a monotone panel label would be **disproved by its own slider**.
+#     Reported with the peak named; the monotone claim stays scoped to the test's two-point pair.
+#     *Generalizable: a signature validated on a two-point comparison is not a monotone law — the
+#     slider samples the range the test never did.*
+#   * **PITCH IS DIAGNOSTIC-ONLY — do NOT build a shortened-length oracle.** Measured +69/+225/+598/
+#     +690/+1271 cents at clearance 4/3/2/1/0.5 mm: large and real, but ``f = c/(2 L_eff)`` would
+#     OVERCLAIM: ``test_contact_is_intermittent`` is explicit that the string is *not* pinned
+#     to a shorter length. It is shipped under the name of the thing actually measured — the upward
+#     **zero-crossing rate** — because a buzz adds crossings within a period, so calling it "pitch"
+#     would launder a mixed quantity into a note name. Gates nothing (the Schelleng-window /
+#     grazing-ratio precedent, fourth customer).
+#   * **The static-equilibrium magnitude oracle is CITED, not led.** ``S u* = (K/rho) b`` held to
+#     3.4e-15 is model #8's exact money test and has never been in the viewer — but it is alpha = 1,
+#     non-musical, and its "result" is a flat line that does not move. It rides the verdict panel as
+#     a magnitude credential, never as a co-headline beside the buzz. Lead audible, cite the oracle.
+#   * **RAIL_FRAC CAN SILENTLY KILL THE CLAIM, AND IT IS A SLIDER.** Peak swing over the rail falls
+#     as the rail shortens toward the nut (5.33/5.00/2.94/1.24 mm at rail_frac 1.0/0.5/0.2/0.08), so
+#     at the default 2 mm clearance the rail goes OUT OF REACH: duty 15.3/18.2/8.8/**0.0**/0.0 % at
+#     rail_frac 1.0/0.5/0.2/0.12/0.08, with zero episodes below ~0.15. A user dragging one slider
+#     reaches a blank raster and an empty claim with nothing wrong. Hence the floor at 0.2, enforced
+#     **here** and not merely as a slider min (the frontend sends what it likes). Out of reach is
+#     still LABELLED, never failed — it is a correct render of a fret nobody can touch.
+#   * **Cost: the most expensive model in the viewer per second of audio, and the dense solve is NOT
+#     the reason.** Measured 189/201/257/261/320 us/step at N = 64/80/96/100/128, ~2x the jawari's
+#     143. Halving the rail span halves m but buys only ~20 %, so the ``|C|x|C|`` solve is not
+#     dominant — the string step and the rank-m correction are. Since ``fs = cN/(L lam)`` also buys
+#     the sample rate, budget the PRODUCT: 1 s of audio costs 6 s (N=64) -> 13 s (N=100) -> 20 s
+#     (N=128) of wall clock. And the out-of-reach control is **0.95x** the fret run's cost per step
+#     (no contact solve to skip — same reason), so keeping it live costs ~1.95x. It is kept
+#     but **separately bounded and short**: the elevation is a spectral centroid and does not need
+#     the full render. ``FRET_WORK_MAX`` counts ``n_audio + n_control`` (the jawari/batch-9 rule).
+#     *Absolute us/step drifts run to run on this machine (331 vs 530 for one config, one session),
+#     so budget on the committed figures and measured ratios, never on a single fresh timing.*
+#   * **Slider names must not collide — the leak family, sixth member.** ``K`` is the sympathetic
+#     bridge spring, ``alpha`` the mallet's felt exponent, ``bridge_stiffness``/``depth``/
+#     ``width_frac`` the jawari's. The rail takes its own ``clearance``/``rail_frac``/
+#     ``rail_stiffness`` — and every one resets in the frontend's ``_default``, or a visit to
+#     another model silently re-renders a different fret.
+
+FRET_N_MAX = 100              # ~261 us/step at N=100; see the cost note above
+FRET_AUDIO_MAX = 0.6          # s — 0.6 s at N=100 is ~30k steps ~= 9 s wall
+# The control is SHORT, exactly as the plan settled: the elevation is a spectral centroid and does
+# not need the full render. MEASURED: the control's centroid is window-invariant — 99.996 / 99.997 /
+# 100.002 / 100.026 Hz over 0.4 / 0.2 / 0.1 / 0.05 s (a mode-1 pluck with no rail is a pure
+# sinusoid), giving an elevation of 4.682 / 4.682 / 4.681 / 4.680. A first cut read this as the
+# control being too short and doubled it, because the *comparison* truncated the FRET pickup to the
+# control's length (`min(len_a, len_b)`) — and the fret centroid is NOT window-invariant (468.2 over
+# 0.4 s, 442.2 over 0.2 s). The bug was coupling the two windows, not the control's length; the
+# right fix measures each signal over its own full run. *Generalizable: when a ratio moves after a
+# window change, find out WHICH side moved before paying to lengthen the other.*
+FRET_CONTROL_MAX = 0.2        # s — ample margin over the ~0.05 s where the centroid has converged
+FRET_WORK_MAX = 60_000        # total steps across the fret run AND the control
+FRET_LAM_DEFAULT = 0.4        # the validated collision-signature lambda
+FRET_K_DEFAULT = 2.0e6        # N/m^alpha — a stiff metal fret
+FRET_ALPHA = 1.5              # Hertzian-ish; fixed, NOT exposed (see the jawari's `alpha` note)
+FRET_CLEARANCE_DEFAULT = 2.0e-3       # m — the brightness peak AND the intermittency default
+FRET_CLEARANCE_MAX = 8.0e-3
+FRET_RAIL_FRAC_DEFAULT = 1.0          # rail under the whole string -> support m = N-1
+FRET_RAIL_FRAC_MIN = 0.2              # below ~0.15 the rail is out of reach (measured; see above)
+FRET_AMP_DEFAULT = 5.0e-3             # m — the probe's mode-1 amplitude
+FRET_AMP_MAX = 2.0e-2
+FRET_SIGMA0_DEFAULT = 0.5             # loss ON (the jawari's rule: "sustained" needs a decay)
+FRET_PICKUP_DEFAULT = 0.05            # the knee: 78 % of the best elevation at 2.3x the level
+FRET_FRAMES_PER_PERIOD = 8            # transit-paced; f1 pacing recovers only 38.8 % of episodes
+FRET_RASTER_COLS_PER_PERIOD = 10      # below this the debounce rounds under a column -> FRAGMENTS
+FRET_RASTER_MAX_COLS = 1200
+FRET_RASTER_MAX_ROWS = 128            # x-binning is free for the picture, fatal for the number
+FRET_DEBOUNCE_FRAC = 0.10             # merge episodes closer than 10 % of a period (reed's rule)
+FRET_EPISODES_MIN = 0.5               # per period; measured >= 1.00 everywhere reachable
+# The "stopped releasing" bar. It is a GUARANTEE, not a live label — MEASURED unreachable across the
+# whole slider range, and for a structural reason worth stating: a lossless one-sided spring always
+# pushes back, so this string can never come to REST on the rail. Softening the rail raises the duty
+# monotonically (0.188/0.300/0.434/0.456/0.466/0.466 at rail_stiffness 2e6...2e1) but it asymptotes
+# just under **0.5**, which is the *free-sinusoid* limit — a string crossing the rail line untouched
+# — i.e. the no-rail limit, NOT pinning. Stiffening it drives the duty the other way (the rail
+# repels rather than admits). A first cut put this bar at 0.5 and would have shipped a "pinned"
+# label sitting exactly on the soft-rail limit, firing on the one regime where the rail does LEAST.
+# So the bar is where not-releasing actually lives, and the fact that nothing reaches it is itself
+# the result: the intermittency is structural, not a tuning accident. (The recorded rule: a guard
+# that cannot trip in the reachable range is a guarantee — do not widen a range to make it fire.)
+FRET_DUTY_MAX = 0.9
+FRET_CENTROID_FMAX = 8000.0           # the probe's brightness band
+FRET_BRIGHTNESS_PEAK = 2.0e-3         # m — where the measured elevation peaks (3.33x); NAMED, not
+#                                       claimed as a law: the curve is non-monotone either side.
+
+
+def _fret_profile(x: NDArray[np.float64], L: float, *, clearance: float,
+                  rail_frac: float) -> NDArray[np.float64]:
+    """Flat rail at ``-clearance`` under ``0 < x <= rail_frac*L``; ``-inf`` (out of support) beyond.
+
+    Mirrors the probe's and ``tests/test_collision_signature.py``'s geometry exactly, so the viewer
+    runs the validated configuration rather than a lookalike (the jawari's own rule).
+    """
+    b = np.full_like(np.asarray(x, dtype=float), -np.inf)
+    on = (x > 0.0) & (x <= rail_frac * L)
+    b[on] = -clearance
+    return b
+
+
+def _build_fret(p: dict[str, Any], *, out_of_reach: bool = False) -> tuple[BarrierString,
+                                                                          dict[str, Any]]:
+    """Construct the flat-rail :class:`BarrierString`. ``out_of_reach`` drops the rail far below
+    the string's swing: the brightness/pitch CONTROL — same string, same everything, no contact.
+    """
+    L = _fnum(p, "L", 1.0)
+    T = _fnum(p, "T", 200.0)
+    rho = _fnum(p, "rho", 0.005)
+    lam = _fnum(p, "lambda", FRET_LAM_DEFAULT)
+    # Deliberately NOT `K`/`alpha`/`bridge_stiffness` — see the leak note in the section comment.
+    K = _fnum(p, "rail_stiffness", FRET_K_DEFAULT)
+    clearance = _fnum(p, "clearance", FRET_CLEARANCE_DEFAULT)
+    rail_frac = _fnum(p, "rail_frac", FRET_RAIL_FRAC_DEFAULT)
+    sigma0 = _fnum(p, "sigma0", FRET_SIGMA0_DEFAULT)
+    try:
+        N = int(p.get("N", 100))
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"N must be an integer, got {p.get('N')!r}.") from exc
+
+    if not (N_MIN <= N <= FRET_N_MAX):
+        raise ParamError(f"N must be in [{N_MIN}, {FRET_N_MAX}] for the fret, got {N}.")
+    if min(L, T, rho) <= 0:
+        raise ParamError("L, T, rho must all be positive.")
+    if not (0.0 < lam < 1.0):
+        raise ParamError(
+            f"lambda must be in (0, 1), got {lam}: the coupled contact solve needs headroom below "
+            "the string's marginal Nyquist mode."
+        )
+    if not (0.0 < clearance <= FRET_CLEARANCE_MAX):
+        raise ParamError(f"clearance must be in (0, {FRET_CLEARANCE_MAX}] m, got {clearance}.")
+    # Enforced HERE, not merely as a slider min: the frontend sends whatever it likes, and below
+    # ~0.15 the rail is out of the string's reach -> a blank raster and an empty claim (measured).
+    if not (FRET_RAIL_FRAC_MIN <= rail_frac <= 1.0):
+        raise ParamError(
+            f"rail_frac must be in [{FRET_RAIL_FRAC_MIN}, 1.0], got {rail_frac}: a shorter rail "
+            "sits under a smaller share of the string's swing, and below ~0.15 nothing touches it."
+        )
+    if K <= 0:
+        raise ParamError(f"rail_stiffness must be positive, got {K}.")
+    if sigma0 < 0:
+        raise ParamError(f"sigma0 must be >= 0, got {sigma0}.")
+
+    c = math.sqrt(T / rho)
+    fs = c * N / (L * lam)
+    # sigma1 = hysteresis = 0, as for the jawari: hysteresis is contact DAMPING (it would fight the
+    # re-injection the model is about) and sigma1 makes the highs decay off any flat-loss reading.
+    string = DampedStiffString(L=L, T=T, rho=rho, fs=fs, N=N, kappa=0.0, sigma0=sigma0, sigma1=0.0)
+    b = _fret_profile(string.x, L, clearance=(1.0 if out_of_reach else clearance),
+                      rail_frac=rail_frac)
+    bar = BarrierString(string=string, barrier=b, stiffness=K, alpha=FRET_ALPHA, hysteresis=0.0)
+    info = {
+        "c": c, "L": L, "N": N, "fs": fs, "lam": float(string.lam), "sigma0": sigma0,
+        "clearance": clearance, "rail_frac": rail_frac, "K": K, "alpha": FRET_ALPHA,
+        "rho": rho, "h": float(string.h), "support": int(bar._support.size),
+    }
+    return bar, info
+
+
+class _FretRun:
+    """Per-step telemetry of a fret run, captured in ONE pass.
+
+    The contact history is reduced into the raster **as it is produced** rather than stored: a full
+    ``(n_steps, m)`` mask would be ~9 MB at the cap for no gain, since every scalar the panel quotes
+    is an accumulation anyway. What IS kept at full rate is the per-step ``n_active`` / ``iters`` /
+    ``contact_any``, because the duty, the episode count and ``|C|max`` must be computed from the
+    signal and never read off the picture (an OR-reduced raster over-states the duty at every finite
+    resolution — measured 28.8/21.4/18.4 % at 400/800/1600 columns against a true 15.5 %).
+    """
+
+    def __init__(self, n: int, m: int, n_cols: int) -> None:
+        self.E = np.empty(n + 1)
+        self.pickup = np.empty(n + 1)
+        self.n_active = np.zeros(n + 1, dtype=np.int32)
+        self.iters = np.zeros(n + 1, dtype=np.int32)
+        # Per-cell MAX contact force -> the optional linear grey. Contact force spans median 10.8 N
+        # to max 77.2 N, a dynamic range of only 7.1x, so no log mapping is needed; and the faintest
+        # half of the contact pixels carry 14.2 % of the impulse, so a binary mask would not badly
+        # over-weight grazing touches either. The grey is a refinement, not a correctness fix.
+        self.raster = np.zeros((m, n_cols))
+        self.frames: list[NDArray[np.float64]] = []
+        self.frame_steps: list[int] = []
+        # <2 KE / E> with the CENTERED velocity the loss identity actually uses (see the section
+        # note): sum and count, accumulated online over three time levels rather than by storing the
+        # field history.
+        self.equi_sum = 0.0
+        self.equi_count = 0
+
+
+def _run_fret(bar: BarrierString, n_steps: int, *, pickup_idx: int, anim_stride: int,
+              frame_until: int, n_cols: int, capture_contact: bool = True) -> _FretRun:
+    """Step the barrier string, capturing audio + energy + contact raster + traces + frames in ONE
+    pass (the geometric/mallet/sympathetic/jawari pattern — ``simulate`` exposes none of the contact
+    internals, and they ARE the panels).
+
+    The animation is a *stride of this same run*, not a second resonator: unlike the bow, whose
+    window is a settled tail, the fret buzzes from ``t = 0``, so the frames the animation wants are
+    already flowing past. A second run would silently double the cost of a root-find-per-step model.
+    """
+    m = bar.penetration.size
+    run = _FretRun(n_steps, m if capture_contact else 0, n_cols if capture_contact else 0)
+    s = bar.string
+    rho, h, k2 = s.rho, s.h, 2.0 * bar.k
+
+    def _sample(i: int) -> None:
+        run.E[i] = bar.energy()
+        run.pickup[i] = s.displacement_at(pickup_idx)
+        if capture_contact:
+            mask = bar.contact_mask()
+            run.n_active[i] = int(np.count_nonzero(mask))
+            run.iters[i] = int(bar.newton_iters)
+            if run.n_active[i]:
+                col = min(n_cols - 1, (i * n_cols) // (n_steps + 1))
+                f = np.abs(bar.contact_force)
+                np.maximum(run.raster[:, col], np.where(mask, f, 0.0), out=run.raster[:, col])
+
+    _sample(0)
+    if frame_until >= 1:
+        run.frames.append(s.u.copy())
+        run.frame_steps.append(0)
+    for i in range(1, n_steps + 1):
+        # u^{i-2}, saved before the roll: the centered velocity at level i-1 is
+        # (u^i - u^{i-2}) / 2k, and the energy it pairs with is E[i-1], already sampled.
+        u_prev2 = s.u_prev.copy()
+        bar.step()
+        _sample(i)
+        if capture_contact and run.E[i - 1] > 0.0:
+            v_c = (s.u[1:-1] - u_prev2[1:-1]) / k2
+            ke_c = 0.5 * rho * h * float(np.dot(v_c, v_c))
+            run.equi_sum += 2.0 * ke_c / run.E[i - 1]
+            run.equi_count += 1
+        if i <= frame_until and i % anim_stride == 0:
+            run.frames.append(s.u.copy())
+            run.frame_steps.append(i)
+    if not np.all(np.isfinite(run.E)):
+        raise ParamError("simulation produced non-finite energy (instability) — adjust parameters.")
+    return run
+
+
+def _fret_episodes(contact: NDArray[np.bool_], min_gap: int) -> int:
+    """Contact episodes, merging any two separated by fewer than ``min_gap`` samples.
+
+    The reed's debounce rule, second customer. Raw onsets and debounced episodes agree at the
+    default (31 vs 31), but the chatter regime is one slider away and the rule is nearly free.
+    """
+    on = np.flatnonzero(contact[1:] & ~contact[:-1])
+    if on.size == 0:
+        return 0
+    off = np.flatnonzero(~contact[1:] & contact[:-1])
+    if off.size and off[0] < on[0]:
+        off = off[1:]
+    n = 1
+    for i in range(1, on.size):
+        prev_off = off[i - 1] if i - 1 < off.size else on[i]
+        if on[i] - prev_off >= min_gap:
+            n += 1
+    return n
+
+
+def _fret_contact_block(run: _FretRun, info: dict[str, Any], fs: float, f1: float, n_steps: int,
+                        n_cols: int, support_x: NDArray[np.float64]) -> dict[str, Any]:
+    """The GATED claim: the string slaps the rail and springs off, and the solve is a vector one.
+
+    Every scalar here is computed at FULL RATE on the FULL support. Only the *image* may be binned:
+    dropping the support from 99 to 33 x-bins leaves the ink fill identical (6.11 %) — the raster
+    reads the same — but collapses ``|C|max`` from 69 to 23, and ``|C|max`` is precisely the number
+    that makes this a vector Newton rather than the mallet's scalar.
+    """
+    contact = run.n_active > 0
+    n_periods = n_steps / (fs / f1)
+    episodes = _fret_episodes(contact, max(1, int(FRET_DEBOUNCE_FRAC * fs / f1)))
+    raw_onsets = int(np.count_nonzero(contact[1:] & ~contact[:-1]))
+    duty = float(contact.mean())
+    per_period = float(episodes / n_periods) if n_periods > 0 else 0.0
+    touching = run.n_active[contact]
+
+    # The image (and ONLY the image) is binned when the support outruns the raster's rows.
+    raster, rows = run.raster, run.raster.shape[0]
+    x_binned = rows > FRET_RASTER_MAX_ROWS
+    if x_binned:
+        edges = np.linspace(0, rows, FRET_RASTER_MAX_ROWS + 1).astype(int)
+        raster = np.array([raster[a:b].max(axis=0) for a, b in zip(edges[:-1], edges[1:],
+                                                                   strict=True) if b > a])
+    fmax = float(raster.max()) if raster.size else 0.0
+    if fmax > 0.0:
+        # Any contact stays >= 1 so the grey never rounds a genuine touch away: the uint8 map is a
+        # strict refinement of the binary mask, which is what the panel's honesty rests on.
+        img = np.where(raster > 0.0, np.maximum(1.0, np.rint(255.0 * raster / fmax)), 0.0)
+    else:
+        img = np.zeros_like(raster)
+
+    # The traces share the raster's columns so they line up under it. Reduced by MAX, not by
+    # sampling: |C| is an intermittent spike train, and picked samples would under-report it for
+    # exactly the reason the duty must not be read off the picture.
+    def _col_max(a: NDArray[np.float64]) -> list[float | None]:
+        edges = np.linspace(0, a.size, n_cols + 1).astype(int)
+        return _finite_list(np.array([float(a[p:q].max()) for p, q in
+                                      zip(edges[:-1], edges[1:], strict=True) if q > p]), 3)
+
+    return {
+        "kind": "fret",
+        # -- the gated claim --------------------------------------------------------------
+        "duty": round(duty, 4),
+        "episodes": int(episodes),
+        "raw_onsets": raw_onsets,
+        "episodes_per_period": round(per_period, 3),
+        "episodes_min": FRET_EPISODES_MIN,
+        "duty_max": FRET_DUTY_MAX,
+        "intermittent": bool(duty > 0.0 and per_period >= FRET_EPISODES_MIN
+                             and duty <= FRET_DUTY_MAX),
+        # Both are correct renders, not failures — a rail nobody reaches and a string lying on one.
+        # `out_of_reach` is live (clearance 6 mm, or a small amplitude, or a short rail);
+        # `pinned` is a measured GUARANTEE that never fires — see the FRET_DUTY_MAX note.
+        "out_of_reach": bool(duty == 0.0),
+        "pinned": bool(duty >= FRET_DUTY_MAX),
+        # -- the vector Newton ------------------------------------------------------------
+        "support": int(info["support"]),
+        "active_max": int(run.n_active.max()),
+        "active_mean_touching": round(float(touching.mean()), 2) if touching.size else None,
+        "iters_max": int(run.iters.max()),
+        "iters_mean": round(float(run.iters[1:].mean()), 3) if n_steps else None,
+        # -- the raster -------------------------------------------------------------------
+        "raster": {
+            "b64": base64.b64encode(img.astype(np.uint8).tobytes()).decode("ascii"),
+            "n_rows": int(img.shape[0]) if img.size else 0,
+            "n_cols": int(img.shape[1]) if img.size else 0,
+            "x_binned": bool(x_binned),
+            "x0": round(float(support_x[0]), 4),
+            "x1": round(float(support_x[-1]), 4),
+            "t0": 0.0,
+            "t1": round(n_steps / fs, 6),
+            "force_max": round(fmax, 3),
+            "cols_per_period": round(n_cols / n_periods, 2) if n_periods > 0 else None,
+        },
+        "trace": {"active": _col_max(run.n_active.astype(float)),
+                  "iters": _col_max(run.iters.astype(float))},
+        "n_periods": round(n_periods, 2),
+    }
+
+
+def _fret_decay_triple(run: _FretRun, fs: float, sigma0: float) -> dict[str, Any]:
+    """The DIAGNOSTIC triple that replaces the jawari's 2*sigma0 oracle (see the section note).
+
+    ``rate`` is what the run does; ``2 sigma0`` is what equipartition would predict; and
+    ``2 sigma0 <2KE/E>`` is the same prediction with the equipartition assumption removed. The third
+    matching the first to ~0.1 % is the whole point — and it is *reported*, never gated, because
+    both sides come from one run of one identity and the agreement is not uniform in alpha.
+    """
+    t = np.arange(run.E.size) / fs
+    rate = _fit_decay(t, run.E)
+    equi = (run.equi_sum / run.equi_count) if run.equi_count else None
+    corrected = (2.0 * sigma0 * equi) if equi is not None else None
+    return {
+        "rate": rate,
+        "oracle_2sigma": 2.0 * sigma0,
+        "equipartition": round(equi, 5) if equi is not None else None,
+        "corrected": corrected,
+        "ratio": round(rate / (2.0 * sigma0), 4) if (rate and sigma0 > 0.0) else None,
+        "agreement": (round(abs(rate - corrected) / corrected, 5)
+                      if (rate and corrected and corrected > 0.0) else None),
+    }
+
+
+def _fret_signature_block(fret_pickup: NDArray[np.float64], ctrl_pickup: NDArray[np.float64],
+                          fs: float, f1: float, info: dict[str, Any]) -> dict[str, Any]:
+    """Brightness elevation and the crossing rate — BOTH diagnostic, neither gated.
+
+    Each signal is measured over its OWN full run, never truncated to the other's length. The
+    control is shorter and that is fine — and load-bearing to get right: its centroid is
+    window-invariant (99.996-100.026 Hz over an 8x range of windows) because a mode-1 pluck with no
+    rail is a pure sinusoid, so the whole elevation is harmonic content the rail added. The fret's
+    centroid is NOT window-invariant (468.2 over 0.4 s vs 442.2 over 0.2 s), so coupling the two
+    windows would silently report the fret's *short-window* brightness under the full run's label.
+    """
+    a, b = fret_pickup, ctrl_pickup
+    f_bright = _fret_centroid(a, fs)
+    c_bright = _fret_centroid(b, fs)
+    elevation = float(f_bright / c_bright) if c_bright > 0 else float("nan")
+    f_cross = _interp_zero_cross_frequency(a - float(np.mean(a)), fs)
+    c_cross = _interp_zero_cross_frequency(b - float(np.mean(b)), fs)
+    cents = (1200.0 * math.log2(f_cross / c_cross)
+             if (f_cross > 0 and c_cross > 0) else None)
+    return {
+        "centroid_fret": round(f_bright, 1),
+        "centroid_control": round(c_bright, 1),
+        "elevation": round(elevation, 3),
+        "f1": round(f1, 3),
+        "clearance": info["clearance"],
+        # NAMED, not claimed: the elevation peaks at an intermediate clearance and falls either side
+        # (2.50/2.71/3.33/2.59/2.83x at 4/3/2/1/0.5 mm), so no monotone label survives the slider.
+        "peak_clearance": FRET_BRIGHTNESS_PEAK,
+        "monotone": False,
+        # Deliberately NOT called pitch: a buzz adds zero crossings *within* a period, so this mixes
+        # the fundamental with the rail's contribution. Large and real; an oracle for nothing.
+        "crossing_rate": round(f_cross, 2),
+        "crossing_rate_control": round(c_cross, 2),
+        "crossing_cents": round(cents, 1) if cents is not None else None,
+        "crossing_is_pitch": False,
+        # model #8's exact money test (tests/test_barrier_collision.py), cited as the magnitude
+        # credential of the contact force — alpha = 1, static, and not a thing this render re-runs.
+        "static_oracle": {"claim": "S u* = (K/rho) b", "residual": 3.4e-15, "alpha": 1.0},
+    }
+
+
+def _fret_centroid(sig: NDArray[np.float64], fs: float) -> float:
+    """Band-limited amplitude-weighted mean frequency — the probe's brightness proxy verbatim."""
+    sig = np.asarray(sig, dtype=float)
+    if sig.size < 4:
+        return float("nan")
+    mag = np.abs(np.fft.rfft(sig * np.hanning(sig.size)))
+    freqs = np.fft.rfftfreq(sig.size, 1.0 / fs)
+    sel = freqs <= FRET_CENTROID_FMAX
+    total = float(np.sum(mag[sel]))
+    return float(np.sum(freqs[sel] * mag[sel]) / total) if total > 0 else float("nan")
+
+
+def _build_payload_fret(p: dict[str, Any]) -> dict[str, Any]:
+    playback_speed = _fnum(p, "playback_speed", 0.02)
+    pickup_frac = _fnum(p, "pickup_position", FRET_PICKUP_DEFAULT)
+    audio_dur = _fnum(p, "audio_duration", 0.4)
+    anim_win = _fnum(p, "animation_window", 0.1)
+    amplitude = _fnum(p, "amplitude", FRET_AMP_DEFAULT)
+    fpp = max(1, int(_fnum(p, "frames_per_period", FRET_FRAMES_PER_PERIOD)))
+
+    if not (0.0 < playback_speed <= SPEED_MAX):
+        raise ParamError(f"playback_speed must be in (0, {SPEED_MAX}], got {playback_speed}.")
+    if not (0.0 < pickup_frac < 1.0):
+        raise ParamError(f"pickup_position must be in (0, 1), got {pickup_frac}.")
+    if not (0.0 < audio_dur <= FRET_AUDIO_MAX):
+        raise ParamError(f"audio_duration must be in (0, {FRET_AUDIO_MAX}] s, got {audio_dur}.")
+    if not (0.0 < anim_win <= ANIM_WIN_MAX):
+        raise ParamError(f"animation_window must be in (0, {ANIM_WIN_MAX}] s, got {anim_win}.")
+    if not (0.0 < amplitude <= FRET_AMP_MAX):
+        raise ParamError(f"amplitude must be in (0, {FRET_AMP_MAX}] m, got {amplitude}.")
+
+    bar, info = _build_fret(p)
+    fs, L, c, N = info["fs"], info["L"], info["c"], info["N"]
+    f1 = c / (2.0 * L)
+    n_steps = max(1, round(audio_dur * fs))
+    # Short (see the FRET_CONTROL_MAX note), but still BUDGETED: the control is 0.95x the fret run's
+    # cost per step — there is no contact solve to skip, because the string step and the rank-m
+    # correction dominate either way — so it is never assumed free.
+    n_control = max(1, round(min(audio_dur, FRET_CONTROL_MAX) * fs))
+    if n_steps + n_control > FRET_WORK_MAX:
+        raise ParamError(
+            f"this configuration needs {n_steps + n_control} steps across the fret run and its "
+            f"out-of-reach control (budget {FRET_WORK_MAX}): every step is a vector contact solve "
+            f"over up to {info['support']} rail nodes. Shorten audio_duration, lower N, or raise "
+            f"lambda."
+        )
+
+    pickup_idx = min(max(1, round(pickup_frac * N)), N - 1)
+    anim_stride = max(1, round((fs / f1) / fpp))
+    n_anim = min(n_steps, max(anim_stride, round(anim_win * fs)))
+    if n_anim // anim_stride > MAX_FRAMES:
+        anim_stride = max(1, math.ceil(n_anim / MAX_FRAMES))
+    # >= 10 columns per period: below that the debounce window rounds to under one column and the
+    # episode count degenerates to raw onsets and FRAGMENTS the slaps (83 and 60 apparent episodes
+    # at 200 and 100 columns against a truth of 49). A too-coarse raster looks BUSIER, not emptier —
+    # which is the more dangerous failure. The count is computed at full rate regardless; this is
+    # what keeps the picture honest next to it.
+    n_periods = max(1e-9, n_steps / (fs / f1))
+    n_cols = int(min(FRET_RASTER_MAX_COLS, max(16, round(FRET_RASTER_COLS_PER_PERIOD * n_periods))))
+
+    shape = _mode1_shape(bar.string) * amplitude
+    bar.set_state(shape)
+    run = _run_fret(bar, n_steps, pickup_idx=pickup_idx, anim_stride=anim_stride,
+                    frame_until=n_anim, n_cols=n_cols)
+
+    # The control: the SAME string with the rail dropped out of reach. Sharing every string
+    # parameter is what makes the elevation attributable to the rail and nothing else.
+    ctrl, _ = _build_fret(p, out_of_reach=True)
+    ctrl.set_state(_mode1_shape(ctrl.string) * amplitude)
+    ctrl_run = _run_fret(ctrl, n_control, pickup_idx=pickup_idx, anim_stride=1, frame_until=0,
+                         n_cols=0, capture_contact=False)
+
+    frames = np.array(run.frames, dtype=float)
+    field_amp = float(np.max(np.abs(frames))) if frames.size else 0.0
+    audio48, peak = _resample_normalize(run.pickup, fs)
+    sim = SimResult(time=np.arange(run.E.size) / fs, energy=run.E, output=None, fs=fs, snapshots=[])
+    # THE INDEXING TRAP (batch 8): `_b` and `contact_mask()` are over the SUPPORT, not the grid, so
+    # both are scattered back onto grid coordinates before shipping. Contact STATISTICS stay
+    # support-relative — that is the frame the model's own tests report them in.
+    rail = np.full(bar.string.N + 1, np.nan)
+    rail[bar._support] = bar._b
+    support_x = bar.string.x[bar._support]
+
+    # decay_oracle=False, and the one place the two configurations of model #8 disagree: the flat
+    # rail breaks equipartition (6-9 % fast) where the jawari's gentle wrap did not. The triple
+    # rides alongside so the panel SHOWS why, instead of printing a mismatch it cannot explain.
+    energy = _energy_block(sim, sigma_zero=bool(info["sigma0"] == 0.0),
+                           oracle_2sigma=2.0 * info["sigma0"], decay_oracle=False)
+    energy["decay_triple"] = _fret_decay_triple(run, fs, info["sigma0"])
+
+    return {
+        "model": "fret",
+        "fs_sim": round(fs, 3),
+        "lambda": round(info["lam"], 6),
+        "grid": {"x": _finite_list(bar.string.x, 6), "barrier": _finite_list(rail)},
+        "frames": {
+            "b64": _b64f32(frames.ravel()),
+            "n_frames": int(frames.shape[0]),
+            "width": int(frames.shape[1]) if frames.ndim == 2 else 0,
+            "dims": 1,
+        },
+        "frame_times": _finite_list(np.array(run.frame_steps, dtype=float) / fs, 6),
+        "anim_dt": float(anim_stride / fs),
+        "playback_speed": playback_speed,
+        "field_amp": field_amp,
+        "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
+        "energy": energy,
+        "meta": {
+            "c": round(c, 3),
+            "f1": round(f1, 3),
+            "num_steps": int(n_steps),
+            "n_control_steps": int(n_control),
+            "n_frames": int(frames.shape[0]),
+            "probe_x": round(float(bar.string.x[pickup_idx]), 4),
+            "clearance": info["clearance"],
+            "rail_frac": info["rail_frac"],
+            "rail_span": round(info["rail_frac"] * L, 4),
+            "amplitude": amplitude,
+            "contact": _fret_contact_block(run, info, fs, f1, n_steps, n_cols, support_x),
+            "spectrum": _fret_signature_block(run.pickup, ctrl_run.pickup, fs, f1, info),
         },
     }
 
