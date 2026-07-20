@@ -1325,15 +1325,19 @@ physics was settled above; this measures only how it **renders and reads**.
   debounce window rounds to **less than one column**, so counting degenerates to raw-onset and
   *fragments* — 83 and 60 apparent episodes against a truth of 49. Coarse columns do not blur the
   slaps together, they **split them**, which is the more dangerous failure because a too-coarse raster
-  looks *busier*, not emptier. Meanwhile the ink fraction converges from above and never reaches the
-  duty: **28.8 % / 21.4 % / 18.4 %** at 400/800/1600 columns against a true **15.5 %** — a column is
-  lit if *any* step in it touched, so the image is inherently a dilation. **So the duty and the
+  looks *busier*, not emptier. Meanwhile the raster's **apparent (column-collapsed) duty overstates
+  the true duty at every finite resolution** — **28.8 % / 21.4 % / 18.4 %** at 400/800/1600 columns
+  against a true **15.5 %**, converging only at full rate — because a column is lit if *any* step in
+  it touched, so the image is inherently a **dilation** in time. (The drawn image's own **ink fill**
+  is a different and much smaller quantity — **13.1 % / 9.5 % / 7.8 %** at those resolutions, against
+  **6.1 %** for the undilated full-rate mask — since most lit columns light only a few of the 99
+  rows.) **So the duty and the
   episode count are computed at full rate and printed; they are never read off the picture.**
   *Generalizable: an OR-reduced raster is an honest map of WHERE and WHEN, and a biased estimator of
   HOW MUCH — compute the scalar from the signal, not from the pixels.*
 - **BINNING x IS FREE FOR THE PICTURE AND FATAL FOR THE NUMBER.** Dropping the support from 99 to 33
-  x-bins leaves the ink fraction **identical (6.11 %)** — the raster reads the same — but the maximum
-  simultaneous count collapses from **69 to 23**. Since `|𝒞|_active` is the batch's second headline
+  x-bins leaves the full-rate ink fill **identical (6.11 %)** — the raster reads the same — but the
+  maximum simultaneous count collapses from **69 to 23**. Since `|𝒞|_active` is the batch's second headline
   (the thing that makes this a *vector* Newton), the trace is computed on the full support and only
   the *image* may be binned. Same lesson as the duty, one axis over.
 - **BINARY CONTACT IS ENOUGH; FORCE MAGNITUDE IS AN OPTIONAL LINEAR GREY.** Contact force spans
