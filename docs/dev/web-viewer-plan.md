@@ -1768,6 +1768,79 @@ the σ_plate decay-oracle decision; the 1/r + ω² sanity). task 3a = `_build_pa
 + web tests. task 3b = frontend (the dual string+heatmap field view + the batch-12 energy/spectrum
 panels reused, per-boundary K sliders) + verifier case + CDP boundary/model-switch check + PNG.
 
+#### The viz design (SETTLED — task 2, measured 2026-07-21)
+
+All numbers from `M:\claud_projects\temp\platebody-viewer-probe\` at the string rig (`L=1, T=200,
+ρ=0.005` → `c=200`, `f₁_string=100` Hz; `N_string=100, λ=0.9, fs=22222` Hz) with a square plate
+`κ=20, ρ_plate=0.005, N_plate=16` (17×17 grid), `ν=0.3` (free). **Nothing was wired first.** The
+probe reproduces the validated core diagnostics (`diagnose_string_free_plate.py`).
+
+- **THE GUARD CEILING IS THE SAME FOR BOTH BOUNDARIES — `K_c ≈ 13 968 N/m` at N_plate=16 — so
+  `bridge_stiffness` needs NO per-boundary re-ranging (the advisor's differ-per-boundary worry was
+  empirically false).** The exact Sherman–Morrison margin is *dominated by the STRING end-node term*
+  `(G0_str⁻¹)_end`; the plate driving-point admittance `(G0_plate⁻¹)_dp` is near-identical for
+  supported vs free at an interior node (`W_dp = h²` either way) — matching `free-plate-bridge-state`'s
+  "margin identical to SS (0.2148)". Margin is **exactly linear in K** (K_c predicted = measured to
+  all digits). **K_c SHRINKS as N_plate grows** (margin@K=3000: 0.159 at N=8 → 0.215 at N=16 → 0.292
+  at N=24 ⟹ K_c ≈ 10.3k at N=24). ⟹ **`bridge_stiffness` slider `[0, 12000]`, default `3000`** (the
+  core's own `K_PLATE_BRIDGE_DEFAULT`) — one range for both boundaries; a high-N × high-K corner
+  trips the **exact guard → clean construction-error payload** (the designed behaviour, worth showing).
+  `n_plate` is its own slider `[8, 24]`, default `16` (n_live 49→529 supported / 81→625 free; the
+  17×17 grid reads the low Chladni pattern and renders far under the `7e8` node-step budget — worst
+  case 27.8M).
+- **THE MONEY PANEL = the energy EXCHANGE, and it is a BIG visible slosh on BOTH bodies (biggest on
+  the free cymbal).** Lossless pluck, K=3000, 0.4 s: **supported** `E_plate` peaks **76.9 %** of the
+  total (`E_string` min 22.7 %); **free** peaks **82.9 %** (`E_string` min 14.9 %), rising to ~90 %
+  near the guard ceiling — the free plate is the more dramatic exchange (`free-plate-bridge` memory:
+  up to ~89 %). Body first peaks at **~9.7 ms**. Total drift **~6e-14** through the whole slosh = the
+  σ=0 verdict, *while `E_string` alone visibly is not conserved*. Reuse batch-12's `drawBodyEnergy`
+  unchanged (`E_string`⇄`E_plate` counter-phase, `E_conn` on its own **signed** axis, flat total as
+  the conservation reference). The one **new** panel content is the **plate heatmap** (below).
+- **THE HEATMAP is the batch's new content — the plate you WATCH ring** (batch 12 had only the string
+  moving). Reuse the plate model's `dims:2` heatmap + decimated `mask` (17×17), fed by
+  `bridge.plate.state.copy()`. Its animation window/stride is chosen **independently** of the 0.4 s
+  slosh trace: a short, fundamental-resolving window on the plate's own motion so you watch it light
+  up as energy arrives (~10 ms in). String 1D canvas (`drawString`) + plate 2D heatmap shown
+  together = the dual field view.
+- **THE TERMINUS GLIDE IS THE OPPOSITE STORY PER BOUNDARY — and it must be measured from a NEAR-NUT
+  pickup (0.23 L), NOT the free end.** As K stiffens the string end gets *pinned*, so `u_end`'s own
+  motion collapses onto the plate's slow driving-point bounce (~55–67 Hz) and **misleads** — batch-12's
+  `u_end` readout worked only because a lumped modal body never pins the end that hard. Measured at
+  0.23 L over 1.5 s (matching the diagnostic):
+  - **Supported: `55 → 98 Hz`** — rises from the free quarter-wave `c/4L=50` and lands **near** the
+    rigid-clamp `c/2L=100`; the pinned soundboard is a near-rigid termination (Step-4 physics).
+  - **Free: `60 → 118 Hz`** — rises and **OVERSHOOTS** `c/2L=100`, landing ~118, because below its
+    first elastic mode the floating plate loads the end as a **reactive mass-spring** (its `{1,x,y}`
+    rigid-body modes act mass-like), not a rigid anchor (`free-plate-bridge-state`, matched exactly).
+  Each boundary's read-out states its own correct story; a shared "toward clamped c/2L" line (the
+  batch-12 text) would be wrong for the free edge.
+- **THE RADIATED SPECTRUM — boosted near the plate modes, NOT clean formants; markers shown not
+  scored.** Faint dashed markers at the low plate modes (supported `[62, 155, 248, 306]` Hz; free
+  `[43, 62, 76, 109]` Hz), where the string partials lift. Peak-pick the FFT; do **NOT** overlay an
+  imposed harmonic ladder (the batch-8 off-grid lesson). The **ω² monopole sanity = `|Q″(f)| /
+  |Q_vol(f)| / (2πf)² = 0.997`** (median over the strong peaks, spread `[0.98, 1.05]`) — the
+  denominator is the plate **volume displacement** `Q_vol` (`h²·Σuᵢ` supported / `Σ Wᵢᵢ uᵢ` free),
+  **NOT** the driving-point `w_dp` (that gives 0.4/0.14, not 1.0 — the real correction over batch-12's
+  `w_b` denominator, since `Q″ = Q_vol″` exactly for a distributed body). A near-tautological
+  bookkeeping check on the pressure read / weights / byte order, NOT a radiation oracle.
+- **The 1/r law is exact** (`gain·r` constant at 1 m and 2 m to all digits) — the distance knob
+  changes **level and latency only, never the spectrum shape**; the readout says so. `distance`
+  slider `[0.5, 4] m`, default 1 (reuse batch-12's).
+- **`sigma_plate` decay_oracle = False (passivity-only) — DECIDED BY MEASUREMENT.** The lossy total is
+  **monotone** (passive) but **NOT a single exponential**: the log-linear fit rms grows with loss
+  (supported 0.0035 → 0.143; free 0.0066 → 0.189 at σ=2→20) — the off-modal coupled decay is
+  genuinely multi-rate (batch-12's read). **σ-gated verdict like weinreich/batch 12:** σ=0 → the
+  ordinary **drift** panel on the total; σ>0 → **passivity** (monotone), no 2σ oracle line.
+  `sigma_plate` slider `[0, 80]`, default 0 (σ=0 conservation headline first).
+- **Instrumented loop, not `simulate()`** (batch-12 pattern): one hand-rolled step loop captures the
+  per-part `E_string`/`E_plate`/`E_conn` split + `Q″` + far-field pressure + the near-nut pickup +
+  `Q_vol` + `plate.state.copy()` frames (within the short heatmap window at stride). IC = the
+  raised-cosine / triangular pluck (the whole partial ladder, for the spectrum boost).
+- **Params to add + reset in `_default`** (the recurring leak): `bridge_stiffness` (re-ranged
+  `[0, 12000]` from the jawari's home 2e6), `n_plate` (new — `[8, 24]`), `sigma_plate` (new),
+  `distance` (reuse body's). Plate geometry (`Lx=Ly`, `ν`) fixed server-side (a plate-geometry editor
+  is its own later feature). `amplitude`/`pluck_position` reuse the string path's.
+
 ### Later batches (rough map — not firm)
 
 - **Body / radiation** — the modal body + radiation read-out is **batch 12**; `StringPlateBridge`
