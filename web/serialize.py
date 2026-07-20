@@ -39,12 +39,13 @@ from physsynth.core.body import ModalBody
 from physsynth.core.bore import C0_AIR, RHO0_AIR, Bore
 from physsynth.core.bow import BowedString
 from physsynth.core.collision import BarrierString
-from physsynth.core.connection import SympatheticStrings
+from physsynth.core.connection import StringBodyBridge, SympatheticStrings
 from physsynth.core.engine import SimResult, simulate
 from physsynth.core.exciter import raised_cosine_2d, triangular_pluck
 from physsynth.core.mallet import MalletMembrane
 from physsynth.core.membrane import Membrane
 from physsynth.core.plate import Plate, VKPlate
+from physsynth.core.radiation import AirRadiation
 from physsynth.core.reed import ReedBore
 from physsynth.core.string_damped import DampedStiffString
 from physsynth.core.string_geometric import GeometricString
@@ -872,6 +873,8 @@ def _build_payload(p: dict[str, Any]) -> dict[str, Any]:
         return _build_payload_bore(p)
     if model == "reed":
         return _build_payload_reed(p)
+    if model == "body":
+        return _build_payload_body(p)
     return _build_payload_string(p)
 
 
@@ -2672,6 +2675,381 @@ def _symp_weinreich(
         probe_x=float(x[pickup_idx]), spectrum_block=spectrum_block, playback_speed=playback_speed,
         energy_sigma_zero=bool(sigma_body == 0.0), energy_decay_oracle=False,
     )
+
+
+# == string -> modal body / bridge + radiation read-out (batch 12) =================================
+#
+# The FIRST viewer of the third stage — the body that colours the tone and the air that carries it.
+# A fixed/free string terminated on a lumped :class:`ModalBody` through a linear bridge spring
+# (:class:`StringBodyBridge`), read out to the far field by :class:`AirRadiation`. All-wrapper; the
+# core stays untouched. Load-bearing decisions, all MEASURED before wiring (see the plan, task 2):
+#
+#   * **The genuinely new content is the COUPLING, not a new signal.** For a single source the
+#     radiated pressure is ``body.pressure() * rho0/(4 pi r)``, integer-sample delayed — the *same*
+#     spectrum, scaled and delayed. So the money panel is the viewer's first three-way energy
+#     decomposition ``E_string + E_body + E_conn`` and the first time ``E_string`` alone is not
+#     conserved (it sloshes into the body — assert on the TOTAL, the docstring's rule). At the
+#     default ``K = 8000`` this is a big visible slosh: ``E_body`` swings ~0.1 % -> 57 % of the
+#     total (first peak ~22 ms), ``E_string`` in counter-phase, while the total drifts ~3e-14 —
+#     that contrast IS the batch. The exchange trace is a 0.4 s slice (~9 sloshes; the full 2 s
+#     reads as noise); the verdict/audio/spectrum use the full run.
+#   * **The guard ceiling is LOW (~21.5k N/m) and shapes the K slider.** At ``K = 0`` the string's
+#     own Nyquist mode already puts ``k^2 lambda_max(A) = 3.24`` of the 4.0 limit, so the coupling
+#     has little headroom. No artificial cap: the core's EXACT guard (``connection.py``,
+#     ``k^2 lambda_max(A) < 4``, assembled matrix-free — the cheap 2-DOF bound is a footgun) raises
+#     a clean ``ValueError`` above the ceiling, surfaced upstream as a construction-error payload.
+#     The frontend caps the slider at 19000 for margin; the backend only requires ``K >= 0``.
+#   * **The radiated spectrum: two honest claims, and a killed one.** (a) The monopole ``omega^2``
+#     CONSISTENCY: radiated-pressure spectrum / body bridge-displacement spectrum
+#     ``= gain*(2 pi f)^2`` to ratio ~1.00 at every peak — but this is a near-tautology (with
+#     ``a = phi``, ``p = sum phi_i q_i'' = -(2 pi f)^2 w_b`` bin-for-bin by FFT linearity), so it is
+#     a SANITY check (catches a broken ``_accel`` read / wrong ``a`` / byte-order), NOT "radiation
+#     law verified". (b) Boosted near the body modes ``[110, 196, 261, 440]`` Hz but NOT clean
+#     formants — the modes are off-harmonic against the string, lifting neighbours via
+#     doublet/avoided-crossing splitting. The first-cut "``omega^2`` tilt" (radiated / string-
+#     pickup) was WRONG and dropped: that ratio is ``f^2 * resonant-transfer``, not a clean ``f^2``.
+#   * **The terminus fundamental GLIDES** free ``c/4L`` -> clamped ``c/2L`` as K stiffens (58 -> 92
+#     Hz at the default rig; asymptotes BELOW 100 because the guard caps K and the body is finite-
+#     mass) — an honest secondary readout, measured at the free end (mode-1 antinode) over a band
+#     DERIVED from ``c/4L .. c/2L`` (never hardcoded: ``T``/``rho``/``L`` are live, so a fixed band
+#     would lock onto a higher partial the moment the user retunes).
+#   * **The 1/r law is exact** (``gain*r`` constant); the distance knob changes level + latency
+#     only, never the spectrum shape — the readout says so.
+#   * **sigma-gated verdict, ``decay_oracle=False`` decided by MEASUREMENT.** ``sigma_body = 0`` ->
+#     the drift check on the total; ``sigma_body > 0`` -> passivity (monotone), no ``2 sigma``
+#     oracle line: the off-harmonic coupled decay is genuinely multi-rate (log-linear fit rms 0.038
+#     -> 0.14 as loss grows), so a single fitted rate against a flat oracle would lie (the jawari
+#     check gave the OPPOSITE answer there because that barrier was lossless-elastic; here
+#     sigma_body is a real loss). Default 0 so the default view is the conservation headline.
+#   * **Instrumented loop, not ``simulate()``** (geometric/mallet/sympathetic pattern):
+#     ``simulate()`` exposes energy+pickup but not the per-part ``E_string``/``E_body``/``E_conn``
+#     split that IS the money panel. One hand-rolled step loop captures all three + the free-end
+#     pickup + the radiated pressure + ``w_b``; a ``SimResult`` is built for :func:`_energy_block`.
+
+
+BODY_N_MAX = 160             # each step = 1 ideal-string leapfrog + 1 body step (no root-find)
+BODY_LAM_DEFAULT = 0.9       # < 1 REQUIRED: the string Nyquist mode is marginal at 1, the spring
+#                              pushes it unstable; the exact guard's headroom lives below it
+BODY_K_DEFAULT = 8000.0      # bridge spring (N/m); the exact guard trips ~21.5k at the default rig
+BODY_SIGMA_BODY_DEFAULT = 0.0    # body loss OFF by default: show the conservation headline first
+BODY_SIGMA_BODY_MAX = 80.0
+BODY_DISTANCE_DEFAULT = 1.0      # listening radius r (m) for the 1/r far-field read-out
+BODY_DISTANCE_MAX = 8.0
+BODY_AMP_DEFAULT = 1e-3          # pluck amplitude (m); reuse the string path's default
+BODY_AUDIO_MAX = 3.0
+BODY_WORK_MAX = 200_000          # total steps of the single instrumented run
+BODY_ANIM_WIN = 0.06             # s of string animation (the only moving shape; the body is lumped)
+BODY_EXCHANGE_WINDOW = 0.4       # s of the E_string<->E_body slosh actually plotted (~9 sloshes)
+BODY_TRACE_POINTS = 600          # decimated length of the exchange trace
+BODY_BODY_FREQS = np.array([110.0, 196.0, 261.0, 440.0])  # guitar-ish off-harmonic body modes
+BODY_BODY_MASS = 0.02            # ~ the string's rho*L, so the body genuinely loads the string
+
+
+def _build_body_bridge(p: dict[str, Any]) -> tuple[StringBodyBridge, dict[str, Any]]:
+    """Build a fixed/free string terminated on a :class:`ModalBody` via a linear bridge spring.
+
+    The string is lossless (``sigma = 0``); the loss gate is the BODY's ``sigma_body`` alone (so the
+    verdict is cleanly the body-coupled decay, not a string+body mix). The core ctor is the single
+    source of truth for the ``lam < 1`` guard and the exact coupled stability bound — both raise
+    ``ValueError``, surfaced upstream as a clean construction-error payload. Returns ``(bridge,
+    info)``
+    where ``info`` carries the derived scalars the panels quote.
+    """
+    L = _fnum(p, "L", 1.0)
+    T = _fnum(p, "T", 200.0)
+    rho = _fnum(p, "rho", 0.005)
+    lam = _fnum(p, "lambda", BODY_LAM_DEFAULT)
+    K = _fnum(p, "bridge_stiffness", BODY_K_DEFAULT)
+    sigma_body = _fnum(p, "sigma_body", BODY_SIGMA_BODY_DEFAULT)
+    try:
+        N = int(p.get("N", 100))
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"N must be an integer, got {p.get('N')!r}.") from exc
+
+    if not (N_MIN <= N <= BODY_N_MAX):
+        raise ParamError(f"N must be in [{N_MIN}, {BODY_N_MAX}] for the body bridge, got {N}.")
+    if min(L, T, rho) <= 0:
+        raise ParamError("L, T, rho must all be positive.")
+    if not (0.0 < lam < 1.0):
+        raise ParamError(
+            f"lambda must be in (0, 1), got {lam}: the string's Nyquist mode is marginal at "
+            "lambda = 1 and the bridge spring pushes it unstable, so the coupled system needs "
+            "headroom below it."
+        )
+    if K < 0:
+        raise ParamError(f"bridge_stiffness must be >= 0, got {K}.")
+    if not (0.0 <= sigma_body <= BODY_SIGMA_BODY_MAX):
+        raise ParamError(f"sigma_body must be in [0, {BODY_SIGMA_BODY_MAX}], got {sigma_body}.")
+
+    c = math.sqrt(T / rho)
+    fs = c * N / (L * lam)
+    string = IdealString(L=L, T=T, rho=rho, fs=fs, N=N, boundary=("fixed", "free"), sigma=0.0)
+    body = ModalBody(freqs=BODY_BODY_FREQS, fs=fs, sigmas=sigma_body, masses=BODY_BODY_MASS,
+                     phi=1.0)
+    # The exact stability guard fires HERE (StringBodyBridge.__init__) if K exceeds the ceiling.
+    bridge = StringBodyBridge(string=string, body=body, K=K)
+    info = {
+        "c": c, "L": L, "N": N, "fs": fs, "lam": float(string.lam), "K": K,
+        "sigma_body": sigma_body,
+    }
+    return bridge, info
+
+
+class _BodyRun:
+    """Per-step telemetry of a body-bridge run — split energies, the bridge, and the read-out."""
+
+    def __init__(self, n: int) -> None:
+        self.E = np.empty(n + 1)            # total E_string + E_body + E_conn (the conserved sum)
+        self.e_string = np.empty(n + 1)     # string energy alone (NOT conserved once coupled)
+        self.e_body = np.empty(n + 1)       # body energy alone
+        self.e_conn = np.empty(n + 1)       # connection (spring) energy — cross-time, can go < 0
+        self.wb = np.empty(n + 1)           # body bridge displacement w_b (the omega^2 denominator)
+        self.u_end = np.empty(n + 1)        # string free-end displacement (the terminus f1 pickup)
+        self.qaccel = np.empty(n + 1)       # raw volume acceleration Q'' (the spectrum SHAPE panel)
+        self.pressure = np.empty(n + 1)     # retarded far-field pressure (the audio only)
+        self.frames: list[NDArray[np.float64]] = []
+        self.frame_steps: list[int] = []
+
+
+def _run_body(bridge: StringBodyBridge, rad: AirRadiation, n_steps: int, *, anim_stride: int,
+              frame_until: int) -> _BodyRun:
+    """Step the coupled string+body+radiation, capturing everything the panels need in ONE pass.
+
+    Hand-rolled rather than :func:`simulate` because the per-part ``E_string``/``E_body``/``E_conn``
+    split (the money panel) and ``w_b`` (the omega^2 consistency denominator) are not part of a
+    ``SimResult`` — the geometric/mallet/sympathetic pattern.
+    """
+    run = _BodyRun(n_steps)
+
+    def _sample(i: int) -> None:
+        run.E[i] = bridge.energy()
+        run.e_string[i] = bridge.string.energy()
+        run.e_body[i] = bridge.body.energy()
+        run.e_conn[i] = 0.5 * bridge.K * bridge._stretch() * bridge._stretch(prev=True)
+        run.wb[i] = bridge.body.bridge_displacement()
+        run.u_end[i] = float(bridge.string.u[-1])
+        # Raw Q'' (undelayed, ungained) drives the spectrum panel + omega^2 check, so their SHAPE is
+        # exactly distance-invariant; the retarded far-field (gain + delay) is the audio only.
+        run.qaccel[i] = bridge.pressure()
+        run.pressure[i] = rad.radiate(bridge)
+
+    _sample(0)
+    if frame_until >= 1:
+        run.frames.append(bridge.string.u.copy())
+        run.frame_steps.append(0)
+    for i in range(1, n_steps + 1):
+        bridge.step()
+        _sample(i)
+        if i <= frame_until and i % anim_stride == 0:
+            run.frames.append(bridge.string.u.copy())
+            run.frame_steps.append(i)
+    if not np.all(np.isfinite(run.E)):
+        raise ParamError("simulation produced non-finite energy (instability) — adjust parameters.")
+    return run
+
+
+def _body_pooled_spectrum(sig: NDArray[np.float64], fs: float, f_max: float,
+                          n_points: int = N_SPEC_POINTS) -> tuple[NDArray[np.float64],
+                                                                   NDArray[np.float64]]:
+    """Band-limited magnitude spectrum, max-pooled to ``n_points`` for the plot. Returns (f, mag).
+
+    Max-pool (not mean) so the narrow high partials survive the decimation, and normalise to the
+    band max so the shape is what reads — the level story is the 1/r readout, not this panel.
+    """
+    sig = np.asarray(sig, dtype=float)
+    mag = np.abs(np.fft.rfft((sig - sig.mean()) * np.hanning(sig.size)))
+    freqs = np.fft.rfftfreq(sig.size, 1.0 / fs)
+    keep = freqs <= f_max
+    freqs, mag = freqs[keep], mag[keep]
+    if freqs.size > n_points:
+        edges = np.linspace(0, freqs.size, n_points + 1).astype(int)
+        freqs = np.array([freqs[a:b].mean() for a, b in zip(edges[:-1], edges[1:], strict=True)
+                          if b > a])
+        mag = np.array([mag[a:b].max() for a, b in zip(edges[:-1], edges[1:], strict=True)
+                        if b > a])
+    m = float(mag.max()) if mag.size else 1.0
+    return freqs, (mag / m if m > 0 else mag)
+
+
+def _body_omega2_consistency(qaccel: NDArray[np.float64], wb: NDArray[np.float64], fs: float,
+                             f_max: float) -> float:
+    """Median of ``|Q''(f)| / |W_b(f)| / (2 pi f)^2`` over the strong volume-acceleration peaks.
+
+    A near-tautology (``Q'' = sum a_i q_i'' = -(2 pi f)^2 w_b`` bin-for-bin with ``a = phi``), so
+    ~1.00 is a SANITY check on the ``_accel`` read / the weights / the byte order — NOT an
+    independent radiation oracle. Computed from the raw volume acceleration (the far-field gain is a
+    scalar that cancels in the ratio anyway), evaluated only at the dominant peaks where both
+    spectra are well above the noise.
+    """
+    win = np.hanning(qaccel.size)
+    freqs = np.fft.rfftfreq(qaccel.size, 1.0 / fs)
+    pqa = np.abs(np.fft.rfft((qaccel - qaccel.mean()) * win))
+    pwb = np.abs(np.fft.rfft((wb - wb.mean()) * win))
+    band = freqs <= f_max
+    if not band.any() or pqa[band].max() <= 0:
+        return float("nan")
+    thresh = 0.05 * float(pqa[band].max())
+    ratios: list[float] = []
+    for i in range(1, pqa.size - 1):
+        if freqs[i] > f_max:
+            break
+        is_peak = pqa[i] >= pqa[i - 1] and pqa[i] > pqa[i + 1]
+        if is_peak and pqa[i] > thresh and pwb[i] > 0.0 and freqs[i] > 0.0:
+            w2 = (2.0 * math.pi * freqs[i]) ** 2
+            ratios.append(float(pqa[i] / pwb[i] / w2))
+    return float(np.median(ratios)) if ratios else float("nan")
+
+
+def _body_terminus_f1(u_end: NDArray[np.float64], fs: float, c: float, L: float) -> float:
+    """Coupled fundamental (Hz) from the free-end pickup, band DERIVED from ``c/4L .. c/2L``.
+
+    The band tracks the physics (``T``/``rho``/``L`` are live) so a retuned string cannot silently
+    lock the readout onto a higher fixed/free partial. Parabolic-refined for sub-bin accuracy.
+    """
+    sig = np.asarray(u_end, dtype=float)
+    sig = sig - sig.mean()
+    spec = np.abs(np.fft.rfft(sig * np.hanning(sig.size)))
+    freqs = np.fft.rfftfreq(sig.size, 1.0 / fs)
+    lo, hi = 0.5 * c / (4.0 * L), 1.3 * c / (2.0 * L)
+    band = (freqs > lo) & (freqs < hi)
+    if not band.any():
+        return float("nan")
+    j = int(np.where(band)[0][int(np.argmax(spec[band]))])
+    if 0 < j < spec.size - 1:
+        a, b_, cc = spec[j - 1], spec[j], spec[j + 1]
+        denom = a - 2.0 * b_ + cc
+        off = 0.5 * (a - cc) / denom if denom != 0.0 else 0.0
+    else:
+        off = 0.0
+    return float((j + off) * fs / sig.size)
+
+
+def _build_payload_body(p: dict[str, Any]) -> dict[str, Any]:
+    playback_speed = _fnum(p, "playback_speed", 0.02)
+    pluck_frac = _fnum(p, "pluck_position", 0.3)
+    amplitude = _fnum(p, "amplitude", BODY_AMP_DEFAULT)
+    audio_dur = _fnum(p, "audio_duration", 2.0)
+    distance = _fnum(p, "distance", BODY_DISTANCE_DEFAULT)
+    fpp = max(1, int(_fnum(p, "frames_per_period", FRAMES_PER_PERIOD)))
+    if not (0.0 < playback_speed <= SPEED_MAX):
+        raise ParamError(f"playback_speed must be in (0, {SPEED_MAX}], got {playback_speed}.")
+    if not (0.0 < pluck_frac < 1.0):
+        raise ParamError(f"pluck_position must be in (0, 1), got {pluck_frac}.")
+    if not (0.0 < audio_dur <= BODY_AUDIO_MAX):
+        raise ParamError(f"audio_duration must be in (0, {BODY_AUDIO_MAX}] s, got {audio_dur}.")
+    if not (0.0 < distance <= BODY_DISTANCE_MAX):
+        raise ParamError(f"distance must be in (0, {BODY_DISTANCE_MAX}] m, got {distance}.")
+
+    # Exact guard fires inside here (K past the ceiling -> ValueError -> construction-error).
+    bridge, info = _build_body_bridge(p)
+    c, L, fs, lam = info["c"], info["L"], info["fs"], info["lam"]
+    f1_base = c / (2.0 * L)
+
+    n_steps = max(1, round(audio_dur * fs))
+    if n_steps > BODY_WORK_MAX:
+        raise ParamError(
+            f"work budget exceeded ({n_steps:,} steps > {BODY_WORK_MAX:,}). Lower the audio "
+            "duration, N, or the tension."
+        )
+    anim_stride = max(1, round((fs / f1_base) / fpp))
+    frame_until = max(anim_stride, round(BODY_ANIM_WIN * fs))
+    if frame_until // anim_stride > MAX_FRAMES:
+        anim_stride = max(1, math.ceil(frame_until / MAX_FRAMES))
+
+    pluck = triangular_pluck(bridge.string.x, L, pluck_frac * L, amplitude=amplitude)
+    bridge.string.set_state(pluck)
+    rad = AirRadiation(fs=fs, distance=distance, retarded=True)
+    run = _run_body(bridge, rad, n_steps, anim_stride=anim_stride, frame_until=frame_until)
+
+    # --- the money panel: E_string <-> E_body exchange over a 0.4 s slice (fractions of the -------
+    #     instantaneous total, so they stay legible as a lossy body decays; E_conn is its own
+    #     overlaid line — it can go negative, so it is NEVER stacked).
+    total = run.E
+    es_frac = run.e_string / total
+    eb_frac = run.e_body / total
+    ec_frac = run.e_conn / total
+    tot_frac = total / total                      # identically ~1.0 — flat conservation reference
+    n_exch = min(n_steps, max(1, round(BODY_EXCHANGE_WINDOW * fs)))
+    eidx = np.linspace(0, n_exch, min(n_exch + 1, BODY_TRACE_POINTS)).astype(int)
+    e0 = float(total[0])
+    quarter = max(1, n_steps // 4)
+    exchange = {
+        "kind": "body",
+        "time": _finite_list(eidx / fs, 6),
+        "e_string_frac": _finite_list(es_frac[eidx]),
+        "e_body_frac": _finite_list(eb_frac[eidx]),
+        "e_conn_frac": _finite_list(ec_frac[eidx]),
+        "total_frac": _finite_list(tot_frac[eidx]),
+        "window": round(n_exch / fs, 4),
+        # scalars measured over the FULL run (robust); the contrast that IS the batch:
+        "body_frac_peak": round(float(np.max(eb_frac)), 4),
+        "string_frac_min": round(float(np.min(es_frac)), 4),
+        "string_frac_max": round(float(np.max(es_frac)), 4),
+        "first_peak_ms": round(float(np.argmax(run.e_body[:quarter]) / fs * 1000.0), 1),
+        "total_drift": (total.max() - total.min()) / abs(e0) if e0 != 0.0 else float("nan"),
+        "K": round(info["K"], 1),
+    }
+
+    # --- the radiated-pressure spectrum + the honest read-outs -----------------------------------
+    # The panel FFT is the RAW volume acceleration Q'' (undelayed, ungained), so its normalised
+    # shape IS the far-field shape and is EXACTLY distance-invariant (gain is a scalar, the integer
+    # delay only moves phase) — that is what makes "distance changes level + latency only" true.
+    f_max = min(0.45 * fs, max(10.0 * f1_base, 1500.0))
+    sf, sm = _body_pooled_spectrum(run.qaccel, fs, f_max)
+    spectrum = {
+        "kind": "body",
+        "f_max": round(f_max, 1),
+        "f": _finite_list(sf, 3),
+        "mag": _finite_list(sm),
+        "body_modes": _finite_list(BODY_BODY_FREQS, 1),
+        # a near-tautological sanity check (~1.00), NOT a radiation oracle — see the section note:
+        "omega2_consistency": round(_body_omega2_consistency(run.qaccel, run.wb, fs, f_max), 3),
+        "terminus_f1": round(_body_terminus_f1(run.u_end, fs, c, L), 2),
+        "f1_free": round(c / (4.0 * L), 2),
+        "f1_clamped": round(c / (2.0 * L), 2),
+        # 1/r: distance changes level + latency only, never the spectrum shape (the readout says).
+        "distance": round(distance, 3),
+        "gain": rad.gain,
+        "gain_times_r": round(rad.gain * distance, 6),
+        "latency_ms": round(rad.latency_samples / fs * 1000.0, 3),
+        "retardation_residual": round(rad.retardation_residual, 4),
+    }
+
+    # --- frames + audio + energy verdict ---------------------------------------------------------
+    frames = np.array(run.frames, dtype=float)             # (n_frames, N+1)
+    field_amp = float(np.max(np.abs(frames))) if frames.size else 0.0
+    audio48, peak = _resample_normalize(run.pressure, fs)  # audio = the far-field pressure
+    sim = SimResult(time=np.arange(total.size) / fs, energy=total, output=None, fs=fs, snapshots=[])
+    return {
+        "model": "body",
+        "fs_sim": round(fs, 3),
+        "lambda": round(lam, 6),
+        "grid": {"x": _finite_list(bridge.string.x, 6)},
+        "frames": {
+            "b64": _b64f32(frames.ravel()),
+            "n_frames": int(frames.shape[0]),
+            "width": int(frames.shape[1]) if frames.ndim == 2 else 0,
+            "dims": 1,
+        },
+        "frame_times": _finite_list(np.array(run.frame_steps, dtype=float) / fs, 6),
+        "anim_dt": float(anim_stride / fs),
+        "playback_speed": playback_speed,
+        "field_amp": field_amp,
+        "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
+        # sigma_body = 0 -> conservation drift on the total; sigma_body > 0 -> passivity, no 2sigma
+        # oracle (the off-harmonic coupled decay is multi-rate; measured, not templated).
+        "energy": _energy_block(sim, sigma_zero=bool(info["sigma_body"] == 0.0), oracle_2sigma=0.0,
+                                decay_oracle=False),
+        "meta": {
+            "c": round(c, 3),
+            "f1": round(f1_base, 3),
+            "num_steps": int(n_steps),
+            "n_frames": int(frames.shape[0]),
+            "probe_x": round(float(L), 4),          # the free end (the bridge terminus)
+            "exchange": exchange,
+            "spectrum": spectrum,
+        },
+    }
 
 
 # == jawari / buzzing bridge (model #8 in its curved configuration) ================================

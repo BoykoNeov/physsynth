@@ -18,6 +18,11 @@ import pytest
 import web.serialize as web_serialize
 from web.serialize import (
     AUDIO_FS,
+    BODY_AUDIO_MAX,
+    BODY_DISTANCE_MAX,
+    BODY_N_MAX,
+    BODY_SIGMA_BODY_MAX,
+    BODY_WORK_MAX,
     BORE_ANIM_MAX,
     BORE_AUDIO_MAX,
     BORE_N_MAX,
@@ -2749,3 +2754,202 @@ def test_fret_episode_debounce_merges_chatter_without_inventing_it():
     assert ct["episodes"] <= ct["raw_onsets"]
     assert ct["episodes"] >= 0.9 * ct["raw_onsets"], "the default must not be over-merged"
     assert ct["episodes_per_period"] >= FRET_EPISODES_MIN
+
+
+# =================================================================================================
+# String -> modal body / bridge + radiation read-out (batch 12) — the COUPLING is the content
+# =================================================================================================
+#
+# The first viewer of the third stage. The claim is the three-way energy split E_string + E_body +
+# E_conn (the total conserves through the coupling while E_string alone does not) and the body
+# colouring the radiated spectrum — NOT a new signal (for one source the far-field is the body
+# pressure, scaled by 1/r and delayed). The measured numbers below come back through the payload as
+# an end-to-end oracle: if the wrapper perturbed the rig they would drift.
+
+
+def _body(**over):
+    return web_serialize.simulate_to_payload({"model": "body", "audio_duration": 0.5, **over})
+
+
+def test_body_conserves_through_the_coupling_while_the_string_alone_does_not():
+    """THE batch, in one test: at sigma_body = 0 the TOTAL drifts < 1e-10 (energy is conserved
+    through the spring coupling), yet E_string alone swings from ~100 % to a small fraction of the
+    total — it is emphatically not conserved on its own. Shipping both numbers is the point: a flat
+    total beside a sloshing E_string is the coupled-oscillator signature, not a bug."""
+    d = _body(bridge_stiffness=8000)
+    e = d["energy"]
+    assert e["sigma_is_zero"] is True
+    assert e["lossless"]["drift"] < LOSSLESS_TOL and e["lossless"]["pass"] is True
+    ex = d["meta"]["exchange"]
+    assert ex["total_drift"] < LOSSLESS_TOL
+    # the contrast: the string's own energy fraction is NOT flat — it gives a big chunk to the body
+    assert ex["string_frac_max"] > 0.9
+    assert ex["string_frac_min"] < 0.6, "E_string alone must visibly not conserve (it sloshes out)"
+    assert ex["body_frac_peak"] > 0.4, "the body must carry a large, visible fraction at the peak"
+
+
+def test_body_k_zero_decouples_the_string_bit_for_bit():
+    """The anchor. K = 0 severs the spring: the string evolves as a bare fixed/free IdealString, the
+    body never moves (E_body = 0), and nothing radiates. The string FIELD is bit-identical to a
+    stand-alone string plucked the same way — the sharpest cheap proof the coupling is a clean
+    add-on that vanishes at K = 0 (the sympathetic all-zero-K / vk nonlinear=False precedent)."""
+    d = _body(bridge_stiffness=0.0, audio_duration=0.3)
+    ex = d["meta"]["exchange"]
+    assert ex["body_frac_peak"] == 0.0, "a decoupled body must never move"
+    assert ex["string_frac_min"] == pytest.approx(1.0), "the string keeps 100 % of the energy"
+    assert d["audio"]["peak"] == 0.0, "a still body radiates nothing"
+
+    # bit-identity of the string field at a matched step
+    fs = d["fs_sim"]
+    frames = _decode_f32(d["frames"]["b64"]).reshape(-1, d["frames"]["width"])
+    last_step = round(d["frame_times"][-1] * fs)
+    from physsynth.core.engine import simulate
+    from physsynth.core.exciter import triangular_pluck
+    from physsynth.core.string_ideal import IdealString
+    c = np.sqrt(200.0 / 0.005)
+    s = IdealString(L=1.0, T=200.0, rho=0.005, fs=c * 100 / 0.9, N=100,
+                    boundary=("fixed", "free"), sigma=0.0)
+    s.set_state(triangular_pluck(s.x, 1.0, 0.3, amplitude=1e-3))
+    bare = simulate(s, num_steps=last_step, snapshot_stride=1).snapshots[-1][1].astype("<f4")
+    assert float(np.max(np.abs(frames[-1] - bare))) == 0.0
+
+
+def test_body_exchange_fractions_carry_e_conn_and_must_not_be_stacked():
+    """The money panel ships four channels {e_string, e_body, e_conn, total}. E_conn is the cross-
+    time spring energy: it swings its own (up to ~10 %) share and can dip negative, so E_string and
+    E_body do NOT sum to the flat total — stacking them to 1 would hide E_conn. The test pins that
+    E_conn is load-bearing (E_string + E_body departs from 1 by the E_conn amount)."""
+    ex = _body(bridge_stiffness=8000)["meta"]["exchange"]
+    assert ex["kind"] == "body"
+    for key in ("time", "e_string_frac", "e_body_frac", "e_conn_frac", "total_frac"):
+        assert len(ex[key]) == len(ex["time"]) and len(ex[key]) > 100
+    es = np.array(ex["e_string_frac"])
+    eb = np.array(ex["e_body_frac"])
+    ec = np.array(ex["e_conn_frac"])
+    tot = np.array(ex["total_frac"])
+    # the three channels sum to the (flat ~1) total — E_conn is exactly the gap, never dropped
+    assert np.allclose(es + eb + ec, tot, atol=1e-9)
+    assert np.allclose(tot, 1.0, atol=1e-9)
+    assert float(np.min(es + eb)) < 0.95, "E_conn carries a real share; stacking es+eb hides it"
+
+
+def test_body_exchange_slosh_is_prompt_and_windowed():
+    """The exchange trace is the FIRST 0.4 s of the run (~9 sloshes; the full 2 s reads as noise),
+    and the body first peaks within tens of ms — the fast coupled exchange the panel must resolve.
+    The scalars are measured over the full run, so they are robust to the window."""
+    ex = _body(bridge_stiffness=8000, audio_duration=1.0)["meta"]["exchange"]
+    assert ex["window"] == pytest.approx(0.4, abs=0.01)
+    assert 0.0 < ex["first_peak_ms"] < 40.0, "the slosh is prompt (tens of ms), not a slow drift"
+
+
+def test_body_terminus_glides_from_free_toward_clamped_as_the_bridge_stiffens():
+    """The honest secondary readout: a soft bridge lets the free end swing (fundamental near the
+    free c/4L = 50 Hz); stiffening it pulls the terminus toward the clamped c/2L = 100 Hz. It
+    ASYMPTOTES BELOW 100 (the guard caps K and the body is finite-mass), so the readout never claims
+    to reach it — the test asserts the monotone glide and the sub-clamped ceiling, not a target."""
+    lo = _body(bridge_stiffness=200)["meta"]["spectrum"]
+    hi = _body(bridge_stiffness=8000)["meta"]["spectrum"]
+    assert lo["f1_free"] == pytest.approx(50.0) and lo["f1_clamped"] == pytest.approx(100.0)
+    assert lo["f1_free"] < lo["terminus_f1"] < hi["terminus_f1"] < lo["f1_clamped"]
+    assert hi["terminus_f1"] == pytest.approx(90.7, abs=1.5), "the probe's measured K=8000 glide"
+
+
+def test_body_monopole_omega2_is_a_consistency_check_near_one_not_an_oracle():
+    """The radiated pressure is the body's volume ACCELERATION, so its spectrum is (2 pi f)^2 times
+    the body displacement spectrum — bin for bin, because a = phi. That makes the ratio ~1.00 a
+    SANITY check on the _accel read / weights / byte order, and it is labelled 'consistency', never
+    a radiation law. A broken acceleration read or a stale weight would move it off 1."""
+    spx = _body(bridge_stiffness=8000)["meta"]["spectrum"]
+    assert spx["omega2_consistency"] == pytest.approx(1.0, abs=0.05)
+
+
+def test_body_one_over_r_scales_level_and_latency_only_never_the_spectrum_shape():
+    """The far-field law: gain = rho0/(4 pi r), so gain*r is constant and the latency r/c0 grows
+    with r, but the (normalised) spectrum SHAPE is computed from the raw volume acceleration and is
+    therefore byte-for-byte identical across distances — the readout's 'shape unchanged' claim, made
+    testable."""
+    a = _body(distance=1.0, audio_duration=0.4)["meta"]["spectrum"]
+    b = _body(distance=4.0, audio_duration=0.4)["meta"]["spectrum"]
+    assert a["gain_times_r"] == pytest.approx(b["gain_times_r"])
+    assert b["latency_ms"] == pytest.approx(4.0 * a["latency_ms"], rel=0.05)
+    assert a["f"] == b["f"] and a["mag"] == b["mag"], "distance must not change the spectrum shape"
+
+
+def test_body_sigma_body_gates_the_verdict_and_drops_the_decay_oracle():
+    """sigma_body = 0 gives the conservation-drift check; sigma_body > 0 flips to PASSIVITY with NO
+    2*sigma oracle line — decided by measurement (the off-harmonic coupled decay is multi-rate, so a
+    single fitted rate against a flat oracle would lie; the jawari check gave the opposite answer
+    because that barrier was lossless-elastic). The total must be monotone non-increasing."""
+    d = _body(bridge_stiffness=8000, sigma_body=20.0)
+    e = d["energy"]
+    assert e["sigma_is_zero"] is False
+    assert e["lossy"]["monotone"] is True
+    assert "measured_2sigma" not in e["lossy"] and "oracle_2sigma" not in e["lossy"]
+
+
+def test_body_guard_is_the_exact_bound_surfaced_as_a_clean_error():
+    """The K slider's ceiling is the core's EXACT coupled guard (k^2 lambda_max(A) < 4), not the
+    2-DOF footgun. Push K well past it and the wrapper returns a clean construction-error payload
+    (never a 500/NaN); lambda >= 1 and a negative stiffness are clean param errors."""
+    over = web_serialize.simulate_to_payload({"model": "body", "bridge_stiffness": 500_000})
+    assert over["error"]["kind"] == "construction"
+    assert "lambda_max" in over["error"]["message"]
+    lam = web_serialize.simulate_to_payload({"model": "body", "lambda": 1.0})
+    assert lam["error"]["kind"] == "param"
+    neg = web_serialize.simulate_to_payload({"model": "body", "bridge_stiffness": -1.0})
+    assert neg["error"]["kind"] == "param"
+
+
+def test_body_frame_and_grid_bookkeeping_line_up_and_the_nut_stays_clamped():
+    """1D string field: the frame width matches the grid, every frame is finite, and node 0 (the
+    nut) is exactly 0 in every frame — the string-boundary test (catches a byte-order scramble or a
+    field/grid stride mismatch), here for the coupled string whose other end is the live bridge."""
+    d = _body(audio_duration=0.3)
+    x = d["grid"]["x"]
+    frames = _decode_f32(d["frames"]["b64"]).reshape(-1, d["frames"]["width"])
+    assert d["frames"]["width"] == len(x)
+    assert d["frames"]["n_frames"] == frames.shape[0] == d["meta"]["n_frames"]
+    assert np.all(np.isfinite(frames))
+    assert float(np.max(np.abs(frames[:, 0]))) == 0.0, "the nut (node 0) is clamped"
+
+
+def test_body_audio_is_the_far_field_pressure_real_and_normalized():
+    """Audio = the retarded far-field pressure, resampled to 48 kHz and peak-normalized. It must be
+    finite, at 48 kHz, within full scale; the reported peak is the raw physical pressure (Pa)."""
+    d = _body(audio_duration=0.4)
+    au = d["audio"]
+    sig = _decode_f32(au["b64"])
+    assert au["fs"] == AUDIO_FS and au["n"] == sig.size > 0
+    assert np.all(np.isfinite(sig)) and float(np.max(np.abs(sig))) <= 1.0 + 1e-6
+    assert au["peak"] > 0.0, "a coupled, radiating body must produce a nonzero far-field pressure"
+
+
+def test_body_work_budget_and_the_n_ceiling_are_reachable():
+    """The clamps a local render can hit: too many steps -> a clean work-budget ParamError, N above
+    the body ceiling and the loss/distance ranges -> clean param errors. All surfaced, never a hang
+    or a 500. The step cap is reachable within the audio cap by a light, fast string (small rho ->
+    high fs), so it is a live backstop, not dead code shadowed by the duration cap."""
+    over = web_serialize.simulate_to_payload(
+        {"model": "body", "N": BODY_N_MAX, "lambda": 0.9, "rho": 0.001,
+         "audio_duration": BODY_AUDIO_MAX})
+    assert over["error"]["kind"] == "param" and "budget" in over["error"]["message"]
+    assert BODY_WORK_MAX == 200_000, "the step backstop the message quotes"
+    big_n = web_serialize.simulate_to_payload({"model": "body", "N": BODY_N_MAX + 1})
+    assert big_n["error"]["kind"] == "param"
+    loud = web_serialize.simulate_to_payload(
+        {"model": "body", "sigma_body": BODY_SIGMA_BODY_MAX + 1.0})
+    assert loud["error"]["kind"] == "param"
+    far = web_serialize.simulate_to_payload({"model": "body", "distance": BODY_DISTANCE_MAX + 1.0})
+    assert far["error"]["kind"] == "param"
+
+
+def test_body_ignores_params_that_belong_to_other_models():
+    """The K-collision guard: the bridge spring is 'bridge_stiffness', NOT the jawari/sympathetic
+    'K' nor the mallet 'alpha'. Passing those stale names (as the frontend does when the user has
+    visited other models) must not change a single number — otherwise a switch renders a different
+    bridge with nothing on screen to say so (the recurring MODEL_RANGES leak)."""
+    base = _body(bridge_stiffness=8000)
+    noisy = _body(bridge_stiffness=8000, K=2.0e6, alpha=2.3, depth=1e-3, kappa=5.0, EA=1e4)
+    assert noisy["meta"]["exchange"] == base["meta"]["exchange"]
+    assert noisy["meta"]["spectrum"] == base["meta"]["spectrum"]
+    assert noisy["energy"] == base["energy"]
