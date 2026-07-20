@@ -39,7 +39,7 @@ from physsynth.core.body import ModalBody
 from physsynth.core.bore import C0_AIR, RHO0_AIR, Bore
 from physsynth.core.bow import BowedString
 from physsynth.core.collision import BarrierString
-from physsynth.core.connection import StringBodyBridge, SympatheticStrings
+from physsynth.core.connection import StringBodyBridge, StringPlateBridge, SympatheticStrings
 from physsynth.core.engine import SimResult, simulate
 from physsynth.core.exciter import raised_cosine_2d, triangular_pluck
 from physsynth.core.mallet import MalletMembrane
@@ -875,6 +875,8 @@ def _build_payload(p: dict[str, Any]) -> dict[str, Any]:
         return _build_payload_reed(p)
     if model == "body":
         return _build_payload_body(p)
+    if model == "platebody":
+        return _build_payload_platebody(p)
     return _build_payload_string(p)
 
 
@@ -3046,6 +3048,343 @@ def _build_payload_body(p: dict[str, Any]) -> dict[str, Any]:
             "num_steps": int(n_steps),
             "n_frames": int(frames.shape[0]),
             "probe_x": round(float(L), 4),          # the free end (the bridge terminus)
+            "exchange": exchange,
+            "spectrum": spectrum,
+        },
+    }
+
+
+# == string -> distributed plate body (models #5/#5b as the body) + radiation =====================
+#
+# Batch 13. Batch 12's lumped ModalBody swapped for a distributed grid Plate via StringPlateBridge,
+# so the third stage of exciter -> resonator -> body finally has a PICTURE: the soundboard (#5,
+# supported) / cymbal (#5b, free) lighting up and ringing on the heatmap as the pluck's energy
+# transfers into it. All-wrapper; the hard explicit-string/implicit-plate coupling AND the EXACT
+# Sherman-Morrison guard are already built + validated in core (test_free_plate_connection.py, 23
+# tests, + the supported-bridge battery). The measured decisions (platebody-viewer-probe, task 2)
+# that shape this backend:
+#   * The guard ceiling K_c ~ 13,968 N/m is the SAME for supported and free (the STRING end-node
+#     term dominates the exact margin; the interior driving point has W_dp = h^2 either way), so
+#     bridge_stiffness is ONE range for both boundaries. K_c shrinks with n_plate; a high-N x high-K
+#     corner trips the exact guard -> clean construction-error payload (the designed behaviour).
+#   * The energy slosh is big on both bodies (E_plate peaks ~77 % supported / ~83 % free at K=3000),
+#     biggest on the free cymbal. Drift ~6e-14 = the sigma=0 verdict; E_string is NOT conserved.
+#   * The terminus f1 is read from a NEAR-NUT pickup (0.23 L), NOT the free end: as K stiffens the
+#     end pins and u_end collapses onto the plate's slow driving-point bounce (~55-67 Hz), which
+#     MISLEADS. Supported 55->98 (lands near c/2L); free 60->118 (OVERSHOOTS c/2L -- the floating
+#     plate loads the end as a reactive mass-spring, not a rigid anchor). Opposite readouts.
+#   * The omega^2 monopole sanity denominator is the plate VOLUME displacement Q_vol (~1.00), NOT
+#     the driving-point w_dp (~0.4): Q'' = pressure() is exactly Q_vol'' for a distributed body.
+#   * sigma_plate decay_oracle = False (passivity-only), measured multi-rate (the batch-12 read).
+
+PLATEBODY_NSTRING_MAX = 160
+PLATEBODY_NPLATE_MIN = 8
+PLATEBODY_NPLATE_MAX = 24
+PLATEBODY_LAM_DEFAULT = 0.9
+PLATEBODY_K_DEFAULT = 3000.0       # core's K_PLATE_BRIDGE_DEFAULT; visible slosh, well under K_c
+PLATEBODY_K_MAX = 12000.0          # slider cap; the exact guard is the real gate (K_c~14k at N=16)
+PLATEBODY_SIGMA_MAX = 80.0
+PLATEBODY_DISTANCE_DEFAULT = 1.0
+PLATEBODY_DISTANCE_MAX = 8.0
+PLATEBODY_AMP_DEFAULT = 1e-3
+PLATEBODY_AUDIO_MAX = 3.0
+PLATEBODY_WORK_MAX = 1.0e8         # n_live x total steps; a reachable backstop (extreme rig ~135M)
+PLATEBODY_ANIM_WIN = 0.03          # s of string+plate animation (the plate rings fast; short win)
+PLATEBODY_EXCHANGE_WINDOW = 0.4    # s of the E_string<->E_plate slosh plotted
+PLATEBODY_TRACE_POINTS = 600
+PLATEBODY_KAPPA = 20.0             # plate stiffness (fixed server-side; a geometry editor is later)
+PLATEBODY_RHO_PLATE = 0.005        # plate areal density (kg/m^2)
+PLATEBODY_NU = 0.3                 # Poisson ratio (free edge only; drops out for supported)
+PLATEBODY_SIDE = 1.0               # square plate Lx = Ly (m)
+PLATEBODY_PICKUP_FRAC = 0.23       # near-nut string pickup for the terminus f1 (NOT the free end)
+PLATEBODY_MARKER_MODES = 6         # low plate modes shown as faint spectrum markers (not scored)
+
+
+def _platebody_boundary(p: dict[str, Any]) -> str:
+    """Plate boundary from the ``domain`` selector: 'supported' (soundboard) or 'free' (cymbal)."""
+    dom = str(p.get("domain", "free"))
+    if dom not in ("supported", "free"):
+        raise ParamError(f"boundary must be 'supported' or 'free', got {dom!r}.")
+    return dom
+
+
+def _platebody_qvol(plate: Plate) -> float:
+    """Plate VOLUME displacement Q_vol -- the omega^2 sanity denominator.
+
+    ``Q'' = plate.pressure()`` is exactly ``Q_vol''`` for a distributed body, so
+    ``|Q''(f)| / |Q_vol(f)| / (2 pi f)^2 = 1`` (a bookkeeping check on the read/weights/byte order,
+    NOT a radiation oracle). The single-node driving-point ``w_dp`` would give ~0.4, not ~1 -- the
+    real correction over the modal body's ``w_b``. Matches ``Plate.pressure`` area weights exactly:
+    the scalar ``h^2`` for a supported plate, the lumped-cell vector ``w`` for a free one.
+    """
+    if plate.boundary == "supported":
+        return plate.h * plate.h * float(np.sum(plate.u))
+    return float(np.dot(plate.w, plate.u))
+
+
+def _build_platebody_bridge(p: dict[str, Any]) -> tuple[StringPlateBridge, dict[str, Any]]:
+    """Build a fixed/free string terminated on a distributed grid :class:`Plate` body.
+
+    The string is lossless (``sigma = 0``); the loss gate is the PLATE's ``sigma_plate`` alone. The
+    core ctor is the single source of truth for the ``lam < 1`` guard and the EXACT Sherman-Morrison
+    coupled stability bound -- both raise ``ValueError``, surfaced upstream as a clean
+    construction-error payload. Returns ``(bridge, info)`` with the scalars the panels quote.
+    """
+    boundary = _platebody_boundary(p)
+    L = _fnum(p, "L", 1.0)
+    T = _fnum(p, "T", 200.0)
+    rho = _fnum(p, "rho", 0.005)
+    lam = _fnum(p, "lambda", PLATEBODY_LAM_DEFAULT)
+    K = _fnum(p, "bridge_stiffness", PLATEBODY_K_DEFAULT)
+    sigma_plate = _fnum(p, "sigma_plate", 0.0)
+    try:
+        N = int(p.get("N", 100))
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"N must be an integer, got {p.get('N')!r}.") from exc
+    try:
+        n_plate = int(p.get("n_plate", 16))
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"n_plate must be an integer, got {p.get('n_plate')!r}.") from exc
+
+    if not (N_MIN <= N <= PLATEBODY_NSTRING_MAX):
+        raise ParamError(f"N must be in [{N_MIN}, {PLATEBODY_NSTRING_MAX}] for the string, got {N}")
+    if not (PLATEBODY_NPLATE_MIN <= n_plate <= PLATEBODY_NPLATE_MAX):
+        raise ParamError(
+            f"n_plate must be in [{PLATEBODY_NPLATE_MIN}, {PLATEBODY_NPLATE_MAX}], got {n_plate}."
+        )
+    if min(L, T, rho) <= 0:
+        raise ParamError("L, T, rho must all be positive.")
+    if not (0.0 < lam < 1.0):
+        raise ParamError(
+            f"lambda must be in (0, 1), got {lam}: the string's Nyquist mode is marginal at "
+            "lambda = 1 and the bridge spring pushes it unstable, so the coupled system needs "
+            "headroom below it."
+        )
+    if K < 0:
+        raise ParamError(f"bridge_stiffness must be >= 0, got {K}.")
+    if not (0.0 <= sigma_plate <= PLATEBODY_SIGMA_MAX):
+        raise ParamError(f"sigma_plate must be in [0, {PLATEBODY_SIGMA_MAX}], got {sigma_plate}.")
+
+    c = math.sqrt(T / rho)
+    fs = c * N / (L * lam)
+    string = IdealString(L=L, T=T, rho=rho, fs=fs, N=N, boundary=("fixed", "free"), sigma=0.0)
+    plate_kw = dict(Lx=PLATEBODY_SIDE, Ly=PLATEBODY_SIDE, kappa=PLATEBODY_KAPPA,
+                    rho=PLATEBODY_RHO_PLATE, fs=fs, N=n_plate, sigma=sigma_plate)
+    if boundary == "free":
+        plate = Plate(boundary="free", nu=PLATEBODY_NU, **plate_kw)
+    else:
+        plate = Plate(boundary="supported", **plate_kw)
+    # The exact stability guard fires HERE (StringPlateBridge.__init__) if K exceeds the ceiling
+    # (which shrinks with n_plate) -> ValueError -> clean construction-error payload.
+    bridge = StringPlateBridge(string=string, plate=plate, K=K)
+    info = {
+        "c": c, "L": L, "N": N, "n_plate": n_plate, "fs": fs, "lam": float(string.lam), "K": K,
+        "sigma_plate": sigma_plate, "boundary": boundary, "n_live": int(plate.n_live),
+        "drive_index": int(bridge.drive_index),
+    }
+    return bridge, info
+
+
+class _PlateBodyRun:
+    """Per-step telemetry of a plate-bridge run -- split energies, the read-out, and BOTH fields."""
+
+    def __init__(self, n: int) -> None:
+        self.E = np.empty(n + 1)            # total E_string + E_plate + E_conn (the conserved sum)
+        self.e_string = np.empty(n + 1)     # string energy alone (NOT conserved once coupled)
+        self.e_plate = np.empty(n + 1)      # plate (body) energy alone
+        self.e_conn = np.empty(n + 1)       # connection (spring) energy -- cross-time, can go < 0
+        self.qvol = np.empty(n + 1)         # plate volume displacement (the omega^2 denominator)
+        self.u_pick = np.empty(n + 1)       # NEAR-NUT string pickup (the terminus f1; NOT u_end)
+        self.qaccel = np.empty(n + 1)       # raw volume acceleration Q'' (the spectrum SHAPE panel)
+        self.pressure = np.empty(n + 1)     # retarded far-field pressure (the audio only)
+        self.frames_plate: list[NDArray[np.float64]] = []   # 2D plate field -> the heatmap
+        self.frames_string: list[NDArray[np.float64]] = []  # 1D string field -> the string strip
+        self.frame_steps: list[int] = []
+
+
+def _run_platebody(bridge: StringPlateBridge, rad: AirRadiation, n_steps: int, *, pickup_idx: int,
+                   anim_stride: int, frame_until: int) -> _PlateBodyRun:
+    """Step the coupled string+plate+radiation, capturing everything the panels need in ONE pass.
+
+    Hand-rolled rather than :func:`simulate`: the per-part ``E_string``/``E_plate``/``E_conn`` split
+    (the money panel), the plate volume displacement (the omega^2 denominator) and BOTH the string
+    strip AND the plate heatmap frames are not part of a ``SimResult``.
+    """
+    run = _PlateBodyRun(n_steps)
+
+    def _sample(i: int) -> None:
+        run.E[i] = bridge.energy()
+        run.e_string[i] = bridge.string.energy()
+        run.e_plate[i] = bridge.plate.energy()
+        run.e_conn[i] = 0.5 * bridge.K * bridge._stretch() * bridge._stretch(prev=True)
+        run.qvol[i] = _platebody_qvol(bridge.plate)
+        run.u_pick[i] = bridge.string.displacement_at(pickup_idx)
+        run.qaccel[i] = bridge.pressure()          # raw Q'' (undelayed) -> distance-invariant
+        run.pressure[i] = rad.radiate(bridge)      # retarded far-field (gain + delay) -> the audio
+
+    def _snap(i: int) -> None:
+        run.frames_plate.append(bridge.plate.state.copy())
+        run.frames_string.append(bridge.string.u.copy())
+        run.frame_steps.append(i)
+
+    _sample(0)
+    if frame_until >= 1:
+        _snap(0)
+    for i in range(1, n_steps + 1):
+        bridge.step()
+        _sample(i)
+        if i <= frame_until and i % anim_stride == 0:
+            _snap(i)
+    if not np.all(np.isfinite(run.E)):
+        raise ParamError("simulation produced non-finite energy (instability); adjust parameters.")
+    return run
+
+
+def _build_payload_platebody(p: dict[str, Any]) -> dict[str, Any]:
+    playback_speed = _fnum(p, "playback_speed", 0.02)
+    pluck_frac = _fnum(p, "pluck_position", 0.3)
+    amplitude = _fnum(p, "amplitude", PLATEBODY_AMP_DEFAULT)
+    audio_dur = _fnum(p, "audio_duration", 2.0)
+    distance = _fnum(p, "distance", PLATEBODY_DISTANCE_DEFAULT)
+    fpp = max(1, int(_fnum(p, "frames_per_period", FRAMES_PER_PERIOD)))
+    if not (0.0 < playback_speed <= SPEED_MAX):
+        raise ParamError(f"playback_speed must be in (0, {SPEED_MAX}], got {playback_speed}.")
+    if not (0.0 < pluck_frac < 1.0):
+        raise ParamError(f"pluck_position must be in (0, 1), got {pluck_frac}.")
+    if not (0.0 < audio_dur <= PLATEBODY_AUDIO_MAX):
+        raise ParamError(f"audio_duration must be in (0, {PLATEBODY_AUDIO_MAX}] s, got {audio_dur}")
+    if not (0.0 < distance <= PLATEBODY_DISTANCE_MAX):
+        raise ParamError(f"distance must be in (0, {PLATEBODY_DISTANCE_MAX}] m, got {distance}.")
+
+    # Exact guard fires inside here (K past the n_plate-dependent ceiling -> construction error).
+    bridge, info = _build_platebody_bridge(p)
+    c, L, fs, lam = info["c"], info["L"], info["fs"], info["lam"]
+    boundary = info["boundary"]
+    f1_base = c / (2.0 * L)
+
+    n_steps = max(1, round(audio_dur * fs))
+    work = info["n_live"] * n_steps
+    if work > PLATEBODY_WORK_MAX:
+        raise ParamError(
+            f"over budget: ~{work / 1e6:.0f}M > {PLATEBODY_WORK_MAX / 1e6:.0f}M node-steps."
+            " Lower the audio duration, n_plate, or N."
+        )
+    anim_stride = max(1, round((fs / f1_base) / fpp))
+    frame_until = max(anim_stride, round(PLATEBODY_ANIM_WIN * fs))
+    if frame_until // anim_stride > MAX_FRAMES:
+        anim_stride = max(1, math.ceil(frame_until / MAX_FRAMES))
+
+    pluck = triangular_pluck(bridge.string.x, L, pluck_frac * L, amplitude=amplitude)
+    bridge.string.set_state(pluck)
+    pickup_idx = int(round(PLATEBODY_PICKUP_FRAC * info["N"]))
+    rad = AirRadiation(fs=fs, distance=distance, retarded=True)
+    run = _run_platebody(bridge, rad, n_steps, pickup_idx=pickup_idx, anim_stride=anim_stride,
+                         frame_until=frame_until)
+
+    # --- the money panel: E_string <-> E_plate exchange (fractions of the instantaneous total) --
+    #     E_conn is its own overlaid SIGNED line -- it can go negative, so it is NEVER stacked).
+    #     Reuses batch-12's `drawBodyEnergy` verbatim, so the plate rides the body's exchange keys.
+    total = run.E
+    es_frac = run.e_string / total
+    ep_frac = run.e_plate / total
+    ec_frac = run.e_conn / total
+    n_exch = min(n_steps, max(1, round(PLATEBODY_EXCHANGE_WINDOW * fs)))
+    eidx = np.linspace(0, n_exch, min(n_exch + 1, PLATEBODY_TRACE_POINTS)).astype(int)
+    e0 = float(total[0])
+    quarter = max(1, n_steps // 4)
+    exchange = {
+        "kind": "platebody",
+        "time": _finite_list(eidx / fs, 6),
+        "e_string_frac": _finite_list(es_frac[eidx]),
+        "e_body_frac": _finite_list(ep_frac[eidx]),      # "body" key = the PLATE (drawBodyEnergy)
+        "e_conn_frac": _finite_list(ec_frac[eidx]),
+        "total_frac": _finite_list((total / total)[eidx]),
+        "window": round(n_exch / fs, 4),
+        "body_frac_peak": round(float(np.max(ep_frac)), 4),
+        "string_frac_min": round(float(np.min(es_frac)), 4),
+        "string_frac_max": round(float(np.max(es_frac)), 4),
+        "first_peak_ms": round(float(np.argmax(run.e_plate[:quarter]) / fs * 1000.0), 1),
+        "total_drift": (total.max() - total.min()) / abs(e0) if e0 != 0.0 else float("nan"),
+        "K": round(info["K"], 1),
+    }
+
+    # --- the radiated-pressure spectrum + the honest read-outs (per BOUNDARY) ---------------------
+    f_max = min(0.45 * fs, max(10.0 * f1_base, 1500.0))
+    sf, sm = _body_pooled_spectrum(run.qaccel, fs, f_max)
+    plate_modes = _plate_discrete_eigenfreqs(bridge.plate, PLATEBODY_MARKER_MODES)
+    plate_modes = plate_modes[plate_modes <= f_max][:PLATEBODY_MARKER_MODES]
+    spectrum = {
+        "kind": "platebody",
+        "boundary": boundary,
+        "f_max": round(f_max, 1),
+        "f": _finite_list(sf, 3),
+        "mag": _finite_list(sm),
+        "body_modes": _finite_list(plate_modes, 1),
+        # omega^2 sanity vs the plate VOLUME displacement (~1.00), NOT w_dp -- see _platebody_qvol:
+        "omega2_consistency": round(_body_omega2_consistency(run.qaccel, run.qvol, fs, f_max), 3),
+        # terminus f1 from the NEAR-NUT pickup (u_end pins + misleads at high K):
+        "terminus_f1": round(_body_terminus_f1(run.u_pick, fs, c, L), 2),
+        "f1_free": round(c / (4.0 * L), 2),
+        "f1_clamped": round(c / (2.0 * L), 2),
+        "distance": round(distance, 3),
+        "gain": rad.gain,
+        "gain_times_r": round(rad.gain * distance, 6),
+        "latency_ms": round(rad.latency_samples / fs * 1000.0, 3),
+        "retardation_residual": round(rad.retardation_residual, 4),
+    }
+
+    # --- frames (BOTH fields) + audio + energy verdict --------------------------------------------
+    plate_full = np.array(run.frames_plate, dtype=float)             # (nf, ny, nx)
+    plate_dec, mask_dec = _decimate_field_mask(plate_full, bridge.plate.mask)
+    nf, ny_dec, nx_dec = plate_dec.shape
+    field_amp = float(np.max(np.abs(plate_dec))) if plate_dec.size else 0.0
+    str_frames = np.array(run.frames_string, dtype=float)            # (nf, N+1)
+    str_amp = float(np.max(np.abs(str_frames))) if str_frames.size else 0.0
+
+    audio48, peak = _resample_normalize(run.pressure, fs)          # audio = the far-field pressure
+    sim = SimResult(time=np.arange(total.size) / fs, energy=total, output=None, fs=fs, snapshots=[])
+    return {
+        "model": "platebody",
+        "boundary": boundary,
+        "fs_sim": round(fs, 3),
+        "lambda": round(lam, 6),
+        "grid": {
+            "dims": 2, "nx": int(nx_dec), "ny": int(ny_dec),
+            "extent_x": round(PLATEBODY_SIDE, 6), "extent_y": round(PLATEBODY_SIDE, 6),
+            "domain": "rectangle",
+        },
+        "frames": {
+            "b64": _b64f32(plate_dec.ravel()),
+            "n_frames": int(nf), "nx": int(nx_dec), "ny": int(ny_dec),
+            "width": int(nx_dec), "dims": 2,
+        },
+        "mask": {"b64": _b64u8(mask_dec.ravel()), "nx": int(nx_dec), "ny": int(ny_dec)},
+        # the string strip: same frame count/times as the heatmap (one simulation, one stride).
+        "string": {
+            "b64": _b64f32(str_frames.ravel()),
+            "n_frames": int(str_frames.shape[0]),
+            "width": int(str_frames.shape[1]) if str_frames.ndim == 2 else 0,
+            "amp": str_amp,
+            "x": _finite_list(bridge.string.x, 6),
+        },
+        "frame_times": _finite_list(np.array(run.frame_steps, dtype=float) / fs, 6),
+        "anim_dt": float(anim_stride / fs),
+        "playback_speed": playback_speed,
+        "field_amp": field_amp,
+        "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
+        # sigma_plate = 0 -> conservation drift on the total; > 0 -> passivity, no 2sigma oracle
+        # (the off-modal coupled decay is multi-rate; measured, not templated).
+        "energy": _energy_block(sim, sigma_zero=bool(info["sigma_plate"] == 0.0), oracle_2sigma=0.0,
+                                decay_oracle=False),
+        "meta": {
+            "c": round(c, 3),
+            "f1": round(f1_base, 3),
+            "num_steps": int(n_steps),
+            "n_frames": int(nf),
+            "boundary": boundary,
+            "n_plate": int(info["n_plate"]),
+            "n_live": int(info["n_live"]),
+            "probe_x": round(PLATEBODY_PICKUP_FRAC * L, 4),   # the near-nut terminus pickup
             "exchange": exchange,
             "spectrum": spectrum,
         },

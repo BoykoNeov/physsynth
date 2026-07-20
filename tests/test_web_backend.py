@@ -60,6 +60,13 @@ from web.serialize import (
     MEMBRANE_LAMBDA_MAX,
     MEMBRANE_N_MAX,
     PLATE_N_MAX,
+    PLATEBODY_AUDIO_MAX,
+    PLATEBODY_DISTANCE_MAX,
+    PLATEBODY_K_MAX,
+    PLATEBODY_NPLATE_MAX,
+    PLATEBODY_NSTRING_MAX,
+    PLATEBODY_SIGMA_MAX,
+    PLATEBODY_WORK_MAX,
     REED_ANIM_MAX,
     REED_AUDIO_MAX,
     REED_N_MAX,
@@ -2950,6 +2957,222 @@ def test_body_ignores_params_that_belong_to_other_models():
     bridge with nothing on screen to say so (the recurring MODEL_RANGES leak)."""
     base = _body(bridge_stiffness=8000)
     noisy = _body(bridge_stiffness=8000, K=2.0e6, alpha=2.3, depth=1e-3, kappa=5.0, EA=1e4)
+    assert noisy["meta"]["exchange"] == base["meta"]["exchange"]
+    assert noisy["meta"]["spectrum"] == base["meta"]["spectrum"]
+    assert noisy["energy"] == base["energy"]
+
+
+# =================================================================================================
+# String -> DISTRIBUTED plate body (models #5/#5b) + radiation (batch 13) — the body you WATCH ring
+# =================================================================================================
+#
+# Batch 12's lumped ModalBody swapped for a distributed grid Plate, so the third stage finally has a
+# PICTURE: the soundboard (supported #5) / cymbal (free #5b) ringing on the heatmap. The claim:
+# the same three-way split (total conserves through the coupling while E_string sloshes) PLUS the
+# 2D field, and the OPPOSITE per-boundary terminus story (supported lands near c/2L; free OVERSHOOTS
+# it). The measured probe numbers (platebody-viewer-probe) come back through the payload end-to-end.
+
+
+def _pb(**over):
+    """Default to the free cymbal (the batch's headline body); 0.5 s keeps the suite fast."""
+    return web_serialize.simulate_to_payload(
+        {"model": "platebody", "domain": "free", "audio_duration": 0.5, **over})
+
+
+def test_platebody_conserves_through_the_coupling_on_both_boundaries():
+    """THE batch, in one test, for each body: at sigma_plate = 0 the TOTAL drifts < 1e-10 (energy is
+    conserved through the spring coupling to the distributed plate), yet E_string alone swings from
+    ~100 % to a small fraction — it is emphatically not conserved on its own. The free cymbal is the
+    bigger slosh (E_plate ~83 %) than the supported soundboard (~77 %), both measured."""
+    for boundary, plate_peak in (("free", 0.83), ("supported", 0.77)):
+        d = _pb(domain=boundary, bridge_stiffness=3000)
+        e = d["energy"]
+        assert e["sigma_is_zero"] is True
+        assert e["lossless"]["drift"] < LOSSLESS_TOL and e["lossless"]["pass"] is True
+        ex = d["meta"]["exchange"]
+        assert ex["total_drift"] < LOSSLESS_TOL
+        assert ex["string_frac_max"] > 0.9
+        assert ex["string_frac_min"] < 0.6, "E_string alone must visibly not conserve (it sloshes)"
+        assert ex["body_frac_peak"] == pytest.approx(plate_peak, abs=0.05), "measured plate share"
+
+
+def test_platebody_terminus_is_the_OPPOSITE_story_per_boundary():
+    """The batch's sharp per-boundary claim (advisor): read from a near-nut pickup, the supported
+    soundboard is a near-rigid termination so its fundamental lands JUST BELOW c/2L = 100 Hz (~98),
+    while the FREE plate loads the end as a reactive mass-spring and OVERSHOOTS c/2L, landing ~117.
+    A single 'toward clamped c/2L' readout (batch 12's) would be wrong for the free edge — this pins
+    that the two boundaries straddle 100 Hz in opposite directions, matching the core diagnostic."""
+    supp = _pb(domain="supported", bridge_stiffness=3000)["meta"]["spectrum"]
+    free = _pb(domain="free", bridge_stiffness=3000)["meta"]["spectrum"]
+    assert supp["f1_free"] == pytest.approx(50.0) and supp["f1_clamped"] == pytest.approx(100.0)
+    assert supp["terminus_f1"] == pytest.approx(96.5, abs=2.0), "supported lands just below c/2L"
+    assert free["terminus_f1"] == pytest.approx(116.7, abs=2.0), "free OVERSHOOTS c/2L"
+    assert supp["terminus_f1"] < supp["f1_clamped"] < free["terminus_f1"], "they straddle 100 Hz"
+
+
+def test_platebody_k_zero_decouples_the_string_bit_for_bit():
+    """The anchor. K = 0 severs the spring: the plate never moves (E_plate = 0), nothing radiates,
+    and the string FIELD is bit-identical to a bare fixed/free IdealString plucked the same way —
+    the sharpest cheap proof the distributed-body coupling is a clean add-on that vanishes at K = 0
+    (the batch-12 / sympathetic all-zero-K precedent, here with the plate as the body)."""
+    d = _pb(bridge_stiffness=0.0, audio_duration=0.3)
+    ex = d["meta"]["exchange"]
+    assert ex["body_frac_peak"] == 0.0, "a decoupled plate must never move"
+    assert ex["string_frac_min"] == pytest.approx(1.0), "the string keeps 100 % of the energy"
+    assert d["audio"]["peak"] == 0.0, "a still plate radiates nothing"
+    fs = d["fs_sim"]
+    st = d["string"]
+    str_frames = _decode_f32(st["b64"]).reshape(-1, st["width"])
+    last_step = round(d["frame_times"][-1] * fs)
+    from physsynth.core.engine import simulate
+    from physsynth.core.exciter import triangular_pluck
+    from physsynth.core.string_ideal import IdealString
+    c = np.sqrt(200.0 / 0.005)
+    s = IdealString(L=1.0, T=200.0, rho=0.005, fs=c * 100 / 0.9, N=100,
+                    boundary=("fixed", "free"), sigma=0.0)
+    s.set_state(triangular_pluck(s.x, 1.0, 0.3, amplitude=1e-3))
+    bare = simulate(s, num_steps=last_step, snapshot_stride=1).snapshots[-1][1].astype("<f4")
+    assert float(np.max(np.abs(str_frames[-1] - bare))) == 0.0
+
+
+def test_platebody_heatmap_is_a_real_2d_field_that_rings_and_stays_masked():
+    """The batch's NEW content: the plate is a 2D heatmap you watch ring (batch 12 had only the 1D
+    string). The field is dims = 2, its width/nx/ny line up with the decoded buffer and the mask, it
+    is finite and genuinely nonzero (the plate moves), and — for the supported soundboard — every
+    exterior (mask == 0) node clamps to 0 in every frame (the 2D boundary test; catches a byte-order
+    scramble or a field/mask stride mismatch). The string strip rides along, same count."""
+    d = _pb(domain="supported", bridge_stiffness=3000, audio_duration=0.3)
+    fr, gr = d["frames"], d["grid"]
+    assert fr["dims"] == 2 and gr["dims"] == 2
+    nf, ny, nx = fr["n_frames"], fr["ny"], fr["nx"]
+    field = _decode_f32(fr["b64"]).astype(float).reshape(nf, ny, nx)
+    mask = _decode_u8(d["mask"]["b64"]).astype(bool).reshape(ny, nx)
+    assert fr["width"] == nx and d["mask"]["nx"] == nx and d["mask"]["ny"] == ny
+    assert np.all(np.isfinite(field))
+    assert float(np.max(np.abs(field))) > 0.0, "the plate must actually ring"
+    ext = ~mask
+    if ext.any():
+        assert float(np.max(np.abs(field[:, ext]))) == 0.0, "exterior nodes clamp to 0 every frame"
+    # the string strip rides along: same frame count, N+1 wide, nut clamped
+    st = d["string"]
+    assert st["n_frames"] == nf and st["width"] == len(st["x"])
+    str_frames = _decode_f32(st["b64"]).reshape(nf, st["width"])
+    assert float(np.max(np.abs(str_frames[:, 0]))) == 0.0, "the nut (node 0) is clamped"
+
+
+def test_platebody_exchange_fractions_carry_e_conn_and_must_not_be_stacked():
+    """The money panel reuses batch-12's four channels {e_string, e_body(=plate), e_conn, total}.
+    E_conn is the cross-time spring energy: it swings its own share and can dip negative, so the
+    three channels sum to the flat ~1 total with E_conn exactly the gap — stacking es+eb would hide
+    it. `kind` is 'platebody' so the frontend can pick the right per-boundary readout."""
+    ex = _pb(bridge_stiffness=3000)["meta"]["exchange"]
+    assert ex["kind"] == "platebody"
+    for key in ("time", "e_string_frac", "e_body_frac", "e_conn_frac", "total_frac"):
+        assert len(ex[key]) == len(ex["time"]) and len(ex[key]) > 100
+    es = np.array(ex["e_string_frac"])
+    eb = np.array(ex["e_body_frac"])
+    ec = np.array(ex["e_conn_frac"])
+    tot = np.array(ex["total_frac"])
+    assert np.allclose(es + eb + ec, tot, atol=1e-9)
+    assert np.allclose(tot, 1.0, atol=1e-9)
+    assert float(np.min(es + eb)) < 0.98, "E_conn carries a real share; stacking es+eb hides it"
+    assert 0.0 < ex["first_peak_ms"] < 40.0, "the slosh is prompt (tens of ms), not a slow drift"
+
+
+def test_platebody_monopole_omega2_uses_volume_displacement_not_the_driving_point():
+    """The omega^2 sanity is ~1.00 ONLY against the plate VOLUME displacement (Q'' = Q_vol'' for a
+    distributed body). The batch-12 denominator w_b (here the single driving-point node) gives ~0.4,
+    not ~1 — the real correction this batch makes. A ~1.00 here proves the pressure read / area
+    weights / byte order are right; it is labelled 'consistency', never a radiation law."""
+    for boundary in ("free", "supported"):
+        spx = _pb(domain=boundary, bridge_stiffness=3000)["meta"]["spectrum"]
+        assert spx["omega2_consistency"] == pytest.approx(1.0, abs=0.05)
+        # the plate's own low modes are the spectrum markers (shown, not scored)
+        assert len(spx["body_modes"]) >= 1 and spx["body_modes"][0] > 0.0
+
+
+def test_platebody_one_over_r_scales_level_and_latency_only_never_the_spectrum_shape():
+    """The far-field law carries over from batch 12: gain*r is constant, the latency r/c0 grows with
+    r, but the normalised spectrum SHAPE (from the raw volume acceleration) is byte-for-byte the
+    same across distances — the 'distance changes level + latency only' claim, made testable."""
+    a = _pb(distance=1.0, audio_duration=0.4)["meta"]["spectrum"]
+    b = _pb(distance=4.0, audio_duration=0.4)["meta"]["spectrum"]
+    assert a["gain_times_r"] == pytest.approx(b["gain_times_r"])
+    assert b["latency_ms"] == pytest.approx(4.0 * a["latency_ms"], rel=0.05)
+    assert a["f"] == b["f"] and a["mag"] == b["mag"], "distance must not change the spectrum shape"
+
+
+def test_platebody_sigma_plate_gates_the_verdict_and_drops_the_decay_oracle():
+    """sigma_plate = 0 gives the conservation-drift check; sigma_plate > 0 flips to PASSIVITY, NO
+    2*sigma oracle line — decided by measurement (the off-modal coupled decay is multi-rate, so a
+    single fitted rate vs a flat oracle would lie). The total must be monotone non-increasing."""
+    d = _pb(bridge_stiffness=3000, sigma_plate=20.0)
+    e = d["energy"]
+    assert e["sigma_is_zero"] is False
+    assert e["lossy"]["monotone"] is True
+    assert "measured_2sigma" not in e["lossy"] and "oracle_2sigma" not in e["lossy"]
+
+
+def test_platebody_guard_is_the_exact_bound_surfaced_as_a_clean_error_on_both_boundaries():
+    """The K ceiling is the core's EXACT Sherman-Morrison guard, not the 2-DOF footgun. It is the
+    SAME for supported and free (the string end-node term dominates), and SHRINKS as n_plate grows
+    — so a high-n_plate x high-K corner trips it. Both surface as clean construction-error payloads
+    (never a 500/NaN); lambda >= 1 and a negative stiffness are clean param errors."""
+    for boundary in ("free", "supported"):
+        over = web_serialize.simulate_to_payload(
+            {"model": "platebody", "domain": boundary, "bridge_stiffness": 500_000})
+        assert over["error"]["kind"] == "construction"
+        corner = web_serialize.simulate_to_payload(
+            {"model": "platebody", "domain": boundary, "n_plate": PLATEBODY_NPLATE_MAX,
+             "bridge_stiffness": PLATEBODY_K_MAX})
+        assert corner["error"]["kind"] == "construction", "high n_plate x high K trips the guard"
+    lam = web_serialize.simulate_to_payload({"model": "platebody", "lambda": 1.0})
+    assert lam["error"]["kind"] == "param"
+    neg = web_serialize.simulate_to_payload({"model": "platebody", "bridge_stiffness": -1.0})
+    assert neg["error"]["kind"] == "param"
+    bad = web_serialize.simulate_to_payload({"model": "platebody", "domain": "clamped"})
+    assert bad["error"]["kind"] == "param", "an unknown boundary is a clean param error"
+
+
+def test_platebody_audio_is_the_far_field_pressure_real_and_normalized():
+    """Audio = the retarded far-field pressure, resampled to 48 kHz and peak-normalized: finite, at
+    48 kHz, within full scale; the reported peak is the raw physical pressure (Pa)."""
+    d = _pb(audio_duration=0.4)
+    au = d["audio"]
+    sig = _decode_f32(au["b64"])
+    assert au["fs"] == AUDIO_FS and au["n"] == sig.size > 0
+    assert np.all(np.isfinite(sig)) and float(np.max(np.abs(sig))) <= 1.0 + 1e-6
+    assert au["peak"] > 0.0, "a coupled, radiating plate must produce a nonzero far-field pressure"
+
+
+def test_platebody_work_budget_and_the_ceilings_are_reachable():
+    """The clamps a local render can hit, all surfaced as clean param errors (never a hang/500): the
+    node-step budget, N over the string cap, n_plate out of range, the loss/distance caps."""
+    over = web_serialize.simulate_to_payload(
+        {"model": "platebody", "N": PLATEBODY_NSTRING_MAX, "lambda": 0.9, "rho": 0.001,
+         "n_plate": PLATEBODY_NPLATE_MAX, "audio_duration": PLATEBODY_AUDIO_MAX})
+    assert over["error"]["kind"] == "param" and "budget" in over["error"]["message"]
+    assert PLATEBODY_WORK_MAX == 1.0e8, "the node-step backstop the message quotes"
+    big_n = web_serialize.simulate_to_payload(
+        {"model": "platebody", "N": PLATEBODY_NSTRING_MAX + 1})
+    assert big_n["error"]["kind"] == "param"
+    big_np = web_serialize.simulate_to_payload(
+        {"model": "platebody", "n_plate": PLATEBODY_NPLATE_MAX + 1})
+    assert big_np["error"]["kind"] == "param"
+    loud = web_serialize.simulate_to_payload(
+        {"model": "platebody", "sigma_plate": PLATEBODY_SIGMA_MAX + 1.0})
+    assert loud["error"]["kind"] == "param"
+    far = web_serialize.simulate_to_payload(
+        {"model": "platebody", "distance": PLATEBODY_DISTANCE_MAX + 1.0})
+    assert far["error"]["kind"] == "param"
+
+
+def test_platebody_ignores_params_that_belong_to_other_models():
+    """The K-collision guard: the bridge spring is 'bridge_stiffness', NOT the jawari/symp 'K'
+    nor the mallet 'alpha'. Passing those stale names (as the frontend does after visiting other
+    models) must not change a single number — the recurring MODEL_RANGES leak, one body up."""
+    base = _pb(bridge_stiffness=3000)
+    noisy = _pb(bridge_stiffness=3000, K=2.0e6, alpha=2.3, depth=1e-3, kappa=5.0, EA=1e4)
     assert noisy["meta"]["exchange"] == base["meta"]["exchange"]
     assert noisy["meta"]["spectrum"] == base["meta"]["spectrum"]
     assert noisy["energy"] == base["energy"]
