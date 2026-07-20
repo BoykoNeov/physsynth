@@ -219,6 +219,14 @@ def main() -> int:
             # The cheapest recent model — the worst passing render is ~3 s.
             ("bore_radiating", "model=bore&domain=radiating"),
             ("bore_open", "model=bore&domain=open"),
+            # The dynamic reed on that same tube: the wind leg's exciter, and the third case of the
+            # meta.ends switch (a "reed" mouth, drawn as a moving flap on its own scale — to scale
+            # it is 2.5 % of the bore diameter). Both far ends again, because the reed's energy
+            # curve differs between them: with a bell, radiated energy accumulates inside the book
+            # so dE RAMPS; on an ideal open end the limit cycle flattens it. Cold renders pay the
+            # fixed-N threshold sweep (~3.5 s) on top of the render, and it is memoized after.
+            ("reed_radiating", "model=reed&domain=radiating"),
+            ("reed_open", "model=reed&domain=open"),
         ]
         # Optional name filters, so a single-model batch can re-check its own case without paying
         # for the whole sweep (the geometric regimes alone are ~2 minutes).

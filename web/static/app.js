@@ -145,6 +145,19 @@ const MODEL_RANGES = {
           bell_ratio_exp: { min: -4, max: 1.4, step: 0.1, fixed: 1, val: -3.5 },
           audio_duration: { min: 0.25, max: 1.5, step: 0.05, fixed: 2, val: 0.5 },
           animation_window: { min: 0.005, max: 0.1, step: 0.005, fixed: 3, val: 0.03 } },
+  // The dynamic reed on that same tube. Inherits the bore's N / L / window ranges for the bore's
+  // reasons, and adds the reed's own three. The bell default is RAISED from the bore's -3.5 to
+  // -2.6: at a near-lossless bell the note speaks so easily that the threshold sits below the
+  // slider's interesting range, and the point of this model is to show the onset. audio_duration
+  // caps at 1.0 (not the bore's 1.5) because the reed needs no ring-down — it settles in ~0.04 s
+  // and the window we want is the settled TAIL.
+  reed: { N: { min: 32, max: 256, val: 128 }, L: { val: 0.5 },
+          gamma: { min: 0.05, max: 1.0, step: 0.01, fixed: 2, val: 0.51 },
+          f_reed: { min: 1000, max: 3500, step: 50, fixed: 0, val: 2500, unit: "Hz" },
+          q_reed: { min: 1, max: 12, step: 0.5, fixed: 1, val: 4 },
+          bell_ratio_exp: { min: -4, max: 1.4, step: 0.1, fixed: 1, val: -2.6 },
+          audio_duration: { min: 0.2, max: 1.0, step: 0.05, fixed: 2, val: 0.5 },
+          animation_window: { min: 0.005, max: 0.1, step: 0.005, fixed: 3, val: 0.03 } },
   // Regime-level ranges, keyed "model:domain" and merged AFTER the model spec (see
   // applyModelRanges). The phantom regime is the first customer and needs both: κ = 8 is its
   // microscope (the geometric model defaults κ = 0, which is a HARMONIC string — every phantom
@@ -188,12 +201,21 @@ const MODEL_RANGES = {
               // switch would leave a 0.5 m string on a window slider that could no longer reach
               // 0.06 s. Same `val`-only leak the jawari's mins had, two fields over.
               L: { min: 0.25, max: 2.0, step: 0.05, val: 1.0 },
+              // The reed's three, and the bell exponent it re-ranges — the leak family's fifth
+              // member. gatherParams sends every slider including hidden ones, so a reed → bore
+              // switch would otherwise ship the reed's raised bell default (-2.6) as the bore's,
+              // quietly rendering a different tube with nothing on screen to say so.
+              gamma: { min: 0.05, max: 1.0, step: 0.01, fixed: 2, val: 0.51 },
+              f_reed: { min: 1000, max: 3500, step: 50, fixed: 0, val: 2500, unit: "Hz" },
+              q_reed: { min: 1, max: 12, step: 0.5, fixed: 1, val: 4 },
+              bell_ratio_exp: { min: -4, max: 1.4, step: 0.1, fixed: 1, val: -3.5 },
               animation_window: { min: 0.01, max: 0.3, step: 0.005, fixed: 3, val: 0.06 } },
 };
 
 // Secondary select repurposed per model: geometry (membrane), boundary (plate / von Kármán) or
 // REGIME (the geometric string — three claims, one string, cheapest first).
-const DOMAIN_MODELS = ["membrane", "mallet", "plate", "vk", "geometric", "sympathetic", "bore"];
+const DOMAIN_MODELS = ["membrane", "mallet", "plate", "vk", "geometric", "sympathetic", "bore",
+                       "reed"];
 const DOMAIN_OPTS = {
   membrane: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
   mallet: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
@@ -210,11 +232,13 @@ const DOMAIN_OPTS = {
   // Radiating is the default: a σ = 0 closed-open tube with no bell rings forever at constant
   // amplitude, a sustained buzz that never decays (loss-default-ON, the bow's and jawari's rule).
   // The ideal open end is kept as the lossless contrast — a perfect mirror, nothing radiates.
+  reed: [["radiating", "Radiating bell — sound leaves"],
+         ["open", "Ideal open end (lossless)"]],
   bore: [["radiating", "Radiating bell — sound leaves"],
          ["open", "Ideal open end (r = −1)"]],
 };
 const DOMAIN_LABELS = { membrane: "Domain", mallet: "Drum shape", geometric: "Regime",
-                        sympathetic: "Regime", bore: "Far end" };
+                        sympathetic: "Regime", bore: "Far end", reed: "Far end" };
 
 const sliders = {};      // param -> <input>
 const updaters = {};     // param -> fn() that refreshes its value label
@@ -235,6 +259,10 @@ let isJawari = false, barrierProfile = null, wrapFrames = null;
 // Acoustic bore: a PRESSURE field, not a displacement one — and the two ends are not alike, which
 // is the whole physics (see drawBore).
 let isBore = false, boreEnv = null, boreRad = null, boreEnds = ["closed", "open"];
+// The reed rides drawBore wholesale (it IS a bore with a new mouth end). Its opening needs its
+// OWN scale: H0 = 0.4 mm against a 16 mm bore is 2.5 %, so drawn in the tube's units the entire
+// headline gesture is sub-pixel — the jawari zoom-pane lesson, second customer.
+let isReed = false, reedOpen = null, reedH0 = 4e-4;
 const FIELD_COLORS = ["#4cc2ff", "#ff8f4c", "#9d7bff"];
 let audioSamples = null, audioFs = 48000, audioBuf = null, audioCtx = null, audioSrc = null;
 let speed = 0.02, animPlaying = true, scrubbing = false, currentFrame = 0, animStart = 0;
@@ -606,12 +634,36 @@ function updateLambdaHint() {
       jHint.textContent = "";
     }
   }
+  // Reed: gamma is the star control, so the hint says which side of the ~1/3 threshold the
+  // current setting is on BEFORE paying for a render — and names the leverage f_reed does and does
+  // not have. The threshold quoted is approximate on purpose: it MOVES with the bell (a lossier
+  // bell needs a harder blow), which is exactly why the sweep is measured per configuration rather
+  // than hardcoded.
+  const reedHint = $("reed-hint");
+  if (reedHint) {
+    if (m !== "reed") {
+      reedHint.textContent = "";
+    } else {
+      const gam = param("gamma"), fr = param("f_reed");
+      const pClosing = 0.03 * Math.pow(2 * Math.PI * fr, 2) * 4e-4;
+      reedHint.textContent =
+        `γ = ${gam.toFixed(2)} → p_mouth = ${Math.round(gam * pClosing)} Pa of `
+        + `p_closing ${Math.round(pClosing)} Pa. `
+        + (gam < 0.30
+          ? "below the ~⅓ threshold: expect the reed NOT to speak (correct physics, labelled)."
+          : gam < 0.40
+            ? "right at the ~⅓ onset — the interesting place, and where the bell's loss decides it."
+            : "well above threshold: the note speaks and the reed beats shut once a period.")
+        + " f_reed sets p_closing (∝ f²) but barely moves the PITCH — the air column does that.";
+      reedHint.style.color = gam < 0.30 ? "var(--warn, #ffcf5c)" : "var(--muted)";
+    }
+  }
   // Bore: R/Z₀ is a log slider, so the hint carries the LINEAR ratio — the number the physics is
   // actually stated in — plus what that ratio means at the two landmarks (a real clarinet bell
   // barely leaks; the matched load absorbs everything and leaves no standing wave at all).
   const boreHint = $("bore-hint");
   if (boreHint) {
-    if (m !== "bore") {
+    if (m !== "bore" && m !== "reed") {
       boreHint.textContent = "";
     } else if (domainSel.value === "open") {
       boreHint.textContent = "ideal open end: pressure-release, r = −1. A perfect mirror — nothing "
@@ -771,7 +823,10 @@ function applyPayload(data) {
   isGeom = data.model === "geometric";
   isSymp = data.model === "sympathetic";
   isJawari = data.model === "jawari";
-  isBore = data.model === "bore";
+  // The reed IS a bore for viz purposes — same pressure field, same envelope, same per-end
+  // dispatch — so it takes the whole path and only adds a mouth end type and its own pane.
+  isBore = data.model === "bore" || data.model === "reed";
+  isReed = data.model === "reed";
   if (isBore) {
     // The envelope is a running max|p(x)| over the FULL audio run, not a frame — it is what makes
     // the formed node/antinode structure legible, which no single instantaneous frame can show.
@@ -792,6 +847,8 @@ function applyPayload(data) {
       if (boreRad[i] > peak) peak = boreRad[i];
     }
     if (peak > 0) for (let i = 0; i < boreRad.length; i++) boreRad[i] /= peak;
+    reedOpen = isReed && data.opening_frames ? Float32Array.from(data.opening_frames) : null;
+    reedH0 = (data.meta && data.meta.H0) || 4e-4;
   }
   if (isJawari) {
     // The bridge profile (NaN off its support) and the per-frame wrap edge, which is the marker
@@ -1025,7 +1082,7 @@ function drawBore(idx) {
   // mouth, so an end that radiates needs room beyond the tube or the one element that shows energy
   // leaving is clipped by the canvas. Walls likewise sit well inside the panel: pressure is scaled
   // to fill the bore, not the whole canvas.
-  const room = (kind) => (kind === "radiating" ? 76 : 34);
+  const room = (kind) => (kind === "radiating" ? 76 : kind === "reed" ? 46 : 34);
   const mL = room(boreEnds[0]), mR = room(boreEnds[1]);
   const wall = Math.round(H * 0.32);
   const sx = (W - mL - mR) / (width - 1);
@@ -1087,7 +1144,26 @@ function drawBore(idx) {
 
   g.fillStyle = "#8b98a8"; g.font = "11px system-ui, sans-serif";
   g.fillText(`p(x) — pressure along the tube (${boreEnds[0]} → ${boreEnds[1]})`, mL, 14);
+  if (isReed) {
+    // The travelling pressure STEP is this batch's best picture and it is easy to miss, so the
+    // panel names it. It is the acoustic dual of the bow's Helmholtz corner: a near-square kink
+    // marching mouth → bell and reflecting, which is exactly what makes the mouthpiece a square
+    // wave. (And it is why the animation is paced on the TRANSIT, not on f1.)
+    const gapPct = Math.round(reedGap() * 140);
+    g.fillStyle = gapPct <= 0 ? "#ff6b6b" : "#8b98a8";
+    g.fillText(gapPct <= 0 ? "reed BEATING SHUT — the once-per-period slam"
+                           : `reed open ${gapPct}% of H₀ — watch the pressure STEP travel`,
+               mL, 28);
+  }
   g.fillText("dashed: max|p| over the whole run — the standing wave", mL, H - 8);
+}
+
+// The reed opening at the current frame, normalized to H0 so the flap has a scale that means
+// something across reed geometries. Clamped: the reed BEATS SHUT (H+ = 0) once a period when blown
+// hard, and can swing past H0 the other way.
+function reedGap() {
+  if (!reedOpen || currentFrame >= reedOpen.length) return 1;
+  return Math.max(0, Math.min(1.4, reedOpen[currentFrame] / (reedH0 || 4e-4))) / 1.4;
 }
 
 // One end of the tube. Switching on the END TYPE, never hardcoding it, is what makes this the viz
@@ -1104,6 +1180,31 @@ function drawBoreEnd(g, kind, x, midY, wall, dir, glow) {
       g.beginPath(); g.moveTo(x - (dir > 0 ? 0 : 9), y + 6); g.lineTo(x + (dir > 0 ? 9 : 0), y);
       g.stroke();
     }
+    return;
+  }
+  if (kind === "reed") {
+    // The mouth. Like "closed" it is a pressure ANTINODE — the reed rides that end's live
+    // half-cell DOF and the bore's own boundary really is "closed" — so it must NOT be drawn as a
+    // node. What it adds is the moving flap. The gap is drawn on the PANE's own scale (see
+    // drawReedPane): to scale it is 2.5 % of the bore diameter and invisible.
+    const openFrac = reedGap();
+    const lip = wall * 0.55;
+    const gap = lip * (0.12 + 0.88 * openFrac);      // never fully closed on screen: 0 must read
+    g.fillStyle = "#2a3340";                          // as "shut", not as "the flap vanished"
+    g.fillRect(x - (dir > 0 ? 0 : 7), midY - wall, 7, 2 * wall);
+    // the flap itself, hinged at the top of the mouthpiece and swinging onto the lay
+    g.strokeStyle = openFrac <= 0 ? "#ff6b6b" : "#ffcf5c";
+    g.lineWidth = 3;
+    g.beginPath();
+    g.moveTo(x - (dir > 0 ? 0 : 7), midY - lip);
+    g.lineTo(x + (dir > 0 ? 18 : -18), midY - gap);
+    g.stroke();
+    g.strokeStyle = "rgba(139,152,168,.5)"; g.lineWidth = 1; g.setLineDash([2, 3]);
+    g.beginPath();
+    g.moveTo(x - (dir > 0 ? 0 : 7), midY + lip);
+    g.lineTo(x + (dir > 0 ? 18 : -18), midY + lip);
+    g.stroke();
+    g.setLineDash([]);
     return;
   }
   if (kind === "open") {
@@ -1352,7 +1453,9 @@ function drawBalance() {
   plot(dE, "#5ad17a", 1.5);
 
   g.font = "10px ui-monospace, monospace";
-  const key = [["bow work", "#e0b050"], ["E−E₀", "#5ad17a"], ["loss", "#6aa9e0"]];
+  const key = b.measured
+    ? [["mouth work", "#e0b050"], ["E−E₀", "#5ad17a"], ["jet + lip loss", "#6aa9e0"]]
+    : [["bow work", "#e0b050"], ["E−E₀", "#5ad17a"], ["loss", "#6aa9e0"]];
   key.forEach(([label, colour], i) => {
     g.fillStyle = colour;
     g.fillRect(pad + 6 + i * 68, 14, 8, 3);
@@ -1362,6 +1465,37 @@ function drawBalance() {
   g.fillText(`${tmax.toFixed(2)} s`, W - 48, H - 8);
 
   const badge = $("energy-verdict"), out = $("energy-readout");
+  // The REED's branch, and it comes first because it is NOT sigma-gated. The bow's two branches
+  // below both assume dissipation is INFERRED (work − ΔE), which makes its lossy residual
+  // identically zero by construction. The reed measures the jet and lip-damping channels
+  // independently and books the bell's radiation into E, so its residual is a number that can
+  // genuinely fail — in every regime, which is why there is nothing to gate on.
+  if (b.measured) {
+    const mb = b.measured, ok = mb.pass;
+    badge.textContent = ok ? "balanced" : "IMBALANCE";
+    badge.className = "badge " + (ok ? "good" : "bad");
+    const bud = payload.meta && payload.meta.budget;
+    // Why E ramps or plateaus, said out loud: with a bell, radiated energy accumulates INSIDE the
+    // book, so E rises for as long as the note sounds; on an ideal open end the limit cycle puts
+    // work and loss on the same slope and ΔE flattens. Both are correct, and the bow's "the tone
+    // grows without bound" line is true of neither.
+    const shape = payload.meta && payload.meta.radiating
+      ? "ΔE ramps: radiated energy accumulates in the book while the note sounds"
+      : "ΔE plateaus: in the limit cycle the breath in and the jet loss out ride the same slope";
+    const ledger = bud
+      ? `\nwhere the breath goes — jet ${(100 * bud.jet_frac).toFixed(1)}%  ·  ` +
+        `lip damping ${(100 * bud.damping_frac).toFixed(1)}%  ·  ` +
+        `radiated ${(100 * bud.radiated_frac).toFixed(1)}%  ·  ` +
+        `stored ${(100 * bud.stored_frac).toFixed(1)}%`
+      : "";
+    out.textContent =
+      `MEASURED balance · ΔE == mouth work − jet − lip damping · residual ` +
+      `${mb.residual.toExponential(2)}\n` +
+      `tol ${mb.tol.toExponential(0)}  →  ${ok ? "PASS ✓" : "FAIL ✗"}  ·  ` +
+      `drop the measured loss and it is ${mb.naive_residual.toExponential(2)} ` +
+      `(the channels are load-bearing)\n${shape}${ledger}`;
+    return;
+  }
   if (e.sigma_is_zero) {
     const ok = b.lossless.pass;
     badge.textContent = ok ? "balanced" : "IMBALANCE";
@@ -1494,6 +1628,108 @@ function drawEnergy() {
 }
 
 // ── second diagnostic panel: partials (string) | mode spectrum (2D) ──────────────────────────
+// The reed's signature panel: the AC level vs gamma, log-y, with 1/3 marked and the user's own
+// gamma shown against it. Log-y because the claim is an ONSET — the level jumps three orders of
+// magnitude across it, and on a linear axis the entire silent branch collapses onto zero and the
+// bracket becomes invisible.
+function drawReedSignature() {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height, pad = 34;
+  g.clearRect(0, 0, W, H);
+  const sw = payload.meta.sweep, sp = payload.meta.spectrum;
+  if (!sw || !sw.level.length) return;
+  const gam = sw.gamma, lev = sw.level;
+  const gmin = Math.min(...gam), gmax = Math.max(...gam);
+  const lo = Math.log10(Math.max(1e-5, Math.min(...lev) * 0.6));
+  const hi = Math.log10(Math.max(...lev) * 1.6);
+  const px = (v) => pad + ((v - gmin) / (gmax - gmin || 1)) * (W - pad - 12);
+  const py = (v) => (H - pad) - ((Math.log10(Math.max(1e-9, v)) - lo) / (hi - lo || 1)) * (H - pad - 16);
+
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1;
+  g.strokeRect(pad, 8, W - pad - 12, H - pad - 8);
+
+  // the speak gate, as a horizontal rule — everything under it is "did not speak"
+  g.strokeStyle = "rgba(139,152,168,.45)"; g.setLineDash([3, 3]); g.lineWidth = 1;
+  g.beginPath(); g.moveTo(pad, py(sw.gate)); g.lineTo(W - 12, py(sw.gate)); g.stroke();
+  g.setLineDash([]);
+
+  // gamma = 1/3, the Dalmont/Kergomard small-oscillation threshold. On the grid EXACTLY (batch 9's
+  // anechoic-null lesson) so the panel can say which side of it the reed is on.
+  const third = px(1 / 3);
+  g.strokeStyle = "rgba(255,207,92,.8)"; g.lineWidth = 1.5;
+  g.beginPath(); g.moveTo(third, 8); g.lineTo(third, H - pad); g.stroke();
+  g.fillStyle = "#ffcf5c"; g.font = "10px ui-monospace, monospace";
+  g.fillText("γ = ⅓", third + 4, 20);
+
+  // the level curve
+  g.strokeStyle = "#4cc2ff"; g.lineWidth = 2; g.beginPath();
+  for (let i = 0; i < gam.length; i++) {
+    const x = px(gam[i]), y = py(lev[i]);
+    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.stroke();
+  for (let i = 0; i < gam.length; i++) {
+    g.fillStyle = sw.speaks[i] ? "#5ad17a" : "#55647a";
+    g.beginPath(); g.arc(px(gam[i]), py(lev[i]), 3.2, 0, 7); g.fill();
+  }
+
+  // the user's own gamma, and where it lands
+  const myG = payload.meta.gamma, myL = payload.meta.ac_level;
+  if (myG >= gmin && myG <= gmax) {
+    g.strokeStyle = "rgba(224,176,80,.9)"; g.lineWidth = 1; g.setLineDash([2, 2]);
+    g.beginPath(); g.moveTo(px(myG), 8); g.lineTo(px(myG), H - pad); g.stroke();
+    g.setLineDash([]);
+    g.fillStyle = "#e0b050";
+    g.beginPath(); g.arc(px(myG), py(myL), 4.5, 0, 7); g.fill();
+  }
+
+  g.fillStyle = "#8b98a8"; g.font = "10px ui-monospace, monospace";
+  g.fillText("AC rms / p_closing", 4, 16);
+  g.fillText(`γ  ${gmin.toFixed(2)} … ${gmax.toFixed(2)}`, W - 96, H - 8);
+
+  const badge = $("partials-verdict"), out = $("partials-readout");
+  const br = sw.bracket;
+  const spoke = payload.meta.speaks;
+  badge.textContent = spoke ? "speaks" : "did not speak";
+  // Below threshold is LABELLED, never FAILED — a reed blown too gently is correct physics, the
+  // bow's Schelleng rule and the jawari's grazing rule, third customer.
+  badge.className = "badge " + (spoke ? "good" : "warn");
+  const pit = sw.pitch;
+  const lines = [];
+  lines.push(
+    `threshold brackets γ ∈ (${br[0] == null ? "?" : br[0].toFixed(3)}, ` +
+    `${br[1] == null ? "?" : br[1].toFixed(3)}]  ·  Dalmont/Kergomard ⅓ = 0.333  ` +
+    `(swept at N = ${sw.sweep_N}, ${sw.sweep_secs} s — the onset needs a long window)`);
+  lines.push(
+    `you are at γ = ${myG.toFixed(3)} → level ${myL.toExponential(2)} ` +
+    `(gate ${sw.gate})  ·  ${spoke ? "the note SPEAKS" : "too gentle — the reed never oscillates"}`);
+  if (pit) {
+    lines.push(
+      `pitch is the AIR COLUMN's: f_reed +${pit.reed_change_pct}% buys only ` +
+      `${pit.pitch_change_pct > 0 ? "+" : ""}${pit.pitch_change_pct}% of pitch ` +
+      `(${pit.cents[0]} → ${pit.cents[1]} cents vs c/4L; a stiffer reed lands closer — ` +
+      `its compliance is an end correction)`);
+  }
+  if (sp && sp.applies) {
+    lines.push(
+      `odd harmonics: f₁/2f₁ = ${sp.odd_even}  ·  3f₁/2f₁ = ${sp.third_second}  ·  ` +
+      `crest ${sp.crest} (1.0 = a perfect square wave)`);
+    const bt = payload.meta.beating;
+    if (bt && bt.beats) {
+      lines.push(
+        `the reed beats shut ${bt.per_period}× per period, ${(100 * bt.duty).toFixed(0)}% duty ` +
+        `(the duty is the primary number — a raw crossing count measures the chatter, not the slam)`);
+    }
+    if (sp.far_field) {
+      lines.push(
+        `CAVEAT — the audio is the MOUTHPIECE (that is the square wave). Outside the bell it is ` +
+        `${sp.far_field.quieter_by}× quieter and spikier (crest ${sp.far_field.crest}): ` +
+        `radiation differentiates, so this is not quite what a listener hears.`);
+    }
+  }
+  out.textContent = lines.join("\n");
+}
+
 function drawDiagnostics() {
   const spec = payload && payload.meta && payload.meta.spectrum;
   // Checked before the dims gate: the tension string is a 1-D model that still wants a spectrum
@@ -1525,6 +1761,15 @@ function drawDiagnostics() {
     partialsTitle.firstChild.textContent = "Bell reflection ";
     partialsSub.textContent = "measured vs r = (R−Z₀)/(R+Z₀)";
     drawBoreOracle();
+    return;
+  }
+  // The reed: the HEADLINE is that the clarinet speaks, not that the book balances. The balance
+  // is necessary but not sufficient — a wrong-sign reed rings down and still closes it — so the
+  // panel spends itself on the blowing threshold.
+  if (spec && spec.kind === "reed") {
+    partialsTitle.firstChild.textContent = "Blowing threshold ";
+    partialsSub.textContent = "does the note speak? γ = p_mouth/p_closing";
+    drawReedSignature();
     return;
   }
   // The geometric string's four regimes, four panels — all 1-D, none of them cents bars.

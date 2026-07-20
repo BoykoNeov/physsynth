@@ -45,6 +45,7 @@ from physsynth.core.exciter import raised_cosine_2d, triangular_pluck
 from physsynth.core.mallet import MalletMembrane
 from physsynth.core.membrane import Membrane
 from physsynth.core.plate import Plate, VKPlate
+from physsynth.core.reed import ReedBore
 from physsynth.core.string_damped import DampedStiffString
 from physsynth.core.string_geometric import GeometricString
 from physsynth.core.string_ideal import IdealString
@@ -622,7 +623,8 @@ def _resample_normalize(x: NDArray[np.float64], fs_in: float) -> tuple[NDArray[n
 
 
 def _balance_verdict(
-    E: NDArray[np.float64], w: NDArray[np.float64], sigma_zero: bool, idx: NDArray[np.int_]
+    E: NDArray[np.float64], w: NDArray[np.float64], sigma_zero: bool, idx: NDArray[np.int_],
+    measured_loss: dict[str, NDArray[np.float64]] | None = None,
 ) -> dict[str, Any]:
     """The energy-BALANCE verdict for an *actively driven* model: ``E - E0 == work_in - loss``.
 
@@ -645,8 +647,48 @@ def _balance_verdict(
       BY CONSTRUCTION: a tautology, a green tick that cannot fail. The honest content is the core's
       own criterion 2 (``test_bow_energy.test_loss_only_removes_energy``): the inferred dissipation
       must be ``>= 0`` (loss never *adds* energy) and monotone non-decreasing (no step adds energy).
+
+    ``measured_loss`` (the reed) switches the verdict from *inferred* to **measured** dissipation
+    and drops the sigma gate entirely — the two go together, and getting either half wrong is a live
+    trap. The reed measures every channel independently (``jet_loss = sum k dp_bar U_B``,
+    ``reed_damp_work = sum k Mr g y'^2``, with the bell's radiation booked inside ``E``), so:
+
+    - the residual ``dE - (mouth_work - sum(measured_loss))`` is a number that can genuinely FAIL,
+      unlike the bow's lossy branch where dissipation is defined as ``w - dE`` and the residual is
+      therefore identically zero by construction — a green tick that cannot fail;
+    - and it is genuine in EVERY regime, so there is no sigma gate. This is the trap: the bow's
+      ``sigma_zero`` branch scores ``max|dE - w|/scale``, which is only valid because a lossless
+      string has ``dE == w``. The reed's jet and lip-damping channels are on even at bore-sigma = 0,
+      so ``dE - mouth_work == -(jet + damp)`` — roughly 60 % of the scale. Routing the reed through
+      the bow's branch would report a catastrophic "IMBALANCE" on a perfectly balanced model.
     """
     dE = E - E[0]
+    if measured_loss is not None:
+        loss_total = np.zeros_like(dE)
+        for arr in measured_loss.values():
+            loss_total = loss_total + np.asarray(arr, dtype=float)
+        scale = np.abs(E) + np.abs(w) + 1e-30
+        residual = float(np.max(np.abs(dE - (w - loss_total)) / scale))
+        # The bow-style residual — measured loss DROPPED — is reported beside it on purpose. It is
+        # large (the jet+damp fraction), and that is the evidence the channels are load-bearing:
+        # a residual that stays tiny with a summand removed would not be testing the summand.
+        naive = float(np.max(np.abs(dE - w) / scale))
+        return {
+            "work": _finite_list(w[idx]),
+            "delta_energy": _finite_list(dE[idx]),
+            "dissipation": _finite_list(loss_total[idx]),
+            "channels": {k: _finite_list(np.asarray(v, dtype=float)[idx])
+                         for k, v in measured_loss.items()},
+            "channel_totals": {k: float(np.asarray(v, dtype=float)[-1])
+                               for k, v in measured_loss.items()},
+            "work_total": float(w[-1]),
+            "measured": {
+                "residual": residual,
+                "naive_residual": naive,
+                "tol": BOW_BALANCE_TOL,
+                "pass": bool(residual < BOW_BALANCE_TOL),
+            },
+        }
     dissipation = w - dE                       # inferred, not measured — see above
     block: dict[str, Any] = {
         "work": _finite_list(w[idx]),
@@ -683,6 +725,7 @@ def _energy_block(
     balance_work: NDArray[np.float64] | None = None,
     decay_oracle: bool = True,
     split: dict[str, NDArray[np.float64]] | None = None,
+    measured_loss: dict[str, NDArray[np.float64]] | None = None,
 ) -> dict[str, Any]:
     """Energy report, gated by loss (catch #4): drift-vs-tol when lossless, passivity when lossy.
 
@@ -716,6 +759,9 @@ def _energy_block(
     unchanged. The split exists because a flat "conserved ✓" beside an audibly decaying pickup
     reads as a bug — the panel needs acoustic falling and radiated rising to make the flat sum
     legible.
+
+    ``measured_loss`` (the reed) upgrades the balance from the bow's *inferred* dissipation to
+    independently **measured** channels and drops the sigma gate; see :func:`_balance_verdict`.
     """
     t, E = res.time, res.energy
     idx = np.linspace(0, len(E) - 1, min(len(E), N_ENERGY_POINTS)).astype(int)
@@ -732,7 +778,7 @@ def _energy_block(
     if balance_work is not None:
         block["kind"] = "balance"
         block["balance"] = _balance_verdict(E, np.asarray(balance_work, dtype=float), sigma_zero,
-                                            idx)
+                                            idx, measured_loss=measured_loss)
         return block
 
     if sigma_zero:
@@ -822,6 +868,8 @@ def _build_payload(p: dict[str, Any]) -> dict[str, Any]:
         return _build_payload_jawari(p)
     if model == "bore":
         return _build_payload_bore(p)
+    if model == "reed":
+        return _build_payload_reed(p)
     return _build_payload_string(p)
 
 
@@ -3432,6 +3480,474 @@ def _build_payload_bore(p: dict[str, Any]) -> dict[str, Any]:
             "spectrum": _bore_signature_block(run.pickup, fs, info),
         },
     }
+
+
+# == reed (wind, Phase D batch 10) =================================================================
+#
+# The dynamic single reed on batch 9's tube: a self-oscillating exciter, the acoustic dual of the
+# bow. It reuses the bore's field type wholesale (pressure along S(x), transit-paced animation,
+# per-end rendering via meta.ends) and adds a mouth end type, a genuine-residual balance, and a
+# signature panel. Core untouched; ReedBore contains the Bore.
+
+REED_N_MIN, REED_N_MAX = 32, 256
+REED_AUDIO_MAX = 1.0
+REED_ANIM_MAX = 0.1
+REED_WORK_MAX = 300_000       # bounds the RENDER (n_anim + n_audio) only — the sweeps are separate
+REED_LAMBDA = 1.0
+REED_RADIUS = 0.008
+REED_NEWTON_TOL = 1e-10       # pinned and unexposed: the balance is linear in the residual, so a
+                              # loose solve degrades the headline directly rather than masking it
+REED_SETTLE_FRAC = 0.4        # the settled tail = the last 40 % of a run (the bow's choice)
+
+# The sweeps are pinned OFF the render slider. Measured N-invariant to the 4th significant digit
+# (gamma = 0.338 -> 0.00431/0.00429/0.00428/0.00427/0.00426 at N = 64/96/128/200/256; pitch leverage
+# 3.05 % at every N), so a fixed modest N gives the same answer at a fraction of the cost — and,
+# the correctness half, the headline threshold stops moving when the user drags N.
+REED_SWEEP_N = 64
+# >= 0.8 s is REQUIRED, not a tolerance. Near the onset the reed critically slows down, and at a
+# 0.4 s window gamma = 0.355 reads 0.01123 — an apparently half-speaking point — where converged it
+# is 0.00441, i.e. silent. A settling time measured deep in the oscillating regime (0.04 s at
+# gamma = 0.5) does not bound the settling time near the bifurcation.
+REED_SWEEP_SECS = 0.8
+# 1/3 is on the grid EXACTLY — batch 9's anechoic-null lesson (a curve that merely straddles its
+# own special value misses the claim it exists to make). Dalmont/Kergomard's small-oscillation
+# threshold is gamma ~ 1/3, so the panel must be able to say which side of it the reed is on.
+REED_SWEEP_GAMMAS = (0.20, 0.30, 1.0 / 3.0, 0.355, 0.372, 0.45, 0.51, 0.61)
+REED_SPEAK_GATE = 0.02        # AC rms / p_closing; the measured floor is ~0.004 and speaking ~0.06
+REED_PITCH_SECS = 0.6
+REED_PITCH_FREEDS = (2000.0, 3000.0)
+_REED_SWEEP_MEMO: dict[tuple, dict[str, Any]] = {}
+
+
+def _build_reed(p: dict[str, Any]) -> tuple[ReedBore, dict[str, Any]]:
+    """Build the clarinet: a ``ReedBore`` on batch 9's ``Bore``.
+
+    ``gamma = p_mouth / p_closing`` is the star control (the dimensionless-coordinate rule's fifth
+    customer after ``dT/T0``, ``frac``, ``downswing/depth`` and ``R/Z0``): ``p_mouth`` alone means
+    nothing without the reed that resists it, and ``p_closing = mu wr^2 H0`` moves with every reed
+    parameter. So the slider is gamma and ``p_mouth`` is derived.
+
+    Bore viscous sigma stays fixed at 0 and unexposed — batch 9's corollary, inherited exactly: it
+    is the one channel ``bore.py`` does not book, and exposing it would silently demote the balance
+    from a measured residual to an inferred one.
+    """
+    L = _fnum(p, "L", 0.5)
+    N = int(_fnum(p, "N", 128))
+    gamma = _fnum(p, "gamma", 0.51)
+    f_reed = _fnum(p, "f_reed", 2500.0)
+    q_reed = _fnum(p, "q_reed", 4.0)
+    ratio_exp = _fnum(p, "bell_ratio_exp", -2.6)
+    domain = str(p.get("domain", "radiating"))
+
+    if domain not in ("radiating", "open"):
+        raise ParamError(f"reed bore end must be 'radiating' or 'open', got {domain!r}.")
+    if not (0.1 <= L <= 2.0):
+        raise ParamError(f"L must be in [0.1, 2.0] m, got {L}.")
+    if not (REED_N_MIN <= N <= REED_N_MAX):
+        raise ParamError(f"N must be in [{REED_N_MIN}, {REED_N_MAX}] for the reed, got {N}.")
+    if not (0.02 <= gamma <= 1.2):
+        raise ParamError(
+            f"gamma = p_mouth/p_closing must be in [0.02, 1.2], got {gamma}. The note speaks above "
+            "gamma ~ 0.36; at gamma >= 1 the reed is held statically shut."
+        )
+    if not (800.0 <= f_reed <= 4000.0):
+        raise ParamError(f"f_reed must be in [800, 4000] Hz, got {f_reed}.")
+    if not (0.5 <= q_reed <= 20.0):
+        raise ParamError(f"q_reed must be in [0.5, 20], got {q_reed}.")
+    ratio = 10.0 ** ratio_exp
+    if not (BORE_R_RATIO_MIN <= ratio <= BORE_R_RATIO_MAX):
+        raise ParamError(
+            f"the bell's R/Z0 must be in [{BORE_R_RATIO_MIN}, {BORE_R_RATIO_MAX}], got {ratio:.3e}."
+        )
+
+    radiating = domain == "radiating"
+    Z0 = RHO0_AIR * C0_AIR / (math.pi * REED_RADIUS * REED_RADIUS)
+    fs = C0_AIR / (REED_LAMBDA * (L / N))
+    bore = Bore(
+        L=L, fs=fs, N=N, radius=REED_RADIUS,
+        boundary=("closed", "radiating" if radiating else "open"),
+        sigma=0.0, R_bell=(ratio * Z0) if radiating else 0.0,
+    )
+    reed = _reed_at_gamma(bore, gamma, f_reed, q_reed)
+    info = {
+        "L": L, "N": N, "fs": fs, "lam": bore.lam, "Z0": Z0, "c0": C0_AIR,
+        "gamma": gamma, "f_reed": f_reed, "q_reed": q_reed,
+        "p_mouth": reed.p_mouth, "p_closing": reed.p_closing, "H0": reed.H0,
+        "ratio": ratio, "radiating": radiating, "R_bell": bore.R_bell,
+        # meta.ends[0] is a VIZ label set here, not read off bore._bc_left (which stays "closed" —
+        # the reed rides that end's live half-cell DOF and the core requires it).
+        "ends": ["reed", "radiating" if radiating else "open"],
+    }
+    return reed, info
+
+
+def _reed_at_gamma(bore: Bore, gamma: float, f_reed: float, q_reed: float) -> ReedBore:
+    """A ``ReedBore`` blown at a given ``gamma``, deriving ``p_mouth`` from its own ``p_closing``.
+
+    ``p_closing = mu wr^2 H0`` is built from the same defaults ``ReedBore`` uses, so this stays a
+    single source of truth for the mapping gamma -> p_mouth across the render and both sweeps.
+    """
+    mu, H0 = 0.03, 4.0e-4
+    p_closing = mu * (2.0 * math.pi * f_reed) ** 2 * H0
+    return ReedBore(bore=bore, p_mouth=gamma * p_closing, f_reed=f_reed, q_reed=q_reed,
+                    newton_tol=REED_NEWTON_TOL)
+
+
+class _ReedRun:
+    """Per-step telemetry of a reed run — every balance channel, the opening, and the field."""
+
+    def __init__(self, n: int, width: int) -> None:
+        self.E = np.empty(n + 1)            # total book: acoustic + reed + booked radiation
+        self.E_ac = np.empty(n + 1)
+        self.E_rad = np.empty(n + 1)
+        self.mouth = np.empty(n + 1)        # cumulative mouth work (active breath in)
+        self.jet = np.empty(n + 1)          # cumulative Bernoulli jet loss
+        self.damp = np.empty(n + 1)         # cumulative reed (lip) damping work
+        self.pickup = np.empty(n + 1)       # mouthpiece pressure — the square wave
+        self.far = np.empty(n + 1)          # bell far-field pressure, for the honest caveat
+        self.opening = np.empty(n + 1)      # reed channel opening H+ (m)
+        self.env = np.zeros(width)
+        self.frames: list[NDArray[np.float64]] = []
+        self.frame_steps: list[int] = []
+        self.frame_open: list[float] = []
+        self.frame_rad: list[float] = []
+
+
+def _run_reed(reed: ReedBore, n_steps: int, *, anim_stride: int, frame_from: int) -> _ReedRun:
+    """Step the reed once, capturing everything the three panels need.
+
+    ONE run, and the animation window is captured out of its TAIL via ``frame_from`` — batch 2's
+    ``snapshot_from`` lesson, which applies verbatim here: the reed also starts from rest and climbs
+    to a limit cycle, so the opening frames are silence, and re-running a second resonator would
+    silently double the cost of a root-find-per-step model in a way the work budget cannot see.
+
+    ``simulate()` is unusable here for the same reason it was for the bow and the mallet: it yields
+    neither the balance channels, nor the opening trace, nor the stacked field — and all three ARE
+    the panels.
+    """
+    bore = reed.bore
+    run = _ReedRun(n_steps, bore.N + 1)
+
+    def _sample(i: int) -> None:
+        run.E[i] = reed.energy()
+        run.E_ac[i] = bore.acoustic_energy()
+        run.E_rad[i] = bore.radiated_energy
+        run.mouth[i] = reed.mouth_work
+        run.jet[i] = reed.jet_loss
+        run.damp[i] = reed.reed_damp_work
+        run.pickup[i] = reed.mouthpiece_pressure()
+        run.far[i] = reed.pressure()
+        run.opening[i] = reed.reed_opening()
+        if i >= frame_from:
+            np.maximum(run.env, np.abs(bore.p), out=run.env)
+
+    _sample(0)
+    for i in range(1, n_steps + 1):
+        reed.step()
+        _sample(i)
+        if i >= frame_from and (i - frame_from) % anim_stride == 0:
+            run.frames.append(bore.p.copy())
+            run.frame_steps.append(i)
+            run.frame_open.append(run.opening[i])
+            run.frame_rad.append(run.E_rad[i])
+    if not np.all(np.isfinite(run.E)):
+        raise ParamError("simulation produced non-finite energy (instability) — adjust parameters.")
+    return run
+
+
+def _reed_ac_level(reed: ReedBore, secs: float) -> float:
+    """Settled-tail AC rms of the mouthpiece pressure, normalized by ``p_closing``.
+
+    Mean-REMOVED, and that is load-bearing rather than tidy: below threshold the mouthpiece still
+    carries a steady DC pressure (measured 8.2 Pa at gamma = 0.338 against an AC 13.0 Pa), so a raw
+    rms reports a "note" where there is only a static pressure. Normalizing by ``p_closing`` then
+    collapses every reed geometry onto one dimensionless axis.
+    """
+    n = max(2, int(secs / reed.k))
+    sig = np.empty(n)
+    for i in range(n):
+        reed.step()
+        sig[i] = reed.mouthpiece_pressure()
+    tail = sig[int((1.0 - REED_SETTLE_FRAC) * n):]
+    return float(np.sqrt(np.mean((tail - tail.mean()) ** 2))) / reed.p_closing
+
+
+def _reed_sweep_block(info: dict[str, Any]) -> dict[str, Any]:
+    """The signature panel: the blowing threshold and the pitch leverage, both at a FIXED N.
+
+    Memoized on every quantity that moves either curve. THE KEY IS THE TRAP: the threshold lives in
+    gamma, but ``p_closing = mu wr^2 H0``, so a key missing ``f_reed`` (which IS exposed) would
+    return stale numbers the moment the user drags that slider — passing on the defaults and wrong
+    on interaction, the "wrong without being broken" family one level up into a cache.
+    """
+    key = (round(info["L"], 6), round(info["f_reed"], 6), round(info["q_reed"], 6),
+           round(info["H0"], 10), round(REED_RADIUS, 6), bool(info["radiating"]),
+           round(info["R_bell"], 6), REED_SWEEP_N, REED_SWEEP_SECS)
+    if key in _REED_SWEEP_MEMO:
+        return _REED_SWEEP_MEMO[key]
+
+    L, f_reed, q_reed = info["L"], info["f_reed"], info["q_reed"]
+    end = "radiating" if info["radiating"] else "open"
+    fs = C0_AIR / (L / REED_SWEEP_N)
+
+    def _fresh(gamma: float, fr: float = f_reed) -> ReedBore:
+        bore = Bore(L=L, fs=fs, N=REED_SWEEP_N, radius=REED_RADIUS, boundary=("closed", end),
+                    sigma=0.0, R_bell=info["R_bell"])
+        return _reed_at_gamma(bore, gamma, fr, q_reed)
+
+    levels = [_reed_ac_level(_fresh(g), REED_SWEEP_SECS) for g in REED_SWEEP_GAMMAS]
+    speaks = [bool(v > REED_SPEAK_GATE) for v in levels]
+    # The bracket = the last silent gamma and the first speaking one. Reported, never FAILed below
+    # threshold: a reed blown too gently is correct physics, not a broken model (the bow's
+    # Schelleng rule and the jawari's grazing rule, third customer).
+    lo = hi = None
+    for g, sp in zip(REED_SWEEP_GAMMAS, speaks, strict=True):
+        if not sp:
+            lo = g
+        elif hi is None:
+            hi = g
+
+    f1 = C0_AIR / (4.0 * L)
+    pitches = []
+    for fr in REED_PITCH_FREEDS:
+        r = _fresh(0.51, fr)
+        n = max(4, int(REED_PITCH_SECS / r.k))
+        sig = np.empty(n)
+        for i in range(n):
+            r.step()
+            sig[i] = r.displacement_at(1)
+        tail = sig[n // 2:]
+        got = spectrum.measure_partials_near(tail - tail.mean(), 1.0 / r.k, np.array([f1]))
+        pitches.append(float(got[0]))
+    leverage = None
+    if all(np.isfinite(pitches)) and pitches[0] > 0:
+        # Stated as LEVERAGE, not as the suite's binary "< 6 %": a +50 % reed sweep buys ~+3 % of
+        # pitch, and the residual trend is itself physics (reed compliance acts as an end
+        # correction, so a stiffer reed lands closer to c/4L).
+        leverage = {
+            "f_reed": [round(f, 1) for f in REED_PITCH_FREEDS],
+            "reed_change_pct": round(100.0 * (REED_PITCH_FREEDS[1] / REED_PITCH_FREEDS[0] - 1), 1),
+            "f0": [round(f, 3) for f in pitches],
+            "pitch_change_pct": round(100.0 * (pitches[1] / pitches[0] - 1.0), 2),
+            "cents": [round(1200.0 * math.log2(f / f1), 1) for f in pitches],
+        }
+
+    block = {
+        "sweep_N": REED_SWEEP_N,
+        "sweep_secs": REED_SWEEP_SECS,
+        "gamma": list(REED_SWEEP_GAMMAS),
+        "level": [round(v, 6) for v in levels],
+        "speaks": speaks,
+        "gate": REED_SPEAK_GATE,
+        "bracket": [lo, hi],
+        "pitch": leverage,
+        "f1": round(f1, 3),
+        # The bracket MOVES with the bell, and the panel must say at which bell it was measured.
+        # Measured at N = 64: R/Z0 = 3e-4 and 2.5e-3 bracket (0.30, 0.338]; 1e-2 gives
+        # (0.338, 0.355]; 2.4e-2 gives (0.355, 0.372]; and by 6.3e-2 the note never speaks at all.
+        # That is correct physics — a lossier bell needs a harder blow — and it is exactly why the
+        # memo key has to carry R_bell.
+        "r_ratio": info["ratio"] if info["radiating"] else None,
+    }
+    _REED_SWEEP_MEMO[key] = block
+    return block
+
+
+def _reed_beating_block(opening: NDArray[np.float64], fs: float, f1: float) -> dict[str, Any]:
+    """The reed's closure statistics over the settled tail: duty first, debounced count beside it.
+
+    THE DUTY IS THE PRIMARY NUMBER because it needs no event definition at all. A raw per-period
+    closure count measures the CHATTER, not the event: at gamma ~ 0.5 each period holds a 35-sample
+    precursor, a 66-sample re-opening and then the main 291-sample closure, so counting zero
+    crossings reports ~1.94 closures per period for what is plainly one beat. Merging episodes
+    separated by less than 10 % of a period recovers 1.00.
+    """
+    tail = np.asarray(opening[int((1.0 - REED_SETTLE_FRAC) * opening.size):], dtype=float)
+    if tail.size < 4 or f1 <= 0:
+        return {"beats": False, "duty": 0.0, "per_period": None}
+    period = max(1, int(round(fs / f1)))
+    shut = tail <= 0.0
+    duty = float(np.mean(shut))
+
+    gap = max(1, int(0.10 * period))
+    episodes, i = 0, 0
+    while i < shut.size:
+        if shut[i]:
+            episodes += 1
+            j = i
+            while j < shut.size:
+                if shut[j]:
+                    j += 1
+                    continue
+                run_open = 0
+                while j + run_open < shut.size and not shut[j + run_open]:
+                    run_open += 1
+                if run_open >= gap:
+                    break
+                j += run_open
+            i = j
+        else:
+            i += 1
+    periods = tail.size / period
+    return {
+        "beats": bool(duty > 0.0),
+        "duty": round(duty, 4),
+        "per_period": round(episodes / periods, 3) if periods > 0 else None,
+        "min_opening": float(tail.min()),
+    }
+
+
+def _build_payload_reed(p: dict[str, Any]) -> dict[str, Any]:
+    playback_speed = _fnum(p, "playback_speed", 0.02)
+    audio_dur = _fnum(p, "audio_duration", 0.5)
+    anim_win = _fnum(p, "animation_window", 0.03)
+    fpp = max(1, int(_fnum(p, "frames_per_period", FRAMES_PER_PERIOD)))
+
+    if not (0.0 < playback_speed <= SPEED_MAX):
+        raise ParamError(f"playback_speed must be in (0, {SPEED_MAX}], got {playback_speed}.")
+    if not (0.0 < audio_dur <= REED_AUDIO_MAX):
+        raise ParamError(f"audio_duration must be in (0, {REED_AUDIO_MAX}] s, got {audio_dur}.")
+    if not (0.0 < anim_win <= REED_ANIM_MAX):
+        raise ParamError(f"animation_window must be in (0, {REED_ANIM_MAX}] s, got {anim_win}.")
+
+    reed, info = _build_reed(p)
+    fs, L = info["fs"], info["L"]
+    f1 = C0_AIR / (4.0 * L)
+    n_steps = max(1, round(audio_dur * fs))
+    if n_steps > REED_WORK_MAX:
+        raise ParamError(
+            f"this render needs {n_steps} steps (budget {REED_WORK_MAX}). At lambda = 1, "
+            f"fs = c0*N/L — so N buys the sample rate, not just the grid. Shorten audio_duration "
+            f"or lower N."
+        )
+
+    # Pace on the TRANSIT, not f1 — batch 9's rule, and the probe confirms it transfers unchanged
+    # (f_ref = c0/L gives 11.6–12.8 frames/transit at every N; f_ref = f1 gives ~3.0 and aliases
+    # the travelling pressure step, which is this batch's best picture).
+    anim_stride = max(1, round((fs / (C0_AIR / L)) / fpp))
+    n_anim = min(n_steps, max(anim_stride, round(anim_win * fs)))
+    if n_anim // anim_stride > MAX_FRAMES:
+        anim_stride = max(1, math.ceil(n_anim / MAX_FRAMES))
+    frame_from = max(0, n_steps - n_anim)
+
+    run = _run_reed(reed, n_steps, anim_stride=anim_stride, frame_from=frame_from)
+
+    frames = np.array(run.frames, dtype=float)
+    field_amp = float(np.max(np.abs(frames))) if frames.size else 0.0
+    audio48, peak = _resample_normalize(run.pickup, fs)
+    sim = SimResult(time=np.arange(run.E.size) / fs, energy=run.E, output=None, fs=fs,
+                    snapshots=[])
+
+    tail0 = int((1.0 - REED_SETTLE_FRAC) * run.pickup.size)
+    tail = run.pickup[tail0:]
+    ac_level = float(np.sqrt(np.mean((tail - tail.mean()) ** 2))) / info["p_closing"]
+    spoke = bool(ac_level > REED_SPEAK_GATE)
+    E_stored = run.E - run.E_rad          # acoustic + reed: plateaus in the limit cycle
+    breath = float(run.mouth[-1]) or 1.0
+
+    return {
+        "model": "reed",
+        "fs_sim": round(fs, 3),
+        "lambda": round(info["lam"], 6),
+        "grid": {"x": _finite_list(reed.bore.x, 6), "envelope": _finite_list(run.env)},
+        "frames": {
+            "b64": _b64f32(frames.ravel()),
+            "n_frames": int(frames.shape[0]),
+            "width": int(frames.shape[1]) if frames.ndim == 2 else 0,
+            "dims": 1,
+        },
+        "frame_times": _finite_list(np.array(run.frame_steps, dtype=float) / fs, 6),
+        "opening_frames": _finite_list(np.array(run.frame_open, dtype=float), 9),
+        "radiated_frames": _finite_list(
+            np.array(run.frame_rad, dtype=float) / (run.E[-1] or 1.0), 6),
+        "anim_dt": float(anim_stride / fs),
+        "playback_speed": playback_speed,
+        "field_amp": field_amp,
+        "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
+        # sigma_zero is passed through but the measured-loss branch ignores it for the verdict:
+        # the reed's jet and lip-damping channels are on in EVERY regime, so the residual is
+        # genuine in every regime and there is nothing to gate. See _balance_verdict.
+        "energy": _energy_block(
+            sim, sigma_zero=True, oracle_2sigma=0.0,
+            balance_work=run.mouth,
+            measured_loss={"jet": run.jet, "reed damping": run.damp},
+        ),
+        "meta": {
+            "c": round(C0_AIR, 3),
+            "f1": round(f1, 3),
+            "num_steps": int(n_steps),
+            "n_frames": int(frames.shape[0]),
+            "ends": info["ends"],
+            "radiating": bool(info["radiating"]),
+            "r_ratio": info["ratio"] if info["radiating"] else None,
+            "Z0": info["Z0"],
+            "gamma": round(info["gamma"], 4),
+            "p_mouth": round(info["p_mouth"], 2),
+            "p_closing": round(info["p_closing"], 2),
+            "H0": info["H0"],
+            "f_reed": round(info["f_reed"], 1),
+            "q_reed": round(info["q_reed"], 3),
+            "transit": round(L / C0_AIR, 8),
+            "frames_per_transit": round(float((fs * L / C0_AIR) / anim_stride), 2),
+            "fallbacks": int(reed.fallbacks),
+            # Where the breath goes. The measured ledger IS the batch's structural point, so it is
+            # reported as fractions of the mouth work rather than left implicit in the curves.
+            "budget": {
+                "mouth_work": float(run.mouth[-1]),
+                "jet_frac": round(float(run.jet[-1]) / breath, 4),
+                "damping_frac": round(float(run.damp[-1]) / breath, 4),
+                "radiated_frac": round(float(run.E_rad[-1]) / breath, 4),
+                "stored_frac": round(float(E_stored[-1] - E_stored[0]) / breath, 4),
+            },
+            "speaks": spoke,
+            "ac_level": round(ac_level, 6),
+            "envelope_ratio": round(float(run.env[0] / max(run.env[-1], 1e-12)), 2),
+            "beating": _reed_beating_block(run.opening, fs, f1),
+            "spectrum": _reed_signature_block(run.pickup, run.far, fs, f1, spoke),
+            "sweep": _reed_sweep_block(info),
+        },
+    }
+
+
+def _reed_signature_block(pickup: NDArray[np.float64], far: NDArray[np.float64], fs: float,
+                          f1: float, spoke: bool) -> dict[str, Any]:
+    """Odd-harmonic dominance off the mouthpiece, with the far-field caveat measured beside it.
+
+    The mouthpiece is the audio because it IS the square wave (measured crest 1.116 against the far
+    field's 3.684, and f1/2f1 = 460 against 25.5). But it is emphatically not what a listener hears
+    — radiation differentiates — so the far-field numbers ship alongside rather than letting "the
+    iconic clarinet tone" quietly mean the pressure inside the mouthpiece.
+    """
+    out: dict[str, Any] = {"kind": "reed", "applies": bool(spoke)}
+    if not spoke:
+        out["note"] = "below threshold — no tone to analyse"
+        return out
+    tail = np.asarray(pickup[pickup.size // 2:], dtype=float)
+    ac = tail - tail.mean()
+    freqs, mag, _ = spectrum.magnitude_spectrum(ac, fs)
+    df = float(freqs[1] - freqs[0])
+
+    def _peak(f: float, m: NDArray[np.float64] = mag) -> float:
+        i = int(round(f / df))
+        return float(m[max(1, i - 3):i + 4].max())
+
+    n_show = max(8, int(6.5 * f1 / df))
+    out["freq"] = _finite_list(freqs[1:n_show], 3)
+    out["mag"] = _finite_list(mag[1:n_show], 6)
+    out["markers"] = [round(m * f1, 3) for m in (1, 2, 3, 4, 5)]
+    out["odd_even"] = round(_peak(f1) / max(_peak(2 * f1), 1e-30), 1)
+    out["third_second"] = round(_peak(3 * f1) / max(_peak(2 * f1), 1e-30), 2)
+    rms = float(np.sqrt(np.mean(ac**2)))
+    out["crest"] = round(float(np.abs(ac).max() / rms), 3) if rms > 0 else None
+    ftail = np.asarray(far[far.size // 2:], dtype=float)
+    fac = ftail - ftail.mean()
+    frms = float(np.sqrt(np.mean(fac**2)))
+    out["far_field"] = {
+        "peak": round(float(np.abs(ftail).max()), 4),
+        "crest": round(float(np.abs(fac).max() / frms), 3) if frms > 0 else None,
+        "quieter_by": round(float(np.abs(ac).max() / max(np.abs(fac).max(), 1e-30)), 1),
+    }
+    return out
 
 
 # == membrane (2D, Phase B) ========================================================================

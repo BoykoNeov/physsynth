@@ -45,6 +45,13 @@ from web.serialize import (
     MEMBRANE_LAMBDA_MAX,
     MEMBRANE_N_MAX,
     PLATE_N_MAX,
+    REED_ANIM_MAX,
+    REED_AUDIO_MAX,
+    REED_N_MAX,
+    REED_N_MIN,
+    REED_SPEAK_GATE,
+    REED_SWEEP_N,
+    REED_WORK_MAX,
     SYMP_N_MAX,
     SYMP_SIGMA_BODY_MAX,
     SYMP_WEINREICH_DETUNE_MAX,
@@ -2209,3 +2216,231 @@ def test_bore_ignores_params_that_belong_to_other_models():
     assert other["energy"]["sigma_is_zero"] is True
     assert other["fs_sim"] == base["fs_sim"]
     assert other["meta"]["radiated_frac"] == pytest.approx(base["meta"]["radiated_frac"])
+
+
+# =================================================================================================
+# The dynamic single reed (wind, batch 10) — the claim is that the balance is MEASURED, and speaks
+# =================================================================================================
+#
+# The reed is the acoustic dual of the bow, but its energy balance is a *stronger* claim: the bow's
+# dissipation is INFERRED as ``work - dE``, so its lossy residual is identically zero by
+# construction. The reed measures ``jet_loss`` and ``reed_damp_work`` independently and books the
+# bell's radiation into ``energy()``, so its residual can genuinely fail. The tests below are
+# written to be the ones that would catch a *broken* wiring: a residual on a sum cannot see a dead
+# summand, and a balance alone passes on silence — so the channels and the speaking are asserted
+# separately from the residual.
+
+
+def _reed(**over):
+    return web_serialize.simulate_to_payload(
+        {"model": "reed", "audio_duration": 0.3, "N": 96, **over})
+
+
+def test_reed_balance_is_a_measured_residual_and_the_channels_are_load_bearing():
+    """The batch's structural claim. The residual closes to ~1e-14 with every channel accounted —
+    and the SAME run with the measured loss dropped (the bow's ``dE - work``) is enormous. That
+    contrast is the evidence the channels are load-bearing: a residual that stayed tiny with a
+    summand removed would not be testing the summand at all. Batch 9's "a sum cannot see a dead
+    summand", aimed here at the residual itself."""
+    e = _reed()["energy"]
+    assert e["kind"] == "balance"
+    b = e["balance"]["measured"]
+    assert b["residual"] < BOW_BALANCE_TOL, b
+    assert b["pass"] is True
+    # measured loss dropped => the jet + damping fraction reappears, ~60-95 % of scale
+    assert b["naive_residual"] > 0.5, b
+
+
+def test_reed_every_balance_channel_is_non_trivially_populated():
+    """A dead or wrong-sign reed rings down and reports residual ~= 0 on silence — reed-state's
+    "balance is necessary but NOT sufficient". So each channel is asserted to actually carry
+    energy, not merely to sum correctly."""
+    m = _reed()["meta"]
+    bud = m["budget"]
+    assert bud["mouth_work"] > 0.0
+    assert bud["jet_frac"] > 0.1          # Bernoulli dissipation is the dominant sink (~0.75)
+    assert bud["damping_frac"] > 0.0      # lip damping
+    assert bud["stored_frac"] > 0.0       # something is actually ringing in the tube
+    tot = bud["jet_frac"] + bud["damping_frac"] + bud["radiated_frac"] + bud["stored_frac"]
+    assert tot == pytest.approx(1.0, abs=2e-3), bud
+
+
+def test_reed_balance_has_no_sigma_gate_and_that_is_not_an_oversight():
+    """The trap this batch had to avoid. The bow's sigma = 0 branch scores ``max|dE - work|``,
+    valid only because a lossless string has ``dE == work``. The reed's jet and lip-damping
+    channels are on in EVERY regime, so routing it through that branch reports a catastrophic
+    IMBALANCE on a perfectly balanced model. The measured branch must therefore replace both the
+    lossless and lossy branches, not sit beside them."""
+    for domain in ("radiating", "open"):
+        b = _reed(domain=domain)["energy"]["balance"]
+        assert "measured" in b
+        assert "lossless" not in b and "lossy" not in b
+        assert b["measured"]["residual"] < BOW_BALANCE_TOL
+
+
+def test_reed_closes_the_balance_with_the_bell_radiating():
+    """Batch 9's booked-radiation property carried onto a driven model: the bell sheds real energy
+    and the book still closes, because ``energy()`` accumulates it. The radiating run must actually
+    radiate (else this passes on a dead bell) while the open run must not radiate at all."""
+    rad = _reed(domain="radiating")["meta"]
+    op = _reed(domain="open")["meta"]
+    assert rad["budget"]["radiated_frac"] > 0.02, rad["budget"]
+    assert op["budget"]["radiated_frac"] == 0.0
+    assert rad["r_ratio"] is not None and op["r_ratio"] is None
+
+
+def test_reed_actually_speaks_above_threshold_and_is_silent_below():
+    """The sufficiency gate. Channels-populated catches a *dead* reed; it does not catch a
+    wrong-sign one that rings down with populated channels. Only the signature does — so this is an
+    assertion, not a reported number."""
+    loud = _reed(gamma=0.51)["meta"]
+    quiet = _reed(gamma=0.20)["meta"]
+    assert loud["speaks"] is True
+    assert loud["ac_level"] > 10.0 * REED_SPEAK_GATE
+    assert quiet["speaks"] is False
+    assert quiet["ac_level"] < REED_SPEAK_GATE
+    # ...and below threshold the reed never slams shut, while above it does.
+    assert loud["beating"]["beats"] is True
+    assert quiet["beating"]["beats"] is False
+
+
+def test_reed_blowing_threshold_brackets_one_third():
+    """Dalmont/Kergomard's small-oscillation rule. The level curve is what carries the claim — it
+    jumps three orders of magnitude across the onset — and the derived bracket must straddle ~1/3.
+    Deliberately NOT asserted at gamma = 1/3 itself: that point sits exactly ON the threshold
+    (measured 0.0196 against a 0.02 gate at the default bell), so its label is a knife edge by
+    construction. Assert the curve's shape, never the knife edge."""
+    sw = _reed()["meta"]["sweep"]
+    lo, hi = sw["bracket"]
+    assert lo is not None and hi is not None
+    assert lo <= 0.36 and hi >= 0.30, sw["bracket"]
+    assert min(sw["level"]) < 0.01 < max(sw["level"])
+    assert max(sw["level"]) / max(min(sw["level"]), 1e-12) > 100.0
+    # monotone in gamma: blowing harder never makes the note quieter
+    assert all(b >= a - 1e-9
+               for a, b in zip(sw["level"][:-1], sw["level"][1:], strict=True))
+    assert 1.0 / 3.0 in sw["gamma"]      # on the grid EXACTLY (batch 9's anechoic-null lesson)
+
+
+def test_reed_sweep_is_pinned_off_the_render_grid():
+    """The sweep is a property of (bore, reed, gamma), not of the display grid — measured
+    N-invariant to the 4th significant digit. Pinning it at REED_SWEEP_N both bounds its cost and,
+    the correctness half, stops the headline threshold moving when the user drags N."""
+    a = _reed(N=64)["meta"]["sweep"]
+    b = _reed(N=200, audio_duration=0.2)["meta"]["sweep"]
+    assert a["sweep_N"] == REED_SWEEP_N
+    assert a["bracket"] == b["bracket"]
+    assert a["level"] == b["level"]
+
+
+def test_reed_sweep_memo_key_carries_everything_that_moves_p_closing():
+    """THE CACHE TRAP. The threshold lives in gamma, but ``p_closing = mu wr^2 H0`` — so a memo key
+    missing ``f_reed`` (which IS an exposed slider) returns stale numbers the moment the user drags
+    it: green on the defaults, wrong on interaction. Same for the bell, which genuinely moves the
+    bracket (a lossier bell needs a harder blow)."""
+    base = _reed()["meta"]["sweep"]
+    assert _reed(f_reed=1500.0)["meta"]["sweep"]["level"] != base["level"]
+    assert _reed(q_reed=8.0)["meta"]["sweep"]["level"] != base["level"]
+    assert _reed(bell_ratio_exp=-1.2)["meta"]["sweep"]["level"] != base["level"]
+    assert _reed(L=0.7)["meta"]["sweep"]["level"] != base["level"]
+
+
+def test_reed_pitch_is_set_by_the_air_column_not_the_reed():
+    """Stated as LEVERAGE rather than the suite's binary "< 6 %": a +50 % sweep of the reed buys
+    only ~+3 % of pitch. The residual trend is itself physics — the reed's compliance acts as an
+    end correction, so a stiffer reed lands CLOSER to c/4L (less negative cents)."""
+    pit = _reed()["meta"]["sweep"]["pitch"]
+    assert pit["reed_change_pct"] == pytest.approx(50.0)
+    assert abs(pit["pitch_change_pct"]) < 6.0
+    assert pit["pitch_change_pct"] > 0.0
+    assert pit["cents"][1] > pit["cents"][0]      # stiffer reed -> closer to c/4L
+    assert all(c < 0.0 for c in pit["cents"])     # reed compliance always flattens
+
+
+def test_reed_is_a_clarinet_odd_harmonics_dominate():
+    sp = _reed()["meta"]["spectrum"]
+    assert sp["applies"] is True
+    assert sp["odd_even"] > 100.0                 # fundamental dwarfs the 2nd harmonic
+    assert sp["third_second"] > 1.0               # 3rd (odd) beats the 2nd (even)
+    assert sp["crest"] < 1.5                      # ~1.0 is a perfect square wave
+
+
+def test_reed_beating_is_debounced_to_one_slam_per_period():
+    """A raw per-period closure count measures the CHATTER, not the event: each period holds a
+    short precursor, a brief re-opening, then the main closure, so zero crossings report ~1.94 for
+    what is plainly one beat. The duty needs no event definition and is the primary number."""
+    bt = _reed(gamma=0.51)["meta"]["beating"]
+    assert bt["beats"] is True
+    assert bt["per_period"] == pytest.approx(1.0, abs=0.15), bt
+    assert 0.2 < bt["duty"] < 0.6
+    assert bt["min_opening"] == 0.0
+
+
+def test_reed_ships_the_far_field_caveat_beside_the_mouthpiece_audio():
+    """The mouthpiece IS the square wave and is the audio, but it is emphatically not what a
+    listener hears — radiation differentiates. The far field is spikier and orders quieter, and
+    those numbers ship so that "the iconic clarinet tone" cannot quietly mean the pressure inside
+    the mouthpiece."""
+    sp = _reed()["meta"]["spectrum"]
+    ff = sp["far_field"]
+    assert ff["quieter_by"] > 20.0
+    assert ff["crest"] > sp["crest"]
+
+
+def test_reed_below_threshold_withdraws_the_spectrum_claims():
+    """An honesty gate that fires and is LABELLED, never failed (batch 9's ``applies = false``):
+    below threshold there is no tone, so there is nothing to measure — which is not the same as
+    being wrong."""
+    sp = _reed(gamma=0.20)["meta"]["spectrum"]
+    assert sp["applies"] is False
+    assert "odd_even" not in sp
+    assert "note" in sp
+
+
+def test_reed_announces_its_mouth_end_for_the_viz_without_touching_the_bore_boundary():
+    """``meta.ends[0] = "reed"`` is a VIZ label set by the payload — the core still requires the
+    bore's left end to be literally "closed" (the reed rides that half-cell DOF). Batch 9 built the
+    ``meta.ends`` switch with two cases precisely so this would be an addition, not a rewrite."""
+    assert _reed()["meta"]["ends"] == ["reed", "radiating"]
+    assert _reed(domain="open")["meta"]["ends"] == ["reed", "open"]
+
+
+def test_reed_animation_is_paced_on_the_transit_and_captured_from_the_settled_tail():
+    """Two inherited lessons in one payload. Batch 9: pace on the transit, not f1 (f1 pacing gives
+    ~3 frames/transit and aliases the travelling pressure step, this batch's best picture). Batch 2:
+    the window is the TAIL, because the reed starts from rest and the opening frames are silence —
+    and it comes out of the audio run, never a second resonator."""
+    d = _reed()
+    assert 8.0 < d["meta"]["frames_per_transit"] < 20.0
+    t = d["frame_times"]
+    # the frames end at the end of the run and start well into it: a tail, not the attack
+    assert t[-1] == pytest.approx(d["meta"]["num_steps"] / d["fs_sim"], rel=1e-3)
+    assert t[0] > 0.5 * t[-1]
+
+
+def test_reed_guards_reject_out_of_range_configurations_cleanly():
+    """The render budget bounds n_anim + n_audio; the sweeps are a separate fixed cost, so neither
+    cap can launder the other. The animation window has its own ceiling for batch 9's reason — the
+    shared 2 s is a cost hole this budget cannot cover."""
+    assert "error" in _reed(N=REED_N_MAX, audio_duration=REED_AUDIO_MAX + 0.5)
+    assert "error" in _reed(N=REED_N_MAX + 1)
+    assert "error" in _reed(N=REED_N_MIN - 1)
+    assert "error" in _reed(audio_duration=REED_AUDIO_MAX + 0.1)
+    assert "error" in _reed(animation_window=REED_ANIM_MAX + 0.01)
+    assert "error" in _reed(gamma=0.0)
+    assert "error" in _reed(gamma=2.0)
+    assert "error" in _reed(f_reed=200.0)
+    assert "error" in _reed(domain="bell")
+    assert REED_ANIM_MAX < web_serialize.ANIM_WIN_MAX
+    assert REED_WORK_MAX > 0
+
+
+def test_reed_ignores_params_that_belong_to_other_models():
+    """Every model gets the whole slider panel. The reed must not read the string family's sigma0
+    (bore viscous sigma is deliberately unexposed and pinned at 0 — batch 9's least-booked-channel
+    rule), nor the jawari's depth, nor the mallet's alpha."""
+    base = _reed()
+    other = _reed(sigma0=0.9, sigma1=0.05, kappa=4.0, depth=0.002, alpha=1.5, K=8000)
+    assert other["fs_sim"] == base["fs_sim"]
+    assert other["meta"]["budget"]["jet_frac"] == pytest.approx(base["meta"]["budget"]["jet_frac"])
+    assert other["energy"]["balance"]["measured"]["residual"] < BOW_BALANCE_TOL
