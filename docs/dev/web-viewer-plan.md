@@ -1440,6 +1440,42 @@ The work guard is **reachable** inside the shipped ranges (lowering λ raises `f
 it), so it is a live guard rather than dead code; the raster's x-binning branch is **not** reachable
 through the API (`m ≤ 99 < 128`) and is inert future-proofing, claimed as nothing more.
 
+#### The frontend, built (task 3b — `drawFretViz` + the raster primitive; 20 fret web tests, +1 this task, all green)
+
+The eighth leak-family member and the first panel that is a **picture of a field's history** rather
+than of a field. `drawFret*` renders left ≈42 % to-scale string-on-rail (one `sy` for the string
+AND the rail — no zoom, the batch's structural point), right ≈58 % contact raster + `|𝒞|_active`
+trace with a playhead at `frame_times[idx]`; the gated claim is **painted on-canvas** (the `#string`
+canvas has no `<p>` readout, only the overlay), the energy panel gets the diagnostic triple, and the
+signature panel names the brightness peak and refuses to call the crossing rate pitch. Every figure
+matches the probe's committed oracle exactly through the live payload (duty 15.45 %, 1.225 ep/period,
+|𝒞|max 69/99, Newton 2/1.159, force 77.24 N, elevation 4.682×, control centroid 100.0 Hz, +1600
+cents). Three things the build surfaced, flagged because each is a rule with a fourth+ customer:
+
+- **The `kind` key is not a missing PANEL, it is the WRONG one.** `drawDiagnostics` dispatches on
+  `meta.spectrum.kind` with a chain of *equality* branches, so a block without `kind` falls through
+  every one to `drawPartials`, which reads per-partial arrays the fret never ships. The contact block
+  already carried `"kind": "fret"`; the signature block did not, and adding it was the one change
+  that reopened the backend. *Generalizable: when a dispatcher is a chain of equality tests, a
+  missing discriminant is a silent mis-route, not a no-op — pin the discriminant in a test.*
+- **A hint that guards a render must be driven by EVERY param it reads.** `onControlChange` refreshes
+  hints from an allowlist, and the fret's out-of-reach warning depends on `clearance` and
+  `rail_frac` — neither of which was in it. The hint went stale: it read "the string reaches the
+  rail" at swing/clearance 2.50 *while the rail had been dragged out of reach*, i.e. the one warning
+  meant to fire **before** a ~15 s render was confidently saying the opposite. Caught only by a
+  live-DOM slider sweep — a deep link renders once and cannot see it. (The jawari's `depth` hint had
+  the same shape and got it right; the fret's second control is what exposed the gap.)
+- **The transition verifier's own traps cost more than the code's.** The deep-link harness
+  structurally cannot see a transition, so a separate CDP driver sweeps sliders and switches models
+  live (`temp/fret-viewer-probe/switch_check.py`). It found the real hint bug — but only after three
+  self-inflicted false results: a mis-escaped f-string brace that silently never switched the model
+  (every param then read as a "leak" against the fret's own page), a whole-canvas ink count that read
+  the rail slab + claim text as raster ink (12623 on an empty raster), and — the load-bearing one —
+  `renderBtn.disabled` makes a Render click during the ~15 s page-load render a **silent no-op**, so
+  the pre-existing "ok" satisfied the wait and every screenshot predated the render under test.
+  *Generalizable: an automated UI check that keys on a status string must stamp a sentinel first and
+  confirm the button was actually actionable — a stale "ok" is indistinguishable from a fresh one.*
+
 ### Later batches (rough map — not firm)
 
 - **Wind** — the reed is **batch 10** (above); the wind leg closes with it.

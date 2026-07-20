@@ -212,6 +212,13 @@ def main() -> int:
             # turns "bright" into a number). At the defaults ~5 s; the guards admit up to ~34 s, so
             # it sits comfortably inside the 90 s window above.
             ("jawari", "model=jawari"),
+            # The fret / flat rail: model #8's OTHER configuration, and the most expensive model in
+            # the viewer per second of audio (~13 s of wall clock per second of sound at N = 100).
+            # Also a two-run model — the out-of-reach brightness control costs 0.95x the fret run,
+            # since the string step and the rank-m correction dominate either way, not the contact
+            # solve. FRET_N_MAX / FRET_AUDIO_MAX / FRET_WORK_MAX are sized so the worst passing
+            # render stays inside the 90 s window; at the defaults it is ~11 s.
+            ("fret", "model=fret"),
             # The acoustic bore: the first WIND model and a new field type (pressure along a tube,
             # with the two ends drawn differently — the closed end is a pressure ANTINODE). Both
             # far-end regimes are covered because they exercise different halves of drawBore: the

@@ -39,6 +39,7 @@ const LABELS = {
   mass: "mallet mass M", stiffness: "felt stiffness K", alpha: "felt exponent α",
   strike_velocity: "strike speed v₀", hysteresis: "felt loss λ_h",
   K: "bridge K", detune: "detune (semis)",
+  clearance: "rail clearance", rail_frac: "rail span", rail_stiffness: "rail K",
   bell_ratio_exp: "bell log₁₀(R/Z₀)",
 };
 
@@ -130,6 +131,26 @@ const MODEL_RANGES = {
             // 3.44x tested vs 2.75x rendered, a hair over the 2.5x gate).
             pickup_position: { val: 0.5 },
             audio_duration: { min: 0.1, max: 1.5, step: 0.01, fixed: 2, val: 0.24 } },
+  // The fret / flat rail — model #8's other configuration, and the jawari's opposite regime. Shares
+  // the jawari's reasons for loss-ON (a lossless string sustains everything, so "the rail brightens
+  // it" would be meaningless) and for lambda = 0.4 (headroom for the coupled contact solve), but its
+  // OWN caps: N ≤ 100 and audio ≤ 0.6 s are cost, not physics — this is the most expensive model in
+  // the viewer per second of audio (~13 s of wall clock per second of sound at N = 100), and the
+  // dense |C|x|C| solve is NOT the reason (halving the rail buys only ~20 %); the string step and
+  // the rank-m correction dominate. amplitude caps at 2 cm and defaults to the 5 mm the probe and
+  // the suite both use, which puts the peak swing over the rail at 5.33 mm against a 2 mm
+  // clearance — the 37.5 % ratio that lets this be the first contact model needing NO zoom pane.
+  // The rail's own three (clearance / rail_frac / rail_stiffness) live only in index.html, like the
+  // jawari's three: no other model reads those names, so there is nothing to re-range and nothing
+  // to leak — their steps are set once, on-grid, where they are declared.
+  fret: { N: { min: 32, max: 100, val: 100 }, lambda: { min: 0.2, max: 0.9, val: 0.4 },
+          amplitude: { max: 0.02, val: 0.005 },
+          sigma0: { val: 0.5 },
+          // 0.05 L, the measured knee: 78 % of the best available brightness elevation at 2.3x the
+          // level of the 0.02 L node. The signature is strongest nearest the termination and the
+          // level rises the other way, so this is the trade, not a default inherited by accident.
+          pickup_position: { val: 0.05 },
+          audio_duration: { min: 0.1, max: 0.6, step: 0.01, fixed: 2, val: 0.4 } },
   // Acoustic bore + bell (the wind leg). The first model here with NO loss slider at all: the
   // bell's radiation is the only loss, and it is BOOKED into Bore.energy(), which is what lets a
   // radiating tube keep the conservation verdict. λ is absent for a different reason — at λ = 1,
@@ -256,6 +277,10 @@ let isGeom = false, orbitU = null, orbitW = null, orbitPerFrame = 1, uwAmp = 1, 
 let isSymp = false, nFields = 1, fieldAmps = [1], fieldLabels = [];
 // Jawari (model #8, curved): the bridge profile under the string + the travelling wrap edge.
 let isJawari = false, barrierProfile = null, wrapFrames = null;
+// Fret / flat rail (model #8, straight): the rail profile the string slaps, plus the contact
+// RASTER — an x-vs-t image, the first panel primitive in the viewer that is a picture of a field's
+// history rather than of a field. `fretRaster` is uint8 grey, row-major, rows = support x.
+let isFret = false, fretRasterCv = null, fretActive = null, frameTimes = null;
 // Acoustic bore: a PRESSURE field, not a displacement one — and the two ends are not alike, which
 // is the whole physics (see drawBore).
 let isBore = false, boreEnv = null, boreRad = null, boreEnds = ["closed", "open"];
@@ -634,6 +659,34 @@ function updateLambdaHint() {
       jHint.textContent = "";
     }
   }
+  // Fret: the same live-gate idea as the jawari's, guarding a DIFFERENT failure — not a degraded
+  // timbre but an erased claim. Peak swing over the rail is A·sin(π·min(rail_frac, ½)) (the rail
+  // reaches only part of the mode-1 arch), and it falls as the rail shortens toward the nut: 5.00 /
+  // 2.94 / 1.84 mm at rail_frac 0.5 / 0.2 / 0.12 for A = 5 mm. So at the default 2 mm clearance a
+  // user dragging rail_frac ALONE reaches a blank raster and an empty claim with nothing on screen
+  // to say why — measured duty 0.0 below rail_frac ≈ 0.15. Hence the floor at 0.2, and hence this.
+  const fHint = $("fret-hint");
+  if (fHint) {
+    if (m === "fret") {
+      const swing = param("amplitude") * Math.sin(Math.PI * Math.min(param("rail_frac"), 0.5));
+      const ratio = swing / param("clearance");
+      const s0 = param("sigma0");
+      fHint.textContent = ratio <= 1.0
+        ? `peak swing over the rail ≈ ${(swing * 1000).toFixed(2)} mm vs a `
+          + `${(param("clearance") * 1000).toFixed(1)} mm clearance — OUT OF REACH: nothing will `
+          + `touch, and the raster will be blank. A shorter rail needs a proportionally smaller `
+          + `clearance.`
+        : `swing/clearance ≈ ${ratio.toFixed(2)} — the string reaches the rail and slaps off it. `
+          + (s0 === 0
+            ? `σ₀ = 0: lossless, so the verdict is conservation drift THROUGH the contact (the `
+              + `proof the rail dissipates nothing). Raise σ₀ for the decay triple.`
+            : `σ₀ = ${s0.toFixed(1)}: passive, and the decay reads ~7 % fast of 2σ₀ — the rail `
+              + `breaks equipartition, it does not leak energy.`);
+      fHint.style.color = ratio <= 1.0 ? "var(--warn, #ffcf5c)" : "var(--muted)";
+    } else {
+      fHint.textContent = "";
+    }
+  }
   // Reed: gamma is the star control, so the hint says which side of the ~1/3 threshold the
   // current setting is on BEFORE paying for a render — and names the leverage f_reed does and does
   // not have. The threshold quoted is approximate on purpose: it MOVES with the bell (a lossier
@@ -713,6 +766,12 @@ function onControlChange(name) {
   if (name === "tongue_position" || name === "dt_over_t0") updateLambdaHint();
   if (name === "kappa") updateLambdaHint();   // the phantom hint's microscope + cost estimate
   if (name === "K" || name === "detune" || name === "sigma_body") updateLambdaHint();  // symp hint
+  // The fret's two geometry controls MUST be here: the hint they drive is an out-of-reach warning,
+  // and clearance and rail_frac are the only two params that can trigger it. Without them the hint
+  // went stale at the last amplitude/sigma0 change — it read "swing/clearance ≈ 2.50, the string
+  // reaches the rail" while the rail had been dragged out of reach, i.e. the one warning meant to
+  // fire BEFORE a ~10 s render is paid for was confidently saying the opposite.
+  if (name === "clearance" || name === "rail_frac") updateLambdaHint();
   scheduleAuto();
 }
 
@@ -823,6 +882,21 @@ function applyPayload(data) {
   isGeom = data.model === "geometric";
   isSymp = data.model === "sympathetic";
   isJawari = data.model === "jawari";
+  isFret = data.model === "fret";
+  if (isFret) {
+    // The rail is scattered back onto GRID coordinates by the backend (NaN off its support), same
+    // convention as the jawari's barrier, and shares fieldAmp for the same reason: drawn on its own
+    // scale it would stop being the thing the string swings past.
+    barrierProfile = data.grid.barrier || null;
+    // Built ONCE into an offscreen buffer at field resolution and blitted per frame (the heatCv
+    // precedent): the raster is up to 128 x 800 cells and never changes during playback, so
+    // rebuilding it every animation frame would burn ~100k pixel writes at 60 Hz for no change.
+    fretRasterCv = buildFretRaster(data.meta.contact.raster);
+    fretActive = data.meta.contact.trace.active || null;
+    // The animation is a WINDOW on the run (0.1 s of 0.4 s by default), while the raster spans the
+    // whole run — so the playhead needs real times, not a frame index scaled by nFrames.
+    frameTimes = data.frame_times || null;
+  }
   // The reed IS a bore for viz purposes — same pressure field, same envelope, same per-end
   // dispatch — so it takes the whole path and only adds a mouth end type and its own pane.
   isBore = data.model === "bore" || data.model === "reed";
@@ -1062,6 +1136,271 @@ function drawJawariPane(g, idx, x0, y0, w, h, zoom) {
     g.fillText(`departure node ${we}`, x0 + margin, y0 + 28);
   }
   g.restore();
+}
+
+// ── fret / flat rail: the string on its rail, and the contact raster ─────────────────────────
+// The jawari's inverse in physics AND in layout. The jawari's claim is a travelling wrap on a
+// SUSTAINED contact, so it spends both its panes on geometry, one of them zoomed. The fret's claim
+// is INTERMITTENCY — slap and release — which no single frame can carry and no zoom would help:
+// what it needs is the whole history at once. So the money panel is the RASTER (right, 58 %), an
+// x-vs-t map of where and when the string touched, and the animation takes the smaller pane.
+//
+// The animation is deliberately TO SCALE, sharing one `sy` for the string AND the rail: at the
+// default the 2 mm clearance is 37.5 % of the 5.33 mm peak swing — ~75 px here — so the gap, the
+// rail and the string all read at one honest scale. This is the first contact model in the viewer
+// that needs no zoom pane; "contact models need a zoom pane" was a fact about the jawari's and the
+// reed's amplitude ratios, not a fact about contact.
+function drawFretViz(idx) {
+  const g = stringCv.getContext("2d");
+  const W = stringCv.width, H = stringCv.height;
+  g.clearRect(0, 0, W, H);
+  const animW = Math.round(W * 0.42);
+  drawFretString(g, idx, 0, 0, animW, H);
+  drawFretRaster(g, idx, animW, 0, W - animW, H);
+}
+
+// The uint8 grey (row-major, rows = support x, cols = time) as an offscreen image. 0 is drawn
+// TRANSPARENT rather than black so "no contact" is the panel background — the ink then reads as
+// the signal itself. The backend guarantees any genuine touch maps to >= 1, so nothing a binary
+// mask would show is lost to rounding, and the grey is a strict refinement of that mask.
+function buildFretRaster(r) {
+  if (!r || !r.n_rows || !r.n_cols) return null;
+  const px = b64ToUint8(r.b64);
+  const cv = document.createElement("canvas");
+  cv.width = r.n_cols; cv.height = r.n_rows;
+  const img = cv.getContext("2d").createImageData(r.n_cols, r.n_rows);
+  for (let i = 0; i < r.n_rows * r.n_cols; i++) {
+    const v = px[i], o = i * 4;
+    if (!v) { img.data[o + 3] = 0; continue; }
+    const t = v / 255;
+    img.data[o] = 255;
+    img.data[o + 1] = Math.round(130 + 110 * t);
+    img.data[o + 2] = Math.round(55 + 95 * t);
+    img.data[o + 3] = 255;
+  }
+  cv.getContext("2d").putImageData(img, 0, 0);
+  return cv;
+}
+
+function drawFretString(g, idx, x0, y0, w, h) {
+  if (!frames || nFrames === 0) return;
+  const m = payload.meta, margin = 20, midY = y0 + h * 0.5;
+  const amp = fieldAmp > 0 ? fieldAmp : 1;
+  const sx = (w - 2 * margin) / (width - 1);
+  const sy = (h / 2 - margin) / amp * 0.92;
+  const px = (i) => x0 + margin + i * sx;
+  const py = (v) => midY - v * sy;
+
+  g.save();
+  g.beginPath(); g.rect(x0, y0, w, h); g.clip();
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(x0, midY); g.lineTo(x0 + w, midY); g.stroke();
+
+  // The rail as a filled solid, not a stroke: a bare line reads as one more trace, and the whole
+  // point is that the string cannot pass through it. A rect is exact here because the rail is FLAT
+  // by construction (that is the model — the jawari is the curved configuration), so unlike
+  // drawJawariPane there is no profile to trace point by point.
+  let railY = null, iRail = -1;
+  if (barrierProfile) {
+    const pts = [];
+    for (let i = 0; i < width; i++) {
+      const b = barrierProfile[i];
+      if (b !== null && b !== undefined && isFinite(b)) { pts.push(i); railY = py(b); }
+    }
+    if (pts.length > 1) {
+      iRail = pts[pts.length - 1];
+      // A SLAB, not a fill to the floor of the pane: at this scale the rail sits ~59 px below the
+      // rest line, so filling to the bottom paints a third of the panel brown and the eye reads the
+      // rail's thickness — which is not a physical quantity — as the loudest thing on screen.
+      g.fillStyle = "rgba(198,142,86,.22)";
+      g.fillRect(px(pts[0]), railY, px(iRail) - px(pts[0]), 14);
+      g.strokeStyle = "#c68e56"; g.lineWidth = 2.5;
+      g.beginPath(); g.moveTo(px(pts[0]), railY); g.lineTo(px(iRail), railY); g.stroke();
+    }
+  }
+
+  // The string, with the nodes currently IN CONTACT picked out. Contact is u <= b node-by-node —
+  // the same test the solver's active set uses — so this is a rendering of the shipped field, not
+  // a statistic re-derived from the picture. It is drawn and never counted on screen: every count
+  // this panel quotes comes from the payload, at full rate.
+  const base = idx * width;
+  g.strokeStyle = "#4cc2ff"; g.lineWidth = 2.5; g.lineJoin = "round";
+  g.beginPath();
+  for (let i = 0; i < width; i++) {
+    const X = px(i), Y = py(frames[base + i]);
+    if (i === 0) g.moveTo(X, Y); else g.lineTo(X, Y);
+  }
+  g.stroke();
+  if (barrierProfile) {
+    g.fillStyle = "#ff6b6b";
+    for (let i = 0; i < width; i++) {
+      const b = barrierProfile[i];
+      if (b === null || b === undefined || !isFinite(b)) continue;
+      if (frames[base + i] <= b) { g.beginPath(); g.arc(px(i), py(b), 2.2, 0, 7); g.fill(); }
+    }
+  }
+
+  // The clearance, drawn as the dimension it is. This is the to-scale claim made checkable by eye:
+  // the gap on screen really is the gap, in the same units as the swing above it.
+  if (railY !== null) {
+    const dx = x0 + margin + Math.round((width - 1) * 0.62) * sx;
+    g.strokeStyle = "rgba(198,142,86,.75)"; g.lineWidth = 1; g.setLineDash([2, 2]);
+    g.beginPath(); g.moveTo(dx, midY); g.lineTo(dx, railY); g.stroke(); g.setLineDash([]);
+    g.fillStyle = "#c68e56"; g.font = "10px ui-monospace, monospace";
+    g.fillText(`${(m.clearance * 1000).toFixed(1)} mm`, dx + 4, (midY + railY) / 2 + 3);
+  }
+
+  const pk = px(Math.round(param("pickup_position") * (width - 1)));
+  g.strokeStyle = "rgba(255,207,92,.35)"; g.setLineDash([4, 4]); g.lineWidth = 1;
+  g.beginPath(); g.moveTo(pk, y0 + 8); g.lineTo(pk, y0 + h - 8); g.stroke(); g.setLineDash([]);
+  g.fillStyle = "#8b98a8";
+  g.beginPath(); g.arc(px(0), midY, 3.5, 0, 7); g.fill();
+  g.beginPath(); g.arc(px(width - 1), midY, 3.5, 0, 7); g.fill();
+
+  g.fillStyle = "#8b98a8"; g.font = "11px system-ui, sans-serif";
+  g.fillText("the string on its rail — to scale, no zoom", x0 + margin, y0 + 14);
+  g.font = "10px ui-monospace, monospace";
+  g.fillText(`rail spans 0 … ${m.rail_span} m  (${m.rail_frac}·L)`, x0 + margin, y0 + h - 8);
+  if (frameTimes && idx < frameTimes.length) {
+    g.fillStyle = "#ffcf5c";
+    g.fillText(`t = ${(frameTimes[idx] * 1000).toFixed(2)} ms`, x0 + w - 96, y0 + 14);
+  }
+  g.restore();
+}
+
+// The money panel. Its x-extent is the rail's SUPPORT (x0..x1), which is narrower than the
+// animation above whenever rail_frac < 1 — so it carries its own labelled axes rather than being
+// forced into pixel alignment with the animation. Self-describing beats coincidentally aligned.
+function drawFretRaster(g, idx, x0, y0, w, h) {
+  const ct = payload && payload.meta && payload.meta.contact;
+  if (!ct) return;
+  const r = ct.raster;
+  const padL = 46, padR = 14, top = 24, rasterH = 118, gap = 10, traceH = 44;
+  const xA = x0 + padL, plotW = w - padL - padR;
+  const yA = y0 + top, yB = yA + rasterH;
+  const tA = yB + gap, tB = tA + traceH;
+  const t0 = r.t0, t1 = r.t1 || 1;
+  const tx = (t) => xA + ((t - t0) / (t1 - t0)) * plotW;
+
+  g.save();
+  g.beginPath(); g.rect(x0, y0, w, h); g.clip();
+  g.fillStyle = "#8b98a8"; g.font = "11px system-ui, sans-serif";
+  g.fillText("contact raster — where and when the string touches", xA, y0 + 14);
+
+  g.fillStyle = "rgba(20,26,34,.6)"; g.fillRect(xA, yA, plotW, rasterH);
+  if (fretRasterCv) {
+    g.imageSmoothingEnabled = false;
+    g.drawImage(fretRasterCv, xA, yA, plotW, rasterH);
+    g.imageSmoothingEnabled = true;
+  }
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(xA, yA, plotW, rasterH);
+  g.font = "9px ui-monospace, monospace"; g.fillStyle = "#8b98a8";
+  g.fillText(`x=${r.x0}`, x0 + 4, yA + 8);
+  g.fillText(`x=${r.x1}`, x0 + 4, yB - 2);
+  g.fillText(`${r.t0.toFixed(3)} s`, xA, tB + 12);
+  g.fillText(`${r.t1.toFixed(3)} s`, xA + plotW - 40, tB + 12);
+
+  // The animated window against the whole run: the animation covers 0.06 s of a 0.4 s raster by
+  // default, so without this the playhead appears to stall in the left seventh for no visible
+  // reason. Drawn as a BAND over both plots rather than a bracket above them — it names a slice of
+  // time, so it should be shown as one, and a bracket line collided with the panel title anyway.
+  if (frameTimes && frameTimes.length > 1) {
+    const a = tx(frameTimes[0]), b = tx(frameTimes[frameTimes.length - 1]);
+    g.fillStyle = "rgba(76,194,255,.10)"; g.fillRect(a, yA, b - a, tB - yA);
+    g.strokeStyle = "rgba(76,194,255,.45)"; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(b, yA); g.lineTo(b, tB); g.stroke();
+    g.fillStyle = "rgba(76,194,255,.75)"; g.fillText("animated", a + 3, yA + 9);
+  }
+
+  // |C|_active, on the FULL support and column-MAX reduced so it lines up under the raster.
+  // Binning x is free for the picture and fatal for this number (69 collapses to 23 at 33 bins),
+  // which is why the trace is computed on the support the solver actually used.
+  g.strokeStyle = "#2a3340"; g.strokeRect(xA, tA, plotW, traceH);
+  const sup = ct.support || 1;
+  if (fretActive && fretActive.length) {
+    const n = fretActive.length;
+    g.fillStyle = "rgba(76,194,255,.35)"; g.strokeStyle = "#4cc2ff"; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(xA, tB);
+    for (let i = 0; i < n; i++) {
+      const v = fretActive[i] == null ? 0 : fretActive[i];
+      g.lineTo(xA + (i / (n - 1 || 1)) * plotW, tB - (v / sup) * traceH);
+    }
+    g.lineTo(xA + plotW, tB); g.closePath(); g.fill();
+  }
+  const yMax = tB - (ct.active_max / sup) * traceH;
+  g.strokeStyle = "rgba(255,107,107,.6)"; g.setLineDash([3, 3]); g.lineWidth = 1;
+  g.beginPath(); g.moveTo(xA, yMax); g.lineTo(xA + plotW, yMax); g.stroke(); g.setLineDash([]);
+  g.fillStyle = "#8b98a8";
+  g.fillText(`|𝒞| 0…${sup}`, x0 + 4, tA + 8);
+  g.fillStyle = "#ff6b6b"; g.fillText(`max ${ct.active_max}`, xA + 4, yMax - 3);
+
+  // The playhead ties the two panes together — the only thing that does, since their x axes mean
+  // different things (string position vs time).
+  if (frameTimes && idx < frameTimes.length) {
+    const X = tx(frameTimes[idx]);
+    g.strokeStyle = "rgba(255,207,92,.8)"; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(X, yA); g.lineTo(X, tB); g.stroke();
+  }
+
+  drawFretClaim(g, ct, x0 + 6, tB + 28, w - 14);
+  g.restore();
+}
+
+// Say the claim out loud. A raster that looks busy is NOT the claim being shown — and every scalar
+// here is quoted from the payload, computed at full rate on the full support. The image is an
+// OR-reduction and therefore a dilation in time: its column-collapsed duty reads 28.8 % against a
+// true 15.5 %, so reading any of these numbers off the pixels would be wrong by ~2x.
+function drawFretClaim(g, ct, x, y, w) {
+  const lines = [];
+  if (ct.out_of_reach) {
+    lines.push(["#ffcf5c", "OUT OF REACH — the string never meets the rail (duty 0, no episodes)."]);
+    lines.push(["#8b98a8", "Peak swing over the rail falls as the rail shortens toward the nut, so "
+      + "a short rail needs a proportionally smaller clearance. Lower `rail clearance`, lengthen "
+      + "`rail span`, or raise the amplitude. This is a correct render of a legitimate "
+      + "configuration, not a failure."]);
+  } else {
+    const ok = ct.intermittent;
+    lines.push([ok ? "#5ad17a" : "#ffcf5c",
+      (ok ? "INTERMITTENT ✓  " : "contact, but outside the intermittent band —  ")
+      + `duty ${(ct.duty * 100).toFixed(2)} % · ${ct.episodes_per_period} episodes/period `
+      + `(${ct.episodes} over ${ct.n_periods} periods)`]);
+    lines.push(["#8b98a8", `it slaps and springs off — gates: ≥ ${ct.episodes_min} episodes/period `
+      + `and duty ≤ ${(ct.duty_max * 100).toFixed(0)} %. `
+      + (ct.pinned ? "PINNED: the string is not releasing." : "Never pinned — a lossless one-sided "
+        + "spring always pushes back, so the string cannot come to rest on the rail.")]);
+    lines.push(["#4cc2ff", `vector Newton: |𝒞| reaches ${ct.active_max} of ${ct.support} support `
+      + `nodes at once (mean ${ct.active_mean_touching} while touching) — this is what makes the `
+      + `solve a vector one rather than the mallet's scalar.`]);
+    lines.push(["#8b98a8", `Newton iters/step: max ${ct.iters_max}, mean ${ct.iters_mean}. That `
+      + `cheapness IS the λ_min(J) ≥ 1 result showing up as a measurement: a unique root, global `
+      + `convergence, no branch-picking.`]);
+  }
+  lines.push(["#6d7885", `raster ${ct.raster.n_rows}×${ct.raster.n_cols} at `
+    + `${ct.raster.cols_per_period} columns/period, grey = contact force (max `
+    + `${ct.raster.force_max} N). The image is an OR-reduction and so a DILATION in time — duty and `
+    + `episodes above are computed at full rate, never read off these pixels.`]);
+  lines.forEach(([colour, text], i) => {
+    g.fillStyle = colour;
+    // The headline reads at 10px; the supporting lines at 9px, which is what makes five blocks fit
+    // under the two plots without stealing height from the raster.
+    g.font = `${i === 0 ? 10 : 9}px ui-monospace, monospace`;
+    // + lh, not + 3: wrapText returns the BASELINE of its last line, so advancing by a bare gap
+    // laid every block on top of the one before it.
+    y = wrapText(g, text, x, y, w, 11) + 11 + 3;
+  });
+}
+
+// Canvas has no text wrapping and these readouts carry numbers of varying width, so hand-wrapping
+// would break the moment a slider moved. Returns the y of the last baseline drawn.
+function wrapText(g, text, x, y, w, lh) {
+  let line = "";
+  for (const word of text.split(" ")) {
+    const next = line ? line + " " + word : word;
+    if (g.measureText(next).width > w && line) { g.fillText(line, x, y); y += lh; line = word; }
+    else line = next;
+  }
+  if (line) g.fillText(line, x, y);
+  return y;
 }
 
 // ── acoustic bore: pressure down the tube, and two ends that are NOT alike ────────────────────
@@ -1318,7 +1657,7 @@ function tick(ts) {
       scrub.value = currentFrame;
     }
     (dims === 2 ? drawHeatmap : isGeom ? drawGeometric
-      : isSymp ? drawSympatheticViz : isJawari ? drawJawariViz
+      : isSymp ? drawSympatheticViz : isJawari ? drawJawariViz : isFret ? drawFretViz
         : isBore ? drawBore : drawString)(currentFrame);
   }
   requestAnimationFrame(tick);
@@ -1678,11 +2017,28 @@ function drawEnergy() {
     // flat-loss oracle to compare against, so both report pure passivity — but for different reasons.
     const spec2 = payload && payload.meta ? payload.meta.spectrum : null;
     const isWein = spec2 && spec2.kind === "sympathetic" && spec2.regime === "weinreich";
+    // The fret is keyed on the MODEL, not on hasOracle. It ships decay_oracle=False, so it would
+    // otherwise fall into the mallet/weinreich `else` below and print "felt/membrane loss removes
+    // energy from a ½M·v₀² floor" — nonsense for a string on a rail — while energy.decay_triple
+    // went entirely unshown. The panel would still draw and the badge would still say "passive",
+    // so a check of the form "does it render? does it pass?" would sail past a lying readout.
+    const tri = isFret ? e.decay_triple : null;
     out.textContent = hasOracle
       ? `lossy · energy monotone decrease: ${mono ? "yes ✓" : "NO ✗"}${convNote}\n` +
         `measured 2σ = ${meas == null ? "—" : meas.toFixed(3)} s⁻¹` +
         `  (flat-loss oracle ${e.lossy.oracle_2sigma.toFixed(3)})`
-      : isWein
+      : tri
+        ? `lossy · passive: energy monotone non-increasing: ${mono ? "yes ✓" : "NO ✗"}${convNote}\n` +
+          `decay ${tri.rate == null ? "—" : tri.rate.toFixed(3)} s⁻¹ · naive 2σ₀ ` +
+          `${tri.oracle_2sigma.toFixed(3)} · corrected 2σ₀·⟨2KE/E⟩ ` +
+          `${tri.corrected == null ? "—" : tri.corrected.toFixed(3)}` +
+          `${tri.agreement == null ? "" : ` (agree to ${(tri.agreement * 100).toFixed(2)} %)`}\n` +
+          `"rate = 2σ₀" is really an EQUIPARTITION assumption ⟨KE⟩ = E/2 — true of harmonic ` +
+          `motion, not of a string slapped by a stiff one-sided spring (⟨2KE/E⟩ = ` +
+          `${tri.equipartition == null ? "—" : tri.equipartition.toFixed(4)}). A diagnostic ` +
+          `triple, not a gate: both sides come from one run of one identity, and the barrier's ` +
+          `losslessness is already certified at machine precision by the σ₀ = 0 drift.`
+        : isWein
         ? `lossy · passive: total energy monotone non-increasing: ${mono ? "yes ✓" : "NO ✗"}` +
           `${convNote}\na two-rate decay to a nonzero aftersound floor — no single-exponential ` +
           `oracle; the two slopes are the claim (see the two-stage-decay panel)`
@@ -1830,6 +2186,14 @@ function drawDiagnostics() {
     partialsTitle.firstChild.textContent = "Sustained shimmer ";
     partialsSub.textContent = "late-window brightness vs a clean string";
     drawJawari();
+    return;
+  }
+  // The fret: like the jawari, a spectral CONTRAST rather than its own partials — but with the
+  // contrast's own non-monotonicity on screen, because here the slider disproves a monotone label.
+  if (spec && spec.kind === "fret") {
+    partialsTitle.firstChild.textContent = "Buzz brightness ";
+    partialsSub.textContent = "vs an out-of-reach control — NOT monotone in clearance";
+    drawFretSignature();
     return;
   }
   // The bore: a 1-D model whose headline is the BELL, not its partials. Odd harmonics are
@@ -2444,6 +2808,89 @@ function drawJawari() {
     + `\nwrap edge sweeps nodes ${wrap.min_node}–${wrap.max_node} of ${wrap.support}, std `
     + `${wrap.std}, in contact ${(wrap.duty * 100).toFixed(0)} % of the run — the suite's flat rail `
     + `at matched clearance pins at std ${wrap.flat_rail_std} (tests/test_jawari.py)`;
+}
+
+// ── the fret's signature: brightness against a control, and the label it may NOT carry ────────
+// Two things, deliberately, because one of them is a warning. Left: the centroid the rail buys
+// against a control that is the SAME string with the rail dropped out of reach — a baseline that
+// reads exactly f₁, because a rail-free mode-1 pluck is a pure sinusoid, so the whole elevation is
+// harmonic content the rail added. Right: where the current clearance sits against the clearance
+// where the elevation PEAKS — the panel's own disclaimer, drawn. `test_closer_barrier_is_brighter`
+// compares 4 mm vs 1 mm and passes by a hair (2.50 vs 2.59); a "closer is brighter" label would be
+// disproved by this model's own star slider, which samples the range that two-point test never did.
+function drawFretSignature() {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height, top = 22, padB = 20;
+  g.clearRect(0, 0, W, H);
+  const out = $("partials-readout");
+  const sp = payload && payload.meta && payload.meta.spectrum;
+  if (!sp) { out.textContent = "no fret signature"; return; }
+  const barsW = Math.round(W * 0.42), plotH = H - top - padB;
+
+  // Left: the two centroids, on a shared linear Hz axis with f₁ marked.
+  const hi = Math.max(sp.centroid_fret, sp.centroid_control, sp.f1) * 1.15 || 1;
+  const by = (v) => top + plotH - (v / hi) * plotH;
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(30, top, barsW - 38, plotH);
+  const yf1 = by(sp.f1);
+  g.strokeStyle = "rgba(255,207,92,.4)"; g.setLineDash([4, 4]);
+  g.beginPath(); g.moveTo(30, yf1); g.lineTo(barsW - 8, yf1); g.stroke(); g.setLineDash([]);
+  g.font = "9px ui-monospace, monospace"; g.fillStyle = "#ffcf5c";
+  // In the axis margin, NOT on the line. The control's centroid IS f₁, so its bar-top label already
+  // sits on this exact height — and when the rail is out of reach the fret's bar joins it, putting
+  // three labels on one baseline. The number is on the bars; the marker only needs naming.
+  g.fillText("f₁", 6, yf1 + 3);
+  [["control", sp.centroid_control, "#8b98a8"], ["fret", sp.centroid_fret, "#ff8f4c"]]
+    .forEach(([label, v, colour], i) => {
+      const bw = (barsW - 54) / 2, bx = 38 + i * (bw + 8);
+      g.fillStyle = colour; g.fillRect(bx, by(v), bw - 6, top + plotH - by(v));
+      g.fillStyle = "#c9d3de";
+      g.fillText(`${Math.round(v)}`, bx, by(v) - 4);
+      g.fillStyle = "#8b98a8"; g.fillText(label, bx, H - 8);
+    });
+  g.fillStyle = "#8b98a8"; g.fillText("Hz", 6, top + 8);
+
+  // Right: the clearance axis, with the measured peak named and the user's setting on it.
+  const cx0 = barsW + 18, cw = W - cx0 - 12, cMax = 0.008;
+  const cy = top + plotH * 0.62;
+  const cxp = (c) => cx0 + Math.min(1, c / cMax) * cw;
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(cx0, cy); g.lineTo(cx0 + cw, cy); g.stroke();
+  // A hump, not a ramp — the shape IS the claim being withheld.
+  g.strokeStyle = "#ff8f4c"; g.lineWidth = 1.5; g.beginPath();
+  for (let i = 0; i <= 40; i++) {
+    const c = (i / 40) * cMax;
+    const d = (c - sp.peak_clearance) / 0.0022;
+    const X = cxp(c), Y = cy - 26 * Math.exp(-d * d) - 4;
+    if (i === 0) g.moveTo(X, Y); else g.lineTo(X, Y);
+  }
+  g.stroke();
+  g.strokeStyle = "rgba(139,152,168,.5)"; g.setLineDash([3, 3]);
+  g.beginPath(); g.moveTo(cxp(sp.peak_clearance), cy - 34); g.lineTo(cxp(sp.peak_clearance), cy);
+  g.stroke(); g.setLineDash([]);
+  g.fillStyle = "#8b98a8";
+  g.fillText(`peak ~${(sp.peak_clearance * 1000).toFixed(1)} mm`, cxp(sp.peak_clearance) - 26,
+             cy - 38);
+  g.fillStyle = "#4cc2ff";
+  g.beginPath(); g.arc(cxp(sp.clearance), cy, 4, 0, 7); g.fill();
+  g.fillText(`you: ${(sp.clearance * 1000).toFixed(1)} mm`, cxp(sp.clearance) - 20, cy + 14);
+  g.fillStyle = "#8b98a8";
+  g.fillText("brightness vs clearance — non-monotone", cx0, cy + 34);
+  g.fillText(`0 … ${cMax * 1000} mm`, cx0, H - 8);
+
+  out.textContent =
+    `brightness ${sp.elevation}× the out-of-reach control — centroid ${sp.centroid_fret} Hz vs `
+    + `${sp.centroid_control} Hz. The control reads exactly f₁ = ${sp.f1} Hz (a rail-free mode-1 `
+    + `pluck is a pure sinusoid), so the entire elevation is harmonic content the rail added.\n`
+    + `NOT monotone in clearance: the elevation peaks near `
+    + `${(sp.peak_clearance * 1000).toFixed(1)} mm and falls either side as the string begins to `
+    + `pin — the suite's two-point 4 mm vs 1 mm comparison does not license a "closer is brighter" `
+    + `law, and this slider would disprove one.\n`
+    + `zero-crossing rate ${sp.crossing_rate} Hz vs ${sp.crossing_rate_control} Hz control `
+    + `(${sp.crossing_cents} cents) — a crossing RATE, deliberately not called pitch: a buzz adds `
+    + `crossings *within* a period, so this mixes f₁ with the rail's contribution. It gates nothing.\n`
+    + `magnitude credential (cited, not re-run): the static-equilibrium oracle `
+    + `${sp.static_oracle.claim} holds to ${sp.static_oracle.residual.toExponential(1)} at `
+    + `α = ${sp.static_oracle.alpha} — model #8's exact money test for the contact force.`;
 }
 
 // ── the bell: one bounce against a closed form, on a log R/Z₀ axis ────────────────────────────

@@ -3486,6 +3486,9 @@ def _fret_signature_block(fret_pickup: NDArray[np.float64], ctrl_pickup: NDArray
     cents = (1200.0 * math.log2(f_cross / c_cross)
              if (f_cross > 0 and c_cross > 0) else None)
     return {
+        # `drawDiagnostics` dispatches on meta.spectrum.kind; without it the fret falls through
+        # every branch to drawPartials, which reads per-partial data this model never ships.
+        "kind": "fret",
         "centroid_fret": round(f_bright, 1),
         "centroid_control": round(c_bright, 1),
         "elevation": round(elevation, 3),

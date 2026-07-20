@@ -2642,6 +2642,16 @@ def test_fret_brightness_is_reported_with_its_non_monotonicity_named():
     assert peak > far and peak > near, "brightness must peak at an INTERMEDIATE clearance"
 
 
+def test_fret_signature_block_carries_its_dispatch_kind():
+    """`drawDiagnostics` switches on `meta.spectrum.kind`, and every branch is an equality test —
+    so a missing key is not a missing panel, it is the WRONG panel: the fret falls through to
+    drawPartials, which reads per-partial arrays this model never ships. The contact block carries
+    its own `kind` for the same reason; both are pinned so neither can be dropped silently."""
+    payload = _fret()
+    assert payload["meta"]["spectrum"]["kind"] == "fret"
+    assert payload["meta"]["contact"]["kind"] == "fret"
+
+
 def test_fret_crossing_rate_is_never_called_pitch():
     """It rises steeply and is real, but f = c/(2 L_eff) would OVERCLAIM: the suite's
     test_contact_is_intermittent is explicit that the string is NOT pinned to a shorter length. A
