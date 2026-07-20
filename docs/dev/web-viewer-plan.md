@@ -943,17 +943,161 @@ before it can return, so no standing wave forms and the odd-harmonic / partial c
 (`spectrum.applies = false`) — the envelope correctly degrades to the trace of a single pass. That
 is a correct render with nothing to measure, which is not the same as a wrong one.
 
+### Batch 10 (PLANNED) — the dynamic single reed: the clarinet speaks
+
+The second half of the wind split. Batch 9 built the pressure/`S(x)` field type on the model with no
+root-find per step; batch 10 puts a **self-oscillating exciter** on the mouth end of that same tube.
+`ReedBore` (`core/reed.py`, wind batch 3) *contains* a `Bore`, so the tube, the envelope, the
+per-end rendering and the `meta.ends` dispatch all come across unchanged — the reed is a new **mouth
+end type**, an addition to the switch batch 9 deliberately built with two cases rather than one.
+All-wrapper again; `physsynth/core` stays untouched.
+
+The reed is the acoustic dual of the bow (batch 2): both are continuous nonlinear exciters solved by
+a scalar root-find per step, both start from **rest** and climb to a limit cycle, both therefore need
+the **energy-BALANCE** panel rather than drift or passivity. But the reed's balance is a *different
+and stronger* claim than the bow's, and that difference is the batch's structural point.
+
+Pre-build probe numbers (`temp/reed-viewer-probe/`), all **measured before any wiring**:
+
+- **THE STRUCTURAL FACT: unlike the bow, the reed's balance is a GENUINE residual, not a tautology.**
+  Batch 2's lossy branch could not be scored, because the bow's dissipation is never measured — it is
+  *inferred* as `work − ΔE`, so a "residual" there is identically zero by construction. The reed
+  measures **every channel independently**: `mouth_work = Σk·p_m·U` (active breath in),
+  `jet_loss = Σk·dp̄·U_B ≥ 0` (Bernoulli), `reed_damp_work = Σk·Mr·g·y′² ≥ 0` (lip damping), plus the
+  bell's **booked** radiation. So `ΔE − (mouth − jet − damp)` is a number that can *fail*, and it
+  doesn't: measured **7.6e-15 relative** on a lossless open bore and **2.9e-15** with a radiating
+  bell, with every channel non-trivially populated (mouth 1.58e-2, jet 9.01e-3, damp 6.63e-4,
+  radiated 5.41e-3 J over 0.25 s). This is the strongest energy claim any driven model in the viewer
+  can make, and the panel should say so rather than reusing the bow's wording.
+- **…and it inherits batch 9's "a sum cannot see a dead summand".** A residual of 1e-15 is also what a
+  *dead* reed reports — that is precisely `reed-state`'s "balance is necessary but not sufficient; a
+  wrong-sign reed rings down and passes on silence". So the headline test asserts the **channels are
+  populated** (each `> 0`, mouth ≫ 0) alongside the residual, exactly as batch 9's split test had to
+  assert the split *moves*. Second customer for that rule, one batch later.
+- **NO VK-style convergence gate — verified, not assumed.** The worry was the tension/VK precedent:
+  a non-converged solve masking as a good number. The reed *cannot* mask, because the per-step balance
+  error is `k·p̄·R/p_pref0` — **linear in the Newton residual R** (the core's identity, not something
+  the sweep below isolates) — so a bad solve shows up directly *as* a bad balance. Confirmed by
+  loosening `newton_tol`: 1e-10 → **1.8e-15**, 1e-8 → 1.7e-14, 1e-6 → 1.3e-11, 1e-4 → 3.7e-10,
+  1e-2 → **7.8e-9** — a monotone six-decade degradation. (`newton_tol` bounds R but does not equal it,
+  so the sweep shows the *direction and magnitude* of the coupling, not its slope; the linearity claim
+  rests on the identity.) So
+  `newton_tol` is pinned tight (1e-10) and **not exposed**, and the balance is left to self-diagnose;
+  no verdict override, no convergence block. *Generalizable: a gate is needed when a bad solve can
+  look like a good result — check the direction of the coupling before copying one in.*
+  (The bracket fallback fires 2.2 % of steps on the lossless bore, 0.26 % with the bell — the `sqrt`
+  cusp at `dp = 0`, expected and already covered by the core's stability tests.)
+- **THE HEADLINE IS THE SIGNATURE, not the balance** — the balance is table-stakes-plus, the physics
+  claim is *that the clarinet speaks*. Three sub-claims, all measured:
+  - **The blowing threshold brackets `γ ≈ 1/3`** (Dalmont/Kergomard's small-oscillation rule), swept
+    on the settled-tail **AC** rms normalized by `p_closing` (see the next bullet) — **but only at a
+    window ≥ 0.8 s, and that is a real trap, not a tolerance.** Near the onset the reed *critically
+    slows down*: the 0.04 s settling time was measured at γ = 0.5, far above threshold, and a
+    marginally sub-threshold reed's transient takes far longer to die. At a 0.4 s window γ = 0.355
+    reads **0.01123** — an apparently intermediate, half-speaking point; at 1.6 s the same γ reads
+    **0.00441**, i.e. sitting on the silent floor (γ = 0.338 → 0.00427). The window was measuring a
+    transient that had not finished decaying. Converged at 0.8–1.6 s the sweep is
+    γ = 0.304 → 0.0040, 0.338 → 0.0043, **0.355 → 0.0044** (silent), **0.372 → 0.062** (speaking),
+    0.388 → 0.186, 0.405 → 0.259, 0.507 → 0.476. So the transition is *sharper* than the first
+    measurement suggested — a **14× jump across a 5 % step in γ** — and the bracket **tightens to
+    (0.355, 0.372]**, a touch above 1/3, exactly as `reed-state` records (this bore's losses raise it).
+    *Generalizable: a settling time measured deep in the oscillating regime does not bound the
+    settling time near the bifurcation — critical slowing down is the whole character of an onset,
+    and a fixed window read across one will manufacture an intermediate point that is not there.*
+    (The bow's and batch 9's "a rate needs a long window" lesson, now aimed at the onset itself.)
+    `γ = p_mouth/p_closing` is
+    the star control, and it is the dimensionless-coordinate rule's fifth customer (after `dT/T₀`,
+    `frac`, `downswing/depth`, `R/Z₀`) — `p_mouth` alone means nothing without the reed that resists it.
+  - **The pitch is set by the AIR COLUMN, not the reed — but state it as LEVERAGE, not as "it barely
+    moves".** At iso-γ = 0.5, sweeping `f_reed` 2000 → 3000 Hz (**+50 %**) moves the played note
+    162.43 → 167.39 Hz (**+3.1 %**, −94 → −42 cents against `c/4L` = 171.50). The suite's test asserts
+    only `< 6 %`; the honest panel reports the *ratio* (a 50 % reed sweep buys 3 % of pitch) and the
+    trend, which is itself physics: the reed's compliance acts as an **end correction**, so a stiffer
+    reed lands *closer* to `c/4L` — monotone across all three points. The bell contributes only ~8
+    cents over `R/Z₀` 0.005 → 0.097, so the flatness is the reed's, not the bell's. Measured with
+    parabolic-refined `measure_partials_near` (batch 9's interpolate-the-spectrum rule, third
+    customer) — a raw bin pick at this window is worth 34 cents and would invent the trend.
+- **BOTH SWEEPS ARE PINNED AT A FIXED N, DECOUPLED FROM THE RENDER SLIDER — a budget fix that turns
+  out to be a correctness fix (advisor's catch).** The naive design recomputes each sweep at the
+  user's N, which (a) blows the budget — at N = 256 the threshold sweep alone is ~490k steps, larger
+  than the entire proposed render cap, for a total ~2× over — and (b) quietly makes the *headline
+  number a function of the display grid*. Measured, it need not be either: the sweep is
+  **N-invariant to the fourth significant digit** (γ = 0.338 → 0.00431/0.00429/0.00428/0.00427/0.00426
+  and γ = 0.372 → 0.06802/…/0.06792 across N = 64/96/128/200/256), and the pitch leverage is
+  **3.05 % at N = 64, 128 and 200 to three digits**. Both are properties of *(bore geometry, f_reed,
+  γ)*, not of the grid. So they are computed once at **`REED_SWEEP_N = 64`** and **memoized on the
+  geometry key** (nothing the γ slider touches changes them), which bounds their cost as a constant
+  and makes the threshold bracket stable while the user drags N. This is batch 9's dispersion rule —
+  *when a claim is not about the render, don't buy it with the render's wall clock* — with the
+  N-invariance measured rather than assumed.
+  - **Odd harmonics dominate:** `peak(f₁)/peak(2f₁)` = **1.43e4**, `peak(3f₁)/peak(2f₁)` = **27**.
+    Table-stakes for a closed-open tube (boundary-determined, batch 9's rule) but it is the clarinet's
+    audible hallmark and belongs on the spectrum strip.
+- **Sub-threshold is NOT silent, and the panel must normalize or it lies.** The raw mouthpiece rms
+  below threshold is **9–15 Pa** — almost all of it the **DC** mouthpiece pressure, not oscillation
+  (measured DC 8.2 Pa vs AC 13.0 Pa at γ = 0.338). A raw-rms gate would report a "note" where there
+  is only a static pressure. So every amplitude figure is **mean-removed AC rms normalized by
+  `p_closing`**, which collapses the whole sweep onto one dimensionless axis and makes the 16× jump
+  legible. Below threshold → **LABEL ("did not speak"), never FAIL** — the bow's Schelleng rule and
+  the jawari's grazing rule, third customer: a reed blown too gently is correct physics.
+- **"Beats shut once per period" needs debouncing — measured 1.94 raw.** The opening trace at γ = 0.5
+  is a textbook slam, but with a **rebound**: per 800-sample period the episodes are a 35-sample
+  precursor, a 66-sample re-opening, then the main **291-sample** closure (**37 % duty**). Counting
+  raw zero-crossings therefore reports ~2 closures per period for what is plainly one beat. The panel
+  merges episodes separated by less than ~10 % of a period → **1.00 per period**, and reports the
+  **duty** (which needs no debouncing) as the primary number. *Generalizable: a per-period event count
+  over a signal that chatters at the threshold measures the chatter, not the event.* (The bow's
+  "a rate needs a long window" trap, one level down — here the window is fine and the *event
+  definition* is what quantizes.)
+- **The mouthpiece pressure is a clean SQUARE WAVE** (measured: flat at −1490 Pa, snap to +1460 Pa,
+  snap back), which is both the iconic clarinet signature and the natural audio pickup. The bell's
+  far-field `pressure()` is what one would actually *hear*; which of the two is the audio and which
+  is a trace is a task-2 (viz design) decision, not a human question.
+- **Settling is FAST, which makes the bow's tail-capture cheap here.** The tone reaches 90 % of its
+  final rms at **t ≈ 0.04 s** and is flat to 0.8 % thereafter. So the animation window is captured
+  out of the audio run via batch 2's `snapshot_from` — **ONE run, never two.** Re-running a second
+  resonator silently doubled the cost of a root-find-per-step model in batch 2 and the work budget
+  could not see it; that lesson applies verbatim to a model that is also a root-find per step.
+- **Animation pacing inherits batch 9's rule unchanged, and the probe confirms it transfers.** Transit
+  `L/c₀` = 1.458 ms vs the tone period 5.831 ms = exactly 4 transits. Pacing on `f_ref = f₁` gives
+  **2.98–3.05 frames/transit** (aliased); pacing on **`f_ref = c₀/L`** gives **11.6–12.8
+  frames/transit, flat in N** — identical to batch 9 to two digits, because the reed changes the
+  *excitation*, not the tube's timescale.
+- **Bore viscous σ stays fixed at 0 and unexposed** — batch 9's least-booked-channel corollary,
+  inherited exactly as it was written to be. `R_bell` is booked, so a *radiating* reed still closes
+  the balance (measured above), and the bell stays the loss control and stays ON by default.
+- **Cost is cheap and the reed barely charges for itself: ~11 µs/step, FLAT in N** (10.7 / 11.1 /
+  11.3 / 11.8 at N = 64 / 128 / 200 / 256) against batch 9's bare bore at 9–11 µs — the root-find is
+  ~15 % on top, not the bow's or jawari's multiple. But `fs = c₀N/L` still buys the sample rate, so
+  budget the **product**: 1.0 s of audio costs 0.5 s (N=64) → 1.5 s (N=200) → 2.1 s (N=256) of wall
+  clock. Two budgets, because there are two kinds of run and one cap over both would hide the larger:
+  - **Render (tone + animation), N-dependent:** `REED_N_MAX = 256`, `REED_AUDIO_MAX = 1.0`,
+    `REED_WORK_MAX = 300_000` steps counting **`n_anim + n_audio`** (the jawari/batch-9 rule) → worst
+    passing render ≈ **2.5 s**. The audio cap is *shorter* than batch 9's 1.5 s because the reed needs
+    no ring-down — it settles in 0.04 s and the tail is what we want anyway.
+  - **Sweeps, fixed-N and memoized:** at `REED_SWEEP_N = 64`, 7 threshold points × 0.8 s + 3 pitch
+    points × 0.6 s ≈ **324k steps ≈ 3.5 s**, paid once per geometry and free on every subsequent
+    render. Budgeted as its own constant, *outside* `REED_WORK_MAX`, so neither cap can launder the
+    other. Worst *cold* first render ≈ **6 s** total, against the jawari's 34.2 s — comfortably inside
+    the verifier's 90 s window.
+
+Build surface (to be enumerated against at review time): `_build_payload_reed` behind the
+`_build_payload` dispatch; a `"reed"` mouth value in `meta.ends` + its `drawBore` branch; the batch-2
+balance panel with a **reed sub-branch** in `drawEnergy` (the bow's "inferred dissipation" wording is
+wrong here — this one is measured); a new **signature panel** (threshold sweep + pitch leverage +
+opening/beating trace); `gamma` as the star control with `MODEL_RANGES` + **`_default` resets** (the
+leak family's fifth member — `p_mouth`, `f_reed`, `q_reed`, and whatever else the reed re-ranges,
+each on its own **step grid**, batch 8's off-grid-snap rule); a hand-rolled instrumented loop
+(`simulate()` gives neither the balance channels nor the opening trace nor the frames — all three
+*are* the panels), constructing a `SimResult` for `_energy_block`.
+
 ### Later batches (rough map — not firm)
 
-- **Wind** — the reed is now **batch 10** (above); see the wind bullet below for its telemetry.
+- **Wind** — the reed is **batch 10** (above); the wind leg closes with it.
 - **Excited strings** — the jawari landed in batch 8 above; the bow in batch 2. What remains of the
   barrier family is **fret buzz / a flat rail or point fret** (model #8's *intermittent* regime, the
   physical opposite of the jawari's persistent travelling wrap) and the tanpura **cotton thread
   (juari)** = one more barrier node at a chosen position.
-- **Wind** — bore + reed (new field type: pressure along an `S(x)` profile). The reed now reuses
-  batch 2's balance panel; its telemetry differs (mouth / jet / reed-damping channels are each
-  sign-definite and separately measured, so unlike the bow it can close the balance *with* loss on
-  — the lossy branch may be a genuine residual there rather than an inferred one).
 - **Sympathetics Weinreich two-stage decay** — DONE, batch 7 above.
 - **The parametric-instability demo** deserves its own batch with real viz (energy cascading into the
   neighbour modes — model #9's IN-plane exchange, which is the SAME `2ω` pump batch 3's whirl aims at
