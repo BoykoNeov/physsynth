@@ -835,11 +835,59 @@ Pre-build probe numbers (`temp/bore-viewer-probe/`), all **measured before any w
   Budget on the product, not on N: `BORE_N_MAX = 256`, `BORE_AUDIO_MAX = 1.5`, `BORE_WORK_MAX =
   300_000` steps → worst passing render ≈ **2.7 s**, against the jawari's 34.2 s.
 
-Still open, to settle while building: whether the pressure field generalizes `drawString` or earns
-its own draw path (it is 1-D with `dims = 1`, but wants the `S(x)` tube drawn *around* it and a
-standing-wave envelope); and how the radiating end is drawn as distinct from a rigid wall. The
-`MODEL_RANGES` discipline applies in full — val on its own `step` grid from `min`, reset **every**
-field in `_default`, extend the switch-check sweep to the new model.
+#### The viz design (SETTLED — task 2, measured 2026-07-20)
+
+- **`drawBore` is its own path, and the forcing reason is correctness, not precedent.** `drawString`
+  pins **both** endpoints to the rest line. The bore's closed end is a pressure **antinode** (p free
+  and large); only the open end is a node (p = 0). That boundary asymmetry **is** the odd-harmonic
+  claim, so `drawString` would not merely look wrong — it would render the batch's own physics
+  backwards. The polyline/margin/scale arithmetic it shares is ~8 lines; duplicating that is cheaper
+  and far clearer than parameterizing `drawString` with five flags. Dispatch extends the existing
+  ternary chain at `app.js:934` with `isBore`.
+- **Ends render by switching on `meta.ends`, never hardcoded.** This viz is the gate batch 10
+  reuses, and the reed *is* a bore with a new end type at the mouth. `ends = ["closed",
+  "radiating"]` → a `"reed"` case is an addition, not a rewrite. Closed = a hatched solid block
+  (you cannot pass); open = the tube simply stops, with a dashed vertical marking the p = 0 node;
+  radiating = a flared mouth plus an outward glow whose intensity tracks the **booked** radiated
+  power — the field-side dual of the energy panel's radiated split, so energy leaving is *seen*
+  leaving. At the matched `R = Z₀` the pulse reaches the mouth and simply vanishes: the anechoic
+  null, visible.
+- **THE TRAP — transit time ≪ render length; pace the animation on the TRANSIT, not on f₁.** One
+  transit is `L/c₀ = 1.458 ms`, but `f₁ = c₀/4L = 171.5 Hz` (5.83 ms = 4 transits), and a 1.5 s
+  audio render is ~1000 transits. Pacing on f₁ the way every string model does gives a **measured
+  2.98–3.05 frames per transit at every N** — the bounce-and-flip picture aliases into noise, and
+  `playback_speed` cannot rescue it because the frames are already decimated in *sim* time. The fix
+  needs no new mechanism: the existing `anim_stride = round((fs / f_ref) / fpp)` seam already takes
+  a model-appropriate reference (the bow substitutes `f_hard_est`, the tension string `f_osc`). Use
+  **`f_ref = c₀/L`** — one transit — so "frames per period" reads as "frames per transit": measured
+  **11.6–12.8 frames/transit, flat in N** (64→256). `BORE_ANIM_WIN` default **0.03 s** = 20.6
+  transits ≈ 250 frames, under `MAX_FRAMES` at every N.
+  **Generalizable: pace the animation on the timescale of the claim the picture makes, not on the
+  fundamental. They coincide for a string and differ 4× for a bore.**
+- **Cost hole found while measuring the pacing: `ANIM_WIN_MAX = 2.0` is a *shared* guard that the
+  bore's budget does not cover.** At N = 256 a 2 s window is **351,232 animation steps** — over
+  `BORE_WORK_MAX` on its own, and the `MAX_FRAMES` re-stride does **not** save it (it caps the
+  frames emitted, not the steps simulated). Follow the jawari precedent: count **`n_anim + n_audio`**
+  against `BORE_WORK_MAX`, rather than inventing a second constant.
+  **Generalizable: a frame-count ceiling is not a cost ceiling — re-striding hides the sim cost it
+  does not remove.**
+- **Two runs, two emissions — do not architect around one shared radiated array.** Frames come from
+  `anim_res`, the energy split from `_energy_block(audio_res)`; radiation is booked in both, but
+  they are different sims at different strides. Emit per-frame cumulative radiated energy **in the
+  frames block** (for the mouth glow) and keep the audio-run split in the energy block.
+- **Envelope and polyline have different sources, each sized to its job.** The animated polyline is
+  the *short* transit-paced window (the live bounce); the envelope is a running `max|p(x)|` over the
+  *full-length audio* run, shipped as a **static** overlay — that is what makes the formed
+  node/antinode structure legible, which no single instantaneous frame can show. Honest caveat to
+  print: at the anechoic `R = Z₀` there **is** no standing wave, and the envelope correctly degrades
+  to the trace of the pulse's single pass.
+- **Scope split so task 3 does not balloon.** MVP = tube outline + pressure polyline + per-end
+  rendering + envelope, and **keep the mouth glow** (it is the field-side half of the batch
+  headline). The `divColor` tube-fill (reusing the membrane's diverging colormap) is the genuinely
+  cuttable piece — build it only if the polyline alone fails to read as a tube.
+
+The `MODEL_RANGES` discipline applies in full — val on its own `step` grid from `min`, reset
+**every** field in `_default`, extend the switch-check sweep to the new model.
 
 ### Later batches (rough map — not firm)
 
