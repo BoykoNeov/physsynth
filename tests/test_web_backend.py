@@ -3008,6 +3008,19 @@ def test_platebody_terminus_is_the_OPPOSITE_story_per_boundary():
     assert supp["terminus_f1"] == pytest.approx(96.5, abs=2.0), "supported lands just below c/2L"
     assert free["terminus_f1"] == pytest.approx(116.7, abs=2.0), "free OVERSHOOTS c/2L"
     assert supp["terminus_f1"] < supp["f1_clamped"] < free["terminus_f1"], "they straddle 100 Hz"
+    # DURATION-ROBUST: the terminus is a dedicated near-nut-pluck probe, NOT read off the user run —
+    # the user's 0.3 L pluck flips free's argmax to ~99 at 2 s (the avoided-crossing doublet). The
+    # probe must read the SAME overshoot at 2 s as at 0.5 s, or the "OVERSHOOTS" readout would lie.
+    free2 = _pb(domain="free", bridge_stiffness=3000, audio_duration=2.0)["meta"]["spectrum"]
+    assert free2["terminus_f1"] == pytest.approx(free["terminus_f1"], abs=1.0), "duration-robust"
+    assert free2["terminus_f1"] > free2["f1_clamped"], "free still OVERSHOOTS at 2 s (not flipped)"
+    # K-DEPENDENT: the terminus is NOT a fixed per-boundary label — a SOFT bridge leaves the free
+    # end near its quarter-wave, so even the free plate reads BELOW c/2L at low K (overshoot needs
+    # stiff). Pins that the frontend must derive "overshoots/near/climbing" from the value, not the
+    # boundary alone (else a low-K panel would claim OVERSHOOTS while showing ~60).
+    free_soft = _pb(domain="free", bridge_stiffness=500)["meta"]["spectrum"]
+    assert free_soft["terminus_f1"] < free_soft["f1_clamped"], "a soft bridge does NOT overshoot"
+    assert free_soft["terminus_f1"] < free["terminus_f1"], "the terminus climbs with K"
 
 
 def test_platebody_k_zero_decouples_the_string_bit_for_bit():

@@ -41,6 +41,8 @@ const LABELS = {
   K: "bridge K", detune: "detune (semis)",
   clearance: "rail clearance", rail_frac: "rail span", rail_stiffness: "rail K",
   bell_ratio_exp: "bell log₁₀(R/Z₀)",
+  bridge_stiffness: "bridge K", sigma_body: "body loss σ_b", distance: "listen dist r",
+  n_plate: "plate grid N", sigma_plate: "plate loss σ_p",
 };
 
 // Per-model slider re-ranging (min/max/step/fixed/val) applied on model switch. The backend mirrors
@@ -199,6 +201,25 @@ const MODEL_RANGES = {
           distance: { min: 0.5, max: 4.0, step: 0.1, fixed: 1, val: 1.0 },
           pluck_position: { val: 0.3 },
           audio_duration: { min: 0.2, max: 3.0, step: 0.1, fixed: 1, val: 2.0 } },
+  // String -> DISTRIBUTED plate body (batch 13): batch 12's lumped body swapped for a grid Plate, so
+  // the third stage finally has a PICTURE (the soundboard/cymbal ringing on the heatmap). ONE model
+  // key with a supported/free boundary domain (ranging is domain-conditional; the standalone plate
+  // does the same). Measured (platebody-viewer-probe): the exact Sherman-Morrison guard ceiling
+  // K_c ~ 13,968 N/m is the SAME for both boundaries (the string end-node term dominates) and SHRINKS
+  // with n_plate, so bridge_stiffness is ONE range [0, 12000] (default 3000, the core's own default,
+  // a big visible slosh well under K_c) and a high-N x high-K corner trips the exact guard -> clean
+  // error. lambda < 1 HARD-required (as the body). n_plate is the plate grid (8..24, default 16 =
+  // 17x17, reads the low Chladni pattern, renders in budget). sigma_plate gates the verdict (0 ->
+  // conservation drift, > 0 -> passivity, no 2σ oracle -- the off-modal coupled decay is multi-rate).
+  // Every re-ranged param (bridge_stiffness, n_plate, sigma_plate, distance) resets in _default.
+  platebody: { N: { min: 16, max: 160, val: 100 },
+               lambda: { min: 0.5, max: 0.99, step: 0.01, fixed: 2, val: 0.9 },
+               bridge_stiffness: { min: 0, max: 12000, step: 250, fixed: 0, val: 3000, unit: "N/m" },
+               n_plate: { min: 8, max: 24, step: 1, fixed: 0, val: 16 },
+               sigma_plate: { val: 0 },
+               distance: { min: 0.5, max: 4.0, step: 0.1, fixed: 1, val: 1.0 },
+               pluck_position: { val: 0.3 },
+               audio_duration: { min: 0.2, max: 3.0, step: 0.1, fixed: 1, val: 2.0 } },
   // Regime-level ranges, keyed "model:domain" and merged AFTER the model spec (see
   // applyModelRanges). The phantom regime is the first customer and needs both: κ = 8 is its
   // microscope (the geometric model defaults κ = 0, which is a HARMONIC string — every phantom
@@ -245,6 +266,13 @@ const MODEL_RANGES = {
               bridge_stiffness: { min: 200000, max: 8000000, step: 100000, fixed: 0, val: 2000000,
                                   unit: "N/mᵅ" },
               distance: { min: 0.5, max: 4.0, step: 0.1, fixed: 1, val: 1.0 },
+              // platebody's two new params (batch 13): n_plate (the plate grid) and sigma_plate (the
+              // plate loss). Their index.html home IS platebody's range, so _default just needs a
+              // sane base + val for the leak family — gatherParams ships every slider, so without a
+              // reset a platebody -> other switch would carry a stale plate grid/loss into a model
+              // that ignores them (harmless there) OR back in (re-overridden by MODEL_RANGES.platebody).
+              n_plate: { min: 8, max: 24, step: 1, fixed: 0, val: 16 },
+              sigma_plate: { min: 0, max: 80, step: 1, fixed: 0, val: 0, unit: "s⁻¹" },
               audio_duration: { min: 0.2, max: 6, step: 0.1, fixed: 1, val: 2 },
               // L and animation_window joined when the bore arrived: it is the first model to
               // re-range EITHER (L → 0.5 m, and the animation window down to a 0.1 s max because
@@ -266,11 +294,14 @@ const MODEL_RANGES = {
 // Secondary select repurposed per model: geometry (membrane), boundary (plate / von Kármán) or
 // REGIME (the geometric string — three claims, one string, cheapest first).
 const DOMAIN_MODELS = ["membrane", "mallet", "plate", "vk", "geometric", "sympathetic", "bore",
-                       "reed"];
+                       "reed", "platebody"];
 const DOMAIN_OPTS = {
   membrane: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
   mallet: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
   plate: [["supported", "Simply-supported (#5)"], ["free", "Free edge — Chladni (#5b)"]],
+  // The plate-as-body boundary: the free cymbal LEADS (the batch's headline — the biggest slosh and
+  // the curved-Chladni ring you watch), the supported soundboard is the canonical guitar-body case.
+  platebody: [["free", "Free cymbal — Chladni (#5b)"], ["supported", "Soundboard (#5)"]],
   vk: [["supported", "Supported gong (#6)"], ["free", "Free-edge cymbal (#6)"]],
   geometric: [["rotating", "Rotating wave — exact circle"],
               ["planar", "Planar — max|w| = 0 exactly"],
@@ -289,7 +320,8 @@ const DOMAIN_OPTS = {
          ["open", "Ideal open end (r = −1)"]],
 };
 const DOMAIN_LABELS = { membrane: "Domain", mallet: "Drum shape", geometric: "Regime",
-                        sympathetic: "Regime", bore: "Far end", reed: "Far end" };
+                        sympathetic: "Regime", bore: "Far end", reed: "Far end",
+                        platebody: "Body edge" };
 
 const sliders = {};      // param -> <input>
 const updaters = {};     // param -> fn() that refreshes its value label
@@ -318,6 +350,10 @@ let isBore = false, boreEnv = null, boreRad = null, boreEnds = ["closed", "open"
 // OWN scale: H0 = 0.4 mm against a 16 mm bore is 2.5 %, so drawn in the tube's units the entire
 // headline gesture is sub-pixel — the jawari zoom-pane lesson, second customer.
 let isReed = false, reedOpen = null, reedH0 = 4e-4;
+// Plate-as-body (batch 13): the DUAL field view. The main frames are the 2D plate heatmap (the
+// distributed body you watch ring, dims = 2, the standard heatmap path), and the string rides along
+// as a thin 1D strip composited on top — its own frame buffer, at the same frame count/times.
+let isPlateBody = false, strFrames = null, strWidth = 0, strX = null, strAmp = 1;
 const FIELD_COLORS = ["#4cc2ff", "#ff8f4c", "#9d7bff"];
 let audioSamples = null, audioFs = 48000, audioBuf = null, audioCtx = null, audioSrc = null;
 let speed = 0.02, animPlaying = true, scrubbing = false, currentFrame = 0, animStart = 0;
@@ -499,7 +535,7 @@ function updateLambdaHint() {
     hint.textContent = `λ = c·k/h = ${lam.toFixed(2)}  (must be < 1: the bridge spring pushes the `
       + `string's Nyquist mode unstable at λ = 1)`;
     hint.style.color = lam >= 1 ? "var(--bad)" : "var(--muted)";
-  } else if (m === "body") {
+  } else if (m === "body" || m === "platebody") {
     // Explicit string + body step, coupled by a spring — the sympathetic case: λ < 1 is HARD-required
     // (the string's Nyquist mode is marginal at λ = 1 and the spring tips it over), so the slider is
     // capped at 0.99. Not "no CFL"; the else branch below would wrongly say so.
@@ -789,6 +825,23 @@ function updateLambdaHint() {
           : `σ_body = ${Math.round(sb)} s⁻¹: the coupled system decays, but off-harmonic modes make `
             + "it multi-rate — passivity, no 2σ oracle.");
       bdHint.style.color = near ? "var(--warn, #ffcf5c)" : "var(--muted)";
+    } else if (m === "platebody") {
+      // The plate body's own live guard: the EXACT Sherman-Morrison ceiling K_c ~ 14k is the same for
+      // both boundaries AND shrinks as the grid grows, so a high-K × high-grid combo errors cleanly.
+      const K = param("bridge_stiffness"), spl = param("sigma_plate"), np = param("n_plate");
+      const near = K >= 10000;
+      const bnd = domainSel.value === "supported" ? "soundboard" : "cymbal";
+      bdHint.textContent =
+        `bridge K = ${Math.round(K)} N/m into the ${bnd} (grid ${np}×${np})`
+        + (near ? " — near the exact guard ceiling (K_c ~14k, and it SHRINKS as the grid grows)" : "")
+        + ". "
+        + (spl === 0
+          ? "σ_plate = 0: the verdict is conservation drift THROUGH the coupling — the TOTAL is flat "
+            + "while E_string sloshes into the plate you watch ring. Raise σ_plate for the passive, "
+            + "multi-rate coupled decay."
+          : `σ_plate = ${Math.round(spl)} s⁻¹: the coupled system decays, off-modal → multi-rate, `
+            + "so passivity, no 2σ oracle.");
+      bdHint.style.color = near ? "var(--warn, #ffcf5c)" : "var(--muted)";
     } else {
       bdHint.textContent = "";
     }
@@ -948,6 +1001,15 @@ function applyPayload(data) {
   isSymp = data.model === "sympathetic";
   isJawari = data.model === "jawari";
   isFret = data.model === "fret";
+  // Plate-as-body: the plate heatmap is the main (dims = 2) field, loaded above; the string strip is
+  // a SECOND 1D buffer drawn on top by drawPlateBody. Same frame count/times (one simulation).
+  isPlateBody = data.model === "platebody";
+  if (isPlateBody && data.string) {
+    strFrames = b64ToFloat32(data.string.b64);
+    strWidth = data.string.width;
+    strX = data.string.x || null;
+    strAmp = data.string.amp || 1;
+  }
   if (isFret) {
     // The rail is scattered back onto GRID coordinates by the backend (NaN off its support), same
     // convention as the jawari's barrier, and shares fieldAmp for the same reason: drawn on its own
@@ -1722,7 +1784,7 @@ function tick(ts) {
       currentFrame = Math.floor(physElapsed / animDt) % nFrames;
       scrub.value = currentFrame;
     }
-    (dims === 2 ? drawHeatmap : isGeom ? drawGeometric
+    (isPlateBody ? drawPlateBody : dims === 2 ? drawHeatmap : isGeom ? drawGeometric
       : isSymp ? drawSympatheticViz : isJawari ? drawJawariViz : isFret ? drawFretViz
         : isBore ? drawBore : drawString)(currentFrame);
   }
@@ -1888,6 +1950,68 @@ function drawHeatmap(idx) {
   }
 }
 
+// ── plate body: the DUAL field view (batch 13) ────────────────────────────────────────────────
+// The batch's new content, in ONE canvas: the distributed plate (the soundboard/cymbal) rings on
+// the heatmap that FILLS the panel, while the string that drives it rides as a thin strip along the
+// top. Showing both is the point — you watch the string pluck and the plate light up as the pluck's
+// energy transfers in (~10 ms), the coupling made visible. The heatmap reuses the standard dims = 2
+// path (a plate is a plate); the string strip is its own 1D buffer at the same frame count.
+function drawPlateBody(idx) {
+  const g = stringCv.getContext("2d");
+  const W = stringCv.width, H = stringCv.height;
+  g.clearRect(0, 0, W, H);
+  if (!frames || nFrames === 0 || !heatCv) return;
+  const stripH = Math.round(H * 0.24);         // the string strip along the top
+
+  // --- the plate heatmap, into the lower region (its own aspect-fit box) --------------------------
+  const hctx = heatCv.getContext("2d");
+  const img = hctx.createImageData(gridNx, gridNy);
+  const amp = fieldAmp > 0 ? fieldAmp : 1;
+  const base = idx * gridNx * gridNy;
+  for (let p = 0; p < gridNx * gridNy; p++) {
+    const o = p * 4;
+    if (maskData && maskData[p] === 0) {         // exterior of a supported plate → panel background
+      img.data[o] = 22; img.data[o + 1] = 27; img.data[o + 2] = 34; img.data[o + 3] = 255;
+      continue;
+    }
+    const c = divColor(frames[base + p] / amp);
+    img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 255;
+  }
+  hctx.putImageData(img, 0, 0);
+  const extX = (gridMeta && gridMeta.extent_x) || 1, extY = (gridMeta && gridMeta.extent_y) || 1;
+  const regY = stripH + 6, regH = H - stripH - 12, pad = 10;
+  const availW = W - 2 * pad, availH = regH - 2 * pad;
+  const scale = Math.min(availW / extX, availH / extY);
+  const dw = extX * scale, dh = extY * scale;
+  const dx = (W - dw) / 2, dy = regY + (regH - dh) / 2;
+  g.imageSmoothingEnabled = true;
+  g.drawImage(heatCv, dx, dy, dw, dh);
+  g.fillStyle = "#8b98a8"; g.font = "10px ui-monospace, monospace";
+  g.fillText(payload.boundary === "free" ? "free cymbal (#5b)" : "soundboard (#5)", dx + 4, dy + 12);
+
+  // --- the string strip along the top -------------------------------------------------------------
+  const midY = stripH / 2, margin = 22;
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(0, midY); g.lineTo(W, midY); g.stroke();
+  if (strFrames && strWidth > 0) {
+    const sxs = (W - 2 * margin) / (strWidth - 1);
+    const sy = (midY - 6) / (strAmp > 0 ? strAmp : 1) * 0.9;
+    const sbase = idx * strWidth;
+    g.strokeStyle = "#4cc2ff"; g.lineWidth = 2; g.lineJoin = "round";
+    g.beginPath();
+    for (let i = 0; i < strWidth; i++) {
+      const x = margin + i * sxs, y = midY - strFrames[sbase + i] * sy;
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.stroke();
+    g.fillStyle = "#8b98a8";
+    g.beginPath(); g.arc(margin, midY, 3, 0, 7); g.fill();               // the nut (clamped)
+    g.beginPath(); g.arc(W - margin, midY, 3.5, 0, 7); g.fill();         // the bridge terminus
+  }
+  g.fillStyle = "#8b98a8"; g.font = "10px ui-monospace, monospace";
+  g.fillText("string", 4, 12);
+}
+
 // ── energy diagnostic ───────────────────────────────────────────────────────────────────────
 // An actively DRIVEN model (the bow) reports an energy BALANCE — a third verdict type, and it
 // replaces both branches below rather than joining them, because for a driven model both are
@@ -1999,7 +2123,7 @@ function drawEnergy() {
   // The body (batch 12): the Energy card IS the money panel — the string ⇄ body energy EXCHANGE, not
   // the bare conservation line. The σ-gated verdict rides the badge + readout (on the ABSOLUTE
   // total), while the canvas shows the slosh; the bore's split-in-the-energy-panel precedent.
-  if (payload.model === "body") { drawBodyEnergy(e); return; }
+  if (payload.model === "body" || payload.model === "platebody") { drawBodyEnergy(e); return; }
   const t = e.time, v = e.value.map((x) => (x == null ? 0 : x));
   const tmax = t[t.length - 1] || 1;
   // Headroom only when the split is drawn: the total is flat AT the maximum, so without it the
@@ -2134,6 +2258,11 @@ function drawBodyEnergy(e) {
   const ex = payload.meta && payload.meta.exchange;
   const badge = $("energy-verdict"), out = $("energy-readout");
   if (!ex) { out.textContent = "no exchange data"; return; }
+  // The distributed body IS a plate here (batch 13) — name it so; batch 12's lumped body keeps "body".
+  const isPB = payload.model === "platebody";
+  const bodyLbl = isPB ? "E_plate" : "E_body";
+  const bodyWord = isPB ? "plate" : "body";
+  const lossName = isPB ? "σ_plate" : "σ_body";
   const t = ex.time, tmax = t[t.length - 1] || 1;
   const num = (a) => a.map((x) => (x == null ? 0 : x));
   const es = num(ex.e_string_frac), eb = num(ex.e_body_frac);
@@ -2165,9 +2294,9 @@ function drawBodyEnergy(e) {
   line(tot, "#5ad17a", 1.2);                    // the flat 100 % reference (NOT the verdict)
   line(ec, "#9d7bff", 1.2);                     // E_conn — the signed spring channel
   line(es, "#4cc2ff", 2.5);                     // E_string — drains
-  line(eb, "#ff8f4c", 2.5);                     // E_body — fills
+  line(eb, "#ff8f4c", 2.5);                     // E_body / E_plate — fills
   g.font = "10px ui-monospace, monospace";
-  [["E_string", "#4cc2ff"], ["E_body", "#ff8f4c"], ["E_conn", "#9d7bff"], ["total", "#5ad17a"]]
+  [["E_string", "#4cc2ff"], [bodyLbl, "#ff8f4c"], ["E_conn", "#9d7bff"], ["total", "#5ad17a"]]
     .forEach(([label, colour], i) => {
       g.fillStyle = colour; g.fillRect(padL + 4 + i * 74, 6, 8, 3);
       g.fillText(label, padL + 15 + i * 74, 10);
@@ -2186,7 +2315,7 @@ function drawBodyEnergy(e) {
       `lossless · TOTAL drift max|Eⁿ−E⁰|/E⁰ = ${e.lossless.drift.toExponential(2)} ` +
       `(tol ${e.lossless.tol.toExponential(0)}) → ${ok ? "PASS ✓" : "FAIL ✗"}\n` +
       `the total conserves THROUGH the bridge (K = ${ex.K} N/m) while E_string alone does NOT: it ` +
-      `sloshes ${smax}% → ${smin}% in counter-phase as the body fills to ${bp}%. ` +
+      `sloshes ${smax}% → ${smin}% in counter-phase as the ${bodyWord} fills to ${bp}%. ` +
       `That contrast — conserved total, non-conserved part — is the batch.`;
   } else {
     const mono = e.lossy.monotone;
@@ -2194,9 +2323,10 @@ function drawBodyEnergy(e) {
     badge.className = "badge " + (mono ? "good" : "bad");
     out.textContent =
       `lossy · TOTAL energy monotone non-increasing: ${mono ? "yes ✓" : "NO ✗"}\n` +
-      `the body loss (σ_body) drains the coupled system, but the off-harmonic modal spread makes ` +
+      `the ${bodyWord} loss (${lossName}) drains the coupled system, but the off-modal spread makes ` +
       `the decay MULTI-RATE — no single 2σ oracle survives it (measured, not templated), so the ` +
-      `honest verdict is passivity. E_string still sloshes to ${smin}% as the body fills to ${bp}%.`;
+      `honest verdict is passivity. E_string still sloshes to ${smin}% as the ${bodyWord} ` +
+      `fills to ${bp}%.`;
   }
 }
 
@@ -2368,9 +2498,11 @@ function drawDiagnostics() {
   }
   // The body: the second panel is the radiated-pressure spectrum — the string's partials coloured
   // by the body (boosted near its modes, NOT clean formants — the off-harmonic avoided crossing).
-  if (spec && spec.kind === "body") {
+  if (spec && (spec.kind === "body" || spec.kind === "platebody")) {
     partialsTitle.firstChild.textContent = "Radiated spectrum ";
-    partialsSub.textContent = "far-field |Q″(f)| · body modes marked · 1/r = level + latency only";
+    const modeWord = spec.kind === "platebody" ? "plate modes" : "body modes";
+    partialsSub.textContent =
+      `far-field |Q″(f)| · ${modeWord} marked · 1/r = level + latency only`;
     drawBodySpectrum(spec);
     return;
   }
@@ -2536,18 +2668,46 @@ function drawBodySpectrum(sp) {
   g.fillStyle = "#8b98a8"; g.font = "10px ui-monospace, monospace";
   g.fillText("|Q″(f)|", 3, top + 10);
   g.fillText(`${Math.round(fmax)} Hz`, W - 58, H - 4);
+  const isPB = sp.kind === "platebody";
   g.fillStyle = "rgba(255,143,76,.9)";
-  g.fillText("│ body modes", padL + 6, top + 10);
+  g.fillText(isPB ? "│ plate modes" : "│ body modes", padL + 6, top + 10);
 
-  // The terminus glide + the two honest read-outs (ω² sanity, 1/r shape-invariance).
+  // The terminus glide + the two honest read-outs (ω² sanity, 1/r shape-invariance). For the plate
+  // body the glide is the OPPOSITE story per boundary (measured, matched to the core diagnostic):
+  // the pinned soundboard lands NEAR c/2L, the FREE cymbal OVERSHOOTS it (a reactive mass-spring).
   const tf = sp.terminus_f1, o2 = sp.omega2_consistency;
+  const modeWord = isPB ? "plate" : "body";
+  let terminusStory;
+  if (isPB) {
+    // The present-tense STATE is derived from the measured value (it is strongly K-dependent: free
+    // reads ~60 at K=200, ~96 at K=1000, ~117 only at K≳3000) — never hardcoded per boundary, or a
+    // low-K panel would claim "OVERSHOOTS 100" while SHOWING 60. The boundary supplies only the
+    // MECHANISM (a tendency true at any K): the free plate overshoots at stiff K, the soundboard
+    // lands near. The number and the words can never contradict (the duration-flip lesson, one dim over).
+    const clamp = sp.f1_clamped, freeF = sp.f1_free;
+    const mech = sp.boundary === "free"
+      ? "the floating plate loads the end as a reactive mass-spring → overshoots c/2L at stiff K"
+      : "the pinned soundboard is a near-rigid termination → lands near c/2L at stiff K";
+    let state;
+    if (tf == null) state = `terminus between free c/4L = ${freeF} and clamped c/2L = ${clamp} Hz`;
+    else if (tf > clamp * 1.03) state = `OVERSHOOTS clamped c/2L = ${clamp} Hz`;
+    else if (Math.abs(tf - clamp) <= clamp * 0.06) state = `lands NEAR clamped c/2L = ${clamp} Hz`;
+    else state = `climbing from free c/4L = ${freeF} toward clamped c/2L = ${clamp} Hz as K stiffens`;
+    terminusStory = `— ${state} (${mech})`;
+  } else {
+    terminusStory =
+      `— glides free c/4L = ${sp.f1_free} toward clamped c/2L = ${sp.f1_clamped} Hz as the bridge ` +
+      `stiffens (asymptotes below 100: the guard caps K and the body is finite-mass)`;
+  }
+  const boostStory = isPB
+    ? `boosted near the plate modes [${(sp.body_modes || []).map((f) => Math.round(f)).join(", ")}] `
+      + `Hz — shown, not scored (off-modal, no clean formants)`
+    : `boosted near the body modes [${(sp.body_modes || []).map((f) => Math.round(f)).join(", ")}] `
+      + `Hz — doublets, NOT formants (avoided crossing)`;
   out.textContent =
-    `terminus f₁ = ${tf == null ? "—" : tf.toFixed(1)} Hz — glides free c/4L = ${sp.f1_free} ` +
-    `toward clamped c/2L = ${sp.f1_clamped} Hz as the bridge stiffens (asymptotes below 100: the ` +
-    `guard caps K and the body is finite-mass)\n` +
-    `boosted near the body modes [${(sp.body_modes || []).map((f) => Math.round(f)).join(", ")}] Hz ` +
-    `— doublets, NOT formants (avoided crossing)  ·  monopole ω² law = ${o2 == null ? "—" : o2.toFixed(2)} ` +
-    `(sanity, not an oracle)\n` +
+    `terminus f₁ = ${tf == null ? "—" : tf.toFixed(1)} Hz ${terminusStory}\n` +
+    `${boostStory}  ·  monopole ω² law = ${o2 == null ? "—" : o2.toFixed(2)} ` +
+    `(sanity vs ${modeWord} volume displacement, not an oracle)\n` +
     `1/r: at r = ${sp.distance} m, gain·r = ${sp.gain_times_r} (const) → distance changes LEVEL + ` +
     `latency (${sp.latency_ms} ms) only, never this shape`;
 }

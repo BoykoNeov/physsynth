@@ -242,6 +242,15 @@ def main() -> int:
             # ceiling, so it renders "ok" (the jawari→body IN-PLACE leak, which this fresh-load
             # cannot exercise, is guarded separately by the _default reset of bridge_stiffness).
             ("body", "model=body"),
+            # String → DISTRIBUTED plate body (batch 13): batch 12's lumped body swapped for a grid
+            # Plate, so the coupling/radiation leg finally has a PICTURE — the soundboard (#5) /
+            # cymbal (#5b) ringing on the heatmap while the string strip rides on top (the dual
+            # view). Both boundaries; a fresh deep-link initialises bridge_stiffness to 3k via
+            # applyModelRanges, well under the exact-guard ceiling (~14k at the default grid), so it
+            # renders "ok". The in-place body/platebody / boundary switch (the guard/leak change)
+            # is exercised separately by the CDP switch driver, not this fresh-load pass.
+            ("platebody_free", "model=platebody&domain=free"),
+            ("platebody_supported", "model=platebody&domain=supported"),
         ]
         # Optional name filters, so a single-model batch can re-check its own case without paying
         # for the whole sweep (the geometric regimes alone are ~2 minutes).

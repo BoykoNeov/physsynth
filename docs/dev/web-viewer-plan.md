@@ -1841,6 +1841,41 @@ probe reproduces the validated core diagnostics (`diagnose_string_free_plate.py`
   `distance` (reuse body's). Plate geometry (`Lx=Ly`, `ν`) fixed server-side (a plate-geometry editor
   is its own later feature). `amplitude`/`pluck_position` reuse the string path's.
 
+#### The backend + frontend, built (tasks 3a/3b — the dual field view; all green)
+
+The coupling/radiation leg now has its *distributed*-body viewer. `_build_payload_platebody` drives
+the validated `StringPlateBridge` (both boundaries) through one instrumented loop, and the frontend
+(`drawPlateBody`) shows the **dual field view**: the string rides a thin strip along the top while
+the plate — soundboard (#5) or free cymbal (#5b) — **rings on the heatmap** below, reusing the plate
+model's `dims:2` renderer wholesale. The Energy card reuses batch-12's `drawBodyEnergy` verbatim (the
+plate rides the body's exchange keys; the legend just relabels `E_body → E_plate`), and
+`drawBodySpectrum` gains a per-boundary terminus readout. Verified live: both fresh-load PNGs
+eyeballed (the cymbal rings a curved-Chladni blob, the soundboard a rectangular one; drift 2.2e-13 /
+1.8e-13; plate fills to 83 % / 77 %); the CDP switch-check **12/12** (`platebody_switch_check.py` —
+jawari→platebody re-ranges `bridge_stiffness` to the guard-safe `[0,12000]/3000`, the free↔supported
+boundary switch both render ok, `sigma_body` stays hidden, and platebody→jawari restores the 2e6
+leak-reset). Two things the build surfaced, each a rule:
+
+- **The terminus f1 CANNOT be read off the user's run — it needs a dedicated near-nut-pluck probe.**
+  The measured design read the terminus from the near-nut pickup of the main run, and the fresh-load
+  PNG at the **default 2 s** exposed the bug the 0.5 s test could not: free read **99 Hz** (NOT an
+  overshoot), flatly contradicting the "OVERSHOOTS" text. The cause is physical — the user's 0.3 L
+  pluck excites the avoided-crossing doublet so that over long integration the argmax **flips**
+  between its ~99 and ~117 Hz partners (measured: free 0.6–1.5 s → 117, but 2.0 s → 99). A **near-nut
+  pluck (0.137 L)** — the core diagnostic's recipe — reads f1 **robustly at every duration** (free
+  117, supported 97). So the terminus is now a **separate short 0.6 s near-nut-pluck sub-run**
+  (`_platebody_terminus_f1`), decoupled from `pluck_position`/`audio_duration`; a `duration-robust`
+  test pins that free still overshoots at 2 s. *Generalizable: a headline number that varies with a
+  user control or the run length is not measured — probe it under fixed, controlled conditions. The
+  PNG at the DEFAULT params, not just the fast test, is what caught it.*
+- **The ω² sanity denominator for a DISTRIBUTED body is the volume displacement, not the driving
+  point.** Batch 12's `w_b` (a scalar modal displacement) does not transfer: for the plate `Q″` is
+  the *area-weighted* volume acceleration, so `|Q″|/|w_dp|` gives ~0.4, not ~1. The right, still
+  near-tautological denominator is `Q_vol = h²Σuᵢ` (supported) / `Σ Wᵢᵢ uᵢ` (free), for which
+  `Q″ = Q_vol″` exactly → 0.997. *Generalizable: when a batch-12 read-out moves from a lumped to a
+  distributed body, re-derive what each spectral ratio actually relates — the lumped identity may
+  quietly break.*
+
 ### Later batches (rough map — not firm)
 
 - **Body / radiation** — the modal body + radiation read-out is **batch 12**; `StringPlateBridge`

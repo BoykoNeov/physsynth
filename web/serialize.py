@@ -3097,7 +3097,32 @@ PLATEBODY_RHO_PLATE = 0.005        # plate areal density (kg/m^2)
 PLATEBODY_NU = 0.3                 # Poisson ratio (free edge only; drops out for supported)
 PLATEBODY_SIDE = 1.0               # square plate Lx = Ly (m)
 PLATEBODY_PICKUP_FRAC = 0.23       # near-nut string pickup for the terminus f1 (NOT the free end)
+PLATEBODY_TERMINUS_PLUCK = 0.137   # near-nut pluck for the terminus probe (matches the diagnostic)
+PLATEBODY_TERMINUS_SECS = 0.6      # fixed FFT window; near-nut pluck reads f1 robustly at any dur
 PLATEBODY_MARKER_MODES = 6         # low plate modes shown as faint spectrum markers (not scored)
+
+
+def _platebody_terminus_f1(p: dict[str, Any], c: float, L: float, fs: float,
+                           n_string: int) -> float:
+    """Robust terminus f1 (Hz) from a DEDICATED near-nut-pluck probe (matches the core diagnostic).
+
+    The USER's pluck (default 0.3 L) muddies the near-nut spectrum: over long integration the argmax
+    flips between the avoided-crossing doublet (free 117 -> 99 Hz at 2 s), so it cannot be read off
+    the user run. A near-nut pluck (0.137 L) reads f1 robustly at ANY duration: free OVERSHOOTS
+    c/2L (~117), the supported soundboard lands NEAR it (~97). A short fixed 0.6 s window keeps this
+    second coupled run cheap (~15 % of a 2 s main run). Same params/guard as the main bridge.
+    """
+    bridge, _ = _build_platebody_bridge(p)     # fresh, same params (the guard already passed above)
+    bridge.string.set_state(triangular_pluck(bridge.string.x, L, PLATEBODY_TERMINUS_PLUCK * L,
+                                             amplitude=PLATEBODY_AMP_DEFAULT))
+    n = max(1, round(PLATEBODY_TERMINUS_SECS * fs))
+    idx = int(round(PLATEBODY_PICKUP_FRAC * n_string))
+    pick = np.empty(n + 1)
+    pick[0] = bridge.string.displacement_at(idx)
+    for i in range(1, n + 1):
+        bridge.step()
+        pick[i] = bridge.string.displacement_at(idx)
+    return _body_terminus_f1(pick, fs, c, L)
 
 
 def _platebody_boundary(p: dict[str, Any]) -> str:
@@ -3194,7 +3219,6 @@ class _PlateBodyRun:
         self.e_plate = np.empty(n + 1)      # plate (body) energy alone
         self.e_conn = np.empty(n + 1)       # connection (spring) energy -- cross-time, can go < 0
         self.qvol = np.empty(n + 1)         # plate volume displacement (the omega^2 denominator)
-        self.u_pick = np.empty(n + 1)       # NEAR-NUT string pickup (the terminus f1; NOT u_end)
         self.qaccel = np.empty(n + 1)       # raw volume acceleration Q'' (the spectrum SHAPE panel)
         self.pressure = np.empty(n + 1)     # retarded far-field pressure (the audio only)
         self.frames_plate: list[NDArray[np.float64]] = []   # 2D plate field -> the heatmap
@@ -3202,13 +3226,15 @@ class _PlateBodyRun:
         self.frame_steps: list[int] = []
 
 
-def _run_platebody(bridge: StringPlateBridge, rad: AirRadiation, n_steps: int, *, pickup_idx: int,
+def _run_platebody(bridge: StringPlateBridge, rad: AirRadiation, n_steps: int, *,
                    anim_stride: int, frame_until: int) -> _PlateBodyRun:
     """Step the coupled string+plate+radiation, capturing everything the panels need in ONE pass.
 
     Hand-rolled rather than :func:`simulate`: the per-part ``E_string``/``E_plate``/``E_conn`` split
     (the money panel), the plate volume displacement (the omega^2 denominator) and BOTH the string
-    strip AND the plate heatmap frames are not part of a ``SimResult``.
+    strip AND the plate heatmap frames are not part of a ``SimResult``. (The terminus f1 is a
+    SEPARATE near-nut-pluck probe -- it cannot be read off this user-pluck run; see
+    :func:`_platebody_terminus_f1`.)
     """
     run = _PlateBodyRun(n_steps)
 
@@ -3218,7 +3244,6 @@ def _run_platebody(bridge: StringPlateBridge, rad: AirRadiation, n_steps: int, *
         run.e_plate[i] = bridge.plate.energy()
         run.e_conn[i] = 0.5 * bridge.K * bridge._stretch() * bridge._stretch(prev=True)
         run.qvol[i] = _platebody_qvol(bridge.plate)
-        run.u_pick[i] = bridge.string.displacement_at(pickup_idx)
         run.qaccel[i] = bridge.pressure()          # raw Q'' (undelayed) -> distance-invariant
         run.pressure[i] = rad.radiate(bridge)      # retarded far-field (gain + delay) -> the audio
 
@@ -3276,10 +3301,8 @@ def _build_payload_platebody(p: dict[str, Any]) -> dict[str, Any]:
 
     pluck = triangular_pluck(bridge.string.x, L, pluck_frac * L, amplitude=amplitude)
     bridge.string.set_state(pluck)
-    pickup_idx = int(round(PLATEBODY_PICKUP_FRAC * info["N"]))
     rad = AirRadiation(fs=fs, distance=distance, retarded=True)
-    run = _run_platebody(bridge, rad, n_steps, pickup_idx=pickup_idx, anim_stride=anim_stride,
-                         frame_until=frame_until)
+    run = _run_platebody(bridge, rad, n_steps, anim_stride=anim_stride, frame_until=frame_until)
 
     # --- the money panel: E_string <-> E_plate exchange (fractions of the instantaneous total) --
     #     E_conn is its own overlaid SIGNED line -- it can go negative, so it is NEVER stacked).
@@ -3322,8 +3345,9 @@ def _build_payload_platebody(p: dict[str, Any]) -> dict[str, Any]:
         "body_modes": _finite_list(plate_modes, 1),
         # omega^2 sanity vs the plate VOLUME displacement (~1.00), NOT w_dp -- see _platebody_qvol:
         "omega2_consistency": round(_body_omega2_consistency(run.qaccel, run.qvol, fs, f_max), 3),
-        # terminus f1 from the NEAR-NUT pickup (u_end pins + misleads at high K):
-        "terminus_f1": round(_body_terminus_f1(run.u_pick, fs, c, L), 2),
+        # terminus f1 from a DEDICATED near-nut-pluck probe (robust at any duration; the user pluck
+        # + u_end both mislead -- the avoided-crossing doublet flips the argmax; see the helper):
+        "terminus_f1": round(_platebody_terminus_f1(p, c, L, fs, info["N"]), 2),
         "f1_free": round(c / (4.0 * L), 2),
         "f1_clamped": round(c / (2.0 * L), 2),
         "distance": round(distance, 3),
