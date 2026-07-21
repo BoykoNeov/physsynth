@@ -55,6 +55,11 @@ from web.serialize import (
     JAWARI_N_MAX,
     JAWARI_RATIO_FLOOR,
     JAWARI_WORK_MAX,
+    JUARI_AMP_MAX,
+    JUARI_ELEVATION_GATE,
+    JUARI_N_MAX,
+    JUARI_SWEEP_DUR,
+    JUARI_WORK_MAX,
     LOSSLESS_TOL,
     MALLET_N_MAX,
     MEMBRANE_LAMBDA_MAX,
@@ -2022,6 +2027,159 @@ def test_jawari_sustain_ratio_is_reported_but_never_gates():
     sp = _jaw()["meta"]["spectrum"]
     assert sp["sustain_ratio"] is not None and sp["clean_sustain_ratio"] is not None
     assert sp["shimmering"] == (sp["elevation"] > JAWARI_ELEVATION_GATE)
+
+
+# =================================================================================================
+# Juari / tanpura cotton thread (model #8, a single-node POINT contact) — the claim is the
+# TUNING CURVE (buzz vs thread position), which the jawari's distributed wrap cannot express
+# =================================================================================================
+#
+# Most tests run FAST (small N, a tiny non-canonical sweep_duration): the buzz is POSITION-dependent
+# at any duration, so the wiring — a curve that varies with position, a marker on it, the flat clean
+# and jawari reference lines, the honest grid resolution — is checkable cheaply. The one physics
+# claim that needs the SETTLED regime (the sweet spot sits near the nut) gets its own slower test.
+
+
+def _jua(**over):
+    # Small N + a tiny non-canonical sweep_duration: the per-node construction (a fresh factorized
+    # string per thread position) dominates the cost, so N is the lever that keeps these fast.
+    base = {"model": "juari", "N": 40, "sweep_duration": 0.04, "audio_duration": 0.05}
+    base.update(over)
+    return web_serialize.simulate_to_payload(base)
+
+
+def test_juari_tuning_curve_is_position_selective():
+    """The headline and the clean separator from the jawari: the buzz VARIES with thread position
+    (the jawari's is a single position-independent number). The clean baseline is spectrally pure,
+    so the elevation is attributable to the thread; and every swept array is the same length."""
+    sp = _jua()["meta"]["spectrum"]
+    assert sp["kind"] == "juari"
+    tn = sp["tuning"]
+    assert len(tn["node"]) == len(tn["frac"]) == len(tn["x"]) == len(tn["elevation"])
+    elev = [e for e in tn["elevation"] if e is not None]
+    assert max(elev) - min(elev) > 0.6, "the tuning curve must be position-selective, not flat"
+    assert sp["centroid"]["clean_late"] == pytest.approx(sp["f1"], rel=0.05)
+
+
+def test_juari_thread_marker_sits_on_the_drawn_curve():
+    """The selected thread's elevation IS one of the swept points, so the frontend marker lands on
+    the curve rather than floating beside it — the selected node is always folded into the sweep."""
+    sp = _jua(thread_position=0.1)["meta"]["spectrum"]
+    node = sp["thread"]["node"]
+    assert node in sp["tuning"]["node"]
+    i = sp["tuning"]["node"].index(node)
+    assert sp["thread"]["elevation"] == sp["tuning"]["elevation"][i] == sp["elevation"]
+
+
+def test_juari_energy_keeps_the_flat_loss_oracle_like_the_jawari():
+    """A single-node point contact is still a LOSSLESS elastic barrier: it moves energy into the
+    highs but dissipates none, so decay_oracle stays TRUE and every mode decays at exactly 2*sigma0
+    (the jawari's decision, carried unchanged — not the mallet's decay_oracle=False)."""
+    e = _jua(sigma0=0.5)["energy"]
+    assert e["sigma_is_zero"] is False
+    assert e["lossy"]["monotone"] is True
+    assert e["lossy"]["measured_2sigma"] == pytest.approx(e["lossy"]["oracle_2sigma"], rel=0.05)
+
+
+def test_juari_sigma0_gates_and_conserves_through_the_point_contact():
+    """sigma0 = 0 flips to the conservation-drift check, and the drift survives a REAL point contact
+    (the string must actually be caught on the thread, not clear of it — else the gate proves
+    nothing about the barrier)."""
+    d = _jua(sigma0=0.0)
+    e = d["energy"]
+    assert e["sigma_is_zero"] is True
+    assert e["lossless"]["drift"] < LOSSLESS_TOL and e["lossless"]["pass"] is True
+    assert sum(d["contact_frames"]) > 0, "the string must contact the thread during the window"
+    assert len(d["contact_frames"]) == d["frames"]["n_frames"]
+
+
+def test_juari_thread_snaps_to_a_grid_node_and_reports_the_resolution():
+    """The point contact lives ON the grid, so thread_position snaps to a node and the tuning
+    resolution IS the node spacing — the honesty the panel foregrounds. The marker is scattered onto
+    grid coordinates (thread_x == x[thread_node]), the single-node analogue of the jawari's
+    support->grid scatter."""
+    d = _jua(N=40, thread_position=0.1)
+    node = d["grid"]["thread_node"]
+    assert 1 <= node <= 39
+    assert d["grid"]["thread_x"] == pytest.approx(d["grid"]["x"][node], abs=1e-6)
+    q = d["meta"]["spectrum"]["quantization"]
+    assert q["h"] == pytest.approx(1.0 / 40, abs=1e-4)
+    assert q["near_nut_nodes"] == round(q["near_nut_frac"] * 40)
+
+
+def test_juari_reference_lines_are_clean_1x_and_a_flat_jawari():
+    """The two guide lines that make the separator read at a glance: clean at exactly 1.0x, and the
+    jawari as a SINGLE number (it is position-independent — that is the whole contrast). The jawari
+    reference must genuinely buzz (> 1x), i.e. the curved bridge is in reach at these params."""
+    ref = _jua()["meta"]["spectrum"]["reference"]
+    assert ref["clean"] == 1.0
+    assert ref["jawari"] is not None and ref["jawari"] > 1.0
+
+
+def test_juari_tuning_curve_is_decoupled_from_the_audio_length():
+    """The load-bearing cost/UX decision: the sweep runs at a CANONICAL fixed duration, so
+    lengthening the sound does not shift the tuning-curve map (nor make it more expensive). Two
+    renders differing ONLY in audio_duration return the identical curve."""
+    a = _jua(audio_duration=0.06)["meta"]["spectrum"]["tuning"]["elevation"]
+    b = _jua(audio_duration=0.1)["meta"]["spectrum"]["tuning"]["elevation"]
+    assert a == b
+
+
+def test_juari_ignores_the_mallet_alpha_and_the_sympathetic_K():
+    """Param-collision guard (the jawari's lesson). The frontend sends every slider, so a user who
+    visited the mallet or sympathetic strings would otherwise leak alpha = 2.3 / K = 8000. The juari
+    reads neither; it uses bridge_stiffness (fixed alpha 1.5)."""
+    base = _jua()["meta"]["spectrum"]["tuning"]["elevation"]
+    leaked = _jua(alpha=2.3, K=8000)["meta"]["spectrum"]["tuning"]["elevation"]
+    assert leaked == base
+    changed = _jua(bridge_stiffness=2.0e5)["meta"]["spectrum"]["tuning"]["elevation"]
+    assert changed != base
+
+
+def test_juari_audio_is_real_and_finite():
+    a = _jua()["audio"]
+    assert a is not None and a["fs"] == AUDIO_FS
+    sig = _decode_f32(a["b64"])
+    assert np.all(np.isfinite(sig)) and float(np.max(np.abs(sig))) > 0.0
+
+
+def test_juari_below_signal_is_labelled_not_failed():
+    """A thread at mid-string is a legitimate position that simply buzzes little (the even partials
+    fall on its node). It must render with an honest 'weak' label — never an error, never a silent
+    buzzing badge (the bow/jawari label-not-fail rule)."""
+    d = _jua(thread_position=0.5)
+    assert "error" not in d
+    sp = d["meta"]["spectrum"]
+    assert sp["buzzing"] == (sp["elevation"] > JUARI_ELEVATION_GATE)
+    assert sp["elevation"] is not None
+
+
+def test_juari_guards_are_clean_error_payloads():
+    """Every out-of-range control comes back as a labelled error payload, not a 500 or a NaN."""
+    assert "error" in _jua(thread_position=1.4)
+    assert "error" in _jua(thread_position=0.0)
+    assert "error" in _jua(N=JUARI_N_MAX + 1)
+    assert "error" in _jua(**{"lambda": 1.5})
+    assert "error" in _jua(amplitude=JUARI_AMP_MAX + 1e-3)
+    assert "error" in _jua(bridge_stiffness=0.0)
+    assert "error" in _jua(sweep_duration=JUARI_SWEEP_DUR + 0.1)
+    assert "error" in _jua(N=128, sweep_duration=JUARI_SWEEP_DUR, audio_duration=JUARI_WORK_MAX)
+
+
+def test_juari_sweet_spot_sits_near_the_nut_settled():
+    """The one claim that needs the SETTLED buzz (slower): the sweet spot is near the nut, where a
+    real tanpura thread lives — NOT mid-string. Measured at the canonical sweep duration; the exact
+    node wobbles ~2 with the window (it is at the grid-resolution limit), so only the near-nut
+    REGION is pinned, not a single node."""
+    sp = _jua(N=40, sweep_duration=0.16, audio_duration=0.06)["meta"]["spectrum"]
+    assert sp["sweet_spot"]["frac"] <= 0.25, "the peak buzz must sit near the nut"
+    # The magnitude oracle (the sim is deterministic): the settled sweet-spot buzz is ~3.1x and the
+    # curved-jawari reference ~3.5x at these params, so a well-placed thread genuinely rivals the
+    # whole bridge. Bracketed, not point-pinned, to tolerate platform FFT noise while still catching
+    # a real physics regression — a halved buzz (~1.5x) or a dead reference would break this, where
+    # "elevation > gate" alone would keep a green BUZZING badge on broken physics.
+    assert 2.7 < sp["sweet_spot"]["elevation"] < 3.5, sp["sweet_spot"]["elevation"]
+    assert 3.0 < sp["reference"]["jawari"] < 3.9, sp["reference"]["jawari"]
 
 
 # =================================================================================================

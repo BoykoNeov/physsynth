@@ -212,6 +212,12 @@ def main() -> int:
             # turns "bright" into a number). At the defaults ~5 s; the guards admit up to ~34 s, so
             # it sits comfortably inside the 90 s window above.
             ("jawari", "model=jawari"),
+            # Juari / tanpura cotton thread: the jawari's position-SELECTIVE complement (a single-
+            # node point contact). Its cost driver is the tuning-curve SWEEP (~11 thread positions
+            # at a canonical 0.24 s), not the audio — the worst passing render is ~37 s, inside the
+            # 90 s window. The deep-link initialises pickup to a generic 0.83 L and thread_position
+            # to the near-nut sweet spot via applyModelRanges.
+            ("juari", "model=juari"),
             # The fret / flat rail: model #8's OTHER configuration, and the most expensive model in
             # the viewer per second of audio (~13 s of wall clock per second of sound at N = 100).
             # Also a two-run model — the out-of-reach brightness control costs 0.95x the fret run,

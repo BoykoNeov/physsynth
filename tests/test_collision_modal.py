@@ -139,3 +139,39 @@ def test_single_node_collapses_to_scalar_solver():
     assert max_mismatch < 1e-13, (
         f"vector (m=1) and scalar solvers disagree by {max_mismatch:.2e} — not the same root"
     )
+
+
+def test_juari_thread_config_collapses_to_scalar_solver():
+    """The same collapse oracle pinned at the tanpura cotton thread's SHIPPED numbers (viewer batch
+    14): a single grazing node at K = 2e6, alpha = 1.5, loss ON, a mode-1 sine at 8 mm — the exact
+    juari config, not the generic K = 8e5 above. Confirms the config-specific money oracle holds for
+    the numbers the viewer actually renders (probe measured 1.9e-15)."""
+    N, node = 100, 9
+    b = np.full(N + 1, -np.inf)
+    b[node] = 0.0  # grazing at the rest line — the thread laid on the bridge
+    bar = make_barrier_string(N=N, lam=0.4, K=2.0e6, alpha=1.5, sigma0=0.5, barrier=b)
+    x = bar.string.x
+    bar.set_state(8.0e-3 * np.sin(np.pi * x / bar.string.L))
+    g = float(bar._G[0, 0])
+
+    contact_steps, max_force, max_mismatch = 0, 0.0, 0.0
+    for _ in range(1200):
+        eta_prev = (bar._b - bar.string.u_prev[bar._support])[0]
+        seed = bar.penetration[0]
+        bar.step()
+        eta_v = bar.penetration[0]
+        f_v = bar.contact_force[0]
+        eta_free = eta_v + g * f_v
+        eta_s, _, _ = solve_contact(
+            eta_free, eta_prev, g, bar.K, bar.alpha, 0.0, bar.k,
+            tol=bar.eta_tol, seed=seed, newton_tol=1e-14,
+        )
+        max_mismatch = max(max_mismatch, abs(eta_v - eta_s))
+        contact_steps += f_v > 0.0
+        max_force = max(max_force, f_v)
+
+    assert contact_steps > 100, f"thread barely touched ({contact_steps} steps)"
+    assert max_force > 1.0, f"contact force {max_force:.2e} N too small to be a real test"
+    assert max_mismatch < 1e-13, (
+        f"juari config: vector (m=1) and scalar solvers disagree by {max_mismatch:.2e}"
+    )

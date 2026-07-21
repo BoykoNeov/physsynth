@@ -867,6 +867,8 @@ def _build_payload(p: dict[str, Any]) -> dict[str, Any]:
         return _build_payload_sympathetic(p)
     if model == "jawari":
         return _build_payload_jawari(p)
+    if model == "juari":
+        return _build_payload_juari(p)
     if model == "fret":
         return _build_payload_fret(p)
     if model == "bore":
@@ -3794,6 +3796,325 @@ def _build_payload_jawari(p: dict[str, Any]) -> dict[str, Any]:
             "bridge_span": round(info["width_frac"] * L, 4),
             "spectrum": _jawari_shimmer_block(run, clean_run, fs, f1, info, amplitude),
         },
+    }
+
+
+# == juari / tanpura cotton thread (model #8, a single-node POINT contact) =========================
+#
+# Batch 14. The jawari's complement, not a preset of it. Where the jawari (batch 8) is a CURVED
+# bridge whose distributed wrap gives a position-INDEPENDENT broadband shimmer, the juari is the
+# tanpura's cotton thread laid on the bridge: ONE barrier node, a point contact, whose buzz is
+# position-SELECTIVE. A point contact clips the partials with an ANTINODE at the thread and spares
+# those with a NODE there, so sliding the thread reshapes WHICH partials buzz — the tanpura's
+# jvari-tuning gesture, and the clean separator from the jawari. All-wrapper; ``physsynth/core``
+# untouched. Every number was measured by a separability probe BEFORE any wiring (see
+# ``docs/dev/web-viewer-plan.md`` batch 14). Load-bearing decisions:
+#
+#   * **The headline is the TUNING CURVE (buzz vs thread position), not "more buzz".** The clean
+#     string sits on its fundamental (late centroid == f1); the jawari is a flat ~3.4x at every
+#     position; the juari sweeps ~1x (nut) -> ~3x (sweet spot near the nut) -> ~1.7x (mid-string,
+#     where the even partials fall on the thread's node and go unclipped).
+#   * **The buzz is a SETTLED quantity.** The spectrum keeps cascading upward for ~20 fundamental
+#     periods, so the sweep runs at a CANONICAL fixed duration (``JUARI_SWEEP_DUR``), DECOUPLED from
+#     the audio slider — otherwise the tuning-curve map would shift under the user when they change
+#     the audio length (a short 0.10 s run peaks at the wrong node; >=0.24 s settles it).
+#   * **Grid quantization is load-bearing and stated honestly.** ``thread_position`` snaps to the
+#     nearest grid node, so the curve's resolution IS the node spacing ``h = L/N`` — coarsest
+#     near the nut, where a real thread lives. The curve is drawn as discrete points, and the count
+#     of distinct near-nut positions is reported.
+#   * **Jawari templates carried unchanged:** ``decay_oracle`` stays TRUE (a lossless elastic point
+#     contact dissipates none), loss defaults ON (``sigma0``), mode-1 IC with no ``pluck_position``
+#     slider (the clean baseline must be spectrally pure for the contrast). sigma1/hysteresis 0.
+#   * **A generic pickup (0.83 L), not 0.5.** At the midpoint the even partials sit on the pickup's
+#     own node and never reach it, which would flatten the tuning curve; a generic point sees both
+#     families. Correctness on the exact config: sigma=0 drift 1.1e-12, sigma>0 passivity, and the
+#     m=1 scalar-collapse (vector == scalar ``solve_contact``) 1.9e-15 — validated in the suite.
+
+JUARI_N_MAX = 128
+JUARI_LAM_DEFAULT = 0.4
+JUARI_AMP_DEFAULT = 8.0e-3
+JUARI_AMP_MAX = 4.0e-2
+JUARI_SIGMA0_DEFAULT = 0.5
+JUARI_THREAD_DEFAULT = 0.10        # fraction of L; ~ the measured sweet spot near the nut
+JUARI_PICKUP_DEFAULT = 0.83        # generic listening point (0.5 hides evens on the pickup's node)
+JUARI_SWEEP_DUR = 0.24             # s — the SETTLED-buzz window; canonical, NOT the audio slider
+JUARI_AUDIO_MAX = 0.6
+JUARI_WORK_MAX = 240_000           # steps across the sweep + jawari ref + main + both cleans
+JUARI_ELEVATION_GATE = 2.0         # centroid elevation over clean below which a position is "weak"
+JUARI_NEAR_NUT_FRAC = 0.15         # the near-nut band whose honest position count is quoted
+# thread positions swept for the tuning curve (fraction of L): dense near the nut where the sweet
+# spot and the steep rise live, sparse toward mid-string where it flattens.
+JUARI_SWEEP_FRACS = (0.02, 0.04, 0.06, 0.08, 0.11, 0.15, 0.21, 0.30, 0.45, 0.65)
+
+
+def _juari_snap(frac: float, N: int) -> int:
+    """Snap a thread position (fraction of L) to its nearest INTERIOR grid node in [1, N-1]."""
+    return min(max(1, round(frac * N)), N - 1)
+
+
+def _build_juari(p: dict[str, Any], *, node: int,
+                 reach: bool) -> tuple[BarrierString, dict[str, Any]]:
+    """A single-node :class:`BarrierString` — the cotton thread at grid ``node``, grazing the rest
+    line. ``reach=False`` seats the thread 1 m below rest (out of the string's reach) for the clean
+    contrast (the ``K = 0`` analog). The string params mirror the jawari's validated numbers, so the
+    buzz is attributable to the thread alone."""
+    L = _fnum(p, "L", 1.0)
+    T = _fnum(p, "T", 200.0)
+    rho = _fnum(p, "rho", 0.005)
+    lam = _fnum(p, "lambda", JUARI_LAM_DEFAULT)
+    # Reuses `bridge_stiffness` (the same 2e6 bridge) and `alpha` fixed server-side at 1.5 — the
+    # jawari's param-hygiene lesson (a bare `K`/`alpha` would collide with the sympathetic/mallet).
+    K = _fnum(p, "bridge_stiffness", JAWARI_K_DEFAULT)
+    sigma0 = _fnum(p, "sigma0", JUARI_SIGMA0_DEFAULT)
+    try:
+        N = int(p.get("N", 100))
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"N must be an integer, got {p.get('N')!r}.") from exc
+    if not (N_MIN <= N <= JUARI_N_MAX):
+        raise ParamError(f"N must be in [{N_MIN}, {JUARI_N_MAX}] for the juari, got {N}.")
+    if min(L, T, rho) <= 0:
+        raise ParamError("L, T, rho must all be positive.")
+    if not (0.0 < lam < 1.0):
+        raise ParamError(
+            f"lambda must be in (0, 1), got {lam}: the coupled contact solve needs headroom below "
+            "the string's marginal Nyquist mode."
+        )
+    if K <= 0:
+        raise ParamError(f"bridge_stiffness must be positive, got {K}.")
+    if sigma0 < 0:
+        raise ParamError(f"sigma0 must be >= 0, got {sigma0}.")
+    if not (1 <= node <= N - 1):
+        raise ParamError(f"thread node must be an interior node in [1, {N - 1}], got {node}.")
+
+    c = math.sqrt(T / rho)
+    fs = c * N / (L * lam)
+    string = DampedStiffString(L=L, T=T, rho=rho, fs=fs, N=N, kappa=0.0, sigma0=sigma0, sigma1=0.0)
+    barrier = np.full_like(string.x, -np.inf)
+    barrier[node] = 0.0 if reach else -1.0
+    bar = BarrierString(string=string, barrier=barrier, stiffness=K,
+                        alpha=JAWARI_ALPHA_DEFAULT, hysteresis=0.0)
+    info = {"c": c, "L": L, "N": N, "fs": fs, "lam": float(string.lam), "sigma0": sigma0,
+            "K": K, "node": node}
+    return bar, info
+
+
+def _juari_pickup(bar: BarrierString, n_steps: int, pickup_idx: int) -> NDArray[np.float64]:
+    """Step, returning the pickup trace only — the light runner for the tuning-curve sweep."""
+    out = np.empty(n_steps + 1)
+    out[0] = bar.string.displacement_at(pickup_idx)
+    for i in range(1, n_steps + 1):
+        bar.step()
+        out[i] = bar.string.displacement_at(pickup_idx)
+    if not np.all(np.isfinite(out)):
+        raise ParamError("simulation produced non-finite output (instability) — adjust parameters.")
+    return out
+
+
+def _juari_late_centroid(pickup: NDArray[np.float64], fs: float) -> float:
+    """Late-window (second half) spectral centroid — the settled buzz brightness."""
+    half = pickup.size // 2
+    return _spectral_centroid(pickup[half:], fs)
+
+
+def _juari_tuning(p: dict[str, Any], amplitude: float, fs: float, nodes: list[int],
+                  sweep_steps: int, pickup_idx: int, clean_late: float) -> dict[str, Any]:
+    """The tuning curve: run the thread at each node (canonical sweep duration) and return the
+    late-window centroid elevation over the clean string, per position. ``clean_late`` is the clean
+    string's late centroid at the SAME duration (the position-independent 1.0x baseline)."""
+    N = int(p.get("N", 100))
+    L = _fnum(p, "L", 1.0)
+    fracs, xs, elev = [], [], []
+    for node in nodes:
+        bar, _ = _build_juari(p, node=node, reach=True)
+        bar.set_state(_mode1_shape(bar.string) * amplitude)
+        cen = _juari_late_centroid(_juari_pickup(bar, sweep_steps, pickup_idx), fs)
+        fracs.append(round(node / N, 4))
+        xs.append(round(node / N * L, 4))
+        elev.append(round(cen / clean_late, 3) if clean_late > 0 else float("nan"))
+    return {"node": list(nodes), "frac": fracs, "x": xs, "elevation": elev}
+
+
+def _build_payload_juari(p: dict[str, Any]) -> dict[str, Any]:
+    playback_speed = _fnum(p, "playback_speed", 0.02)
+    pickup_frac = _fnum(p, "pickup_position", JUARI_PICKUP_DEFAULT)
+    audio_dur = _fnum(p, "audio_duration", 0.24)
+    anim_win = _fnum(p, "animation_window", 0.06)
+    amplitude = _fnum(p, "amplitude", JUARI_AMP_DEFAULT)
+    thread_frac = _fnum(p, "thread_position", JUARI_THREAD_DEFAULT)
+    fpp = max(1, int(_fnum(p, "frames_per_period", FRAMES_PER_PERIOD)))
+    # The tuning-curve sweep duration is CANONICAL (the settled-buzz window) and the UI never sends
+    # it — but the tests override it to a tiny value so the ~11-run sweep stays fast. Not a slider.
+    sweep_dur = _fnum(p, "sweep_duration", JUARI_SWEEP_DUR)
+    if not (0.0 < sweep_dur <= JUARI_SWEEP_DUR):
+        raise ParamError(f"sweep_duration must be in (0, {JUARI_SWEEP_DUR}] s, got {sweep_dur}.")
+
+    if not (0.0 < playback_speed <= SPEED_MAX):
+        raise ParamError(f"playback_speed must be in (0, {SPEED_MAX}], got {playback_speed}.")
+    if not (0.0 < pickup_frac < 1.0):
+        raise ParamError(f"pickup_position must be in (0, 1), got {pickup_frac}.")
+    if not (0.0 < audio_dur <= JUARI_AUDIO_MAX):
+        raise ParamError(f"audio_duration must be in (0, {JUARI_AUDIO_MAX}] s, got {audio_dur}.")
+    if not (0.0 < anim_win <= ANIM_WIN_MAX):
+        raise ParamError(f"animation_window must be in (0, {ANIM_WIN_MAX}] s, got {anim_win}.")
+    if not (0.0 < amplitude <= JUARI_AMP_MAX):
+        raise ParamError(f"amplitude must be in (0, {JUARI_AMP_MAX}] m, got {amplitude}.")
+    if not (0.0 < thread_frac < 1.0):
+        raise ParamError(f"thread_position must be in (0, 1), got {thread_frac}.")
+
+    # Build the selected thread first: it validates the string params and gives fs/N/c, and the
+    # snapped node anchors both the sweep and the main run.
+    N_req = int(p.get("N", 100)) if str(p.get("N", 100)).lstrip("-").isdigit() else 100
+    sel_node = _juari_snap(thread_frac, N_req if N_MIN <= N_req <= JUARI_N_MAX else 100)
+    main_bar, info = _build_juari(p, node=sel_node, reach=True)
+    fs, L, c, N = info["fs"], info["L"], info["c"], info["N"]
+    sel_node = _juari_snap(thread_frac, N)          # re-snap on the validated N
+    f1 = c / (2.0 * L)
+
+    # The sweep node set: the canonical fractions plus the selected node, so its marker sits exactly
+    # on the drawn curve. Snapped, deduped, sorted.
+    sweep_nodes = sorted({_juari_snap(fr, N) for fr in JUARI_SWEEP_FRACS} | {sel_node})
+
+    sweep_steps = max(1, round(sweep_dur * fs))
+    n_steps = max(1, round(audio_dur * fs))
+    # Budget: the sweep (one run per node) + one clean + one jawari reference, all at the canonical
+    # sweep duration, plus the main + audio-clean at the audio duration. The sweep is the driver
+    # and is FIXED in the audio slider — the tuning-curve map does not get more expensive as you
+    # lengthen the sound.
+    total = (len(sweep_nodes) + 2) * sweep_steps + 2 * n_steps
+    if total > JUARI_WORK_MAX:
+        raise ParamError(
+            f"this configuration needs {total} steps (budget {JUARI_WORK_MAX}): the tuning-curve "
+            f"sweep is {len(sweep_nodes)} thread positions at the settled-buzz duration. Lower N, "
+            "raise lambda, or shorten audio_duration."
+        )
+
+    pickup_idx = min(max(1, round(pickup_frac * N)), N - 1)
+
+    # The canonical clean baseline (thread out of reach) at the sweep duration — the 1.0x line and
+    # the tuning-curve normalizer.
+    clean_sweep, _ = _build_juari(p, node=sel_node, reach=False)
+    clean_sweep.set_state(_mode1_shape(clean_sweep.string) * amplitude)
+    clean_late_sweep = _juari_late_centroid(_juari_pickup(clean_sweep, sweep_steps, pickup_idx), fs)
+
+    # The jawari reference: the SAME string against a curved bridge at the jawari defaults — a flat,
+    # position-independent elevation — the "a well-placed thread matches the bridge" guide line.
+    # (A CONVENIENCE overlay, not the juari's own physics: a degenerate jawari span — unreachable in
+    # the N >= 32 UI range — must not fail the whole render, it just drops the guide line, which
+    # drawJuariTuning already handles as reference.jawari == null. LABEL-not-FAIL.)
+    try:
+        jaw_ref, _ = _build_jawari(p, clearance=0.0)
+        jaw_ref.set_state(_mode1_shape(jaw_ref.string) * amplitude)
+        jaw_ref_late = _juari_late_centroid(_juari_pickup(jaw_ref, sweep_steps, pickup_idx), fs)
+        jawari_ref = round(jaw_ref_late / clean_late_sweep, 3) if clean_late_sweep > 0 else None
+    except (ParamError, ValueError):
+        jawari_ref = None
+
+    tuning = _juari_tuning(p, amplitude, fs, sweep_nodes, sweep_steps, pickup_idx, clean_late_sweep)
+
+    # The main run (audio + animation + energy) and its own clean contrast, both at the audio
+    # duration for good spectral resolution and a listenable pickup.
+    anim_stride = max(1, round((fs / f1) / fpp))
+    n_anim = min(n_steps, max(anim_stride, round(anim_win * fs)))
+    if n_anim // anim_stride > MAX_FRAMES:
+        anim_stride = max(1, math.ceil(n_anim / MAX_FRAMES))
+    main_bar.set_state(_mode1_shape(main_bar.string) * amplitude)
+    run = _run_jawari(main_bar, n_steps, pickup_idx=pickup_idx, anim_stride=anim_stride,
+                      frame_until=n_anim)
+    clean_audio, _ = _build_juari(p, node=sel_node, reach=False)
+    clean_audio.set_state(_mode1_shape(clean_audio.string) * amplitude)
+    clean_audio_run = _run_jawari(clean_audio, n_steps, pickup_idx=pickup_idx, anim_stride=1,
+                                  frame_until=0, capture_wrap=False)
+
+    frames = np.array(run.frames, dtype=float)
+    field_amp = float(np.max(np.abs(frames))) if frames.size else 0.0
+    audio48, peak = _resample_normalize(run.pickup, fs)
+    sim = SimResult(time=np.arange(run.E.size) / fs, energy=run.E, output=None, fs=fs, snapshots=[])
+
+    sig = _juari_signature_block(run, clean_audio_run, fs, f1, info, tuning, sweep_nodes,
+                                 sel_node, jawari_ref)
+
+    return {
+        "model": "juari",
+        "fs_sim": round(fs, 3),
+        "lambda": round(info["lam"], 6),
+        "grid": {"x": _finite_list(main_bar.string.x, 6), "thread_node": int(sel_node),
+                 "thread_x": round(float(main_bar.string.x[sel_node]), 6)},
+        "frames": {
+            "b64": _b64f32(frames.ravel()),
+            "n_frames": int(frames.shape[0]),
+            "width": int(frames.shape[1]) if frames.ndim == 2 else 0,
+            "dims": 1,
+        },
+        "frame_times": _finite_list(np.array(run.frame_steps, dtype=float) / fs, 6),
+        # per-frame: 1 when the string is in contact at the thread this frame, else 0 (the marker
+        # lights up as the string is caught). Single-node -> n_contact is 0 or 1.
+        "contact_frames": [int(run.n_contact[i] > 0) for i in run.frame_steps],
+        "anim_dt": float(anim_stride / fs),
+        "playback_speed": playback_speed,
+        "field_amp": field_amp,
+        "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
+        # The damped string's own verdict, unchanged: the thread is a lossless elastic point
+        # contact, so the flat-loss 2*sigma0 oracle survives it (decay_oracle stays TRUE).
+        "energy": _energy_block(sim, sigma_zero=bool(info["sigma0"] == 0.0),
+                                oracle_2sigma=2.0 * info["sigma0"]),
+        "meta": {
+            "c": round(c, 3),
+            "f1": round(f1, 3),
+            "num_steps": int(n_steps),
+            "n_frames": int(frames.shape[0]),
+            "probe_x": round(float(main_bar.string.x[pickup_idx]), 4),
+            "spectrum": sig,
+        },
+    }
+
+
+def _juari_signature_block(run: _JawariRun, clean: _JawariRun, fs: float, f1: float,
+                           info: dict[str, Any], tuning: dict[str, Any], sweep_nodes: list[int],
+                           sel_node: int, jawari_ref: float | None) -> dict[str, Any]:
+    """The claim: the tuning curve (buzz vs thread position), plus the mechanism (the band spectrum
+    at the selected position), plus the honest grid-quantization resolution."""
+    N, L = info["N"], info["L"]
+    juari_late = _juari_late_centroid(run.pickup, fs)
+    clean_late = _juari_late_centroid(clean.pickup, fs)
+
+    # the selected position's elevation IS its sweep point, so the marker sits on the drawn curve
+    sel_i = sweep_nodes.index(sel_node)
+    sel_elev = tuning["elevation"][sel_i]
+    peak_i = int(np.nanargmax(tuning["elevation"]))
+    sweet = {"node": tuning["node"][peak_i], "frac": tuning["frac"][peak_i],
+             "x": tuning["x"][peak_i], "elevation": tuning["elevation"][peak_i]}
+
+    # honest quantization: the node spacing IS the tuning resolution, coarsest near the nut.
+    near_nut_nodes = int(min(max(1, round(JUARI_NEAR_NUT_FRAC * N)), N - 1))
+    swept_near_nut = int(sum(1 for fr in tuning["frac"] if fr <= JUARI_NEAR_NUT_FRAC))
+
+    f_max = min(0.45 * fs, max(20.0 * f1, 2000.0))
+    half = run.pickup.size // 2
+    jf, jm, jn = _jawari_band_spectrum(run.pickup[half:], fs, f_max)
+    cf, cm, cn = _jawari_band_spectrum(clean.pickup[half:], fs, f_max)
+    norm = max(jn, cn) or 1.0
+    jm = [None if v is None else v / norm for v in jm]
+    cm = [None if v is None else v / norm for v in cm]
+
+    return {
+        "kind": "juari",
+        "tuning": tuning,
+        "thread": {"node": int(sel_node), "frac": round(sel_node / N, 4),
+                   "x": round(sel_node / N * L, 4), "elevation": sel_elev},
+        "sweet_spot": sweet,
+        "elevation": sel_elev,
+        "elevation_gate": JUARI_ELEVATION_GATE,
+        "buzzing": bool(sel_elev is not None and sel_elev > JUARI_ELEVATION_GATE),
+        "reference": {"clean": 1.0, "jawari": jawari_ref},
+        "centroid": {"juari_late": round(juari_late, 1), "clean_late": round(clean_late, 1)},
+        "quantization": {"h": round(L / N, 5), "near_nut_frac": JUARI_NEAR_NUT_FRAC,
+                         "near_nut_nodes": near_nut_nodes, "swept_near_nut": swept_near_nut},
+        "spectra": {
+            "f_max": round(f_max, 1),
+            "juari": {"f": jf, "mag": jm},
+            "clean": {"f": cf, "mag": cm},
+        },
+        "f1": round(f1, 3),
     }
 
 
