@@ -133,6 +133,20 @@ const MODEL_RANGES = {
             // 3.44x tested vs 2.75x rendered, a hair over the 2.5x gate).
             pickup_position: { val: 0.5 },
             audio_duration: { min: 0.1, max: 1.5, step: 0.01, fixed: 2, val: 0.24 } },
+  // Juari / tanpura cotton thread (model #8, a single-node POINT contact). Shares the jawari's
+  // loss-ON reason (the buzz is meaningless without decay) and its contact-solve lambda = 0.4 / N.
+  // thread_position is the STAR control and defaults to ~0.10 L, the measured sweet spot near the
+  // nut. pickup is a GENERIC 0.83 L, not 0.5: at the midpoint the even partials sit on the pickup's
+  // own node and never reach it, which flattens the tuning curve. audio_duration re-ranges its step
+  // to 0.01 (the jawari's lesson — step 0.1 would snap the tested 0.24 to 0.2) and caps at 0.6 s;
+  // the tuning-curve sweep runs at a CANONICAL fixed 0.24 s regardless, so lengthening the sound
+  // does not make the map more expensive.
+  juari: { N: { min: 32, max: 128, val: 100 }, lambda: { min: 0.2, max: 0.9, val: 0.4 },
+           amplitude: { min: 0.001, max: 0.04, step: 0.001, fixed: 3, val: 0.008 },
+           sigma0: { val: 0.5 }, sigma1: { val: 0 },
+           thread_position: { min: 0.02, max: 0.9, step: 0.01, fixed: 2, val: 0.1 },
+           pickup_position: { val: 0.83 },
+           audio_duration: { min: 0.2, max: 0.6, step: 0.01, fixed: 2, val: 0.24 } },
   // The fret / flat rail — model #8's other configuration, and the jawari's opposite regime. Shares
   // the jawari's reasons for loss-ON (a lossless string sustains everything, so "the rail brightens
   // it" would be meaningless) and for lambda = 0.4 (headroom for the coupled contact solve), but its
@@ -339,6 +353,7 @@ let isGeom = false, orbitU = null, orbitW = null, orbitPerFrame = 1, uwAmp = 1, 
 let isSymp = false, nFields = 1, fieldAmps = [1], fieldLabels = [];
 // Jawari (model #8, curved): the bridge profile under the string + the travelling wrap edge.
 let isJawari = false, barrierProfile = null, wrapFrames = null;
+let isJuari = false, threadNode = -1, contactFrames = null;
 // Fret / flat rail (model #8, straight): the rail profile the string slaps, plus the contact
 // RASTER — an x-vs-t image, the first panel primitive in the viewer that is a picture of a field's
 // history rather than of a field. `fretRaster` is uint8 grey, row-major, rows = support x.
@@ -733,6 +748,27 @@ function updateLambdaHint() {
       jHint.textContent = "";
     }
   }
+  // Juari: the thread snaps to a grid node, so surface WHICH node live — the tuning resolution IS the
+  // node spacing — and where it sits: near the nut is the sweet spot; mid-string is quieter (there
+  // the even partials fall on the thread's own node and pass unclipped).
+  const juHint = $("juari-hint");
+  if (juHint) {
+    if (m === "juari") {
+      const N = Math.round(param("N"));
+      const node = Math.min(Math.max(1, Math.round(param("thread_position") * N)), N - 1);
+      const where = node / N <= 0.15
+        ? "near the nut — the sweet spot, where the thread clips the richest set of partials"
+        : node / N >= 0.4
+          ? "toward mid-string — quieter: the even partials sit on the thread's node, unclipped"
+          : "mid-way — a moderate buzz";
+      juHint.textContent = `thread snaps to grid node ${node} (x ≈ ${(node / N).toFixed(3)} L, `
+        + `spacing 1/${N}) — ${where}. The tuning curve is only as fine as this spacing, `
+        + `coarsest near the nut.`;
+      juHint.style.color = "var(--muted)";
+    } else {
+      juHint.textContent = "";
+    }
+  }
   // Fret: the same live-gate idea as the jawari's, guarding a DIFFERENT failure — not a degraded
   // timbre but an erased claim. Peak swing over the rail is A·sin(π·min(rail_frac, ½)) (the rail
   // reaches only part of the mode-1 arch), and it falls as the rail shortens toward the nut: 5.00 /
@@ -1000,6 +1036,7 @@ function applyPayload(data) {
   isGeom = data.model === "geometric";
   isSymp = data.model === "sympathetic";
   isJawari = data.model === "jawari";
+  isJuari = data.model === "juari";
   isFret = data.model === "fret";
   // Plate-as-body: the plate heatmap is the main (dims = 2) field, loaded above; the string strip is
   // a SECOND 1D buffer drawn on top by drawPlateBody. Same frame count/times (one simulation).
@@ -1058,6 +1095,12 @@ function applyPayload(data) {
     // for: how far the string has swung PAST the curve.
     barrierProfile = data.grid.barrier || null;
     wrapFrames = data.wrap_frames || null;
+  }
+  if (isJuari) {
+    // A single-node point contact: the thread is ONE grid node (thread_node), and contact_frames[i]
+    // is 1 when the string is caught on it this frame — the marker lights up on the downswing.
+    threadNode = data.grid.thread_node;
+    contactFrames = data.contact_frames || null;
   }
   if (isGeom) {
     orbitU = b64ToFloat32(data.orbit.u);
@@ -1264,6 +1307,69 @@ function drawJawariPane(g, idx, x0, y0, w, h, zoom) {
     g.fillText(`departure node ${we}`, x0 + margin, y0 + 28);
   }
   g.restore();
+}
+
+// ── juari: the string over its single-node cotton thread ─────────────────────────────────────
+// A POINT contact, so unlike the jawari (a curved wrap that needs a zoom pane) one full-width pane
+// carries it: the whole string swinging, the thread a peg at one grid node on the rest line. The
+// peg lights up on the downswing, the frames it is CAUGHT (contact_frames) — that catch is what
+// clips the partials with an antinode there. The map/mechanism live in the diagnostics panel; this
+// pane is just "watch the thread grab the string".
+function drawJuariViz(idx) {
+  const g = stringCv.getContext("2d");
+  const W = stringCv.width, H = stringCv.height, margin = 26;
+  g.clearRect(0, 0, W, H);
+  const xs = (payload && payload.grid && payload.grid.x) || [];
+  if (!frames || nFrames === 0 || !xs.length) return;
+
+  const amp = fieldAmp > 0 ? fieldAmp : 1;
+  const midY = H * 0.5;
+  const sx = (W - 2 * margin) / (width - 1);
+  const sy = (Math.min(midY, H - midY) - margin) / amp * 0.92;
+  const px = (i) => margin + i * sx;
+  const py = (v) => midY - v * sy;
+
+  // rest line
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(0, midY); g.lineTo(W, midY); g.stroke();
+
+  // the string
+  g.strokeStyle = "#4cc2ff"; g.lineWidth = 2; g.lineJoin = "round";
+  g.beginPath();
+  const base = idx * width;
+  for (let i = 0; i < width; i++) {
+    const Y = py(frames[base + i]);
+    if (i === 0) g.moveTo(px(i), Y); else g.lineTo(px(i), Y);
+  }
+  g.stroke();
+
+  // the thread: a peg standing on the rest line at its grid node. It brightens the frames the
+  // string is caught on it (contact_frames), which is the whole point — the catch clips the highs.
+  const caught = contactFrames && idx < contactFrames.length ? contactFrames[idx] : 0;
+  if (threadNode >= 0 && threadNode < width) {
+    const tx = px(threadNode);
+    g.strokeStyle = caught ? "#ff6b6b" : "#c68e56"; g.lineWidth = caught ? 3 : 2;
+    g.beginPath(); g.moveTo(tx, midY); g.lineTo(tx, midY + (caught ? 16 : 12)); g.stroke();
+    g.fillStyle = caught ? "#ff6b6b" : "#c68e56";
+    g.beginPath(); g.arc(tx, midY, caught ? 5 : 3.5, 0, 7); g.fill();
+    if (caught) {
+      g.strokeStyle = "rgba(255,107,107,.4)"; g.lineWidth = 1; g.setLineDash([3, 3]);
+      g.beginPath(); g.moveTo(tx, 8); g.lineTo(tx, H - 8); g.stroke(); g.setLineDash([]);
+    }
+  }
+
+  // pickup line + terminations
+  const pk = px(Math.round(param("pickup_position") * (width - 1)));
+  g.strokeStyle = "rgba(255,207,92,.35)"; g.setLineDash([4, 4]); g.lineWidth = 1;
+  g.beginPath(); g.moveTo(pk, 8); g.lineTo(pk, H - 8); g.stroke(); g.setLineDash([]);
+  g.fillStyle = "#8b98a8";
+  g.beginPath(); g.arc(px(0), midY, 3.5, 0, 7); g.fill();
+  g.beginPath(); g.arc(px(width - 1), midY, 3.5, 0, 7); g.fill();
+
+  g.fillStyle = "#8b98a8"; g.font = "11px system-ui, sans-serif";
+  g.fillText("the string over its cotton thread", margin, 16);
+  g.fillStyle = caught ? "#ff6b6b" : "#c68e56";
+  g.fillText(`thread node ${threadNode}${caught ? " — caught" : ""}`, margin, 30);
 }
 
 // ── fret / flat rail: the string on its rail, and the contact raster ─────────────────────────
@@ -1785,7 +1891,8 @@ function tick(ts) {
       scrub.value = currentFrame;
     }
     (isPlateBody ? drawPlateBody : dims === 2 ? drawHeatmap : isGeom ? drawGeometric
-      : isSymp ? drawSympatheticViz : isJawari ? drawJawariViz : isFret ? drawFretViz
+      : isSymp ? drawSympatheticViz : isJawari ? drawJawariViz : isJuari ? drawJuariViz
+        : isFret ? drawFretViz
         : isBore ? drawBore : drawString)(currentFrame);
   }
   requestAnimationFrame(tick);
@@ -2468,6 +2575,14 @@ function drawDiagnostics() {
     partialsTitle.firstChild.textContent = "Sustained shimmer ";
     partialsSub.textContent = "late-window brightness vs a clean string";
     drawJawari();
+    return;
+  }
+  // The juari: the TUNING CURVE (buzz vs thread position) is the headline, the band spectrum the
+  // mechanism — two panes, because sliding the thread reshapes WHICH partials buzz.
+  if (spec && spec.kind === "juari") {
+    partialsTitle.firstChild.textContent = "Tuning curve ";
+    partialsSub.textContent = "buzz vs thread position — slide the thread to retune";
+    drawJuari();
     return;
   }
   // The fret: like the jawari, a spectral CONTRAST rather than its own partials — but with the
@@ -3184,6 +3299,164 @@ function drawJawari() {
     + `\nwrap edge sweeps nodes ${wrap.min_node}–${wrap.max_node} of ${wrap.support}, std `
     + `${wrap.std}, in contact ${(wrap.duty * 100).toFixed(0)} % of the run — the suite's flat rail `
     + `at matched clearance pins at std ${wrap.flat_rail_std} (tests/test_jawari.py)`;
+}
+
+// ---- juari: the TUNING CURVE (the map) + the band spectrum (the mechanism) -------------------
+// Left, the headline: late-window buzz elevation vs thread position, drawn as DISCRETE POINTS at
+// node resolution (the point contact snaps to the grid — the quantization is honest content, not a
+// rendering flaw), with the clean 1.0x and the jawari's flat, position-INDEPENDENT reference lines
+// so the separator reads in one glance. The current thread sits on the curve; the sweet spot is
+// marked. Right, the mechanism: the band spectrum at the selected position vs the clean string —
+// what a point contact does that the jawari cannot, select WHICH partials buzz by position.
+function drawJuari() {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height;
+  g.clearRect(0, 0, W, H);
+  const out = $("partials-readout");
+  const sp = payload && payload.meta && payload.meta.spectrum;
+  if (!sp || !sp.tuning) { out.textContent = "no juari tuning curve"; return; }
+
+  const splitX = Math.round(W * 0.58);
+  drawJuariTuning(g, sp, 0, 0, splitX, H);
+  drawJuariSpectrum(g, sp, splitX, 0, W - splitX, H);
+
+  const t = sp.thread, ss = sp.sweet_spot, q = sp.quantization;
+  const ref = sp.reference || {};
+  const verdict = sp.buzzing
+    ? `BUZZING ✓  ${sp.elevation.toFixed(2)}× the clean string at x = ${t.x} L (gate ${sp.elevation_gate}×)`
+    : `weak here — ${sp.elevation.toFixed(2)}× < ${sp.elevation_gate}× at x = ${t.x} L (a legitimate `
+      + `position, just quiet: slide the thread toward the sweet spot)`;
+  const jref = ref.jawari == null ? "—" : `${ref.jawari.toFixed(2)}×`;
+  out.textContent =
+    `${verdict}\n`
+    + `sweet spot x = ${ss.x} L (node ${ss.node}), ${ss.elevation.toFixed(2)}× — near the nut, and it `
+    + `rivals the whole curved jawari bridge (${jref}, flat: the jawari cannot select by position)\n`
+    + `centroid at the thread ${sp.centroid.juari_late} Hz vs clean ${sp.centroid.clean_late} Hz — `
+    + `the thread suppresses the fundamental and pumps energy into the partials with an antinode on `
+    + `it (clean at low order, washing out at high n)\n`
+    + `grid resolution h = ${q.h} L: the thread snaps to a node, so the curve is only as fine as the `
+    + `spacing — coarsest exactly near the nut, where ${q.near_nut_nodes} distinct positions exist `
+    + `(x ≤ ${q.near_nut_frac} L) and the sweep drew ${q.swept_near_nut}`;
+}
+
+function drawJuariTuning(g, sp, x0, y0, w, h) {
+  const padL = 30, padB = 18, top = 22, padR = 8;
+  const plotW = w - padL - padR, plotH = h - padB - top;
+  const tn = sp.tuning;
+  const fracs = tn.frac, elev = tn.elevation;
+  const fMax = Math.max(...fracs) * 1.06;
+  const eMax = Math.max(sp.reference && sp.reference.jawari ? sp.reference.jawari : 0,
+                        ...elev.filter((v) => v != null)) * 1.12;
+  const eMin = 0.85;
+  const px = (f) => x0 + padL + (f / fMax) * plotW;
+  const py = (e) => y0 + top + plotH - ((e - eMin) / (eMax - eMin)) * plotH;
+
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(x0 + padL, y0 + top, plotW, plotH);
+  g.fillStyle = "#8b98a8"; g.font = "11px system-ui, sans-serif";
+  g.fillText("buzz × clean  vs  thread position (·L)", x0 + padL, y0 + 14);
+
+  g.font = "9px ui-monospace, monospace";
+  for (let e = 1; e <= Math.floor(eMax); e++) {
+    const Y = py(e);
+    g.strokeStyle = "rgba(139,152,168,.12)"; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(x0 + padL, Y); g.lineTo(x0 + padL + plotW, Y); g.stroke();
+    g.fillStyle = "#8b98a8"; g.fillText(`${e}×`, x0 + 6, Y + 3);
+  }
+  for (const f of [0, 0.2, 0.4, 0.6]) {
+    if (f > fMax) continue;
+    g.fillStyle = "#8b98a8"; g.fillText(f.toFixed(1), px(f) - 6, y0 + h - 5);
+  }
+
+  g.strokeStyle = "#8b98a8"; g.lineWidth = 1.5;
+  g.beginPath(); g.moveTo(px(0), py(1)); g.lineTo(px(fMax), py(1)); g.stroke();
+  g.fillStyle = "#8b98a8"; g.fillText("clean 1×", x0 + padL + 4, py(1) - 4);
+  if (sp.reference && sp.reference.jawari != null) {
+    const jy = py(sp.reference.jawari);
+    g.strokeStyle = "#ff8f4c"; g.setLineDash([5, 4]); g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(px(0), jy); g.lineTo(px(fMax), jy); g.stroke(); g.setLineDash([]);
+    g.fillStyle = "#ff8f4c";
+    g.fillText(`jawari ${sp.reference.jawari.toFixed(1)}× (flat)`, x0 + padL + 4, jy - 4);
+  }
+  const gy = py(sp.elevation_gate);
+  g.strokeStyle = "rgba(255,207,92,.4)"; g.setLineDash([2, 3]); g.lineWidth = 1;
+  g.beginPath(); g.moveTo(px(0), gy); g.lineTo(px(fMax), gy); g.stroke(); g.setLineDash([]);
+
+  g.strokeStyle = "rgba(76,194,255,.35)"; g.lineWidth = 1;
+  g.beginPath();
+  let started = false;
+  for (let i = 0; i < fracs.length; i++) {
+    if (elev[i] == null) continue;
+    const X = px(fracs[i]), Y = py(elev[i]);
+    if (!started) { g.moveTo(X, Y); started = true; } else g.lineTo(X, Y);
+  }
+  g.stroke();
+  for (let i = 0; i < fracs.length; i++) {
+    if (elev[i] == null) continue;
+    g.fillStyle = "#4cc2ff";
+    g.beginPath(); g.arc(px(fracs[i]), py(elev[i]), 2.6, 0, 7); g.fill();
+  }
+
+  const ss = sp.sweet_spot;
+  if (ss) {
+    g.strokeStyle = "#8fe388"; g.lineWidth = 1.5;
+    g.beginPath(); g.arc(px(ss.frac), py(ss.elevation), 6, 0, 7); g.stroke();
+    g.fillStyle = "#8fe388"; g.fillText("sweet", px(ss.frac) - 10, py(ss.elevation) - 9);
+  }
+  const t = sp.thread;
+  if (t && t.elevation != null) {
+    const X = px(t.frac), Y = py(t.elevation);
+    g.strokeStyle = "rgba(255,107,107,.5)"; g.setLineDash([3, 3]); g.lineWidth = 1;
+    g.beginPath(); g.moveTo(X, y0 + top); g.lineTo(X, y0 + top + plotH); g.stroke();
+    g.setLineDash([]);
+    g.fillStyle = "#ff6b6b";
+    g.beginPath(); g.arc(X, Y, 4.5, 0, 7); g.fill();
+  }
+}
+
+// The mechanism, borrowing the jawari's shared-scale log spectrum: the two late-window spectra
+// (thread vs clean) so the RELATIVE height up the band shows which partials the thread lifted.
+function drawJuariSpectrum(g, sp, x0, y0, w, h) {
+  const padL = 30, padB = 18, top = 22, padR = 8;
+  const plotW = w - padL - padR, plotH = h - padB - top;
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(x0 + padL, y0 + top, plotW, plotH);
+  g.fillStyle = "#8b98a8"; g.font = "11px system-ui, sans-serif";
+  g.fillText("which partials buzz (late)", x0 + padL, y0 + 14);
+  if (!sp.spectra) return;
+  const fMax = sp.spectra.f_max || 2000;
+  const px = (f) => x0 + padL + (f / fMax) * plotW;
+  const floor = 1e-4;
+  const py = (m) => {
+    const v = Math.max(m || floor, floor);
+    return y0 + top + plotH - ((Math.log10(v) - Math.log10(floor)) / 4) * plotH;
+  };
+  g.font = "9px ui-monospace, monospace";
+  for (let d = 0; d >= -4; d--) {
+    const Y = py(Math.pow(10, d));
+    g.strokeStyle = "rgba(139,152,168,.13)"; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(x0 + padL, Y); g.lineTo(x0 + padL + plotW, Y); g.stroke();
+    g.fillStyle = "#8b98a8"; g.fillText(`1e${d}`, x0 + 4, Y + 3);
+  }
+  if (sp.f1) {
+    g.strokeStyle = "rgba(255,207,92,.35)"; g.setLineDash([4, 4]);
+    g.beginPath(); g.moveTo(px(sp.f1), y0 + top); g.lineTo(px(sp.f1), y0 + top + plotH); g.stroke();
+    g.setLineDash([]);
+  }
+  const trace = (data, colour, wdt) => {
+    if (!data || !data.f) return;
+    g.strokeStyle = colour; g.lineWidth = wdt; g.beginPath();
+    let started = false;
+    for (let i = 0; i < data.f.length; i++) {
+      const X = px(data.f[i]), Y = py(data.mag[i]);
+      if (!started) { g.moveTo(X, Y); started = true; } else g.lineTo(X, Y);
+    }
+    g.stroke();
+  };
+  trace(sp.spectra.clean, "#8b98a8", 1.5);
+  trace(sp.spectra.juari, "#ff6b6b", 2);
+  g.font = "10px ui-monospace, monospace";
+  g.fillStyle = "#ff6b6b"; g.fillText("thread", x0 + padL + 6, y0 + top + 12);
+  g.fillStyle = "#8b98a8"; g.fillText("clean", x0 + padL + 6, y0 + top + 24);
+  g.fillText(`${Math.round(fMax)} Hz`, x0 + w - 50, y0 + h - 5);
 }
 
 // ── the fret's signature: brightness against a control, and the label it may NOT carry ────────

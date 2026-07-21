@@ -1876,7 +1876,22 @@ leak-reset). Two things the build surfaced, each a rule:
   distributed body, re-derive what each spectral ratio actually relates — the lumped identity may
   quietly break.*
 
-### Batch 14 (PLANNED) — the tanpura cotton thread (juari): a POSITION-SELECTIVE point contact
+### Batch 14 (DONE) — the tanpura cotton thread (juari): a POSITION-SELECTIVE point contact
+
+**Built & browser-verified.** All-wrapper (`physsynth/core` untouched); 12 web tests + 1 core
+scalar-collapse test at the juari's numbers. Shipped defaults, measured through the payload: thread
+at x = 0.10 L (node 10) buzzes **2.84×** the clean string; the **sweet spot is node 11 (x = 0.11 L)
+at 2.99×**, which *rivals the whole curved jawari bridge* (**3.45×**, flat) — a well-placed point
+thread is as bright as the distributed wrap, but position-tunable; clean baseline sits on **f₁ =
+100 Hz**. The headless verifier renders "ok" with the tuning curve, the flat clean/jawari reference
+lines, the band-spectrum mechanism pane, and the energy card's `decay_oracle` verdict (measured 2σ =
+1.002 vs oracle 1.000). Cost: the **sweep is the driver** (~11 thread positions at a canonical
+0.24 s), ~37 s at the default — so a hidden `sweep_duration` override keeps the tests fast while the
+UI holds the canonical window. One measured decision beyond the plan below: **the buzz is a SETTLED
+quantity** — a 0.10 s run peaks at the wrong node (the spectrum is still cascading upward), so the
+sweep runs at a fixed 0.24 s DECOUPLED from the audio slider (pinned by a test), keeping the map
+stable when the user changes the sound length.
+
 
 The last unshown member of the barrier family, and the jawari's (batch 8) complement rather than a
 preset of it. The tanpura *juari* (the *jvari*-tuning thread) is a single thread of cotton laid on

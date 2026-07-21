@@ -27,6 +27,7 @@
             <option value="geometric">Geometrically-exact string (u·w·v)</option>
             <option value="sympathetic">Sympathetic strings (coupled, ×2)</option>
             <option value="jawari">Jawari — buzzing bridge (sitar/tanpura, #8)</option>
+            <option value="juari">Juari — tanpura cotton thread (tunable buzz, #8)</option>
             <option value="fret">Fret / flat rail — buzz (contact, #8)</option>
             <option value="bore">Acoustic bore + bell (clarinet, wind)</option>
             <option value="reed">Dynamic reed → bore (clarinet speaks, wind)</option>
@@ -47,11 +48,11 @@
       <!-- The bore joins this group for L alone. Its medium is AIR — ρ₀ and c₀ are properties of
            the medium, not tunable the way string tension is — so ρ needs an explicit list that
            leaves the bore out, rather than the blanket "every model in this fieldset" it had. -->
-      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari fret body platebody membrane mallet plate vk bore reed">
+      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody membrane mallet plate vk bore reed">
         <legend>Physical</legend>
-        <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N" data-show="ideal stiff damped tension bow geometric sympathetic jawari fret body platebody membrane mallet"></div>
-        <div class="slider" data-param="rho" data-min="0.001" data-max="0.02" data-step="0.0005" data-val="0.005" data-unit="kg/m²" data-fixed="4" data-show="ideal stiff damped tension bow geometric sympathetic jawari fret body platebody membrane mallet plate vk"></div>
-        <div class="slider" data-param="L"   data-min="0.25" data-max="2.0"  data-step="0.05"  data-val="1.0"   data-unit="m" data-show="ideal stiff damped tension bow geometric sympathetic jawari fret body platebody bore reed"></div>
+        <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody membrane mallet"></div>
+        <div class="slider" data-param="rho" data-min="0.001" data-max="0.02" data-step="0.0005" data-val="0.005" data-unit="kg/m²" data-fixed="4" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody membrane mallet plate vk"></div>
+        <div class="slider" data-param="L"   data-min="0.25" data-max="2.0"  data-step="0.05"  data-val="1.0"   data-unit="m" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody bore reed"></div>
       </fieldset>
 
       <fieldset class="group" data-show="membrane mallet plate vk">
@@ -64,7 +65,7 @@
       <fieldset class="group">
         <legend>Discretization</legend>
         <div class="slider" data-param="N"      data-min="16"  data-max="512" data-step="1"    data-val="128"></div>
-        <div class="slider" data-param="lambda" data-min="0.5" data-max="2.0" data-step="0.01" data-val="1.0" data-show="ideal stiff damped tension bow sympathetic jawari fret body platebody membrane mallet"></div>
+        <div class="slider" data-param="lambda" data-min="0.5" data-max="2.0" data-step="0.01" data-val="1.0" data-show="ideal stiff damped tension bow sympathetic jawari juari fret body platebody membrane mallet"></div>
         <div class="slider" data-param="mu"     data-min="0.25" data-max="32" data-step="0.25" data-val="1.0" data-fixed="2" data-show="plate"></div>
         <div class="slider" data-param="fs"     data-min="8000" data-max="96000" data-step="1000" data-val="32000" data-unit="Hz" data-fixed="0" data-show="vk"></div>
         <!-- The geometric string's knob is lam_long, NOT lambda, and that inversion is the model's
@@ -97,9 +98,9 @@
            (the frontend's standing rule), re-ranged per model via MODEL_RANGES. Mind the meaning:
            model #9's EA is the nonlinearity coefficient, model #10's is the axial stiffness and its
            coefficient is EA − T₀. In the whirl regime amplitude is derived from ΔT/T₀, so it hides. -->
-      <fieldset class="group" data-show="tension geometric jawari fret">
+      <fieldset class="group" data-show="tension geometric jawari juari fret">
         <legend>Nonlinearity</legend>
-        <div class="slider" data-param="amplitude" data-min="0.001" data-max="0.06" data-step="0.001" data-val="0.02" data-unit="m" data-fixed="3" data-show="tension geometric jawari fret" data-hide-domain="whirl"></div>
+        <div class="slider" data-param="amplitude" data-min="0.001" data-max="0.06" data-step="0.001" data-val="0.02" data-unit="m" data-fixed="3" data-show="tension geometric jawari juari fret" data-hide-domain="whirl"></div>
         <div class="slider" data-param="EA" data-min="0" data-max="200" data-step="5" data-val="100" data-unit="kN" data-scale="1e3" data-fixed="0" data-show="tension geometric"></div>
         <p class="hint" id="tension-hint" data-show="tension"></p>
         <p class="hint" id="geom-hint" data-show="geometric"></p>
@@ -163,6 +164,17 @@
         <p class="hint" id="jawari-hint"></p>
       </fieldset>
 
+      <!-- The juari / tanpura cotton thread (batch 14): a single-node POINT contact, the jawari's
+           position-SELECTIVE complement. thread_position is the STAR control — it is the tanpura's
+           jvari-tuning gesture. It snaps to the nearest grid node (the point contact lives on the
+           grid), so the tuning curve's resolution IS the node spacing, coarsest near the nut where a
+           real thread lives — the hint surfaces which grid node the thread lands on, live. -->
+      <fieldset class="group" data-show="juari">
+        <legend>Cotton thread (juari)</legend>
+        <div class="slider" data-param="thread_position" data-min="0.02" data-max="0.9" data-step="0.01" data-val="0.1" data-unit="·L" data-fixed="2"></div>
+        <p class="hint" id="juari-hint"></p>
+      </fieldset>
+
       <!-- String → modal body + radiation (batch 12): the coupling/radiation leg of
            exciter → resonator → body/radiation, shown for the first time. A fixed/free string
            terminated on a lumped modal body through a linear bridge SPRING (bridge_stiffness), read
@@ -181,9 +193,9 @@
                verdict to passivity (the off-harmonic coupled decay is multi-rate, so no 2σ oracle).
              * distance is the 1/r far-field knob, new to this batch: it changes level + latency
                only, never the (distance-invariant) spectrum SHAPE — the readout says so. -->
-      <fieldset class="group" data-show="jawari sympathetic body platebody">
+      <fieldset class="group" data-show="jawari juari sympathetic body platebody">
         <legend>Bridge stiffness / body &amp; radiation</legend>
-        <div class="slider" data-param="bridge_stiffness" data-min="200000" data-max="8000000" data-step="100000" data-val="2000000" data-unit="N/mᵅ" data-fixed="0" data-show="jawari body platebody"></div>
+        <div class="slider" data-param="bridge_stiffness" data-min="200000" data-max="8000000" data-step="100000" data-val="2000000" data-unit="N/mᵅ" data-fixed="0" data-show="jawari juari body platebody"></div>
         <div class="slider" data-param="sigma_body"       data-min="0"      data-max="80"      data-step="1"      data-val="20"      data-unit="s⁻¹" data-fixed="0" data-show="sympathetic body" data-hide-domain="normal transfer"></div>
         <!-- platebody's own plate-grid + plate loss (n_plate lowers the guard ceiling K_c; sigma_plate
              gates the verdict, σ=0 → conservation drift, σ>0 → passivity, exactly like the body). -->
@@ -276,14 +288,14 @@
            the flat-loss decay oracle the energy panel reports (measured 2.77 against a 1.00 oracle)
            and buys nothing — the shimmer is a sigma1 = 0 result. sigma0 GATES the verdict: 0 gives
            conservation drift through the curved wrap, > 0 passivity + the 2·sigma0 oracle. -->
-      <fieldset class="group" data-show="damped tension bow geometric jawari fret">
+      <fieldset class="group" data-show="damped tension bow geometric jawari juari fret">
         <legend>Loss (frequency-dependent)</legend>
         <div class="slider" data-param="sigma0" data-min="0" data-max="20"   data-step="0.1"   data-val="1.0"></div>
         <div class="slider" data-param="sigma1" data-min="0" data-max="0.01" data-step="0.0001" data-val="0.002" data-fixed="4" data-show="damped tension bow geometric"></div>
         <p class="hint" id="loss-hint"></p>
       </fieldset>
 
-      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari fret body bore">
+      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body bore">
         <legend>Excitation</legend>
         <!-- pluck_position is meaningless for three models here. The tension string's IC is the
              mode-1 sine the Duffing reduction needs, which has no pluck point; the bowed string
@@ -296,7 +308,7 @@
         <!-- pickup_position is hidden for the body model: its audio is the far-field radiated
              pressure and the backend probes the terminus at x = L, so a movable pickup marker would
              claim a control the model does not have. -->
-        <div class="slider" data-param="pickup_position" data-min="0.02" data-max="0.98" data-step="0.01" data-val="0.1" data-show="ideal stiff damped tension bow geometric sympathetic jawari fret bore"></div>
+        <div class="slider" data-param="pickup_position" data-min="0.02" data-max="0.98" data-step="0.01" data-val="0.1" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret bore"></div>
       </fieldset>
 
       <fieldset class="group" data-show="membrane mallet plate vk">
@@ -315,7 +327,7 @@
         <!-- No audio_duration for the geometric string: it is the viewer's one viz-only model. See
              the note under the canvas — resolving its longitudinal wave forces fs ≈ 22× a normal
              string's, so a second of sound is ~10 minutes of compute. -->
-        <div class="slider" data-param="audio_duration"   data-min="0.2" data-max="6"    data-step="0.1"  data-val="2.0" data-unit="s" data-show="ideal stiff damped tension bow sympathetic jawari fret body platebody membrane mallet plate vk bore reed"></div>
+        <div class="slider" data-param="audio_duration"   data-min="0.2" data-max="6"    data-step="0.1"  data-val="2.0" data-unit="s" data-show="ideal stiff damped tension bow sympathetic jawari juari fret body platebody membrane mallet plate vk bore reed"></div>
         <!-- Hidden for the phantom regime: its window is fixed physics, not a preference. At 0.05 s
              the weakest phantom (2f₁) sits inside its neighbours' leakage skirts and is mislocated
              by 0.52 Hz (vs 0.039 Hz at 0.10 s), collapsing its margin to f₂ from 170× to 8×. -->
