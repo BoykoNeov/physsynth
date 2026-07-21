@@ -1876,6 +1876,91 @@ leak-reset). Two things the build surfaced, each a rule:
   distributed body, re-derive what each spectral ratio actually relates — the lumped identity may
   quietly break.*
 
+### Batch 14 (PLANNED) — the tanpura cotton thread (juari): a POSITION-SELECTIVE point contact
+
+The last unshown member of the barrier family, and the jawari's (batch 8) complement rather than a
+preset of it. The tanpura *juari* (the *jvari*-tuning thread) is a single thread of cotton laid on
+the bridge under the string; sliding it a millimetre is how a player tunes the instrument's buzz.
+Physically it is **one more barrier node** (the jawari-state follow-on): a `BarrierString` (model #8)
+whose barrier is `-inf` everywhere except **one interior grid node** — the thread — grazing the rest
+line. **Zero core code; `physsynth/core` untouched**, like every batch since Phase B.
+
+**The whole batch was gated on a separability PROBE before any wiring** (advisor: "the probe is the
+whole decision"). The redundancy trap is real — a thread node *inside* the span the curved jawari
+bridge already wraps is a no-op, so the honest framing is the thread **alone**, not thread-on-curve.
+The probe (three passes, `M:\claud_projects\temp\juari_probe\`) confirmed a distinct, honest model.
+Every number below is measured, before the wiring:
+
+- **The claim is POSITION-SELECTIVITY — the tuning curve — NOT "more buzz."** A point contact couples
+  to the mode shapes: it clips partials with an **antinode** at the thread and barely perturbs those
+  with a **node** there. So sliding the thread reshapes *which* partials buzz — the tanpura tuning
+  gesture, and the clean separator from the jawari, whose distributed curved wrap gives a
+  **position-INDEPENDENT** broadband shimmer. Measured, with the jawari's own string params (loss ON
+  σ₀=0.5, mode-1 IC, N=100, λ=0.4, K=2e6, α=1.5, amp=8 mm): the clean string sits on its fundamental
+  (late-window centroid **100 Hz = f₁**), the jawari is a flat **3.39× clean** at every position, and
+  the juari **sweeps 1.0×→3.44×→~2.0× as the thread moves nut→sweet-spot→mid-string.** The curve IS
+  the headline; the jawari's single number cannot express it.
+- **The sweet spot is x≈0.09 (node 8–9), ~3.44×** — which slightly *exceeds* the jawari's 3.39×: a
+  well-placed thread is as bright as the whole curved bridge, but tunable. The near-nut region is a
+  smooth **rise** from the termination (node 1 = 1.02×, negligible — displacement vanishes at the
+  fixed end) to that peak, then a gentle decline (mid-string ~1.6–2.0×, where the even partials have
+  a node at x=0.5 and go unclipped). **20 of 25 near-nut nodes exceed 2.0×.**
+- **The tuning curve survives the window/duration wobble** (jawari-state's late/early caveat; batch
+  13's 117→99 flip). Measured at three settings — late-50%/0.35 s, late-30%/0.35 s, last-0.20 s — the
+  **peak node agrees (9, 8, 9)** and the shape holds; only the 2nd digit moves (node 9:
+  3.44/3.41/3.38×). The *feature* is robust, so the numbers are safe to quote.
+- **Grid quantization is load-bearing and stated honestly.** `thread_position` snaps to the nearest
+  grid node (model #8's documented sub-grid limitation); the tuning curve's resolution **is** the
+  node spacing, `h = L/N = 0.01 L`. The physically-real regime — near the nut, where a real tanpura
+  thread lives — is precisely where that resolution gives the **fewest distinct positions** (~10
+  across the rise nut→peak). The panel plots **discrete points at node resolution, not a smooth
+  line** — the quantization is honest content, not a rendering flaw — and the count is foregrounded.
+- **The mechanism panel is the band spectrum at the selected position, calibrated to the data.**
+  Probe 2: the thread **suppresses the fundamental** where it has an antinode there (node 50: f₁
+  −18.8 dB) and pumps that energy into the **low-order** partials with an antinode at the thread
+  (node 50: odd n=3/5 at +95/+103 dB vs even n=2/6 at +61/+57 dB). The selectivity is **clean at low
+  order and washes out at high n** as the nonlinear clipping spreads energy broadly (node 50: n=9
+  antinode +68 actually *below* n=10 node +79). Write it that way — fundamental-suppression + low-
+  order antinode selection, masked at high n — never an idealized odd/even alternation.
+- **The tuning curve is the MAP; `thread_position` is where you stand on it.** The sweep panel is a
+  precomputed reference (clean 1.0× and jawari 3.39× drawn as flat guide lines; the sweet spot
+  marked); the `thread_position` slider picks the operating point that drives the audio, the band
+  spectrum, and the string-over-thread animation, with a marker on the curve showing the current
+  position. That is the tanpura-tuning UX in one screen.
+- **Below-signal positions LABEL, never FAIL** (the bow Schelleng / jawari floor rule). A thread at
+  the nut, or on a partial's node, is legitimate physics that simply does not buzz much; the panel
+  reports the elevation and where to move the thread, never a red verdict on real physics.
+- **Jawari templates carried UNCHANGED — they are table stakes, not the batch's content.**
+  `decay_oracle` stays **TRUE**: the thread is a *lossless elastic* contact (dissipates none), so
+  every mode still decays at exactly 2σ₀ and the flat-loss oracle survives the point wrap. Loss
+  defaults ON (σ₀=0.5 — "which partials buzz" is meaningless on a lossless string). Mode-1 IC, **no
+  `pluck_position` slider** (the clean baseline must be spectrally pure for the contrast — the #6
+  `mode11` / #9 single-mode lesson). σ₁ and hysteresis fixed at 0.
+- **Correctness confirmed on the ACTUAL juari config, not by analogy** (advisor: the probe measured
+  *signal*, never *correctness*): σ=0 lossless **energy drift 1.08e-12** through 587 real contact
+  steps (613 N peak force); σ>0 **passivity** (max inter-step ΔE = −2.78e-17, monotone); and the
+  config-specific money oracle — **m=1 scalar-collapse**, the single contacting node's vector solve
+  == the imported scalar `solve_contact` to **1.93e-15** (barrier-collision-state's oracle, re-run at
+  K=2e6/α=1.5 rather than cited from #8's K=8e5). The suite already carries
+  `test_single_node_collapses_to_scalar_solver` on this exact single-node shape; the new tests pin it
+  at the juari's numbers.
+- **Param hygiene: `thread_position` is a NEW name** (fraction of L; no other model sends it, so no
+  leak — the jawari's `bridge_stiffness`/`K`/`alpha` collision lesson). Reuses `bridge_stiffness`
+  (same 2e6 bridge), `amplitude`, `lambda`, `sigma0`, `N`, `pickup_position` from the jawari ranges;
+  α fixed server-side at 1.5.
+- **THE SUPPORT→GRID SCATTER TRAP, harder with one node.** `BarrierString._b`/`contact_mask()` are
+  over the **support** (here length 1), not the grid — the jawari's off-by-one is *easier* to ship
+  and eyeball past with a single node than with fifteen. The thread marker and any contact readout
+  are scattered onto the grid (`grid[support] = value`) exactly as the jawari does, and a test asserts
+  the marker sits on the driven node.
+- **Own cost budget — the SWEEP is the cost driver, not the audio.** The audio/band/animation is one
+  full run + one clean run (cheap, single-node scalar solve). The tuning curve needs ~24 sweep points,
+  each a short run; the sweep dominates. `JUARI_N_MAX`, `JUARI_AUDIO_MAX`, a fixed `JUARI_SWEEP_POINTS`
+  at a reduced `JUARI_SWEEP_DUR` (the centroid stabilises fast — window study above), and a combined
+  `JUARI_WORK_MAX` over sweep+audio+clean. Exact numbers pinned against measured per-step cost during
+  implementation (jawari was ~143 µs/step for a 15-node vector solve; a 1-node scalar solve is
+  cheaper). The clean run is reused for both the tuning-curve baseline and the band-spectrum contrast.
+
 ### Later batches (rough map — not firm)
 
 - **Body / radiation** — the modal body + radiation read-out is **batch 12**; `StringPlateBridge`
@@ -1884,8 +1969,8 @@ leak-reset). Two things the build surfaced, each a rule:
   booked-loss panel).
 - **Wind** — the reed is **batch 10** (above); the wind leg closes with it.
 - **Excited strings** — the jawari landed in batch 8 above; the bow in batch 2; **fret buzz / the flat
-  rail is batch 11** (above). What remains of the barrier family is the tanpura **cotton thread
-  (juari)** = one more barrier node at a chosen position.
+  rail is batch 11** (above); the tanpura **cotton thread (juari)** is **batch 14** (above). The
+  barrier family is then fully surfaced.
 - **Sympathetics Weinreich two-stage decay** — DONE, batch 7 above.
 - **The parametric-instability demo** deserves its own batch with real viz (energy cascading into the
   neighbour modes — model #9's IN-plane exchange, which is the SAME `2ω` pump batch 3's whirl aims at
