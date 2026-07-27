@@ -58,6 +58,22 @@ const MODEL_RANGES = {
   // and dT/T0 is bounded server-side to keep the mode below its parametric-breakup threshold.
   tension: { N: { max: 256, val: 128 }, kappa: { val: 1.0 }, audio_duration: { max: 3, val: 1 },
              amplitude: { val: 0.02 }, sigma0: { val: 0 }, sigma1: { val: 0 } },
+  // The parametric regime crosses the very threshold the Duffing regime must stay under, so its
+  // dT/T0 range is the whirl's turned inside out: up to 14, not 2.2. dt_over_t0 is SHARED with the
+  // geometric whirl by name because it is the same physical coordinate — the driven mode's tension
+  // excess — and the whirl's ceiling exists precisely BECAUSE of the instability shown here. It is
+  // fully specified in both places and reset in _default, or a 3.0 set here would leak into the
+  // whirl and trip its 2.2 guard on the next render (the leak family, batches 2/3/7/8/12).
+  // kappa = 2 and EA = 100 kN are the grid the thresholds were measured on (m=3 edge at dT/T0 ~ 2);
+  // EA's min is lifted off 0 because EA = 0 is model #3 exactly — no tension modulation, no pump.
+  // N caps at 200: two claim runs plus a sweep, every step a tension root-find (~250 µs).
+  "tension:parametric": {
+    N: { min: 32, max: 200, val: 128 }, kappa: { val: 2.0 }, EA: { min: 5, val: 100 },
+    dt_over_t0: { min: 0.1, max: 14, step: 0.1, fixed: 2, val: 3.0 },
+    dt_below: { min: 0.1, max: 14, step: 0.1, fixed: 2, val: 1.5 },
+    mode_number: { min: 1, max: 8, step: 1, fixed: 0, val: 3 },
+    sigma0: { val: 0 }, sigma1: { val: 0 }, pickup_position: { val: 0.1 },
+  },
   // Loss is ON by default here — the OPPOSITE of the tension string above, and load-bearing:
   // sigma0 > 0 lets the note settle to a steady Helmholtz limit cycle instead of growing without
   // bound, and sigma1 > 0 damps the high partials so the corner stays clean (one slip per period)
@@ -283,6 +299,10 @@ const MODEL_RANGES = {
               sigma0: { min: 0, max: 20, step: 0.1, val: 1.0 },
               sigma1: { min: 0, max: 0.01, step: 0.0001, fixed: 4, val: 0.002 },
               pickup_position: { val: 0.1 },
+              // Shared by the geometric whirl and the tension string's parametric regime, which
+              // re-range it to 2.2 and 14 respectively. These are index.html's (the whirl's) values,
+              // so a parametric → whirl switch cannot leave a 3.0 sitting above the whirl's guard.
+              dt_over_t0: { min: 0.1, max: 2.2, step: 0.05, fixed: 2, val: 1.5 },
               K: { min: 500, max: 10000, step: 100, fixed: 0, val: 8000 },
               detune: { min: 0, max: 12, step: 0.1, fixed: 1, val: 0 },
               sigma_body: { min: 0, max: 80, step: 1, fixed: 0, val: 0, unit: "s⁻¹" },
@@ -329,7 +349,7 @@ const MODEL_RANGES = {
 // Secondary select repurposed per model: geometry (membrane), boundary (plate / von Kármán) or
 // REGIME (the geometric string — three claims, one string, cheapest first).
 const DOMAIN_MODELS = ["membrane", "mallet", "plate", "vk", "geometric", "sympathetic", "bore",
-                       "reed", "platebody"];
+                       "reed", "platebody", "tension"];
 const DOMAIN_OPTS = {
   membrane: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
   mallet: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
@@ -338,6 +358,12 @@ const DOMAIN_OPTS = {
   // the curved-Chladni ring you watch), the supported soundboard is the canonical guitar-body case.
   platebody: [["free", "Free cymbal — Chladni (#5b)"], ["supported", "Soundboard (#5)"]],
   vk: [["supported", "Supported gong (#6)"], ["free", "Free-edge cymbal (#6)"]],
+  // The tension string's two regimes are two sides of ONE threshold. Duffing leads: it is the
+  // measurable, oracle-backed claim, and it is only honest BELOW the tongue — which is exactly what
+  // `parametric` crosses. The server-side dT/T0 ceiling that refuses the Duffing panel is not
+  // relaxed; this regime is where it points.
+  tension: [["duffing", "Duffing shift — below the tongue"],
+            ["parametric", "Parametric breakup — across it"]],
   geometric: [["rotating", "Rotating wave — exact circle"],
               ["planar", "Planar — max|w| = 0 exactly"],
               ["whirl", "Whirling — the Mathieu tongue"],
@@ -356,7 +382,7 @@ const DOMAIN_OPTS = {
 };
 const DOMAIN_LABELS = { membrane: "Domain", mallet: "Drum shape", geometric: "Regime",
                         sympathetic: "Regime", bore: "Far end", reed: "Far end",
-                        platebody: "Body edge" };
+                        platebody: "Body edge", tension: "Regime" };
 
 const sliders = {};      // param -> <input>
 const updaters = {};     // param -> fn() that refreshes its value label
@@ -379,6 +405,10 @@ let isJuari = false, threadNode = -1, contactFrames = null;
 // RASTER — an x-vs-t image, the first panel primitive in the viewer that is a picture of a field's
 // history rather than of a field. `fretRaster` is uint8 grey, row-major, rows = support x.
 let isFret = false, fretRasterCv = null, fretActive = null, frameTimes = null;
+// The parametric regime of the tension string (batch 16): a single mode disintegrating into its
+// Mathieu partners while the energy stays conserved. Keyed off the payload's `regime`, not its
+// `model`, because it IS the tension string — same class, different initial condition.
+let isParam = false;
 // Acoustic bore: a PRESSURE field, not a displacement one — and the two ends are not alike, which
 // is the whole physics (see drawBore).
 let isBore = false, boreEnv = null, boreRad = null, boreEnds = ["closed", "open"];
@@ -603,7 +633,9 @@ function updateLambdaHint() {
   // parametrically breaks up. Show it live so the ceiling is visible while dragging.
   const tHint = $("tension-hint");
   if (tHint) {
-    if (m === "tension") {
+    // Duffing regime only: the parametric regime derives A from dT/T0 (the amplitude slider is
+    // hidden there), so this hint would report a stale number from a control nobody can see.
+    if (m === "tension" && domainSel.value !== "parametric") {
       const A = param("amplitude"), EA = param("EA") * 1e3, T = param("T"), L = param("L");
       const dt = EA * A * A * Math.pow(Math.PI / L, 2) / (4 * T);
       tHint.textContent = `ΔT/T₀ = ${dt.toFixed(2)}  ·  the mode breaks up above ~4.45 (real, `
@@ -611,6 +643,26 @@ function updateLambdaHint() {
       tHint.style.color = dt > 4.45 ? "var(--bad)" : "var(--muted)";
     } else {
       tHint.textContent = "";
+    }
+  }
+  // Parametric: the two runs must STRADDLE this mode's threshold, and the threshold moves hard
+  // with m — measured edges in ΔT/T₀: m=1 (4, 6], m=2 (3, 4], m=3 (1.75, 2.25], m=4 and m=5 (1, 2].
+  // m=1 is the mode that will NOT break up at ordinary amplitude: it has no lower resonance
+  // partner. The hint places the edge for the CURRENT m; the sweep then measures it rather than
+  // trusting this table, and the table is a guide to slider placement, never a claim.
+  const paHint = $("param-hint");
+  if (paHint) {
+    if (m === "tension" && domainSel.value === "parametric") {
+      const mm = param("mode_number");
+      const edge = mm <= 1 ? "≈ 5 (no lower partner — the robust one)"
+        : mm === 2 ? "≈ 3.5" : mm === 3 ? "≈ 2" : "≈ 1.5";
+      const above = param("dt_over_t0"), below = param("dt_below");
+      paHint.textContent = "driven mode m = " + mm + " · its measured edge is ΔT/T₀ " + edge
+        + " — put the two runs either side of it (now " + below.toFixed(2) + " and "
+        + above.toFixed(2) + ")";
+      paHint.style.color = below < above ? "var(--muted)" : "var(--warn, var(--muted))";
+    } else {
+      paHint.textContent = "";
     }
   }
   // Geometric string: EA is the AXIAL stiffness here, and the nonlinearity coefficient is EA − T₀
@@ -1082,6 +1134,7 @@ function applyPayload(data) {
   isJawari = data.model === "jawari";
   isJuari = data.model === "juari";
   isFret = data.model === "fret";
+  isParam = data.regime === "parametric";
   // Plate-as-body: the plate heatmap is the main (dims = 2) field, loaded above; the string strip is
   // a SECOND 1D buffer drawn on top by drawPlateBody. Same frame count/times (one simulation).
   isPlateBody = data.model === "platebody";
@@ -1936,7 +1989,7 @@ function tick(ts) {
     }
     (isPlateBody ? drawPlateBody : dims === 2 ? drawHeatmap : isGeom ? drawGeometric
       : isSymp ? drawSympatheticViz : isJawari ? drawJawariViz : isJuari ? drawJuariViz
-        : isFret ? drawFretViz
+        : isFret ? drawFretViz : isParam ? drawParametricViz
         : isBore ? drawBore : drawString)(currentFrame);
   }
   requestAnimationFrame(tick);
@@ -2656,6 +2709,14 @@ function drawDiagnostics() {
     partialsTitle.firstChild.textContent = "Amplitude shift ";
     partialsSub.textContent = "measured vs exact Duffing";
     drawTensionSpectrum();
+    return;
+  }
+  // The parametric regime: the claim is a PURITY trace on a log axis with the unstable run's
+  // energy drift on the same axes — straight line up, flat line at machine precision.
+  if (spec && spec.kind === "parametric") {
+    partialsTitle.firstChild.textContent = "Mode purity ";
+    partialsSub.textContent = "off-mode growth vs the energy drift of the same run";
+    drawParametric();
     return;
   }
   // Also before the dims gate: another 1-D model that wants its own panel rather than cents bars.
@@ -3847,6 +3908,253 @@ function drawBoreOracle() {
     : `\nnothing radiated: the split in the energy panel is the whole total, and conservation here `
       + `is the ordinary lossless kind`;
   out.textContent = verdict + book + sig + disp;
+}
+
+// ── the parametric instability: the mode coming apart, and the tongue it crosses ─────────────
+// Two panes in the wide canvas (the fret's layout). LEFT: the string itself — a clean m-lobe sine
+// losing its shape is the most legible thing this viewer can draw, so the animation IS a claim and
+// needs no new primitive. The dashed overlay is the CURRENT projection onto mode m, not frame 0:
+// the mode's amplitude breathes with the Duffing hardening, so a frozen reference would drift out
+// of phase and read as off-mode content that isn't there. The gap between solid and dashed is
+// exactly what the purity panel plots. RIGHT: the tongue, where the threshold's SHARPNESS lives.
+function drawParametricViz(idx) {
+  const g = stringCv.getContext("2d");
+  const W = stringCv.width, H = stringCv.height;
+  g.clearRect(0, 0, W, H);
+  const animW = Math.round(W * 0.46);
+  drawParamString(g, idx, 0, 0, animW, H);
+  drawParamTongue(g, animW, 0, W - animW, H);
+}
+
+function drawParamString(g, idx, x0, y0, w, h) {
+  const sp = payload && payload.meta && payload.meta.spectrum;
+  if (!frames || nFrames === 0 || !sp) return;
+  const m = sp.m || 1, margin = 20, midY = y0 + h * 0.5;
+  const amp = fieldAmp > 0 ? fieldAmp : 1;
+  const sx = (w - 2 * margin) / (width - 1);
+  const sy = (h / 2 - margin) / amp * 0.9;
+  const px = (i) => x0 + margin + i * sx;
+  const py = (v) => midY - v * sy;
+  const base = idx * width;
+
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(x0 + 6, midY); g.lineTo(x0 + w - 6, midY); g.stroke();
+
+  // the mode-m component of THIS frame: q = <u, phi> / <phi, phi>
+  let num = 0, den = 0;
+  for (let i = 0; i < width; i++) {
+    const phi = Math.sin((m * Math.PI * i) / (width - 1));
+    num += frames[base + i] * phi; den += phi * phi;
+  }
+  const q = den > 0 ? num / den : 0;
+
+  g.strokeStyle = "rgba(139,152,168,.55)"; g.lineWidth = 1.2; g.setLineDash([5, 4]);
+  g.beginPath();
+  for (let i = 0; i < width; i++) {
+    const y = py(q * Math.sin((m * Math.PI * i) / (width - 1)));
+    if (i === 0) g.moveTo(px(i), y); else g.lineTo(px(i), y);
+  }
+  g.stroke(); g.setLineDash([]);
+
+  g.strokeStyle = "#4cc2ff"; g.lineWidth = 2.4; g.lineJoin = "round";
+  g.beginPath();
+  for (let i = 0; i < width; i++) {
+    const y = py(frames[base + i]);
+    if (i === 0) g.moveTo(px(i), y); else g.lineTo(px(i), y);
+  }
+  g.stroke();
+
+  g.fillStyle = "#8b98a8";
+  g.beginPath(); g.arc(px(0), midY, 3.5, 0, 7); g.fill();
+  g.beginPath(); g.arc(px(width - 1), midY, 3.5, 0, 7); g.fill();
+  g.font = "11px ui-monospace, monospace"; g.fillStyle = "#c8d2e0";
+  g.fillText("driven mode m = " + m, x0 + margin, y0 + 18);
+  g.fillStyle = "rgba(139,152,168,.85)"; g.font = "10px ui-monospace, monospace";
+  g.fillText("dashed: the mode-m component that remains", x0 + margin, y0 + h - 10);
+}
+
+// The tongue. x is dT/T0, y is the SATURATED off-mode level on a log axis — not a growth rate (no
+// single exponential exists above the edge: overlapping tongues saturate within ~5 periods) and not
+// a time-to-break (the near-edge points never break at ANY cap; they plateau at a bounded level).
+// Stable points sit ON the seed floor, drawn hollow, because "it did not grow" is a measurement.
+function drawParamTongue(g, x0, y0, w, h) {
+  const sp = payload && payload.meta && payload.meta.spectrum;
+  const sw = sp && sp.sweep;
+  if (!sw || !sw.points || !sw.points.length) return;
+  const padL = x0 + 44, padR = 14, padB = 30, top = y0 + 26;
+  const plotW = w - (padL - x0) - padR, plotH = h - (top - y0) - padB;
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(padL, top, plotW, plotH);
+
+  const pts = sw.points.filter((pt) => !pt.truncated);
+  const floors = pts.map((pt) => pt.floor).filter((f) => f > 0);
+  const lo = Math.floor(Math.log10(Math.min.apply(null, floors.concat([1e-7])))) - 1;
+  const hi = 0;                                     // levels are bounded by ~0.5 — a fixed ceiling
+  const dts = sw.points.map((pt) => pt.dt);
+  const dMin = Math.min.apply(null, dts), dMax = Math.max.apply(null, dts);
+  const px = (d) => padL + ((d - dMin) / Math.max(dMax - dMin, 1e-9)) * plotW;
+  const py = (v) => top + plotH - ((Math.log10(Math.max(v, Math.pow(10, lo))) - lo)
+                                   / (hi - lo)) * plotH;
+
+  for (let d = lo; d <= hi; d++) {
+    const y = py(Math.pow(10, d));
+    g.strokeStyle = "rgba(139,152,168,.15)"; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(padL, y); g.lineTo(padL + plotW, y); g.stroke();
+    g.fillStyle = "#8b98a8"; g.font = "9px ui-monospace, monospace";
+    g.fillText("1e" + d, x0 + 8, y + 3);
+  }
+
+  // the edge, as a BRACKET: its fine position moves with N (measured 2.00/2.00/2.25 at N=100/150/
+  // 200, plus an N=200-only tongue at 1.75), so a single line would claim a stillness that is not
+  // there. The band is the honest width of what was resolved.
+  if (sw.edge_lo != null && sw.edge_hi != null) {
+    g.fillStyle = "rgba(255,143,76,.10)";
+    g.fillRect(px(sw.edge_lo), top, Math.max(px(sw.edge_hi) - px(sw.edge_lo), 2), plotH);
+    g.fillStyle = "rgba(255,143,76,.75)"; g.font = "9px ui-monospace, monospace";
+    g.fillText("edge", px(sw.edge_lo) + 3, top + plotH - 6);
+  }
+
+  // the claim pair, so this panel and the purity panel are visibly the same experiment
+  const marks = [[sp.dt_below, "#4cc2ff"], [sp.dt_above, "#ff8f4c"]];
+  for (let k = 0; k < marks.length; k++) {
+    const dt = marks[k][0];
+    if (dt == null || dt < dMin || dt > dMax) continue;
+    g.strokeStyle = marks[k][1]; g.globalAlpha = 0.45; g.lineWidth = 1; g.setLineDash([3, 3]);
+    g.beginPath(); g.moveTo(px(dt), top); g.lineTo(px(dt), top + plotH); g.stroke();
+    g.setLineDash([]); g.globalAlpha = 1;
+  }
+
+  g.strokeStyle = "#5ad17a"; g.lineWidth = 2; g.beginPath();
+  let started = false;
+  for (const pt of pts) {
+    if (!pt.unstable) { started = false; continue; }
+    const x = px(pt.dt), y = py(pt.level);
+    if (!started) { g.moveTo(x, y); started = true; } else g.lineTo(x, y);
+  }
+  g.stroke();
+
+  for (const pt of sw.points) {
+    if (pt.truncated) {
+      g.fillStyle = "#8b98a8"; g.font = "9px ui-monospace, monospace";
+      g.fillText("—", px(pt.dt) - 3, top + plotH / 2);
+      continue;
+    }
+    const x = px(pt.dt), y = py(pt.unstable ? pt.level : pt.floor);
+    g.beginPath(); g.arc(x, y, 3.4, 0, 7);
+    if (!pt.unstable) { g.strokeStyle = "#8b98a8"; g.lineWidth = 1.4; g.stroke(); }
+    else if (!pt.saturated) { g.strokeStyle = "#ffcf5c"; g.lineWidth = 1.8; g.stroke(); }
+    else { g.fillStyle = "#5ad17a"; g.fill(); }
+    g.fillStyle = "#8b98a8"; g.font = "9px ui-monospace, monospace";
+    g.fillText(pt.dt.toFixed(1), x - 7, top + plotH + 12);
+  }
+
+  g.fillStyle = "#c8d2e0"; g.font = "11px ui-monospace, monospace";
+  g.fillText("the tongue — saturated off-mode level", padL, y0 + 16);
+  g.fillStyle = "#8b98a8"; g.font = "9px ui-monospace, monospace";
+  g.fillText("ΔT/T₀", padL + plotW / 2 - 14, top + plotH + 25);
+  g.fillText("fixed N = " + sw.N + ", σ = 0, seed " + fmtExp(sw.seed_rel),
+             padL, top + plotH + 25);
+  if (sw.n_unsaturated) {
+    g.fillStyle = "#ffcf5c";
+    g.fillText("○ still growing at the cap", padL + plotW - 132, top + 12);
+  }
+}
+
+function fmtExp(v) {
+  if (!v) return "0";
+  return "1e" + Math.floor(Math.log10(Math.abs(v)));
+}
+
+// The headline: off-mode growth and the SAME RUN's energy drift, on one log axis. Straight line up,
+// flat line at machine precision — a numerical instability grows the energy, a parametric one only
+// redistributes it, and putting both on one pair of axes is the whole argument.
+function drawParametric() {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height, padL = 34, padB = 16, top = 10;
+  g.clearRect(0, 0, W, H);
+  const out = $("partials-readout");
+  const sp = payload && payload.meta && payload.meta.spectrum;
+  if (!sp || !sp.above) { out.textContent = "no purity trace"; return; }
+
+  const plotW = W - padL - 8, plotH = H - padB - top;
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(padL, top, plotW, plotH);
+
+  const series = [
+    { v: sp.below.env, t: sp.below.t, col: "#4cc2ff", lw: 1.8, dash: null },
+    { v: sp.above.env, t: sp.above.t, col: "#ff8f4c", lw: 2, dash: null },
+    { v: sp.drift_trace, t: sp.above.t, col: "#c8d2e0", lw: 1.4, dash: [3, 3] },
+  ];
+  let vmin = Infinity, vmax = 0;
+  for (const sr of series) {
+    for (const v of sr.v) {
+      if (v == null || !(v > 0)) continue;
+      if (v < vmin) vmin = v;
+      if (v > vmax) vmax = v;
+    }
+  }
+  if (!(vmax > 0)) { out.textContent = "nothing to plot"; return; }
+  const lo = Math.floor(Math.log10(vmin)), hi = Math.ceil(Math.log10(vmax));
+  const span = Math.max(hi - lo, 1);
+  const tmax = Math.max(sp.above.t[sp.above.t.length - 1], 1e-12);
+  const px = (t) => padL + (t / tmax) * plotW;
+  const py = (v) => top + plotH - ((Math.log10(Math.max(v, Math.pow(10, lo))) - lo) / span) * plotH;
+
+  for (let d = lo; d <= hi; d += Math.max(1, Math.round(span / 6))) {
+    const y = py(Math.pow(10, d));
+    g.strokeStyle = "rgba(139,152,168,.15)"; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(padL, y); g.lineTo(padL + plotW, y); g.stroke();
+    g.fillStyle = "#8b98a8"; g.font = "9px ui-monospace, monospace";
+    g.fillText("1e" + d, 3, y + 3);
+  }
+
+  for (const sr of series) {
+    g.strokeStyle = sr.col; g.lineWidth = sr.lw;
+    if (sr.dash) g.setLineDash(sr.dash);
+    g.beginPath();
+    let started = false;
+    for (let i = 0; i < sr.v.length && i < sr.t.length; i++) {
+      const v = sr.v[i];
+      if (v == null || !(v > 0)) continue;
+      const x = px(sr.t[i]), y = py(v);
+      if (!started) { g.moveTo(x, y); started = true; } else g.lineTo(x, y);
+    }
+    g.stroke(); g.setLineDash([]);
+  }
+
+  g.font = "10px ui-monospace, monospace";
+  g.fillStyle = "#ff8f4c"; g.fillText("off-mode, ΔT/T₀ = " + sp.dt_above, padL + 5, top + 11);
+  g.fillStyle = "#4cc2ff"; g.fillText("off-mode, ΔT/T₀ = " + sp.dt_below, padL + 5, top + 23);
+  g.fillStyle = "#c8d2e0"; g.fillText("energy drift of the unstable run", padL + 5, top + 35);
+  g.fillStyle = "#8b98a8"; g.font = "9px ui-monospace, monospace";
+  g.fillText((tmax * 1e3).toFixed(0) + " ms  ·  " + sp.periods + " periods of mode " + sp.m,
+             W - 152, H - 5);
+
+  const c = sp.cascade || {};
+  const tops = (c.top || []).slice(0, 3)
+    .map((kv) => "m=" + kv[0] + " " + (kv[1] * 100).toFixed(1) + "%").join(", ");
+  const grid = c.over_grid == null ? "—" : c.over_grid.toExponential(1) + "×";
+  const lines = [];
+  if (sp.straddles) {
+    lines.push("the pair straddles the tongue · ΔT/T₀ " + sp.dt_below
+      + " stays pure (" + sp.below.growth + "× the seed), " + sp.dt_above + " grows "
+      + sp.above.growth + "× to " + (sp.above.level * 100).toFixed(1) + "% off-mode");
+  } else if (sp.above.unstable && sp.below.unstable) {
+    lines.push("BOTH runs are above the tongue — lower ΔT/T₀ (stable run) for the contrast");
+  } else {
+    lines.push("NEITHER run crossed the tongue for m = " + sp.m + " — this mode is more robust "
+      + "than m = 3; the sweep shows where its edge is");
+  }
+  lines.push("the energy landed in " + (tops || "no partner yet") + " — " + grid
+    + " above the grid scale (modes ≥ " + c.grid_from + "), which is what separates a Mathieu "
+    + "tongue from a blow-up");
+  // NOT "both runs are equally nonlinear" — at the shipped default that reads 59 % vs 42 %, and
+  // calling those equal is a claim the numbers beside it refute. The defensible statement is the
+  // weaker one, which is also the one that matters: the stable run is not a LINEAR control.
+  lines.push("the stable run is no linear control: " + (sp.below.nl_fraction * 100).toFixed(0)
+    + "% of its energy is in the stretch against " + (sp.above.nl_fraction * 100).toFixed(0)
+    + "% — both are deep in the nonlinear regime; the tongue is the difference, not nonlinearity");
+  lines.push("seed " + fmtExp(sp.seed_rel) + "·A over modes 1.." + sp.seed_modes
+    + ", fixed — the growth RATE is seed-independent, only the onset time is not");
+  out.textContent = lines.join("\n");
 }
 
 function drawWhirl() {

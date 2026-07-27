@@ -2131,7 +2131,7 @@ gates the advisor set before any panel code:
   its place on the axis; silent truncation reading as "covered everything" is the failure the
   no-silent-caps rule names.
 
-### Batch 16 (PLANNED) — the parametric instability: model #9's second refusal, discharged
+### Batch 16 (DONE) — the parametric instability: model #9's second refusal, discharged
 
 The last batch named in this plan's own backlog, and the discharge of a refusal the tension batch
 wrote into the code. `_build_payload_tension` raises above `TENSION_DT_MAX = 4.45` with *"the
@@ -2171,8 +2171,11 @@ advisor's.
 - **The claim runs are BOTH deeply nonlinear — "below" is not a linear control, and that is the
   stronger claim.** At the m=3 pair straddling the edge, `nonlinear_fraction` at the IC (which is
   the peak: max displacement, zero velocity) reads **0.42 at `ΔT/T₀` = 1.5** against **0.49 at 2.0**
-  — tension 2.5× vs 3.0× rest. The two runs are *equally* nonlinear. The tongue is the entire
-  difference, and the panel says so with those numbers.
+  — tension 2.5× vs 3.0× rest, i.e. *equally* nonlinear at that pair. The shipped default pairs 1.5
+  against 3.0, where it is 42 % vs 59 % — still both deep in the nonlinear regime, no longer equal,
+  so the panel claims only the part that holds at every pair: the tongue is the entire difference,
+  and the stable run is no linear control. (The panel first said "equally", measured here and
+  rendered there — see the found-during-the-build note below.)
 - **NO new verdict type** (batch 3's precedent). Nothing drives this string, so the ordinary σ=0
   drift check IS the claim; what makes it one is what it survives. **Drift stays 1e-15…1e-12 across
   all ~150 probe runs, including complete disintegration** (off-mode 0.5) — a numerical instability
@@ -2270,6 +2273,74 @@ which is precisely the bug class where a missing slider still renders a flawless
 the built `.slider` params over CDP. Score the unstable run's drift over the **FULL** array, not the
 decimated one (batch 2). And the deep-link verifier structurally cannot fire the regime switch
 (batch 4) — a CDP switch-check drives it.
+
+**Found during the build (not in the plan above):**
+
+- **A SHARED slider is only shared if it is BUILT in both places — and `dt_over_t0` lived inside the
+  whirl's own fieldset**, which is `data-show="geometric"`. Sharing the name would therefore have
+  produced, under `tension`, a control that never gets created at all while `gatherParams` shipped
+  nothing and the server quietly applied its default: batch 15's bug class exactly, reproduced by a
+  different route. The slider moved to the shared *Nonlinearity* box, which both models show. The
+  placement is also the honest one — it is one physical coordinate (the driven mode's tension
+  excess), and the whirl's 2.2 ceiling exists *because* of the instability this regime crosses.
+- **THE LEFTOVER-CHROME TRAP RECURRED, AND BATCH 15'S RECORDED FIX DOES NOT CATCH IT.** That fix
+  was "prove the attached DOM matches disk" — but the marker it used is a *version* marker
+  (`does the DOM contain radiation_R / mode_number?`), and a leftover browser **from an earlier run
+  of the same script** has identical markup and sails straight through. `subprocess.terminate()`
+  kills the launcher, not the browser tree, so every run left a live Chrome holding the debug port;
+  runs 2 and 3 failed to bind it, attached to run 1's page, and read back the state run 1 had left
+  (`domain=parametric`) as two FAILs that were not real. Two changes: the check kills its own
+  leftovers first, matched on its `param-chrome-` profile prefix (never the user's browser —
+  21 processes identified before anything was killed, per the standing rule), and the freshness
+  marker is now a **SESSION** marker: a pristine page has the markup defaults in its selects
+  (`model = ideal`, `domain = ""`), where a leftover is mid-experiment. *Generalizable: to detect a
+  stale attachment, assert something unique to THIS session, not to this version of the code.*
+- **"Has it rendered yet?" is NOT that session marker** — the first attempt, and it failed
+  immediately on a genuinely fresh page. Autorender is on by default, so a pristine page has
+  already rendered `ideal` by the time the websocket attaches.
+- **ROUNDING A LOG-AXIS SERIES IN THE PAYLOAD DELETES THE CLAIM.** `_finite_list(drift, 12)` rounds
+  to twelve *decimal places*, so a drift of 1e-13 ships as a bare `0.0` — and the flat
+  machine-precision line that is half of this batch's argument silently disappears from the panel.
+  The off-mode traces have the same problem at their seed floor. Both now ship unrounded (they are
+  ~425 points each). *Round and format for display; never in the payload of a series that will be
+  drawn on a log axis.* Pinned by a test asserting the smallest positive drift value survives.
+- **A partner that rounds to "0.0 %" is not a partner.** The first cut named the top four off-modes,
+  which beside a real m=7 at 20 % printed "m=10 0.0 %" — modes a whisker above the grid scale, which
+  pass a naive `> grid_scale` filter and then round to nothing on screen. The bar is the **core
+  signature test's own**: 100× the grid scale, plus `PARAM_PARTNER_FLOOR` on top, set at 1e-3 by
+  the *readout's* resolution (one decimal of a percentage) rather than by a physics scale — what is
+  not worth printing is not worth naming, and that bar belongs in the payload, not the drawing code.
+  At the shipped default the two bars are not close: the real partners sit at 2.0e-1 and 1.4e-1 and
+  the phantom at 6.6e-8 against a 100×-grid-scale bar of 4.7e-6, three orders of headroom. Below
+  the tongue the list comes back EMPTY, and `over_grid` is `null` rather than `0.0`, which would
+  read as "at grid scale" instead of "there is no winner to price".
+- **THE BACKEND DOES NOT HOT-RELOAD, so a "regenerated" screenshot can be a PRE-FIX render.** The
+  phantom above was fixed, the verifier re-run, the PNG re-read — and the phantom was **still
+  there**, which sent me chasing a second bug (a floor an order too low) that did not exist. The
+  server had been running since before the fix landed; `serialize.py` is imported once. The false
+  trail cost more than the original bug. *Sibling of the leftover-Chrome trap, and the same shape:
+  the browser was fresh, the tab was fresh, the **module** was stale — a re-render only re-runs the
+  code the server already has.* Restarting it (the launcher's `terminate()` again leaves the Python
+  process holding the port, so the port must be reclaimed by PID) made the phantom vanish on the
+  spot. Confirmed after the fact by rebuilding the payload in-process with the old floor restored:
+  identical output, i.e. the 1e-4 floor had *always* been sufficient. **Re-render after a backend
+  edit ⟹ restart the server first, or the picture is testing the previous commit.**
+- **"Both runs are equally nonlinear" was refuted by the two numbers printed beside it.** The line
+  was written from the probe pair (0.42 at ΔT/T₀ = 1.5 vs 0.49 at 2.0 — genuinely equal), but the
+  shipped default pairs 1.5 against **3.0**, where it renders as "equally nonlinear: 59 % vs 42 %".
+  The claim only ever needed the weaker form, which is also the one that carries the batch: the
+  stable run is **no linear control** — both runs are deep in the nonlinear regime and the tongue
+  is the entire difference. *A sentence measured at one operating point ships at another; re-read
+  the rendered claim against its own numbers, not against the probe it came from.*
+- **A hint that reads a control the regime HIDES prints a stale number.** `tension-hint` computes
+  ΔT/T₀ from the `amplitude` slider, which the parametric regime hides because A is derived — so it
+  had to be gated to the Duffing regime, and the parametric regime got its own hint that speaks in
+  the coordinate it actually exposes.
+- **Cost, measured on the real payload build rather than extrapolated:** the shipped default render
+  is **5.45 s** (two 40-period claim runs plus the 8-point sweep), against the membrane's 5.6 s
+  worst passing render. Per-step cost is **200–290 µs** across N = 100…200 and both regimes —
+  the tension batch's recorded "~176 µs at N=128" was optimistic, and the sweep's *stable* points
+  are the expensive ones because they alone run the full cap.
 
 ### Later batches (rough map — not firm)
 

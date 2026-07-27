@@ -187,6 +187,11 @@ def main() -> int:
             ("mallet_rect", "model=mallet&domain=rectangle"),
             ("string_ideal", "model=ideal"),
             ("string_tension", "model=tension"),
+            # The tension string's SECOND regime (batch 16): the same string past its parametric
+            # threshold, where the Duffing panel one line up refuses to go. Two claim runs plus the
+            # tongue sweep, ~5.5 s at the defaults — the sweep is the driver, and its stable points
+            # are the expensive ones (they alone run the full cap).
+            ("string_parametric", "model=tension&domain=parametric"),
             ("string_bow", "model=bow"),
             ("plate_supported", "model=plate&domain=supported"),
             ("plate_free", "model=plate&domain=free"),

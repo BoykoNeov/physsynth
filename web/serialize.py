@@ -862,6 +862,11 @@ def _build_payload(p: dict[str, Any]) -> dict[str, Any]:
     if model == "vk":
         return _build_payload_vk(p)
     if model == "tension":
+        # A regime of tension, not a model key of its own: same resonator class, different IC (the
+        # geometric family's pattern, and batch 4's precedent for discharging a #9 refusal). The
+        # Duffing path below stays bit-for-bit — it is the one the oracle tests pin.
+        if _tension_regime(p) == "parametric":
+            return _build_payload_parametric(p)
         return _build_payload_tension(p)
     if model == "bow":
         return _build_payload_bow(p)
@@ -1243,6 +1248,602 @@ def _build_payload_tension(p: dict[str, Any]) -> dict[str, Any]:
             # A nonlinearity HIDES at small amplitude, where the run merely re-plays the linear
             # scheme (model #6's lesson) — so report the PEAK fraction of E the stretch term holds.
             "nonlinear_fraction": round(float(nl_fraction), 6),
+        },
+    }
+
+
+# == the parametric instability — tension regime "parametric" (Phase D batch 16) ==================
+#
+# Model #9's SECOND refusal, discharged. :func:`_build_payload_tension` above raises over
+# ``TENSION_DT_MAX`` with "the breakup is real, energy-conserving physics; it wants a panel of its
+# own" — this is that panel, and the refusal stays exactly where it is. It is the **in-plane** modal
+# exchange: the tension pumps at ``2 omega_m``, the neighbouring modes sit in Mathieu tongues, and
+# above a threshold they grow exponentially until the mode disintegrates. The same parametric pump
+# batch 3's whirl aims at the *other* polarization, and precisely what batch 1's purity gate was
+# protecting the Duffing oracle from.
+#
+# The verdict is the ORDINARY sigma=0 drift check (batch 3's precedent — nothing drives this
+# string, so no new verdict type). What makes it a claim is what it survives: the energy drift
+# stays at ~1e-13 THROUGH a complete disintegration. A numerical instability grows the energy; a
+# parametric one only redistributes it.
+#
+# sigma is FIXED AT 0 and deliberately unexposed. Loss decays the amplitude back down through the
+# threshold, so the instability self-extinguishes partway through the panel; and multi-rate
+# redistribution has no single-exponential form, so a decay oracle would have nothing to check.
+# Do not "fix" this into a slider.
+
+PARAM_REGIMES = ("duffing", "parametric")
+
+# The DRIVEN mode is a control because m = 1 is the one mode that does NOT do this at reachable
+# amplitude — it has no lower resonance partner. Measured thresholds in dT/T0: m=1 (4, 6] (batch 1
+# independently measured (4.44, 6.05]); m=2 (3, 4]; m=3 (1.75, 2.25]; m=4 and m=5 both (1, 2].
+PARAM_M_DEFAULT = 3             # the documented case, and the core signature test's case
+PARAM_M_MAX = 8
+
+# The seed. The growth RATE is seed-independent (measured 70.1/s at 1e-11, 1e-9 and 1e-6 alike,
+# r^2 = 1.000, against 68.4/s for roundoff alone), so an explicit seed costs nothing — and it makes
+# the below/above contrast honest, because "below is flat" would otherwise be partly "below was
+# never seeded". Defined by MODAL content, not as a draw over grid nodes: a `standard_normal(N+1)`
+# spreads a fixed norm over twice as many modes at 2N and confounds any comparison across N.
+# Broadband so the tongue picks its own winner rather than us naming a partner in advance.
+PARAM_SEED_REL = 1e-6           # relative to the driven amplitude; 1e-3 leaves no room to grow
+PARAM_SEED_MODES = 24
+PARAM_SEED_RNG = 12345
+
+# dT/T0 IS the control (the geometric whirl's precedent), never amplitude: EA and T move the pump
+# just as hard as A does, and dT/T0 = EA*A^2*p2/(4T) is exact and free of any stepping.
+PARAM_DT_ABOVE_DEFAULT = 3.0    # above the m=3 edge (~2): disintegrates inside the claim window
+PARAM_DT_BELOW_DEFAULT = 1.5    # below it — and still 42 % nonlinear, which is the point
+PARAM_DT_MAX = 14.0
+
+PARAM_CLAIM_PERIODS = 40        # run length in PERIODS OF MODE m, never steps (see _param_steps)
+PARAM_SAMPLE = 4                # off-mode is sampled every 4th step; the step itself costs ~250 us
+
+# The sweep is a CONTROLLED reference curve: fixed N, sigma = 0, the user's m — the threshold is
+# NOT mode-invariant, so a sweep at the wrong m is a different curve entirely.
+PARAM_SWEEP_N = 100
+PARAM_SWEEP_DTS = (1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0)
+PARAM_SWEEP_CAP_PERIODS = 60
+PARAM_SWEEP_CHUNK_PERIODS = 15  # saturation is judged chunk-to-chunk, in periods of mode m
+PARAM_SAT_RATIO = 1.10          # a chunk beating the previous by < 10 % counts as saturated
+PARAM_UNSTABLE_FACTOR = 100.0   # level > 100x the seed floor = the mode was destabilized
+# The floor under a NAMED partner, as a fraction of the driven amplitude. Set by the READOUT's own
+# resolution (one decimal place of a percentage = 0.1 %), not by a physics scale: a partner the
+# panel prints as "0.0 %" claims a cascade landed somewhere and then shows nothing there, so
+# anything named must be worth one printable tick. It is not the load-bearing filter -- 100x grid
+# is, with three orders of headroom at the default -- but it is the one that cannot be outrun by a
+# parameter set where the two happen to be close. See _param_cascade.
+PARAM_PARTNER_FLOOR = 1e-3
+
+PARAM_N_MAX = 200
+PARAM_WORK_MAX = 30_000         # steps in the two claim runs (root-find each, ~250 us)
+PARAM_SWEEP_WORK_MAX = 60_000   # steps in the sweep, which is the cost driver
+
+
+def _tension_regime(p: dict[str, Any]) -> str:
+    regime = str(p.get("domain", "duffing"))
+    if regime not in PARAM_REGIMES:
+        raise ParamError(f"regime must be one of {PARAM_REGIMES}, got {regime!r}.")
+    return regime
+
+
+def _mode_shape(res: Any, m: int) -> NDArray[np.float64]:
+    """The exact discrete eigenvector ``sin(m pi x / L)`` on the resonator's grid.
+
+    ``sin(m pi x/L)`` is an eigenvector of ``D2`` *and* of the simply-supported ``B = D2^2`` for
+    every ``m``, which is what makes single-mode motion an exact invariant of the scheme in exact
+    arithmetic — and therefore what makes its *dynamical* loss of purity a physical statement
+    rather than a discretization artifact.
+    """
+    return np.sin(m * np.pi * np.arange(res.N + 1) / res.N)
+
+
+def _parametric_seed(res: Any, m: int) -> NDArray[np.float64]:
+    """Unit-norm off-mode seed with N-INDEPENDENT modal content (modes 1..24, mode ``m`` removed).
+
+    Fixed ``default_rng`` coefficients, so the perturbation is reproducible on any BLAS — which is
+    the point. [[tension-string-state]] flagged the core's roundoff-seeded breakup test as the one
+    result that could behave differently on another architecture; nothing shipped here depends on
+    roundoff, and the self-seeding claim is pinned by a test instead (seed = 0 still breaks up).
+    """
+    rng = np.random.default_rng(PARAM_SEED_RNG)
+    coef = rng.standard_normal(PARAM_SEED_MODES + 1)
+    v = np.zeros(res.N + 1)
+    for mm in range(1, PARAM_SEED_MODES + 1):
+        if mm != m:
+            v += coef[mm] * _mode_shape(res, mm)
+    return v / float(np.linalg.norm(v))
+
+
+def _param_mode_frequency(res: Any, m: int) -> tuple[float, float]:
+    """``(f_m, p2)`` of mode ``m`` on the DISCRETE grid — the frequency the stepper actually rings.
+
+    Small-amplitude: the run is *above* this by the Duffing hardening, so it is used only to set
+    run lengths and strides, never reported as the frequency of the motion.
+    """
+    p2 = damping.spatial_eigenvalue_p2(res.N, res.h, m)
+    w0sq = res.c**2 * p2 + res.kappa**2 * p2**2
+    return math.sqrt(w0sq) / (2.0 * math.pi), p2
+
+
+def _param_amplitude(res: Any, dt_over_t: float, p2: float) -> float:
+    """Invert ``dT/T0 = EA*A^2*p2/(4T)`` — the exact single-mode stretch, no stepping."""
+    return math.sqrt(4.0 * res.T * dt_over_t / (res.EA * p2))
+
+
+def _param_steps(res: Any, f_m: float, periods: float) -> int:
+    """Steps spanning ``periods`` periods of MODE m.
+
+    Run length is specified in periods of the driven mode, never in steps: at a fixed step count,
+    raising N raises ``fs`` and shrinks the physics-time window until the breakup slides off the
+    end of the panel.
+    """
+    return max(16, int(round(periods * res.fs / f_m)))
+
+
+def _off_fraction(u: NDArray[np.float64], shape: NDArray[np.float64],
+                  denom: float, scale: float) -> float:
+    """Off-mode content of ``u`` as a fraction of the FIXED ``scale = ||u_0||``.
+
+    Never normalized by the instantaneous ``||u||``: a single mode passes through ``u ~ 0`` twice a
+    period, where roundoff dominates and the ratio reports a spurious 1.0 that looks exactly like
+    catastrophe. Mirrors ``tests.helpers.mode_off_fraction``.
+    """
+    return float(np.linalg.norm(u - np.dot(u, shape) / denom * shape) / scale)
+
+
+def _param_envelope(off: NDArray[np.float64], win: int) -> NDArray[np.float64]:
+    """Sliding-MAX envelope of the off-mode trace over one period of the driven mode.
+
+    Off-mode content is a *growing oscillation*, so any rate read off the raw trace measures
+    wherever the wiggle happened to sit (batch 3's whirl lesson, in a new model). MAX, not the
+    weinreich batch's sliding mean: here the outline of the growth is the signal, not a level
+    contaminated by ripple.
+    """
+    if win < 2 or off.size < win:
+        return off
+    pad = win // 2
+    padded = np.concatenate([np.full(pad, off[0]), off, np.full(win - 1 - pad, off[-1])])
+    return np.lib.stride_tricks.sliding_window_view(padded, win).max(axis=1)
+
+
+def _run_parametric(
+    res: Any,
+    m: int,
+    amplitude: float,
+    n_steps: int,
+    *,
+    seed_rel: float = PARAM_SEED_REL,
+    pickup_index: int | None = None,
+    snapshot_stride: int = 0,
+    modal_from: int = 0,
+) -> dict[str, Any]:
+    """Step a seeded single-mode start, capturing energy, off-mode content and modal cascade.
+
+    A hand-rolled loop rather than :func:`engine.simulate` for the usual reason (geometric, mallet,
+    sympathetic): the engine is generic over ``Resonator`` and knows nothing of the off-mode
+    fraction or the per-mode projections, and those ARE the panels.
+
+    ``modal_from`` starts the cascade's running max — the modal content is tracked as a MAXIMUM
+    over a window, never read at the final instant: every mode passes through zero twice a period,
+    so a single-instant read is a coin flip on phase.
+    """
+    shape = _mode_shape(res, m)
+    u0 = amplitude * shape
+    if seed_rel > 0.0:
+        u0 = u0 + seed_rel * amplitude * _parametric_seed(res, m)
+    res.set_state(u0)
+    scale = float(np.linalg.norm(amplitude * shape))
+    denom = float(np.dot(shape, shape))
+    # Read AT THE IC, which is the peak: the mode starts at maximum displacement with zero
+    # velocity, so all of E is potential and the stretch is maximal (batch 1's lesson — off the
+    # final state this reports wherever the run happened to stop).
+    e_ic = res.energy()
+    nl_fraction = float(res.nonlinear_energy() / e_ic) if e_ic > 0 else 0.0
+
+    n_modes = min(res.N // 2, 40)
+    phi = np.array([_mode_shape(res, mm) for mm in range(1, n_modes + 1)])
+    phi_norm = np.einsum("ij,ij->i", phi, phi)
+    modal_peak = np.zeros(n_modes)
+
+    energy = np.empty(n_steps + 1)
+    pickup = np.empty(n_steps + 1) if pickup_index is not None else None
+    n_off = n_steps // PARAM_SAMPLE + 1
+    off = np.empty(n_off)
+    off_t = np.empty(n_off)
+    snaps: list[tuple[int, NDArray[np.float64]]] = []
+
+    energy[0] = res.energy()
+    if pickup is not None:
+        pickup[0] = float(res.u[pickup_index])
+    if snapshot_stride:
+        snaps.append((0, res.state))
+    off[0], off_t[0] = _off_fraction(res.u, shape, denom, scale), 0.0
+    j = 1
+
+    for i in range(1, n_steps + 1):
+        res.step()
+        u = res.u                      # read-only view; `.state` would copy the field every step
+        energy[i] = res.energy()
+        if pickup is not None:
+            pickup[i] = float(u[pickup_index])
+        if snapshot_stride and i % snapshot_stride == 0:
+            snaps.append((i, res.state))
+        if i % PARAM_SAMPLE == 0:
+            if j < n_off:
+                off[j] = _off_fraction(u, shape, denom, scale)
+                off_t[j] = i / res.fs
+                j += 1
+            if i >= modal_from:
+                np.maximum(modal_peak, np.abs(phi @ u) / phi_norm, out=modal_peak)
+
+    return {
+        "energy": energy, "off": off[:j], "off_t": off_t[:j], "pickup": pickup,
+        "snapshots": snaps, "shape": shape, "scale": scale, "amplitude": amplitude,
+        "modal_peak": modal_peak / amplitude, "n_modes": n_modes, "nl_fraction": nl_fraction,
+        # The off-mode fraction the seed itself represents: ||seed|| / ||u_0|| = seed_rel*A/scale,
+        # exact, and the reference every "did it grow?" decision is made against.
+        "seed_floor": seed_rel * amplitude / scale if seed_rel > 0 else 0.0,
+    }
+
+
+def _param_saturation_run(res: Any, m: int, amplitude: float, *, cap_periods: float,
+                          chunk_periods: float, f_m: float,
+                          seed_rel: float = PARAM_SEED_REL) -> dict[str, Any]:
+    """One sweep point: grow the seed until the off-mode level SATURATES, or give up at the cap.
+
+    The saturated level — not a growth rate, and not a time-to-break — is this sweep's observable,
+    and both alternatives were measured and rejected first:
+
+    * a fitted growth **rate** is clean only AT the tongue edge (``r^2 = 1.000`` at ``dT/T0 = 2``)
+      and degrades to ``r^2 ~ 0.4`` above 3, returning non-monotone rates. The cause is physical:
+      above the edge several tongues overlap and the content saturates within ~5 periods, so there
+      is no single exponential to fit.
+    * ``t_break`` at a fixed level (radbody's ``t50`` analogue) dies because the near-edge points
+      NEVER break, at any cap: at ``dT/T0 = 2.25`` the off-mode content sits on 0.130 flat across
+      40, 60 and 90 periods. They are *bounded*, not slow — a partial exchange that degrades the
+      mode without destroying it — so a fixed level is an arbitrary line through a continuum.
+
+    The level is window-free for the reason that matters: it *plateaus*, and saturation is verified
+    per point rather than assumed. A point that has not settled by the cap comes back labelled.
+    """
+    shape = _mode_shape(res, m)
+    res.set_state(amplitude * shape + seed_rel * amplitude * _parametric_seed(res, m))
+    scale = float(np.linalg.norm(amplitude * shape))
+    denom = float(np.dot(shape, shape))
+    steps_per_period = res.fs / f_m
+    chunk = max(8, int(round(chunk_periods * steps_per_period)))
+    cap = max(chunk, int(round(cap_periods * steps_per_period)))
+
+    e0 = res.energy()
+    chunk_max: list[float] = []
+    cur, saturated, i = 0.0, False, 0
+    while i < cap:
+        res.step()
+        i += 1
+        if i % PARAM_SAMPLE == 0:
+            cur = max(cur, _off_fraction(res.u, shape, denom, scale))
+        if i % chunk == 0:
+            chunk_max.append(cur)
+            cur = 0.0
+            if len(chunk_max) >= 2 and chunk_max[-1] <= PARAM_SAT_RATIO * chunk_max[-2]:
+                saturated = True
+                break
+
+    level = max(chunk_max) if chunk_max else cur
+    floor = seed_rel * amplitude / scale
+    return {
+        "level": level, "floor": floor, "growth": level / floor if floor > 0 else 0.0,
+        "unstable": bool(level > PARAM_UNSTABLE_FACTOR * floor), "saturated": saturated,
+        "steps": i, "periods": i / steps_per_period,
+        "drift": float(abs(res.energy() - e0) / e0) if e0 > 0 else 0.0,
+        "n_not_converged": int(res.n_not_converged),
+    }
+
+
+def _param_sweep(p: dict[str, Any], m: int, *, dts: tuple[float, ...], cap_periods: float,
+                 chunk_periods: float) -> dict[str, Any]:
+    """The tongue curve: saturated off-mode level vs ``dT/T0``, at a FIXED N and sigma = 0.
+
+    A controlled reference curve (radbody's precedent) — fixed N so the points are comparable, and
+    the user's ``m`` because the threshold is emphatically NOT mode-invariant. What is claimed off
+    it is the CONVERGENT part: above ``dT/T0 = 2.25`` the curve keeps its shape and its level to
+    within ~10 % between N = 100 and N = 200. The tongue EDGE is *not* claimed invariant — measured
+    at 2.00 / 2.00 / 2.25 for N = 100 / 150 / 200, with an N = 200-only narrow tongue at 1.75 that
+    grows into partner m = 10 where every other case goes to m = 7. That is real Mathieu structure
+    (a tongue has edges on both sides in detuning, so a partner enters and leaves resonance as the
+    amplitude rises) and the panel says so, rather than claiming a stillness that is not there.
+    """
+    points: list[dict[str, Any]] = []
+    spent, truncated = 0, False
+    sweep_p = {**p, "N": PARAM_SWEEP_N, "sigma0": 0.0, "sigma1": 0.0}
+
+    for dt in dts:
+        if spent >= PARAM_SWEEP_WORK_MAX:
+            # No silent caps: a dropped point reads as "covered everything". It keeps its place on
+            # the axis as a labelled null instead.
+            truncated = True
+            points.append({"dt": dt, "level": None, "truncated": True})
+            continue
+        res = _build_resonator(sweep_p).res
+        f_m, p2 = _param_mode_frequency(res, m)
+        amp = _param_amplitude(res, dt, p2)
+        r = _param_saturation_run(res, m, amp, cap_periods=cap_periods,
+                                  chunk_periods=chunk_periods, f_m=f_m)
+        spent += r["steps"]
+        points.append({
+            "dt": dt, "amplitude": round(amp, 6), "level": round(r["level"], 6),
+            "floor": r["floor"], "growth": round(r["growth"], 1),
+            "unstable": r["unstable"], "saturated": r["saturated"],
+            "periods": round(r["periods"], 1), "drift": r["drift"],
+            "n_not_converged": r["n_not_converged"], "truncated": False,
+        })
+
+    done = [pt for pt in points if not pt["truncated"]]
+    unstable = [pt["dt"] for pt in done if pt["unstable"]]
+    stable = [pt["dt"] for pt in done if not pt["unstable"]]
+    # The edge as a BRACKET, never a single number: the fine structure between the last stable and
+    # the first unstable point is tongue structure, and its position moves with N.
+    edge_lo = max((d for d in stable if not unstable or d < min(unstable)), default=None)
+    edge_hi = min(unstable, default=None)
+    return {
+        "points": points, "N": PARAM_SWEEP_N, "seed_rel": PARAM_SEED_REL,
+        "cap_periods": cap_periods, "chunk_periods": chunk_periods,
+        "edge_lo": edge_lo, "edge_hi": edge_hi, "truncated": truncated,
+        "steps": spent,
+        "n_unstable": len(unstable), "n_unsaturated": sum(1 for pt in done if not pt["saturated"]),
+    }
+
+
+def _param_sweep_dts(p: dict[str, Any]) -> tuple[float, ...]:
+    """The sweep grid, with a hidden override so the test suite need not pay for all 8 points.
+
+    The shipped path is the one with the key ABSENT, so it is pinned by its own test (batch 15's
+    lesson: a constant can be right while the default path reading it is not).
+    """
+    raw = p.get("sweep_points")
+    if raw is None:
+        return PARAM_SWEEP_DTS
+    try:
+        dts = tuple(float(v) for v in raw)
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"sweep_points must be a list of numbers, got {raw!r}.") from exc
+    if not dts or any(not (0.0 < d <= PARAM_DT_MAX) for d in dts):
+        raise ParamError(f"sweep_points must all be in (0, {PARAM_DT_MAX}], got {raw!r}.")
+    return dts
+
+
+def _param_trace(run: dict[str, Any], fs: float, f_m: float,
+                 max_points: int = 500) -> dict[str, Any]:
+    """One claim run's off-mode story: the raw trace, its envelope, and the level it reached."""
+    off = run["off"]
+    win = max(2, int(round((fs / f_m) / PARAM_SAMPLE)))
+    env = _param_envelope(off, win)
+    step = max(1, math.ceil(off.size / max_points))
+    idx = np.arange(0, off.size, step)
+    floor = run["seed_floor"]
+    level = float(env.max()) if env.size else 0.0
+    return {
+        "t": _finite_list(run["off_t"][idx], 6),
+        # NOT rounded: these are plotted on a LOG axis and span 1e-7..1e0, where round(v, 9) sends
+        # the machine-precision end to a bare 0.0 and silently deletes the flat line that is half
+        # the claim. Round/format for display, never in the payload of a log-axis series.
+        "off": _finite_list(off[idx]),
+        "env": _finite_list(env[idx]),
+        "idx": idx,
+        "floor": floor,
+        "level": level,
+        "growth": round(level / floor, 1) if floor > 0 else 0.0,
+        "unstable": bool(level > PARAM_UNSTABLE_FACTOR * floor),
+        "nl_fraction": round(run["nl_fraction"], 6),
+    }
+
+
+def _param_cascade(run: dict[str, Any], m: int) -> dict[str, Any]:
+    """Where the energy LANDED — read as a max over the run's second half, never at one instant.
+
+    Every mode passes through zero twice a period, so a single-instant read of the modal content is
+    a coin flip on phase (the family's recurring trap). The partners are read OFF THE RUN and never
+    named in advance: which neighbour wins moves with ``dT/T0`` — for m = 3 it is m = 7 just above
+    the edge, m = 4 and 11 deeper in, and m = 4 and 8 at ``dT/T0 ~ 9``. [[tension-string-state]]'s
+    "m=3 -> m=4 and m=8" was measured at ~11 and is one tongue among several, not the answer.
+
+    ``grid_scale`` is the reference that separates parametric physics from a numerical instability:
+    a blow-up puts its energy at the grid scale, a Mathieu tongue puts it in the low neighbours.
+    The core signature test asks for 100x; measured here it is 1e5..1e7.
+    """
+    peak = run["modal_peak"]
+    n_modes = run["n_modes"]
+    lo = min(max(2 * m + 8, n_modes // 2), n_modes - 1)
+    grid_scale = float(peak[lo:].max()) if lo < n_modes else 0.0
+    # Only partners that cleared the SAME bar the core signature test uses -- 100x the grid scale --
+    # are named, with PARAM_PARTNER_FLOOR of the driven amplitude on top. A mode sitting near the
+    # noise is not a partner, and printing it as "m=10, 0.0 %" beside a real one reads as though the
+    # cascade found something there (it rounds to 0.0 precisely because it is nothing) -- so the
+    # floor is the readout's own resolution, NOT a physics scale an order below it. Below the tongue
+    # the list comes back EMPTY, which is the honest answer.
+    others = [(mm, float(peak[mm - 1])) for mm in range(1, n_modes + 1)
+              if mm != m and peak[mm - 1] > max(100.0 * grid_scale, PARAM_PARTNER_FLOOR)]
+    top = sorted(others, key=lambda kv: -kv[1])[:4]
+    best = top[0][1] if top else 0.0
+    return {
+        "modes": list(range(1, n_modes + 1)),
+        "peak": _finite_list(peak, 9),
+        "driven": m,
+        "driven_peak": round(float(peak[m - 1]), 6),
+        "grid_scale": grid_scale,
+        "grid_from": lo + 1,
+        "top": [(mm, round(a, 6)) for mm, a in top],
+        # None, not 0.0, when nothing cleared the bar: a ratio of "how far the winner is above the
+        # grid scale" has no value when there is no winner, and 0.0x would read as "at grid scale".
+        "over_grid": round(best / grid_scale, 1) if top and grid_scale > 0 else None,
+    }
+
+
+def _param_block(res: Any, m: int, f_m: float, periods: float, above: dict[str, Any],
+                 below: dict[str, Any], dt_above: float, dt_below: float,
+                 sweep: dict[str, Any]) -> dict[str, Any]:
+    """The regime's whole story, assembled. See :func:`_build_payload_parametric`."""
+    tr_above = _param_trace(above, res.fs, f_m)
+    tr_below = _param_trace(below, res.fs, f_m)
+
+    # The drift of the UNSTABLE run, on the SAME axes as its off-mode growth: straight line up,
+    # flat line at machine precision. That contrast is the entire argument. The plotted trace is
+    # decimated but the HEADLINE number comes off the full array via _energy_block (batch 2: a
+    # decimated max understates it).
+    e = above["energy"]
+    e0 = e[0]
+    idx = np.minimum(tr_above.pop("idx") * PARAM_SAMPLE, e.size - 1)
+    drift = np.abs(e[idx] - e0) / abs(e0) if e0 != 0 else np.abs(e[idx])
+    tr_below.pop("idx", None)
+
+    straddles = bool(tr_above["unstable"] and not tr_below["unstable"])
+    return {
+        "kind": "parametric",
+        "m": m, "f_m": round(f_m, 3), "periods": round(periods, 1),
+        "seed_rel": PARAM_SEED_REL, "seed_modes": PARAM_SEED_MODES,
+        "dt_above": round(dt_above, 4), "dt_below": round(dt_below, 4),
+        "amp_above": round(above["amplitude"], 6), "amp_below": round(below["amplitude"], 6),
+        "above": tr_above, "below": tr_below,
+        "drift_trace": _finite_list(drift),   # log axis — see _param_trace on rounding
+        "cascade": _param_cascade(above, m),
+        "sweep": sweep,
+        "straddles": straddles,
+        # Both claim runs are deeply nonlinear — "below" is NOT a linear control, and saying so is
+        # the stronger claim: measured 0.42 vs 0.49 of E in the stretch at dT/T0 = 1.5 vs 2.0. The
+        # tongue is the entire difference between them.
+        "nl_gap": round(abs(tr_above["nl_fraction"] - tr_below["nl_fraction"]), 6),
+        "note": (
+            "both runs are equally nonlinear — the tongue is the difference"
+            if straddles else
+            "the pair does not straddle this mode's threshold — see the sweep for where it is"
+        ),
+    }
+
+
+def _build_payload_parametric(p: dict[str, Any]) -> dict[str, Any]:
+    playback_speed = _fnum(p, "playback_speed", 0.02)
+    pickup_frac = _fnum(p, "pickup_position", 0.1)
+    fpp = max(1, int(_fnum(p, "frames_per_period", FRAMES_PER_PERIOD)))
+    dt_above = _fnum(p, "dt_over_t0", PARAM_DT_ABOVE_DEFAULT)
+    dt_below = _fnum(p, "dt_below", PARAM_DT_BELOW_DEFAULT)
+    periods = _fnum(p, "claim_periods", PARAM_CLAIM_PERIODS)
+
+    try:
+        m = int(_fnum(p, "mode_number", PARAM_M_DEFAULT))
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"mode_number must be an integer, got {p.get('mode_number')!r}.") from exc
+    if not (1 <= m <= PARAM_M_MAX):
+        raise ParamError(f"mode_number must be in [1, {PARAM_M_MAX}], got {m}.")
+    if not (0.0 < playback_speed <= SPEED_MAX):
+        raise ParamError(f"playback_speed must be in (0, {SPEED_MAX}], got {playback_speed}.")
+    if not (0.0 < pickup_frac < 1.0):
+        raise ParamError(f"pickup_position must be in (0, 1), got {pickup_frac}.")
+    for name, val in (("dt_over_t0", dt_above), ("dt_below", dt_below)):
+        if not (0.0 < val <= PARAM_DT_MAX):
+            raise ParamError(f"{name} must be in (0, {PARAM_DT_MAX}], got {val}.")
+    if not (1.0 <= periods <= 200.0):
+        raise ParamError(f"claim_periods must be in [1, 200], got {periods}.")
+    try:
+        n_req = int(p.get("N", 128))
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"N must be an integer, got {p.get('N')!r}.") from exc
+    if n_req > PARAM_N_MAX:
+        raise ParamError(
+            f"N must be <= {PARAM_N_MAX} for the parametric regime (got {n_req}): every step runs "
+            "a tension root-find (~250 µs), and this regime runs two claim runs plus a sweep."
+        )
+
+    # sigma is forced to 0, not merely defaulted: under loss the amplitude decays back down through
+    # the threshold and the instability self-extinguishes mid-panel. See the section comment.
+    base = {**p, "sigma0": 0.0, "sigma1": 0.0}
+    b = _build_resonator(base)
+    res = b.res
+    if res.EA <= 0.0:
+        raise ParamError(
+            "EA must be > 0 in the parametric regime: with EA = 0 the string is model #3 exactly, "
+            "the tension never modulates, and there is no parametric pump to be unstable to."
+        )
+    f_m, p2 = _param_mode_frequency(res, m)
+    amp_above = _param_amplitude(res, dt_above, p2)
+    amp_below = _param_amplitude(res, dt_below, p2)
+    pickup_idx = min(max(1, round(pickup_frac * res.N)), res.N - 1)
+
+    n_steps = _param_steps(res, f_m, periods)
+    if 2 * n_steps > PARAM_WORK_MAX:
+        raise ParamError(
+            f"work budget exceeded ({2 * n_steps:,} steps > {PARAM_WORK_MAX:,} for the two claim "
+            f"runs): every step runs a tension root-find. Lower N, claim_periods, or the mode "
+            "number (a higher mode needs more steps per unit time)."
+        )
+
+    stride = max(1, round((res.fs / f_m) / fpp))
+    if n_steps // stride > MAX_FRAMES:
+        stride = max(1, math.ceil(n_steps / MAX_FRAMES))
+
+    # ONE above-threshold run yields the energy verdict, the off-mode trace, the cascade, the
+    # frames and the audio. Unlike every model whose animation window is the attack at t = 0, the
+    # window here IS the claim window — the breakup happens inside it — so re-running for frames
+    # would silently double the cost of a root-find-per-step model (the bow's lesson).
+    above = _run_parametric(res, m, amp_above, n_steps, pickup_index=pickup_idx,
+                            snapshot_stride=stride, modal_from=n_steps // 2)
+    below = _run_parametric(_build_resonator(base).res, m, amp_below, n_steps)
+
+    sweep = _param_sweep(base, m, dts=_param_sweep_dts(p),
+                         cap_periods=_fnum(p, "sweep_cap", PARAM_SWEEP_CAP_PERIODS),
+                         chunk_periods=PARAM_SWEEP_CHUNK_PERIODS)
+
+    frames = np.array([st for _, st in above["snapshots"]], dtype=float)
+    frame_steps = np.array([i for i, _ in above["snapshots"]], dtype=float)
+    audio48, peak = _resample_normalize(above["pickup"], res.fs)
+
+    sim = SimResult(time=np.arange(above["energy"].size) / res.fs, energy=above["energy"],
+                    output=above["pickup"], fs=res.fs, snapshots=[])
+    n_bad = int(res.n_not_converged)
+    convergence = {
+        "all_converged": n_bad == 0,
+        "n_not_converged": n_bad,
+        "tension_tol": res.tension_tol,
+        "bracket_expansions": int(res.bracket_expansions),
+        # A failed root-find looks EXACTLY like a breakup, and the drift number is meaningless if
+        # the step never converged — so the claim is gated on it (von Karman's Picard gate).
+        "detail": (
+            f"tension root-find did not converge: {n_bad} step(s), tol {res.tension_tol:.0e}\n"
+            "verdict N/A — the breakup cannot be told from a failed solve"
+        ),
+        "note": f"  ·  tension solve converged (tol {res.tension_tol:.0e})",
+    }
+
+    return {
+        "model": "tension",
+        "regime": "parametric",
+        "fs_sim": round(res.fs, 3),
+        "lambda": round(float(res.lam), 6),
+        "grid": {"x": _finite_list(res.x, 6)},
+        "frames": {
+            "b64": _b64f32(frames.ravel()),
+            "n_frames": int(frames.shape[0]),
+            "width": int(frames.shape[1]) if frames.ndim == 2 else 0,
+            "dims": 1,
+        },
+        "frame_times": _finite_list(frame_steps / res.fs, 6),
+        "anim_dt": float(stride / res.fs),
+        "playback_speed": playback_speed,
+        "field_amp": float(np.max(np.abs(frames))) if frames.size else 0.0,
+        "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
+        "energy": _energy_block(sim, True, 0.0, convergence=convergence),
+        "meta": {
+            "c": round(b.c, 3),
+            "f1": round(f_m / m, 3),
+            "num_steps": int(n_steps),
+            "n_frames": int(frames.shape[0]),
+            "EA_over_T": round(res.EA_over_T, 3),
+            "nonlinear_fraction": round(above["nl_fraction"], 6),
+            # Nested under meta.spectrum with a `kind`, like every other model's second panel —
+            # drawDiagnostics dispatches on exactly that, and a top-level key renders NOTHING
+            # (batch 1's gotcha, and the fret's `kind` reopen).
+            "spectrum": _param_block(res, m, f_m, periods, above, below, dt_above, dt_below,
+                                     sweep),
         },
     }
 

@@ -11,6 +11,7 @@ This file imports ``web.serialize`` (the wrapper) and ``physsynth`` (the core) �
 """
 
 import base64
+import math
 
 import numpy as np
 import pytest
@@ -64,6 +65,11 @@ from web.serialize import (
     MALLET_N_MAX,
     MEMBRANE_LAMBDA_MAX,
     MEMBRANE_N_MAX,
+    PARAM_SEED_REL,
+    PARAM_SWEEP_CAP_PERIODS,
+    PARAM_SWEEP_CHUNK_PERIODS,
+    PARAM_SWEEP_DTS,
+    PARAM_SWEEP_N,
     PLATE_N_MAX,
     PLATEBODY_AUDIO_MAX,
     PLATEBODY_DISTANCE_MAX,
@@ -419,6 +425,242 @@ def test_tension_frames_decode_to_a_mode1_sine_with_fixed_ends():
 )
 def test_tension_bad_params_give_error_payload(bad):
     r = simulate_to_payload({**TENSION_P, **bad})
+    assert "error" in r, f"{bad} should be rejected"
+    assert r["error"]["kind"] in ("param", "construction")
+    assert isinstance(r["error"]["message"], str) and r["error"]["message"]
+
+
+
+
+# == the parametric instability — tension regime "parametric" (batch 16) ==========================
+# Model #9's SECOND refusal, discharged: `_build_payload_tension` refuses above TENSION_DT_MAX
+# because the mode breaks up there, and this is the panel it points at. The headline is that the
+# energy drift stays at machine precision THROUGH a complete disintegration — a numerical
+# instability grows the energy, a parametric one only redistributes it.
+#
+# Everything asserted here was measured before the panel existed (temp/parametric-probe, probes
+# 1-6). The runs are kept short with `claim_periods` and a cut-down `sweep_points`; the SHIPPED
+# defaults are pinned separately, because a constant can be right while the default path reading it
+# is not (batch 15's lesson).
+
+PARAM_P: dict = {
+    "model": "tension", "domain": "parametric", "N": 128, "EA": 1.0e5, "kappa": 2.0,
+    "sweep_points": [1.0, 3.0], "sweep_cap": 25,
+}
+
+
+def _param(**overrides) -> dict:
+    return simulate_to_payload({**PARAM_P, **overrides})
+
+
+def test_parametric_conserves_through_a_complete_disintegration():
+    """**The money test, and the whole reason this regime exists.**
+
+    The driven mode is destroyed — a fifth of ``||u_0||`` ends up outside it — and the energy drift
+    over the same run stays at ~1e-12. That contrast IS the claim: a numerical instability would
+    grow the energy, whereas a parametric one only moves it between modes. Both halves are needed;
+    either alone proves nothing (a stable run also conserves, and a blow-up also loses purity)."""
+    d = _param()
+    sp = d["meta"]["spectrum"]
+    assert sp["kind"] == "parametric"
+    assert d["regime"] == "parametric"
+    assert sp["above"]["unstable"], "the above-threshold run must actually break up"
+    assert sp["above"]["level"] > 0.1, f"expected a real disintegration, got {sp['above']['level']}"
+    assert d["energy"]["lossless"]["pass"], d["energy"]["lossless"]
+    assert d["energy"]["lossless"]["drift"] < 1e-10
+
+
+def test_parametric_pair_straddles_and_the_stable_run_stays_on_its_seed():
+    """Below the tongue the seed does not grow: the run ends within a small factor of the floor it
+    started on. The contrast is only meaningful because BOTH runs were seeded identically."""
+    sp = _param()["meta"]["spectrum"]
+    assert sp["straddles"]
+    assert not sp["below"]["unstable"]
+    assert sp["below"]["growth"] < 10.0, f"below the tongue nothing grows: {sp['below']['growth']}"
+    assert sp["above"]["growth"] > 1e4, f"above it, decades of growth: {sp['above']['growth']}"
+
+
+def test_parametric_below_run_is_not_a_linear_control():
+    """The subtle one, and the stronger claim. "Below threshold" is NOT a linear string: measured
+    0.42 vs 0.49 of the energy in the stretch at dT/T0 = 1.5 vs 2.0. The two runs are *equally*
+    nonlinear, so what separates them is the Mathieu tongue and nothing else."""
+    sp = _param()["meta"]["spectrum"]
+    assert sp["below"]["nl_fraction"] > 0.3, "the stable run must still be deeply nonlinear"
+    assert sp["nl_gap"] < 0.25, f"the two runs' nonlinearity must be comparable: {sp['nl_gap']}"
+
+
+def test_parametric_drift_is_scored_on_the_full_array_not_the_shipped_trace():
+    """The plotted drift is decimated for the panel; the VERDICT is not.
+
+    A decimated maximum understates the real one (batch 2's lesson), so the reported drift must be
+    at least the largest value on the trace the panel draws."""
+    d = _param()
+    trace = [v for v in d["meta"]["spectrum"]["drift_trace"] if v is not None]
+    assert trace, "the drift trace must be shipped"
+    assert d["energy"]["lossless"]["drift"] >= max(trace) * (1 - 1e-12)
+
+
+def test_parametric_log_axis_traces_are_not_rounded_into_zero():
+    """Both panels are log-y and span 1e-13..1e0. Rounding the payload to a fixed number of decimal
+    places sends the machine-precision end to a bare 0.0 and silently deletes the flat drift line
+    that is half the argument — so these series ship unrounded."""
+    sp = _param()["meta"]["spectrum"]
+    positive = [v for v in sp["drift_trace"] if v is not None and v > 0]
+    assert positive, "the drift trace cannot be all zeros — it would vanish on a log axis"
+    assert min(positive) < 1e-12, f"machine-precision detail was rounded away: {min(positive)}"
+    assert min(v for v in sp["below"]["env"] if v is not None and v > 0) < 1e-5
+
+
+def test_parametric_energy_lands_in_low_neighbours_not_at_the_grid_scale():
+    """The discriminator against a numerical instability, and the core signature test's own bar: a
+    blow-up puts its energy at the grid scale, a Mathieu tongue puts it in the low neighbours. The
+    partner is read OFF THE RUN and never named in advance — which one wins moves with dT/T0."""
+    c = _param()["meta"]["spectrum"]["cascade"]
+    assert c["top"], "the breakup must name the modes that took the energy"
+    assert c["over_grid"] > 100.0, f"partners must clear 100x the grid scale: {c['over_grid']}"
+    winner = c["top"][0][0]
+    assert winner != c["driven"] and winner < c["grid_from"], f"winner {winner} is not a neighbour"
+    # Every NAMED partner must survive the readout's own rounding. The panel prints each as a
+    # percentage to one decimal, so a partner below 0.1 % is displayed as "m=10 0.0 %" beside a real
+    # one at 20 % — a cascade claimed and nothing shown at it. The bar belongs in the payload, not
+    # in the drawing code: what is not worth printing is not worth naming. At this default the
+    # 100x-grid-scale bar already clears it by three orders; this holds the *display* invariant for
+    # the parameter sets where it would not.
+    for mm, level in c["top"]:
+        assert f"{level * 100:.1f}" != "0.0", f"partner m={mm} rounds to 0.0 % in the readout"
+
+
+def test_parametric_names_no_partner_below_the_tongue():
+    """An empty cascade is the honest answer for a stable run — not a list of modes sitting at the
+    noise floor that round to "0.0 %" beside a real partner."""
+    sp = _param(dt_over_t0=1.2, dt_below=1.0)["meta"]["spectrum"]
+    assert not sp["above"]["unstable"]
+    assert sp["cascade"]["top"] == []
+    assert sp["cascade"]["over_grid"] is None, "a ratio with no winner must be null, never 0.0"
+
+
+def test_parametric_mode_one_is_the_robust_one():
+    """**Why `m` had to become a control.** At a dT/T0 that disintegrates mode 3, mode 1 is still
+    pure: it has no lower resonance partner. The tension path's hardwired mode-1 start would have
+    shown a flat line and no instability at all."""
+    at_three = _param(mode_number=3)["meta"]["spectrum"]
+    at_one = _param(mode_number=1)["meta"]["spectrum"]
+    assert at_three["above"]["unstable"], "mode 3 breaks up at the default dT/T0"
+    assert not at_one["above"]["unstable"], "mode 1 must survive the same pump"
+    assert not at_one["straddles"], "and the panel must say the pair did not straddle"
+
+
+def test_parametric_run_length_is_periods_of_mode_m_not_steps():
+    """At a fixed step count, raising N raises fs and shrinks the physics-time window until the
+    breakup slides off the end of the panel. Run length is specified in periods of the DRIVEN mode,
+    so refining the grid buys resolution, never a shorter experiment."""
+    coarse = _param(N=64)["meta"]["spectrum"]
+    fine = _param(N=128)["meta"]["spectrum"]
+    assert coarse["periods"] == fine["periods"]
+    assert fine["above"]["t"][-1] == pytest.approx(coarse["above"]["t"][-1], rel=0.05)
+
+
+def test_parametric_self_seeding_still_breaks_up_without_the_explicit_seed():
+    """The shipped panel seeds explicitly so the below/above contrast is honest and reproducible on
+    any BLAS. But the physics does not NEED a seed — roundoff alone excites the neighbours — and
+    that claim is pinned here rather than in the render, which is what lets the panel stop depending
+    on floating-point noise. (See [[tension-string-state]]'s flagged BLAS risk.)"""
+    from web.serialize import _build_resonator, _param_mode_frequency, _run_parametric
+
+    res = _build_resonator({**PARAM_P, "sigma0": 0.0, "sigma1": 0.0}).res
+    f_m, p2 = _param_mode_frequency(res, 3)
+    amp = math.sqrt(4.0 * res.T * 3.0 / (res.EA * p2))
+    run = _run_parametric(res, 3, amp, int(round(40 * res.fs / f_m)), seed_rel=0.0,
+                          modal_from=0)
+    assert run["off"].max() > 1e-3, "roundoff alone must still seed the instability"
+    e = run["energy"]
+    assert abs(e - e[0]).max() / abs(e[0]) < 1e-10, "and it must still conserve"
+
+
+def test_parametric_sweep_bins_stable_unstable_and_unsaturated_separately():
+    """Three bins, not two. A point that never left the seed floor and one that grew but had not
+    settled by the cap are different measurements, and lumping them reads as a much wider stable
+    region than exists."""
+    sw = _param(sweep_points=[1.0, 1.5, 2.0, 3.0, 5.0], sweep_cap=40)["meta"]["spectrum"]["sweep"]
+    pts = {pt["dt"]: pt for pt in sw["points"]}
+    assert not pts[1.0]["unstable"] and not pts[1.5]["unstable"]
+    assert pts[3.0]["unstable"] and pts[5.0]["unstable"]
+    assert pts[5.0]["level"] > pts[3.0]["level"], "deeper in the tongue destroys more of the mode"
+    assert pts[1.0]["level"] <= 100.0 * pts[1.0]["floor"]
+    assert sw["edge_lo"] is not None and sw["edge_hi"] is not None
+    assert sw["edge_lo"] < sw["edge_hi"], "the edge is a BRACKET — its fine position moves with N"
+
+
+def test_parametric_sweep_is_a_controlled_reference_curve():
+    """Fixed N and sigma = 0 regardless of what the render is set to, because the points have to be
+    comparable with each other. The user's `m` is honoured, since the threshold is emphatically not
+    mode-invariant and a sweep at the wrong mode is a different curve."""
+    sw = _param(N=64, sigma0=7.0)["meta"]["spectrum"]["sweep"]
+    assert sw["N"] == PARAM_SWEEP_N != 64
+    assert sw["seed_rel"] == PARAM_SEED_REL
+
+
+def test_parametric_sweep_truncation_is_labelled_never_silent(monkeypatch):
+    """``PARAM_SWEEP_WORK_MAX`` is a GUARANTEE, not dead code: the shipped grid cannot reach it. So
+    it is driven PAST itself here, where the behaviour is real — the tail must come back as labelled
+    nulls that keep their place on the axis. Silent truncation reading as "covered everything" is
+    the failure the no-silent-caps rule names."""
+    monkeypatch.setattr(web_serialize, "PARAM_SWEEP_WORK_MAX", 1)
+    sw = _param(sweep_points=[1.0, 3.0, 5.0])["meta"]["spectrum"]["sweep"]
+    assert sw["truncated"]
+    dropped = [pt for pt in sw["points"] if pt["truncated"]]
+    assert dropped, "the tail must be present and labelled, not missing"
+    assert all(pt["level"] is None for pt in dropped)
+    assert [pt["dt"] for pt in sw["points"]] == [1.0, 3.0, 5.0], "every point keeps its place"
+
+
+def test_parametric_shipped_sweep_path_is_pinned_with_the_overrides_absent():
+    """The hidden `sweep_points` / `sweep_cap` overrides keep the suite from paying for the full
+    grid on every test — which means the configuration the UI actually ships, with both keys
+    ABSENT, would otherwise be exercised only by the verifier."""
+    sw = simulate_to_payload({"model": "tension", "domain": "parametric", "N": 64,
+                              "claim_periods": 8})["meta"]["spectrum"]["sweep"]
+    assert [pt["dt"] for pt in sw["points"]] == list(PARAM_SWEEP_DTS)
+    assert sw["cap_periods"] == PARAM_SWEEP_CAP_PERIODS
+    assert sw["chunk_periods"] == PARAM_SWEEP_CHUNK_PERIODS
+
+
+def test_parametric_forces_sigma_to_zero():
+    """Loss is not merely defaulted off, it is FORCED: under damping the amplitude decays back down
+    through the threshold and the instability self-extinguishes mid-panel, and multi-rate
+    redistribution has no single-exponential form for a decay oracle to check. A user arriving from
+    the bow (sigma0 = 0.5) must still get the conservation verdict."""
+    d = _param(sigma0=5.0, sigma1=0.01)
+    assert d["energy"]["sigma_is_zero"], "sigma must be forced to zero in this regime"
+    assert d["energy"]["lossless"]["pass"]
+
+
+def test_parametric_regime_leaves_the_duffing_path_bit_for_bit():
+    """The regime is a fork in the dispatch, not a change to the Duffing builder — and the Duffing
+    payload is what the exact-oracle tests above pin. An absent `domain` must mean `duffing`."""
+    assert simulate_to_payload(TENSION_P) == simulate_to_payload({**TENSION_P, "domain": "duffing"})
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"domain": "nonesuch"},                 # an unknown regime, not a silent fallback
+        {"mode_number": 0},
+        {"mode_number": 99},
+        {"dt_over_t0": 0},
+        {"dt_over_t0": 400},
+        {"dt_below": -1},
+        {"EA": 0},                              # no tension modulation ⇒ no pump to be unstable to
+        {"N": 400},                             # over PARAM_N_MAX
+        {"N": 200, "claim_periods": 180},       # over the claim-run work budget
+        {"claim_periods": 0},
+        {"pickup_position": 1.5},
+        {"sweep_points": [0.0]},
+        {"sweep_points": "nope"},
+    ],
+)
+def test_parametric_bad_params_give_error_payload(bad):
+    r = _param(**bad)
     assert "error" in r, f"{bad} should be rejected"
     assert r["error"]["kind"] in ("param", "construction")
     assert isinstance(r["error"]["message"], str) and r["error"]["message"]

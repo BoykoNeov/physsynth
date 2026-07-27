@@ -169,22 +169,24 @@ Complete and validated:
   `S(x)` is carried from day one (cone/flare = a different area profile, not a rewrite). A
   frequency-independent `-2σU` drag is the passivity placeholder (real viscothermal / bell losses
   come with batch 2's radiating bell, then batch 3's dynamic mass-spring reed exciter).
-- **Web viewer** — interactive offline recompute. Wired so far: the linear string family (Phase A),
-  the membrane (Phase B), both Kirchhoff plates (#5 supported, #5b free) and the von Kármán
-  nonlinear plate (#6 supported gong + free cymbal) as 2D heatmap models (Phase C), and — as Phase D,
-  *consolidation* — the tension-modulated string #9 (batch 1), the bowed string (batch 2) and the
-  geometrically-exact string #10 (batch 3). The nonlinear panels read the energy verdict through
-  a solver-convergence gate and the spectrum as an amplitude *hardening shift* — not a cents error.
-  The tension panel leads with the **shift** `ω(A) − ω(A→0)` against its exact Duffing closed form
+- **Web viewer** — interactive offline recompute, and as of Phase D batch 16 **every resonator the
+  core defines except the free beam has a panel**. Phase A wired the linear string family, Phase B
+  the membrane, Phase C both Kirchhoff plates (#5 supported, #5b free) and the von Kármán nonlinear
+  plate (#6 gong + cymbal); Phase D was chosen as *consolidation* over more physics and surfaced the
+  rest — the tension-modulated string #9, the bow, the geometrically-exact string #10 and its
+  phantom partials, the mallet #7, sympathetic strings and Weinreich two-stage decay, the jawari,
+  fret and juari configurations of the barrier model #8, the acoustic bore and its dynamic reed, the
+  modal and plate bodies, the radiation load, and the parametric instability.
+  Each panel is built around the claim its model can actually support rather than a uniform readout:
+  the tension panel leads with the **shift** `ω(A) − ω(A→0)` against its exact Duffing closed form
   (the difference cancels the θ-scheme's linear dispersion error, which an absolute frequency would
-  carry), measured on a *lossless* pair of runs while the audio stays lossy so the downward pitch
-  glide is audible. The bow's energy panel is a third verdict type — an energy **balance**, because
-  for a driven model both older verdicts are actively wrong rather than merely weaker. The geometric
-  string's panel is the **orbit** (the plot #9 structurally cannot draw: one polarization has no
-  orbit but a point on a line): an exact rotating-wave circle, the planar bit-exact line, and the
-  whirl as a log-y growth envelope inside its Mathieu tongue — with the drift holding ~1e-12 straight
-  *through* a 63× blow-up, which is what separates redistribution from a diverging solve. Still built
-  but unsurfaced: the reed, the wind bore, the collision models and the coupled/radiating chains; see
+  carry); the bow's energy panel is a third verdict type — an energy **balance**, because for a
+  driven model both older verdicts are actively wrong rather than merely weaker; the geometric
+  string's is the **orbit** that model #9 structurally cannot draw. Nonlinear panels read the energy
+  verdict through a solver-convergence gate, and a run that dissipates or radiates keeps the
+  conservation verdict when its loss is a *booked* channel. The newest panel puts a mode's
+  disintegration and the same run's energy drift on one log axis — a straight line up beside a flat
+  line at machine precision, which is what separates redistribution from a diverging solve. See
   `docs/dev/web-viewer-plan.md`.
 
 The deliverable for each model is the resonator *and the rig that measures its deviation from

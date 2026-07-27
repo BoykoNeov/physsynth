@@ -40,7 +40,7 @@
             <option value="vk">von Kármán plate (nonlinear)</option>
           </select>
         </label>
-        <label class="field" data-show="membrane mallet plate vk geometric sympathetic bore reed platebody" style="margin-top:8px">
+        <label class="field" data-show="membrane mallet plate vk geometric sympathetic bore reed platebody tension" style="margin-top:8px">
           <span id="domain-label">Domain</span>
           <select id="domain"></select>
         </label>
@@ -101,10 +101,31 @@
            coefficient is EA − T₀. In the whirl regime amplitude is derived from ΔT/T₀, so it hides. -->
       <fieldset class="group" data-show="tension geometric jawari juari fret">
         <legend>Nonlinearity</legend>
-        <div class="slider" data-param="amplitude" data-min="0.001" data-max="0.06" data-step="0.001" data-val="0.02" data-unit="m" data-fixed="3" data-show="tension geometric jawari juari fret" data-hide-domain="whirl"></div>
+        <div class="slider" data-param="amplitude" data-min="0.001" data-max="0.06" data-step="0.001" data-val="0.02" data-unit="m" data-fixed="3" data-show="tension geometric jawari juari fret" data-hide-domain="whirl parametric"></div>
         <div class="slider" data-param="EA" data-min="0" data-max="200" data-step="5" data-val="100" data-unit="kN" data-scale="1e3" data-fixed="0" data-show="tension geometric"></div>
+        <!-- SHARED by the geometric whirl and the tension string's parametric regime, and it lives
+             here rather than in either regime's own box because it is one physical coordinate: the
+             driven mode's tension excess. The amplitude is set by ΔT/T₀, never by A directly — A is a
+             proxy, and EA and T move the excess just as hard. The two models re-range it in opposite
+             directions (the whirl caps at 2.2 to stay BELOW the planar breakup; the parametric
+             regime runs to 14 to cross it), so both name it in full in MODEL_RANGES and _default
+             restores the whirl's values on the way out. -->
+        <div class="slider" data-param="dt_over_t0" data-min="0.1" data-max="2.2" data-step="0.05" data-val="1.5" data-unit="ΔT/T₀" data-fixed="2" data-domain="whirl parametric"></div>
         <p class="hint" id="tension-hint" data-show="tension"></p>
         <p class="hint" id="geom-hint" data-show="geometric"></p>
+      </fieldset>
+
+      <!-- The parametric regime (batch 16). Gated on the regime as well as the model, like the whirl
+           box below. The DRIVEN MODE is the control that decides whether there is anything to see at
+           all: m = 1 has no lower resonance partner and stays pure to dT/T0 ~ 5, while m = 3 (the
+           default, and the core signature test's case) goes unstable just above 2. The two dT/T0
+           sliders are the below/above pair — both runs are deeply nonlinear (~42 % vs ~49 % of the
+           energy in the stretch), so what separates them is the tongue, not the nonlinearity. -->
+      <fieldset class="group" data-show="tension" data-domain="parametric">
+        <legend>Parametric breakup — the Mathieu tongue</legend>
+        <div class="slider" data-param="mode_number" data-min="1" data-max="8" data-step="1" data-val="3" data-unit="driven mode m" data-fixed="0" data-domain="parametric"></div>
+        <div class="slider" data-param="dt_below" data-min="0.1" data-max="14" data-step="0.1" data-val="1.5" data-unit="ΔT/T₀ (stable run)" data-fixed="2" data-domain="parametric"></div>
+        <p class="hint" id="param-hint" data-domain="parametric"></p>
       </fieldset>
 
       <!-- Gated on the REGIME as well as the model: every control inside is whirl-only, so without
@@ -117,10 +138,6 @@
              watching the growth die at the edge is the point, and the upper edge is SOFT
              (leading-order ε), so it dies gradually rather than switching off. -->
         <div class="slider" data-param="tongue_position" data-min="0" data-max="1" data-step="0.01" data-val="0.25" data-fixed="2" data-domain="whirl"></div>
-        <!-- The amplitude is set by ΔT/T₀, never by A directly: A is a proxy, and EA and T move the
-             tension excess just as hard. At κ_u = 0 this is exactly model #9's planar-breakup
-             coordinate, so the cap is a measured margin to its ≈3, not a guess. -->
-        <div class="slider" data-param="dt_over_t0" data-min="0.1" data-max="2.2" data-step="0.05" data-val="1.5" data-unit="ΔT/T₀" data-fixed="2" data-domain="whirl"></div>
         <label class="check" data-domain="whirl"><input type="checkbox" id="seed-velocity" /> velocity seed (injects angular momentum)</label>
         <p class="hint" id="whirl-hint" data-domain="whirl"></p>
       </fieldset>
