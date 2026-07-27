@@ -1976,7 +1976,16 @@ Every number below is measured, before the wiring:
   implementation (jawari was ~143 µs/step for a 15-node vector solve; a 1-node scalar solve is
   cheaper). The clean run is reused for both the tuning-curve baseline and the band-spectrum contrast.
 
-### Batch 15 (PLANNED) — the air pushes back (`RadiatedBody`): the BOOKED radiation channel
+### Batch 15 (DONE) — the air pushes back (`RadiatedBody`): the BOOKED radiation channel
+
+**Built & browser-verified.** All-wrapper (`physsynth/core` untouched); 16 web tests (306 in the web
+file, 1099 in the suite), ruff clean, headless verifier `radbody` PASS, CDP switch-check **17/17**,
+both panel crops eyeballed. Shipped defaults, measured through the payload: at R = 133 the air takes
+**98.4 %** of the pluck within 2 s while the booked total drifts **1.60e-14**; the body itself peaks
+at **0.10 %** (a conduit, not a reservoir); the drain is fastest at **R ≈ 5.16 (20.0 ms)** in a
+basin **2.29–7.74**, against **252 ms** at the default — the panel's whole point. Default render
+**2.93 s** (44 444 audio steps + 53 453 sweep steps). Two bugs only the *rendered page* could catch,
+both recorded below.
 
 The last member of the body/radiation family, and the one thing batches 12–13 structurally *could
 not* show. There the air was a pure **read-out**: `AirRadiation` scales the body's volume
@@ -2081,6 +2090,33 @@ gates the advisor set before any panel code:
   cannot. **Reset in `MODEL_RANGES._default`** — the leak family (batches 2/3/7/8/12). Reuses
   `bridge_stiffness` / `sigma_body` / `distance` / `amplitude` / `pluck_position` / `lambda` / `N`
   from the body ranges, re-ranged per that model's existing entries.
+
+**Found during the build (not in the plan above):**
+
+- **A SLIDER THAT DOES NOT EXIST LOOKS EXACTLY LIKE ONE THAT WORKS, because the backend default
+  fills in.** The `radiation_R` markup landed *nested inside* the `distance` slider's `<div>` (an
+  insertion that reused the opening tag and left the original `</div>` behind), so `buildSliders`
+  never created it — and the fresh-load PNG still rendered a flawless R = 133 panel, because
+  `gatherParams` simply shipped no `radiation_R` and the server applied `RADBODY_R_DEFAULT`. The
+  deep-link verifier's "does it draw?" check cannot see this class of bug at all; only enumerating
+  the built `.slider` params over CDP did. *Generalizable: when a param has a server-side default,
+  a missing control is invisible in the picture — assert the control EXISTS, not just that the
+  render is right.*
+- **A leftover headless Chrome answers `/json` on the debug port and hands you ITS page** — the
+  stale-server trap one level over. Three runs of the switch-check "found" the missing slider in a
+  browser that had loaded the pre-fix DOM, which is also how the *fix* appeared not to work. The
+  driver now proves the attached DOM matches disk before asserting anything, and uses a fresh
+  `mkdtemp` profile per run. (`--remote-allow-origins=*` is also required, as the main verifier
+  already does.)
+- **Two panel collisions the numbers could not show:** a centred x-axis title lands exactly on the
+  `100` decade tick and a rotated y-axis title lands on the `300` tick, so the units moved to the
+  empty corners (`Pa·s/m³` after the last decade, `t₅₀ ms` inside the plot's top-left). And `∫P_rad`
+  was first drawn teal, a colour that reads as the green *total* at a glance — the one pair that
+  must never be confused, since the whole claim is one filling up to the other. It is now amber.
+  `body_frac_peak` needed a sub-1 % format too: the conduit finding rounds to a bare "0 %".
+- **`_RadBodyRun` is deliberately NOT a subclass of `_BodyRun`.** Inheriting batch 12's telemetry
+  meant sampling `wb` / `qaccel` / `u_end` — three extra calls on every step of a model whose entire
+  budget is step count — to fill arrays that feed the far-field spectrum panel this batch replaces.
 
 ### Later batches (rough map — not firm)
 

@@ -234,6 +234,22 @@ const MODEL_RANGES = {
                distance: { min: 0.5, max: 4.0, step: 0.1, fixed: 1, val: 1.0 },
                pluck_position: { val: 0.3 },
                audio_duration: { min: 0.2, max: 3.0, step: 0.1, fixed: 1, val: 2.0 } },
+  // String -> a RADIATION-LOADED body (batch 15): batch 12's rig with the body wrapped in a
+  // RadiatedBody, so the air pushes BACK and the energy it takes is BOOKED. radiation_R is the star
+  // control, linear [0, 300] step 1 — the panel's log-axis sweep carries the decades a linear slider
+  // cannot, and the three positions that matter are all reachable: 0 (decouples the air, and the
+  // render is then bit-identical to `body`), the 2-10 basin (fastest drain), and 133 = the free-space
+  // monopole R_a at the first body mode (110 Hz), which is the shipped default. bridge_stiffness and
+  // the rest inherit the body's ranges verbatim, since it IS the body's rig; radiation_R resets in
+  // _default like every re-ranged param (gatherParams ships every slider, hidden ones included).
+  radbody: { N: { min: 16, max: 160, val: 100 },
+             lambda: { min: 0.5, max: 0.99, step: 0.01, fixed: 2, val: 0.9 },
+             bridge_stiffness: { min: 0, max: 19000, step: 500, fixed: 0, val: 8000, unit: "N/m" },
+             radiation_R: { min: 0, max: 300, step: 1, fixed: 0, val: 133, unit: "Pa·s/m³" },
+             sigma_body: { val: 0 },
+             distance: { min: 0.5, max: 4.0, step: 0.1, fixed: 1, val: 1.0 },
+             pluck_position: { val: 0.3 },
+             audio_duration: { min: 0.2, max: 3.0, step: 0.1, fixed: 1, val: 2.0 } },
   // Regime-level ranges, keyed "model:domain" and merged AFTER the model spec (see
   // applyModelRanges). The phantom regime is the first customer and needs both: κ = 8 is its
   // microscope (the geometric model defaults κ = 0, which is a HARMONIC string — every phantom
@@ -287,6 +303,11 @@ const MODEL_RANGES = {
               // that ignores them (harmless there) OR back in (re-overridden by MODEL_RANGES.platebody).
               n_plate: { min: 8, max: 24, step: 1, fixed: 0, val: 16 },
               sigma_plate: { min: 0, max: 80, step: 1, fixed: 0, val: 0, unit: "s⁻¹" },
+              // radbody's radiation resistance (batch 15). Its index.html home IS radbody's range,
+              // so this is the leak-family reset: no other model reads radiation_R, but the slider
+              // is still shipped by gatherParams, and a stale value would come back on re-entry
+              // rather than the measured default.
+              radiation_R: { min: 0, max: 300, step: 1, fixed: 0, val: 133, unit: "Pa·s/m³" },
               audio_duration: { min: 0.2, max: 6, step: 0.1, fixed: 1, val: 2 },
               // L and animation_window joined when the bore arrived: it is the first model to
               // re-range EITHER (L → 0.5 m, and the animation window down to a 0.1 s max because
@@ -550,7 +571,7 @@ function updateLambdaHint() {
     hint.textContent = `λ = c·k/h = ${lam.toFixed(2)}  (must be < 1: the bridge spring pushes the `
       + `string's Nyquist mode unstable at λ = 1)`;
     hint.style.color = lam >= 1 ? "var(--bad)" : "var(--muted)";
-  } else if (m === "body" || m === "platebody") {
+  } else if (m === "body" || m === "platebody" || m === "radbody") {
     // Explicit string + body step, coupled by a spring — the sympathetic case: λ < 1 is HARD-required
     // (the string's Nyquist mode is marginal at λ = 1 and the spring tips it over), so the slider is
     // capped at 0.99. Not "no CFL"; the else branch below would wrongly say so.
@@ -861,6 +882,29 @@ function updateLambdaHint() {
           : `σ_body = ${Math.round(sb)} s⁻¹: the coupled system decays, but off-harmonic modes make `
             + "it multi-rate — passivity, no 2σ oracle.");
       bdHint.style.color = near ? "var(--warn, #ffcf5c)" : "var(--muted)";
+    } else if (m === "radbody") {
+      // The radiation LOAD's live readout. sigma_rad/omega_1 = a²R/(2 m omega_1) is the dimensionless
+      // control the optimum actually tracks; a = 1, m = 0.02 kg and the first body mode 110 Hz are
+      // fixed properties of this rig (the same one batch 12 ships), so the ratio is R/27.65 — the
+      // payload reports the authoritative value, this is the live version while you drag.
+      const R = param("radiation_R"), sb = param("sigma_body");
+      const ratio = R / (2 * 0.02 * 2 * Math.PI * 110);
+      bdHint.textContent =
+        `R = ${Math.round(R)} Pa·s/m³ → σ_rad/ω₁ ≈ ${ratio.toFixed(2)}. `
+        + (R === 0
+          ? "R = 0 DECOUPLES the air: this render is bit-identical to the read-out-only body — "
+            + "batch 12's slosh, nothing radiated."
+          : ratio < 0.07
+            ? "a light load: the body still rings and stores, the air drains it slowly."
+            : ratio < 0.5
+              ? "near the basin: this is about as fast as the air can empty the string."
+              : "past the match — MORE air is now WORSE (the load chokes the body it drains); "
+                + "133 is the free-space monopole R_a at the first body mode.")
+        + (sb === 0
+          ? " σ_body = 0: the verdict is conservation of the BOOKED total (radiated energy is a "
+            + "channel, not a loss)."
+          : ` σ_body = ${Math.round(sb)} s⁻¹ dissipates into nowhere → passivity, no 2σ oracle.`);
+      bdHint.style.color = "var(--muted)";
     } else if (m === "platebody") {
       // The plate body's own live guard: the EXACT Sherman-Morrison ceiling K_c ~ 14k is the same for
       // both boundaries AND shrinks as the grid grows, so a high-K × high-grid combo errors cleanly.
@@ -1174,9 +1218,9 @@ function drawString(idx) {
   const sy = (H / 2 - margin) / amp * 0.92;
   const base = idx * width;
 
-  // pickup marker — suppressed for the body (its audio is the far-field radiated pressure and the
-  // backend probes the terminus at x = L, so there is no movable pickup to mark).
-  if (payload && payload.model !== "body") {
+  // pickup marker — suppressed for the body models (their audio is the far-field radiated pressure
+  // and the backend probes the terminus at x = L, so there is no movable pickup to mark).
+  if (payload && payload.model !== "body" && payload.model !== "radbody") {
     const px = margin + Math.round(param("pickup_position") * (width - 1)) * sx;
     g.strokeStyle = "rgba(255,207,92,.35)"; g.setLineDash([4, 4]); g.lineWidth = 1;
     g.beginPath(); g.moveTo(px, 8); g.lineTo(px, H - 8); g.stroke(); g.setLineDash([]);
@@ -2230,7 +2274,10 @@ function drawEnergy() {
   // The body (batch 12): the Energy card IS the money panel — the string ⇄ body energy EXCHANGE, not
   // the bare conservation line. The σ-gated verdict rides the badge + readout (on the ABSOLUTE
   // total), while the canvas shows the slosh; the bore's split-in-the-energy-panel precedent.
-  if (payload.model === "body" || payload.model === "platebody") { drawBodyEnergy(e); return; }
+  // radbody (batch 15) rides the same panel with a FOURTH channel: the booked radiated energy.
+  if (payload.model === "body" || payload.model === "platebody" || payload.model === "radbody") {
+    drawBodyEnergy(e); return;
+  }
   const t = e.time, v = e.value.map((x) => (x == null ? 0 : x));
   const tmax = t[t.length - 1] || 1;
   // Headroom only when the split is drawn: the total is flat AT the maximum, so without it the
@@ -2367,13 +2414,17 @@ function drawBodyEnergy(e) {
   if (!ex) { out.textContent = "no exchange data"; return; }
   // The distributed body IS a plate here (batch 13) — name it so; batch 12's lumped body keeps "body".
   const isPB = payload.model === "platebody";
+  // batch 15: the air is a LOAD, so a FOURTH channel — the booked radiated energy — fills as the
+  // three mechanical ones drain. They sum to the flat reference exactly (measured 1.6e-14).
+  const isRB = payload.model === "radbody";
   const bodyLbl = isPB ? "E_plate" : "E_body";
   const bodyWord = isPB ? "plate" : "body";
   const lossName = isPB ? "σ_plate" : "σ_body";
   const t = ex.time, tmax = t[t.length - 1] || 1;
-  const num = (a) => a.map((x) => (x == null ? 0 : x));
+  const num = (a) => (a || []).map((x) => (x == null ? 0 : x));
   const es = num(ex.e_string_frac), eb = num(ex.e_body_frac);
   const ec = num(ex.e_conn_frac), tot = num(ex.total_frac);
+  const er = isRB ? num(ex.e_rad_frac) : null;
   // y window spans the negative E_conn excursion up to just past the 100 % reference. Never a
   // [0,1] clamp — the whole point of E_conn as its own channel is that it dips below zero.
   const ymin = Math.min(-0.05, ...ec) * 1.1;
@@ -2402,18 +2453,62 @@ function drawBodyEnergy(e) {
   line(ec, "#9d7bff", 1.2);                     // E_conn — the signed spring channel
   line(es, "#4cc2ff", 2.5);                     // E_string — drains
   line(eb, "#ff8f4c", 2.5);                     // E_body / E_plate — fills
+  // AMBER, not the sweep panel's teal: the one pair that must never be confused is ∫P_rad (the
+  // batch's headline) and the flat total (the reference it fills up to), and a teal curve reads as
+  // the same colour as a green line at a glance. Amber against green is unmistakable.
+  if (er) line(er, "#ffd166", 2.5);             // ∫P_rad — the booked channel the air fills
   g.font = "10px ui-monospace, monospace";
-  [["E_string", "#4cc2ff"], [bodyLbl, "#ff8f4c"], ["E_conn", "#9d7bff"], ["total", "#5ad17a"]]
-    .forEach(([label, colour], i) => {
-      g.fillStyle = colour; g.fillRect(padL + 4 + i * 74, 6, 8, 3);
-      g.fillText(label, padL + 15 + i * 74, 10);
-    });
+  const legend = [["E_string", "#4cc2ff"], [bodyLbl, "#ff8f4c"], ["E_conn", "#9d7bff"]];
+  if (er) legend.push(["∫P_rad", "#ffd166"]);
+  legend.push(["total", "#5ad17a"]);
+  const step = er ? 62 : 74;
+  legend.forEach(([label, colour], i) => {
+    g.fillStyle = colour; g.fillRect(padL + 4 + i * step, 6, 8, 3);
+    g.fillText(label, padL + 15 + i * step, 10);
+  });
   g.fillStyle = "#8b98a8"; g.fillText(`${tmax.toFixed(2)} s`, W - 46, H - 5);
 
   // The σ-gated verdict — on the ABSOLUTE total (payload.energy), not on these fractions.
   const bp = (ex.body_frac_peak * 100).toFixed(0);
   const smin = (ex.string_frac_min * 100).toFixed(0);
   const smax = (ex.string_frac_max * 100).toFixed(0);
+  // The radiation LOAD gets its own readout and RETURNS — the body/plate wording below would be
+  // actively wrong here (it calls a conserving radiating run a slosh, and never mentions that the
+  // air's share is booked, which is the only reason the total stays flat). The fret's
+  // else-branch-lies lesson: branch and return, never let a shared tail speak for a new model.
+  if (isRB) {
+    const radEnd = (ex.rad_frac_end * 100).toFixed(1);
+    const radWin = (ex.rad_frac_window * 100).toFixed(0);
+    // The conduit claim lives in the small digits — a heavily loaded body peaks at 0.1 %, and
+    // rounding that to a bare "0%" reads as "the panel has no number" rather than as the finding.
+    const bpr = ex.body_frac_peak < 0.01 ? (ex.body_frac_peak * 100).toFixed(2)
+                                         : (ex.body_frac_peak * 100).toFixed(0);
+    if (e.sigma_is_zero) {
+      const ok = e.lossless.pass;
+      badge.textContent = ok ? "conserved" : "DRIFT";
+      badge.className = "badge " + (ok ? "good" : "bad");
+      out.textContent =
+        `lossless · TOTAL drift max|Eⁿ−E⁰|/E⁰ = ${e.lossless.drift.toExponential(2)} ` +
+        `(tol ${e.lossless.tol.toExponential(0)}) → ${ok ? "PASS ✓" : "FAIL ✗"}\n` +
+        `R = ${ex.R} Pa·s/m³ hands ${radEnd}% of the pluck to the air (${radWin}% inside this ` +
+        `window) and the total STILL conserves — the radiated energy is a BOOKED channel, not a ` +
+        `loss. Mechanical drains, ∫P_rad fills, the four sum to the flat reference. ` +
+        (ex.body_frac_peak < 0.05
+          ? `The ${bodyWord} itself peaks at only ${bpr}%: loaded by the air it stops being a ` +
+            `reservoir and becomes a conduit (pull R to 0 to get batch 12's slosh back, exactly).`
+          : `The ${bodyWord} still stores up to ${bp}% on the way through.`);
+    } else {
+      const mono = e.lossy.monotone;
+      badge.textContent = mono ? "passive" : "NON-MONOTONE";
+      badge.className = "badge " + (mono ? "good" : "bad");
+      out.textContent =
+        `lossy · TOTAL energy monotone non-increasing: ${mono ? "yes ✓" : "NO ✗"}\n` +
+        `σ_body > 0 dissipates into nowhere — THAT is what drops the conservation verdict, not the ` +
+        `radiation (whose ${radEnd}% is booked and would conserve on its own). No 2σ oracle: the ` +
+        `off-harmonic coupled decay is multi-rate, so passivity is the honest verdict.`;
+    }
+    return;
+  }
   if (e.sigma_is_zero) {
     const ok = e.lossless.pass;
     badge.textContent = ok ? "conserved" : "DRIFT";
@@ -2613,6 +2708,15 @@ function drawDiagnostics() {
   }
   // The body: the second panel is the radiated-pressure spectrum — the string's partials coloured
   // by the body (boosted near its modes, NOT clean formants — the off-harmonic avoided crossing).
+  // The radiation LOAD: the second panel is the MAP the R slider walks — how fast the air empties
+  // the string, against R. It replaces batch 12's far-field spectrum here because for one source
+  // that spectrum is the body's (1/r and a delay only), and it is already shown one model over.
+  if (spec && spec.kind === "radbody") {
+    partialsTitle.firstChild.textContent = "Drain speed ";
+    partialsSub.textContent = "t₅₀ vs radiation resistance — there is an optimum";
+    drawRadBodySweep();
+    return;
+  }
   if (spec && (spec.kind === "body" || spec.kind === "platebody")) {
     partialsTitle.firstChild.textContent = "Radiated spectrum ";
     const modeWord = spec.kind === "platebody" ? "plate modes" : "body modes";
@@ -2741,6 +2845,121 @@ function drawSpectrum() {
     `f₁ = ${sp.f1_discrete.toFixed(2)} Hz (discrete)   peaks on blue lines = self-consistent\n` +
     `fundamental detected vs discrete: ${cf == null ? "—" : cf.toFixed(3) + " cents"}` +
     `   ·   ${tierLabel}: ${cg == null ? "—" : cg.toFixed(2) + " cents"}`;
+}
+
+// ── radiation load: the t₅₀-vs-R map the slider walks ────────────────────────────────────────
+// The batch's second claim, and the one the ENERGY panel cannot make: radiation has an OPTIMUM.
+// t₅₀ is the time for the booked channel to reach half the pluck's energy — a RATE, deliberately
+// not "fraction radiated by time T", whose peak walks with T (measured: R = 3 → 10 → 30 as T goes
+// 0.05 → 0.4 s; batch 14's window trap). Log-log, because the interesting structure spans decades
+// the linear slider cannot. The curve is a CONTROLLED reference (fixed sweep N, σ_body = 0), so it
+// stays put while the render's grid, loss and duration move; the marker is the operating point
+// measured the same way, which is why it lies ON the curve rather than near it.
+function drawRadBodySweep() {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height, padL = 34, padB = 17, top = 10;
+  g.clearRect(0, 0, W, H);
+  const out = $("partials-readout");
+  const sp = payload && payload.meta && payload.meta.spectrum;
+  const sw = sp && sp.sweep;
+  if (!sw) { out.textContent = "no radiation sweep"; return; }
+  const plotW = W - padL - 10, plotH = H - padB - top;
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(padL, top, plotW, plotH);
+
+  // K = 0 severs the bridge, so nothing ever reaches the body and every point would censor. The
+  // sweep is SKIPPED rather than run to draw a row of nulls — labelled, never failed.
+  if (sw.skipped) {
+    g.fillStyle = "#8b98a8"; g.font = "11px ui-monospace, monospace";
+    g.fillText("no bridge coupling (K = 0) — nothing reaches the body,", padL + 10, top + 60);
+    g.fillText("so nothing radiates and there is no drain to time.", padL + 10, top + 76);
+    out.textContent =
+      "sweep skipped: " + sw.note + ". Raise the bridge stiffness to couple the string to the "
+      + "body — at K = 0 the string is a bare fixed/free string and the air never sees it.";
+    return;
+  }
+
+  const rs = sw.r, ts = sw.t50_ms;
+  const pts = [];
+  for (let i = 0; i < rs.length; i++) if (ts[i] != null) pts.push([rs[i], ts[i]]);
+  if (!pts.length) { out.textContent = "every sweep point censored — no drain inside the cap"; return; }
+  const rmin = rs[0], rmax = rs[rs.length - 1];
+  const tlo = Math.min(...pts.map((p) => p[1])) * 0.8;
+  const thi = Math.max(...pts.map((p) => p[1])) * 1.25;
+  const lx = (r) => padL + (Math.log(r / rmin) / Math.log(rmax / rmin)) * plotW;
+  const ly = (t) => top + plotH - (Math.log(t / tlo) / Math.log(thi / tlo)) * plotH;
+
+  // decade gridlines + the log-y ticks, so "3× slower" is readable off the picture
+  g.strokeStyle = "rgba(139,152,168,.15)"; g.setLineDash([2, 3]);
+  g.fillStyle = "#8b98a8"; g.font = "9px ui-monospace, monospace";
+  [1, 10, 100].forEach((r) => {
+    if (r < rmin || r > rmax) return;
+    g.beginPath(); g.moveTo(lx(r), top); g.lineTo(lx(r), top + plotH); g.stroke();
+    g.fillText(String(r), lx(r) - 4, H - 5);
+  });
+  [10, 30, 100, 300, 1000].forEach((t) => {
+    if (t < tlo || t > thi) return;
+    g.beginPath(); g.moveTo(padL, ly(t)); g.lineTo(padL + plotW, ly(t)); g.stroke();
+    g.fillText(String(t), 4, ly(t) + 3);
+  });
+  g.setLineDash([]);
+  // Units sit where nothing else does: the x unit AFTER the last decade label (a centred axis title
+  // lands exactly on the "100" tick), and the y unit inside the plot's empty top-left corner (a
+  // rotated axis title lands on the "300" tick). Both collisions were real in the first render.
+  g.fillText("Pa·s/m³", W - 46, H - 5);
+  g.fillText("t₅₀ ms", padL + 4, top + 9);
+
+  // the basin: where the drain is within 25 % of its fastest — a BAND, because the minimum is broad
+  // and pointing at one R would over-claim the resolution of a threshold-crossing measurement.
+  if (sw.basin) {
+    g.fillStyle = "rgba(95,227,192,.10)";
+    g.fillRect(lx(sw.basin[0]), top, lx(sw.basin[1]) - lx(sw.basin[0]), plotH);
+  }
+  // the physical value: the free-space monopole R_a at the first body mode (the shipped default).
+  if (sp.r_phys_f1 >= rmin && sp.r_phys_f1 <= rmax) {
+    g.strokeStyle = "rgba(255,143,76,.55)"; g.setLineDash([4, 3]);
+    g.beginPath(); g.moveTo(lx(sp.r_phys_f1), top); g.lineTo(lx(sp.r_phys_f1), top + plotH);
+    g.stroke(); g.setLineDash([]);
+    g.fillStyle = "rgba(255,143,76,.8)"; g.fillText("R_a(f₁)", lx(sp.r_phys_f1) - 20, top + 10);
+  }
+
+  g.strokeStyle = "#5fe3c0"; g.lineWidth = 2; g.beginPath();
+  pts.forEach(([r, t], i) => { const X = lx(r), Y = ly(t); if (i === 0) g.moveTo(X, Y); else g.lineTo(X, Y); });
+  g.stroke();
+  g.fillStyle = "#5fe3c0";
+  pts.forEach(([r, t]) => g.fillRect(lx(r) - 1.5, ly(t) - 1.5, 3, 3));
+
+  // the minimum, and the operating point measured the SAME way (so it sits on the curve)
+  if (sw.best_r != null) {
+    g.strokeStyle = "#ffd166"; g.lineWidth = 1.5;
+    g.beginPath(); g.arc(lx(sw.best_r), ly(sw.best_t50_ms), 5, 0, 2 * Math.PI); g.stroke();
+  }
+  if (sw.r_now > 0 && sw.t50_now_ms != null) {
+    const X = Math.max(padL + 2, Math.min(padL + plotW - 2, lx(sw.r_now)));
+    g.fillStyle = "#4cc2ff";
+    g.beginPath(); g.arc(X, ly(sw.t50_now_ms), 4, 0, 2 * Math.PI); g.fill();
+    g.fillStyle = "#4cc2ff"; g.font = "9px ui-monospace, monospace";
+    g.fillText("you", X - 8, ly(sw.t50_now_ms) - 7);
+  } else if (sw.r_now === 0) {
+    // R = 0 has no place on a log axis and no t₅₀ at all (nothing radiates, ever). Say so on the
+    // left edge rather than clamping it onto the curve, which would invent a drain that never runs.
+    g.fillStyle = "#8b98a8"; g.font = "9px ui-monospace, monospace";
+    g.fillText("R = 0: off-axis, never drains", padL + 6, top + plotH - 6);
+  }
+
+  const modes = sp.body_modes || [], rp = sp.r_phys || [];
+  const now = sw.t50_now_ms == null
+    ? (sw.r_now === 0 ? "R = 0 — the air is decoupled, nothing radiates"
+                      : `t₅₀ > ${sw.cap_ms} ms (censored: slower than the sweep cap)`)
+    : `t₅₀ = ${sw.t50_now_ms.toFixed(0)} ms at R = ${sw.r_now}`;
+  out.textContent =
+    `${now}   ·   fastest ${sw.best_t50_ms == null ? "—" : sw.best_t50_ms.toFixed(0) + " ms"} at `
+    + `R ≈ ${sw.best_r} (basin ${sw.basin ? sw.basin[0] + "–" + sw.basin[1] : "—"})\n`
+    + `MORE air is not more sound: past the basin the load chokes the body it drains `
+    + `(U = U_free/(1+RG) ⇒ P = R·U² → 0), so t₅₀ RISES again. σ_rad/ω₁ = ${sp.sigma_ratio} here.\n`
+    + `R is CONSTANT in frequency; the true monopole R_a ∝ ω² spans ${rp[0]}–${rp[rp.length - 1]} `
+    + `over the body modes (${modes.join(", ")} Hz), so one R cannot fit all four — `
+    + (sw.r_now > 0 ? `this one is exact at ${sp.f_match} Hz` : "and R = 0 matches none of them")
+    + `. Reference curve: N = ${sw.sweep_n}, σ_body = 0, ${sw.steps} steps.`;
 }
 
 // ── body: the radiated-pressure spectrum ─────────────────────────────────────────────────────

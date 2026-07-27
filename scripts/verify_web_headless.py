@@ -257,6 +257,13 @@ def main() -> int:
             # is exercised separately by the CDP switch driver, not this fresh-load pass.
             ("platebody_free", "model=platebody&domain=free"),
             ("platebody_supported", "model=platebody&domain=supported"),
+            # String → a RADIATION-LOADED body (batch 15): the air pushes BACK. Same rig as `body`
+            # with the body wrapped in a RadiatedBody, so the Energy card gains a FOURTH channel —
+            # the booked ∫P_rad filling as the mechanical three drain, with the total still flat —
+            # and the second panel is the t₅₀-vs-R map instead of the far-field spectrum (which for
+            # one source is the body's, already shown one model over). Costs the render (~2.3 s at
+            # the 2 s default) plus the reference sweep (~1.4 s, 18 early-exiting points).
+            ("radbody", "model=radbody"),
         ]
         # Optional name filters, so a single-model batch can re-check its own case without paying
         # for the whole sweep (the geometric regimes alone are ~2 minutes).
