@@ -1310,9 +1310,9 @@ PARAM_UNSTABLE_FACTOR = 100.0   # level > 100x the seed floor = the mode was des
 # The floor under a NAMED partner, as a fraction of the driven amplitude. Set by the READOUT's own
 # resolution (one decimal place of a percentage = 0.1 %), not by a physics scale: a partner the
 # panel prints as "0.0 %" claims a cascade landed somewhere and then shows nothing there, so
-# anything named must be worth one printable tick. It is not the load-bearing filter -- 100x grid
-# is, with three orders of headroom at the default -- but it is the one that cannot be outrun by a
-# parameter set where the two happen to be close. See _param_cascade.
+# anything named must be worth one printable tick. It is not the load-bearing filter -- 100x the
+# grid scale is, with three orders of headroom at the default -- but it is the one that cannot be
+# outrun by a parameter set where the two happen to be close. See _param_cascade.
 PARAM_PARTNER_FLOOR = 1e-3
 
 PARAM_N_MAX = 200
