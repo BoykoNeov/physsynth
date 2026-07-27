@@ -90,6 +90,12 @@ never the reverse. This keeps the physics portable to C++/Rust later without re-
 - **Coupling**: nonlinear interactions between exciter and resonator (bow friction, reed/lip,
   hammer-felt) and between resonators (string-to-body, sympathetic strings).
 - **Body / radiation**: maps resonator motion to output pressure (modal body, or convolution later).
+  The air node itself is built in three tiers, all in `core/radiation.py`: a monopole **read-out**
+  (`AirRadiation`, no back-reaction), a constant-resistance **load** (`RadiatedBody`), and the
+  **frequency-dependent** load (`RationalAirLoad` / `ReactiveRadiatedBody`) — the exact first-order
+  impedance `Z_a = R·jωτ/(1+jωτ)`, a resistance in parallel with the radiation mass, so the air
+  stores as well as dissipates and the energy identity carries both. A distributed 3-D air box
+  (§12H) remains a separate, later tier.
 - **Engine**: owns the timestep loop, parameter smoothing, and (eventually) the audio callback.
 
 ### 3.3 Real-time safety (for the later native port — note now, enforce later)

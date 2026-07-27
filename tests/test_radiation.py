@@ -796,6 +796,17 @@ def test_loaded_mode_rejects_a_nonpositive_frequency():
         load.loaded_mode(0.0, weight=0.02, mass=0.02)
 
 
+def test_loaded_mode_refuses_to_return_an_unconverged_iterate():
+    # No silent caps: the fixed point is only meaningful while the added mass is small against the
+    # modal mass. Starved of iterations it raises rather than handing back the last guess.
+    load = RationalAirLoad.from_sphere(fs=48000.0, radius=SPHERE_RADIUS_DEFAULT)
+    with pytest.raises(ValueError, match="did not converge"):
+        load.loaded_mode(2.0 * np.pi * 440.0, weight=0.02, mass=0.02, iterations=2)
+    # ...and with the default budget the same call converges fine.
+    w, alpha = load.loaded_mode(2.0 * np.pi * 440.0, weight=0.02, mass=0.02)
+    assert 0.0 < w < 2.0 * np.pi * 440.0 and alpha > 0.0
+
+
 # -- construction validation --------------------------------------------------------------------
 @pytest.mark.parametrize(
     "kwargs",

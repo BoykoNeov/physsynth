@@ -5,6 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: cb030015-8285-4c6c-88ad-8de6570289ae
+  modified: 2026-07-27T14:55:31.333Z
 ---
 
 Phase 3 (2D) model #4 — **circular membrane** — built & passing. Full suite now **160 tests**
@@ -55,5 +56,6 @@ count, never by per-peak label.
 
 **Next:** Phase 3 continues — (a) the **interactive web viewer** (precomputed frames → browser
 player, Python source of truth, no solver port), then (b) model #5 the **Kirchhoff plate**
-(biharmonic, Chladni patterns). θ-artifact + portability-test loose ends from
-[[stiff-string-state]] still untouched (don't gate Phase 3).
+(biharmonic, Chladni patterns). **Both (a) and (b) are DONE** (viewer Phase A–D; [[plate-state]]).
+The θ-artifact loose end from [[stiff-string-state]] is still untouched (don't gate Phase 3); the
+portability-test one is **RESOLVED** (hardcoded allowlist + sys.modules-delta measurement).

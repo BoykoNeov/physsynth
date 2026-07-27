@@ -584,7 +584,13 @@ class RationalAirLoad:
         return self.R * s * self.tau / (1.0 + s * self.tau)
 
     def loaded_mode(
-        self, omega0: float, *, weight: float, mass: float, iterations: int = 50
+        self,
+        omega0: float,
+        *,
+        weight: float,
+        mass: float,
+        iterations: int = 50,
+        tol: float = 1e-14,
     ) -> tuple[float, float]:
         """Closed-form ``(omega_eff, alpha)`` of one weakly loaded mode — **both** parts of ``Z_a``.
 
@@ -601,9 +607,12 @@ class RationalAirLoad:
           *shifted* frequency.
 
         Both depend on the frequency they shift, so this solves the fixed point
-        ``omega_eff = omega0 sqrt(m / m_eff(omega_eff))`` by iteration (it converges in a few
-        passes). Valid while the loading is weak, ``alpha << omega`` — the residual is second order
-        in that ratio (~1% at ``alpha/omega ~ 1%``).
+        ``omega_eff = omega0 sqrt(m / m_eff(omega_eff))`` by iteration — to ``tol``, and it
+        **raises** rather than silently returning the last iterate if that is not reached.
+
+        This is a weak-loading result: valid while ``alpha << omega``, with a residual second order
+        in that ratio (~1% at ``alpha / omega ~ 1%``). It is a *modeling* oracle, independent of the
+        time-stepping scheme — it reads only :meth:`impedance`.
         """
         if mass <= 0.0:
             raise ValueError("mass must be positive.")
@@ -613,7 +622,17 @@ class RationalAirLoad:
         w = w0
         a2 = float(weight) * float(weight)
         for _ in range(int(iterations)):
-            w = w0 * np.sqrt(mass / (mass + a2 * self.impedance(w).imag / w))
+            w_next = w0 * np.sqrt(mass / (mass + a2 * self.impedance(w).imag / w))
+            if abs(w_next - w) <= tol * w_next:
+                w = w_next
+                break
+            w = w_next
+        else:
+            raise ValueError(
+                f"loaded_mode did not converge in {iterations} iterations (last relative step "
+                f"{abs(w_next - w) / w_next:.3e} > tol {tol:.1e}); the added mass is comparable to "
+                "the modal mass, which is outside this weak-loading formula's range."
+            )
         z = self.impedance(w)
         m_eff = mass + a2 * z.imag / w
         return float(w), float(a2 * z.real / (2.0 * m_eff))

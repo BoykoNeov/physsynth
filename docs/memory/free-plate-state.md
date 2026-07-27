@@ -5,6 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: c7e3f34a-89a1-41b0-814a-0c24a661c871
+  modified: 2026-07-27T14:54:24.435Z
 ---
 
 Phase-3 **model #5b — 2D free-edge (FFFF) Kirchhoff plate + curved Chladni figures** built & all
@@ -56,13 +57,16 @@ center node — NOT a bulge). Chladni figures textbook: cross → X → ring →
 (SS regression) done at the eigen level: generalized `Kφ=μWφ` fed SS ops (K=h²B, W=h²I) → model-#5
 spectrum.
 
-**Side fix flagged to human (separate commit):** the portability allowlist test
+**Side fix, APPLIED in a separate commit (not open work):** the portability allowlist test
 (`test_stability.py::test_core_dependency_allowlist`) was failing because Windows **pywin32**'s `.pth`
-now injects `pywin32_bootstrap/pywin32_system32` at interpreter startup into every subprocess. Fixed
+injects `pywin32_bootstrap/pywin32_system32` at interpreter startup into every subprocess. Fixed
 to measure the **delta** of modules pulled *by importing the core* (snapshot sys.modules before
-import), not the absolute set. Correct semantics, harmless on Linux CI (where the .pth never loads, so
-the test passed there anyway). Alternative the human may prefer: add pywin32 to the allowlist.
+import), not the absolute set — still the shipped form. Correct semantics, harmless on Linux CI
+(where the .pth never loads, so the test passed there anyway). The alternative floated at the time
+(add pywin32 to the allowlist instead) was never taken up and needs no decision — the delta
+measurement makes it moot. Allowlist policy itself: [[stiff-string-state]].
 
-**Next:** model #6 — **nonlinear (von Kármán) plate** (the gong/cymbal deep end), and/or wiring the
-SS + free plate into the web viewer ([[web-viewer-state]]). See [[commit-push-at-batch-end]]; mind
-[[respect-ruff-line-length]] (I drifted ~28 E501s this batch — write ≤100 in the FIRST draft).
+**Both follow-ons DONE:** model #6 — **nonlinear (von Kármán) plate** (the gong/cymbal deep end,
+[[von-karman-plate-state]]) — and wiring the SS + free plate into the web viewer (Phase C,
+[[web-viewer-state]]). See [[commit-push-at-batch-end]]; mind [[respect-ruff-line-length]]
+(I drifted ~28 E501s this batch — write ≤100 in the FIRST draft).

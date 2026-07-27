@@ -5,6 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: adeb84a3-126a-4535-9e89-0420a2167ff4
+  modified: 2026-07-27T14:54:31.927Z
 ---
 
 As of **2026-06-21**, Phase 2 **model #2 (stiff string) is complete and green** — the first model
@@ -63,5 +64,6 @@ alone pulls exactly that set. If a new platform's scipy drags in an unlisted nam
 `_CORE_DEP_ALLOWLIST` — a deliberate reviewed edit (that visibility is the point). `docs/dev/
 portability-contract.md` updated to match.
 
-Next: **model #3 (frequency-dependent damping)** — the natural follow-up that fixes the damping
-caveat; then Phase 3 (2D membrane/plate). Tolerances still inherit M1's bar (human's §11.5 call).
+Both follow-ons DONE: **model #3 (frequency-dependent damping)**, which fixed the damping caveat
+([[damped-string-state]]), and Phase 3 (2D membrane/plate — [[membrane-state]], [[plate-state]]).
+Tolerances still inherit M1's bar (human's §11.5 call, HANDOFF §11.5 never revisited).
