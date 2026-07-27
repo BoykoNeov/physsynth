@@ -2,10 +2,11 @@
 
 > **Status: BUILT & GREEN (2026-07-27).** `core/radiation.py` gains `RationalAirLoad` (+
 > `from_sphere`, `impedance`, `impedance_discrete`, `loaded_mode`, `far_field_pressure`) and
-> `ReactiveRadiatedBody`; `tests/test_radiation.py` 28 → **71**;
+> `ReactiveRadiatedBody`; `tests/test_radiation.py` 28 → **72**;
 > `scripts/diagnose_radiation_impedance.py` (3 figures); `helpers.make_reactive_body`. Zero edits
-> to `AirRadiation`, `RadiatedBody`, `body.py` or `connection.py`. **Measured:** impedance sweep vs the pre-warped closed form **8.3e-16**;
-> three-way energy identity flat to **7.4e-14**; per-mode decay and the added-mass pitch drop within
+> to `AirRadiation`, `RadiatedBody`, `body.py` or `connection.py`. Suite **1173 green** (was 1129),
+> ruff clean. **Measured:** impedance sweep vs the pre-warped closed form **8.3e-16**; three-way
+> energy identity flat to **7.4e-14**; per-mode decay and the added-mass pitch drop within
 > **0.5%** of the closed form (frequency to 5 digits); both reductions bit-identical.
 >
 > **The one thing the plan got wrong, found by measuring:** the per-mode oracle
