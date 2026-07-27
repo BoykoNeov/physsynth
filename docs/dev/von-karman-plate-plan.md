@@ -1,6 +1,7 @@
 # Nonlinear (von Kármán) plate — Phase 4 Plan (model #6)
 
-> **Status: Parts 1–3 BUILT & GREEN (2026-07-01).** Part 1 = discrete bracket + money test
+> **Status: Parts 1–6 COMPLETE & GREEN** (Parts 1–3 2026-07-01; Parts 4–6 2026-07-02, the
+> free-edge cymbal included). Part 1 = discrete bracket + money test
 > (`VonKarmanBracket`, `tests/test_vk_bracket.py`, 15 tests). Part 2 = Airy stress-function elliptic
 > solve `B_F` (`AiryStressSolver`, `tests/test_vk_airy.py`, 13 tests) — **clamped** `F = 0, F,n = 0`
 > BC (human decision #2, 2026-07-01), energy-first `B_F = Lc_rᵀ Wa Lc_r`, `splu`-prefactored,
@@ -313,9 +314,10 @@ If #2 fails, **stop** — the time loop cannot conserve energy. This is the gate
    (e) struck-plate GIF. Console prints drift, membrane fraction, glide table, Picard residuals.
 6. **(Part 6, follow-on) Free-edge cymbal** — swap `B_bend → K` (model #5b free stiffness, `I → W`
    lumped mass) and reuse the nonlinear machinery. The one-line "only the two boundary operators
-   change" was **wrong** — see the dedicated Part-6 section below. **✅ CRUX DE-RISKED (2026-07-02,
-   empirically in `M:/claud_projects/temp/vk-free-bracket-probe/`); build pending human review of
-   the plan section below.**
+   change" was **wrong** — see the dedicated Part-6 section below. **✅ DONE (2026-07-02).** Crux
+   de-risked empirically first (`M:/claud_projects/temp/vk-free-bracket-probe/`), then built:
+   `VKPlate(boundary="free")` + `tests/test_vk_free.py` (12 tests), and later surfaced in the
+   viewer as the free cymbal (web-viewer-plan Phase C).
 
 ---
 

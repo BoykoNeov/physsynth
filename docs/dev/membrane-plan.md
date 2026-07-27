@@ -1,8 +1,9 @@
 # Membrane (2D) — Phase 3 Plan (model #4, circular drumhead)
 
-> **Status: PLANNED (2026-06-21).** First 2D model. Crosses from the 1D string family (#1–3) into
-> Phase 3 (HANDOFF §5 row 4, §9). Core in `core/membrane.py` + `core/operators2d.py`, oracles in
-> `analysis/modal.py`, suite in `tests/test_membrane_*.py`, viz extended in `viz/plots.py`.
+> **Status: PLANNED → IMPLEMENTED & GREEN (2026-06-21).** First 2D model. Crosses from the 1D
+> string family (#1–3) into Phase 3 (HANDOFF §5 row 4, §9). Core in `core/membrane.py` +
+> `core/operators2d.py`, oracles in `analysis/modal.py`, suite in `tests/test_membrane_*.py`,
+> viz extended in `viz/plots.py`.
 > The **interactive web viewer** (precomputed frames → browser player) is a *separate, later*
 > deliverable, sequenced after this solver+harness passes (CLAUDE.md #4: viz depends on a validated
 > core, never before it).

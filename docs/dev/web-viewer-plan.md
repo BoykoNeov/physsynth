@@ -1201,7 +1201,7 @@ Probe `temp/reed-viewer-probe/probe_viz.py`, at the default clarinet (γ = 0.51,
   the DOM**, because `payload`/`currentFrame` are module-scoped `let`s and `let`/`const` never
   become `window` properties.
 
-### Batch 11 (PLANNED) — the fret / flat rail: model #8 on its own terms
+### Batch 11 (DONE) — the fret / flat rail: model #8 on its own terms
 
 Batch 8 shipped the **jawari**, which is a *configuration* of model #8 (a curved barrier hugging the
 termination). The general case — the **flat rail / fret**, string–fret buzz, prepared-piano rattle —
@@ -1675,7 +1675,7 @@ things the build surfaced, each a rule with a fourth+ customer:
   handler and asserts the re-range in both directions plus a post-switch "ok" render. *Generalizable:
   a per-navigation harness tests initialisation, not transition; a leak lives in the transition.*
 
-### Batch 13 (PLANNED) — the body you WATCH ring: string → distributed plate #5/#5b + radiation
+### Batch 13 (DONE) — the body you WATCH ring: string → distributed plate #5/#5b + radiation
 
 Batch 12 opened the coupling/radiation leg with the **lumped modal body** (no spatial extent — the
 string was the only moving shape). This batch swaps that body for a **distributed grid plate** —
@@ -2358,6 +2358,17 @@ decimated one (batch 2). And the deep-link verifier structurally cannot fire the
   *regime of tension* rather than the standalone demo sketched here, and with real viz (energy
   cascading into the neighbour modes — model #9's IN-plane exchange, the SAME `2ω` pump batch 3's
   whirl aims at the other polarization); *not* a bolt-on to justify batch 1's purity gate.
+
+**This map is now EMPTY — every bullet above resolves to a shipped batch, so Phase D's model list
+is CLOSED** (verified 2026-07-27). There is no next batch to look up: every model the core had
+built is surfaced in the viewer, and the built-vs-shown gap Phase D existed to close is gone. What
+remains is a fork for the human, not a lookup — the plan-endorsed candidates are the two *core*
+growths named in the Body/radiation bullet above (frequency-dependent `R(ω)`, or a distributed/3-D
+air box, HANDOFF §12H), HANDOFF §11's two never-closed decisions (#3 polyphony — a gate on engine
+design, cheaper to settle before a port; #5 tolerance tuning), Phase 5 (the real-time C++/Rust port,
+HANDOFF §9's literal next phase), or a §12 high-leverage thread (port-Hamiltonian coupling,
+differentiable models, modal synthesis from measured IRs/FEM). **Don't infer a batch 17 from this
+document — if a new viewer batch is wanted it needs a new model or a new capability first.**
 
 ## Tests — `tests/test_web_backend.py` (web wrapper, not core; keep core count stable)
 
