@@ -1,7 +1,24 @@
 # Frequency-dependent radiation — the rational impedance `Z_a(ω)` (radiation batch 3)
 
-> **Status: PLANNED (2026-07-27).** The first core batch after Phase D closed. Extends
-> `core/radiation.py`: batch 1 was the read-out (`AirRadiation`), batch 2 the *resistive* load
+> **Status: BUILT & GREEN (2026-07-27).** `core/radiation.py` gains `RationalAirLoad` (+
+> `from_sphere`, `impedance`, `impedance_discrete`, `loaded_mode`, `far_field_pressure`) and
+> `ReactiveRadiatedBody`; `tests/test_radiation.py` 28 → **71**;
+> `scripts/diagnose_radiation_impedance.py` (3 figures); `helpers.make_reactive_body`. Zero edits
+> to `AirRadiation`, `RadiatedBody`, `body.py` or `connection.py`. **Measured:** impedance sweep vs the pre-warped closed form **8.3e-16**;
+> three-way energy identity flat to **7.4e-14**; per-mode decay and the added-mass pitch drop within
+> **0.5%** of the closed form (frequency to 5 digits); both reductions bit-identical.
+>
+> **The one thing the plan got wrong, found by measuring:** the per-mode oracle
+> `alpha = a² Re Z_a(omega_i)/(2 m_i)` is incomplete — it misses the **reactance**, an added mass
+> `m_add = a² Im Z_a/omega` that lowers the frequency *and* the denominator. With that included
+> (self-consistently, since both depend on the frequency they shift) the agreement goes from 26% off
+> to 0.5%, and the test now exercises **both** parts of `Z_a` instead of only its real part. Shipped
+> as `RationalAirLoad.loaded_mode()`. A second trap surfaced with it: fitting the decay rate
+> through the log of the *modal energy* is badly biased, because that expression assumes the bare
+> `omega` the loaded mode no longer oscillates at — fit the envelope peaks instead.
+
+> *(Original plan below, as written before the build.)* The first core batch after Phase D
+> closed. Extends `core/radiation.py`: batch 1 was the read-out (`AirRadiation`), batch 2 the *resistive* load
 > (`RadiatedBody`, one constant `R`), and this is the **full first-order impedance** — resistance
 > **plus reactance** (the radiation mass). It is the one thing batch 2 explicitly refused, in its own
 > docstring: *"the constant-`R` `RadiatedBody` evaluates this at one reference frequency; true
@@ -257,4 +274,4 @@ through the reduction test, so it is written down here.
 
 **Acceptance:** all of §7 green, full suite green (baseline pinned below), `ruff check .` clean.
 
-**Baseline pinned at `1533b51`:** see the commit that lands this doc for the measured suite count.
+**Baseline pinned at `1533b51`.** Suite after the batch: see the `feat:` commit that lands it.

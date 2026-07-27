@@ -25,7 +25,12 @@ from physsynth.core.engine import simulate
 from physsynth.core.mallet import MalletMembrane, MalletWall
 from physsynth.core.membrane import Domain, Membrane
 from physsynth.core.plate import Plate
-from physsynth.core.radiation import AirRadiation, RadiatedBody
+from physsynth.core.radiation import (
+    AirRadiation,
+    RadiatedBody,
+    RationalAirLoad,
+    ReactiveRadiatedBody,
+)
 from physsynth.core.reed import ReedBore
 from physsynth.core.string_damped import DampedStiffString
 from physsynth.core.string_geometric import GeometricString
@@ -622,6 +627,37 @@ def make_radiated_body(
         freqs=freqs, fs=fs, sigmas=sigmas, masses=masses, phi=phi, radiation=radiation
     )
     return RadiatedBody(body=body, R=R)
+
+
+# Frequency-dependent radiation load (batch 3): resistance R in PARALLEL with the radiation mass
+# M_a, the exact first-order (pulsating-sphere) impedance. The default M_a puts the trapezoid's
+# k R / (2 M_a) around 0.1 — the reactance is genuinely in play without being stiff. M_a = inf is
+# the constant-R load (batch 2, bit-identical); RationalAirLoad.from_sphere gives the physically
+# consistent pair for a given radius.
+M_A_RADIATION_DEFAULT = 0.2  # kg/m^4
+SPHERE_RADIUS_DEFAULT = 0.05  # m — a 5 cm pulsating sphere (ka = 1 at ~1.1 kHz)
+
+
+def make_reactive_body(
+    *,
+    freqs: np.ndarray = BODY_FREQS_DEFAULT,
+    fs: float = 48000.0,
+    sigmas: np.ndarray | float = 0.0,
+    masses: np.ndarray | float = 1.0,
+    phi: np.ndarray | float = 1.0,
+    radiation: np.ndarray | float | None = None,
+    R: float = R_RADIATION_DEFAULT,
+    M_a: float = M_A_RADIATION_DEFAULT,
+) -> ReactiveRadiatedBody:
+    """Build a modal body loaded by the rational (frequency-dependent) radiation impedance.
+
+    ``sigmas = 0`` (default) keeps the modes lossless so the air is the only channel and
+    ``body.energy() + stored + radiated`` is conserved. ``R = 0`` decouples the air entirely
+    (bit-identical to :func:`make_body`); ``M_a = inf`` collapses to :func:`make_radiated_body`."""
+    body = ModalBody(
+        freqs=freqs, fs=fs, sigmas=sigmas, masses=masses, phi=phi, radiation=radiation
+    )
+    return ReactiveRadiatedBody(body=body, load=RationalAirLoad(fs=fs, R=R, M_a=M_a))
 
 
 # Acoustic bore (wind leg). A closed-open cylinder ~0.5 m long (clarinet-ish): the odd-harmonic

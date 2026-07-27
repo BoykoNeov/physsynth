@@ -159,6 +159,24 @@ Complete and validated:
   leapfrog, so `E_string + E_body + E_conn` is conserved to machine precision (explicit, exact — no
   implicit solve); an exact coupled-eigenvalue guard bounds the spring stiffness. Radiated pressure
   is read out as `Σ aᵢ q̈ᵢ` (monopole ∝ volume acceleration).
+- **Air / radiation** — the last node of the chain (`core/radiation.py`), in three tiers. A
+  free-space **monopole read-out** (`AirRadiation`) turns the body's volume acceleration into the
+  far-field `ρ₀Q″(t − r/c₀)/(4πr)` with an exact integer-sample retardation. A **radiation load**
+  (`RadiatedBody`) lets the air push back — a passive rank-1 dashpot solved by one scalar
+  Sherman–Morrison — so what the air takes is *booked*: `E_body + ∫R U² dt` is conserved to ~1e-14
+  and `R = 0` is bit-identical to the bare body. And a **frequency-dependent load**
+  (`RationalAirLoad`) replaces that one constant `R` with the exact first-order impedance of a
+  pulsating sphere: a resistance in *parallel* with the radiation mass, `Z_a = R·jωτ/(1+jωτ)`. No
+  filter fitting is involved — that impedance is already rational, so a single auxiliary state
+  realises it *exactly*, and the R–`M_a` network **is** the passivity proof (unconditional: no CFL,
+  no guard). The volume velocity splits, so the energy identity gains a **stored** term beside the
+  dissipated one, `E_body + ½M_a U_L² + ∫R U_R² dt`, flat to ~1e-14; `M_a → ∞` collapses it back to
+  the constant-`R` load bit-for-bit. A measured impedance sweep matches the **pre-warped** closed
+  form to 8e-16 (trapezoid *is* the bilinear transform, so the scheme realises `Z_a` at
+  `s = (2j/k)·tan(ωk/2)` — comparing against `Z_a(jω)` instead shows a warp that reads as a bug).
+  The payoff is what a constant `R` structurally cannot do: high partials radiate better and die
+  first, at `α = a²·Re Z_a/(2m_eff)`, while the **reactance** adds mass and drops the pitch — both
+  measured against the closed form to better than 2%.
 - **Acoustic bore** *(wind leg, batch 1 of 3)* — the first **acoustic** resonator (`core/bore.py`):
   the 1D air column of a clarinet, a staggered pressure/volume-velocity leapfrog of Webster's horn
   equation. Energy-first — the trapezoidal `h/2` half-cell closes a rigid wall (no ghost stencil,

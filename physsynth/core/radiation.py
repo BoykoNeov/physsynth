@@ -339,3 +339,450 @@ class RadiatedBody:
         self.radiated_energy = 0.0
         self.volume_velocity = 0.0
         self.n = 0
+
+
+class RationalAirLoad:
+    """The air as a **first-order positive-real impedance** — resistance *and* radiation mass.
+
+    Batch 2's :class:`RadiatedBody` loads a body with a single constant resistance ``R``; real air
+    is frequency-dependent (``R_a(omega) = rho0 omega^2 / (4 pi c0)`` for a free-space monopole), so
+    a constant over-damps the low modes and under-damps the high ones. The fix needs **no filter
+    approximation**: the exact acoustic radiation impedance of a **pulsating sphere** of radius
+    ``a`` is already a first-order rational function of ``j omega``,
+
+        Z_a(j omega) = (rho0 c0 / S) * j k a / (1 + j k a) ,    S = 4 pi a^2 ,  k = omega / c0 ,
+
+    which is exactly a resistance in **parallel** with an acoustic inertance:
+
+        Z_a = R * j omega tau / (1 + j omega tau) ,
+        R = rho0 c0 / S ,   M_a = rho0 / (4 pi a) ,   tau = M_a / R = a / c0 .
+
+    ``M_a`` is the classic **radiation mass** — air dragged along but not radiated. The circuit
+    reading *is* the numerical scheme: the volume velocity splits, ``U = U_R + U_L``, with
+    ``p = R U_R = M_a dU_L/dt``. The resistor branch is radiated (lost to the far field), the
+    inertance branch is stored (returned later). That split makes the frequency dependence
+    **passive by construction** — the network is the proof, so there is no positive-realness check
+    to pass and no stability guard to tune.
+
+    Two closed-form anchors bracket it, and the first one is batch 2's own helper:
+
+    ========== ==================================== =========================================
+    limit      ``Re Z_a``                           anchor
+    ========== ==================================== =========================================
+    ``ka -> 0``  ``rho0 omega^2 / (4 pi c0)``        exactly :func:`monopole_radiation_resistance`
+    ``ka -> oo`` ``rho0 c0 / S``                     plane-wave (fully loaded) saturation
+    ========== ==================================== =========================================
+
+    so this class does not supersede the batch-2 helper — it *contains* it as its low-frequency
+    limit. ``Im Z_a`` peaks at ``ka = 1``.
+
+    **Parameters are the effective coefficients** ``(R, M_a)``, independently, **not** a radius.
+    Besides being the general first-order load (reusable for a fitted horn/piston termination), it
+    is the only parameterisation that can reach ``M_a -> infinity`` at fixed ``R`` — the
+    constant-resistance load, i.e. batch 2 exactly. A sphere ties ``M_a`` to ``R`` and cannot.
+    :meth:`from_sphere` is the physically-consistent constructor for those who want the radius.
+
+    **Discretisation: trapezoid on the inertance, which is the bilinear transform.** With
+    ``L^- = U_L^{n-1/2}`` known,
+
+        M_a (U_L^{n+1/2} - U_L^{n-1/2}) / k = p^n ,   U_L^n = (U_L^{n+1/2} + U_L^{n-1/2}) / 2 ,
+        p^n = R (U^n - U_L^n)   ==>   p = R_eff (U - L^-) ,  R_eff = R / (1 + k R / (2 M_a)) .
+
+    So on the body's side the whole batch is ``R -> R_eff`` plus a known offset ``L^-`` — batch 2's
+    scalar Sherman-Morrison solve is untouched in shape. Because ``R_eff`` lies in ``[0, R]`` for
+    every ``M_a > 0``, ``1 + R_eff G >= 1`` still holds: the solve is never singular, so the load is
+    **unconditionally passive** at any ``R``, any ``M_a``, any ``k``. No CFL, no guard.
+
+    The exact discrete impedance is ``Z_a`` evaluated at the **pre-warped** frequency
+    ``s = (2j / k) tan(omega k / 2)`` (:meth:`impedance_discrete`), not at ``j omega`` — that is the
+    bilinear transform's signature, and comparing a measured sweep to :meth:`impedance` instead
+    shows a growing ``O((omega k)^2)`` error that looks like a scheme bug but is not.
+
+    Parameters
+    ----------
+    fs : float
+        Sample rate (Hz); timestep ``k = 1 / fs``. Must match the body's ``fs``.
+    R : float
+        Acoustic radiation resistance (Pa·s/m³ = kg/m⁴·s). ``0`` decouples the air entirely.
+    M_a : float, optional
+        Acoustic radiation mass / inertance (kg/m⁴), ``> 0``. Default ``inf`` — the
+        constant-resistance load, **bit-identical** to :class:`RadiatedBody` (in IEEE arithmetic
+        ``k R / (2 inf) = 0`` and ``p / inf = 0``, so ``R_eff = R`` exactly and the auxiliary state
+        stays exactly zero).
+    rho0, c0 : float, optional
+        Ambient medium density and sound speed — used only for the equivalent-sphere geometry
+        behind :meth:`far_field_pressure`, never in the time step.
+
+    Raises
+    ------
+    ValueError
+        If ``R < 0``, ``M_a <= 0``, or ``fs``/``rho0``/``c0`` are not positive.
+    """
+
+    def __init__(
+        self,
+        *,
+        fs: float,
+        R: float,
+        M_a: float = np.inf,
+        rho0: float = RHO0_AIR,
+        c0: float = C0_AIR,
+    ) -> None:
+        if fs <= 0.0:
+            raise ValueError("fs must be positive.")
+        if R < 0.0:
+            raise ValueError("radiation resistance R must be >= 0.")
+        if not (M_a > 0.0):  # catches 0, negatives and NaN; +inf is allowed (= constant R)
+            raise ValueError("radiation mass M_a must be positive (inf = constant-R load).")
+        if rho0 <= 0.0 or c0 <= 0.0:
+            raise ValueError("rho0 and c0 must be positive.")
+
+        self.fs = float(fs)
+        self.k = 1.0 / self.fs
+        self.R = float(R)
+        self.M_a = float(M_a)
+        self.rho0 = float(rho0)
+        self.c0 = float(c0)
+
+        # The trapezoid's effective resistance. M_a = inf -> k R / (2 inf) = 0.0 -> R_eff = R
+        # exactly (the batch-2 reduction, bit-for-bit).
+        self.R_eff = self.R / (1.0 + self.k * self.R / (2.0 * self.M_a))
+        # Relaxation time tau = M_a / R (inf if either the mass is infinite or R = 0).
+        self.tau = np.inf if (self.R == 0.0 or np.isinf(self.M_a)) else self.M_a / self.R
+
+        # Equivalent pulsating-sphere geometry, for the far-field read-out only. A general (R, M_a)
+        # pair need not be sphere-consistent (that permissiveness is deliberate); the radius is
+        # None unless 4 pi a_eq^2 == S_eq holds, and only far_field_pressure() insists on it.
+        self.sphere_radius: float | None = None
+        self.sphere_area: float | None = None
+        if self.R > 0.0 and np.isfinite(self.M_a):
+            a_eq = self.c0 * self.M_a / self.R          # from tau = a / c0
+            s_eq = self.rho0 * self.c0 / self.R         # from R = rho0 c0 / S
+            if abs(4.0 * np.pi * a_eq * a_eq - s_eq) <= 1e-9 * s_eq:
+                self.sphere_radius = a_eq
+                self.sphere_area = s_eq
+
+        self.u_l = 0.0              # auxiliary state U_L^{n-1/2}: the inertance branch's velocity
+        self.radiated_energy = 0.0  # integral of R U_R^2 dt — energy handed to the far field
+        self.volume_velocity = 0.0  # last centered total U^n (diagnostic)
+        self.pressure_load = 0.0    # last load pressure p^n (diagnostic; drives the far field)
+        self.n = 0
+
+    @classmethod
+    def from_sphere(
+        cls,
+        *,
+        fs: float,
+        radius: float,
+        rho0: float = RHO0_AIR,
+        c0: float = C0_AIR,
+    ) -> RationalAirLoad:
+        """The physically consistent pulsating sphere of radius ``a``: the *exact* monopole load.
+
+        ``R = rho0 c0 / (4 pi a^2)`` and ``M_a = rho0 / (4 pi a)``, so ``tau = a / c0`` and the
+        impedance is exactly ``(rho0 c0 / S) j k a / (1 + j k a)``. Use this when you want physics;
+        use the ``(R, M_a)`` constructor when you want to dial the two effects independently
+        (including the ``M_a = inf`` reduction to batch 2, which no radius can express).
+        """
+        if radius <= 0.0:
+            raise ValueError("sphere radius must be positive.")
+        area = 4.0 * np.pi * radius * radius
+        return cls(fs=fs, R=rho0 * c0 / area, M_a=rho0 / (4.0 * np.pi * radius), rho0=rho0, c0=c0)
+
+    # -- the scalar solve ---------------------------------------------------------------
+
+    def solve(self, u_free: float, G: float) -> tuple[float, float]:
+        """Load pressure ``p^n`` and centered volume velocity ``U^n`` — *without* committing.
+
+        ``u_free`` is the body's force-free centered volume velocity and ``G`` its scalar
+        driving-point factor ``(k/2) sum_i a_i^2 / (m_i (1 + sigma_i k))``; the coupled scalar
+
+            u* = (u_free - L^-) / (1 + R_eff G) ,   p = R_eff u* ,   U = u* + L^-
+
+        is exact (the last identity because ``u*(1 + R_eff G) = u_free - L^-``). ``G = 0`` is the
+        **prescribed-velocity drive** — a rigid piston moving at ``U = u_free`` regardless of the
+        load — which is how the impedance oracle drives this object standalone.
+
+        The operation order matters: forming ``u*`` first and multiplying by ``R_eff`` (rather than
+        the algebraically equal alternatives) is what keeps ``M_a = inf`` bit-identical to
+        :class:`RadiatedBody`.
+        """
+        u_star = (u_free - self.u_l) / (1.0 + self.R_eff * G)
+        p = self.R_eff * u_star
+        return p, u_star + self.u_l
+
+    def commit(self, p: float, u: float) -> None:
+        """Advance the auxiliary state on the accepted ``(p, U)`` and book the energy split.
+
+        The inertance branch takes ``U_L`` (stored, returned later); the resistor branch takes
+        ``U_R = U - U_L`` (radiated, gone). The trapezoid makes the stored increment exactly
+        ``k p U_L^n`` and the dissipated one exactly ``k R U_R^2 >= 0``, and together they equal the
+        ``k p U^n`` the body sheds — so the three-way identity telescopes to machine precision.
+        """
+        u_l_mid = self.u_l + 0.5 * self.k * p / self.M_a      # U_L^n (the trapezoid midpoint)
+        u_r = u - u_l_mid                                     # what actually goes to the far field
+        self.u_l = self.u_l + self.k * p / self.M_a           # U_L^{n+1/2}
+        self.radiated_energy += self.k * self.R * u_r * u_r   # P_rad dt = k R U_R^2 >= 0
+        self.volume_velocity = u
+        self.pressure_load = p
+        self.n += 1
+
+    def step(self, u_free: float, G: float = 0.0) -> tuple[float, float]:
+        """:meth:`solve` then :meth:`commit` — the standalone driven form (``G = 0`` = prescribed
+        volume velocity ``u_free``). Returns ``(p, U)``."""
+        p, u = self.solve(u_free, G)
+        self.commit(p, u)
+        return p, u
+
+    # -- energy -------------------------------------------------------------------------
+
+    def stored_energy(self) -> float:
+        """Kinetic energy of the radiation mass, ``1/2 M_a (U_L^{n+1/2})^2`` (Joules).
+
+        Zero for the constant-``R`` load (``M_a = inf``, where the auxiliary state is identically
+        zero and the product ``inf * 0`` would otherwise be a NaN — special-cased here).
+        """
+        if np.isinf(self.M_a):
+            return 0.0
+        return 0.5 * self.M_a * self.u_l * self.u_l
+
+    def energy(self) -> float:
+        """The air's whole share: stored (radiation mass) + dissipated (radiated to the far field).
+
+        Unlike batch 2's purely dissipative channel this air can also *give back*, so the stored
+        term is genuinely new structure — a wrong reactance shows up as drift in the identity
+        ``E_body + air.energy() = const``.
+        """
+        return self.stored_energy() + self.radiated_energy
+
+    # -- closed-form oracles ------------------------------------------------------------
+
+    def impedance(self, omega: float) -> complex:
+        """Continuous acoustic impedance ``Z_a(j omega) = R j omega tau / (1 + j omega tau)``.
+
+        The physics. ``Re Z -> rho0 omega^2 / (4 pi c0)`` as ``omega tau -> 0`` (agreeing with
+        :func:`monopole_radiation_resistance` for a sphere-consistent load) and ``-> R`` as
+        ``omega tau -> inf``. Constant-``R`` loads (``M_a = inf``) return ``R`` at every frequency —
+        which is precisely batch 2's approximation, stated.
+        """
+        if np.isinf(self.tau):
+            return complex(self.R if np.isinf(self.M_a) else 0.0)
+        s = 1j * float(omega)
+        return self.R * s * self.tau / (1.0 + s * self.tau)
+
+    def impedance_discrete(self, omega: float) -> complex:
+        """The **scheme's** impedance: ``Z_a`` at the pre-warped ``s = (2j / k) tan(omega k / 2)``.
+
+        Trapezoid *is* the bilinear transform, so this — not :meth:`impedance` — is what a measured
+        sweep matches to machine precision. The gap between the two is the honest discretisation
+        error; it falls as ``O((omega k)^2)`` and vanishes as ``k -> 0``. Valid below Nyquist
+        (``omega k < pi``), where the tangent is finite and positive.
+        """
+        if np.isinf(self.tau):
+            return complex(self.R if np.isinf(self.M_a) else 0.0)
+        s = 2j * np.tan(0.5 * float(omega) * self.k) / self.k
+        return self.R * s * self.tau / (1.0 + s * self.tau)
+
+    def loaded_mode(
+        self, omega0: float, *, weight: float, mass: float, iterations: int = 50
+    ) -> tuple[float, float]:
+        """Closed-form ``(omega_eff, alpha)`` of one weakly loaded mode — **both** parts of ``Z_a``.
+
+        A single mode ``m q'' + m omega0^2 q = -a p`` driven against this load, with
+        ``p = Z_a U`` and ``U = a q'``, becomes (at ``q' = j omega q``)
+
+            [m + a^2 Im Z_a(omega) / omega] q''  +  a^2 Re Z_a(omega) q'  +  m omega0^2 q  =  0 ,
+
+        so the air does **two** things and the batch needs both to be right:
+
+        * the **reactance** is an *added mass* ``m_add = a^2 Im Z_a / omega`` — the body gets
+          heavier and its pitch drops (a constant-``R`` load cannot: its ``Im Z`` is zero);
+        * the **resistance** damps it at ``alpha = a^2 Re Z_a / (2 m_eff)``, evaluated at the
+          *shifted* frequency.
+
+        Both depend on the frequency they shift, so this solves the fixed point
+        ``omega_eff = omega0 sqrt(m / m_eff(omega_eff))`` by iteration (it converges in a few
+        passes). Valid while the loading is weak, ``alpha << omega`` — the residual is second order
+        in that ratio (~1% at ``alpha/omega ~ 1%``).
+        """
+        if mass <= 0.0:
+            raise ValueError("mass must be positive.")
+        w0 = float(omega0)
+        if w0 <= 0.0:
+            raise ValueError("omega0 must be positive.")
+        w = w0
+        a2 = float(weight) * float(weight)
+        for _ in range(int(iterations)):
+            w = w0 * np.sqrt(mass / (mass + a2 * self.impedance(w).imag / w))
+        z = self.impedance(w)
+        m_eff = mass + a2 * z.imag / w
+        return float(w), float(a2 * z.real / (2.0 * m_eff))
+
+    def far_field_pressure(self, distance: float, p_load: float | None = None) -> float:
+        """Far-field pressure at ``r`` from the sphere's own surface pressure: ``(a / r) p_load``.
+
+        **Not** the batch-1 read-out, and the difference is a trap worth stating.
+        :class:`AirRadiation` is the ``a -> 0`` compact-source limit ``rho0 Q'' / (4 pi r)``; a
+        *finite* sphere additionally low-passes the far field by ``1 / (1 + j k a)``, so a naive
+        power balance against batch 1 misses by ``1 / (1 + (ka)^2)`` — which reads as a bug and is
+        not one. With this form the balance is **exact at every ``ka``**, because
+        ``S |Z_a|^2 / (rho0 c0) == Re Z_a`` identically:
+
+            4 pi r^2 <p_far^2> / (rho0 c0)  ==  <R U_R^2>   =   the booked radiated power.
+
+        The pure travel delay ``(r - a) / c0`` is *not* applied (it is latency, not level — hand the
+        result to :class:`AirRadiation` if you want the delay line). Requires a sphere-consistent
+        load: a general ``(R, M_a)`` pair has no radius, and this read-out is the one place where
+        that interpretation is genuinely needed, so it refuses rather than guessing.
+        """
+        if self.sphere_radius is None:
+            raise ValueError(
+                "far_field_pressure needs a sphere-consistent load (4 pi a^2 == rho0 c0 / R); "
+                "build it with RationalAirLoad.from_sphere(...)."
+            )
+        if distance <= 0.0:
+            raise ValueError("distance must be positive.")
+        p = self.pressure_load if p_load is None else float(p_load)
+        return self.sphere_radius / float(distance) * p
+
+    def reset(self) -> None:
+        """Zero the auxiliary state, the radiated channel and the counters — reuse on a new run."""
+        self.u_l = 0.0
+        self.radiated_energy = 0.0
+        self.volume_velocity = 0.0
+        self.pressure_load = 0.0
+        self.n = 0
+
+
+class ReactiveRadiatedBody:
+    """A :class:`ModalBody` loaded by a **frequency-dependent** radiation impedance (batch 3).
+
+    Batch 2's :class:`RadiatedBody` is the purely **resistive** load; what is new here is the
+    **reactance** — the radiation mass — which is what turns one number into ``Z_a(omega)``. The
+    audible consequence is the one a constant ``R`` cannot produce: high partials radiate better and
+    die first, at the per-mode rate ``alpha_i = a_i^2 Re Z_a(omega_i) / (2 m_i)``.
+
+    Structurally it is batch 2 with the load pressure generalised from ``p = R U`` to
+    ``p = R_eff (U - L^-)`` (see :class:`RationalAirLoad`), so the same rank-1 scalar
+    Sherman-Morrison solve carries it:
+
+        q~^{n+1} = ModalBody.step(force)                    (force-free advance)
+        U_free   = a^T (q~^{n+1} - q^{n-1}) / (2 k)         (its centered volume velocity)
+        p, U     = load.solve(U_free, G) ,   G = (k/2) sum_i a_i^2 / (m_i (1 + sigma_i k))
+        q^{n+1}  = q~^{n+1} - p * [k^2 a_i / (m_i (1 + sigma_i k))]
+
+    and the energy identity gains a **stored** term alongside the dissipated one:
+
+        E_body  +  1/2 M_a (U_L^{n+1/2})^2  +  integral R U_R^2 dt  =  const     (lossless modes).
+
+    Passivity is unconditional (``1 + R_eff G >= 1`` for every ``R >= 0``, ``M_a > 0``, ``k``), so
+    there is still no CFL and no guard. Two exact reductions pin it: ``R = 0`` is bit-identical to a
+    bare :class:`ModalBody`, and ``M_a = inf`` is bit-identical to :class:`RadiatedBody` at the same
+    ``R``. Like batch 2 it delegates every read accessor, so it drops straight into a
+    :class:`~physsynth.core.connection.StringBodyBridge` as the body with no edit to the bridge.
+
+    Parameters
+    ----------
+    body : ModalBody
+        The radiating body. Its radiation weights ``body.a`` set the volume-velocity coupling; use
+        ``sigmas = 0`` to isolate the air channel in the energy identity.
+    load : RationalAirLoad
+        The air impedance. Its ``fs`` must match the body's.
+
+    Raises
+    ------
+    ValueError
+        If the load's timestep differs from the body's.
+    """
+
+    def __init__(self, *, body: ModalBody, load: RationalAirLoad) -> None:
+        if not np.isclose(load.k, body.k, rtol=1e-12, atol=0.0):
+            raise ValueError(
+                f"load fs ({load.fs}) must match the body's ({1.0 / body.k}) — the trapezoid's "
+                "R_eff and the body's centered velocity share one timestep."
+            )
+        self.body = body
+        self.load = load
+        self.k = body.k
+        one_plus_sk = 1.0 + body.sigma * body.k
+        self._G = 0.5 * body.k * float(np.sum(body.a * body.a / (body.m * one_plus_sk)))
+        self._corr = body.k * body.k * body.a / (body.m * one_plus_sk)
+        self.n = 0
+
+    def __getattr__(self, name: str):
+        # Delegate read-only body accessors (phi, m, omega, M, q, q_prev, state, bridge_*, ...) so
+        # this is a drop-in wherever a bare ModalBody is expected. Only reached for names not set on
+        # the instance, so the overrides below always win.
+        return getattr(self.body, name)
+
+    # -- time stepping ------------------------------------------------------------------
+
+    def step(self, force: float = 0.0) -> None:
+        """Advance one step: force-free body advance, scalar load solve, rank-1 correction.
+
+        ``force`` is the optional external (bridge) force, forwarded to :meth:`ModalBody.step`; the
+        radiation back-reaction is applied on top of it.
+        """
+        b = self.body
+        q_nm1 = b.q_prev.copy()                        # q^{n-1}, before step() rolls history
+        b.step(force)                                  # commit the force-free next state q~^{n+1}
+        u_free = float(np.dot(b.a, b.q - q_nm1)) / (2.0 * self.k)  # free centered volume velocity
+        p, u = self.load.solve(u_free, self._G)        # scalar coupled solve (Sherman-Morrison)
+        b.q = b.q - p * self._corr                     # rank-1 correction of q^{n+1}
+        # Refresh q'' from the *corrected* second difference so pressure() carries the load.
+        b._accel = (b.q - 2.0 * b.q_prev + q_nm1) / (self.k * self.k)
+        self.load.commit(p, u)
+        self.n += 1
+
+    # -- diagnostics --------------------------------------------------------------------
+
+    @property
+    def radiated_energy(self) -> float:
+        """Energy handed to the far field, ``integral R U_R^2 dt`` (the load's dissipated share)."""
+        return self.load.radiated_energy
+
+    @property
+    def volume_velocity(self) -> float:
+        """Last centered total volume velocity ``U^n`` (diagnostic)."""
+        return self.load.volume_velocity
+
+    def energy(self) -> float:
+        """Total discrete energy ``E_body + E_air`` (Joules), the air term being *stored plus
+        radiated*.
+
+        Conserved to machine precision for a lossless body (``sigmas = 0``, any ``R``, any ``M_a``);
+        monotonically decreasing if any body mode is itself lossy. Assert on this total — neither
+        ``body.energy()`` (which the air both takes from and returns to) nor the radiated channel
+        alone is conserved.
+        """
+        return self.body.energy() + self.load.energy()
+
+    def pressure(self) -> float:
+        """Monopole read-out ``sum_i a_i q_i''`` carrying the load (cf. :meth:`ModalBody.pressure`).
+
+        This is the compact-source (``a -> 0``) volume acceleration that :class:`AirRadiation`
+        expects. For the *finite* sphere's own far field — the one whose power balances the booked
+        radiated energy exactly — use :meth:`RationalAirLoad.far_field_pressure`.
+        """
+        return self.body.pressure()
+
+    def far_field_pressure(self, distance: float) -> float:
+        """Far-field pressure at ``r`` from the finite sphere: see
+        :meth:`RationalAirLoad.far_field_pressure`."""
+        return self.load.far_field_pressure(distance)
+
+    def set_state(
+        self,
+        q0: NDArray[np.float64] | float,
+        v0: NDArray[np.float64] | float = 0.0,
+    ) -> None:
+        """Set the body's initial modal state and reset the air (auxiliary state + channels)."""
+        self.body.set_state(q0, v0)
+        self.load.reset()
+        self.n = 0
+
+    def reset(self) -> None:
+        """Zero the body state and the air's auxiliary state and channels — reuse on a new run."""
+        self.body.set_state(0.0)
+        self.load.reset()
+        self.n = 0
