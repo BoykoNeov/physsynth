@@ -1976,12 +1976,119 @@ Every number below is measured, before the wiring:
   implementation (jawari was ~143 µs/step for a 15-node vector solve; a 1-node scalar solve is
   cheaper). The clean run is reused for both the tuning-curve baseline and the band-spectrum contrast.
 
+### Batch 15 (PLANNED) — the air pushes back (`RadiatedBody`): the BOOKED radiation channel
+
+The last member of the body/radiation family, and the one thing batches 12–13 structurally *could
+not* show. There the air was a pure **read-out**: `AirRadiation` scales the body's volume
+acceleration to a far-field pressure and takes nothing — by construction it has no `energy()`. Here
+the air is a **load**: `RadiatedBody` (a rank-1 passive dashpot, [[radiation-state]] batch 2) puts a
+resistance `R` on the body's net volume velocity, removes `P_rad = R·U²` watts, and books the total
+in `radiated_energy`. Because `RadiatedBody` is a `ModalBody` **drop-in**, it slots into batch 12's
+`StringBodyBridge` as the body with **zero core edits and zero bridge edits** — the rig is batch 12's
+with one substitution, so every difference on screen is the back-reaction and nothing else.
+
+Model key **`radbody`**, its own entry (not a domain of `body`) — batch 13's `platebody` precedent:
+it keeps batch 12's 15 tests and payload untouched, and earns its own ranges and cost budget. Scope
+is the **lumped** modal body only; `RadiatedBody` wraps a `ModalBody`, and grid/plate radiation
+load is explicitly deferred in the core. All-wrapper as always.
+
+**Everything below is measured** (`temp/radbody-probe/`, probes 1–6), and three of the numbers were
+gates the advisor set before any panel code:
+
+- **THE BOOKED DRIFT CLEARS THE 1e-10 BAR BY FOUR ORDERS — the flagged coupling-order hazard is
+  empirically FALSE.** [[radiation-state]] records the standalone identity at 7.86e-14 but the full
+  chain only as "< 1e-9", and `StringBodyBridge` precomputes `beta_b` from the *bare* body and
+  commits its spring force *before* `RadiatedBody.step` applies the rank-1 correction — so an
+  `O(k·R·U)` mismatch growing with `R` and `K` was plausible, and would have landed exactly where
+  the demo lives. Measured over `R ∈ {0 … 20 000}` × `K ∈ {0, 8 000, 19 000}`: drift **3.9e-15 …
+  6.8e-14**, no trend in either. The `< 1e-9` was a test tolerance, not the number. So the verdict
+  needs no redesign: **σ_body = 0 → the ordinary lossless drift check, on the BOOKED total.**
+- **The verdict rides the booked total, and `sigma_zero` stays `(sigma_body == 0)` REGARDLESS of R**
+  — the bore's precedent (batch 9), second customer. `R > 0` is not a loss, it is a *channel*:
+  `bridge.energy()` already includes `body.energy() = E_body + ∫P_rad`, so a radiating run is still
+  a *conserving* run. Default drift **2.15e-14** while 98.4 % of the pluck has left as sound.
+- **The money panel is the four-channel BOOKED SPLIT**, and the four channels sum to the flat
+  reference to **1.6e-14** — `E_string + E_body + E_conn + ∫P_rad ≡ 1`. Batch 12's `drawBodyEnergy`
+  gains ONE additive line (`e_rad_frac`); it does **not** route through `_energy_block(split=…)`
+  (the bore's mechanism renders on a different path, and the body family's panel is the exchange
+  panel — batch 13 already reused it verbatim). Batch 12's rules carry: `E_conn` **goes negative**
+  (measured −0.06 %) so it is never clamped and never stacked, and the flat total is a **reference**,
+  not the verdict.
+- **`R = 0` is BIT-IDENTICAL to batch 12** — `np.array_equal` True on both the energy and the
+  pressure traces over 4 000 steps, not merely close. The anchor test builds both payloads from ONE
+  explicit shared param dict and compares arrays (the `model` key differs by design).
+- **The second panel is the `t₅₀`-vs-`R` sweep: radiation has an OPTIMUM, and more air is worse.**
+  `t₅₀` = the time for the radiated channel to reach 50 % of the pluck's energy. Measured minimum at
+  **R ≈ 4** (19.6 ms) inside a broad basin `R ≈ 2–10`, rising to 251 ms at R = 133 and 1.49 s at
+  R = 800 — the air can *choke* the body it is draining (`U = U_free/(1+RG)`, so `P = R·U² → 0` as
+  `R → ∞`).
+- **…and that optimum is PHYSICS, not the timestep — the advisor's impostor, checked and cleared.**
+  The scheme's own turnover sits at `R = 1/G`, `G = (k/2)Σaᵢ²/(mᵢ(1+σᵢk)) ∝ k`, so `1/G ∝ fs`:
+  111 → 222 → 444 across N = 50/100/200. The measured curve does **not** move — `t₅₀` at R = 3 is
+  **24.48 / 24.52 / 24.57 ms** over that 4× refinement (0.4 %), and every window's peak lands on the
+  same R at all three N. The physical scale it tracks instead is `σ_rad/ω₁ = a²R/(2mω₁) = R/27.6`,
+  which is the dimensionless control the sweep's axis and the readout both use (#9's `ΔT/T₀`, #10's
+  `frac`). The optimum is also **K-invariant** (R = 4 at K = 2 000 / 8 000 / 15 000 / 19 000 — the
+  bridge sets how fast energy *reaches* the body, not which R best empties it), and it is
+  **amplitude-invariant bit-exactly** (linear model: `max|frac(A) − frac(2A)| == 0.0`) — a free
+  oracle no nonlinear model in the viewer can offer.
+- **`t₅₀` is the observable BECAUSE fraction-radiated is window-dependent — batch 14's exact trap.**
+  The peak of "fraction radiated at time T" walks **R = 3 → 10 → 30** as T goes 0.05 → 0.15 → 0.4 s,
+  and at σ_body = 0 the fraction saturates toward 1 for any R > 0 given enough time, so *any* fixed
+  window reports a different sweet spot. `t₅₀` is a rate: window-free (it only needs the run to get
+  there) and grid-converged. Points that do not reach 50 % inside the cap are **labelled censored,
+  never plotted as a number** (the jawari/bow "label, never fail" rule).
+- **The sweep is a CONTROLLED REFERENCE CURVE, decoupled from the render** (batch 13's terminus
+  probe, batch 1's measurement pair): fixed `N = 100` and **`sigma_body = 0` always**, with the
+  user's `K`/`L`/`T`/`ρ`/pluck. A fixed N is legitimate *because* the curve is N-independent — but
+  it cannot be an arbitrary one, because the coupled guard ceiling *shrinks with fs*
+  (K_c = 8 563 / 10 716 / 21 479 / 34 394 N/m at N = 40 / 50 / 100 / 160), so a sweep at a **lower**
+  fixed N than the render could trip a guard the render passed. N = 100 is above the whole
+  `bridge_stiffness` range (max 19 000 < K_c(100) = 21 479), so it is always constructible. σ_body = 0
+  is required too: on a lossy body most of the energy goes to σ, `t₅₀` censors nearly everywhere, and
+  the sweep both lies and costs 7× more.
+- **The sweep is CHEAP because it exits early** — each point stops the instant it crosses 50 %.
+  18 log-spaced points over `R ∈ [0.3, 300]`, cap 0.8 s each: **47 845 steps / 1.4 s** at the default
+  (K = 8 000), 46 151 at K = 19 000, and 120 573 / 3.4 s at the soft-coupling corner K = 1 000 (2
+  points censored). The worst case is **K = 0**, where nothing ever reaches the body (radiated energy
+  after 0.3 s is *exactly* 0.0) and all 18 points would run the full cap — so **K = 0 skips the sweep
+  entirely** with a labelled "no coupling — nothing radiates", rather than burning 320 000 steps to
+  draw a curve of `NaN`.
+- **Cost is step-count only — the per-step cost is N-INDEPENDENT** (28.8 µs bare / 56.8 µs
+  instrumented at both N = 100 and N = 160; the Python-level body+bridge overhead dominates, not the
+  grid). Default render (N = 100, 2 s) = 44 444 steps ≈ 2.3 s, plus ~1.4 s of sweep. Budget mirrors
+  batch 12: `RADBODY_N_MAX = 160`, `RADBODY_AUDIO_MAX = 3`, `RADBODY_WORK_MAX = 200 000`, plus a
+  sweep-specific step budget that censors the remainder rather than hanging.
+- **Default `R = 133` is the free-space monopole resistance at the first body mode** — `R_a(ω) =
+  ρ₀ω²/(4πc₀)` = 133.4 at 110 Hz — which makes the read-out and the load *exactly* consistent at one
+  frequency, and the panel prints which: `f_match = √(4πc₀R/ρ₀)/2π` = **109.8 Hz** at R = 133. It
+  also renders the best picture: the split ramps 0 → 0.13 → 0.42 → 0.66 → 0.92 → 0.98 over
+  0.05/0.2/0.4/1/2 s, a legible drain across the whole panel.
+- **HONESTY: `R` is constant in frequency and the true monopole `R_a ∝ ω²`** (133 / 424 / 751 / 2135
+  at the rig's 110 / 196 / 261 / 440 Hz body modes) — one constant *cannot* be right at all four. The
+  readout states it and names the one frequency where load and read-out agree; frequency-dependent
+  `R` is a separate, harder core batch. No second "radiated" analysis pretends otherwise (batch 12's
+  rule).
+- **The load KILLS batch 12's slosh, and that is the finding, not a defect.** Peak `E_body` falls
+  monotonically 0.773 → 0.491 → 0.195 → 0.072 → 0.0010 at R = 0 / 1 / 4 / 10 / 133: loaded by the
+  air, the body stops being a *reservoir* and becomes a *conduit*. Slosh visibility and drain
+  legibility are anti-correlated (both governed by σ_rad), so no single R shows both — the batch
+  leads with the drain, and **the slider makes the contrast live**: pull `R` to 0 and batch 12's
+  77 % slosh returns, bit-identically.
+- **Param hygiene:** the new slider is **`radiation_R`** (distinctive; no other model sends it),
+  linear `[0, 300]` step 1, default 133 — reachable endpoints for the anchor (0), the basin (2–10)
+  and the physical value (133), with the log-axis sweep panel carrying the decades the slider
+  cannot. **Reset in `MODEL_RANGES._default`** — the leak family (batches 2/3/7/8/12). Reuses
+  `bridge_stiffness` / `sigma_body` / `distance` / `amplitude` / `pluck_position` / `lambda` / `N`
+  from the body ranges, re-ranged per that model's existing entries.
+
 ### Later batches (rough map — not firm)
 
 - **Body / radiation** — the modal body + radiation read-out is **batch 12**; `StringPlateBridge`
-  (plate #5/#5b as a *distributed* body — the cymbal you watch ring) is **batch 13** (above). The
-  remaining follow-on is `RadiatedBody` (the radiation *load* / back-reaction, the `E_body + ∫P_rad`
-  booked-loss panel).
+  (plate #5/#5b as a *distributed* body — the cymbal you watch ring) is **batch 13**; the radiation
+  **load** / back-reaction (`RadiatedBody`, the booked `∫P_rad` channel) is **batch 15** (above),
+  which closes the family. Beyond it the core itself would have to grow: frequency-dependent
+  `R(ω)`, or a distributed/3-D air box (HANDOFF §12H).
 - **Wind** — the reed is **batch 10** (above); the wind leg closes with it.
 - **Excited strings** — the jawari landed in batch 8 above; the bow in batch 2; **fret buzz / the flat
   rail is batch 11** (above); the tanpura **cotton thread (juari)** is **batch 14** (above). The
