@@ -72,6 +72,17 @@ from web.serialize import (
     PLATEBODY_NSTRING_MAX,
     PLATEBODY_SIGMA_MAX,
     PLATEBODY_WORK_MAX,
+    RADBODY_AUDIO_MAX,
+    RADBODY_DISTANCE_MAX,
+    RADBODY_K_MAX,
+    RADBODY_N_MAX,
+    RADBODY_R_DEFAULT,
+    RADBODY_R_MAX,
+    RADBODY_SIGMA_BODY_MAX,
+    RADBODY_SWEEP_CAP,
+    RADBODY_SWEEP_N,
+    RADBODY_SWEEP_POINTS,
+    RADBODY_WORK_MAX,
     REED_ANIM_MAX,
     REED_AUDIO_MAX,
     REED_N_MAX,
@@ -90,6 +101,7 @@ from web.serialize import (
     VK_N_MAX,
     VK_WOVERE_MAX,
     _measure_tension_mode1,
+    _radbody_t50,
     _tension_dt_over_t,
     _tension_spectrum_block,
     simulate_to_payload,
@@ -3344,6 +3356,254 @@ def test_platebody_ignores_params_that_belong_to_other_models():
     models) must not change a single number — the recurring MODEL_RANGES leak, one body up."""
     base = _pb(bridge_stiffness=3000)
     noisy = _pb(bridge_stiffness=3000, K=2.0e6, alpha=2.3, depth=1e-3, kappa=5.0, EA=1e4)
+    assert noisy["meta"]["exchange"] == base["meta"]["exchange"]
+    assert noisy["meta"]["spectrum"] == base["meta"]["spectrum"]
+    assert noisy["energy"] == base["energy"]
+
+# =================================================================================================
+# String -> a RADIATION-LOADED modal body (batch 15) — the air pushes BACK
+# =================================================================================================
+#
+# Batches 12-13 read the air out; RadiatedBody makes it a load. The claim is the BOOKED channel:
+# E_string + E_body + E_conn + int P_rad conserves while the mechanical part drains away as sound,
+# and the drain has an OPTIMUM in R — more air is worse, because the air chokes the body it drains.
+# The measured numbers come back through the payload as an end-to-end oracle.
+
+
+def _rb(**over):
+    """Short radbody run with a COARSE sweep — the sweep is the whole cost of this payload."""
+    return web_serialize.simulate_to_payload(
+        {"model": "radbody", "audio_duration": 0.5, "sweep_points": 3, "sweep_cap": 0.4, **over}
+    )
+
+
+def test_radbody_conserves_while_the_air_carries_the_energy_away():
+    """THE batch, in one test: R > 0 drains 4/5 of the pluck into the far field, and the total is
+    STILL conserved to < 1e-10 — because the radiated energy is a booked CHANNEL, not a loss (the
+    bore's bell precedent). A viewer that showed only the mechanical energy would call this a leak;
+    the booked total is what makes 'radiating' and 'conserving' the same run."""
+    d = _rb(audio_duration=0.6, radiation_R=RADBODY_R_DEFAULT)
+    e = d["energy"]
+    assert e["sigma_is_zero"] is True, "R > 0 must NOT flip the gate — sigma_body alone gates it"
+    assert e["lossless"]["drift"] < LOSSLESS_TOL and e["lossless"]["pass"] is True
+    ex = d["meta"]["exchange"]
+    assert ex["kind"] == "radbody"
+    assert ex["total_drift"] < LOSSLESS_TOL
+    assert ex["rad_frac_end"] > 0.5, "the air must visibly carry the energy away"
+    assert ex["mech_frac_end"] == pytest.approx(1.0 - ex["rad_frac_end"], abs=1e-9)
+
+
+def test_radbody_r_zero_is_bit_identical_to_the_readout_only_body():
+    """The anchor, from ONE shared param dict (not two models' defaults happening to coincide).
+    R = 0 decouples the air, so the loaded chain must reproduce batch 12 EXACTLY — same energy
+    report, same far-field audio bytes, same string frames, same three exchange channels. Bit
+    equality, not closeness: the rank-1 correction is multiplied by R, so at R = 0 it is a no-op."""
+    shared = {"audio_duration": 0.35, "bridge_stiffness": 8000, "N": 90, "lambda": 0.85,
+              "pluck_position": 0.27, "amplitude": 1.5e-3, "distance": 1.4}
+    loaded = simulate_to_payload({"model": "radbody", "radiation_R": 0.0, "sweep_points": 2,
+                                  "sweep_cap": 0.2, **shared})
+    readout = simulate_to_payload({"model": "body", **shared})
+    assert loaded["energy"] == readout["energy"]
+    assert loaded["audio"]["b64"] == readout["audio"]["b64"]
+    assert loaded["frames"]["b64"] == readout["frames"]["b64"]
+    for key in ("time", "e_string_frac", "e_body_frac", "e_conn_frac", "total_frac"):
+        assert loaded["meta"]["exchange"][key] == readout["meta"]["exchange"][key], key
+    assert loaded["meta"]["exchange"]["rad_frac_end"] == 0.0, "a decoupled air radiates nothing"
+
+
+def test_radbody_four_channels_sum_to_the_flat_reference_and_e_conn_stays_signed():
+    """The money panel ships FOUR channels now. They sum to the flat total by construction, so the
+    flat line is a REFERENCE, not the verdict (batch 12's rule) — and E_conn still dips negative,
+    so the four are never stacked and never clamped."""
+    ex = _rb(radiation_R=RADBODY_R_DEFAULT)["meta"]["exchange"]
+    n = len(ex["time"])
+    for key in ("e_string_frac", "e_body_frac", "e_conn_frac", "e_rad_frac", "total_frac"):
+        assert len(ex[key]) == n and n > 100, key
+    es = np.array(ex["e_string_frac"])
+    eb = np.array(ex["e_body_frac"])
+    ec = np.array(ex["e_conn_frac"])
+    er = np.array(ex["e_rad_frac"])
+    tot = np.array(ex["total_frac"])
+    assert np.allclose(es + eb + ec + er, tot, atol=1e-9)
+    assert np.allclose(tot, 1.0, atol=1e-9)
+    assert float(np.min(ec)) < 0.0, "E_conn is a signed cross-time term — clamping it hides it"
+    assert er[0] == 0.0 and float(er[-1]) > float(er[n // 2]), "the radiated channel only fills"
+
+
+def test_radbody_t50_optimum_is_physics_not_the_scheme_timestep():
+    """The discriminator. The scheme's OWN turnover sits at R = 1/G with G = (k/2) sum a^2/m ~ k,
+    so 1/G is proportional to fs and would move by the N ratio (3.2x here). The measured t50 does
+    not move at all across the same refinement — so the optimum the panel plots is the physical
+    over-damping scale (sigma_rad/omega_1), not an artifact of the timestep."""
+    for R in (3.0, 30.0):
+        t50 = [_radbody_t50({"model": "radbody"}, R, 0.8, n=n)[0] for n in (50, 100, 160)]
+        assert all(np.isfinite(t50))
+        spread = (max(t50) - min(t50)) / min(t50)
+        assert spread < 0.08, f"t50 must be N-independent at R={R}, got {t50}"
+    # what a scheme-bound turnover would have done over that same refinement, for contrast:
+    assert (160 / 50) > 3.0, "1/G ~ fs ~ N would have moved by this factor; the curve did not"
+
+
+def test_radbody_sweep_is_a_controlled_reference_curve_not_the_render():
+    """The sweep is pinned at a FIXED N and sigma_body = 0 with the user's K/string/pluck, so the
+    map does not move when the sound length, grid or body loss changes (batch 13's dedicated-probe
+    lesson). Fixed N is legitimate only because the curve is N-independent — and it must be a HIGH
+    one, because the coupled guard ceiling shrinks with fs: at the sweep N the whole
+    bridge_stiffness range constructs."""
+    a = _rb(N=60)["meta"]["spectrum"]["sweep"]
+    b = _rb(N=140)["meta"]["spectrum"]["sweep"]
+    c = _rb(N=60, sigma_body=20.0)["meta"]["spectrum"]["sweep"]
+    assert a == b == c
+    assert a["sweep_n"] == RADBODY_SWEEP_N
+    top = simulate_to_payload({"model": "radbody", "N": RADBODY_SWEEP_N,
+                               "bridge_stiffness": RADBODY_K_MAX, "audio_duration": 0.1,
+                               "sweep_points": 2, "sweep_cap": 0.1})
+    assert "error" not in top, "the sweep N must clear the guard for the whole K range"
+
+
+def test_radbody_radiated_fraction_is_amplitude_invariant_bit_exactly():
+    """A free oracle no nonlinear model in the viewer can offer: the loaded chain is LINEAR, so
+    doubling the pluck scales every energy by exactly 4 and the radiated FRACTION is unchanged —
+    bit-for-bit, because 2x is exact in binary. If the load ever picked up an amplitude-dependent
+    term (a stray nonlinearity, a mis-scaled correction), this is what would catch it."""
+    a = _rb(amplitude=1e-3, sweep_points=2, sweep_cap=0.2)["meta"]["exchange"]
+    b = _rb(amplitude=2e-3, sweep_points=2, sweep_cap=0.2)["meta"]["exchange"]
+    assert a["e_rad_frac"] == b["e_rad_frac"]
+    assert a["rad_frac_end"] == b["rad_frac_end"]
+
+
+def test_radbody_more_air_is_worse_the_optimum_is_a_broad_basin():
+    """The second panel's claim, on the shipped grid: t50 falls to a minimum near R ~ 5 and then
+    RISES — beyond the match the air chokes the body it is draining (U = U_free/(1 + R G), so
+    P = R U^2 -> 0 as R -> inf). Both ends of the swept decade are several times slower than the
+    basin, which is what makes the panel a map rather than a slope."""
+    sw = _rb(sweep_points=RADBODY_SWEEP_POINTS, sweep_cap=RADBODY_SWEEP_CAP,
+             audio_duration=0.3)["meta"]["spectrum"]["sweep"]
+    assert sw["skipped"] is False and sw["n_censored"] == 0
+    t50 = np.array([np.nan if v is None else v for v in sw["t50_ms"]])
+    assert 1.5 < sw["best_r"] < 20.0, f"the optimum sits in the basin, got {sw['best_r']}"
+    lo, hi = sw["basin"]
+    assert lo <= sw["best_r"] <= hi and hi / lo < 20.0, "a basin, not the whole axis"
+    assert t50[0] > 3.0 * sw["best_t50_ms"], "too little air drains slowly"
+    assert t50[-1] > 3.0 * sw["best_t50_ms"], "too MUCH air also drains slowly — the batch's point"
+
+
+def test_radbody_k_zero_skips_the_sweep_instead_of_drawing_a_row_of_nans():
+    """The cost corner. With no bridge spring nothing ever reaches the body, so every sweep point
+    would run the full cap only to report NaN — the whole grid burned to draw nothing. K = 0 is a
+    legitimate slider position (the decoupling anchor), so it is LABELLED, not failed and not
+    silently expensive (the bow-Schelleng / jawari-grazing rule)."""
+    d = _rb(bridge_stiffness=0.0)
+    sw = d["meta"]["spectrum"]["sweep"]
+    assert sw["skipped"] is True and sw["steps"] == 0 and sw["t50_ms"] == []
+    assert "coupling" in sw["note"]
+    ex = d["meta"]["exchange"]
+    assert ex["rad_frac_end"] == 0.0 and ex["body_frac_peak"] == 0.0
+    assert d["audio"]["peak"] == 0.0, "a body that never moves radiates nothing"
+
+
+def test_radbody_sigma_body_gates_the_verdict_and_radiation_never_does():
+    """The gate is the BODY's own loss, never R. A lossy body dissipates into nowhere (passivity,
+    and no 2-sigma oracle — the off-harmonic coupled decay is multi-rate, batch 12's measurement);
+    a radiating body hands its energy to a channel that is accounted for, so it stays on the
+    conservation branch however hard it radiates."""
+    loud = _rb(radiation_R=RADBODY_R_MAX, sigma_body=0.0)
+    assert loud["energy"]["sigma_is_zero"] is True
+    assert loud["energy"]["lossless"]["pass"] is True
+    lossy = _rb(radiation_R=RADBODY_R_MAX, sigma_body=20.0)
+    assert lossy["energy"]["sigma_is_zero"] is False
+    assert lossy["energy"]["lossy"]["monotone"] is True
+    assert "measured_2sigma" not in lossy["energy"]["lossy"], "no closed form -> no decay oracle"
+
+
+def test_radbody_the_load_turns_the_reservoir_into_a_conduit():
+    """The finding behind the default: loading the body KILLS batch 12's slosh. At R = 0 the body
+    stores most of the pluck at its peak; as R rises it stops storing and starts passing energy
+    straight through to the air. Slosh and drain are anti-correlated, so no single R shows both —
+    which is exactly why the slider (not a second run) carries the contrast."""
+    peaks = [_rb(radiation_R=r, sweep_points=2, sweep_cap=0.2)["meta"]["exchange"]["body_frac_peak"]
+             for r in (0.0, 1.0, 10.0, RADBODY_R_DEFAULT)]
+    assert peaks[0] > 0.5, "at R = 0 this is batch 12: the body is a reservoir"
+    assert peaks[-1] < 0.01, "loaded, the body barely stores at all — it conducts"
+    assert all(a > b for a, b in zip(peaks[:-1], peaks[1:], strict=True)), f"monotone: {peaks}"
+
+
+def test_radbody_f_match_names_the_one_frequency_where_load_and_readout_agree():
+    """The honesty number. R is CONSTANT in frequency while the true monopole resistance goes as
+    omega^2, so one R cannot be right at all four body modes — their R_a values span 16x, exactly
+    (440/110)^2. Rather than a disclaimer, the payload names the single frequency at which this R
+    IS the free-space monopole load, and the default puts it on the first body mode."""
+    sp = _rb(radiation_R=RADBODY_R_DEFAULT, sweep_points=2, sweep_cap=0.2)["meta"]["spectrum"]
+    from physsynth.core.radiation import monopole_radiation_resistance
+    assert sp["f_match"] == pytest.approx(sp["body_modes"][0], abs=1.0)
+    back = monopole_radiation_resistance(2.0 * np.pi * sp["f_match"])
+    assert back == pytest.approx(RADBODY_R_DEFAULT, rel=1e-3)
+    r_phys = sp["r_phys"]
+    ratio = r_phys[-1] / r_phys[0]
+    assert ratio == pytest.approx((sp["body_modes"][-1] / sp["body_modes"][0]) ** 2, rel=1e-3)
+    assert sp["sigma_ratio"] > 1.0, "at the physical R this rig's light body is over-damped"
+
+
+def test_radbody_shipped_sweep_settings_are_the_measured_ones():
+    """The hidden overrides exist so the suite does not pay for the full sweep 16 times; the values
+    the UI actually ships are the measured ones and are pinned here (the juari's precedent)."""
+    assert (RADBODY_SWEEP_POINTS, RADBODY_SWEEP_CAP, RADBODY_SWEEP_N) == (18, 0.8, 100)
+    assert RADBODY_R_DEFAULT == 133.0, "= the monopole R_a at the first body mode (110 Hz)"
+    bad = simulate_to_payload({"model": "radbody", "sweep_points": 999})
+    assert bad["error"]["kind"] == "param"
+
+
+def test_radbody_frame_and_grid_bookkeeping_line_up_and_the_nut_stays_clamped():
+    """Frame/grid contract, plus the fixed/free boundary: the nut is clamped and the bridge end
+    moves (it is the terminus the body loads)."""
+    d = _rb(audio_duration=0.4)
+    x = np.array(d["grid"]["x"])
+    frames = _decode_f32(d["frames"]["b64"]).reshape(-1, d["frames"]["width"])
+    assert d["frames"]["dims"] == 1 and d["frames"]["width"] == len(x)
+    assert frames.shape[0] == d["frames"]["n_frames"] == len(d["frame_times"])
+    assert float(np.max(np.abs(frames[:, 0]))) == 0.0, "the nut is fixed"
+    assert float(np.max(np.abs(frames[:, -1]))) > 0.0, "the bridge end is free and loaded"
+
+
+def test_radbody_audio_is_the_far_field_pressure_real_and_normalized():
+    """The audio is the retarded monopole read-out of the LOADED body (so it carries the damping),
+    resampled to the fixed browser rate and normalized with the true peak reported."""
+    d = _rb(audio_duration=0.4, distance=2.0)
+    a = d["audio"]
+    sig = _decode_f32(a["b64"])
+    assert a["fs"] == AUDIO_FS and a["n"] == sig.size
+    assert np.all(np.isfinite(sig)) and float(np.max(np.abs(sig))) <= 1.0 + 1e-6
+    assert a["peak"] > 0.0
+    sp = d["meta"]["spectrum"]
+    assert sp["gain_times_r"] == pytest.approx(sp["gain"] * 2.0, abs=1e-6), "1/r (6 dp)"
+
+
+def test_radbody_guards_and_budget_are_clean_error_payloads():
+    """Every clamp a local render can hit, surfaced as a param/construction error — never a hang,
+    a 500 or a NaN payload."""
+    for bad in ({"N": RADBODY_N_MAX + 1}, {"radiation_R": RADBODY_R_MAX + 1},
+                {"sigma_body": RADBODY_SIGMA_BODY_MAX + 1},
+                {"distance": RADBODY_DISTANCE_MAX + 1},
+                {"audio_duration": RADBODY_AUDIO_MAX + 1},
+                {"bridge_stiffness": RADBODY_K_MAX + 1}, {"lambda": 1.0}, {"radiation_R": -1.0}):
+        out = simulate_to_payload({"model": "radbody", "sweep_points": 2, **bad})
+        assert out["error"]["kind"] == "param", bad
+    over = simulate_to_payload({"model": "radbody", "N": RADBODY_N_MAX, "rho": 0.001,
+                                "audio_duration": RADBODY_AUDIO_MAX, "sweep_points": 2})
+    assert over["error"]["kind"] == "param" and "budget" in over["error"]["message"]
+    assert RADBODY_WORK_MAX == 200_000, "the step backstop the message quotes"
+    # the exact coupled bound is the CONSTRUCTION guard, and it bites at a low N (ceiling ~ fs)
+    tight = simulate_to_payload({"model": "radbody", "N": 40, "bridge_stiffness": 12000.0,
+                                 "sweep_points": 2, "audio_duration": 0.1})
+    assert tight["error"]["kind"] == "construction"
+
+
+def test_radbody_ignores_params_that_belong_to_other_models():
+    """The recurring MODEL_RANGES leak: 'radiation_R' is a NEW name, and the stale sliders the
+    frontend still ships after visiting other models must not move a single number."""
+    base = _rb(radiation_R=50.0, sweep_points=2, sweep_cap=0.2)
+    noisy = _rb(radiation_R=50.0, sweep_points=2, sweep_cap=0.2, K=2.0e6, alpha=2.3, depth=1e-3,
+                kappa=5.0, EA=1e4, sigma_plate=3.0, n_plate=12)
     assert noisy["meta"]["exchange"] == base["meta"]["exchange"]
     assert noisy["meta"]["spectrum"] == base["meta"]["spectrum"]
     assert noisy["energy"] == base["energy"]

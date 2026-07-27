@@ -45,7 +45,11 @@ from physsynth.core.exciter import raised_cosine_2d, triangular_pluck
 from physsynth.core.mallet import MalletMembrane
 from physsynth.core.membrane import Membrane
 from physsynth.core.plate import Plate, VKPlate
-from physsynth.core.radiation import AirRadiation
+from physsynth.core.radiation import (
+    AirRadiation,
+    RadiatedBody,
+    monopole_radiation_resistance,
+)
 from physsynth.core.reed import ReedBore
 from physsynth.core.string_damped import DampedStiffString
 from physsynth.core.string_geometric import GeometricString
@@ -879,6 +883,8 @@ def _build_payload(p: dict[str, Any]) -> dict[str, Any]:
         return _build_payload_body(p)
     if model == "platebody":
         return _build_payload_platebody(p)
+    if model == "radbody":
+        return _build_payload_radbody(p)
     return _build_payload_string(p)
 
 
@@ -3411,6 +3417,442 @@ def _build_payload_platebody(p: dict[str, Any]) -> dict[str, Any]:
             "n_plate": int(info["n_plate"]),
             "n_live": int(info["n_live"]),
             "probe_x": round(PLATEBODY_PICKUP_FRAC * L, 4),   # the near-nut terminus pickup
+            "exchange": exchange,
+            "spectrum": spectrum,
+        },
+    }
+
+
+# == string -> a RADIATION-LOADED modal body (the air pushes back, batch 15) =======================
+#
+# Batches 12-13 read the air out; here the air is a LOAD. :class:`AirRadiation` is a pure output
+# transform that takes nothing (it deliberately has no ``energy()``); :class:`RadiatedBody` is a
+# rank-1 passive dashpot that puts an acoustic resistance ``R`` on the body's net volume velocity
+# ``U``, removes ``P_rad = R U^2`` watts and BOOKS the total in ``radiated_energy``. It is a
+# ``ModalBody`` drop-in, so it slots into batch 12's StringBodyBridge as the body with zero core and
+# zero bridge edits: this rig IS batch 12's with one substitution, and every difference on screen is
+# the back-reaction. Load-bearing decisions, all measured (temp/radbody-probe, probes 1-6):
+#
+#   * **The verdict rides the BOOKED total, and ``sigma_zero`` stays ``(sigma_body == 0)``
+#     regardless of R** (the bore's booked-bell precedent, 2nd customer). ``R > 0`` is not a loss,
+#     it is a *channel*: ``bridge.energy()`` already holds ``body.energy() = E_body + int P_rad``,
+#     so a radiating run is still a CONSERVING run. Do not "fix" this into a passivity branch.
+#   * **The 1e-10 bar clears by four orders — the coupling-order hazard is empirically false.**
+#     StringBodyBridge precomputes ``beta_b`` from the bare body and commits its spring force before
+#     the rank-1 correction lands, so an O(k R U) mismatch growing with R and K was plausible.
+#     Measured over R in {0..20000} x K in {0, 8000, 19000}: drift 3.9e-15..6.8e-14, no trend. The
+#     "< 1e-9" recorded for the full chain was a test tolerance, not the number.
+#   * **The money panel is the four-channel booked split**, which sums to the flat reference to
+#     1.6e-14: ``E_string + E_body + E_conn + int P_rad == 1``. Batch 12's exchange panel gains ONE
+#     line rather than routing through ``_energy_block(split=...)`` (a second mechanism for the same
+#     picture). ``E_conn`` still goes negative (-0.06 %) -> never clamped, never stacked.
+#   * **``R = 0`` is BIT-IDENTICAL to batch 12** (``np.array_equal`` on both the energy and the
+#     pressure traces, not merely close) — the anchor, and the slider's self-documenting endpoint.
+#   * **The 2nd panel is the ``t50``-vs-R sweep: radiation has an OPTIMUM, and more air is worse.**
+#     ``t50`` = time for the radiated channel to reach 50 % of the pluck. Minimum ~19.6 ms at R ~ 4
+#     in a broad basin R ~ 2-10, rising to 251 ms at R = 133 and 1.49 s at R = 800: the air chokes
+#     the body it drains (``U = U_free/(1 + R G)`` -> ``P = R U^2 -> 0`` as ``R -> inf``).
+#   * **That optimum is PHYSICS, not the timestep.** The scheme's own turnover sits at ``R = 1/G``
+#     with ``G = (k/2) sum a^2/(m(1+sigma k)) ~ k``, i.e. ``1/G ~ fs``: 111 -> 222 -> 444 across
+#     N = 50/100/200. The measured curve does not move — t50 at R = 3 is 24.48/24.52/24.57 ms over
+#     that 4x refinement. It tracks the physical ``sigma_rad/omega_1 = a^2 R/(2 m omega_1)`` instead
+#     (= R/27.6 here), which is the dimensionless control the panel prints. Also K-invariant
+#     (R = 4 at K = 2000..19000) and amplitude-invariant BIT-EXACTLY (the model is linear).
+#   * **t50 is the observable BECAUSE fraction-radiated is window-dependent** (batch 14's trap): the
+#     peak of "fraction at time T" walks R = 3 -> 10 -> 30 as T goes 0.05 -> 0.4 s, and at
+#     sigma_body = 0 the fraction saturates toward 1 for any R > 0. A rate is window-free. Points
+#     that never reach 50 % inside the cap are LABELLED censored, never plotted as a number.
+#   * **The sweep is a CONTROLLED reference curve**: fixed ``RADBODY_SWEEP_N`` and
+#     ``sigma_body = 0`` always, with the user's K/L/T/rho/pluck. A fixed N is legitimate because
+#     the curve is N-independent, but it cannot be an arbitrary one: the coupled guard ceiling
+#     SHRINKS with fs (K_c = 8563/10716/21479/34394 N/m at N = 40/50/100/160), so a sweep below the
+#     render's N could trip a guard the render passed. N = 100 sits above the whole
+#     bridge_stiffness range (max 19000 < 21479), so it always constructs.
+#   * **The sweep is cheap because it exits early** (47845 steps / 1.4 s at the default; 120573 at
+#     the soft-coupling corner K = 1000). The worst case is **K = 0**, where nothing ever reaches
+#     the body (radiated energy after 0.3 s is exactly 0.0) and all 18 points would run the full
+#     cap -> K = 0 SKIPS the sweep with a label instead of burning 320k steps drawing NaN.
+#   * **Per-step cost is N-INDEPENDENT** (28.8 us bare / 56.8 us instrumented at both N = 100 and
+#     N = 160 — Python-level body+bridge overhead, not the grid), so the budget is steps alone.
+#   * **Default R = 133 is the free-space monopole resistance at the first body mode** (R_a(110 Hz)
+#     = 133.4), which is the one frequency where the load and the batch-1 read-out are exactly
+#     consistent — the panel prints it (``f_match``). It also draws the best picture: the split
+#     ramps 0 -> 0.13 -> 0.42 -> 0.66 -> 0.92 -> 0.98 at 0.05/0.2/0.4/1/2 s.
+#   * **HONESTY: R is constant in frequency; the true monopole R_a is ~ omega^2** (133/424/751/2135
+#     at the rig's 110/196/261/440 Hz modes) — one constant cannot be right at all four. Said in the
+#     readout, with the single matched frequency named. Frequency-dependent R is a core batch.
+#   * **The load KILLS batch 12's slosh, and that is the finding.** Peak E_body falls monotonically
+#     0.773 -> 0.491 -> 0.195 -> 0.072 -> 0.0010 at R = 0/1/4/10/133: loaded by the air, the body
+#     stops being a reservoir and becomes a conduit. Slosh visibility and drain legibility are
+#     anti-correlated, so no single R shows both — lead with the drain and let the slider restore
+#     the slosh (exactly, at R = 0).
+
+RADBODY_N_MAX = 160              # cost is steps alone (per-step cost is N-independent, measured)
+RADBODY_LAM_DEFAULT = 0.9        # < 1 required, as batch 12: the spring pushes Nyquist unstable
+RADBODY_K_DEFAULT = 8000.0       # the same bridge spring as batch 12, so R = 0 reproduces it
+RADBODY_K_MAX = 19000.0          # exact guard trips ~21.5k at N = 100 -> the sweep N always builds
+RADBODY_R_DEFAULT = 133.0        # = monopole R_a at the first body mode (110 Hz); f_match = 109.8
+RADBODY_R_MAX = 300.0            # basin (2-10), the physical value (133) and R = 0 all reachable
+RADBODY_SIGMA_BODY_DEFAULT = 0.0  # body loss OFF: the headline is conservation THROUGH radiation
+RADBODY_SIGMA_BODY_MAX = 80.0
+RADBODY_DISTANCE_DEFAULT = 1.0   # listening radius r (m) for the far-field read-out (the audio)
+RADBODY_DISTANCE_MAX = 8.0
+RADBODY_AMP_DEFAULT = 1e-3
+RADBODY_AUDIO_MAX = 3.0
+RADBODY_WORK_MAX = 200_000       # steps of the single instrumented run (batch 12's budget)
+RADBODY_ANIM_WIN = 0.06          # s of string animation (the body is lumped — no shape to draw)
+RADBODY_EXCHANGE_WINDOW = 0.4    # batch 12's window verbatim, so R = 0 draws batch 12's picture
+RADBODY_TRACE_POINTS = 600
+RADBODY_SWEEP_N = 100            # FIXED: the curve is N-independent, and 100 clears the K guard
+RADBODY_SWEEP_POINTS = 18
+RADBODY_SWEEP_R_MIN = 0.3        # a decade below the basin ...
+RADBODY_SWEEP_R_MAX = 300.0      # ... to two decades above it (log-spaced)
+RADBODY_SWEEP_CAP = 0.8          # s per point; beyond this the point is CENSORED, never guessed
+RADBODY_SWEEP_WORK_MAX = 200_000  # hard stop: censor the remaining points rather than hang
+
+
+def _build_radbody_bridge(
+    p: dict[str, Any], *, n_override: int | None = None, r_override: float | None = None,
+    sigma_override: float | None = None,
+) -> tuple[StringBodyBridge, RadiatedBody, dict[str, Any]]:
+    """Batch 12's string+ModalBody+spring rig with the body wrapped in a :class:`RadiatedBody`.
+
+    The overrides exist for the sweep, which is a *controlled reference curve*: it pins ``N`` (the
+    curve is N-independent, but the coupled guard ceiling is not — see the section note) and
+    ``sigma_body = 0`` (on a lossy body most of the energy goes to sigma, so ``t50`` censors nearly
+    everywhere and the curve would both lie and cost 7x more), while keeping the user's K, string
+    and pluck. Returns ``(bridge, radiated_body, info)``.
+    """
+    L = _fnum(p, "L", 1.0)
+    T = _fnum(p, "T", 200.0)
+    rho = _fnum(p, "rho", 0.005)
+    lam = _fnum(p, "lambda", RADBODY_LAM_DEFAULT)
+    K = _fnum(p, "bridge_stiffness", RADBODY_K_DEFAULT)
+    R = _fnum(p, "radiation_R", RADBODY_R_DEFAULT) if r_override is None else float(r_override)
+    sigma_body = (_fnum(p, "sigma_body", RADBODY_SIGMA_BODY_DEFAULT) if sigma_override is None
+                  else float(sigma_override))
+    try:
+        N = int(p.get("N", 100)) if n_override is None else int(n_override)
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"N must be an integer, got {p.get('N')!r}.") from exc
+
+    if not (N_MIN <= N <= RADBODY_N_MAX):
+        raise ParamError(
+            f"N must be in [{N_MIN}, {RADBODY_N_MAX}] for the radiating body, got {N}."
+        )
+    if min(L, T, rho) <= 0:
+        raise ParamError("L, T, rho must all be positive.")
+    if not (0.0 < lam < 1.0):
+        raise ParamError(
+            f"lambda must be in (0, 1), got {lam}: the string's Nyquist mode is marginal at "
+            "lambda = 1 and the bridge spring pushes it unstable, so the coupled system needs "
+            "headroom below it."
+        )
+    if not (0.0 <= K <= RADBODY_K_MAX):
+        raise ParamError(f"bridge_stiffness must be in [0, {RADBODY_K_MAX}], got {K}.")
+    if not (0.0 <= R <= RADBODY_R_MAX):
+        raise ParamError(
+            f"radiation_R must be in [0, {RADBODY_R_MAX}] Pa·s/m³, got {R}. R = 0 decouples the "
+            "air (bit-identical to the read-out-only body); the load is unconditionally passive, "
+            "so this is a legibility range, not a stability one."
+        )
+    if not (0.0 <= sigma_body <= RADBODY_SIGMA_BODY_MAX):
+        raise ParamError(f"sigma_body must be in [0, {RADBODY_SIGMA_BODY_MAX}], got {sigma_body}.")
+
+    c = math.sqrt(T / rho)
+    fs = c * N / (L * lam)
+    string = IdealString(L=L, T=T, rho=rho, fs=fs, N=N, boundary=("fixed", "free"), sigma=0.0)
+    # The SAME body rig as batch 12 (freqs, mass, phi) — that is what makes R = 0 bit-identical.
+    body = ModalBody(freqs=BODY_BODY_FREQS, fs=fs, sigmas=sigma_body, masses=BODY_BODY_MASS,
+                     phi=1.0)
+    loaded = RadiatedBody(body=body, R=R)
+    # The exact coupled stability guard fires HERE if K exceeds the ceiling (which shrinks with fs).
+    bridge = StringBodyBridge(string=string, body=loaded, K=K)
+    info = {
+        "c": c, "L": L, "N": N, "fs": fs, "lam": float(string.lam), "K": K, "R": R,
+        "sigma_body": sigma_body,
+    }
+    return bridge, loaded, info
+
+
+class _RadBodyRun:
+    """Per-step telemetry of a radiation-LOADED body run — the four channels and the read-out.
+
+    Deliberately NOT a subclass of :class:`_BodyRun`: batch 12's ``wb``/``qaccel``/``u_end`` feed
+    its far-field spectrum panel (the omega^2 consistency ratio and the terminus glide), which this
+    batch replaces with the t50 sweep. Inheriting them would cost three extra calls on every step of
+    a model whose whole budget is step count, to fill arrays nothing ships.
+    """
+
+    def __init__(self, n: int) -> None:
+        self.E = np.empty(n + 1)            # the BOOKED total: mechanical + int P_rad (conserved)
+        self.e_string = np.empty(n + 1)     # string energy alone
+        self.e_body = np.empty(n + 1)       # the BARE body, without its booked radiation channel
+        self.e_conn = np.empty(n + 1)       # connection (spring) energy — cross-time, can go < 0
+        self.rad = np.empty(n + 1)          # int P_rad dt — the energy handed to the far field
+        self.pressure = np.empty(n + 1)     # retarded far-field pressure (the audio)
+        self.frames: list[NDArray[np.float64]] = []
+        self.frame_steps: list[int] = []
+
+
+def _run_radbody(bridge: StringBodyBridge, loaded: RadiatedBody, rad: AirRadiation, n_steps: int,
+                 *, anim_stride: int, frame_until: int) -> _RadBodyRun:
+    """Step the loaded chain, capturing the four energy channels + the read-out in ONE pass.
+
+    Note ``e_body`` reads ``loaded.body.energy()``, NOT ``bridge.body.energy()``: the latter is the
+    RadiatedBody's total, which already folds the radiated channel in and would draw it twice.
+    """
+    run = _RadBodyRun(n_steps)
+
+    def _sample(i: int) -> None:
+        run.E[i] = bridge.energy()                    # booked total (mechanical + int P_rad)
+        run.e_string[i] = bridge.string.energy()
+        run.e_body[i] = loaded.body.energy()          # the BARE body, without the booked channel
+        run.e_conn[i] = 0.5 * bridge.K * bridge._stretch() * bridge._stretch(prev=True)
+        run.rad[i] = loaded.radiated_energy
+        run.pressure[i] = rad.radiate(bridge)
+
+    _sample(0)
+    if frame_until >= 1:
+        run.frames.append(bridge.string.u.copy())
+        run.frame_steps.append(0)
+    for i in range(1, n_steps + 1):
+        bridge.step()
+        _sample(i)
+        if i <= frame_until and i % anim_stride == 0:
+            run.frames.append(bridge.string.u.copy())
+            run.frame_steps.append(i)
+    if not np.all(np.isfinite(run.E)):
+        raise ParamError("simulation produced non-finite energy (instability) — adjust parameters.")
+    return run
+
+
+def _radbody_t50(p: dict[str, Any], R: float, cap_seconds: float,
+                 n: int = RADBODY_SWEEP_N) -> tuple[float, int]:
+    """Steps until the radiated channel holds half the pluck's energy. Returns ``(t50_s, steps)``.
+
+    ``NaN`` when the cap is reached first — CENSORED, which the panel labels rather than plotting.
+    Early exit is what makes the sweep cheap: the whole 18-point curve is ~48k steps at the default.
+    ``n`` is exposed so the N-independence of the curve can be *tested* rather than asserted (it is
+    what separates this physical optimum from the scheme's own ``1/G ~ fs`` turnover).
+    """
+    bridge, loaded, info = _build_radbody_bridge(
+        p, n_override=n, r_override=R, sigma_override=0.0,
+    )
+    L, fs = info["L"], info["fs"]
+    pluck_frac = _fnum(p, "pluck_position", 0.3)
+    amplitude = _fnum(p, "amplitude", RADBODY_AMP_DEFAULT)
+    bridge.string.set_state(
+        triangular_pluck(bridge.string.x, L, pluck_frac * L, amplitude=amplitude)
+    )
+    half = 0.5 * bridge.energy()
+    cap_steps = max(1, round(cap_seconds * fs))
+    for i in range(1, cap_steps + 1):
+        bridge.step()
+        if loaded.radiated_energy >= half:
+            return i / fs, i
+    return float("nan"), cap_steps
+
+
+def _radbody_sweep(p: dict[str, Any], r_now: float, k_now: float) -> dict[str, Any]:
+    """The ``t50``-vs-R reference curve + the operating-point marker measured the SAME way.
+
+    Skipped entirely at ``K = 0``: with no bridge spring nothing ever reaches the body (measured
+    radiated energy after 0.3 s is exactly 0.0), so every point would run the full cap to report
+    ``NaN`` — 320k steps to draw nothing. Labelled, not failed (the bow/jawari rule).
+
+    ``sweep_points`` / ``sweep_cap`` are hidden overrides (no slider): the shipped values are the
+    measured ones, pinned by a test, and the tests use a coarse grid so the sweep — which is the
+    whole cost of this payload — does not dominate the suite. The juari's precedent.
+    """
+    points = int(_fnum(p, "sweep_points", RADBODY_SWEEP_POINTS))
+    cap = _fnum(p, "sweep_cap", RADBODY_SWEEP_CAP)
+    if not (2 <= points <= 40):
+        raise ParamError(f"sweep_points must be in [2, 40], got {points}.")
+    if not (0.05 <= cap <= 1.5):
+        raise ParamError(f"sweep_cap must be in [0.05, 1.5] s, got {cap}.")
+    grid = np.geomspace(RADBODY_SWEEP_R_MIN, RADBODY_SWEEP_R_MAX, points)
+    out: dict[str, Any] = {
+        "r": _finite_list(grid, 4),
+        "cap_ms": round(cap * 1000.0, 1),
+        "sweep_n": RADBODY_SWEEP_N,
+        "r_now": round(r_now, 3),
+    }
+    if k_now <= 0.0:
+        out.update({"t50_ms": [], "skipped": True, "truncated": False, "steps": 0,
+                    "t50_now_ms": None, "best_r": None, "best_t50_ms": None, "basin": None,
+                    "n_censored": 0,
+                    "note": "no bridge coupling (K = 0): the body never moves, nothing radiates"})
+        return out
+
+    t50s: list[float] = []
+    spent = 0
+    truncated = False
+    for r in grid:
+        if spent >= RADBODY_SWEEP_WORK_MAX:      # never hang: censor the tail, say so
+            truncated = True
+            t50s.append(float("nan"))
+            continue
+        t50, steps = _radbody_t50(p, float(r), cap)
+        spent += steps
+        t50s.append(t50)
+    t50_arr = np.array(t50s, dtype=float)
+    finite = np.isfinite(t50_arr)
+    best_i = int(np.argmin(np.where(finite, t50_arr, np.inf))) if finite.any() else -1
+    basin = None
+    if best_i >= 0:
+        near = finite & (t50_arr <= 1.25 * t50_arr[best_i])
+        basin = [round(float(grid[near][0]), 3), round(float(grid[near][-1]), 3)]
+    t50_now = float("nan")
+    if r_now > 0.0 and spent < RADBODY_SWEEP_WORK_MAX:
+        t50_now, steps_now = _radbody_t50(p, r_now, cap)
+        spent += steps_now
+    out.update({
+        "t50_ms": _finite_list(t50_arr * 1000.0, 3),
+        "skipped": False,
+        "truncated": truncated,
+        "steps": int(spent),
+        "n_censored": int(np.count_nonzero(~finite)),
+        "best_r": round(float(grid[best_i]), 3) if best_i >= 0 else None,
+        "best_t50_ms": round(float(t50_arr[best_i]) * 1000.0, 3) if best_i >= 0 else None,
+        "basin": basin,
+        "t50_now_ms": round(t50_now * 1000.0, 3) if math.isfinite(t50_now) else None,
+    })
+    return out
+
+
+def _build_payload_radbody(p: dict[str, Any]) -> dict[str, Any]:
+    playback_speed = _fnum(p, "playback_speed", 0.02)
+    pluck_frac = _fnum(p, "pluck_position", 0.3)
+    amplitude = _fnum(p, "amplitude", RADBODY_AMP_DEFAULT)
+    audio_dur = _fnum(p, "audio_duration", 2.0)
+    distance = _fnum(p, "distance", RADBODY_DISTANCE_DEFAULT)
+    fpp = max(1, int(_fnum(p, "frames_per_period", FRAMES_PER_PERIOD)))
+    if not (0.0 < playback_speed <= SPEED_MAX):
+        raise ParamError(f"playback_speed must be in (0, {SPEED_MAX}], got {playback_speed}.")
+    if not (0.0 < pluck_frac < 1.0):
+        raise ParamError(f"pluck_position must be in (0, 1), got {pluck_frac}.")
+    if not (0.0 < audio_dur <= RADBODY_AUDIO_MAX):
+        raise ParamError(f"audio_duration must be in (0, {RADBODY_AUDIO_MAX}] s, got {audio_dur}.")
+    if not (0.0 < distance <= RADBODY_DISTANCE_MAX):
+        raise ParamError(f"distance must be in (0, {RADBODY_DISTANCE_MAX}] m, got {distance}.")
+
+    bridge, loaded, info = _build_radbody_bridge(p)   # exact K guard fires in here
+    c, L, fs, lam, R = info["c"], info["L"], info["fs"], info["lam"], info["R"]
+    f1_base = c / (2.0 * L)
+
+    n_steps = max(1, round(audio_dur * fs))
+    if n_steps > RADBODY_WORK_MAX:
+        raise ParamError(
+            f"work budget exceeded ({n_steps:,} steps > {RADBODY_WORK_MAX:,}). Lower the audio "
+            "duration, N, or the tension."
+        )
+    anim_stride = max(1, round((fs / f1_base) / fpp))
+    frame_until = max(anim_stride, round(RADBODY_ANIM_WIN * fs))
+    if frame_until // anim_stride > MAX_FRAMES:
+        anim_stride = max(1, math.ceil(frame_until / MAX_FRAMES))
+
+    bridge.string.set_state(triangular_pluck(bridge.string.x, L, pluck_frac * L,
+                                             amplitude=amplitude))
+    air = AirRadiation(fs=fs, distance=distance, retarded=True)
+    run = _run_radbody(bridge, loaded, air, n_steps, anim_stride=anim_stride,
+                       frame_until=frame_until)
+
+    # --- the money panel: the FOUR booked channels, fractions of the (conserved) booked total -----
+    #     E_string + E_body + E_conn + int P_rad == total, exactly (measured to 1.6e-14), so the
+    #     four lines fill the flat reference. E_conn can go negative -> signed axis, never stacked.
+    total = run.E
+    es_frac = run.e_string / total
+    eb_frac = run.e_body / total
+    ec_frac = run.e_conn / total
+    er_frac = run.rad / total
+    n_exch = min(n_steps, max(1, round(RADBODY_EXCHANGE_WINDOW * fs)))
+    eidx = np.linspace(0, n_exch, min(n_exch + 1, RADBODY_TRACE_POINTS)).astype(int)
+    e0 = float(total[0])
+    exchange = {
+        "kind": "radbody",
+        "time": _finite_list(eidx / fs, 6),
+        "e_string_frac": _finite_list(es_frac[eidx]),
+        "e_body_frac": _finite_list(eb_frac[eidx]),
+        "e_conn_frac": _finite_list(ec_frac[eidx]),
+        "e_rad_frac": _finite_list(er_frac[eidx]),
+        "total_frac": _finite_list((total / total)[eidx]),
+        "window": round(n_exch / fs, 4),
+        # scalars over the FULL run — the drain is the batch, so these are its headline:
+        "rad_frac_end": round(float(er_frac[-1]), 4),
+        "mech_frac_end": round(float(1.0 - er_frac[-1]), 4),
+        "rad_frac_window": round(float(er_frac[eidx[-1]]), 4),
+        "body_frac_peak": round(float(np.max(eb_frac)), 4),
+        "string_frac_min": round(float(np.min(es_frac)), 4),
+        "string_frac_max": round(float(np.max(es_frac)), 4),
+        "total_drift": (total.max() - total.min()) / abs(e0) if e0 != 0.0 else float("nan"),
+        "K": round(info["K"], 1),
+        "R": round(R, 3),
+    }
+
+    # --- the second panel: the t50-vs-R reference curve (the map the R slider walks) --------------
+    sweep = _radbody_sweep(p, R, info["K"])
+    # sigma_rad/omega_1 = a^2 R / (2 m omega_1) for the LOWEST body mode — the dimensionless control
+    # the optimum actually tracks (R/27.6 at this rig), as opposed to the scheme's 1/G ~ fs.
+    a1, m1 = float(loaded.body.a[0]), float(loaded.body.m[0])
+    w1 = 2.0 * math.pi * float(BODY_BODY_FREQS[0])
+    # R_a(omega) = rho0 omega^2/(4 pi c0) is quadratic in omega, so the frequency at which this
+    # CONSTANT R equals the true free-space monopole load is omega = sqrt(R / R_a(1)) — the one
+    # frequency where the load and the batch-1 read-out are consistent with each other.
+    r_a_unit = monopole_radiation_resistance(1.0)
+    f_match = math.sqrt(R / r_a_unit) / (2.0 * math.pi) if R > 0.0 else 0.0
+    spectrum = {
+        "kind": "radbody",
+        "sweep": sweep,
+        "R": round(R, 3),
+        "sigma_rad": round(a1 * a1 * R / (2.0 * m1), 4),
+        "sigma_ratio": round(a1 * a1 * R / (2.0 * m1) / w1, 5),
+        "f_match": round(f_match, 2),
+        "body_modes": _finite_list(BODY_BODY_FREQS, 1),
+        # R_a at each body mode: one CONSTANT R cannot match a law that goes as omega^2. Shown so
+        # the panel can say so with numbers instead of a disclaimer.
+        "r_phys": _finite_list(
+            np.array([monopole_radiation_resistance(2.0 * math.pi * f) for f in BODY_BODY_FREQS]),
+            1,
+        ),
+        "r_phys_f1": round(monopole_radiation_resistance(2.0 * math.pi
+                                                         * float(BODY_BODY_FREQS[0])), 1),
+        "distance": round(distance, 3),
+        "gain": air.gain,
+        "gain_times_r": round(air.gain * distance, 6),
+        "latency_ms": round(air.latency_samples / fs * 1000.0, 3),
+    }
+
+    frames = np.array(run.frames, dtype=float)
+    field_amp = float(np.max(np.abs(frames))) if frames.size else 0.0
+    audio48, peak = _resample_normalize(run.pressure, fs)
+    sim = SimResult(time=np.arange(total.size) / fs, energy=total, output=None, fs=fs, snapshots=[])
+    return {
+        "model": "radbody",
+        "fs_sim": round(fs, 3),
+        "lambda": round(lam, 6),
+        "grid": {"x": _finite_list(bridge.string.x, 6)},
+        "frames": {
+            "b64": _b64f32(frames.ravel()),
+            "n_frames": int(frames.shape[0]),
+            "width": int(frames.shape[1]) if frames.ndim == 2 else 0,
+            "dims": 1,
+        },
+        "frame_times": _finite_list(np.array(run.frame_steps, dtype=float) / fs, 6),
+        "anim_dt": float(anim_stride / fs),
+        "playback_speed": playback_speed,
+        "field_amp": field_amp,
+        "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
+        # R > 0 is a booked CHANNEL, not a loss: the total still conserves, so the gate stays
+        # sigma_body alone (the bore's bell precedent). Do not "fix" this into a passivity branch.
+        "energy": _energy_block(sim, sigma_zero=bool(info["sigma_body"] == 0.0), oracle_2sigma=0.0,
+                                decay_oracle=False),
+        "meta": {
+            "c": round(c, 3),
+            "f1": round(f1_base, 3),
+            "num_steps": int(n_steps),
+            "n_frames": int(frames.shape[0]),
+            "probe_x": round(float(L), 4),
             "exchange": exchange,
             "spectrum": spectrum,
         },
