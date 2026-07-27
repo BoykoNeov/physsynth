@@ -274,4 +274,6 @@ through the reduction test, so it is written down here.
 
 **Acceptance:** all of §7 green, full suite green (baseline pinned below), `ruff check .` clean.
 
-**Baseline pinned at `1533b51`.** Suite after the batch: see the `feat:` commit that lands it.
+**Baseline pinned at `1533b51` (1129).** Suite after the batch: **1173 green**, ruff clean — the
++44 are all in `tests/test_radiation.py`, so the delta is exactly this batch and nothing outside it
+moved.

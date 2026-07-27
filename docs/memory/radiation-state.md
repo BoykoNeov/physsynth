@@ -103,7 +103,9 @@ the passivity proof — `U` splits, resistor branch radiated, inertance branch s
   cross-check now runs at **two timesteps**.
 - Zero edits to `AirRadiation`/`RadiatedBody`/`body.py`/`connection.py`; `__getattr__` delegation
   carries the full string→bridge→loaded-body chain free. `tests/test_radiation.py` 28 → **72**,
-  `scripts/diagnose_radiation_impedance.py` (3 figs), `helpers.make_reactive_body`.
+  `scripts/diagnose_radiation_impedance.py` (3 figs), `helpers.make_reactive_body`. Suite **1173**
+  green (was 1129 at Phase D close; +44 all in `test_radiation.py`, so the delta *is* the batch),
+  ruff clean.
 
 **Next horizon** = distributed/3D FDTD air box (§12H, the remaining half of the R(ω)/air-box fork)
 or plate/grid radiation load (deferred: area-weighted W, implicit θ-solve). See
