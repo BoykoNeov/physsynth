@@ -2131,6 +2131,146 @@ gates the advisor set before any panel code:
   its place on the axis; silent truncation reading as "covered everything" is the failure the
   no-silent-caps rule names.
 
+### Batch 16 (PLANNED) — the parametric instability: model #9's second refusal, discharged
+
+The last batch named in this plan's own backlog, and the discharge of a refusal the tension batch
+wrote into the code. `_build_payload_tension` raises above `TENSION_DT_MAX = 4.45` with *"the
+breakup is real, energy-conserving physics; it wants a panel of its own."* This is that panel. It is
+the **in-plane** modal exchange — the same `2ω` parametric pump batch 3's whirl aims at the other
+polarization — and it is what batch 1's purity gate was protecting the Duffing oracle *from*.
+
+**A REGIME of `tension`, not a new model key.** The pattern the viewer already follows: a different
+resonator class earns its own key (`radbody`/`platebody`, `RadiatedBody` vs `ModalBody`); the same
+class with a different IC is a regime (geometric's planar/whirl/rotating/phantom). This is
+`TensionModulatedString` with a different mode IC and a larger amplitude — the same-class case, and
+the exact analogue of batch 4, which discharged model #9's *first* refusal as a regime of geometric.
+`tension` has no secondary select today, so this adds one (`DOMAIN_OPTS.tension`, the batch-6
+`data-show` fix on the domain container, `tension:parametric` keys for `hasRegimeRanges`). Core is
+untouched; `_build_payload_tension` stays bit-for-bit; **`TENSION_DT_MAX` is NOT relaxed** — the
+refusal stays exactly where it is, and now it points somewhere.
+
+**Everything below is MEASURED before any panel code** (`temp/parametric-probe/`, probes 1–6,
+`FINDINGS.md` + raw JSON). Three of the six probes overturned a prior assumption, two of them the
+advisor's.
+
+- **`m` MUST be a control, and m=1 is the one mode that does not do this.** The tension path is
+  hardwired to `_mode1_shape`, and the m=1 threshold is `ΔT/T₀ ∈ (4, 6]` (batch 1 measured (4.44,
+  6.05] independently) because it has no lower resonance partner. Measured thresholds: m=1 (4, 6];
+  m=2 (3, 4]; **m=3 (1.75, 2.25]** — the documented case, the core test's case, the default; m=4 and
+  m=5 both (1, 2]. `_mode1_shape` generalizes to `_mode_shape(res, m)`; the animation stride rides
+  **mode m**, not f₁; and **run length is specified in PERIODS OF MODE m, never steps** — at a fixed
+  step count, raising N raises fs and shrinks the physics-time window until the breakup slides off
+  the end of the panel (`TENSION_MEASURE_PERIODS`' pattern).
+- **THE PARTNER IS NOT FIXED — it moves with `ΔT/T₀`, which corrects the recorded result.** For m=3
+  the energy goes to **m=7** just above the edge (`ΔT/T₀` 2–3), to **4 and 11** deeper in, and to
+  **4 and 8** at `ΔT/T₀ ≈ 9`. Memory's "m=3 → m=4 and m=8" was measured at ≈11 and is *one tongue
+  among several*, not the answer. The cascade panel must therefore **never label a fixed pair** —
+  it reads the partners off the run. Off-mode energy sits **1e5–1e7 above grid scale** throughout,
+  which is the discriminator against a numerical instability (the core test's `>100×` bar, with
+  four orders of headroom).
+- **The claim runs are BOTH deeply nonlinear — "below" is not a linear control, and that is the
+  stronger claim.** At the m=3 pair straddling the edge, `nonlinear_fraction` at the IC (which is
+  the peak: max displacement, zero velocity) reads **0.42 at `ΔT/T₀` = 1.5** against **0.49 at 2.0**
+  — tension 2.5× vs 3.0× rest. The two runs are *equally* nonlinear. The tongue is the entire
+  difference, and the panel says so with those numbers.
+- **NO new verdict type** (batch 3's precedent). Nothing drives this string, so the ordinary σ=0
+  drift check IS the claim; what makes it one is what it survives. **Drift stays 1e-15…1e-12 across
+  all ~150 probe runs, including complete disintegration** (off-mode 0.5) — a numerical instability
+  grows the energy, a parametric one only redistributes it. Printed *next to* the disintegration,
+  the whirl's pattern. σ is **fixed at 0 and deliberately unexposed**: loss decays the amplitude
+  back down through the threshold, so the instability self-extinguishes, and there is no
+  single-exponential form for multi-rate redistribution to fit a decay oracle to (jawari's
+  σ₁/hysteresis precedent — say why in the docstring so nobody "fixes" it into a slider).
+- **Gate the claim on `n_not_converged == 0`.** A tension root-find failure at high `ΔT/T₀` looks
+  exactly like a breakup, and the drift number is meaningless if the step never converged. The
+  tension `convergence` block already ships; reuse it and let it override the badge (VK's gate).
+
+**The seed — explicit, fixed, printed, and defined MODALLY.**
+
+- **The growth rate is seed-independent; only the onset time shifts** (by `log(seed)/rate`).
+  Measured at m=3, `ΔT/T₀`=2: envelope-fitted rate **70.1/s at seeds 1e-11, 1e-9 and 1e-6 alike,
+  r² = 1.000**, against 68.4/s for roundoff-only — 2.5 %. So an explicit seed costs nothing.
+- It is taken anyway, because it makes the below/above contrast **honest**: with roundoff seeding,
+  "below is flat" is partly "below was never seeded." Same seed both sides, every sweep point
+  starting from the same floor with identical dynamic range to grow through. The self-seeding claim
+  is pinned in a **test** (seed = 0 still breaks up, still conserves, still lands in the neighbours)
+  rather than in the shipped render — which also closes [[tension-string-state]]'s flagged BLAS
+  risk, since nothing shipped depends on roundoff any more.
+- **Convention: a unit-norm combination of modes 1..24 (mode `m` removed) with fixed
+  `default_rng(12345)` coefficients, scaled to `1e-6·A`.** Defined by MODAL content on purpose —
+  probe 2's `standard_normal(N+1)` draw spread a fixed norm over twice as many modes at N=200 and
+  confounded the two-N comparison. Broadband so the tongue picks its own winner rather than us
+  naming a partner in advance. `1e-3` is too large: no dynamic range below saturation, the fit
+  returns garbage. Batch 3's displacement-vs-velocity convention trap applies — state it in the
+  payload.
+
+**The sweep panel — the saturated off-mode LEVEL, after two rejected observables.**
+
+- **Rejected #1: the fitted growth rate.** Clean only *at* the edge (r² = 1.000 at `ΔT/T₀` = 2.0),
+  degrading to r² ≈ 0.4 above 3.0 and returning non-monotone rates (m=4: 2.3/s at 3 vs 44.8/s at 4).
+  The cause is physical, not estimator choice — above the edge several tongues overlap and the
+  content saturates within ~5 periods, so there is no single exponential to fit. (Fitting the
+  ENVELOPE rather than the raw signal is still mandatory — raw off-mode content is a growing
+  *oscillation*, batch 3's whirl lesson — it is just not sufficient.)
+- **Rejected #2: `t_break`.** The natural radbody-`t50` analogue, and it looked right — monotone,
+  refinement-convergent (46.6/39.5/38.4 ms at N=100/150/200 for `ΔT/T₀`=4), cheaper the deeper it
+  goes. It dies on the near-edge points, which **never break at any cap**: at `ΔT/T₀` = 2.25 the
+  off-mode content sits on **0.130 flat across 40, 60 and 90 periods**; 2.50 → 0.155, 2.75 → 0.190.
+  They are not slow, they are **bounded** — a *partial* exchange in which the mode is degraded, not
+  destroyed. A fixed break level is an arbitrary line through a continuum of plateaus.
+- **Shipped: the saturated level.** Window-free for the reason that matters — it *plateaus*, and
+  saturation is **verified per point** (chunk-to-chunk in periods of mode m; a chunk that beats the
+  previous by < 10 % is saturated) so a point that has not settled by the cap is **labelled, never
+  reported as if it had**. Measured curve (m=3): flat at the seed floor for `ΔT/T₀` ≤ 1.75, then
+  0.061 / 0.130 / 0.155 / 0.190 / 0.207 / 0.238 / 0.261 / 0.295 / **0.332** rising monotonically to
+  `ΔT/T₀` = 6. On a log axis the growth ratio jumps **1.1× → 4e5×** across the edge: that jump *is*
+  the sharp-threshold claim.
+- **Three bins, not two** — `stable` (level < 100× the seed floor), `unsaturated` (grew, had not
+  settled at the cap), `saturated`. Two bins conflate genuinely stable points with slow ones and
+  read as a much wider stable region than exists. No silent caps: everything keeps its place on the
+  axis with its label.
+- **What is N-invariant, and what is NOT — stated, not glossed.** Above `ΔT/T₀` = 2.25 both grids
+  agree within ~10 % (0.130/0.112, 0.190/0.178, 0.238/0.251, 0.332/0.373 at N=100/200) and the curve
+  keeps its shape. The **edge location does not hold still**: 2.00 (N=100), 2.00 (N=150), 2.25
+  (N=200), and N=200 carries an isolated narrow tongue at **1.75 that grows into partner m=10**
+  where every other case goes to m=7, plus a null at 2.00. This is real Mathieu structure — a tongue
+  has edges on *both* sides in detuning, so a partner enters and leaves resonance as the amplitude
+  rises — whose fine position depends on which discrete partner frequency is available.
+  [[tension-string-state]]'s "refinement-invariant" was measured at `ΔT/T₀` ≈ 11, deep in the merged
+  region, where refinement-robustness does hold. **Claim the convergent quantity; describe the edge
+  as the tongue structure it is.** A naive two-N invariance claim would have been wrong here.
+- **Controlled reference curve** (radbody's precedent): fixed N, σ = 0, the user's m — the threshold
+  is *not* mode-invariant, so a sweep at the wrong m is a different curve. The fixed N and the seed
+  are printed on the panel, and the y-axis reads "saturated off-mode level **from a 1e-6 seed**",
+  never a bare level (batch 14's canonical-duration lesson: the seed sets the intercept, the physics
+  sets the slope).
+
+**Panels.** (1) *Headline* — off-mode envelope vs time on log-y, below and above, with the unstable
+run's **energy drift on the same axes** at ~1e-13: straight line up, flat line at machine precision.
+`physsynth/viz/plots.py:plot_mode_purity` is the template; `drawWhirl`/`drawSympathetic` are already
+log-y, so this is their third customer, not new infrastructure. (2) *The cascade* — modal content at
+the end of the unstable run, partners read off the run with a grid-scale reference line. (3) *The
+tongue sweep*, above. The **animation needs no new viz**: a clean m-lobe sine visibly losing its
+shape is the 1-D line path already there, and the frames come out of the above-threshold run.
+**Audio** is cheap from that same run — shipped, not headlined, and it must not set the claim runs'
+duration (batch 14).
+
+**Cost — the one item still unmeasured, deliberately.** A 12-point sweep with the saturation exit is
+**9.9 s at N=100 / 26.4 s at N=200**, and the claim runs are ~1.0 s each at 60 periods, so the sweep
+is the driver and gets its own budget with the *stable* points priced (they alone run the full cap).
+Measured per-step cost here is ~350 µs at N=100 — **2× the 176 µs the tension batch recorded at
+N=128**, which is exactly why this gets re-measured on the real payload build rather than
+extrapolated (batch 4's rule: extrapolating a loop understates a payload build). Trim levers, in
+order: fewer sweep points, a shorter saturation chunk, a lower cap.
+
+**Traps carried in from prior batches.** `_default` leak family (2/3/7/8/12) — every param this
+re-ranges resets, `m` included, and this regime's amplitude range must exceed the Duffing regime's.
+Batch 15's **control-existence check**: `m` and the sweep knobs will have server-side defaults,
+which is precisely the bug class where a missing slider still renders a flawless panel — enumerate
+the built `.slider` params over CDP. Score the unstable run's drift over the **FULL** array, not the
+decimated one (batch 2). And the deep-link verifier structurally cannot fire the regime switch
+(batch 4) — a CDP switch-check drives it.
+
 ### Later batches (rough map — not firm)
 
 - **Body / radiation** — the modal body + radiation read-out is **batch 12**; `StringPlateBridge`
@@ -2143,9 +2283,10 @@ gates the advisor set before any panel code:
   rail is batch 11** (above); the tanpura **cotton thread (juari)** is **batch 14** (above). The
   barrier family is then fully surfaced.
 - **Sympathetics Weinreich two-stage decay** — DONE, batch 7 above.
-- **The parametric-instability demo** deserves its own batch with real viz (energy cascading into the
-  neighbour modes — model #9's IN-plane exchange, which is the SAME `2ω` pump batch 3's whirl aims at
-  the other polarization) — *not* a bolt-on to justify batch 1's purity gate.
+- **The parametric-instability demo** — **batch 16** (above), planned and probed. It landed as a
+  *regime of tension* rather than the standalone demo sketched here, and with real viz (energy
+  cascading into the neighbour modes — model #9's IN-plane exchange, the SAME `2ω` pump batch 3's
+  whirl aims at the other polarization); *not* a bolt-on to justify batch 1's purity gate.
 
 ## Tests — `tests/test_web_backend.py` (web wrapper, not core; keep core count stable)
 
