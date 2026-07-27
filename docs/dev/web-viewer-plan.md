@@ -1978,8 +1978,8 @@ Every number below is measured, before the wiring:
 
 ### Batch 15 (DONE) — the air pushes back (`RadiatedBody`): the BOOKED radiation channel
 
-**Built & browser-verified.** All-wrapper (`physsynth/core` untouched); 16 web tests (306 in the web
-file, 1099 in the suite), ruff clean, headless verifier `radbody` PASS, CDP switch-check **17/17**,
+**Built & browser-verified.** All-wrapper (`physsynth/core` untouched); 17 web tests (307 in the web
+file, 1100 in the suite), ruff clean, headless verifier `radbody` PASS, CDP switch-check **17/17**,
 both panel crops eyeballed. Shipped defaults, measured through the payload: at R = 133 the air takes
 **98.4 %** of the pluck within 2 s while the booked total drifts **1.60e-14**; the body itself peaks
 at **0.10 %** (a conduit, not a reservoir); the drain is fastest at **R ≈ 5.16 (20.0 ms)** in a
@@ -2117,6 +2117,19 @@ gates the advisor set before any panel code:
 - **`_RadBodyRun` is deliberately NOT a subclass of `_BodyRun`.** Inheriting batch 12's telemetry
   meant sampling `wb` / `qaccel` / `u_end` — three extra calls on every step of a model whose entire
   budget is step count — to fill arrays that feed the far-field spectrum panel this batch replaces.
+- **The hidden `sweep_points`/`sweep_cap` overrides needed the shipped path pinned SEPARATELY.**
+  They keep the suite from paying for the full 18-point sweep seventeen times, but because every
+  radbody test sets them, the configuration the UI actually ships — both keys *absent* — was
+  exercised only by the verifier. A constant can be right while the default path reading it is not,
+  so the settings test now renders with the keys omitted and asserts the grid length and cap that
+  come back.
+- **`RADBODY_SWEEP_WORK_MAX` is a GUARANTEE, not dead code — and is unit-tested past itself.** The
+  worst reachable sweep is ~120 k steps against the 200 k cap (K = 0, the catastrophe, is *skipped*
+  rather than budgeted), so `truncated` cannot fire in the shipped range. Batch 1's rule applies:
+  do not widen a range to make a gate fire — drive it past the guard, where the behaviour is real.
+  With the budget lowered the tail must come back as labelled nulls with `truncated` set, keeping
+  its place on the axis; silent truncation reading as "covered everything" is the failure the
+  no-silent-caps rule names.
 
 ### Later batches (rough map — not firm)
 

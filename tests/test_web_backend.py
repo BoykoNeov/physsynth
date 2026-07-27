@@ -3546,11 +3546,37 @@ def test_radbody_f_match_names_the_one_frequency_where_load_and_readout_agree():
 
 def test_radbody_shipped_sweep_settings_are_the_measured_ones():
     """The hidden overrides exist so the suite does not pay for the full sweep 16 times; the values
-    the UI actually ships are the measured ones and are pinned here (the juari's precedent)."""
+    the UI actually ships are the measured ones and are pinned here (the juari's precedent).
+
+    And pinned THROUGH the payload with the override keys ABSENT — which is the configuration the UI
+    ships and every other test in this section overrides away. A constant can be right while the
+    default path that reads it is not."""
     assert (RADBODY_SWEEP_POINTS, RADBODY_SWEEP_CAP, RADBODY_SWEEP_N) == (18, 0.8, 100)
     assert RADBODY_R_DEFAULT == 133.0, "= the monopole R_a at the first body mode (110 Hz)"
-    bad = simulate_to_payload({"model": "radbody", "sweep_points": 999})
-    assert bad["error"]["kind"] == "param"
+    shipped = simulate_to_payload({"model": "radbody", "audio_duration": 0.3})
+    sw = shipped["meta"]["spectrum"]["sweep"]
+    assert len(sw["r"]) == RADBODY_SWEEP_POINTS and len(sw["t50_ms"]) == RADBODY_SWEEP_POINTS
+    assert sw["cap_ms"] == pytest.approx(RADBODY_SWEEP_CAP * 1000.0)
+    assert sw["truncated"] is False, "the shipped sweep must fit its own budget with room to spare"
+    for bad_p in ({"sweep_points": 999}, {"sweep_points": "x"}, {"sweep_cap": 9.0}):
+        bad = simulate_to_payload({"model": "radbody", **bad_p})
+        assert bad["error"]["kind"] == "param", bad_p
+
+
+def test_radbody_sweep_truncation_censors_the_tail_rather_than_hanging(monkeypatch):
+    """The step budget is a GUARANTEE, not dead code: the worst reachable sweep is ~120k steps
+    against a 200k cap (and K = 0, the catastrophe, is skipped rather than budgeted), so `truncated`
+    can never fire in the shipped range. Batch 1's rule — do not widen a range to make a gate fire;
+    drive it PAST the guard instead, where the behaviour is real — so the budget is lowered here and
+    the tail must come back as labelled nulls with `truncated` set, never as invented numbers."""
+    monkeypatch.setattr(web_serialize, "RADBODY_SWEEP_WORK_MAX", 5_000)
+    sw = _rb(sweep_points=RADBODY_SWEEP_POINTS, audio_duration=0.2,
+             sweep_cap=0.4)["meta"]["spectrum"]["sweep"]
+    assert sw["truncated"] is True and sw["skipped"] is False
+    assert sw["n_censored"] > 0
+    assert sw["t50_ms"][-1] is None, "the tail is censored, not extrapolated"
+    assert sw["steps"] >= 5_000, "it stops after the budget, it does not pretend to have run"
+    assert len(sw["t50_ms"]) == RADBODY_SWEEP_POINTS, "censored points keep their place on the axis"
 
 
 def test_radbody_frame_and_grid_bookkeeping_line_up_and_the_nut_stays_clamped():

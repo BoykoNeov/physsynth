@@ -3665,7 +3665,12 @@ def _radbody_sweep(p: dict[str, Any], r_now: float, k_now: float) -> dict[str, A
     measured ones, pinned by a test, and the tests use a coarse grid so the sweep — which is the
     whole cost of this payload — does not dominate the suite. The juari's precedent.
     """
-    points = int(_fnum(p, "sweep_points", RADBODY_SWEEP_POINTS))
+    try:
+        points = int(p.get("sweep_points", RADBODY_SWEEP_POINTS))
+    except (TypeError, ValueError) as exc:
+        raise ParamError(
+            f"sweep_points must be an integer, got {p.get('sweep_points')!r}."
+        ) from exc
     cap = _fnum(p, "sweep_cap", RADBODY_SWEEP_CAP)
     if not (2 <= points <= 40):
         raise ParamError(f"sweep_points must be in [2, 40], got {points}.")
