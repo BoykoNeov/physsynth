@@ -196,6 +196,39 @@ Complete and validated:
   the energy stays flat — the one place in this repo where a flat energy is not a stability
   certificate. The headline is cross-tier: far from the walls the room reproduces `AirRadiation`'s
   own monopole law to `max|gain−1| = 6.6e-3`, and one cell thick it tracks `Bore` to 5.3e-14.
+- **The room pushes back** *(air box, batch 2)* — `RoomPort` / `RoomLoadedBody`: the two-way
+  body↔room coupling, which is to the air box what `RadiatedBody` was to `AirRadiation`. It rests on
+  one observation about the scheme: within a single step an injection changes the pressure at its
+  own nodes and **nowhere else** (propagation waits for the next momentum sub-step), so the room
+  seen from a port is a **Thévenin source**, `p̄ = p̄_free + R_room·q` — a known open-circuit
+  pressure carrying the room's entire history *including every reflection*, in series with one
+  positive constant. The body's rank-1 volume-velocity solve then closes in a **single division**,
+  `U = (U_free − G·p̄_free)/(1 + G·R_room)`, and since `1 + G·R_room ≥ 1` the port is
+  **unconditionally passive**: no CFL of its own, no stability guard. The two ledgers are the same
+  number twice — each port's `∫p̄U dt` *is* the room's `injected` — so summing them removes the
+  coupling term from the conserved statement entirely and `Σ inst.energy() + room.energy()` is flat
+  to ~1e-14 for any wall, any port position, any number of instruments. The payoff is what no `R(ω)`
+  can produce at any order: a **delayed echo**. In two rooms differing *only* in `Lz` the body's
+  trajectory is **bit-identical** until the round trip completes and different immediately after,
+  at `2d + 1` steps for `d` = 3, 5, 7 — three geometries, one law; and two instruments in one room
+  hear each other, the second staying *exactly* zero until the first's wave arrives. That arrival is
+  **Manhattan**, not `r/c₀`: the 7-point stencil spreads one node per step, so an off-axis listener
+  gets a machine-precision precursor (measured step 6 where `r/c₀` says 11.5). Two refusals came out
+  of measuring rather than arguing. A port on an **open** face is perfectly conservative and
+  perfectly *silent* (`injected` and `acoustic` exactly zero, drift 8.6e-15) — the energy report is
+  structurally blind to it, so it raises at construction. And **overlapping** ports drift 3.6e-2
+  where disjoint ones hold 7.1e-15, which is the same measurement that scopes N instruments in.
+  Finally, a measured non-convergence, shipped as one: a **point** port is a sphere of radius
+  `≈ h/3.1`, so refining the grid *halves* its equivalent radius and doubles the added mass it hangs
+  on the body — refinement makes the artifact worse — while a fixed-radius **ball** barely moves
+  (0.493 and 0.496 against 1.045 and 1.038 over two halvings: a factor of twenty in grid
+  sensitivity). The energy identity is exact either way; the *magnitude* of a point port's load is a
+  grid quantity, which is why `radius` has no default. What a spread port *is* comes out as the
+  **uniformly injecting ball**, equivalent shell radius `5a/6` — the classic 6/5 shape factor, not
+  a pulsating shell of radius `a` — confirmed to **0.3%**, but only after the room is got out of the
+  way: the same port reads 8.6% high in a room ten times its radius, and that excess is the room's
+  own reactance rather than the port's. The number is Courant-invariant to five figures, so it is a
+  static near-field quantity and not a dispersion artifact.
 - **Acoustic bore** *(wind leg, batch 1 of 3)* — the first **acoustic** resonator (`core/bore.py`):
   the 1D air column of a clarinet, a staggered pressure/volume-velocity leapfrog of Webster's horn
   equation. Energy-first — the trapezoidal `h/2` half-cell closes a rigid wall (no ghost stencil,

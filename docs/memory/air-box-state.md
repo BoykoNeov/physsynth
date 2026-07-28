@@ -1,6 +1,6 @@
 ---
 name: air-box-state
-description: 3-D FDTD air box (HANDOFF §12H) batch 1 BUILT & GREEN, batch 2 (two-way room<->body port) PLANNED — the DISTRIBUTED air tier above the lumped port; the reward and the price both live at λ=1/√3; a flat energy is NOT a stability certificate there
+description: 3-D FDTD air box (HANDOFF §12H) batches 1 AND 2 BUILT & GREEN — the DISTRIBUTED air tier above the lumped port; the reward and the price both live at λ=1/√3; batch 2's port is a Thevenin source solved in ONE division, and the ROOM contaminated the port's own measured size by more than the effect
 metadata: 
   node_type: memory
   type: project
@@ -99,41 +99,73 @@ Suite **1235** green (was 1173); the batch's 62 run in 2.97 s.
 
 ---
 
-**BATCH 2 — the room pushes back — PLANNED (2026-07-28), not built.** Plan
-`docs/dev/air-box-back-reaction-plan.md`. The room seen from a port node is a **Thevenin source**:
-`pbar = pbar_free + R_room*q`, so the whole two-way coupling is ONE DIVISION,
-`U = (U_free - G*pbar_free)/(1 + G*R_room)` — structurally `RadiatedBody`'s rank-1 solve reused
-verbatim, unconditionally passive (`1 + G*R_room >= 1` always, no CFL, no guard). Seven traps
-measured on a prototype BEFORE any core code; the numbers that would otherwise cost a rediscovery:
+**BATCH 2 — the room pushes back — BUILT & GREEN (2026-07-28).** Plan
+`docs/dev/air-box-back-reaction-plan.md`. `RoomPort` + `RoomLoadedBody`, both in `airbox.py`; ZERO
+edits to `radiation.py` / `body.py` / `connection.py` / `bore.py`. All seven planned traps held.
 
-- **`R_room = k*rho0*c0^2 / (2*W*(1+beta))` — the `(1+beta)` is NOT optional.** batch 1's `step()`
-  adds the source BEFORE the wall closure, so a port on a lossy wall gets divided by `(1+beta)` too.
-  Measured drift: **8.4e-15 with** the factor, **1.9e-2 without**. Wall-mounted ports are supported
-  *because* of it; the naive spelling passes every interior-port test and leaks only on a wall.
-- **A port on an OPEN face is silent and the books say nothing is wrong.** `p=0` pins `pbar=0` and
-  `R_room=0`, so `injected` and `acoustic` are **exactly 0.0** forever while the drift is 8.6e-15.
-  The energy report — this project's primary bug detector — is structurally blind to it. Refuse.
-- **A POINT port's load diverges as `1/h` and refining makes it WORSE.** Measured `|Z|` **x2.00 per
-  halving** over three grids (37³/74³/148³), = `3.16..3.29 x |Z_sphere(a=h)|` at every frequency:
-  **a point port is a pulsating sphere of radius ~h/3.2**, i.e. mostly an ADDED MASS (detune), not
-  damping. NOT the cell compliance (that would be `1/h³`) — it is the monopole near field at the
-  only radius the grid has.
-- **A fixed-radius SPREAD port converges** (x0.96 then x1.01 over three grids, 203 -> 1743 -> 13613
-  nodes; non-monotone because the STAIRCASED ball's discrete volume wobbles around `4*pi*a^3/3`), so
-  it ships. But it converges to the **uniformly-injecting BALL**, not the pulsating shell — the
-  classic **6/5** factor (equivalent shell radius `5a/6`); measured 1.11x at ka=0.23. An oracle
-  against `from_sphere(a)` would be wrong by design.
-- **Disjoint ports are EXACTLY independent (7.1e-15); coincident ports drift 3.6e-2.** Same
-  measurement read both ways: it scopes N instruments IN and refuses overlap. Snapping is what makes
-  the hazard real — two ports 5 mm apart on a 13.5 mm grid ARE one port.
-- **The arrival oracle is MANHATTAN, not Euclidean.** The 7-point stencil spreads one node per step,
-  so a second body first moves at `Manhattan + 1` steps — **measured 7** where `r/c0` says **17.5**.
-  A causality test written against `r/c0` fails 2.5x early for reasons unrelated to the coupling.
+**The whole batch is one observation about batch 1's `step()`:** within a step an injection changes
+the pressure at its OWN nodes and nowhere else (propagation waits for the next momentum sub-step).
+So the room seen from a port is a **Thevenin source**, `pbar = pbar_free + R_room*q`, and the body's
+rank-1 solve closes in ONE DIVISION: `U = (U_free - G*pbar_free)/(1 + G*R_room)`. `1 + G*R_room >= 1`
+always ⇒ **unconditionally passive**, no CFL of its own, no guard. Conservation of
+`Σ inst.energy() + room.energy()` measured **~1e-14** at interior / wall / edge / corner / spread
+ports, rigid / matched / mixed walls, coarse and fine grids, one and two instruments.
 
-**Design decision: the port does NOT step the room — the caller does, once, after every port has
-solved.** That is what lets N instruments share a room and lets a string-driven member work at all
-(the *bridge* owns `body.step`). `free_pressure_at` deliberately ignores queued injections, which is
-exact iff ports are disjoint; the forgotten-`room.step()` guard is therefore **per-port**, not a
-global "is `_pending` empty" (that would fire on the second instrument of every scene).
-`RoomLoadedBody.energy()` must be an EXPLICIT override — `__getattr__` delegation would silently
-return the bare modal energy without its coupling channel.
+**THE PLAN'S CROSS-TIER ORACLE DID NOT SURVIVE CONTACT — and the reason is the finding.**
+- **The oracle became the port's EQUIVALENT RADIUS, not `|Z|`.** `a_eff = rho0/(4*pi*M_a)` with
+  `M_a = Im Z / omega`. One number saying what the port IS as a sphere, and it does BOTH halves of
+  §7.10 at once. `|Z|` carries the room's modal wiggle; the near-field MASS does not.
+- **THE ROOM CONTAMINATED THE MAGNITUDE BY MORE THAN THE EFFECT BEING MEASURED.** Same port, same
+  `h`, room swept: `a_eff/(5a/6)` = **1.086 (0.5 m) → 1.040 (0.7) → 1.003 (1.0) → 0.977 (1.4)**. The
+  plan's "1.11 at ka=0.23, consistent with 6/5" was reading the ROOM's reactance. The 6/5 shape
+  factor is real and now confirmed to **0.3%** — but only where the port is COMPACT. **A ratio
+  survives a small cheap room; a MAGNITUDE does not.** Get the room out of the way before comparing
+  anything to a closed form.
+- **`a_eff` is COURANT-INVARIANT to 5 significant figures** (45.231/45.232/45.233/45.234 mm across
+  cfl 0.5→0.998). It is a *static* near-field quantity ⇒ run the sweep at the cheapest λ, and the
+  measurement is not a dispersion artifact — not assumable in a scheme with NO dispersionless λ. The
+  first sweep grids were accidentally at **0.998 of the CFL ceiling** (where the corner mode goes
+  defective); harmless here, but only because it was checked.
+- Contrast, three grids: point `a_eff/h` = 0.324/0.320/0.317 (ratios **0.493, 0.496** — it HALVES)
+  vs ball ratios **1.045, 1.038**. A factor of twenty in grid sensitivity. THAT is the assertion.
+
+**Arrival constants, measured with the SHIPPED code (the plan's prototype numbers were off by one):**
+- reflection returns at **`2d + 1`** steps — measured at d = 3, 5, 7 (three geometries, one law),
+  asserted as BIT-IDENTITY between two rooms differing only in `Lz`. Careful: the reference room
+  must be deep enough that its OWN reflection is still in transit (Nz=12 → step 19 vs largest t=15).
+- a second body first moves at **exactly Manhattan** (not `Manhattan+1`), at separations 6 and 12,
+  against `r/c0` = 11.5 and 13.6. Euclidean is the wrong oracle by up to 2x.
+
+**Build-time gotchas worth not rediscovering:**
+- **The room must book `injected` from its OWN post-closure `pbar`**, never a number the port hands
+  back. Port books `k*pbar_predicted*U`; the two agree only if `R_room` is exactly right, so their
+  difference IS the bug detector. Shortcut it and the conservation test becomes a tautology.
+- **A spread port must NOT go through `_pending`** — that path is a scalar Python loop and a 5 cm
+  port is 203 nodes at h=13.5 mm, 13613 at 3.4 mm. Separate vectorized queue (`_pending_ports`).
+- **The forgotten-`room.step()` guard keys on `room.n`**, per port — not mark-clearing, and NOT a
+  global "is anything pending" (that fires on the second instrument of every scene). `set_state`
+  clears every port's mark.
+- `self.body = body` must be the FIRST assignment (else `__getattr__` recurses). `energy()`,
+  `set_state()` and `reset()` are all explicit overrides — delegation returns a stale ledger.
+- **`bridge.energy()` ALREADY includes `inst.energy()` including `radiated_energy`** — adding it
+  again double-counts, and it shows up as a 3.8e-3 drift that reads like a scheme bug.
+- The local `O(port)` free-pressure read is asserted **BIT-IDENTICAL** to the full-array
+  `_divergence()`-then-closure at interior/wall/edge/corner. Not in the plan; added on review,
+  because an off-by-one there SURVIVES every energy test (port and room would still agree).
+
+**Refusals, all measured rather than argued:** port on an **open** face (`injected` and `acoustic`
+exactly 0.0, drift 8.6e-15 — perfectly conservative, perfectly silent, and the energy report is
+structurally BLIND to it); **overlapping** ports (3.6e-2 vs 7.1e-15 disjoint — the same measurement
+scopes N instruments IN); a radius the grid cannot resolve (it would silently be a point port); a
+sample-rate mismatch; a port solved twice without `room.step()`. Checks run over the WHOLE mask —
+an interior centre can still reach a wall once the ball is laid down.
+
+**The port does NOT step the room** — the caller does, once, after every port has solved. That is
+what lets N instruments share a room and lets a string-driven member work (the *bridge* owns
+`body.step`). Disjoint ports are bit-identical under solve ORDER, which is why `free_pressure()` may
+ignore queued injections.
+
+**Files:** `physsynth/core/airbox.py`; `tests/test_airbox_port.py` (structural),
+`tests/test_airbox_scene.py` (physical + cross-tier); `tests/helpers.py::make_room_loaded_body` /
+`room_scene_energy`; `scripts/diagnose_airbox_port.py`. Suite **1287** green (was 1235);
+the batch adds **52 tests in 8.9 s** (~7 s of that is the one cross-tier sweep).

@@ -11,7 +11,7 @@ from scipy.sparse.linalg import eigsh
 
 from physsynth.analysis import modal, spectrum
 from physsynth.analysis.rotating_wave import rotating_wave_history, solve_rotating_wave
-from physsynth.core.airbox import AirBox
+from physsynth.core.airbox import AirBox, RoomLoadedBody
 from physsynth.core.beam import FreeBeam
 from physsynth.core.body import ModalBody
 from physsynth.core.bore import C0_AIR, RHO0_AIR, Bore
@@ -1273,6 +1273,75 @@ def airbox_noise(box: AirBox, seed: int = 0, amplitude: float = 1.0) -> AirBox:
     rng = np.random.default_rng(seed)
     box.set_state(amplitude * rng.standard_normal(box.p.shape))
     return box
+
+
+# The two-way port (batch 2): a modal body loaded BY the room rather than merely heard in it.
+# A slightly larger default room than make_airbox's, at a coarser h, so a port can sit at an
+# interior node, on a wall and in a corner of the same geometry, and so the two-instrument scene
+# has room for a measurable travel time -- 11 x 9 x 7 = 693 nodes, still free.
+AIRBOX_PORT_ROOM_DEFAULT = (0.5, 0.4, 0.3)  # m -> N = (10, 8, 6) at h = 5 cm
+AIRBOX_PORT_H_DEFAULT = 0.05                # m
+AIRBOX_PORT_AT_DEFAULT = (0.15, 0.15, 0.15)  # m -> node (3, 3, 3), interior on every axis
+# Body: inharmonic pair, a soundboard-scale modal mass, and radiation weights (m^2) big enough
+# that the room genuinely loads it within a few hundred steps.
+AIRBOX_PORT_FREQS = np.array([220.0, 337.0])
+AIRBOX_PORT_MASS = 0.05          # kg
+AIRBOX_PORT_RADIATION = 2e-3     # m^2 (a_1; a_2 = 0.65 a_1)
+AIRBOX_PORT_Q0 = np.array([1e-3, 5e-4])  # m
+
+
+def make_room_loaded_body(
+    *,
+    room: AirBox | None = None,
+    L: tuple[float, float, float] = AIRBOX_PORT_ROOM_DEFAULT,
+    h: float = AIRBOX_PORT_H_DEFAULT,
+    cfl: float = AIRBOX_CFL_FRACTION,
+    walls="rigid",
+    at: tuple[float, float, float] = AIRBOX_PORT_AT_DEFAULT,
+    radius: float | None = None,
+    freqs: np.ndarray = AIRBOX_PORT_FREQS,
+    sigmas: np.ndarray | float = 0.0,
+    masses: np.ndarray | float = AIRBOX_PORT_MASS,
+    phi: np.ndarray | float = 1.0,
+    radiation: np.ndarray | float | None = None,
+    q0: np.ndarray | float | None = AIRBOX_PORT_Q0,
+) -> RoomLoadedBody:
+    """A modal body loaded by an :class:`AirBox` through a port — the two-way coupling fixture.
+
+    Returns the :class:`RoomLoadedBody`; its room is on ``.room`` and its port on ``.port``. Pass
+    ``room=`` to put a **second** instrument in an existing room (their ports must be disjoint) —
+    the sample rate then comes from that room, so ``h`` and ``cfl`` are ignored.
+
+    ``radius=None`` (the default) is a point port: exact, cheap, and with a *grid-dependent* load
+    magnitude, which is right for every structural oracle and wrong for a physical one. ``sigmas=0``
+    keeps the modes lossless so the **only** energy channel is the room, and the conserved statement
+    is ``inst.energy() + inst.room.energy()``.
+    """
+    if room is None:
+        room = make_airbox(L=L, h=h, cfl=cfl, walls=walls)
+    if radiation is None:
+        radiation = AIRBOX_PORT_RADIATION * 0.65 ** np.arange(np.size(freqs))
+    body = ModalBody(
+        freqs=freqs, fs=room.fs, sigmas=sigmas, masses=masses, phi=phi, radiation=radiation
+    )
+    inst = RoomLoadedBody(body=body, room=room, at=at, radius=radius)
+    if q0 is not None:
+        inst.set_state(q0)
+    return inst
+
+
+def room_scene_energy(*instruments: RoomLoadedBody) -> float:
+    """The conserved total of a whole scene: ``sum_j inst_j.energy() + room.energy()``.
+
+    The coupling term cancels identically — each port's ``radiated_energy`` *is* the room's
+    ``injected``, seen from the other side of the same terminal — so this statement contains no
+    coupling term at all, which is why a drift in it is unambiguously a bug rather than accounting.
+    Every instrument must share one room.
+    """
+    room = instruments[0].room
+    if any(inst.room is not room for inst in instruments):
+        raise ValueError("room_scene_energy expects instruments sharing a single room.")
+    return sum(inst.energy() for inst in instruments) + room.energy()
 
 
 def gaussian_pulse(fs: float, f0: float, *, amplitude: float = 1e-3, widths: float = 4.0):

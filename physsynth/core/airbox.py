@@ -98,11 +98,19 @@ injects ``integral p q dt``, booked on :meth:`injected_energy`, so the conserved
 ``E + dissipated - injected = const`` — what :meth:`energy` returns. A *hard* source (assigning
 ``p``) would not be passive and is not offered.
 
-**Read-out only — no back-reaction.** The source injects into the room and the room does not push
-back on it. That is the exact position :class:`~physsynth.core.radiation.AirRadiation` occupied in
-radiation batch 1, and the module's own history says build read-out first; a two-way, provably
-passive room-body port is the natural next batch. Likewise deferred: PML, HRTF/ambisonics,
-scattering objects and non-rectangular geometry, and viscothermal air absorption.
+**The room pushes back (batch 2): the port.** :meth:`inject` is a *read-out* source — it drives the
+room and the room does not load it, exactly the position
+:class:`~physsynth.core.radiation.AirRadiation` occupied in radiation batch 1. :class:`RoomPort` and
+:class:`RoomLoadedBody` close that loop. Within one step an injection changes the pressure at
+its own nodes and nowhere else (propagation waits for the next momentum sub-step), so the room
+seen from a port is a **Thevenin source**, ``pbar = pbar_free + R_room q``: a known open-circuit
+pressure carrying the room's whole history *including every reflection*, in series with one
+positive constant. The body's rank-1 solve then closes in a **single division**, and because
+``1 + G R_room >= 1`` it is unconditionally passive — no CFL of its own, no stability guard. The
+payoff is the thing no lumped ``R(omega)`` can produce at any order: a **delayed echo** loading the
+body, rather than a decaying exponential. Still deferred: PML, HRTF/ambisonics, scattering objects
+and non-rectangular geometry, viscothermal air absorption, moving ports, overlapping ports, and the
+distributed *area* coupling (a body radiating from every node rather than through one port).
 
 **Cost is a design constraint here, for the first time in this repo.** At ``fs = 44.1 kHz`` the CFL
 forces ``h >= sqrt(3) c0 / fs ~ 1.35 cm``, so a 1 m^3 room is ~74^3 nodes and one second of audio is
@@ -115,11 +123,23 @@ Headless: NumPy only.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import NDArray
 
-__all__ = ["AirBox", "FACES", "RHO0_AIR", "C0_AIR", "impedance_from_zeta"]
+if TYPE_CHECKING:  # type-only: the room stays free of any dependency on the body module
+    from physsynth.core.body import ModalBody
+
+__all__ = [
+    "AirBox",
+    "FACES",
+    "RHO0_AIR",
+    "C0_AIR",
+    "impedance_from_zeta",
+    "RoomPort",
+    "RoomLoadedBody",
+]
 
 # Ambient air (matches physsynth.core.radiation and .bore so every tier of the air node agrees).
 RHO0_AIR = 1.2041  # kg/m^3
@@ -248,6 +268,13 @@ class AirBox:
             source if source is not None else tuple(0.5 * v for v in self.L_actual)
         )
         self._pending: list[tuple[tuple[int, int, int], float]] = []
+        # Port injections are queued separately from the scalar `inject()` path: a spread port is
+        # thousands of nodes and the scalar loop would dominate the step (measured). Each entry is
+        # (fancy-index triple, normalized volume weights, volume velocity U).
+        self._pending_ports: list[
+            tuple[tuple[NDArray[np.intp], ...], NDArray[np.float64], float]
+        ] = []
+        self._ports: list[RoomPort] = []  # live ports, for the disjointness check and reset
 
         self.p: NDArray[np.float64] = np.zeros((Nx + 1, Ny + 1, Nz + 1))
         self.ux: NDArray[np.float64] = np.zeros((Nx, Ny + 1, Nz + 1))
@@ -372,6 +399,9 @@ class AirBox:
         self.dissipated = 0.0
         self.injected = 0.0
         self._pending.clear()
+        self._pending_ports.clear()
+        for port in self._ports:
+            port._queued_at = -1  # a fresh run: no port owes this room an injection
         self.n = 0
 
     # -- time stepping --------------------------------------------------------------------
@@ -432,10 +462,15 @@ class AirBox:
         p_old = self.p
         p_next = p_old - self.k * self.rho0 * self.c0**2 * self._divergence()
 
-        if self._pending:
+        if self._pending or self._pending_ports:
             gain = self.k * self.rho0 * self.c0**2
             for index, q in self._pending:
                 p_next[index] += gain * q / self._W[index]
+            # Ports inject the same soft source term, vectorized over their node set: node n takes
+            # the share w_n of the volume velocity U. Disjointness makes the plain += exact (no two
+            # ports touch a node, and a port's own node list has no repeats).
+            for nodes, w, q in self._pending_ports:
+                p_next[nodes] += gain * q * w / self._W[nodes]
 
         if self._has_walls:
             p_next = (p_next - self._beta * p_old) / (1.0 + self._beta)
@@ -447,10 +482,17 @@ class AirBox:
             for index, area, Z in self._lossy:
                 self.dissipated += self.k * float(np.sum(area * pbar[index] ** 2)) / Z
 
-        if self._pending:
+        if self._pending or self._pending_ports:
             for index, q in self._pending:
                 self.injected += self.k * 0.5 * (p_next[index] + p_old[index]) * q
+            # Booked from the room's OWN post-closure pressure, never from a number the port hands
+            # back. The port books k pbar_predicted U; these two agree only if R_room is exactly
+            # right, so their difference is what the conserved total is watching (§6.1).
+            for nodes, w, q in self._pending_ports:
+                pbar_port = float(np.sum(w * 0.5 * (p_next[nodes] + p_old[nodes])))
+                self.injected += self.k * pbar_port * q
             self._pending.clear()
+            self._pending_ports.clear()
 
         u_next = self._momentum(p_next, (self.ux, self.uy, self.uz))
         self.ux_prev, self.uy_prev, self.uz_prev = self.ux, self.uy, self.uz
@@ -596,3 +638,453 @@ class AirBox:
         idx = self._mode_indices(l, m, n)
         s = sum(np.sin(q * np.pi / (2 * N)) ** 2 for q, N in zip(idx, self.N, strict=True))
         return float(4.0 * s / (self.h * self.h))
+
+
+class RoomPort:
+    """One two-way terminal into an :class:`AirBox` — the room's **Thevenin equivalent** at a spot.
+
+    A port is a set of grid nodes with normalized volume weights ``w_n`` (summing to 1). It answers
+    exactly one question, and answers it as a *linear scalar relation*: if a volume velocity ``q``
+    is injected here this step, what centered pressure ``pbar`` will the injector feel?
+
+        ``pbar = pbar_free + R_room q``
+
+    :meth:`free_pressure` is ``pbar_free``, the open-circuit term — what the port would feel with
+    ``q = 0``, carrying the room's entire history *including every reflection off every wall*.
+    :attr:`R_room` is the constant internal resistance. Together they are everything a coupled
+    solver needs, which is why the body's load collapses to one division
+    (:class:`RoomLoadedBody`) instead of a field solve.
+
+    **Why it is only two numbers.** Within a single step an injection changes the pressure at its
+    own nodes and nowhere else: :meth:`AirBox.step` adds the source term node-locally to
+    ``p^{n+1}``, and propagation to the neighbours waits for the *next* momentum sub-step. So the
+    room is linear-in-``q`` with a diagonal instantaneous response, and
+
+        ``R_room = sum_n w_n^2 k rho0 c0^2 / (2 W_n (1 + beta_n))``
+
+    where the ``2`` is the centered (trapezoidal) pressure, ``W_n`` the tensor-trapezoid node
+    weight, and ``(1 + beta_n)`` the **wall closure denominator**. That last factor is easy to omit
+    — the naive ``k rho0 c0^2 / (2 W)`` is right at every interior node — and omitting it costs
+    nothing until someone mounts a port on a lossy wall, where it leaks ~2% of the run's energy
+    (measured 1.9e-2 against 8.4e-15 with the factor). ``step()`` injects *before* it closes the
+    wall, so the injection is divided by ``1 + beta`` along with everything else, and ``R_room``
+    must say so.
+
+    **Point port versus spread port — a measured non-convergence.** ``radius=None`` puts the whole
+    volume velocity on one node. That is exact and perfectly conservative, and its *magnitude* is a
+    property of the grid rather than of the physics: the port behaves as a pulsating sphere of
+    equivalent radius ``~ h / 3.1`` (measured ``a_eff / h`` = 0.324, 0.320, 0.317 on three grids),
+    which at low frequency is an added **mass** loading the body. Refining ``h`` therefore makes the
+    artifact *worse*, not better — it halves the equivalent radius and doubles the load (measured
+    ratios 0.493 and 0.496 across two halvings). A ball of fixed ``radius`` does not move: 1.045 and
+    1.038 over the same halvings, a factor of twenty less grid-sensitive. **So use a point port for
+    structural tests, where only exactness matters, and a spread port whenever the magnitude of the
+    coupling is meant to mean something.** ``radius`` has no default so that choice is always made,
+    never inherited.
+
+    A spread port's absolute size is the **uniformly injecting ball**, whose equivalent shell radius
+    is ``5a/6`` — the classic **6/5** shape factor, the same one as the mean potential of a
+    uniformly charged sphere — and *not* a pulsating shell of radius ``a``. Confirmed to 0.3% in a
+    room large enough for the port to be compact. Read that caveat as a real one: the same
+    measurement in a room only 10x the port reads 8.6% high, and that excess is the **room's** own
+    reactance rather than the port's (measured ratios to ``5a/6`` of 1.086, 1.040, 1.003, 0.977 for
+    rooms of 0.5, 0.7, 1.0 and 1.4 m). The number is insensitive to the Courant number to five
+    significant figures, so it is a static near-field quantity and not a dispersion artifact.
+
+    Parameters
+    ----------
+    room : AirBox
+        The room to open a port into. The port registers itself with the room for the life of the
+        room (used for the disjointness check), so build a fresh room rather than reusing one whose
+        ports you have discarded.
+    at : (float, float, float)
+        Port centre (m), snapped to the nearest node (see :meth:`AirBox.snapped`).
+    radius : float or None
+        Ball radius (m) around ``at``, or ``None`` for a single-node point port. **Required.**
+        Nodes outside the room are clipped, so a port near a wall is smaller and one-sided —
+        physical, and reported by :attr:`node_count`.
+
+    Raises
+    ------
+    ValueError
+        Centre outside the room; a non-positive ``radius``; a ``radius`` too small for the grid to
+        resolve (it would silently be a point port); a port touching an ``"open"`` face (which can
+        do no work at all — see below); or a port sharing a node with an existing port.
+
+    Notes
+    -----
+    **An open face is refused, and the energy report cannot catch why.** An ``"open"`` (``Z = 0``)
+    face pins ``p = 0``, so a port on it has ``pbar_free = 0`` and ``R_room = 0``: the body radiates
+    into a short circuit. Measured over 400 steps, ``injected`` and ``acoustic`` are *exactly* zero
+    and the conserved total drifts 8.6e-15. The run is perfectly conservative and completely silent
+    — the physics is exactly right and exactly useless — so this project's primary bug detector is
+    structurally blind to it and a construction-time refusal is the only place to catch it.
+
+    **Overlap is refused for a reason that is also the reason N instruments work.** Two ports
+    sharing a node are not independent within a step: A's injection changes B's ``pbar``, so B
+    solved against a pressure that never occurred and the two ledgers stop matching (measured 3.6e-2
+    drift, against 7.1e-15 for disjoint ports in the same room). Disjointness is exactly the
+    condition that makes the cheap per-port scalar solve *exact*. A simultaneous ``(I + G R) U``
+    solve with the cross-resistance matrix would handle overlap and is passive too, but it needs one
+    central object owning every port — which is precisely what makes a per-instrument
+    :class:`~physsynth.core.connection.StringBodyBridge` chain impossible. The hazard is real
+    because of **snapping**: two ports 5 mm apart on a 13.5 mm grid are one port.
+
+    **Do not mix :meth:`AirBox.inject` with ports** in a run whose energy you intend to assert on.
+    That source's work lands in the room's ``injected`` book with no port ledger to cancel it, so
+    ``sum_j inst_j.energy() + room.energy()`` is no longer the conserved total (it picks up the
+    source's contribution). Ports and the read-out source are both fine, just not in one ledger.
+    """
+
+    def __init__(self, *, room: AirBox, at: Sequence[float], radius: float | None) -> None:
+        self.room = room
+        self.index = room.node_index(at)
+        self.radius = None if radius is None else float(radius)
+
+        if self.radius is None:
+            nodes = tuple(np.array([i], dtype=np.intp) for i in self.index)
+        else:
+            if self.radius <= 0.0 or not np.isfinite(self.radius):
+                raise ValueError(f"port radius must be a positive length, got {radius!r}.")
+            offs = [
+                room.h * (np.arange(n + 1) - c)
+                for n, c in zip(room.N, self.index, strict=True)
+            ]
+            d2 = (
+                offs[0][:, None, None] ** 2
+                + offs[1][None, :, None] ** 2
+                + offs[2][None, None, :] ** 2
+            )
+            nodes = np.nonzero(d2 <= self.radius * self.radius)
+            if nodes[0].size == 1:
+                raise ValueError(
+                    f"port radius {self.radius} m is smaller than the grid can resolve (h = "
+                    f"{room.h}): the ball contains only the centre node {self.index}, so this "
+                    "would silently be a point port with a grid-dependent load magnitude. Coarsen "
+                    "the request, refine h, or pass radius=None to ask for a point port on purpose."
+                )
+        self.nodes: tuple[NDArray[np.intp], ...] = tuple(nodes)  # type: ignore[assignment]
+
+        self._check_open_faces()
+        self._flat = np.ravel_multi_index(self.nodes, room.p.shape)
+        self._check_disjoint()
+
+        W = room._W[self.nodes]
+        self.w: NDArray[np.float64] = W / W.sum()
+        self.R_room = float(
+            np.sum(
+                self.w * self.w * room.k * room.rho0 * room.c0**2
+                / (2.0 * W * (1.0 + room._beta[self.nodes]))
+            )
+        )
+        self._queued_at = -1  # room.n at which this port last queued an injection
+        room._ports.append(self)
+
+    # -- construction refusals -------------------------------------------------------------
+
+    def _check_open_faces(self) -> None:
+        """Refuse a port that touches a pressure-release face — it can do no work (see Notes)."""
+        room = self.room
+        if not np.any(room._open):
+            return
+        touched = [
+            face
+            for face in FACES
+            if room.walls[face] == 0.0
+            and np.any(
+                self.nodes[_AXES.index(face[0])]
+                == (0 if face[1] == "0" else room.N[_AXES.index(face[0])])
+            )
+        ]
+        if touched:
+            raise ValueError(
+                f"port at {self.index} touches the open (pressure-release) face(s) {touched}, "
+                "where p is pinned to 0: pbar_free and R_room are both exactly zero, so the body "
+                "would radiate into a short circuit — perfectly conservative, perfectly silent, "
+                "and invisible to the energy report. Move the port off that face, or give the face "
+                "a finite impedance."
+            )
+
+    def _check_disjoint(self) -> None:
+        """Refuse a port sharing any node with an existing one (see Notes)."""
+        for other in self.room._ports:
+            shared = np.intersect1d(self._flat, other._flat)
+            if shared.size:
+                node = np.unravel_index(int(shared[0]), self.room.p.shape)
+                raise ValueError(
+                    f"port at {self.index} shares node {node} with the existing port at "
+                    f"{other.index} ({shared.size} node(s) in common). Overlapping ports are not "
+                    "independent within a step, so each one's solve uses a pressure that never "
+                    "occurred and the energy ledgers stop matching. Note grid snapping: two nearby "
+                    f"centres collapse onto one node at h = {self.room.h}."
+                )
+
+    # -- the two numbers -------------------------------------------------------------------
+
+    @property
+    def node_count(self) -> int:
+        """How many grid nodes the port actually covers (clipping at walls included)."""
+        return int(self.nodes[0].size)
+
+    @property
+    def volume(self) -> float:
+        """The port's discrete volume ``sum_n W_n`` (m^3) — the staircased ball, made visible.
+
+        Compare against ``4 pi a^3 / 3``: the wobble as whole nodes fall in or out of the ball is
+        the membrane batch's staircase and it is this port's accuracy floor (measured -4.6%, +1.5%
+        on two grids), not a defect of the scheme.
+        """
+        return float(np.sum(self.room._W[self.nodes]))
+
+    def free_pressure(self) -> float:
+        """The open-circuit centered pressure ``pbar_free`` this port would feel with ``q = 0``.
+
+        ``O(port nodes)``: the divergence at a node needs only the six faces touching it, so this
+        never touches the whole field. It replicates :meth:`AirBox.step`'s order exactly —
+        divergence, **then** the wall closure — and must be read *before* ``room.step()``, from the
+        stored ``u^{n+1/2}``.
+
+        It deliberately ignores other ports' queued injections. For **disjoint** ports that is not
+        an approximation: a queued injection at another node cannot reach this node within the step,
+        so including it would change nothing — while for overlapping ports (refused at construction)
+        reading it would make the solve *asymmetric* rather than merely wrong.
+        """
+        room = self.room
+        ix, iy, iz = self.nodes
+        div = np.zeros(ix.size)
+        for axis, (u, idx) in enumerate(
+            ((room.ux, ix), (room.uy, iy), (room.uz, iz))
+        ):
+            n_face = room.N[axis]
+            pick = [ix, iy, iz]
+            pick[axis] = np.minimum(idx, n_face - 1)
+            plus = np.where(idx < n_face, u[tuple(pick)], 0.0)
+            pick[axis] = np.maximum(idx - 1, 0)
+            minus = np.where(idx > 0, u[tuple(pick)], 0.0)
+            div += (plus - minus) / room._w[axis][idx]
+
+        p_node = room.p[self.nodes]
+        p_free = p_node - room.k * room.rho0 * room.c0**2 * div
+        if room._has_walls:
+            beta = room._beta[self.nodes]
+            p_free = (p_free - beta * p_node) / (1.0 + beta)
+        return float(np.sum(self.w * 0.5 * (p_free + p_node)))
+
+    # -- driving ---------------------------------------------------------------------------
+
+    def require_ready(self) -> None:
+        """Raise if this port's previous injection is still pending — i.e. no ``room.step()``.
+
+        The check is **per-port**, keyed on the room's step counter, not on whether the room has
+        anything queued: with several instruments in one room, every port after the first solves
+        while earlier ports' injections sit queued, and a global "is anything pending" test would
+        fire on all of them.
+        """
+        if self._queued_at == self.room.n:
+            raise RuntimeError(
+                f"port at {self.index} was asked to solve twice within one room step (room.n = "
+                f"{self.room.n}). A port does not step its room — the caller does, once, after "
+                "every port has solved:  for inst in instruments: inst.step(...)  then  "
+                "room.step(). Without it the room is frozen and the body is loaded by a stale "
+                "field, silently."
+            )
+
+    def inject(self, q: float) -> None:
+        """Queue this port's volume velocity ``q`` (m^3/s) for the room's next :meth:`AirBox.step`.
+
+        Node ``n`` receives the share ``w_n q``. The room books the work at its own post-closure
+        centered pressure — never at a number handed back from here, which is what keeps the two
+        ledgers an independent check on each other rather than a tautology.
+        """
+        self.require_ready()
+        self.room._pending_ports.append((self.nodes, self.w, float(q)))
+        self._queued_at = self.room.n
+
+    def reset(self) -> None:
+        """Forget any pending-injection mark — for reusing the port on a fresh run."""
+        self._queued_at = -1
+
+
+class RoomLoadedBody:
+    """A :class:`~physsynth.core.body.ModalBody` **loaded by a room** — the two-way port (batch 2).
+
+    :class:`~physsynth.core.radiation.RadiatedBody` loads a body with a constant resistance and
+    :class:`~physsynth.core.radiation.RationalAirLoad` with an exact first-order impedance. Both are
+    *one-ports with no memory of geometry*, so their impulse response is a decaying exponential and
+    they structurally cannot represent the thing a room does: **give energy back, at a delay, from a
+    direction**. A body in a small hard room feels its own reflected wave arriving ``2d/c0`` later
+    and is loaded by it — not reverberation added to a dry signal, but a change to the body's own
+    oscillation. That is what this class adds, and no ``R(omega)`` reproduces it at any order.
+
+    **The solve is one division.** The body's volume velocity is ``U = sum_i a_i q_i'`` and the port
+    pressure ``pbar`` enters mode ``i`` as ``-a_i pbar`` (the *same* weights, by reciprocity — the
+    fact :class:`~physsynth.core.radiation.RadiatedBody` already relies on). Take the force-free
+    step, read its free centered ``U_free``, ask the port for its two numbers (:class:`RoomPort`),
+    and substitute::
+
+        G = (k/2) sum_i a_i^2 / (m_i (1 + sigma_i k))
+        U = (U_free - G pbar_free) / (1 + G R_room)
+        pbar = pbar_free + R_room U
+        q_i^{n+1} = q~_i^{n+1} - pbar k^2 a_i / (m_i (1 + sigma_i k))
+
+    Since ``G >= 0`` and ``R_room >= 0``, ``1 + G R_room >= 1``: the solve can never be singular at
+    any sample rate, any grid, any body. **The port is unconditionally passive — no CFL of its own,
+    no stability guard**, exactly like ``RadiatedBody`` and unlike the bridge springs, whose rank-1
+    block can go negative. The room's own CFL and the body's are unchanged; coupling them adds no
+    third condition.
+
+    **The ledgers cancel identically.** The corrected state's centered volume velocity is exactly
+    the ``U`` solved for, so the body's energy decrement telescopes to precisely ``k pbar U`` —
+    which is :attr:`radiated_energy`. The room books the *same* number into its ``injected``, from
+    its own post-closure pressure, because the injection weights and the read-back weights are the
+    same vector. So for a scene::
+
+        sum_j inst_j.energy() + room.energy()
+
+    is conserved to machine precision, and the coupling term **cancels out of the statement
+    entirely** — which is why a drift in it is unambiguous evidence of a bug rather than of
+    accounting. (Assert on that total, not on ``body.energy()``, which is not monotone: the port's
+    near-field reactance hands energy back every cycle.)
+
+    Being a drop-in for ``ModalBody`` (it delegates every read accessor) it slots straight into a
+    :class:`~physsynth.core.connection.StringBodyBridge` as the body, giving the full
+    ``string -> bridge -> body -> room`` chain with no edit to ``connection.py``.
+
+    **This class does not step the room, and that is deliberate.** ::
+
+        for n in range(n_steps):
+            inst_a.step(force)     # or bridge_a.step(), which owns the body's step
+            inst_b.step(force)
+            room.step()            # one room, one step, after every port has solved
+
+    Had ``step()`` advanced the room, two instruments would step it twice per sample and a
+    string-driven instrument (where the *bridge* owns ``body.step``) could not be a member at all.
+    The cost is one line in the caller's loop, and forgetting it raises (:meth:`RoomPort.inject`)
+    rather than silently freezing the room.
+
+    Parameters
+    ----------
+    body : ModalBody
+        The body to load. Its radiation weights ``body.a`` set the volume-velocity coupling; ``a =
+        0`` decouples the room and is **bit-identical** to the bare body. Use ``sigmas = 0`` to
+        isolate the room channel in the energy identity.
+    room : AirBox
+        The room to radiate into. Its sample rate must match the body's.
+    at, radius
+        Passed to :class:`RoomPort` — the port centre (m) and ball radius (m), or ``radius=None``
+        for a point port. See that class on why the choice is required rather than defaulted.
+
+    Raises
+    ------
+    ValueError
+        If ``room.fs`` does not match ``body.fs``, or on any of :class:`RoomPort`'s refusals.
+    """
+
+    def __init__(
+        self,
+        *,
+        body: ModalBody,
+        room: AirBox,
+        at: Sequence[float],
+        radius: float | None,
+    ) -> None:
+        self.body = body  # FIRST: any attribute miss before this makes __getattr__ recurse
+        if not np.isclose(body.k, room.k, rtol=1e-12, atol=0.0):
+            raise ValueError(
+                f"sample-rate mismatch: body fs = {body.fs} but room fs = {room.fs}. The port's "
+                "solve is a single timestep shared by both, so they must agree exactly."
+            )
+        self.room = room
+        self.port = RoomPort(room=room, at=at, radius=radius)
+        self.k = body.k
+        # Rank-1 precomputes, from PUBLIC body attributes (RadiatedBody's _G is its own business).
+        # The (1 + sigma_i k) carries the body's implicit damping denominator into the load.
+        one_plus_sk = 1.0 + body.sigma * body.k
+        self._G = 0.5 * body.k * float(np.sum(body.a * body.a / (body.m * one_plus_sk)))
+        self._corr = body.k * body.k * body.a / (body.m * one_plus_sk)
+        self.radiated_energy = 0.0  # integral pbar U dt: the work this body did on the room
+        self.volume_velocity = 0.0  # last centered U (diagnostic)
+        self.port_pressure = 0.0    # last centered pbar the body was loaded by
+        self.n = 0
+
+    def __getattr__(self, name: str):
+        # Delegate read-only body accessors (phi, m, omega, M, q, q_prev, state, bridge_*, ...) so a
+        # RoomLoadedBody is a drop-in wherever a bare ModalBody is expected (e.g. StringBodyBridge).
+        # Only reached for names not set on the instance, so the overrides below always win.
+        if name == "body":  # nothing to delegate through yet -- never recurse
+            raise AttributeError(name)
+        return getattr(self.body, name)
+
+    # -- time stepping ---------------------------------------------------------------------
+
+    def step(self, force: float = 0.0) -> None:
+        """Advance one step: read the port, advance the body, solve the load, queue the injection.
+
+        ``force`` is the optional external (bridge) force, forwarded to
+        :meth:`~physsynth.core.body.ModalBody.step`; the room's load is applied on top of it. The
+        room is **not** stepped here — see the class docstring.
+        """
+        b, port = self.body, self.port
+        port.require_ready()                           # before mutating anything (§ the guard)
+        pbar_free = port.free_pressure()               # read u^{n+1/2}, BEFORE room.step()
+        q_nm1 = b.q_prev.copy()                        # q^{n-1}, before step() rolls history
+        b.step(force)                                  # commit the force-free next state q~^{n+1}
+        u_free = float(np.dot(b.a, b.q - q_nm1)) / (2.0 * self.k)
+        u = (u_free - self._G * pbar_free) / (1.0 + self._G * port.R_room)
+        pbar = pbar_free + port.R_room * u
+        b.q = b.q - pbar * self._corr                  # rank-1 correction of q^{n+1}
+        # Refresh q'' from the *corrected* second difference so pressure() carries the load (the
+        # same reason ModalBody.pressure reads the true _accel rather than reconstructing it).
+        b._accel = (b.q - 2.0 * b.q_prev + q_nm1) / (self.k * self.k)
+        port.inject(u)
+        self.radiated_energy += self.k * pbar * u
+        self.volume_velocity = u
+        self.port_pressure = pbar
+        self.n += 1
+
+    # -- diagnostics -----------------------------------------------------------------------
+
+    def energy(self) -> float:
+        """Total discrete energy ``E_body + integral pbar U dt`` (Joules).
+
+        **An explicit override, not a delegation** — ``__getattr__`` would otherwise hand back the
+        bare modal energy, i.e. the total *without* its coupling channel, which is exactly the
+        number that looks fine and is not conserved. Unlike
+        :meth:`~physsynth.core.radiation.RadiatedBody.energy` this one is **not** monotone: the room
+        gives energy back, so :attr:`radiated_energy` can decrease. The conserved statement is the
+        whole scene, ``sum_j inst_j.energy() + room.energy()``.
+        """
+        return self.body.energy() + self.radiated_energy
+
+    def pressure(self) -> float:
+        """Radiated pressure read-out ``sum_i a_i q_i''``, reflecting the room load.
+
+        Delegates to :meth:`~physsynth.core.body.ModalBody.pressure`, whose ``_accel`` this class
+        refreshes *after* the rank-1 correction. For the pressure **in the room**, read the field:
+        :meth:`AirBox.pressure_at`.
+        """
+        return self.body.pressure()
+
+    def set_state(
+        self,
+        q0: NDArray[np.float64] | float,
+        v0: NDArray[np.float64] | float = 0.0,
+    ) -> None:
+        """Set the body's initial modal state and reset this port's coupling ledger to zero."""
+        self.body.set_state(q0, v0)
+        self._reset_books()
+
+    def reset(self) -> None:
+        """Zero the body state and the coupling ledger — reuse on a new run.
+
+        The room is a separate object with its own :meth:`AirBox.set_state`.
+        """
+        self.body.set_state(0.0)
+        self._reset_books()
+
+    def _reset_books(self) -> None:
+        self.radiated_energy = 0.0
+        self.volume_velocity = 0.0
+        self.port_pressure = 0.0
+        self.port.reset()
+        self.n = 0

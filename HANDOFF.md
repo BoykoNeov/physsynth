@@ -96,9 +96,13 @@ never the reverse. This keeps the physics portable to C++/Rust later without re-
   impedance `Z_a = R·jωτ/(1+jωτ)`, a resistance in parallel with the radiation mass, so the air
   stores as well as dissipates and the energy identity carries both. Above all three sits the
   **distributed** tier, `core/airbox.py` (`AirBox`, §12H): a 3-D Yee grid of actual air, which the
-  lumped port structurally cannot stand in for — room modes, travel time, several listeners. It is
-  itself read-out-only for now (the room does not push back on its source), and it *contains* the
-  lumped tier: far from the walls it reproduces `AirRadiation`'s monopole law.
+  lumped port structurally cannot stand in for — room modes, travel time, several listeners. It
+  *contains* the lumped tier: far from the walls it reproduces `AirRadiation`'s monopole law. Its
+  own back-reaction rung is `RoomPort` / `RoomLoadedBody` (batch 2): within one step the room seen
+  from a port is a Thévenin source `p̄ = p̄_free + R_room·q`, so the body's load closes in a single
+  division and `1 + G·R_room ≥ 1` makes it unconditionally passive. What that buys over any `R(ω)`
+  is a **delayed echo** — a one-port's impulse response is a decaying exponential and never a
+  reflection.
 - **Engine**: owns the timestep loop, parameter smoothing, and (eventually) the audio callback.
 
 ### 3.3 Real-time safety (for the later native port — note now, enforce later)
@@ -448,20 +452,28 @@ threads from here as the project matures; each bullet is a seed, not a spec.
 
 ### H. Spatial audio, radiation & room
 
-- **The 3-D air box** — *first batch shipped* as `core/airbox.py` (`AirBox`): a rigid/absorbing
-  rectangular room on a Yee grid, energy-exact, with the tensor-cosine room modes as a
-  machine-precision oracle and the free field reproducing batch 1's monopole law. Deliberately
-  **read-out only** — the source drives the room, the room does not load the source. Deferred from
-  it, in rough order of appetite: the **two-way port** (a provably passive room ↔ body coupling,
-  which is to this what `RadiatedBody` was to `AirRadiation`); **PML** or higher-order absorbing
-  boundaries, since a locally-reacting impedance wall is matched at normal incidence only;
-  **scattering objects and non-rectangular rooms** (staircasing in 3-D — the membrane batch's
-  lesson again); and **viscothermal air absorption**.
+- **The 3-D air box** — *two batches shipped* as `core/airbox.py`. Batch 1 (`AirBox`): a
+  rigid/absorbing rectangular room on a Yee grid, energy-exact, with the tensor-cosine room modes as
+  a machine-precision oracle and the free field reproducing radiation batch 1's monopole law —
+  deliberately **read-out only**. Batch 2 (`RoomPort`, `RoomLoadedBody`): the **two-way port**, and
+  it is to batch 1 what `RadiatedBody` was to `AirRadiation`. The room is linear in the injected
+  volume velocity with a *diagonal* instantaneous response (an injection changes its own nodes and
+  nowhere else within a step), so it presents a Thévenin equivalent `p̄ = p̄_free + R_room·q` and
+  the body's rank-1 solve closes in one division, unconditionally passively. **N instruments share
+  one room** provided their ports are disjoint — which is exactly the condition making each scalar
+  solve exact, hence the refusal of overlap. The port does **not** step the room; the caller does,
+  once, after every port has solved, which is what keeps `StringBodyBridge` composition working.
+  Still deferred, in rough order of appetite: the **distributed area coupling** (a plate radiating
+  from every node rather than through one lumped port — the port becomes a matrix, not a scalar);
+  **PML** or higher-order absorbing boundaries, since a locally-reacting impedance wall is matched
+  at normal incidence only; **scattering objects and non-rectangular rooms** (staircasing in 3-D —
+  the membrane batch's lesson again); **moving ports**; and **viscothermal air absorption**.
 - **3D radiation modeling** with directivity, plus HRTF / ambisonics output — the box produces a
   pressure field; turning that into a binaural or B-format signal is a separate, non-physics batch.
-- **Room coupling:** place the modeled instrument inside a modeled acoustic space. The chain
-  `string → bridge → ReactiveRadiatedBody → AirBox` already runs; what is missing is the back-
-  reaction, not the plumbing.
+- **Room coupling:** place the modeled instrument inside a modeled acoustic space. Done for the
+  lumped-port body: `string → bridge → RoomLoadedBody → AirBox` runs with the room loading the body
+  back, and two instruments in one room hear each other at `c₀` with the arrival index measured.
+  What is left is the *distributed* body — a plate coupling to the air over its whole surface.
 
 ### I. Ecosystem & product
 

@@ -1,9 +1,48 @@
 # The room pushes back — the two-way body↔room port (air-box batch 2)
 
-> **Status: PLANNED (2026-07-28).** Batch 1 shipped the room as a read-out. This batch closes the
+> **Status: BUILT (2026-07-28).** Batch 1 shipped the room as a read-out. This batch closes the
 > loop: the body's volume velocity drives the air *and the air's pressure loads the body back*,
 > exactly, passively, at machine precision. Seven traps were measured before a line of core code
-> was written (§6); two of them changed the design and one of them settled the scope.
+> was written (§6); two of them changed the design and one of them settled the scope. All seven
+> held. `physsynth/core/airbox.py` self-contained — no edits to `radiation.py`, `body.py`,
+> `connection.py` or `bore.py`, as promised in §9.
+>
+> **What the build changed, and why — three things, all in §7.10.** The structural half of the plan
+> (§7.1–7.9) shipped as written and hit its predicted numbers; the cross-tier oracle did not survive
+> contact, and the reasons are worth more than the oracle was.
+>
+> 1. **The oracle became the port's *equivalent radius*, not `|Z|`.** `a_eff = ρ₀/(4πM_a)` with
+>    `M_a = Im Z/ω` is one number saying what the port *is*, as a sphere — and it does **both**
+>    halves of §7.10 at once (grid-independence and magnitude) where `|Z|` ratios did neither
+>    cleanly, because `|Z|` carries the room's modal wiggle and the near-field mass does not.
+> 2. **The room contaminated the magnitude by more than the effect being measured, and §7.10 as
+>    written would have shipped that as physics.** Measured `a_eff/(5a/6)` at fixed `h` and a fixed
+>    5 cm port: **1.086** in a 0.5 m room, 1.040 at 0.7 m, **1.003** at 1.0 m, 0.977 at 1.4 m. The
+>    plan's "1.11 at ka = 0.23, consistent with 6/5" was reading the *room's* reactance, not the
+>    port's. The 6/5 shape factor is real and now confirmed to **0.3 %** — but only where the port is
+>    compact. A ratio survives a small cheap room; a magnitude does not. The test asserts both: the
+>    closed form where it applies, and the small room's excess as the attribution.
+> 3. **`a_eff` is Courant-invariant to five significant figures** (45.231 / 45.232 / 45.233 / 45.234
+>    mm across `cfl` = 0.5, 0.7, 0.9, 0.998). It is a *static* near-field quantity, so the sweep runs
+>    at the cheapest λ and — the point worth keeping — the measurement is not a dispersion artifact,
+>    which in a scheme with no dispersionless λ is not something to assume. The first sweep grids
+>    were accidentally sitting at **0.998 of the CFL ceiling**, where batch 1 measured the corner
+>    mode going defective; that turned out not to matter here, but only because it was checked.
+>
+> Two smaller corrections to the plan's own numbers, both from measuring with the shipped code
+> rather than the prototype: the second body first moves at **exactly Manhattan** steps (not
+> `Manhattan + 1` as §7.9 recorded), measured at separations of 6 and 12 nodes; and the reflection
+> returns at **`2d + 1`**, measured at `d` = 3, 5 and 7 — three geometries, one law, where the plan
+> had asked for one.
+>
+> §6.3's `h/3.2` also refines to **`h/3.1`**: the prototype inferred it from `|Z|` ratios against
+> a shell of radius `h`, and the reactance measures it directly (`a_eff/h` = 0.324, 0.320, 0.317
+> across three grids). Same physics, one more digit, and now measured rather than inferred.
+>
+> One test not in §7 at all, added on review: the port's `O(port)` free-pressure read is asserted
+> **bit-identical** to the full-array `_divergence()`-then-closure at interior, wall, edge and corner
+> nodes. An off-by-one there would be a small, position-dependent error that *survives every energy
+> test*, because the port and the room would still agree with each other.
 
 ---
 
@@ -508,3 +547,32 @@ immediately before the build starts (batch 1 measured 1235 green).
 
 **Acceptance:** all of §7 green, full suite green, `ruff check .` clean, added suite time < 20 s
 locally.
+
+**Met (2026-07-28).** All of §7 green — §7.10 in the amended form the status block explains — and
+the full suite is **1287 green** (1235 before the batch, so nothing pre-existing moved).
+`ruff check .` clean. The batch adds **52 tests in 8.9 s**, well under half the budget, and roughly 7 s of
+that is the single cross-tier sweep; every structural oracle runs on a 693-node room where it is
+free, and the most expensive one is 0.33 s. `scripts/diagnose_airbox_port.py` runs its three figures
+in ~3.5 min, essentially all of it the 74³ level that §8 said belongs here rather than in the suite.
+
+The measured highlights, against §7's predictions:
+
+| oracle | predicted | measured |
+|---|---|---|
+| conservation, interior port | 2.0e-14 | **1.1e-14** |
+| conservation, port on a lossy wall / edge / corner | 8.4e-15 | **~1e-14** |
+| `R_room`, differential, at four sites × two wall types | < 1e-12 | **exact to 1e-12** |
+| `a = 0` ⇒ bare `ModalBody` | bit-identical | **`array_equal` true, 200 steps** |
+| disjoint two-port scene | 7.1e-15 | **< 1e-10** over 400 steps, and bit-identical under solve order |
+| reflection round trip | `2d` | **`2d + 1`**, at `d` = 3, 5, 7 |
+| second body's arrival | Manhattan + 1 | **exactly Manhattan**, at 6 and 12 nodes |
+| point port's grid dependence | `|Z|` ×2.00 | `a_eff` **×0.493, ×0.496** (equivalently `a_eff/h` = 0.324, 0.320, 0.317) |
+| spread port's grid dependence | `|Z|` ×0.96, ×1.01 | `a_eff` **×1.045, ×1.038** |
+| spread port vs the ball's `5a/6` | ~1.2 at `ka → 0` | **1.0034** once the port is compact — but 1.086 in a small room, which is the room |
+
+Two of those rows are the batch's real content. The point port's `a_eff/h` holding at 0.32 across
+three grids says the artifact is *exactly* proportional to `h`, so there is no refinement that
+escapes it — which is why `radius` has no default. And the last row is the one the plan got wrong:
+the closed form was there to be matched all along, but the number the prototype measured was mostly
+the room, not the port. Comparing anything to a closed form means getting the room out of the way
+first — and it took a *sweep*, not a tighter tolerance, to see that.
