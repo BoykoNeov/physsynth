@@ -1,6 +1,6 @@
 ---
 name: air-box-state
-description: 3-D FDTD air box (HANDOFF §12H) batch 1 BUILT & GREEN — the DISTRIBUTED air tier above the lumped port; the reward and the price both live at λ=1/√3; a flat energy is NOT a stability certificate there
+description: 3-D FDTD air box (HANDOFF §12H) batch 1 BUILT & GREEN, batch 2 (two-way room<->body port) PLANNED — the DISTRIBUTED air tier above the lumped port; the reward and the price both live at λ=1/√3; a flat energy is NOT a stability certificate there
 metadata: 
   node_type: memory
   type: project
@@ -96,3 +96,44 @@ free-field pair tops out at N=64. Audio-rate rooms belong in the diagnose script
 **Files:** `physsynth/core/airbox.py`; `tests/test_airbox_{energy,modal,freefield}.py`;
 `tests/helpers.py::make_airbox`/`airbox_noise`/`gaussian_pulse`; `scripts/diagnose_airbox.py`.
 Suite **1235** green (was 1173); the batch's 62 run in 2.97 s.
+
+---
+
+**BATCH 2 — the room pushes back — PLANNED (2026-07-28), not built.** Plan
+`docs/dev/air-box-back-reaction-plan.md`. The room seen from a port node is a **Thevenin source**:
+`pbar = pbar_free + R_room*q`, so the whole two-way coupling is ONE DIVISION,
+`U = (U_free - G*pbar_free)/(1 + G*R_room)` — structurally `RadiatedBody`'s rank-1 solve reused
+verbatim, unconditionally passive (`1 + G*R_room >= 1` always, no CFL, no guard). Seven traps
+measured on a prototype BEFORE any core code; the numbers that would otherwise cost a rediscovery:
+
+- **`R_room = k*rho0*c0^2 / (2*W*(1+beta))` — the `(1+beta)` is NOT optional.** batch 1's `step()`
+  adds the source BEFORE the wall closure, so a port on a lossy wall gets divided by `(1+beta)` too.
+  Measured drift: **8.4e-15 with** the factor, **1.9e-2 without**. Wall-mounted ports are supported
+  *because* of it; the naive spelling passes every interior-port test and leaks only on a wall.
+- **A port on an OPEN face is silent and the books say nothing is wrong.** `p=0` pins `pbar=0` and
+  `R_room=0`, so `injected` and `acoustic` are **exactly 0.0** forever while the drift is 8.6e-15.
+  The energy report — this project's primary bug detector — is structurally blind to it. Refuse.
+- **A POINT port's load diverges as `1/h` and refining makes it WORSE.** Measured `|Z|` **x2.00 per
+  halving** over three grids (37³/74³/148³), = `3.16..3.29 x |Z_sphere(a=h)|` at every frequency:
+  **a point port is a pulsating sphere of radius ~h/3.2**, i.e. mostly an ADDED MASS (detune), not
+  damping. NOT the cell compliance (that would be `1/h³`) — it is the monopole near field at the
+  only radius the grid has.
+- **A fixed-radius SPREAD port converges** (x0.96 then x1.01 over three grids, 203 -> 1743 -> 13613
+  nodes; non-monotone because the STAIRCASED ball's discrete volume wobbles around `4*pi*a^3/3`), so
+  it ships. But it converges to the **uniformly-injecting BALL**, not the pulsating shell — the
+  classic **6/5** factor (equivalent shell radius `5a/6`); measured 1.11x at ka=0.23. An oracle
+  against `from_sphere(a)` would be wrong by design.
+- **Disjoint ports are EXACTLY independent (7.1e-15); coincident ports drift 3.6e-2.** Same
+  measurement read both ways: it scopes N instruments IN and refuses overlap. Snapping is what makes
+  the hazard real — two ports 5 mm apart on a 13.5 mm grid ARE one port.
+- **The arrival oracle is MANHATTAN, not Euclidean.** The 7-point stencil spreads one node per step,
+  so a second body first moves at `Manhattan + 1` steps — **measured 7** where `r/c0` says **17.5**.
+  A causality test written against `r/c0` fails 2.5x early for reasons unrelated to the coupling.
+
+**Design decision: the port does NOT step the room — the caller does, once, after every port has
+solved.** That is what lets N instruments share a room and lets a string-driven member work at all
+(the *bridge* owns `body.step`). `free_pressure_at` deliberately ignores queued injections, which is
+exact iff ports are disjoint; the forgotten-`room.step()` guard is therefore **per-port**, not a
+global "is `_pending` empty" (that would fire on the second instrument of every scene).
+`RoomLoadedBody.energy()` must be an EXPLICIT override — `__getattr__` delegation would silently
+return the bare modal energy without its coupling channel.
