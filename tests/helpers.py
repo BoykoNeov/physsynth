@@ -11,6 +11,7 @@ from scipy.sparse.linalg import eigsh
 
 from physsynth.analysis import modal, spectrum
 from physsynth.analysis.rotating_wave import rotating_wave_history, solve_rotating_wave
+from physsynth.core.airbox import AirBox
 from physsynth.core.beam import FreeBeam
 from physsynth.core.body import ModalBody
 from physsynth.core.bore import C0_AIR, RHO0_AIR, Bore
@@ -1226,6 +1227,74 @@ def measure_tension_mode_frequency(
     if len(times) < 2:
         raise RuntimeError(f"only {len(times)} crossings in {max_steps} steps -- can't measure")
     return 1.0 / float(np.mean(np.diff(times)))
+
+
+# -- the 3-D air box (HANDOFF §12.H): the distributed tier of the air node ---------------
+#
+# A small, ordinary room. The default grid is deliberately tiny (0.9 x 0.7 x 0.6 m at h = 10 cm,
+# i.e. 10 x 8 x 7 = 560 nodes): 3-D is the first model here where grid cost is a design constraint,
+# and every structural/modal oracle is grid-size-independent, so they run where they are free.
+# The sample rate is *solved for* from the requested Courant number, exactly as make_bore does --
+# but the 3-D ceiling is lambda <= 1/sqrt(3) ~ 0.577, and unlike the 1-D string NO lambda is
+# dispersionless, so 0.9 of the ceiling is a default, never a sweet spot.
+AIRBOX_ROOM_DEFAULT = (0.9, 0.7, 0.6)  # m
+AIRBOX_H_DEFAULT = 0.1                 # m
+AIRBOX_CFL_FRACTION = 0.9              # lambda = fraction / sqrt(3)
+
+
+def make_airbox(
+    *,
+    L: tuple[float, float, float] = AIRBOX_ROOM_DEFAULT,
+    h: float = AIRBOX_H_DEFAULT,
+    cfl: float = AIRBOX_CFL_FRACTION,
+    walls="rigid",
+    source: tuple[float, float, float] | None = None,
+    rho0: float = RHO0_AIR,
+    c0: float = C0_AIR,
+) -> AirBox:
+    """Build an :class:`AirBox` whose Courant number is exactly ``cfl / sqrt(3)``.
+
+    ``h`` fixes the grid, so the sample rate is solved for: ``fs = c0 sqrt(3) / (cfl h)``. ``cfl``
+    is the *fraction of the 3-D CFL ceiling*, not lambda itself — pass ``cfl=1.0`` to sit exactly
+    on ``lambda = 1/sqrt(3)`` (where the corner mode reaches the arcsin's argument of 1) and
+    ``cfl > 1`` to check that construction is refused. ``walls`` takes the same token / float /
+    per-face mapping the class does.
+    """
+    fs = c0 * np.sqrt(3.0) / (cfl * h)
+    return AirBox(L=L, fs=fs, h=h, walls=walls, source=source, rho0=rho0, c0=c0)
+
+
+def airbox_noise(box: AirBox, seed: int = 0, amplitude: float = 1.0) -> AirBox:
+    """Seed the room with a random pressure field (and rest velocity) — the structural-test IC.
+
+    Broadband noise excites **every** mode at once, including the ones a smooth pulse would miss,
+    so an energy identity that survives it has no direction left to hide in.
+    """
+    rng = np.random.default_rng(seed)
+    box.set_state(amplitude * rng.standard_normal(box.p.shape))
+    return box
+
+
+def gaussian_pulse(fs: float, f0: float, *, amplitude: float = 1e-3, widths: float = 4.0):
+    """A Gaussian volume-velocity pulse ``q(t)`` and its derivative ``qdot(t)``, centred at
+    ``widths`` standard deviations in so it starts (and ends) at numerical zero.
+
+    ``sigma = 1/(2 pi f0)`` puts the spectral peak near ``f0``. Returned as a pair of callables of
+    *time in seconds*, plus the effective duration ``2 * widths * sigma`` — which is what sizes the
+    reflection-free window in the free-field oracle.
+    """
+    sigma = 1.0 / (2.0 * np.pi * f0)
+    t0 = widths * sigma
+
+    def q(t):
+        return amplitude * np.exp(-((t - t0) ** 2) / (2.0 * sigma * sigma))
+
+    def qdot(t):
+        return -amplitude * (t - t0) / (sigma * sigma) * np.exp(
+            -((t - t0) ** 2) / (2.0 * sigma * sigma)
+        )
+
+    return q, qdot, 2.0 * widths * sigma
 
 
 # -- model #10, Tier B: the rotating-wave relative equilibrium ---------------------------

@@ -1,10 +1,27 @@
 # The 3-D air box — a room the sound actually crosses (air-box batch 1)
 
-> **Status: PLANNED (2026-07-28).** The human's pick at the post-Phase-D fork, taken after the
+> **Status: BUILT (2026-07-28).** The human's pick at the post-Phase-D fork, taken after the
 > `R(ω)` arm landed (`radiation-frequency-dependent-plan.md`). Every number quoted in §6 and §7
 > below was **measured on a throwaway prototype before this plan was written** — the layout, the
 > energy identity, the wall closure and the free-field window were all settled empirically, not
-> assumed. Prototype lives outside the repo (`M:\claud_projects\temp\airbox`).
+> assumed. Prototype lives outside the repo (`M:\claud_projects\temp\airbox`). Suite **1235 green**
+> (was 1173), ruff clean, `physsynth/core/airbox.py` self-contained — no edits to `radiation.py`,
+> `body.py`, `connection.py` or `bore.py`.
+>
+> **What the build changed, and why.** Writing it up front paid: every §7 oracle passed at the
+> predicted number on the first run (the `Bore` cross-check reproduced `5.25e-14` to the digit).
+> Three corrections, all recorded in §6 and §7 below rather than quietly absorbed:
+>
+> 1. **The step ordering changed, and trap §6.1 evaporated with it.** The shipped class uses
+>    `Bore`'s order — pressure, walls, then velocity — so `energy()` is a pure function of stored
+>    state instead of a mid-step snapshot. The pairing bug the prototype spent a drift hunt on
+>    cannot be written.
+> 2. **Trap §6.5's `-1.5` sample lag was ordering-dependent, and is gone** (measured `|lag| < 0.4`).
+>    It was an artefact of injecting the source before the velocity sub-step. The *discipline* it
+>    taught — assert gain, report lag, let the search go negative — still stands and is still what
+>    the test does.
+> 3. **A sixth trap, not predicted: `lambda = 1/sqrt(3)` carries a reward and a price together.**
+>    See §6.6. It is the more interesting finding of the batch.
 
 ---
 
@@ -201,7 +218,7 @@ not used.
 
 ---
 
-## 6. Traps — all five found by measuring, before a line of core code
+## 6. Traps — five found by measuring before a line of core code, one found by building
 
 1. **The energy/dissipation pairing instant.** `E^n` pairs `p^n` with `u^{n±1/2}`, so it must be
    evaluated *mid-step* — after the velocity update, before the pressure update. Pairing `p^{n+1}`
@@ -209,6 +226,12 @@ not used.
    read exactly like a broken scheme; the dissipation accumulator has the same off-by-one. Once
    both were snapshotted at the same instant the total went to **7.5e-16**. This is the single
    most likely place a drift hunt lands, and it is a *bookkeeping* bug, not a physics one.
+   > **Discharged in the build, by construction.** `AirBox` uses `Bore`'s ordering — pressure,
+   > walls, then velocity — after which the object holds `p^{n+1}` with `u^{n+3/2}` and `u^{n+1/2}`,
+   > so the cross-time product *is* `E^{n+1}` and `energy()` is a pure state function. The trap
+   > cannot be written. Its cost is a different obligation: `set_state` must mirror `Bore`'s
+   > contract exactly (`u0` is `u^{-1/2}`, the setter derives `u^{1/2}`), or §7.10 reads `1e-2`
+   > instead of `1e-14` and the hunt goes to the scheme rather than to the seam.
 2. **The exact mode initialiser is `omega`-free.** For `p^n = cos(omega_d n k)·mode`, the exact
    discrete half-step-back velocity is `u^{-1/2} = (k / (2 rho0 h)) * diff(mode)` — no `omega` in
    it. The plausible-looking continuum form `sin(omega k/2)/(rho0 omega h)` is *nearly* right and
@@ -227,13 +250,41 @@ not used.
    trap 3 is the mechanism; absorption is a convenience. Measured normal-incidence reflection
    against the closed form `|R| = |(zeta-1)/(zeta+1)|` is a *separate* oracle (§7.5), not a
    substitute for windowing.
-5. **The read-out has a fixed sub-sample lag — report it, do not assert it away.** The recorded
-   sample `n` holds `p^{n+1}`, and the staggering adds another half step, giving a **constant
-   ≈ -1.5 sample** offset, independent of `h` and of `r` (spread across radii < 0.51 sample).
-   Batch 1's delay line is an integer-sample, dispersionless construction; the FDTD arrival is
-   dispersive with an O(h) effective source origin. So **assert gain, report lag** — exactly the
-   split the advisor called for. Fitting gain without allowing a *negative* lag pins the search at
-   its boundary and inflates the residual from `9e-3` to `0.59`.
+5. **The read-out has a fixed sub-sample lag — report it, do not assert it away.** The prototype
+   measured a **constant ≈ -1.5 sample** offset, independent of `h` and of `r` (spread across radii
+   < 0.51 sample). Batch 1's delay line is an integer-sample, dispersionless construction; the FDTD
+   arrival is dispersive with an O(h) effective source origin. So **assert gain, report lag** —
+   exactly the split the advisor called for. Fitting gain without allowing a *negative* lag pins the
+   search at its boundary and inflates the residual from `9e-3` to `0.59`.
+   > **The number was ordering-dependent; the discipline was not.** Under the shipped ordering the
+   > source enters half a step later and the offset is **gone** — measured `|lag| < 0.4` samples at
+   > every radius, drifting ~0.5 of a sample across the radius range as dispersion accumulates. So
+   > `-1.5` was a property of *where in the step the source was applied*, not of the read-out — and
+   > the new number is not merely different, it is the **physically aligned** one: a soft source
+   > folded into the pressure update at step `n` lands at the same instant as the pressure it
+   > perturbs, whereas the prototype's pre-velocity injection was half a step early. The test still
+   > asserts gain and merely pins the lag as sub-sample; a whole sample would mean the source or the
+   > read-out sits at the wrong instant.
+
+6. **`lambda = 1/sqrt(3)` hands you the reward and the price at once — and the energy identity
+   cannot tell you about the price.** Not predicted by the prototype; found by building.
+   * **Reward.** A mode whose wavevector lies along the grid **diagonal** — `l/Nx = m/Ny = n/Nz`,
+     which on a cube is `l = m = n` and on the `(0.9, 0.7, 0.6)` room at `h = 0.1` is the *corner*
+     mode `(9,7,6)` — comes out at the **exact continuum frequency**, measured `1e-16`. Nothing
+     else is exact at any `lambda`; axial modes stay off by `> 1e-3` everywhere.
+   * **Price.** The corner mode's dispersion argument `lambda sqrt(3)` reaches exactly 1
+     (`omega_d k = pi`) and the leapfrog's amplification matrix goes **defective**. Broadband
+     content then grows **linearly**: measured peak amplitude ×15 by 1000 steps and ×88 by 6000,
+     with windowed peaks in a clean `1, 2, 3, 4` progression. Secular, not exponential.
+   * **And the energy stays flat through it**, because the discrete energy is only positive
+     *semi*-definite at the ceiling — potential and kinetic grow together with cancelling signs.
+     **A flat energy is therefore not a stability certificate at `lambda_max`**, the one place in
+     this repo where the project's primary bug detector is blind. Construction allows the ceiling
+     deliberately; the helpers default to `0.9/sqrt(3)`.
+   * **Corollary that broke a first-draft test:** dispersion does *not* simply worsen toward the
+     ceiling. The spatial and temporal errors partly cancel, so "smaller `lambda` is more accurate"
+     — true in 1-D — is **false** here. Assert that no `lambda` is dispersionless; do not assert a
+     monotone trend in `lambda`.
 
 ---
 
@@ -267,7 +318,10 @@ not used.
    textbook rectangular-room formula — recovered at **order 2**. *[measured rates **2.012, 2.003,
    2.001**]*
 7. **CFL.** `lambda > 1/sqrt(3)` rejected at construction; a run at `lambda` just under it stays
-   bounded over a long run.
+   bounded over a long run. *[built: at `0.999` of the ceiling the windowed peak is flat across
+   four 2000-step windows; **at** the ceiling it goes `1, 2, 3, 4` — see trap §6.6, which is the
+   more interesting half. Use **windowed** peaks, not a running max: a running max only ever rises,
+   so it cannot tell a bounded oscillation from a slowly growing one.]*
 
 **Cross-tier — the headline:**
 
@@ -343,3 +397,15 @@ suite may not.
 
 **Acceptance:** all of §7 green, full suite green, `ruff check .` clean, added suite time < 30 s
 locally. Baseline to be pinned by a measured run immediately before the build starts.
+
+**Met (2026-07-28).** All of §7 green, and the **full suite is 1235 green** (1173 before the batch,
+so nothing pre-existing moved). `ruff check .` clean. The batch adds **62 tests in 2.97 s**
+locally — a tenth of the budget, which is what building the structural and modal oracles on a
+560-node grid buys; only the free-field pair and the two ceiling runs cost anything at all, and the
+most expensive single test is 0.30 s. `scripts/diagnose_airbox.py` runs the three figures in ~40 s,
+which is where the one large room lives. The measured highlights, all matching §7's predictions:
+lossless drift `7.5e-16`; booked total with walls `4.4e-15`; source booking `1.0e-15`; the exact
+discrete mode `0.0` at step 0, `1.1e-16` at step 1, `2.3e-14` over 500; continuum convergence rates
+`2.01 / 2.00 / 2.00`; free-field `max|gain-1|` `9.9e-2 (N=32) -> 2.0e-2 (48) -> 6.6e-3 (64)`; wall
+reflection within `2e-2` of `(zeta-1)/(zeta+1)`; `Bore` cross-check `5.25e-14` with transverse
+leakage exactly `0.0`.

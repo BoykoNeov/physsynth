@@ -177,6 +177,25 @@ Complete and validated:
   The payoff is what a constant `R` structurally cannot do: high partials radiate better and die
   first, at `α = a²·Re Z_a/(2m_eff)`, while the **reactance** adds mass and drops the pitch — both
   measured against the closed form to better than 2%.
+- **The 3-D air box** — the **distributed** tier above all three (`core/airbox.py`): a room of
+  actual air on a Yee grid, node-centred pressure and face-centred velocity, which is the bore's
+  1-D cell tensored up so its boundary machinery transfers unchanged. A lumped port has one
+  terminal, one impedance, one distance, and so cannot represent room modes, travel time, comb
+  filtering, several listeners, or a source that is not compact. The energy is the same cross-time
+  product under tensor-trapezoid weights (drift ~1e-15), and **one** wall closure covers all three
+  boundary types — `p^{n+1} = (p_rigid − βp^n)/(1+β)`, a 1×1 solve where edges and corners simply
+  *sum admittances* — with `Z = ∞` recovering the rigid box bit-identically and `Z = 0` the open
+  face. The soft volume-velocity source is booked as its own channel, so `stored + absorbed −
+  injected` is flat while the room drains 99.8% of what it was given. Its money oracle is rare:
+  the tensor cosine is an **exact** eigenvector of the discrete Laplacian *including at the h/2
+  wall nodes*, so both the mode shape and its frequency `ω_d = (2/k)·arcsin(c₀kμ/2)` are asserted
+  to ~1e-14 — a tier above the membrane's Bessel test, which staircasing could only ever make a
+  convergence check. Two things 3-D teaches that 1-D does not: **no `λ` is dispersionless**, only a
+  *direction* is (on the grid diagonal at `λ = 1/√3`, exact to 1e-16, axial modes never), and at
+  that same ceiling the corner mode goes defective so broadband content grows **linearly** while
+  the energy stays flat — the one place in this repo where a flat energy is not a stability
+  certificate. The headline is cross-tier: far from the walls the room reproduces `AirRadiation`'s
+  own monopole law to `max|gain−1| = 6.6e-3`, and one cell thick it tracks `Bore` to 5.3e-14.
 - **Acoustic bore** *(wind leg, batch 1 of 3)* — the first **acoustic** resonator (`core/bore.py`):
   the 1D air column of a clarinet, a staggered pressure/volume-velocity leapfrog of Webster's horn
   equation. Energy-first — the trapezoidal `h/2` half-cell closes a rigid wall (no ghost stencil,
