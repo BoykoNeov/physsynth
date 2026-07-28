@@ -127,8 +127,15 @@ pressure-release / Dirichlet face), or a **float** specific acoustic impedance `
 box.inject(q)                      # volume velocity q (m^3/s) at the source node — the primitive
 box.step()
 box.pressure_at(point)             # nearest-node pressure (the snap is reported, not hidden)
+box.snapped(point)                 # the actual node coordinate the read-out lands on
 box.energy(); box.dissipated_energy(); box.injected_energy()
 ```
+
+**The snapped radius is the one the closed form gets evaluated at.** A listener request is rounded
+to the nearest node, so two nearby listeners can collapse onto the *same* node. Every oracle that
+compares against an analytic `r` must use `r_snapped = round(r/h) * h`, not the requested `r` —
+otherwise the snap error (up to `h/2`, i.e. ~10% at `r = 5h`) is silently charged to the physics.
+`snapped()` exists so a caller and a test can both see which radius they actually got.
 
 `inject` takes **volume velocity**, because that is what the continuity equation's source term is.
 The lumped tier's `_VolumeAccelerationSource` protocol hands out `Q''` instead, so driving the box
@@ -194,7 +201,7 @@ not used.
 
 ---
 
-## 6. Traps — all four found by measuring, before a line of core code
+## 6. Traps — all five found by measuring, before a line of core code
 
 1. **The energy/dissipation pairing instant.** `E^n` pairs `p^n` with `u^{n±1/2}`, so it must be
    evaluated *mid-step* — after the velocity update, before the pressure update. Pairing `p^{n+1}`
@@ -244,14 +251,18 @@ not used.
 
 **Spectral — the money oracles, in two tiers:**
 
-5. **The exact discrete room mode.** The tensor cosine `cos(l pi i/Nx) cos(m pi j/Ny)
-   cos(n pi k/Nz)` is an **exact** eigenvector of the discrete Neumann Laplacian *including at the
-   `h/2` wall nodes*, with eigenvalue `-mu^2`, `mu^2 = (4/h^2) sum_d sin^2(l_d pi / (2 N_d))`.
-   Initialised with the §6.2 velocity it oscillates at exactly
-   `omega_d = (2/k) arcsin(c0 k mu / 2)` — assert the field stays proportional to the mode shape to
-   machine precision over hundreds of steps. *[measured shape error **1.2e-14 … 4.7e-14** over 500
-   steps]* This is a **tier above** the membrane's Bessel test, which was convergence-rate only,
-   because the rectangle is grid-aligned and nothing is staircased.
+5. **The exact discrete room mode — two separate assertions, not one.**
+   **(a) Spatial.** The tensor cosine `cos(l pi i/Nx) cos(m pi j/Ny) cos(n pi k/Nz)` is an
+   **exact** eigenvector of the discrete Neumann Laplacian *including at the `h/2` wall nodes*,
+   with eigenvalue `-mu^2`, `mu^2 = (4/h^2) sum_d sin^2(l_d pi / (2 N_d))`. Assert the operator
+   residual directly, over **every** `l` from `0` to `N`. *[measured **6.4e-16 … 4.8e-14**]*
+   **(b) Temporal.** Initialised with the §6.2 velocity, the field must equal
+   `cos(omega_d n k) * mode` with `omega_d = (2/k) arcsin(c0 k mu / 2)` — compared against the
+   *predicted amplitude at each step*, not merely "still proportional to the mode shape."
+   *[measured **1.2e-14 … 4.7e-14** over 500 steps]*
+   A shape-only test passes even when `omega_d` is wrong, and `omega_d` is the whole point: this is
+   a **tier above** the membrane's Bessel test, which was convergence-rate only, because the
+   rectangle is grid-aligned and nothing is staircased.
 6. **The continuum room modes.** `f_lmn = (c0/2) sqrt((l/Lx)^2 + (m/Ly)^2 + (n/Lz)^2)` — the
    textbook rectangular-room formula — recovered at **order 2**. *[measured rates **2.012, 2.003,
    2.001**]*
@@ -266,15 +277,32 @@ not used.
    **`gain == 1` at every radius *is* the `1/r` law** — a far better estimator than a log-log slope
    fit on dispersive pulse peaks. Assert `max|gain - 1|` falls with refinement; **report** the lag.
    *[measured `max|gain-1|` = **1.97e-2 (N=48) → 6.85e-3 (N=64) → 1.65e-3 (N=96)**; lag ≈ -1.5
-   samples, spread < 0.51 sa; post-fit residual 0.175 → 0.037, order ≈ 2]*
+   samples, spread < 0.51 sa; post-fit residual 0.175 → 0.037]*
+   **Do not tighten this into a convergence-order claim during the build.** The measured sequence
+   implies rate ≈3.6 while a single-radius study at fixed `r = 0.15 m` gave ≈1.7 — they disagree
+   because `r_min`/`r_max` themselves move with `N` (§6.3 ties the usable range to `h` and to the
+   pulse). "Falls with refinement" is the honest assertion. An order claim would first require the
+   radii pinned in physical units across every grid.
 9. **Wall reflection coefficient.** Quasi-1D duct, pulse onto an impedance face: measured `|R|`
    vs `|(zeta-1)/(zeta+1)|` at several `zeta`. *[measured err **3.1e-3 … 1.3e-2**]* — a
    convergence tier, not machine precision; assert accordingly and let it tighten with `h`.
 10. **Cross-model agreement with `Bore`.** A box one cell thick in `y` and `z`, rigid on the
-    transverse faces, reproduces the 1-D bore's closed-open odd-harmonic series. **This is an
-    `allclose` cross-model check, not a family reduction** — `Bore` carries the area `S` through
-    both updates and the box carries none, so the float operation order differs and bit-identity
-    is not promised.
+    transverse faces and `Z = 0` at `x1`, run against the repo's `Bore` from the same `p^0`:
+    traces agree to `< 1e-12` relative over thousands of steps. **This is an `allclose`
+    cross-model check, not a family reduction** — `Bore` carries the area `S` through both updates
+    and the box carries none, so the float operation order differs and bit-identity is *not*
+    promised. *[measured **5.25e-14** over 4000 steps; `array_equal` **False**, as expected;
+    transverse leakage `max|p - p[:,0,0]|` **exactly 0.0**, so the `h/2` transverse half-cells
+    raise no spurious dynamics even against the open face]*
+    The closed-open **odd-harmonic series** `f_n = (2n-1) c0/(4L)` is then *inherited* from
+    `test_bore_modal.py` via that agreement, and is deliberately **not** re-asserted here by FFT
+    peak-picking off a short box run — at 4000 steps the bin width is 12 Hz, and a Gaussian IC
+    puts spectral nulls on some of the very partials being counted. The trace agreement is the
+    stronger and cheaper evidence.
+    **Match `lambda` on both sides.** The 3-D CFL caps `lambda <= 1/sqrt(3) ≈ 0.577`, so a
+    quasi-1-D box **cannot** run at the bore's `lambda = 1` dispersionless sweet spot. Comparing a
+    box at `lambda = 0.51` against a bore at `lambda = 1` compares two different amounts of
+    dispersion and disagrees for an uninteresting reason.
 11. **Full chain, zero edits elsewhere.** `string → bridge → ReactiveRadiatedBody → AirBox`, driven
     by the body's public `volume_velocity`, runs with no edits to `body.py`, `connection.py` or
     `radiation.py`.
