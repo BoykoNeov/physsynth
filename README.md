@@ -46,12 +46,17 @@ just wires up the `physsynth` package and dev extras.)
 ```bash
 pytest                  # full harness
 pytest -m "not slow"    # skip the longer convergence/spectral sweeps
-pytest -n auto --dist loadgroup   # same tests, spread across cores (needs pytest-xdist)
+pytest -n 8 --dist loadgroup      # same tests, spread across cores (needs pytest-xdist)
 ```
 
 The full harness is long — it simulates every model in the repo. Prefer the parallel form for a
 whole-suite run and the plain form when debugging a single test, where worker startup is pure
 overhead and the serial run gets the full multi-threaded BLAS (measurably faster per test).
+
+Pick the worker count deliberately rather than reaching for `-n auto`: `auto` takes one worker per
+*logical* core, which oversubscribes a hyperthreaded desktop that is also doing other work. `-n 8`
+is the configuration actually measured here. CI uses `-n auto` because its runners are small and
+otherwise idle.
 
 `--dist loadgroup` matters: a handful of modules carry `pytest.mark.xdist_group` because their
 module-scoped fixtures are expensive (the whirling and phantom sweeps run 30–110 s of simulation
