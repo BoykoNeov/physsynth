@@ -51,6 +51,10 @@ from physsynth.analysis.dispersion import stiff_dispersion_frequencies
 from physsynth.analysis.duffing import kc_mode_coefficients
 from physsynth.analysis.spectrum import detect_peaks, magnitude_spectrum
 
+# Keep this module on ONE xdist worker (``--dist loadgroup``): its three module-scoped fixtures cost
+# ~81 s + ~47 s + ~29 s of setup, which scattering would rebuild per worker. No effect serially.
+pytestmark = pytest.mark.xdist_group("geometric_phantom")
+
 # -- parameters, and why each is what it is --------------------------------------------------------
 
 N = 32

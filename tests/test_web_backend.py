@@ -1656,6 +1656,10 @@ def phantom():
     return simulate_to_payload(dict(GEOM_PHANTOM))
 
 
+# The seven `phantom` tests share one ~23 s module-scoped run. Pin them to a single xdist worker
+# (``--dist loadgroup``) so it is computed once instead of once per worker; the rest of this large
+# module is free to scatter, which is where the parallel win in this file comes from.
+@pytest.mark.xdist_group("web_phantom")
 def test_phantom_peaks_are_the_quadratic_combinations_of_the_measured_partials(phantom):
     """**The mechanism.** Every peak the longitudinal field carries is a *quadratic* combination of
     the transverse partials.
@@ -1690,6 +1694,7 @@ def test_phantom_peaks_are_the_quadratic_combinations_of_the_measured_partials(p
     assert abs(sp["combos"]["f1+f2"] - (sp["ladder"][0] + sp["ladder"][1])) > 0.05
 
 
+@pytest.mark.xdist_group("web_phantom")
 def test_phantom_no_longitudinal_peak_sits_on_a_transverse_partial(phantom):
     """The other half of the claim, and the more discriminating half.
 
@@ -1707,6 +1712,7 @@ def test_phantom_no_longitudinal_peak_sits_on_a_transverse_partial(phantom):
         )
 
 
+@pytest.mark.xdist_group("web_phantom")
 def test_phantom_headline_is_the_defect_measured_from_both_sides(phantom):
     """**The headline**: the displacement that puts a phantom in a *gap* is ``f2 - 2 f1``, and it is
     one number measured in one run — no oracle, no confound.
@@ -1730,6 +1736,7 @@ def test_phantom_headline_is_the_defect_measured_from_both_sides(phantom):
     assert min(d1, d2) > 3.0, "the phantoms must land in the gaps, not on the partials"
 
 
+@pytest.mark.xdist_group("web_phantom")
 def test_phantom_conserves_through_the_wrapper(phantom):
     """Criterion 1 survives 7,950 Newton steps of the most arithmetic-heavy regime in the viewer."""
     e = phantom["energy"]
@@ -1738,6 +1745,7 @@ def test_phantom_conserves_through_the_wrapper(phantom):
     assert e["lossless"]["pass"] is True
 
 
+@pytest.mark.xdist_group("web_phantom")
 def test_phantom_window_is_fixed_physics_and_ignores_the_animation_slider(phantom):
     """The 0.10 s window is not a preference, so the slider that sets every other regime's window is
     ignored here (and hidden in the UI).
@@ -1752,6 +1760,7 @@ def test_phantom_window_is_fixed_physics_and_ignores_the_animation_slider(phanto
     assert phantom["meta"]["num_steps"] == round(GEOM_PHANTOM_WINDOW * phantom["fs_sim"])
 
 
+@pytest.mark.xdist_group("web_phantom")
 def test_phantom_display_grid_is_denser_than_the_measurement_grid(phantom):
     """The display/measurement split, pinned structurally.
 
@@ -1776,6 +1785,7 @@ def test_phantom_display_grid_is_denser_than_the_measurement_grid(phantom):
     assert len(sp["wide_freq"]) > 100
 
 
+@pytest.mark.xdist_group("web_phantom")
 def test_phantom_ships_the_audio_that_batch_3_deferred(phantom):
     """The debt: model #10 went viz-only, promising the bridge force as its true audible signature.
 

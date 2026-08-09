@@ -19,7 +19,7 @@ dependencies = [
 # Visualization/diagnostics. Kept OUT of `dependencies` so the headless DSP core
 # (physsynth/core) never even has plotting available to import. See CLAUDE.md #4.
 viz = ["matplotlib>=3.7"]
-dev = ["pytest>=7.4", "matplotlib>=3.7"]
+dev = ["pytest>=7.4", "pytest-xdist>=3.5", "matplotlib>=3.7"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["physsynth"]
@@ -29,6 +29,10 @@ testpaths = ["tests"]
 addopts = "-q"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    # Declared here so the mark does not warn when pytest-xdist is absent. It only bites under
+    # `-n N --dist loadgroup`, where it keeps a module's tests on one worker so an expensive
+    # module-scoped fixture is built once rather than once per worker.
+    "xdist_group: pin these tests to a single xdist worker (see conftest.py)",
 ]
 
 [tool.ruff]

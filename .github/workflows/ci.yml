@@ -19,6 +19,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Install
         run: |
@@ -30,5 +32,9 @@ jobs:
           pip install ruff
           ruff check .
 
+      # `-n auto` = one worker per available core (GitHub runners are small, so this is ~4).
+      # `--dist loadgroup` scatters tests freely EXCEPT where a module carries
+      # `pytest.mark.xdist_group`, which keeps its expensive module-scoped fixtures on one worker.
+      # conftest.py pins each worker to a single BLAS thread so the pool does not oversubscribe.
       - name: Run validation harness
-        run: pytest -q
+        run: pytest -q -n auto --dist loadgroup

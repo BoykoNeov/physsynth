@@ -104,6 +104,11 @@ from helpers import (
 from physsynth.analysis.damping import spatial_eigenvalue_p2
 from physsynth.analysis.duffing import kc_mode_coefficients
 
+# Keep this module on ONE xdist worker (``--dist loadgroup``): its three module-scoped fixtures are
+# the most expensive setup in the suite (~110 s + ~55 s + ~45 s). Scattering the tests would rebuild
+# them once per worker. Harmless when running serially or without xdist.
+pytestmark = pytest.mark.xdist_group("geometric_whirl")
+
 # -- parameters, and why each is what it is --------------------------------------------------------
 
 N = 16
