@@ -11,7 +11,7 @@ from scipy.sparse.linalg import eigsh
 
 from physsynth.analysis import modal, spectrum
 from physsynth.analysis.rotating_wave import rotating_wave_history, solve_rotating_wave
-from physsynth.core.airbox import AirBox, RoomLoadedBody
+from physsynth.core.airbox import AirBox, RoomLoadedBody, RoomLoadedPlate
 from physsynth.core.beam import FreeBeam
 from physsynth.core.body import ModalBody
 from physsynth.core.bore import C0_AIR, RHO0_AIR, Bore
@@ -25,6 +25,7 @@ from physsynth.core.connection import (
 from physsynth.core.engine import simulate
 from physsynth.core.mallet import MalletMembrane, MalletWall
 from physsynth.core.membrane import Domain, Membrane
+from physsynth.core.plate import THETA_DEFAULT as PLATE_THETA_DEFAULT
 from physsynth.core.plate import Plate
 from physsynth.core.radiation import (
     AirRadiation,
@@ -1411,3 +1412,113 @@ GeometricString.longitudinal_energy` is the wrong one: the helix holds a **stati
     """
     dt_v = (s.v[1:-1] - s.v_prev[1:-1]) / s.k
     return 0.5 * s.rho * s.h * float(np.dot(dt_v, dt_v))
+
+
+# -- air-box batch 3: the DISTRIBUTED area coupling (a plate radiating from every node) ---
+# A room sized so a 0.30 m plate's footprint plus its one-cell bilinear halo sits strictly inside
+# a face (which SurfacePort refuses otherwise, because a face-rim node touches a second wall and
+# R_j would stop being uniform across the patch). N = (12, 11, 9) at fs = 8000 -> h = 8.25 cm.
+AIRBOX_SURFACE_FS = 8000.0
+AIRBOX_SURFACE_N = (12, 11, 9)
+AIRBOX_SURFACE_PLATE_L = 0.30      # m, square
+AIRBOX_SURFACE_KAPPA = 20.0        # m^2/s
+AIRBOX_SURFACE_RHO = 0.5           # kg/m^2 -- light enough that the air genuinely loads it
+
+
+def make_surface_room(
+    *,
+    fs: float = AIRBOX_SURFACE_FS,
+    N: tuple[int, int, int] = AIRBOX_SURFACE_N,
+    cfl: float = AIRBOX_CFL_FRACTION,
+    walls="rigid",
+) -> AirBox:
+    """A room sized in **cells**, for mounting a surface in one of its walls.
+
+    ``make_airbox`` fixes ``h`` and solves for ``fs``; here the plate fixes ``fs`` (the two must
+    share a timestep exactly), so the grid is specified as a cell count per axis and ``h`` follows
+    from the Courant number. ``cfl`` is the fraction of the 3-D ceiling, as everywhere else.
+    """
+    h = C0_AIR * np.sqrt(3.0) / (cfl * fs)
+    return AirBox(L=tuple(n * h for n in N), fs=fs, h=h, walls=walls)
+
+
+def make_room_loaded_plate(
+    *,
+    room: AirBox | None = None,
+    walls="rigid",
+    N_room: tuple[int, int, int] = AIRBOX_SURFACE_N,
+    fs: float = AIRBOX_SURFACE_FS,
+    face: str = "z0",
+    origin: tuple[float, float] | None = None,
+    spreading: str = "bilinear",
+    boundary: str = "supported",
+    N: int = 8,
+    L: float = AIRBOX_SURFACE_PLATE_L,
+    kappa: float = AIRBOX_SURFACE_KAPPA,
+    rho: float = AIRBOX_SURFACE_RHO,
+    sigma: float = 0.0,
+    theta: float = PLATE_THETA_DEFAULT,
+) -> RoomLoadedPlate:
+    """A :class:`Plate` mounted flush in a wall and loaded by the room over its whole surface.
+
+    Returns the :class:`RoomLoadedPlate`; its room is on ``.room`` and its port on ``.port``. Pass
+    ``room=`` to mount a **second** surface (or a batch-2 point port) in an existing room — their
+    node sets must be disjoint, and note the acoustic source is up to one air cell larger than the
+    plate itself. ``sigma = 0`` keeps the plate lossless so the **only** energy channel is the
+    room, and the conserved statement is ``inst.energy() + inst.room.energy()``.
+    """
+    if room is None:
+        room = make_surface_room(fs=fs, N=N_room, walls=walls)
+    plate = Plate(
+        Lx=L, Ly=L, kappa=kappa, rho=rho, fs=room.fs, N=N, sigma=sigma, theta=theta,
+        boundary=boundary,
+    )
+    return RoomLoadedPlate(
+        plate=plate, room=room, face=face, origin=origin, spreading=spreading
+    )
+
+
+def plate_bump(plate: Plate, amplitude: float = 1e-3) -> np.ndarray:
+    """A smooth off-centre bump on ``plate``'s live nodes — the generic struck initial condition.
+
+    Off-centre so it is not orthogonal to the antisymmetric modes. The free plate gets its mean
+    removed: a net piston is the most efficient radiator the geometry has (see §7.8), so leaving it
+    in would drown every other channel within a few hundred steps.
+    """
+    x, y = plate.X[plate.mask], plate.Y[plate.mask]
+    width = 0.08 * plate.Lx
+    u0 = amplitude * np.exp(
+        -(((x - 0.42 * plate.Lx) ** 2 + (y - 0.38 * plate.Ly) ** 2) / (width * width))
+    )
+    return u0 if plate.boundary == "supported" else u0 - u0.mean()
+
+
+def plate_mode_shape(plate: Plate, m: int, n: int) -> np.ndarray:
+    """The **exact** discrete mode ``sin(m pi x/Lx) sin(n pi y/Ly)`` of a supported plate, rms 1.
+
+    Exact because ``B = L^2`` keeps the sine product an eigenvector of the scheme, which is what
+    makes ``sum_i sin(m pi i/N) = 0`` for even ``m`` an *identity* rather than an approximation —
+    i.e. what makes an even-index mode's net volume displacement exactly zero.
+    """
+    if plate.boundary != "supported":
+        raise ValueError(
+            "the closed-form sine mode is the supported plate's; #5b has no such form."
+        )
+    x, y = plate.X[plate.mask], plate.Y[plate.mask]
+    shape = np.sin(m * np.pi * x / plate.Lx) * np.sin(n * np.pi * y / plate.Ly)
+    return shape / np.sqrt(np.mean(shape * shape))
+
+
+def surface_scene_energy(*instruments) -> float:
+    """The conserved total of a surface scene: ``sum_j inst_j.energy() + room.energy()``.
+
+    :func:`room_scene_energy` one tier up — and carrying the same warning, sharpened by batch 3's
+    own measurement: this total is **necessary and not sufficient**. It stays flat (4.9e-15) with a
+    deliberately wrong ``R_j`` that leaves the two ledgers 18% apart, because each side's ledger
+    telescopes against whatever pressure *it* used. Assert it, and assert ``radiated == injected``
+    beside it.
+    """
+    room = instruments[0].room
+    if any(inst.room is not room for inst in instruments):
+        raise ValueError("surface_scene_energy expects instruments sharing a single room.")
+    return sum(inst.energy() for inst in instruments) + room.energy()

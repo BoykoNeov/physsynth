@@ -739,13 +739,15 @@ class RoomPort:
     to ``-k pbar U`` for *whatever* ``pbar`` was used in the force, and the room's
     identity is exact for *whatever* injection it received, so the
     scene total is the sum of two separately-exact identities and stays flat even when the pressure
-    the body was pushed by and the pressure the room developed are different numbers. Measured on a
-    corner port (``beta = 1.559``, so the naive ``R_room`` is 2.56x too big) over 400 steps: the
-    scene total drifts **6.3e-15 — green either way** — while ``|radiated - injected|`` goes from
-    4.2e-16 to **88% of the channel**. A wrong ``R_room`` does not leak energy; it creates it on one
-    side and destroys the same amount on the other. The tests that catch it are the *cross-ledger*
-    identity ``radiated == injected`` and the differential measurement
-    ``test_R_room_is_what_the_room_does``, never the conserved total.
+    the body was pushed by and the pressure the room developed are different numbers. Measured here
+    on batch 3's distributed port, whose ``R_j`` is this same constant per node — the factor dropped
+    on a lossy mounting wall (``zeta = 3``, mean ``beta = 0.173``), 300 steps: the scene total
+    drifts **4.9e-15, which is SMALLER than the correct run's 2.0e-14** — green either way, and not
+    even in the suspicious direction — while ``|radiated - injected|`` goes from **exactly
+    0.00e+00** to **18% of the channel** (12.9% on a free plate). A wrong ``R`` does not leak
+    energy; it creates it on one side and destroys the same amount on the other. The tests that
+    catch it are the *cross-ledger* identity ``radiated == injected`` and the differential
+    measurement ``test_R_room_is_what_the_room_does``, never the conserved total.
 
     **Point port versus spread port — a measured non-convergence.** ``radius=None`` puts the whole
     volume velocity on one node. That is exact and perfectly conservative, and its *magnitude* is a
@@ -1216,13 +1218,24 @@ class SurfacePort:
     not survive measurement.** ``T`` must (a) conserve volume exactly, (b) be usable as ``T^T`` for
     the pressure, and (c) leave no air node in the footprint unfed. Nearest-node assignment
     satisfies (a) and (b) and fails (c): at ``h_surface/h_air = 1.21`` it leaves footprint nodes
-    unfed (this class refuses it), and where it does construct, its interior assigned area per air
-    node **does not converge** — measured spread 0.258 and 0.161 ``h_air^2`` at ``N_plate = 16, 24``
-    — a lumpy source at the grid scale for no reason. Bilinear spreading (each surface node's area
-    distributed over the four surrounding air nodes with weights summing to 1) leaves **0** unfed
-    at every ratio and assigns **exactly** ``h_air^2`` per interior node — measured spread
-    ``0.0000`` at every refinement, a partition-of-unity consequence. That is what ships, and
+    unfed, which this class refuses. Where it does construct, its interior assigned area per air
+    node is lumpy at the grid scale and **does not converge** — measured spread 0.83, 1.03, 0.64,
+    0.46 ``h_air^2`` at ``N_plate = 8, 16, 24, 32``, wandering rather than shrinking. Bilinear
+    spreading (each surface node's area distributed over the four surrounding air nodes with
+    weights summing to 1) leaves **0** unfed at every ratio and is 10x to 100x flatter at every
+    one: 0.082, 0.062, 0.051, 0.031 over the same refinements, decreasing. That is what ships, and
     ``spreading="nearest"`` exists **only** as its measured negative control.
+
+    **How flat, exactly — because "partition of unity" promises more than it delivers.** Bilinear's
+    interior assignment is ``h_air^2`` *exactly* (measured 5e-16 … 2e-15) when ``h_air/h_surface``
+    is an **integer**, and only then. Off an integer it ripples, and not monotonically in the ratio:
+    2.93 gives 0.0077 while the finer 4.40 gives 0.0207. Poisson summation says why — the
+    periodised hat sum has Fourier coefficients ``sinc^2(pi k h_air/h_surface)``, whose ``k``-th
+    term vanishes exactly when ``k h_air/h_surface`` is a nonzero integer, so which harmonics
+    cancel depends on the ratio's arithmetic rather than on its size. The residual is a small
+    ripple in the source's *amplitude* across the surface, it shrinks under refinement, and it is
+    the accuracy floor of this coupling — worth knowing before reading a radiated magnitude as
+    physics.
 
     **What was expected to decide it, and what was actually found.** The plan for this batch argued
     from *reflection equivariance* — that bilinear's load matrix is mirror-symmetric at every offset
@@ -1264,14 +1277,15 @@ class SurfacePort:
     re-excites a surface's *shape*, converting an acoustically silent mode into a radiating one at
     the 1-3% level, is one more thing no one-port can represent at all.
 
-    **A baffled surface needs no new boundary machinery.** A soft injection of ``q = A_n v`` at a
-    **wall** node *is* the moving-wall (piston) condition, not an approximation of it: the wall
-    node's divergence is ``u_face/w_z`` with ``w_z = h/2``, so a wall moving at ``v`` adds
-    ``k rho0 c0^2 v/(h/2)``, and a soft source ``q = h^2 v`` into ``W = h^3/2`` adds
-    ``k rho0 c0^2 (h^2 v)/(h^3/2)`` — the same number. Measured against an independent moving-wall
-    implementation at ~1e-15 **relative** in the field and in both energy books, on rigid, mixed and
-    lossy mounting walls. (Machine precision, *not* bit identity — the two expressions divide by
-    ``W`` and by ``w_z`` in different orders, and this repo's bit-identity claims are load-bearing.)
+    **A baffled surface needs no new boundary machinery, and that is algebra rather than a
+    measurement.** A soft injection of ``q = A_n v`` at a **wall** node *is* the moving-wall
+    (piston) condition, not an approximation of it: the wall node's divergence is ``u_face/w_z``
+    with ``w_z = h/2``, so a wall moving at ``v`` adds ``k rho0 c0^2 v/(h/2)``, while a soft source
+    ``q = h^2 v`` into ``W = h^3/2`` adds ``k rho0 c0^2 (h^2 v)/(h^3/2)`` — and
+    ``h^2/(h^3/2) = 1/(h/2)``, so these are the same number identically, on every wall type. Note
+    the two expressions divide by ``W`` and by ``w_z`` in different orders, so an implementation
+    written the other way would agree to machine precision and **not** bit-for-bit; this repo's
+    bit-identity claims are load-bearing and that one could not be cashed.
 
     Parameters
     ----------
@@ -1536,6 +1550,9 @@ class SurfacePort:
         reached = np.ravel_multi_index(
             (self.nodes[t0], self.nodes[t1]), (room.N[t0] + 1, room.N[t1] + 1)
         )
+        # Recorded for the message and for the plan's API surface, but note it can only ever
+        # read 0 on a LIVE port: a nonzero count is refused right below. It is a construction-time
+        # diagnostic, not a state a caller can observe and act on.
         self.footprint_empty = int(np.setdiff1d(foot, reached).size)
         if self.footprint_empty:
             raise ValueError(
@@ -1722,15 +1739,21 @@ class RoomLoadedPlate:
 
     is flat for *any* ``T`` and *any* ``R`` — including a **wrong** ``R``. Each side's ledger
     telescopes against whatever pressure it used, and the sum of two internally-consistent
-    identities is conserved even when the two disagree with each other. Measured with ``R_j``
-    deliberately 17% wrong (dropping the ``1 + beta`` wall factor): the conserved total drifts
-    1.7e-14 — *green* — while ``radiated - injected`` is **13% of the channel**. So the conserved
-    total ships as **necessary and not sufficient**, and the money test is the cross-ledger identity
+    identities is conserved even when the two disagree with each other. Measured by dropping the
+    ``1 + beta`` wall factor from ``R_j`` on a lossy mounting wall, 300 steps: the conserved total
+    drifts **4.9e-15 — smaller than the correct run's own 2.0e-14** — while ``radiated - injected``
+    goes from *exactly zero* to **18% of the channel** (12.9%, free plate). So the conserved total
+    ships as **necessary and not sufficient**, and the money test is the cross-ledger identity
     ``radiated_energy == room.injected`` plus a differential per-node measurement of ``R_j`` read
-    straight off the room. (Every conservation claim must also report **how big the channel is** — a
-    conservation test on a channel worth 1e-14 of the total passes with the coupling disconnected.
-    Air loading a light plate is genuinely violent: a 45 g, 0.09 m^2 plate at 700 Hz has a radiation
-    time constant of ~2.4 ms.)
+    straight off the room.
+
+    **And every conservation claim must report how big the channel is**, because a conservation test
+    on a channel worth 1e-14 of the total passes with the coupling disconnected. The channel is a
+    property of the *motion*, not of the coupling: measured over 400 steps into an all-lossy room,
+    a narrow plucked bump gives **0.0028** of ``E0`` on a supported plate and 0.0018 on a free one
+    (fine spatial patterns radiate badly — that is the acoustic short circuit doing its job), while
+    the free plate's uniform-velocity **piston** gives **0.9974**. So the piston configuration is
+    the one that makes a conservation assertion non-vacuous, and it ships alongside the others.
 
     **No ``_accel`` correction is needed, deliberately.** :class:`RoomLoadedBody` has to refresh
     ``body._accel`` *after* its rank-1 correction because its load is applied post-solve. Here
@@ -1749,11 +1772,13 @@ class RoomLoadedPlate:
     not happening and the delegation would hide it perfectly. The news is good on both counts:
     ``G0 = M + (theta - 1/4) k^2 S`` is a statement about **mass and theta-excess stiffness**, and
     the air load is **dissipative** — it enters ``A``, never ``G0`` — so the margin comes out
-    bit-identical loaded or bare (0.57868295 both, supported and free); and adding the load block to
-    ``G0`` anyway *reduces* ``(G0^-1)_dp`` by 0.7%, i.e. the true margin is *smaller* than the guard
-    reports. **The guard's blindness errs safe.** A test pins that bit-identity so a future change
-    making the load non-dissipative (the two-sided dipole plate, batch 4, whose face cut removes air
-    mass) fails loudly there instead of silently mis-guarding.
+    **bit-identical** loaded or bare (measured ``0.2061806714931906`` supported and
+    ``0.2061840079056186`` free, in both cases to the last digit); and adding the load block to
+    ``G0`` anyway *reduces* ``(G0^-1)_dp`` — measured ratio 0.500 supported, 0.995 free, both below
+    1 — i.e. the true margin is *smaller* than the guard reports. **The guard's blindness errs
+    safe**, and it is the sign of that ratio, not its size, that is the claim. A test pins the
+    bit-identity so a future change making the load non-dissipative (the two-sided dipole plate,
+    batch 4, whose face cut removes air mass) fails loudly there instead of silently mis-guarding.
 
     **The free plate's rigid-body translation now radiates.** Model #5b's stiffness nullspace is
     exactly ``{1, x, y}`` — bare, a uniform velocity translates forever at *constant* energy
@@ -1859,8 +1884,15 @@ class RoomLoadedPlate:
         # Drop the structural zeros the load's sparsity pattern contributes where its value is 0, so
         # a zero-area surface (T = 0) factors the plate's OWN matrix and reduces to the bare plate.
         a_loaded.eliminate_zeros()
-        self.nnz_growth = a_loaded.nnz / a_bare.tocsc().nnz  # the load's cost, reported not assumed
+        # The load's cost, reported rather than assumed -- and reported twice, because the two
+        # numbers say different things. `nnz_growth` counts STORED entries; `lu_nnz` is what splu
+        # actually pays, which is fill-in and is the one that matters. Measured against a bare-plate
+        # factorization at h_plate/h_air = 0.45, 0.23, 0.15: stored 2.9x, 8.7x, 18.2x but fill only
+        # 1.55x, 3.50x, 5.29x. Real growth either way -- the load couples every plate node sharing
+        # an air node, so the block is ~(h_air/h_plate)^2 wide and the factorization DOES thicken.
+        self.nnz_growth = a_loaded.nnz / a_bare.tocsc().nnz
         self._lu_loaded = splu(a_loaded)
+        self.lu_nnz = int(self._lu_loaded.L.nnz + self._lu_loaded.U.nnz)
 
         self.radiated_energy = 0.0  # integral pbar . q dt: the work this plate did on the room
         self.nodal_volume_velocity = np.zeros(self.port.node_count)  # last q (m^3/s per node)
