@@ -1,11 +1,11 @@
 # The plate radiates from every node — the distributed area coupling (air-box batch 3)
 
 > **Status: PLANNED.** Every number in §6 and §7 below was measured on a prototype before a line of
-> core code was written — the house rule since batch 1. Eight traps were measured; **three changed
-> the design**, one of them changing what the batch's own money test *is*, and one of them is a
-> correction to a claim batch 2 shipped in a comment.
+> core code was written — the house rule since batch 1. Eight traps were measured; **four changed
+> the design**, one of them changing what the batch's own money test *is*, one of them changing a
+> default in the API, and one of them is a correction to a claim batch 2 shipped in a comment.
 >
-> The three that changed the design, in order of how much they cost to learn:
+> The four that changed the design, in order of how much they cost to learn:
 >
 > 1. **The conserved total is structurally BLIND to a wrong coupling constant** (§6.1). It is not
 >    merely weak — it is *exactly* as flat with a 17 % error in `R_j` as without it, because each
@@ -23,15 +23,31 @@
 >    not — symmetry defect of `TᵀRT` measured at **1e-15 versus 0.42–0.73** — and the monopole that
 >    leaks out of an even plate mode tracks that defect one-for-one, **1e-15 versus 18 %**. Under
 >    nearest-node the batch's own headline claim holds at `t = 0` and dissolves within 200 steps.
->    Nearest-node's symmetry, where it appears, is an accident of grid alignment.
-> 3. **The headline is a ratio, not a located transition** (§7.6). The `ω = c₀k_p` coincidence law is
+>    Bilinear's equivariance holds at **every** plate offset (measured at eight, flat at 9e-16) for a
+>    stateable reason: `R_j` is uniform across a face's interior, so `TᵀRT = R·TᵀT` and only relative
+>    offsets enter. Nearest-node's defect is flat too — its failure is not an alignment matter either.
+> 3. **The load matrix is only half the coupling, and the even mode's silence is a property of the
+>    whole SCENE** (§7.6.4) — the finding that came closest to shipping as a false claim, and it was
+>    found by asking whether §6.5's measurement was conditional on the plate being centred. It is, but
+>    not for the expected reason. The incoming `Tᵀ p̄_free` is the **room's** field, so the
+>    antisymmetric subspace survives only if the room is mirror-symmetric about the mode's own
+>    antisymmetry plane. A **perfectly centred** plate in a room made asymmetric *in x* (lossy `x0`,
+>    rigid `x1`) leaks **3.5e-02** — the largest figure in the study — while the same asymmetry in *y*
+>    leaves a `(2,1)` mode at 3.0e-15. Six different room widths with the plate centred, spanning two
+>    grid alignments, all sit at rounding: **grid commensurability is not the criterion, centring is.**
+>    And there is no tolerance band — the leak is *linear* in the offset over four decades (`δ/h_air`
+>    of 1e-6 gives 1.0e-07), so "approximately centred" is not approximately silent. Consequences:
+>    `origin` **defaults to centred**, the oracle fixes both halves of the symmetry, and the
+>    asymmetric case ships as a **diagnose figure rather than a bug** — a room re-exciting a plate's
+>    *shape* is one more thing no `R(ω)` one-port can represent.
+> 4. **The headline is a ratio, not a located transition** (§7.6). The `ω = c₀k_p` coincidence law is
 >    the *infinite* corrugated-plane result; a finite staircased patch in a box radiates from its
 >    edges below coincidence, by an amount that is a property of the patch, not of a citable closed
 >    form. Measured: the power ratio is **not** monotone in frequency (room modes plus the piston's
 >    own response), so the assertions are strict monotonicity in *pattern fineness* at fixed
 >    frequency, an endpoint lift, and a *bracket* containing each pattern's own `c₀k_p`.
 >
-> The fourth finding worth reading before the build: **a consistent sign flip in `T`/`Tᵀ` is
+> The fifth finding worth reading before the build: **a consistent sign flip in `T`/`Tᵀ` is
 > invisible to every energetic quantity in the batch**, including `radiated_energy`, which comes out
 > **bit-identical** (§6.2). `TᵀRT` is sign-invariant. The only detector is the sign of the surface
 > pressure on the *first* steps — and the naive six-step read gives the *wrong* answer, because the
@@ -219,7 +235,10 @@ inst = RoomLoadedPlate(
     plate=plate,
     room=room,
     face="z0",            # which of the six walls the plate is mounted flush in
-    origin=(0.40, 0.35),  # the plate's (0, 0) corner, in that face's own two coordinates (m)
+    origin=None,          # the plate's (0, 0) corner in that face's own two coordinates (m);
+                          # DEFAULTS TO CENTRED, and §7.6.4 is why — an off-centre plate in a
+                          # mirror-symmetric room is legal and physical, but its even modes stop
+                          # being exactly silent, linearly in the offset with no threshold.
 )
 
 for n in range(n_steps):
@@ -472,14 +491,24 @@ The leak tracks the defect one-for-one across fourteen orders of magnitude, and 
 closed by the one case where nearest-node *accidentally* becomes symmetric: refining the air grid to
 `h_air = 2.75 cm` under a fixed `N=16` plate happens to align the assignment, the defect drops to
 **exactly `0.00e+00`**, and the leak drops with it to 8.2e-16. Nearest-node's symmetry is an accident
-of alignment; bilinear's is structural.
+of alignment; bilinear's is not.
+
+**And bilinear's equivariance is genuinely offset-independent, which is worth stating because the
+obvious worry is that it is not.** Bilinear is mirror-equivariant only if the plate's mirror maps the
+*air* grid to itself, which sounds like a commensurability condition on where the plate sits. Measured
+at eight `x` offsets spanning `0 … h_air` in steps of `h/8`, the defect is **9.0e-16 at every one of
+them** — flat, no periodicity. The reason: `R_j` is uniform across the interior of a face, so
+`TᵀRT = R · TᵀT`, and `TᵀT`'s entries depend only on the *relative* offsets of plate nodes within
+their air cells, which mirroring reverses without changing. The load matrix is equivariant wherever
+the plate sits. Nearest-node's defect is likewise flat (5.2e-01 at every offset) — its failure is not
+an alignment matter either.
 
 Why this outranks the lumpiness argument: a load that breaks the mode's mirror symmetry **mixes the
 odd modes in**, and the odd modes are the ones with net volume. Under nearest-node an even plate mode
 starts with exactly zero net volume velocity (1.3e-17) and within 200 steps has grown a monopole 18 %
 of the plate's own scale — so §1's headline claim would hold at `t = 0` and dissolve while you watch.
-Under bilinear the antisymmetric subspace is invariant to rounding and the claim is **exact for all
-time**. That is the difference between an oracle and an anecdote.
+Under bilinear the load never breaks the antisymmetric subspace. **But the load is only half of the
+coupling**, and the other half turns out to matter more — §7.6.4.
 
 Two consequences of bilinear that must be handled rather than inherited from the prototype:
 
@@ -524,6 +553,16 @@ The disagreement is at the nodes the plane shares with the pressure-release face
 the reason that such a port is silent and the energy report is blind to it. **This is a second,
 independent reason for the same refusal** — inherit it verbatim, and the local read is then
 bit-identical by construction rather than by luck.
+
+**And the check must be run on a HIGH face too, because that is a different branch.** The local
+divergence read takes `where(idx < N_axis, u[...], 0.0)` on the plus side and the mirrored form on the
+minus side; a port on `z1`/`x1`/`y1` exercises the branch a `z0` port never touches, and the six-face
+ledger agreement of §7.5 does *not* test it — the port and the room would agree on a wrong value just
+as happily. Measured over all six faces after 23 coupled steps, against the full-array
+`_divergence()`-then-closure: **`0.0` exactly, bit-identical, on every face, rigid and all-lossy**
+(against a `|p̄|` scale of 4.3 – 36 Pa). So the local read is right on the high faces as well — but the
+assertion ships, one line per face, because the fact that it *would* have been invisible is the reason
+batch 2 added the scalar version on review in the first place.
 
 ### 6.8 The bridge computes its stability guard on the **unloaded** plate — measured safe, not assumed
 
@@ -632,7 +671,7 @@ waves of period `p` nodes with the **uniform component projected out** (so `Σ q
 not approximately) and then **rms-normalised** (so "equal rms surface velocity" is exact). Radiated
 power is the time-average of `Σ_j p̄_j q_j` over whole periods.
 
-Three assertions, in descending robustness:
+Three assertions on that rig, in descending robustness, and a fourth below on a real plate:
 
 1. **The lumped tier predicts zero.** `Σ_j q_j` is zero to rounding for every non-uniform pattern by
    construction — measured `0.0` exactly for three of the four patterns and `6.8e-21` for the
@@ -657,34 +696,89 @@ a mode the distributed port radiates from definitely.
 
 Measured on a real coupled `RoomLoadedPlate` (N=16, equal rms surface velocity, 200 steps, bilinear):
 
-| mode | \|U\|/A at `t=0` | peak \|U\|/A over 200 steps | radiated / (1,1) | cycles in 200 steps |
-|---|---|---|---|---|
-| (1,1) | 8.59e-01 | 5.94e-01 | 1.000 | 17.5 |
-| **(2,1)** | **1.26e-17** | **1.86e-15** | 1.398 | 43.6 |
-| **(1,2)** | **1.81e-17** | **2.49e-15** | 1.398 | 43.6 |
-| **(2,2)** | **7.79e-18** | **1.16e-15** | 2.134 | 69.8 |
-| (3,1) | 2.79e-01 | 2.56e-01 | 2.763 | 87.3 |
-| **(4,2)** | **4.75e-18** | **4.38e-15** | 7.100 | 174.5 |
+| mode | \|U\|/A at `t=0` | peak \|U\|/A over 200 steps | radiated / (1,1) | `f` (continuum, Hz) | band |
+|---|---|---|---|---|---|
+| (1,1) | 8.59e-01 | 5.94e-01 | 1.000 | 698 | `< fs/4` ✔ |
+| **(2,1)** | **1.26e-17** | **1.86e-15** | 1.398 | 1745 | `< fs/4` ✔ |
+| **(1,2)** | **1.81e-17** | **2.49e-15** | 1.398 | 1745 | `< fs/4` ✔ |
+| **(2,2)** | **7.79e-18** | **1.16e-15** | 2.134 | 2793 | `fs/4 … fs/2` |
+| (3,1) | 2.79e-01 | 2.56e-01 | 2.763 | 3491 | near Nyquist |
+| **(4,2)** | **4.75e-18** | **4.38e-15** | 7.100 | 6982 | **above Nyquist** |
 
-The even rows hold the zero **for all 200 steps, at rounding** — which is a property of bilinear
-spreading and not of the mode (§6.5: under nearest-node the same rows leak to 1.8e-01). So the
-assertion is: for an even-index mode, `max|Σ_j q_j| / Σ areas < 1e-13` over the whole run, **and**
-`radiated_energy` is a definite nonzero — bounded below by a real fraction of the (1,1) mode's, so it
-cannot pass on a disconnected coupling. `(1,2)` against `(2,1)` on a square plate is a free symmetry
-check (identical to all quoted digits).
+The frequency column is the continuum closed form `f = κπ((m/Lx)² + (n/Ly)²)/2`, and it is there to
+mark the band, not as a measured quantity — at `fs = 8000` only the first three rows sit in the
+trustworthy `f < fs/4`, `(3,1)` is up against Nyquist and `(4,2)`'s 6982 Hz is *not attainable* at
+this sample rate at all. **Which affects the two columns differently, and that asymmetry is the useful
+part.** The zero is a symmetry statement and is therefore resolution-independent — `(4,2)`'s 4.4e-15
+is as good a number as `(2,1)`'s, unresolved mode or not. The `radiated / (1,1)` column is *not*:
+comparing energies across rows means comparing an unresolved mode against a resolved one. So the
+suite's assertions live on `(1,1)`, `(2,1)`, `(1,2)` and the zero-only rows; the ranking column and
+rows below `(2,2)` are diagnose-script material (§8).
+
+The even rows hold the zero **for all 200 steps, at rounding**. So the assertion is: for an even-index
+mode, `max|Σ_j q_j| / Σ areas < 1e-13` over the whole run, **and** `radiated_energy` is a definite
+nonzero — bounded below by a real fraction of the (1,1) mode's, so it cannot pass on a disconnected
+coupling. `(1,2)` against `(2,1)` on a square plate is a free symmetry check (identical to all quoted
+digits).
+
+##### The zero is a property of the whole scene, not of the plate or the spreading operator
+
+This is the finding that came closest to shipping as a false claim, and it is worth the space. §6.5's
+equivariance is necessary but **not sufficient**: the load matrix is only half the coupling, and the
+incoming `Tᵀ p̄_free` is the *room's* field. The antisymmetric subspace survives only if the whole
+scene is mirror-symmetric about the mode's own antisymmetry plane. Measured three ways:
+
+| configuration | load defect | peak \|U\|/A |
+|---|---|---|
+| plate centred, **six different room widths** (`N_x` = 7…11, two distinct grid alignments) | 9.0e-16 | **1.9e-15 – 2.3e-15** |
+| plate off-centre by `h_air/3`, same six rooms | 9.0e-16 | 4.7e-03 – 9.7e-03 |
+| plate **centred**, all-lossy or all-rigid room (symmetric) | 9.1e-16 | **1.9e-15 – 4.6e-15** |
+| plate **centred**, lossy `x0` against rigid `x1` (asymmetric **in x**) | 9.1e-16 | **3.5e-02** |
+| plate **centred**, lossy `x0` **and** `x1` (symmetric in x again) | 9.1e-16 | **3.3e-15** |
+| plate **centred**, lossy `y0` only (asymmetric in y, *not* in x) | 9.1e-16 | **3.0e-15** |
+
+Three things fall out of that table, in order of how much they matter:
+
+1. **Grid commensurability is not the criterion.** Six room widths give two different `org/h_air`
+   fractional alignments and two different `n_air` (30 and 36), and all six are at rounding. Centring
+   is the criterion; where the plate lands on the grid is irrelevant.
+2. **The room's own asymmetry is what leaks, and it leaks in the mode's axis only.** A perfectly
+   centred plate in a room made asymmetric *in x* leaks 3.5e-02 — the largest figure in the whole
+   study — while the same asymmetry in *y* leaves the `(2,1)` mode's zero untouched at 3.0e-15. That
+   is the mechanism identified, not merely correlated: the room's asymmetric echoes drive the plate's
+   odd modes.
+3. **There is no tolerance band.** The leak is *linear* in the offset with no threshold: `δ/h_air` of
+   1e-6, 1e-4 and 1e-2 give peak `|U|/A` of 1.0e-07, 1.0e-05 and 1.0e-03 — a clean factor of `0.1·δ/h`
+   over four decades. So an "approximately centred" plate is not approximately silent. The oracle must
+   be built on an **exactly** symmetric scene, and the assertion is `< 1e-13`, not a loose bound.
+
+Consequences for the build, all three of which would otherwise be discovered by a mysterious failure:
+
+- **`RoomLoadedPlate` defaults `origin` to centred in the face**, and `make_room_loaded_plate` does
+  too, each with a comment giving this reason. §4's illustrative `origin=(0.40, 0.35)` is *outside*
+  the symmetric regime (measured load defect 2.9e-01 in the room that fits it, versus 3.1e-15
+  centred) — legal, physical, and simply not the configuration the plate-mode oracle can run in.
+- **The §7.6.4 test fixes both halves**: centred plate **and** wall impedances symmetric in the mode's
+  antisymmetric axis. A test that used `walls={"x0": ...}` would fail at the 3.5e-02 level and look
+  like a coupling bug.
+- **And the asymmetric case is not a defect to hide — it is another thing only this tier can do.**
+  A room that is asymmetric about the plate re-excites the plate's *shape*, converting an
+  acoustically-silent even mode into a radiating one at the 1–3 % level. No `R(ω)` one-port can
+  represent that at all: a lumped port couples through a single scalar and has no shape for the room
+  to push on. It belongs in the diagnose script as a figure, with the symmetric case beside it.
 
 **And the trap in this table, which is the reason it is a separate assertion from 7.6.2.** The
 radiated column goes the *wrong* way: the finer mode radiates **more**, up to 7.1× at (4,2). This does
 not contradict 7.6.2 — it is the reason 7.6.2 must hold frequency fixed. A plate mode locks spatial
-fineness to frequency (`f ∝ m² + n²`), so a finer mode completes 10× the cycles in the same window and
-its extra cycles beat the per-cycle suppression. **The plate-mode oracle must therefore assert the
-exact zero and a nonzero power, and must NOT rank the modes by radiated energy** — that ranking
+fineness to frequency (`f ∝ m² + n²`), so a finer mode completes several times the cycles in the same
+window and that count beats the per-cycle suppression. **The plate-mode oracle must therefore assert
+the exact zero and a nonzero power, and must NOT rank the modes by radiated energy** — that ranking
 belongs only to the prescribed-velocity rig where `f` is a knob. A test that "fixed" the direction by
 normalising per cycle would be asserting the square-wave result through a mode that cannot isolate it.
 
 Resolution note for the rig: the air nodes under the plate (36 here, a 6×6 patch) bound the surface
-pattern the room can resolve, so the assertion stays on (2,1)/(2,2) and (4,2) is a diagnose-script
-row.
+pattern the room can resolve, which is a second and independent reason the fine rows are
+diagnose-script material.
 
 **And what must NOT be asserted.** The ratio is **not monotone in frequency** (measured: room modes
 and the piston's own response make it wander by tens of percent), so no monotone-in-`f` test. The
@@ -771,6 +865,8 @@ The three oracles added on review are in the free tier too, measured rather than
 | §7.6.4 real plate modes | 3 modes × 200 steps, `N_plate=16` | **0.12 s** |
 | §7.8 free rigid body | 2 rooms + bare control × 600 steps | **0.21 s** |
 | §6.5 symmetry defect | two load assemblies, **no time-stepping at all** | **0.01 s** |
+| §6.7 six-face `free_pressure` bit-identity | 6 faces × 2 wall sets × 23 steps | **~0.05 s** |
+| §7.6.4 scene-symmetry controls | off-centre + asymmetric-room positive controls, 200 steps each | **~0.10 s** |
 
 Two step counts worth fixing here rather than in review. §7.8's 2000-step prototype run is
 **unnecessary**: `E_plate/E₀` is already 4.3e-05 at **200 steps** with `radiated/E₀ = 0.999957`, so the
@@ -782,7 +878,7 @@ So assertion 7.6.2 costs ~0.3 s and 7.6.3 about twice that (two frequencies). Th
 that produces the coincidence brackets is a **`scripts/diagnose_airbox_surface.py` figure**, with a
 coarse two-or-three-frequency version in the suite. Nothing here needs an audio-rate room, and the
 batch should stay under ~10 s total — batch 2's cross-tier sweep alone was ~7 s of its 8.9 s. With the
-review additions at 0.46 s combined, the headline is still the only line item with a bill.
+review additions at ~0.6 s combined, the headline is still the only line item with a bill.
 
 ---
 
@@ -792,7 +888,8 @@ review additions at 0.46 s combined, the headline is still the only line item wi
   written against. No new module — this is the air box's third batch and belongs beside its port.
   `SurfacePort` takes a **face**, supports all six, and defines positive `u` along that face's inward
   normal (§7.5) so that no per-face sign exists to get wrong. Bilinear spreading, on the strength of
-  §6.5's symmetry measurement rather than its lumpiness one.
+  §6.5's symmetry measurement rather than its lumpiness one. `origin` **defaults to centred in the
+  face**, with §7.6.4's reason in the comment.
 - **No `connection.py` edit** — `StringPlateBridge` accepts a `RoomLoadedPlate` as its body unchanged,
   and its guard's blindness to the load is measured conservative rather than assumed harmless (§6.8).
 - **The only edits outside `airbox.py`**: the `_pending_ports` type comment (§4), and the corrected
@@ -804,15 +901,22 @@ review additions at 0.46 s combined, the headline is still the only line item wi
     timesteps (§7.4), the reductions and refusals (§7.7);
   - the **six-face** sign oracle with its global-axis negative control (§7.5);
   - the load matrix's **reflection equivariance** under bilinear spreading, with nearest-node as the
-    measured negative control (§6.5) — the assertion the plate-mode headline rests on;
+    measured negative control (§6.5), asserted **offset-independently** so the reason it holds
+    (`TᵀRT = R·TᵀT`, relative offsets only) is what is pinned rather than a lucky alignment;
+  - `free_pressure()` bit-identical to the full-array closure on **all six faces**, high ones
+    included, because the high-face branch is new in this batch and no ledger sees it (§6.7);
   - the short-circuit headline (§7.6), including **§7.6.4's real plate mode**: the even-index mode's
-    exactly-zero net volume velocity held for the whole run, and a nonzero radiated energy;
+    exactly-zero net volume velocity held for the whole run, and a nonzero radiated energy — on an
+    exactly symmetric scene, with the off-centre and asymmetric-room cases as the measured
+    **positive** controls (the zero is supposed to break there, and by how much is a number);
   - the **free plate's rigid-body translation** damped to a stop against a bare-plate control (§7.8);
   - the `StringPlateBridge` margin's bit-identity loaded vs bare (§6.8), so that a future
     non-dissipative load fails loudly there.
   Helpers `make_room_loaded_plate` and a prescribed-velocity `surface_drive` in `tests/helpers.py`.
 - `scripts/diagnose_airbox_surface.py`: the radiated-power-versus-pattern-fineness sweep with the
-  coincidence brackets marked, the energy-channel flat-total figure, the surface pressure field, and
-  the plate-mode table of §7.6.4 including the (4,2) row the suite leaves at the resolution limit.
+  coincidence brackets marked, the energy-channel flat-total figure, the surface pressure field, the
+  plate-mode table of §7.6.4 including the rows above `fs/4` that the suite cannot rank, and the
+  **asymmetric-room figure** — an even mode's silence broken by the room's own asymmetry at the 1–3 %
+  level, which is a thing no one-port can do and reads as a result rather than an error.
 - Docs: HANDOFF §12H updated (batch 3 shipped, the two-sided dipole plate named as batch 4), this
   plan's status block rewritten with what the build changed, and the memory mirror synced.
