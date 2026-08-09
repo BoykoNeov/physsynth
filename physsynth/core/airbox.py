@@ -123,13 +123,16 @@ Headless: NumPy only.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy import sparse
+from scipy.sparse.linalg import splu
 
-if TYPE_CHECKING:  # type-only: the room stays free of any dependency on the body module
+if TYPE_CHECKING:  # type-only: the room stays free of any dependency on the resonator modules
     from physsynth.core.body import ModalBody
+    from physsynth.core.plate import Plate
 
 __all__ = [
     "AirBox",
@@ -139,6 +142,8 @@ __all__ = [
     "impedance_from_zeta",
     "RoomPort",
     "RoomLoadedBody",
+    "SurfacePort",
+    "RoomLoadedPlate",
 ]
 
 # Ambient air (matches physsynth.core.radiation and .bore so every tier of the air node agrees).
@@ -151,6 +156,60 @@ FACES = ("x0", "x1", "y0", "y1", "z0", "z1")
 _AXES = "xyz"
 _LAMBDA_MAX = 1.0 / np.sqrt(3.0)  # 3-D CFL ceiling
 _LAMBDA_TOL = 1e-12
+
+# How a surface node's area is handed to the air grid (see SurfacePort).
+Spreading = Literal["bilinear", "nearest"]
+_SPREADINGS = ("bilinear", "nearest")
+
+
+def _face_axes(face: str) -> tuple[int, int, int, int]:
+    """``(normal axis, end, in-plane axis 0, in-plane axis 1)`` for a face name.
+
+    The two in-plane axes are taken in increasing order — ``x0`` spans ``(y, z)``, ``y0`` spans
+    ``(x, z)``, ``z0`` spans ``(x, y)`` — the same ordering :meth:`AirBox._build_wall_closure` uses
+    for its transverse area weights. **No axis is mirrored on a high face**: the inward normal is
+    carried by the sign convention (see :class:`SurfacePort`), never by flipping a coordinate.
+    """
+    if face not in FACES:
+        raise ValueError(f"unknown face {face!r}; expected one of {FACES}.")
+    axis = _AXES.index(face[0])
+    t0, t1 = (a for a in range(3) if a != axis)
+    return axis, int(face[1]), t0, t1
+
+
+def _free_pressure_nodes(
+    room: AirBox, nodes: tuple[NDArray[np.intp], ...]
+) -> NDArray[np.float64]:
+    """Per-node open-circuit centered pressure ``pbar_free`` at ``nodes`` — ``O(patch)``.
+
+    Shared verbatim by :class:`RoomPort` (which contracts it with its weights) and
+    :class:`SurfacePort` (which returns the vector). It replicates :meth:`AirBox.step`'s order
+    exactly — divergence, **then** the wall closure — and must be read *before* ``room.step()``,
+    from the stored ``u^{n+1/2}``.
+
+    The local divergence read is bit-identical to the full-array :meth:`AirBox._divergence`
+    followed by the closure, on low **and** high faces alike (the ``idx < N`` / ``idx > 0`` branches
+    are different code paths and both are exercised), for every wall type *except* an ``open``
+    face — where :meth:`AirBox.step` pins ``p = 0`` and this read does not. Ports touching an open
+    face are refused at construction, so the identity holds by construction rather than by luck.
+    """
+    ix, iy, iz = nodes
+    div = np.zeros(ix.size)
+    for axis, (u, idx) in enumerate(((room.ux, ix), (room.uy, iy), (room.uz, iz))):
+        n_face = room.N[axis]
+        pick = [ix, iy, iz]
+        pick[axis] = np.minimum(idx, n_face - 1)
+        plus = np.where(idx < n_face, u[tuple(pick)], 0.0)
+        pick[axis] = np.maximum(idx - 1, 0)
+        minus = np.where(idx > 0, u[tuple(pick)], 0.0)
+        div += (plus - minus) / room._w[axis][idx]
+
+    p_node = room.p[nodes]
+    p_free = p_node - room.k * room.rho0 * room.c0**2 * div
+    if room._has_walls:
+        beta = room._beta[nodes]
+        p_free = (p_free - beta * p_node) / (1.0 + beta)
+    return 0.5 * (p_free + p_node)
 
 
 def impedance_from_zeta(
@@ -270,11 +329,17 @@ class AirBox:
         self._pending: list[tuple[tuple[int, int, int], float]] = []
         # Port injections are queued separately from the scalar `inject()` path: a spread port is
         # thousands of nodes and the scalar loop would dominate the step (measured). Each entry is
-        # (fancy-index triple, normalized volume weights, volume velocity U).
+        # (fancy-index triple, per-node volume weights, volume velocity U), and every use of the
+        # pair is LINEAR in `w` -- the injection is `w * U` and the read-back `w . pbar`. The
+        # weights need not be normalized: a RoomPort passes a unit-sum `w` with the scalar `U`, and
+        # a SurfacePort passes the per-node volume-velocity VECTOR itself with `U = 1.0`. Both come
+        # out exactly right, which is why the distributed tier needs no AirBox edit at all.
         self._pending_ports: list[
             tuple[tuple[NDArray[np.intp], ...], NDArray[np.float64], float]
         ] = []
-        self._ports: list[RoomPort] = []  # live ports, for the disjointness check and reset
+        # Live ports, for the disjointness check and the set_state reset. Both port tiers register
+        # here (they share the `_flat` / `index` / `_queued_at` protocol the checks read).
+        self._ports: list[RoomPort | SurfacePort] = []
 
         self.p: NDArray[np.float64] = np.zeros((Nx + 1, Ny + 1, Nz + 1))
         self.ux: NDArray[np.float64] = np.zeros((Nx, Ny + 1, Nz + 1))
@@ -664,11 +729,23 @@ class RoomPort:
 
     where the ``2`` is the centered (trapezoidal) pressure, ``W_n`` the tensor-trapezoid node
     weight, and ``(1 + beta_n)`` the **wall closure denominator**. That last factor is easy to omit
-    — the naive ``k rho0 c0^2 / (2 W)`` is right at every interior node — and omitting it costs
-    nothing until someone mounts a port on a lossy wall, where it leaks ~2% of the run's energy
-    (measured 1.9e-2 against 8.4e-15 with the factor). ``step()`` injects *before* it closes the
-    wall, so the injection is divided by ``1 + beta`` along with everything else, and ``R_room``
-    must say so.
+    — the naive ``k rho0 c0^2 / (2 W)`` is right at every interior node — and it matters as soon as
+    a port is mounted on a lossy wall: ``step()`` injects *before* it closes the wall, so the
+    injection is divided by ``1 + beta`` along with everything else, and ``R_room`` must say so.
+
+    **What omitting it costs is NOT an energy leak, and this repo's primary bug detector cannot
+    see it.** Corrected on measurement (the area-coupling batch §6.1,
+    ``docs/dev/air-box-area-coupling-plan.md``): the body's energy identity telescopes
+    to ``-k pbar U`` for *whatever* ``pbar`` was used in the force, and the room's
+    identity is exact for *whatever* injection it received, so the
+    scene total is the sum of two separately-exact identities and stays flat even when the pressure
+    the body was pushed by and the pressure the room developed are different numbers. Measured on a
+    corner port (``beta = 1.559``, so the naive ``R_room`` is 2.56x too big) over 400 steps: the
+    scene total drifts **6.3e-15 — green either way** — while ``|radiated - injected|`` goes from
+    4.2e-16 to **88% of the channel**. A wrong ``R_room`` does not leak energy; it creates it on one
+    side and destroys the same amount on the other. The tests that catch it are the *cross-ledger*
+    identity ``radiated == injected`` and the differential measurement
+    ``test_R_room_is_what_the_room_does``, never the conserved total.
 
     **Point port versus spread port — a measured non-convergence.** ``radius=None`` puts the whole
     volume velocity on one node. That is exact and perfectly conservative, and its *magnitude* is a
@@ -849,26 +926,7 @@ class RoomPort:
         so including it would change nothing — while for overlapping ports (refused at construction)
         reading it would make the solve *asymmetric* rather than merely wrong.
         """
-        room = self.room
-        ix, iy, iz = self.nodes
-        div = np.zeros(ix.size)
-        for axis, (u, idx) in enumerate(
-            ((room.ux, ix), (room.uy, iy), (room.uz, iz))
-        ):
-            n_face = room.N[axis]
-            pick = [ix, iy, iz]
-            pick[axis] = np.minimum(idx, n_face - 1)
-            plus = np.where(idx < n_face, u[tuple(pick)], 0.0)
-            pick[axis] = np.maximum(idx - 1, 0)
-            minus = np.where(idx > 0, u[tuple(pick)], 0.0)
-            div += (plus - minus) / room._w[axis][idx]
-
-        p_node = room.p[self.nodes]
-        p_free = p_node - room.k * room.rho0 * room.c0**2 * div
-        if room._has_walls:
-            beta = room._beta[self.nodes]
-            p_free = (p_free - beta * p_node) / (1.0 + beta)
-        return float(np.sum(self.w * 0.5 * (p_free + p_node)))
+        return float(np.sum(self.w * _free_pressure_nodes(self.room, self.nodes)))
 
     # -- driving ---------------------------------------------------------------------------
 
@@ -1086,5 +1144,848 @@ class RoomLoadedBody:
         self.radiated_energy = 0.0
         self.volume_velocity = 0.0
         self.port_pressure = 0.0
+        self.port.reset()
+        self.n = 0
+
+
+class SurfacePort:
+    """A **whole moving surface** mounted flush in one wall of an :class:`AirBox` (batch 3).
+
+    :class:`RoomPort` is a *one-port*: it couples through exactly one scalar, the net volume
+    velocity ``U = sum_i a_i q_i'``, and hands back exactly one scalar pressure. That is the right
+    shape for a :class:`~physsynth.core.body.ModalBody`, whose radiation weights *are* its surface
+    collapsed to a point. It is the wrong shape for a **grid** resonator, which has a real surface
+    with a real shape on it — and the difference is not a refinement but a whole physical effect
+    that every lumped tier in this repo predicts to be **exactly zero**:
+
+        a surface radiates according to the **shape** of its motion, not only its net volume
+        displacement — so a mode with zero net volume velocity, which every one-port here calls
+        silent, is not.
+
+    That is the **acoustic short circuit**. An even-index mode of a simply supported plate —
+    ``(2,1)``, ``(2,2)``, ``(4,2)`` — has ``+`` and ``-`` regions displacing *exactly* cancelling
+    volumes (``sum_i sin(m pi i/N) = 0`` identically for even ``m``, so ``U = 0`` to rounding and
+    not merely small). What actually happens is that each patch of surface pushes on the air
+    *locally*, and the cancellation is only as complete as the acoustic wavelength's ability to
+    bridge a ``+`` region and its ``-`` neighbour. Below coincidence the cancellation is nearly
+    complete and the radiation comes from the edges; above it the surface pattern is supersonic and
+    radiates freely. A one-port has no length scale on its surface, so no ``R(omega)`` reproduces
+    this at any order — the same structural argument as batch 2's delayed echo, one tier further in.
+
+    **The room's instantaneous response is diagonal, so the load is ``T^T R T``.** Batch 2 read
+    "an injection changes the pressure at its own node and nowhere else within a step" as a Thevenin
+    source at *a* node. The stronger reading is that the room's instantaneous response over *any*
+    set of nodes is **diagonal** — no cross-resistance at any separation, including one cell
+    (measured: off-diagonal exactly ``0.00e+00`` at interior, lossy-wall and lossy-edge patches
+    alike). So with
+
+    * ``T`` the **volume-weight matrix** ``(n_patch x n_surface)``, ``q = T v`` in m^3/s,
+    * ``R = diag(R_j)``, ``R_j = k rho0 c0^2 / (2 W_j (1 + beta_j))`` — :attr:`RoomPort.R_room`'s
+      constant per node, wall-closure denominator included,
+    * ``pbar = pbar_free + R q`` a **vector** Thevenin relation,
+
+    reciprocity carries the pressure back as ``f = -T^T pbar`` (the same structural fact
+    :class:`~physsynth.core.radiation.RadiatedBody` leans on when it reuses its read-out weights as
+    coupling weights), and the unknown part of the load is ``-(1/2k) T^T R T u^{n+1}``: a constant,
+    symmetric, positive-semidefinite, sparse matrix times the unknown. It **folds into the
+    resonator's own factorization** — nothing new is solved (see :class:`RoomLoadedPlate`). The
+    family's ladder, complete: ``RadiatedBody`` scalar ``R`` -> one division; ``RationalAirLoad``
+    ``R_eff`` + one aux state -> one division; ``RoomPort`` scalar ``R_room`` with a rich
+    ``pbar_free`` -> one division; **this** diagonal ``R`` with a matrix ``T`` -> absorbed into the
+    resonator's LU. Batch 2 *is* the rank-1 case: put every surface node on one air node and ``T``
+    becomes ``w 1^T``, ``T^T R T`` the rank-1 ``R_room w w^T``, and Sherman-Morrison is what
+    inverting ``A + rank-1`` gives instead of refactoring. Passivity is unconditional and for a
+    better reason than before — ``T^T R T`` is PSD because ``R_j >= 0``, so the loaded matrix is SPD
+    for every timestep, every grid, every patch, and can never be singular.
+
+    **The sign convention is part of the API, and it is local.** Positive surface displacement is
+    along the room's **inward normal at** :attr:`face` — ``+z`` for ``z0``, ``-z`` for ``z1``, and
+    so on — so an outward-moving surface *compresses* the air at its own face. Hence ``T`` is
+    entrywise non-negative on all six walls and **no inward normal appears in the code at all**.
+    This is not cosmetic: a consistent sign flip in ``T``/``T^T`` is invisible to every energetic
+    quantity in the batch — ``T^T R T`` is sign-invariant, so the load matrix, the solve and
+    ``radiated_energy`` all come out **bit-identical** while the room's field is inverted
+    (measured). The alternative convention, "positive displacement along the global axis", needs an
+    explicit per-face sign, and getting it wrong on three of the six faces is a perfectly passive,
+    perfectly conservative, perfectly green simulation of a plate pushing the wrong way. The local
+    convention disarms the trap instead of testing around it. (Its only detector is the sign of the
+    surface pressure on the **first** step: a six-step read gave the *wrong* answer in the prototype
+    because the plate's own half period was five steps.)
+
+    **Bilinear spreading, and the argument that decides it is COVERAGE — the symmetry argument does
+    not survive measurement.** ``T`` must (a) conserve volume exactly, (b) be usable as ``T^T`` for
+    the pressure, and (c) leave no air node in the footprint unfed. Nearest-node assignment
+    satisfies (a) and (b) and fails (c): at ``h_surface/h_air = 1.21`` it leaves footprint nodes
+    unfed (this class refuses it), and where it does construct, its interior assigned area per air
+    node **does not converge** — measured spread 0.258 and 0.161 ``h_air^2`` at ``N_plate = 16, 24``
+    — a lumpy source at the grid scale for no reason. Bilinear spreading (each surface node's area
+    distributed over the four surrounding air nodes with weights summing to 1) leaves **0** unfed
+    at every ratio and assigns **exactly** ``h_air^2`` per interior node — measured spread
+    ``0.0000`` at every refinement, a partition-of-unity consequence. That is what ships, and
+    ``spreading="nearest"`` exists **only** as its measured negative control.
+
+    **What was expected to decide it, and what was actually found.** The plan for this batch argued
+    from *reflection equivariance* — that bilinear's load matrix is mirror-symmetric at every offset
+    while nearest-node's is not. Measured here (two independent routes: the defect of ``T^T R T``
+    under the surface's own mirror permutation, and the defect of ``T`` itself under that mirror
+    composed with the air grid's), **bilinear's equivariance is not offset-independent.** It holds
+    exactly when ``S = 2 (surface centre) / h_air`` is an **integer** — defect 1.0e-15 there — and
+    fails smoothly otherwise, 1.6e-01 … 3.8e-01 across sixteen offsets spanning one air cell,
+    peaking at the half-cell offset. The algebra says the same thing: the surface's mirror sends
+    node ``i`` to a cell fraction ``frac(S - t_i)``, which equals the ``1 - f_i`` that reverses a
+    bilinear weight pair *only* for integral ``S``. Nearest-node's equivariance is patchier still,
+    and the way it fails is the tell: it is exact at an **even** ``S`` (measured ``0.00e+00``) and
+    breaks at an **odd** one (5.2e-01), because there the surface's own centre node lands exactly on
+    a rounding tie, which round-half-to-even resolves the same way from both directions. So
+    nearest-node's symmetry is an accident of alignment and of the rounding rule; bilinear's is a
+    property of the geometry.
+
+    **Two consequences, and neither weakens the design.** First, centring is load-bearing for *two*
+    independent reasons rather than one — it is what makes ``S`` integral and the load matrix
+    equivariant at all, on top of the scene-symmetry argument below. Second, the coupled monopole
+    leak does **not** discriminate the two operators: with the surface centred, an even plate mode's
+    ``|U|/A`` stays at rounding (1.3e-14 … 3.3e-13 over 200 steps) under *both* spreadings at
+    ``N_plate = 8, 16, 24``. What breaks the zero is the **scene**, not the spreading operator —
+    measured 2.3e-01 for a plate off-centre by ``h_air/3`` and 7.4e-02 for a centred plate in a room
+    made asymmetric in the mode's own axis, against 7.2e-14 centred and symmetric.
+
+    **The zero is a property of the whole SCENE, not of the surface or the spreading operator.**
+    Equivariance of the load is necessary and *not* sufficient, because the load is only half the
+    coupling: the incoming ``T^T pbar_free`` is the **room's** field, so an antisymmetric surface
+    mode stays silent only if the room is mirror-symmetric about that mode's own antisymmetry
+    plane. A **perfectly centred** plate in a room made asymmetric *in x* (lossy ``x0``, rigid
+    ``x1``) leaks 3.5e-02 — the largest figure in the study — while the same asymmetry
+    in *y* leaves a ``(2,1)`` mode at 3.0e-15. Six different room widths with the plate
+    centred, spanning two grid alignments,
+    all sit at rounding: **grid commensurability is not the criterion, centring is.** And there is
+    no tolerance band — the leak is *linear* in the offset over four decades (``delta/h_air = 1e-6``
+    gives 1.0e-07), so "approximately centred" is not approximately silent. Hence :attr:`origin`
+    **defaults to centred in the face**. The asymmetric case is not a defect to hide: a room that
+    re-excites a surface's *shape*, converting an acoustically silent mode into a radiating one at
+    the 1-3% level, is one more thing no one-port can represent at all.
+
+    **A baffled surface needs no new boundary machinery.** A soft injection of ``q = A_n v`` at a
+    **wall** node *is* the moving-wall (piston) condition, not an approximation of it: the wall
+    node's divergence is ``u_face/w_z`` with ``w_z = h/2``, so a wall moving at ``v`` adds
+    ``k rho0 c0^2 v/(h/2)``, and a soft source ``q = h^2 v`` into ``W = h^3/2`` adds
+    ``k rho0 c0^2 (h^2 v)/(h^3/2)`` — the same number. Measured against an independent moving-wall
+    implementation at ~1e-15 **relative** in the field and in both energy books, on rigid, mixed and
+    lossy mounting walls. (Machine precision, *not* bit identity — the two expressions divide by
+    ``W`` and by ``w_z`` in different orders, and this repo's bit-identity claims are load-bearing.)
+
+    Parameters
+    ----------
+    room : AirBox
+        The room to mount the surface in. The port registers itself with the room for the room's
+        lifetime (used by the disjointness check), so build a fresh room rather than reusing one
+        whose ports you have discarded.
+    face : str
+        Which of the six walls (:data:`FACES`) the surface lies flush in.
+    coords : array, shape (n_surface, 2)
+        Surface node positions (m) in the face's own two in-plane coordinates, in the surface's own
+        frame — ``x0`` spans ``(y, z)``, ``y0`` spans ``(x, z)``, ``z0`` spans ``(x, y)``, with **no
+        axis mirrored on a high face**. Together with ``areas`` this is the whole *surface
+        protocol*: any grid resonator that can name its nodes and their areas can be mounted, with
+        no port edit.
+    areas : array, shape (n_surface,)
+        Nodal areas (m^2) — the volume a unit nodal velocity displaces per second. Their sum is
+        :attr:`net_area`, which is **not** the surface's bounding rectangle whenever the resonator
+        has dead rim nodes (see that attribute).
+    origin : (float, float), optional
+        Where the surface frame's ``(0, 0)`` lands in the face's own coordinates (m). **Defaults to
+        centred**, for the two independent reasons above: centring is what makes ``S`` integral and
+        the load matrix mirror-equivariant, *and* what lets the scene be symmetric about a mode's
+        own antisymmetry plane. An off-centre surface is legal and physical; it simply is not a
+        configuration in which an antisymmetric mode is silent.
+    spreading : {"bilinear", "nearest"}
+        The area-spreading operator. ``"bilinear"`` ships. ``"nearest"`` is retained solely as the
+        measured negative control of the symmetry argument above — **do not use it for physics.**
+
+    Raises
+    ------
+    ValueError
+        An unknown face or spreading name; malformed or negative ``coords``/``areas``; a footprint
+        lying outside the face; a footprint that (with its one-cell bilinear halo) reaches the
+        face's own rim; air nodes inside the footprint that no surface node feeds; a surface mounted
+        on an ``"open"`` face; or a patch sharing a node with an existing port.
+
+    Notes
+    -----
+    **Why the rim of the face is refused rather than clipped.** Clipping the stencil at the face
+    boundary (``np.clip(i0 + di, 0, N)``) folds a node's outboard weight back onto the boundary
+    node. The weights still sum to 1, so volume is still conserved and **every ledger stays green
+    while the source geometry is quietly wrong** — the same failure shape as the sign flip above.
+    :meth:`AirBox.node_index` already refuses to relocate an out-of-room point rather than snapping
+    it; this matches. The refusal is stated on the *stencil*: every air node that receives weight
+    must be strictly interior to the face. That has a second, load-bearing consequence — a node on
+    the face's rim also touches a second wall, so it carries half the node weight ``W`` and the
+    **sum** of two wall admittances in ``beta``. ``R_j`` would stop being uniform across the patch,
+    and with it the ``T^T R T = R (T^T T)`` identity the offset-independent equivariance rests on.
+    The refusal is therefore what keeps the symmetry argument true, not merely what keeps the
+    geometry tidy. It also means a legal patch can only ever touch its own mounting face.
+
+    **The acoustic source is up to one air cell larger than the surface**, because bilinear
+    legitimately spreads onto the nodes just outboard of the surface's rectangle. The disjointness
+    check therefore uses the **actual node set**, never the footprint.
+
+    **A lossy mounting wall is a test configuration, not a recommended one.** Patch nodes keep the
+    mounting wall's impedance: :meth:`AirBox.step` divides the injection by ``1 + beta`` whether one
+    likes it or not, so ``R_j`` must say so, and the result is physically a piston in an *absorbing*
+    baffle — consistent, passive, and the only way to pin the ``(1 + beta)`` factor (which the
+    radiation leg left unpinned twice in its history). But such a wall absorbs **through the
+    surface's own footprint**, i.e. it models a plate porous to the wall behind it. A **rigid**
+    mounting wall is the true infinite baffle and is the sane default.
+    """
+
+    def __init__(
+        self,
+        *,
+        room: AirBox,
+        face: str,
+        coords: NDArray[np.float64],
+        areas: NDArray[np.float64],
+        origin: Sequence[float] | None = None,
+        spreading: Spreading = "bilinear",
+    ) -> None:
+        if spreading not in _SPREADINGS:
+            raise ValueError(
+                f"unknown spreading {spreading!r}; expected one of {_SPREADINGS}. 'nearest' is the "
+                "measured negative control of the symmetry argument, not a configuration."
+            )
+        axis, end, t0, t1 = _face_axes(face)  # validates `face`
+        self.room = room
+        self.face = face
+        self.spreading: Spreading = spreading
+        self.axis = axis
+        self.in_plane_axes = (t0, t1)
+
+        coords = np.asarray(coords, dtype=float)
+        if coords.ndim != 2 or coords.shape[1] != 2:
+            raise ValueError(
+                "coords must be an (n_surface, 2) array of in-plane node positions (m), got shape "
+                f"{coords.shape}."
+            )
+        areas = np.asarray(areas, dtype=float)
+        if areas.shape != (coords.shape[0],):
+            raise ValueError(
+                f"areas must have shape {(coords.shape[0],)} (one per surface node), got "
+                f"{areas.shape}."
+            )
+        if np.any(areas < 0.0) or not np.all(np.isfinite(areas)):
+            raise ValueError("surface node areas must be finite and >= 0 (m^2).")
+        self.coords = coords.copy()
+        self.areas = areas.copy()
+        self.n_surface = int(coords.shape[0])
+
+        extent = (room.N[t0] * room.h, room.N[t1] * room.h)  # the face's own size (m)
+        if origin is None:
+            # Centred: the footprint's midpoint lands on the face's midpoint, so the face grid's
+            # own mirror maps the surface to itself and S = 2*centre/h is an integer. Not an
+            # aesthetic default -- see the class docstring: it is what makes the LOAD equivariant
+            # (measured 1.0e-15 at integral S, 1.6e-01..3.8e-01 elsewhere) and what lets the SCENE
+            # be symmetric, and the scene leak is LINEAR in the offset with no tolerance band.
+            origin = tuple(
+                0.5 * (extent[d] - (coords[:, d].min() + coords[:, d].max())) for d in (0, 1)
+            )
+        origin = tuple(float(v) for v in origin)
+        if len(origin) != 2:
+            raise ValueError(
+                f"origin must be an (o0, o1) pair in the face's own axes, got {origin!r}."
+            )
+        self.origin: tuple[float, float] = origin  # type: ignore[assignment]
+
+        face_coords = coords + np.asarray(origin)  # node positions in the face's own coordinates
+        self._face_coords = face_coords
+        tol = 1e-9 * room.h
+        for d, (size, ax) in enumerate(zip(extent, (t0, t1), strict=True)):
+            lo, hi = float(face_coords[:, d].min()), float(face_coords[:, d].max())
+            if lo < -tol or hi > size + tol:
+                raise ValueError(
+                    f"the surface's footprint spans {lo:.6g}..{hi:.6g} m along {_AXES[ax]}, "
+                    f"outside face {face!r}, which is 0..{size:.6g} m there. Move it with origin= "
+                    f"(it currently sits at {origin[d]:.6g} m on that axis), or enlarge the room."
+                )
+
+        rows, cols, vals = self._spread(face_coords)
+        self._assemble(rows, cols, vals, axis, end, t0, t1)
+
+        self._check_footprint(face_coords, t0, t1)
+        self._check_open_faces()
+        self._check_disjoint()
+        room._ports.append(self)
+
+    # -- construction: the spreading operator ----------------------------------------------
+
+    def _spread(
+        self, face_coords: NDArray[np.float64]
+    ) -> tuple[NDArray[np.intp], NDArray[np.intp], NDArray[np.float64]]:
+        """Distribute each surface node's area over the air nodes — the ``T`` entries, unassembled.
+
+        Returns ``(row, col, value)`` in the face's flat ``i0 * (N1 + 1) + i1`` indexing. Entries
+        whose *geometric* weight is exactly zero are dropped (an on-grid surface node genuinely does
+        not reach its outboard neighbour); entries whose weight is nonzero are kept even when the
+        node's **area** is zero, so a zero-area surface still names the nodes it covers and the
+        ``T = 0`` reduction to the bare resonator stays exercisable.
+        """
+        room = self.room
+        t0, t1 = self.in_plane_axes
+        n_axis = (room.N[t0], room.N[t1])
+        stencil: list[tuple[tuple[NDArray[np.intp], ...], tuple[NDArray[np.float64], ...]]] = []
+        for d in (0, 1):
+            t = face_coords[:, d] / room.h
+            if self.spreading == "nearest":
+                i = np.clip(np.rint(t).astype(np.intp), 0, n_axis[d])
+                stencil.append(((i,), (np.ones(self.n_surface),)))
+            else:
+                # floor, with the top edge folded down one cell so the stencil is always {i0, i0+1}
+                # and the outboard node carries weight exactly 0 there (never a clipped fold).
+                i0 = np.minimum(np.floor(t).astype(np.intp), n_axis[d] - 1)
+                f = t - i0
+                stencil.append(((i0, i0 + 1), (1.0 - f, f)))
+
+        surf = np.arange(self.n_surface, dtype=np.intp)
+        n1 = n_axis[1]
+        rows_l, cols_l, vals_l, geo_l = [], [], [], []
+        for a0, w0 in zip(stencil[0][0], stencil[0][1], strict=True):
+            for a1, w1 in zip(stencil[1][0], stencil[1][1], strict=True):
+                w = w0 * w1
+                rows_l.append(a0 * (n1 + 1) + a1)
+                cols_l.append(surf)
+                vals_l.append(self.areas * w)
+                geo_l.append(w)
+        keep = np.concatenate(geo_l) != 0.0
+        return (
+            np.concatenate(rows_l)[keep],
+            np.concatenate(cols_l)[keep],
+            np.concatenate(vals_l)[keep],
+        )
+
+    def _assemble(
+        self,
+        rows: NDArray[np.intp],
+        cols: NDArray[np.intp],
+        vals: NDArray[np.float64],
+        axis: int,
+        end: int,
+        t0: int,
+        t1: int,
+    ) -> None:
+        """Build the patch node set, ``T``, ``R`` and the load matrix from the spread entries."""
+        room = self.room
+        n1 = room.N[t1]
+        face_nodes = np.unique(rows)
+        i0 = (face_nodes // (n1 + 1)).astype(np.intp)
+        i1 = (face_nodes % (n1 + 1)).astype(np.intp)
+        for idx, ax in ((i0, t0), (i1, t1)):
+            lo, hi = int(idx.min()), int(idx.max())
+            if lo < 1 or hi > room.N[ax] - 1:
+                raise ValueError(
+                    f"the surface's spread stencil reaches air node index {lo}..{hi} along "
+                    f"{_AXES[ax]} on face {self.face!r}, but a node on the face's own rim (0 or "
+                    f"{room.N[ax]}) touches a SECOND wall: it carries half the node weight W and "
+                    "the sum of two wall admittances, so R_j stops being uniform across the patch "
+                    "and the spreading operator's reflection equivariance stops holding. Keep the "
+                    "footprint plus one air cell strictly inside the face -- move it with origin=, "
+                    "enlarge the room, or shrink the surface."
+                )
+        pos = np.searchsorted(face_nodes, rows)
+        self.T = sparse.coo_matrix(
+            (vals, (pos, cols)), shape=(face_nodes.size, self.n_surface)
+        ).tocsr()
+
+        node_idx: list[NDArray[np.intp]] = [i0, i0, i0]  # placeholders; all three are overwritten
+        node_idx[axis] = np.full(face_nodes.size, 0 if end == 0 else room.N[axis], dtype=np.intp)
+        node_idx[t0] = i0
+        node_idx[t1] = i1
+        self.nodes: tuple[NDArray[np.intp], ...] = tuple(node_idx)
+        self.index: tuple[int, int, int] = tuple(  # type: ignore[assignment]
+            int(a[0]) for a in self.nodes
+        )
+        self._flat = np.ravel_multi_index(self.nodes, room.p.shape)
+
+        W = room._W[self.nodes]
+        self.R: NDArray[np.float64] = (
+            room.k * room.rho0 * room.c0**2 / (2.0 * W * (1.0 + room._beta[self.nodes]))
+        )
+        # T^T R T: constant, symmetric, PSD, sparse -- the whole load, assembled once. Left as the
+        # RAW triple product (never symmetrized): its ~1e-15 asymmetry is the sparse product's
+        # summation order, and the symmetry-defect oracle is only meaningful on the raw matrix.
+        self.load_matrix = (self.T.T @ sparse.diags(self.R) @ self.T).tocsr()
+        self._queued_at = -1  # room.n at which this port last queued an injection
+
+    # -- construction refusals -------------------------------------------------------------
+
+    def _check_footprint(self, face_coords: NDArray[np.float64], t0: int, t1: int) -> None:
+        """Refuse a surface too coarse to feed every air node under it (a comb at the grid scale).
+
+        Counts air nodes inside the footprint's bounding box that no surface node reaches. With
+        bilinear spreading this is 0 at every grid ratio measured, so the refusal rarely fires — and
+        it still ships, because a surface coarse enough to skip whole air cells is a real thing to
+        refuse. Note the condition is a **count of unfed nodes**, not an inequality on
+        ``h_surface/h_air``: at ratio 0.909, comfortably inside the naive inequality, nearest-node
+        still left half the footprint unfed.
+        """
+        room = self.room
+        tol = 1e-9 * room.h
+        inside = []
+        for d, ax in enumerate((t0, t1)):
+            grid = np.arange(room.N[ax] + 1) * room.h
+            lo, hi = face_coords[:, d].min() - tol, face_coords[:, d].max() + tol
+            inside.append(np.nonzero((grid >= lo) & (grid <= hi))[0])
+        foot = (inside[0][:, None] * (room.N[t1] + 1) + inside[1][None, :]).ravel()
+        reached = np.ravel_multi_index(
+            (self.nodes[t0], self.nodes[t1]), (room.N[t0] + 1, room.N[t1] + 1)
+        )
+        self.footprint_empty = int(np.setdiff1d(foot, reached).size)
+        if self.footprint_empty:
+            raise ValueError(
+                f"{self.footprint_empty} of {foot.size} air node(s) inside the surface's "
+                f"footprint on face {self.face!r} are fed by no surface node, so the acoustic "
+                f"source would be a comb at the grid scale. The surface's spacing is too coarse "
+                f"for h_air = {room.h:.6g} m (spreading={self.spreading!r}). Refine the surface, "
+                "or coarsen the air grid."
+            )
+
+    def _check_open_faces(self) -> None:
+        """Refuse a surface mounted on a pressure-release face — it can do no work (batch 2's rule).
+
+        An ``open`` (``Z = 0``) face pins ``p = 0``, so ``pbar_free`` and every ``R_j`` are exactly
+        zero: the surface radiates into a short circuit, perfectly conservative and completely
+        silent, and the energy report is structurally blind to it. There is a **second,
+        independent** reason here: :func:`_free_pressure_nodes`' local read does not pin
+        ``p = 0`` where :meth:`AirBox.step` does, so a patch touching an open face is the
+        one case where the local
+        read stops being bit-identical to the full-array closure (measured 4.3e-04, against exactly
+        0.0 everywhere else). Refusing makes that identity hold by construction rather than by luck.
+        """
+        room = self.room
+        if not np.any(room._open):
+            return
+        touched = [
+            face
+            for face in FACES
+            if room.walls[face] == 0.0
+            and np.any(
+                self.nodes[_AXES.index(face[0])]
+                == (0 if face[1] == "0" else room.N[_AXES.index(face[0])])
+            )
+        ]
+        if touched:
+            raise ValueError(
+                f"the surface on face {self.face!r} touches the open (pressure-release) face(s) "
+                f"{touched}, where p is pinned to 0: pbar_free and every R_j are exactly zero, so "
+                "the surface would radiate into a short circuit -- perfectly conservative, "
+                "perfectly silent, and invisible to the energy report. Give that face a finite "
+                "impedance, or mount the surface elsewhere."
+            )
+
+    def _check_disjoint(self) -> None:
+        """Refuse a patch sharing any node with an existing port (:class:`RoomPort`'s rule)."""
+        for other in self.room._ports:
+            shared = np.intersect1d(self._flat, other._flat)
+            if shared.size:
+                node = np.unravel_index(int(shared[0]), self.room.p.shape)
+                raise ValueError(
+                    f"the surface on face {self.face!r} ({self.node_count} nodes) shares node "
+                    f"{node} with the existing port at {other.index} ({shared.size} node(s) in "
+                    "common). Overlapping ports are not independent within a step, so each one's "
+                    "solve uses a pressure that never occurred and the energy ledgers stop "
+                    "matching. Note the acoustic source is up to one air cell LARGER than the "
+                    "surface itself (bilinear spreads outboard), so footprints that merely look "
+                    "separate can still collide."
+                )
+
+    # -- geometry / read-out ---------------------------------------------------------------
+
+    @property
+    def node_count(self) -> int:
+        """How many air nodes the surface's spread source actually covers."""
+        return int(self.nodes[0].size)
+
+    @property
+    def net_area(self) -> float:
+        """The **radiating** area ``sum_n area_n`` (m^2) — which is *not* the bounding rectangle.
+
+        A simply-supported plate's rim nodes are dead: they do not move, so they displace no volume,
+        and the total comes out at exactly ``((N-1)/N)^2 Lx Ly`` (measured 0.5625, 0.7656, 0.8403,
+        0.8789, 0.9184 at ``N = 4, 8, 12, 16, 24``). That shortfall is **physics, not a defect** —
+        but it means any comparison against a closed form for a piston of area ``Lx Ly`` is wrong by
+        that factor at coarse ``N``, so the number is reported (:attr:`RoomPort.volume`'s
+        precedent). A free plate has no dead rim and comes out at exactly ``Lx Ly``.
+        """
+        return float(np.sum(self.areas))
+
+    def free_pressure(self) -> NDArray[np.float64]:
+        """The open-circuit centered pressure **vector** ``pbar_free`` over the patch, ``O(patch)``.
+
+        The distributed analogue of :meth:`RoomPort.free_pressure`, and the same contract: read it
+        *before* ``room.step()``, from the stored ``u^{n+1/2}``. See :func:`_free_pressure_nodes`.
+        """
+        return _free_pressure_nodes(self.room, self.nodes)
+
+    # -- driving ---------------------------------------------------------------------------
+
+    def require_ready(self) -> None:
+        """Raise if this port's previous injection is still pending — i.e. no ``room.step()``.
+
+        Per-port and keyed on the room's step counter, exactly as :meth:`RoomPort.require_ready`:
+        with several instruments in one room every port after the first solves while earlier ports'
+        injections sit queued, so a global "is anything pending" test would fire on all of them.
+        """
+        if self._queued_at == self.room.n:
+            raise RuntimeError(
+                f"the surface port on face {self.face!r} was asked to solve twice within one room "
+                f"step (room.n = {self.room.n}). A port does not step its room -- the caller does, "
+                "once, after every port has solved:  for inst in instruments: inst.step(...)  then "
+                " room.step(). Without it the room is frozen and the surface is loaded by a stale "
+                "field, silently."
+            )
+
+    def inject(self, q: NDArray[np.float64]) -> None:
+        """Queue the **per-node** volume-velocity vector ``q`` (m^3/s) for the room's next step.
+
+        Handed to the room as ``(nodes, weights=q, U=1.0)``: :meth:`AirBox.step` is linear in the
+        weights for both the injection (``w U``) and the read-back (``w . pbar``), so a vector goes
+        in and both come out exactly right — which is why the distributed tier needs **zero edits**
+        to ``AirBox``. The room books the work at its own post-closure centered pressure, never at a
+        number handed back from here, so the two ledgers stay an independent check on each other.
+        """
+        q = np.asarray(q, dtype=float)
+        if q.shape != (self.node_count,):
+            raise ValueError(
+                f"q must be the per-node volume-velocity vector, shape {(self.node_count,)}, "
+                f"got {q.shape}. (Pass q = port.T @ v, not the scalar sum -- the scalar is exactly "
+                "what the lumped tier would have coupled through, i.e. the negative control.)"
+            )
+        self.require_ready()
+        self.room._pending_ports.append((self.nodes, q, 1.0))
+        self._queued_at = self.room.n
+
+    def reset(self) -> None:
+        """Forget any pending-injection mark — for reusing the port on a fresh run."""
+        self._queued_at = -1
+
+
+class RoomLoadedPlate:
+    """A :class:`~physsynth.core.plate.Plate` mounted flush in a wall and loaded by the room over
+    its **whole surface** — the distributed area coupling (batch 3).
+
+    :class:`RoomLoadedBody` couples a lumped :class:`~physsynth.core.body.ModalBody` to a room
+    through one scalar terminal. This couples a **grid** resonator through every node it has. The
+    physical difference is :class:`SurfacePort`'s headline — the acoustic short circuit — and it is
+    structural, not a refinement: an even-index mode of a simply supported plate has *exactly* zero
+    net volume velocity, so every one-port in this repo (``AirRadiation``, ``RadiatedBody``,
+    ``RationalAirLoad``, ``RoomPort``) reports exact silence from a mode this class radiates from
+    definitely. This is also what makes the *existing* grid resonators radiate honestly: models #4,
+    #5 and #5b have had a ``pressure()`` read-out since they were built, and it is
+    ``sum_i area_i u_i''`` — a monopole, i.e. exactly the net volume acceleration, i.e. exactly the
+    quantity that is insufficient. That read-out is not wrong; it is the compact ``a -> 0`` limit of
+    this, and this is where the plate stops being a point source.
+
+    **The load folds into the plate's own factorization — nothing new is solved.** The plate already
+    back-substitutes a prefactored SPD system every step (``A = (1 + sigma k) I + theta k^2 kappa^2
+    B`` supported, or the ``W``-weighted free form). Substituting the port's Thevenin relation into
+    the plate's own linear response gives
+
+        f_load = -T^T pbar_free  -  T^T R T (u^{n+1} - u^{n-1}) / (2k)
+
+    whose unknown part is a constant, symmetric, **positive-semidefinite** sparse matrix times
+    ``u^{n+1}``. A PSD addition to an SPD matrix is SPD, so ``A + (k/2rho_s) T^T R T`` is factored
+    **once at construction** and the per-step cost of the whole room is two sparse matrix-vector
+    products. Passivity is unconditional — it is a property of the matrix, not an inequality to
+    check — so the room's CFL and the plate's unconditional stability are both untouched and
+    coupling them adds no third condition.
+
+    Per step, in this order (the ordering is load-bearing: ``pbar_free`` must be read from the
+    stored ``u^{n+1/2}`` **before** the room advances)::
+
+        1.  pbar_free = port.free_pressure()                     # vector, O(patch)
+        2.  rhs = the plate's own force-free RHS  +  k^2 f_ext / rho_s
+                  -  k^2 T^T pbar_free / rho_s
+                  +  (k/2) (T^T R T) u^{n-1} / rho_s
+        3.  u^{n+1} = LU_loaded.solve(rhs)
+        4.  q    = T (u^{n+1} - u^{n-1}) / (2k)                  # per-node volume velocity, m^3/s
+        5.  pbar = pbar_free + R q
+        6.  radiated_energy += k pbar . q ;  port.inject(q)
+        7.  (caller) room.step()
+
+    where ``rho_s`` stands for ``rho h^2`` on the supported branch and ``rho`` on the free branch
+    (the lumped mass ``W`` lives inside ``A`` and is divided out by the solve, exactly as
+    :meth:`~physsynth.core.plate.Plate.step`'s own ``f_ext`` path already does).
+
+    **The energy ledger telescopes exactly, and the conserved total is NOT the money test.** The
+    theta-average applies to the *conservative* spatial operator, not to the load: ``f_load`` enters
+    at time ``n`` as a plain force, so multiplying the update by the centered velocity gives
+    ``dE_plate = -k pbar . q`` with **exactly** the ``q`` injected into the room. So
+
+        plate.energy() + radiated_energy + room.energy()
+
+    is flat for *any* ``T`` and *any* ``R`` — including a **wrong** ``R``. Each side's ledger
+    telescopes against whatever pressure it used, and the sum of two internally-consistent
+    identities is conserved even when the two disagree with each other. Measured with ``R_j``
+    deliberately 17% wrong (dropping the ``1 + beta`` wall factor): the conserved total drifts
+    1.7e-14 — *green* — while ``radiated - injected`` is **13% of the channel**. So the conserved
+    total ships as **necessary and not sufficient**, and the money test is the cross-ledger identity
+    ``radiated_energy == room.injected`` plus a differential per-node measurement of ``R_j`` read
+    straight off the room. (Every conservation claim must also report **how big the channel is** — a
+    conservation test on a channel worth 1e-14 of the total passes with the coupling disconnected.
+    Air loading a light plate is genuinely violent: a 45 g, 0.09 m^2 plate at 700 Hz has a radiation
+    time constant of ~2.4 ms.)
+
+    **No ``_accel`` correction is needed, deliberately.** :class:`RoomLoadedBody` has to refresh
+    ``body._accel`` *after* its rank-1 correction because its load is applied post-solve. Here
+    the load is **inside** the solve, so the second difference
+    ``(u^{n+1} - 2u^n + u^{n-1})/k^2`` already carries it and
+    :meth:`~physsynth.core.plate.Plate.pressure` is right for free. The one-line override
+    batch 2 needed is absent here.
+
+    **The string -> bridge -> plate -> room chain comes free — measured, not inferred.** Being a
+    drop-in for ``Plate`` by ``__getattr__`` delegation, this slots straight into a
+    :class:`~physsynth.core.connection.StringPlateBridge` as the body with **no edit to
+    ``connection.py``**. That claim needed measuring rather than inheriting, because unlike batch
+    2's ``ModalBody`` bridge, ``StringPlateBridge._stability_margin`` **reassembles the plate's
+    ``G0`` block from scratch** out of ``theta, rho, h, kappa, B / W, K`` — every one of which a
+    delegating wrapper hands over happily, so the guard would be computed against physics that is
+    not happening and the delegation would hide it perfectly. The news is good on both counts:
+    ``G0 = M + (theta - 1/4) k^2 S`` is a statement about **mass and theta-excess stiffness**, and
+    the air load is **dissipative** — it enters ``A``, never ``G0`` — so the margin comes out
+    bit-identical loaded or bare (0.57868295 both, supported and free); and adding the load block to
+    ``G0`` anyway *reduces* ``(G0^-1)_dp`` by 0.7%, i.e. the true margin is *smaller* than the guard
+    reports. **The guard's blindness errs safe.** A test pins that bit-identity so a future change
+    making the load non-dissipative (the two-sided dipole plate, batch 4, whose face cut removes air
+    mass) fails loudly there instead of silently mis-guarding.
+
+    **The free plate's rigid-body translation now radiates.** Model #5b's stiffness nullspace is
+    exactly ``{1, x, y}`` — bare, a uniform velocity translates forever at *constant* energy
+    (measured ``E/E0 = 1.0000`` at 400 … 2000 steps). Mount the same plate flush in a baffle and
+    that identical motion **is a piston**, the most efficient radiator the geometry has, so a lossy
+    room takes all of it (``E_plate/E0 < 1e-3`` by 400 steps, ``radiated/E0 -> 1.0000``). This is
+    also why the coupling channel is 0.35% of ``E0`` for a supported plate and **35%** for a free
+    one in the same rig — the clamped rim is a poor radiator and the free plate's rigid body is a
+    perfect one. Do **not** expect monotone decay in a *rigid* room: the plate drops to 4.5%, climbs
+    back to 15.9% and wanders, because a closed box gives the piston's energy back. Only the total
+    is monotone there (exactly flat, 2.0e-13).
+
+    Parameters
+    ----------
+    plate : Plate
+        The resonator — ``boundary="supported"`` (model #5) or ``"free"`` (model #5b). Only its
+        public state and operators are used; ``plate.py`` is untouched. Its sample rate must match
+        the room's.
+    room : AirBox
+        The room to radiate into. The plate lies flush in one of its walls, so the rigid wall *is*
+        the textbook infinite baffle and the plate's back face is unloaded.
+    face : str
+        Which of the six walls (:data:`FACES`) the plate is mounted in. Positive plate displacement
+        is along that face's **inward normal** (see :class:`SurfacePort` — the local convention is
+        what makes the per-face sign that no energy report can catch not exist in the code).
+    origin : (float, float), optional
+        The plate's ``(0, 0)`` corner in the face's own two coordinates (m). **Defaults to
+        centred**, and :class:`SurfacePort`'s spreading and scene-symmetry paragraphs are why: an
+        off-centre plate in a mirror-symmetric room is legal and physical, but its even modes stop
+        being exactly silent, *linearly* in the offset with no threshold (measured 2.3e-01 at an
+        offset of ``h_air/3``, against 7.2e-14 centred).
+    spreading : {"bilinear", "nearest"}
+        Forwarded to :class:`SurfacePort`. ``"nearest"`` is that class's measured negative control,
+        not a configuration.
+
+    Raises
+    ------
+    ValueError
+        A sample-rate mismatch, or any of :class:`SurfacePort`'s refusals.
+
+    Notes
+    -----
+    **This class does not step the room**, exactly as :class:`RoomLoadedBody` does not::
+
+        for n in range(n_steps):
+            inst.step(f_ext)       # or bridge.step(), which owns plate.step
+            room.step()            # one room, one step, after every port has solved
+
+    Mixing tiers in one room is inherited unchanged: a ``RoomLoadedPlate`` and a
+    ``RoomLoadedBody`` can share a room provided their node sets are disjoint, which is exactly what
+    makes each port's solve exact.
+    """
+
+    def __init__(
+        self,
+        *,
+        plate: Plate,
+        room: AirBox,
+        face: str,
+        origin: Sequence[float] | None = None,
+        spreading: Spreading = "bilinear",
+    ) -> None:
+        self.plate = plate  # FIRST: any attribute miss before this makes __getattr__ recurse
+        if not np.isclose(plate.k, room.k, rtol=1e-12, atol=0.0):
+            raise ValueError(
+                f"sample-rate mismatch: plate fs = {plate.fs} but room fs = {room.fs}. The port's "
+                "solve is a single timestep shared by both, so they must agree exactly."
+            )
+        self.room = room
+        self.k = plate.k
+
+        # The surface protocol: live-node coordinates and their areas. The live ordering is C-order
+        # over `mask` (operators2d's contract), which is exactly what `X[mask]` yields -- so the
+        # columns of T line up with the plate's own state vector by construction.
+        coords = np.column_stack((plate.X[plate.mask], plate.Y[plate.mask]))
+        if plate.boundary == "supported":
+            areas = np.full(plate.n_live, plate.h * plate.h)
+            # Per-node mass rho_s h^2: Plate.step divides f_ext by exactly this.
+            self._denominator = plate.rho * plate.h * plate.h
+        else:
+            areas = plate.w.copy()  # lumped cell areas (h^2, h^2/2, h^2/4) -- no dead rim
+            self._denominator = plate.rho  # W lives inside A and is divided out by the solve
+        self.port = SurfacePort(
+            room=room,
+            face=face,
+            coords=coords,
+            areas=areas,
+            origin=origin,
+            spreading=spreading,
+        )
+
+        # A_loaded = A + (k / 2 rho_s) T^T R T -- SPD (PSD added to SPD), factored ONCE. The plate's
+        # own A is reassembled here rather than reached into, because plate.py stays untouched; the
+        # dense coupled cross-check at two timesteps is what pins that this reassembly is right.
+        sk = plate.sigma * plate.k
+        coeff = plate.theta * plate.k * plate.k * plate.kappa * plate.kappa
+        if plate.boundary == "supported":
+            a_bare = (1.0 + sk) * sparse.identity(plate.n_live, format="csc") + coeff * plate.B
+        else:
+            a_bare = (1.0 + sk) * plate.W + coeff * plate.K
+        self._load_scale = 0.5 * plate.k / self._denominator
+        a_loaded = (a_bare + self._load_scale * self.port.load_matrix).tocsc()
+        # Drop the structural zeros the load's sparsity pattern contributes where its value is 0, so
+        # a zero-area surface (T = 0) factors the plate's OWN matrix and reduces to the bare plate.
+        a_loaded.eliminate_zeros()
+        self.nnz_growth = a_loaded.nnz / a_bare.tocsc().nnz  # the load's cost, reported not assumed
+        self._lu_loaded = splu(a_loaded)
+
+        self.radiated_energy = 0.0  # integral pbar . q dt: the work this plate did on the room
+        self.nodal_volume_velocity = np.zeros(self.port.node_count)  # last q (m^3/s per node)
+        self.surface_pressure = np.zeros(self.port.node_count)       # last pbar (Pa per node)
+        self.volume_velocity = 0.0  # last sum_j q_j -- the LUMPED tier's coupling, i.e. the control
+        self.n = 0
+
+    def __getattr__(self, name: str):
+        # Delegate read accessors (u, u_prev, X, Y, mask, B, K, W, w, theta, kappa, rho, h, n_live,
+        # boundary, state, to_live, pickup_index_at, ...) so a RoomLoadedPlate is a drop-in wherever
+        # a bare Plate is expected -- notably StringPlateBridge, which reassembles the plate's G0
+        # block out of exactly those. Only reached for names not set on the instance, so the
+        # overrides below always win. NOTHING here may shadow a name that bridge reads.
+        if name == "plate":  # nothing to delegate through yet -- never recurse
+            raise AttributeError(name)
+        return getattr(self.plate, name)
+
+    # -- time stepping ---------------------------------------------------------------------
+
+    def step(self, f_ext: NDArray[np.float64] | None = None) -> None:
+        """Advance one step: read the port, solve the **loaded** system, queue the injection.
+
+        ``f_ext`` is the optional external nodal force (live vector) — the driving-point coupling a
+        :class:`~physsynth.core.connection.StringPlateBridge` injects — and is added to the RHS
+        with exactly :meth:`~physsynth.core.plate.Plate.step`'s own arithmetic, so a zero air load
+        is a clean reduction to the bare plate. The room is **not** stepped here (class docstring).
+        """
+        p, port = self.plate, self.port
+        port.require_ready()               # before mutating anything
+        pbar_free = port.free_pressure()   # read u^{n+1/2}, BEFORE room.step()
+
+        sk = p.sigma * self.k
+        k2 = self.k * self.k
+        kappa2 = p.kappa * p.kappa
+        u_nm1 = p.u_prev
+        if p.boundary == "supported":
+            rhs = (
+                2.0 * p.u
+                + (1.0 - 2.0 * p.theta) * k2 * (-kappa2 * (p.B @ p.u))
+                - u_nm1
+                + p.theta * k2 * (-kappa2 * (p.B @ u_nm1))
+                + sk * u_nm1
+            )
+            if f_ext is not None:
+                rhs = rhs + k2 * f_ext / (p.rho * p.h * p.h)
+        else:
+            rhs = (
+                p.W @ (2.0 * p.u - u_nm1)
+                + (1.0 - 2.0 * p.theta) * k2 * (-kappa2 * (p.K @ p.u))
+                + p.theta * k2 * (-kappa2 * (p.K @ u_nm1))
+                + sk * (p.W @ u_nm1)
+            )
+            if f_ext is not None:
+                rhs = rhs + k2 * f_ext / p.rho
+        # The air load: the known open-circuit force, plus the u^{n-1} half of the centered
+        # velocity (its u^{n+1} half is already inside the factorization).
+        rhs = rhs - k2 * (port.T.T @ pbar_free) / self._denominator
+        rhs = rhs + self._load_scale * (port.load_matrix @ u_nm1)
+
+        u_next = self._lu_loaded.solve(rhs)
+        # _accel already carries the load -- it was IN the solve, so no post-solve refresh.
+        p._accel = (u_next - 2.0 * p.u + u_nm1) / k2
+        p.u_prev = p.u
+        p.u = u_next
+        p.n += 1
+
+        q = port.T @ ((u_next - u_nm1) / (2.0 * self.k))
+        pbar = pbar_free + port.R * q
+        port.inject(q)
+        self.radiated_energy += self.k * float(np.dot(pbar, q))
+        self.nodal_volume_velocity = q
+        self.surface_pressure = pbar
+        self.volume_velocity = float(np.sum(q))
+        self.n += 1
+
+    # -- diagnostics -----------------------------------------------------------------------
+
+    def energy(self) -> float:
+        """Total discrete energy ``E_plate + integral pbar . q dt`` (Joules).
+
+        **An explicit override, not a delegation** — ``__getattr__`` would otherwise hand back the
+        bare plate energy, i.e. the total *without* its coupling channel, which is exactly the
+        number that looks fine and is not conserved. Like :meth:`RoomLoadedBody.energy` and unlike
+        :meth:`~physsynth.core.radiation.RadiatedBody.energy` it is **not** monotone: a room gives
+        energy back. The conserved statement is the whole scene, ``inst.energy() + room.energy()``
+        — and see the class docstring on why that flatness is necessary and not sufficient.
+        """
+        return self.plate.energy() + self.radiated_energy
+
+    def pressure(self) -> float:
+        """The plate's **monopole** read-out ``sum_i area_i u_i''`` (Pa-ish), reflecting the load.
+
+        Delegates to :meth:`~physsynth.core.plate.Plate.pressure`, which is right for free here
+        (the load is inside the solve, so ``_accel`` carries it with no post-solve refresh). Keep in
+        mind what it *is*: the net volume acceleration — the compact limit this class exists to go
+        beyond. It is exactly zero for the modes whose radiation is this batch's headline. For the
+        pressure **in the room**, read the field: :meth:`AirBox.pressure_at`.
+        """
+        return self.plate.pressure()
+
+    def set_state(
+        self,
+        u0: NDArray[np.float64],
+        v0: NDArray[np.float64] | float = 0.0,
+    ) -> None:
+        """Set the plate's initial state and reset this port's coupling ledger to zero.
+
+        The plate's own consistent second-order start is used verbatim, i.e. ``u^{-1}`` is derived
+        from the **unloaded** acceleration — the room has not acted yet at ``n = 0``.
+        """
+        self.plate.set_state(u0, v0)
+        self._reset_books()
+
+    def reset(self) -> None:
+        """Zero the plate state and the coupling ledger — reuse on a new run.
+
+        The room is a separate object with its own :meth:`AirBox.set_state`.
+        """
+        self.plate.set_state(np.zeros(self.plate.n_live))
+        self._reset_books()
+
+    def _reset_books(self) -> None:
+        self.radiated_energy = 0.0
+        self.nodal_volume_velocity = np.zeros(self.port.node_count)
+        self.surface_pressure = np.zeros(self.port.node_count)
+        self.volume_velocity = 0.0
         self.port.reset()
         self.n = 0
