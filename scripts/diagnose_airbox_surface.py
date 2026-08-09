@@ -16,9 +16,10 @@ suite deliberately does not assert.
      — but *not* as a located knee. At fixed frequency the five patterns span **39x**; plotted
      against ``f/f_c`` the same points collapse to within **1.5x - 5.5x**, and every curve peaks at
      ``f/f_c = 1``. So the coincidence law locates the **peak**, while the unity crossing sits
-     below it on the rising flank — in the *same* bracket ``[0.70, 0.85] f_c`` for every pattern
-     that crosses at all, across a factor of three in fineness. The law is in that **scaling**,
-     which is why the plan asks for a bracket and never a knee.
+     below it on the rising flank — in the same *single sweep interval* ``[0.70, 0.85] f_c`` for
+     every pattern that crosses at all, across a factor of three in fineness. One interval wide is
+     all the resolution that claim has, and it is all a bracket ever claims: the law is in the
+     **scaling**, which is why the plan asks for a bracket and never a knee.
 
      **The resolvability floor is the first thing this script prints**, because a pattern the *air*
      grid cannot carry aliases, and an aliased point on a monotonicity curve looks exactly like a
@@ -45,6 +46,15 @@ suite deliberately does not assert.
      artifacts of where they were measured. Every row flagged unresolvable moves; every resolved
      row is stable. What survives untouched is the zero: ``peak |U|/A`` sits at 2e-15 - 3e-14 for
      every even mode at **every** level, exactly as the plan predicted a symmetry statement would.
+
+     **That attribution needs a control, because ``h_air = c0 sqrt(3)/(CFL fs)``** — refining the
+     sample rate refines the air grid *and* raises Nyquist in lockstep, so the sweep alone cannot
+     tell the two axes apart. Pinning ``h_air`` at 82.5 mm and reaching the same three sample rates
+     by lowering the Courant fraction instead (0.900, 0.450, 0.225) gives ``(4,2)`` = **0.018,
+     0.016, 0.023**: four times the time resolution moves it not at all. Space binds. Note also
+     that the whole correction rests on the ``(4,2)`` row with ``(3,1)`` as weak support — the
+     other four modes are flat at ~1.0000, so this is one measurement repeated rather than six
+     independent confirmations.
 
      And once every mode is resolved, the ranking **inverts**: normalised per cycle of the mode's
      own oscillation at equal rms velocity, radiation falls strictly with fineness — 1.000, 0.448,
@@ -372,6 +382,12 @@ MODES = ((1, 1), (2, 1), (1, 2), (2, 2), (3, 1), (4, 2))
 # Three air grids at FIXED physical room and FIXED physical duration, so the only thing changing
 # is what the air can resolve. Cells double with fs because h_air halves.
 LEVELS = ((8000.0, (12, 12, 9)), (16000.0, (24, 24, 18)), (32000.0, (48, 48, 36)))
+# THE CONTROL that makes the attribution earned rather than asserted. h_air = c0 sqrt(3)/(CFL fs),
+# so LEVELS refines the air grid and raises Nyquist together and cannot separate them. Here h_air
+# is held FIXED at the coarsest value and the same three sample rates are reached by lowering the
+# Courant fraction instead (0.900, 0.450, 0.225 -- all legal, all below the 3-D ceiling). Time
+# resolution improves 4x; space resolution does not move at all.
+CONTROL_MODES = ((3, 1), (4, 2))    # the only rows that move at all; the rest are flat at 1.0000
 REFINE_DURATION = 0.025      # s -- 200 steps at the coarsest level
 REFINE_ZETA = 1.0            # lossy: "did it radiate" gets a ONE-WAY answer (a rigid box gives
 #                              the energy back, and the fixed-window fraction then wanders)
@@ -382,14 +398,18 @@ def mode_frequency(m: int, n: int) -> float:
     return PLATE_KAPPA * np.pi / 2.0 * ((m / PLATE_L) ** 2 + (n / PLATE_L) ** 2)
 
 
-def mode_run(fs: float, cells, m: int, n: int, *, cycles: float | None = None):
+def mode_run(fs: float, cells, m: int, n: int, *, cycles: float | None = None,
+             h: float | None = None):
     """Seed a mode at **equal rms velocity** and report the fraction of its energy radiated.
 
     Equal rms velocity, not equal displacement: radiation couples to the volume *velocity*, so this
     is what makes two modes comparable at all (equal rms displacement puts 4700x more energy in the
     finest mode than the coarsest and ranks amplitudes instead of modes).
+
+    ``h`` overrides the spacing ``air_h(fs)`` would pick, which is how the control run holds the
+    air grid still while the sample rate moves (the Courant fraction absorbs the difference).
     """
-    h = air_h(fs)
+    h = air_h(fs) if h is None else h
     room = AirBox(L=tuple(c * h for c in cells), fs=fs, h=h,
                   walls=impedance_from_zeta(REFINE_ZETA))
     plate = _plate(fs)
@@ -423,28 +443,41 @@ def fig_plate_modes():
         for m, n in MODES:
             grid[(fs, m, n)] = mode_run(fs, cells, m, n)
 
+    # The control: same sample rates, same room in metres, air grid held at the COARSEST spacing.
+    h_fixed = air_h(LEVELS[0][0])
+    control = {
+        (m, n): [mode_run(fs, LEVELS[0][1], m, n, h=h_fixed)[0] for fs, _ in LEVELS]
+        for m, n in CONTROL_MODES
+    }
+
     fs_fine, cells_fine = LEVELS[-1]
     per_cycle = {(m, n): mode_run(fs_fine, cells_fine, m, n, cycles=1.0) for m, n in MODES}
 
     fig, (ax, ax2) = plt.subplots(1, 2, figsize=(13.0, 4.8))
     h_air_mm = np.array([air_h(fs) * 1e3 for fs, _ in LEVELS])
+    level = np.array([fs / LEVELS[0][0] for fs, _ in LEVELS])
     for j, (m, n) in enumerate(MODES):
         vals = [grid[(fs, m, n)][0] for fs, _ in LEVELS]
         res = [mode_resolution(fs, m, n) for fs, _ in LEVELS]
-        ax.semilogx(h_air_mm, vals, "-", color=f"C{j}", lw=1.2, label=f"({m},{n})")
+        ax.plot(level, vals, "-", color=f"C{j}", lw=1.2, label=f"({m},{n})")
         ok = [i for i, r in enumerate(res) if r >= RESOLVABLE]
         no = [i for i, r in enumerate(res) if r < RESOLVABLE]
-        ax.plot(h_air_mm[ok], [vals[i] for i in ok], "o", color=f"C{j}", ms=7)
-        ax.plot(h_air_mm[no], [vals[i] for i in no], "x", color=f"C{j}", ms=8, mew=2)
-    ax.invert_xaxis()
-    ax.set_xticks(h_air_mm)
-    ax.set_xticklabels([f"{v:.1f}" for v in h_air_mm])
+        ax.plot(level[ok], [vals[i] for i in ok], "o", color=f"C{j}", ms=7)
+        ax.plot(level[no], [vals[i] for i in no], "x", color=f"C{j}", ms=8, mew=2)
+    for j, (m, n) in enumerate(MODES):
+        if (m, n) in control:
+            ax.plot(level, control[(m, n)], ":", color=f"C{j}", lw=1.8,
+                    label=None if j else None)
+    ax.plot([], [], "k:", lw=1.8, label=r"time only ($h_{air}$ fixed)")
+    ax.set_xscale("log")
+    ax.set_xticks(level)
+    ax.set_xticklabels([f"{lv:.0f}x\n{h:.1f} mm" for lv, h in zip(level, h_air_mm, strict=True)])
     ax.set_xticks([], minor=True)
-    ax.set_xlabel(r"air spacing $h_{air}$ (mm)   (finer $\rightarrow$)")
+    ax.set_xlabel(r"refinement in $f_s$   ($h_{air}$ below, for the solid curves)")
     ax.set_ylabel(f"fraction of $E_0$ radiated in {REFINE_DURATION * 1e3:.0f} ms")
     ax.set_title("x = the AIR grid cannot carry this mode's pattern\n"
-                 r"($\lambda_{min} < 4\,h_{air}$) — and those are the rows that MOVE")
-    ax.legend(fontsize=8, ncol=2, title="mode")
+                 "solid: space AND time refined · dotted: time ALONE, and (4,2) stays put")
+    ax.legend(fontsize=7, ncol=2, title="mode", loc="lower right")
     ax.grid(alpha=0.3, which="both")
 
     labels = [f"({m},{n})" for m, n in MODES]
@@ -473,7 +506,7 @@ def fig_plate_modes():
     path = os.path.join(OUT, "airbox_surface_modes.png")
     fig.savefig(path, dpi=140)
     plt.close(fig)
-    return path, grid, per_cycle
+    return path, grid, per_cycle, control
 
 
 # ================================================================================================
@@ -542,7 +575,7 @@ def main():
         print(f"       delta/h_air = {d:9.3g}   peak = {v:.3e}   ratio = {v / d:.3f}")
 
     t0 = time.perf_counter()
-    p3, grid, per_cycle = fig_plate_modes()
+    p3, grid, per_cycle, control = fig_plate_modes()
     print(f"\n3. the plate modes the suite cannot rank -> {p3}   [{time.perf_counter() - t0:.1f}s]")
     header = "  ".join(f"{air_h(fs) * 1e3:5.1f}mm" for fs, _ in LEVELS)
     print(f"     radiated fraction of E0 in {REFINE_DURATION * 1e3:.0f} ms, per air grid:  "
@@ -555,8 +588,23 @@ def main():
         band = "" if mode_frequency(m, n) < LEVELS[0][0] / 4 else "  (above fs/4 at 8 kHz)"
         print(f"       ({m},{n})  f = {mode_frequency(m, n):5.0f} Hz   {marks}{band}")
     print("       'x' = the air grid cannot carry it (lambda_min < 4 h_air). Those rows move by up")
-    print("       to three orders; every resolved row is stable. The binding constraint is the AIR")
-    print("       grid's SPACE axis, not the plate's time axis as the batch plan supposed.")
+    print("       to three orders; every resolved row is stable. The whole correction rests on the")
+    print("       (4,2) row, (3,1) weakly: the other four sit flat at ~1.0000, so this is ONE")
+    print("       measurement repeated, not six independent confirmations.")
+    print("     the CONTROL, which is what makes the attribution earned rather than asserted —")
+    print("     h_air = c0 sqrt(3)/(CFL fs), so the table above refines space and time TOGETHER.")
+    print(f"     Here h_air is pinned at {air_h(LEVELS[0][0]) * 1e3:.1f} mm and the same sample "
+          "rates are reached by")
+    print("     lowering the Courant fraction (0.900, 0.450, 0.225) — time 4x better, space still:")
+    for m, n in CONTROL_MODES:
+        both = "  ".join(f"{grid[(fs, m, n)][0]:.4f}" for fs, _ in LEVELS)
+        alone = "  ".join(f"{v:.4f}" for v in control[(m, n)])
+        print(f"       ({m},{n})  space+time: {both}     time alone: {alone}")
+    print("       (4,2) recovers only when the SPACE axis moves — 0.018 -> 0.9998 with both, and")
+    print("       flat at ~0.02 with time alone. So the binding constraint is the AIR grid's space")
+    print("       axis, not the plate's time axis as the batch plan supposed. Caveat in the open:")
+    print("       the control runs at a different Courant fraction, hence different numerical")
+    print("       dispersion — which does not plausibly move a 50x effect, but is not nothing.")
     print("     the zero, meanwhile, is resolution-INDEPENDENT (peak |U|/A per level):")
     for m, n in MODES:
         if m % 2 == 0 or n % 2 == 0:
