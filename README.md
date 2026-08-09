@@ -63,6 +63,14 @@ module-scoped fixtures are expensive (the whirling and phantom sweeps run 30–1
 *before* their first assertion). The mark keeps those on one worker so the fixture is built once;
 everything else — including the 336-test web-backend module — scatters freely.
 
+A parallel run saturates every core, which makes the rest of the desktop sluggish. To keep working
+while it runs, prefix any invocation with the priority wrapper — it forwards its arguments to pytest
+unchanged, and the xdist workers inherit the lowered priority:
+
+```bash
+python scripts/nicepytest.py -n 8 --dist loadgroup
+```
+
 ## Generate diagnostics
 
 ```bash
