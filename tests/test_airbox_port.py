@@ -17,10 +17,18 @@ Two traps get their own tests here because nothing else would catch them:
 * ``R_room`` must carry the wall-closure factor ``1/(1 + beta)``. ``AirBox.step`` injects *before*
   it closes the wall, so a port on a lossy wall is divided by ``1 + beta`` along with everything
   else. Without the factor an interior-port suite stays perfectly green and a wall-mounted port
-  leaks ~2% per run (measured 1.9e-2 against 8.4e-15). ``test_R_room_is_what_the_room_does``
-  measures it **differentially** — comparing the coupled step's ``pbar`` against
-  ``pbar_free + R_room U`` would be a tautology, since that expression is how ``pbar`` was computed,
-  and would pass for any ``R_room`` whatsoever.
+  reads a pressure the room never developed. **What that costs is not an energy leak** — this
+  header said "leaks ~2% per run" until batch 3 measured it, and the 1.9e-2 quoted here was the
+  *ledger gap*, not a drift. The conserved total is structurally blind to a wrong ``R_room``: each
+  side's identity telescopes against whatever pressure *it* used, so the sum of two
+  internally-consistent identities stays flat while the two disagree (batch 3 measured the total
+  drifting **4.9e-15 with the factor dropped against 2.0e-14 with it right** — green, and not even
+  in the suspicious direction, while ``|radiated - injected|`` went from exactly 0.0 to 18%). So
+  the detector is ``test_R_room_is_what_the_room_does``, which measures it **differentially** —
+  comparing the coupled step's ``pbar`` against ``pbar_free + R_room U`` would be a tautology,
+  since that expression is how ``pbar`` was computed, and would pass for any ``R_room``
+  whatsoever — together with the cross-ledger ``radiated == injected``, never the total. See
+  ``RoomPort.R_room``'s docstring and ``docs/dev/air-box-area-coupling-plan.md`` §6.1.
 * The port's local ``O(port)`` free-pressure read must replicate the full-array
   ``_divergence()``-then-closure exactly, *including* at wall, edge and corner nodes where a node
   sees only the faces it has. ``test_free_pressure_matches_full_array`` asserts bit-identity there.

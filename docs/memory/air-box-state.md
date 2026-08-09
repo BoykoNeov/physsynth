@@ -1,11 +1,11 @@
 ---
 name: air-box-state
-description: 3-D FDTD air box (HANDOFF §12H) batches 1 AND 2 BUILT & GREEN — the DISTRIBUTED air tier above the lumped port; the reward and the price both live at λ=1/√3; batch 2's port is a Thevenin source solved in ONE division, and the ROOM contaminated the port's own measured size by more than the effect
+description: 3-D FDTD air box (HANDOFF §12H) batches 1, 2 AND 3 SHIPPED & GREEN (docs closed 2026-08-09) — the DISTRIBUTED air tier above the lumped port; the reward and the price both live at λ=1/√3; batch 2's port is a Thevenin source solved in ONE division, and the ROOM contaminated the port's own measured size by more than the effect; batch 3 is the DISTRIBUTED area coupling, whose finding is that CONSERVATION IS BLIND to a wrong coupling constant; batch 4 is NAMED (interior two-sided dipole plate) and not started
 metadata: 
   node_type: memory
   type: project
   originSessionId: 8506c3d9-c98e-4229-87cf-6160a3fd6c48
-  modified: 2026-07-28T02:37:05.779Z
+  modified: 2026-08-09T20:06:45.396Z
 ---
 
 **The distributed air node — `physsynth/core/airbox.py` `AirBox`.** The human's pick at the
@@ -169,3 +169,123 @@ ignore queued injections.
 `tests/test_airbox_scene.py` (physical + cross-tier); `tests/helpers.py::make_room_loaded_body` /
 `room_scene_energy`; `scripts/diagnose_airbox_port.py`. Suite **1287** green (was 1235);
 the batch adds **52 tests in 8.9 s** (~7 s of that is the one cross-tier sweep).
+
+---
+
+**BATCH 3 — the plate radiates from EVERY NODE — COMPLETE & SHIPPED (2026-08-09).** Plan
+`docs/dev/air-box-area-coupling-plan.md`, whose **§10 is the post-build record** — read it before
+trusting any number in that plan's body. `SurfacePort` + `RoomLoadedPlate`, both in `airbox.py`;
+**zero edits** to `AirBox` itself, `plate.py`, `connection.py`, `body.py`, `radiation.py`, `bore.py`.
+**Full suite re-run at batch end: 1355 green, exit 0** (was 1287); the batch adds **68 tests**, and
+1355 − 1287 = 68 = exactly `test_airbox_surface.py`, so nothing anywhere else moved.
+
+**The claim: a surface radiates by the SHAPE of its motion, not its net volume displacement.** An
+even-index supported-plate mode has *exactly* zero net volume velocity (`Σ sin(mπi/N) = 0` is an
+identity, and `B = L²` keeps the sine product an exact eigenvector), so every one-port in the repo
+reports exact silence — and the distributed port radiates **5.6× the (1,1) mode's energy** from it
+while `|U|/A` stays at 6e-14 for the whole 200-step run. Structural, not numerical: a one-port has
+no length scale on its surface.
+
+**The mechanism is one line up from batch 2.** The room's instantaneous response over a node SET is
+**diagonal** (off-diagonal measured *exactly* `0.00e+00`), so the load is `TᵀRT` — constant,
+symmetric, PSD, sparse — and it **folds into the plate's own `splu`**. Nothing new is solved.
+Batch 2 IS the rank-1 case (`T = w1ᵀ` → Sherman–Morrison). Passivity is a property of the matrix,
+not an inequality to check.
+
+**THE BATCH'S REAL FINDING — CONSERVATION IS BLIND, AND THIS INVERTS THE PROJECT'S INSTINCT.** The
+plate's ledger telescopes against *whatever* pressure it used and the room's against *whatever* it
+received, so the scene total is the sum of two separately-exact identities and stays flat when the
+two disagree. Measured (dropping `(1+β)` from `R_j` on a lossy mounting wall, 300 steps): drift
+**4.9e-15 — SMALLER than the correct run's 2.0e-14**, i.e. green and not even suspicious — while
+`|radiated − injected|` goes from **exactly 0.00e+00 to 18%** of the channel. **So the money test is
+`radiated == injected` plus the differential per-node `R_j`, never the total.** This also corrects
+`RoomPort.R_room`'s shipped docstring, which said the missing factor "leaks ~2% of the run's
+energy": nothing leaks — that 1.9e-2 was the LEDGER GAP. A test asserts BOTH halves so the framing
+fails loudly if it ever stops being true.
+
+**THREE MORE PLAN CLAIMS DID NOT SURVIVE MEASUREMENT — all in the same direction (the prototype
+measured them where the effect was hidden). Re-measure a plan number in YOUR geometry.**
+1. **Bilinear's mirror-equivariance is NOT offset-independent.** It needs `S = 2·(surface centre)/
+   h_air` **integral**: 1.0e-15 there, **1.6e-01…3.8e-01** elsewhere (16 offsets), confirmed two
+   independent ways (`TᵀRT` under the plate's mirror permutation; `T` itself under that mirror
+   composed with the air grid's) and by the algebra — the mirror sends node `i` to cell fraction
+   `frac(S − t_i)`, which is the `1 − f_i` that reverses a bilinear weight pair only for integral
+   `S`. ⇒ **centring is load-bearing TWICE** (the load's equivariance AND the scene's symmetry),
+   which strengthens the centred default rather than weakening it.
+2. **The symmetry argument does not discriminate the spreading operators at all.** Centred, an even
+   mode's `|U|/A` stays at rounding under BOTH bilinear and nearest at N=8/16/24 — the plan's "18%
+   leak under nearest" does not reproduce. What decides bilinear is **coverage**: 10×–100× flatter
+   interior assignment and *converging* (0.082/0.062/0.051/0.031) where nearest wanders
+   (0.83/1.03/0.64/0.46). Nearest's equivariance is exact at an EVEN `S` and broken at an ODD one,
+   where the centre node lands on a round-half-to-even tie — an accident of the rounding rule.
+3. **"Partition of unity" promises more than it delivers.** Bilinear's interior assigned area is
+   exactly `h_air²` (5e-16) **only when `h_air/h_surface` is an integer**, and off it ripples
+   non-monotonically in the ratio (2.93 → 0.0077 but the finer 4.40 → 0.0207). Poisson summation on
+   the hat: the `k`-th coefficient `sinc²(πk h_air/h_p)` vanishes when `k·ratio` is an integer, so
+   WHICH harmonics cancel is arithmetic, not size. That ripple is the coupling's accuracy floor.
+
+**Design decisions worth not re-deriving:**
+- **The sign convention is LOCAL** — positive `u` along the port face's **inward normal**, so `T` is
+  entrywise non-negative on all six faces and no inward normal appears in the code. Necessary
+  because a consistent flip is **bit-identical** in `radiated_energy` (`TᵀRT` is sign-invariant);
+  the only detector is the surface pressure at **n = 1**. The test asserts the bit-identity of the
+  WRONG run — that is the point of it.
+- **Refuse the face RIM, do not clip the stencil.** A rim node touches a SECOND wall, so it carries
+  half `W` and the SUM of two admittances ⇒ `R_j` stops being uniform ⇒ `TᵀRT = R·TᵀT` (the whole
+  equivariance argument) stops holding. Clipping would keep every ledger green with the geometry
+  quietly wrong.
+- **Zero `AirBox` edits** because `step()` is LINEAR in the port weights: a `SurfacePort` passes the
+  per-node volume-velocity VECTOR as `weights` with `U = 1.0`, and both the injection and the
+  read-back come out right.
+- `self.plate` FIRST (or `__getattr__` recurses); never shadow a name `StringPlateBridge` reads
+  (`K W B L w mask theta kappa rho h u u_prev …`) — hence `_lu_loaded`, `load_matrix`.
+- **The guard errs SAFE, measured:** the margin is **bit-identical** loaded vs bare (the load is
+  dissipative — it enters `A`, never `G0`), and adding the load block to `G0` anyway *reduces*
+  `(G0⁻¹)_dp` (ratio 0.500 supported / 0.995 free). **The SIGN is the claim, not the size.**
+- **The load DOES thicken the factorization** — LU fill **1.55×/3.50×/5.29×** at
+  `h_plate/h_air = 0.45/0.23/0.15`, against the plan's expectation that it would not. `lu_nnz` is
+  exposed because stored `nnz` (2.9×/8.7×/18.2×) is NOT what `splu` pays.
+- **The channel is a property of the MOTION, not the coupling:** a struck bump gives 0.002 of `E₀`
+  (fine patterns radiate badly — the short circuit working), the free plate's **piston** gives
+  0.9974. Ship the piston config so a conservation assertion is non-vacuous.
+- `net_area` is `((N−1)/N)²·LxLy` supported (dead rim nodes displace nothing) and exactly `LxLy`
+  free. `T = 0` reduces to bare `Plate` **bit-identically** (structural zeros eliminated before
+  factoring) — the available reduction, since `R = 0` happens only on a refused open face.
+
+**THE DIAGNOSE SCRIPT CORRECTED TWO MORE OF THE PLAN'S OWN READINGS** (`scripts/diagnose_airbox_
+surface.py`, ~18 s, three figures) — and the pattern is now five-for-five: **every plan claim that
+died, died because the prototype measured it where the effect was hidden.**
+- **Coincidence is a SCALING COLLAPSE, not a knee.** At fixed `f` the five patterns span **39×**;
+  plotted against `f/f_c` they collapse to within 1.5×–5.5× and every curve **PEAKS at `f/f_c = 1`**.
+  The unity crossing is on the rising flank, `[0.70, 0.85] f_c` — a bracket **one sweep interval
+  wide**, i.e. exactly as tight as the frequency grid and no tighter. Say so or it reads as a
+  measurement.
+- **The fine plate-mode rows are limited by the AIR grid's SPACE axis, not the plate's time axis**
+  (the plan said time). `(4,2)` radiates 0.018 → 0.870 → 0.9998 across a 4× air refinement. But that
+  sweep cannot attribute anything, because `h_air = c₀√3/(CFL·fs)` moves BOTH axes together — **the
+  control is to pin `h_air` and reach the same rates by lowering the Courant fraction** (0.900,
+  0.450, 0.225): 4× the time resolution moves `(4,2)` not at all (0.0181, 0.0155, 0.0228). Caveat
+  kept in the open: the control runs at a different dispersion. And it is ONE row repeated — `(3,1)`
+  weak support, the other four flat at ~1.0000.
+- **Once every mode is resolved the RANKING INVERTS** — per cycle at equal rms velocity: 1.000,
+  0.448, 0.448, 0.260, 0.213, 0.091, strictly decreasing. The plan's "finer radiates MORE, up to
+  7.1×" was measuring the **cycle count** over a fixed window. The zero survives untouched
+  (2e-15…3e-14 at every level) — the resolution-free claim is resolution-free, the other was not.
+- **Rig facts that would each have produced a confident wrong figure:** equal rms **velocity** is
+  what makes modes comparable (equal displacement puts 4700× more energy in the finest); a **lossy**
+  room is what makes "did it radiate" one-way (a rigid box hands it back and the fraction wanders);
+  the drive needs a **raised-cosine ramp** (a hard start's click beats the steady-state power at
+  fine patterns); and the **resolvability floor prints FIRST**, because an aliased point on a
+  monotonicity curve looks exactly like a clean result.
+
+**Files:** `physsynth/core/airbox.py`; `tests/test_airbox_surface.py`;
+`tests/helpers.py::make_surface_room` / `make_room_loaded_plate` / `plate_bump` /
+`plate_mode_shape` / `surface_scene_energy`; `scripts/diagnose_airbox_surface.py`. Docs closed at
+batch end: HANDOFF §12H (three batches, batch 4 named), README's model catalogue, the plan's status
+block + new §10, and `tests/test_airbox_port.py`'s header — which had gone on repeating the
+"leaks ~2%" wording that §6.1 disproved, in the very file whose job is that trap.
+
+**BATCH 4 IS NAMED: the interior two-sided (dipole) plate** — a plate hanging *in* the room radiating
+from both faces, an internal moving **boundary** rather than a source, and therefore a genuinely
+different object from anything shipped. Deferred beyond it, unchanged: PML / higher-order absorbing
+boundaries, scattering objects and non-rectangular rooms, moving ports, viscothermal absorption.

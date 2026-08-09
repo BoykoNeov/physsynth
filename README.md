@@ -252,6 +252,33 @@ Complete and validated:
   way: the same port reads 8.6% high in a room ten times its radius, and that excess is the room's
   own reactance rather than the port's. The number is Courant-invariant to five figures, so it is a
   static near-field quantity and not a dispersion artifact.
+- **The plate radiates from every node** *(air box, batch 3)* — `SurfacePort` / `RoomLoadedPlate`:
+  the **distributed area coupling**, a plate flush in a wall coupled to the air over its whole
+  surface rather than through one lumped terminal. It is one line up from batch 2 and no harder: the
+  room's instantaneous response over a node *set* is **diagonal** — off-diagonal measured *exactly*
+  `0.00e+00`, because within a step an injection still changes only its own nodes — so the load is
+  `TᵀRT`, constant, symmetric, PSD and sparse, and it **folds into the plate's own `splu`**. Nothing
+  new is solved and passivity is a property of the matrix rather than an inequality to check; batch
+  2 is the rank-1 case of it (`T = w1ᵀ`, Sherman–Morrison). What that buys is a claim no one-port
+  can state, let alone satisfy: **a surface radiates by the shape of its motion, not by its net
+  volume displacement.** An even-index simply-supported mode has *identically* zero net volume
+  velocity (`Σ sin(mπi/N) = 0` is an identity, and `B = L²` keeps the sine product an exact
+  eigenvector), so `AirRadiation`, `RadiatedBody`, `RationalAirLoad` and `RoomPort` all report exact
+  silence — while the distributed port radiates **5.6×** the (1,1) mode's energy from it, with
+  `|U|/A` sitting at 6e-14 for the whole run. A one-port has no length scale on its surface, so this
+  is structural, not a matter of accuracy. The batch's real finding is a warning about this repo's
+  own primary bug detector: **the conserved total is blind to a wrong coupling constant.** Each
+  side's ledger telescopes against whatever pressure *it* used, so the scene total is the sum of two
+  separately-exact identities and stays flat while the two disagree — measured, with the wall-closure
+  factor dropped, at a drift of **4.9e-15, smaller than the correct run's 2.0e-14**, green and not
+  even suspicious, while `|radiated − injected|` went from exactly `0.0` to **18 %** of the channel.
+  So the money test is `radiated == injected` plus a differential per-node `R_j`, never the total.
+  Two things measurement changed on the way: the spreading operator is bilinear for **coverage**
+  (0 unfed footprint nodes at every grid ratio, interior assignment 10×–100× flatter *and*
+  converging) rather than for the symmetry argument that was expected to decide it, and the silence
+  of an even mode turns out to be a property of the whole **scene** — a perfectly centred plate in a
+  room made asymmetric in the mode's own axis leaks 3.5e-02, which is a room re-exciting a plate's
+  *shape*, and one more thing no `R(ω)` can represent at all.
 - **Acoustic bore** *(wind leg, batch 1 of 3)* — the first **acoustic** resonator (`core/bore.py`):
   the 1D air column of a clarinet, a staggered pressure/volume-velocity leapfrog of Webster's horn
   equation. Energy-first — the trapezoidal `h/2` half-cell closes a rigid wall (no ghost stencil,

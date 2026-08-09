@@ -102,7 +102,9 @@ never the reverse. This keeps the physics portable to C++/Rust later without re-
   from a port is a Thévenin source `p̄ = p̄_free + R_room·q`, so the body's load closes in a single
   division and `1 + G·R_room ≥ 1` makes it unconditionally passive. What that buys over any `R(ω)`
   is a **delayed echo** — a one-port's impulse response is a decaying exponential and never a
-  reflection.
+  reflection. `SurfacePort` / `RoomLoadedPlate` (batch 3) is the same rung for a body with **area**:
+  the port becomes a matrix, and what that buys is a surface radiating by the *shape* of its motion
+  rather than by its net volume — the thing no lumped terminal has the length scale to express.
 - **Engine**: owns the timestep loop, parameter smoothing, and (eventually) the audio callback.
 
 ### 3.3 Real-time safety (for the later native port — note now, enforce later)
@@ -452,7 +454,7 @@ threads from here as the project matures; each bullet is a seed, not a spec.
 
 ### H. Spatial audio, radiation & room
 
-- **The 3-D air box** — *two batches shipped* as `core/airbox.py`. Batch 1 (`AirBox`): a
+- **The 3-D air box** — *three batches shipped* as `core/airbox.py`. Batch 1 (`AirBox`): a
   rigid/absorbing rectangular room on a Yee grid, energy-exact, with the tensor-cosine room modes as
   a machine-precision oracle and the free field reproducing radiation batch 1's monopole law —
   deliberately **read-out only**. Batch 2 (`RoomPort`, `RoomLoadedBody`): the **two-way port**, and
@@ -463,17 +465,32 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   one room** provided their ports are disjoint — which is exactly the condition making each scalar
   solve exact, hence the refusal of overlap. The port does **not** step the room; the caller does,
   once, after every port has solved, which is what keeps `StringBodyBridge` composition working.
-  Still deferred, in rough order of appetite: the **distributed area coupling** (a plate radiating
-  from every node rather than through one lumped port — the port becomes a matrix, not a scalar);
-  **PML** or higher-order absorbing boundaries, since a locally-reacting impedance wall is matched
-  at normal incidence only; **scattering objects and non-rectangular rooms** (staircasing in 3-D —
-  the membrane batch's lesson again); **moving ports**; and **viscothermal air absorption**.
+  Batch 3 (`SurfacePort`, `RoomLoadedPlate`): the **distributed area coupling** — a plate flush in a
+  wall radiating from *every node* rather than through one lumped terminal. The room's instantaneous
+  response over a node *set* is **diagonal** (measured exactly `0.00e+00` off-diagonal), so the load
+  is `TᵀRT` — constant, symmetric, PSD, sparse — and it folds into the plate's own `splu` with
+  nothing new solved; batch 2 is its rank-1 case. What that buys is a claim no one-port can even
+  state: a surface radiates by the **shape** of its motion, not by its net volume displacement, so
+  an even-index supported mode whose net volume velocity is *identically* zero — and which every
+  lumped tier in this repo therefore calls silent — radiates **5.6×** the (1,1) mode's energy.
+  Its finding is a warning about this project's own primary bug detector: **the conserved total is
+  structurally blind to a wrong coupling constant**, because each side's ledger telescopes against
+  whatever pressure *it* used, so the money test is `radiated == injected` plus a differential
+  per-node `R_j`, never the total. Batch 4 is named: the **interior two-sided (dipole) plate** — a
+  plate hanging *in* the room, radiating from both faces, an internal moving boundary rather than a
+  source. Still deferred beyond it, in rough order of appetite: **PML** or higher-order absorbing
+  boundaries, since a locally-reacting impedance wall is matched at normal incidence only;
+  **scattering objects and non-rectangular rooms** (staircasing in 3-D — the membrane batch's lesson
+  again); **moving ports**; and **viscothermal air absorption**.
 - **3D radiation modeling** with directivity, plus HRTF / ambisonics output — the box produces a
   pressure field; turning that into a binaural or B-format signal is a separate, non-physics batch.
 - **Room coupling:** place the modeled instrument inside a modeled acoustic space. Done for the
   lumped-port body: `string → bridge → RoomLoadedBody → AirBox` runs with the room loading the body
   back, and two instruments in one room hear each other at `c₀` with the arrival index measured.
-  What is left is the *distributed* body — a plate coupling to the air over its whole surface.
+  Done for the *distributed* body too, as of batch 3: `RoomLoadedPlate` couples a plate to the air
+  over its whole surface and `StringPlateBridge` accepts it as a body unchanged, so
+  `string → bridge → RoomLoadedPlate → AirBox` is a running chain. What is left is a plate the room
+  can reach from **both** sides — the interior dipole of batch 4.
 
 ### I. Ecosystem & product
 

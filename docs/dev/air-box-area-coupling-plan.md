@@ -1,9 +1,21 @@
 # The plate radiates from every node — the distributed area coupling (air-box batch 3)
 
-> **Status: PLANNED.** Every number in §6 and §7 below was measured on a prototype before a line of
-> core code was written — the house rule since batch 1. Eight traps were measured; **four changed
-> the design**, one of them changing what the batch's own money test *is*, one of them changing a
-> default in the API, and one of them is a correction to a claim batch 2 shipped in a comment.
+> **Status: BUILT (2026-08-09).** `SurfacePort` + `RoomLoadedPlate` shipped in
+> `physsynth/core/airbox.py`, with **zero edits** to `AirBox` itself, `plate.py`, `connection.py`,
+> `body.py`, `radiation.py` or `bore.py` — as §9 promised. Suite **1355** green, was 1287; the batch
+> adds **68 tests**, all of them in `tests/test_airbox_surface.py`, and that arithmetic closes
+> exactly (1355 − 1287 = 68), so nothing anywhere else moved.
+>
+> **§10 is the post-build record: what shipped, and the four plan claims the build measured
+> false.** Read it before trusting a number in the body of this document. Three of the four are in
+> §6.5 and §7.6.4, and they all failed in the same direction — the prototype measured them in a
+> configuration where the effect it was looking for was hidden. The sites are marked inline.
+>
+> Everything below this line is the **pre-build** prediction, kept as written. Every number in §6
+> and §7 was measured on a prototype before a line of core code existed — the house rule since
+> batch 1. Eight traps were measured; **four changed the design**, one of them changing what the
+> batch's own money test *is*, one of them changing a default in the API, and one of them is a
+> correction to a claim batch 2 shipped in a comment.
 >
 > The four that changed the design, in order of how much they cost to learn:
 >
@@ -16,7 +28,10 @@
 >    not conservation. It is `radiated == injected`, plus a differential per-node measurement of
 >    `R_j` read straight off the room.
 > 2. **Nearest-node area assignment is the wrong spreading operator — and the argument that decides
->    it is symmetry, not lumpiness** (§6.5). The coverage numbers came first (zero uncovered footprint
+>    it is symmetry, not lumpiness** (§6.5). **[CORRECTED by the build — §10.1 and §10.2. The
+>    conclusion stands and the reason inverts: symmetry does *not* discriminate the two operators,
+>    coverage does, and bilinear's equivariance is not offset-independent.]** The coverage numbers
+>    came first (zero uncovered footprint
 >    nodes at every grid ratio against nearest-node's 8 of 12; interior assigned-area spread exactly
 >    `0.000` at every refinement against 0.16–0.83 `h_air²` that never converges) and they are merely
 >    aesthetic. The decisive one: bilinear spreading is **reflection-equivariant** and nearest-node is
@@ -56,9 +71,9 @@
 > makes `T` entrywise non-negative on all six walls, so the per-face sign that no ledger can catch
 > never exists to be got wrong.
 >
-> And one thing the prototype learned by getting the *direction* of an effect wrong: with a **real
-> plate mode** driving the surface (§7.6.4, the assertion that puts a plate into §1's claim), the
-> finer mode radiates **more**, up to 7.1×, not less. A plate mode locks fineness to frequency, so the
+> And one thing the prototype learned by getting the *direction* of an effect wrong — **and then got
+> wrong itself, §10.3**: with a **real plate mode** driving the surface (§7.6.4, the assertion that
+> puts a plate into §1's claim), the finer mode radiates **more**, up to 7.1×, not less. A plate mode locks fineness to frequency, so the
 > higher mode completes ten times the cycles and its count beats the per-cycle suppression. The
 > fineness law belongs to the prescribed-velocity rig where `f` is a knob; the plate-mode oracle
 > asserts the exactly-zero net volume velocity and a nonzero power, and ranks nothing.
@@ -471,6 +486,12 @@ a partition-of-unity consequence — while nearest-node's spread is 0.16–0.83 
 converge with refinement**. That is a lumpy source at the grid scale for no reason. Bilinear costs
 ~10 lines and is what ships.
 
+> **[CORRECTED by the build — §10.2.]** "Exactly `h_air²` at every ratio" is too strong: it is exact
+> only when `h_air/h_surface` is an **integer**, and off an integer it ripples non-monotonically in
+> the ratio. Bilinear is still 10×–100× flatter than nearest at every refinement *and* converging
+> where nearest wanders, so what this paragraph concludes survives — but the residual ripple is the
+> coupling's accuracy floor and this batch shipped knowing its size.
+
 **And then a third measurement, which is the one that actually decides it.** Lumpiness is an
 aesthetic argument; symmetry is not. Bilinear spreading is **reflection-equivariant** — mirror the
 geometry and the four weights mirror with it — while nearest-node rounding is not, because ties and
@@ -492,6 +513,14 @@ closed by the one case where nearest-node *accidentally* becomes symmetric: refi
 `h_air = 2.75 cm` under a fixed `N=16` plate happens to align the assignment, the defect drops to
 **exactly `0.00e+00`**, and the leak drops with it to 8.2e-16. Nearest-node's symmetry is an accident
 of alignment; bilinear's is not.
+
+> **[CORRECTED by the build — §10.1 and §10.2.]** The table above and the two paragraphs that
+> follow it are the plan's biggest miss, and it is a miss of *reasoning*, not of conclusion. The
+> shipped measurement finds the coupled monopole leak does **not** discriminate the operators at all
+> (centred, an even mode stays at rounding under both), and bilinear's equivariance is **not**
+> offset-independent — it needs `S = 2·(surface centre)/h_air` integral. The operator that ships is
+> unchanged and the argument for it is now **coverage**; the leak's real determinant is the
+> **scene**, which is §7.6.4's subsection below and the thing this plan got right.
 
 **And bilinear's equivariance is genuinely offset-independent, which is worth stating because the
 obvious worry is that it is not.** Bilinear is mirror-equivariant only if the plate's mirror maps the
@@ -767,6 +796,11 @@ Consequences for the build, all three of which would otherwise be discovered by 
   represent that at all: a lumped port couples through a single scalar and has no shape for the room
   to push on. It belongs in the diagnose script as a figure, with the symmetric case beside it.
 
+> **[CORRECTED by the build — §10.3.]** The `radiated / (1,1)` column below is an artifact of the
+> air grid it was measured on, and its direction **inverts** once every mode is resolved. What the
+> paragraph concludes — *do not rank modes by radiated energy in this oracle* — is right, and now
+> for a second and better reason than the one it gives.
+
 **And the trap in this table, which is the reason it is a separate assertion from 7.6.2.** The
 radiated column goes the *wrong* way: the finer mode radiates **more**, up to 7.1× at (4,2). This does
 not contradict 7.6.2 — it is the reason 7.6.2 must hold frequency fixed. A plate mode locks spatial
@@ -787,6 +821,12 @@ coincidence law *is* visible — each pattern's ratio crosses unity in the inter
 1000–1500, 1500–2200. Four patterns, four brackets, one closed form. **Assert the bracket, never a
 located knee** — locating it needs a room big enough and a grid fine enough that the number stops
 being a property of the patch. Absolute radiated power is a diagnose-script figure only (§8).
+
+> **[REFINED by the build — §10.4.]** "Assert the bracket" was right for a better reason than this
+> paragraph gives: plotted against `f/f_c` the patterns' curves **collapse**, and each one *peaks*
+> at `f/f_c = 1`. The unity crossing sits on the rising flank rather than at the peak, and the
+> common `[0.70, 0.85] f_c` bracket the diagnose script reports is exactly **one sweep interval
+> wide** — as tight as the frequency grid and no tighter.
 
 Rig constraint worth writing down: the pattern period must not exceed the patch node count, or the
 projection annihilates the pattern and the rms normalisation divides by zero (a `NaN`, met once).
@@ -920,3 +960,168 @@ review additions at ~0.6 s combined, the headline is still the only line item wi
   level, which is a thing no one-port can do and reads as a result rather than an error.
 - Docs: HANDOFF §12H updated (batch 3 shipped, the two-sided dipole plate named as batch 4), this
   plan's status block rewritten with what the build changed, and the memory mirror synced.
+
+---
+
+## 10. What the build changed — the post-build record
+
+Everything above this line is the pre-build prediction. This section is what the shipped code
+measured, and it is the authority wherever the two disagree. The four corrections below are marked
+inline at their sites.
+
+`SurfacePort` and `RoomLoadedPlate` shipped in `physsynth/core/airbox.py` exactly as §9 scoped them
+— **zero edits** to `AirBox`, `plate.py`, `connection.py`, `body.py`, `radiation.py` or `bore.py`.
+The one structural surprise was pleasant: `AirBox.step()` is *linear* in the port weights, so a
+`SurfacePort` passes the per-node volume-velocity **vector** as `weights` with `U = 1.0` and both
+the injection and the read-back come out right without the room knowing a surface exists. Batch 2's
+`_pending_ports` type comment ("normalized") was relaxed to say so — that, and this document, and
+`tests/test_airbox_port.py`'s header claim (§10.5), were the only edits outside `airbox.py`.
+
+The batch's headline claims all held as written: the off-diagonal of the room's instantaneous
+response is **exactly `0.00e+00`**, the load `TᵀRT` folds into the plate's own `splu` with nothing
+new solved, an even-index supported mode holds `|U|/A` at rounding for a whole run while radiating
+**5.6×** the (1,1) mode's energy, and `|radiated − injected|` is **exactly `0.00e+00`** where a
+wrong `R_j` puts it at 18 % of the channel with the conserved total still green (§6.1, the finding
+this batch exists to have made).
+
+### 10.1 Bilinear's equivariance is *not* offset-independent — it needs `S` integral
+
+§6.5's "9.0e-16 at every one of eight offsets, flat, no periodicity" does not reproduce. Measured on
+the shipped code two independent ways — the defect of `TᵀRT` under the surface's own mirror
+permutation, and the defect of `T` itself under that mirror composed with the air grid's — bilinear
+is exactly equivariant when `S = 2·(surface centre)/h_air` is an **integer** (defect **1.0e-15**)
+and fails smoothly otherwise: **1.6e-01 … 3.8e-01** across sixteen offsets spanning one air cell,
+peaking at the half-cell. The algebra agrees, which is why this is a finding rather than a doubt:
+the mirror sends node `i` to cell fraction `frac(S − t_i)`, which equals the `1 − f_i` that reverses
+a bilinear weight pair only for integral `S`. The plan's eight-offset sweep evidently sampled a
+period it could not see.
+
+Nearest-node's failure is patchier and the *way* it fails is the tell: exact at an **even** `S`
+(measured `0.00e+00`), broken at an **odd** one (5.2e-01), because there the surface's centre node
+lands on a rounding tie that round-half-to-even resolves the same way from both directions. So
+nearest-node's symmetry is an accident of alignment *and of the rounding rule*; bilinear's is a
+property of the geometry, holding on a stateable condition rather than everywhere.
+
+**This strengthens the centred default rather than weakening it.** Centring is now load-bearing
+**twice** — it is what makes `S` integral and the load equivariant at all, on top of §7.6.4's scene
+symmetry — and the two reasons are independent.
+
+### 10.2 The symmetry argument does not discriminate the operators at all — coverage does
+
+§6.5's decisive third measurement is the one that dissolved. With the surface **centred**, an even
+plate mode's `|U|/A` stays at rounding (1.3e-14 … 3.3e-13 over 200 steps) under **both** spreadings
+at `N_plate = 8, 16, 24`. The plan's "18 % leak under nearest-node, tracking the load defect
+one-for-one across fourteen orders of magnitude" was measured with the plate somewhere that made
+the *scene* asymmetric, and it was the scene doing the leaking. What actually breaks the zero, both
+measured on the shipped code: **2.3e-01** for a plate off-centre by `h_air/3`, and **7.4e-02** for a
+perfectly centred plate in a room made asymmetric in the mode's own axis — against **7.2e-14**
+centred and symmetric.
+
+So bilinear ships for the argument §6.5 called merely aesthetic. It leaves **0** unfed footprint
+nodes at every ratio where nearest leaves up to 8 of 12, and its interior assignment is 10×–100×
+flatter *and converging* — **0.082, 0.062, 0.051, 0.031** over four refinements against nearest's
+**0.83, 1.03, 0.64, 0.46**, which wander.
+
+And the flatness claim needs its own correction, because "partition of unity" promises more than it
+delivers. Bilinear's interior assignment is `h_air²` **exactly** (5e-16 … 2e-15) only when
+`h_air/h_surface` is an **integer**. Off an integer it ripples, and not monotonically in the ratio:
+2.93 gives 0.0077 while the *finer* 4.40 gives 0.0207. Poisson summation on the periodised hat says
+why — the `k`-th coefficient is `sinc²(πk·h_air/h_surface)`, vanishing exactly when
+`k·h_air/h_surface` is a nonzero integer, so **which** harmonics cancel is the ratio's arithmetic
+rather than its size. The residual is a small ripple in the source's amplitude across the surface,
+it shrinks under refinement, and it is **this coupling's accuracy floor** — worth knowing before
+reading a radiated magnitude as physics.
+
+### 10.3 The plate-mode ranking inverts, and the binding constraint is the air grid's *space* axis
+
+§7.6.4's `radiated / (1,1)` column — and its "the finer mode radiates **more**, up to 7.1×" — is an
+artifact of the grid it was measured on. §7.6.4 attributed the untrustworthy rows to the **plate's
+time** axis (modes above `fs/4`). Measured across a 4× air-grid refinement at fixed physical room
+and duration, the binding constraint is the **air grid's space** axis: `(4,2)` radiates **0.018,
+0.870, 0.9998** of its energy at `h_air` = 82.5, 41.3, 20.6 mm.
+
+That refinement sweep cannot by itself separate the two axes, because `h_air = c₀√3/(CFL·fs)` ties
+them: raising `fs` refines the air grid *and* lifts Nyquist in lockstep. The discriminator is to pin
+`h_air` at the coarsest 82.5 mm and reach the same three sample rates by lowering the Courant
+fraction instead (0.900, 0.450, 0.225 — all legal). Time resolution improves 4×; space does not
+move. Measured:
+
+| mode | space **and** time refined | time alone (`h_air` pinned) |
+|---|---|---|
+| (4,2) | 0.0181 → 0.8695 → 0.9998 | 0.0181 → 0.0155 → 0.0228 |
+| (3,1) | 0.8396 → 0.9993 → 0.9999 | 0.8396 → 0.7616 → 0.7893 |
+
+Four times the time resolution moves `(4,2)` not at all; it recovers only when the space axis moves.
+Two honesties the diagnose script prints beside the table: the control runs at a different Courant
+fraction and therefore different numerical dispersion, which does not plausibly account for 50× but
+is not nothing; and the correction rests on the `(4,2)` row with `(3,1)` as weak support — the other
+four modes sit flat at ~1.0000, so this is one measurement repeated, not six independent
+confirmations.
+
+**Once every mode is resolved the ranking inverts.** Per cycle of the mode's own oscillation at
+equal rms velocity: **1.000, 0.448, 0.448, 0.260, 0.213, 0.091** — strictly decreasing. That is
+§7.6.2's fineness law showing up on *real plate modes*, and it means §7.6.4's ranking column was
+measuring the **cycle count** over a fixed window. The plan's instruction — the plate-mode oracle
+asserts the exact zero and a nonzero power and **ranks nothing** — was right, and is now right for
+a second reason.
+
+**What survives untouched is the zero.** Peak `|U|/A` sits at 2e-15 … 3e-14 for every even mode at
+every refinement level, exactly as a symmetry statement should. The claim that is resolution-free is
+resolution-free; the claim that is not, was not.
+
+### 10.4 Coincidence is a scaling collapse, and the bracket is one sweep interval wide
+
+§7.6's refusal to assert a located knee was right, for a better reason than it gave. Driven at
+prescribed velocity, power falls **strictly** with fineness below every `f_c` — 0.564, 0.159, 0.070,
+0.038, 0.015 of the piston at 150 Hz, strict at 100 and 250 Hz too. At fixed frequency the five
+patterns span **39×**; plotted against `f/f_c` the same points **collapse to within 1.5×–5.5×**, and
+every curve **peaks at `f/f_c = 1`**. So the coincidence law locates the *peak*; the unity crossing
+sits on the rising flank, in the same `[0.70, 0.85] f_c` for every pattern that crosses, across a
+factor of three in fineness. That bracket is **one sweep interval wide** — exactly as tight as the
+frequency grid and no tighter, which the script says beside it.
+
+Three rig facts measured rather than assumed, each of which would otherwise have produced a
+confident wrong figure:
+
+- **Equal rms *velocity* is what makes two modes comparable.** Equal rms displacement puts 4700×
+  more energy in the finest mode and ranks amplitudes instead of modes.
+- **A lossy room is what gives "did it radiate" a one-way answer.** A rigid box hands the energy
+  back, and a fixed-window fraction then wanders.
+- **The drive needs a raised-cosine ramp.** A hard start radiates a click larger than the
+  steady-state power at the fine patterns.
+
+And the resolvability floor is the **first** thing the diagnose script prints, because a pattern the
+air grid cannot carry aliases, and an aliased point on a monotonicity curve looks exactly like a
+clean result. All five shipped patterns clear `λ_p ≥ 4 h_air`.
+
+### 10.5 Smaller things the build settled
+
+- **The load *does* thicken the factorization**, against §2's expectation that it would not: LU fill
+  **1.55× / 3.50× / 5.29×** at `h_plate/h_air` = 0.45 / 0.23 / 0.15. `lu_nnz` is exposed because the
+  stored `nnz` (2.9× / 8.7× / 18.2×) is **not** what `splu` pays.
+- **§6.8's guard errs safe, and the sign is the claim, not the size.** The bridge margin is
+  *bit-identical* loaded versus bare (the load enters `A`, never `G0`), and adding the load block to
+  `G0` anyway *reduces* `(G0⁻¹)_dp` — ratio 0.500 supported, 0.995 free.
+- **The radiated channel is a property of the motion, not of the coupling.** A struck bump gives
+  0.002 of `E₀` (fine patterns radiate badly — the short circuit working), the free plate's
+  **piston** gives 0.9974. The conservation assertion ships on the piston config so it is not
+  vacuous.
+- **The face RIM is refused rather than clipped.** A rim node touches a *second* wall, carrying half
+  `W` and the **sum** of two admittances, so `R_j` stops being uniform and `TᵀRT = R·TᵀT` — the
+  whole equivariance argument — stops holding. Clipping would keep every ledger green with the
+  geometry quietly wrong.
+- **Reductions:** `net_area` is `((N−1)/N)²·Lx·Ly` supported (dead rim nodes displace nothing) and
+  exactly `Lx·Ly` free, as §6.6 predicted. `T = 0` reduces to a bare `Plate` **bit-identically**
+  (structural zeros eliminated before factoring) — that is the reduction available, since `R = 0`
+  happens only on a refused open face.
+- **`tests/test_airbox_port.py`'s header was corrected**, alongside `RoomPort.R_room`'s docstring:
+  both said omitting the `1/(1+β)` factor "leaks ~2 %". Nothing leaks. The 1.9e-2 was the **ledger
+  gap** (§6.1), and the total drifts *less* with the factor dropped than with it right.
+
+### 10.6 What comes next
+
+**Batch 4 is the interior two-sided (dipole) plate** — a plate hanging *in* the room rather than
+flush in a wall, radiating from both faces, which is an internal moving boundary rather than a
+source and therefore a genuinely different object from anything shipped here. §3 named it and the
+scope it defers is unchanged: PML or higher-order absorbing boundaries, scattering objects and
+non-rectangular rooms, moving ports, and viscothermal air absorption.
