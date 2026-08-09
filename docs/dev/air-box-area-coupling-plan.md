@@ -734,6 +734,12 @@ Measured on a real coupled `RoomLoadedPlate` (N=16, equal rms surface velocity, 
 | (3,1) | 2.79e-01 | 2.56e-01 | 2.763 | 3491 | near Nyquist |
 | **(4,2)** | **4.75e-18** | **4.38e-15** | 7.100 | 6982 | **above Nyquist** |
 
+> **[CORRECTED by the build — §10.3.]** The `radiated / (1,1)` column of this table is an artifact
+> of the air grid it was measured on, and its direction **inverts** once every mode is resolved (per
+> cycle at equal rms velocity: 1.000, 0.448, 0.448, 0.260, 0.213, 0.091). The `|U|/A` columns —
+> the zero, which is a symmetry statement — hold at every refinement level, exactly as the paragraph
+> below predicts they would.
+
 The frequency column is the continuum closed form `f = κπ((m/Lx)² + (n/Ly)²)/2`, and it is there to
 mark the band, not as a measured quantity — at `fs = 8000` only the first three rows sit in the
 trustworthy `f < fs/4`, `(3,1)` is up against Nyquist and `(4,2)`'s 6982 Hz is *not attainable* at
@@ -796,10 +802,10 @@ Consequences for the build, all three of which would otherwise be discovered by 
   represent that at all: a lumped port couples through a single scalar and has no shape for the room
   to push on. It belongs in the diagnose script as a figure, with the symmetric case beside it.
 
-> **[CORRECTED by the build — §10.3.]** The `radiated / (1,1)` column below is an artifact of the
-> air grid it was measured on, and its direction **inverts** once every mode is resolved. What the
-> paragraph concludes — *do not rank modes by radiated energy in this oracle* — is right, and now
-> for a second and better reason than the one it gives.
+> **[CORRECTED by the build — §10.3.]** The `radiated / (1,1)` column of the table above is an
+> artifact of the air grid it was measured on, and its direction **inverts** once every mode is
+> resolved. What the paragraph below concludes — *do not rank modes by radiated energy in this
+> oracle* — is right, and now for a second and better reason than the one it gives.
 
 **And the trap in this table, which is the reason it is a separate assertion from 7.6.2.** The
 radiated column goes the *wrong* way: the finer mode radiates **more**, up to 7.1× at (4,2). This does
