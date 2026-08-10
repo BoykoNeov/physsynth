@@ -2615,6 +2615,152 @@ recorded because the wrong version was one edit from shipping:
   not a measurement until it is normalised against something in the same run that did not change —
   which is the airbox lesson above, one more time, in a costume that looks like a stopwatch.*
 
+### Batch 18 (PLANNED) — the room: the first field with a SHAPE in three dimensions
+
+**The legality check first, because this document forbids inferring a batch from itself.** The
+standing rule is "if a new viewer batch is wanted it needs a new model or a new **capability**
+first," and batch 17 named this very batch's blocker: the 3-D air box "needs a 3-D field type the
+frontend does not have, and it is its own batch." That capability is what this batch builds. The
+core side has been ready since 2026-08-10 — `AirBox` and its four batches ([[air-box-state]]) are
+the one remaining built-but-unshown core family, and the *only* one.
+
+**Everything below is measured** (`M:\claud_projects\temp\airbox-viewer-probe\`, probes 1–3),
+before a line of the batch was written. Four plan claims died in those probes; they are recorded
+here with the numbers that killed them, because in this project a probe that only confirms is a
+probe that was aimed at the wrong thing.
+
+#### The gate: what a 3-D room costs, which is not what 1-D and 2-D intuition says
+
+- **The CFL runs the WRONG WAY in 3-D, and the cost is `h⁻⁴`, not `h⁻³`.** `λ = c₀k/h ≤ 1/√3`
+  means `fs ≥ c₀√3/h`, so a **coarser** grid forces a **higher** sample rate: refining `h` buys
+  `h⁻³` nodes *and* `h⁻¹` steps. Measured on a fixed room and duration, halving `h` twice:
+  work `3.49e5 → 4.94e6 → 7.59e7`, i.e. **×14.2 then ×15.4** against the predicted 16. Every 1-D
+  and 2-D model in this viewer has a `WORK_MAX` derived from an `h⁻²`/`h⁻³` instinct; this one
+  cannot borrow it. Measured throughput is **~5e7 node-steps/s** at ≥1e5 nodes (1e8 at 1e4 — the
+  large grids are memory-bound), and `AIRBOX_WORK_MAX` comes from that, the membrane/plate/VK way.
+- **The shipped viewer room is `(1.2, 0.9, 0.8)` m at `h = 0.03`** → `N = (40, 30, 27)`,
+  35 588 nodes, `fs = 22 003 Hz`, **~7.4 s wall per simulated second** bare. The coupled port chain
+  measures **12–16 s/s**, which is the same order as the shipped `vk` and `platebody` renders.
+- **`λ = 0.9/√3` is the default, NOT the ceiling.** `λ = 1/√3` makes grid-diagonal modes exact —
+  tempting, since it would turn `mode_frequency` into a machine-precision oracle worth printing —
+  but it is also where the corner mode goes **defective**, so a flat energy there is not a
+  stability certificate ([[air-box-state]]). The claim below turns out not to need it (see the
+  λ-independence measurement), so the ceiling stays a refusal rather than a setting.
+
+#### DIED IN PROBING: the two shapes this batch was going to have
+
+- **DIED — "the echo and the null live in the same run."** They cannot. The directivity rig needs
+  the first reflection to arrive *after* the measurement window; the echo claim needs the
+  reflection to **be** the point. Opposite requirements, so opposite rigs — which is what actually
+  forces this batch's shape, and it was an assumption, not a measurement, until probe 2.
+- **DIED — the `object` regime (a coupled `RoomSuspendedPlate`) as the carrier of the null.** It is
+  the most expensive option in the batch (12–16 s/s) buying the **weakest** claim. The 85× null is
+  a **prescribed-velocity** figure for a documented reason (`RoomSuspendedPlate.radiated_energy`:
+  "a radiation figure needs a prescribed-velocity rig"), and a *free* plate's fundamental is the
+  **saddle/twist** ([[free-plate-state]]) — a quadrupole, whose arc is not the dipole's. Coupling
+  the plate and printing 85× beside it would have been a number measured on one rig and captioned
+  with another's. Cut.
+- **DIED — directivity as an audio-bearing regime.** The rig is a **5 m cube** (1 030 301 nodes) —
+  it has to be, to window the burst before the first image. A 200-step burst costs a measured
+  **4.1 s per arm** (~12 s for all three, *cheaper than the juari sweep's 37 s*), but 0.3 s of
+  audio in that same room is `3.7e9` node-steps ≈ **74 s**. So directivity can never carry audio.
+  It ships as a **decoupled fixed-cost panel** with its own rig parameters printed beside it —
+  which is exactly the juari precedent ([[juari-state]]: the sweep is a canonical duration
+  *decoupled* from audio), arrived at here from the opposite direction.
+- **DIED — my own first echo probe, which never tested its claim.** The mic was axis-aligned, so
+  the direct path and the Manhattan path were the *same* 0.600 m and the measurement could not
+  distinguish them. The claim was only actually tested after the mic moved off-axis. *A probe whose
+  geometry makes two candidate answers equal has measured neither.*
+
+#### The shape that survives: one audio run + one decoupled panel
+
+Model key **`airbox`** (batch 13/15/17's precedent: a different coupling class earns a key).
+All-wrapper as always — `physsynth/core` is untouched, and the core-dep allowlist guard is re-run
+because `airbox` has never been imported by the web tier before.
+
+**The audio-bearing run is `string → bridge → RoomLoadedBody → AirBox`, not a bare room.** A bare
+read-out has exactly **one** ledger and therefore nothing to be blind to, which makes for a weak
+honesty gate on a batch whose real risk is the slicer. `RoomPort` is a rank-1 scalar solve that
+costs almost nothing over the bare room, `RoomLoadedBody` delegates every `ModalBody` accessor so
+batch 12's machinery is reused unchanged, and it buys a genuine **cross-ledger** test.
+
+#### The claim: the lattice light cone — an exact integer, and λ-independent
+
+The headline is an **index**, never a magnitude — batch 2's own finding is that the room
+contaminated the port's measured size by more than the effect, and the viewer room is small.
+
+On a 7-point Yee stencil the numerical domain of dependence after `n` steps is
+`|di| + |dj| + |dk| ≤ n` **cells**, so the first nonzero at a mic sits on the **Manhattan distance
+in cells** — earlier than the physical wavefront, and independent of `λ`. Measured, off-axis mic at
+cell offset `(21, 10, 10)`, where the three candidate answers are cleanly separated:
+
+| | Euclidean | physical Manhattan | lattice cone (L1 cells) | **measured first nonzero** |
+|---|---|---|---|---|
+| `λ = 0.9/√3` | 48.72 steps | 78.90 steps | 41 | **41** |
+| `λ = 1/√3`   | 43.85 steps | 71.01 steps | 41 | **41** |
+
+plus an axis-aligned control (cone 21, measured **21**, both λ) — **4/4 exact**. The integer does
+not move when `λ` does, which is why the default can sit safely below the ceiling *and* why no λ
+caveat belongs in the panel text. The detector is exact-zero-vs-nonzero on a field with zero
+initial data, so it is not a threshold choice: at `1e-3` of peak the same mic reads 43 and at 2 %
+it reads 46, and **those** numbers do move with λ. The panel prints the cone index as the claim and
+the amplitude-threshold arrivals beside it as what they are — the physical wavefront, arriving
+later than its own precursor.
+
+#### The money test is the CROSS-LEDGER residual, not the room's drift
+
+Third and fourth customers for this lesson already exist ([[air-box-state]] batches 3 and 4;
+[[web-viewer-state]] b17). `AirBox.energy()` = `acoustic + dissipated − injected` reads flat at
+~1e-21 in every probe run above **with a wrong coupling constant**, because each side's ledger
+telescopes against whatever pressure *it* used. The gate is therefore
+`|body.radiated_energy − room.injected|` against the room's own post-closure pressure, **at two
+timesteps**, with the scene total shipped as a sanity line and explicitly *not* as the evidence.
+
+#### The new capability: `dims: 3` is a SLICE SET, and the doc says so plainly
+
+Three named orthogonal planes per frame (`xy`, `xz`, `yz`) through a slice point, each decoded by
+the existing `drawHeatmap` path. **Not volumetric, and the payload field is named so nobody reads
+it as volumetric.** A 32³ volume × 300 frames is ~10M floats — dead on this document's own
+JSON-size trap. Measured: 3 slices × 300 frames at the 64-cap decimation is **5.26 MB base64**,
+comparable to a shipped membrane payload. The slice point is a **server-side** slider (a re-render);
+a client-side movable slice would require shipping the volume, which is the thing that does not fit.
+
+**The colour map is a measurement, not a taste.** A wavefront's **leading edge** is the faintest
+part of the frame and the thing the viewer must see. Measured mid-flight, as a fraction of frame
+max: median **2.2e-3**, faintest live decile **3.0e-7** early, rising to 2.7e-2 later, while frame
+max itself swings ~2× within the run on top of a **385×** first-frame-to-peak spread. So
+global-linear renders the early frames black and per-frame-linear hides the decay: **a compressed
+signed map is forced**, and *which* map ships is printed in the payload rather than left implicit
+(the batch-3 scar: five plan claims died because the prototype measured where the effect was
+hidden).
+
+#### Pre-flagged traps
+
+- **The fieldset beats the slider.** `data-show` on the enclosing `<fieldset>` wins over the
+  slider's own, and `buildSliders` has **no visibility filter**, so a control can be *built and
+  shipped* yet unreachable — live twice already (b15, b17, by opposite mechanisms). Add `airbox`
+  to every enclosing fieldset, not just the new sliders.
+- **The backend does not hot-reload.** Restart it between backend edits when verifying in Chrome,
+  and use a **session** marker for stale-tab detection — a version marker cannot catch leftover
+  Chrome (b16).
+- **`h` is snapped, and the snap is the resolution.** `N_d = round(L_d/h)`, so the room the user
+  gets is `L_actual`; report it, never silently resample it away (the juari precedent).
+- **Do not print a `t50`.** It is a magnitude, and at viewer room size the room contaminates it.
+- **Never quote probe 2's `image` times for the 2.0/3.0 m rows** — the monkeypatch did not take
+  (`free_room(..., room_m=FREE_ROOM)` binds the default at def time), so all three arcs ran the 5 m
+  cube. The 49 / 72.4 / **88.7×** series is therefore a clean pure **arc-radius** series (r = 0.70 /
+  1.05 / 1.20 m) and nothing else; the null is a far-field measure and the radius is load-bearing.
+- Ruff ≤100 chars in the first draft; `addopts` already carries `-q`, so **never pass `-q`**.
+
+#### Touch list
+
+`web/serialize.py` (constants + `_build_payload_airbox` + the dispatch at ~857) ·
+`web/static/index.html` (option, sliders, **and every enclosing fieldset**) · `web/static/app.js`
+(`MODEL_RANGES` + `_default`, the viz dispatch at ~2050, the energy branch at ~2392/2538,
+diagnostics at ~2908, the new slice-set draw fn) · `tests/test_web_backend.py` (cross-ledger
+residual through the wrapper, frame bookkeeping, slice decimation, `λ > 1/√3` → a clean error
+payload, not a 500/NaN) · `scripts/verify_web_headless.py` (add the `airbox` case).
+
 ### Later batches (rough map — not firm)
 
 - **Body / radiation** — the modal body + radiation read-out is **batch 12**; `StringPlateBridge`
@@ -2652,6 +2798,12 @@ model class, and **batch 17 (above) surfaces it** — so the rule stands and thi
 it looks like. The same rule still governs what comes after: the 3-D air box is the one remaining
 built-but-unshown core family, and it needs a **new frontend capability** (a 3-D field type) before
 it is a batch, which is exactly the bar this sentence sets.*
+
+*Amended 2026-08-10 (second time, same day): **batch 18 (above) is that capability**, and it clears
+the bar the sentence directly above sets rather than dodging it — the 3-D field type is built as
+part of the batch, and it ships as a **slice set**, not as volumetric rendering, for a measured
+payload reason. With it the built-but-unshown gap closes a second time and the fork's arms reduce
+to **Phase 5 (the real-time port)** and **a §12 thread**.*
 
 ## Tests — `tests/test_web_backend.py` (web wrapper, not core; keep core count stable)
 
