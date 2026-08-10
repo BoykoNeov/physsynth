@@ -1961,6 +1961,143 @@ class SurfacePort(_PatchPort):
         self._queued_at = self.room.n
 
 
+def _require_same_rate(model, room: AirBox, label: str) -> None:
+    """Refuse a resonator whose timestep is not the room's, naming it as the caller knows it.
+
+    The port's Thevenin solve is a **single timestep shared by both** — there is no resampling
+    anywhere in the coupling — so this is a refusal, not a warning. ``label`` is the word the
+    message uses for the model ("plate", "membrane"): an error naming the wrong model is worse
+    than none.
+    """
+    if not np.isclose(model.k, room.k, rtol=1e-12, atol=0.0):
+        raise ValueError(
+            f"sample-rate mismatch: {label} fs = {model.fs} but room fs = {room.fs}. The port's "
+            "solve is a single timestep shared by both, so they must agree exactly."
+        )
+
+
+class _PlateSurface:
+    """The seam between a room port and the grid resonator it loads — the :class:`Plate` side.
+
+    Batches 3 and 4 each reassemble the plate's system matrix and its theta-scheme RHS, in two
+    boundary branches: four copies of one piece of arithmetic, and every further loaded resonator
+    doubles them again. This is that arithmetic, extracted once, as six members — everything a
+    loaded surface has to provide and nothing about the room:
+
+    ==================  ====================================================================
+    ``surface()``       ``(coords, areas)`` — the live nodes the port spreads onto, in the
+                        model's own C-order over ``mask``, so ``T``'s columns line up with
+                        the state vector by construction
+    ``denominator``     the per-node mass ``rho_s`` that the load and ``f_ext`` divide by
+    ``a_bare()``        the **unloaded** system matrix, before ``(k/2 rho_s) T^T R T``
+    ``u_prev``          ``u^{n-1}`` — read once per step, **before** :meth:`commit`
+    ``rhs(f_ext)``      the force-free RHS plus the ``f_ext`` path: everything the room does
+                        not touch
+    ``commit(u_next)``  roll the history and refresh whatever the model caches
+    ==================  ====================================================================
+
+    The extraction lives **inside this module**, never in ``plate.py``: the room may depend on the
+    resonators and not the reverse (the headless-core rule), and "``plate.py`` untouched" is a
+    claim batches 3 and 4 both make and keep.
+
+    **``u_prev`` is a live read, not a snapshot, and the caller must take it before**
+    :meth:`commit`. The wrapper needs ``u^{n-1}`` in three places — inside :meth:`rhs`, in the
+    load's ``(k/2 rho_s) (T^T R T) u^{n-1}`` term, and in the centered velocity
+    ``(u^{n+1} - u^{n-1}) / 2k`` — and after :meth:`commit` this property returns ``u^n`` instead.
+    Reading it late is the one way this extraction can go wrong and still look plausible: the
+    scheme stays stable and each ledger still telescopes against the pressure it used, so only the
+    physics is off by one time level and nothing green turns red.
+
+    **Not a base class, deliberately.** There is one implementation today; a second arrives with
+    its first caller, and what the two genuinely share is better measured then than guessed now.
+    :meth:`commit`'s ``_accel`` write in particular is the *plate's*, not the seam's — a two-level
+    roll that caches no acceleration would not want it.
+    """
+
+    def __init__(self, plate: Plate) -> None:
+        self.model = plate
+        self.k = plate.k
+        if plate.boundary == "supported":
+            self.areas = np.full(plate.n_live, plate.h * plate.h)
+            # Per-node mass rho_s h^2: Plate.step divides f_ext by exactly this.
+            self.denominator = plate.rho * plate.h * plate.h
+        else:
+            self.areas = plate.w.copy()  # lumped cell areas (h^2, h^2/2, h^2/4) -- no dead rim
+            self.denominator = plate.rho  # W lives inside A and is divided out by the solve
+
+    def surface(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """``(coords, areas)`` — live-node positions (m) and their areas (m^2), in model order."""
+        p = self.model
+        coords = np.column_stack((p.X[p.mask], p.Y[p.mask]))
+        return coords, self.areas
+
+    def a_bare(self) -> sparse.spmatrix:
+        """The unloaded system matrix: ``(1 + sigma k) I + theta k^2 kappa^2 B``, or its ``W`` form.
+
+        Reassembled here rather than reached into, because ``plate.py`` stays untouched — which is
+        exactly why the coupled cross-check at two timesteps exists to pin it.
+        """
+        p = self.model
+        sk = p.sigma * p.k
+        coeff = p.theta * p.k * p.k * p.kappa * p.kappa
+        if p.boundary == "supported":
+            return (1.0 + sk) * sparse.identity(p.n_live, format="csc") + coeff * p.B
+        return (1.0 + sk) * p.W + coeff * p.K
+
+    @property
+    def u_prev(self) -> NDArray[np.float64]:
+        """``u^{n-1}`` — read once per step, before :meth:`commit` (see the class docstring)."""
+        return self.model.u_prev
+
+    def rhs(self, f_ext: NDArray[np.float64] | None) -> NDArray[np.float64]:
+        """The force-free theta-scheme RHS plus the ``f_ext`` path — the room's terms are not here.
+
+        Byte-for-byte :meth:`~physsynth.core.plate.Plate.step`'s own arithmetic, in its own operand
+        order, so a zero air load is a clean reduction to the bare plate and a transcription slip
+        would show up against the model itself.
+        """
+        p = self.model
+        sk = p.sigma * self.k
+        k2 = self.k * self.k
+        kappa2 = p.kappa * p.kappa
+        u_nm1 = p.u_prev
+        if p.boundary == "supported":
+            rhs = (
+                2.0 * p.u
+                + (1.0 - 2.0 * p.theta) * k2 * (-kappa2 * (p.B @ p.u))
+                - u_nm1
+                + p.theta * k2 * (-kappa2 * (p.B @ u_nm1))
+                + sk * u_nm1
+            )
+            if f_ext is not None:
+                rhs = rhs + k2 * f_ext / (p.rho * p.h * p.h)
+        else:
+            rhs = (
+                p.W @ (2.0 * p.u - u_nm1)
+                + (1.0 - 2.0 * p.theta) * k2 * (-kappa2 * (p.K @ p.u))
+                + p.theta * k2 * (-kappa2 * (p.K @ u_nm1))
+                + sk * (p.W @ u_nm1)
+            )
+            if f_ext is not None:
+                rhs = rhs + k2 * f_ext / p.rho
+        return rhs
+
+    def commit(self, u_next: NDArray[np.float64]) -> None:
+        """Roll ``u^{n-1} <- u^n <- u^{n+1}`` and refresh the plate's acceleration cache.
+
+        ``_accel`` needs no post-solve correction, deliberately: the load was **inside** the solve,
+        so the second difference already carries it and
+        :meth:`~physsynth.core.plate.Plate.pressure` is right for free. (:class:`RoomLoadedBody`,
+        whose rank-1 load lands *after* its solve, does need the refresh — the asymmetry is in the
+        tier, not in the model.)
+        """
+        p = self.model
+        p._accel = (u_next - 2.0 * p.u + p.u_prev) / (self.k * self.k)
+        p.u_prev = p.u
+        p.u = u_next
+        p.n += 1
+
+
 class RoomLoadedPlate:
     """A :class:`~physsynth.core.plate.Plate` mounted flush in a wall and loaded by the room over
     its **whole surface** — the distributed area coupling (batch 3).
@@ -2123,25 +2260,16 @@ class RoomLoadedPlate:
         spreading: Spreading = "bilinear",
     ) -> None:
         self.plate = plate  # FIRST: any attribute miss before this makes __getattr__ recurse
-        if not np.isclose(plate.k, room.k, rtol=1e-12, atol=0.0):
-            raise ValueError(
-                f"sample-rate mismatch: plate fs = {plate.fs} but room fs = {room.fs}. The port's "
-                "solve is a single timestep shared by both, so they must agree exactly."
-            )
+        _require_same_rate(plate, room, "plate")
         self.room = room
         self.k = plate.k
 
-        # The surface protocol: live-node coordinates and their areas. The live ordering is C-order
-        # over `mask` (operators2d's contract), which is exactly what `X[mask]` yields -- so the
-        # columns of T line up with the plate's own state vector by construction.
-        coords = np.column_stack((plate.X[plate.mask], plate.Y[plate.mask]))
-        if plate.boundary == "supported":
-            areas = np.full(plate.n_live, plate.h * plate.h)
-            # Per-node mass rho_s h^2: Plate.step divides f_ext by exactly this.
-            self._denominator = plate.rho * plate.h * plate.h
-        else:
-            areas = plate.w.copy()  # lumped cell areas (h^2, h^2/2, h^2/4) -- no dead rim
-            self._denominator = plate.rho  # W lives inside A and is divided out by the solve
+        # The surface protocol (see _PlateSurface): live-node coordinates and their areas. The live
+        # ordering is C-order over `mask` (operators2d's contract), which is exactly what `X[mask]`
+        # yields -- so the columns of T line up with the plate's own state vector by construction.
+        self._surface = _PlateSurface(plate)
+        coords, areas = self._surface.surface()
+        self._denominator = self._surface.denominator
         self.port = SurfacePort(
             room=room,
             face=face,
@@ -2152,14 +2280,9 @@ class RoomLoadedPlate:
         )
 
         # A_loaded = A + (k / 2 rho_s) T^T R T -- SPD (PSD added to SPD), factored ONCE. The plate's
-        # own A is reassembled here rather than reached into, because plate.py stays untouched; the
-        # dense coupled cross-check at two timesteps is what pins that this reassembly is right.
-        sk = plate.sigma * plate.k
-        coeff = plate.theta * plate.k * plate.k * plate.kappa * plate.kappa
-        if plate.boundary == "supported":
-            a_bare = (1.0 + sk) * sparse.identity(plate.n_live, format="csc") + coeff * plate.B
-        else:
-            a_bare = (1.0 + sk) * plate.W + coeff * plate.K
+        # own A is reassembled by the seam rather than reached into, because plate.py stays
+        # untouched; the dense coupled cross-check at two timesteps pins that reassembly.
+        a_bare = self._surface.a_bare()
         self._load_scale = 0.5 * plate.k / self._denominator
         a_loaded = (a_bare + self._load_scale * self.port.load_matrix).tocsc()
         # Drop the structural zeros the load's sparsity pattern contributes where its value is 0, so
@@ -2201,33 +2324,13 @@ class RoomLoadedPlate:
         with exactly :meth:`~physsynth.core.plate.Plate.step`'s own arithmetic, so a zero air load
         is a clean reduction to the bare plate. The room is **not** stepped here (class docstring).
         """
-        p, port = self.plate, self.port
+        port = self.port
         port.require_ready()               # before mutating anything
         pbar_free = port.free_pressure()   # read u^{n+1/2}, BEFORE room.step()
 
-        sk = p.sigma * self.k
         k2 = self.k * self.k
-        kappa2 = p.kappa * p.kappa
-        u_nm1 = p.u_prev
-        if p.boundary == "supported":
-            rhs = (
-                2.0 * p.u
-                + (1.0 - 2.0 * p.theta) * k2 * (-kappa2 * (p.B @ p.u))
-                - u_nm1
-                + p.theta * k2 * (-kappa2 * (p.B @ u_nm1))
-                + sk * u_nm1
-            )
-            if f_ext is not None:
-                rhs = rhs + k2 * f_ext / (p.rho * p.h * p.h)
-        else:
-            rhs = (
-                p.W @ (2.0 * p.u - u_nm1)
-                + (1.0 - 2.0 * p.theta) * k2 * (-kappa2 * (p.K @ p.u))
-                + p.theta * k2 * (-kappa2 * (p.K @ u_nm1))
-                + sk * (p.W @ u_nm1)
-            )
-            if f_ext is not None:
-                rhs = rhs + k2 * f_ext / p.rho
+        u_nm1 = self._surface.u_prev   # ONCE, and before commit() -- see _PlateSurface
+        rhs = self._surface.rhs(f_ext)
         # The air load: the known open-circuit force, plus the u^{n-1} half of the centered
         # velocity (its u^{n+1} half is already inside the factorization).
         rhs = rhs - k2 * (port.T.T @ pbar_free) / self._denominator
@@ -2235,10 +2338,7 @@ class RoomLoadedPlate:
 
         u_next = self._lu_loaded.solve(rhs)
         # _accel already carries the load -- it was IN the solve, so no post-solve refresh.
-        p._accel = (u_next - 2.0 * p.u + u_nm1) / k2
-        p.u_prev = p.u
-        p.u = u_next
-        p.n += 1
+        self._surface.commit(u_next)
 
         q = port.T @ ((u_next - u_nm1) / (2.0 * self.k))
         pbar = pbar_free + port.R * q
@@ -2718,23 +2818,16 @@ class RoomSuspendedPlate:
         spreading: Spreading = "bilinear",
     ) -> None:
         self.plate = plate  # FIRST: any attribute miss before this makes __getattr__ recurse
-        if not np.isclose(plate.k, room.k, rtol=1e-12, atol=0.0):
-            raise ValueError(
-                f"sample-rate mismatch: plate fs = {plate.fs} but room fs = {room.fs}. The port's "
-                "solve is a single timestep shared by both, so they must agree exactly."
-            )
+        _require_same_rate(plate, room, "plate")
         self.room = room
         self.k = plate.k
 
-        # The surface protocol, batch 3's verbatim: live-node coordinates and their areas, in the
-        # plate's own C-order over `mask`, so T's columns line up with the plate's state vector.
-        coords = np.column_stack((plate.X[plate.mask], plate.Y[plate.mask]))
-        if plate.boundary == "supported":
-            areas = np.full(plate.n_live, plate.h * plate.h)
-            self._denominator = plate.rho * plate.h * plate.h
-        else:
-            areas = plate.w.copy()  # lumped cell areas (h^2, h^2/2, h^2/4) -- no dead rim
-            self._denominator = plate.rho  # W lives inside A and is divided out by the solve
+        # The surface protocol (see _PlateSurface), batch 3's verbatim: live-node coordinates and
+        # their areas, in the plate's own C-order over `mask`, so T's columns line up with the
+        # plate's state vector.
+        self._surface = _PlateSurface(plate)
+        coords, areas = self._surface.surface()
+        self._denominator = self._surface.denominator
         self.port = InteriorSurfacePort(
             room=room,
             plane=plane,
@@ -2746,15 +2839,10 @@ class RoomSuspendedPlate:
         )
 
         # A_loaded = A + (k / 2 rho_s) 2 T^T R T -- SPD (PSD added to SPD), factored ONCE. The
-        # plate's own A is reassembled here rather than reached into, because plate.py stays
-        # untouched; the coupled residual at two timesteps is what pins that this reassembly is
-        # right, and it is the only guard that catches BOTH ways of getting the 2 wrong.
-        sk = plate.sigma * plate.k
-        coeff = plate.theta * plate.k * plate.k * plate.kappa * plate.kappa
-        if plate.boundary == "supported":
-            a_bare = (1.0 + sk) * sparse.identity(plate.n_live, format="csc") + coeff * plate.B
-        else:
-            a_bare = (1.0 + sk) * plate.W + coeff * plate.K
+        # plate's own A is reassembled by the seam rather than reached into, because plate.py stays
+        # untouched; the coupled residual at two timesteps is what pins that reassembly, and it is
+        # the only guard that catches BOTH ways of getting the 2 wrong.
+        a_bare = self._surface.a_bare()
         self._load_scale = 0.5 * plate.k / self._denominator
         a_loaded = (a_bare + self._load_scale * self.port.load_matrix).tocsc()
         # Drop the structural zeros the load's sparsity pattern contributes where its value is 0, so
@@ -2790,34 +2878,14 @@ class RoomSuspendedPlate:
         exactly :meth:`~physsynth.core.plate.Plate.step`'s own arithmetic. The room is **not**
         stepped here (class docstring).
         """
-        p, port = self.plate, self.port
+        port = self.port
         port.require_ready()                      # before mutating anything
         lo_free, hi_free = port.free_pressure()   # read u^{n+1/2}, BEFORE room.step()
         d_free = hi_free - lo_free
 
-        sk = p.sigma * self.k
         k2 = self.k * self.k
-        kappa2 = p.kappa * p.kappa
-        u_nm1 = p.u_prev
-        if p.boundary == "supported":
-            rhs = (
-                2.0 * p.u
-                + (1.0 - 2.0 * p.theta) * k2 * (-kappa2 * (p.B @ p.u))
-                - u_nm1
-                + p.theta * k2 * (-kappa2 * (p.B @ u_nm1))
-                + sk * u_nm1
-            )
-            if f_ext is not None:
-                rhs = rhs + k2 * f_ext / (p.rho * p.h * p.h)
-        else:
-            rhs = (
-                p.W @ (2.0 * p.u - u_nm1)
-                + (1.0 - 2.0 * p.theta) * k2 * (-kappa2 * (p.K @ p.u))
-                + p.theta * k2 * (-kappa2 * (p.K @ u_nm1))
-                + sk * (p.W @ u_nm1)
-            )
-            if f_ext is not None:
-                rhs = rhs + k2 * f_ext / p.rho
+        u_nm1 = self._surface.u_prev   # ONCE, and before commit() -- see _PlateSurface
+        rhs = self._surface.rhs(f_ext)
         # The air load: the known open-circuit pressure JUMP, plus the u^{n-1} half of the centered
         # velocity (its u^{n+1} half is already inside the factorization).
         rhs = rhs - k2 * (port.T.T @ d_free) / self._denominator
@@ -2825,10 +2893,7 @@ class RoomSuspendedPlate:
 
         u_next = self._lu_loaded.solve(rhs)
         # _accel already carries the load -- it was IN the solve, so no post-solve refresh.
-        p._accel = (u_next - 2.0 * p.u + u_nm1) / k2
-        p.u_prev = p.u
-        p.u = u_next
-        p.n += 1
+        self._surface.commit(u_next)
 
         q = port.T @ ((u_next - u_nm1) / (2.0 * self.k))
         d_pbar = d_free + 2.0 * port.R * q
