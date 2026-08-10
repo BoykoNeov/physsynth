@@ -3964,6 +3964,14 @@ def test_airload_five_channels_sum_to_the_flat_reference_and_e_conn_stays_signed
     assert float(np.min(ec)) < 0.0, "E_conn is a signed cross-time term — clamping it hides it"
     assert er[0] == 0.0 and float(er[-1]) > float(er[n // 2]), "the radiated channel only fills"
     assert float(np.max(est)) > 0.0 and float(est[-1]) < float(np.max(est)), "stored is returned"
+    # The panel plots only `window` seconds while stored_frac_peak is run-wide, so the readout
+    # needs the in-window peak too — quoting a number the drawn picture never reaches reads as a
+    # panel disagreeing with its own caption.
+    ex_full = ex
+    assert ex_full["stored_frac_window_peak"] <= ex_full["stored_frac_peak"] + 1e-9
+    # rel 1e-4, not tighter: the payload rounds this scalar to 5 dp for display while `est` is the
+    # decimated trace itself, so an exact comparison would be testing the rounding.
+    assert ex_full["stored_frac_window_peak"] == pytest.approx(float(np.max(est)), rel=1e-4)
 
 
 def test_airload_the_ledger_residual_catches_what_the_drift_cannot():

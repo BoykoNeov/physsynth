@@ -4964,6 +4964,11 @@ def _build_payload_airload(p: dict[str, Any]) -> dict[str, Any]:
         "rad_frac_window": round(float(er_frac[eidx[-1]]), 4),
         "body_frac_peak": round(float(np.max(eb_frac)), 4),
         "stored_frac_peak": round(float(np.max(est_frac)), 5),
+        # The peak INSIDE the drawn window as well as over the whole run: the exchange panel plots
+        # only the first `window` seconds, and at the shipped default the stored channel peaks
+        # after it — so a readout quoting the run-wide 18 % beside a picture whose pink line never
+        # gets there reads as a panel that disagrees with its own number.
+        "stored_frac_window_peak": round(float(np.max(est_frac[eidx])), 5),
         "string_frac_min": round(float(np.min(es_frac)), 4),
         "conn_frac_min": round(float(np.min(ec_frac)), 5),
         "total_drift": (total.max() - total.min()) / abs(e0) if e0 != 0.0 else float("nan"),

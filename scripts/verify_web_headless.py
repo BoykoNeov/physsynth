@@ -269,6 +269,14 @@ def main() -> int:
             # one source is the body's, already shown one model over). Costs the render (~2.3 s at
             # the 2 s default) plus the reference sweep (~1.4 s, 18 early-exiting points).
             ("radbody", "model=radbody"),
+            # String → a body loaded by the air's IMPEDANCE (batch 17): the air STORES as well as
+            # radiates, so the Energy card gains a FIFTH channel (½M_a·U_L², which both fills and
+            # empties) and the second panel becomes the per-mode α(f) curve against the closed form
+            # and against the constant-R load that cannot bend. Costs the render (~2.9 s) plus the
+            # pinned single-mode sweep (~1.0 s, 12 points × 2 runs). The `air_corner = 0` anchor —
+            # which reproduces radbody bit-for-bit — is a slider setting, so it is exercised by the
+            # CDP switch driver and the backend suite rather than by this fresh-load pass.
+            ("airload", "model=airload"),
         ]
         # Optional name filters, so a single-model batch can re-check its own case without paying
         # for the whole sweep (the geometric regimes alone are ~2 minutes).

@@ -43,6 +43,10 @@ const LABELS = {
   bell_ratio_exp: "bell log₁₀(R/Z₀)",
   bridge_stiffness: "bridge K", sigma_body: "body loss σ_b", distance: "listen dist r",
   n_plate: "plate grid N", sigma_plate: "plate loss σ_p",
+  // Deliberately NEUTRAL for radiation_R: radbody's R is the compact-source resistance at one
+  // frequency and airload's is the saturated plane-wave value, so any qualifier in a shared label
+  // would be wrong for one of them. The per-model hint carries the meaning instead.
+  radiation_R: "radiation R", air_corner: "air corner f_c", radiation_weight: "radiation a",
 };
 
 // Per-model slider re-ranging (min/max/step/fixed/val) applied on model switch. The backend mirrors
@@ -266,6 +270,25 @@ const MODEL_RANGES = {
              distance: { min: 0.5, max: 4.0, step: 0.1, fixed: 1, val: 1.0 },
              pluck_position: { val: 0.3 },
              audio_duration: { min: 0.2, max: 3.0, step: 0.1, fixed: 1, val: 2.0 } },
+  // Batch 17. Same rig as radbody above, so everything but the air is copied verbatim — and
+  // radiation_R is deliberately RE-RANGED 44×, because its meaning changed with the load class:
+  // radbody's R is the COMPACT-source resistance at one frequency, this one is the SATURATED
+  // plane-wave rho0*c0/S. Both models accept the param, which makes this the leak family's worst
+  // case; _default restores radbody's [0, 300] on the way out and MODEL_RANGES.radbody re-asserts
+  // it on the way in. The default 13146.4 is the 5 cm sphere, whose corner (1091.8 Hz) sits above
+  // all four body modes — which is the whole reason Re Z_a still climbs across them. Reaching
+  // batch 15 exactly is a dial-able setting: air_corner 0 + radiation_R 133 + radiation_weight 1.
+  airload: { N: { min: 16, max: 160, val: 100 },
+             lambda: { min: 0.5, max: 0.99, step: 0.01, fixed: 2, val: 0.9 },
+             bridge_stiffness: { min: 0, max: 19000, step: 500, fixed: 0, val: 8000, unit: "N/m" },
+             radiation_R: { min: 0, max: 20000, step: 0.1, fixed: 1, val: 13146.4,
+                            unit: "Pa·s/m³" },
+             air_corner: { min: 0, max: 3000, step: 0.1, fixed: 1, val: 1091.8, unit: "Hz" },
+             radiation_weight: { min: 0.005, max: 1.0, step: 0.005, fixed: 3, val: 0.05 },
+             sigma_body: { val: 0 },
+             distance: { min: 0.5, max: 4.0, step: 0.1, fixed: 1, val: 1.0 },
+             pluck_position: { val: 0.3 },
+             audio_duration: { min: 0.2, max: 3.0, step: 0.1, fixed: 1, val: 2.0 } },
   // Regime-level ranges, keyed "model:domain" and merged AFTER the model spec (see
   // applyModelRanges). The phantom regime is the first customer and needs both: κ = 8 is its
   // microscope (the geometric model defaults κ = 0, which is a HARMONIC string — every phantom
@@ -328,6 +351,12 @@ const MODEL_RANGES = {
               // is still shipped by gatherParams, and a stale value would come back on re-entry
               // rather than the measured default.
               radiation_R: { min: 0, max: 300, step: 1, fixed: 0, val: 133, unit: "Pa·s/m³" },
+              // airload's two (batch 17). Their index.html home IS airload's range, so like
+              // n_plate/sigma_plate these only need a sane base + val here — but they DO need one,
+              // because gatherParams ships every slider including hidden ones, and a stale corner
+              // or weight coming back on re-entry would silently replace the measured default.
+              air_corner: { min: 0, max: 3000, step: 0.1, fixed: 1, val: 1091.8, unit: "Hz" },
+              radiation_weight: { min: 0.005, max: 1.0, step: 0.005, fixed: 3, val: 0.05 },
               audio_duration: { min: 0.2, max: 6, step: 0.1, fixed: 1, val: 2 },
               // L and animation_window joined when the bore arrived: it is the first model to
               // re-range EITHER (L → 0.5 m, and the animation window down to a 0.1 s max because
@@ -601,7 +630,7 @@ function updateLambdaHint() {
     hint.textContent = `λ = c·k/h = ${lam.toFixed(2)}  (must be < 1: the bridge spring pushes the `
       + `string's Nyquist mode unstable at λ = 1)`;
     hint.style.color = lam >= 1 ? "var(--bad)" : "var(--muted)";
-  } else if (m === "body" || m === "platebody" || m === "radbody") {
+  } else if (m === "body" || m === "platebody" || m === "radbody" || m === "airload") {
     // Explicit string + body step, coupled by a spring — the sympathetic case: λ < 1 is HARD-required
     // (the string's Nyquist mode is marginal at λ = 1 and the spring tips it over), so the slider is
     // capped at 0.99. Not "no CFL"; the else branch below would wrongly say so.
@@ -957,6 +986,32 @@ function updateLambdaHint() {
             + "channel, not a loss)."
           : ` σ_body = ${Math.round(sb)} s⁻¹ dissipates into nowhere → passivity, no 2σ oracle.`);
       bdHint.style.color = "var(--muted)";
+    } else if (m === "airload") {
+      // The impedance load's live readout. Two coefficients, and what matters is where the CORNER
+      // sits relative to the body modes: below it the air is a mass (stores, radiates poorly),
+      // above it a resistance. The equivalent radii are the sphere-consistency check the payload
+      // reports authoritatively — this is the live version while you drag.
+      const R = param("radiation_R"), fc = param("air_corner"), w = param("radiation_weight");
+      const aR = R > 0 ? Math.sqrt(1.2 * 343 / (4 * Math.PI * R)) : Infinity;
+      const aT = fc > 0 ? 343 / (2 * Math.PI * fc) : Infinity;
+      const consistent = R > 0 && fc > 0 && Math.abs(aR - aT) / aT < 0.01;
+      bdHint.textContent =
+        `R = ${R.toFixed(0)} Pa·s/m³ (saturated), corner = ${fc.toFixed(0)} Hz, a = ${w.toFixed(3)}. `
+        + (R === 0
+          ? "R = 0 DECOUPLES the air entirely — a bare ModalBody, bit-for-bit, and nothing radiates."
+          : fc === 0
+            ? "corner = 0 → M_a = ∞: the purely RESISTIVE load. This is batch 15 exactly — one rate "
+              + "for every mode and no pitch shift at all. Raise it to give the air its mass back."
+            : consistent
+              ? `sphere-consistent: a ≈ ${aR.toFixed(3)} m. The four body modes (110–440 Hz) sit `
+                + (fc > 440 ? "BELOW the corner, where Re Z climbs as ω² — the shaping regime."
+                            : "at or ABOVE the corner, where Re Z has saturated and the load is "
+                              + "nearly flat: lower R (a bigger sphere) is where the bending is.")
+              : `no sphere realizes this pair — R implies a = ${aR.toFixed(3)} m, the corner implies `
+                + `a = ${aT.toFixed(3)} m. Still a legal passive first-order load, just not a sphere.`)
+        + (w > 0.3 ? " The radiation weight is high: the body is heavily loaded and may stop ringing"
+                   + " altogether (α/ω > 1). It is not a volume control." : "");
+      bdHint.style.color = "var(--muted)";
     } else if (m === "platebody") {
       // The plate body's own live guard: the EXACT Sherman-Morrison ceiling K_c ~ 14k is the same for
       // both boundaries AND shrinks as the grid grows, so a high-K × high-grid combo errors cleanly.
@@ -1273,7 +1328,8 @@ function drawString(idx) {
 
   // pickup marker — suppressed for the body models (their audio is the far-field radiated pressure
   // and the backend probes the terminus at x = L, so there is no movable pickup to mark).
-  if (payload && payload.model !== "body" && payload.model !== "radbody") {
+  if (payload && payload.model !== "body" && payload.model !== "radbody"
+      && payload.model !== "airload") {
     const px = margin + Math.round(param("pickup_position") * (width - 1)) * sx;
     g.strokeStyle = "rgba(255,207,92,.35)"; g.setLineDash([4, 4]); g.lineWidth = 1;
     g.beginPath(); g.moveTo(px, 8); g.lineTo(px, H - 8); g.stroke(); g.setLineDash([]);
@@ -2328,7 +2384,8 @@ function drawEnergy() {
   // the bare conservation line. The σ-gated verdict rides the badge + readout (on the ABSOLUTE
   // total), while the canvas shows the slosh; the bore's split-in-the-energy-panel precedent.
   // radbody (batch 15) rides the same panel with a FOURTH channel: the booked radiated energy.
-  if (payload.model === "body" || payload.model === "platebody" || payload.model === "radbody") {
+  if (payload.model === "body" || payload.model === "platebody"
+      || payload.model === "radbody" || payload.model === "airload") {
     drawBodyEnergy(e); return;
   }
   const t = e.time, v = e.value.map((x) => (x == null ? 0 : x));
@@ -2470,6 +2527,11 @@ function drawBodyEnergy(e) {
   // batch 15: the air is a LOAD, so a FOURTH channel — the booked radiated energy — fills as the
   // three mechanical ones drain. They sum to the flat reference exactly (measured 1.6e-14).
   const isRB = payload.model === "radbody";
+  // batch 17: the air is an IMPEDANCE, so it also STORES — a FIFTH channel, and the only one here
+  // that both fills and empties. It rides the same panel because it is the same ledger; what makes
+  // it a new claim is that at batch 15's own radiation weight it peaks at 0.7 % (invisible) and at
+  // a physical one it peaks at 18 %.
+  const isAL = payload.model === "airload";
   const bodyLbl = isPB ? "E_plate" : "E_body";
   const bodyWord = isPB ? "plate" : "body";
   const lossName = isPB ? "σ_plate" : "σ_body";
@@ -2477,7 +2539,8 @@ function drawBodyEnergy(e) {
   const num = (a) => (a || []).map((x) => (x == null ? 0 : x));
   const es = num(ex.e_string_frac), eb = num(ex.e_body_frac);
   const ec = num(ex.e_conn_frac), tot = num(ex.total_frac);
-  const er = isRB ? num(ex.e_rad_frac) : null;
+  const er = (isRB || isAL) ? num(ex.e_rad_frac) : null;
+  const est = isAL ? num(ex.e_stored_frac) : null;
   // y window spans the negative E_conn excursion up to just past the 100 % reference. Never a
   // [0,1] clamp — the whole point of E_conn as its own channel is that it dips below zero.
   const ymin = Math.min(-0.05, ...ec) * 1.1;
@@ -2509,12 +2572,17 @@ function drawBodyEnergy(e) {
   // AMBER, not the sweep panel's teal: the one pair that must never be confused is ∫P_rad (the
   // batch's headline) and the flat total (the reference it fills up to), and a teal curve reads as
   // the same colour as a green line at a glance. Amber against green is unmistakable.
+  // E_stored goes UNDER ∫P_rad: the two are both "the air", but only one of them is gone. Drawn
+  // in a dimmer amber-adjacent rose so the pair reads as related without either being mistakable
+  // for the other — and thinner, because it is the smaller channel at every setting measured.
+  if (est) line(est, "#ff7bac", 1.8);           // ½M_a·U_L² — air dragged along, and given back
   if (er) line(er, "#ffd166", 2.5);             // ∫P_rad — the booked channel the air fills
   g.font = "10px ui-monospace, monospace";
   const legend = [["E_string", "#4cc2ff"], [bodyLbl, "#ff8f4c"], ["E_conn", "#9d7bff"]];
+  if (est) legend.push(["E_air", "#ff7bac"]);
   if (er) legend.push(["∫P_rad", "#ffd166"]);
   legend.push(["total", "#5ad17a"]);
-  const step = er ? 62 : 74;
+  const step = est ? 54 : (er ? 62 : 74);
   legend.forEach(([label, colour], i) => {
     g.fillStyle = colour; g.fillRect(padL + 4 + i * step, 6, 8, 3);
     g.fillText(label, padL + 15 + i * step, 10);
@@ -2529,6 +2597,56 @@ function drawBodyEnergy(e) {
   // actively wrong here (it calls a conserving radiating run a slosh, and never mentions that the
   // air's share is booked, which is the only reason the total stays flat). The fret's
   // else-branch-lies lesson: branch and return, never let a shared tail speak for a new model.
+  // The impedance load's readout, and it leads with a number no other panel here carries: the
+  // LEDGER RESIDUAL. The drift below is blind to a mis-drawn ledger — the air's two channels come
+  // out of one accessor, so one of them can be double-counted or dropped with the conserved total
+  // untouched — so the panel states that the five lines it draws really do sum to the line it
+  // draws them against. Same branch-and-return discipline as radbody's below.
+  if (isAL) {
+    const radEnd = (ex.rad_frac_end * 100).toFixed(1);
+    const stPk = (ex.stored_frac_peak * 100).toFixed(1);
+    const stWin = (ex.stored_frac_window_peak * 100).toFixed(1);
+    const bpr = ex.body_frac_peak < 0.01 ? (ex.body_frac_peak * 100).toFixed(2)
+                                         : (ex.body_frac_peak * 100).toFixed(0);
+    const flat = ex.corner === 0;
+    const ledger = `five channels sum to the total: max residual ${ex.ledger_residual.toExponential(2)}`
+      + ` → ${ex.ledger_pass ? "PASS ✓" : "FAIL ✗"}`;
+    if (e.sigma_is_zero) {
+      const ok = e.lossless.pass && ex.ledger_pass;
+      badge.textContent = ok ? "conserved" : (e.lossless.pass ? "LEDGER" : "DRIFT");
+      badge.className = "badge " + (ok ? "good" : "bad");
+      out.textContent =
+        `lossless · TOTAL drift max|Eⁿ−E⁰|/E⁰ = ${e.lossless.drift.toExponential(2)} ` +
+        `(tol ${e.lossless.tol.toExponential(0)}) → ${e.lossless.pass ? "PASS ✓" : "FAIL ✗"}\n` +
+        `${ledger} — the drift alone cannot see a wrong panel, because the air's stored and ` +
+        `radiated shares come out of ONE accessor.\n` +
+        (flat
+          ? `air_corner = 0 → M_a = ∞: the purely resistive load, so E_air is flat zero and this ` +
+            `render is batch 15 bit-for-bit. Raise the corner to give the air its mass back.`
+          : `The air takes ${radEnd}% of the pluck away and HOLDS up to ${stPk}% of it on the way ` +
+            `— that stored share is returned, not lost, which is why the total is still flat. ` +
+            // Only worth saying when the drawn window really does miss the peak: at the shipped
+            // default the two are the same number, and printing "the run-wide peak comes later"
+            // beside a picture that already shows it would be a readout contradicting its panel.
+            (ex.stored_frac_window_peak < 0.9 * ex.stored_frac_peak
+              ? `Inside the ${tmax.toFixed(2)} s drawn above it only reaches ${stWin}% — the peak ` +
+                `is later in the run. `
+              : "") +
+            `E_air reads as a BAND rather than a curve because it oscillates at 2ω: energy moves ` +
+            `in and out of the radiation mass twice per cycle. The ${bodyWord} peaks at ${bpr}%.`);
+    } else {
+      const mono = e.lossy.monotone;
+      badge.textContent = mono ? "passive" : "NON-MONOTONE";
+      badge.className = "badge " + (mono ? "good" : "bad");
+      out.textContent =
+        `lossy · TOTAL energy monotone non-increasing: ${mono ? "yes ✓" : "NO ✗"}\n` +
+        `${ledger}\n` +
+        `σ_body > 0 dissipates into nowhere — THAT is what drops the conservation verdict, not the ` +
+        `air, whose ${radEnd}% radiated and ${stPk}% stored are both BOOKED and would conserve on ` +
+        `their own. No 2σ oracle: the coupled decay is multi-rate AND frequency-dependent.`;
+    }
+    return;
+  }
   if (isRB) {
     const radEnd = (ex.rad_frac_end * 100).toFixed(1);
     const radWin = (ex.rad_frac_window * 100).toFixed(0);
@@ -2778,6 +2896,17 @@ function drawDiagnostics() {
     drawRadBodySweep();
     return;
   }
+  // The impedance load: the second panel is the frequency dependence itself — the per-mode decay
+  // rate, measured one mode at a time, against the closed form and against the constant-R load
+  // that CANNOT bend. It replaces radbody's t₅₀-vs-R map because the claim moved: there the
+  // question was how fast one number empties the string, here it is what the air does differently
+  // to each partial.
+  if (spec && spec.kind === "airload") {
+    partialsTitle.firstChild.textContent = "Per-mode decay ";
+    partialsSub.textContent = "α(f) measured vs closed form · a constant R is the flat line";
+    drawAirLoadSweep();
+    return;
+  }
   if (spec && (spec.kind === "body" || spec.kind === "platebody")) {
     partialsTitle.firstChild.textContent = "Radiated spectrum ";
     const modeWord = spec.kind === "platebody" ? "plate modes" : "body modes";
@@ -3021,6 +3150,181 @@ function drawRadBodySweep() {
     + `over the body modes (${modes.join(", ")} Hz), so one R cannot fit all four — `
     + (sw.r_now > 0 ? `this one is exact at ${sp.f_match} Hz` : "and R = 0 matches none of them")
     + `. Reference curve: N = ${sw.sweep_n}, σ_body = 0, ${sw.steps} steps.`;
+}
+
+// ── airload: the per-mode decay rate, and the flat line a constant R is stuck with ───────────
+// The batch's claim, drawn. Re Z_a climbs with frequency below the corner, so α_i = a²ReZ(ω_i)/2m
+// climbs with it: high partials radiate better and die first. Three things share the axes —
+//   * the MEASURED α, one mode at a time (body alone, no string: with a shared radiation weight a
+//     multi-mode body's modes are coupled through the net volume velocity and there is no per-mode
+//     rate to report at all);
+//   * the closed form `loaded_mode`, as an OVERLAY with a stated validity — it is a weak-loading
+//     result whose residual is second order in α/ω, and the readout prints the measured
+//     coefficient rather than pretending the two agree everywhere;
+//   * batch 15's constant-R load matched at the fundamental, which needs no measurement: its α is
+//     a constant and its pitch shift is exactly zero, both closed form.
+// Log-log, because the claim spans two decades in α over four octaves in f and a linear axis would
+// show one point and a corner. The pitch drop rides the same panel as a second trace on its own
+// right-hand scale — it is the OTHER half of the same impedance, and splitting it into a third
+// card would separate the two things a constant R fails at.
+function drawAirLoadSweep() {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height, padL = 34, padR = 30, padB = 17, top = 12;
+  g.clearRect(0, 0, W, H);
+  const out = $("partials-readout");
+  const sp = payload && payload.meta && payload.meta.spectrum;
+  const sw = sp && sp.sweep;
+  if (!sw) { out.textContent = "no air-load sweep"; return; }
+  const plotW = W - padL - padR, plotH = H - padB - top;
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(padL, top, plotW, plotH);
+
+  // R = 0 severs the air entirely: nothing radiates, so every point would run its full length to
+  // report a rate of zero. SKIPPED and labelled, never a row of nulls (radbody's K = 0 precedent).
+  if (sw.skipped) {
+    g.fillStyle = "#8b98a8"; g.font = "11px ui-monospace, monospace";
+    g.fillText("R = 0 — the air is decoupled from the body,", padL + 10, top + 60);
+    g.fillText("so no mode radiates and there is no rate to measure.", padL + 10, top + 76);
+    out.textContent =
+      "sweep skipped: " + sw.note + ". Raise the radiation resistance to couple the air — at "
+      + "R = 0 the body is a bare ModalBody and the load is a no-op, bit-for-bit.";
+    return;
+  }
+
+  const fs = sw.f, al = sw.alpha, ao = sw.alpha_oracle, dm = sw.df_meas;
+  const pts = [];
+  for (let i = 0; i < fs.length; i++) if (al[i] != null) pts.push([fs[i], al[i], i]);
+  if (!pts.length) {
+    g.fillStyle = "#8b98a8"; g.font = "11px ui-monospace, monospace";
+    g.fillText("every mode is past critical damping at this load —", padL + 10, top + 60);
+    g.fillText("nothing oscillates, so there is no decay rate to fit.", padL + 10, top + 76);
+    out.textContent =
+      `all ${fs.length} points CENSORED: with the reactance removed (corner = 0) at R = ${sw.r_flat}`
+      + " the load is far past critical damping, so no mode rings and no α exists. Labelled, not"
+      + " guessed — lower the resistance or raise the corner.";
+    return;
+  }
+  const fmin = fs[0], fmax = fs[fs.length - 1];
+  const alo = Math.min(sw.alpha_flat, ...pts.map((p) => p[1])) * 0.6;
+  const ahi = Math.max(sw.alpha_flat, ...pts.map((p) => p[1])) * 1.6;
+  const lx = (f) => padL + (Math.log(f / fmin) / Math.log(fmax / fmin)) * plotW;
+  const ly = (a) => top + plotH - (Math.log(a / alo) / Math.log(ahi / alo)) * plotH;
+
+  // octave gridlines on x, decade gridlines on y — "×10 per octave" has to be readable off the
+  // picture, not only off the readout.
+  g.strokeStyle = "rgba(139,152,168,.15)"; g.setLineDash([2, 3]);
+  g.fillStyle = "#8b98a8"; g.font = "9px ui-monospace, monospace";
+  [110, 220, 440, 880, 1760].forEach((f) => {
+    if (f < fmin || f > fmax) return;
+    g.beginPath(); g.moveTo(lx(f), top); g.lineTo(lx(f), top + plotH); g.stroke();
+    g.fillText(String(f), lx(f) - 9, H - 5);
+  });
+  [1, 10, 100, 1000].forEach((a) => {
+    if (a < alo || a > ahi) return;
+    g.beginPath(); g.moveTo(padL, ly(a)); g.lineTo(padL + plotW, ly(a)); g.stroke();
+    g.fillText(String(a), 4, ly(a) + 3);
+  });
+  g.setLineDash([]);
+  // Units in the empty corners, radbody's collision lesson — with one correction that only the
+  // rendered page showed: "Hz" after the last octave label OVERLAPS it, because the last tick is
+  // 1760 and its label is centred on the axis end. The bottom-LEFT gutter under padL is the one
+  // spot on this panel nothing else uses.
+  g.fillText("Hz", 4, H - 5);
+  g.fillText("α s⁻¹", padL + 4, top + 9);
+
+  // the corner: where the air stops being a mass and becomes a resistance. Everything LEFT of it
+  // is where Re Z_a climbs, which is the entire reason the measured curve has a slope at all.
+  if (sp.corner > fmin && sp.corner < fmax) {
+    g.strokeStyle = "rgba(255,123,172,.5)"; g.setLineDash([4, 3]);
+    g.beginPath(); g.moveTo(lx(sp.corner), top); g.lineTo(lx(sp.corner), top + plotH); g.stroke();
+    g.setLineDash([]);
+    g.fillStyle = "rgba(255,123,172,.85)"; g.fillText("corner", lx(sp.corner) - 18, top + 9);
+  }
+  // the body's own four modes, so the sweep's frequency axis is anchored to the rig it describes
+  (sp.body_modes || []).forEach((f) => {
+    if (f < fmin || f > fmax) return;
+    g.strokeStyle = "rgba(255,143,76,.22)";
+    g.beginPath(); g.moveTo(lx(f), top + plotH - 5); g.lineTo(lx(f), top + plotH); g.stroke();
+  });
+
+  // batch 15's load, matched at the fundamental: ONE rate for every mode, and it is a straight
+  // horizontal line by construction, not a fit. This is the negative control, drawn.
+  if (sw.alpha_flat > alo && sw.alpha_flat < ahi) {
+    g.strokeStyle = "#8b98a8"; g.lineWidth = 1.4; g.setLineDash([5, 4]);
+    g.beginPath(); g.moveTo(padL, ly(sw.alpha_flat)); g.lineTo(padL + plotW, ly(sw.alpha_flat));
+    g.stroke(); g.setLineDash([]);
+    g.fillStyle = "#8b98a8"; g.fillText("constant R", padL + plotW - 60, ly(sw.alpha_flat) - 4);
+  }
+  // the closed form, UNDER the measurement and thinner: it is the overlay, not the result.
+  g.strokeStyle = "rgba(255,209,102,.75)"; g.lineWidth = 1.4; g.beginPath();
+  let started = false;
+  for (let i = 0; i < fs.length; i++) {
+    if (ao[i] == null) continue;
+    const X = lx(fs[i]), Y = ly(ao[i]);
+    if (!started) { g.moveTo(X, Y); started = true; } else g.lineTo(X, Y);
+  }
+  if (started) g.stroke();
+  // the measurement
+  g.strokeStyle = "#5fe3c0"; g.lineWidth = 2; g.beginPath();
+  pts.forEach(([f, a], i) => { const X = lx(f), Y = ly(a); if (i === 0) g.moveTo(X, Y); else g.lineTo(X, Y); });
+  g.stroke();
+  g.fillStyle = "#5fe3c0";
+  pts.forEach(([f, a]) => g.fillRect(lx(f) - 1.5, ly(a) - 1.5, 3, 3));
+
+  // The pitch drop on its own right-hand scale — the OTHER half of Z_a, and the half a constant R
+  // cannot attempt at all (Im Z ≡ 0 → exactly zero shift, so there is no second control to draw).
+  const dfv = dm.filter((x) => x != null);
+  if (dfv.length) {
+    const dlo = Math.min(0, ...dfv) * 1.15, dhi = 0.02;
+    const dy = (v) => top + plotH - ((v - dlo) / (dhi - dlo)) * plotH;
+    g.strokeStyle = "#4cc2ff"; g.lineWidth = 1.6; g.setLineDash([3, 2]); g.beginPath();
+    let st2 = false;
+    for (let i = 0; i < fs.length; i++) {
+      if (dm[i] == null) continue;
+      const X = lx(fs[i]), Y = dy(dm[i]);
+      if (!st2) { g.moveTo(X, Y); st2 = true; } else g.lineTo(X, Y);
+    }
+    g.stroke(); g.setLineDash([]);
+    // The right-hand scale carries NUMBERS only. An axis title here lands on the corner marker's
+    // label at the top of the plot, and the legend already names the trace — so the unit rides the
+    // legend entry instead of being written twice.
+    g.fillStyle = "#4cc2ff"; g.font = "9px ui-monospace, monospace";
+    g.fillText(dlo.toFixed(0), W - padR + 2, dy(dlo) - 2);
+    g.fillText("0", W - padR + 2, dy(0) + 8);
+  }
+
+  g.font = "10px ui-monospace, monospace";
+  const legend = [["measured α", "#5fe3c0"], ["closed form", "#ffd166"], ["Δf %", "#4cc2ff"]];
+  legend.forEach(([label, colour], i) => {
+    g.fillStyle = colour; g.fillRect(padL + 4 + i * 74, top - 8, 8, 3);
+    g.fillText(label, padL + 15 + i * 74, top - 4);
+  });
+
+  const df0 = dm.find((x) => x != null);
+  const coef = sw.resid_coef;
+  const censored = sw.n_censored
+    ? ` ${sw.n_censored} point${sw.n_censored > 1 ? "s" : ""} CENSORED (past critical damping — no `
+      + `rate exists, so none is drawn).`
+    : "";
+  const trunc = sw.truncated ? " Sweep TRUNCATED at the work budget; the tail is labelled, not"
+    + " dropped." : "";
+  out.textContent =
+    `α spans ${sw.span}× over ${fs[0].toFixed(0)}–${fs[fs.length - 1].toFixed(0)} Hz, while batch `
+    + `15's constant R — matched to this load at the first body mode (R = ${sw.r_flat} Pa·s/m³) — `
+    + `sits flat at ${sw.alpha_flat} s⁻¹ and under-damps the top by ${sw.flat_ratio_top}×. `
+    + `High partials radiate better and die first; one number cannot do that.\n`
+    + (df0 != null
+      ? `The air is also a MASS: the fundamental goes ${Math.abs(df0).toFixed(2)}% FLAT `
+        + `(~${Math.round(Math.abs(df0) * 17.31)} cents), measured against the scheme's own `
+        + `unloaded frequency — a constant R shifts it by exactly zero, because a real resistance `
+        + `has no reactance. `
+      : "")
+    + `\nThe closed form is a WEAK-loading result: its residual is second order in α/ω`
+    + (coef ? `, and measured here that coefficient is ${coef[0]}–${coef[1]} across the sweep — so `
+      + `the disagreement at the top is the formula's own stated order, not a scheme error. `
+      : ". ")
+    + `${sw.n_weak}/${fs.length} points sit inside α/ω ≤ ${sw.weak_max}. `
+    + `Curve pinned at ${(sw.fs / 1000).toFixed(0)} kHz (NOT the render's rate: at the render's own `
+    + `rate the leapfrog's warping would outweigh the shift it is measuring).${censored}${trunc}`;
 }
 
 // ── body: the radiated-pressure spectrum ─────────────────────────────────────────────────────
