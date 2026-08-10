@@ -2044,8 +2044,11 @@ class RoomLoadedPlate:
     ``G0`` anyway *reduces* ``(G0^-1)_dp`` — measured ratio 0.500 supported, 0.995 free, both below
     1 — i.e. the true margin is *smaller* than the guard reports. **The guard's blindness errs
     safe**, and it is the sign of that ratio, not its size, that is the claim. A test pins the
-    bit-identity so a future change making the load non-dissipative (the two-sided dipole plate,
-    batch 4, whose face cut removes air mass) fails loudly there instead of silently mis-guarding.
+    bit-identity so a future change making the load non-dissipative fails loudly there instead of
+    silently mis-guarding. It used to name batch 4's two-sided dipole plate, "whose face cut removes
+    air mass", as that change; measured, it is not one — :class:`RoomSuspendedPlate` gives the same
+    margin to the last digit, because the cut removes air inertia from the **room's** ledger and
+    never from the plate's ``G0``.
 
     **The free plate's rigid-body translation now radiates.** Model #5b's stiffness nullspace is
     exactly ``{1, x, y}`` — bare, a uniform velocity translates forever at *constant* energy

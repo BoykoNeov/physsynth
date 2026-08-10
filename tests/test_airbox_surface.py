@@ -716,8 +716,15 @@ def test_string_bridge_plate_room_chain(boundary):
     against physics that is not happening, and the delegation would hide that perfectly. It is safe
     because ``G0 = M + (theta - 1/4) k^2 S`` is a statement about mass and theta-excess stiffness
     while the air load is **dissipative**: it enters ``A``, never ``G0``. Pinning the bit-identity
-    here means a future change making the load non-dissipative — the two-sided dipole plate of batch
-    4, whose face cut removes air mass — fails loudly instead of silently mis-guarding.
+    here means a future change making the load non-dissipative fails loudly instead of silently
+    mis-guarding.
+
+    **This docstring used to name batch 4's two-sided dipole plate, "whose face cut removes air
+    mass", as that future change. It is not one**, and the reasoning did not survive: the face cut
+    removes air inertia from the *room's* ledger, where it was never part of the plate's ``G0``,
+    while the load stays proportional to ``u^{n+1} - u^{n-1}`` and enters ``A``. Measured in
+    ``tests/test_airbox_dipole.py::test_string_bridge_plate_room_chain``, a ``RoomSuspendedPlate``
+    gives the **same** margin this test pins, to the last digit.
     """
     inst = make_room_loaded_plate(boundary=boundary, walls=WALLS["all-lossy"])
     loaded = inst.plate

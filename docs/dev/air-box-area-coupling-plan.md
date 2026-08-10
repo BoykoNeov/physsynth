@@ -618,9 +618,18 @@ Measured, and the news is good on both counts:
   reports: **the guard is conservative, so its blindness errs safe.**
 
 Therefore **no `connection.py` edit**, and the plan says why rather than that it happened to work. A
-test must pin the bit-identity of the margin, so that a future change making the load non-dissipative
-(the two-sided plate of §3, whose face-cut removes air mass) fails loudly here instead of silently
-mis-guarding.
+test must pin the bit-identity of the margin, so that a future change making the load
+non-dissipative fails loudly here instead of silently mis-guarding.
+
+> **Corrected by batch 4 (2026-08-10).** This paragraph originally named "the two-sided plate of §3,
+> whose face-cut removes air mass" as the change that would trip that pin. It does not, and the
+> reasoning behind the prediction does not survive: the face cut removes air inertia from the
+> **room's** ledger, where it was never part of the plate's `G0`, while the load itself stays
+> proportional to `u^{n+1} − u^{n−1}` — dissipative, merely doubled — so it enters `A` and never
+> `G0`, exactly as here. Measured in `tests/test_airbox_dipole.py::test_string_bridge_plate_room_
+> chain`, the margin comes out **bit-identical** for a `RoomSuspendedPlate`, and it is the *same*
+> margin this batch measured, because the guard never saw either load. The pin is still worth
+> having; the example it names was wrong.
 
 ---
 
@@ -957,7 +966,8 @@ review additions at ~0.6 s combined, the headline is still the only line item wi
     **positive** controls (the zero is supposed to break there, and by how much is a number);
   - the **free plate's rigid-body translation** damped to a stop against a bare-plate control (§7.8);
   - the `StringPlateBridge` margin's bit-identity loaded vs bare (§6.8), so that a future
-    non-dissipative load fails loudly there.
+    non-dissipative load fails loudly there. (Batch 4's two-sided plate was named as that future
+    change and is **not** one — see the correction in §6.8.)
   Helpers `make_room_loaded_plate` and a prescribed-velocity `surface_drive` in `tests/helpers.py`.
 - `scripts/diagnose_airbox_surface.py`: the radiated-power-versus-pattern-fineness sweep with the
   coincidence brackets marked, the energy-channel flat-total figure, the surface pressure field, the

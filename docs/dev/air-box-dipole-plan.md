@@ -621,4 +621,115 @@ prediction that it would not.
 
 ## 10. What the build changed — the post-build record
 
-*(to be written after the build, per batches 1–3)*
+**Status: SHIPPED (2026-08-10).** `physsynth/core/airbox.py` gains `PLANES`, `AirBox.add_cut` /
+`cut_faces`, a private `_PatchPort` base holding the spreading operator and four refusals,
+`InteriorSurfacePort` and `RoomSuspendedPlate`. No edit to `plate.py` or `connection.py`.
+`tests/test_airbox_cut.py` (42) and `tests/test_airbox_dipole.py` (56) ship alongside
+`scripts/diagnose_airbox_dipole.py`. Suite 1355 → **1453**, green.
+
+The plan's structure survived essentially intact — the cut *is* the only new machinery, the load
+*is* `2 TᵀRT`, the half-offset oracle *is* exact, and §6.1's "neither ledger catches a wrong load
+coefficient" reproduced with both controls. What follows is only where measurement in the build
+disagreed with the plan's prototype.
+
+### 10.1 The pass criterion of §7.7 is wrong, and the right one is per-arm
+
+§7.7 proposed **`ratio ≤ 2`** as the criterion that would separate an honest sweep from the
+prototype's room-contaminated 3.75 and 4.69. Re-measured properly — windowed tone bursts in a 5 m
+rigid room, whole cycles, truncated before the first reflection reaches the source — the sweep is
+clean and the criterion still fails:
+
+```
+    ka       0.80   1.00   1.30   1.70   2.20   2.80
+    baffled  0.281  0.406  0.595  0.797  0.915  0.905     (R / rho0 c0 A)
+    dipole   0.078  0.231  0.797  1.798  2.117  1.778
+    dip/baf  0.278  0.569  1.339  2.257  2.314  1.965
+```
+
+The **ratio** reaches 2.31 (2.49 across the refinement) — over the ceiling — while each **arm** is
+where it should be: the baffled column has the textbook `(ka)² →` constant shape and rises
+monotonically toward 1, and the dipole tops out at 2.12–2.30. The ratio exceeds 2 because the
+baffled arm has not saturated yet, and a piston legitimately overshoots its own asymptote near its
+first maximum. So the criterion belongs on **each arm separately, asymptotically**, and the
+baffled arm's shape is what makes the dipole arm believable at all. The prototype's 3.75/4.69 were
+still contaminated; the diagnosis was right and the test it proposed was not.
+
+**The crossing, which §7.7 correctly identified as the claim, is at `ka` between 1.0 and 1.3** and
+survives every refinement.
+
+### 10.2 The dipole arm's magnitude does not converge, and the reason is the obstacle
+
+New, and the sharpest correction here. Under air-grid refinement at fixed room and plate:
+
+```
+    h_air     0.060  0.050  0.040  0.030
+    baffled   0.405  0.406  0.409  0.412     (ka = 1.0, R / rho0 c0 A)
+    dipole    0.279  0.231  0.360  0.225
+    blocked   1.44   1.36   1.78   1.44      (blocked_area / plate area)
+```
+
+The dipole arm tracks **`blocked_area`, not `h`** — at low `ka` its magnitude is set by the
+obstacle, and the obstacle is a rounding of the footprint onto the air grid, so it does not
+converge. The baffled arm, whose source uses the *same* `T`, converges smoothly. Only the ratio's
+sign against 1 is a claim.
+
+### 10.3 §6.4 was right about the fraction and wrong about everything else
+
+§6.4 reported the overshoot as worth "**±3% while the blocked area moves 33%**" and asked for a
+re-measurement with a mode-shaped motion. Both done, and the two probes **disagree**:
+
+```
+    free / piston      blocked  2.27  1.53  1.31  1.37   (1.73x)
+                       t50/ms   0.500 0.375 0.375 0.344  (1.45x)
+                       rad/E0   0.4647 0.4695 0.4615 0.4764  (1.03x)
+    supported / (2,1)  blocked  1.51  0.93  0.92  0.80   (1.89x)
+                       t50/ms   1.375 0.562 0.500 0.500  (2.75x)
+                       rad/E0   1.0000 x4 — SATURATED, which is not the same as insensitive
+```
+
+The **fraction** radiated is insensitive; the **rate** is not, and §10.2's prescribed-velocity `R`
+agrees with the rate. §6.4's number was measured on the fraction, which is the one observable that
+cannot see the effect. (A mode's fraction saturates outright, so it is reported as saturated rather
+than as a result.)
+
+### 10.4 The overshoot ratio's denominator was wrong, and the supported branch goes *below* 1
+
+§6.4 quoted `blocked_area / plate_area` = 1.490, 1.571, 1.352, 1.183 "trending to 1". Measured, that
+is the **free** branch only. The supported branch reads 1.513, 0.927, 0.925, 0.799 — **below 1** —
+because the cut is the support of `T` and a supported plate's clamped rim is not in `T`. Against
+the **live** rectangle, which is the moving surface and therefore the honest denominator, it reads
+2.690, 1.647, 1.644, 1.421 and does trend to 1. `blocked_area`'s docstring says so, and the
+consequence is worth stating: the free plate is the configuration where the obstacle and the
+physical plate coincide, which is also the one a physically suspended object *is*.
+
+### 10.5 The numbers that moved without changing a claim
+
+* **§6.5's sign flip lands at step 8**, not step 7. The plan said the step count is not the lesson;
+  it moved, and it still is not. More importantly the flip that is genuinely invisible is the
+  **consistent** one (both the `∓q` order and the jump direction) — flip only one and the conserved
+  total *does* catch it, which the plan did not distinguish. The detector is the sign of the
+  **room's own** pressure on the first step, not the port's `pressure_jump`, which the consistent
+  flip leaves bit-identical.
+* **§6.3's index range is `1 ≤ index ≤ N − 2`**, not `N − 1`: with `index` a *face* index, both
+  straddling node planes are interior only up to `N − 2`.
+* **§7.8's null is 85×**, the arc is 1.000/0.928/0.786/0.565/0.347/0.164/0.012, the baffled arc
+  reaches 0.530, and the phantom is 5.2× down at the same shape. The plan's caveats all held —
+  including that the requested angles are not the ones the grid gives (0.0/14.3/30.3/45.9/59.2/
+  74.2/88.8 at radii 1.175–1.222 m).
+* **§7.6's ratios are 5.2, 19.3, 40.8** (plan: 5.2, 22, 45) and the free piston's phantom never
+  reaches `t50` — the divergence, as asserted.
+* **§6.6 confirmed**: margins `0.2061806714931906` supported and `0.2061840079056186` free,
+  bit-identical loaded or bare, and they are *batch 3's own* numbers rather than the plan's
+  `0.2052…` — the guard never saw either load, so it reports the same margin for both batches.
+* **§7.1's energy drifts** are 6.5e-15 (rigid) and 8.0e-15 (lossy) of the acoustic scale, and the
+  modal oracle 1.0e-14 … 7.4e-14 field error at 3.3e-16 … 8.2e-16 drift — a decade looser than the
+  prototype's, on a broadband IC rather than a single mode.
+* **§7.2's partial cut passes 0.83 of the uncut room's peak**, not the prototype's 0.223 of "the
+  same source": a half-width partition in a room this size is barely an obstacle. The exact
+  `0.000e+00` for the full cut is unchanged, and it is the assertion.
+
+### 10.6 What was scoped out and stayed out
+
+Everything §3 deferred stayed deferred. One item is worth naming because it was *close*: `Membrane`
+(#4) and the von Kármán plate (#6) mount on `InteriorSurfacePort` with no port change — the surface
+protocol is batch 3's, unedited — but neither is wired up or tested, so neither is claimed.

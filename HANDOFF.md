@@ -454,7 +454,7 @@ threads from here as the project matures; each bullet is a seed, not a spec.
 
 ### H. Spatial audio, radiation & room
 
-- **The 3-D air box** — *three batches shipped* as `core/airbox.py`. Batch 1 (`AirBox`): a
+- **The 3-D air box** — *four batches shipped* as `core/airbox.py`. Batch 1 (`AirBox`): a
   rigid/absorbing rectangular room on a Yee grid, energy-exact, with the tensor-cosine room modes as
   a machine-precision oracle and the free field reproducing radiation batch 1's monopole law —
   deliberately **read-out only**. Batch 2 (`RoomPort`, `RoomLoadedBody`): the **two-way port**, and
@@ -476,12 +476,35 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   Its finding is a warning about this project's own primary bug detector: **the conserved total is
   structurally blind to a wrong coupling constant**, because each side's ledger telescopes against
   whatever pressure *it* used, so the money test is `radiated == injected` plus a differential
-  per-node `R_j`, never the total. Batch 4 is named: the **interior two-sided (dipole) plate** — a
-  plate hanging *in* the room, radiating from both faces, an internal moving boundary rather than a
-  source. Still deferred beyond it, in rough order of appetite: **PML** or higher-order absorbing
+  per-node `R_j`, never the total. Batch 4 (`AirBox.add_cut`, `InteriorSurfacePort`,
+  `RoomSuspendedPlate`): the **interior two-sided (dipole) plate** — the plate stops being a source
+  and becomes an **object**. It hangs *in* the room, radiates from both faces, is driven by the
+  pressure *jump* across it, and blocks a path through the room **even at rest**. The
+  implementation news was better than the area-coupling plan feared: prescribing a face velocity and
+  injecting a `∓q` pair on the two node planes straddling it are the *same arithmetic*
+  (`A_face·w_z = W` identically), so the port protocol, the injection weights and the `injected`
+  ledger are all batch 3's, and **the only new machinery is the cut** — zeroing `u` on a set of
+  faces, which the energy identity absorbs for free because a cut face's contribution to the
+  kinetic sum is identically zero. The cut brings a *new* machine-precision oracle rather than a
+  restriction of batch 1's: a full cut makes two rooms of length `(m+½)h` and `(N−m−½)h`, the cut
+  end is **face-centered**, and the exact eigenvector is `cos(nπi/(m+½))`. Its finding **outranks
+  batch 3's and corrects it**: batch 4 has a coefficient batch 3 did not — the **2** of the two
+  loaded faces — and **the money test is blind to half the ways to get it wrong** (a `1×` inside the
+  factorization only leaves `|radiated − injected|` at rounding; a consistent `1×` leaves the scene
+  total at rounding). So the money test is *not sufficient either*, and the guard that catches both
+  is the **coupled residual at two timesteps** against the room's own post-closure pressure jump.
+  The headline is that the blockage is not a refinement of the source: drop the cut, keep the `∓q`
+  pair, and the resulting legal dipole *source* — the "phantom" — has a `t50` **diverging** from the
+  real plate's under refinement (5.2, 19.3, 40.8 at 1×/2×/3×), which is what proves the cut is
+  load-bearing. What the object buys that no `R(ω)` can state: the radiation resistance ratio
+  dipole/baffled **crosses 1** (0.28 … 2.31 over `ka = 0.8 … 2.8`), and the far field has a
+  **direction** — an 85× null in the plate's own plane — where every lumped one-port here is a
+  monopole. Still deferred, in rough order of appetite: **PML** or higher-order absorbing
   boundaries, since a locally-reacting impedance wall is matched at normal incidence only;
   **scattering objects and non-rectangular rooms** (staircasing in 3-D — the membrane batch's lesson
-  again); **moving ports**; and **viscothermal air absorption**.
+  again); a plate **not aligned with a grid plane**, and one of finite thickness; `Membrane` (#4) and
+  the von Kármán plate (#6) as suspended surfaces (the port needs no change for either — neither is
+  wired up); **moving ports**; and **viscothermal air absorption**.
 - **3D radiation modeling** with directivity, plus HRTF / ambisonics output — the box produces a
   pressure field; turning that into a binaural or B-format signal is a separate, non-physics batch.
 - **Room coupling:** place the modeled instrument inside a modeled acoustic space. Done for the
@@ -489,8 +512,10 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   back, and two instruments in one room hear each other at `c₀` with the arrival index measured.
   Done for the *distributed* body too, as of batch 3: `RoomLoadedPlate` couples a plate to the air
   over its whole surface and `StringPlateBridge` accepts it as a body unchanged, so
-  `string → bridge → RoomLoadedPlate → AirBox` is a running chain. What is left is a plate the room
-  can reach from **both** sides — the interior dipole of batch 4.
+  `string → bridge → RoomLoadedPlate → AirBox` is a running chain. And as of batch 4 the room can
+  reach the plate from **both** sides: `string → bridge → RoomSuspendedPlate → AirBox` runs with the
+  same `connection.py`, and the stability guard comes out bit-identical to the bare plate's —
+  retiring batch 3's own prediction that the face cut would break it.
 
 ### I. Ecosystem & product
 
