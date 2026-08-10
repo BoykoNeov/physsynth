@@ -35,6 +35,7 @@ from scipy.sparse.linalg import eigsh
 
 from physsynth.analysis import damping, dispersion, duffing, modal, spectrum
 from physsynth.analysis.rotating_wave import rotating_wave_history, solve_rotating_wave
+from physsynth.core.airbox import AirBox, RoomLoadedBody, impedance_from_zeta
 from physsynth.core.body import ModalBody
 from physsynth.core.bore import C0_AIR, RHO0_AIR, Bore
 from physsynth.core.bow import BowedString
@@ -894,6 +895,8 @@ def _build_payload(p: dict[str, Any]) -> dict[str, Any]:
         return _build_payload_radbody(p)
     if model == "airload":
         return _build_payload_airload(p)
+    if model == "airbox":
+        return _build_payload_airbox(p)
     return _build_payload_string(p)
 
 
@@ -8404,5 +8407,509 @@ def _build_payload_vk(p: dict[str, Any]) -> dict[str, Any]:
             "num_steps": int(n_audio),
             "n_frames": int(nf),
             "spectrum": _vk_spectrum_block(pickup, fs, f_lin, f0),
+        },
+    }
+
+
+# == string -> body -> a 3-D ROOM (HANDOFF §12H) ==================================================
+#
+# Batch 18. The first field in this viewer with a shape in THREE dimensions, and the first payload
+# with `dims: 3`. Three things about it are unlike every model above, and all three are measured
+# (`M:\claud_projects\temp\airbox-viewer-probe\`) rather than assumed:
+#
+#   * **The cost is h^-4, not h^-3.** The 3-D CFL runs the wrong way: lambda = c0 k / h <= 1/sqrt(3)
+#     means fs >= c0 sqrt(3)/h, so a COARSER grid forces a HIGHER sample rate. Refining h buys h^-3
+#     nodes AND h^-1 steps. Measured x14.2 then x15.4 per halving against the predicted 16, so no
+#     WORK_MAX instinct from the 1-D/2-D models transfers; AIRBOX_WORK_MAX comes from the measured
+#     ~5e7 node-steps/s.
+#   * **The room is the stiffest constraint, so IT sets fs for the whole scene** — `RoomLoadedBody`
+#     refuses a sample-rate mismatch, and the room's fs is pinned by its own CFL. So the STRING's
+#     lambda stops being a slider and becomes a DERIVED read-out, the reverse of every other model
+#     here. That also couples the two grids: at h = 0.03 the string tops out near N = 110, at
+#     h = 0.05 near N = 66, and the refusal says which knob to move.
+#   * **`dims: 3` is a SLICE SET, not a volume.** Three named orthogonal planes per frame, decoded
+#     by the frontend's existing heatmap path. A 32^3 volume x 300 frames is ~10M floats — dead on
+#     this file's own JSON-size trap; three slices at the 64-cap measure 5.26 MB base64, which is a
+#     shipped membrane payload's order.
+#
+# The claim is an INDEX, never a magnitude (batch 2's finding: the room contaminates a magnitude by
+# more than the effect). On a 7-point Yee stencil the numerical domain of dependence after n steps
+# is |di| + |dj| + |dk| <= n CELLS, so a mic's first nonzero sits on the Manhattan distance in
+# cells — EARLIER than the physical wavefront and independent of lambda (measured 41/41 off-axis
+# and 21/21 on-axis at both lambda = 0.9/sqrt3 and the 1/sqrt3 ceiling, and 41 again through the
+# coupled run). The money test is the CROSS-LEDGER residual |radiated - injected|, never the drift:
+# the coupling term cancels out of the scene total identically (`RoomLoadedBody.energy`), which is
+# exactly why the total cannot see a wrong coupling constant.
+
+AIRBOX_ASPECT = (1.2, 0.9, 0.8)      # m at room_size = 1.0; the shipped room's proportions
+AIRBOX_SIZE_DEFAULT = 1.0
+AIRBOX_SIZE_MIN, AIRBOX_SIZE_MAX = 0.5, 2.5
+AIRBOX_H_DEFAULT = 0.03              # m; N = round(L/h) per axis, and the SNAP is the resolution
+AIRBOX_H_MIN, AIRBOX_H_MAX = 0.02, 0.10
+AIRBOX_CFL_DEFAULT = 0.9             # lambda_air = frac / sqrt(3); NOT the ceiling — see below
+AIRBOX_CFL_MIN, AIRBOX_CFL_MAX = 0.3, 0.99
+AIRBOX_ZETA_DEFAULT = 3.0            # normalized wall impedance when walls = "absorbing"
+AIRBOX_ZETA_MAX = 50.0
+AIRBOX_WALLS = ("rigid", "absorbing", "open")
+AIRBOX_N_MAX = 140
+AIRBOX_AUDIO_DEFAULT = 0.6           # s; ~8 s to render — the room costs ~14 s per simulated second
+AIRBOX_AUDIO_MAX = 2.0
+AIRBOX_NODE_MAX = 400_000            # ~3.2x the shipped room; the payload/latency ceiling
+AIRBOX_WORK_MAX = 1.2e9              # nodes x steps, ~24 s at the measured ~5e7 node-steps/s
+AIRBOX_ANIM_WIN = 0.014              # s — the wavefront crosses the shipped room in ~3.5 ms
+AIRBOX_CELLS_PER_FRAME = 1.0         # the animation clock is ACOUSTIC TRANSIT, not the string's f1
+AIRBOX_TRACE_POINTS = 600
+AIRBOX_PORT_FRAC = (0.25, 0.30, 0.35)   # the body's port, as a fraction of L_actual
+AIRBOX_MIC_FAR = (0.92, 0.85, 0.90)     # the far end of the mic's travel — deliberately OFF-AXIS
+AIRBOX_MIC_DEFAULT = 0.8
+AIRBOX_MIC_MIN, AIRBOX_MIC_MAX = 0.15, 1.0
+AIRBOX_ARRIVAL_FRACS = (1e-3, 2e-2)     # amplitude thresholds shown BESIDE the cone, not as it
+AIRBOX_SCALE_PCTL = 55.0             # percentile of the live field that sets the asinh reference
+
+
+def _airbox_walls(p: dict[str, Any]) -> tuple[Any, str, float]:
+    """The wall token the core wants, plus what the readout prints. See :data:`AIRBOX_WALLS`."""
+    walls = str(p.get("walls", "rigid"))
+    if walls not in AIRBOX_WALLS:
+        raise ParamError(f"walls must be one of {AIRBOX_WALLS}, got {walls!r}.")
+    zeta = _fnum(p, "wall_zeta", AIRBOX_ZETA_DEFAULT)
+    if walls != "absorbing":
+        return walls, walls, float("nan")
+    # NOTE the caller's lossless test keys off the TOKEN, not this label: "open" (Z = 0) is a
+    # pressure-release wall, which reflects with inversion and dissipates NOTHING — measured
+    # `dissipated_energy == 0.0` exactly. Classing it lossy would exempt a conservative scene from
+    # the 1e-10 bar, i.e. hide the very bug the bar exists to catch.
+    if not (0.0 < zeta <= AIRBOX_ZETA_MAX):
+        raise ParamError(f"wall_zeta must be in (0, {AIRBOX_ZETA_MAX}], got {zeta}.")
+    # The primary wall parameter stays the EFFECTIVE Z (the "unphysical params are a feature" rule);
+    # zeta is only how the reflection oracle likes to talk about it.
+    return impedance_from_zeta(zeta), f"absorbing (zeta = {zeta:g})", zeta
+
+
+def _build_airbox_scene(p: dict[str, Any]) -> tuple[StringBodyBridge, AirBox, RoomLoadedBody,
+                                                    dict[str, Any]]:
+    """Build ``string -> bridge -> RoomLoadedBody -> AirBox`` and every scalar the panels quote.
+
+    Deliberately NOT a bare room. A read-out room has exactly ONE ledger and therefore nothing to
+    be blind to, which is a weak honesty gate for a batch whose real risk is the slicer; the port
+    is a rank-1 scalar solve that costs almost nothing over the bare room and buys a genuine
+    CROSS-LEDGER test. `RoomLoadedBody` delegates every `ModalBody` accessor, so batch 12's
+    machinery above is reused unchanged.
+
+    **fs is the room's, and the string's lambda falls out of it** — see the section note.
+    """
+    size = _fnum(p, "room_size", AIRBOX_SIZE_DEFAULT)
+    h = _fnum(p, "air_h", AIRBOX_H_DEFAULT)
+    cfl = _fnum(p, "air_cfl", AIRBOX_CFL_DEFAULT)
+    L = _fnum(p, "L", 1.0)
+    T = _fnum(p, "T", 200.0)
+    rho = _fnum(p, "rho", 0.005)
+    K = _fnum(p, "bridge_stiffness", BODY_K_DEFAULT)
+    sigma_body = _fnum(p, "sigma_body", BODY_SIGMA_BODY_DEFAULT)
+    try:
+        N = int(p.get("N", 100))
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"N must be an integer, got {p.get('N')!r}.") from exc
+
+    if not (AIRBOX_SIZE_MIN <= size <= AIRBOX_SIZE_MAX):
+        raise ParamError(
+            f"room_size must be in [{AIRBOX_SIZE_MIN}, {AIRBOX_SIZE_MAX}], got {size}."
+        )
+    if not (AIRBOX_H_MIN <= h <= AIRBOX_H_MAX):
+        raise ParamError(f"air_h must be in [{AIRBOX_H_MIN}, {AIRBOX_H_MAX}] m, got {h}.")
+    if not (AIRBOX_CFL_MIN <= cfl <= AIRBOX_CFL_MAX):
+        raise ParamError(
+            f"air_cfl must be in [{AIRBOX_CFL_MIN}, {AIRBOX_CFL_MAX}], got {cfl}: it is the "
+            "fraction of the 3-D CFL ceiling, and 1.0 is refused because lambda = 1/sqrt(3) is "
+            "where the corner mode goes DEFECTIVE — a flat energy there is not a stability "
+            "certificate."
+        )
+    if not (N_MIN <= N <= AIRBOX_N_MAX):
+        raise ParamError(f"N must be in [{N_MIN}, {AIRBOX_N_MAX}] for the room, got {N}.")
+    if min(L, T, rho) <= 0:
+        raise ParamError("L, T, rho must all be positive.")
+    if K < 0:
+        raise ParamError(f"bridge_stiffness must be >= 0, got {K}.")
+    if not (0.0 <= sigma_body <= BODY_SIGMA_BODY_MAX):
+        raise ParamError(f"sigma_body must be in [0, {BODY_SIGMA_BODY_MAX}], got {sigma_body}.")
+
+    walls, walls_label, zeta = _airbox_walls(p)
+    room_L = tuple(size * v for v in AIRBOX_ASPECT)
+    lam_air = cfl / math.sqrt(3.0)
+    fs = C0_AIR / (lam_air * h)                     # the room pins the scene's sample rate
+
+    c = math.sqrt(T / rho)
+    lam_string = c * N / (L * fs)                   # DERIVED, not a slider
+    if not (0.0 < lam_string < 1.0):
+        raise ParamError(
+            f"the string's lambda comes out {lam_string:.4f}, and it must be in (0, 1). The ROOM "
+            f"sets the sample rate here (fs = c0/(lambda_air h) = {fs:,.0f} Hz), so the string's "
+            "lambda is derived, not dialled: lower N, refine air_h, or raise air_cfl."
+        )
+
+    room = AirBox(L=room_L, fs=fs, h=h, walls=walls)
+    nodes = int(np.prod([n + 1 for n in room.N]))
+    if nodes > AIRBOX_NODE_MAX:
+        raise ParamError(
+            f"the room is {nodes:,} nodes (> {AIRBOX_NODE_MAX:,}). Coarsen air_h or shrink "
+            "room_size — in 3-D the node count grows as h^-3."
+        )
+
+    string = IdealString(L=L, T=T, rho=rho, fs=fs, N=N, boundary=("fixed", "free"), sigma=0.0)
+    body = ModalBody(freqs=BODY_BODY_FREQS, fs=fs, sigmas=sigma_body, masses=BODY_BODY_MASS,
+                     phi=1.0)
+    at = tuple(f * v for f, v in zip(AIRBOX_PORT_FRAC, room.L_actual, strict=True))
+    loaded = RoomLoadedBody(body=body, room=room, at=at, radius=None)
+    # The exact coupled guard fires HERE if K exceeds the ceiling (surfaced as a construction
+    # error).
+    bridge = StringBodyBridge(string=string, body=loaded, K=K)
+    info = {
+        "c": c, "L": L, "N": N, "fs": fs, "lam_string": lam_string, "lam_air": lam_air,
+        "K": K, "sigma_body": sigma_body, "h": h, "cfl": cfl, "nodes": nodes,
+        "walls_token": str(p.get("walls", "rigid")),
+        "room_L": tuple(round(float(v), 4) for v in room.L_actual),
+        "room_L_requested": tuple(round(float(v), 4) for v in room_L),
+        "room_N": tuple(int(v) for v in room.N), "walls": walls_label, "zeta": zeta,
+        "port_at": tuple(round(float(v), 4) for v in room.snapped(at)),
+    }
+    return bridge, room, loaded, info
+
+
+class _AirboxRun:
+    """Telemetry of a room-coupled run — five booked channels, two ledgers, and the mic.
+
+    **Two sampling rates, on purpose.** The mic pressure and the port velocity are per-step: one is
+    the audio and the other is the cone's time origin, and the cone is an exact-integer claim that
+    a decimated trace would destroy. The five energy channels are sampled every ``e_stride`` steps
+    instead, because each one is a sum over the WHOLE room and seven of them per step measured
+    ~3 s of the shipped render's wall-clock on their own. The channels are integrals of a smooth
+    quantity, so ``AIRBOX_TRACE_POINTS`` samples bound them honestly — but the drift and the
+    residual below are therefore maxima over those samples, not over every step, and the payload
+    says so.
+    """
+
+    def __init__(self, n: int, e_stride: int) -> None:
+        m = n // e_stride + 1
+        self.e_stride = e_stride
+        self.e_steps = np.arange(m) * e_stride
+        self.E = np.empty(m)                 # the conserved scene total (bridge + room)
+        self.e_string = np.empty(m)
+        self.e_body = np.empty(m)            # BARE modal energy (not RoomLoadedBody.energy)
+        self.e_conn = np.empty(m)
+        self.e_acoustic = np.empty(m)        # stored in the air
+        self.e_dissipated = np.empty(m)      # taken by the walls (monotone)
+        self.radiated = np.empty(m)          # the body's ledger: what it handed the room
+        self.injected = np.empty(m)          # the ROOM's ledger for the same transaction
+        self.p_mic = np.empty(n + 1)         # room pressure at the mic — the arrival trace
+        self.q_port = np.empty(n + 1)        # port volume velocity (the cone's time origin)
+        self.slices: list[NDArray[np.float64]] = []
+        self.frame_steps: list[int] = []
+
+
+def _airbox_slice_planes(room: AirBox, frac: float) -> list[dict[str, Any]]:
+    """The three named orthogonal planes, with their decimation strides. Server-side, by design.
+
+    A client-side movable slice would require shipping the whole volume, which is the one thing
+    that does not fit (see the section note). So the slice point is a re-render, and the plane
+    geometry travels in the payload rather than being re-derived in JS.
+    """
+    nx, ny, nz = (int(n) + 1 for n in room.N)
+    idx = [min(max(0, int(round(frac * (n - 1)))), n - 1) for n in (nx, ny, nz)]
+    hx = float(room.h)
+    planes = [
+        {"name": "xy", "u": "x", "v": "y", "nu_full": nx, "nv_full": ny, "axis": 2, "at": idx[2]},
+        {"name": "xz", "u": "x", "v": "z", "nu_full": nx, "nv_full": nz, "axis": 1, "at": idx[1]},
+        {"name": "yz", "u": "y", "v": "z", "nu_full": ny, "nv_full": nz, "axis": 0, "at": idx[0]},
+    ]
+    for pl in planes:
+        stride = max(1, math.ceil(max(pl["nu_full"], pl["nv_full"]) / DISPLAY_MAX))
+        pl["stride"] = stride
+        pl["nu"] = len(range(0, pl["nu_full"], stride))
+        pl["nv"] = len(range(0, pl["nv_full"], stride))
+        pl["at_m"] = round(pl["at"] * hx, 4)
+        pl["extent"] = [round((pl["nu_full"] - 1) * hx, 4), round((pl["nv_full"] - 1) * hx, 4)]
+    return planes
+
+
+def _airbox_take_slices(room: AirBox, planes: list[dict[str, Any]]) -> NDArray[np.float64]:
+    """One frame: the three decimated planes, flattened head-to-tail in ``planes`` order."""
+    out: list[NDArray[np.float64]] = []
+    for pl in planes:
+        s, at = pl["stride"], pl["at"]
+        if pl["axis"] == 2:
+            field = room.p[::s, ::s, at]
+        elif pl["axis"] == 1:
+            field = room.p[::s, at, ::s]
+        else:
+            field = room.p[at, ::s, ::s]
+        out.append(np.asarray(field, dtype=float).ravel())
+    return np.concatenate(out)
+
+
+def _run_airbox(bridge: StringBodyBridge, room: AirBox, loaded: RoomLoadedBody, n_steps: int, *,
+                mic_index: tuple[int, int, int], planes: list[dict[str, Any]], anim_stride: int,
+                frame_until: int, e_stride: int) -> _AirboxRun:
+    """Step the coupled scene, capturing the five channels, both ledgers and the slice frames.
+
+    The step ORDER is batch 2's contract and is load-bearing: every port solves against the room's
+    stored ``u^{n+1/2}`` FIRST, and the caller steps the room ONCE afterwards. Hand-rolled rather
+    than :func:`simulate` for the same reason batch 12's is — the channel split is not a
+    ``SimResult``. See :class:`_AirboxRun` for why the two rates differ.
+    """
+    run = _AirboxRun(n_steps, e_stride)
+
+    def _sample_energy(j: int) -> None:
+        run.e_string[j] = bridge.string.energy()
+        run.e_body[j] = loaded.body.energy()
+        run.e_conn[j] = 0.5 * bridge.K * bridge._stretch() * bridge._stretch(prev=True)
+        run.e_acoustic[j] = room.acoustic_energy()
+        run.e_dissipated[j] = room.dissipated_energy()
+        run.radiated[j] = loaded.radiated_energy
+        run.injected[j] = room.injected_energy()
+        run.E[j] = bridge.energy() + room.energy()
+
+    def _sample_fast(i: int) -> None:
+        run.p_mic[i] = float(room.p[mic_index])
+        run.q_port[i] = loaded.volume_velocity
+
+    _sample_energy(0)
+    _sample_fast(0)
+    if frame_until >= 1:
+        run.slices.append(_airbox_take_slices(room, planes))
+        run.frame_steps.append(0)
+    for i in range(1, n_steps + 1):
+        bridge.step()
+        room.step()
+        _sample_fast(i)
+        if i % e_stride == 0 and i // e_stride < run.E.size:
+            _sample_energy(i // e_stride)
+        if i <= frame_until and i % anim_stride == 0:
+            run.slices.append(_airbox_take_slices(room, planes))
+            run.frame_steps.append(i)
+    if not np.all(np.isfinite(run.E)) or not np.all(np.isfinite(run.p_mic)):
+        raise ParamError("simulation produced non-finite energy (instability) — adjust parameters.")
+    return run
+
+
+def _airbox_arrival(run: _AirboxRun, manhattan: int, eucl_m: float, manh_m: float, fs: float,
+                    c0: float) -> dict[str, Any]:
+    """THE CLAIM: the lattice light cone, measured as an exact integer of grid cells.
+
+    The detector is exact-zero-vs-nonzero on a field with zero initial data, so it is not a
+    threshold choice — and that matters, because the amplitude-threshold arrivals beside it DO move
+    with lambda while the cone does not. The time origin is the first nonzero INJECTION, not step
+    0: the string is plucked in displacement so the body (and hence the port) starts at rest, and a
+    step-0 origin would offset the integer by one. That was measured, not assumed.
+    """
+    nz_q = np.nonzero(run.q_port != 0.0)[0]
+    nz_p = np.nonzero(run.p_mic != 0.0)[0]
+    first_q = int(nz_q[0]) if nz_q.size else -1
+    first_p = int(nz_p[0]) if nz_p.size else -1
+    measured = (first_p - first_q) if (first_q >= 0 and first_p >= 0) else -1
+
+    peak = float(np.max(np.abs(run.p_mic))) if run.p_mic.size else 0.0
+    thresholds = []
+    for frac in AIRBOX_ARRIVAL_FRACS:
+        hits = np.nonzero(np.abs(run.p_mic) > frac * peak)[0] if peak > 0 else np.array([])
+        step = int(hits[0]) - first_q if hits.size and first_q >= 0 else -1
+        thresholds.append({"frac": frac, "steps": step})
+
+    # the trace the panel draws: the mic's first arrival, in STEPS, so the cone lands on a gridline
+    span = max(manhattan * 3, measured + 20, 60)
+    span = min(span, run.p_mic.size - 1)
+    lo = max(0, first_q)
+    trace = run.p_mic[lo:lo + span + 1]
+    tmax = float(np.max(np.abs(trace))) if trace.size else 0.0
+    return {
+        "kind": "airbox",
+        "manhattan_cells": int(manhattan),
+        "measured_cells": int(measured),
+        "match": bool(measured == manhattan),
+        "first_injection_step": first_q,
+        "first_mic_step": first_p,
+        "euclid_m": round(eucl_m, 4),
+        "euclid_steps": round(eucl_m / c0 * fs, 2),
+        # the PHYSICAL time to walk the Manhattan path at c0 — the third candidate answer, and the
+        # one that makes the claim non-trivial: the cone beats both, and is an integer.
+        "manhattan_m": round(manh_m, 4),
+        "manhattan_steps_physical": round(manh_m / c0 * fs, 2),
+        "thresholds": thresholds,
+        "trace": _finite_list(trace / tmax if tmax > 0 else trace, 6),
+        "trace_peak": tmax,
+        "span": int(span),
+    }
+
+
+def _build_payload_airbox(p: dict[str, Any]) -> dict[str, Any]:
+    playback_speed = _fnum(p, "playback_speed", 0.02)
+    pluck_frac = _fnum(p, "pluck_position", 0.3)
+    amplitude = _fnum(p, "amplitude", BODY_AMP_DEFAULT)
+    audio_dur = _fnum(p, "audio_duration", AIRBOX_AUDIO_DEFAULT)
+    mic_frac = _fnum(p, "mic_position", AIRBOX_MIC_DEFAULT)
+    slice_frac = _fnum(p, "slice_position", 0.5)
+    if not (0.0 < playback_speed <= SPEED_MAX):
+        raise ParamError(f"playback_speed must be in (0, {SPEED_MAX}], got {playback_speed}.")
+    if not (0.0 < pluck_frac < 1.0):
+        raise ParamError(f"pluck_position must be in (0, 1), got {pluck_frac}.")
+    if not (0.0 < audio_dur <= AIRBOX_AUDIO_MAX):
+        raise ParamError(f"audio_duration must be in (0, {AIRBOX_AUDIO_MAX}] s, got {audio_dur}.")
+    if not (AIRBOX_MIC_MIN <= mic_frac <= AIRBOX_MIC_MAX):
+        raise ParamError(
+            f"mic_position must be in [{AIRBOX_MIC_MIN}, {AIRBOX_MIC_MAX}], got {mic_frac}."
+        )
+    if not (0.0 <= slice_frac <= 1.0):
+        raise ParamError(f"slice_position must be in [0, 1], got {slice_frac}.")
+
+    bridge, room, loaded, info = _build_airbox_scene(p)
+    fs, c, L = info["fs"], info["c"], info["L"]
+    f1_base = c / (2.0 * L)
+
+    n_steps = max(1, round(audio_dur * fs))
+    work = info["nodes"] * n_steps
+    if work > AIRBOX_WORK_MAX:
+        raise ParamError(
+            f"work budget exceeded ({work:.2e} node-steps > {AIRBOX_WORK_MAX:.2e}). In 3-D the "
+            "CFL runs the wrong way — a coarser grid forces a HIGHER sample rate — so cost grows "
+            "as h^-4: coarsen air_h only together with a shorter audio_duration, or shrink "
+            "room_size."
+        )
+
+    # --- geometry the claim is measured against --------------------------------------------------
+    port_at = np.array(info["port_at"], dtype=float)
+    mic_want = tuple(
+        a + mic_frac * (f * b - a)
+        for a, f, b in zip(port_at, AIRBOX_MIC_FAR, room.L_actual, strict=True)
+    )
+    mic_index = room.node_index(mic_want)
+    port_index = room.node_index(tuple(port_at))
+    manhattan = int(np.abs(np.array(mic_index) - np.array(port_index)).sum())
+    mic_snapped = np.array(room.snapped(mic_want), dtype=float)
+    port_snapped = np.array(room.snapped(tuple(port_at)), dtype=float)
+    eucl_m = float(np.linalg.norm(mic_snapped - port_snapped))
+    manh_m = float(np.sum(np.abs(mic_snapped - port_snapped)))
+
+    planes = _airbox_slice_planes(room, slice_frac)
+    per_frame = int(sum(pl["nu"] * pl["nv"] for pl in planes))
+    # catch #2, but on the ROOM's clock. Every other model strides at the STRING's fundamental;
+    # here that is the wrong oscillator entirely — the thing being animated is a wavefront, which
+    # advances lambda_air CELLS per step and crosses the shipped room in ~3.5 ms. Striding on f1
+    # measured 18 frames and showed the crossing in about four of them. One frame per cell of
+    # travel is the resolution the picture actually has.
+    anim_stride = max(1, round(AIRBOX_CELLS_PER_FRAME / info["lam_air"]))
+    frame_until = min(n_steps, max(anim_stride, round(AIRBOX_ANIM_WIN * fs)))
+    if frame_until // anim_stride > MAX_FRAMES:
+        anim_stride = max(1, math.ceil(frame_until / MAX_FRAMES))
+
+    pluck = triangular_pluck(bridge.string.x, L, pluck_frac * L, amplitude=amplitude)
+    bridge.string.set_state(pluck)
+    e_stride = max(1, math.ceil(n_steps / AIRBOX_TRACE_POINTS))
+    run = _run_airbox(bridge, room, loaded, n_steps, mic_index=mic_index, planes=planes,
+                      anim_stride=anim_stride, frame_until=frame_until, e_stride=e_stride)
+
+    # --- the money panel: FIVE booked channels, and the cross-ledger residual that guards them ----
+    # The coupling term cancels out of the total identically (radiated == injected), which is
+    # PRECISELY why the total cannot see a wrong coupling constant — the air box's own batch-3 and
+    # batch-4 finding, and b17's. So the gate is the residual, and the total ships as a sanity line.
+    total = run.E
+    e0 = float(total[0])
+    scale = max(abs(e0), 1e-300)
+    resid = np.abs(run.radiated - run.injected) / scale
+    ledger = {
+        "kind": "airbox",
+        "time": _finite_list(run.e_steps / fs, 6),
+        "e_string_frac": _finite_list(run.e_string / total),
+        "e_body_frac": _finite_list(run.e_body / total),
+        "e_conn_frac": _finite_list(run.e_conn / total),
+        "e_acoustic_frac": _finite_list(run.e_acoustic / total),
+        "e_dissipated_frac": _finite_list(run.e_dissipated / total),
+        "total_frac": _finite_list(total / total),
+        "residual": _finite_list(resid, 3),
+        # THE MONEY NUMBER. Max over the energy SAMPLES (every `e_stride` steps), not every step —
+        # see _AirboxRun on why, and `e_stride` ships so the bound is readable, not implied.
+        "residual_max": float(np.max(resid)),
+        "e_stride": int(run.e_stride),
+        "n_samples": int(total.size),
+        "acoustic_frac_peak": round(float(np.max(run.e_acoustic / total)), 6),
+        "dissipated_frac_end": round(float(run.e_dissipated[-1] / total[-1]), 6),
+        "radiated_frac_end": round(float(run.radiated[-1] / total[-1]), 6),
+        "total_drift": (total.max() - total.min()) / scale,
+        "walls": info["walls"],
+    }
+
+    arrival = _airbox_arrival(run, manhattan, eucl_m, manh_m, fs, room.c0)
+    arrival["mic_cell"] = [int(v) for v in mic_index]
+    arrival["port_cell"] = [int(v) for v in port_index]
+    arrival["mic_at"] = [round(float(v), 4) for v in mic_snapped]
+    arrival["lam_air"] = round(info["lam_air"], 6)
+
+    # --- the slice set: dims 3, and the colour map is a MEASUREMENT ------------------------------
+    # A wavefront's leading edge is the faintest part of a frame and the thing the viewer must see.
+    # Measured mid-flight it is ~2e-3 of the frame max (faintest live decile 3e-7 early), while the
+    # frame max itself swings ~2x within a run on top of a 385x first-frame-to-peak spread. So
+    # global-linear renders the early frames black and per-frame-linear hides the decay: a
+    # COMPRESSED SIGNED map is forced. The values shipped stay physical (Pa) and the mapping travels
+    # WITH them rather than being an implicit frontend choice.
+    frames = np.array(run.slices, dtype=float) if run.slices else np.zeros((0, per_frame))
+    live = np.abs(frames[frames != 0.0])
+    field_amp = float(np.max(np.abs(frames))) if frames.size else 0.0
+    ref = float(np.percentile(live, AIRBOX_SCALE_PCTL)) if live.size else 0.0
+    if not (ref > 0.0):
+        ref = field_amp if field_amp > 0.0 else 1.0
+
+    audio48, peak = _resample_normalize(run.p_mic, fs)   # the audio IS the mic, in the room
+    sim = SimResult(time=run.e_steps / fs, energy=total, output=None, fs=fs, snapshots=[])
+    return {
+        "model": "airbox",
+        "fs_sim": round(fs, 3),
+        "lambda": round(info["lam_string"], 6),
+        "grid": {"x": _finite_list(bridge.string.x, 6)},
+        "frames": {
+            "b64": _b64f32(frames.ravel()),
+            "n_frames": int(frames.shape[0]),
+            "width": int(per_frame),
+            "dims": 3,
+            "kind": "slices",
+            "planes": planes,
+            "stride_floats": int(per_frame),
+            "scale": {"map": "asinh", "ref": ref, "amp": field_amp,
+                      "pctl": AIRBOX_SCALE_PCTL},
+        },
+        "frame_times": _finite_list(np.array(run.frame_steps, dtype=float) / fs, 6),
+        "anim_dt": float(anim_stride / fs),
+        "playback_speed": playback_speed,
+        "field_amp": field_amp,
+        "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
+        # Lossless iff nothing in the scene dissipates: sigma_body = 0 AND a wall that takes
+        # nothing. BOTH "rigid" (Z = inf) and "open" (Z = 0) qualify — an open wall reflects with
+        # inversion and its `dissipated_energy` is exactly 0.0 (measured). Only "absorbing" is
+        # lossy, and keying this off the token rather than the printed label is what keeps a
+        # conservative scene ON the 1e-10 bar instead of quietly exempted from it.
+        "energy": _energy_block(
+            sim,
+            sigma_zero=bool(info["sigma_body"] == 0.0 and info["walls_token"] != "absorbing"),
+            oracle_2sigma=0.0, decay_oracle=False,
+        ),
+        "meta": {
+            "c": round(c, 3),
+            "f1": round(f1_base, 3),
+            "num_steps": int(n_steps),
+            "n_frames": int(frames.shape[0]),
+            "room": {
+                "L": list(info["room_L"]),
+                "L_requested": list(info["room_L_requested"]),
+                "N": list(info["room_N"]),
+                "h": info["h"],
+                "nodes": info["nodes"],
+                "cfl": info["cfl"],
+                "lam_air": round(info["lam_air"], 6),
+                "lam_string": round(info["lam_string"], 6),
+                "walls": info["walls"],
+                "zeta": info["zeta"],
+                "port_at": list(info["port_at"]),
+                "c0": round(room.c0, 3),
+                "work": float(work),
+            },
+            "ledger": ledger,
+            "arrival": arrival,
         },
     }
