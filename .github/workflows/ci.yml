@@ -4,14 +4,27 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  schedule:
+    # Nightly, 04:00 UTC — this is where the SECOND interpreter is covered (see the matrix below).
+    - cron: "0 4 * * *"
+  workflow_dispatch:
 
 jobs:
   validate:
-    name: Validation harness (energy / modal / convergence / stability)
+    name: Validation harness (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
+      # Do not cancel 3.12 because 3.11 went red: when they disagree, the disagreement IS the
+      # finding, and cancelling the other half hides which axis the split is on.
+      fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        # Every push ran the whole ~1500-test suite TWICE, on 3.11 and 3.12 — and this is
+        # pure-numeric code whose failures have never once been interpreter-specific (the one
+        # real split in this repo's history was Windows vs Linux, an axis the matrix does not
+        # even cover). So pushes and PRs pay for one interpreter and the nightly pays for both.
+        python-version: >-
+          ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+              && '["3.11","3.12"]' || '["3.12"]' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -36,5 +49,13 @@ jobs:
       # `--dist loadgroup` scatters tests freely EXCEPT where a module carries
       # `pytest.mark.xdist_group`, which keeps its expensive module-scoped fixtures on one worker.
       # conftest.py pins each worker to a single BLAS thread so the pool does not oversubscribe.
+      #
+      # NO `-q` HERE. `pyproject.toml` already sets `addopts = "-q"`, so passing it again makes it
+      # `-qq`, which suppresses the `N passed in …` summary entirely — a green run and a red run
+      # then end the same way on screen. Verified both ways on 2026-08-10.
+      #
+      # `--durations=50` is free (it only reports what pytest already timed) and is the only
+      # QUIET-MACHINE profile of this suite that exists: local timings are taken on a contended
+      # box and inflate ~3x. Read it before optimising anything.
       - name: Run validation harness
-        run: pytest -q -n auto --dist loadgroup
+        run: pytest -n auto --dist loadgroup --durations=50

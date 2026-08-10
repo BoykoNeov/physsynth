@@ -626,12 +626,29 @@ def test_load_matrix_is_symmetric_and_the_cost_is_reported():
 
 
 def _peak_monopole(inst, steps=200):
-    """Largest ``|sum_j q_j| / net_area`` over a run — all a one-port could ever couple through."""
-    peak = 0.0
+    """Largest ``|sum_j q_j| / sum_j |q_j|`` over a run — the fraction of the surface's own flow
+    that survives cancellation, i.e. all a one-port could ever couple through.
+
+    **Normalised by the run's own flow, deliberately.** The bare ``|sum q| / net_area`` is
+    dimensional, so its zero sits at whatever roundoff happens to be for this amplitude and this
+    cell size — it read ``7e-14`` on Windows and ``1.6e-13`` on Linux against an *absolute*
+    ``1e-13`` bar, which is a platform assertion wearing a physics assertion's clothes. The ratio
+    is dimensionless and caps at 1, so the zeros (``<1e-11``) and the radiating controls (``~1``)
+    separate by eight orders of magnitude and the bar can sit two decades clear of either.
+
+    It is also the stronger statement: an amplitude-free measure cannot be flattered by a run that
+    barely moves. ``denom == 0`` for the whole run would be exactly that degenerate pass, so it is
+    refused rather than returned as a zero.
+    """
+    peak, moved = 0.0, False
     for _ in range(steps):
         inst.step()
         inst.room.step()
-        peak = max(peak, abs(inst.volume_velocity) / inst.port.net_area)
+        denom = float(np.abs(inst.nodal_volume_velocity).sum())
+        if denom > 0.0:
+            moved = True
+            peak = max(peak, abs(inst.volume_velocity) / denom)
+    assert moved, "the surface never moved — a dead coupling would pass every silence bar vacuously"
     return peak
 
 
@@ -662,8 +679,8 @@ def test_an_even_mode_is_silent_to_every_one_port_and_still_radiates(mode):
     reference = make_room_loaded_plate(room=make_surface_room(N=(12, 12, 9)), N=16)
     reference.set_state(1e-3 * plate_mode_shape(reference.plate, 1, 1))
 
-    assert _peak_monopole(inst) < 1e-13
-    assert _peak_monopole(reference) > 1e-2  # the (1,1) control DOES have a monopole
+    assert _peak_monopole(inst) < 1e-9
+    assert _peak_monopole(reference) > 1e-2  # the (1,1) control cancels not at all — it reads 1.0
     assert inst.radiated_energy > 0.05 * reference.radiated_energy
 
 
@@ -693,10 +710,10 @@ def test_the_silence_is_a_property_of_the_whole_scene():
         return _peak_monopole(inst)
 
     # symmetric scenes: silent to rounding
-    assert leak("rigid") < 1e-13
-    assert leak(impedance_from_zeta(4.0)) < 1e-13
+    assert leak("rigid") < 1e-9
+    assert leak(impedance_from_zeta(4.0)) < 1e-9
     # asymmetric in y only -- the (2,1) mode is antisymmetric in X, so its zero is untouched
-    assert leak({"y0": impedance_from_zeta(4.0)}) < 1e-13
+    assert leak({"y0": impedance_from_zeta(4.0)}) < 1e-9
     # asymmetric in the mode's OWN axis: the room drives the plate's odd modes
     assert leak({"x0": impedance_from_zeta(4.0)}) > 1e-3
     # and off-centre by a third of an air cell, in an otherwise perfect room

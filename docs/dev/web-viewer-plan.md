@@ -2562,7 +2562,8 @@ recorded because the wrong version was one edit from shipping:
   close-outs, the HANDOFF §11 decisions and all five batch-17 commits — has been `failure`. The
   seven failing tests are **all pre-existing air-box** (six
   `test_airbox_dipole.py::test_surface_port_is_bit_identical_across_the_shared_spreading_refactor`
-  parametrisations and `test_airbox_surface.py::…_even_mode_is_silent_…[mode1]`); batch 17's own
+  parametrisations — since renamed `…_is_unchanged_across_…`, see the fix below — and
+  `test_airbox_surface.py::…_even_mode_is_silent_…[mode1]`); batch 17's own
   357 web tests are green on Linux, and the one thing the failure list *does* say about this batch
   is that its `…_bit_identically` anchor is the safe kind (bit-identity between two runs in the same
   process, not against literals captured on one machine). **Do not blame `-qq` for the blindness.**
@@ -2570,6 +2571,21 @@ recorded because the wrong version was one edit from shipping:
   `FAILED …` lines were printed in every one of those runs. The suite was not silent; it was
   *unread*. **A 24-minute suite whose verdict nobody opens is worse than no suite: it converts
   "tests exist and pass" into an assumption while charging full price for it.**
+- **BOTH failures were the same mistake: a number captured on ONE machine, asserted as if it were
+  physics.** Fixed 2026-08-10. The dipole goldens were compared with `==` against literals captured
+  on Windows, where Linux differs in the last ULP (`6708.019018618780` vs `…779`) — so the test was
+  a *platform* assertion wearing a refactor assertion's clothes, and it passed only on the machine
+  that wrote it. And `_peak_monopole` measured `|Σq|/net_area`, a *dimensional* quantity, against an
+  **absolute** `1e-13`: it reads `7e-14` here and `1.6e-13` there, and the bar was simply sitting on
+  the roundoff. The cures are opposite in shape and the same in kind — the golden test drops to
+  `rel=1e-12`/`1e-11` while keeping `node_count`, `nnz_T` and the index-weighted digest as the exact
+  *permutation* detectors (**and its docstring now says what the tolerance no longer catches**: a
+  pure summation reordering of the stepping loop); `_peak_monopole` becomes the dimensionless
+  cancellation ratio `|Σq|/Σ|q|`, which caps at 1, separates the zeros (`<1e-11`) from the radiating
+  controls (`~1`) by **eight** orders instead of six, and cannot be flattered by a run that barely
+  moves — measured, the `(1,1)` control now reads exactly `1.000000`, which is a *better* statement
+  of "this mode has a monopole" than the old `3.16` was. **A tolerance that is not scale-free is a
+  golden value with extra steps.**
 
 ### Later batches (rough map — not firm)
 

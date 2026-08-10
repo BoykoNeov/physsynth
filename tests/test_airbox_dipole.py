@@ -653,16 +653,24 @@ SURFACE_CASES = {
 
 
 @pytest.mark.parametrize("case", list(SURFACE_CASES))
-def test_surface_port_is_bit_identical_across_the_shared_spreading_refactor(case):
-    """Batch 3's :class:`SurfacePort` is **unchanged to the last bit** by batch 4's refactor.
+def test_surface_port_is_unchanged_across_the_shared_spreading_refactor(case):
+    """Batch 3's :class:`SurfacePort` is unchanged by batch 4's refactor, which moved the spreading
+    operator and four refusals into a shared base so the interior port could reuse them.
 
-    The spreading operator and four refusals moved into a shared base so the interior port could
-    reuse them, and a refactor that quietly changed a summation order would leave every batch-3 test
-    passing (they are all tolerance-based) while breaking this repo's bit-identity claims. So the
-    numbers below were captured from the *pre-refactor* code and are pinned here: checksums of ``T``
-    and of the load matrix (which a reordering breaks), and a 200-step coupled run's end state
-    across both boundaries, both spreadings, a lossy mounting wall, an off-centre surface and a
-    high face.
+    **This was an ``==`` bit-identity test and is now a tolerance test, deliberately.** The goldens
+    below were captured on Windows; on Linux ``load`` differs in the last ULP
+    (``6708.019018618780`` vs ``…779``) and ``radiated`` by ~1.7e-14 relative after 200 coupled
+    steps. Under ``==`` that is a *platform* assertion, not a refactor assertion, and it failed CI
+    on every run while passing on the machine that wrote it — the worst possible split, because the
+    green side is the side nobody ships from.
+
+    **Say what the tolerance no longer catches:** a pure summation *reordering* of the stepping loop
+    can move ``radiated``/``p`` by less than 1e-11 and would now pass. What still carries that claim
+    is the structure, asserted exactly: ``node_count`` and ``nnz_T`` are integers, and the
+    index-weighted digest ``sum_i a_i * i`` moves by *order unity* under any permutation of the data
+    — so a reordering of ``T`` or of the load matrix is still caught outright. The run-end values
+    are regression detection now, not a bit-identity proof; the refactor they were written to guard
+    has shipped, and this is what survives it honestly.
     """
     def digest(a):
         a = np.asarray(a, dtype=float).ravel()
@@ -671,15 +679,17 @@ def test_surface_port_is_bit_identical_across_the_shared_spreading_refactor(case
     want = SURFACE_GOLDEN[case]
     inst = make_room_loaded_plate(**SURFACE_CASES[case])
     port = inst.port
+    # Exact: integers, and the permutation detector.
     assert (port.node_count, port.T.nnz) == (want["node_count"], want["nnz_T"])
-    assert digest(port.T.data) == want["T"]
-    assert digest(port.load_matrix.data) == want["load"]
+    assert digest(port.T.data) == pytest.approx(want["T"], rel=1e-12)
+    assert digest(port.load_matrix.data) == pytest.approx(want["load"], rel=1e-12)
     inst.set_state(plate_bump(inst.plate))
     for _ in range(200):
         inst.step()
         inst.room.step()
-    assert inst.radiated_energy == want["radiated"]
-    assert float(inst.room.p.sum()) == want["p"]
+    # 200 steps of accumulation, so one decade looser than the construction-time digests.
+    assert inst.radiated_energy == pytest.approx(want["radiated"], rel=1e-11)
+    assert float(inst.room.p.sum()) == pytest.approx(want["p"], rel=1e-11)
 
 
 # -- refusals ---------------------------------------------------------------------------------
