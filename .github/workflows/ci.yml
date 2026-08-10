@@ -22,9 +22,8 @@ jobs:
         # pure-numeric code whose failures have never once been interpreter-specific (the one
         # real split in this repo's history was Windows vs Linux, an axis the matrix does not
         # even cover). So pushes and PRs pay for one interpreter and the nightly pays for both.
-        python-version: >-
-          ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
-              && '["3.11","3.12"]' || '["3.12"]' }}
+        # fromJSON is required: a matrix value must be an ARRAY, and the ternary yields a string.
+        python-version: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["3.11","3.12"]' || '["3.12"]') }}
     steps:
       - uses: actions/checkout@v4
 
