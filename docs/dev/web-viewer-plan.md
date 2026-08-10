@@ -2345,7 +2345,9 @@ decimated one (batch 2). And the deep-link verifier structurally cannot fire the
 ### Batch 17 (DONE) — the air as an IMPEDANCE: `Z_a(ω)` stores as well as radiates
 
 **Built & browser-verified.** All-wrapper (`physsynth/core` untouched, core test count unchanged,
-the core-dep allowlist guard green); 21 web tests, ruff clean, headless verifier `airload` PASS
+the core-dep allowlist guard green); **21 web tests (357 in the web file, 1474 in the suite —
++21 and all of them in `test_web_backend.py`, so the delta *is* the batch)**, ruff clean, headless
+verifier `airload` PASS
 alongside `body`/`platebody`/`radbody`, CDP switch-check PASS. Shipped defaults, measured through
 the payload: the air takes **97.4 %** of the pluck within 2 s and **holds up to 18.1 %** of it in
 the radiation mass on the way, while the body still sloshes to **60.5 %** and the five channels sum
