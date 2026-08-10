@@ -136,10 +136,22 @@ footprint or an odd node count need not:
     h_mem/h_air = 3.96   bbox 132   rows 48   cols 48   UNION 96    <- both refuse
 ```
 
-So the weaker criterion does not weaken the check where the check earns its keep: the comb threshold
-is unmoved — it lies in `(2.02, 2.20]` under both — and only the *shape* assumption is dropped. The
-`footprint_empty` attribute, the refusal text and the "count, not an inequality on `h_surface/h_air`"
-rationale all survive; the message gains the shape it now knows about.
+So the weaker criterion does not weaken the check where the check earns its keep, and only the
+*shape* assumption is dropped. The `footprint_empty` attribute, the refusal text and the "count, not
+an inequality on `h_surface/h_air`" rationale all survive; the message gains the shape it now knows
+about.
+
+> **Corrected at build time — the two `bbox` columns above are not the shipped criterion.** Probe 3
+> computed its `bbox` from the *reached node set*; the code's is built from the surface's
+> *coordinate* extent, which is inset by up to one air node per side and is therefore a **subset**
+> of the new span-wise set, not a superset. So the new criterion is very slightly **stricter** than
+> what shipped, not weaker: 20 unfed against 17 at `h_mem/h_air = 2.02`. Re-measured against the
+> shipped code on one rectangle at 1.01, 1.21, 1.35, 1.52, 1.73, 2.02, 2.42, 3.03 — **both criteria
+> change their verdict between the same two spacings**, which is the claim that had to survive and
+> does. What died is "the threshold lies in `(2.02, 2.20]`": that interval was a different room's.
+> The crossing depends on how the patch lands on the grid, not on the ratio alone — the same reason
+> the check counts unfed nodes instead of comparing spacings. Pinned by
+> `test_the_comb_verdict_changes_where_it_always_did`.
 
 **This is the batch's only edit to shipped port machinery.** Everything else the disk needs is
 already there — probe 2 bypassed the check and constructed the port to the end:

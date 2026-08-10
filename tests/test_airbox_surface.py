@@ -51,8 +51,15 @@ from helpers import (
 from scipy import sparse
 from scipy.sparse.linalg import splu
 
-from physsynth.core.airbox import FACES, RoomLoadedPlate, SurfacePort, impedance_from_zeta
+from physsynth.core.airbox import (
+    FACES,
+    InteriorSurfacePort,
+    RoomLoadedPlate,
+    SurfacePort,
+    impedance_from_zeta,
+)
 from physsynth.core.connection import StringPlateBridge
+from physsynth.core.membrane import Membrane
 from physsynth.core.plate import Plate
 from physsynth.core.string_ideal import IdealString
 
@@ -802,6 +809,120 @@ def test_refuses_a_surface_too_coarse_for_the_air_grid():
     """
     with pytest.raises(ValueError, match="fed by no surface node"):
         make_room_loaded_plate(boundary="free", N=3, spreading="nearest")
+
+
+# -- the footprint is span-wise, not a bounding box (air-box batch 5) ---------------------
+# `_check_footprint` built its required set as a bounding BOX, which silently assumed every
+# surface is a rectangle. These pin the replacement: a staircased disk is accepted, a rectangle
+# is judged by the identical set, and the comb it exists to refuse is still refused.
+
+DISK_ROOM_FS = 40_000.0            # h_air = 16.5 mm: fine enough that a disk's bbox corners bite
+DISK_ROOM_N = (28, 28, 9)          # ~22 air nodes across the disk -- below ~10 the effect hides
+DISK_RADIUS = 0.18                 # m
+DISK_TIERS = ("baffled", "suspended")
+
+
+def _disk_port(*, tier: str, N: int, domain: str = "circle", **kw):
+    """A membrane's live nodes handed to a port — the shape that motivated the criterion."""
+    room = make_surface_room(fs=DISK_ROOM_FS, N=DISK_ROOM_N)
+    geometry = dict(radius=DISK_RADIUS) if domain == "circle" else kw
+    mem = Membrane(domain=domain, T=3000.0, rho=0.26, fs=DISK_ROOM_FS, N=N, **geometry)
+    coords = np.column_stack((mem.X[mem.mask], mem.Y[mem.mask]))
+    areas = np.full(mem.n_live, mem.h * mem.h)
+    if tier == "baffled":
+        return SurfacePort(room=room, face="z0", coords=coords, areas=areas), mem
+    return InteriorSurfacePort(room=room, plane="z", index=4, coords=coords, areas=areas), mem
+
+
+def _bounding_box_unfed(port) -> int:
+    """The **old** criterion, recomputed here so these tests can show they discriminate.
+
+    A test that only asserts the new code passes cannot tell a fix from a no-op. This is the
+    superseded required set — the outer product of the two per-axis coordinate ranges — and the
+    disk cases below assert it was *not* zero, i.e. that the shipped check really did refuse them.
+    """
+    room = port.room
+    t0, t1 = port.in_plane_axes
+    tol = 1e-9 * room.h
+    inside = []
+    for d, ax in enumerate((t0, t1)):
+        grid = np.arange(room.N[ax] + 1) * room.h
+        lo, hi = port._face_coords[:, d].min() - tol, port._face_coords[:, d].max() + tol
+        inside.append(np.nonzero((grid >= lo) & (grid <= hi))[0])
+    foot = (inside[0][:, None] * (room.N[t1] + 1) + inside[1][None, :]).ravel()
+    reached = np.ravel_multi_index(
+        (port.nodes[t0], port.nodes[t1]), (room.N[t0] + 1, room.N[t1] + 1)
+    )
+    return int(np.setdiff1d(foot, reached).size)
+
+
+@pytest.mark.parametrize("tier", DISK_TIERS)
+@pytest.mark.parametrize("N", (16, 24, 32, 48))
+def test_accepts_a_staircased_disk_the_bounding_box_refused(tier, N):
+    """A round drumhead is the interesting membrane, and the bounding box refused it — always.
+
+    The bbox corners of a disk sit ~``0.41 R`` outside it, so they are fed by no surface node *by
+    construction*: the refusal was structural and refining made it no better (16, 12, 48, 40 unfed
+    at ``N = 16, 24, 32, 48``, identically on both tiers). Span-wise the same disks leave zero.
+    """
+    port, _ = _disk_port(tier=tier, N=N)
+    assert port.footprint_empty == 0
+    assert _bounding_box_unfed(port) > 0, "this configuration no longer discriminates"
+
+
+@pytest.mark.parametrize("tier", DISK_TIERS)
+def test_a_rectangle_is_judged_by_the_identical_required_set(tier):
+    """The reduction that protects batches 3 and 4: for a rectangle, span-wise **is** the box.
+
+    Every row spans the same columns and every column the same rows, so the union of the spans is
+    the bounding box of the reached nodes — by construction, not by tolerance. Asserted as exact
+    set equality rather than as equal counts.
+    """
+    port, _ = _disk_port(tier=tier, N=12, domain="rectangle", Lx=0.24, Ly=0.16)
+    t0, t1 = port.in_plane_axes
+    i0, i1 = np.asarray(port.nodes[t0]), np.asarray(port.nodes[t1])
+    reached = {(int(a), int(b)) for a, b in zip(i0, i1, strict=True)}
+    box = {
+        (r, c)
+        for r in range(int(i0.min()), int(i0.max()) + 1)
+        for c in range(int(i1.min()), int(i1.max()) + 1)
+    }
+    assert reached == box
+    assert port.footprint_empty == 0
+    assert _bounding_box_unfed(port) == 0
+
+
+def test_the_comb_verdict_changes_where_it_always_did():
+    """Dropping the *shape* assumption must not weaken the check where it earns its keep.
+
+    The new required set contains the old one (the coordinate box is inset by up to one node per
+    side), so it counts a few more unfed nodes when it refuses — 20 against 17 at
+    ``h_surface/h_air = 2.02``. What must not move is the **verdict boundary**, and it does not:
+    swept over a rectangle, both criteria change their mind between the same two spacings.
+
+    Note this is *not* a fixed ratio. Where the boundary sits depends on how the patch lands on
+    the air grid — a differently-placed one put it in (2.02, 2.24] — which is exactly why the
+    condition is a count of unfed nodes and not an inequality on ``h_surface/h_air``.
+    """
+    ratios, verdicts = [], []
+    for N in (12, 10, 9, 8, 7, 6, 5, 4):
+        room = make_surface_room(fs=DISK_ROOM_FS, N=DISK_ROOM_N)
+        mem = Membrane(domain="rectangle", T=3000.0, rho=0.26, fs=DISK_ROOM_FS, N=N, Lx=0.20,
+                       Ly=0.20)
+        coords = np.column_stack((mem.X[mem.mask], mem.Y[mem.mask]))
+        areas = np.full(mem.n_live, mem.h * mem.h)
+        ratios.append(mem.h / room.h)
+        try:
+            port = SurfacePort(room=room, face="z0", coords=coords, areas=areas)
+        except ValueError as exc:
+            assert "fed by no surface node" in str(exc)
+            verdicts.append("refused")
+        else:
+            verdicts.append("accepted")
+            assert _bounding_box_unfed(port) == 0, "the old criterion must agree on an ACCEPT"
+    # Monotone: accepted while fine, refused once coarse, and it crosses exactly once.
+    assert verdicts == ["accepted"] * 5 + ["refused"] * 3, list(zip(ratios, verdicts, strict=True))
+    assert ratios[4] < 2.0 < ratios[5], "the crossing must bracket the two-air-cell ceiling"
 
 
 def test_refuses_a_surface_on_an_open_face():

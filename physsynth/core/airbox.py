@@ -1531,39 +1531,70 @@ class _PatchPort:
 
     # -- construction refusals -------------------------------------------------------------
 
-    def _check_footprint(self, face_coords: NDArray[np.float64]) -> None:
+    def _check_footprint(self) -> None:
         """Refuse a surface too coarse to feed every air node under it (a comb at the grid scale).
 
-        Counts air nodes inside the footprint's bounding box that no surface node reaches. With
-        bilinear spreading this is 0 at every grid ratio measured, so the refusal rarely fires — and
-        it still ships, because a surface coarse enough to skip whole air cells is a real thing to
-        refuse. Note the condition is a **count of unfed nodes**, not an inequality on
-        ``h_surface/h_air``: at ratio 0.909, comfortably inside the naive inequality, nearest-node
-        still left half the footprint unfed.
+        Counts air nodes **under** the footprint that no surface node reaches. With bilinear
+        spreading this is 0 at every grid ratio measured, so the refusal rarely fires — and it still
+        ships, because a surface coarse enough to skip whole air cells is a real thing to refuse.
+        Note the condition is a **count of unfed nodes**, not an inequality on ``h_surface/h_air``:
+        at ratio 0.909, comfortably inside the naive inequality, nearest-node still left half the
+        footprint unfed.
+
+        **"Under the footprint" is span-wise, not a bounding box** — which it was until the membrane
+        batch, and which quietly assumed every surface is a *rectangle*. The required set is now:
+        per reached air-node row, the columns between that row's own first and last reached column;
+        per reached column, the rows between its own first and last; and their **union**. For a
+        rectangle every row spans the same columns and every column the same rows, so this reduces
+        to the bounding box **by construction** — batches 3 and 4 are unmoved.
+
+        The new set is *contained* in the old one's outer bound and *contains* the old one itself
+        (the coordinate box is inset by up to one node per side), so it refuses everything the box
+        refused and counts a few more nodes when it does — measured 20 against 17 at
+        ``h_surface/h_air = 2.02``. **The verdict boundary does not move**: swept over a rectangle
+        at 1.01, 1.21, 1.35, 1.52, 1.73, 2.02, 2.42, 3.03, both criteria change their mind between
+        the same two spacings. Where that boundary *sits* depends on alignment and not only on the
+        ratio — a differently-placed patch put it in (2.02, 2.24] — which is the same reason this
+        is a count of unfed nodes and not an inequality on ``h_surface/h_air``.
+
+        The bounding box was not a conservative approximation, it was the **wrong set**. A
+        staircased *disk* — model #4's circular domain, i.e. a drumhead — has bbox corners about
+        ``0.41 R`` from the nearest live node, so they are unreachable by construction and the
+        refusal fired at *every* resolution, getting worse under refinement: 20, 48 and 40 unfed
+        nodes at ``N = 40, 56, 72``, on both port tiers. Those corners are not under the surface at
+        all. Span-wise, the same disks leave **zero** unfed at ``N = 24 … 96``.
+
+        What this does still refuse, and honestly so, is a surface with an interior *hole* — an
+        annulus spans its own gap row-wise. No resonator in this repo has one; if one arrives, this
+        is the line that has to learn about it, and the refusal names the shape rather than hiding
+        it.
         """
         room = self.room
         t0, t1 = self.in_plane_axes
-        tol = 1e-9 * room.h
-        inside = []
-        for d, ax in enumerate((t0, t1)):
-            grid = np.arange(room.N[ax] + 1) * room.h
-            lo, hi = face_coords[:, d].min() - tol, face_coords[:, d].max() + tol
-            inside.append(np.nonzero((grid >= lo) & (grid <= hi))[0])
-        foot = (inside[0][:, None] * (room.N[t1] + 1) + inside[1][None, :]).ravel()
-        reached = np.ravel_multi_index(
-            (self.nodes[t0], self.nodes[t1]), (room.N[t0] + 1, room.N[t1] + 1)
-        )
+        i0 = np.asarray(self.nodes[t0], dtype=np.intp)
+        i1 = np.asarray(self.nodes[t1], dtype=np.intp)
+        n1 = room.N[t1] + 1
+        spans: list[NDArray[np.intp]] = []
+        for key in np.unique(i0):  # per air-node ROW: the columns between its own min and max
+            run = i1[i0 == key]
+            spans.append(int(key) * n1 + np.arange(int(run.min()), int(run.max()) + 1))
+        for key in np.unique(i1):  # per air-node COLUMN: the rows between its own min and max
+            run = i0[i1 == key]
+            spans.append(np.arange(int(run.min()), int(run.max()) + 1) * n1 + int(key))
+        foot = np.unique(np.concatenate(spans))
+        reached = np.ravel_multi_index((i0, i1), (room.N[t0] + 1, n1))
         # Recorded for the message and for the plan's API surface, but note it can only ever
         # read 0 on a LIVE port: a nonzero count is refused right below. It is a construction-time
         # diagnostic, not a state a caller can observe and act on.
         self.footprint_empty = int(np.setdiff1d(foot, reached).size)
         if self.footprint_empty:
             raise ValueError(
-                f"{self.footprint_empty} of {foot.size} air node(s) inside the surface's "
+                f"{self.footprint_empty} of {foot.size} air node(s) under the surface's "
                 f"footprint on {self._where} are fed by no surface node, so the acoustic "
-                f"source would be a comb at the grid scale. The surface's spacing is too coarse "
-                f"for h_air = {room.h:.6g} m (spreading={self.spreading!r}). Refine the surface, "
-                "or coarsen the air grid."
+                f"source would be a comb at the grid scale. The footprint is measured span-wise "
+                f"(per row and per column of air nodes), so this is about the surface's spacing "
+                f"and not its outline: too coarse for h_air = {room.h:.6g} m "
+                f"(spreading={self.spreading!r}). Refine the surface, or coarsen the air grid."
             )
 
     def _check_open_faces(self) -> None:
@@ -1885,7 +1916,7 @@ class SurfacePort(_PatchPort):
         rows, cols, vals = self._spread(face_coords)
         self._assemble(rows, cols, vals, axis, end, t0, t1)
 
-        self._check_footprint(face_coords)
+        self._check_footprint()
         self._check_open_faces()
         self._check_disjoint()
         room._ports.append(self)
@@ -2108,11 +2139,14 @@ class RoomLoadedPlate:
     structural, not a refinement: an even-index mode of a simply supported plate has *exactly* zero
     net volume velocity, so every one-port in this repo (``AirRadiation``, ``RadiatedBody``,
     ``RationalAirLoad``, ``RoomPort``) reports exact silence from a mode this class radiates from
-    definitely. This is also what makes the *existing* grid resonators radiate honestly: models #4,
-    #5 and #5b have had a ``pressure()`` read-out since they were built, and it is
+    definitely. This is also what makes the *existing* grid resonators radiate honestly: models #5
+    and #5b have had a ``pressure()`` read-out since they were built, and it is
     ``sum_i area_i u_i''`` — a monopole, i.e. exactly the net volume acceleration, i.e. exactly the
     quantity that is insufficient. That read-out is not wrong; it is the compact ``a -> 0`` limit of
-    this, and this is where the plate stops being a point source.
+    this, and this is where the plate stops being a point source. (This sentence used to name model
+    #4 as well. It does not have one: :class:`~physsynth.core.membrane.Membrane` exposes no
+    ``pressure()``, and its two-level roll keeps no ``_accel`` to build one from. The point stands
+    for the plates; the membrane simply never had the compact limit to be superseded.)
 
     **The load folds into the plate's own factorization — nothing new is solved.** The plate already
     back-substitutes a prefactored SPD system every step (``A = (1 + sigma k) I + theta k^2 kappa^2
@@ -2569,7 +2603,7 @@ class InteriorSurfacePort(_PatchPort):
         rows, cols, vals = self._spread(face_coords)
         self._assemble(rows, cols, vals, axis, t0, t1)
 
-        self._check_footprint(face_coords)
+        self._check_footprint()
         self._check_disjoint()
         # The cut LAST, because it is the only registration that mutates the room: if any refusal
         # above fires, the room is left exactly as it was found.
