@@ -2615,7 +2615,64 @@ recorded because the wrong version was one edit from shipping:
   not a measurement until it is normalised against something in the same run that did not change —
   which is the airbox lesson above, one more time, in a costume that looks like a stopwatch.*
 
-### Batch 18 (PLANNED) — the room: the first field with a SHAPE in three dimensions
+### Batch 18 (DONE) — the room: the first field with a SHAPE in three dimensions
+
+**Built & browser-verified.** All-wrapper (`physsynth/core` untouched, core test count unchanged,
+the core-dep allowlist guard green — `airbox` is a new *core* import for the web tier but adds no
+third-party dependency, and the guard measures the `sys.modules` delta); **13 web tests**, ruff
+clean repo-wide, both new headless cases added. Shipped defaults, measured through the payload:
+the cone reads **46 cells, measured 46, MATCH**, against a Euclidean arrival of **52.8 steps** and a
+physical-Manhattan one of **88.5** — the claim beats both, and it is an integer. Cross-ledger
+residual **6.89e-18**, scene drift **2.49e-14**, air holding at most **2.76e-2 %** of the scene.
+Default render **8.6 s** (13 202 steps × 35 588 nodes), payload **2.8–3.1 MB**, 155 slice frames.
+
+**Six things the build corrected, every one of them a measurement rather than a review comment.**
+Recorded because the wrong version of each was working code at the time:
+
+- **The animation clock was the STRING's, and the room does not run on it.** `anim_stride` came
+  from `fs / (f1 · FRAMES_PER_PERIOD)` like every other model — but the thing being animated is a
+  *wavefront*, which crosses the shipped room in ~3.5 ms and advances `λ_air` **cells** per step.
+  On the string's clock that rendered **18 frames** and showed the crossing in about four of them.
+  On the room's (one frame per cell of travel) it renders **155**. *Generalizable: catch #2 says
+  the stride must resolve the fundamental — but "the fundamental" means the oscillator you are
+  drawing, and in a coupled scene that is not always the one the model is named after.*
+- **The slice decode was TRANSPOSED, and it looked like physics.** The backend ravels
+  `room.p[::s, ::s, at]` with shape `(nu, nv)` in C order, so **`nv` is the fastest axis**; the
+  frontend read `u = q % nu`. The result was not a crash or a garbled buffer — it was smooth
+  **horizontal banding**, which is a perfectly plausible thing for a room to do. What caught it was
+  arithmetic, not the picture: at 110–440 Hz the wavelength is ~3 m against a 1.2 m room, so the
+  field *must* be smooth and a striped one is impossible. **No payload assertion could have seen
+  this** — the bytes were correct — which is exactly why the headless case earns its cost.
+- **`open` walls are LOSSLESS, and calling them lossy would have hidden the bug the bar exists to
+  catch.** `Z = 0` is pressure-release: it reflects with inversion and dissipates **exactly 0.0**
+  (measured). The first draft keyed "lossless" off `walls == "rigid"`, which quietly exempted a
+  conservative scene from the 1e-10 conservation bar. It now keys off the token, and *both* rigid
+  and open sit on the bar (drift 6.1e-15 and 7.9e-15).
+- **A NaN builds a perfect payload and dies at the transport.** `zeta` was `float("nan")` on
+  non-absorbing walls; `web/server.py` dumps with `allow_nan=False`. `simulate_to_payload` returned
+  a valid dict, every in-process assertion passed, and the browser got a 500. *An in-process
+  serializer test structurally cannot see a serialization bug* — so the suite now calls
+  `json.dumps(..., allow_nan=False)` the way the server does.
+- **Seven whole-room energy sums per step cost ~3 s of the render.** The run now samples at **two
+  rates**: the mic and the port every step (the cone is an exact integer that a decimated trace
+  would destroy), the five channels every `e_stride`. The residual and drift are therefore maxima
+  over ~595 samples, not over every step, and `e_stride` ships in the payload so the bound is
+  readable rather than implied.
+- **The coupled cone must be timed from the first nonzero INJECTION, not from step 0.** The string
+  is plucked in *displacement*, so the body — and hence the port — starts at rest and first injects
+  at step 1. Timing from step 0 would have put the integer off by one, and it would have looked
+  like a rounding problem in the claim rather than a bookkeeping one in the origin.
+
+**And one design fact that only appeared once the two grids had to share a timestep:** `air_cfl`
+near 1 is refused by the **bridge**, not by the room — at `cfl = 0.99` the lower `fs` trips
+`StringBodyBridge`'s exact guard (`k²λ_max(A) = 4.15 ≥ 4`) before the air's CFL is anywhere near
+violated. The binding constraint at the top of that slider is the *coupling*, and the error message
+that surfaces is the core's own.
+
+*What is below is the plan as written before the build, kept because four of its claims died in
+probing and that record is the point.*
+
+### Batch 18 (PLAN, as written before the build) — the room
 
 **The legality check first, because this document forbids inferring a batch from itself.** The
 standing rule is "if a new viewer batch is wanted it needs a new model or a new **capability**

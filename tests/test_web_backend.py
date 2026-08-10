@@ -12,6 +12,7 @@ This file imports ``web.serialize`` (the wrapper) and ``physsynth`` (the core) �
 
 import base64
 import copy
+import json
 import math
 
 import numpy as np
@@ -19,6 +20,15 @@ import pytest
 
 import web.serialize as web_serialize
 from web.serialize import (
+    AIRBOX_AUDIO_MAX,
+    AIRBOX_CFL_MAX,
+    AIRBOX_H_MAX,
+    AIRBOX_H_MIN,
+    AIRBOX_MIC_MAX,
+    AIRBOX_N_MAX,
+    AIRBOX_NODE_MAX,
+    AIRBOX_SIZE_MAX,
+    AIRBOX_ZETA_MAX,
     AIRLOAD_CORNER_DEFAULT,
     AIRLOAD_CORNER_MAX,
     AIRLOAD_K_MAX,
@@ -4302,4 +4312,203 @@ def test_airload_ignores_params_that_belong_to_other_models():
                 sigma_plate=3.0, n_plate=12, sweep_cap=0.9)
     assert noisy["meta"]["exchange"] == base["meta"]["exchange"]
     assert noisy["meta"]["spectrum"] == base["meta"]["spectrum"]
+    assert noisy["energy"] == base["energy"]
+
+
+# == airbox: the ROOM — dims 3 as a slice set, and a claim that is an integer (batch 18) ==========
+#
+# The viewer's first 3-D field. What these tests pin, in order of how badly the batch needs them:
+#
+#   1. **The claim is an exact integer and it is lambda-INDEPENDENT.** On a 7-point Yee stencil the
+#      numerical domain of dependence after n steps is |di| + |dj| + |dk| <= n CELLS, so the mic's
+#      first nonzero lands on the Manhattan distance in cells. The two PHYSICAL arrivals it beats
+#      (Euclidean at c0, and walking the Manhattan path at c0) are both something else, and both
+#      move with lambda. If a refactor ever makes the cone move with lambda, the claim is gone.
+#   2. **The money test is the CROSS-LEDGER residual, not the drift.** ``RoomLoadedBody.energy``
+#      folds the coupling in so that it cancels out of the scene total identically — the total is
+#      structurally blind to a wrong coupling constant. Asserting on the drift alone would be
+#      asserting on a number with a known blind spot.
+#   3. **The payload survives STRICT json.** The server serializes with ``allow_nan=False``, so a
+#      NaN builds a fine payload in-process and then 500s at the transport. An in-process
+#      assertion cannot see it; this one calls json.dumps the way the server does.
+#   4. **``open`` walls are LOSSLESS.** Z = 0 is pressure-release: it reflects with inversion and
+#      dissipates exactly nothing. Classing it lossy would exempt a conservative scene from the
+#      1e-10 bar, i.e. hide the bug the bar exists to catch.
+
+
+def _ab(**over):
+    """A SHORT room run. The room costs ~14 s of wall-clock per simulated second, so every test
+    here buys the least audio that still answers its question."""
+    return _sim({"model": "airbox", "audio_duration": 0.05, **over})
+
+
+def test_airbox_the_cone_is_the_manhattan_cell_count_exactly():
+    d = _ab()
+    a = d["meta"]["arrival"]
+    assert a["measured_cells"] == a["manhattan_cells"], a
+    assert a["match"] is True
+    # the claim is only meaningful because the three candidate answers DISAGREE: an axis-aligned
+    # mic would make the Euclidean and Manhattan paths equal and the test would prove nothing.
+    assert a["euclid_steps"] > a["manhattan_cells"]
+    assert a["manhattan_steps_physical"] > a["euclid_steps"]
+
+
+def test_airbox_the_cone_tracks_the_mic_and_never_stops_matching():
+    """The interactive half of the claim: move the mic, the integer MOVES, and it still matches."""
+    seen = []
+    for frac in (0.2, 0.5, 0.8, 1.0):
+        a = _ab(mic_position=frac)["meta"]["arrival"]
+        assert a["match"] is True, (frac, a)
+        seen.append(a["manhattan_cells"])
+    assert seen == sorted(seen) and len(set(seen)) == len(seen), seen
+
+
+def test_airbox_the_cone_is_lambda_independent_while_the_amplitude_arrivals_are_not():
+    """THE test. The cone is a property of the STENCIL, so it must not move when the Courant
+    number does — that is what lets the default sit safely below the 1/sqrt(3) ceiling (where the
+    corner mode goes defective) with no caveat attached to the claim. The amplitude-threshold
+    arrivals beside it are physical, so they are free to move, and the contrast is the point."""
+    cones, rates, thresh = set(), set(), set()
+    for cfl in (0.4, 0.6, 0.9):
+        d = _ab(air_cfl=cfl)
+        a = d["meta"]["arrival"]
+        assert a["match"] is True, (cfl, a)
+        cones.add(a["manhattan_cells"])
+        rates.add(round(d["fs_sim"]))
+        thresh.add(tuple(q["steps"] for q in a["thresholds"]))
+    assert len(cones) == 1, f"the cone MOVED with lambda: {cones}"
+    assert len(rates) == 3, "the sample rates must actually differ or the test is vacuous"
+    assert len(thresh) > 1, "the amplitude arrivals should move with lambda; if not, why not?"
+
+
+def test_airbox_the_money_test_is_the_cross_ledger_residual():
+    d = _ab()
+    g = d["meta"]["ledger"]
+    assert g["kind"] == "airbox"
+    assert g["residual_max"] < 1e-10, g["residual_max"]
+    # the total is ALSO flat — but it is flat either way, which is precisely why it is not the gate
+    assert abs(g["total_drift"]) < LOSSLESS_TOL
+    assert g["e_stride"] >= 1 and g["n_samples"] > 100
+
+
+def test_airbox_the_room_sets_fs_and_the_strings_lambda_is_derived():
+    """The inversion that IS this model: ``RoomLoadedBody`` refuses a sample-rate mismatch and the
+    room's fs is pinned by its own CFL, so the string's lambda is a READ-OUT. A coarser room
+    (larger h) therefore RAISES fs, the opposite of every other model in this viewer."""
+    fine = _ab(air_h=0.025)
+    coarse = _ab(air_h=0.05, N=60)
+    assert fine["fs_sim"] > coarse["fs_sim"], "a coarser grid must force a HIGHER sample rate"
+    for d in (fine, coarse):
+        r = d["meta"]["room"]
+        assert 0.0 < r["lam_string"] < 1.0
+        assert r["lam_air"] <= 1.0 / math.sqrt(3.0) + 1e-12
+        assert d["lambda"] == pytest.approx(r["lam_string"])
+    # and the refusal names the right knob when the derived lambda crosses 1
+    bad = _ab(air_h=0.05, N=140)
+    assert "error" in bad and "derived" in bad["error"]["message"]
+
+
+def test_airbox_ships_three_named_slices_not_a_volume():
+    d = _ab()
+    fr = d["frames"]
+    assert fr["dims"] == 3 and fr["kind"] == "slices"
+    names = [pl["name"] for pl in fr["planes"]]
+    assert names == ["xy", "xz", "yz"]
+    per_frame = sum(pl["nu"] * pl["nv"] for pl in fr["planes"])
+    assert fr["width"] == per_frame
+    field = _decode_f32(fr["b64"])
+    assert field.size == per_frame * fr["n_frames"]
+    assert np.all(np.isfinite(field))
+    assert len(d["frame_times"]) == fr["n_frames"] and fr["n_frames"] > 1
+    # a volume would be nx*ny*nz per frame; the slice set must be far smaller than that
+    nx, ny, nz = (n + 1 for n in d["meta"]["room"]["N"])
+    assert per_frame < 0.25 * nx * ny * nz
+
+
+def test_airbox_slices_decimate_and_report_their_own_stride():
+    """DISPLAY_MAX is a display cap, not a physics one — so a room finer than the cap must shrink
+    the shipped planes and SAY it did, rather than silently sending a bigger buffer."""
+    # fine enough that an axis passes DISPLAY_MAX, small enough to stay inside AIRBOX_NODE_MAX —
+    # the two caps are close together in 3-D, which is itself the h^-3 fact this batch keeps
+    # running into.
+    d = _ab(air_h=AIRBOX_H_MIN, room_size=1.2, audio_duration=0.02)
+    assert "error" not in d, d.get("error")
+    for pl in d["frames"]["planes"]:
+        assert pl["nu"] <= DISPLAY_MAX and pl["nv"] <= DISPLAY_MAX
+        assert pl["stride"] >= 1
+        assert pl["nu"] == len(range(0, pl["nu_full"], pl["stride"]))
+        assert pl["nv"] == len(range(0, pl["nv_full"], pl["stride"]))
+    assert any(pl["stride"] > 1 for pl in d["frames"]["planes"]), "this room should have decimated"
+
+
+def test_airbox_the_colour_mapping_travels_with_the_values():
+    """The values stay in Pa and the compression is DECLARED. A wavefront's leading edge measures
+    ~2e-3 of the frame max, so the map cannot be linear — and leaving that choice implicit in the
+    frontend is how a rendering decision stops being reviewable."""
+    sc = _ab()["frames"]["scale"]
+    assert sc["map"] == "asinh"
+    assert sc["ref"] > 0.0 and sc["amp"] >= sc["ref"]
+    assert 0.0 < sc["pctl"] < 100.0
+
+
+def test_airbox_grid_snap_is_reported_never_silently_resampled():
+    d = _ab(air_h=0.03, room_size=1.0)
+    r = d["meta"]["room"]
+    assert r["L"] != r["L_requested"], "this h/L pair should snap — otherwise pick another"
+    for actual, n in zip(r["L"], r["N"], strict=True):
+        assert actual == pytest.approx(n * r["h"], rel=1e-9)
+
+
+def test_airbox_open_walls_are_lossless_and_only_absorbing_is_not():
+    """Z = 0 reflects with inversion and dissipates NOTHING. If ``open`` were classed lossy it
+    would be exempted from the 1e-10 conservation bar — hiding exactly the bug it exists to
+    find."""
+    for walls in ("rigid", "open"):
+        d = _ab(walls=walls)
+        assert "lossless" in d["energy"], walls
+        assert d["energy"]["lossless"]["pass"] is True, (walls, d["energy"])
+        assert d["meta"]["ledger"]["dissipated_frac_end"] == 0.0, walls
+    lossy = _ab(walls="absorbing")
+    assert "lossy" in lossy["energy"]
+    assert lossy["meta"]["ledger"]["dissipated_frac_end"] > 0.0
+    assert lossy["energy"]["lossy"]["monotone"] is True
+
+
+def test_airbox_payload_survives_the_servers_strict_json():
+    """``web/server.py`` dumps with ``allow_nan=False``. A NaN anywhere builds a perfectly good
+    payload in-process and then 500s at the transport, which no in-process assertion can see —
+    this is that bug's regression test, and it was a real one (``zeta`` on non-absorbing walls)."""
+    for walls in ("rigid", "absorbing", "open"):
+        json.dumps(_ab(walls=walls), allow_nan=False)
+    for bad in ({"air_cfl": 1.0}, {"N": AIRBOX_N_MAX + 1}, {"walls": "squishy"}):
+        json.dumps(_ab(**bad), allow_nan=False)
+
+
+def test_airbox_guards_and_budget_are_clean_error_payloads():
+    for bad in ({"N": AIRBOX_N_MAX + 1}, {"air_cfl": AIRBOX_CFL_MAX + 0.01},
+                {"air_cfl": 0.1}, {"air_h": AIRBOX_H_MAX + 0.01}, {"air_h": 0.001},
+                {"room_size": AIRBOX_SIZE_MAX + 0.1}, {"room_size": 0.1},
+                {"walls": "squishy"}, {"walls": "absorbing", "wall_zeta": 0.0},
+                {"walls": "absorbing", "wall_zeta": AIRBOX_ZETA_MAX + 1},
+                {"mic_position": AIRBOX_MIC_MAX + 0.1}, {"slice_position": 1.5},
+                {"audio_duration": AIRBOX_AUDIO_MAX + 0.1}, {"audio_duration": 0.0},
+                {"sigma_body": -1.0}, {"pluck_position": 1.0}):
+        out = _ab(**bad)
+        assert "error" in out and out["error"]["kind"] == "param", bad
+    nodes = _ab(air_h=AIRBOX_H_MIN, room_size=AIRBOX_SIZE_MAX)
+    assert "error" in nodes and str(AIRBOX_NODE_MAX) in nodes["error"]["message"].replace(",", "")
+    work = _ab(air_h=0.021, audio_duration=AIRBOX_AUDIO_MAX)
+    assert "error" in work and "work budget" in work["error"]["message"]
+    # the coupled stability guard is the CORE's, so it must surface as a construction error
+    stiff = _ab(bridge_stiffness=5.0e6)
+    assert "error" in stiff and stiff["error"]["kind"] == "construction"
+
+
+def test_airbox_ignores_params_that_belong_to_other_models():
+    """gatherParams ships every slider, hidden ones included — the recurring MODEL_RANGES leak."""
+    base = _ab()
+    noisy = _ab(K=2.0e6, alpha=2.3, depth=1e-3, kappa=5.0, EA=1e4, sigma_plate=3.0, n_plate=12,
+                radiation_R=133.0, air_corner=1091.8, radiation_weight=0.5, distance=2.0)
+    assert noisy["meta"]["arrival"] == base["meta"]["arrival"]
+    assert noisy["meta"]["ledger"] == base["meta"]["ledger"]
     assert noisy["energy"] == base["energy"]

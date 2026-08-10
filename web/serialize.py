@@ -8467,14 +8467,17 @@ AIRBOX_ARRIVAL_FRACS = (1e-3, 2e-2)     # amplitude thresholds shown BESIDE the 
 AIRBOX_SCALE_PCTL = 55.0             # percentile of the live field that sets the asinh reference
 
 
-def _airbox_walls(p: dict[str, Any]) -> tuple[Any, str, float]:
+def _airbox_walls(p: dict[str, Any]) -> tuple[Any, str, float | None]:
     """The wall token the core wants, plus what the readout prints. See :data:`AIRBOX_WALLS`."""
     walls = str(p.get("walls", "rigid"))
     if walls not in AIRBOX_WALLS:
         raise ParamError(f"walls must be one of {AIRBOX_WALLS}, got {walls!r}.")
     zeta = _fnum(p, "wall_zeta", AIRBOX_ZETA_DEFAULT)
     if walls != "absorbing":
-        return walls, walls, float("nan")
+        # None, NOT float("nan"): the server serializes with `allow_nan=False`, so a NaN here builds
+        # a perfectly good payload in-process and then dies at the JSON boundary with a 500. An
+        # in-process `simulate_to_payload` assertion cannot see that — only a real request can.
+        return walls, walls, None
     # NOTE the caller's lossless test keys off the TOKEN, not this label: "open" (Z = 0) is a
     # pressure-release wall, which reflects with inversion and dissipates NOTHING — measured
     # `dissipated_energy == 0.0` exactly. Classing it lossy would exempt a conservative scene from

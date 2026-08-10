@@ -277,6 +277,17 @@ def main() -> int:
             # which reproduces radbody bit-for-bit — is a slider setting, so it is exercised by the
             # CDP switch driver and the backend suite rather than by this fresh-load pass.
             ("airload", "model=airload"),
+            # String → body → a 3-D ROOM (batch 18): the viewer's first `dims: 3` field, shipped as
+            # a SLICE SET (three named orthogonal planes per frame) rather than a volume. This case
+            # earns its place beyond the backend suite for a reason the suite structurally cannot
+            # cover: the plane buffers are laid out in numpy C order (nv fastest) and a frontend
+            # that decodes them u-fastest TRANSPOSES the picture — which on a smooth field renders
+            # as plausible-looking banding, not as an error. Only pixels catch that. Costs ~9 s (the
+            # room is ~14 s of wall-clock per simulated second and the default is 0.6 s of audio).
+            ("airbox", "model=airbox"),
+            # The absorbing wall is the only lossy termination — and the only one that exposes ζ, so
+            # it is also the case that proves the ζ slider is reachable rather than merely built.
+            ("airbox_absorbing", "model=airbox&domain=absorbing"),
         ]
         # Optional name filters, so a single-model batch can re-check its own case without paying
         # for the whole sweep (the geometric regimes alone are ~2 minutes).

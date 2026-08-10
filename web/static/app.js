@@ -289,6 +289,15 @@ const MODEL_RANGES = {
              distance: { min: 0.5, max: 4.0, step: 0.1, fixed: 1, val: 1.0 },
              pluck_position: { val: 0.3 },
              audio_duration: { min: 0.2, max: 3.0, step: 0.1, fixed: 1, val: 2.0 } },
+  // The room. N's ceiling is not a preference: fs is the ROOM's (fs = c0/(lambda_air h)), so the
+  // string's lambda = cN/(L fs) is DERIVED, and past ~110 at the default h it crosses 1 and the
+  // backend refuses. audio_duration is short for a measured reason — the room costs ~14 s of
+  // wall-clock per simulated second, so the shipped 0.6 s is already an ~8.6 s render.
+  airbox: { N: { min: 16, max: 140, val: 100 },
+            bridge_stiffness: { min: 0, max: 19000, step: 500, fixed: 0, val: 8000, unit: "N/m" },
+            sigma_body: { val: 0 },
+            pluck_position: { val: 0.3 },
+            audio_duration: { min: 0.1, max: 2.0, step: 0.05, fixed: 2, val: 0.6 } },
   // Regime-level ranges, keyed "model:domain" and merged AFTER the model spec (see
   // applyModelRanges). The phantom regime is the first customer and needs both: κ = 8 is its
   // microscope (the geometric model defaults κ = 0, which is a HARMONIC string — every phantom
@@ -378,7 +387,7 @@ const MODEL_RANGES = {
 // Secondary select repurposed per model: geometry (membrane), boundary (plate / von Kármán) or
 // REGIME (the geometric string — three claims, one string, cheapest first).
 const DOMAIN_MODELS = ["membrane", "mallet", "plate", "vk", "geometric", "sympathetic", "bore",
-                       "reed", "platebody", "tension"];
+                       "reed", "platebody", "tension", "airbox"];
 const DOMAIN_OPTS = {
   membrane: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
   mallet: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
@@ -408,10 +417,17 @@ const DOMAIN_OPTS = {
          ["open", "Ideal open end (lossless)"]],
   bore: [["radiating", "Radiating bell — sound leaves"],
          ["open", "Ideal open end (r = −1)"]],
+  // The room's walls. Rigid leads because it is the conservative case and this batch's headline is
+  // a conservation claim. "open" is NOT the lossy one it looks like: Z = 0 is pressure-release, it
+  // reflects with inversion and dissipates exactly nothing (measured 0.0), so it sits on the same
+  // 1e-10 bar as rigid. Only "absorbing" takes energy, and only it exposes ζ.
+  airbox: [["rigid", "Rigid walls (Z = ∞) — conservative"],
+           ["absorbing", "Absorbing walls (ζ) — the only lossy one"],
+           ["open", "Pressure-release (Z = 0) — reflects, loses nothing"]],
 };
 const DOMAIN_LABELS = { membrane: "Domain", mallet: "Drum shape", geometric: "Regime",
                         sympathetic: "Regime", bore: "Far end", reed: "Far end",
-                        platebody: "Body edge", tension: "Regime" };
+                        platebody: "Body edge", tension: "Regime", airbox: "Walls" };
 
 const sliders = {};      // param -> <input>
 const updaters = {};     // param -> fn() that refreshes its value label
@@ -419,7 +435,7 @@ const fixedOf = {};      // param -> decimal places for the value label (re-rang
 const scaleOf = {};      // param -> multiplier applied in gatherParams (E in GPa, e in mm)
 const unitOf = {};       // param -> value-label unit suffix (re-rangeable: ρ is areal vs volumetric)
 let payload = null;
-let dims = 1;            // 1 = string polyline, 2 = membrane heatmap
+let dims = 1;            // 1 = string polyline, 2 = membrane heatmap, 3 = a 3-D room SLICE SET
 let frames = null, nFrames = 0, width = 0, fieldAmp = 1, animDt = 1e-3;
 let gridNx = 0, gridNy = 0, maskData = null, gridMeta = null, heatCv = null;
 // Geometric string (model #10): three stacked fields per frame + the (u, w) orbit trail.
@@ -449,6 +465,11 @@ let isReed = false, reedOpen = null, reedH0 = 4e-4;
 // distributed body you watch ring, dims = 2, the standard heatmap path), and the string rides along
 // as a thin 1D strip composited on top — its own frame buffer, at the same frame count/times.
 let isPlateBody = false, strFrames = null, strWidth = 0, strX = null, strAmp = 1;
+// batch 18 — the room. `dims = 3` is a SLICE SET, never a volume: three named orthogonal planes
+// per frame, each an ordinary decimated heatmap, concatenated head-to-tail in `slicePlanes` order.
+// A movable client-side slice would need the whole volume shipped (~10M floats); the slice point
+// is a server-side re-render instead, so the plane geometry travels in the payload.
+let isAirBox = false, slicePlanes = null, sliceCvs = null, sliceScale = null;
 const FIELD_COLORS = ["#4cc2ff", "#ff8f4c", "#9d7bff"];
 let audioSamples = null, audioFs = 48000, audioBuf = null, audioCtx = null, audioSrc = null;
 let speed = 0.02, animPlaying = true, scrubbing = false, currentFrame = 0, animStart = 0;
@@ -630,6 +651,21 @@ function updateLambdaHint() {
     hint.textContent = `λ = c·k/h = ${lam.toFixed(2)}  (must be < 1: the bridge spring pushes the `
       + `string's Nyquist mode unstable at λ = 1)`;
     hint.style.color = lam >= 1 ? "var(--bad)" : "var(--muted)";
+  } else if (m === "airbox") {
+    // The room's inversion, and it is the geometric string's trap in a new costume: here fs belongs
+    // to the AIR (3-D CFL, lambda_air = c0 k/h <= 1/sqrt(3)) and the STRING's lambda is whatever
+    // falls out. Showing both is the point — and so is showing that a COARSER room raises fs, which
+    // is the opposite of every other model in this viewer.
+    const h = param("air_h"), cfl = param("air_cfl"), N = param("N");
+    const lamAir = cfl / Math.SQRT2 / Math.sqrt(1.5);          // cfl / sqrt(3)
+    const fs = 343 / (lamAir * h);
+    const c = Math.sqrt(param("T") / param("rho"));
+    const lam = c * N / (param("L") * fs);
+    const bad = !(lam > 0 && lam < 1);
+    hint.textContent = `λ_air = ${lamAir.toFixed(3)} (≤ 1/√3 ≈ 0.577) → fs = ${fmt(fs)} Hz, and `
+      + `the STRING's λ = ${lam.toFixed(3)} is derived from it${bad ? " — REFUSED, ≥ 1" : ""}. A `
+      + `COARSER room forces a HIGHER fs, so cost grows as h⁻⁴, not h⁻³.`;
+    hint.style.color = bad ? "var(--bad)" : "var(--muted)";
   } else if (m === "body" || m === "platebody" || m === "radbody" || m === "airload") {
     // Explicit string + body step, coupled by a spring — the sympathetic case: λ < 1 is HARD-required
     // (the string's Nyquist mode is marginal at λ = 1 and the spring tips it over), so the slider is
@@ -949,6 +985,33 @@ function updateLambdaHint() {
   // an over-stiff spring surfaces as a construction ERROR, not a degraded render. The slider is
   // capped at 19k with margin, but the hint names how close the current K is and what σ_body decides
   // — the live-gate idea shared with the jawari and fret, guarding a hard failure this time.
+  // The room's live readout. Two numbers decide whether a render is even legal, and both are
+  // derived rather than dialled: the node count (h⁻³) and the work (h⁻⁴, because a coarser room
+  // raises fs). Showing them while you drag is what keeps the h slider from feeling like a
+  // cheap "quality" knob — coarsening it does NOT reliably make the render faster.
+  const abHint = $("airbox-hint");
+  if (abHint) {
+    if (m === "airbox") {
+      const h = param("air_h"), size = param("room_size"), cfl = param("air_cfl");
+      const lamAir = cfl / Math.sqrt(3);
+      const fs = 343 / (lamAir * h);
+      const NN = [1.2, 0.9, 0.8].map((v) => Math.max(1, Math.round(size * v / h)));
+      const nodes = (NN[0] + 1) * (NN[1] + 1) * (NN[2] + 1);
+      const steps = Math.round(param("audio_duration") * fs);
+      const work = nodes * steps;
+      const overNodes = nodes > 400000, overWork = work > 1.2e9;
+      abHint.textContent =
+        `room ${NN.map((v) => (v * h).toFixed(2)).join(" × ")} m (snapped from `
+        + `${[1.2, 0.9, 0.8].map((v) => (size * v).toFixed(2)).join(" × ")}) · grid `
+        + `${NN.join("×")} = ${fmt(nodes)} nodes · ${fmt(steps)} steps → ${work.toExponential(2)} `
+        + `node-steps ≈ ${(work / 5e7).toFixed(1)} s`
+        + (overNodes ? "  — REFUSED: over 400k nodes" : "")
+        + (overWork ? "  — REFUSED: over the 1.2e9 work budget" : "");
+      abHint.style.color = (overNodes || overWork) ? "var(--bad)" : "var(--muted)";
+    } else {
+      abHint.textContent = "";
+    }
+  }
   const bdHint = $("body-hint");
   if (bdHint) {
     if (m === "body") {
@@ -1113,6 +1176,10 @@ function scheduleAuto() {
 function gatherParams() {
   const p = { model: modelSel.value };
   if (domainSel) p.domain = domainSel.value;
+  // The room's secondary select IS its wall termination, and the backend's key is `walls` — sent
+  // explicitly rather than having the backend sniff `domain`, which carries a stale value from
+  // whichever model was selected last.
+  if (modelSel.value === "airbox") p.walls = domainSel.value;
   for (const k in sliders) p[k] = +sliders[k].value * (scaleOf[k] || 1);
   if (nonlinearChk) p.nonlinear = nonlinearChk.checked;
   if (seedVelChk) p.seed_velocity = seedVelChk.checked;
@@ -1187,6 +1254,22 @@ function applyPayload(data) {
     gridMeta = data.grid;
     heatCv = document.createElement("canvas");   // offscreen field-resolution buffer
     heatCv.width = gridNx; heatCv.height = gridNy;
+  }
+  isAirBox = dims === 3;
+  if (isAirBox) {
+    slicePlanes = data.frames.planes || [];
+    sliceScale = data.frames.scale || { map: "linear", ref: fieldAmp, amp: fieldAmp };
+    // One offscreen buffer per plane (the heatCv precedent), plus each plane's OFFSET into the
+    // per-frame block — the planes have different node counts, so the offsets are cumulative and
+    // are computed here once rather than re-derived on every animation frame.
+    let off = 0;
+    sliceCvs = slicePlanes.map((pl) => {
+      const cv = document.createElement("canvas");
+      cv.width = pl.nu; cv.height = pl.nv;
+      const rec = { cv, plane: pl, offset: off };
+      off += pl.nu * pl.nv;
+      return rec;
+    });
   }
   isGeom = data.model === "geometric";
   isSymp = data.model === "sympathetic";
@@ -2047,7 +2130,8 @@ function tick(ts) {
       currentFrame = Math.floor(physElapsed / animDt) % nFrames;
       scrub.value = currentFrame;
     }
-    (isPlateBody ? drawPlateBody : dims === 2 ? drawHeatmap : isGeom ? drawGeometric
+    (isAirBox ? drawSlices : isPlateBody ? drawPlateBody : dims === 2 ? drawHeatmap
+      : isGeom ? drawGeometric
       : isSymp ? drawSympatheticViz : isJawari ? drawJawariViz : isJuari ? drawJuariViz
         : isFret ? drawFretViz : isParam ? drawParametricViz
         : isBore ? drawBore : drawString)(currentFrame);
@@ -2157,6 +2241,105 @@ function divColor(t) {
   const a = Math.min(1, Math.abs(t));
   if (t >= 0) return [20 + a * 235, 24 + a * 96, 30 + a * 6];     // dark → orange/red
   return [20 + a * 24, 24 + a * 162, 30 + a * 225];               // dark → cyan/blue
+}
+
+// ── the room: three orthogonal SLICES of a 3-D field (batch 18) ───────────────────────────────
+// The first field in this viewer with a shape in three dimensions. Three panes, one per plane, all
+// on the SAME colour scale so a wavefront that leaves one plane and enters another reads as one
+// event rather than three unrelated pictures.
+//
+// The mapping is a measurement, not a taste. Measured mid-flight, a wavefront's LEADING EDGE — the
+// faintest part of the frame and the thing you actually need to see — is ~2e-3 of the frame max,
+// and the faintest live decile is 3e-7 early, while the frame max itself swings ~2x within a run
+// on top of a 385x first-frame-to-peak spread. So a global linear scale renders the early frames
+// black and a per-frame one hides the decay. asinh against a percentile reference is what ships,
+// and the backend sends the reference WITH the values (which stay in Pa) rather than leaving the
+// choice implicit here.
+function sliceNorm(v) {
+  const ref = (sliceScale && sliceScale.ref) || 1;
+  const amp = (sliceScale && sliceScale.amp) || ref;
+  const den = Math.asinh(amp / ref) || 1;
+  return Math.asinh(v / ref) / den;
+}
+
+function drawSlices(idx) {
+  const g = stringCv.getContext("2d");
+  const W = stringCv.width, H = stringCv.height;
+  g.clearRect(0, 0, W, H);
+  if (!frames || nFrames === 0 || !sliceCvs) return;
+  const meta = (payload && payload.meta) || {};
+  const room = meta.room || {};
+  const arr = meta.arrival || {};
+  const base = idx * width;
+
+  const pad = 10, gap = 8, labelH = 18, legendH = 16;
+  const paneW = (W - 2 * pad - 2 * gap) / 3;
+  const paneH = H - 2 * pad - labelH - legendH;
+  // ONE metres-per-pixel for all three panes (the largest extent that must fit anywhere), so the
+  // room reads at a single scale across the views instead of each pane zooming to its own crop.
+  let mpp = 0;
+  sliceCvs.forEach((rec) => {
+    const e = rec.plane.extent;
+    mpp = Math.max(mpp, e[0] / paneW, e[1] / paneH);
+  });
+  const S = mpp > 0 ? 1 / mpp : 1;
+  let tallest = 0;
+  sliceCvs.forEach((rec) => { tallest = Math.max(tallest, rec.plane.extent[1] * S); });
+
+  sliceCvs.forEach((rec, k) => {
+    const pl = rec.plane, n = pl.nu * pl.nv;
+    const hctx = rec.cv.getContext("2d");
+    const img = hctx.createImageData(pl.nu, pl.nv);
+    for (let q = 0; q < n; q++) {
+      // C order on shape (nu, nv): the LAST axis is fastest, so v varies fastest, not u.
+      // Reading it the other way round transposes the picture, and on a smooth field with
+      // unequal nu/nv that shows up as horizontal banding rather than as an obvious error —
+      // which is exactly how it got past the payload assertions and into the browser.
+      const v = q % pl.nv, u = (q / pl.nv) | 0;
+      const c = divColor(sliceNorm(frames[base + rec.offset + q]));
+      const o = (v * pl.nu + u) * 4;
+      img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 255;
+    }
+    hctx.putImageData(img, 0, 0);
+
+    // aspect-fit inside the pane from the PHYSICAL extent, so a non-cubic room reads as one
+    const x0 = pad + k * (paneW + gap), y0 = pad + labelH;
+    const ex = pl.extent[0] || 1, ey = pl.extent[1] || 1;
+    const dw = ex * S, dh = ey * S;
+    // tops aligned (they are three views of ONE room), the block centred in the slack
+    const dx = x0 + (paneW - dw) / 2, dy = y0 + (paneH - tallest) / 2;
+    g.imageSmoothingEnabled = true;
+    g.drawImage(rec.cv, dx, dy, dw, dh);
+    g.strokeStyle = "rgba(255,255,255,.14)"; g.lineWidth = 1;
+    g.strokeRect(dx, dy, dw, dh);
+
+    g.fillStyle = "rgba(255,255,255,.62)";
+    g.font = "11px ui-monospace,monospace";
+    const normal = pl.name === "xy" ? "z" : pl.name === "xz" ? "y" : "x";
+    g.fillText(`${pl.u}${pl.v}   ${normal} = ${pl.at_m.toFixed(2)} m`, x0 + 2, pad + 11);
+
+    // the port and the mic, drawn only on the planes they actually lie in/near — a marker on a
+    // plane the source is not in would be a lie about where the sound started
+    const axes = { x: 0, y: 1, z: 2 };
+    const port = room.port_at || null, mic = arr.mic_at || null;
+    const place = (pt, col, filled) => {
+      if (!pt) return;
+      const iu = pt[axes[pl.u]], iv = pt[axes[pl.v]];
+      const mx = dx + (iu / ex) * dw, my = dy + (iv / ey) * dh;
+      g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 1.5;
+      g.beginPath(); g.arc(mx, my, 4.5, 0, 7);
+      if (filled) g.fill(); else g.stroke();
+    };
+    place(port, "rgba(255,95,109,.95)", true);
+    place(mic, "rgba(255,207,92,.95)", false);
+  });
+
+  // the scale legend — the mapping is printed, never implicit
+  g.fillStyle = "rgba(255,255,255,.45)";
+  g.font = "10px ui-monospace,monospace";
+  const sc = sliceScale || {};
+  g.fillText(`asinh(p / ${sc.ref.toExponential(2)}) · p${Math.round(sc.pctl)} ref`
+    + ` · max ${sc.amp.toExponential(2)} Pa   ● port  ○ mic`, pad + 2, H - 2);
 }
 
 function drawHeatmap(idx) {
@@ -2392,6 +2575,11 @@ function drawEnergy() {
       || payload.model === "radbody" || payload.model === "airload") {
     drawBodyEnergy(e); return;
   }
+  // The room (batch 18). Same booked-ledger idea, but the panel's headline is NOT the drift: the
+  // coupling term cancels out of the scene total identically, so the total is structurally blind
+  // to a wrong coupling constant (the air box's own batch-3 and batch-4 finding, and b17's). The
+  // number that is not blind is the CROSS-LEDGER residual, and it gets the readout.
+  if (payload.model === "airbox") { drawAirBoxEnergy(); return; }
   const t = e.time, v = e.value.map((x) => (x == null ? 0 : x));
   const tmax = t[t.length - 1] || 1;
   // Headroom only when the split is drawn: the total is flat AT the maximum, so without it the
@@ -2508,6 +2696,161 @@ function drawEnergy() {
           `felt/membrane loss removes energy from a ½M·v₀² floor — no decay-rate oracle for a ` +
           `closed struck system`;
   }
+}
+
+// ── the room: the lattice light cone (batch 18's claim) ──────────────────────────────────────
+// The mic's pressure against STEP NUMBER, not time — because the claim is an integer number of
+// steps and a time axis would blur it. On a 7-point Yee stencil the numerical domain of dependence
+// after n steps is |di| + |dj| + |dk| <= n CELLS, so the first nonzero at the mic lands exactly on
+// the Manhattan distance in cells. Three markers, and the point is that they DISAGREE: the cone
+// (an integer), the Euclidean arrival at c₀, and the time to walk the Manhattan path at c₀. The
+// precursor beats both physical ones, and the integer does not move when λ does.
+function drawAirBoxArrival() {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height, padL = 34, padB = 26, top = 16;
+  g.clearRect(0, 0, W, H);
+  const a = payload.meta && payload.meta.arrival;
+  if (!a) return;
+  const tr = a.trace || [];
+  const span = Math.max(a.span || tr.length, 1);
+  const X = (s) => padL + (s / span) * (W - padL - 10);
+  const Y = (v) => top + (1 - (v + 1) / 2) * (H - top - padB);
+
+  g.strokeStyle = "rgba(255,255,255,.10)"; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(padL, Y(0)); g.lineTo(W - 10, Y(0)); g.stroke();
+
+  const mark = (s, col, label, dash, row) => {
+    if (!(s >= 0) || s > span) return;
+    g.save();
+    g.strokeStyle = col; g.lineWidth = 1.5;
+    if (dash) g.setLineDash(dash);
+    g.beginPath(); g.moveTo(X(s), top + 14); g.lineTo(X(s), H - padB); g.stroke();
+    g.restore();
+    g.fillStyle = col; g.font = "10px ui-monospace,monospace";
+    // staggered rows: the three markers can land within a few steps of each other, and stacked
+    // labels at one height is how the first draft rendered them illegible.
+    g.fillText(label, X(s) + 3, top + 26 + (row || 0) * 12);
+  };
+  // drawn UNDER the trace so the data is never hidden by its own annotation
+  mark(a.euclid_steps, "rgba(255,207,92,.75)", `euclid ${a.euclid_steps.toFixed(1)}`, [4, 3], 1);
+  mark(a.manhattan_steps_physical, "rgba(200,140,255,.7)",
+    `manh·c₀ ${a.manhattan_steps_physical.toFixed(1)}`, [4, 3], 2);
+
+  g.strokeStyle = "rgba(120,180,255,.95)"; g.lineWidth = 1.6; g.beginPath();
+  for (let i = 0; i < tr.length; i++) {
+    const x = X(i), y = Y(tr[i]);
+    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.stroke();
+
+  // the cone last and solid — it is the claim
+  mark(a.manhattan_cells, a.match ? "rgba(120,230,150,.95)" : "rgba(255,95,109,.95)",
+    `cone ${a.manhattan_cells}`, null, 0);
+
+  g.fillStyle = "rgba(255,255,255,.55)"; g.font = "10px ui-monospace,monospace";
+  g.fillText("steps after the first nonzero injection", padL, H - 8);
+
+  g.fillStyle = a.match ? "rgba(120,230,150,.95)" : "rgba(255,95,109,.95)";
+  g.font = "12px ui-monospace,monospace";
+  g.fillText(
+    `|Δi|+|Δj|+|Δk| = ${a.manhattan_cells} cells   measured ${a.measured_cells}   `
+    + (a.match ? "MATCH ✓" : "MISMATCH ✗"), padL + 4, H - 22);
+  g.fillStyle = "rgba(255,255,255,.45)"; g.font = "10px ui-monospace,monospace";
+  const th = (a.thresholds || []).map((q) => `${(q.frac * 100).toFixed(1)}% → ${q.steps}`)
+    .join(",  ");
+  g.fillText(`port ${a.port_cell.join(",")} → mic ${a.mic_cell.join(",")}`
+    + `   λ_air ${a.lam_air.toFixed(3)}`, padL, top + 8);
+  // The amplitude arrivals go on the BOTTOM line, not beside the header: they are the CONTRAST to
+  // the claim (these move with λ, the cone does not), and crowding them onto the header line put
+  // two right-aligned strings through each other at this panel width.
+  const thTxt = `amplitude arrivals  ${th}`;
+  g.fillText(thTxt, W - 10 - g.measureText(thTxt).width, H - 8);
+}
+
+// ── the room: five booked channels, and the number the total CANNOT see ──────────────────────
+// Two axes, because the scene spans four decades and one axis would be a lie of omission. The
+// mechanical channels (string, body, connection) carry ~everything and ride a linear axis, exactly
+// as batch 12's do. The ROOM's channels — stored in the air, taken by the walls, handed over by the
+// body — peak at ~2.5e-4 of the scene total at the shipped defaults, so on that same linear axis
+// they are indistinguishable from zero. They get a LOG axis of their own underneath, which is the
+// honest way to show a channel that is real and tiny rather than pretending it is absent.
+//
+// The headline is the CROSS-LEDGER residual, not the drift. `RoomLoadedBody.energy` folds the
+// coupling term in such a way that it cancels out of the scene total identically — so the total
+// stays flat at ~1e-14 whether or not the coupling constant is right, and a panel that led with
+// the drift would be reporting a number with a known blind spot. |radiated − injected| has no such
+// blind spot: it compares what the body says it handed over against what the room says it got.
+function drawAirBoxEnergy() {
+  const g = energyCv.getContext("2d");
+  const W = energyCv.width, H = energyCv.height, padL = 30, padB = 16, top = 14;
+  g.clearRect(0, 0, W, H);
+  const gd = payload.meta && payload.meta.ledger;
+  const badge = $("energy-verdict"), out = $("energy-readout");
+  if (!gd) { out.textContent = "no ledger data"; return; }
+  const num = (a) => (a || []).map((x) => (x == null ? 0 : x));
+  const t = gd.time, tmax = t[t.length - 1] || 1;
+  const es = num(gd.e_string_frac), eb = num(gd.e_body_frac), ec = num(gd.e_conn_frac);
+  const ea = num(gd.e_acoustic_frac), ed = num(gd.e_dissipated_frac), tot = num(gd.total_frac);
+
+  const splitY = top + (H - top - padB) * 0.60;
+  const X = (i) => padL + (t[i] / tmax) * (W - padL - 8);
+
+  // --- upper: the mechanical channels, linear fractions -----------------------------------------
+  const vmax = 1.15;
+  const Ylin = (v) => top + (1 - v / vmax) * (splitY - top);
+  g.strokeStyle = "rgba(255,255,255,.10)"; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(padL, splitY); g.lineTo(W - 8, splitY); g.stroke();
+  const line = (arr, col, Y, wdt) => {
+    g.strokeStyle = col; g.lineWidth = wdt || 1.6; g.beginPath();
+    for (let i = 0; i < arr.length; i++) {
+      const x = X(i), y = Y(arr[i]);
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.stroke();
+  };
+  line(tot, "rgba(120,230,150,.85)", Ylin, 2.2);
+  line(es, "rgba(120,180,255,.9)", Ylin);
+  line(eb, "rgba(255,160,80,.9)", Ylin);
+  line(ec, "rgba(200,140,255,.8)", Ylin);
+  g.fillStyle = "rgba(255,255,255,.55)"; g.font = "10px ui-monospace,monospace";
+  g.fillText("1", 8, Ylin(1) + 3); g.fillText("0", 8, Ylin(0) + 3);
+
+  // --- lower: the ROOM's channels, log axis (they are 4 decades down — see the note above) ------
+  const roomAll = ea.concat(ed).filter((v) => v > 0);
+  const hi = roomAll.length ? Math.max(...roomAll) : 1e-12;
+  const loExp = Math.floor(Math.log10(hi)) - 4, hiExp = Math.ceil(Math.log10(hi));
+  const Ylog = (v) => {
+    const e2 = Math.log10(Math.max(v, 1e-300));
+    const f = (e2 - loExp) / Math.max(hiExp - loExp, 1e-9);
+    return splitY + 12 + (1 - Math.min(1, Math.max(0, f))) * (H - padB - splitY - 12);
+  };
+  for (let e2 = loExp; e2 <= hiExp; e2++) {
+    const y = Ylog(Math.pow(10, e2));
+    g.strokeStyle = "rgba(255,255,255,.06)";
+    g.beginPath(); g.moveTo(padL, y); g.lineTo(W - 8, y); g.stroke();
+    g.fillStyle = "rgba(255,255,255,.35)";
+    g.fillText("1e" + e2, 4, y + 3);
+  }
+  line(ea, "rgba(90,220,255,.95)", Ylog);
+  if (gd.dissipated_frac_end > 0) line(ed, "rgba(255,120,140,.9)", Ylog);
+
+  g.fillStyle = "rgba(255,255,255,.62)"; g.font = "11px ui-monospace,monospace";
+  g.fillText("E_string · E_body · E_conn · total (linear)", padL + 4, top + 10);
+  const roomLbl = "air: stored" + (gd.dissipated_frac_end > 0 ? " · walls" : "") + "  (log)";
+  g.fillText(roomLbl, W - 10 - g.measureText(roomLbl).width, splitY + 22);
+
+  const resid = gd.residual_max, drift = Math.abs(gd.total_drift);
+  const ok = resid < 1e-10;
+  badge.textContent = ok ? "ledgers agree ✓" : "LEDGER MISMATCH ✗";
+  badge.className = "badge " + (ok ? "ok" : "bad");
+  out.textContent =
+    `cross-ledger |radiated − injected| / E₀ = ${resid.toExponential(2)}  (max over `
+    + `${gd.n_samples} samples, every ${gd.e_stride} steps)\n`
+    + `scene total drift = ${drift.toExponential(2)} — SANITY ONLY: the coupling term cancels out `
+    + `of the total identically, so the total is blind to a wrong coupling constant\n`
+    + `air holds at most ${(gd.acoustic_frac_peak * 100).toExponential(2)} % of the scene; walls `
+    + `took ${(gd.dissipated_frac_end * 100).toExponential(2)} % by the end  ·  walls = `
+    + `${gd.walls}`;
 }
 
 // ── body: the string ⇄ body energy EXCHANGE (the money panel) ────────────────────────────────
@@ -2905,6 +3248,16 @@ function drawDiagnostics() {
   // that CANNOT bend. It replaces radbody's t₅₀-vs-R map because the claim moved: there the
   // question was how fast one number empties the string, here it is what the air does differently
   // to each partial.
+  // The room's claim panel: the lattice light cone, which is an INTEGER. Everything else in this
+  // viewer's second panel is a curve or a sweep; this one's whole content is that a measured count
+  // of grid cells equals a predicted count of grid cells, and that the two physical arrival times
+  // it beats are both something else.
+  if (payload.model === "airbox") {
+    partialsTitle.firstChild.textContent = "Arrival ";
+    partialsSub.textContent = "the lattice light cone — an exact integer, and λ-independent";
+    drawAirBoxArrival();
+    return;
+  }
   if (spec && spec.kind === "airload") {
     partialsTitle.firstChild.textContent = "Per-mode decay ";
     partialsSub.textContent = "α(f) measured vs closed form · a constant R is the flat line";
