@@ -18,6 +18,16 @@ import pytest
 
 import web.serialize as web_serialize
 from web.serialize import (
+    AIRLOAD_CORNER_DEFAULT,
+    AIRLOAD_CORNER_MAX,
+    AIRLOAD_K_MAX,
+    AIRLOAD_N_MAX,
+    AIRLOAD_R_MAX,
+    AIRLOAD_SWEEP_FS,
+    AIRLOAD_SWEEP_POINTS,
+    AIRLOAD_WEAK_LOADING_MAX,
+    AIRLOAD_WEIGHT_MAX,
+    AIRLOAD_WORK_MAX,
     AUDIO_FS,
     BODY_AUDIO_MAX,
     BODY_DISTANCE_MAX,
@@ -106,6 +116,7 @@ from web.serialize import (
     TENSION_OFFMODE_MAX,
     VK_N_MAX,
     VK_WOVERE_MAX,
+    _airload_measure_mode,
     _measure_tension_mode1,
     _radbody_t50,
     _tension_dt_over_t,
@@ -3882,6 +3893,321 @@ def test_radbody_ignores_params_that_belong_to_other_models():
     base = _rb(radiation_R=50.0, sweep_points=2, sweep_cap=0.2)
     noisy = _rb(radiation_R=50.0, sweep_points=2, sweep_cap=0.2, K=2.0e6, alpha=2.3, depth=1e-3,
                 kappa=5.0, EA=1e4, sigma_plate=3.0, n_plate=12)
+    assert noisy["meta"]["exchange"] == base["meta"]["exchange"]
+    assert noisy["meta"]["spectrum"] == base["meta"]["spectrum"]
+    assert noisy["energy"] == base["energy"]
+
+
+# == airload: the air as an IMPEDANCE Z_a(omega) — it STORES as well as radiates (batch 17) =======
+#
+# Batch 15's air is one number; here it is a resistance in parallel with the radiation mass. Two
+# consequences the tests below pin: the booked ledger grows a FIFTH channel (stored), and the
+# damping becomes frequency-dependent — which is the half a constant R cannot do at all. The
+# anchor runs the other way: pull the corner to 0 and batch 15 comes back bit-for-bit.
+
+
+def _al(**over):
+    """Short airload run with a COARSE sweep — the sweep is most of this payload's cost."""
+    return web_serialize.simulate_to_payload(
+        {"model": "airload", "audio_duration": 0.35, "sweep_points": 3, "sweep_cycles": 6, **over}
+    )
+
+
+def test_airload_conserves_while_the_air_both_stores_and_radiates():
+    """THE batch in one test: the air takes most of the pluck AND holds a visible share of it in
+    the radiation mass, and the total is still conserved to < 1e-10 — because BOTH air channels are
+    booked. `sigma_body` alone gates the verdict (the bore's bell precedent, third customer)."""
+    d = _al(audio_duration=0.6)
+    e = d["energy"]
+    assert e["sigma_is_zero"] is True, "radiation is a CHANNEL, not a loss — it must not flip this"
+    assert e["lossless"]["drift"] < LOSSLESS_TOL and e["lossless"]["pass"] is True
+    ex = d["meta"]["exchange"]
+    assert ex["kind"] == "airload"
+    assert ex["total_drift"] < LOSSLESS_TOL
+    assert ex["rad_frac_end"] > 0.5, "the air must visibly carry the energy away"
+    assert ex["stored_frac_peak"] > 0.05, "and visibly STORE some of it — that is the new channel"
+    assert ex["mech_frac_end"] == pytest.approx(1.0 - ex["rad_frac_end"], abs=1e-9)
+
+
+def test_airload_a_zero_corner_reproduces_batch_15s_shipped_picture_bit_identically():
+    """THE anchor, and it reaches batch 15 as SHIPPED, not merely as a mechanism. air_corner = 0
+    means M_a = inf, so R_eff = R exactly and the auxiliary state stays exactly zero; with
+    radiation_weight = 1 (which broadcasts to ModalBody's own phi) and radiation_R at a value
+    radbody also accepts, the two chains are the same arithmetic. Bit equality from ONE shared
+    param dict, not two sets of defaults happening to agree."""
+    shared = {"audio_duration": 0.35, "bridge_stiffness": 8000, "N": 90, "lambda": 0.85,
+              "pluck_position": 0.27, "amplitude": 1.5e-3, "distance": 1.4, "radiation_R": 133.0}
+    flat = simulate_to_payload({"model": "airload", "air_corner": 0.0, "radiation_weight": 1.0,
+                                "sweep_points": 2, "sweep_cycles": 4, **shared})
+    b15 = simulate_to_payload({"model": "radbody", "sweep_points": 2, "sweep_cap": 0.2, **shared})
+    assert flat["energy"] == b15["energy"]
+    assert flat["audio"]["b64"] == b15["audio"]["b64"]
+    assert flat["frames"]["b64"] == b15["frames"]["b64"]
+    for key in ("time", "e_string_frac", "e_body_frac", "e_conn_frac", "e_rad_frac", "total_frac"):
+        assert flat["meta"]["exchange"][key] == b15["meta"]["exchange"][key], key
+    assert set(flat["meta"]["exchange"]["e_stored_frac"]) == {0.0}, "M_a = inf stores nothing"
+
+
+def test_airload_five_channels_sum_to_the_flat_reference_and_e_conn_stays_signed():
+    """The money panel ships FIVE channels. They sum to the flat total by construction, so the flat
+    line is a REFERENCE and not the verdict (batch 12's rule) — and E_conn still dips negative, so
+    the five are never stacked and never clamped."""
+    ex = _al()["meta"]["exchange"]
+    n = len(ex["time"])
+    keys = ("e_string_frac", "e_body_frac", "e_conn_frac", "e_stored_frac", "e_rad_frac",
+            "total_frac")
+    for key in keys:
+        assert len(ex[key]) == n and n > 100, key
+    es, eb, ec, est, er, tot = (np.array(ex[k]) for k in keys)
+    assert np.allclose(es + eb + ec + est + er, tot, atol=1e-9)
+    assert np.allclose(tot, 1.0, atol=1e-9)
+    assert float(np.min(ec)) < 0.0, "E_conn is a signed cross-time term — clamping it hides it"
+    assert er[0] == 0.0 and float(er[-1]) > float(er[n // 2]), "the radiated channel only fills"
+    assert float(np.max(est)) > 0.0 and float(est[-1]) < float(np.max(est)), "stored is returned"
+
+
+def test_airload_the_ledger_residual_catches_what_the_drift_cannot():
+    """The air-box lesson, third customer, and the reason this payload ships a second number.
+    `load.energy()` is stored PLUS radiated while `body.energy()` is bare, so a channel can be
+    double-counted or dropped with the conserved total untouched. Rebuild the ledger wrongly from
+    the SHIPPED channels: the residual moves by 14 orders while the drift does not move at all."""
+    ex = _al()["meta"]["exchange"]
+    assert ex["ledger_residual"] < LOSSLESS_TOL and ex["ledger_pass"] is True
+    assert ex["ledger_residual"] < 1e-12, "the true ledger closes at rounding, not merely at tol"
+    es, eb, ec, est, er, tot = (np.array(ex[k]) for k in
+                                ("e_string_frac", "e_body_frac", "e_conn_frac", "e_stored_frac",
+                                 "e_rad_frac", "total_frac"))
+    flipped = float(np.max(np.abs(tot - (es + eb + ec - est + er))))
+    dropped = float(np.max(np.abs(tot - (es + eb + ec + er))))
+    assert flipped > 1e-3 and dropped > 1e-3, "a wrong ledger must be LOUD, or the guard is theatre"
+    assert ex["total_drift"] < LOSSLESS_TOL, "...while the drift stays green through both"
+
+
+def test_airload_alpha_climbs_with_frequency_and_the_constant_r_impostor_cannot():
+    """The second panel's claim. Re Z_a rises with frequency below the corner, so high partials
+    radiate better and die first; batch 15's load — matched to this one at the fundamental — damps
+    every mode at one rate. The impostor needs no measurement: its alpha is a constant and its
+    pitch shift is exactly zero, both closed form."""
+    sw = _al(sweep_points=5)["meta"]["spectrum"]["sweep"]
+    a = np.array([x for x in sw["alpha"] if x is not None])
+    assert a.size == 5 and np.all(np.diff(a) > 0.0), f"alpha must climb monotonically, got {a}"
+    assert sw["span"] > 50.0, "and by a wide margin over four octaves"
+    assert sw["flat_ratio_top"] > 20.0, "the flat impostor under-damps the top by this much"
+    assert sw["alpha_flat"] > 0.0 and sw["r_flat"] > 0.0
+
+
+def test_airload_the_oracle_residual_is_second_order_in_the_loading_ratio():
+    """`loaded_mode` is a WEAK-loading result with a residual second order in alpha/omega. The
+    panel therefore does not claim the oracle is exact — it claims the disagreement is that
+    residual, with the coefficient measured. Where the loading is weak the two agree closely."""
+    sw = _al(sweep_points=5)["meta"]["spectrum"]["sweep"]
+    a = np.array([x for x in sw["alpha"] if x is not None])
+    o = np.array([x for x in sw["alpha_oracle"] if x is not None])
+    w = np.array([x for x in sw["alpha_over_omega"] if x is not None])
+    assert a.size == o.size == w.size == 5
+    rel = np.abs(a - o) / o
+    weak = w <= AIRLOAD_WEAK_LOADING_MAX
+    assert weak.any(), "the sweep must contain points inside the formula's stated range"
+    assert np.all(rel[weak] < 0.02), f"weakly loaded points must match closely, got {rel[weak]}"
+    coef = rel / w**2
+    assert sw["resid_coef"] is not None
+    assert 5.0 < min(coef) and max(coef) < 60.0, f"a clean 2nd order, coefficient ~17: {coef}"
+    assert max(coef) / min(coef) < 3.0, "and roughly CONSTANT — that is what makes it 2nd order"
+
+
+def test_airload_the_pitch_drop_is_the_reactance_and_a_flat_load_has_none():
+    """The half a constant R cannot even attempt. Im Z_a is an added mass, so the loaded mode goes
+    FLAT; a real R has Im Z == 0 and cannot move the pitch at all. The measured drop tracks the
+    closed form, and it shrinks with frequency because Im Z_a / omega decays above the corner."""
+    sw = _al(sweep_points=4)["meta"]["spectrum"]["sweep"]
+    df = np.array([x for x in sw["df_meas"] if x is not None])
+    dfo = np.array([x for x in sw["df_oracle"] if x is not None])
+    assert df.size == 4 and np.all(df < -1.0), f"the air must flatten every mode, got {df}"
+    assert np.all(np.abs(df - dfo) < 0.6), f"and track the closed form: {df} vs {dfo}"
+    assert df[-1] > df[0], "the drop shrinks with frequency (Im Z / omega falls above the corner)"
+    # the negative control: the SAME sweep with the reactance removed (corner = 0 -> M_a = inf).
+    # R is dropped to batch 15's value so the flat load stays under-damped enough to ring.
+    flat = _al(sweep_points=4, air_corner=0.0, radiation_R=133.0)["meta"]["spectrum"]["sweep"]
+    fdf = np.array([x for x in flat["df_meas"] if x is not None])
+    fa = np.array([x for x in flat["alpha"] if x is not None])
+    assert np.all(np.abs(fdf) < 0.05), f"no reactance, no pitch shift — got {fdf}"
+    assert np.allclose(fa, fa[0], rtol=0.02), f"and one rate for every mode: {fa}"
+
+
+def test_airload_the_pitch_shift_needs_the_schemes_own_unloaded_reference():
+    """Recorded because reading the shift against the nominal f0 gets the SIGN wrong at the
+    render's own rate. The leapfrog warps a 1760 Hz mode upward at fs = 22222 by more than the air
+    pulls it down, so 'the air flattened it' becomes 'the air sharpened it' — a discretization
+    artifact credited to the physics. Against a measured R = 0 run at the same fs it is negative,
+    which is why every sweep point pays for a second run."""
+    f0, fs, steps = 1760.0, 22222.2, 400
+    kw = {"weight": 0.02, "mass": 0.02, "fs": fs, "steps": steps}
+    R, M_a = 13146.4, 1.9164          # the shipped 5 cm sphere
+    f_load, _ = _airload_measure_mode(f0, R=R, M_a=M_a, **kw)
+    f_free, _ = _airload_measure_mode(f0, R=0.0, M_a=M_a, **kw)
+    assert (f_load - f0) / f0 > 0.0, "against NOMINAL the scheme's warping wins — the trap"
+    assert (f_load - f_free) / f_free < 0.0, "against the scheme's OWN unloaded run, the air wins"
+    assert f_free > f0, "...and the warping is the unloaded run's, measurable on its own"
+
+
+def test_airload_overdamped_points_are_censored_not_guessed():
+    """The censoring rule (label, never fail — the jawari/bow/radbody line). At the shipped R with
+    the reactance removed the load is far past critical damping: the mode cannot ring, so there is
+    no rate to report and the sweep returns nulls that keep their place on the axis."""
+    sw = _al(sweep_points=3, air_corner=0.0)["meta"]["spectrum"]["sweep"]
+    assert sw["skipped"] is False
+    assert sw["n_censored"] > 0, "a mode that cannot oscillate has no measurable alpha"
+    assert len(sw["alpha"]) == len(sw["f"]) == 3, "censored points keep their slot on the axis"
+    assert any(x is None for x in sw["alpha"])
+
+
+def test_airload_r_zero_skips_the_sweep_with_a_label_instead_of_a_row_of_nulls():
+    """R = 0 decouples the air entirely: every point would run its full length to report nothing.
+    Skipped with a note (radbody's K = 0 precedent), and the render still conserves — trivially,
+    because with no air there is nothing to book."""
+    d = _al(radiation_R=0.0)
+    sw = d["meta"]["spectrum"]["sweep"]
+    assert sw["skipped"] is True and sw["steps"] == 0 and sw["alpha"] == []
+    assert "decoupled" in sw["note"]
+    ex = d["meta"]["exchange"]
+    assert ex["rad_frac_end"] == 0.0 and ex["stored_frac_peak"] == 0.0
+    assert d["energy"]["lossless"]["pass"] is True
+
+
+def test_airload_sweep_is_pinned_at_48k_and_does_not_follow_the_renders_rate():
+    """A CONTROLLED reference curve (batch 15's rule). Pinning fs is what makes the residual
+    attributable to the formula rather than to the leapfrog — so the curve must be identical
+    across renders whose own sample rates differ."""
+    a = _al(N=60, sweep_points=3)
+    b = _al(N=120, sweep_points=3)
+    for d in (a, b):
+        assert d["meta"]["spectrum"]["sweep"]["fs"] == AIRLOAD_SWEEP_FS
+    assert a["fs_sim"] != b["fs_sim"], "the two renders really do run at different rates"
+    assert a["meta"]["spectrum"]["sweep"]["alpha"] == b["meta"]["spectrum"]["sweep"]["alpha"]
+    assert a["meta"]["spectrum"]["sweep"]["df_meas"] == b["meta"]["spectrum"]["sweep"]["df_meas"]
+
+
+def test_airload_sigma_body_gates_the_verdict_and_radiation_never_does():
+    """Both air channels are booked, so a radiating run is a CONSERVING run; only body loss makes
+    it a decaying one. Do not 'fix' the radiating case into a passivity branch."""
+    assert _al()["energy"]["sigma_is_zero"] is True
+    lossy = _al(sigma_body=20.0)["energy"]
+    assert lossy["sigma_is_zero"] is False
+    assert lossy["lossy"]["monotone"] is True
+    assert "measured_2sigma" not in lossy["lossy"], "no flat-loss oracle survives a radiating body"
+
+
+def test_airload_the_radiation_weight_is_not_a_volume_control_and_the_peak_says_so():
+    """It scales the read-out, so the normalized audio hides what it does to the level — and it is
+    not even monotone, because the loudest setting is the impedance match, not the largest weight.
+    The payload reports the un-normalized peak so 'quieter' does not read as physics."""
+    peaks = {w: _al(radiation_weight=w)["meta"]["pressure_peak"] for w in (0.02, 0.05, 0.2)}
+    assert all(v > 0.0 for v in peaks.values())
+    assert peaks[0.05] > peaks[0.02] and peaks[0.05] > peaks[0.2], (
+        f"the peak is non-monotone in the weight — the match is the loudest: {peaks}"
+    )
+
+
+def test_airload_the_sphere_readout_says_which_radius_each_coefficient_implies():
+    """R and the corner are exposed as INDEPENDENT effective coefficients, so most of the plane is
+    not any sphere. Rather than forbid it, the readout prints the radius each one implies and
+    whether they agree — the project's unphysical-params-are-a-feature rule."""
+    sp = _al()["meta"]["spectrum"]["sphere"]
+    assert sp["consistent"] is True and sp["rel_gap"] < 0.01
+    assert sp["a_from_R"] == pytest.approx(0.05, rel=1e-3), "the shipped default IS the 5 cm sphere"
+    assert sp["a_from_corner"] == pytest.approx(sp["a_from_R"], rel=1e-3)
+    assert sp["corner_sphere"] == pytest.approx(AIRLOAD_CORNER_DEFAULT, rel=1e-3)
+    off = _al(air_corner=200.0)["meta"]["spectrum"]["sphere"]
+    assert off["consistent"] is False and off["rel_gap"] > 0.5, "and it says so when they disagree"
+    assert off["a_from_R"] == sp["a_from_R"], "R still implies its own radius; the corner moved"
+
+
+def test_airload_the_exact_load_tracks_batch_15s_compact_law_over_the_band():
+    """Why batch 15's honesty note was CORRECT and not an over-confession. Its r_phys came from the
+    compact-source law; the exact load of the sphere that law describes agrees with it to 14 % over
+    the band — close enough that batch 15's numbers were right, and far enough that one constant
+    could not be all four of them."""
+    sp = _al()["meta"]["spectrum"]
+    exact = np.array(sp["re_z_modes"])
+    compact = np.array(sp["r_compact_modes"])
+    rel = np.abs(exact - compact) / compact
+    assert np.all(rel < 0.15), f"the exact load tracks the compact law: {rel}"
+    assert np.all(np.diff(rel) > 0.0), "and drifts below it with frequency (finite ka)"
+    assert exact[-1] / exact[0] > 10.0, "meanwhile Re Z itself spans a decade — no constant fits"
+
+
+def test_airload_shipped_sweep_settings_are_the_measured_ones():
+    """Batch 15's lesson: every other test overrides sweep_points/sweep_cycles to keep the suite
+    fast, so the configuration the UI actually ships — both keys ABSENT — is exercised nowhere
+    else. A constant can be right while the default path reading it is not."""
+    shipped = simulate_to_payload({"model": "airload", "audio_duration": 0.2})
+    sw = shipped["meta"]["spectrum"]["sweep"]
+    assert len(sw["f"]) == AIRLOAD_SWEEP_POINTS == len(sw["alpha"])
+    assert sw["fs"] == AIRLOAD_SWEEP_FS
+    assert sw["truncated"] is False and sw["n_censored"] == 0
+    assert sw["steps"] < 60_000, "the shipped sweep must stay inside batch 15's budget"
+    for bad_p in ({"sweep_points": 1}, {"sweep_points": 99}, {"sweep_points": "x"}):
+        bad = simulate_to_payload({"model": "airload", **bad_p})
+        assert "error" in bad and bad["error"]["kind"] == "param"
+
+
+def test_airload_sweep_truncation_censors_the_tail_rather_than_hanging(monkeypatch):
+    """The work cap is a GUARANTEE, not dead code — and it cannot fire in the shipped range, so it
+    is driven past the guard rather than by widening a range (batch 1's rule). Below the budget the
+    tail must come back as labelled nulls that keep their place, never silently dropped."""
+    monkeypatch.setattr(web_serialize, "AIRLOAD_SWEEP_WORK_MAX", 4_000)
+    sw = _al(sweep_points=6)["meta"]["spectrum"]["sweep"]
+    assert sw["truncated"] is True
+    assert len(sw["alpha"]) == 6 and sw["n_censored"] > 0
+    assert sw["alpha"][-1] is None and sw["alpha"][0] is not None
+
+
+def test_airload_the_coupled_k_guard_is_the_bare_bodys_and_the_load_does_not_move_it():
+    """StringBodyBridge takes beta_b from the BARE body, so the impedance load cannot change the
+    ceiling — measured identical to the digit at every N. That is what lets this batch inherit
+    batch 15's K_MAX unexamined, and the test is here so it stays true."""
+    ok = _al(N=100, bridge_stiffness=AIRLOAD_K_MAX, sweep_points=2)
+    assert "error" not in ok, "K_MAX must be constructible at the reference N"
+    tight = simulate_to_payload({"model": "airload", "N": 40, "bridge_stiffness": 12000.0,
+                                 "audio_duration": 0.1, "sweep_points": 2})
+    assert "error" in tight, "the ceiling SHRINKS with fs — a low N must still trip it"
+    same = simulate_to_payload({"model": "radbody", "N": 40, "bridge_stiffness": 12000.0,
+                                "audio_duration": 0.1, "sweep_points": 2, "sweep_cap": 0.1})
+    assert "error" in same and same["error"]["kind"] == tight["error"]["kind"]
+
+
+def test_airload_frame_and_grid_bookkeeping_line_up_and_the_nut_stays_clamped():
+    d = _al()
+    fr = d["frames"]
+    frames = _decode_f32(fr["b64"]).reshape(fr["n_frames"], fr["width"])
+    assert fr["dims"] == 1
+    assert fr["width"] == len(d["grid"]["x"])
+    assert len(d["frame_times"]) == fr["n_frames"] and fr["n_frames"] > 1
+    assert np.all(frames[:, 0] == 0.0), "the fixed nut must never move"
+    assert np.all(np.isfinite(frames))
+
+
+def test_airload_guards_and_budget_are_clean_error_payloads():
+    for bad in ({"N": AIRLOAD_N_MAX + 1}, {"lambda": 1.0}, {"radiation_R": -1.0},
+                {"radiation_R": AIRLOAD_R_MAX + 1}, {"air_corner": -1.0},
+                {"air_corner": AIRLOAD_CORNER_MAX + 1}, {"radiation_weight": 0.0},
+                {"radiation_weight": AIRLOAD_WEIGHT_MAX + 0.1},
+                {"bridge_stiffness": AIRLOAD_K_MAX + 1}, {"sigma_body": -1.0},
+                {"audio_duration": 0.0}, {"distance": 0.0}, {"pluck_position": 1.0}):
+        out = simulate_to_payload({"model": "airload", "sweep_points": 2, **bad})
+        assert "error" in out and out["error"]["kind"] == "param", bad
+    over = simulate_to_payload({"model": "airload", "N": AIRLOAD_N_MAX, "rho": 0.001,
+                                "audio_duration": 3.0, "sweep_points": 2})
+    assert "error" in over and str(AIRLOAD_WORK_MAX) in over["error"]["message"].replace(",", "")
+
+
+def test_airload_ignores_params_that_belong_to_other_models():
+    """The recurring MODEL_RANGES leak, and this batch's worst instance: `radiation_R` is shared
+    with radbody at a 44x different range, so it MUST reset in _default. The stale sliders the
+    frontend still ships after visiting other models must not move a single number here."""
+    base = _al(sweep_points=2)
+    noisy = _al(sweep_points=2, K=2.0e6, alpha=2.3, depth=1e-3, kappa=5.0, EA=1e4,
+                sigma_plate=3.0, n_plate=12, sweep_cap=0.9)
     assert noisy["meta"]["exchange"] == base["meta"]["exchange"]
     assert noisy["meta"]["spectrum"] == base["meta"]["spectrum"]
     assert noisy["energy"] == base["energy"]

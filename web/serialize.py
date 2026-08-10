@@ -48,6 +48,8 @@ from physsynth.core.plate import Plate, VKPlate
 from physsynth.core.radiation import (
     AirRadiation,
     RadiatedBody,
+    RationalAirLoad,
+    ReactiveRadiatedBody,
     monopole_radiation_resistance,
 )
 from physsynth.core.reed import ReedBore
@@ -890,6 +892,8 @@ def _build_payload(p: dict[str, Any]) -> dict[str, Any]:
         return _build_payload_platebody(p)
     if model == "radbody":
         return _build_payload_radbody(p)
+    if model == "airload":
+        return _build_payload_airload(p)
     return _build_payload_string(p)
 
 
@@ -4459,6 +4463,581 @@ def _build_payload_radbody(p: dict[str, Any]) -> dict[str, Any]:
             "num_steps": int(n_steps),
             "n_frames": int(frames.shape[0]),
             "probe_x": round(float(L), 4),
+            "exchange": exchange,
+            "spectrum": spectrum,
+        },
+    }
+
+
+# == string -> a body loaded by the air's IMPEDANCE Z_a(omega) (batch 17) ==========================
+#
+# Batch 15's air is ONE NUMBER; here it is an impedance. :class:`RationalAirLoad` is a resistance in
+# parallel with the radiation mass ``M_a`` — the exact acoustic load of a pulsating sphere, and
+# already a first-order rational function of ``j omega``, so it needs no filter fit — and
+# :class:`ReactiveRadiatedBody` is the ``ModalBody`` drop-in that carries it. Two consequences: the
+# air now STORES as well as dissipates (batch 15's booked ledger gains a fifth channel), and the
+# damping becomes frequency-dependent (high partials radiate better and die first), which a constant
+# R cannot do. Load-bearing decisions, all measured (temp/reactive-probe, probes 1-5):
+#
+#   * **RadiatedBody's R and RationalAirLoad's R are NOT the same physical quantity**, which is why
+#     the default moves 133 -> 13146. Batch 15's R came from ``monopole_radiation_resistance``, the
+#     COMPACT-source (ka -> 0) law rho0 w^2/(4 pi c0) at 110 Hz; this R is the SATURATED plane-wave
+#     value rho0 c0 / S. Reading batch 15's number as a saturation implies a 0.497 m sphere whose
+#     exact Re Z_a is 66.6/101.3/113.0/125.3 over the band — flat, and -50%..-94% against the law
+#     batch 15 quoted. The sphere its number actually describes is the 5 cm one (132.1/410.4/
+#     710.7/1836.8, i.e. -1.0%/-3.1%/-5.4%/-14.0%): **batch 15's honesty note was CORRECT**, and its
+#     numbers were good to 14 %. The shipped default IS that 5 cm sphere, which is why all four body
+#     modes sit BELOW the corner where Re Z_a climbs.
+#   * **The anchor is a slider setting that reaches batch 15's SHIPPED picture.** ``air_corner = 0``
+#     -> ``M_a = inf`` -> ``R_eff = R`` exactly with the auxiliary state exactly zero, so at
+#     ``radiation_weight = 1`` and ``radiation_R = 133`` the chain is BIT-IDENTICAL to radbody:
+#     ``np.array_equal`` True on energy, far-field pressure AND the radiated channel over 8000
+#     steps. (``ModalBody(radiation=1.0)`` broadcasts to exactly ``phi.copy()`` — asserted, not
+#     assumed.)
+#   * **THE MONEY TEST IS THE LEDGER RESIDUAL, NOT THE DRIFT** (the air-box lesson, 3rd customer).
+#     Drift clears the 1e-10 bar everywhere measured (7.7e-15..1.1e-13) but is structurally blind to
+#     a wrong panel: ``load.energy()`` is stored PLUS radiated while ``body.energy()`` is bare, so a
+#     batch-15 copy-paste can double-count or drop a channel with the drift still green. The guard
+#     is per-step ``max|E - (E_string + E_body + E_conn + E_stored + int P_rad)|/E0``, measured
+#     2.30e-16 against controls that are loud: sign-flipped stored 3.63e-01, dropped 1.81e-01.
+#   * **The money panel is batch 15's booked split with a FIFTH line, and the fifth one is the
+#     batch**: E_stored peaks at 18.1 % of the pluck at the shipped default. In batch 15's own rig
+#     (weight 1) it peaks at 0.16-0.69 % — invisible, which is why batch 15 could not have drawn it.
+#   * **The radiation WEIGHT, not R, decides whether anything is visible.** Batch 15 inherited
+#     ``a_i = phi_i = 1`` from ModalBody's default, which puts the body at alpha/omega_1 = 4.8 —
+#     past critical damping, and mode-coupled through the shared volume velocity, so exciting one
+#     mode returns a mixture (a 110 Hz mode measures 152 Hz) and ``loaded_mode`` diverges. The
+#     core's validated regime is radiation = 0.02 at mass = 0.02; this ships 0.05.
+#   * **At a physical weight batch 15's anti-correlation does NOT bind.** It measured that slosh and
+#     drain cannot both show; here weight 0.05 gives 97.4 % radiated by 2 s AND a 60.5 % body slosh.
+#     Across the slider: peak E_body 0.716/0.605/0.139/0.0085 and radiated-at-2s 0.824/0.974/0.974/
+#     0.762 at weight 0.02/0.05/0.1/0.2 — 0.05 is near the top of both (the impedance match) and is
+#     also the loudest (peak far-field 0.56/0.96/0.33 Pa at 0.02/0.05/0.2).
+#   * **The 2nd panel is the CONTROLLED single-mode sweep** — one mode at a time, body alone, no
+#     string, because that is the only rig where ``loaded_mode`` is defined and "per-mode" means
+#     anything. Batch 15's pinned-reference-curve precedent. alpha climbs 5.41 -> 572.06 s^-1 over
+#     110 -> 1760 Hz (106x) against a flat impostor pinned at 8.26 (69x under-damped at the top).
+#   * **The pitch drop is the half a constant R cannot attempt**: -10.14 % at the fundamental
+#     (~185 cents) vs an oracle of -10.11 %, falling to -3.50 % at 1760 Hz as Im Z_a/omega decays
+#     above the corner. A constant R has Im Z == 0, so its shift is exactly 0 — no measurement.
+#   * **The shift MUST be read against the SCHEME's unloaded frequency, not nominal f0**, or the
+#     leapfrog's warping is credited to the air and at the render's own rate the SIGN flips: at
+#     fs = 22222 a 1760 Hz mode reads +0.55 % against nominal, -0.65 % against a measured unloaded
+#     run (oracle -0.53 %). Every sweep point therefore pays for a second R = 0 run.
+#   * **The sweep is pinned at 48 kHz** because the oracle error at 1760 Hz converges 2.61 % (22 k)
+#     -> 1.15 % (48 k) -> 0.86 % (96 k) -> 0.79 % (192 k): a floor that is NOT the scheme. Pinning
+#     puts the residual in the formula, where the panel can name it.
+#   * **…and the residual is exactly the weak-loading formula's own stated order, coefficient
+#     measured.** Over the shipped sweep alpha/omega runs 0.0078 -> 0.0540 and the error 0.10 % ->
+#     5.49 %; err/(alpha/omega)^2 is 16.4 -> 18.8, flat across a 7x range. The measurement is
+#     primary and the oracle is an overlay with a printed validity — not "the oracle is off".
+#   * **Run length is NOT what limits sweep accuracy**: 40 cycles capped at 24000 costs 149060 steps
+#     / 3.57 s and 12 cycles capped at 6000 costs 44710 / 0.97 s with the SAME median error (1.51 %)
+#     and max (5.53 vs 5.47 %). Shipped: 12 log-spaced points, 12 cycles, 6000-step cap.
+#   * **The coupled K guard is untouched by the load** — ceilings bare vs reactive identical to the
+#     digit at N = 40/50/100/160 (8563.1/10715.7/21478.5/34393.8, batch 15's own numbers), because
+#     StringBodyBridge takes beta_b from the BARE body. K_MAX = 19000 carries over.
+#   * **HONESTY** (different from batch 15's): the audio is AirRadiation's COMPACT read-out — batch
+#     15's path verbatim, which is what makes the anchor bit-identical — while the load's own far
+#     field is the finite sphere's, further low-passed by 1/(1 + jka); only the sphere's balances
+#     the booked channel exactly (pinned by the far-field power-balance test in test_radiation.py).
+#     And ``radiation_weight`` scales the read-out, so the audio level moves with a slider that is
+#     not a volume control, non-monotonically — the readout prints the peak so "quieter" does not
+#     read as physics.
+
+AIRLOAD_N_MAX = 160              # batch 15's budget: cost is steps alone (per-step cost is flat)
+AIRLOAD_LAM_DEFAULT = 0.9        # < 1 required, as batch 12/15: the spring pushes Nyquist unstable
+AIRLOAD_K_DEFAULT = 8000.0       # batch 12/15's bridge spring, unchanged
+AIRLOAD_K_MAX = 19000.0          # the coupled guard is load-INDEPENDENT (measured); batch 15's cap
+AIRLOAD_R_DEFAULT = 13146.4      # rho0 c0/(4 pi a^2) at a = 5 cm: the SATURATED plane-wave value
+AIRLOAD_R_MAX = 20000.0          # reaches the 5 cm sphere AND batch 15's 133 (step 0.1 hits it)
+AIRLOAD_CORNER_DEFAULT = 1091.8  # c0/(2 pi a) at a = 5 cm; 0 = M_a = inf = batch 15's flat load
+AIRLOAD_CORNER_MAX = 3000.0
+AIRLOAD_WEIGHT_DEFAULT = 0.05    # the impedance match: best drain AND best slosh AND loudest
+AIRLOAD_WEIGHT_MIN = 0.005
+AIRLOAD_WEIGHT_MAX = 1.0         # 1.0 = ModalBody's phi default = batch 15's rig (the anchor)
+AIRLOAD_SIGMA_BODY_DEFAULT = 0.0  # body loss OFF: the headline is conservation THROUGH radiation
+AIRLOAD_SIGMA_BODY_MAX = 80.0
+AIRLOAD_DISTANCE_DEFAULT = 1.0
+AIRLOAD_DISTANCE_MAX = 8.0
+AIRLOAD_AMP_DEFAULT = 1e-3
+AIRLOAD_AUDIO_MAX = 3.0
+AIRLOAD_WORK_MAX = 200_000       # steps of the single instrumented run (batch 12/15's budget)
+AIRLOAD_ANIM_WIN = 0.06          # s of string animation (the body is lumped — no shape to draw)
+AIRLOAD_EXCHANGE_WINDOW = 0.4    # batch 12/15's window verbatim, so the anchor draws their picture
+AIRLOAD_TRACE_POINTS = 600
+AIRLOAD_SWEEP_FS = 48_000.0      # PINNED: the oracle error's floor is the formula, not the scheme
+AIRLOAD_SWEEP_POINTS = 12
+AIRLOAD_SWEEP_F_MIN = 110.0      # the rig's first body mode ...
+AIRLOAD_SWEEP_F_MAX = 1760.0     # ... to four octaves above it
+AIRLOAD_SWEEP_CYCLES = 12        # run length is NOT the accuracy limiter (measured)
+AIRLOAD_SWEEP_STEP_CAP = 6_000   # a guard only: 12 cycles at 48 kHz binds below ~96 Hz
+AIRLOAD_SWEEP_WORK_MAX = 200_000  # hard stop: censor the remaining points rather than hang
+AIRLOAD_WEAK_LOADING_MAX = 0.02  # alpha/omega beyond which the ORACLE overlay is labelled, not hid
+
+
+def _airload_mass(R: float, corner: float) -> float:
+    """``M_a`` from the corner frequency ``f_c = R / (2 pi M_a)``. ``f_c = 0`` -> ``inf``.
+
+    The corner is the exposed coordinate rather than ``M_a`` because it lives on the same axis as
+    the body modes: below it the air is a MASS (stores, does not radiate), above it a RESISTANCE.
+    ``0`` is therefore "the corner is below everything" = batch 15's purely resistive load.
+
+    ``R = 0`` must ALSO give ``inf`` and not ``0``: the corner is defined as ``R / (2 pi M_a)``, so
+    inverting it at ``R = 0`` yields a zero mass, which the core rejects outright — and it would
+    reject the one setting that is supposed to mean "no air at all". Decoupling the air is a
+    property of ``R``; the corner has nothing left to say about it.
+    """
+    return math.inf if (corner <= 0.0 or R <= 0.0) else R / (2.0 * math.pi * corner)
+
+
+def _airload_sphere_readout(R: float, corner: float) -> dict[str, Any]:
+    """The equivalent radius implied by ``R`` and by the corner, and whether they agree.
+
+    ``R`` and ``air_corner`` are exposed as INDEPENDENT effective coefficients, so most of the
+    plane is not any sphere (the core's own parameterisation choice, and the project's
+    unphysical-params-are-a-feature rule). Rather than forbid the combination, say what each
+    implies: ``a_R = sqrt(rho0 c0 / 4 pi R)`` from the saturation, ``a_tau = c0 / 2 pi f_c`` from
+    the relaxation time. The sphere-consistent corner ``sqrt(R c0 / (rho0 pi))`` is identically
+    batch 15's ``f_match`` — true, but near-tautological (both are ``ka = 1``), so it ships as a
+    sanity line, not as evidence.
+    """
+    if R <= 0.0:
+        return {"a_from_R": None, "a_from_corner": None, "rel_gap": None, "consistent": False,
+                "corner_sphere": None}
+    a_r = math.sqrt(RHO0_AIR * C0_AIR / (4.0 * math.pi * R))
+    corner_sphere = math.sqrt(R * C0_AIR / (RHO0_AIR * math.pi))
+    if corner <= 0.0:
+        return {"a_from_R": round(a_r, 5), "a_from_corner": None, "rel_gap": None,
+                "consistent": False, "corner_sphere": round(corner_sphere, 2)}
+    a_t = C0_AIR / (2.0 * math.pi * corner)
+    gap = abs(a_r - a_t) / a_t
+    return {"a_from_R": round(a_r, 5), "a_from_corner": round(a_t, 5), "rel_gap": round(gap, 6),
+            "consistent": bool(gap < 0.01), "corner_sphere": round(corner_sphere, 2)}
+
+
+def _build_airload_bridge(
+    p: dict[str, Any], *, n_override: int | None = None,
+) -> tuple[StringBodyBridge, ReactiveRadiatedBody, dict[str, Any]]:
+    """Batch 15's string+ModalBody+spring rig with the resistance replaced by ``Z_a(omega)``.
+
+    Deliberately a near-copy of :func:`_build_radbody_bridge` rather than a shared helper: the two
+    differ in the body's ``radiation`` weight (which batch 15 left at ModalBody's ``phi`` default)
+    and in the load class, and folding them together would put a branch inside the one construction
+    path whose bit-for-bit equality with batch 15 is this batch's anchor.
+    """
+    L = _fnum(p, "L", 1.0)
+    T = _fnum(p, "T", 200.0)
+    rho = _fnum(p, "rho", 0.005)
+    lam = _fnum(p, "lambda", AIRLOAD_LAM_DEFAULT)
+    K = _fnum(p, "bridge_stiffness", AIRLOAD_K_DEFAULT)
+    R = _fnum(p, "radiation_R", AIRLOAD_R_DEFAULT)
+    corner = _fnum(p, "air_corner", AIRLOAD_CORNER_DEFAULT)
+    weight = _fnum(p, "radiation_weight", AIRLOAD_WEIGHT_DEFAULT)
+    sigma_body = _fnum(p, "sigma_body", AIRLOAD_SIGMA_BODY_DEFAULT)
+    try:
+        N = int(p.get("N", 100)) if n_override is None else int(n_override)
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"N must be an integer, got {p.get('N')!r}.") from exc
+
+    if not (N_MIN <= N <= AIRLOAD_N_MAX):
+        raise ParamError(f"N must be in [{N_MIN}, {AIRLOAD_N_MAX}] for the air load, got {N}.")
+    if min(L, T, rho) <= 0:
+        raise ParamError("L, T, rho must all be positive.")
+    if not (0.0 < lam < 1.0):
+        raise ParamError(
+            f"lambda must be in (0, 1), got {lam}: the string's Nyquist mode is marginal at "
+            "lambda = 1 and the bridge spring pushes it unstable, so the coupled system needs "
+            "headroom below it."
+        )
+    if not (0.0 <= K <= AIRLOAD_K_MAX):
+        raise ParamError(f"bridge_stiffness must be in [0, {AIRLOAD_K_MAX}], got {K}.")
+    if not (0.0 <= R <= AIRLOAD_R_MAX):
+        raise ParamError(
+            f"radiation_R must be in [0, {AIRLOAD_R_MAX}] Pa·s/m³, got {R}. This is the SATURATED "
+            "(plane-wave) resistance rho0*c0/S, not batch 15's compact-source value at one "
+            "frequency — the same name, a different limit of the same formula."
+        )
+    if not (0.0 <= corner <= AIRLOAD_CORNER_MAX):
+        raise ParamError(
+            f"air_corner must be in [0, {AIRLOAD_CORNER_MAX}] Hz, got {corner}. 0 means M_a = inf: "
+            "the purely resistive load, bit-identical to the constant-R body."
+        )
+    if not (AIRLOAD_WEIGHT_MIN <= weight <= AIRLOAD_WEIGHT_MAX):
+        raise ParamError(
+            f"radiation_weight must be in [{AIRLOAD_WEIGHT_MIN}, {AIRLOAD_WEIGHT_MAX}], got "
+            f"{weight}. It is the body's volume-velocity coupling a_i, not a volume control."
+        )
+    if not (0.0 <= sigma_body <= AIRLOAD_SIGMA_BODY_MAX):
+        raise ParamError(f"sigma_body must be in [0, {AIRLOAD_SIGMA_BODY_MAX}], got {sigma_body}.")
+
+    c = math.sqrt(T / rho)
+    fs = c * N / (L * lam)
+    string = IdealString(L=L, T=T, rho=rho, fs=fs, N=N, boundary=("fixed", "free"), sigma=0.0)
+    # The SAME body rig as batches 12/15 (freqs, mass, phi) — `radiation` is what this batch adds,
+    # and at 1.0 it broadcasts to exactly phi.copy(), which is what makes the anchor bit-identical.
+    body = ModalBody(freqs=BODY_BODY_FREQS, fs=fs, sigmas=sigma_body, masses=BODY_BODY_MASS,
+                     phi=1.0, radiation=weight)
+    M_a = _airload_mass(R, corner)
+    loaded = ReactiveRadiatedBody(body=body, load=RationalAirLoad(fs=fs, R=R, M_a=M_a))
+    # The exact coupled stability guard fires HERE; measured load-independent, so it is batch 15's.
+    bridge = StringBodyBridge(string=string, body=loaded, K=K)
+    info = {
+        "c": c, "L": L, "N": N, "fs": fs, "lam": float(string.lam), "K": K, "R": R,
+        "corner": corner, "M_a": M_a, "weight": weight, "sigma_body": sigma_body,
+    }
+    return bridge, loaded, info
+
+
+class _AirLoadRun:
+    """Per-step telemetry of an impedance-loaded body run — FIVE channels and the read-out.
+
+    The fifth is ``stored``: the air's kinetic energy in the radiation mass, which the resistive
+    load had no place for. It is read from ``load.stored_energy()``, NOT inferred as a remainder —
+    a remainder would make the ledger residual below tautologically zero.
+    """
+
+    def __init__(self, n: int) -> None:
+        self.E = np.empty(n + 1)            # the BOOKED total: mechanical + stored + int P_rad
+        self.e_string = np.empty(n + 1)
+        self.e_body = np.empty(n + 1)       # the BARE body, without the air's two channels
+        self.e_conn = np.empty(n + 1)       # connection (spring) energy — cross-time, can go < 0
+        self.stored = np.empty(n + 1)       # 1/2 M_a U_L^2 — air dragged along, returned later
+        self.rad = np.empty(n + 1)          # int R U_R^2 dt — energy handed to the far field
+        self.pressure = np.empty(n + 1)
+        self.frames: list[NDArray[np.float64]] = []
+        self.frame_steps: list[int] = []
+
+
+def _run_airload(bridge: StringBodyBridge, loaded: ReactiveRadiatedBody, rad: AirRadiation,
+                 n_steps: int, *, anim_stride: int, frame_until: int) -> _AirLoadRun:
+    """Step the loaded chain, capturing the five energy channels + the read-out in ONE pass.
+
+    ``e_body`` reads ``loaded.body.energy()`` and NOT ``bridge.body.energy()``: the latter is the
+    wrapper's total, which already folds *both* air channels in and would draw them twice. That is
+    precisely the mistake the ledger residual exists to catch (batch 15's note said this about one
+    channel; there are two now, and ``load.energy()`` returns their sum).
+    """
+    run = _AirLoadRun(n_steps)
+
+    def _sample(i: int) -> None:
+        run.E[i] = bridge.energy()
+        run.e_string[i] = bridge.string.energy()
+        run.e_body[i] = loaded.body.energy()
+        run.e_conn[i] = 0.5 * bridge.K * bridge._stretch() * bridge._stretch(prev=True)
+        run.stored[i] = loaded.load.stored_energy()
+        run.rad[i] = loaded.radiated_energy
+        run.pressure[i] = rad.radiate(bridge)
+
+    _sample(0)
+    if frame_until >= 1:
+        run.frames.append(bridge.string.u.copy())
+        run.frame_steps.append(0)
+    for i in range(1, n_steps + 1):
+        bridge.step()
+        _sample(i)
+        if i <= frame_until and i % anim_stride == 0:
+            run.frames.append(bridge.string.u.copy())
+            run.frame_steps.append(i)
+    if not np.all(np.isfinite(run.E)):
+        raise ParamError("simulation produced non-finite energy (instability) — adjust parameters.")
+    return run
+
+
+def _airload_measure_mode(f0: float, *, R: float, M_a: float, weight: float, mass: float,
+                          fs: float, steps: int) -> tuple[float, float]:
+    """One mode, body alone, free decay -> ``(f_measured, alpha)``. ``nan`` when it cannot ring.
+
+    The single-mode rig is not a simplification, it is a REQUIREMENT: with a shared radiation
+    weight the modes of a multi-mode body are coupled through the net volume velocity, so exciting
+    one returns a mixture (measured: a 110 Hz mode reads 152 Hz at batch 15's weight) and there is
+    no per-mode rate to report. ``loaded_mode`` is defined for exactly this rig.
+
+    Returns ``nan`` rather than a number when the mode is too heavily loaded to oscillate — the
+    censoring rule (label, never guess), which fires at ``air_corner = 0`` and the default ``R``.
+    """
+    body = ModalBody(freqs=np.array([f0]), fs=fs, sigmas=0.0, masses=mass, phi=1.0,
+                     radiation=weight)
+    loaded = ReactiveRadiatedBody(body=body, load=RationalAirLoad(fs=fs, R=R, M_a=M_a))
+    loaded.set_state(np.array([1e-3]))
+    q = np.empty(steps)
+    for n in range(steps):
+        loaded.step()
+        q[n] = body.q[0]
+    if not np.all(np.isfinite(q)):
+        return float("nan"), float("nan")
+    sign = np.signbit(q)
+    crossings = np.flatnonzero(sign[:-1] != sign[1:])
+    if crossings.size < 3:
+        return float("nan"), float("nan")
+    f_meas = 0.5 * fs * (crossings.size - 1) / (crossings[-1] - crossings[0])
+    env = np.abs(q)
+    peaks = np.flatnonzero((env[1:-1] > env[:-2]) & (env[1:-1] >= env[2:])) + 1
+    peaks = peaks[env[peaks] > 0.0]
+    if peaks.size < 3:
+        return f_meas, float("nan")
+    t = np.arange(steps) / fs
+    alpha = -float(np.polyfit(t[peaks], np.log(env[peaks]), 1)[0])
+    return f_meas, alpha
+
+
+def _airload_sweep(p: dict[str, Any], info: dict[str, Any]) -> dict[str, Any]:
+    """The per-mode reference curve: measured ``alpha(f)`` and pitch drop vs the closed form.
+
+    A CONTROLLED curve in batch 15's sense — pinned ``fs`` and a pinned single-mode body, carrying
+    only the user's ``radiation_R`` / ``air_corner`` / ``radiation_weight``. Pinning ``fs`` is what
+    makes the residual attributable: the oracle error at the top converges 2.61 % (22 kHz) ->
+    0.79 % (192 kHz), so at the render's own rate most of the disagreement would be the leapfrog's,
+    not the formula's.
+
+    Every point costs TWO runs. The second is the unloaded (``R = 0``) reference, and it is not
+    optional: read against the nominal ``f0`` instead, the scheme's own warping flips the sign of
+    the measured pitch shift at the top of the sweep.
+    """
+    R, weight, M_a = info["R"], info["weight"], info["M_a"]
+    mass = float(BODY_BODY_MASS)
+    try:
+        points = int(p.get("sweep_points", AIRLOAD_SWEEP_POINTS))
+    except (TypeError, ValueError) as exc:
+        raise ParamError(
+            f"sweep_points must be an integer, got {p.get('sweep_points')!r}."
+        ) from exc
+    if not (2 <= points <= 40):
+        raise ParamError(f"sweep_points must be in [2, 40], got {points}.")
+    cycles = max(2, int(_fnum(p, "sweep_cycles", AIRLOAD_SWEEP_CYCLES)))
+    grid = np.geomspace(AIRLOAD_SWEEP_F_MIN, AIRLOAD_SWEEP_F_MAX, points)
+    fs = AIRLOAD_SWEEP_FS
+    ref = RationalAirLoad(fs=fs, R=R, M_a=M_a)
+    # The impostor: batch 15's load, matched to this one at the FIRST body mode — the comparison
+    # the core's own negative-control test makes. Its alpha is a constant and its pitch shift is
+    # exactly zero (Im Z == 0), so neither needs measuring; drawing them costs no steps.
+    r_flat = float(ref.impedance(2.0 * math.pi * float(BODY_BODY_FREQS[0])).real)
+    alpha_flat = weight * weight * r_flat / (2.0 * mass)
+
+    out: dict[str, Any] = {
+        "f": _finite_list(grid, 3),
+        "fs": fs,
+        "cycles": cycles,
+        "r_flat": round(r_flat, 3),
+        "alpha_flat": round(alpha_flat, 5),
+        "weak_max": AIRLOAD_WEAK_LOADING_MAX,
+    }
+    if R <= 0.0:
+        out.update({"skipped": True, "truncated": False, "steps": 0, "alpha": [],
+                    "alpha_oracle": [],
+                    "df_meas": [], "df_oracle": [], "alpha_over_omega": [], "n_censored": 0,
+                    "span": None, "flat_ratio_top": None, "resid_coef": None,
+                    "note": "radiation_R = 0: the air is decoupled, nothing radiates, no curve"})
+        return out
+
+    alpha_m: list[float] = []
+    alpha_o: list[float] = []
+    df_m: list[float] = []
+    df_o: list[float] = []
+    a_over_w: list[float] = []
+    spent = 0
+    truncated = False
+    for f0 in grid:
+        if spent >= AIRLOAD_SWEEP_WORK_MAX:      # never hang: censor the tail, say so
+            truncated = True
+            alpha_m.append(float("nan"))
+            alpha_o.append(float("nan"))
+            df_m.append(float("nan"))
+            df_o.append(float("nan"))
+            a_over_w.append(float("nan"))
+            continue
+        steps = int(min(cycles * fs / f0, AIRLOAD_SWEEP_STEP_CAP))
+        f_load, al = _airload_measure_mode(f0, R=R, M_a=M_a, weight=weight, mass=mass, fs=fs,
+                                           steps=steps)
+        f_free, _ = _airload_measure_mode(f0, R=0.0, M_a=M_a, weight=weight, mass=mass, fs=fs,
+                                          steps=steps)
+        spent += 2 * steps
+        alpha_m.append(al)
+        # against the SCHEME's own unloaded frequency, never the nominal f0 (see the docstring)
+        df_m.append((f_load - f_free) / f_free * 100.0 if f_free > 0.0 else float("nan"))
+        try:
+            w_eff, a_pred = ref.loaded_mode(2.0 * math.pi * f0, weight=weight, mass=mass)
+        except ValueError:      # the added mass is comparable to the modal mass — outside the
+            alpha_o.append(float("nan"))   # formula's range, which is a fact about the OVERLAY,
+            df_o.append(float("nan"))      # not about the measurement beside it
+            a_over_w.append(al / (2.0 * math.pi * f0) if math.isfinite(al) else float("nan"))
+            continue
+        alpha_o.append(a_pred)
+        df_o.append((w_eff / (2.0 * math.pi) - f0) / f0 * 100.0)
+        a_over_w.append(a_pred / (2.0 * math.pi * f0))
+
+    a_arr = np.array(alpha_m, dtype=float)
+    o_arr = np.array(alpha_o, dtype=float)
+    w_arr = np.array(a_over_w, dtype=float)
+    good = np.isfinite(a_arr) & np.isfinite(o_arr) & (o_arr > 0.0)
+    # err/(alpha/omega)^2 — the weak-loading formula's OWN stated order, coefficient measured.
+    coef = None
+    if np.count_nonzero(good & (w_arr > 0.0)) >= 2:
+        rel = np.abs(a_arr[good] - o_arr[good]) / o_arr[good]
+        c2 = rel / (w_arr[good] ** 2)
+        coef = [round(float(np.min(c2)), 2), round(float(np.max(c2)), 2)]
+    finite_a = a_arr[np.isfinite(a_arr) & (a_arr > 0.0)]
+    out.update({
+        "skipped": False,
+        "truncated": truncated,
+        "steps": int(spent),
+        "alpha": _finite_list(a_arr, 5),
+        "alpha_oracle": _finite_list(o_arr, 5),
+        "df_meas": _finite_list(np.array(df_m, dtype=float), 4),
+        "df_oracle": _finite_list(np.array(df_o, dtype=float), 4),
+        "alpha_over_omega": _finite_list(w_arr, 6),
+        "n_censored": int(np.count_nonzero(~np.isfinite(a_arr))),
+        "n_weak": int(np.count_nonzero(np.isfinite(w_arr) & (w_arr <= AIRLOAD_WEAK_LOADING_MAX))),
+        "span": round(float(finite_a.max() / finite_a.min()), 2) if finite_a.size >= 2 else None,
+        "flat_ratio_top": (round(float(finite_a.max() / alpha_flat), 2)
+                           if finite_a.size and alpha_flat > 0.0 else None),
+        "resid_coef": coef,
+    })
+    return out
+
+
+def _build_payload_airload(p: dict[str, Any]) -> dict[str, Any]:
+    playback_speed = _fnum(p, "playback_speed", 0.02)
+    pluck_frac = _fnum(p, "pluck_position", 0.3)
+    amplitude = _fnum(p, "amplitude", AIRLOAD_AMP_DEFAULT)
+    audio_dur = _fnum(p, "audio_duration", 2.0)
+    distance = _fnum(p, "distance", AIRLOAD_DISTANCE_DEFAULT)
+    fpp = max(1, int(_fnum(p, "frames_per_period", FRAMES_PER_PERIOD)))
+    if not (0.0 < playback_speed <= SPEED_MAX):
+        raise ParamError(f"playback_speed must be in (0, {SPEED_MAX}], got {playback_speed}.")
+    if not (0.0 < pluck_frac < 1.0):
+        raise ParamError(f"pluck_position must be in (0, 1), got {pluck_frac}.")
+    if not (0.0 < audio_dur <= AIRLOAD_AUDIO_MAX):
+        raise ParamError(f"audio_duration must be in (0, {AIRLOAD_AUDIO_MAX}] s, got {audio_dur}.")
+    if not (0.0 < distance <= AIRLOAD_DISTANCE_MAX):
+        raise ParamError(f"distance must be in (0, {AIRLOAD_DISTANCE_MAX}] m, got {distance}.")
+
+    bridge, loaded, info = _build_airload_bridge(p)   # exact K guard fires in here
+    c, L, fs, lam = info["c"], info["L"], info["fs"], info["lam"]
+    R, corner, weight = info["R"], info["corner"], info["weight"]
+    f1_base = c / (2.0 * L)
+
+    n_steps = max(1, round(audio_dur * fs))
+    if n_steps > AIRLOAD_WORK_MAX:
+        raise ParamError(
+            f"work budget exceeded ({n_steps:,} steps > {AIRLOAD_WORK_MAX:,}). Lower the audio "
+            "duration, N, or the tension."
+        )
+    anim_stride = max(1, round((fs / f1_base) / fpp))
+    frame_until = max(anim_stride, round(AIRLOAD_ANIM_WIN * fs))
+    if frame_until // anim_stride > MAX_FRAMES:
+        anim_stride = max(1, math.ceil(frame_until / MAX_FRAMES))
+
+    bridge.string.set_state(triangular_pluck(bridge.string.x, L, pluck_frac * L,
+                                             amplitude=amplitude))
+    air = AirRadiation(fs=fs, distance=distance, retarded=True)
+    run = _run_airload(bridge, loaded, air, n_steps, anim_stride=anim_stride,
+                       frame_until=frame_until)
+
+    # --- the money panel: FIVE booked channels, and the residual that guards them ----------------
+    #     The drift check below is blind to a mis-drawn ledger (load.energy() is stored PLUS
+    #     radiated while body.energy() is bare), so the panel carries its own residual. Measured
+    #     2.3e-16; sign-flip a channel and it reads 3.6e-01 while the drift stays green.
+    total = run.E
+    e0 = float(total[0])
+    five = run.e_string + run.e_body + run.e_conn + run.stored + run.rad
+    ledger_resid = float(np.max(np.abs(total - five)) / abs(e0)) if e0 != 0.0 else float("nan")
+    es_frac = run.e_string / total
+    eb_frac = run.e_body / total
+    ec_frac = run.e_conn / total
+    est_frac = run.stored / total
+    er_frac = run.rad / total
+    n_exch = min(n_steps, max(1, round(AIRLOAD_EXCHANGE_WINDOW * fs)))
+    eidx = np.linspace(0, n_exch, min(n_exch + 1, AIRLOAD_TRACE_POINTS)).astype(int)
+    exchange = {
+        "kind": "airload",
+        "time": _finite_list(eidx / fs, 6),
+        "e_string_frac": _finite_list(es_frac[eidx]),
+        "e_body_frac": _finite_list(eb_frac[eidx]),
+        "e_conn_frac": _finite_list(ec_frac[eidx]),
+        "e_stored_frac": _finite_list(est_frac[eidx]),
+        "e_rad_frac": _finite_list(er_frac[eidx]),
+        "total_frac": _finite_list((total / total)[eidx]),
+        "window": round(n_exch / fs, 4),
+        "rad_frac_end": round(float(er_frac[-1]), 4),
+        "mech_frac_end": round(float(1.0 - er_frac[-1]), 4),
+        "rad_frac_window": round(float(er_frac[eidx[-1]]), 4),
+        "body_frac_peak": round(float(np.max(eb_frac)), 4),
+        "stored_frac_peak": round(float(np.max(est_frac)), 5),
+        "string_frac_min": round(float(np.min(es_frac)), 4),
+        "conn_frac_min": round(float(np.min(ec_frac)), 5),
+        "total_drift": (total.max() - total.min()) / abs(e0) if e0 != 0.0 else float("nan"),
+        "ledger_residual": ledger_resid,
+        "ledger_tol": LOSSLESS_TOL,
+        "ledger_pass": bool(ledger_resid < LOSSLESS_TOL),
+        "K": round(info["K"], 1),
+        "R": round(R, 3),
+        "corner": round(corner, 3),
+        "weight": round(weight, 4),
+    }
+
+    # --- the second panel: the per-mode curve the constant-R load cannot bend --------------------
+    sweep = _airload_sweep(p, info)
+    sphere = _airload_sphere_readout(R, corner)
+    ref = RationalAirLoad(fs=fs, R=R, M_a=info["M_a"])
+    modes_w = 2.0 * math.pi * BODY_BODY_FREQS
+    spectrum = {
+        "kind": "airload",
+        "sweep": sweep,
+        "R": round(R, 3),
+        "corner": round(corner, 3),
+        "M_a": info["M_a"] if math.isfinite(info["M_a"]) else None,
+        "weight": round(weight, 4),
+        "flat": bool(corner <= 0.0),
+        "sphere": sphere,
+        "body_modes": _finite_list(BODY_BODY_FREQS, 1),
+        # The exact load at each body mode beside batch 15's COMPACT-law numbers: same medium, same
+        # frequencies, different limit of the same formula. At the shipped default they agree to
+        # -1.0 %/-3.1 %/-5.4 %/-14.0 %, which is what makes batch 15's honesty note correct.
+        "re_z_modes": _finite_list(np.array([ref.impedance(w).real for w in modes_w]), 2),
+        "im_z_modes": _finite_list(np.array([ref.impedance(w).imag for w in modes_w]), 2),
+        "r_compact_modes": _finite_list(
+            np.array([monopole_radiation_resistance(w) for w in modes_w]), 1,
+        ),
+        "distance": round(distance, 3),
+        "gain": air.gain,
+        "latency_ms": round(air.latency_samples / fs * 1000.0, 3),
+    }
+
+    frames = np.array(run.frames, dtype=float)
+    field_amp = float(np.max(np.abs(frames))) if frames.size else 0.0
+    # The far-field PEAK is reported because radiation_weight scales the read-out: the audio is
+    # normalized, so without this number a slider that is not a volume control looks like one.
+    pressure_peak = float(np.max(np.abs(run.pressure))) if run.pressure.size else 0.0
+    audio48, peak = _resample_normalize(run.pressure, fs)
+    sim = SimResult(time=np.arange(total.size) / fs, energy=total, output=None, fs=fs, snapshots=[])
+    return {
+        "model": "airload",
+        "fs_sim": round(fs, 3),
+        "lambda": round(lam, 6),
+        "grid": {"x": _finite_list(bridge.string.x, 6)},
+        "frames": {
+            "b64": _b64f32(frames.ravel()),
+            "n_frames": int(frames.shape[0]),
+            "width": int(frames.shape[1]) if frames.ndim == 2 else 0,
+            "dims": 1,
+        },
+        "frame_times": _finite_list(np.array(run.frame_steps, dtype=float) / fs, 6),
+        "anim_dt": float(anim_stride / fs),
+        "playback_speed": playback_speed,
+        "field_amp": field_amp,
+        "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
+        # Both air channels are BOOKED, so a radiating run still CONSERVES: the gate stays
+        # sigma_body alone (the bore's bell precedent, batch 15's rule, third customer).
+        "energy": _energy_block(sim, sigma_zero=bool(info["sigma_body"] == 0.0), oracle_2sigma=0.0,
+                                decay_oracle=False),
+        "meta": {
+            "c": round(c, 3),
+            "f1": round(f1_base, 3),
+            "num_steps": int(n_steps),
+            "n_frames": int(frames.shape[0]),
+            "probe_x": round(float(L), 4),
+            "pressure_peak": round(pressure_peak, 6),
             "exchange": exchange,
             "spectrum": spectrum,
         },
