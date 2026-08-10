@@ -95,7 +95,12 @@ never the reverse. This keeps the physics portable to C++/Rust later without re-
   (`AirRadiation`, no back-reaction), a constant-resistance **load** (`RadiatedBody`), and the
   **frequency-dependent** load (`RationalAirLoad` / `ReactiveRadiatedBody`) — the exact first-order
   impedance `Z_a = R·jωτ/(1+jωτ)`, a resistance in parallel with the radiation mass, so the air
-  stores as well as dissipates and the energy identity carries both. Above all three sits the
+  stores as well as dissipates and the energy identity carries both. Mind that the **`R` of the
+  second and third tiers are different physical quantities**: `RadiatedBody`'s is a *compact-source*
+  resistance `ρ₀ω²/(4πc₀)` evaluated at one frequency, `RationalAirLoad`'s is the *saturated*
+  plane-wave `ρ₀c₀/S`, and they meet only at `ka = 1`. The viewer surfaces the third tier as
+  `airload` (web-viewer batch 17), where `air_corner = 0` walks it back to the second bit-for-bit.
+  Above all three sits the
   **distributed** tier, `core/airbox.py` (`AirBox`, §12H): a 3-D Yee grid of actual air, which the
   lumped port structurally cannot stand in for — room modes, travel time, several listeners. It
   *contains* the lumped tier: far from the walls it reproduces `AirRadiation`'s monopole law. Its
@@ -405,7 +410,7 @@ because the *reasoning* is the reusable part — and because those three had dri
 3. **Which models are polyphonic** — answered structurally in §11.3a; the CPU-budget half stays
    deferred to Phase 5.
 4. **First interactive visualization target** — **the web view, sooner.** Notebook-only plots were
-   skipped in favour of the Phase-3.5 interactive viewer (`web/`, `physsynth/viz/`), which ran to 16
+   skipped in favour of the Phase-3.5 interactive viewer (`web/`, `physsynth/viz/`), which ran to 17
    batches and is what surfaced most of the models.
 5. **Test tolerances** — **the existing bars stand; what was missing was the reason.** The policy is
    now written down in §6.1, including why the acceptance bar must *not* be tightened.

@@ -2342,7 +2342,17 @@ decimated one (batch 2). And the deep-link verifier structurally cannot fire the
   the tension batch's recorded "~176 µs at N=128" was optimistic, and the sweep's *stable* points
   are the expensive ones because they alone run the full cap.
 
-### Batch 17 (IN PROGRESS) — the air as an IMPEDANCE: `Z_a(ω)` stores as well as radiates
+### Batch 17 (DONE) — the air as an IMPEDANCE: `Z_a(ω)` stores as well as radiates
+
+**Built & browser-verified.** All-wrapper (`physsynth/core` untouched, core test count unchanged,
+the core-dep allowlist guard green); 21 web tests, ruff clean, headless verifier `airload` PASS
+alongside `body`/`platebody`/`radbody`, CDP switch-check PASS. Shipped defaults, measured through
+the payload: the air takes **97.4 %** of the pluck within 2 s and **holds up to 18.1 %** of it in
+the radiation mass on the way, while the body still sloshes to **60.5 %** and the five channels sum
+to the conserved total with a ledger residual of **2.30e-16** (drift 3.56e-14). The sweep reports
+`α` spanning **105.85×** over 110–1760 Hz against a constant-`R` impostor pinned at **8.26 s⁻¹**
+(**69.31×** under-damped at the top), and a fundamental **10.13 % flat** (~175 cents). Default
+render **3.84 s** (44 444 audio steps + a 44 710-step sweep).
 
 **Phase D's model list closed in 2026-07 and this document forbade inferring a batch 17 from it —
 "if a new viewer batch is wanted it needs a new model or a new capability first."** That condition
@@ -2482,6 +2492,58 @@ recorded because the wrong version was one edit from shipping:
   `air_corner` are exposed as **independent effective coefficients**, so most of the plane is not
   any sphere; the readout prints the equivalent radius implied by each (`a_R = √(ρ₀c₀/4πR)`,
   `a_τ = c₀/2πf_c`) and whether they agree, rather than forbidding the combination.
+
+**Found during the build (not in the plan above):**
+
+- **`R = 0` — the one setting that means "no air at all" — RAISED, because the corner's own formula
+  collapses at it.** `M_a = R / (2π f_c)` is the inversion of the exposed coordinate, and at `R = 0`
+  it returns a *zero* mass, which `RationalAirLoad` rejects outright (`M_a > 0`). So the anchor the
+  plan leaned on hardest was the single value the parameterisation could not express. The fix is one
+  clause — decoupling is a property of `R`, and the corner has nothing left to say about it — but
+  the lesson generalises: *when you expose a derived coordinate, check the endpoints of the
+  coordinate you derived it FROM, not just of the one on the slider.*
+- **BATCH 15's OWN INVISIBLE-SLIDER BUG WAS STILL LIVE, and this batch's switch-check is what found
+  it.** `pluck_position`'s markup lists `body platebody radbody` in its `data-show`, but the
+  Excitation *fieldset* around it lists only `body` — and the fieldset gate wins, so for two shipped
+  models the control was never built and `_fnum(p, "pluck_position", 0.3)` silently stood in.
+  Batch 15 wrote the lesson ("a slider that does not exist looks exactly like one that works,
+  because the backend default fills in") and then shipped an instance of it *in the same family*,
+  because its own check enumerated the sliders it had added rather than the ones the model should
+  have. **Two gates, two lists, and only the narrower one is visible in a diff.** Fixed for all
+  four models.
+- **The switch-check's readiness condition was itself the bug it was written to catch.** Waiting on
+  `document.querySelectorAll('.slider').length > 5` is satisfied *before any JavaScript runs* —
+  the divs ship in `index.html` and are empty until `buildSliders` fills them — so the first run
+  "found" all 64 sliders visible and none of them containing an `<input>`, i.e. three false
+  failures and one false pass. The real signal is the presence of a *built* `input#s-…`.
+  *A readiness check that can be satisfied by the static markup is not a readiness check.*
+- **Two panel collisions the numbers could not show, radbody's lesson repeating one axis over:**
+  the x-unit `Hz` placed after the last octave label lands *on* the `1760` tick (the last tick is
+  centred on the axis end), and a right-hand axis title lands on the corner marker's label. The unit
+  moved to the bottom-left gutter — the one spot this panel leaves empty — and the Δf unit rides its
+  legend entry instead of being written twice.
+- **`E_air` renders as a BAND, not a curve, and that is the physics.** The stored energy oscillates
+  at **2ω** — energy moves in and out of the radiation mass twice per cycle — so at the exchange
+  panel's time resolution it fills a hairy band near the axis rather than tracing a line. Left
+  un-smoothed and *said* in the readout: an envelope would have been prettier and would have hidden
+  the one visual fact that distinguishes a reservoir from a drain.
+- **The readout quoted a peak its own picture did not reach.** `stored_frac_peak` is run-wide while
+  the exchange panel plots only `AIRLOAD_EXCHANGE_WINDOW` seconds, so a window-peak scalar was added
+  and the sentence about it is now *conditional* — at the shipped default the two coincide, and
+  printing "the run-wide peak comes later" beside a picture already showing it would be a caption
+  contradicting its panel.
+- **The label for `radiation_R` had to stay NEUTRAL**, and that is this batch's headline in
+  miniature: the shared `LABELS` map is consulted by both models, and any qualifier ("saturated",
+  "compact") would be correct for one and wrong for the other. The per-model hint carries the
+  meaning; the label carries only the name.
+- **`resid_coef` ships wider than the plan's measured 16.4–18.8** — the shipped sweep reads
+  **15.9–21.5**, because the plan's figure came from a 25-cycle probe and the shipped run uses 12.
+  Same claim (flat across a 7× range in `α/ω`, so the residual is second order), looser digits. *A
+  coefficient measured at one run length ships at another; re-read the rendered number.*
+- **Only 4 of the 12 sweep points sit inside `α/ω ≤ 0.02`** at the shipped weight, and the panel
+  prints that fraction rather than hiding it. The measurement is primary everywhere; the *oracle* is
+  what has a validity band, and saying which points are inside it is the honest version of an
+  overlay that visibly diverges at the top.
 
 ### Later batches (rough map — not firm)
 
