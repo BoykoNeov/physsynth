@@ -107,6 +107,51 @@ displacement runs 9.69e-8, 1.94e-6, 5.82e-6 m³ across the three amplitudes — 
 **linear in the strike amplitude** (1 : 20 : 60 against amplitudes 1 : 20 : 60). The lumped tier
 sees a louder plate and nothing else.
 
+### 0.5 The `ka` gap — closed by probe, because otherwise it would have killed §0.4 in Commit C
+
+The drift above was measured on the canonical 0.4 m plate, whose modal centroid sits at **`ka ≈
+0.25`** — *acoustically compact*, where batch 5's lesson applies verbatim (a compact source is quiet
+because it is compact) and a pattern claim has nothing to bite on. The band this plan originally
+costed, `ka = 3`, was **not the band the drift was measured in**. That is precisely the mismatch that
+killed five claims in batch 3, and it would have surfaced only in Commit C — as 41% drift producing
+no measurable change in anything, with every ledger green.
+
+`probe_ka_window.py` sweeps plate geometry × strike width for a cell with **both** drift ≥ 0.20 and
+centroid `ka` ≥ 0.80 (`ka` scales as `e/L`, so smaller or thicker raises it; a narrower strike raises
+the centroid). Five geometries × two strike widths, `w/e = 3`, free edge, 0.125 s at 96 kHz:
+
+| `Lx` | `e` | strike frac | drift | centroid | `ka` centroid | `ka` p90 | peak sweeps | |
+|---|---|---|---|---|---|---|---|---|
+| 0.40 | 1.0 mm | 0.20 | 0.504 | 100 Hz | 0.37 | 0.68 | 5 | compact |
+| 0.40 | 1.0 mm | 0.08 | 0.293 | 112 Hz | 0.41 | 0.68 | 9 | compact |
+| 0.20 | 1.0 mm | 0.20 | 0.446 | 389 Hz | 0.71 | 1.35 | 10 | compact |
+| 0.20 | 1.0 mm | 0.08 | 0.337 | 428 Hz | 0.78 | 1.35 | 36 | marginal |
+| 0.20 | 2.0 mm | 0.08 | — | — | — | — | 50 | **diverged** |
+| **0.10** | **1.0 mm** | **0.20** | **0.328** | **1660 Hz** | **1.52** | **2.70** | **29** | **PASS** |
+| 0.10 | 2.0 mm | 0.20 | 0.304 | 1560 Hz | 1.43 | 2.70 | 50 | pass, at the cap |
+| 0.10 | 1.0/2.0 | 0.08 | — | — | — | — | 50 | **diverged** |
+
+**The build cell is `Lx = Ly = 0.10 m`, `e = 1 mm`, broad strike (width = 0.20 `Lx`), `w/e = 3`** —
+drift 0.328 with the modal centroid at `ka = 1.52` and the 90th-percentile mode at `ka = 2.70`,
+i.e. squarely inside batch 4's validated directivity band `ka = 0.8…2.8`.
+
+**Two findings that come free with it, and both constrain the build:**
+
+1. **The narrow strike is unusable — the knob that raises `ka` breaks convergence.** Every
+   `0.08`-width cell at `L ≤ 0.20` hit the `couple_max_iter = 50` cap and produced NaN. This is the
+   `VKPlate` docstring's own warning ("the strong-cascade regime `w ≫ e` may not converge —
+   qualitative, not a gate") arriving as a *hard* limit on the experiment design. The broad strike
+   is not a stylistic choice; it is the only one that runs.
+2. **Picard sweeps go 5 → 10 → 29 → 50 across the grid, and §4's cost model assumed 3–7.** The build
+   cell costs **29 sweeps**, ~4–6× the plan's first estimate, and the 2 mm variant sits *at the cap*
+   — converged on the last step but not on every step, which makes it unusable for a conservation
+   claim. **`n_iters` and `converged` must be asserted per step, not sampled at the end.**
+
+**And one methodological note for §7.6:** drift is a function of the observation window, so the
+window is part of the claim. Fix a canonical duration and state it — the juari viewer batch's lesson
+(a settled quantity needs a canonical duration decoupled from anything else) applying to a
+*transient* one for the first time.
+
 ---
 
 ## 1. Why — what a nonlinear plate says that a linear one cannot
@@ -219,30 +264,30 @@ list untouched.
 ## 4. The feasibility window — computed up front, not discovered mid-sweep
 
 The room sets `fs` (3-D CFL runs the wrong way; cost `~h⁻⁴`), and this is the first batch where a
-*third* multiplier applies: the loaded back-substitution runs **per Picard sweep**, not per step.
-Measured sweep counts (`probe_cascade.py`): **3 at `w/e = 0.05`, 5 at 1.0, 7 at 3.0** — so the loud
-regime that the headline needs costs about **2.3× the quiet one**, on top of batch 3's measured
+*third* multiplier applies: the loaded back-substitution runs **per Picard sweep**, not per step. And
+§0.5 measured that multiplier to be much larger than this section first assumed: **29 sweeps at the
+build cell**, not the 3–7 seen on the big soft plate — on top of batch 3's measured
 loaded-factorization fill growth of 1.55×/3.50×/5.29×.
 
-Two windows, from `feasibility.py` (2.5 m cubic room, ≥5 air cells per structural wave, ≥8 plate
-points per structural wave):
+Because §0.5 moved the build cell to a **0.10 m** plate, the room shrinks with it: a 1.5 m cube gives
+`r ≈ 0.5 m` for the directivity arc, which is 10 plate-spans away. Windows from `feasibility.py`,
+re-computed for the build cell (≥5 air cells per structural wave at the **p90** mode, ≥8 plate points
+per structural wave):
 
-| target | `f_top` | `ka` | `h_air` | `fs` | air nodes | est. wall clock |
-|---|---|---|---|---|---|---|
-| coincidence (§0.2) | 12220 Hz | 44.8 | 5.61 mm | 105.8 kHz | 89.3 M (3.6 GB) | ~5.25 h / 0.5 s |
-| **the headline band** | 819 Hz | 3.0 | 21.7 mm | 27.4 kHz | 1.60 M (64 MB) | **~0.6 min / 0.2 s** |
+| target | `f_top` | `ka` | `h_air` | `fs` | room | air nodes | est. wall clock |
+|---|---|---|---|---|---|---|---|
+| coincidence (§0.2) | 12220 Hz | 44.8 | 5.61 mm | 105.8 kHz | 2.5 m | 89.3 M (3.6 GB) | ~5.25 h / 0.5 s |
+| **the build cell** | 2950 Hz | 2.70 | 11.4 mm | 52 kHz | 1.5 m | 2.3 M (92 MB) | **~2–3 min / 0.2 s** |
 
-The headline band is three orders of magnitude cheaper, which is the whole reason §0.4's claim is
-the one being made. Note it sits **below** batch 5's large-surface knee — deliberately: this batch
-makes no threshold claim, so batch 5's `ka = 8` requirement does not bind. What *does* bind is
-batch 4's directivity band (`ka = 0.8…2.8`), which this window covers.
+The build cell is two orders of magnitude cheaper, which is why §0.4's claim is the one being made.
+It sits **below** batch 5's large-surface knee — deliberately: this batch makes no threshold claim,
+so batch 5's `ka = 8` requirement does not bind. What *does* bind is batch 4's directivity band
+(`ka = 0.8…2.8`), and the build cell covers it at both the centroid (1.52) and the p90 (2.70).
 
-**The honest caveat, stated before the sweep rather than after:** the modal centroid of a struck
-plate at `N = 18` sits at 61–80 Hz, i.e. `ka ≈ 0.22…0.29` — **compact**. Batch 5's lesson applies
-directly: a compact source is quiet because it is compact. So the headline must be measured on a
-plate/strike whose energy actually lives near `ka ≈ 1`, which means either a stiffer/smaller plate or
-a strike that excites higher modes, and **§7.6 must report the `ka` its numbers were taken at**.
-Getting this wrong is exactly how five claims died in batch 3.
+**The caveat this section used to carry is now closed rather than flagged** — see §0.5. The original
+draft costed `ka = 3` while the probe had measured drift at `ka ≈ 0.25`, which is the batch-3 failure
+mode exactly. §7.6 still reports the `ka` its numbers were taken at, but now as a confirmation
+instead of a hedge.
 
 ---
 
@@ -330,28 +375,43 @@ test again for the opposite reason. §7.3 predicts batch 6 splits them along a *
 
 **§7.1 (the split point) — `nonlinear=False` is bit-identical to batch 3 and batch 4.** Both
 boundaries, both tiers, with a **non-zero `f_ext`** so the seam's new force path has a byte-exact
-counterpart (§3). Plus batch 3/4's existing pinned numbers — the `StringPlateBridge` margins
-`0.2061806714931906` / `0.2061840079056186`, `nnz_growth`, `lu_nnz` — reproduced to the last digit.
-**This lands first, alone, as a commit whose entire claim is "zero new physics, here is the proof."**
+counterpart (§3), and with **`sigma > 0` on at least one case per branch**: `a_bare`'s `(1 + σk)`
+factor and `rhs`'s `sk * u_nm1` term are where a `rho_s`-vs-`rho_v` slip could hide *asymmetrically*
+between `A` and the RHS, and a lossless run never exercises them. Plus batch 3/4's existing pinned
+numbers — the `StringPlateBridge` margins `0.2061806714931906` / `0.2061840079056186`, `nnz_growth`,
+`lu_nnz` — reproduced to the last digit. **This lands first, alone, as a commit whose entire claim is
+"zero new physics, here is the proof."**
+
+*The comparison `Plate` must be constructed with `rho=vk.rho_s`*, which is what
+`tests/test_vk_free.py:45` already does. Miss it and §7.1 fails in a way that looks exactly like a
+load bug.
 
 **§7.2 — `T = 0` is the bare `VKPlate`.** A zero-area surface factors the plate's own matrix; the
 loaded class reduces to the model exactly, nonlinear path included.
 
-**§7.3 — the two-parameter money test, and the predicted asymmetry.** VK conservation holds only
-*at the Picard fixed point*, so `couple_tol` is an error source alongside the load. The prediction,
-to be measured and reported either way:
+**§7.3 — the two-parameter money test, and the detector asymmetry. Measure all three; predict none
+of them.** VK conservation holds only *at the Picard fixed point*, so `couple_tol` is an error source
+alongside the load — a second axis no previous batch had. Sweep `couple_tol` = 1e-13 / 1e-6 / 1e-3
+(the last deliberately under-converged, the negative control) and tabulate **three** quantities:
 
-* **`radiated == injected` should be blind to `couple_tol`** — it is arithmetic on whatever
-  `w^{n+1}` came out of the solve (`q = T(w^{n+1} − w^{n−1})/2k`, `p̄ = p̄_free + Rq`, inject `q`),
-  which is a property of the port relation alone. That is *exactly* batch 5's stated reason it was
-  blind there, arriving on a new axis.
-* **The scene total should degrade with `couple_tol`**, because that is where the fixed-point error
-  lives.
+1. **`|radiated − injected|`** — expected blind, because it is arithmetic on whatever `w^{n+1}` came
+   out of the solve (`q = T(w^{n+1} − w^{n−1})/2k`, `p̄ = p̄_free + Rq`, inject `q`), i.e. a property
+   of the port relation alone. Batch 5's stated reason it was blind there, on a new axis.
+2. **The scene total** — the obvious candidate for the sensitive one, *but not obviously so*: an
+   under-converged Picard produces a `w^{n+1}` that is wrong yet **self-consistent**, and
+   `VKPlate.energy()` is computed from `(u, u_prev, F, F_prev)`, which the roll keeps mutually
+   consistent regardless of convergence. So the total may degrade only slowly, or barely at all.
+3. **`last_residual` / `n_iters`** — the only quantity that sees the fixed-point error *directly*,
+   and therefore the candidate for the sharp detector if (2) turns out blind too.
 
-If both hold, the batch's self-certifying claim is that **loaded drift falls with `couple_tol` at
-the same rate as unloaded** — the air load adds no new error floor — and the family's "no single
-detector is sufficient" rule gains a fourth, orthogonal, demonstration. Run at `couple_tol = 1e-3`
-deliberately under-converged as the negative control.
+Enumerating all three matters because **the interesting outcome is the one where (2) is also nearly
+blind** — that would be a *fourth* blind spot on a new axis and a stronger finding than the
+two-way split, but it is only claimable if all three were measured rather than two predicted. The
+self-certifying claim either way: **loaded drift falls with `couple_tol` at the same rate as
+unloaded**, i.e. the air load adds no new error floor.
+
+Per §0.5, `converged` and `n_iters` are asserted **per step**, never sampled at the end: the 2 mm
+variant converged on its final step while sitting at the 50-sweep cap throughout.
 
 **§7.4 — the coupled residual at two timesteps**, from the committed state (§6.2), for both tiers.
 Batch 4's guard, which is the only one that catches a wrong factor of 2 on the two loaded faces.
@@ -359,22 +419,35 @@ Batch 4's guard, which is the only one that catches a wrong factor of 2 on the t
 **§7.5 — passivity and the ledger.** Lossless room + lossless plate: scene total flat. Lossy: monotone.
 `energy()` overridden explicitly on both wrappers (never delegated) for the fourth batch running.
 
-**§7.6 — the headline (§0.4).** Modal-share drift, measured under the mass matrix, against radiated
-fraction over the same windows, at `w/e ≈ 0.05` (frozen control) and `w/e ≈ 3` (drifting), same
-geometry, same room, same strike position. **Must report the `ka` band its energy actually occupies**
-(§4's caveat) and must state the radiated numbers as ratios, not magnitudes (batch 2).
+**§7.6 — the headline (§0.4), on §0.5's build cell.** `Lx = Ly = 0.10 m`, `e = 1 mm`, free edge,
+broad strike (width 0.20 `Lx`), at `w/e ≈ 0.05` (the frozen control) and `w/e = 3` (drifting) — same
+geometry, same room, same strike position, one flag apart. Modal-share drift measured under the mass
+matrix (never by spectral peak — §6.3) against radiated fraction over the same windows. States the
+`ka` band its energy occupies (centroid 1.52, p90 2.70) and reports radiated numbers as **ratios**,
+not magnitudes (batch 2). The observation window is **part of the claim** and is fixed and named.
 
 **§7.7 — directivity of the suspended cymbal**, at batch 4's snapped radii/angles, measured in two
 time windows of one run. The claim is that the *pattern* differs between windows for the loud plate
 and not for the quiet one. Report the in-plane null for both.
 
+**§7.8 — the compact-safe alternative, held in reserve.** If §7.7's pattern change proves too small
+to separate from the sweep's own resolution, the fallback needs no `ka` at all and uses batch 3's
+headline as its mechanism: on the **supported** plate, even-index modes have *identically zero* net
+volume displacement while radiating 5.6× the (1,1) mode, so modal drift moves energy between modes
+the lumped tier calls silent and modes it calls loud. That is measurable as the **monopole read-out
+and the true radiated power diverging during a single strike** — at any `ka`, on a compact source.
+§0.4 already measured the half of it that needs no room: the monopole is linear in strike amplitude
+while the shape content is not. Choose between §7.7 and §7.8 on measurement, not in advance.
+
 ---
 
 ## 8. Cost budget — owned, not discovered
 
-* §7.1–§7.5 are cheap: small rooms, short runs, no sweeps. Suite-safe.
-* §7.6/§7.7 belong in `scripts/diagnose_airbox_vk.py`, not the suite — target ≤10 min, ≤1 GB, in
-  line with `diagnose_airbox_dipole.py` (~7 min, ~1 GB).
+* §7.1–§7.5 are cheap: small rooms, short runs, no sweeps. Suite-safe — but note that any
+  *nonlinear* suite test pays §0.5's sweep multiplier, so keep the guards at low amplitude where the
+  count is 3–5, and leave `w/e = 3` to the diagnose script.
+* §7.6/§7.7 belong in `scripts/diagnose_airbox_vk.py`, not the suite — §4 budgets ~2–3 min for the
+  build cell, so the whole script should land well inside `diagnose_airbox_dipole.py`'s ~7 min / ~1 GB.
 * The coincidence window (§0.2, ~5.25 h / 3.6 GB) is **not run**. It is costed so the deferral is a
   decision.
 
