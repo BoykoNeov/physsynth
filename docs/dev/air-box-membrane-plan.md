@@ -108,30 +108,36 @@ construction* and refining makes it no better:
 Both tiers refuse it — `SurfacePort` on a wall gives the identical 48/400. **The refusal is right
 and its required set is wrong**: those corner nodes are not "under the surface" at all.
 
-**The fix, validated in the probe before being written:** build the required set **row-wise** —
-per air-node row, the span between that row's own minimum and maximum reached column — and again
-column-wise, requiring the union. For a rectangle every row spans the same columns, so this reduces
-to the bounding box **by construction**, which is what protects batches 3 and 4.
+**The fix, validated in the probe before being written:** build the required set **span-wise** —
+per air-node row, the columns between that row's own min and max reached column; per column, the
+rows between its own min and max; and require their **union**. For a rectangle every row spans the
+same columns and every column the same rows, so this reduces to the bounding box **by
+construction**, which is what protects batches 3 and 4.
+
+The union is strictly stronger than rows alone, so it is measured as the union rather than inferred
+from it — the disk's symmetry would make rows and columns agree, and a disk on a non-square air
+footprint or an odd node count need not:
 
 ```
-    domain     N   h_mem/h_air   bbox unfed   ROW-WISE unfed
-    circle    24      0.825          64             0
-    circle    40      0.495          56             0
-    circle    56      0.354         108             0
-    circle    72      0.275         100             0
-    circle    96      0.206         100             0
-    rectangle 40      0.495           0             0      <- unchanged, as required
-    rectangle 56      0.354           0             0      <- unchanged, as required
+    case                    bbox   rows   cols   UNION      case                bbox rows cols UNION
+    circle R=0.15 N=24        64      0      0       0      rect 0.30x0.18 N=40    0    0    0     0
+    circle R=0.15 N=40        56      0      0       0      rect 0.29x0.13 N=37    0    0    0     0
+    circle R=0.15 N=56       108      0      0       0      rect 0.30x0.30 N=56    0    0    0     0
+    circle R=0.15 N=72       100      0      0       0
+    circle R=0.15 N=96       100      0      0       0      <- disks: UNION is 0 at every N
+    circle R=0.13 N=25        48      0      0       0      <- odd N, non-square air footprint
+    circle R=0.13 N=41        40      0      0       0
+    circle R=0.13 N=57        40      0      0       0      <- rects: unchanged, as required
 
     negative control (a genuinely coarse comb must still be caught):
-    h_mem/h_air = 1.98  bbox   0   row-wise   0        <- both pass; this is not a comb
-    h_mem/h_air = 2.83  bbox 112   row-wise  48        <- both refuse
-    h_mem/h_air = 3.96  bbox 132   row-wise  48        <- both refuse
-    h_mem/h_air = 6.60  bbox  48   row-wise  16        <- both refuse
+    h_mem/h_air = 1.98   bbox   0   rows  0   cols  0   UNION  0    <- both pass; not a comb
+    h_mem/h_air = 2.20   bbox  68   rows 32   cols 32   UNION 64    <- both refuse
+    h_mem/h_air = 2.83   bbox 112   rows 48   cols 48   UNION 96    <- both refuse
+    h_mem/h_air = 3.96   bbox 132   rows 48   cols 48   UNION 96    <- both refuse
 ```
 
 So the weaker criterion does not weaken the check where the check earns its keep: the comb threshold
-is unmoved (between 1.98 and 2.24 either way) and only the *shape* assumption is dropped. The
+is unmoved — it lies in `(2.02, 2.20]` under both — and only the *shape* assumption is dropped. The
 `footprint_empty` attribute, the refusal text and the "count, not an inequality on `h_surface/h_air`"
 rationale all survive; the message gains the shape it now knows about.
 
@@ -293,6 +299,15 @@ with a `Plate` adapter (both boundary branches) and a `Membrane` adapter (`a_bar
 `denominator = ρh²`), and rewire `RoomLoadedPlate` / `RoomSuspendedPlate` onto it. VK's loop hook
 (§3) is a fourth method that batch 6 adds; do not add it now.
 
+**The membrane adapter's `rhs(f_ext)` is *new* arithmetic, and that is a difference worth naming.**
+Batches 3 and 4 reproduce `Plate.step`'s own `f_ext` path line for line, so a transcription error
+shows up against the model itself. `Membrane.step()` takes **no** `f_ext` at all — the same gap that
+sends `VKPlate` to batch 6 (§3) — so the membrane's `k² f_ext / ρh²` term has no counterpart to be
+bit-identical *to*. It is easy arithmetic (uniform per-node mass, no `W`, no θ), but the only thing
+pinning it is §7.1's `T = 0` reduction plus §7.2's ledger, and no caller in this batch passes an
+`f_ext` at all. Either wire the term and test it directly, or omit it and let batch 6 add it with
+its first real caller — do not ship it untested because the signature looked like batch 3's.
+
 **The refactor is guarded by construction, which is why it goes first and alone.** Batches 3 and 4
 already pin exact numbers — the `StringPlateBridge` stability margins `0.2061806714931906`
 (supported) and `0.2061840079056186` (free), bit-identical loaded and bare, plus `nnz_growth` and
@@ -406,8 +421,40 @@ at one end.
 
 **7.2 The money test.** `radiated_energy == room.injected` to rounding, and the scene total
 `membrane.energy() + radiated + room.energy()` flat — reported **with the channel size**, because a
-conservation test on a channel worth 1e-14 of the total passes disconnected. Batch 3's precedent:
-name the configuration that makes it non-vacuous.
+conservation test on a channel worth 1e-14 of the total passes disconnected.
+
+Batch 3's precedent is to *name* the non-vacuous configuration, and here the naming had to be
+probed, because **a membrane has no piston**: the rim is clamped, there is no rigid-body nullspace,
+and batch 3's `0.9974` configuration therefore does not exist. The expectation going in was that a
+realistic head (`c/c₀ ≈ 0.31`) would leave a channel too small to assert on. **Measured, it does
+not** — the prototype of §5.1, suspended, 500 steps, `ρ = 0.26 kg/m²`, 0.30 m square:
+
+```
+    c/c0  walls  shape    N   channel/E0   |rad-inj|/channel   total drift/E0   E_end/E0
+    0.31  rigid  mode01  79    8.424e-01         1.7e-15           1.20e-13       0.2032
+    0.31  rigid  bump    79    2.307e-01         1.8e-15           6.08e-15       0.8296
+    0.31  lossy  mode01  79    6.393e-01         1.9e-15           9.33e-14       0.4370
+    0.60  lossy  mode01  41    8.438e-01         3.0e-16           2.94e-15       0.2124
+    1.00  lossy  mode01  24    9.981e-01         1.7e-15           1.11e-15       0.0031
+    1.40  lossy  mode01  17    1.000e+00         3.2e-15           4.74e-15       0.0000
+```
+
+So §7.2 is non-vacuous at the drum's **actual** operating point and needs neither a supersonic head
+nor an all-lossy room; the `(0,1)` bulge is the configuration to name, and the narrow bump is the
+contrast (0.23 vs 0.84 at `c/c₀ = 0.31` — the acoustic short circuit, visible in the channel itself).
+
+**Two warnings must travel with that table or it will be misread.** First, `channel` is
+`max |radiated_energy|`, and for a *suspended* surface that ledger is dominantly **reactive** — batch
+4 measured 50.2% of its per-step increments negative and warned in as many words that reading it as
+"84% radiated" is wrong by about a factor of two. It is the right measure of whether a conservation
+assertion has anything to bite on, and it is **not** a radiation figure; §7.7's prescribed-velocity
+rig is. Second, `E_end/E0` falls hard with `c/c₀` (0.44 → 0.21 → 0.003 → 0.000) which is the
+headline's shape — but `N` falls with it too (79 → 41 → 24 → 17) and 500 steps is a different number
+of periods at each `c`. It is an encouraging **sighting**, not a claim, and §7.7 is where it becomes
+one or dies.
+
+The same run validates §5.1's arithmetic ahead of commit 4: `|radiated − injected| / channel` is
+1e-16…1e-15 and the scene total is flat to 1e-16…1e-13 across all sixteen configurations.
 
 **7.3 The coupled residual at two timesteps** against the room's own post-closure pressure — batch
 4's guard, the only one that catches both ways of getting the `2` wrong, applied to the doubled
@@ -450,7 +497,9 @@ and keep the per-tier oracles on the smallest room that keeps the channel non-va
 
 1. `docs/dev/air-box-membrane-plan.md` — this document. *(commit 1)*
 2. The §5.2 seam extraction, `airbox.py` only, **zero behaviour change**, pinned by batches 3/4's
-   existing bit-identity numbers. *(commit 2, alone)*
+   existing bit-identity numbers. *(commit 2, alone — and the `Membrane` adapter must **not** be in
+   it. "Zero behaviour change" is only a meaningful claim about a commit that introduces no
+   unexercised code path; the membrane adapter arrives in commit 4 with its first caller.)*
 3. The §2.1 row-wise footprint criterion + the §2.2 doc fix. *(commit 3)*
 4. `RoomLoadedMembrane` + `RoomSuspendedMembrane` and their tests. *(commit 4)*
 5. A diagnose script for §7.7's sweep, and the post-build record — including every claim above that
