@@ -2459,9 +2459,11 @@ recorded because the wrong version was one edit from shipping:
 - **…and the remaining disagreement is EXACTLY the weak-loading formula's own stated order, with
   the coefficient measured.** `loaded_mode` documents a residual "second order in `α/ω`, ~1 % at
   `α/ω ~ 1 %`". Over the shipped sweep `α/ω` runs 0.0078 → 0.0540 and the error runs 0.10 % →
-  5.49 %; the ratio **err/(α/ω)² is 16.4 → 18.8**, flat across a 7× range. So the panel does not say
-  "the oracle disagrees at the top" — it says the residual is second order with coefficient ≈ 17,
-  and the measurement is primary while the oracle is an overlay with a printed validity.
+  5.49 %; the ratio **err/(α/ω)² is flat across a 7× range** — 16.4 → 18.8 on the 25-cycle probe,
+  **15.9 → 21.5 as shipped** at 12 cycles (the shipped figure; the probe's tighter digits are not
+  what renders). So the panel does not say "the oracle disagrees at the top" — it says the residual
+  is second order with coefficient ≈ 16–21, and the measurement is primary while the oracle is an
+  overlay with a printed validity.
 - **The sweep's cost is set by its per-point run length, and that is NOT what limits accuracy** —
   40 cycles capped at 24 000 steps costs 149 060 steps / 3.57 s and 12 cycles capped at 6 000 costs
   **44 710 steps / 0.97 s**, with the *same* median oracle error (1.51 %) and max (5.53 % vs
@@ -2502,15 +2504,22 @@ recorded because the wrong version was one edit from shipping:
   clause — decoupling is a property of `R`, and the corner has nothing left to say about it — but
   the lesson generalises: *when you expose a derived coordinate, check the endpoints of the
   coordinate you derived it FROM, not just of the one on the slider.*
-- **BATCH 15's OWN INVISIBLE-SLIDER BUG WAS STILL LIVE, and this batch's switch-check is what found
-  it.** `pluck_position`'s markup lists `body platebody radbody` in its `data-show`, but the
-  Excitation *fieldset* around it lists only `body` — and the fieldset gate wins, so for two shipped
-  models the control was never built and `_fnum(p, "pluck_position", 0.3)` silently stood in.
-  Batch 15 wrote the lesson ("a slider that does not exist looks exactly like one that works,
-  because the backend default fills in") and then shipped an instance of it *in the same family*,
-  because its own check enumerated the sliders it had added rather than the ones the model should
-  have. **Two gates, two lists, and only the narrower one is visible in a diff.** Fixed for all
-  four models.
+- **BATCH 15's INVISIBLE-CONTROL BUG WAS STILL LIVE, and it is a DIFFERENT mechanism from the one
+  batch 15 recorded — the correction matters more than the finding.** `pluck_position`'s markup
+  lists `body platebody radbody` in its `data-show`, but the Excitation *fieldset* around it listed
+  only `body`, and the fieldset gate wins. Batch 15's case was "the control is never built, so
+  `gatherParams` ships nothing and the *server* default fills in". **This one is the opposite:**
+  `buildSliders` iterates every `.slider` with **no visibility filter** and `updateVisibility` only
+  sets `el.hidden`, so the control *is* built and `gatherParams` — which iterates the built map —
+  ships it on every request. The value it ships is `MODEL_RANGES.<model>.pluck_position.val`,
+  re-asserted by `applyModelRanges` on every switch. So the user simply **lost the knob**: on two
+  shipped models the pluck point could not be moved at all. Verified, rather than assumed, that the
+  worse reading is *not* live — `body`, `platebody`, `radbody` and `airload` all carry
+  `pluck_position: { val: 0.3 }`, so a value dragged on another model is overwritten on entry
+  rather than leaking in. It was silent only because the frontend's 0.3 and the backend's 0.3
+  happen to agree; had they differed, the picture would have changed with nothing on screen to say
+  so. **Two gates, two lists, and only the narrower one is visible in a diff.** Fixed for all four
+  models.
 - **The switch-check's readiness condition was itself the bug it was written to catch.** Waiting on
   `document.querySelectorAll('.slider').length > 5` is satisfied *before any JavaScript runs* —
   the divs ship in `index.html` and are empty until `buildSliders` fills them — so the first run
@@ -2536,10 +2545,11 @@ recorded because the wrong version was one edit from shipping:
   miniature: the shared `LABELS` map is consulted by both models, and any qualifier ("saturated",
   "compact") would be correct for one and wrong for the other. The per-model hint carries the
   meaning; the label carries only the name.
-- **`resid_coef` ships wider than the plan's measured 16.4–18.8** — the shipped sweep reads
-  **15.9–21.5**, because the plan's figure came from a 25-cycle probe and the shipped run uses 12.
-  Same claim (flat across a 7× range in `α/ω`, so the residual is second order), looser digits. *A
-  coefficient measured at one run length ships at another; re-read the rendered number.*
+- **`resid_coef` ships wider than the 25-cycle probe measured** — 16.4–18.8 there, **15.9–21.5** as
+  shipped at 12 cycles. Same claim (flat across a 7× range in `α/ω`, so the residual is second
+  order), looser digits. *A coefficient measured at one run length ships at another; re-read the
+  rendered number.* (Corrected at the source bullet above too, not only here — the air-box rule:
+  put the correction where the wrong number is.)
 - **Only 4 of the 12 sweep points sit inside `α/ω ≤ 0.02`** at the shipped weight, and the panel
   prints that fraction rather than hiding it. The measurement is primary everywhere; the *oracle* is
   what has a validity band, and saying which points are inside it is the honest version of an

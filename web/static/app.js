@@ -991,8 +991,12 @@ function updateLambdaHint() {
       // sits relative to the body modes: below it the air is a mass (stores, radiates poorly),
       // above it a resistance. The equivalent radii are the sphere-consistency check the payload
       // reports authoritatively — this is the live version while you drag.
+      // rho0 = 1.2041, NOT a rounded 1.2: this hint and the payload both decide the same
+      // `consistent` boolean from these radii, and a hint that can disagree with the payload it
+      // previews is the batch-13 class of bug. At the default the rounded value alone moves the
+      // gap from 0.0003 % to 0.146 %.
       const R = param("radiation_R"), fc = param("air_corner"), w = param("radiation_weight");
-      const aR = R > 0 ? Math.sqrt(1.2 * 343 / (4 * Math.PI * R)) : Infinity;
+      const aR = R > 0 ? Math.sqrt(1.2041 * 343 / (4 * Math.PI * R)) : Infinity;
       const aT = fc > 0 ? 343 / (2 * Math.PI * fc) : Infinity;
       const consistent = R > 0 && fc > 0 && Math.abs(aR - aT) / aT < 0.01;
       bdHint.textContent =
