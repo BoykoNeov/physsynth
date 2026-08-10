@@ -11,6 +11,7 @@ This file imports ``web.serialize`` (the wrapper) and ``physsynth`` (the core) �
 """
 
 import base64
+import copy
 import math
 
 import numpy as np
@@ -135,6 +136,59 @@ def _decode_u8(b64: str) -> np.ndarray:
     return np.frombuffer(base64.b64decode(b64), dtype=np.uint8)
 
 
+_PAYLOAD_MEMO: dict = {}
+
+
+def _serialize_config():
+    """Every module-level constant of ``web.serialize``, read at **call** time.
+
+    This is the memo key's second half, and the whole reason the memo survives ``monkeypatch``.
+    Four tests here lower a work budget or a measurement window on the module
+    (``PARAM_SWEEP_WORK_MAX``, ``RADBODY_SWEEP_WORK_MAX``, ``AIRLOAD_SWEEP_WORK_MAX``,
+    ``TENSION_MEASURE_PERIODS``) precisely so a guard that cannot fire in the shipped range fires
+    somewhere real — so the *same params* legitimately produce a *different payload*, and a key
+    built from params alone would hand the patched result to the next unpatched caller.
+
+    Read generically rather than as a hand-written list of the four, because
+    ``_REED_SWEEP_MEMO``'s docstring in ``web/serialize.py`` already names the trap this walks
+    into: **the key is the trap**, and a hand-maintained key is wrong the day someone patches a
+    fifth constant — passing on the defaults and wrong on exactly the test that bothered to patch.
+    A generic fingerprint cannot fall behind the module.
+
+    ``*_MEMO`` names are excluded deliberately: they are production caches that *grow* during the
+    session, so folding them in would change the key on every miss and the memo would never hit.
+    """
+    return tuple(
+        (k, repr(v))
+        for k, v in sorted(vars(web_serialize).items())
+        if k.isupper() and not k.endswith("_MEMO") and not callable(v)
+    )
+
+
+def _sim(params: dict) -> dict:
+    """``simulate_to_payload`` with a session memo — an identical run is computed once.
+
+    ~90 of this file's ~440 simulation call sites repeat a signature another test has already run
+    (10x bare ``_reed()``, 9x ``_fret()``, 7x ``_jaw()``, 7x ``BOW_P`` …), because a bare default
+    run is the natural thing to assert *any* single fact against. That is good test writing and a
+    ~20% tax on the slowest file in the suite; the fix belongs in the seam, not in the tests.
+
+    **Returns a deep copy.** No test here mutates a payload today, so sharing one would work — and
+    would install an unstated read-only invariant that the next test to write ``payload["meta"][k]
+    = …`` breaks *silently and at a distance*, in some other test. A copy costs microseconds
+    against runs of tens of seconds and makes the invariant structural instead of a convention.
+
+    Note the memo cannot cross xdist workers (separate processes), so under ``-n N`` it collapses
+    only the repeats that happen to land together. It is the serial run and the repeat-dense
+    workers that get the full win; making it unconditional would mean ``xdist_group``-ing each
+    family onto one worker, which trades CPU for concentration and needs measuring first.
+    """
+    key = (repr(sorted(params.items())), _serialize_config())
+    if key not in _PAYLOAD_MEMO:
+        _PAYLOAD_MEMO[key] = simulate_to_payload(dict(params))
+    return copy.deepcopy(_PAYLOAD_MEMO[key])
+
+
 def _base_params(**overrides):
     """Canonical short run (c=200, f1=100 Hz); short durations keep the suite fast."""
     p = {
@@ -153,7 +207,7 @@ def _base_params(**overrides):
 
 def test_lossless_drift_survives_wrapper():
     """Lossless ideal string: the serializer must report drift < 1e-10 (HANDOFF §6.1)."""
-    payload = simulate_to_payload(_base_params())
+    payload = _sim(_base_params())
     assert "error" not in payload, payload.get("error")
     energy = payload["energy"]
     assert energy["sigma_is_zero"] is True
@@ -166,7 +220,7 @@ def test_lossless_drift_survives_wrapper():
 def test_all_three_models_build(model):
     """Per-model dispatch (catch #5): each model returns a well-formed lossless payload."""
     extra = {"kappa": 1.0} if model in ("stiff", "damped") else {}
-    payload = simulate_to_payload(_base_params(model=model, **extra))
+    payload = _sim(_base_params(model=model, **extra))
     assert "error" not in payload, payload.get("error")
     assert payload["model"] == model
     assert payload["meta"]["partials"] is not None
@@ -180,7 +234,7 @@ def test_all_three_models_build(model):
 def test_frame_bookkeeping():
     """Frame width == grid length; frame count matches the decoded buffer and ~window/stride."""
     p = _base_params()
-    payload = simulate_to_payload(p)
+    payload = _sim(p)
     frames, grid = payload["frames"], payload["grid"]["x"]
     n, w = frames["n_frames"], frames["width"]
     assert w == len(grid)                      # 1D field width == node count (N+1)
@@ -199,7 +253,7 @@ def test_frames_decode_to_field_values_and_boundary():
     values) — the one silent failure a code-read can't rule out — so pin the values: the decoded
     peak must equal ``field_amp``, and the fixed endpoints must stay clamped at ~0 every frame.
     """
-    payload = simulate_to_payload(_base_params())
+    payload = _sim(_base_params())
     n, w = payload["frames"]["n_frames"], payload["frames"]["width"]
     grid = _decode_f32(payload["frames"]["b64"]).astype(float).reshape(n, w)
     # decoded peak == the field_amp the front-end y-scale uses (garbage bytes would diverge wildly)
@@ -211,7 +265,7 @@ def test_frames_decode_to_field_values_and_boundary():
 
 def test_audio_resampled_and_normalized():
     """Audio is at the fixed 48 kHz (catch #1), finite, and peak-normalized to <= 1."""
-    payload = simulate_to_payload(_base_params(N=64))
+    payload = _sim(_base_params(N=64))
     audio = payload["audio"]
     assert audio["fs"] == AUDIO_FS
     samples = _decode_f32(audio["b64"])
@@ -223,7 +277,7 @@ def test_audio_resampled_and_normalized():
 
 def test_high_N_audio_stays_in_browser_range():
     """fs_sim rides N; the *audio* rate must stay 48 kHz regardless (the point of catch #1)."""
-    payload = simulate_to_payload(_base_params(N=512, audio_duration=0.2))
+    payload = _sim(_base_params(N=512, audio_duration=0.2))
     assert "error" not in payload, payload.get("error")
     assert payload["fs_sim"] > AUDIO_FS        # sim ran far above the browser cap...
     assert payload["audio"]["fs"] == AUDIO_FS  # ...but the delivered audio did not
@@ -234,7 +288,7 @@ def test_high_N_audio_stays_in_browser_range():
 
 def test_lossy_reports_passivity_not_drift():
     """With loss, energy must be reported as monotone decrease, not a scary 'drift' figure."""
-    payload = simulate_to_payload(_base_params(model="damped", sigma0=2.0, sigma1=1e-4, kappa=1.0))
+    payload = _sim(_base_params(model="damped", sigma0=2.0, sigma1=1e-4, kappa=1.0))
     assert "error" not in payload, payload.get("error")
     energy = payload["energy"]
     assert energy["sigma_is_zero"] is False
@@ -250,7 +304,7 @@ def test_lossy_reports_passivity_not_drift():
 
 def test_cfl_violation_is_clean_error():
     """lambda > 1 for the explicit ideal string -> the core ctor guard surfaces as an error."""
-    payload = simulate_to_payload(_base_params(model="ideal", **{"lambda": 1.5}))
+    payload = _sim(_base_params(model="ideal", **{"lambda": 1.5}))
     assert "error" in payload
     assert payload["error"]["kind"] == "construction"
     msg = payload["error"]["message"].lower()
@@ -259,7 +313,7 @@ def test_cfl_violation_is_clean_error():
 
 def test_stiff_admits_lambda_above_one():
     """The implicit stiff scheme has no CFL limit -> lambda > 1 must succeed, not error."""
-    payload = simulate_to_payload(_base_params(model="stiff", kappa=1.0, **{"lambda": 1.5}))
+    payload = _sim(_base_params(model="stiff", kappa=1.0, **{"lambda": 1.5}))
     assert "error" not in payload, payload.get("error")
     assert payload["lambda"] == pytest.approx(1.5, rel=1e-6)
 
@@ -279,14 +333,14 @@ def test_stiff_admits_lambda_above_one():
 )
 def test_bad_params_give_error_payload(bad):
     """Out-of-range params return a clean error payload, never an exception or a 500."""
-    payload = simulate_to_payload(_base_params(**bad))
+    payload = _sim(_base_params(**bad))
     assert "error" in payload
     assert payload["error"]["message"]
 
 
 def test_none_params_does_not_crash():
     """Defensive: empty/None input runs on defaults rather than throwing."""
-    payload = simulate_to_payload({})
+    payload = _sim({})
     assert "error" not in payload, payload.get("error")
 
 
@@ -302,7 +356,7 @@ def test_tension_shift_matches_the_exact_duffing_oracle():
     carries the θ-scheme's linear temporal dispersion error, and ω(A→0) carries the same one, so
     their difference cancels it and isolates the nonlinear physics (the core's own oracle test,
     re-run through the wrapper)."""
-    sp = simulate_to_payload(TENSION_P)["meta"]["spectrum"]
+    sp = _sim(TENSION_P)["meta"]["spectrum"]
     assert sp["kind"] == "tension"
     assert sp["shift_oracle"] > 1.0, "the shift should be a real, audible number of Hz"
     assert sp["shift_measured"] == pytest.approx(sp["shift_oracle"], rel=1e-2)
@@ -320,9 +374,9 @@ def test_tension_shift_is_immune_to_loss():
     the oracle as σ rose, reading as a bug that isn't one. The audio stays lossy on purpose (the
     glide is the model's signature); the *number* must not notice.
     """
-    quiet = simulate_to_payload({**TENSION_P})["meta"]["spectrum"]
-    lossy = simulate_to_payload({**TENSION_P, "sigma0": 5.0, "sigma1": 0.002})["meta"]["spectrum"]
-    assert not simulate_to_payload({**TENSION_P, "sigma0": 5.0})["energy"]["sigma_is_zero"]
+    quiet = _sim({**TENSION_P})["meta"]["spectrum"]
+    lossy = _sim({**TENSION_P, "sigma0": 5.0, "sigma1": 0.002})["meta"]["spectrum"]
+    assert not _sim({**TENSION_P, "sigma0": 5.0})["energy"]["sigma_is_zero"]
     # bit-identical: the measurement run forces sigma0 = sigma1 = 0 regardless of the request
     assert lossy["shift_measured"] == quiet["shift_measured"]
     assert lossy["f_hardened"] == quiet["f_hardened"]
@@ -332,7 +386,7 @@ def test_tension_energy_survives_the_wrapper_and_the_nonlinearity_is_engaged():
     """Criterion 1 through a nonlinear model — plus the model #6 lesson: a nonlinearity *hides* at
     small amplitude, where the test merely re-runs the linear scheme. So assert the stretch term
     actually holds a real fraction of E at the shipped default."""
-    r = simulate_to_payload(TENSION_P)
+    r = _sim(TENSION_P)
     assert r["energy"]["lossless"]["drift"] < LOSSLESS_TOL
     assert r["energy"]["lossless"]["pass"] is True
     assert r["energy"]["convergence"]["all_converged"] is True
@@ -342,7 +396,7 @@ def test_tension_energy_survives_the_wrapper_and_the_nonlinearity_is_engaged():
 
 def test_tension_ea_zero_collapses_to_the_linear_string():
     """``EA = 0`` is model #3 bit-for-bit — the free regression the nonlinearity ships with."""
-    r = simulate_to_payload({**TENSION_P, "EA": 0.0})
+    r = _sim({**TENSION_P, "EA": 0.0})
     sp = r["meta"]["spectrum"]
     assert r["meta"]["nonlinear_fraction"] == 0.0
     assert sp["shift_oracle"] == 0.0
@@ -353,7 +407,7 @@ def test_tension_ea_zero_collapses_to_the_linear_string():
 def test_tension_dt_over_t_matches_the_closed_form():
     """``dT/T0 = EA·A²·p²/(4T)`` is exact for a single mode (the ``L`` cancels), which is what lets
     the guard run *before* any stepping."""
-    sp = simulate_to_payload(TENSION_P)["meta"]["spectrum"]
+    sp = _sim(TENSION_P)["meta"]["spectrum"]
     p2 = web_serialize.damping.spatial_eigenvalue_p2(128, 1.0 / 128, 1)
     # abs=1e-4: the payload rounds to 4 dp, and the run's *measured* peak is what is reported
     assert sp["dT_over_T"] == pytest.approx(_tension_dt_over_t(1e5, 0.02, p2, 200.0), abs=1e-4)
@@ -391,15 +445,15 @@ def test_tension_dt_guard_is_not_an_amplitude_proxy():
     """The guard bounds ``dT/T0``, not amplitude: EA and T move it just as hard as A does, so an
     amplitude-only cap would let ``EA = 2e5`` break up with the panel none the wiser."""
     at_cap = {**TENSION_P, "amplitude": TENSION_AMP_MAX, "EA": 1e5, "audio_duration": 0.2}
-    assert simulate_to_payload(at_cap)["meta"]["spectrum"]["dT_over_T"] <= TENSION_DT_MAX
+    assert _sim(at_cap)["meta"]["spectrum"]["dT_over_T"] <= TENSION_DT_MAX
     # same (legal) amplitude, stiffer string -> over the threshold -> rejected
-    err = simulate_to_payload({**at_cap, "EA": 2e5})["error"]
+    err = _sim({**at_cap, "EA": 2e5})["error"]
     assert err["kind"] == "param"
     assert "dT/T0" in err["message"]
 
 
 def test_tension_lossy_reports_passivity():
-    r = simulate_to_payload({**TENSION_P, "sigma0": 4.0})
+    r = _sim({**TENSION_P, "sigma0": 4.0})
     assert r["energy"]["sigma_is_zero"] is False
     assert r["energy"]["lossy"]["monotone"] is True
     assert r["energy"]["lossy"]["measured_2sigma"] == pytest.approx(8.0, rel=0.25)
@@ -409,7 +463,7 @@ def test_tension_frames_decode_to_a_mode1_sine_with_fixed_ends():
     """The IC is the mode-1 sine the Duffing reduction needs (a triangular pluck is broadly
     multi-mode and would make the shift a lying number). Pins the decoded *values*, not just the
     size — a length-only check cannot catch byte-order garbage."""
-    r = simulate_to_payload(TENSION_P)
+    r = _sim(TENSION_P)
     fr = r["frames"]
     field = _decode_f32(fr["b64"]).reshape(fr["n_frames"], fr["width"])
     assert fr["dims"] == 1
@@ -435,7 +489,7 @@ def test_tension_frames_decode_to_a_mode1_sine_with_fixed_ends():
     ],
 )
 def test_tension_bad_params_give_error_payload(bad):
-    r = simulate_to_payload({**TENSION_P, **bad})
+    r = _sim({**TENSION_P, **bad})
     assert "error" in r, f"{bad} should be rejected"
     assert r["error"]["kind"] in ("param", "construction")
     assert isinstance(r["error"]["message"], str) and r["error"]["message"]
@@ -461,7 +515,7 @@ PARAM_P: dict = {
 
 
 def _param(**overrides) -> dict:
-    return simulate_to_payload({**PARAM_P, **overrides})
+    return _sim({**PARAM_P, **overrides})
 
 
 def test_parametric_conserves_through_a_complete_disintegration():
@@ -629,7 +683,7 @@ def test_parametric_shipped_sweep_path_is_pinned_with_the_overrides_absent():
     """The hidden `sweep_points` / `sweep_cap` overrides keep the suite from paying for the full
     grid on every test — which means the configuration the UI actually ships, with both keys
     ABSENT, would otherwise be exercised only by the verifier."""
-    sw = simulate_to_payload({"model": "tension", "domain": "parametric", "N": 64,
+    sw = _sim({"model": "tension", "domain": "parametric", "N": 64,
                               "claim_periods": 8})["meta"]["spectrum"]["sweep"]
     assert [pt["dt"] for pt in sw["points"]] == list(PARAM_SWEEP_DTS)
     assert sw["cap_periods"] == PARAM_SWEEP_CAP_PERIODS
@@ -649,7 +703,7 @@ def test_parametric_forces_sigma_to_zero():
 def test_parametric_regime_leaves_the_duffing_path_bit_for_bit():
     """The regime is a fork in the dispatch, not a change to the Duffing builder — and the Duffing
     payload is what the exact-oracle tests above pin. An absent `domain` must mean `duffing`."""
-    assert simulate_to_payload(TENSION_P) == simulate_to_payload({**TENSION_P, "domain": "duffing"})
+    assert _sim(TENSION_P) == _sim({**TENSION_P, "domain": "duffing"})
 
 
 @pytest.mark.parametrize(
@@ -698,7 +752,7 @@ def test_membrane_lossless_drift_survives_wrapper():
     """The energy signature must survive the 2D wrapper too
     (HANDOFF §6.1 — conservation ⊥ geometry).
     """
-    payload = simulate_to_payload(_membrane_params())
+    payload = _sim(_membrane_params())
     assert "error" not in payload, payload.get("error")
     assert payload["model"] == "membrane" and payload["frames"]["dims"] == 2
     energy = payload["energy"]
@@ -711,7 +765,7 @@ def test_membrane_lossless_drift_survives_wrapper():
 def test_membrane_frame_bookkeeping_2d(domain):
     """2D frames: declared {nx, ny} match the decoded buffer, frame_times, and the <=64 budget."""
     extra = {"radius": 0.5} if domain == "circle" else {"Lx": 1.0, "Ly": 0.8}
-    payload = simulate_to_payload(_membrane_params(domain=domain, **extra))
+    payload = _sim(_membrane_params(domain=domain, **extra))
     assert "error" not in payload, payload.get("error")
     fr = payload["frames"]
     nf, nx, ny = fr["n_frames"], fr["nx"], fr["ny"]
@@ -725,7 +779,7 @@ def test_membrane_frame_bookkeeping_2d(domain):
 def test_membrane_spatial_decimation_shrinks_field():
     """For a grid above the display budget, the shipped field must be strictly decimated."""
     # N=80 -> mask is 81x81 (> 64), so the display grid must be coarser than the sim grid.
-    payload = simulate_to_payload(_membrane_params(N=80, audio_duration=0.12))
+    payload = _sim(_membrane_params(N=80, audio_duration=0.12))
     assert "error" not in payload, payload.get("error")
     nx, ny = payload["frames"]["nx"], payload["frames"]["ny"]
     assert nx < 81 and ny < 81                            # decimation actually happened
@@ -740,7 +794,7 @@ def test_membrane_frames_decode_to_field_values_and_mask():
     cell is 0 in every frame, and the decoded peak equals the ``field_amp`` the heatmap colour
     scale uses.
     """
-    payload = simulate_to_payload(_membrane_params(N=64, audio_duration=0.12))
+    payload = _sim(_membrane_params(N=64, audio_duration=0.12))
     fr = payload["frames"]
     nf, nx, ny = fr["n_frames"], fr["nx"], fr["ny"]
     field = _decode_f32(fr["b64"]).astype(float).reshape(nf, ny, nx)
@@ -758,7 +812,7 @@ def test_membrane_frames_decode_to_field_values_and_mask():
 
 def test_membrane_rectangle_aspect_uses_snapped_ly():
     """Rectangle extent comes from the ctor-snapped Ly (cells stay square), not the raw slider."""
-    payload = simulate_to_payload(_membrane_params(domain="rectangle", Lx=1.2, Ly=0.8, N=48))
+    payload = _sim(_membrane_params(domain="rectangle", Lx=1.2, Ly=0.8, N=48))
     assert "error" not in payload, payload.get("error")
     g = payload["grid"]
     assert g["extent_x"] == pytest.approx(1.2, abs=1e-9)
@@ -767,7 +821,7 @@ def test_membrane_rectangle_aspect_uses_snapped_ly():
 
 def test_membrane_spectrum_block_fundamental_is_self_consistent():
     """The FFT must ring at the discrete fundamental (the honest oracle) to well under a cent."""
-    payload = simulate_to_payload(_membrane_params(N=48, audio_duration=0.3))
+    payload = _sim(_membrane_params(N=48, audio_duration=0.3))
     sp = payload["meta"]["spectrum"]
     assert sp is not None
     assert len(sp["modes_discrete"]) > 0 and len(sp["modes_continuum"]) > 0
@@ -780,7 +834,7 @@ def test_membrane_spectrum_block_fundamental_is_self_consistent():
 
 def test_membrane_lossy_reports_passivity():
     """σ>0 → energy reported as monotone passive decay at 2σ, not a scary 'drift' (catch #4)."""
-    payload = simulate_to_payload(_membrane_params(sigma=6.0, audio_duration=0.3))
+    payload = _sim(_membrane_params(sigma=6.0, audio_duration=0.3))
     assert "error" not in payload, payload.get("error")
     energy = payload["energy"]
     assert energy["sigma_is_zero"] is False and "lossless" not in energy
@@ -805,16 +859,16 @@ def test_membrane_lossy_reports_passivity():
 )
 def test_membrane_bad_params_give_error_payload(bad):
     """Out-of-range 2D params return a clean error payload, never an exception/500/NaN."""
-    payload = simulate_to_payload(_membrane_params(**bad))
+    payload = _sim(_membrane_params(**bad))
     assert "error" in payload
     assert payload["error"]["message"]
 
 
 def test_membrane_cfl_ceiling_is_the_2d_bar():
     """λ just under 1/√2 builds; the message names the 2D CFL when it doesn't."""
-    ok = simulate_to_payload(_membrane_params(**{"lambda": round(MEMBRANE_LAMBDA_MAX - 0.01, 3)}))
+    ok = _sim(_membrane_params(**{"lambda": round(MEMBRANE_LAMBDA_MAX - 0.01, 3)}))
     assert "error" not in ok, ok.get("error")
-    bad = simulate_to_payload(_membrane_params(**{"lambda": 0.9}))
+    bad = _sim(_membrane_params(**{"lambda": 0.9}))
     assert "error" in bad
     assert "cfl" in bad["error"]["message"].lower() or "sqrt(2)" in bad["error"]["message"].lower()
 
@@ -826,7 +880,7 @@ def test_membrane_thin_rectangle_rejected_by_nlive_guard():
     is per-step ∝ n_live with a sharp cache cliff). The geometry guard catches it *before* eigsh /
     simulate run, so the rejection is instant.
     """
-    payload = simulate_to_payload(_membrane_params(domain="rectangle", Lx=0.3, Ly=2.0, N=100))
+    payload = _sim(_membrane_params(domain="rectangle", Lx=0.3, Ly=2.0, N=100))
     assert "error" in payload
     assert "interior nodes" in payload["error"]["message"]
 
@@ -837,13 +891,13 @@ def test_membrane_small_geometry_rejected_by_work_budget():
     """
     # radius 0.2 at N=100 stays under the n_live cap but fs ≈ 83 kHz → ~1.3e9 node-steps >
     # budget.
-    payload = simulate_to_payload(_membrane_params(domain="circle", radius=0.2, N=100,
+    payload = _sim(_membrane_params(domain="circle", radius=0.2, N=100,
                                                    audio_duration=2.0))
     assert "error" in payload
     assert "node-steps" in payload["error"]["message"]
     # the SAME geometry with short audio fits the budget (work scales with duration) — not a hard
     # ban
-    ok = simulate_to_payload(_membrane_params(domain="circle", radius=0.2, N=100,
+    ok = _sim(_membrane_params(domain="circle", radius=0.2, N=100,
                                               audio_duration=0.3))
     assert "error" not in ok, ok.get("error")
 
@@ -873,7 +927,7 @@ def test_mallet_lossless_conserves_through_the_wrapper():
     ordinary lossless drift panel, no new verdict type (the bow needed a balance panel only because
     it is driven from rest with E₀ = 0).
     """
-    payload = simulate_to_payload(_mallet_params())
+    payload = _sim(_mallet_params())
     assert "error" not in payload, payload.get("error")
     assert payload["model"] == "mallet" and payload["frames"]["dims"] == 2
     energy = payload["energy"]
@@ -888,7 +942,7 @@ def test_mallet_bounces_with_near_unity_restitution_and_head_barely_rings():
 
     This is the headline the contact panel shows — physics, never tuned to ring louder.
     """
-    sp = simulate_to_payload(_mallet_params(N=60))["meta"]["spectrum"]
+    sp = _sim(_mallet_params(N=60))["meta"]["spectrum"]
     assert sp["kind"] == "mallet"
     assert sp["separated"] is True                        # the felt lets go within the window
     assert sp["restitution"] > 0.99                       # near-elastic rebound
@@ -901,7 +955,7 @@ def test_mallet_strike_marker_reports_the_snapped_node_in_fractions():
     """The strike marker coords are the SNAPPED contact node (in (0,1) fractions) — where the felt
     actually landed, not the raw slider — so the heatmap dot sits on the real node.
     """
-    sp = simulate_to_payload(_mallet_params(N=40, pluck_x=0.5, pluck_y=0.5))["meta"]["spectrum"]
+    sp = _sim(_mallet_params(N=40, pluck_x=0.5, pluck_y=0.5))["meta"]["spectrum"]
     assert 0.0 < sp["strike_fx"] < 1.0 and 0.0 < sp["strike_fy"] < 1.0
     assert sp["strike_fx"] == pytest.approx(0.5, abs=0.03)   # snaps near the requested centre
     assert sp["strike_fy"] == pytest.approx(0.5, abs=0.03)
@@ -911,7 +965,7 @@ def test_mallet_audio_is_the_ring_not_the_dimple():
     """The pickup audio must be the membrane's modal ring (a real tone at the fundamental), not the
     near-field dimple relaxation — a peak near f1_discrete confirms it (advisor sanity check).
     """
-    payload = simulate_to_payload(_mallet_params(N=48, audio_duration=0.4))
+    payload = _sim(_mallet_params(N=48, audio_duration=0.4))
     assert "error" not in payload, payload.get("error")
     a = _decode_f32(payload["audio"]["b64"]).astype(float)
     assert np.all(np.isfinite(a)) and np.max(np.abs(a)) == pytest.approx(0.9, abs=1e-4)
@@ -931,7 +985,7 @@ def test_mallet_lossy_reports_passivity_without_a_decay_oracle():
     frontend can render passivity instead.
     """
     for extra in ({"sigma": 6.0}, {"hysteresis": 3.0e4}):
-        energy = simulate_to_payload(_mallet_params(N=48, **extra))["energy"]
+        energy = _sim(_mallet_params(N=48, **extra))["energy"]
         assert energy["sigma_is_zero"] is False and "lossless" not in energy
         lossy = energy["lossy"]
         assert lossy["monotone"] is True
@@ -942,8 +996,8 @@ def test_mallet_hysteresis_lowers_restitution():
     """Hunt-Crossley hysteresis is passive (removes energy on loading AND unloading), so it must
     lower the rebound: restitution(λ_h>0) < restitution(λ_h=0).
     """
-    elastic = simulate_to_payload(_mallet_params(N=48))["meta"]["spectrum"]["restitution"]
-    hyst = simulate_to_payload(_mallet_params(N=48, hysteresis=3.0e4))["meta"]["spectrum"]
+    elastic = _sim(_mallet_params(N=48))["meta"]["spectrum"]["restitution"]
+    hyst = _sim(_mallet_params(N=48, hysteresis=3.0e4))["meta"]["spectrum"]
     assert hyst["restitution"] < elastic
 
 
@@ -961,7 +1015,7 @@ def test_mallet_hysteresis_lowers_restitution():
     ],
 )
 def test_mallet_bad_params_give_error_payload(bad):
-    payload = simulate_to_payload(_mallet_params(**bad))
+    payload = _sim(_mallet_params(**bad))
     assert "error" in payload and "message" in payload["error"]
 
 
@@ -969,10 +1023,10 @@ def test_mallet_small_geometry_rejected_by_work_budget():
     """A squat rectangle at N=80 with 2 s audio inflates the node-step product past the mallet
     budget (halved vs the membrane for the per-step root-find). Reject; short audio fits.
     """
-    heavy = simulate_to_payload(_mallet_params(domain="rectangle", Lx=0.6, Ly=0.8, N=80,
+    heavy = _sim(_mallet_params(domain="rectangle", Lx=0.6, Ly=0.8, N=80,
                                                audio_duration=2.0))
     assert "error" in heavy and "node-steps" in heavy["error"]["message"]
-    ok = simulate_to_payload(_mallet_params(domain="rectangle", Lx=0.6, Ly=0.8, N=80,
+    ok = _sim(_mallet_params(domain="rectangle", Lx=0.6, Ly=0.8, N=80,
                                             audio_duration=0.2))
     assert "error" not in ok, ok.get("error")
 
@@ -997,7 +1051,7 @@ def _plate_params(**overrides):
 @pytest.mark.parametrize("boundary", ["supported", "free"])
 def test_plate_lossless_drift_survives_wrapper(boundary):
     """Both plate boundaries conserve energy through the wrapper (HANDOFF §6.1)."""
-    payload = simulate_to_payload(_plate_params(domain=boundary))
+    payload = _sim(_plate_params(domain=boundary))
     assert "error" not in payload, payload.get("error")
     assert payload["model"] == "plate" and payload["boundary"] == boundary
     assert payload["frames"]["dims"] == 2
@@ -1010,7 +1064,7 @@ def test_plate_lossless_drift_survives_wrapper(boundary):
 @pytest.mark.parametrize("boundary", ["supported", "free"])
 def test_plate_frame_bookkeeping_2d(boundary):
     """2D frames + mask: declared shapes match the decoded buffers and the display budget."""
-    payload = simulate_to_payload(_plate_params(domain=boundary))
+    payload = _sim(_plate_params(domain=boundary))
     fr = payload["frames"]
     nf, nx, ny = fr["n_frames"], fr["nx"], fr["ny"]
     assert nx <= DISPLAY_MAX and ny <= DISPLAY_MAX
@@ -1025,7 +1079,7 @@ def test_plate_supported_spectrum_is_tight_tier():
     """Simply-supported: the FFT rings on the discrete line, and the continuum (Navier) tier is
     tight (~1 cent) — unlike the membrane's O(h) staircase.
     """
-    payload = simulate_to_payload(_plate_params(domain="supported", N=40, audio_duration=0.3))
+    payload = _sim(_plate_params(domain="supported", N=40, audio_duration=0.3))
     sp = payload["meta"]["spectrum"]
     assert sp is not None and sp["kind"] == "plate"
     assert len(sp["modes_discrete"]) > 0 and len(sp["modes_continuum"]) > 0
@@ -1037,17 +1091,17 @@ def test_plate_free_spectrum_has_leissa_only_when_square():
     """The free plate's continuum reference is the Leissa square anchor — present for a square,
     empty for an off-square rectangle (no closed form to mislabel).
     """
-    sq = simulate_to_payload(_plate_params(domain="free", Lx=1.0, Ly=1.0))
+    sq = _sim(_plate_params(domain="free", Lx=1.0, Ly=1.0))
     assert "error" not in sq, sq.get("error")
     assert len(sq["meta"]["spectrum"]["modes_continuum"]) > 0
-    rect = simulate_to_payload(_plate_params(domain="free", Lx=1.4, Ly=0.7))
+    rect = _sim(_plate_params(domain="free", Lx=1.4, Ly=0.7))
     assert "error" not in rect, rect.get("error")
     assert rect["meta"]["spectrum"]["modes_continuum"] == []
 
 
 def test_plate_lossy_reports_passivity():
     """σ>0 → monotone passive decay at 2σ, not a drift number (catch #4)."""
-    payload = simulate_to_payload(_plate_params(sigma=6.0, audio_duration=0.25))
+    payload = _sim(_plate_params(sigma=6.0, audio_duration=0.25))
     assert "error" not in payload, payload.get("error")
     energy = payload["energy"]
     assert energy["sigma_is_zero"] is False and "lossless" not in energy
@@ -1070,14 +1124,14 @@ def test_plate_lossy_reports_passivity():
 )
 def test_plate_bad_params_give_error_payload(bad):
     """Out-of-range plate params return a clean error payload, never an exception/500."""
-    payload = simulate_to_payload(_plate_params(**bad))
+    payload = _sim(_plate_params(**bad))
     assert "error" in payload
     assert payload["error"]["message"]
 
 
 def test_plate_low_mu_rejected_by_work_budget():
     """fs = κ/(μh²) explodes at LOW μ → step blow-up; the guard rejects and points at μ."""
-    payload = simulate_to_payload(_plate_params(mu=0.25, N=80, audio_duration=2.0))
+    payload = _sim(_plate_params(mu=0.25, N=80, audio_duration=2.0))
     assert "error" in payload
     msg = payload["error"]["message"].lower()
     assert "node-steps" in msg and "mu" in msg
@@ -1105,7 +1159,7 @@ def test_vk_supported_conserves_converges_and_hardens():
     """Supported gong, w/e=3: lossless energy conserves at a *converged* Picard fixed point, and
     the fundamental hardens ABOVE its linear value (the amplitude pitch glide).
     """
-    payload = simulate_to_payload(_vk_params())
+    payload = _sim(_vk_params())
     assert "error" not in payload, payload.get("error")
     assert payload["model"] == "vk" and payload["boundary"] == "supported"
     energy = payload["energy"]
@@ -1120,7 +1174,7 @@ def test_vk_supported_conserves_converges_and_hardens():
 
 def test_vk_linear_toggle_has_no_convergence_block_and_no_shift():
     """nonlinear=False reproduces the *linear* plate: no Picard convergence block, ~0 hardening."""
-    payload = simulate_to_payload(_vk_params(nonlinear=False, w_over_e=0.5))
+    payload = _sim(_vk_params(nonlinear=False, w_over_e=0.5))
     assert "error" not in payload, payload.get("error")
     assert payload["nonlinear"] is False
     assert "convergence" not in payload["energy"]
@@ -1132,7 +1186,7 @@ def test_vk_free_cymbal_conserves_without_a_fundamental():
     """Free-edge cymbal: energy conserves (converged), but the crash is a mode wash with no clean
     fundamental — f0/shift are reported as unavailable, never a lying number.
     """
-    payload = simulate_to_payload(_vk_params(domain="free", Lx=0.2, Ly=0.2, N=14, w_over_e=3.0))
+    payload = _sim(_vk_params(domain="free", Lx=0.2, Ly=0.2, N=14, w_over_e=3.0))
     assert "error" not in payload, payload.get("error")
     assert payload["boundary"] == "free"
     assert payload["energy"]["convergence"]["all_converged"] is True
@@ -1144,7 +1198,7 @@ def test_vk_free_cymbal_conserves_without_a_fundamental():
 
 def test_vk_lossy_reports_passivity():
     """σ>0 → monotone passive decay; the convergence block still rides along (catch: gate both)."""
-    payload = simulate_to_payload(_vk_params(sigma=3.0, w_over_e=2.0, audio_duration=0.12))
+    payload = _sim(_vk_params(sigma=3.0, w_over_e=2.0, audio_duration=0.12))
     assert "error" not in payload, payload.get("error")
     energy = payload["energy"]
     assert energy["sigma_is_zero"] is False and "lossless" not in energy
@@ -1169,7 +1223,7 @@ def test_vk_lossy_reports_passivity():
 )
 def test_vk_bad_params_give_error_payload(bad):
     """Out-of-range von Kármán params return a clean error payload, never an exception/500/NaN."""
-    payload = simulate_to_payload(_vk_params(**bad))
+    payload = _sim(_vk_params(**bad))
     assert "error" in payload
     assert payload["error"]["message"]
 
@@ -1192,7 +1246,7 @@ def test_bow_lossless_balance_is_the_money_number():
     joule the bow's work put in must sit in the string: ``E - E0 == bow_work``, exactly. It holds
     for *any* Newton residual — the force is applied exactly and the power read from the true
     post-correction velocity — which is why (unlike von Kármán) there is no convergence gate."""
-    e = simulate_to_payload(BOW_QUIET)["energy"]
+    e = _sim(BOW_QUIET)["energy"]
     assert e["kind"] == "balance"
     assert e["sigma_is_zero"] is True
     assert e["balance"]["lossless"]["residual"] < BOW_BALANCE_TOL
@@ -1208,8 +1262,8 @@ def test_bow_balance_replaces_both_older_verdicts_because_both_would_lie():
     rest to the Helmholtz limit cycle, so the passivity monotone check fails. Either would paint a
     red badge on a perfectly correct run, so the block must ship neither.
     """
-    quiet = simulate_to_payload(BOW_QUIET)["energy"]
-    lossy = simulate_to_payload(BOW_P)["energy"]
+    quiet = _sim(BOW_QUIET)["energy"]
+    lossy = _sim(BOW_P)["energy"]
     for e in (quiet, lossy):
         assert e["kind"] == "balance"
         assert "lossless" not in e and "lossy" not in e, "the old verdicts must not ride along"
@@ -1234,7 +1288,7 @@ def test_bow_lossy_reports_inferred_dissipation_not_a_tautological_residual():
     "balance residual" here would be identically zero BY CONSTRUCTION: a green tick that cannot
     fail. The honest content is the core's own criterion 2: the inferred loss is >= 0 and only ever
     grows."""
-    b = simulate_to_payload(BOW_P)["energy"]["balance"]
+    b = _sim(BOW_P)["energy"]["balance"]
     assert "lossless" not in b, "a lossy residual is a tautology — it must not be shipped"
     assert "residual" not in b["lossy"]
     assert b["lossy"]["non_negative"] is True and b["lossy"]["monotone"] is True
@@ -1244,7 +1298,7 @@ def test_bow_lossy_reports_inferred_dissipation_not_a_tautological_residual():
 
 def test_bow_balance_curves_share_one_decimation():
     """The three curves are only comparable if they are sampled at the same instants."""
-    e = simulate_to_payload(BOW_P)["energy"]
+    e = _sim(BOW_P)["energy"]
     b = e["balance"]
     n = len(e["time"])
     assert len(b["work"]) == len(b["delta_energy"]) == len(b["dissipation"]) == n
@@ -1256,7 +1310,7 @@ def test_bow_balance_curves_share_one_decimation():
 def test_bow_helmholtz_slip_fraction_matches_beta():
     """The panel's oracle: Helmholtz motion sticks for ``1-beta`` of the period and slips once, for
     a fraction ``beta``. The bow-position slider sits directly on the oracle's free parameter."""
-    sp = simulate_to_payload(BOW_P)["meta"]["spectrum"]
+    sp = _sim(BOW_P)["meta"]["spectrum"]
     assert sp["kind"] == "bow"
     assert sp["helmholtz"] is True
     assert sp["slips_per_period"] == pytest.approx(1.0, abs=0.25)
@@ -1268,7 +1322,7 @@ def test_bow_helmholtz_slip_fraction_matches_beta():
 def test_bow_slip_fraction_tracks_beta_as_the_bow_moves(bow_position):
     """Not one point but a *trend*: beta is the star control, so the slip fraction must follow it.
     ``force = 0.4`` is inside Schelleng's window across this range (the core's own choice)."""
-    sp = simulate_to_payload(
+    sp = _sim(
         {**BOW_P, "bow_position": bow_position, "force": 0.4}
     )["meta"]["spectrum"]
     assert sp["helmholtz"] is True, f"expected clean Helmholtz at beta~{bow_position}"
@@ -1278,8 +1332,8 @@ def test_bow_slip_fraction_tracks_beta_as_the_bow_moves(bow_position):
 def test_bow_pitch_is_the_strings_not_the_bows():
     """The bow does not choose the pitch — the string does (the bore/reed lesson, on a string).
     Doubling the bow speed must not move it."""
-    slow = simulate_to_payload(BOW_P)["meta"]["spectrum"]
-    fast = simulate_to_payload({**BOW_P, "v_bow": 0.2, "force": 0.8})["meta"]["spectrum"]
+    slow = _sim(BOW_P)["meta"]["spectrum"]
+    fast = _sim({**BOW_P, "v_bow": 0.2, "force": 0.8})["meta"]["spectrum"]
     assert abs(slow["pitch_cents"]) < 60.0, "bowed pitch should lock to f1"
     if fast["helmholtz"]:
         assert abs(fast["f_detected"] - slow["f_detected"]) < 0.05 * slow["f1"]
@@ -1293,7 +1347,7 @@ def test_bow_out_of_window_is_labelled_not_failed():
     must not be scored (tension's sigma-divergence and von Karman's broad-strike trap, a third
     time). The balance, a property of the *scheme* rather than of the parameters, must still pass.
     """
-    r = simulate_to_payload({**BOW_P, "force": 0.02})
+    r = _sim({**BOW_P, "force": 0.02})
     sp = r["meta"]["spectrum"]
     assert r["meta"]["helmholtz_number"] < 1.0, "expected a starved bow, below the force floor"
     assert sp["helmholtz"] is False, "expected this corner to leave the Helmholtz window"
@@ -1310,7 +1364,7 @@ def test_bow_out_of_window_is_labelled_not_failed():
 def test_bow_zero_force_leaves_the_string_at_rest():
     """``force = 0`` decouples the bow entirely — the free regression the exciter ships with. The
     bow starts from REST (there is no pluck), so with no friction nothing ever moves."""
-    r = simulate_to_payload({**BOW_QUIET, "force": 0.0})
+    r = _sim({**BOW_QUIET, "force": 0.0})
     assert r["energy"]["balance"]["work_total"] == 0.0
     assert r["field_amp"] == 0.0
     assert np.all(_decode_f32(r["frames"]["b64"]) == 0.0)
@@ -1319,7 +1373,7 @@ def test_bow_zero_force_leaves_the_string_at_rest():
 def test_bow_frames_decode_to_a_string_with_fixed_ends():
     """The 1D byte-order test: right size, wrong values would pass a length check. Also pins that
     the animation shows SETTLED motion — from rest the first frames would be near-flat."""
-    r = simulate_to_payload(BOW_P)
+    r = _sim(BOW_P)
     f = r["frames"]
     field = _decode_f32(f["b64"]).reshape(f["n_frames"], f["width"])
     assert f["width"] == len(r["grid"]["x"]) == BOW_P["N"] + 1
@@ -1332,7 +1386,7 @@ def test_bow_helmholtz_number_is_reported_never_asserted():
     """Above 1 the friction curve is multivalued — the regime of real sustained bowing — but it is
     NOT a stability limit (friction is bounded, the scheme stable and the balance exact for any
     root). So it must be a reported diagnostic, and a value above 1 must render fine."""
-    r = simulate_to_payload(BOW_P)
+    r = _sim(BOW_P)
     assert r["meta"]["helmholtz_number"] > 1.0
     assert "error" not in r
     assert r["energy"]["balance"]["lossy"]["pass"] is True
@@ -1354,7 +1408,7 @@ def test_bow_helmholtz_number_is_reported_never_asserted():
 )
 def test_bow_bad_params_give_error_payload(bad):
     """Out-of-range bow params return a clean error payload, never an exception/500/NaN."""
-    payload = simulate_to_payload({**BOW_P, **bad})
+    payload = _sim({**BOW_P, **bad})
     assert "error" in payload
     assert payload["error"]["message"]
 
@@ -1362,7 +1416,7 @@ def test_bow_bad_params_give_error_payload(bad):
 def test_bow_work_budget_is_its_own():
     """Every step is a friction root-find, so the string path's N_MAX/duration would hang. The
     guard must name the reason, not just refuse."""
-    payload = simulate_to_payload({**BOW_P, "N": 256, "lambda": 0.5, "audio_duration": 3.0})
+    payload = _sim({**BOW_P, "N": 256, "lambda": 0.5, "audio_duration": 3.0})
     assert "error" in payload
     assert "root-find" in payload["error"]["message"]
 
@@ -1388,7 +1442,7 @@ GEOM_WHIRL: dict = {**GEOM_P, "domain": "whirl", "dt_over_t0": 1.5, "tongue_posi
 
 
 def _geom(**overrides):
-    return simulate_to_payload({**GEOM_P, **overrides})
+    return _sim({**GEOM_P, **overrides})
 
 
 def test_geometric_planar_max_w_is_bit_exact_zero():
@@ -1483,7 +1537,7 @@ def test_geometric_whirl_grows_inside_the_tongue_and_conserves_through_it():
     in-plane exchange conserves too), which is why the tongue tests below exist; but it is
     necessary, and it is nearly free (``energy()`` is ~0.15 ms against a ~2 ms step).
     """
-    d = simulate_to_payload(GEOM_WHIRL)
+    d = _sim(GEOM_WHIRL)
     sp, e = d["meta"]["spectrum"], d["energy"]
     assert sp["kind"] == "whirl" and sp["in_tongue"] is True
     assert sp["growth"] > 3.0, "no growth at the tongue's peak — the recipe is off the tongue"
@@ -1498,7 +1552,7 @@ def test_geometric_whirl_needs_no_new_energy_verdict_unlike_the_bow():
     the balance had to replace them. Nothing drives this string — it is seeded and then left alone —
     so the plain conservation check is not merely adequate, it is the whole claim.
     """
-    e = simulate_to_payload(GEOM_WHIRL)["energy"]
+    e = _sim(GEOM_WHIRL)["energy"]
     assert "kind" not in e, "the whirl must not claim a balance/other verdict type"
     assert "balance" not in e
     assert "lossless" in e
@@ -1511,7 +1565,7 @@ def test_geometric_whirl_is_dead_outside_the_tongue():
     upper edge is SOFT (the analysis is leading-order in eps), so the bar is generous: what must not
     happen is the orders-of-magnitude growth the tongue's interior shows.
     """
-    d = simulate_to_payload({**GEOM_WHIRL, "tongue_position": 0.8})
+    d = _sim({**GEOM_WHIRL, "tongue_position": 0.8})
     sp = d["meta"]["spectrum"]
     assert sp["in_tongue"] is False
     assert sp["growth"] < 3.0
@@ -1524,7 +1578,7 @@ def test_geometric_degenerate_string_cannot_whirl():
     With the default (displacement) seed this reads 1.00x, for a sharp reason: ``dw = dA phi`` at
     rest **is** the rotation generator, so the run is the same planar motion in a rotated plane.
     """
-    d = simulate_to_payload({**GEOM_WHIRL, "tongue_position": 0.0})
+    d = _sim({**GEOM_WHIRL, "tongue_position": 0.0})
     sp = d["meta"]["spectrum"]
     assert sp["degenerate"] is True and sp["in_tongue"] is False
     assert sp["growth"] == pytest.approx(1.0, abs=0.15)
@@ -1540,13 +1594,13 @@ def test_geometric_velocity_seed_makes_the_degenerate_string_marginal_not_stable
     marginal mode grows **secularly** — linear in t, not exponential. That is not whirling, and the
     panel must not call it whirling; the difference is the envelope's shape — hence the log-y.
     """
-    disp = simulate_to_payload({**GEOM_WHIRL, "tongue_position": 0.0})["meta"]["spectrum"]
-    vel = simulate_to_payload({**GEOM_WHIRL, "tongue_position": 0.0,
+    disp = _sim({**GEOM_WHIRL, "tongue_position": 0.0})["meta"]["spectrum"]
+    vel = _sim({**GEOM_WHIRL, "tongue_position": 0.0,
                                "seed_velocity": True})["meta"]["spectrum"]
     assert disp["seed_velocity"] is False and vel["seed_velocity"] is True
     assert vel["growth"] > disp["growth"], "a velocity kick must do what a rotation cannot"
     # Secular, not exponential: it grows, but nothing like the tongue's interior at the same cost.
-    tongue = simulate_to_payload(GEOM_WHIRL)["meta"]["spectrum"]
+    tongue = _sim(GEOM_WHIRL)["meta"]["spectrum"]
     assert vel["growth"] < tongue["growth"]
 
 
@@ -1557,7 +1611,7 @@ def test_geometric_unseeded_whirl_is_the_honesty_gate():
     growth ratio in this section is a ratio *to* the seed, so if the unseeded run were merely small
     rather than exactly zero, each of them would be partly measuring numerical leakage.
     """
-    d = simulate_to_payload({**GEOM_WHIRL, "seed_frac": 0.0})
+    d = _sim({**GEOM_WHIRL, "seed_frac": 0.0})
     sp = d["meta"]["spectrum"]
     assert sp["seeded"] is False
     assert max(sp["envelope"]) == 0.0
@@ -1572,7 +1626,7 @@ def test_geometric_whirl_rate_matches_the_mathieu_prediction_and_runs_low():
     loose: this is reported to the user and never scored, and inventing a tight pass/fail here would
     be inventing a claim the physics does not make.
     """
-    sp = simulate_to_payload(GEOM_WHIRL)["meta"]["spectrum"]
+    sp = _sim(GEOM_WHIRL)["meta"]["spectrum"]
     assert sp["predicted_rate"] > 0.0
     assert sp["measured_rate"] is not None
     assert sp["rate_ratio"] == pytest.approx(1.0, abs=0.35)
@@ -1664,7 +1718,7 @@ GEOM_PHANTOM: dict = {"model": "geometric", "domain": "phantom", "N": 16, "lam_l
 @pytest.fixture(scope="module")
 def phantom():
     """The phantom run (~23 s), shared by every test that reads it."""
-    return simulate_to_payload(dict(GEOM_PHANTOM))
+    return _sim(dict(GEOM_PHANTOM))
 
 
 # The seven `phantom` tests share one ~23 s module-scoped run. Pin them to a single xdist worker
@@ -1830,7 +1884,7 @@ def test_phantom_linear_string_has_no_channel_to_put_a_phantom_in():
     firing first, a defect above the gate would paint "the 4 strongest peaks ARE the 4 combinations"
     over a spectrum with no peaks in it at all.
     """
-    d = simulate_to_payload({**GEOM_PHANTOM, "N": 8, "EA": 200.0})   # EA == T0
+    d = _sim({**GEOM_PHANTOM, "N": 8, "EA": 200.0})   # EA == T0
     sp = d["meta"]["spectrum"]
     assert sp["linear"] is True
     assert sp["bridge_max"] == 0.0, "EA = T0 must leave v identically zero — not merely small"
@@ -1853,7 +1907,7 @@ def test_phantom_labels_a_grid_too_coarse_to_show_the_stiffness():
     Note this is NOT the linear control above: the channel is wide open (peaks are detected, the
     phantoms are there), they have merely collapsed onto the partials.
     """
-    d = simulate_to_payload({**GEOM_PHANTOM, "N": 8})
+    d = _sim({**GEOM_PHANTOM, "N": 8})
     sp = d["meta"]["spectrum"]
     assert sp["linear"] is False, "the phantom channel is open — this is not the a = 0 control"
     assert sp["n_peaks"] >= 4, "the phantoms are present; they are merely not discriminating"
@@ -1889,7 +1943,7 @@ def test_phantom_defect_gate_is_one_sided_not_absolute():
 ])
 def test_phantom_budget_and_amplitude_guards_give_clean_error_payloads(bad):
     """Both phantom-specific guards reject at construction — no 500, no NaN render, no 45 s wait."""
-    d = simulate_to_payload({**GEOM_PHANTOM, **bad})
+    d = _sim({**GEOM_PHANTOM, **bad})
     assert "error" in d, f"{bad} should have been rejected"
     assert d["error"]["kind"] in ("param", "construction")
 
@@ -1919,7 +1973,7 @@ SYMP_TRANSFER: dict = {**SYMP_NORMAL, "domain": "transfer", "K": 1500.0, "audio_
 
 
 def _symp(**overrides):
-    return simulate_to_payload({**SYMP_NORMAL, **overrides})
+    return _sim({**SYMP_NORMAL, **overrides})
 
 
 def test_symp_antisymmetric_mode_keeps_the_bridge_bit_exact_still():
@@ -1990,7 +2044,7 @@ def test_symp_audio_is_the_plucked_string_pickup_not_silence():
 def test_symp_transfer_tuned_unison_drains_most_of_the_energy():
     """Pluck string A; at unison the tuned neighbour drains most of the total energy (the classic
     near-complete coupled-oscillator exchange), and the fraction starts at ~0 and rises."""
-    d = simulate_to_payload({**SYMP_TRANSFER, "detune": 0.0})
+    d = _sim({**SYMP_TRANSFER, "detune": 0.0})
     sp = d["meta"]["spectrum"]
     assert sp["kind"] == "sympathetic" and sp["regime"] == "transfer" and sp["tuned"] is True
     assert sp["peak_neighbour"] > 0.5, f"tuned neighbour barely rang ({sp['peak_neighbour']:.2f})"
@@ -2001,8 +2055,8 @@ def test_symp_transfer_tuned_unison_drains_most_of_the_energy():
 def test_symp_transfer_detuned_neighbour_stays_quiet():
     """Its contrast: a neighbour ~4 semitones off unison barely responds — the coupling is
     frequency-selective, which is why a sympathetic string lights up only for the right note."""
-    tuned = simulate_to_payload({**SYMP_TRANSFER, "detune": 0.0})["meta"]["spectrum"]
-    detuned = simulate_to_payload({**SYMP_TRANSFER, "detune": 4.0})["meta"]["spectrum"]
+    tuned = _sim({**SYMP_TRANSFER, "detune": 0.0})["meta"]["spectrum"]
+    detuned = _sim({**SYMP_TRANSFER, "detune": 4.0})["meta"]["spectrum"]
     assert detuned["peak_neighbour"] < 0.25, "detuned neighbour rang too much"
     assert tuned["peak_neighbour"] > 3.0 * detuned["peak_neighbour"]
 
@@ -2010,7 +2064,7 @@ def test_symp_transfer_detuned_neighbour_stays_quiet():
 def test_symp_transfer_conserves_and_the_fractions_stay_physical():
     """Transfer is lossless too — the ordinary drift verdict — and each per-string energy fraction
     is a fraction (in [0, 1] up to the body/connection share)."""
-    d = simulate_to_payload({**SYMP_TRANSFER, "detune": 0.0})
+    d = _sim({**SYMP_TRANSFER, "detune": 0.0})
     assert d["energy"]["lossless"]["drift"] < LOSSLESS_TOL
     sp = d["meta"]["spectrum"]
     for arr in (sp["frac0"], sp["frac1"]):
@@ -2020,14 +2074,14 @@ def test_symp_transfer_conserves_and_the_fractions_stay_physical():
 def test_symp_lambda_must_be_below_one():
     """lambda = 1 leaves the string's Nyquist mode marginal and the bridge spring pushes it
     unstable, so the coupled system needs headroom below it (a clean error, not a 500)."""
-    r = simulate_to_payload({**SYMP_NORMAL, "lambda": 1.0})
+    r = _sim({**SYMP_NORMAL, "lambda": 1.0})
     assert "error" in r and "lambda must be in (0, 1)" in r["error"]["message"]
 
 
 def test_symp_over_stiff_bridge_is_rejected_by_the_core_guard():
     """K is gated by the core's exact dense leapfrog guard (k^2 lambda_max(A) < 4), surfaced as a
     clean construction error."""
-    r = simulate_to_payload({**SYMP_NORMAL, "K": 1.0e6})
+    r = _sim({**SYMP_NORMAL, "K": 1.0e6})
     assert "error" in r and "unstable" in r["error"]["message"]
 
 
@@ -2037,14 +2091,14 @@ def test_symp_over_stiff_bridge_is_rejected_by_the_core_guard():
     {"domain": "weinreich", "sigma_body": 999.0}, {"domain": "weinreich", "detune": 5.0},
 ])
 def test_symp_bad_params_give_error_payload(bad):
-    r = simulate_to_payload({**SYMP_NORMAL, **bad})
+    r = _sim({**SYMP_NORMAL, **bad})
     assert "error" in r, f"expected a clean error payload for {bad}"
 
 
 def test_symp_normal_work_budget_counts_both_runs():
     """The normal regime runs TWICE (antisymmetric + symmetric contrast), so its budget is on
     ``2 * n_steps``; a long-enough audio duration trips it with a clean error."""
-    r = simulate_to_payload({**SYMP_NORMAL, "audio_duration": 3.0, "T": 800.0, "N": 160})
+    r = _sim({**SYMP_NORMAL, "audio_duration": 3.0, "T": 800.0, "N": 160})
     assert "error" in r and "work budget" in r["error"]["message"]
     # and the default sits comfortably inside it
     assert 2 * round(0.4 * (200.0 / 0.005) ** 0.5 * 60 / 0.9) < SYMP_WORK_MAX
@@ -2064,7 +2118,7 @@ SYMP_WEIN: dict = {**SYMP_NORMAL, "domain": "weinreich", "K": 6000.0, "sigma_bod
 
 
 def _wein(**overrides):
-    return simulate_to_payload({**SYMP_WEIN, **overrides})
+    return _sim({**SYMP_WEIN, **overrides})
 
 
 def test_symp_weinreich_two_stage_knee_prompt_faster_than_aftersound():
@@ -2172,7 +2226,7 @@ def test_symp_weinreich_detune_range_is_fine_not_semitones():
 
 
 def _jaw(**over):
-    return web_serialize.simulate_to_payload({"model": "jawari", "audio_duration": 0.24, **over})
+    return _sim({"model": "jawari", "audio_duration": 0.24, **over})
 
 
 def test_jawari_reproduces_the_suites_shimmer_and_wrap_numbers():
@@ -2320,7 +2374,7 @@ def _jua(**over):
     # string per thread position) dominates the cost, so N is the lever that keeps these fast.
     base = {"model": "juari", "N": 40, "sweep_duration": 0.04, "audio_duration": 0.05}
     base.update(over)
-    return web_serialize.simulate_to_payload(base)
+    return _sim(base)
 
 
 def test_juari_tuning_curve_is_position_selective():
@@ -2469,7 +2523,7 @@ def test_juari_sweet_spot_sits_near_the_nut_settled():
 
 
 def _bore(**over):
-    return web_serialize.simulate_to_payload({"model": "bore", "audio_duration": 0.25, **over})
+    return _sim({"model": "bore", "audio_duration": 0.25, **over})
 
 
 def test_bore_conserves_with_the_bell_radiating_and_the_split_actually_moves():
@@ -2687,7 +2741,7 @@ def test_bore_ignores_params_that_belong_to_other_models():
 
 
 def _reed(**over):
-    return web_serialize.simulate_to_payload(
+    return _sim(
         {"model": "reed", "audio_duration": 0.3, "N": 96, **over})
 
 
@@ -2922,7 +2976,7 @@ def test_reed_ignores_params_that_belong_to_other_models():
 
 
 def _fret(**over):
-    return web_serialize.simulate_to_payload({"model": "fret", "audio_duration": 0.4, **over})
+    return _sim({"model": "fret", "audio_duration": 0.4, **over})
 
 
 def test_fret_reproduces_the_probes_intermittency_numbers():
@@ -3075,16 +3129,35 @@ def test_fret_brightness_is_reported_with_its_non_monotonicity_named():
     clean baseline: a mode-1 pluck with no rail is a pure sinusoid whose centroid reads EXACTLY f1,
     so the whole elevation is harmonic content the rail added. But it PEAKS at an intermediate
     clearance and falls either side, so no monotone label may be shipped — the slider samples a
-    range the two-point suite test never did, and would disprove it."""
+    range the two-point suite test never did, and would disprove it.
+
+    The *label* is asserted here; the peak it names is measured next door, deliberately split."""
     sp = _fret()["meta"]["spectrum"]
     assert sp["elevation"] == pytest.approx(4.682, abs=0.02)
     assert sp["centroid_control"] == pytest.approx(sp["f1"], rel=0.001)
     assert sp["monotone"] is False
     assert sp["peak_clearance"] == FRET_BRIGHTNESS_PEAK
-    far = _fret(audio_duration=0.25, clearance=4.0e-3)["meta"]["spectrum"]["elevation"]
+
+
+@pytest.mark.parametrize("side", [4.0e-3, 1.0e-3])
+def test_fret_brightness_peaks_at_an_intermediate_clearance(side):
+    """The measurement behind the ``monotone is False`` label next door: brightness is higher at
+    2 mm than either 4 mm (rail barely reached) or 1 mm (string rides it, closer to pinned).
+
+    **Split from that label test, and split again per side, for wall-clock.** As one function this
+    was four serialized simulations — 83 s on an idle CI runner, the most expensive test in this
+    file — and no worker count divides a test. Each side now carries its own 2 mm peak run, so the
+    two sides cost one extra simulation of CPU and *halve* the critical path; the fret model is the
+    most expensive in the viewer per second of audio, which is what makes that trade worth naming.
+
+    Splitting per side also localises the failure. The original asserted ``peak > far and peak >
+    near`` as one statement, so either collapse pointed at the same line; the two sides fail
+    separately now, and *which* side lost is the whole diagnosis — a rail that never reaches and a
+    string that rides it are opposite bugs.
+    """
     peak = _fret(audio_duration=0.25, clearance=2.0e-3)["meta"]["spectrum"]["elevation"]
-    near = _fret(audio_duration=0.25, clearance=1.0e-3)["meta"]["spectrum"]["elevation"]
-    assert peak > far and peak > near, "brightness must peak at an INTERMEDIATE clearance"
+    off = _fret(audio_duration=0.25, clearance=side)["meta"]["spectrum"]["elevation"]
+    assert peak > off, "brightness must peak at an INTERMEDIATE clearance"
 
 
 def test_fret_signature_block_carries_its_dispatch_kind():
@@ -3208,7 +3281,7 @@ def test_fret_episode_debounce_merges_chatter_without_inventing_it():
 
 
 def _body(**over):
-    return web_serialize.simulate_to_payload({"model": "body", "audio_duration": 0.5, **over})
+    return _sim({"model": "body", "audio_duration": 0.5, **over})
 
 
 def test_body_conserves_through_the_coupling_while_the_string_alone_does_not():
@@ -3331,12 +3404,12 @@ def test_body_guard_is_the_exact_bound_surfaced_as_a_clean_error():
     """The K slider's ceiling is the core's EXACT coupled guard (k^2 lambda_max(A) < 4), not the
     2-DOF footgun. Push K well past it and the wrapper returns a clean construction-error payload
     (never a 500/NaN); lambda >= 1 and a negative stiffness are clean param errors."""
-    over = web_serialize.simulate_to_payload({"model": "body", "bridge_stiffness": 500_000})
+    over = _sim({"model": "body", "bridge_stiffness": 500_000})
     assert over["error"]["kind"] == "construction"
     assert "lambda_max" in over["error"]["message"]
-    lam = web_serialize.simulate_to_payload({"model": "body", "lambda": 1.0})
+    lam = _sim({"model": "body", "lambda": 1.0})
     assert lam["error"]["kind"] == "param"
-    neg = web_serialize.simulate_to_payload({"model": "body", "bridge_stiffness": -1.0})
+    neg = _sim({"model": "body", "bridge_stiffness": -1.0})
     assert neg["error"]["kind"] == "param"
 
 
@@ -3369,17 +3442,17 @@ def test_body_work_budget_and_the_n_ceiling_are_reachable():
     the body ceiling and the loss/distance ranges -> clean param errors. All surfaced, never a hang
     or a 500. The step cap is reachable within the audio cap by a light, fast string (small rho ->
     high fs), so it is a live backstop, not dead code shadowed by the duration cap."""
-    over = web_serialize.simulate_to_payload(
+    over = _sim(
         {"model": "body", "N": BODY_N_MAX, "lambda": 0.9, "rho": 0.001,
          "audio_duration": BODY_AUDIO_MAX})
     assert over["error"]["kind"] == "param" and "budget" in over["error"]["message"]
     assert BODY_WORK_MAX == 200_000, "the step backstop the message quotes"
-    big_n = web_serialize.simulate_to_payload({"model": "body", "N": BODY_N_MAX + 1})
+    big_n = _sim({"model": "body", "N": BODY_N_MAX + 1})
     assert big_n["error"]["kind"] == "param"
-    loud = web_serialize.simulate_to_payload(
+    loud = _sim(
         {"model": "body", "sigma_body": BODY_SIGMA_BODY_MAX + 1.0})
     assert loud["error"]["kind"] == "param"
-    far = web_serialize.simulate_to_payload({"model": "body", "distance": BODY_DISTANCE_MAX + 1.0})
+    far = _sim({"model": "body", "distance": BODY_DISTANCE_MAX + 1.0})
     assert far["error"]["kind"] == "param"
 
 
@@ -3408,7 +3481,7 @@ def test_body_ignores_params_that_belong_to_other_models():
 
 def _pb(**over):
     """Default to the free cymbal (the batch's headline body); 0.5 s keeps the suite fast."""
-    return web_serialize.simulate_to_payload(
+    return _sim(
         {"model": "platebody", "domain": "free", "audio_duration": 0.5, **over})
 
 
@@ -3565,18 +3638,18 @@ def test_platebody_guard_is_the_exact_bound_surfaced_as_a_clean_error_on_both_bo
     — so a high-n_plate x high-K corner trips it. Both surface as clean construction-error payloads
     (never a 500/NaN); lambda >= 1 and a negative stiffness are clean param errors."""
     for boundary in ("free", "supported"):
-        over = web_serialize.simulate_to_payload(
+        over = _sim(
             {"model": "platebody", "domain": boundary, "bridge_stiffness": 500_000})
         assert over["error"]["kind"] == "construction"
-        corner = web_serialize.simulate_to_payload(
+        corner = _sim(
             {"model": "platebody", "domain": boundary, "n_plate": PLATEBODY_NPLATE_MAX,
              "bridge_stiffness": PLATEBODY_K_MAX})
         assert corner["error"]["kind"] == "construction", "high n_plate x high K trips the guard"
-    lam = web_serialize.simulate_to_payload({"model": "platebody", "lambda": 1.0})
+    lam = _sim({"model": "platebody", "lambda": 1.0})
     assert lam["error"]["kind"] == "param"
-    neg = web_serialize.simulate_to_payload({"model": "platebody", "bridge_stiffness": -1.0})
+    neg = _sim({"model": "platebody", "bridge_stiffness": -1.0})
     assert neg["error"]["kind"] == "param"
-    bad = web_serialize.simulate_to_payload({"model": "platebody", "domain": "clamped"})
+    bad = _sim({"model": "platebody", "domain": "clamped"})
     assert bad["error"]["kind"] == "param", "an unknown boundary is a clean param error"
 
 
@@ -3594,21 +3667,21 @@ def test_platebody_audio_is_the_far_field_pressure_real_and_normalized():
 def test_platebody_work_budget_and_the_ceilings_are_reachable():
     """The clamps a local render can hit, all surfaced as clean param errors (never a hang/500): the
     node-step budget, N over the string cap, n_plate out of range, the loss/distance caps."""
-    over = web_serialize.simulate_to_payload(
+    over = _sim(
         {"model": "platebody", "N": PLATEBODY_NSTRING_MAX, "lambda": 0.9, "rho": 0.001,
          "n_plate": PLATEBODY_NPLATE_MAX, "audio_duration": PLATEBODY_AUDIO_MAX})
     assert over["error"]["kind"] == "param" and "budget" in over["error"]["message"]
     assert PLATEBODY_WORK_MAX == 1.0e8, "the node-step backstop the message quotes"
-    big_n = web_serialize.simulate_to_payload(
+    big_n = _sim(
         {"model": "platebody", "N": PLATEBODY_NSTRING_MAX + 1})
     assert big_n["error"]["kind"] == "param"
-    big_np = web_serialize.simulate_to_payload(
+    big_np = _sim(
         {"model": "platebody", "n_plate": PLATEBODY_NPLATE_MAX + 1})
     assert big_np["error"]["kind"] == "param"
-    loud = web_serialize.simulate_to_payload(
+    loud = _sim(
         {"model": "platebody", "sigma_plate": PLATEBODY_SIGMA_MAX + 1.0})
     assert loud["error"]["kind"] == "param"
-    far = web_serialize.simulate_to_payload(
+    far = _sim(
         {"model": "platebody", "distance": PLATEBODY_DISTANCE_MAX + 1.0})
     assert far["error"]["kind"] == "param"
 
@@ -3635,7 +3708,7 @@ def test_platebody_ignores_params_that_belong_to_other_models():
 
 def _rb(**over):
     """Short radbody run with a COARSE sweep — the sweep is the whole cost of this payload."""
-    return web_serialize.simulate_to_payload(
+    return _sim(
         {"model": "radbody", "audio_duration": 0.5, "sweep_points": 3, "sweep_cap": 0.4, **over}
     )
 
@@ -3663,9 +3736,9 @@ def test_radbody_r_zero_is_bit_identical_to_the_readout_only_body():
     equality, not closeness: the rank-1 correction is multiplied by R, so at R = 0 it is a no-op."""
     shared = {"audio_duration": 0.35, "bridge_stiffness": 8000, "N": 90, "lambda": 0.85,
               "pluck_position": 0.27, "amplitude": 1.5e-3, "distance": 1.4}
-    loaded = simulate_to_payload({"model": "radbody", "radiation_R": 0.0, "sweep_points": 2,
+    loaded = _sim({"model": "radbody", "radiation_R": 0.0, "sweep_points": 2,
                                   "sweep_cap": 0.2, **shared})
-    readout = simulate_to_payload({"model": "body", **shared})
+    readout = _sim({"model": "body", **shared})
     assert loaded["energy"] == readout["energy"]
     assert loaded["audio"]["b64"] == readout["audio"]["b64"]
     assert loaded["frames"]["b64"] == readout["frames"]["b64"]
@@ -3718,7 +3791,7 @@ def test_radbody_sweep_is_a_controlled_reference_curve_not_the_render():
     c = _rb(N=60, sigma_body=20.0)["meta"]["spectrum"]["sweep"]
     assert a == b == c
     assert a["sweep_n"] == RADBODY_SWEEP_N
-    top = simulate_to_payload({"model": "radbody", "N": RADBODY_SWEEP_N,
+    top = _sim({"model": "radbody", "N": RADBODY_SWEEP_N,
                                "bridge_stiffness": RADBODY_K_MAX, "audio_duration": 0.1,
                                "sweep_points": 2, "sweep_cap": 0.1})
     assert "error" not in top, "the sweep N must clear the guard for the whole K range"
@@ -3813,16 +3886,23 @@ def test_radbody_shipped_sweep_settings_are_the_measured_ones():
 
     And pinned THROUGH the payload with the override keys ABSENT — which is the configuration the UI
     ships and every other test in this section overrides away. A constant can be right while the
-    default path that reads it is not."""
+    default path that reads it is not.
+
+    **This test is expensive ON PURPOSE — do not "optimise" it by passing the overrides.** It is the
+    only run in this section that pays full price, and the moment it stops paying, the shipped
+    configuration is covered nowhere. A profile taken on a loaded machine puts it near the top of
+    the file and makes it look like the obvious win (on an idle CI runner it is under 24 s, so that
+    reading was contention, not cost) — either way it is the one run here that must not get
+    cheaper."""
     assert (RADBODY_SWEEP_POINTS, RADBODY_SWEEP_CAP, RADBODY_SWEEP_N) == (18, 0.8, 100)
     assert RADBODY_R_DEFAULT == 133.0, "= the monopole R_a at the first body mode (110 Hz)"
-    shipped = simulate_to_payload({"model": "radbody", "audio_duration": 0.3})
+    shipped = _sim({"model": "radbody", "audio_duration": 0.3})
     sw = shipped["meta"]["spectrum"]["sweep"]
     assert len(sw["r"]) == RADBODY_SWEEP_POINTS and len(sw["t50_ms"]) == RADBODY_SWEEP_POINTS
     assert sw["cap_ms"] == pytest.approx(RADBODY_SWEEP_CAP * 1000.0)
     assert sw["truncated"] is False, "the shipped sweep must fit its own budget with room to spare"
     for bad_p in ({"sweep_points": 999}, {"sweep_points": "x"}, {"sweep_cap": 9.0}):
-        bad = simulate_to_payload({"model": "radbody", **bad_p})
+        bad = _sim({"model": "radbody", **bad_p})
         assert bad["error"]["kind"] == "param", bad_p
 
 
@@ -3875,14 +3955,14 @@ def test_radbody_guards_and_budget_are_clean_error_payloads():
                 {"distance": RADBODY_DISTANCE_MAX + 1},
                 {"audio_duration": RADBODY_AUDIO_MAX + 1},
                 {"bridge_stiffness": RADBODY_K_MAX + 1}, {"lambda": 1.0}, {"radiation_R": -1.0}):
-        out = simulate_to_payload({"model": "radbody", "sweep_points": 2, **bad})
+        out = _sim({"model": "radbody", "sweep_points": 2, **bad})
         assert out["error"]["kind"] == "param", bad
-    over = simulate_to_payload({"model": "radbody", "N": RADBODY_N_MAX, "rho": 0.001,
+    over = _sim({"model": "radbody", "N": RADBODY_N_MAX, "rho": 0.001,
                                 "audio_duration": RADBODY_AUDIO_MAX, "sweep_points": 2})
     assert over["error"]["kind"] == "param" and "budget" in over["error"]["message"]
     assert RADBODY_WORK_MAX == 200_000, "the step backstop the message quotes"
     # the exact coupled bound is the CONSTRUCTION guard, and it bites at a low N (ceiling ~ fs)
-    tight = simulate_to_payload({"model": "radbody", "N": 40, "bridge_stiffness": 12000.0,
+    tight = _sim({"model": "radbody", "N": 40, "bridge_stiffness": 12000.0,
                                  "sweep_points": 2, "audio_duration": 0.1})
     assert tight["error"]["kind"] == "construction"
 
@@ -3908,7 +3988,7 @@ def test_radbody_ignores_params_that_belong_to_other_models():
 
 def _al(**over):
     """Short airload run with a COARSE sweep — the sweep is most of this payload's cost."""
-    return web_serialize.simulate_to_payload(
+    return _sim(
         {"model": "airload", "audio_duration": 0.35, "sweep_points": 3, "sweep_cycles": 6, **over}
     )
 
@@ -3937,9 +4017,9 @@ def test_airload_a_zero_corner_reproduces_batch_15s_shipped_picture_bit_identica
     param dict, not two sets of defaults happening to agree."""
     shared = {"audio_duration": 0.35, "bridge_stiffness": 8000, "N": 90, "lambda": 0.85,
               "pluck_position": 0.27, "amplitude": 1.5e-3, "distance": 1.4, "radiation_R": 133.0}
-    flat = simulate_to_payload({"model": "airload", "air_corner": 0.0, "radiation_weight": 1.0,
+    flat = _sim({"model": "airload", "air_corner": 0.0, "radiation_weight": 1.0,
                                 "sweep_points": 2, "sweep_cycles": 4, **shared})
-    b15 = simulate_to_payload({"model": "radbody", "sweep_points": 2, "sweep_cap": 0.2, **shared})
+    b15 = _sim({"model": "radbody", "sweep_points": 2, "sweep_cap": 0.2, **shared})
     assert flat["energy"] == b15["energy"]
     assert flat["audio"]["b64"] == b15["audio"]["b64"]
     assert flat["frames"]["b64"] == b15["frames"]["b64"]
@@ -4147,15 +4227,19 @@ def test_airload_the_exact_load_tracks_batch_15s_compact_law_over_the_band():
 def test_airload_shipped_sweep_settings_are_the_measured_ones():
     """Batch 15's lesson: every other test overrides sweep_points/sweep_cycles to keep the suite
     fast, so the configuration the UI actually ships — both keys ABSENT — is exercised nowhere
-    else. A constant can be right while the default path reading it is not."""
-    shipped = simulate_to_payload({"model": "airload", "audio_duration": 0.2})
+    else. A constant can be right while the default path reading it is not.
+
+    **This test is expensive ON PURPOSE — do not "optimise" it by passing the overrides.** Its cost
+    IS its coverage: it is the only run in this section not overridden down, and making it cheap
+    would silently delete the shipped configuration from the suite."""
+    shipped = _sim({"model": "airload", "audio_duration": 0.2})
     sw = shipped["meta"]["spectrum"]["sweep"]
     assert len(sw["f"]) == AIRLOAD_SWEEP_POINTS == len(sw["alpha"])
     assert sw["fs"] == AIRLOAD_SWEEP_FS
     assert sw["truncated"] is False and sw["n_censored"] == 0
     assert sw["steps"] < 60_000, "the shipped sweep must stay inside batch 15's budget"
     for bad_p in ({"sweep_points": 1}, {"sweep_points": 99}, {"sweep_points": "x"}):
-        bad = simulate_to_payload({"model": "airload", **bad_p})
+        bad = _sim({"model": "airload", **bad_p})
         assert "error" in bad and bad["error"]["kind"] == "param"
 
 
@@ -4176,10 +4260,10 @@ def test_airload_the_coupled_k_guard_is_the_bare_bodys_and_the_load_does_not_mov
     batch 15's K_MAX unexamined, and the test is here so it stays true."""
     ok = _al(N=100, bridge_stiffness=AIRLOAD_K_MAX, sweep_points=2)
     assert "error" not in ok, "K_MAX must be constructible at the reference N"
-    tight = simulate_to_payload({"model": "airload", "N": 40, "bridge_stiffness": 12000.0,
+    tight = _sim({"model": "airload", "N": 40, "bridge_stiffness": 12000.0,
                                  "audio_duration": 0.1, "sweep_points": 2})
     assert "error" in tight, "the ceiling SHRINKS with fs — a low N must still trip it"
-    same = simulate_to_payload({"model": "radbody", "N": 40, "bridge_stiffness": 12000.0,
+    same = _sim({"model": "radbody", "N": 40, "bridge_stiffness": 12000.0,
                                 "audio_duration": 0.1, "sweep_points": 2, "sweep_cap": 0.1})
     assert "error" in same and same["error"]["kind"] == tight["error"]["kind"]
 
@@ -4202,9 +4286,9 @@ def test_airload_guards_and_budget_are_clean_error_payloads():
                 {"radiation_weight": AIRLOAD_WEIGHT_MAX + 0.1},
                 {"bridge_stiffness": AIRLOAD_K_MAX + 1}, {"sigma_body": -1.0},
                 {"audio_duration": 0.0}, {"distance": 0.0}, {"pluck_position": 1.0}):
-        out = simulate_to_payload({"model": "airload", "sweep_points": 2, **bad})
+        out = _sim({"model": "airload", "sweep_points": 2, **bad})
         assert "error" in out and out["error"]["kind"] == "param", bad
-    over = simulate_to_payload({"model": "airload", "N": AIRLOAD_N_MAX, "rho": 0.001,
+    over = _sim({"model": "airload", "N": AIRLOAD_N_MAX, "rho": 0.001,
                                 "audio_duration": 3.0, "sweep_points": 2})
     assert "error" in over and str(AIRLOAD_WORK_MAX) in over["error"]["message"].replace(",", "")
 
