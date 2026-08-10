@@ -132,6 +132,7 @@ from scipy.sparse.linalg import splu
 
 if TYPE_CHECKING:  # type-only: the room stays free of any dependency on the resonator modules
     from physsynth.core.body import ModalBody
+    from physsynth.core.membrane import Membrane
     from physsynth.core.plate import Plate
 
 __all__ = [
@@ -147,6 +148,8 @@ __all__ = [
     "RoomLoadedPlate",
     "InteriorSurfacePort",
     "RoomSuspendedPlate",
+    "RoomLoadedMembrane",
+    "RoomSuspendedMembrane",
 ]
 
 # Ambient air (matches physsynth.core.radiation and .bore so every tier of the air node agrees).
@@ -2984,6 +2987,416 @@ class RoomSuspendedPlate:
         """
         self.plate.set_state(np.zeros(self.plate.n_live))
         self._reset_books()
+
+    def _reset_books(self) -> None:
+        self.radiated_energy = 0.0
+        self.pressure_jump = np.zeros(self.port.face_count)
+        self.nodal_volume_velocity = np.zeros(self.port.face_count)
+        self.volume_velocity = 0.0
+        self.port.reset()
+        self.n = 0
+
+
+class _MembraneSurface:
+    """The seam's membrane side (batch 5) — see :class:`_PlateSurface` for the six members.
+
+    Three differences from the plate, and each one is a fact about model #4 rather than a
+    convenience:
+
+    * **The mass is uniform.** Every live node carries ``rho h^2``; there is no lumped ``W`` and no
+      free-boundary branch, because a membrane's rim is clamped and dead. So ``denominator`` is a
+      scalar and the load's ``(k / 2 rho h^2) T^T R T`` is a plain scaling.
+    * **There is no ``_accel``** to refresh, so :meth:`commit` is the two-level roll and nothing
+      else. This is the same gap that leaves ``Membrane`` without a ``pressure()`` read-out.
+    * **``rhs``'s ``f_ext`` term has no counterpart in the model.**
+      :meth:`~physsynth.core.plate.Plate.step` has its own ``f_ext`` path, so batch 3's copy of it
+      could be checked against the original; ``Membrane.step()`` takes no force at all. This term
+      is therefore *new* arithmetic and is pinned directly, by the static-deflection oracle
+      ``u_ss = -L^-1 f / (T h^2)`` — not left to the energy ledger, which would stay green with the
+      coefficient wrong.
+    """
+
+    def __init__(self, membrane: Membrane) -> None:
+        self.model = membrane
+        self.k = membrane.k
+        self.areas = np.full(membrane.n_live, membrane.h * membrane.h)
+        # Per-node mass rho h^2, uniform: the clamped rim is dead, not lightly weighted.
+        self.denominator = membrane.rho * membrane.h * membrane.h
+
+    def surface(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """``(coords, areas)`` — the **live** nodes only, which is the moving surface (batch 5).
+
+        Unlike the free plate, where ``mask`` is all-ones, a membrane's rim is clamped and dead, so
+        the radiating surface is one cell inside the nominal boundary: measured on a disk of
+        ``R = 0.15 m`` at ``N = 56``, ``sum h^2 = 0.070284 m^2``, i.e. ``0.9943 pi R^2``. Read
+        :attr:`InteriorSurfacePort.blocked_area` beside it — the obstacle the suspended tier puts
+        in the room follows the *air* grid and is a different number again (1.228x there).
+        """
+        m = self.model
+        coords = np.column_stack((m.X[m.mask], m.Y[m.mask]))
+        return coords, self.areas
+
+    def a_bare(self) -> sparse.spmatrix:
+        """``(1 + sigma k) I`` — and its emptiness is the batch's main design fact.
+
+        Model #4 is a **pure explicit** update: one matvec, no solve. The air load's unknown is
+        ``u^{n+1}``, so putting it in ``A`` is what keeps ``radiated == injected`` an identity and
+        passivity a property of the matrix rather than an inequality to check — at the price of a
+        sparse factorization and a back-substitution per step, in a model whose whole character was
+        that it had neither. The alternative (lag the load velocity at ``(u^n - u^{n-1})/k`` and
+        stay explicit) is measured once as a negative control and does not ship.
+        """
+        m = self.model
+        return (1.0 + m.sigma * m.k) * sparse.identity(m.n_live, format="csc")
+
+    @property
+    def u_prev(self) -> NDArray[np.float64]:
+        """``u^{n-1}`` — read once per step, before :meth:`commit` (see :class:`_PlateSurface`)."""
+        return self.model.u_prev
+
+    def rhs(self, f_ext: NDArray[np.float64] | None) -> NDArray[np.float64]:
+        """``2 u^n - (1 - sigma k) u^{n-1} + c^2 k^2 L u^n``, plus ``k^2 f_ext / rho h^2``.
+
+        The first part is :meth:`~physsynth.core.membrane.Membrane.step`'s own numerator in its own
+        operand order, so a zero air load and no force reduce to the bare membrane exactly. The
+        ``f_ext`` term is the one piece of arithmetic in this batch with nothing to be
+        bit-identical to (class docstring).
+        """
+        m = self.model
+        sk = m.sigma * self.k
+        c2k2 = m.c * m.c * self.k * self.k
+        rhs = 2.0 * m.u - (1.0 - sk) * m.u_prev + c2k2 * (m.L @ m.u)
+        if f_ext is not None:
+            rhs = rhs + self.k * self.k * f_ext / self.denominator
+        return rhs
+
+    def commit(self, u_next: NDArray[np.float64]) -> None:
+        """Roll ``u^{n-1} <- u^n <- u^{n+1}``. There is no acceleration cache to refresh."""
+        m = self.model
+        m.u_prev = m.u
+        m.u = u_next
+        m.n += 1
+
+
+class _RoomLoadedMembraneMixin:
+    """What :class:`RoomLoadedMembrane` and :class:`RoomSuspendedMembrane` share verbatim."""
+
+    def __getattr__(self, name: str):
+        # Delegate read accessors (u, u_prev, X, Y, mask, L, c, h, n_live, domain, state, to_live,
+        # pickup_index_at, displacement_at, ...) so this is a drop-in wherever a bare Membrane is
+        # expected. Only reached for names not set on the instance, so the overrides always win.
+        # Note what is deliberately NOT here: `pressure()`, because model #4 has none.
+        if name == "membrane":  # nothing to delegate through yet -- never recurse
+            raise AttributeError(name)
+        return getattr(self.membrane, name)
+
+    def energy(self) -> float:
+        """Total discrete energy ``E_membrane + integral pbar . q dt`` (Joules).
+
+        **An explicit override, not a delegation** — ``__getattr__`` would otherwise hand back the
+        bare membrane energy, i.e. the total *without* its coupling channel. Not monotone: a room
+        gives energy back. The conserved statement is the whole scene,
+        ``inst.energy() + inst.room.energy()`` — and that flatness is *necessary and not
+        sufficient*, for the third batch running (see :class:`RoomLoadedPlate`).
+        """
+        return self.membrane.energy() + self.radiated_energy
+
+    def set_state(
+        self,
+        u0: NDArray[np.float64],
+        v0: NDArray[np.float64] | float = 0.0,
+    ) -> None:
+        """Set the membrane's initial state and reset this port's coupling ledger to zero.
+
+        The membrane's own consistent second-order start is used verbatim, i.e. ``u^{-1}`` comes
+        from the **unloaded** acceleration — the room has not acted yet at ``n = 0``.
+        """
+        self.membrane.set_state(u0, v0)
+        self._reset_books()
+
+    def reset(self) -> None:
+        """Zero the membrane state and the coupling ledger — reuse on a new run."""
+        self.membrane.set_state(np.zeros(self.membrane.n_live))
+        self._reset_books()
+
+
+class RoomLoadedMembrane(_RoomLoadedMembraneMixin):
+    """A :class:`~physsynth.core.membrane.Membrane` mounted flush in a wall — the baffled drumhead.
+
+    Batch 3's :class:`RoomLoadedPlate` with model #4 in place of model #5, and the physics that
+    changes is not a detail. **A membrane has no coincidence frequency.** Kirchhoff bending gives
+    ``c_b(omega) = sqrt(kappa omega)``, which grows without bound, so every plate in this repo
+    *crosses* ``c0`` at one frequency and is a poor radiator below it and a good one above. A
+    membrane's wave speed is the constant ``c = sqrt(T/rho)``, with no ``omega`` in it at all. So:
+
+    * there is no frequency at which the character changes — the surface is subsonic at **every**
+      mode or supersonic at every mode;
+    * the control is the material and the tuning, not the mode number, through the single number
+      ``c/c0``, which a player walks across the threshold by tightening the head;
+    * real drumheads sit well below it (Mylar at ``T ~ 3000 N/m``, ``rho ~ 0.26 kg/m^2`` gives
+      ``c/c0 ~ 0.31``), so the acoustic short circuit is not an edge case for a drum — it is the
+      drum's normal operating point, and it is why a head with no shell is quiet.
+
+    **The claim is a continuum one and the scheme smears it — read this before quoting it.** The
+    5-point Laplacian is dispersive, so the discrete phase speed falls below ``c`` at high
+    wavenumber and a *marginally* supersonic head drops back under ``c0`` somewhere on the grid:
+    measured at ``lambda_mem = 1/sqrt(2)``, ``c/c0 = 1.05`` inverts at ``beta h = 1.445``, about
+    2.2 nodes per wavelength — on the grid, not past it. The threshold therefore ships
+    **bracketed**, with the measurement band held below the 1% dispersion knee
+    (``beta h = 0.686``, ~4.6 nodes/wavelength). A sweep that silently crossed the inversion would
+    measure the opposite of the claim and look clean doing it.
+
+    A gift from the same table: at ``lambda_mem = 1/sqrt(2)`` the grid **diagonal** is exactly
+    dispersionless (1.0000 across the band) while the axis degrades to 0.707 at Nyquist — the 2-D
+    analogue of the 1-D ``lambda = 1`` exactness, surviving on one direction only. It is a reason
+    to run the membrane *at* its CFL ceiling here, and it is also the anisotropy maximum.
+
+    **The membrane stops being explicit.** See :meth:`_MembraneSurface.a_bare`: the load goes into
+    ``A``, so model #4 acquires a factorization and a back-substitution it never had. That price
+    is reported, not buried — :attr:`nnz_growth` and :attr:`lu_nnz` are on the instance.
+
+    **Both domains work, and the round one needed a fix.** ``domain="circle"`` is the interesting
+    head, and :meth:`_PatchPort._check_footprint` refused every disk at every resolution until this
+    batch: its required set was a bounding box. The disk's own two staircases — the clamped rim on
+    the membrane grid, and the port footprint on the air grid — are why every disk oracle here is a
+    ratio or a rate and never a magnitude.
+
+    Parameters
+    ----------
+    membrane : Membrane
+        The resonator (model #4), ``domain="rectangle"`` or ``"circle"``. Only its public state and
+        operators are used; ``membrane.py`` is untouched. Its sample rate must match the room's.
+    room : AirBox
+        The room to radiate into. The membrane lies flush in one of its walls, so the rigid wall
+        *is* the textbook infinite baffle and the back face is unloaded.
+    face : str
+        Which of the six walls (:data:`FACES`). Positive displacement is along that face's inward
+        normal (see :class:`SurfacePort`).
+    origin : (float, float), optional
+        The membrane's ``(0, 0)`` corner in the face's own two coordinates (m). Defaults to
+        **centred**; an off-centre surface's even modes stop being exactly silent, linearly in the
+        offset with no threshold.
+    spreading : {"bilinear", "nearest"}
+        Forwarded to :class:`SurfacePort`. ``"nearest"`` is that class's measured negative control.
+
+    Raises
+    ------
+    ValueError
+        A sample-rate mismatch, or any of :class:`SurfacePort`'s refusals.
+
+    Notes
+    -----
+    **This class does not step the room**, exactly as batches 2, 3 and 4 do not::
+
+        for n in range(n_steps):
+            inst.step(f_ext)
+            room.step()            # one room, one step, after every port has solved
+    """
+
+    def __init__(
+        self,
+        *,
+        membrane: Membrane,
+        room: AirBox,
+        face: str,
+        origin: Sequence[float] | None = None,
+        spreading: Spreading = "bilinear",
+    ) -> None:
+        self.membrane = membrane  # FIRST: an attribute miss before this makes __getattr__ recurse
+        _require_same_rate(membrane, room, "membrane")
+        self.room = room
+        self.k = membrane.k
+
+        self._surface = _MembraneSurface(membrane)
+        coords, areas = self._surface.surface()
+        self._denominator = self._surface.denominator
+        self.port = SurfacePort(
+            room=room,
+            face=face,
+            coords=coords,
+            areas=areas,
+            origin=origin,
+            spreading=spreading,
+        )
+
+        a_bare = self._surface.a_bare()
+        self._load_scale = 0.5 * self.k / self._denominator
+        a_loaded = (a_bare + self._load_scale * self.port.load_matrix).tocsc()
+        # Drop the structural zeros the load contributes where its value is 0, so a zero-area
+        # surface (T = 0) factors (1 + sigma k) I and reduces to the bare membrane.
+        a_loaded.eliminate_zeros()
+        self.nnz_growth = a_loaded.nnz / a_bare.tocsc().nnz
+        self._lu_loaded = splu(a_loaded)
+        self.lu_nnz = int(self._lu_loaded.L.nnz + self._lu_loaded.U.nnz)
+
+        self.radiated_energy = 0.0  # integral pbar . q dt: the work this membrane did on the room
+        self.nodal_volume_velocity = np.zeros(self.port.node_count)  # last q (m^3/s per node)
+        self.surface_pressure = np.zeros(self.port.node_count)       # last pbar (Pa per node)
+        self.volume_velocity = 0.0  # last sum_j q_j -- the LUMPED tier's coupling, i.e. the control
+        self.n = 0
+
+    # -- time stepping ---------------------------------------------------------------------
+
+    def step(self, f_ext: NDArray[np.float64] | None = None) -> None:
+        """Advance one step: read the port, solve the **loaded** system, queue the injection.
+
+        ``f_ext`` is the optional external nodal force (live vector, newtons). Unlike batch 3's, it
+        has no counterpart in the model to be checked against — ``Membrane.step()`` takes no force
+        — so it is pinned by its own static-deflection oracle rather than by a reduction. The room
+        is **not** stepped here (class docstring).
+        """
+        port = self.port
+        port.require_ready()               # before mutating anything
+        pbar_free = port.free_pressure()   # read u^{n+1/2}, BEFORE room.step()
+
+        k2 = self.k * self.k
+        u_nm1 = self._surface.u_prev   # ONCE, and before commit() -- see _PlateSurface
+        rhs = self._surface.rhs(f_ext)
+        # The air load: the known open-circuit force, plus the u^{n-1} half of the centered
+        # velocity (its u^{n+1} half is already inside the factorization).
+        rhs = rhs - k2 * (port.T.T @ pbar_free) / self._denominator
+        rhs = rhs + self._load_scale * (port.load_matrix @ u_nm1)
+
+        u_next = self._lu_loaded.solve(rhs)
+        self._surface.commit(u_next)
+
+        q = port.T @ ((u_next - u_nm1) / (2.0 * self.k))
+        pbar = pbar_free + port.R * q
+        port.inject(q)
+        self.radiated_energy += self.k * float(np.dot(pbar, q))
+        self.nodal_volume_velocity = q
+        self.surface_pressure = pbar
+        self.volume_velocity = float(np.sum(q))
+        self.n += 1
+
+    def _reset_books(self) -> None:
+        self.radiated_energy = 0.0
+        self.nodal_volume_velocity = np.zeros(self.port.node_count)
+        self.surface_pressure = np.zeros(self.port.node_count)
+        self.volume_velocity = 0.0
+        self.port.reset()
+        self.n = 0
+
+
+class RoomSuspendedMembrane(_RoomLoadedMembraneMixin):
+    """A :class:`~physsynth.core.membrane.Membrane` hanging **in** the room — the frame drum.
+
+    :class:`RoomLoadedMembrane` with the wall taken away, i.e. batch 4's move applied to model #4:
+    the head radiates from **both** faces, is driven by the pressure **jump** across it, and is an
+    *object* rather than a source — it also removes paths through the room, which is the cut
+    :class:`InteriorSurfacePort` registers. The load matrix and the ``pbar`` term both double.
+
+    The two tiers ship together and completeness is not the reason: the ``c/c0`` claim of
+    :class:`RoomLoadedMembrane` is a **comparison**. Batch 4's dipole-over-baffled resistance ratio
+    is the instrument that turned "unbaffling changes sign" into a claim rather than a magnitude,
+    and the baffled arm here is the reference this one is read against.
+
+    **Two areas, and they are different numbers.** :attr:`InteriorSurfacePort.net_area` is the
+    moving surface — the *live* nodes, so one cell inside the nominal rim, because a membrane's
+    boundary is clamped and dead. :attr:`InteriorSurfacePort.blocked_area` is the obstacle, which
+    follows the reached **air** nodes. Measured on a disk of ``R = 0.15 m`` at ``N = 56``: 0.070284
+    and 0.086293 m^2, a ratio of 1.228. Batch 4 measured that the dipole's magnitude tracks
+    ``blocked_area`` rather than the air spacing, so an area quietly taken as ``pi R^2`` gives a
+    plausible, wrong, and green-ledgered result. Report both by name or neither.
+
+    Parameters
+    ----------
+    membrane : Membrane
+        The resonator (model #4). Its sample rate must match the room's.
+    room : AirBox
+        The room. The cut is registered on construction and is **geometry, not state** — it
+        survives :meth:`reset`.
+    plane, index : str, int
+        Which interior plane (:data:`PLANES`) and which index along its normal axis.
+    origin : (float, float), optional
+        Defaults to **centred** — and this is the first surface for which that centres a *disk*.
+    spreading : {"bilinear", "nearest"}
+        Forwarded to :class:`InteriorSurfacePort`.
+
+    Raises
+    ------
+    ValueError
+        A sample-rate mismatch, or any of :class:`InteriorSurfacePort`'s refusals.
+    """
+
+    def __init__(
+        self,
+        *,
+        membrane: Membrane,
+        room: AirBox,
+        plane: str,
+        index: int,
+        origin: Sequence[float] | None = None,
+        spreading: Spreading = "bilinear",
+    ) -> None:
+        self.membrane = membrane  # FIRST: an attribute miss before this makes __getattr__ recurse
+        _require_same_rate(membrane, room, "membrane")
+        self.room = room
+        self.k = membrane.k
+
+        self._surface = _MembraneSurface(membrane)
+        coords, areas = self._surface.surface()
+        self._denominator = self._surface.denominator
+        self.port = InteriorSurfacePort(
+            room=room,
+            plane=plane,
+            index=index,
+            coords=coords,
+            areas=areas,
+            origin=origin,
+            spreading=spreading,
+        )
+
+        # A_loaded = (1 + sigma k) I + (k / 2 rho h^2) 2 T^T R T -- the 2 is the two loaded faces,
+        # and the coupled residual at two timesteps is the only guard that catches BOTH ways of
+        # getting it wrong (see InteriorSurfacePort).
+        a_bare = self._surface.a_bare()
+        self._load_scale = 0.5 * self.k / self._denominator
+        a_loaded = (a_bare + self._load_scale * self.port.load_matrix).tocsc()
+        a_loaded.eliminate_zeros()
+        self.nnz_growth = a_loaded.nnz / a_bare.tocsc().nnz
+        self._lu_loaded = splu(a_loaded)
+        self.lu_nnz = int(self._lu_loaded.L.nnz + self._lu_loaded.U.nnz)
+
+        self.radiated_energy = 0.0
+        self.pressure_jump = np.zeros(self.port.face_count)          # last (pbar_hi - pbar_lo), Pa
+        self.nodal_volume_velocity = np.zeros(self.port.face_count)  # last q (m^3/s per face)
+        self.volume_velocity = 0.0  # last sum_j q_j -- the LUMPED tier's coupling, i.e. the control
+        self.n = 0
+
+    # -- time stepping ---------------------------------------------------------------------
+
+    def step(self, f_ext: NDArray[np.float64] | None = None) -> None:
+        """Advance one step: read both planes, solve the **loaded** system, queue the ``-q``/``+q``.
+
+        ``f_ext`` is the optional external nodal force (live vector, newtons); see
+        :meth:`RoomLoadedMembrane.step` on why it is pinned by an oracle and not by a reduction.
+        The room is **not** stepped here (class docstring).
+        """
+        port = self.port
+        port.require_ready()                      # before mutating anything
+        lo_free, hi_free = port.free_pressure()   # read u^{n+1/2}, BEFORE room.step()
+        d_free = hi_free - lo_free
+
+        k2 = self.k * self.k
+        u_nm1 = self._surface.u_prev   # ONCE, and before commit() -- see _PlateSurface
+        rhs = self._surface.rhs(f_ext)
+        # The air load: the known open-circuit pressure JUMP, plus the u^{n-1} half of the centered
+        # velocity (its u^{n+1} half is already inside the factorization).
+        rhs = rhs - k2 * (port.T.T @ d_free) / self._denominator
+        rhs = rhs + self._load_scale * (port.load_matrix @ u_nm1)
+
+        u_next = self._lu_loaded.solve(rhs)
+        self._surface.commit(u_next)
+
+        q = port.T @ ((u_next - u_nm1) / (2.0 * self.k))
+        d_pbar = d_free + 2.0 * port.R * q
+        port.inject(q)
+        self.radiated_energy += self.k * float(np.dot(d_pbar, q))
+        self.nodal_volume_velocity = q
+        self.pressure_jump = d_pbar
+        self.volume_velocity = float(np.sum(q))
+        self.n += 1
 
     def _reset_books(self) -> None:
         self.radiated_energy = 0.0

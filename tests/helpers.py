@@ -14,7 +14,9 @@ from physsynth.analysis.rotating_wave import rotating_wave_history, solve_rotati
 from physsynth.core.airbox import (
     AirBox,
     RoomLoadedBody,
+    RoomLoadedMembrane,
     RoomLoadedPlate,
+    RoomSuspendedMembrane,
     RoomSuspendedPlate,
 )
 from physsynth.core.beam import FreeBeam
@@ -1632,3 +1634,120 @@ def surface_scene_energy(*instruments) -> float:
     if any(inst.room is not room for inst in instruments):
         raise ValueError("surface_scene_energy expects instruments sharing a single room.")
     return sum(inst.energy() for inst in instruments) + room.energy()
+
+
+# -- air-box batch 5: the MEMBRANE as a suspended and baffled surface ----------------------
+# A finer room than batches 3/4's: the membrane's own CFL floor (lambda_mem <= 1/sqrt(2)) means a
+# fast head is a COARSE membrane at fixed fs, so the air grid has to be fine enough that a disk's
+# footprint is more than a few nodes across. 29x29x10 = 8410 pressure nodes -- still cheap.
+AIRBOX_MEMBRANE_FS = 40_000.0
+AIRBOX_MEMBRANE_N = (28, 28, 9)     # room, in CELLS: h_air = 16.5 mm
+AIRBOX_MEMBRANE_INDEX = 4           # the interior plane, as batch 4
+AIRBOX_MEMBRANE_L = 0.20            # m, square head
+AIRBOX_MEMBRANE_RADIUS = 0.12       # m, round head
+AIRBOX_MEMBRANE_RHO = 0.26          # kg/m^2 -- a Mylar drumhead
+AIRBOX_MEMBRANE_T = 3000.0          # N/m  -- c = 107.4 m/s, i.e. c/c0 = 0.31: SUBSONIC, as a
+                                    # real head is. The threshold is a tuning, not a constant.
+
+
+def make_air_membrane(
+    *,
+    fs: float = AIRBOX_MEMBRANE_FS,
+    domain: Domain = "rectangle",
+    N: int = 16,
+    T: float = AIRBOX_MEMBRANE_T,
+    rho: float = AIRBOX_MEMBRANE_RHO,
+    sigma: float = 0.0,
+    L: float = AIRBOX_MEMBRANE_L,
+    radius: float = AIRBOX_MEMBRANE_RADIUS,
+) -> Membrane:
+    """A drumhead sized for the batch-5 room — ``sigma = 0`` so the only channel is the air."""
+    geometry = dict(radius=radius) if domain == "circle" else dict(Lx=L, Ly=L)
+    return Membrane(domain=domain, T=T, rho=rho, fs=fs, N=N, sigma=sigma, **geometry)
+
+
+def make_membrane_room(
+    *,
+    fs: float = AIRBOX_MEMBRANE_FS,
+    N: tuple[int, int, int] = AIRBOX_MEMBRANE_N,
+    cfl: float = AIRBOX_CFL_FRACTION,
+    walls="rigid",
+) -> AirBox:
+    """:func:`make_surface_room` at the batch-5 defaults — a finer grid, a smaller box."""
+    return make_surface_room(fs=fs, N=N, cfl=cfl, walls=walls)
+
+
+def make_room_loaded_membrane(
+    *,
+    room: AirBox | None = None,
+    walls="rigid",
+    N_room: tuple[int, int, int] = AIRBOX_MEMBRANE_N,
+    face: str = "z0",
+    origin: tuple[float, float] | None = None,
+    spreading: str = "bilinear",
+    **membrane_kw,
+) -> RoomLoadedMembrane:
+    """A :class:`Membrane` mounted flush in a wall — the **baffled** drumhead (batch 5).
+
+    The room is on ``.room`` and the port on ``.port``. ``sigma = 0`` by default keeps the head
+    lossless so the only energy channel is the room, and the conserved statement is
+    ``inst.energy() + inst.room.energy()`` — necessary and not sufficient, as ever.
+    """
+    fs = membrane_kw.get("fs", AIRBOX_MEMBRANE_FS)
+    if room is None:
+        room = make_membrane_room(fs=fs, N=N_room, walls=walls)
+    membrane = make_air_membrane(**membrane_kw)
+    return RoomLoadedMembrane(
+        membrane=membrane, room=room, face=face, origin=origin, spreading=spreading
+    )
+
+
+def make_suspended_membrane(
+    *,
+    room: AirBox | None = None,
+    walls="rigid",
+    N_room: tuple[int, int, int] = AIRBOX_MEMBRANE_N,
+    plane: str = "z",
+    index: int = AIRBOX_MEMBRANE_INDEX,
+    origin: tuple[float, float] | None = None,
+    spreading: str = "bilinear",
+    **membrane_kw,
+) -> RoomSuspendedMembrane:
+    """A :class:`Membrane` hung on an interior plane — the **frame drum**, radiating both sides."""
+    fs = membrane_kw.get("fs", AIRBOX_MEMBRANE_FS)
+    if room is None:
+        room = make_membrane_room(fs=fs, N=N_room, walls=walls)
+    membrane = make_air_membrane(**membrane_kw)
+    return RoomSuspendedMembrane(
+        membrane=membrane, room=room, plane=plane, index=index, origin=origin, spreading=spreading
+    )
+
+
+def membrane_bump(membrane: Membrane, amplitude: float = 1e-3) -> np.ndarray:
+    """A narrow off-centre strike on the live nodes — the FINE spatial pattern.
+
+    The contrast partner of :func:`membrane_bulge`. A membrane has no rigid-body nullspace (the
+    rim is clamped), so unlike :func:`plate_bump` there is no mean to remove — and no piston
+    configuration exists at all, which is why batch 3's ``0.9974`` channel has no analogue here.
+    """
+    x, y = membrane.X[membrane.mask], membrane.Y[membrane.mask]
+    span = float(x.max() - x.min())
+    width = 0.10 * span
+    x0 = x.min() + 0.42 * span
+    y0 = y.min() + 0.38 * float(y.max() - y.min())
+    return amplitude * np.exp(-(((x - x0) ** 2 + (y - y0) ** 2) / (width * width)))
+
+
+def membrane_bulge(membrane: Membrane, amplitude: float = 1e-3) -> np.ndarray:
+    """The single-signed fundamental bulge — the configuration that makes conservation non-vacuous.
+
+    Maximum net volume velocity for the geometry, so the coupling channel is a large fraction of
+    ``E0`` (measured 0.84 at ``c/c0 = 0.31``, against 0.23 for :func:`membrane_bump` — the
+    acoustic short circuit, visible in the channel itself). Sine product on a rectangle, and the
+    smooth radial analogue on a disk.
+    """
+    x, y = membrane.X[membrane.mask], membrane.Y[membrane.mask]
+    if membrane.domain == "rectangle":
+        return amplitude * np.sin(np.pi * x / membrane.Lx) * np.sin(np.pi * y / membrane.Ly)
+    r = np.sqrt(x * x + y * y) / membrane.radius
+    return amplitude * np.cos(0.5 * np.pi * np.clip(r, 0.0, 1.0))
