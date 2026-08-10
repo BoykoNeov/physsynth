@@ -521,6 +521,78 @@ and keep the per-tier oracles on the smallest room that keeps the channel non-va
 
 ## 10. What the build changed — the post-build record
 
-*(To be written after the build, per batches 3 and 4. If §1.1's headline survives contact with
-§6.1's inversion unchanged, say so explicitly and say at what band — a claim that never moved is
-either well-probed or under-measured, and the reader cannot tell which unless it is stated.)*
+Built 2026-08-10 in four commits after this document. `physsynth/core/airbox.py` grew the seam and
+the two wrappers; `plate.py` and `membrane.py` were **not touched**, as promised. 348 air-box tests
+pass (44 of them new), ruff clean.
+
+### 10.1 The claims that died on measurement
+
+Five, and three of them were this plan's own.
+
+| # | The claim | Verdict |
+|---|-----------|---------|
+| 5 | §2.1: "the comb threshold is unmoved — it lies in `(2.02, 2.20]` under both" | **Dead.** Probe 3's `bbox` column was computed from the *reached* node set; the shipped one is built from the surface's *coordinate* extent and is inset by up to one node per side. So the new criterion is very slightly **stricter**, not weaker — 20 unfed against 17 at `h/h_air = 2.02` — and that interval was a different room's. What survives, re-measured against the shipped code over 1.01 … 3.03: **both criteria change verdict between the same two spacings**. |
+| 6 | §7.6: the lagged-explicit load makes `radiated − injected` depart from zero | **Dead, and it inverts two batches.** Measured: the scene total drifts **3.8e-2 of `E0`** while the ledger gap stays at **1.6e-16**. `radiated == injected` is a property of the *port relation* alone — the room receives exactly the `q` it was handed at exactly the pressure it then has — so it cannot see which velocity produced that `q`. Batch 3: the total is blind. Batch 4: the money test is blind. Batch 5: the money test is blind again, for the opposite reason. **No single one of the three is sufficient**, which is now the family's standing lesson rather than a per-batch surprise. |
+| 7 | §7.7: "the dipole/baffled ratio under **prescribed uniform** motion, swept across `c/c₀`" | **Dead as written.** A piston has no structural wavenumber, so `c` never enters the measurement at all — the sweep would have been constant by construction. Replaced by the corrugated-surface rig: prescribe `sin(β_x x) sin(β_y y) sin(ωt)` at **fixed `ω`** and sweep `β`, which holds `ka`, the room and the grid fixed and moves only `k₀/β`. |
+| 8 | §1.1's operational half — "subsonic at every mode, therefore short-circuited" | **Size-dependent, and that is the batch's real correction to itself.** See §10.2. |
+| 9 | An `f_ext` oracle can be taken from rest with the load in place | **Dead.** Even at rest the first step's centred velocity `(u¹ − u⁻¹)/2k` is nonzero, so the room loads the head immediately — measured, that alone moves the answer **0.96%**, exactly the size an "approximately equal" test would have waved through. The coefficient is pinned with the load removed; the sign and operator get their own static-deflection oracle `u_ss = −L⁻¹f/(T h²)`. |
+
+### 10.2 The headline, and the half of it that is size-dependent
+
+The **kinematic** half is exact and needs no simulation: `k₀/β = (ω/c₀)/(ω/c) = c/c₀` for every
+mode of a membrane, against `√(κω)/c₀` for a plate. Measured on the batch-3/4 plate over modes
+(1,1)…(4,4): the membrane sits at 0.313 four times over; the plate walks 0.864 → 1.727 → 2.591 →
+3.454, i.e. **crosses**. That is the claim, and nothing moved it.
+
+The **operational** half — "so a subsonic head short-circuits" — turns out to depend on the
+surface's acoustic size, which this plan did not anticipate:
+
+```
+    sigma = R / rho0 c0 A,  fixed omega, only k0/beta moving
+
+    k0/beta          0.30    0.40    0.60    0.80    1.00    1.25    1.80    2.60
+    ka = 8   baffled 0.0004  0.0013  0.0196  0.5385  1.2023  1.3743  1.1600  1.0488
+             susp    0.0003  0.0015  0.0364  1.1267  2.2745  2.7215  2.1802  1.9290
+    ka = 1.2 baffled 0.0063  0.1578  0.4330  0.3982  0.3717  0.3538  0.3372  0.3293
+             susp    0.0021  0.2087  0.4988  0.4253  0.3836  0.3573  0.3341  0.3233
+```
+
+At `ka = 8` the threshold is textbook — **3773×** across the sweep baffled, 8859× suspended, the
+knee exactly at `k₀/β = 1`, and each arm saturating at **its own** plane-wave asymptote (1 and 2).
+That last number is worth pausing on: batch 4 could only say "`ratio ≤ 2` is the wrong pass
+criterion" because its baffled arm had not saturated; here both arms reach their asymptotes
+cleanly, which is the rig's own sanity check and retires the doubt.
+
+At `ka = 1.2` — where a real head's first modes live (a 0.30 m Mylar head's fundamental is 253 Hz,
+`ka = 0.78`) — **there is no knee at all**. The sweep spans 69×, peaks at `k₀/β = 0.60` and decays
+smoothly through 1 without noticing it. The reason is in the last column of the script's own
+output: at drum scale the patch carries **0.3 structural periods**, so there is nothing to cancel
+and the radiation is a compact-source effect. So:
+
+> A real drumhead's fundamental is quiet because the head is **compact**, not because it is
+> subsonic. The short circuit in the `c/c₀` sense is a statement about its *high* modes.
+
+Both halves ship, and the second one is why. Stating only the first would have been true and
+misleading — the reader would take a 900× threshold to the fundamental of a frame drum and find 1×.
+
+### 10.3 What survived unchanged
+
+* **The disk fix.** Span-wise required set; zero unfed at `N = 16 … 48` where the box refused
+  16/12/48/40, on both tiers; rectangles identical by construction. The tests assert the fix
+  *discriminates* — each disk case recomputes the superseded set and asserts it was nonzero.
+* **The dispersion inversion (§6.1)**, now with exact crossings on the shipped operator: `c/c₀` =
+  1.05, 1.10, 1.2247 fall back through 1 at `βh` = 1.449, 1.937, 2.598 (4.3, 3.2, 2.4
+  nodes/wavelength), all on the grid, against a 1% knee at `βh = 0.686`.
+* **The seam's "zero behaviour change"**, pinned by a purpose-built byte-exact baseline over 16
+  configurations rather than by the suite — which could not have checked it, since the two pinned
+  stability margins come from `G0`, which the air load never enters.
+* §5.1's scheme, §5.3's two areas, §7.1's bit-identical reduction, §7.2's non-vacuous channel
+  (0.14 … 0.82 of `E0` on the bulge), §7.3's coupled residual, §7.4, §7.5, §7.8.
+
+### 10.4 What batch 6 inherits
+
+The `VKPlate` extension point of §3 is unchanged by anything measured here: the load is linear in
+`u^{n+1}` and independent of `F`, so it folds into `A` once and the Picard loop is untouched; the
+seam it needs is a **loop hook**, not `rhs()`. Add the base class then, when a second implementation
+exists and the shape is known — `_MembraneSurface` and `_PlateSurface` share five of six members
+and disagree on exactly the one (`commit`) that a base class would have got wrong.

@@ -583,15 +583,24 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   lumped one-port here is a monopole. Still deferred, in rough order of appetite: **PML** or higher-order absorbing
   boundaries, since a locally-reacting impedance wall is matched at normal incidence only;
   **scattering objects and non-rectangular rooms** (staircasing in 3-D — the membrane batch's lesson
-  again); a plate **not aligned with a grid plane**, and one of finite thickness; `Membrane` (#4) and
-  the von Kármán plate (#6) as suspended surfaces (~~the port needs no change for either~~ — **that
-  half is measured wrong**: `_check_footprint` builds its required set as a bounding **box**, so a
-  *circular* membrane is refused at every resolution, 20/48/40 unfed air nodes at `N = 40/56/72`, on
-  both tiers. A rectangular one is accepted. The fix is one localized criterion — row-wise instead of
-  bbox, validated to accept the disk at `N = 24…96` while leaving rectangles and the comb refusal
-  bit-unchanged — and it is planned as air-box **batch 5** in `docs/dev/air-box-membrane-plan.md`,
-  where #4 is scoped and #6 deferred to batch 6 with its extension point named); **moving ports**;
+  again); a plate **not aligned with a grid plane**, and one of finite thickness; **moving ports**;
   and **viscothermal air absorption**.
+- **Batch 5 — the drumhead in the room — is SHIPPED** (`docs/dev/air-box-membrane-plan.md`).
+  `RoomLoadedMembrane` and `RoomSuspendedMembrane` put model #4 in the air box on both tiers and in
+  both domains, over a seam (`_PlateSurface` / `_MembraneSurface`) extracted first in its own
+  bit-identical commit. §12H's "the port needs no change for either" was **measured wrong**:
+  `_check_footprint` built its required set as a bounding **box**, so a *circular* membrane — a
+  drumhead — was refused at every resolution and refining made it worse. The required set is now
+  span-wise (rows ∪ columns), which reduces to the box for a rectangle by construction. The
+  headline is that a membrane has **no coincidence frequency** — `c = √(T/ρ)` has no `ω`, so
+  `k₀/β = c/c₀` at *every* mode — and the batch's own correction to it is that the sharp threshold
+  at `k₀/β = 1` is a **large-surface** statement: measured 3773× across it at `ka = 8` with each arm
+  saturating at its plane-wave asymptote (1 baffled, 2 suspended), and **no knee at all** at
+  `ka = 1.2`, where a real head's first modes live. A drumhead is quiet because it is *compact*, not
+  because it is subsonic. And a third methodological finding: the lagged-explicit load drifts the
+  scene total by 3.8e-2 while `radiated == injected` stays at 1.6e-16 — so batch 3's blind spot was
+  the total, batch 4's was the money test, and batch 5's is the money test again *for the opposite
+  reason*. **The von Kármán plate (#6) is batch 6**, with its extension point named in the plan's §3.
 - **3D radiation modeling** with directivity, plus HRTF / ambisonics output — the box produces a
   pressure field; turning that into a binaural or B-format signal is a separate, non-physics batch.
 - **Room coupling:** place the modeled instrument inside a modeled acoustic space. Done for the
