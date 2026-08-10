@@ -594,8 +594,11 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   span-wise (rows ∪ columns), which reduces to the box for a rectangle by construction. The
   headline is that a membrane has **no coincidence frequency** — `c = √(T/ρ)` has no `ω`, so
   `k₀/β = c/c₀` at *every* mode — and the batch's own correction to it is that the sharp threshold
-  at `k₀/β = 1` is a **large-surface** statement: measured 3773× across it at `ka = 8` with each arm
-  saturating at its plane-wave asymptote (1 baffled, 2 suspended), and **no knee at all** at
+  at `k₀/β = 1` is a **large-surface** statement: at `ka = 8` the knee is exact and each arm saturates
+  at its plane-wave asymptote (1 baffled, 2 suspended), with a **70×** rise across the knee measured
+  over the band that stays resolved (≥5 air cells per structural wave — the full sweep's 3773× has an
+  under-resolved bottom point and is an upper bound, batch 4's "the crossing is the claim, the
+  magnitudes are not" arriving again); and **no knee at all** at
   `ka = 1.2`, where a real head's first modes live. A drumhead is quiet because it is *compact*, not
   because it is subsonic. And a third methodological finding: the lagged-explicit load drifts the
   scene total by 3.8e-2 while `radiated == injected` stays at 1.6e-16 — so batch 3's blind spot was

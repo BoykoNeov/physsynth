@@ -71,9 +71,14 @@ SCALES = (
     ("large  ka=8",        8.0, 0.015, 1.8, 31),
 )
 
+# The band of k0/beta over which EVERY point of the ka=8 sweep keeps >=5 air cells per
+# structural wave. Multipliers are quoted over this band only; outside it the low-sigma end is an
+# aliasing floor as much as a cancellation floor, which is batch 4's "the crossing is the claim,
+# the magnitudes are not" arriving in a new costume.
+RESOLVED = (0.60, 1.25)
+
 AREA = SURFACE_L * SURFACE_L
 A_EFF = np.sqrt(AREA / np.pi)
-PLANE_WAVE = RHO0_AIR * C0_AIR * AREA
 
 # Where the two families sit on the curve. A Mylar head and a hard-tuned one; a plate's modes.
 MYLAR_C = np.sqrt(3000.0 / 0.26)     # 107.4 m/s -> c/c0 = 0.313
@@ -267,13 +272,27 @@ def main() -> None:
               f"window {window * 1e3:.2f} ms < reflection {reflection * 1e3:.2f} ms")
     big = scales["large  ka=8"][0]
     small = scales["drum-sized  ka=1.2"][0]
+    # The RESOLVED span, not the full sweep. Batch 4's doctrine applied to this batch's own
+    # number: the sweep's bottom point sits at 2.7 air cells/wave, so its sigma is an aliasing
+    # floor as much as a cancellation floor and the full-sweep multiplier is an UPPER BOUND.
+    res = [r for r in big if RESOLVED[0] <= r[0] <= RESOLVED[1]]
     print("   THE CORRECTION THIS BATCH OWES ITS OWN PLAN: the threshold is a large-surface")
     print("   statement. At ka=8 it is textbook and each arm saturates at its own plane-wave")
     print(f"   asymptote ({max(r[1] for r in big):.2f} baffled -> 1, "
           f"{max(r[2] for r in big):.2f} suspended -> 2, batch 4's ceiling reached honestly).")
+    print(f"   the rise across the knee, between RESOLVED points only (k0/beta "
+          f"{RESOLVED[0]} .. {RESOLVED[1]}, >=5 air cells/wave): "
+          f"{max(r[1] for r in res) / min(r[1] for r in res):5.1f}x baffled, "
+          f"{max(r[2] for r in res) / min(r[2] for r in res):5.1f}x suspended.")
+    full = max(r[1] for r in big) / min(r[1] for r in big)
+    print(f"   the FULL sweep reads {full:.0f}x, but its bottom point is at 2.7 air cells/wave"
+          " -- an aliasing floor as much as a")
+    print("   cancellation one, so that is an UPPER BOUND. The KNEE at 1 is the claim and it is")
+    print("   robust across 5.3 / 7.1 / 8.9 cells per wave; the multiplier is not.")
     print(f"   At ka=1.2 -- a real head's first modes -- the same sweep spans only "
-          f"{max(r[1] for r in small) / min(r[1] for r in small):.0f}x and has NO knee at 1: the")
-    print("   head is quiet because it is COMPACT, not because it is subsonic.")
+          f"{max(r[1] for r in small) / min(r[1] for r in small):.0f}x and has NO knee at 1 (its")
+    print("   shortest wave is 5.3 cells, so that one is resolved throughout): the head is quiet")
+    print("   because it is COMPACT, not because it is subsonic.")
     print(f"   -> {path1}")
 
     print("\n2. where the families sit (figure 1, right) — kinematics, no simulation")

@@ -557,9 +557,18 @@ surface's acoustic size, which this plan did not anticipate:
              susp    0.0021  0.2087  0.4988  0.4253  0.3836  0.3573  0.3341  0.3233
 ```
 
-At `ka = 8` the threshold is textbook — **3773×** across the sweep baffled, 8859× suspended, the
-knee exactly at `k₀/β = 1`, and each arm saturating at **its own** plane-wave asymptote (1 and 2).
-That last number is worth pausing on: batch 4 could only say "`ratio ≤ 2` is the wrong pass
+At `ka = 8` the threshold is textbook: the knee is exactly at `k₀/β = 1` and each arm saturates at
+**its own** plane-wave asymptote (1 and 2).
+
+**And the size of the rise is not the claim — this batch had to apply batch 4's own doctrine to
+itself.** The full sweep reads 3773× baffled and 8859× suspended, but its bottom point sits at
+**2.7 air cells per structural wave**: that σ is an aliasing floor as much as a cancellation floor,
+so those multipliers are upper bounds and were quoted here as though they were measurements. Over
+the band where every point keeps ≥5 air cells per wave (`k₀/β` = 0.60 … 1.25) the rise is
+**70.2× baffled and 74.8× suspended**. The *knee* is robust across 5.3 / 7.1 / 8.9 cells per wave;
+the multiplier is not. `RESOLVED` in the script is now that band, and it prints both.
+
+The saturation is worth pausing on: batch 4 could only say "`ratio ≤ 2` is the wrong pass
 criterion" because its baffled arm had not saturated; here both arms reach their asymptotes
 cleanly, which is the rig's own sanity check and retires the doubt.
 
