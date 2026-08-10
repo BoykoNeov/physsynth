@@ -2342,13 +2342,156 @@ decimated one (batch 2). And the deep-link verifier structurally cannot fire the
   the tension batch's recorded "~176 µs at N=128" was optimistic, and the sweep's *stable* points
   are the expensive ones because they alone run the full cap.
 
+### Batch 17 (IN PROGRESS) — the air as an IMPEDANCE: `Z_a(ω)` stores as well as radiates
+
+**Phase D's model list closed in 2026-07 and this document forbade inferring a batch 17 from it —
+"if a new viewer batch is wanted it needs a new model or a new capability first."** That condition
+is now met: the human took the fork's **core `R(ω)`** arm on 2026-07-27 and
+`RationalAirLoad` / `ReactiveRadiatedBody` shipped ([[radiation-state]] batch 3), which is the
+*first* new resonator-side core since Phase D closed. This batch surfaces it. (The other new core
+family, the 3-D air box, is deliberately **not** in scope: it needs a 3-D field type the frontend
+does not have, and it is its own batch.)
+
+The batch that discharges a caveat batch 15 wrote against itself. There the air was **one number**:
+`RadiatedBody` puts a constant resistance `R` on the body's volume velocity, and the readout had to
+confess *"`R` is constant in frequency and the true monopole `R_a ∝ ω²` (133 / 424 / 751 / 2135 at
+the rig's four body modes) — one constant cannot be right at all four."* Here the air is an
+**impedance**: a resistance in parallel with the radiation mass `M_a`, which is the *exact* acoustic
+load of a pulsating sphere and a first-order rational function of `jω`, so it needs no filter fit.
+The audible consequence is the one a constant `R` cannot produce — high partials radiate better and
+die first — and the *inaudible* one is that the air now **stores**, which gives batch 15's booked
+ledger a **fifth channel**.
+
+Model key **`airload`**, its own entry (batch 13/15's precedent: a different load class earns a
+key). All-wrapper as always; `physsynth/core` is untouched.
+
+**Everything below is measured** (`M:\claud_projects\temp\reactive-probe\`, probes 1–5), and the
+first bullet is a headline this batch had already drafted **backwards** — the advisor's catch,
+recorded because the wrong version was one edit from shipping:
+
+- **`RadiatedBody`'s `R` and `RationalAirLoad`'s `R` are NOT the same physical quantity, and that —
+  not legibility — is why the default moves 133 → 13146.** Batch 15 set `R = 133` from
+  `monopole_radiation_resistance`, the **compact-source** (`ka → 0`) law `ρ₀ω²/(4πc₀)` evaluated at
+  110 Hz. `RationalAirLoad`'s `R` is the **saturated plane-wave** (`ka → ∞`) value `ρ₀c₀/S`. Reading
+  batch 15's number as a saturation implies a **0.497 m** sphere, whose exact `Re Z_a` over the band
+  is 66.6 / 101.3 / 113.0 / 125.3 — flat, and **−50 % … −94 %** against batch 15's quoted law. That
+  reading would have made batch 15's honesty note look like a confession to a sin it never
+  committed. It is wrong. The sphere batch 15's number actually describes is the **5 cm** one, whose
+  exact `Re Z_a` is 132.1 / 410.4 / 710.7 / 1836.8 — **−1.0 % / −3.1 % / −5.4 % / −14.0 %** against
+  the compact law it quoted. **Batch 15's note was correct**, its numbers were good to 14 % over the
+  band, and what it could not do was *use* them. The shipped default here is that same 5 cm sphere,
+  which is why all four body modes sit **below** the corner, where `Re Z_a` climbs. *Generalizable:
+  two batches can name a slider `R`, cite the same medium, and mean different limits of the same
+  formula; check which limit a number came from before claiming continuity between them.*
+- **The exact-algebra identity is real but near-tautological — it ships as a sanity check, not as
+  evidence.** The sphere-consistent corner `f_c = √(R c₀ / (ρ₀ π))` equals batch 15's `f_match`
+  identically (measured rel. difference **0.00e+00** at R = 10 / 133 / 1000, 1.7e-16 at 300). It has
+  to: `f_match` is where the compact law meets the constant, and the corner is where the compact
+  limit meets the saturation — both are `ka = 1`, by construction.
+- **THE ANCHOR IS A SLIDER SETTING, AND IT REACHES BATCH 15's SHIPPED PICTURE, NOT JUST ITS
+  MECHANISM.** `air_corner = 0` → `M_a = ∞` → `R_eff = R` exactly and the auxiliary state stays
+  exactly zero, so with `radiation_weight = 1` and `radiation_R = 133` the whole chain is
+  **bit-identical** to batch 15: `np.array_equal` True on the energy, the far-field pressure *and*
+  the radiated channel over 8000 steps. Two things this rests on, asserted rather than assumed:
+  `ModalBody(radiation=1.0)` broadcasts to exactly `phi.copy()` (checked), and the construction path
+  (boundary, `BODY_BODY_FREQS`/`BODY_BODY_MASS`, `fs` from λ/N) is batch 15's verbatim. All three
+  values are reachable on the shipped sliders, so the anchor is something the *user* can dial.
+- **THE MONEY TEST IS THE LEDGER RESIDUAL, NOT THE DRIFT — the air-box lesson, third customer.**
+  The conserved total clears the 1e-10 bar everywhere measured (**7.7e-15 … 1.1e-13** over corner ×
+  R × K × weight), but it is **structurally blind to a wrong panel**: `load.energy()` returns stored
+  *plus* radiated while `body.energy()` is bare, so a batch-15 copy-paste can double-count or drop a
+  channel and leave the drift green. The guard is the per-step
+  `max|E_total − (E_string + E_body + E_conn + E_stored + ∫P_rad)| / E₀`, measured **2.30e-16**,
+  against controls that are loud: sign-flip `E_stored` → **3.63e-01**, drop it → **1.81e-01**, with
+  drift unmoved at 4.7e-14 in both.
+- **The money panel is therefore batch 15's booked split with a FIFTH line — and the fifth one is
+  the batch.** `E_string + E_body + E_conn + E_stored + ∫P_rad ≡ 1`. `E_stored` peaks at **18.1 %**
+  of the pluck at the shipped default: the air is genuinely a reservoir, not a rounding error.
+  Batch 12's rules carry: `E_conn` goes negative (measured −0.108 %) so it is never clamped and
+  never stacked, and the flat total is a **reference**, not the verdict.
+- **…but it is a rounding error in batch 15's OWN rig, which is why batch 15 could not have drawn
+  it.** At `radiation_weight = 1` the stored channel peaks at **0.16 %** (corner 30 Hz) to
+  **0.69 %** (corner 110 Hz) — invisible. It only becomes a line at a physical radiation weight.
+- **THE RADIATION WEIGHT, NOT `R`, IS THE KNOB THAT DECIDES WHETHER ANYTHING IS VISIBLE.** Batch 15
+  inherited `a_i = phi_i = 1` from `ModalBody`'s default (`radiation` falls back to `phi`), which
+  puts the body at `α/ω₁ = 4.8` — **past critical damping**, and mode-coupled through the shared
+  volume velocity, so exciting one mode returns a mixture (a 110 Hz mode measures 152 Hz) and
+  `loaded_mode` diverges. The core's own validated regime is `radiation = 0.02` at `mass = 0.02`.
+  This batch exposes the weight as a slider and defaults it to **0.05**.
+- **AND AT A PHYSICAL WEIGHT, BATCH 15's ANTI-CORRELATION DOES NOT BIND.** Batch 15 measured that
+  "slosh visibility and drain legibility are anti-correlated, so no single R shows both" and shipped
+  the drain. With the reactive load at weight 0.05 the render shows **both**: 97.4 % radiated by 2 s
+  *and* a 60.5 % body slosh. The claim was true of `R` at weight 1; it is not a property of the
+  radiation channel. Measured across the weight slider — peak `E_body` 0.716 / **0.605** / 0.139 /
+  0.0085 and radiated-at-2 s 0.824 / **0.974** / 0.974 / 0.762 at weight 0.02 / 0.05 / 0.1 / 0.2 —
+  0.05 is the only setting that is near the top of *both*, which is the impedance match, and it is
+  also the **loudest** (peak far-field 0.56 / **0.96** / 0.33 Pa at weight 0.02 / 0.05 / 0.2).
+- **The second panel is the CONTROLLED SINGLE-MODE SWEEP: `α(f)` and the pitch drop, measured
+  against the closed form, with the constant-`R` impostor beside them.** One mode at a time, body
+  alone, no string — because that is the only rig in which `loaded_mode` is defined and in which
+  "per-mode" means anything (see the mode-coupling bullet above). Batch 15's precedent exactly: a
+  reference curve with pinned parameters, decoupled from the render. At the shipped default `α`
+  climbs **5.41 → 572.06 s⁻¹** over 110 → 1760 Hz (**106×**), against a flat impostor pinned at
+  **8.26** — under-damping the top of the sweep **69×**.
+- **The pitch drop is the half a constant `R` cannot even attempt**, and it is large: **−10.14 %**
+  at the fundamental (≈185 cents) against an oracle of **−10.11 %**, falling to −3.50 % at 1760 Hz
+  because `Im Z_a / ω` decays above the corner. A constant `R` has `Im Z ≡ 0`, so its shift is
+  **exactly zero** — the one number in the panel that needs no measurement.
+- **THE PITCH SHIFT MUST BE READ AGAINST THE SCHEME'S OWN UNLOADED FREQUENCY, NOT THE NOMINAL `f₀` —
+  otherwise the leapfrog's warping is credited to the air, and at the render's own rate it gets the
+  SIGN wrong.** At fs = 22 222 Hz (N = 100, λ = 0.9) a 1760 Hz mode measures **+0.55 %** against
+  nominal while the oracle says −0.53 %; against a measured unloaded run at the same fs it is
+  −0.65 %. So every sweep point pays for a second, `R = 0` run, and the panel plots the difference.
+- **The sweep is pinned at 48 kHz, and that is a decision the render's rate forces.** The oracle
+  error at 1760 Hz is 2.61 % at 22 kHz, 1.15 % at 48 kHz, 0.86 % at 96 kHz and 0.79 % at 192 kHz —
+  i.e. it converges to a floor that is *not* the scheme. Pinning at 48 kHz puts the remaining
+  disagreement in the formula, where the panel can name it.
+- **…and the remaining disagreement is EXACTLY the weak-loading formula's own stated order, with
+  the coefficient measured.** `loaded_mode` documents a residual "second order in `α/ω`, ~1 % at
+  `α/ω ~ 1 %`". Over the shipped sweep `α/ω` runs 0.0078 → 0.0540 and the error runs 0.10 % →
+  5.49 %; the ratio **err/(α/ω)² is 16.4 → 18.8**, flat across a 7× range. So the panel does not say
+  "the oracle disagrees at the top" — it says the residual is second order with coefficient ≈ 17,
+  and the measurement is primary while the oracle is an overlay with a printed validity.
+- **The sweep's cost is set by its per-point run length, and that is NOT what limits accuracy** —
+  40 cycles capped at 24 000 steps costs 149 060 steps / 3.57 s and 12 cycles capped at 6 000 costs
+  **44 710 steps / 0.97 s**, with the *same* median oracle error (1.51 %) and max (5.53 % vs
+  5.47 %). Shipped: 12 points log-spaced over 110 → 1760 Hz, 12 cycles, 6 000-step cap, two runs per
+  point (loaded + unloaded). That is batch 15's sweep budget almost exactly (47 845 steps / 1.4 s).
+- **The coupled `K` guard is untouched by the load** — measured ceilings bare vs reactive are
+  identical to the digit at N = 40 / 50 / 100 / 160: **8563.1 / 10715.7 / 21478.5 / 34393.8**, which
+  are batch 15's recorded numbers. `StringBodyBridge` takes `beta_b` from the *bare* body, so
+  `K_MAX = 19000` and the fixed-N reasoning carry over verbatim.
+- **Param hygiene.** Three new sliders. **`radiation_R`** is *re-ranged* from radbody's `[0, 300]`
+  to `[0, 20000]` — its `index.html` home is radbody's range, so it must reset in
+  `MODEL_RANGES._default` or an `airload → radbody` switch renders a 44× load: the leak family
+  (batches 2/3/7/8/12/15), and this is its worst instance yet because both models *accept* the
+  param. **`air_corner`** (Hz, `[0, 3000]`, default 1091.8) is distinctive; `0` is the batch-15
+  anchor and is self-documenting on the slider. **`radiation_weight`** (`[0.005, 1]`, default 0.05)
+  is distinctive. Reuses `bridge_stiffness` / `sigma_body` / `distance` / `amplitude` /
+  `pluck_position` / `lambda` / `N` / `audio_duration` from radbody's ranges.
+- **HONESTY, and it is a different one from batch 15's.** (a) The audio is `AirRadiation`'s
+  **compact** read-out — batch 15's path verbatim, which is what makes the anchor bit-identical —
+  while the load's own far field is the finite sphere's, low-passed by a further `1/(1 + jka)`; the
+  two differ by up to 14 % in `Re Z` over this band and only the sphere's balances the booked
+  channel exactly (`test_far_field_power_balances_the_booked_radiated_power` in
+  `tests/test_radiation.py` pins that, so this batch cites it rather than re-deriving it).
+  (b) `radiation_weight` scales the
+  read-out, so **the audio level moves with a slider that is not a volume control** — and not even
+  monotonically (peak 0.56 / 0.96 / 0.33 Pa at weight 0.02 / 0.05 / 0.2, peaking at the impedance
+  match). The readout prints the peak so "quieter" does not read as physics. (c) `R` and
+  `air_corner` are exposed as **independent effective coefficients**, so most of the plane is not
+  any sphere; the readout prints the equivalent radius implied by each (`a_R = √(ρ₀c₀/4πR)`,
+  `a_τ = c₀/2πf_c`) and whether they agree, rather than forbidding the combination.
+
 ### Later batches (rough map — not firm)
 
 - **Body / radiation** — the modal body + radiation read-out is **batch 12**; `StringPlateBridge`
   (plate #5/#5b as a *distributed* body — the cymbal you watch ring) is **batch 13**; the radiation
   **load** / back-reaction (`RadiatedBody`, the booked `∫P_rad` channel) is **batch 15** (above),
   which closes the family. Beyond it the core itself would have to grow: frequency-dependent
-  `R(ω)`, or a distributed/3-D air box (HANDOFF §12H).
+  `R(ω)`, or a distributed/3-D air box (HANDOFF §12H). *Both since grew — and the first of them is
+  **batch 17** (above): `RationalAirLoad`/`ReactiveRadiatedBody` as `airload`. The air box is still
+  unsurfaced and is the next candidate, not a resumption of this map.*
 - **Wind** — the reed is **batch 10** (above); the wind leg closes with it.
 - **Excited strings** — the jawari landed in batch 8 above; the bow in batch 2; **fret buzz / the flat
   rail is batch 11** (above); the tanpura **cotton thread (juari)** is **batch 14** (above). The
@@ -2371,6 +2514,12 @@ real-time C++/Rust port,
 HANDOFF §9's literal next phase), or a §12 high-leverage thread (port-Hamiltonian coupling,
 differentiable models, modal synthesis from measured IRs/FEM). **Don't infer a batch 17 from this
 document — if a new viewer batch is wanted it needs a new model or a new capability first.**
+
+*Amended 2026-08-10: that condition was MET, not bypassed. The `R(ω)` fork arm delivered a new core
+model class, and **batch 17 (above) surfaces it** — so the rule stands and this is what satisfying
+it looks like. The same rule still governs what comes after: the 3-D air box is the one remaining
+built-but-unshown core family, and it needs a **new frontend capability** (a 3-D field type) before
+it is a batch, which is exactly the bar this sentence sets.*
 
 ## Tests — `tests/test_web_backend.py` (web wrapper, not core; keep core count stable)
 
