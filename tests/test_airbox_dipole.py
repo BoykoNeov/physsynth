@@ -120,10 +120,16 @@ def _refactor(inst, scale):
 
 
 def _uncut(room):
-    """Drop every cut, turning a suspended plate into the **phantom** — see the headline test."""
+    """Drop every cut, turning a suspended plate into the **phantom** — see the headline test.
+
+    Asserts the room really is uncut afterwards: if the cut ever grows a fourth piece of state this
+    helper stops uncutting, and the headline test would silently compare the dipole to itself and
+    pass trivially.
+    """
     room._cut_mask = [None, None, None]
     room._cut_index = [None, None, None]
     room._cuts = []
+    assert room.cut_faces == 0
     return room
 
 

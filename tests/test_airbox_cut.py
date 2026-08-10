@@ -142,7 +142,10 @@ def test_the_sub_room_lengths_sum_to_the_room(plane, index):
     lo = (index + 0.5) * box.h
     hi = (box.N[axis] - index - 0.5) * box.h
     assert lo + hi == pytest.approx(box.L_actual[axis], rel=1e-15)
-    assert lo != box.L_actual[axis] / 2 or box.N[axis] == 2 * index + 1
+    # ... and neither side is the room's own grid restricted: a half cell shifts BOTH ends, so
+    # neither sub-room length is a whole number of cells.
+    assert not float(lo / box.h).is_integer()
+    assert not float(hi / box.h).is_integer()
 
 
 # -- what a cut does to sound -------------------------------------------------------------

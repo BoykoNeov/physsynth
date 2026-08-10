@@ -2582,18 +2582,28 @@ class RoomSuspendedPlate:
       refinement (measured ``t50`` ratios 5.2, 19.3, 40.8 at 1x/2x/3x), because a transparent
       doublet at separation ``h`` has moment proportional to ``h``. There is no grid on which the
       source alone is a coarse version of the object.
-    * **Unbaffling is not a factor — it changes sign.** Under prescribed uniform motion the ratio of
-      radiation resistances dipole/baffled is far below 1 at low ``ka`` and crosses 1 by mid-band. A
-      ratio that *crosses* 1 cannot be reproduced by any constant, and therefore not by any
-      ``R(omega)`` fitted to the baffled case — the same structural argument as batch 2's delayed
-      echo and batch 3's acoustic short circuit, a third time.
-    * **It has a direction, and nothing else in this repo does.** The two-sided plate's far field is
-      a ``cos theta`` dipole with a deep null in the plate's own plane, against a baffled plate with
-      no null anywhere; every lumped one-port here (``AirRadiation``, ``RadiatedBody``,
+    * **Unbaffling is not a factor — it changes sign.** Under prescribed uniform motion in a
+      windowed free field the ratio of radiation resistances dipole/baffled measures 0.278, 0.569,
+      1.339, 2.257, 2.314, 1.965 at ``ka = 0.8 .. 2.8`` — it **crosses 1**, and a ratio that crosses
+      1 cannot be reproduced by any constant, hence not by any ``R(omega)`` fitted to the baffled
+      case. That is the same structural argument as batch 2's delayed echo and batch 3's acoustic
+      short circuit, a third time. The *crossing* is the claim: under air-grid refinement the
+      baffled arm converges smoothly toward its plane-wave asymptote while the dipole arm tracks
+      :attr:`~InteriorSurfacePort.blocked_area` instead, so its magnitude does not converge — only
+      the ratio's sign relative to 1 does.
+    * **It has a direction, and nothing else in this repo does.** Windowed free field, normalized
+      peak ``|p|`` from on-axis to in-plane: 1.000, 0.928, 0.786, 0.565, 0.347, 0.164, **0.012** —
+      an 85x null in the plate's own plane — against a baffled arc that only reaches 0.530,
+      with no null anywhere. Every lumped one-port here (``AirRadiation``, ``RadiatedBody``,
       ``RationalAirLoad``, ``RoomPort``) is a monopole with no angular dependence at all.
 
     The last two are ``scripts/diagnose_airbox_dipole.py``'s, not the suite's — see
-    :attr:`radiated_energy` on why a radiation figure needs a prescribed-velocity rig.
+    :attr:`radiated_energy` on why a radiation figure needs a prescribed-velocity rig. **Do not read
+    the first bullet against the ``t50`` numbers above and conclude they disagree.** They point
+    opposite ways and both are right: ``t50`` counts the reactive near field as though it had left,
+    so a free plate's piston sheds its energy ~20x *faster* suspended than baffled while
+    **radiating** far less at that same low ``ka``. That pair is exactly why neither a decay time
+    nor :attr:`radiated_energy` ships as a radiation measure.
 
     **The scheme**, per step, in this order (``pbar_free`` must be read from the stored
     ``u^{n+1/2}`` **before** the room advances — batch 2's contract, unchanged)::
