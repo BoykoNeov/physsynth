@@ -2596,6 +2596,24 @@ recorded because the wrong version was one edit from shipping:
   the best under the right one** — its cancellation factor is 3.6e5, two orders above the others.
   *Choosing "relative" over "absolute" is not the decision; choosing the scale the error is
   generated at is. A cancelling sum has no meaningful relative tolerance against itself.*
+- **CI green on 2026-08-10 after 20 red runs — and the first quiet-machine profile of this suite
+  says the web backend is NOT its bottleneck.** Adding `--durations=50` to CI cost nothing and
+  inverted the ranking a contended local run had given: the top is `test_geometric_energy`
+  (281 s), then the *module fixture setup* of `test_geometric_whirl` (252 s) and
+  `test_geometric_phantom` (217 s) — batch 17's most expensive test is 83 s, sixth. And the shape
+  outranks the ranking: whirl and phantom are `xdist_group`-**pinned**, so ~720 s and ~425 s each
+  run on a **single worker** against a ~1400 s wall. Two modules are the critical path. Checked
+  before treating it as reclaimable: their fixtures build 11 runs with **measured zero overlap**,
+  so the sharing is already maximal and the cost is the physics.
+- **The suite got 9.0 % faster and the honest part of that sentence is how hard it was to say.**
+  Memoising identical simulations at the `_sim` seam (50 calls → 10 runs, reproducibly) plus
+  splitting the 4-simulation fret test took the full suite 1501.9 s → 1366.1 s; the `-m "not slow"`
+  lane runs 1411 of 1476 in 725.0 s (**1.90×**). But **GitHub's runner class varies ~1.6×**: the
+  *identical untouched* whirl fixture read **252.05 / 252.09 / 158.50 / 252.76 s** across four
+  consecutive runs, and a 15:56 total sat between two 22:46s purely on hardware. The 9 % is
+  quotable **only** because its two runs read 252.05 and 252.09 on that reference. *A wall-clock is
+  not a measurement until it is normalised against something in the same run that did not change —
+  which is the airbox lesson above, one more time, in a costume that looks like a stopwatch.*
 
 ### Later batches (rough map — not firm)
 
