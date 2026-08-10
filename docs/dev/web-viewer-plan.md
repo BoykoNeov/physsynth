@@ -2619,8 +2619,19 @@ recorded because the wrong version was one edit from shipping:
 
 **Built & browser-verified.** All-wrapper (`physsynth/core` untouched, core test count unchanged,
 the core-dep allowlist guard green — `airbox` is a new *core* import for the web tier but adds no
-third-party dependency, and the guard measures the `sys.modules` delta); **13 web tests**, ruff
-clean repo-wide, both new headless cases added. Shipped defaults, measured through the payload:
+third-party dependency, and the guard measures the `sys.modules` delta); **13 web tests** (372 in
+the web file, **1489 in the suite** — +13 and all of them in `test_web_backend.py`, so the delta
+*is* the batch), ruff clean repo-wide.
+
+**The two headless cases are ADDED but were NOT run by the script**, and the build record says so
+rather than implying otherwise. `scripts/verify_web_headless.py` launches its own Chrome on the
+DevTools port and could not reach that endpoint while an already-running Chrome held the browser —
+this document's own leftover-Chrome trap (b16), one costume further. What *was* verified, in a live
+browser over CDP, is the same ground the two cases cover: both deep-links render "ok", the slice
+panes paint, `domain=absorbing` reaches the backend as `walls` **and the ζ slider is built AND
+reachable** (`offsetParent !== null`, value 3 — the b15/b17 invisible-control check, passed), and
+the absorbing field max drops to 5.41e-2 Pa against rigid's 1.14e-1. *The script's own pass/fail
+path for these two names remains unexercised; running it needs a machine with no competing Chrome.* Shipped defaults, measured through the payload:
 the cone reads **46 cells, measured 46, MATCH**, against a Euclidean arrival of **52.8 steps** and a
 physical-Manhattan one of **88.5** — the claim beats both, and it is an integer. Cross-ledger
 residual **6.89e-18**, scene drift **2.49e-14**, air holding at most **2.76e-2 %** of the scene.
