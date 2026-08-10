@@ -17,7 +17,8 @@
 - Section 4 is the math you implement from.
 - Section 6 is the test suite — build it *before* expanding features.
 - Section 10 is the very first thing to build. Start there.
-- Section 11 lists the few decisions still genuinely open. Surface them to the human; don't guess silently.
+- Section 11 is a **decision record** — its five items are all closed (2026-08-10). Read it before
+  re-opening any of them. New questions still go to the human rather than being guessed silently.
 
 ---
 
@@ -111,7 +112,7 @@ never the reverse. This keeps the physics portable to C++/Rust later without re-
   case's rather than scaling it, and a far-field **direction** where every lumped tier is a monopole.
 - **Engine**: owns the timestep loop, parameter smoothing, and (eventually) the audio callback.
   Today `engine.simulate()` drives exactly one resonator; polyphony needs it to drive a *scene* of N,
-  some of which take many excitations internally — see §11.1 for which models are which.
+  some of which take many excitations internally — see §11.3a for which models are which.
 
 ### 3.3 Real-time safety (for the later native port — note now, enforce later)
 
@@ -309,7 +310,7 @@ lesson: a bound measured where the effect is hidden is worse than no bound).
 - **Parameter mapping.** Raw physics (Young's modulus, tension, mode damping) is not musician-friendly.
   Budget real work for mapping ugly physical params to a few intuitive macros, with smoothing.
 - **CPU budget x polyphony.** A single FDTD plate can saturate a core. *Which* models are polyphonic
-  is settled in §11.1 (field models per instance, strings per voice); what remains here is the
+  is settled in §11.3a (field models per instance, strings per voice); what remains here is the
   budget — voice counts and stealing — which is a real-time-stage concern, not one for now.
 - **Real-time safety.** No alloc/lock/block in the callback. (Real-time stage.)
 - **Visualization/audio thread coordination.** Lock-free snapshot only. (Real-time stage.)
@@ -401,7 +402,7 @@ because the *reasoning* is the reusable part — and because those three had dri
    proposed.** Explicit at `lambda = 1` for the ideal string (exact, dispersionless); the implicit
    `theta`-scheme arrives with the stiff string and carries every stiff and nonlinear model after it
    (`core/string_stiff.py`, `core/plate.py`).
-3. **Which models are polyphonic** — answered structurally in §11.1; the CPU-budget half stays
+3. **Which models are polyphonic** — answered structurally in §11.3a; the CPU-budget half stays
    deferred to Phase 5.
 4. **First interactive visualization target** — **the web view, sooner.** Notebook-only plots were
    skipped in favour of the Phase-3.5 interactive viewer (`web/`, `physsynth/viz/`), which ran to 16
@@ -409,7 +410,11 @@ because the *reasoning* is the reusable part — and because those three had dri
 5. **Test tolerances** — **the existing bars stand; what was missing was the reason.** The policy is
    now written down in §6.1, including why the acceptance bar must *not* be tightened.
 
-### 11.1 Polyphony (#3) — per-instance vs per-voice
+### 11.3a Polyphony — per-instance vs per-voice
+
+*(Numbered `11.3a`, not `11.1`: `§11.N` already means "decision item N" in four plan docs, so a
+subsection expanding item #3 has to say so. Same reason §6.1 is safe — §6's tests are cited as
+"acceptance criterion N", never as `§6.N`.)*
 
 "Which models are polyphonic" is two questions, and only one of them needs an engine that does not
 exist yet.

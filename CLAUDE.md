@@ -48,6 +48,6 @@ Acceptance criteria are in §10.
 
 HANDOFF.md §11's five decisions are settled and kept there as a decision record: Python; explicit
 *and* implicit (θ-scheme from the stiff string on); polyphony is per-instance for field models and
-per-voice for strings (§11.1, budget half deferred to Phase 5); the web viewer was the first viz
+per-voice for strings (§11.3a, budget half deferred to Phase 5); the web viewer was the first viz
 target; tolerances stand as they are (§6.1). New open questions go to the human as before — but do
 not re-open these five.
