@@ -2556,6 +2556,20 @@ recorded because the wrong version was one edit from shipping:
   prints that fraction rather than hiding it. The measurement is primary everywhere; the *oracle* is
   what has a validity band, and saying which points are inside it is the honest version of an
   overlay that visibly diverges at the top.
+- **THIS BATCH SHIPPED INTO A TREE WHOSE CI WAS ALREADY RED, AND NOBODY NOTICED FOR 18 RUNS.**
+  Discovered *after* the close-out, on 2026-08-10: the last green run is `31325446976`
+  (air-box batch 4's `SurfacePort` feature commit) and every push since — through both air-box
+  close-outs, the HANDOFF §11 decisions and all five batch-17 commits — has been `failure`. The
+  seven failing tests are **all pre-existing air-box** (six
+  `test_airbox_dipole.py::test_surface_port_is_bit_identical_across_the_shared_spreading_refactor`
+  parametrisations and `test_airbox_surface.py::…_even_mode_is_silent_…[mode1]`); batch 17's own
+  357 web tests are green on Linux, and the one thing the failure list *does* say about this batch
+  is that its `…_bit_identically` anchor is the safe kind (bit-identity between two runs in the same
+  process, not against literals captured on one machine). **Do not blame `-qq` for the blindness.**
+  CI passes `-q` on top of `addopts = "-q"`, which suppresses the `N passed` summary — but the
+  `FAILED …` lines were printed in every one of those runs. The suite was not silent; it was
+  *unread*. **A 24-minute suite whose verdict nobody opens is worse than no suite: it converts
+  "tests exist and pass" into an assumption while charging full price for it.**
 
 ### Later batches (rough map — not firm)
 
