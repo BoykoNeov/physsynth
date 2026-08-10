@@ -584,8 +584,14 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   boundaries, since a locally-reacting impedance wall is matched at normal incidence only;
   **scattering objects and non-rectangular rooms** (staircasing in 3-D — the membrane batch's lesson
   again); a plate **not aligned with a grid plane**, and one of finite thickness; `Membrane` (#4) and
-  the von Kármán plate (#6) as suspended surfaces (the port needs no change for either — neither is
-  wired up); **moving ports**; and **viscothermal air absorption**.
+  the von Kármán plate (#6) as suspended surfaces (~~the port needs no change for either~~ — **that
+  half is measured wrong**: `_check_footprint` builds its required set as a bounding **box**, so a
+  *circular* membrane is refused at every resolution, 20/48/40 unfed air nodes at `N = 40/56/72`, on
+  both tiers. A rectangular one is accepted. The fix is one localized criterion — row-wise instead of
+  bbox, validated to accept the disk at `N = 24…96` while leaving rectangles and the comb refusal
+  bit-unchanged — and it is planned as air-box **batch 5** in `docs/dev/air-box-membrane-plan.md`,
+  where #4 is scoped and #6 deferred to batch 6 with its extension point named); **moving ports**;
+  and **viscothermal air absorption**.
 - **3D radiation modeling** with directivity, plus HRTF / ambisonics output — the box produces a
   pressure field; turning that into a binaural or B-format signal is a separate, non-physics batch.
 - **Room coupling:** place the modeled instrument inside a modeled acoustic space. Done for the
