@@ -664,6 +664,15 @@ def test_surface_port_is_unchanged_across_the_shared_spreading_refactor(case):
     on every run while passing on the machine that wrote it — the worst possible split, because the
     green side is the side nobody ships from.
 
+    **``p`` is toleranced against the FIELD's scale, not its own — because it is a cancelling sum.**
+    ``sum(p)`` is ~1e2 out of ``sum|p|`` ~1e6, a cancellation factor of 650–360000 across these six
+    cases, so its roundoff is set by the *terms* and reading it as a fraction of the *result*
+    inflates it by exactly that factor. Measured: the same three Linux deviations are 8.0e-11,
+    3.3e-10 and 1.9e-10 relative to ``sum(p)`` — and 3.8e-14, 9.1e-16 and 1.1e-13 relative to
+    ``sum|p|``, i.e. plain last-ULP like everything else here. ``nearest`` is the worst offender
+    under the wrong denominator and the *best* under the right one, which is the tell. A tolerance
+    is only meaningful next to the scale the error is actually generated at.
+
     **Say what the tolerance no longer catches:** a pure summation *reordering* of the stepping loop
     can move ``radiated``/``p`` by less than 1e-11 and would now pass. What still carries that claim
     is the structure, asserted exactly: ``node_count`` and ``nnz_T`` are integers, and the
@@ -689,7 +698,8 @@ def test_surface_port_is_unchanged_across_the_shared_spreading_refactor(case):
         inst.room.step()
     # 200 steps of accumulation, so one decade looser than the construction-time digests.
     assert inst.radiated_energy == pytest.approx(want["radiated"], rel=1e-11)
-    assert float(inst.room.p.sum()) == pytest.approx(want["p"], rel=1e-11)
+    # ... and `p` against the field's own scale, since the sum cancels by up to 3.6e5 (see above).
+    assert abs(float(inst.room.p.sum()) - want["p"]) <= 1e-11 * float(np.abs(inst.room.p).sum())
 
 
 # -- refusals ---------------------------------------------------------------------------------

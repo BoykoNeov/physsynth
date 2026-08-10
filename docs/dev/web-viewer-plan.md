@@ -2586,6 +2586,16 @@ recorded because the wrong version was one edit from shipping:
   moves — measured, the `(1,1)` control now reads exactly `1.000000`, which is a *better* statement
   of "this mode has a monopole" than the old `3.16` was. **A tolerance that is not scale-free is a
   golden value with extra steps.**
+- **And the first cure was still wrong for one of the six, for the third instance of the same
+  mistake.** `rel=1e-11` on `radiated` held, but three `p` cases stayed red at 8.0e-11 / 3.3e-10 /
+  1.9e-10 relative. `room.p.sum()` is a **cancelling** sum — `Σp ~ 1e2` out of `Σ|p| ~ 1e6`, a
+  cancellation factor of **650 to 362 000** across the six cases — so its roundoff is set by the
+  *terms* and reading it as a fraction of the *result* inflates it by exactly that factor. Against
+  `Σ|p|` the same three deviations are **3.8e-14, 9.1e-16, 1.1e-13**: plain last-ULP, like
+  everything else. The tell is that **`nearest` is the worst case under the wrong denominator and
+  the best under the right one** — its cancellation factor is 3.6e5, two orders above the others.
+  *Choosing "relative" over "absolute" is not the decision; choosing the scale the error is
+  generated at is. A cancelling sum has no meaningful relative tolerance against itself.*
 
 ### Later batches (rough map — not firm)
 
