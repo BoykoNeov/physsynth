@@ -390,6 +390,15 @@ def fig_t50():
         ratios = [(r, p / d) for r, d, _, p in rows if p is not None and d]
         if ratios:
             ax.plot([r for r, _ in ratios], [v for _, v in ratios], "o-", label=label)
+            continue
+        # A series with no finite ratio is the STRONGER result, not a missing one: say so on the
+        # figure rather than letting it vanish into the legend's absence.
+        ax.annotate(
+            f"{label}: the phantom never reaches t50 at all\n(off the top of this axis at every "
+            "refinement)",
+            xy=(0.5, 0.06), xycoords="axes fraction", ha="center", fontsize=8, color="C1",
+            bbox={"boxstyle": "round", "fc": "0.95", "ec": "C1"},
+        )
     ax.set_xlabel("air-grid refinement (fs and room cells scale together)")
     ax.set_ylabel("t50 phantom / t50 dipole")
     ax.set_title("drop the cut and the source DIVERGES from the object")
