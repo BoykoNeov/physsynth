@@ -28,6 +28,9 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
   against closed-form physics: energy conservation (lossless run drifts < 1e-10), passivity (lossy
   run decreases monotonically), modal frequencies vs analytic oracle, convergence order. These tests
   exist and pass before any new model is added.
+- **Do not tighten the `1e-10` acceptance bar.** The gap to the ~`1e-15` typically observed is
+  deliberate headroom: this harness is the acceptance contract for the eventual native port, which
+  must reproduce these numbers under a different compiler and BLAS. Tiers and rationale in §6.1.
 - **Energy report is mandatory** on every resonator — it is the primary bug detector.
 - When `E^n` drifts in a lossless run, suspect the boundary handling (summation-by-parts) first.
 - Assert `lambda = c*k/h <= 1` for explicit schemes; reject construction otherwise. Tune toward
@@ -41,7 +44,10 @@ The first deliverable is the **ideal-string solver + validation harness** (HANDO
 deliverable is the string *plus the rig that measures its deviation from theory* — not just a string.
 Acceptance criteria are in §10.
 
-## Open decisions — ask the human, don't silently guess
+## Open decisions — all closed (2026-08-10)
 
-Python vs Julia; explicit vs implicit reference solver; which models are polyphonic; first
-interactive-viz target; test tolerances. See HANDOFF.md §11.
+HANDOFF.md §11's five decisions are settled and kept there as a decision record: Python; explicit
+*and* implicit (θ-scheme from the stiff string on); polyphony is per-instance for field models and
+per-voice for strings (§11.1, budget half deferred to Phase 5); the web viewer was the first viz
+target; tolerances stand as they are (§6.1). New open questions go to the human as before — but do
+not re-open these five.

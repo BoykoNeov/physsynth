@@ -74,8 +74,9 @@ f1=100 Hz):
   range at λ<1* — where a coefficient/indexing bug hides while staying invisible at λ=1. Anchored to
   physics by also asserting the λ=1 sweep matches the *continuum* (not just the recurrence-derived
   oracle) and that the λ<1 phase velocity droops monotonically below c.
-- **Tolerances provisional** (§11.5 still open): `ORACLE_RTOL=1e-4`, `CONTINUUM_RTOL=1e-7`, set a few
-  × above the observed clean residuals.
+- **Tolerances** — `ORACLE_RTOL=1e-4`, `CONTINUUM_RTOL=1e-7`, set a few × above the observed clean
+  residuals. Called "provisional" here pending §11.5; **§11.5 closed 2026-08-10 and they stand** —
+  the margin above observed is deliberate (it is the native port's headroom, HANDOFF §6.1).
 
 **Next (Phase 2):** stiff string — add `-κ²·u_xxxx` (biharmonic), stretched partials
 `fₙ = n·f₁·√(1+B·n²)`, tighter CFL. Scheme decision (HANDOFF §11.2): **go straight to implicit**

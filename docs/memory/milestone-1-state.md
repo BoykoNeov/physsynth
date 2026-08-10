@@ -5,6 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 54851fe8-37fb-409e-922c-6b9a1dc7f027
+  modified: 2026-08-10T07:23:38.320Z
 ---
 
 As of 2026-06-20, the project was initialized from HANDOFF.md and **Milestone 1 (§10) is
@@ -33,9 +34,10 @@ autonomously and disclosed): Python (settled by non-negotiable #3); **explicit**
 energy/modal/convergence/**dispersion** harness carries over; the stiff string's own dispersion
 `fₙ = n·f₁·√(1+B·n²)` makes the new dispersion curve a direct stretched-partials check.
 
-**Still genuinely the human's to set:** test tolerances (§11.5 — currently 1e-10 drift, ~1 cent;
-dispersion adds provisional ORACLE_RTOL=1e-4, CONTINUUM_RTOL=1e-7); which models are polyphonic
-(§11.3); first interactive-viz target (§11.4).
+**~~Still genuinely the human's to set~~ — ALL CLOSED 2026-08-10, see [[handoff-decisions-closed]].**
+(Was: test tolerances §11.5; polyphony §11.3; first interactive-viz target §11.4. The tolerance
+numbers quoted here — 1e-10 drift, ~1 cent, ORACLE_RTOL=1e-4, CONTINUUM_RTOL=1e-7 — all **stand**;
+the decision was that they are deliberate, not provisional.)
 
 **Language strategy (resolved 2026-06-20):** the human floated switching to Julia, then Rust/C++.
 Decided to **stay Python** for the research phase; the systems-language port is deferred to the

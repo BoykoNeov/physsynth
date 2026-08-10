@@ -110,6 +110,8 @@ never the reverse. This keeps the physics portable to C++/Rust later without re-
   a path through it even at rest — which buys a radiation resistance that *crosses* the baffled
   case's rather than scaling it, and a far-field **direction** where every lumped tier is a monopole.
 - **Engine**: owns the timestep loop, parameter smoothing, and (eventually) the audio callback.
+  Today `engine.simulate()` drives exactly one resonator; polyphony needs it to drive a *scene* of N,
+  some of which take many excitations internally — see §11.1 for which models are which.
 
 ### 3.3 Real-time safety (for the later native port — note now, enforce later)
 
@@ -263,6 +265,28 @@ These become the CI suite. Each is a numeric assertion against closed-form physi
 
 **Rule:** the energy report (`resonator.energy()`) and tests 1–4 must exist before model #2 is started.
 
+### 6.1 Tolerance policy — why the bounds look loose
+
+Closes §11 #5. Every numeric bound in the suite is chosen rather than defaulted, and most carry the
+observed value beside them (`CONSERVE_TOL = 1e-10  # observed ~1e-12`). There are three tiers, and
+they are not interchangeable.
+
+| Tier | Bound | What it is for |
+|---|---|---|
+| **1 — acceptance** | `1e-10` | The lossless energy-drift bar of test 1 above. The *same* for every resonator: `DRIFT_TOL` appears in ~15 test modules, several of them commenting "the same bar as every other resonator". |
+| **2 — machine-exact** | `1e-12` … `1e-15` | Quantities that are *exact* rather than approximate: a discrete mode that is an exact eigenvector, `radiated == injected`, a bit-identity between two code paths. Held to what the arithmetic can actually deliver. |
+| **3 — physical** | per test, in cents or % | Where the discrete model legitimately differs from a continuum oracle (staircased boundaries, dispersion, a nonlinear limit). No global number is possible; each bound is measured first, then justified in its own assertion message. |
+
+**The gap between tier 1's `1e-10` and the ~`1e-15` typically observed is deliberate headroom, not
+slack.** `docs/dev/portability-contract.md` makes this harness the acceptance contract for the
+eventual native port: the ported kernel is correct *iff* it reproduces these numbers under a
+different language, compiler and BLAS. Tightening the acceptance bar toward what this machine
+happens to observe would make the port fail for reasons that are not physics.
+
+⇒ **Do not tighten tier 1.** Tightening tier 2 is fine where the quantity really is exact — that is
+what the tier is for. Tier 3 is re-measured per configuration, never inherited (§12H batch 3's
+lesson: a bound measured where the effect is hidden is worse than no bound).
+
 ---
 
 ## 7. Visualization plan
@@ -284,8 +308,9 @@ These become the CI suite. Each is a numeric assertion against closed-form physi
   oversample around nonlinearities.
 - **Parameter mapping.** Raw physics (Young's modulus, tension, mode damping) is not musician-friendly.
   Budget real work for mapping ugly physical params to a few intuitive macros, with smoothing.
-- **CPU budget x polyphony.** A single FDTD plate can saturate a core. Decide which models are
-  polyphonic. (Matters at the real-time stage, not now.)
+- **CPU budget x polyphony.** A single FDTD plate can saturate a core. *Which* models are polyphonic
+  is settled in §11.1 (field models per instance, strings per voice); what remains here is the
+  budget — voice counts and stealing — which is a real-time-stage concern, not one for now.
 - **Real-time safety.** No alloc/lock/block in the callback. (Real-time stage.)
 - **Visualization/audio thread coordination.** Lock-free snapshot only. (Real-time stage.)
 - **Testing without ears.** Mitigated by §6 — keep it first-class.
@@ -362,16 +387,57 @@ HANDOFF.md
 
 ---
 
-## 11. Open decisions — surface to the human, do not silently guess
+## 11. Open decisions — CLOSED (kept as a decision record)
 
-1. **Python vs Julia** for the prototype. (Default: Python, unless the human prefers Julia.)
-2. **Explicit vs implicit reference solver.** Explicit at `lambda = 1` is exact and simplest to start;
-   implicit gives unconditional stability and better stiff-string accuracy. Recommendation: start
-   explicit for milestone 1, add an implicit path at the stiff-string stage.
-3. **Which models are polyphonic** (affects the engine design eventually).
-4. **First interactive visualization target:** notebook plots only for now, or jump to an interactive
-   web view sooner?
-5. **Tuning of test tolerances** (cents thresholds, energy-drift bound) with the human's fidelity bar.
+**All five are closed as of 2026-08-10.** Three were answered by what the project actually did; #3
+and #5 were decided by the human at the post-Phase-D fork. This section is kept rather than deleted
+because the *reasoning* is the reusable part — and because those three had drifted into being
+"open" long after practice had settled them.
+
+1. **Python vs Julia** — **Python.** Settled at milestone 1, never revisited. The port to a systems
+   language is a Phase-5 decision (C++/JUCE vs Rust, deliberately not made now); until then
+   `docs/dev/portability-contract.md` is what keeps `core/` portable.
+2. **Explicit vs implicit reference solver** — **both, exactly as this item's own recommendation
+   proposed.** Explicit at `lambda = 1` for the ideal string (exact, dispersionless); the implicit
+   `theta`-scheme arrives with the stiff string and carries every stiff and nonlinear model after it
+   (`core/string_stiff.py`, `core/plate.py`).
+3. **Which models are polyphonic** — answered structurally in §11.1; the CPU-budget half stays
+   deferred to Phase 5.
+4. **First interactive visualization target** — **the web view, sooner.** Notebook-only plots were
+   skipped in favour of the Phase-3.5 interactive viewer (`web/`, `physsynth/viz/`), which ran to 16
+   batches and is what surfaced most of the models.
+5. **Test tolerances** — **the existing bars stand; what was missing was the reason.** The policy is
+   now written down in §6.1, including why the acceptance bar must *not* be tightened.
+
+### 11.1 Polyphony (#3) — per-instance vs per-voice
+
+"Which models are polyphonic" is two questions, and only one of them needs an engine that does not
+exist yet.
+
+**The structural half — physics, not CPU — is answered:**
+
+- **Field models are polyphonic *per instance*.** A membrane (#4), a plate (#5/#5b/#6) or the air box
+  (§12H) carries arbitrarily many simultaneous excitations on **one** instance: the excitations
+  superpose on a single state array and the DOF count does not grow with the note count. Striking a
+  drum twice is not two voices, it is one drum with two strikes. Already wired this way: `AirBox`
+  takes N disjoint ports (§12H batch 2) and `SurfacePort` couples an entire node *set* (batch 3).
+  Not yet wired: more than one simultaneous mallet on one membrane — `MalletMembrane` is a single
+  mallet. That is a gap in the *exciter* layer, not a limit of the model.
+- **1-D string models are polyphonic *per voice*.** Each sounding note is its own instance with its
+  own state, and cost grows linearly with the voice count. Already wired this way:
+  `SympatheticStrings` is N `IdealString` objects sharing one bridge point on a common body.
+
+⇒ The answer to "which models are polyphonic" is **all of them, by two different mechanisms**, and
+the engine must eventually express both: a scene of N resonator instances, some of which internally
+accept many excitations. Note that the scene half already exists ad hoc — `AirBox` with N ports,
+`SympatheticStrings` — while `engine.simulate()` still drives exactly one resonator.
+
+**The budget half stays deferred to Phase 5**, which is what §8 already says: voice counts,
+per-method budgets and voice stealing are real-time concerns and there is no real-time engine yet.
+Measuring cost-per-second in offline NumPy would not transfer to a C++/Rust real-time budget — at
+best the *relative* ranking across models would survive, and this project's own repeated lesson is
+that a ratio survives a change of conditions where a magnitude does not (§12H batch 2). Pick it up
+with §12F's voice-management bullet when Phase 5 starts.
 
 ---
 

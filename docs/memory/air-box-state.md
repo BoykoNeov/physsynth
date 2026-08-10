@@ -1,11 +1,11 @@
 ---
 name: air-box-state
-description: 3-D FDTD air box (HANDOFF §12H) batches 1, 2 AND 3 SHIPPED & GREEN (docs closed 2026-08-09) — the DISTRIBUTED air tier above the lumped port; the reward and the price both live at λ=1/√3; batch 2's port is a Thevenin source solved in ONE division, and the ROOM contaminated the port's own measured size by more than the effect; batch 3 is the DISTRIBUTED area coupling, whose finding is that CONSERVATION IS BLIND to a wrong coupling constant; batch 4 is NAMED (interior two-sided dipole plate) and not started
+description: 3-D FDTD air box (HANDOFF §12H) batches 1, 2, 3 AND 4 SHIPPED & GREEN (batch 4 docs closed 2026-08-10) — the DISTRIBUTED air tier above the lumped port; the reward and the price both live at λ=1/√3; batch 2's port is a Thevenin source solved in ONE division, and the ROOM contaminated the port's own measured size by more than the effect; batch 3 is the DISTRIBUTED area coupling, whose finding is that CONSERVATION IS BLIND to a wrong coupling constant; **batch 4 = the plate becomes an OBJECT (interior two-sided dipole) — the cut is AirBox's only new machinery, the MONEY TEST is not sufficient either (only the coupled residual catches both halves of a wrong 2), and FOUR MORE plan claims died on measurement including its own ≤2 pass criterion**
 metadata: 
   node_type: memory
   type: project
   originSessionId: 8506c3d9-c98e-4229-87cf-6160a3fd6c48
-  modified: 2026-08-09T20:06:45.396Z
+  modified: 2026-08-10T04:11:39.214Z
 ---
 
 **The distributed air node — `physsynth/core/airbox.py` `AirBox`.** The human's pick at the
@@ -285,7 +285,128 @@ batch end: HANDOFF §12H (three batches, batch 4 named), README's model catalogu
 block + new §10, and `tests/test_airbox_port.py`'s header — which had gone on repeating the
 "leaks ~2%" wording that §6.1 disproved, in the very file whose job is that trap.
 
-**BATCH 4 IS NAMED: the interior two-sided (dipole) plate** — a plate hanging *in* the room radiating
-from both faces, an internal moving **boundary** rather than a source, and therefore a genuinely
-different object from anything shipped. Deferred beyond it, unchanged: PML / higher-order absorbing
-boundaries, scattering objects and non-rectangular rooms, moving ports, viscothermal absorption.
+---
+
+**BATCH 4 — the plate stops being a SOURCE and becomes an OBJECT — COMPLETE & SHIPPED
+(2026-08-10).** Plan `docs/dev/air-box-dipole-plan.md`, whose **§10 is the post-build record — read
+it before trusting any number in that plan's body.** `AirBox.add_cut`/`cut_faces`, a private
+`_PatchPort` base, `InteriorSurfacePort`, `RoomSuspendedPlate`, all in `airbox.py`; **zero edits** to
+`plate.py`, `connection.py`, `body.py`, `radiation.py`, `bore.py`. Full suite at batch end:
+**1453 green, exit 0** (was 1355); the batch adds **98** = exactly `test_airbox_cut.py` (42) +
+`test_airbox_dipole.py` (56), so nothing anywhere else moved. Deferred beyond it, unchanged: PML /
+higher-order absorbing boundaries, scattering objects and non-rectangular rooms, a plate not aligned
+with a grid plane or of finite thickness, `Membrane`/#6 as suspended surfaces (the port needs **no
+change** for either — neither is wired up), moving ports, viscothermal absorption.
+
+**PROCESS SCAR, worth more than any number here: `git checkout -- <file>` to undo a small temporary
+edit DISCARDED the entire batch's core work.** It was replayable from the transcript and the golden
+pin proved the replay byte-faithful, but the right move is to revert the edit itself (or stash), and
+to commit a durable checkpoint before touching the file to test a deliberate break.
+
+**The plan's own §3 fear was wrong, and pleasantly.** It budgeted for new boundary machinery
+("replacing their momentum update with the plate's motion"). Measured: prescribing the face velocity
+and injecting a `−q/+q` pair on the two node planes straddling the plane are **the same arithmetic**,
+because `A_face·w_z = W` identically. ⇒ **`AirBox` needs exactly ONE new thing: the cut** (zeroing `u`
+on a face set, applied inside `_momentum` so `step()` and `set_state()` are both covered). Port
+protocol, weights and the `injected` ledger are batch 3's untouched. Batch 1's step ordering paying
+off a third time. The load is `2·TᵀRT` — same sparsity, same fill, still PSD, still folds into `splu`.
+
+**A free new machine-precision oracle came with the cut.** It lies on a FACE, half a cell past the
+last node, so a full cut splits the room into two **half-offset** sub-rooms of length `(m+½)h` and
+`(N−m−½)h` — summing to `L` exactly, no cell lost — whose exact modes are `cos(nπi/(m+½))`, **not**
+the room's own `cos(nπi/N)`. Measured 1.2e-14. Full cut isolates at exactly `0.000e+00`; a partial
+cut passes 2.2e-01 (the diffraction an unbaffled plate lives on). NB this validates the **cut
+primitive**, not the port — §6.3's rim refusal means a *port* can never seal the room.
+
+**THE METHODOLOGICAL FINDING, and it outranks the physics: the money test is NOT sufficient either.**
+Batch 3 established the conserved total is blind to a wrong `R_j` and crowned `radiated == injected`.
+Batch 4 has a coefficient batch 3 lacked (the **2**), and **each ledger is blind to a different way of
+getting it wrong**: `1×` inside the factorization ONLY → money test 1.5e-16 (blind), total 1.3e-4
+(caught); `1×` consistently → total 1.2e-15 (blind), money test 1.45× channel (caught). **Only the
+coupled residual catches both** — the achieved `u^{n+1}` put back into the PDE with the force taken
+from the ROOM's own post-closure pressure jump, at TWO timesteps. And `assert load == 2*one_sided` is
+a tautology; the 2 is earned differentially (`∂p̄_lo/∂q = −R_j`, `∂p̄_hi/∂q = +R_j`, same `R_j`,
+1.15e-16 rel, off-diagonal exactly `0.00e+00`).
+
+**Two observables TRIED AND REJECTED as radiation measures.** `radiated_energy` and `t50` both count
+the **reactive near field** as though it had left, and batch 4's channel is **50.9% negative
+increments** where batch 3's was 0.0% — a reservoir, not a drain. They disagreed about *direction* in
+the prototype. ⇒ radiation efficiency needs a **prescribed-velocity** rig (batch 3's even-mode test
+already wrote that rule for its own reason). Any **mode ranking is refused twice over**.
+
+**Design decisions not to re-derive:**
+- **The cut is ADDITIVE, and disjointness must cover cut FACES, not only pressure nodes.** A
+  single-slot cut lets a second plate silently un-block the first — it degrades to a pure `−q/+q`
+  source with every ledger green. Two ports can have disjoint NODES and overlapping CUTS (the node
+  sets live on different planes while the cuts share one), which is why this refusal is genuinely new.
+- **The cut is the SUPPORT OF `T`**, not the plate's footprint (clipping `T` is batch 3's refused
+  failure shape).
+- **The sign convention CANNOT be local like batch 3's** (an interior plane has no inward normal), so
+  `+x/+y/+z` it is. Refinement over the plan: the **consistent** flip (`∓q` order AND jump direction
+  together) is the invisible one — load matrix, solve, `pressure_jump` and `radiated_energy` all
+  BIT-IDENTICAL while the room's field is exactly inverted; flip only ONE and the conserved total
+  catches it. ⇒ the detector is the sign of the **ROOM's own** pressure at step 1, not the port's
+  `pressure_jump`. (The port's own jump inverts at step **8** here, not the plan's 7.)
+- Use the plate's **centered** velocity in the `n+½` face slot — forced, because the forward
+  difference is an **added mass** and would land in the guard's `G0`. Bounded by a `k`-only
+  refinement: **0.14%** across `λ = 0.52 → 0.065`.
+- The phantom (inject, don't cut) is **bit-identically two `AirBox.inject` monopoles** (`0.000e+00`).
+  `T = 0` → bare `Plate` bit-identically **even though the cut is still there** — the cut belongs to
+  the ROOM and the load to the PLATE.
+- `index` is a FACE index and its legal range is **`1 ≤ index ≤ N−2`** (the plan said `N−1`): both
+  straddling NODE planes must be interior or `R_j` differs between the sides. Consequence: an
+  interior patch can never touch any wall, so **no open-face refusal is needed** — provable, not an
+  omission.
+
+**IT RETIRES A PREDICTION OF BATCH 3'S — measured, and the docstring + plan §6.8 now say so.** The
+face cut does **not** make the load non-dissipative: it removes air inertia from the *room's* ledger,
+where it was never in the plate's `G0`, while the load stays ∝ `u^{n+1} − u^{n−1}` and enters `A`.
+Margin bit-identical, and it is **batch 3's own** `0.2061806714931906` / `0.2061840079056186`, not
+the plan's `0.2052…` — because the guard never saw either load.
+
+**FOUR MORE PLAN CLAIMS DIED ON MEASUREMENT — including the plan's own pass criterion. The
+five-for-five pattern from batch 3 holds: every one died because the prototype measured it where the
+effect was hidden.**
+1. **`ratio ≤ 2` is the WRONG pass criterion** — the very test §7.7 invented to catch its own
+   contaminated prototype. Windowed re-measurement: the **ratio** hits 2.31 (2.49 refined) while each
+   **arm** is fine — baffled 0.281→0.915 rising monotonically to its asymptote of 1, dipole topping
+   at 2.12–2.30. The ratio exceeds 2 because the baffled arm has not saturated, and a piston
+   overshoots its own asymptote near its first maximum. ⇒ the criterion belongs on **each arm,
+   asymptotically**; the baffled arm's textbook shape is what makes the dipole arm believable.
+2. **The dipole arm's MAGNITUDE does not converge, and the obstacle is why.** At `ka = 1.0` under air
+   refinement it reads 0.279, 0.231, **0.360**, 0.225 — tracking `blocked_area` (1.44, 1.36, **1.78**,
+   1.44), not `h` — while the baffled arm, using the SAME `T`, converges smoothly. Only the ratio's
+   sign against 1 is a claim.
+3. **§6.4's "±3% while the area moves 33%" is true of the FRACTION and false of everything else.**
+   Two probes disagree: `rad/E0` moves 1.03× while `t50` moves 1.45× (piston) / 2.75× (a (2,1) mode),
+   and the prescribed-velocity `R` agrees with the RATE. The fraction is the one observable that
+   cannot see the effect. (A mode's fraction saturates at 1.0000 — not the same as insensitive.)
+4. **The overshoot's denominator was wrong.** `blocked/plate` = 1.49…1.18 "trending to 1" is the
+   **free** branch only; the **supported** branch goes *below* 1 (1.513, 0.927, 0.925, 0.799) because
+   the clamped rim is not in `T`. Against the **LIVE** rectangle — the moving surface, the honest
+   denominator — it reads 2.690, 1.647, 1.644, 1.421 and does trend to 1.
+
+**The physics claims, as measured in the build:**
+1. **Directivity — survives everything.** `1.000, 0.928, 0.786, 0.565, 0.347, 0.164, 0.012` vs
+   `cos θ`: an **85× in-plane null**, against a baffled arc reaching only 0.530 with no null, and
+   lumped one-ports with none *possible*. Reported with **SNAPPED** radii and angles (0.0/14.3/30.3/
+   45.9/59.2/74.2/88.8 at r = 1.175–1.222 m) and with the baffled 90° probe flagged as sitting ON the
+   wall. **The phantom has the SAME pattern (in-plane 0.010) at 5.2× less** ⇒ directivity identifies
+   the dipole, the BLOCKAGE sets its strength; both tests are needed.
+2. **Unbaffling CROSSES 1** — 0.278, 0.569, 1.339, 2.257, 2.314, 1.965 over `ka = 0.8…2.8`, crossing
+   between 1.0 and 1.3. No constant, hence no `R(ω)`, reproduces a crossing.
+3. **The cut is un-omittable** — phantom/dipole `t50` 5.2 → 19.3 → **40.8**, i.e. it *diverges*; the
+   free piston's phantom never reaches `t50`. A doublet at separation `h` has moment ∝ `h` by
+   construction, so this is an **implementation** control (exactly what a clobbered cut produces),
+   not a claim about dipole sources in general.
+4. **`t50` and radiated power point OPPOSITE ways and both are right.** The suspended free piston
+   sheds energy ~20× FASTER than baffled (`dip/baf` 0.047/0.039/0.041) while RADIATING far less at
+   that `ka` — because `t50` counts the reactive near field as though it had left. That pair is the
+   proof that neither a decay time nor `radiated_energy` is a radiation measure, and it is why the
+   attribute's docstring leads with "the work done on the air — and about half comes back".
+
+**Files:** `physsynth/core/airbox.py`; `tests/test_airbox_cut.py`, `tests/test_airbox_dipole.py`;
+`tests/helpers.py::make_cut_room` / `make_suspended_plate` / `sub_room_mode`;
+`scripts/diagnose_airbox_dipole.py` (~7 min, ~1 GB peak, three figures). A golden-number test pins
+batch 3's `SurfacePort` **bit-identical** across the `_PatchPort` refactor, captured from the
+pre-refactor code — the only way to cash that claim once the old code is gone.

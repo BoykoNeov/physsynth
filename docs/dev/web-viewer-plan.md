@@ -2364,8 +2364,10 @@ is CLOSED** (verified 2026-07-27). There is no next batch to look up: every mode
 built is surfaced in the viewer, and the built-vs-shown gap Phase D existed to close is gone. What
 remains is a fork for the human, not a lookup — the plan-endorsed candidates are the two *core*
 growths named in the Body/radiation bullet above (frequency-dependent `R(ω)`, or a distributed/3-D
-air box, HANDOFF §12H), HANDOFF §11's two never-closed decisions (#3 polyphony — a gate on engine
-design, cheaper to settle before a port; #5 tolerance tuning), Phase 5 (the real-time C++/Rust port,
+air box, HANDOFF §12H — *both since taken: `R(ω)` 2026-07-27, the air box in four batches*),
+HANDOFF §11's two never-closed decisions (#3 polyphony — a gate on engine design, cheaper to settle
+before a port; #5 tolerance tuning — *both CLOSED 2026-08-10, see §11.1/§6.1*), Phase 5 (the
+real-time C++/Rust port,
 HANDOFF §9's literal next phase), or a §12 high-leverage thread (port-Hamiltonian coupling,
 differentiable models, modal synthesis from measured IRs/FEM). **Don't infer a batch 17 from this
 document — if a new viewer batch is wanted it needs a new model or a new capability first.**
