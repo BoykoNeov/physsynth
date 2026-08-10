@@ -42,6 +42,14 @@ from physsynth.analysis.duffing import (
     kc_mode_coefficients,
 )
 
+# All three tests here are grid- or amplitude-REFINEMENT studies -- each runs the same string
+# several times over and compares the results, so every one of them is expensive by construction
+# (165 s + 135 s + 93 s + 65 s across the four parametrisations on an idle CI runner). Marked at
+# module level rather than per test: "a convergence study re-runs the thing it is studying" is a
+# property of the file, and a per-test threshold would be a measurement that goes stale.
+pytestmark = pytest.mark.slow
+
+
 # -- convergence order: Richardson SELF-convergence ------------------------------------------------
 
 

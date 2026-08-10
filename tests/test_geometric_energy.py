@@ -353,6 +353,11 @@ def test_longitudinal_loss_defaults_to_the_transverse_values():
 # -- the linear limit ------------------------------------------------------------------
 
 
+# Marked slow per TEST, not per module: unlike the other three model-#10 files, this one is 26
+# tests of which only these two are expensive, and the other 24 are the cheap energy/passivity
+# assertions that a fast lane most wants to keep. This one needs a long record at fine resolution
+# to resolve three separate wave families; `test_softening_is_hyperreal_not_unstable` sweeps EA.
+@pytest.mark.slow
 def test_small_amplitude_recovers_three_linear_waves():
     """Tier A/5: as ``u → 0`` the model is three decoupled linear waves — transverse at ``n c/(2L)``
     (**both** polarizations, isotropic) and longitudinal at ``n c_long/(2L)``.
@@ -425,6 +430,7 @@ def test_softening_EA_is_rejected_by_default_and_permitted_on_request():
     assert GeometricString(EA=T_DEFAULT, **kw)._a == 0.0
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("EA", [T_DEFAULT * 0.5, T_DEFAULT * 0.1, T_DEFAULT / 200.0])
 def test_softening_is_hyperreal_not_unstable(EA):
     """A softening string **conserves, stays positive, and cannot go slack**. The floor is real —

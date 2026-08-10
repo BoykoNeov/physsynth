@@ -45,9 +45,18 @@ just wires up the `physsynth` package and dev extras.)
 
 ```bash
 pytest                  # full harness
-pytest -m "not slow"    # skip the longer convergence/spectral sweeps
+pytest -m "not slow"    # the fast lane — skips the sweeps and refinement studies
 pytest -n 8 --dist loadgroup      # same tests, spread across cores (needs pytest-xdist)
 ```
+
+`-m "not slow"` is a **lane, not a gate**: CI runs the full harness on every push, and this is for
+the edit/run loop. What it gives up is specific — the four geometric-string (model #10) validation
+files, which are `test_geometric_whirl.py`, `test_geometric_phantom.py`, `test_geometric_limits.py`
+and two tests of `test_geometric_energy.py`, plus the convergence/dispersion sweeps in the
+string files. That is roughly a third of the suite's CPU in a handful of files, because each of
+them re-runs the model it is studying: a convergence study refines and re-runs, a Mathieu tongue is
+mapped by running the string on both sides of it. **Model #10 is almost entirely deselected, so run
+the full harness before you claim anything about the geometric string.**
 
 The full harness is long — it simulates every model in the repo. Prefer the parallel form for a
 whole-suite run and the plain form when debugging a single test, where worker startup is pure

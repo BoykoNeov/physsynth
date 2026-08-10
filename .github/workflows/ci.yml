@@ -58,3 +58,25 @@ jobs:
       # box and inflate ~3x. Read it before optimising anything.
       - name: Run validation harness
         run: pytest -n auto --dist loadgroup --durations=50
+
+  # The fast lane restores per-push coverage on the OTHER interpreter, which the single-version
+  # matrix above gives up. It is not a gate and it is not a substitute for the full run: it
+  # deselects `slow`, which is most of model #10. It exists so a version-specific import or
+  # dtype problem still surfaces on every push rather than waiting for the nightly.
+  fast:
+    name: Fast lane (py3.11, -m "not slow")
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Run fast lane
+        run: pytest -n auto --dist loadgroup -m "not slow" --durations=25

@@ -105,9 +105,19 @@ from physsynth.analysis.damping import spatial_eigenvalue_p2
 from physsynth.analysis.duffing import kc_mode_coefficients
 
 # Keep this module on ONE xdist worker (``--dist loadgroup``): its three module-scoped fixtures are
-# the most expensive setup in the suite (~110 s + ~55 s + ~45 s). Scattering the tests would rebuild
-# them once per worker. Harmless when running serially or without xdist.
-pytestmark = pytest.mark.xdist_group("geometric_whirl")
+# the most expensive setup in the suite (252 s + 125 s + 84 s on an idle 4-core CI runner).
+# Scattering the tests would rebuild them once per worker. Harmless when running serially.
+#
+# ...which also makes this module the SUITE'S CRITICAL PATH: pinned, it is ~460 s of setup plus
+# ~260 s of calls on a single worker, ~720 s against a ~25 min wall. That is not slack to reclaim.
+# The three fixtures build 11 whirl runs and MEASURED ZERO OVERLAP between them (distinct kappa_w /
+# amplitude / seed), so the sharing is already maximal and the cost is the physics: a Mathieu
+# tongue is mapped by running the string on both sides of it, repeatedly.
+#
+# Hence `slow` as well -- the marker is the only lever left here, and it is an honest one because
+# the claim is about the MODULE ("mapping a parametric instability is expensive by nature"), not
+# about a measured number that goes stale the next time anyone profiles.
+pytestmark = [pytest.mark.xdist_group("geometric_whirl"), pytest.mark.slow]
 
 # -- parameters, and why each is what it is --------------------------------------------------------
 

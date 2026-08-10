@@ -52,8 +52,16 @@ from physsynth.analysis.duffing import kc_mode_coefficients
 from physsynth.analysis.spectrum import detect_peaks, magnitude_spectrum
 
 # Keep this module on ONE xdist worker (``--dist loadgroup``): its three module-scoped fixtures cost
-# ~81 s + ~47 s + ~29 s of setup, which scattering would rebuild per worker. No effect serially.
-pytestmark = pytest.mark.xdist_group("geometric_phantom")
+# 217 s + 135 s + 73 s of setup on an idle 4-core CI runner, which scattering would rebuild per
+# worker. No effect serially.
+#
+# Pinned, that is ~425 s of setup on one worker -- the suite's second-longest single chain after
+# `test_geometric_whirl.py`. The three fixtures are distinct rigs (two-mode at AMP, the same string
+# at amp -> 0, and the circular-polarization run), so there is no sharing left to find, and `slow`
+# is the only remaining lever. Marked at MODULE level deliberately: the claim is that resolving a
+# quadratic phantom needs long records at fine resolution, which is a property of the measurement
+# and not a number to re-check.
+pytestmark = [pytest.mark.xdist_group("geometric_phantom"), pytest.mark.slow]
 
 # -- parameters, and why each is what it is --------------------------------------------------------
 

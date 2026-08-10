@@ -28,7 +28,12 @@ packages = ["physsynth"]
 testpaths = ["tests"]
 addopts = "-q"
 markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    # `slow` marks a CLAIM about a test, not a stopwatch reading: "this validation re-runs the
+    # thing it is validating" (convergence/refinement studies, parameter sweeps, instability maps).
+    # Deliberately NOT a "took more than N seconds" band -- that is a measurement, and a measurement
+    # in a marker goes stale the first time anyone profiles on a different machine. Deselect the
+    # lane with `-m "not slow"`; it is a lane, never the gate. CI runs the FULL suite on every push.
+    "slow: expensive by construction — sweeps, refinement studies (deselect with '-m \"not slow\"')",
     # Declared here so the mark does not warn when pytest-xdist is absent. It only bites under
     # `-n N --dist loadgroup`, where it keeps a module's tests on one worker so an expensive
     # module-scoped fixture is built once rather than once per worker.
