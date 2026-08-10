@@ -104,7 +104,11 @@ never the reverse. This keeps the physics portable to C++/Rust later without re-
   is a **delayed echo** — a one-port's impulse response is a decaying exponential and never a
   reflection. `SurfacePort` / `RoomLoadedPlate` (batch 3) is the same rung for a body with **area**:
   the port becomes a matrix, and what that buys is a surface radiating by the *shape* of its motion
-  rather than by its net volume — the thing no lumped terminal has the length scale to express.
+  rather than by its net volume — the thing no lumped terminal has the length scale to express. And
+  `InteriorSurfacePort` / `RoomSuspendedPlate` (batch 4) is the last rung: the surface stops being a
+  patch of *wall* and becomes an **object** in the room, loaded on both faces (`2·TᵀRT`) and blocking
+  a path through it even at rest — which buys a radiation resistance that *crosses* the baffled
+  case's rather than scaling it, and a far-field **direction** where every lumped tier is a monopole.
 - **Engine**: owns the timestep loop, parameter smoothing, and (eventually) the audio callback.
 
 ### 3.3 Real-time safety (for the later native port — note now, enforce later)
@@ -497,9 +501,10 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   pair, and the resulting legal dipole *source* — the "phantom" — has a `t50` **diverging** from the
   real plate's under refinement (5.2, 19.3, 40.8 at 1×/2×/3×), which is what proves the cut is
   load-bearing. What the object buys that no `R(ω)` can state: the radiation resistance ratio
-  dipole/baffled **crosses 1** (0.28 … 2.31 over `ka = 0.8 … 2.8`), and the far field has a
-  **direction** — an 85× null in the plate's own plane — where every lumped one-port here is a
-  monopole. Still deferred, in rough order of appetite: **PML** or higher-order absorbing
+  dipole/baffled **crosses 1** — spanning 0.28 to 2.31 over a sweep from `ka = 0.8` to `2.8`, with
+  the crossing bracketed to the one sweep interval `ka ∈ [1.0, 1.3]`, which is all a sweep ever
+  claims — and the far field has a **direction**, an 85× null in the plate's own plane, where every
+  lumped one-port here is a monopole. Still deferred, in rough order of appetite: **PML** or higher-order absorbing
   boundaries, since a locally-reacting impedance wall is matched at normal incidence only;
   **scattering objects and non-rectangular rooms** (staircasing in 3-D — the membrane batch's lesson
   again); a plate **not aligned with a grid plane**, and one of finite thickness; `Membrane` (#4) and

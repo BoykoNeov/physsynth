@@ -279,6 +279,31 @@ Complete and validated:
   of an even mode turns out to be a property of the whole **scene** — a perfectly centred plate in a
   room made asymmetric in the mode's own axis leaks 3.5e-02, which is a room re-exciting a plate's
   *shape*, and one more thing no `R(ω)` can represent at all.
+- **The plate stops being a source and becomes an object** *(air box, batch 4)* — `AirBox.add_cut` /
+  `InteriorSurfacePort` / `RoomSuspendedPlate`: the **interior two-sided (dipole) plate**, hanging
+  *in* the room rather than mounted flush in a wall. It radiates from both faces, is driven by the
+  pressure **jump** across it, and — this is the part a source cannot do — **blocks a path through
+  the room even at rest.** The implementation news is better than expected: prescribing a face
+  velocity and injecting a `∓q` pair on the two node planes straddling it are *the same arithmetic*
+  (`A_face·w_z = W` identically), so the port protocol, the injection weights and the `injected`
+  ledger are all batch 3's and **the only new machinery is the cut** — zeroing `u` on a set of
+  faces, which the energy identity absorbs for free because a cut face's contribution to the kinetic
+  sum is identically zero. The cut brings a *new* machine-precision oracle rather than a restriction
+  of batch 1's: it lies on a **face**, half a cell past the last node, so a full cut makes two rooms
+  of length `(m+½)h` and `(N−m−½)h` whose exact modes are `cos(nπi/(m+½))`, not the room's own
+  `cos(nπi/N)`. The batch's finding **outranks batch 3's and corrects it**: batch 4 has a
+  coefficient batch 3 did not — the **2** of the two loaded faces — and the money test is blind to
+  half the ways to get it wrong (a `1×` inside the factorization only leaves `radiated == injected`
+  at rounding; a consistent `1×` leaves the *scene total* at rounding). **So `radiated == injected`
+  is not sufficient either**, and the guard that catches both is the coupled residual at two
+  timesteps against the room's own post-closure pressure jump. What the object buys: the radiation
+  resistance ratio dipole/baffled **crosses 1** — spanning 0.28 to 2.31 over a sweep from
+  `ka = 0.8` to `2.8`, bracketed to the one sweep interval `ka ∈ [1.0, 1.3]` and no tighter, which
+  no constant and therefore no `R(ω)` can reproduce; and the far field has a **direction** — an 85×
+  null in the plate's own plane, where every lumped one-port here is a monopole with no angular
+  dependence at all. Drop the cut and keep the `∓q` pair and what is left is a legal, perfectly
+  conservative dipole *source* whose decay **diverges** from the real plate's under grid refinement
+  (5.2×, 19.3×, 40.8×) — which is what proves the obstacle is not a refinement of the source.
 - **Acoustic bore** *(wind leg, batch 1 of 3)* — the first **acoustic** resonator (`core/bore.py`):
   the 1D air column of a clarinet, a staggered pressure/volume-velocity leapfrog of Webster's horn
   equation. Energy-first — the trapezoidal `h/2` half-cell closes a rigid wall (no ghost stencil,

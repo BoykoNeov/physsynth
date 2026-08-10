@@ -1141,3 +1141,10 @@ flush in a wall, radiating from both faces, which is an internal moving boundary
 source and therefore a genuinely different object from anything shipped here. §3 named it and the
 scope it defers is unchanged: PML or higher-order absorbing boundaries, scattering objects and
 non-rectangular rooms, moving ports, and viscothermal air absorption.
+
+> **Shipped 2026-08-10** — `docs/dev/air-box-dipole-plan.md`, and read that plan's own §10 before
+> trusting a number in its body. Two things it says about *this* batch: §6.8's prediction that the
+> face cut would make the load non-dissipative is **retracted** (see the correction there), and this
+> batch's "the conserved total is blind, so the money test is `radiated == injected`" needed
+> sharpening — batch 4's factor-of-2 is invisible to the **money test** as well, and only the
+> coupled residual against the room's own post-closure pressure catches both halves.

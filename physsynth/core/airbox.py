@@ -474,6 +474,13 @@ class AirBox:
                     )
 
         self.p = p0
+        # Cut BOTH stored half-steps, not only the one _momentum returns. `u0` is the caller's, and
+        # the natural one -- `set_mode`'s and the sub-room oracle's `(k/2 rho0 h) diff(p0)` -- is
+        # nonzero across a cut, because `p0` jumps there. Nothing numerical depends on it (the
+        # kinetic term is the cross-time product `u u_prev` and `u` is zero on a cut face, and
+        # `step` reads `self.ux` rather than `ux_prev`), so it is the *invariant* that would
+        # otherwise be false: a cut room holds no live velocity on a cut face at ANY half-step.
+        self._apply_cut(prev)
         self.ux_prev, self.uy_prev, self.uz_prev = prev
         self.ux, self.uy, self.uz = self._momentum(p0, prev)
         self.dissipated = 0.0
@@ -502,10 +509,14 @@ class AirBox:
             u_prev[1] - c * np.diff(p, axis=1),
             u_prev[2] - c * np.diff(p, axis=2),
         )
+        self._apply_cut(u)
+        return u
+
+    def _apply_cut(self, u: Sequence[NDArray[np.float64]]) -> None:
+        """Zero the cut faces of a ``(ux, uy, uz)`` triple, in place — ``O(cut faces)``."""
         for axis, idx in enumerate(self._cut_index):
             if idx is not None:
-                u[axis][idx] = 0.0  # O(cut faces), not O(faces): a precomputed fancy index
-        return u
+                u[axis][idx] = 0.0  # a precomputed fancy index, not an O(faces) mask write
 
     def _divergence(self) -> NDArray[np.float64]:
         """Discrete divergence at every node — the **transpose** of the momentum gradient.

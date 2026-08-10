@@ -72,12 +72,19 @@ def test_a_cut_room_still_conserves(plane, wall_name):
 
 
 def test_a_cut_face_carries_no_velocity_at_any_half_step():
-    """Both stored half-steps are zero on a cut face — including on a room already in motion.
+    """Both stored half-steps are zero on a cut face — **at every entry point**.
 
-    The zeroing lives in :meth:`AirBox._momentum`, the single place both ``step`` and ``set_state``
-    produce velocities, so the consistent start cannot leave a live velocity behind either. Adding a
-    cut to a *moving* room clears what is already there, which is the case a lazier implementation
-    would miss.
+    Three of them, and each is a different code path: adding a cut to a room already in motion
+    (:meth:`AirBox._register_cut` clears what is there), the consistent start
+    (:meth:`AirBox.set_state` cuts the caller's ``u^{-1/2}`` as well as the ``u^{+1/2}`` it
+    derives), and every subsequent step (:meth:`AirBox._momentum`).
+
+    The ``set_state`` half is the one an implementation naturally misses, because only the
+    *derived* half-step passes through ``_momentum`` — and the natural ``u0``, the omega-free
+    ``(k/2 rho0 h) diff(p0)`` that :func:`sub_room_mode` and :meth:`AirBox.set_mode` both use, is
+    **nonzero across a cut**, since ``p0`` jumps there. Nothing numerical depends on it (the
+    kinetic term is the cross-time product and its other factor is zero), which is exactly why it
+    needs a test rather than a measurement: the only thing it would break is the claim.
     """
     box = airbox_noise(make_airbox())
     for _ in range(5):
@@ -88,6 +95,15 @@ def test_a_cut_face_carries_no_velocity_at_any_half_step():
         assert np.all(box.uz[:, :, 3] == 0.0)
         assert np.all(box.uz_prev[:, :, 3] == 0.0)
         box.step()
+
+    # ... and the consistent start, whose u0 is nonzero on the cut before set_state touches it.
+    fresh = make_airbox()
+    fresh.add_cut("z", 3)
+    p0, u0, _ = sub_room_mode(fresh, "z", 3, "lo", 1)
+    assert np.any(u0[2][:, :, 3] != 0.0), "the seed must be nonzero there, or this proves nothing"
+    fresh.set_state(p0, u0)
+    assert np.all(fresh.uz[:, :, 3] == 0.0)
+    assert np.all(fresh.uz_prev[:, :, 3] == 0.0)
 
 
 # -- the oracle --------------------------------------------------------------------------
