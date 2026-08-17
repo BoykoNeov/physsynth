@@ -658,8 +658,10 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   non-convergence, which a statement about a quadratic form is structurally blind to. The headline
   is the string's departure from the *same plate's* linear self, which is identically `0.0` for a
   linear body — doubling the pluck doubles a leapfrog and an LU back-substitution *exactly* — and
-  second order in the pluck (1.99/1.94 supported, 1.97/1.87 free), saturating near 0.81 once the
-  trajectories decorrelate. The plan's own energy-share headline died on the shipping rig: peak
+  grows at second order in the pluck **once normalised by the linear response** (1.99/1.94
+  supported, 1.97/1.87 free; the *absolute* departure is third order, since the von Kármán force is
+  cubic in `w` and the denominator carries one power of the amplitude), saturating near 0.81 once
+  the trajectories decorrelate. The plan's own energy-share headline died on the shipping rig: peak
   share is a **bounded** observable, so at 82% it has no headroom, goes non-monotone and changes
   **sign** — its control half survives (a linear body's share is amplitude-invariant to machine
   precision) and neither its size nor its sign is claimed. And the batch's cost finding inverts §8's:

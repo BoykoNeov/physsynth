@@ -138,16 +138,23 @@ def test_nonlinearity_is_genuinely_engaged(boundary):
 @pytest.mark.parametrize("boundary", BOUNDARIES)
 @pytest.mark.parametrize("lossy", ["plate", "string"])
 def test_passivity_with_loss(boundary, lossy):
-    """With loss on either part the total decreases monotonically (never increases)."""
+    """With loss on either part the total decreases monotonically (never increases).
+
+    The tolerance is ``1e-12 * E0`` — relative to the run's own initial energy, and lifted from
+    :func:`test_plate_connection.test_passivity_with_plate_damping` rather than invented. An
+    *absolute* epsilon here would have been a few ulps of this rig's ~8.5e-4 J, which is exactly the
+    kind of bar CLAUDE.md §6.1 keeps headroom against: this suite is the acceptance contract for a
+    native port under a different compiler and BLAS.
+    """
     kw = {"sigma_plate": 3.0} if lossy == "plate" else {"sigma_string": 1.0}
     bridge = _pluck(make_vk_plate_bridge(boundary=boundary, **kw), amplitude=1e-3)
-    e_prev = bridge.energy()
+    e0 = e_prev = bridge.energy()
     for n in range(1200):
         bridge.step()
         e = bridge.energy()
-        assert e <= e_prev + 1e-18, f"energy rose at step {n}: {e_prev:.12e} -> {e:.12e}"
+        assert e - e_prev <= 1e-12 * e0, f"energy rose at step {n}: {e_prev:.12e} -> {e:.12e}"
         e_prev = e
-    assert e_prev < bridge.energy() + 1.0  # sanity: finite
+    assert e_prev < e0, "the lossy run never lost anything"
 
 
 @pytest.mark.parametrize("boundary", BOUNDARIES)

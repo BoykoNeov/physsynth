@@ -107,7 +107,9 @@ string's trajectory moves:
 
 It is identically **zero** for a linear body — not 1e-16, but `0.0`, because doubling the pluck
 doubles every quantity in a leapfrog and an LU back-substitution exactly — and it grows at **second
-order in the pluck amplitude**, on both boundaries and on both rigs:
+order in the pluck amplitude**, on both boundaries and on both rigs. Second order is a statement
+about the *normalised* measure: the von Kármán force is cubic in `w`, so the absolute trajectory
+perturbation is third order and the denominator gives back one power of the amplitude.
 
 | pluck | 1e-5 | 2e-5 | 5e-5 | 1e-4 | 2e-4 | 5e-4 |
 |---|---|---|---|---|---|---|
