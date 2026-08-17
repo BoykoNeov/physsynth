@@ -682,13 +682,16 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   that *coarsening* the room breaks the plate's fixed point stands beside it, not against it. The
   obvious headline then died against a shipped batch's own numbers: batch 6's `sigma_shape` with a
   string in place of its strike, on batch 6's rig, at the **same** peak `w/e = 3`, is **flat to
-  four digits** — and the loud arm's spread lands *below its own quiet control*, which is what
-  makes it a null result rather than a small one. The reason is that **`w/e` is not an amplitude
+  four digits** — 0.27% against a 0.28% control, where the strike gives 46.0% against 1.4% — and
+  the loud arm's spread lands *below its own quiet control*, which is what makes it a null result
+  rather than a small one. Radiated fraction over the 120 ms window: **0.0042%** of the scene, so
+  the room here is a read-out and not a variable. The reason is that **`w/e` is not an amplitude
   when the drive is a point force**: a point force on a free plate feeds the `{1, x, y}` rigid
   nullspace, rigid motion stretches nothing, and the von Kármán coupling is a functional of
   *stretching* — so at matched peak displacement the string-driven plate carries ~190× less energy
-  than a struck one (normalised by `(w/e)²`; the un-normalised 781× compared two different
-  displacements and was wrong — batch 6's own warning landing inside the batch that cites it), with
+  than a struck one (158× raw, 190× normalised by `(w/e)²`; the un-normalised 781× compared two
+  different displacements and was wrong — batch 6's own warning landing inside the batch that
+  cites it), with
   95.5% of its motion rigid. Note the struck arm's 0.00% rigid share is an **identity, not a
   measurement**: a displacement start gives the nullspace no velocity. The two boundaries are then
   out of reach by *opposite* mechanisms — the free cymbal reaches `w/e = 3` and 95.5% of it is
@@ -697,7 +700,7 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   decided by band overlap, not by how hard you pluck.** Hold the plate and move the *string's*
   fundamental across the plate's first flexural mode (by length, so the wave impedance is fixed) at
   constant pluck energy, and the rigid share collapses 95.5% → 4.5% while the departure from the
-  plate's own linear self spans ~5900× between the worst and best overlap — all at peak
+  plate's own linear self spans **5894×** between the worst and best overlap — all at peak
   displacements well inside where the model is faithful, and reproduced **across two rigs seven
   times apart in sample rate**. That converts this section's own closing line above from an
   assertion into a mechanism, and sharpens it: it is **not a budget question** — a string cannot

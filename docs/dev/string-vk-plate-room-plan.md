@@ -31,18 +31,20 @@ It does not. Batch 6's rig, batch 6's `sigma_shape`, batch 6's four 30 ms window
 free plate, one pluck against another 60× smaller — and the plate reaching the **same peak
 `w/e` = 3.02**:
 
-| | window 1 | 2 | 3 | 4 | spread | modal-share drift |
-|---|---|---|---|---|---|---|
-| quiet, nonlinear | 1.0000 | 0.9996 | 0.9988 | 0.9979 | 1.0021 | 0.0043 |
-| quiet, **linear control** | 1.0000 | 0.9996 | 0.9988 | 0.9979 | 1.0021 | 0.0043 |
-| loud, nonlinear | 1.0000 | 0.9996 | 0.9988 | 0.9980 | **1.0020** | 0.0043 |
-| loud, **linear control** | 1.0000 | 0.9996 | 0.9988 | 0.9979 | 1.0021 | 0.0043 |
+| | window 1 | 2 | 3 | 4 | spread | modal-share drift | peak `w/e` |
+|---|---|---|---|---|---|---|---|
+| quiet, nonlinear | 1.0000 | 0.9993 | 0.9988 | 0.9972 | 1.0028 | 0.0045 | 0.0503 |
+| quiet, **linear control** | 1.0000 | 0.9993 | 0.9988 | 0.9972 | 1.0028 | 0.0045 | 0.0503 |
+| loud, nonlinear | 1.0000 | 0.9994 | 0.9989 | 0.9973 | **1.0027** | 0.0045 | 3.0172 |
+| loud, **linear control** | 1.0000 | 0.9993 | 0.9988 | 0.9972 | 1.0028 | 0.0045 | 3.0169 |
 
-Identical to four digits. What makes this unambiguous rather than merely *too small to see* is the
-third row: the loud arm's spread is **below its own quiet control** (1.0020 against 1.0021). There
-is no effect here with a sign, let alone a size. Batch 5's resolved-mode restriction changes
-nothing (1.0014 against 1.0015), and the radiated fraction over the run is **0.007%** — in this
-chain the room is a **read-out, not a variable**.
+Identical to four digits: **0.27% against 0.28%**, where batch 6's strike gives 46.0% against
+1.4%. What makes this unambiguous rather than merely *too small to see* is the third row — the
+loud arm's spread is **below its own quiet control**. There is no effect here with a sign, let
+alone a size. The modal-share drift behind it is 0.0045 in *all four* arms, and the radiated
+fraction over the 120 ms is **0.0042%** of the scene total — in this chain the room is a
+**read-out, not a variable**, which is why the replacement claim had to come from the plate's
+motion rather than from anybody's books.
 
 This is the strongest kind of dead claim this project produces: it died against a **shipped
 batch's own numbers**, on that batch's own rig, with that batch's own code. Which forces the
@@ -55,10 +57,10 @@ Batch 6 reaches `w/e = 3` by *strike* and gets a 46% swing. This chain reaches `
 
 | free plate, 30 ms, suspended | peak `w/e` | max plate energy | rigid `{1,x,y}` share |
 |---|---|---|---|
-| string-driven, 43.4 mm pluck | 2.997 | 6.80e-03 J | **95.52%** |
+| string-driven, 43.4 mm pluck | 2.994 | 6.81e-03 J | **95.52%** |
 | struck, Gaussian `w0/e = 1.727` | 2.730 | 1.08e+00 J | 0.00% *(an identity — see below)* |
 
-**158× less energy at matched peak displacement, 191× normalised by `(w/e)²`** (strain energy is
+**158× less energy at matched peak displacement, 190× normalised by `(w/e)²`** (strain energy is
 quadratic). 95.5% of the string-driven plate's motion is rigid-body translation and tilt, which
 **stretches nothing** — and the von Kármán coupling is a functional of *stretching*, not of
 displacement. The bridge is not a strike; it is a point force, and a point force on a free plate
@@ -126,11 +128,11 @@ same displacement on strings of different lengths.
 
 | `f1/f_elastic` | L (mm) | amp/L | rigid share | plate energy share | peak `w/e` | sweeps | departure |
 |---|---|---|---|---|---|---|---|
-| 0.28 | 599.9 | 0.5% | 95.52% | 1.46% | 0.220 | 3 | 1.87e-06 |
-| 0.50 | 336.0 | 0.7% | 83.55% | 0.94% | 0.093 | 3 | 1.39e-05 |
-| **1.00** | 167.8 | 1.0% | **4.54%** | **18.87%** | 0.151 | 4 | **1.03e-02** |
-| 2.00 | 83.9 | 1.4% | 1.73% | 15.59% | 0.082 | 4 | 1.10e-02 |
-| 4.00 | 41.9 | 2.0% | 1.55% | 10.50% | 0.032 | 4 | 2.83e-03 |
+| 0.28 | 599.2 | 0.5% | 95.52% | 1.47% | 0.220 | 3 | 1.8687e-06 |
+| 0.50 | 335.6 | 0.7% | 83.64% | 0.94% | 0.092 | 3 | 1.3965e-05 |
+| **1.00** | 167.8 | 1.0% | **4.54%** | **18.85%** | 0.151 | 4 | **1.0286e-02** |
+| 2.00 | 83.9 | 1.4% | 1.73% | 15.61% | 0.082 | 4 | 1.1014e-02 |
+| 4.00 | 41.9 | 2.0% | 1.55% | 10.50% | 0.032 | 4 | 2.8279e-03 |
 
 *departure* is the bridge batch's surviving observable — the plate's displacement history against
 the **same chain with `nonlinear=False`**, which is a body that responds exactly proportionally.
@@ -142,20 +144,20 @@ Scene-total drift stays 7e-15 … 1e-13 and every step converged, throughout.
 > radiation-shape signature that moves 46% under a direct strike moves 0.20% — below its own quiet
 > control. Bring the string's fundamental **onto** the plate's first flexural mode and the rigid
 > fraction collapses to 4.5%, the plate's share of the energy rises **1.5% -> 18.9%**, and the
-> departure from the plate's own linear self spans **5900× between the worst and best overlap** —
+> departure from the plate's own linear self spans **5894× between the worst and best overlap** —
 > all at peak displacements of 0.03–0.22 thicknesses, well inside where the model is faithful.
 
 ### 1.1 What is a range and what is a trend
 
-`5900×` is **max over min across the sweep, not a monotone rise.** The departure column is
-non-monotone: ratios 1.00 and 1.03e-02 and 2.00 at 1.10e-02 are the same number for this purpose,
-and 4.00 falls back to 2.83e-03. The minimum is at ratio 0.28. Said as a trend it would be the
-`781×` mistake again, one section later.
+`5894×` is **max over min across the sweep, not a monotone rise.** The departure column is
+non-monotone: ratio 1.00 at 1.0286e-02 and ratio 2.00 at 1.1014e-02 are the same number for this
+purpose, and 4.00 falls back to 2.8279e-03. The minimum is at ratio 0.28. Said as a trend it would
+be the `781×` mistake again, one section later.
 
 ### 1.2 The optimum ratio moves with amplitude — and that is itself the signature
 
-At the defensible pluck the plate's energy share peaks at ratio **1.00** (18.87%). At a hard pluck
-188× larger in energy it peaks at ratio **2.00** (84.15%) instead, with ratio 1.00 at 9.02%. These
+At the defensible pluck the plate's energy share peaks at ratio **1.00** (18.85%). At a hard pluck
+186× larger in energy it peaks at ratio **2.00** (84.06%) instead, with ratio 1.00 at 9.01%. These
 are not averaged or reconciled: an optimum that moves with drive amplitude is exactly what a
 linear chain cannot do, so the amplitude-dependence of the optimum is a second, smaller claim
 riding on the first. Neither arm's peak value is claimed as a magnitude; the *location moving* is.
@@ -167,8 +169,8 @@ riding on the first. Neither arm's peak value is claimed as a magnitude; the *lo
    188× apart in energy, as does the plate's energy share (1.46%, 0.94%). This is the bridge
    batch's linear-body invariance arriving again, and it is what makes the sweep clean: the
    quantity being moved is a property of the coupling, not of the excitation.
-3. **The ratio survives the change of conditions where the magnitude does not** — 7100× at the
-   hard pluck, 5900× at the defensible one. The defensible arm is the one quoted.
+3. **The ratio survives the change of conditions where the magnitude does not** — 7082× at the
+   hard pluck, 5894× at the defensible one. The defensible arm is the one quoted.
 
 ### 1.4 The thin-plate arm — corroboration, never the claim
 
@@ -327,4 +329,56 @@ string is nearly free: it is an explicit leapfrog at 285 nodes against a 53³ ro
 
 ## 8. What the build changed — the post-build record
 
-*(filled in after the build)*
+### 8.1 What survived exactly as planned
+
+Unusually, most of it — because the probes were unusually thorough before the document existed.
+Every number in §0 and §1 came from a probe and was **re-measured by the shipped diagnose script**
+on the shipped rig with the drive index pinned; the two agree to the digits quoted. The composition
+needed no core change, the guard came out bit-identical on all four combinations, and the
+one-fixed-point measurement reproduced.
+
+### 8.2 The suite rig turned out to sit in the good-overlap regime, and that made the claim stronger
+
+The batch's own cheap 8 kHz rig — a 300 mm plate the *linear* chain test chose long before this
+batch existed — has a first flexural mode near 36 Hz against a 91 Hz string, i.e. `f1/f_el ≈ 2.5`.
+Its rigid share is **4.3%**, exactly where §1's curve puts that ratio. Nobody tuned it there. So
+the suite test does not merely re-run the plan's rig at lower resolution: it is a **cross-rig
+reproduction**, two rigs seven times apart in sample rate and three times apart in plate span,
+agreeing on where the transition sits. That is the difference between a mechanism and a tuning,
+and it is worth more than the extra digits the expensive rig buys.
+
+Sweeping the string's length on that rig gives 4.3% -> 20.8% -> 77.9% -> 95.4% (baffled) at
+L = 0.6, 1.2, 2.4, 4.8 m, and the suite asserts monotonicity across three of them rather than a
+two-point ratio.
+
+### 8.3 An observable that had to be thrown away mid-build
+
+The first version of the suite test asserted on the **plate's share of the energy**, and it failed
+— non-monotone, 0.053 / 0.024 / 0.014 / 0.019 across the sweep. The reason is the batch's own
+headline turned back on itself: the plate's energy *counts rigid bouncing as energy the plate
+received*, which is exactly the confusion the test exists to separate. It is now deliberately not
+asserted, and the docstring says why. (A second, smaller version of the same mistake was measuring
+it as an instantaneous end-of-run sample of an oscillating quantity; the helper takes the maximum
+over the run instead.)
+
+### 8.4 A number quoted at the wrong stiffness
+
+The guard margins first written into the test docstring — 7.665222462503e-01 / 7.665222468590e-01 —
+were measured at `K = 3000` while the tests run at the helper's `K = 800` (2.0440593233341828e-01
+and 2.0440593249574418e-01). The margin is linear in `K` and only the *identity* is ever the
+assertion, so nothing was wrong with the test; but a number in a docstring gets cited, so both
+places now name the rig and the stiffness. The batch's second self-correction, after the 781×.
+
+### 8.5 Numbers a later batch will want
+
+* **Cost:** 10.6–10.9 ms/step on batch 6's rig with the string attached (the string is nearly free:
+  an explicit leapfrog at 285 nodes against a 53³ room). The diagnose script is ~5 min for §1's
+  four 120 ms cases and ~11 min in total. The suite's 26 chain tests are **14 s**.
+* **Picard sweeps** rise with pluck and with overlap, not with the room: 3 → 4 across the
+  defensible sweep, 4 → 9 across the hard one, every step converged, scene drift 2.7e-15 … 1.3e-13
+  throughout.
+* **The guard is not the binding constraint here; the fixed point is not either.** What binds is
+  that `K` cannot be raised to compensate for poor overlap — it saturates *and* the guard refuses
+  (§0.5). Overlap is the only lever, which is the claim restated as an engineering constraint.
+* **A viewer batch now has three claims to choose from** and one of them (the rigid share collapsing
+  as the bands meet) is a picture rather than a number.
