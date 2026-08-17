@@ -565,6 +565,12 @@ structural wave, and the cascade's destination modes are exactly the ones the ai
 worst. So the multiplier is an upper bound. **The separation is the claim and it survives the
 restriction — 20× and 18× the control over resolved modes only — and the multiplier is not claimed.**
 
+**Read the resolved-band column for what it is.** The restriction removes the cascade's destination
+modes from the numerator *and* the denominator, so it does not test whether the 33× is an artefact —
+it asks a deliberately narrower question and answers it. 20× is therefore a **floor from a smaller
+claim**, not a confirmation of the larger one. What the pair licenses is exactly the sentence above:
+the separation exists at both resolutions, and no multiplier is quoted as physical.
+
 **The compact limit does not merely under-read.** The monopole — everything `AirRadiation`,
 `RadiatedBody` and `RationalAirLoad` can see — is 3e-7…3e-6 of the true figure here, and for the
 suspended cymbal at `w/e = 3` it moves the **wrong way**: it rises 1.38× while the true efficiency

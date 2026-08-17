@@ -528,6 +528,8 @@ def test_couple_tol_moves_the_total_and_not_the_money_test(boundary, tier):
             bare_worst = max(bare_worst, abs(bare.energy() - b0))
         gap = abs(inst.radiated_energy - inst.room.injected) / abs(inst.radiated_energy)
         assert gap <= LEDGER_TOL, f"the money test is supposed to MISS couple_tol = {tol:.0e}"
+        # Load-bearing at 1e-6 and 1e-3 only: at 1e-13 both sides sit at the rounding floor
+        # (~1.2e-13 each), so the comparison passes there for reasons unrelated to the air load.
         assert worst <= 3.0 * bare_worst, "the air load must add no error floor of its own"
         assert inst.last_residual <= tol
         drifts.append(worst / abs(e0))
