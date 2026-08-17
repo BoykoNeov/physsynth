@@ -2829,6 +2829,168 @@ diagnostics at ~2908, the new slice-set draw fn) · `tests/test_web_backend.py` 
 residual through the wrapper, frame bookkeeping, slice decimation, `λ > 1/√3` → a clean error
 payload, not a 500/NaN) · `scripts/verify_web_headless.py` (add the `airbox` case).
 
+### Batch 19 (PLAN, as written before the build) — the gong in the room: radiation that CHANGES mid-strike
+
+**The legality check first**, because this document forbids inferring a batch from itself. The
+standing rule is "a new viewer batch needs a new model or a new capability first." Air-box **batch
+6** (`docs/dev/air-box-vk-plate-plan.md`, HANDOFF §12H) supplies both halves of it in its own
+closing line — *"**Still out:** a viewer batch, which now has both the new model and the new claim
+its own rule requires."* The models are `RoomLoadedVKPlate` / `RoomSuspendedVKPlate` (the nonlinear
+plate #6 radiating into the 3-D room, baffled and hung); the claim is quoted below. Batch 18 built
+the 3-D field type, so no new capability is needed — this batch is a **composition** of b18's slice
+set with the shipped `vk` plate view.
+
+Model key **`vkroom`** (b13/b15/b17/b18's precedent: a different coupling class earns a key).
+All-wrapper as always; `physsynth/core` is untouched.
+
+**The claim, inherited and re-measured rather than re-derived:**
+
+> **A loud plate's radiation is time-varying at fixed geometry, and a quiet one's is not.**
+
+Every other radiator in this repo is linear in its excitation, so radiated fraction and pattern are
+amplitude-**invariant** by construction. The von Kármán coupling is quadratic, so the *shape* of the
+motion evolves during a single strike — and a surface radiates by the shape of its motion, not by
+its net volume displacement (batch 3). No `R(ω)` in `radiation.py` can state this: a
+scalar-per-frequency load has one pattern per frequency.
+
+#### The gate, and it is the whole reason this batch was probed before it was planned
+
+**Everything below is measured** (`M:\claud_projects\temp\vkroom-probe\`, probes 1–6), before a line
+of the batch was written. The gate was expected to kill or reshape it, and it reshaped it.
+
+- **The air grid cannot be coarsened along the CFL line, and the edge is *sharper* than batch 6
+  recorded.** Batch 6 measured 72 Picard sweeps at 57.9 kHz and NaN at 33.0 kHz. Between those, at
+  a fixed Courant fraction of 0.9: `h = 11.40 mm` (57.9 kHz) converges at 72 sweeps; **`h = 14 mm`
+  (47.2 kHz) already fails** (sweep cap 120, `converged` False, no NaN — the quiet failure); and
+  `h ≥ 17 mm` (38.8 kHz) is an **immediate NaN at step 0**. So the shipped `airbox` room's
+  22.0 kHz cannot host this plate at any size, and `AIRBOX_H_*` cannot be reused.
+- **DIED — "the Courant fraction is the affordability lever."** It is not, but *not* for the reason
+  on record, and the distinction is this batch's first generalizable finding. Batch 6's warning is
+  that **coarsening the room breaks the plate's fixed point**; that is a statement about coarsening
+  **along the CFL line**, where `h` and `fs` are tied. Hold `fs` fixed and lower the Courant
+  fraction instead — `h = c₀√3/(λ·fs)` grows with no rate change — and the fixed point is
+  **untouched**: measured **identical** 72/5 sweeps and `converged` True at fractions 0.90, 0.60 and
+  0.45, while the node count falls as `(L·λ)³` (148 877 → 42 875 → 17 576). The plate does not care
+  about `h`; it cares about `k`. **What it breaks instead is the claim.** Batch 5's ≥5-air-cells-
+  per-structural-wave floor is a statement about `h`, so the resolved mode count collapses
+  **17 → 8 → 6 of 289**, and with it the resolved-band spread → **1.000×** at every fraction below
+  0.9. The refusal to coarsen therefore **stands, for a different reason than the one it inherited**
+  — and the two reasons are not interchangeable, because one is a stability limit and the other is
+  a validity limit that leaves every ledger green.
+- **What survives is shrinking the room at the fixed fine grid**, which batch 6 never needed to try:
+  `L = 0.35 m` against its 0.60 m keeps the resolved band (17/289) *and* the resolved-band
+  separation — **29.3×** against the reference rig's **30.6×** — at roughly a third of the cost.
+  Below 0.35 m nothing more is bought: `L = 0.25 m` is **indistinguishable** from 0.35 m (418.8
+  against 414.5 steps/s), because by then the **plate** is the floor, not the room.
+- **The bar was never the air-box batch's 8.6 s.** Measured through `simulate_to_payload` itself:
+  shipped `vk` defaults **15.1 s**, `vk` at its own reachable loud/long ceiling (free, `w/e = 3`,
+  1.0 s) **52.7 s**, `airbox` defaults 7.1 s, `platebody` 7.6 s. So ~20–30 s is an ordinary render
+  here, and this batch fits between the `vk` default and the `vk` ceiling.
+- **THE COST NUMBERS ARE QUOTED AS RANGES, BECAUSE THIS MACHINE'S OWN NOISE FLOOR IS 1.88×.**
+  Probe 5's duration sweep had to be **thrown away and re-run**: it timed 0.060 s of audio at 37.4 s
+  and 0.300 s at 42.2 s, and the *same* configuration at 26.6 s in one section and 47.9 s in
+  another. Re-measured as a **rate** with an unchanged reference interleaved between every case
+  ([[ci-runner-variance]]'s rule, arriving locally for the first time), the reference alone spans
+  **220.6 → 414.5 steps/s = 1.88×**. Only two parameter effects clear that floor: the room at 0.60 m
+  is ~2.8× slower than at 0.35 m, and the quiet arm is ~2.6× faster than the loud one (mean sweeps
+  4.0 against 13.0). Tier (baffled vs suspended) and audio duration do **not** clear it, which is
+  itself the useful half — cost is linear in duration, as it should be. *Generalizable: this repo's
+  CI-variance discipline is not a CI fact. The local machine is worse than the runners.*
+
+#### The shipping rig, and what it costs
+
+Free-edge von Kármán plate (the honest cymbal — free edge, hung in air), `L = 0.10 m`, `N = 16`,
+steel sheet `e = 1 mm`; room a **0.35 m cube** at `h = 11.40 mm`, lossy walls `ζ = 4`;
+**`fs = 57.9 kHz`, and the ROOM sets it** — b18's rule again, one model further. `couple_max_iter`
+must be **120**, not the viewer's shipped `VK_COUPLE_MAX_ITER = 50`, which the loud arm caps out.
+Default audio **0.12 s** — batch 6's own observation window, and *the observation window is part of
+the claim*, so it is named rather than defaulted.
+
+Measured at that rig, 0.12 s, both tiers, quiet (`w/e = 0.05`) against loud (`w/e = 3`):
+
+| tier | w/e | sweeps | converged | modal drift | spread (all) | spread (resolved) |
+|---|---|---|---|---|---|---|
+| baffled | 0.05 | 5 | True | 0.0291 | 1.013× | 1.002× |
+| baffled | 3.00 | 72 | True | 0.5892 | 1.428× | 1.068× |
+| suspended | 0.05 | 5 | True | 0.0090 | 1.004× | 1.001× |
+| suspended | 3.00 | 72 | True | 0.3358 | 1.224× | 1.053× |
+
+→ **resolved band: baffled quiet 0.2 % against loud 6.8 % = 29.3×; suspended 0.1 % against 5.3 % =
+65.0×.** Batch 5's doctrine carries: the **separation** is the claim and it survives the resolution
+restriction; the all-modes multiplier does not travel (it reads 38.4 / 42.8 / 91.1 / 14.0 / 191.9 %
+across the five probed rigs — junk from unresolved modes — while the resolved band reads a steady
+6.8–7.1 %). Only the separation is claimed. Render cost ~17–27 s loud, ~8–13 s quiet.
+
+#### The control is a SLIDER, and it is the batch's own anchor
+
+`VKPlate(nonlinear=False)` is bit-identical to `Plate`, so this class with the flag off is
+bit-identical to `RoomLoadedPlate` — "frozen versus drifting is one class and one flag, not two
+rigs." Shipped as a user-dialable toggle (b17's lesson: the anchor being reachable on the sliders is
+what makes it evidence rather than a test fixture), and the render computes the **linear twin of the
+user's own settings** alongside the main arm so the claim is visible in one picture. The twin is
+cheap — sweeps collapse to 1 — measured **~13 s**, for a default total of ~30–35 s.
+
+**Measured, and it is the cleanest number in the batch:** at `w/e = 3` with the flag **off**, the
+spread is **1.013×** baffled and **1.004×** suspended — *identically the quiet arm's values to three
+decimals*. So the effect is the **nonlinearity, not the amplitude**, and the control says so without
+needing a second amplitude. This is also the only catch for batch 6's silent-failure trap (`rho_v`
+for `rho_s`: the air load 1000× too weak at `e = 1 mm`, with every ledger still green).
+
+#### Both ledgers are green everywhere, INCLUDING where the claim is dead — so neither is the gate
+
+Scene drift **3.2e-13 … 7.3e-13** and the cross-ledger money test `|radiated − injected|`
+**2.2e-16 … 1.7e-14**, at every rig probed — *including the coarsened ones whose resolved-band
+claim had collapsed to 1.000×*. That is the air-box family's standing rule ("no single detector is
+sufficient") arriving with a **fifth** distinct blind spot, and batch 6's own third reason underneath
+it: the money test is arithmetic on whatever `w^{n+1}` came out of the solve, so an under-converged
+one is ported self-consistently. **The honesty line for this batch is therefore the per-step
+convergence record — `converged` (all steps) and the max/mean sweep count — carried in the payload
+as a first-class number beside the two ledgers, never as a test-only assertion.**
+
+#### Refusals, inherited and asserted
+
+- **No compact/monopole far-field read-out.** Batch 6 measured it at **3e-7** of the truth and
+  moving the **wrong way** for the suspended cymbal (rising while the true efficiency falls). The
+  bridge batch refused `pressure()` and asserted the absence with a test; same here.
+- **No `t50`, no decay time** — a magnitude, and at this room size the room contaminates it (b18).
+- **No directivity panel.** Batch 6 refused it on a costed contradiction (a 120 ms window needs a
+  41 m room), and b18 had already refused it as audio-bearing.
+- **No string drive.** The three-way-chain batch measured this exact headline **flat** under a
+  string — 0.27 % against a 0.28 % control — because `w/e` is not an amplitude under a point force.
+  The plate must be **struck**. Say so in the panel text rather than leaving the absence unexplained.
+- **Identify modes by projection under the mass matrix, never by an FFT peak** (batch 6: at
+  `w/e = 3` a peak tracker reads a mode at 0.53× its own linear value, because the field has gone
+  broadband and "the" frequency has stopped existing).
+
+#### Pre-flagged traps
+
+- **The animation clock is neither the string's nor the wavefront's.** b18's slip was inheriting the
+  string's stride for a wavefront. Here the subject is **shape drift over ~0.12 s** — a slow panel,
+  not a per-period wiggle — while the room slices still want the wavefront's clock. Two clocks, both
+  chosen deliberately and printed.
+- **The audio is a 120 ms burst, not a note.** State it. This is the shortest audio-bearing render
+  in the viewer, and the reason is the gate above, not an oversight.
+- **The fieldset beats the slider** — add `vkroom` to every enclosing `<fieldset>`'s `data-show`,
+  not just the new sliders (live twice already: b15, b17, by opposite mechanisms).
+- **`h` is snapped and the snap is the resolution** — report the actual `L`, never resample silently.
+- **A NaN builds a perfect payload and dies at the transport** — test through
+  `json.dumps(..., allow_nan=False)`, the way the server dumps (b18's scar).
+- **The slice decode: `nv` is the fastest axis.** Reuse b18's path unchanged; do not re-derive it. A
+  transposed decode renders as plausible banding, and no payload assertion can see it.
+- **The backend does not hot-reload**; restart between edits, and use a session marker for stale-tab
+  detection.
+- Neither existing work cap covers this pairing (`VK_WORK_MAX` is `n_live × steps × sweeps`,
+  `AIRBOX_WORK_MAX` is `nodes × steps`, and at this rig **both pass comfortably** while the render
+  still takes ~25 s). A **two-term** budget is needed, and the plate term is the one that binds:
+  measured ~0.16 ms per Picard sweep against ~2e-8 s per node-step.
+
+#### Touch list
+
+`web/serialize.py` (constants + `_build_payload_vkroom` + the dispatch at ~857) ·
+`web/static/index.html` (option, sliders, **and every enclosing fieldset**) · `web/static/app.js`
+(`MODEL_RANGES` + `_default`, the viz dispatch, the energy/diagnostics branches, the dual
+plate-field + room-slice view) · `tests/test_web_backend.py` · `scripts/verify_web_headless.py`.
+
 ### Later batches (rough map — not firm)
 
 - **Body / radiation** — the modal body + radiation read-out is **batch 12**; `StringPlateBridge`
