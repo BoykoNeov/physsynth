@@ -55,6 +55,28 @@ G_STRONG = dict(grain_x=1.0, grain_cross=0.153, grain_y=0.0727)  # ~ the spruce 
 G_WILD = dict(grain_x=11.0, grain_cross=2.5, grain_y=0.9)  # nothing is made of this
 
 
+# Passivity is asserted against a roundoff bar relative to the initial energy, the same shape as
+# `test_bore_radiation.py` and `test_airbox_port.py` -- NOT against a bare `<= 0.0`.
+#
+# This is not defensive slack, it is required, and the reason is the *first* step. Every test here
+# plucks from rest, so at step 0 the velocity is exactly zero and the step dissipates essentially
+# nothing: measured -2.70e-18 against -1.50e-10 for the very next step and ~1.09e-08 typical. The
+# sign of a decrement four billion times smaller than its neighbours is decided by summation order
+# alone, so a bare `<= 0.0` is a coin toss on any given BLAS -- it read negative locally and
+# positive on CI, which is exactly how it failed there while passing here.
+#
+# The bar cannot hide a real failure: 1e-12 * e[0] is ~3.3e-17 here, still five orders of magnitude
+# BELOW a typical genuine decrement, so any physically meaningful energy gain fails it loudly.
+PASSIVITY_ROUNDOFF = 1e-12
+
+
+def _assert_monotone(e, why="energy increased somewhere in a lossy run"):
+    d = np.diff(e)
+    bar = PASSIVITY_ROUNDOFF * e[0]
+    assert np.all(d <= bar), f"{why}: max step {d.max():.3e} exceeds the roundoff bar {bar:.3e}"
+    assert e[-1] < e[0], f"{why}: energy did not fall at all ({e[-1]:.6e} vs {e[0]:.6e})"
+
+
 def _sine_field(plate, m, n):
     """``sin(mπx/Lx) sin(nπy/Ly)`` sampled on the live nodes, in the plate's own ordering."""
     jj, ii = np.nonzero(plate.mask)
@@ -282,7 +304,7 @@ def test_lossy_grained_plate_is_passive_and_a_low_mode_decays_at_2sigma():
     p = make_orthotropic_plate(N=24, mu=2.0, sigma=4.0, **G_STRONG)
     p.set_state(_sine_field(p, 1, 1) * 1e-3)
     e = np.asarray(simulate(p, num_steps=int(0.3 * p.fs)).energy)
-    assert np.all(np.diff(e) <= 0.0), "energy increased somewhere in a lossy run"
+    _assert_monotone(e)
     rate = -np.log(e[-1] / e[0]) / 0.3
     assert abs(rate / (2.0 * p.sigma) - 1.0) < 0.02, (
         f"fundamental decays at {rate:.3f}/s, want ~{2 * p.sigma:.3f}/s"
@@ -531,7 +553,7 @@ def test_grain_makes_the_theta_damping_anisotropic_and_the_ledger_stays_green():
     def measured_rate(plate, m, n):
         plate.set_state(_sine_field(plate, m, n) * 1e-3)
         e = np.asarray(simulate(plate, num_steps=int(secs * plate.fs)).energy)
-        assert np.all(np.diff(e) <= 0.0), "the ledger must stay monotone -- passivity is untouched"
+        _assert_monotone(e, why="the ledger must stay monotone -- passivity is untouched")
         return -np.log(e[-1] / e[0]) / secs
 
     # Control: on a square isotropic plate (4,1) and (1,4) are exactly degenerate, in frequency
