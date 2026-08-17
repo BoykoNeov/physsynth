@@ -4512,3 +4512,191 @@ def test_airbox_ignores_params_that_belong_to_other_models():
     assert noisy["meta"]["arrival"] == base["meta"]["arrival"]
     assert noisy["meta"]["ledger"] == base["meta"]["ledger"]
     assert noisy["energy"] == base["energy"]
+
+
+# == vkroom: the gong in the ROOM — radiation that changes mid-strike (batch 19) ===================
+#
+# Air-box batch 6's models, surfaced. What these tests pin, in order of how badly the batch needs
+# them:
+#
+#   1. **The separation, not the multiplier.** A struck plate's radiation pattern moves during the
+#      strike and a linear one's does not — one class and one flag apart, not two rigs. The
+#      SEPARATION is what is asserted, and deliberately with a loose bar, because the magnitude is
+#      measurably NOT grid-converged: refining the air cell by 12 % takes the struck arm's spread
+#      from 7.0 % to 2.0 % while the linear twin holds at 0.05–0.12 %. The modal-share drift is the
+#      better-conditioned of the two (77–116x separation against the spread's 7–21x) and carries
+#      the tighter bar.
+#   2. **The air grid is a STABILITY limit, and the slider says so.** h = 14 mm stops converging
+#      and h >= 17 mm is an immediate NaN, so the range is not a taste and a widened one must fail
+#      here rather than in a browser.
+#   3. **w/e is a CLIFF.** 3.2 runs at 109 of 120 sweeps and 3.4 is dead. The cap is 3.0, which is
+#      why it sits under the last value that worked rather than on it.
+#   4. **Convergence is the honesty line, because neither ledger is.** Both read green at every rig
+#      probed, INCLUDING coarsened ones whose claim had already collapsed — the money test is
+#      arithmetic on whatever w^{n+1} came out of the solve, so an under-converged one is ported
+#      self-consistently.
+#   5. **The payload survives STRICT json** — b18's scar, and this model has two live NaN routes
+#      (a diverged plate and an absent wall impedance) rather than one.
+
+
+@pytest.fixture(scope="module")
+def vkroom():
+    """One ~11 s coupled run (plate + room + the linear control twin), shared by every test here."""
+    return _sim({"model": "vkroom", "audio_duration": 0.06})
+
+
+def _vr(**over):
+    return _sim({"model": "vkroom", "audio_duration": 0.03, **over})
+
+
+@pytest.mark.xdist_group("web_vkroom")
+def test_vkroom_the_struck_plates_pattern_moves_and_the_linear_ones_does_not(vkroom):
+    """**THE CLAIM.** Same plate, same room, same strike, one flag apart.
+
+    Every other radiator in this repo is linear in its excitation, so its pattern is amplitude-
+    invariant by construction. The von Kármán coupling is quadratic, so the *shape* of the motion
+    evolves during a single strike — and a surface radiates by the shape of its motion, not by its
+    net volume displacement. No ``R(omega)`` can state this: a scalar-per-frequency load has one
+    pattern per frequency and cannot change it mid-strike.
+
+    The bars are loose on purpose. The modal-share drift is the well-conditioned observable and
+    gets the tighter one; the efficiency spread is max/min of four near-equal numbers *and* is not
+    grid-converged, so it is asserted for **direction and order of magnitude only**.
+    """
+    c = vkroom["meta"]["claim"]
+    assert c["modal_drift"] > 20 * c["modal_drift_twin"], c
+    assert c["spread_resolved"] > c["spread_resolved_twin"], c
+    sep = (c["spread_resolved"] - 1) / max(c["spread_resolved_twin"] - 1, 1e-12)
+    assert sep > 3.0, (sep, c)
+
+
+@pytest.mark.xdist_group("web_vkroom")
+def test_vkroom_the_honesty_line_is_convergence_because_neither_ledger_is(vkroom):
+    """Both ledgers are green here — and they are green on rigs where the claim is already dead.
+
+    The scene total telescopes against whatever pressure each side used, and the money test is
+    arithmetic on whatever ``w^{n+1}`` came out of the solve, so an under-converged step is ported
+    self-consistently. That is why the per-step convergence record is carried in the payload as a
+    first-class number instead of being asserted only here.
+    """
+    cv = vkroom["meta"]["convergence"]
+    assert cv["all_converged"] is True, cv
+    assert cv["n_not_converged"] == 0
+    assert 1 <= cv["max_iters"] <= cv["cap"], cv
+    assert cv["twin_max_iters"] == 1, cv        # the linear twin needs no iteration at all
+    assert vkroom["energy"]["convergence"]["all_converged"] is True
+
+
+@pytest.mark.xdist_group("web_vkroom")
+def test_vkroom_both_ledgers_are_green_and_the_scene_is_conserved(vkroom):
+    """Necessary and NOT sufficient — kept because a *red* one is still decisive."""
+    lg = vkroom["meta"]["ledger"]
+    assert lg["kind"] == "vkroom"
+    assert lg["residual_max"] < 1e-10, lg["residual_max"]
+    assert vkroom["energy"]["lossless"]["pass"] is True
+    assert vkroom["energy"]["lossless"]["drift"] < 1e-10, vkroom["energy"]["lossless"]
+
+
+@pytest.mark.xdist_group("web_vkroom")
+def test_vkroom_the_compact_monopole_is_shipped_beside_the_truth_not_as_it(vkroom):
+    """Batch 6 measured the compact limit at ~3e-7 of the true figure. It is a caption, not a claim.
+
+    The absence of a far-field pressure read-out is load-bearing rather than incidental — the
+    bridge batch refused ``pressure()`` for the same reason, and for the suspended cymbal the
+    monopole moves the WRONG WAY (rising while the true efficiency falls).
+    """
+    c = vkroom["meta"]["claim"]
+    assert 0.0 < c["mono_ratio"] < 1e-3, c["mono_ratio"]
+    assert "pressure" not in vkroom["meta"]
+    assert "t50" not in vkroom["meta"]           # a magnitude, and the room contaminates it
+
+
+@pytest.mark.xdist_group("web_vkroom")
+def test_vkroom_ships_the_plate_field_and_the_room_slices_on_TWO_clocks(vkroom):
+    """The plate pane runs on the plate's first flexural mode; the slices on acoustic transit.
+
+    They are different oscillators and there is no single honest stride for both — b18's slip was
+    inheriting the string's clock for a wavefront, and this batch has the same hazard twice over.
+    """
+    f, rf = vkroom["frames"], vkroom["room_frames"]
+    assert f["dims"] == 2 and rf["dims"] == 3 and rf["kind"] == "slices"
+    assert f["n_frames"] >= 2 and rf["n_frames"] >= 2
+    assert rf["anim_dt"] != vkroom["anim_dt"]
+    assert rf["width"] == sum(pl["nu"] * pl["nv"] for pl in rf["planes"])
+    assert len(rf["planes"]) == 3
+    assert {pl["name"] for pl in rf["planes"]} == {"xy", "xz", "yz"}
+    assert len(vkroom["frame_times"]) == f["n_frames"]
+    assert len(rf["times"]) == rf["n_frames"]
+
+
+@pytest.mark.xdist_group("web_vkroom")
+def test_vkroom_reports_the_snapped_room_and_the_derived_rate(vkroom):
+    """``h`` is snapped and the snap IS the resolution — report the room you got (the juari rule).
+
+    The sample rate is the ROOM's, and the plate's iteration depends on it, so it is reported too.
+    """
+    room = vkroom["meta"]["room"]
+    assert room["L"][0] == pytest.approx(room["N"][0] * room["h"], rel=1e-9)
+    assert room["cfl"] == 0.9
+    assert vkroom["fs_sim"] == pytest.approx(343.0 * math.sqrt(3) / (0.9 * room["h"]), rel=1e-6)
+    assert vkroom["boundary"] == "free"
+
+
+@pytest.mark.xdist_group("web_vkroom")
+def test_vkroom_payload_survives_the_servers_strict_json(vkroom):
+    """b18's scar: a NaN builds a fine payload in-process and 500s at the transport."""
+    json.dumps(vkroom, allow_nan=False)
+
+
+def test_vkroom_the_flag_off_makes_the_run_its_own_control():
+    """With the nonlinearity already off there is no second rig to build, and none is built."""
+    d = _vr(nonlinear=False)
+    c = d["meta"]["claim"]
+    assert d["nonlinear"] is False
+    assert c["spread_resolved"] == c["spread_resolved_twin"]
+    assert c["modal_drift"] == c["modal_drift_twin"]
+    assert d["meta"]["convergence"]["max_iters"] == 1
+
+
+def test_vkroom_both_tiers_run_and_the_suspended_one_radiates_from_both_faces():
+    for tier in ("baffled", "suspended"):
+        d = _vr(domain=tier)
+        assert d["tier"] == tier
+        assert d["meta"]["claim"]["n_resolved"] >= 1
+
+
+def test_vkroom_guards_are_clean_error_payloads_never_a_500():
+    """Each of these is a MEASURED limit, and the message has to say which kind it is."""
+    cases = [
+        ({"w_over_e": 3.5}, "cliff"),                       # 3.4 measured dead
+        ({"air_h": 0.02}, "converging"),                    # a stability limit, not a taste
+        ({"air_h": 0.005}, "air_h"),
+        ({"domain": "supported"}, "domain"),                # the gong is refused, not offered
+        ({"room_size": 1.5}, "room_size"),
+        ({"plate_N": 40}, "plate_N"),
+        ({"audio_duration": 5.0}, "audio_duration"),
+        ({"wall_zeta": 0.0}, "wall_zeta"),
+    ]
+    for over, needle in cases:
+        d = _vr(**over)
+        assert "error" in d, (over, d.get("model"))
+        assert d["error"]["kind"] == "param", (over, d["error"])
+        assert needle in d["error"]["message"], (over, d["error"]["message"])
+
+
+def test_vkroom_the_two_term_budget_refuses_what_neither_shipped_cap_would():
+    """``VK_WORK_MAX`` and ``AIRBOX_WORK_MAX`` both PASS at this rig while the render takes ~25 s.
+
+    The plate term is priced at the sweep cap rather than the measured mean (120 against 13), so a
+    configuration that is legal on the mean cannot slip through at nine times the intended cost.
+    """
+    d = _sim({"model": "vkroom", "audio_duration": 0.3})
+    assert "error" in d and d["error"]["kind"] == "param", d.get("model")
+    assert "budget" in d["error"]["message"]
+
+
+def test_vkroom_ignores_params_that_belong_to_other_models():
+    """gatherParams sends every slider, hidden ones included — the leak family (b2/3/7/8/12)."""
+    d = _vr(kappa=8.0, T=500.0, bridge_stiffness=1e6, air_cfl=0.45, radius=0.9)
+    assert "error" not in d
+    assert d["meta"]["room"]["cfl"] == 0.9      # air_cfl is a CONSTANT here and must not be read

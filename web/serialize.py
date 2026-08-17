@@ -29,13 +29,20 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.linalg import eigh
 from scipy.ndimage import uniform_filter1d
 from scipy.signal import resample_poly
 from scipy.sparse.linalg import eigsh
 
 from physsynth.analysis import damping, dispersion, duffing, modal, spectrum
 from physsynth.analysis.rotating_wave import rotating_wave_history, solve_rotating_wave
-from physsynth.core.airbox import AirBox, RoomLoadedBody, impedance_from_zeta
+from physsynth.core.airbox import (
+    AirBox,
+    RoomLoadedBody,
+    RoomLoadedVKPlate,
+    RoomSuspendedVKPlate,
+    impedance_from_zeta,
+)
 from physsynth.core.body import ModalBody
 from physsynth.core.bore import C0_AIR, RHO0_AIR, Bore
 from physsynth.core.bow import BowedString
@@ -897,6 +904,8 @@ def _build_payload(p: dict[str, Any]) -> dict[str, Any]:
         return _build_payload_airload(p)
     if model == "airbox":
         return _build_payload_airbox(p)
+    if model == "vkroom":
+        return _build_payload_vkroom(p)
     return _build_payload_string(p)
 
 
@@ -8914,5 +8923,627 @@ def _build_payload_airbox(p: dict[str, Any]) -> dict[str, Any]:
             },
             "ledger": ledger,
             "arrival": arrival,
+        },
+    }
+
+
+# == the gong in the room: model #6 as a radiating SURFACE (batch 19) ==============================
+#
+# `RoomLoadedVKPlate` / `RoomSuspendedVKPlate` — air-box batch 6, the one model family the viewer
+# never surfaced. Composition, not new capability: b18 built the 3-D slice set and the `vk` model
+# built the plate pane, and this key puts the nonlinear plate inside the room.
+#
+# THE CLAIM: **a loud plate's radiation is time-varying at fixed geometry, and a quiet one's is
+# not.** Every other radiator in this repo is linear in its excitation, so its pattern is amplitude-
+# invariant by construction; the von Kármán coupling is quadratic, so the SHAPE of the motion
+# evolves during a single strike, and a surface radiates by the shape of its motion rather than by
+# its net volume displacement (batch 3). No `R(omega)` can state it — a scalar-per-frequency load
+# has one pattern per frequency.
+#
+# Four things about this key are unlike every model above, all measured before it was written
+# (`M:\claud_projects\temp\vkroom-probe\`, probes 1-9):
+#
+#   * **The air grid is PINNED, and the pin is a stability limit.** Along the CFL line h = 11.40 mm
+#     (fs 57.9 kHz) converges at 72 Picard sweeps, 14 mm stops converging, and >= 17 mm is an
+#     immediate NaN. The shipped `airbox` room's 22.0 kHz cannot host this plate at any size, so
+#     none of the `AIRBOX_*` grid constants are reusable.
+#   * **The room CAN be coarsened at fixed fs — and it still must not be.** Lower the Courant
+#     fraction instead of h and the fixed point is untouched (identical 72/5 sweeps at 0.90/0.60/
+#     0.45) while nodes fall as (L*lambda)^3, so batch 6's "coarsening the room breaks the plate's
+#     fixed point" is a statement about coarsening ALONG THE CFL LINE. What it breaks instead is the
+#     CLAIM: batch 5's >=5-air-cells-per-structural-wave floor is a statement about h, so the
+#     resolved mode count collapses 17 -> 8 -> 6 of 289 and the resolved-band spread goes to 1.000x.
+#     Hence `VKROOM_CFL` is a constant and not a slider — a validity limit that leaves every ledger
+#     green, which is a different and more dangerous thing than a stability limit.
+#   * **Affordability is the room's SIZE at the fixed fine grid.** L = 0.35 m keeps the resolved
+#     band and the separation (29.3x against the 0.60 m reference rig's 30.6x) at ~a third of the
+#     cost; below 0.35 m nothing more is bought, because by then the PLATE is the floor.
+#   * **The defaults sit on a cliff.** At width 0.20, w/e 3.0 runs at 72 sweeps, 3.2 at 109, and 3.4
+#     is dead. At w/e 3.0, width 0.19 runs and 0.18 is dead. `VK_WOVERE_MAX = 6.0` is unusable here
+#     and the strike width is NOT a slider. The tempting single guard on the strike's curvature
+#     (`w/e / width^2`, which both brackets put at 83-85) is WRONG off the diagonal: at a constant
+#     ratio of 75.3, w/e 1 and 2 run while 5 and 8 are dead. Amplitude binds; a broader strike does
+#     not buy it back.
+#
+# The boundary is fixed to `free` (the honest cymbal) and `domain` carries the TIER instead, because
+# the claim is a comparison between tiers. The supported gong runs here but resolves only 6 of 225
+# modes, on which the separation collapses to 3.8x baffled and runs BACKWARDS suspended (0.3x) — a
+# six-mode band is noise, so it is refused rather than shipped under this headline.
+
+VKROOM_TIERS = ("baffled", "suspended")
+VKROOM_BOUNDARY = "free"             # NOT a slider — see the section note (the gong is refused)
+VKROOM_MATERIAL = dict(E=2.0e11, e=1.0e-3, nu=0.3, rho=7800.0)   # batch 6's canonical steel sheet
+VKROOM_PLATE_L = 0.10                # m, square. Fixed: every axis exposed is an axis measured.
+VKROOM_PLATE_N_DEFAULT = 16
+VKROOM_PLATE_N_MIN, VKROOM_PLATE_N_MAX = 8, 16
+VKROOM_STRIKE_WIDTH = 0.20           # of Lx. FIXED: 0.19 runs at 109 sweeps and 0.18 is dead.
+VKROOM_WOVERE_DEFAULT = 3.0
+VKROOM_WOVERE_MIN, VKROOM_WOVERE_MAX = 0.01, 3.0
+VKROOM_WOVERE_CLIFF = 3.4            # measured dead; 3.2 runs at 109 of 120 sweeps
+VKROOM_QUIET = 0.05                  # the amplitude the control was measured against
+VKROOM_CFL = 0.90                    # a CONSTANT, not a slider — see the section note
+VKROOM_H_DEFAULT = 0.0114            # m; the coarsest air cell whose plate still converges
+VKROOM_H_MIN, VKROOM_H_MAX = 0.0090, 0.0125
+VKROOM_SIZE_DEFAULT = 0.35           # m, cube
+VKROOM_SIZE_MIN, VKROOM_SIZE_MAX = 0.25, 0.60
+VKROOM_ZETA_DEFAULT, VKROOM_ZETA_MAX = 4.0, 50.0
+VKROOM_AUDIO_DEFAULT, VKROOM_AUDIO_MAX = 0.12, 0.30
+VKROOM_SWEEP_CAP = 120               # the core default 50 caps out on the loud arm (measured 72)
+VKROOM_WINDOWS = 4                   # batch 6's own window count; the observation window IS a claim
+VKROOM_CELLS_PER_WAVE = 5.0          # batch 5's resolution floor, applied per MODE
+VKROOM_NULLSPACE_DIM = 3             # a free plate's nullspace is exactly {1, x, y} (model #5b)
+VKROOM_NODE_MAX = 200_000
+VKROOM_ROOM_WORK_MAX = 8.0e8         # nodes x steps, counting the control twin's room as well
+VKROOM_PLATE_WORK_MAX = 5.0e8        # n_live x steps x the SWEEP CAP, never the measured mean
+VKROOM_PROJ_SAMPLES = 400            # modal projections per window; the read-out is not free
+VKROOM_TRACE_POINTS = 400
+VKROOM_ANIM_WIN = 0.004              # s of plate animation (a struck plate rings fast)
+VKROOM_ROOM_ANIM_WIN = 0.0015        # s of room slices — the wavefront's clock, not the plate's
+VKROOM_CELLS_PER_FRAME = 1.0         # b18: one frame per cell of acoustic travel
+VKROOM_MIC_FAR = (0.90, 0.86, 0.93)  # far end of the mic's travel, deliberately OFF-AXIS
+VKROOM_MIC_DEFAULT = 0.75
+VKROOM_SCALE_PCTL = 55.0
+
+
+def _vkroom_tier(p: dict[str, Any]) -> str:
+    """The ``domain`` select carries the TIER here, not the boundary. See the section note."""
+    tier = str(p.get("domain", "suspended"))
+    if tier not in VKROOM_TIERS:
+        raise ParamError(f"domain must be one of {VKROOM_TIERS}, got {tier!r}.")
+    return tier
+
+
+def _vkroom_strike(plate: VKPlate, w_over_e: float) -> NDArray[np.float64]:
+    """A centred raised-Gaussian strike of peak ``w_over_e * e``, on the plate's live nodes.
+
+    The width is :data:`VKROOM_STRIKE_WIDTH` and is deliberately not a parameter: 0.19 already
+    costs 109 of the 120 available Picard sweeps and 0.18 is dead at step 0.
+    """
+    w = VKROOM_STRIKE_WIDTH * plate.Lx
+    dx, dy = plate.X - 0.5 * plate.Lx, plate.Y - 0.5 * plate.Ly
+    field = w_over_e * plate.e * np.exp(-((dx * dx + dy * dy) / (w * w)))
+    return field[plate.mask]
+
+
+def _vkroom_modes(plate: VKPlate, h_air: float) -> tuple[NDArray[np.float64], NDArray[np.float64],
+                                                         NDArray[np.bool_]]:
+    """Mass-orthonormal free-plate modes, their frequencies, and which the AIR grid resolves.
+
+    Projection under the mass matrix, **never** a spectral peak: batch 6 measured that at
+    ``w/e = 3`` a peak tracker reads a mode at 0.53x its own linear value, because the field has
+    gone broadband and "the" frequency has stopped existing.
+
+    ``resolved`` is batch 5's criterion applied per mode — a mode whose structural wavelength spans
+    fewer than :data:`VKROOM_CELLS_PER_WAVE` air cells is smoothed by the port's own spreading, so
+    its contribution to any efficiency is an interpolation artefact as much as a physical one.
+    """
+    areas = plate.wdiag                                  # free edge: lumped cell areas
+    vals, vecs = eigh(plate.K.toarray() * plate.kappa ** 2, np.diag(areas))
+    f = np.sqrt(np.clip(vals, 0.0, None)) / (2.0 * np.pi)
+    beta = np.sqrt(2.0 * np.pi * np.maximum(f, 1e-9) / plate.kappa)
+    return vecs, f, ((2.0 * np.pi / beta) / h_air) >= VKROOM_CELLS_PER_WAVE
+
+
+def _build_vkroom_scene(p: dict[str, Any], *, nonlinear: bool) -> tuple[Any, dict[str, Any]]:
+    """Build the free-edge von Kármán plate in its room, plus every scalar the panels quote.
+
+    **The ROOM sets the sample rate** — b18's rule, one model further, and here it is also the
+    stability gate: the plate's Picard fixed point cares about ``k``, and the room is what fixes it.
+    """
+    tier = _vkroom_tier(p)
+    size = _fnum(p, "room_size", VKROOM_SIZE_DEFAULT)
+    h = _fnum(p, "air_h", VKROOM_H_DEFAULT)
+    zeta = _fnum(p, "wall_zeta", VKROOM_ZETA_DEFAULT)
+    try:
+        n_plate = int(p.get("plate_N", VKROOM_PLATE_N_DEFAULT))
+    except (TypeError, ValueError) as exc:
+        raise ParamError(f"plate_N must be an integer, got {p.get('plate_N')!r}.") from exc
+
+    if not (VKROOM_SIZE_MIN <= size <= VKROOM_SIZE_MAX):
+        raise ParamError(
+            f"room_size must be in [{VKROOM_SIZE_MIN}, {VKROOM_SIZE_MAX}] m, got {size}."
+        )
+    if not (VKROOM_H_MIN <= h <= VKROOM_H_MAX):
+        raise ParamError(
+            f"air_h must be in [{VKROOM_H_MIN}, {VKROOM_H_MAX}] m, got {h}. This range is a "
+            "STABILITY limit, not a taste: the room sets the sample rate, and at h = 0.014 the "
+            "plate's Picard iteration stops converging while h >= 0.017 is an immediate NaN."
+        )
+    if not (0.0 < zeta <= VKROOM_ZETA_MAX):
+        raise ParamError(f"wall_zeta must be in (0, {VKROOM_ZETA_MAX}], got {zeta}.")
+    if not (VKROOM_PLATE_N_MIN <= n_plate <= VKROOM_PLATE_N_MAX):
+        raise ParamError(
+            f"plate_N must be in [{VKROOM_PLATE_N_MIN}, {VKROOM_PLATE_N_MAX}], got {n_plate}."
+        )
+
+    lam_air = VKROOM_CFL / math.sqrt(3.0)
+    fs = C0_AIR / (lam_air * h)
+    n_room = int(round(size / h))
+    room = AirBox(L=(n_room * h,) * 3, fs=fs, h=h, walls=impedance_from_zeta(zeta))
+    nodes = int(np.prod([n + 1 for n in room.N]))
+    if nodes > VKROOM_NODE_MAX:
+        raise ParamError(
+            f"the room is {nodes:,} nodes (> {VKROOM_NODE_MAX:,}). Shrink room_size — air_h cannot "
+            "be coarsened here, because it is what holds the plate's iteration together."
+        )
+
+    plate = VKPlate(
+        Lx=VKROOM_PLATE_L, Ly=VKROOM_PLATE_L, fs=fs, N=n_plate, boundary=VKROOM_BOUNDARY,
+        nonlinear=nonlinear, couple_max_iter=VKROOM_SWEEP_CAP, **VKROOM_MATERIAL,
+    )
+    if tier == "baffled":
+        inst = RoomLoadedVKPlate(plate=plate, room=room, face="z0")
+    else:
+        inst = RoomSuspendedVKPlate(plate=plate, room=room, plane="z", index=n_room // 2)
+    info = {
+        "tier": tier, "fs": fs, "h": h, "lam_air": lam_air, "nodes": nodes, "zeta": zeta,
+        "room_L": tuple(round(float(v), 4) for v in room.L_actual),
+        "room_L_requested": round(float(size), 4),
+        "room_N": tuple(int(v) for v in room.N), "n_plate": n_plate,
+        "n_live": int(plate.n_live), "kappa": round(float(plate.kappa), 4), "e": plate.e,
+        "plate_L": VKROOM_PLATE_L, "boundary": VKROOM_BOUNDARY,
+    }
+    return inst, info
+
+
+class _VKRoomRun:
+    """Telemetry of a struck plate radiating into a room — the claim, two ledgers, and convergence.
+
+    **Three sampling rates, on purpose.** The mic is per-step (it is the audio). The energy channels
+    are every ``e_stride`` steps, because each is a sum over the whole room (b18's finding: seven of
+    them per step cost ~3 s of that render on their own). The modal projection behind the claim is
+    every ``proj_stride`` steps — it is a window MEAN of a quadratic form, so ~400 samples per
+    window bound it honestly, and the stride ships in the payload so the bound is readable rather
+    than implied.
+    """
+
+    def __init__(self, n: int, e_stride: int, windows: int) -> None:
+        m = n // e_stride + 1
+        self.e_stride = e_stride
+        self.e_steps = np.arange(m) * e_stride
+        self.E = np.empty(m)                 # the conserved scene total (instrument + room)
+        self.e_plate = np.empty(m)           # BARE plate energy (not the wrapper's)
+        self.e_acoustic = np.empty(m)
+        self.e_dissipated = np.empty(m)
+        self.radiated = np.empty(m)          # the plate's ledger: what it handed the room
+        self.injected = np.empty(m)          # the ROOM's ledger for the same transaction
+        self.p_mic = np.empty(n + 1)
+        self.sigma_shape = np.zeros(windows)      # the claim, all modes
+        self.sigma_res = np.zeros(windows)        # the claim, resolved band only
+        self.sigma_mono = np.zeros(windows)       # what every lumped tier in this repo can see
+        self.shares: list[NDArray[np.float64]] = []
+        self.in_band = np.zeros(windows)
+        self.plate_frames: list[NDArray[np.float64]] = []
+        self.plate_steps: list[int] = []
+        self.slices: list[NDArray[np.float64]] = []
+        self.slice_steps: list[int] = []
+        self.n_not_converged = 0
+        self.worst_residual = 0.0
+        self.max_iters = 0
+        self.sweep_total = 0
+
+
+def _run_vkroom(inst: Any, n_steps: int, *, windows: int, mic_index: tuple[int, int, int],
+                planes: list[dict[str, Any]], e_stride: int, proj_stride: int,
+                plate_stride: int, plate_until: int, slice_stride: int,
+                slice_until: int, modes: tuple[NDArray[np.float64], NDArray[np.bool_]],
+                capture: bool = True) -> _VKRoomRun:
+    """Step the coupled scene, capturing the claim, both ledgers and both frame sets.
+
+    The step ORDER is the air-box family's contract and is load-bearing: the port solves against
+    the room's stored half-step first, and the room is stepped ONCE afterwards by the caller —
+    here, by this loop.
+
+    ``capture=False`` runs the control twin, which needs the claim and the convergence record but
+    neither audio nor frames; it is what keeps the twin cheap (its sweeps collapse to 1).
+    """
+    room, plate = inst.room, inst.plate
+    vecs, resolved = modes
+    vecs_r = vecs[:, resolved]
+    areas = plate.wdiag
+    faces = 2.0 if isinstance(inst, RoomSuspendedVKPlate) else 1.0
+    load = inst.port.load_matrix
+    area = plate.Lx * plate.Ly
+    run = _VKRoomRun(n_steps, e_stride, windows)
+    per = max(1, n_steps // windows)
+    acc = [np.zeros(vecs.shape[1]) for _ in range(windows)]
+    sums = np.zeros((windows, 5))    # p_shape, p_res, p_mono, v2, v2_res
+    counts = np.zeros(windows, dtype=int)
+
+    def _sample_energy(j: int) -> None:
+        run.e_plate[j] = plate.energy()
+        run.e_acoustic[j] = room.acoustic_energy()
+        run.e_dissipated[j] = room.dissipated_energy()
+        run.radiated[j] = inst.radiated_energy
+        run.injected[j] = room.injected_energy()
+        run.E[j] = inst.energy() + room.energy()
+
+    def _sample_claim(i: int) -> None:
+        w = min(i // per, windows - 1)
+        v = (plate.u - plate.u_prev) / plate.k
+        c = vecs.T @ (areas * v)
+        v_res = vecs_r @ c[resolved]
+        sums[w, 0] += faces * float(v @ (load @ v))
+        sums[w, 1] += faces * float(v_res @ (load @ v_res))
+        sums[w, 2] += faces * RHO0_AIR * C0_AIR * float(np.sum(areas * v)) ** 2 / area
+        sums[w, 3] += float(np.dot(areas * v, v)) / area
+        sums[w, 4] += float(np.dot(areas * v_res, v_res)) / area
+        acc[w] += c * c
+        counts[w] += 1
+
+    _sample_energy(0)
+    _sample_claim(0)
+    if capture:
+        run.p_mic[0] = float(room.p[mic_index])
+        if plate_until >= 1:
+            run.plate_frames.append(np.asarray(plate.state, dtype=float))
+            run.plate_steps.append(0)
+        if slice_until >= 1:
+            run.slices.append(_airbox_take_slices(room, planes))
+            run.slice_steps.append(0)
+    for i in range(1, n_steps + 1):
+        inst.step()
+        room.step()
+        if not plate.converged:
+            run.n_not_converged += 1
+        run.worst_residual = max(run.worst_residual, float(plate.last_residual))
+        run.max_iters = max(run.max_iters, int(plate.n_iters))
+        run.sweep_total += int(plate.n_iters)
+        if capture:
+            run.p_mic[i] = float(room.p[mic_index])
+        if i % proj_stride == 0:
+            _sample_claim(i)
+        if i % e_stride == 0 and i // e_stride < run.E.size:
+            _sample_energy(i // e_stride)
+        if capture and i <= plate_until and i % plate_stride == 0:
+            run.plate_frames.append(np.asarray(plate.state, dtype=float))
+            run.plate_steps.append(i)
+        if capture and i <= slice_until and i % slice_stride == 0:
+            run.slices.append(_airbox_take_slices(room, planes))
+            run.slice_steps.append(i)
+
+    # NaN is the OTHER failure mode, and it is not the same as non-convergence: a run can finish
+    # every step with `converged` False and finite numbers (measured at w/e = 3.4). Catch it here,
+    # because a non-finite payload serializes fine in-process and dies at the transport with a 500
+    # (`json.dumps(..., allow_nan=False)`) — b18's scar.
+    if not np.all(np.isfinite(run.E)) or (capture and not np.all(np.isfinite(run.p_mic))):
+        raise ParamError(
+            "simulation produced non-finite energy (the plate's iteration diverged). Lower "
+            f"w_over_e — it is capped at {VKROOM_WOVERE_MAX} because {VKROOM_WOVERE_CLIFF} was "
+            "measured dead — or refine air_h."
+        )
+
+    denom = RHO0_AIR * C0_AIR * area
+    for w in range(windows):
+        n = max(1, counts[w])
+        v2, v2_res = sums[w, 3] / n, sums[w, 4] / n
+        run.sigma_shape[w] = (sums[w, 0] / n) / (denom * v2) if v2 > 0 else 0.0
+        run.sigma_res[w] = (sums[w, 1] / n) / (denom * v2_res) if v2_res > 0 else 0.0
+        run.sigma_mono[w] = (sums[w, 2] / n) / (denom * v2) if v2 > 0 else 0.0
+        run.in_band[w] = v2_res / v2 if v2 > 0 else 0.0
+        total = acc[w].sum()
+        run.shares.append(acc[w] / total if total > 0 else acc[w])
+    return run
+
+
+def _vkroom_spread(x: NDArray[np.float64]) -> float:
+    """Max over min across the windows — how much the radiation pattern MOVED during the strike."""
+    lo = float(np.min(x))
+    return float(np.max(x) / lo) if lo > 0 else 0.0
+
+
+def _vkroom_claim_block(main: _VKRoomRun, twin: _VKRoomRun, resolved: NDArray[np.bool_],
+                        freqs: NDArray[np.float64], fs: float) -> dict[str, Any]:
+    """THE CLAIM: shape-radiation efficiency per window, against the plate's own linear self.
+
+    The observable is deliberately **not** the ledger. Batch 6 measured the obvious one — radiated
+    energy per window off the port's own books — and it does not separate the arms: the ROOM's own
+    build-up moves it 1.79x in the control while the effect moves it 3.64x, i.e. the confound is
+    the same size as the thing. What separates cleanly is the efficiency evaluated as a functional
+    of the SHAPE alone, ``v^T (T^T R T) v / (rho0 c0 A <v^2>)`` — the room's own resistive operator,
+    the one inside the factorization, applied to the plate's actual coupled velocity. The run is
+    fully coupled; only the read-out is a fixed quadratic form, which takes the room's transient out
+    of the number without taking the room out of the physics.
+
+    Every figure is given **twice** — over all modes and over the modes the air grid actually
+    resolves — because the cascade's destination modes are exactly the ones it resolves worst. The
+    **separation** is the claim; the multiplier is not, and the resolved band is what travels
+    (measured flat at 1.044/1.053/1.050/1.053 across a 5x range of window while the all-modes
+    figure falls monotonically 1.395 -> 1.103).
+    """
+    drift = 0.5 * float(np.abs(main.shares[-1] - main.shares[0]).sum())
+    drift_twin = 0.5 * float(np.abs(twin.shares[-1] - twin.shares[0]).sum())
+    return {
+        "kind": "vkroom",
+        "sigma_shape": _finite_list(main.sigma_shape, 6),
+        "sigma_resolved": _finite_list(main.sigma_res, 6),
+        "sigma_mono": _finite_list(main.sigma_mono, 9),
+        "sigma_shape_twin": _finite_list(twin.sigma_shape, 6),
+        "sigma_resolved_twin": _finite_list(twin.sigma_res, 6),
+        "spread": round(_vkroom_spread(main.sigma_shape), 6),
+        "spread_resolved": round(_vkroom_spread(main.sigma_res), 6),
+        "spread_twin": round(_vkroom_spread(twin.sigma_shape), 6),
+        "spread_resolved_twin": round(_vkroom_spread(twin.sigma_res), 6),
+        "modal_drift": round(drift, 6),
+        "modal_drift_twin": round(drift_twin, 6),
+        "in_band": _finite_list(main.in_band, 6),
+        "n_resolved": int(resolved.sum()),
+        "n_modes": int(resolved.size),
+        "f_resolved_max": round(float(np.max(freqs[resolved])) if resolved.any() else 0.0, 2),
+        "windows": int(main.sigma_shape.size),
+        "window_s": round(float(main.p_mic.size - 1) / fs / max(1, main.sigma_shape.size), 6),
+        # What every lumped tier in this repo can see, shipped BESIDE the truth rather than as it:
+        # batch 6 measured the compact monopole at 3e-7 of the true figure, and for the suspended
+        # cymbal moving the WRONG WAY (rising while the true efficiency falls).
+        "mono_ratio": round(
+            float(np.mean(main.sigma_mono) / np.mean(main.sigma_shape))
+            if np.mean(main.sigma_shape) > 0 else 0.0, 12),
+    }
+
+
+def _build_payload_vkroom(p: dict[str, Any]) -> dict[str, Any]:
+    playback_speed = _fnum(p, "playback_speed", 0.02)
+    w_over_e = _fnum(p, "w_over_e", VKROOM_WOVERE_DEFAULT)
+    audio_dur = _fnum(p, "audio_duration", VKROOM_AUDIO_DEFAULT)
+    mic_frac = _fnum(p, "mic_position", VKROOM_MIC_DEFAULT)
+    slice_frac = _fnum(p, "slice_position", 0.5)
+    fpp = max(1, int(_fnum(p, "frames_per_period", FRAMES_PER_PERIOD)))
+    nonlinear = _as_bool(p.get("nonlinear", True), True)
+
+    if not (0.0 < playback_speed <= SPEED_MAX):
+        raise ParamError(f"playback_speed must be in (0, {SPEED_MAX}], got {playback_speed}.")
+    if not (VKROOM_WOVERE_MIN <= w_over_e <= VKROOM_WOVERE_MAX):
+        raise ParamError(
+            f"w_over_e must be in [{VKROOM_WOVERE_MIN}, {VKROOM_WOVERE_MAX}], got {w_over_e}. The "
+            f"ceiling is not a taste: at this rig {VKROOM_WOVERE_CLIFF} was measured DEAD (the "
+            "plate's iteration diverges at step 0), and it is a cliff rather than a slope -- 3.2 "
+            "still runs, at 109 of 120 sweeps."
+        )
+    if not (0.0 < audio_dur <= VKROOM_AUDIO_MAX):
+        raise ParamError(f"audio_duration must be in (0, {VKROOM_AUDIO_MAX}] s, got {audio_dur}.")
+    if not (0.15 <= mic_frac <= 1.0):
+        raise ParamError(f"mic_position must be in [0.15, 1.0], got {mic_frac}.")
+    if not (0.0 <= slice_frac <= 1.0):
+        raise ParamError(f"slice_position must be in [0, 1], got {slice_frac}.")
+
+    inst, info = _build_vkroom_scene(p, nonlinear=nonlinear)
+    room, plate = inst.room, inst.plate
+    fs, tier = info["fs"], info["tier"]
+    n_steps = max(VKROOM_WINDOWS, round(audio_dur * fs))
+
+    # --- the two-term work budget. Neither shipped cap covers this pairing: VK_WORK_MAX is
+    # n_live x steps x sweeps and AIRBOX_WORK_MAX is nodes x steps, and at this rig BOTH pass
+    # comfortably while the render still takes ~25 s. The plate term is priced at the SWEEP CAP,
+    # never at the measured mean (13 against a cap of 120), the way VK_WORK_MAX already does.
+    twin_runs = 2 if nonlinear else 1
+    room_work = float(info["nodes"]) * n_steps * twin_runs
+    plate_work = float(info["n_live"]) * n_steps * VKROOM_SWEEP_CAP
+    if room_work > VKROOM_ROOM_WORK_MAX:
+        raise ParamError(
+            f"the room's budget is exceeded ({room_work:.2e} node-steps > "
+            f"{VKROOM_ROOM_WORK_MAX:.2e}; the control twin's room counts too). Shrink room_size or "
+            "shorten audio_duration -- air_h cannot be coarsened here."
+        )
+    if plate_work > VKROOM_PLATE_WORK_MAX:
+        raise ParamError(
+            f"the plate's budget is exceeded ({plate_work:.2e} coupled node-solves > "
+            f"{VKROOM_PLATE_WORK_MAX:.2e}, priced at the {VKROOM_SWEEP_CAP}-sweep cap rather than "
+            "the measured mean). Shorten audio_duration or lower plate_N."
+        )
+
+    vecs, freqs, resolved = _vkroom_modes(plate, info["h"])
+    # The FOURTH mode, and the index is a fact rather than a threshold: a free plate's nullspace is
+    # exactly {1, x, y} (model #5b), so modes 0-2 are the rigid-body ones and mode 3 is the first
+    # flexural — the saddle/twist, not a bulge. Filtering on "frequency > epsilon" instead picks a
+    # rigid mode, because the three zeros come out of `eigh` at ~1e-5 Hz rather than at 0, and the
+    # animation stride then lands ~3x past the whole window (measured: one frame).
+    f_lin = float(freqs[VKROOM_NULLSPACE_DIM]) if freqs.size > VKROOM_NULLSPACE_DIM else 1.0
+
+    # --- geometry: the plate's centre, and a mic deliberately OFF-AXIS from it -------------------
+    z_plate = 0.0 if tier == "baffled" else (info["room_N"][2] // 2) * info["h"]
+    centre = (0.5 * room.L_actual[0], 0.5 * room.L_actual[1], z_plate)
+    mic_want = tuple(
+        a + mic_frac * (f * b - a)
+        for a, f, b in zip(centre, VKROOM_MIC_FAR, room.L_actual, strict=True)
+    )
+    mic_index = room.node_index(mic_want)
+
+    planes = _airbox_slice_planes(room, slice_frac)
+    per_frame = int(sum(pl["nu"] * pl["nv"] for pl in planes))
+
+    # TWO animation clocks, both chosen rather than inherited -- b18's slip was taking the string's
+    # stride for a wavefront. The plate pane is drawn on the PLATE's first flexural mode; the room
+    # slices are drawn on ACOUSTIC TRANSIT (one frame per cell of travel). They are different
+    # oscillators and there is no single honest stride for both.
+    plate_stride = max(1, round((fs / max(f_lin, 1.0)) / fpp))
+    plate_until = min(n_steps, max(plate_stride, round(VKROOM_ANIM_WIN * fs)))
+    if plate_until // plate_stride > MAX_FRAMES:
+        plate_stride = max(1, math.ceil(plate_until / MAX_FRAMES))
+    slice_stride = max(1, round(VKROOM_CELLS_PER_FRAME / info["lam_air"]))
+    slice_until = min(n_steps, max(slice_stride, round(VKROOM_ROOM_ANIM_WIN * fs)))
+    if slice_until // slice_stride > MAX_FRAMES:
+        slice_stride = max(1, math.ceil(slice_until / MAX_FRAMES))
+
+    e_stride = max(1, math.ceil(n_steps / VKROOM_TRACE_POINTS))
+    proj_stride = max(1, math.ceil(n_steps / (VKROOM_WINDOWS * VKROOM_PROJ_SAMPLES)))
+
+    inst.set_state(_vkroom_strike(plate, w_over_e))
+    run = _run_vkroom(
+        inst, n_steps, windows=VKROOM_WINDOWS, mic_index=mic_index, planes=planes,
+        e_stride=e_stride, proj_stride=proj_stride, plate_stride=plate_stride,
+        plate_until=plate_until, slice_stride=slice_stride, slice_until=slice_until,
+        modes=(vecs, resolved),
+    )
+
+    # --- the control, and it is the batch's anchor -----------------------------------------------
+    # VKPlate(nonlinear=False) is bit-identical to Plate, so this class with the flag off is
+    # bit-identical to RoomLoadedPlate: "frozen versus drifting" is ONE class and ONE flag, not two
+    # rigs. Measured at w/e = 3 with the flag off, the spread lands on the QUIET arm's value to
+    # three decimals (1.013x baffled, 1.004x suspended) -- so the effect is the nonlinearity and
+    # not the amplitude, and the control says so without needing a second amplitude. It is also the
+    # only catch for batch 6's silent-failure trap (rho_v where rho_s belongs: the air load 1000x
+    # too weak at e = 1 mm, with every ledger still green).
+    if nonlinear:
+        twin_inst, _ = _build_vkroom_scene(p, nonlinear=False)
+        twin_inst.set_state(_vkroom_strike(twin_inst.plate, w_over_e))
+        twin = _run_vkroom(
+            twin_inst, n_steps, windows=VKROOM_WINDOWS, mic_index=mic_index, planes=planes,
+            e_stride=e_stride, proj_stride=proj_stride, plate_stride=1, plate_until=0,
+            slice_stride=1, slice_until=0, modes=(vecs, resolved), capture=False,
+        )
+    else:
+        twin = run
+
+    # --- the two ledgers, and NEITHER of them is the gate ----------------------------------------
+    # Measured green at every rig probed, INCLUDING the coarsened ones whose resolved-band claim had
+    # already collapsed to 1.000x: scene drift 3.2e-13..7.3e-13, money test 2.2e-16..1.7e-14. That
+    # is the air-box family's standing rule arriving with a fifth blind spot, on top of batch 6's
+    # own third reason -- the money test is arithmetic on whatever w^{n+1} came out of the solve, so
+    # an under-converged one is ported self-consistently. The honesty line here is the per-step
+    # CONVERGENCE record, which is why it is carried in the energy block rather than asserted only
+    # in a test.
+    total = run.E
+    e0 = float(total[0])
+    scale = max(abs(e0), 1e-300)
+    resid = np.abs(run.radiated - run.injected) / scale
+    ledger = {
+        "kind": "vkroom",
+        "time": _finite_list(run.e_steps / fs, 6),
+        "e_plate_frac": _finite_list(run.e_plate / total),
+        "e_acoustic_frac": _finite_list(run.e_acoustic / total),
+        "e_dissipated_frac": _finite_list(run.e_dissipated / total),
+        "radiated_frac": _finite_list(run.radiated / total),
+        "total_frac": _finite_list(total / total),
+        "residual": _finite_list(resid, 3),
+        "residual_max": float(np.max(resid)),
+        "e_stride": int(run.e_stride),
+        "proj_stride": int(proj_stride),
+        "n_samples": int(total.size),
+        "acoustic_frac_peak": round(float(np.max(run.e_acoustic / total)), 8),
+        "radiated_frac_end": round(float(run.radiated[-1] / total[-1]), 8),
+        "total_drift": (total.max() - total.min()) / scale,
+    }
+    convergence = {
+        "all_converged": run.n_not_converged == 0,
+        "n_not_converged": int(run.n_not_converged),
+        "worst_residual": float(run.worst_residual),
+        "max_iters": int(run.max_iters),
+        "mean_iters": round(run.sweep_total / max(1, n_steps), 2),
+        "couple_tol": float(plate.couple_tol),
+        "cap": int(VKROOM_SWEEP_CAP),
+        "twin_max_iters": int(twin.max_iters),
+    }
+
+    claim = _vkroom_claim_block(run, twin, resolved, freqs, fs)
+
+    if run.plate_frames:
+        plate_full = np.array(run.plate_frames, dtype=float)
+    else:
+        plate_full = np.zeros((0,) + np.asarray(plate.state).shape)
+    plate_dec, mask_dec = _decimate_field_mask(plate_full, plate.mask)
+    nf, ny_dec, nx_dec = plate_dec.shape
+    plate_amp = float(np.max(np.abs(plate_dec))) if plate_dec.size else 0.0
+
+    slices = np.array(run.slices, dtype=float) if run.slices else np.zeros((0, per_frame))
+    live = np.abs(slices[slices != 0.0])
+    slice_amp = float(np.max(np.abs(slices))) if slices.size else 0.0
+    ref = float(np.percentile(live, VKROOM_SCALE_PCTL)) if live.size else 0.0
+    if not (ref > 0.0):
+        ref = slice_amp if slice_amp > 0.0 else 1.0
+
+    audio48, peak = _resample_normalize(run.p_mic, fs)     # the audio IS the mic, in the room
+    sim = SimResult(time=run.e_steps / fs, energy=total, output=None, fs=fs, snapshots=[])
+    return {
+        "model": "vkroom",
+        "tier": tier,
+        "boundary": VKROOM_BOUNDARY,
+        "nonlinear": nonlinear,
+        "fs_sim": round(fs, 3),
+        "grid": {
+            "dims": 2, "nx": int(nx_dec), "ny": int(ny_dec),
+            "extent_x": round(plate.Lx, 6), "extent_y": round(plate.Ly, 6), "domain": "rectangle",
+        },
+        "frames": {
+            "b64": _b64f32(plate_dec.ravel()),
+            "n_frames": int(nf), "nx": int(nx_dec), "ny": int(ny_dec),
+            "width": int(nx_dec), "dims": 2,
+        },
+        "mask": {"b64": _b64u8(mask_dec.ravel()), "nx": int(nx_dec), "ny": int(ny_dec)},
+        "frame_times": _finite_list(np.array(run.plate_steps, dtype=float) / fs, 6),
+        "anim_dt": float(plate_stride / fs),
+        "room_frames": {
+            "b64": _b64f32(slices.ravel()),
+            "n_frames": int(slices.shape[0]),
+            "width": int(per_frame),
+            "dims": 3,
+            "kind": "slices",
+            "planes": planes,
+            "stride_floats": int(per_frame),
+            "times": _finite_list(np.array(run.slice_steps, dtype=float) / fs, 6),
+            "anim_dt": float(slice_stride / fs),
+            "amp": slice_amp,
+            "scale": {"map": "asinh", "ref": ref, "amp": slice_amp, "pctl": VKROOM_SCALE_PCTL},
+        },
+        "playback_speed": playback_speed,
+        "field_amp": plate_amp,
+        "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
+        # The plate is lossless (sigma = 0) and the walls' dissipation is BOOKED, so the scene total
+        # is conserved and the 1e-10 drift bar applies -- measured 3.2e-13..7.3e-13 with zeta = 4.
+        # The verdict is additionally gated on convergence: the energy identity telescopes only at
+        # the Picard fixed point, so a run with a non-converged step has a drift number that is
+        # iteration noise rather than physics.
+        "energy": _energy_block(
+            sim, sigma_zero=True, oracle_2sigma=0.0, decay_oracle=False, convergence=convergence,
+        ),
+        "meta": {
+            "kappa": info["kappa"],
+            "e": info["e"],
+            "f1": round(f_lin, 3),
+            "num_steps": int(n_steps),
+            "n_frames": int(nf),
+            "w_over_e": w_over_e,
+            "strike_width": VKROOM_STRIKE_WIDTH,
+            "plate": {
+                "L": info["plate_L"], "N": info["n_plate"], "n_live": info["n_live"],
+                "boundary": VKROOM_BOUNDARY, "cliff_w_over_e": VKROOM_WOVERE_CLIFF,
+            },
+            "room": {
+                "L": list(info["room_L"]),
+                "L_requested": info["room_L_requested"],
+                "N": list(info["room_N"]),
+                "h": info["h"],
+                "nodes": info["nodes"],
+                "cfl": VKROOM_CFL,
+                "lam_air": round(info["lam_air"], 6),
+                "zeta": info["zeta"],
+                "c0": round(room.c0, 3),
+                "mic_at": [round(float(v), 4) for v in room.snapped(mic_want)],
+                "mic_cell": [int(v) for v in mic_index],
+                "room_work": float(room_work),
+                "plate_work": float(plate_work),
+            },
+            "ledger": ledger,
+            "convergence": convergence,
+            "claim": claim,
         },
     }

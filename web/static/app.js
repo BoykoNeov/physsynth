@@ -298,6 +298,20 @@ const MODEL_RANGES = {
             sigma_body: { val: 0 },
             pluck_position: { val: 0.3 },
             audio_duration: { min: 0.1, max: 2.0, step: 0.05, fixed: 2, val: 0.6 } },
+  // Every range here is a MEASURED limit, not a taste, and two of them are stability limits.
+  // air_h [9, 12.5] mm: the room sets the sample rate and the plate's Picard iteration needs
+  // it — at h = 14 mm the iteration stops converging and at h >= 17 mm it is an immediate NaN,
+  // so the shipped `airbox` default of 30 mm cannot host this plate at any room size.
+  // w_over_e caps at 3.0 against vk's own 6.0: 3.2 still runs (at 109 of 120 sweeps) and 3.4
+  // is DEAD. It is a cliff, not a slope, which is why the cap is well under the last value
+  // that worked. audio_duration is a 120 ms BURST rather than a note — the same gate.
+  vkroom: { room_size: { min: 0.25, max: 0.6, step: 0.01, fixed: 2, val: 0.35, unit: "m cube" },
+            air_h: { min: 0.009, max: 0.0125, step: 0.0001, fixed: 4, val: 0.0114, unit: "m" },
+            wall_zeta: { min: 0.5, max: 50, step: 0.5, fixed: 1, val: 4.0 },
+            plate_N: { min: 8, max: 16, step: 1, fixed: 0, val: 16 },
+            mic_position: { min: 0.15, max: 1.0, step: 0.01, fixed: 2, val: 0.75 },
+            w_over_e: { min: 0.05, max: 3.0, step: 0.05, fixed: 2, val: 3.0, unit: "×e" },
+            audio_duration: { min: 0.02, max: 0.3, step: 0.01, fixed: 2, val: 0.12 } },
   // Regime-level ranges, keyed "model:domain" and merged AFTER the model spec (see
   // applyModelRanges). The phantom regime is the first customer and needs both: κ = 8 is its
   // microscope (the geometric model defaults κ = 0, which is a HARMONIC string — every phantom
@@ -324,6 +338,16 @@ const MODEL_RANGES = {
   // fixed, because the jawari has to narrow BOTH (see its spec) and a stale 0.01 step would leave
   // every other model's multi-second slider crawling in hundredths.
   _default: { N: { min: 16, max: 512 }, lambda: { min: 0.5, max: 2.0, val: 1.0 },
+              // vkroom re-ranges these four; index.html's homes are the airbox's and the vk
+              // plate's. Without the reset, a vkroom → vk switch would leave w_over_e capped
+              // at 3.0 (vk's own ceiling is 6.0) and a vkroom → airbox switch would leave the
+              // room at a 0.35 m cube on a 9 mm grid — legal for neither.
+              w_over_e: { min: 0.1, max: 6, step: 0.1, fixed: 1, val: 2.0, unit: "×e" },
+              room_size: { min: 0.5, max: 2.5, step: 0.05, fixed: 2, val: 1.0,
+                           unit: "× (1.2·0.9·0.8 m)" },
+              air_h: { min: 0.02, max: 0.10, step: 0.005, fixed: 3, val: 0.03, unit: "m" },
+              wall_zeta: { min: 0.1, max: 50, step: 0.1, fixed: 1, val: 3.0 },
+              plate_N: { min: 8, max: 16, step: 1, fixed: 0, val: 16 },
               kappa: { min: 0, max: 8, step: 0.05, fixed: 2, val: 1.0 },
               rho: { min: 0.001, max: 0.02, step: 0.0005, fixed: 4, val: 0.005, unit: "kg/m²" },
               amplitude: { min: 0.001, max: 0.06, step: 0.001, fixed: 3, val: 0.001 },
@@ -387,7 +411,7 @@ const MODEL_RANGES = {
 // Secondary select repurposed per model: geometry (membrane), boundary (plate / von Kármán) or
 // REGIME (the geometric string — three claims, one string, cheapest first).
 const DOMAIN_MODELS = ["membrane", "mallet", "plate", "vk", "geometric", "sympathetic", "bore",
-                       "reed", "platebody", "tension", "airbox"];
+                       "reed", "platebody", "tension", "airbox", "vkroom"];
 const DOMAIN_OPTS = {
   membrane: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
   mallet: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
@@ -396,6 +420,14 @@ const DOMAIN_OPTS = {
   // the curved-Chladni ring you watch), the supported soundboard is the canonical guitar-body case.
   platebody: [["free", "Free cymbal — Chladni (#5b)"], ["supported", "Soundboard (#5)"]],
   vk: [["supported", "Supported gong (#6)"], ["free", "Free-edge cymbal (#6)"]],
+  // vkroom's select carries the TIER, not the boundary, and that is a measured decision. The
+  // claim is a COMPARISON between a plate flush in a wall and one hung in mid-air, so the tier
+  // is the axis that has to be dialable. The boundary is pinned to free (the honest cymbal):
+  // the supported gong RUNS at this rig but resolves only 6 of 225 modes, on which the
+  // separation collapses to 3.8x baffled and runs BACKWARDS suspended (0.3x) — a six-mode band
+  // is noise, so it is refused rather than shipped under this batch's headline.
+  vkroom: [["suspended", "Hung cymbal — radiates BOTH faces (#6)"],
+           ["baffled", "Gong flush in a wall — baffled (#6)"]],
   // The tension string's two regimes are two sides of ONE threshold. Duffing leads: it is the
   // measurable, oracle-backed claim, and it is only honest BELOW the tongue — which is exactly what
   // `parametric` crosses. The server-side dT/T0 ceiling that refuses the Duffing panel is not
@@ -427,7 +459,10 @@ const DOMAIN_OPTS = {
 };
 const DOMAIN_LABELS = { membrane: "Domain", mallet: "Drum shape", geometric: "Regime",
                         sympathetic: "Regime", bore: "Far end", reed: "Far end",
-                        platebody: "Body edge", tension: "Regime", airbox: "Walls" };
+                        platebody: "Body edge", tension: "Regime", airbox: "Walls",
+                        // not "Boundary": the boundary is PINNED to free here and
+                        // the select carries the mounting instead.
+                        vkroom: "Mounting" };
 
 const sliders = {};      // param -> <input>
 const updaters = {};     // param -> fn() that refreshes its value label
@@ -465,6 +500,10 @@ let isReed = false, reedOpen = null, reedH0 = 4e-4;
 // distributed body you watch ring, dims = 2, the standard heatmap path), and the string rides along
 // as a thin 1D strip composited on top — its own frame buffer, at the same frame count/times.
 let isPlateBody = false, strFrames = null, strWidth = 0, strX = null, strAmp = 1;
+// The gong's room half: its own frames, planes, offsets, scale and CLOCK, kept separate from
+// the dims-3 slice state above because vkroom is a dims-2 payload that ALSO carries a room.
+let isVKRoom = false, roomFrames = null, roomSliceCvs = null, roomScale = null;
+let roomWidth = 0, roomNFrames = 0, roomAnimDt = 0;
 // batch 18 — the room. `dims = 3` is a SLICE SET, never a volume: three named orthogonal planes
 // per frame, each an ordinary decimated heatmap, concatenated head-to-tail in `slicePlanes` order.
 // A movable client-side slice would need the whole volume shipped (~10M floats); the slice point
@@ -1012,6 +1051,34 @@ function updateLambdaHint() {
       abHint.textContent = "";
     }
   }
+  // The gong's own hint. It shows the two things this model's cost is decided by BEFORE a render
+  // is spent: the sample rate (which the ROOM sets, and which the plate's iteration depends on) and
+  // the two-term work budget, because neither shipped cap covers this pairing on its own.
+  const vrHint = $("vkroom-hint");
+  if (vrHint) {
+    if (m === "vkroom") {
+      const h = param("air_h"), size = param("room_size"), we = param("w_over_e");
+      const fs = 343 * Math.sqrt(3) / (0.9 * h);
+      const nr = Math.max(1, Math.round(size / h));
+      const nodes = (nr + 1) ** 3;
+      const steps = Math.round(param("audio_duration") * fs);
+      const nl = !nonlinearChk || nonlinearChk.checked;
+      const roomWork = nodes * steps * (nl ? 2 : 1);
+      const nLive = (param("plate_N") + 1) ** 2;
+      const plateWork = nLive * steps * 120;
+      const overRoom = roomWork > 8.0e8, overPlate = plateWork > 5.0e8;
+      vrHint.textContent =
+        `room ${(nr * h).toFixed(3)} m cube (snapped) · ${nr}³ = ${fmt(nodes)} nodes · `
+        + `fs = ${fmt(Math.round(fs))} Hz — set by the ROOM, and the plate's iteration needs it · `
+        + `${fmt(steps)} steps · w/e ${we.toFixed(2)} (3.4 measured DEAD)`
+        + (nl ? " · + a LINEAR twin, the control" : "")
+        + (overRoom ? "  — REFUSED: over the room's 8e8 node-step budget" : "")
+        + (overPlate ? "  — REFUSED: over the plate's 5e8 solve budget" : "");
+      vrHint.style.color = (overRoom || overPlate) ? "var(--bad)" : "var(--muted)";
+    } else {
+      vrHint.textContent = "";
+    }
+  }
   const bdHint = $("body-hint");
   if (bdHint) {
     if (m === "body") {
@@ -1279,6 +1346,22 @@ function applyPayload(data) {
   isParam = data.regime === "parametric";
   // Plate-as-body: the plate heatmap is the main (dims = 2) field, loaded above; the string strip is
   // a SECOND 1D buffer drawn on top by drawPlateBody. Same frame count/times (one simulation).
+  isVKRoom = data.model === "vkroom";
+  roomFrames = null; roomSliceCvs = null; roomNFrames = 0;
+  if (isVKRoom && data.room_frames) {
+    const rf = data.room_frames;
+    roomFrames = b64ToFloat32(rf.b64);
+    roomWidth = rf.width; roomNFrames = rf.n_frames; roomAnimDt = rf.anim_dt || animDt;
+    roomScale = rf.scale || { ref: rf.amp || 1, amp: rf.amp || 1 };
+    let off = 0;
+    roomSliceCvs = (rf.planes || []).map((pl) => {
+      const cv = document.createElement("canvas");
+      cv.width = pl.nu; cv.height = pl.nv;
+      const rec = { cv, plane: pl, offset: off };
+      off += pl.nu * pl.nv;
+      return rec;
+    });
+  }
   isPlateBody = data.model === "platebody";
   if (isPlateBody && data.string) {
     strFrames = b64ToFloat32(data.string.b64);
@@ -2130,7 +2213,8 @@ function tick(ts) {
       currentFrame = Math.floor(physElapsed / animDt) % nFrames;
       scrub.value = currentFrame;
     }
-    (isAirBox ? drawSlices : isPlateBody ? drawPlateBody : dims === 2 ? drawHeatmap
+    (isAirBox ? drawSlices : isVKRoom ? drawVKRoomField
+      : isPlateBody ? drawPlateBody : dims === 2 ? drawHeatmap
       : isGeom ? drawGeometric
       : isSymp ? drawSympatheticViz : isJawari ? drawJawariViz : isJuari ? drawJuariViz
         : isFret ? drawFretViz : isParam ? drawParametricViz
@@ -2341,6 +2425,95 @@ function drawSlices(idx) {
   g.fillText(`asinh(p / ${sc.ref.toExponential(2)}) · p${Math.round(sc.pctl)} ref`
     + ` · max ${sc.amp.toExponential(2)} Pa   ● port  ○ mic`, pad + 2, H - 2);
 }
+
+// The gong's dual field view (batch 19): the PLATE on the left, the ROOM it is radiating into on
+// the right. b13's precedent (string + plate in one canvas), with the difference that the two halves
+// run on DIFFERENT CLOCKS and say so — the plate pane is strided on the plate's first flexural mode
+// and the room's on acoustic transit, because they are different oscillators and there is no single
+// honest stride for both. The room index is therefore mapped by TIME and clamped, not shared: the
+// plate window outlasts the room window, so the last slice frame holds while the plate keeps moving.
+function drawVKRoomField(idx) {
+  const g = stringCv.getContext("2d");
+  const W = stringCv.width, H = stringCv.height;
+  g.clearRect(0, 0, W, H);
+  if (!frames || nFrames === 0 || !heatCv) return;
+
+  const pad = 10, gap = 12, labelH = 16;
+  const plateW = Math.round((W - 2 * pad - gap) * 0.34);
+  const roomW = W - 2 * pad - gap - plateW;
+  const paneH = H - 2 * pad - labelH;
+
+  // -- the plate, one device pixel per node into the offscreen buffer (drawHeatmap's own path) --
+  const hctx = heatCv.getContext("2d");
+  const img = hctx.createImageData(gridNx, gridNy);
+  const amp = fieldAmp > 0 ? fieldAmp : 1;
+  const base = idx * gridNx * gridNy;
+  for (let p = 0; p < gridNx * gridNy; p++) {
+    const o = p * 4;
+    if (maskData && maskData[p] === 0) {
+      img.data[o] = 22; img.data[o + 1] = 27; img.data[o + 2] = 34; img.data[o + 3] = 255;
+    } else {
+      const c = divColor(frames[base + p] / amp);
+      img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 255;
+    }
+  }
+  hctx.putImageData(img, 0, 0);
+  const side = Math.min(plateW, paneH);
+  const px = pad + (plateW - side) / 2, py = pad + labelH + (paneH - side) / 2;
+  g.imageSmoothingEnabled = false;
+  g.drawImage(heatCv, px, py, side, side);
+  g.imageSmoothingEnabled = true;
+  g.strokeStyle = "rgba(255,255,255,.18)"; g.lineWidth = 1;
+  g.strokeRect(px + 0.5, py + 0.5, side - 1, side - 1);
+  g.fillStyle = "rgba(255,255,255,.65)"; g.font = "11px ui-monospace,monospace";
+  g.fillText("plate — the shape that radiates", pad, pad + 11);
+
+  // -- the room: three named orthogonal slices, on their own clock ------------------------------
+  if (!roomSliceCvs || !roomFrames || roomNFrames === 0) return;
+  const rIdx = Math.min(roomNFrames - 1,
+    Math.max(0, Math.round((idx * animDt) / (roomAnimDt || animDt))));
+  const rBase = rIdx * roomWidth;
+  const den = Math.asinh(((roomScale && roomScale.amp) || 1) / ((roomScale && roomScale.ref) || 1))
+    || 1;
+  const norm = (v) => Math.asinh(v / ((roomScale && roomScale.ref) || 1)) / den;
+
+  const cellW = (roomW - 2 * gap) / 3;
+  let mpp = 0;
+  roomSliceCvs.forEach((rec) => {
+    const e = rec.plane.extent;
+    mpp = Math.max(mpp, e[0] / cellW, e[1] / paneH);
+  });
+  const S = mpp > 0 ? 1 / mpp : 1;
+  const x0 = pad + plateW + gap;
+  roomSliceCvs.forEach((rec, k) => {
+    const pl = rec.plane, n = pl.nu * pl.nv;
+    const hc = rec.cv.getContext("2d");
+    const im = hc.createImageData(pl.nu, pl.nv);
+    for (let q = 0; q < n; q++) {
+      // C order on shape (nu, nv): the LAST axis is fastest, so v varies fastest, not u. Reading
+      // it the other way transposes the picture, and on a smooth field that renders as plausible
+      // BANDING rather than as an obvious error — b18's scar, and no payload assertion sees it.
+      const v = q % pl.nv, u = (q / pl.nv) | 0;
+      const c = divColor(norm(roomFrames[rBase + rec.offset + q]));
+      const o = (v * pl.nu + u) * 4;
+      im.data[o] = c[0]; im.data[o + 1] = c[1]; im.data[o + 2] = c[2]; im.data[o + 3] = 255;
+    }
+    hc.putImageData(im, 0, 0);
+    const w = pl.extent[0] * S, h = pl.extent[1] * S;
+    const ox = x0 + k * (cellW + gap) + (cellW - w) / 2;
+    const oy = pad + labelH + (paneH - h) / 2;
+    g.imageSmoothingEnabled = false;
+    g.drawImage(rec.cv, ox, oy, w, h);
+    g.imageSmoothingEnabled = true;
+    g.strokeStyle = "rgba(255,255,255,.15)";
+    g.strokeRect(ox + 0.5, oy + 0.5, w - 1, h - 1);
+    g.fillStyle = "rgba(255,255,255,.55)"; g.font = "10px ui-monospace,monospace";
+    g.fillText(`${pl.name} @ ${pl.at_m} m`, ox, pad + 11);
+  });
+  g.fillStyle = "rgba(255,255,255,.65)"; g.font = "11px ui-monospace,monospace";
+  g.fillText("room (pressure)", x0, H - pad + 2);
+}
+
 
 function drawHeatmap(idx) {
   const g = stringCv.getContext("2d");
@@ -2705,6 +2878,87 @@ function drawEnergy() {
 // the Manhattan distance in cells. Three markers, and the point is that they DISAGREE: the cone
 // (an integer), the Euclidean arrival at c₀, and the time to walk the Manhattan path at c₀. The
 // precursor beats both physical ones, and the integer does not move when λ does.
+// The gong's claim panel (batch 19). Two curves, four points each: the shape-radiation efficiency
+// per observation window for the struck plate, and for the SAME plate with the nonlinearity turned
+// off — one class and one flag apart, not two rigs. The loud arm's curve moves; the twin's is flat.
+//
+// Three things about what is drawn, all of them measured rather than styled:
+//
+//   * The RESOLVED band is the solid pair and the all-modes pair is faint, because only the
+//     resolved one travels. Rig-invariance and duration-invariance both say so — across a 5x range
+//     of window the resolved spread reads 1.044/1.053/1.050/1.053 while the all-modes figure falls
+//     monotonically 1.395 -> 1.103.
+//   * The axis is NOT zero-based. The effect is a few percent on a number near 0.65, so a
+//     zero-based axis renders both curves as the same flat line and the panel says nothing.
+//   * The spread is printed with its own caveat rather than as a headline. It is max/min of four
+//     near-equal numbers, and it is NOT grid-converged: refining the air cell 12% takes it from
+//     7.0% to 2.0% while the twin holds at 0.05-0.12%. The SEPARATION is the claim (never below
+//     ~17x at any rig probed); the multiplier is not, and the panel is built to say exactly that.
+function drawVKRoomClaim() {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height, padL = 44, padB = 30, top = 18, padR = 12;
+  g.clearRect(0, 0, W, H);
+  const c = payload.meta && payload.meta.claim;
+  if (!c || !c.sigma_resolved || !c.sigma_resolved.length) return;
+  const n = c.sigma_resolved.length;
+
+  const series = [
+    { v: c.sigma_resolved, col: "#7ee0a0", w: 2.2, label: "struck (resolved band)" },
+    { v: c.sigma_resolved_twin, col: "#ff9f6e", w: 2.2, label: "same plate, LINEAR" },
+    { v: c.sigma_shape, col: "rgba(126,224,160,.30)", w: 1.2, label: "struck (all modes)" },
+    { v: c.sigma_shape_twin, col: "rgba(255,159,110,.30)", w: 1.2, label: "linear (all modes)" },
+  ].filter((s) => s.v && s.v.length === n);
+
+  let lo = Infinity, hi = -Infinity;
+  series.forEach((s) => s.v.forEach((y) => { lo = Math.min(lo, y); hi = Math.max(hi, y); }));
+  if (!(hi > lo)) { hi = lo + 1e-9; }
+  const pad = 0.18 * (hi - lo);
+  lo -= pad; hi += pad;
+  const X = (i) => padL + (n === 1 ? 0.5 : i / (n - 1)) * (W - padL - padR);
+  const Y = (v) => top + (1 - (v - lo) / (hi - lo)) * (H - top - padB);
+
+  g.strokeStyle = "rgba(255,255,255,.08)"; g.lineWidth = 1;
+  for (let i = 0; i < n; i++) {
+    g.beginPath(); g.moveTo(X(i), top); g.lineTo(X(i), H - padB); g.stroke();
+  }
+  g.fillStyle = "rgba(255,255,255,.45)"; g.font = "10px ui-monospace,monospace";
+  for (let i = 0; i < n; i++) g.fillText(`w${i + 1}`, X(i) - 6, H - padB + 14);
+  g.fillText(hi.toFixed(3), 4, top + 4);
+  g.fillText(lo.toFixed(3), 4, H - padB);
+  g.save();
+  g.translate(11, H / 2); g.rotate(-Math.PI / 2);
+  g.fillText("σ_shape", -22, 0);
+  g.restore();
+
+  series.forEach((s) => {
+    g.strokeStyle = s.col; g.lineWidth = s.w;
+    g.beginPath();
+    s.v.forEach((y, i) => (i ? g.lineTo(X(i), Y(y)) : g.moveTo(X(i), Y(y))));
+    g.stroke();
+    g.fillStyle = s.col;
+    s.v.forEach((y, i) => { g.beginPath(); g.arc(X(i), Y(y), s.w > 2 ? 3 : 2, 0, 7); g.fill(); });
+  });
+
+  // the legend, and the honesty line with it
+  const pct = (x) => `${(100 * (x - 1)).toFixed(2)}%`;
+  const sep = (c.spread_resolved - 1) / Math.max(c.spread_resolved_twin - 1, 1e-12);
+  g.font = "10px ui-monospace,monospace";
+  const lines = [
+    ["#7ee0a0", `struck: ${pct(c.spread_resolved)} over ${c.windows} windows`],
+    ["#ff9f6e", `linear twin: ${pct(c.spread_resolved_twin)} — flat by construction`],
+    ["rgba(255,255,255,.55)", `separation ~${sep.toFixed(0)}× · resolved ${c.n_resolved}/${c.n_modes} modes`],
+    ["rgba(255,255,255,.40)", `modal-share drift ${c.modal_drift.toFixed(3)} vs ${c.modal_drift_twin.toFixed(3)}`],
+  ];
+  const lx = padL + 8, ly = top + 2;
+  g.fillStyle = "rgba(12,16,22,.72)";
+  g.fillRect(lx - 4, ly - 2, W - lx - padR, lines.length * 11 + 6);
+  lines.forEach((L, i) => {
+    g.fillStyle = L[0];
+    g.fillText(L[1], lx, ly + 9 + i * 11);
+  });
+}
+
+
 function drawAirBoxArrival() {
   const g = partialsCv.getContext("2d");
   const W = partialsCv.width, H = partialsCv.height, padL = 34, padB = 26, top = 16;
@@ -3252,6 +3506,17 @@ function drawDiagnostics() {
   // viewer's second panel is a curve or a sweep; this one's whole content is that a measured count
   // of grid cells equals a predicted count of grid cells, and that the two physical arrival times
   // it beats are both something else.
+  // The gong's claim panel: shape-radiation efficiency per window, struck against the SAME
+  // plate with its nonlinearity switched off. This is the one observable that separates them —
+  // the obvious one (radiated energy per window, off the port's own books) does not, because the
+  // room's own build-up moves it by as much as the effect does.
+  if (payload.model === "vkroom") {
+    partialsTitle.firstChild.textContent = "Radiation shape ";
+    partialsSub.textContent =
+      "σ_shape per window — a loud plate's pattern MOVES during the strike, a linear one's does not";
+    drawVKRoomClaim();
+    return;
+  }
   if (payload.model === "airbox") {
     partialsTitle.firstChild.textContent = "Arrival ";
     partialsSub.textContent = "the lattice light cone — an exact integer, and λ-independent";

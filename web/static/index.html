@@ -40,9 +40,10 @@
             <option value="mallet">Mallet → drum (contact, #7)</option>
             <option value="plate">Kirchhoff plate (2D)</option>
             <option value="vk">von Kármán plate (nonlinear)</option>
+            <option value="vkroom">Gong/cymbal in a 3-D ROOM — radiation that CHANGES mid-strike</option>
           </select>
         </label>
-        <label class="field" data-show="membrane mallet plate vk geometric sympathetic bore reed platebody tension airbox" style="margin-top:8px">
+        <label class="field" data-show="membrane mallet plate vk geometric sympathetic bore reed platebody tension airbox vkroom" style="margin-top:8px">
           <span id="domain-label">Domain</span>
           <select id="domain"></select>
         </label>
@@ -65,9 +66,9 @@
         <div class="slider" data-param="Ly" data-min="0.1" data-max="2.0" data-step="0.05" data-val="0.8" data-unit="m" data-domain="rectangle supported free"></div>
       </fieldset>
 
-      <fieldset class="group">
+      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret bore reed body platebody radbody airload airbox membrane mallet plate vk">
         <legend>Discretization</legend>
-        <div class="slider" data-param="N"      data-min="16"  data-max="512" data-step="1"    data-val="128"></div>
+        <div class="slider" data-param="N"      data-min="16"  data-max="512" data-step="1"    data-val="128" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret bore reed body platebody radbody airload airbox membrane mallet plate vk"></div>
         <div class="slider" data-param="lambda" data-min="0.5" data-max="2.0" data-step="0.01" data-val="1.0" data-show="ideal stiff damped tension bow sympathetic jawari juari fret body platebody radbody airload membrane mallet"></div>
         <div class="slider" data-param="mu"     data-min="0.25" data-max="32" data-step="0.25" data-val="1.0" data-fixed="2" data-show="plate"></div>
         <div class="slider" data-param="fs"     data-min="8000" data-max="96000" data-step="1000" data-val="32000" data-unit="Hz" data-fixed="0" data-show="vk"></div>
@@ -91,7 +92,7 @@
         <div class="slider" data-param="e"     data-min="0.2" data-max="3.0" data-step="0.1" data-val="1.0" data-unit="mm" data-scale="1e-3" data-fixed="1" data-show="vk"></div>
       </fieldset>
 
-      <fieldset class="group" data-show="vk">
+      <fieldset class="group" data-show="vk vkroom">
         <legend>Nonlinearity</legend>
         <div class="slider" data-param="w_over_e" data-min="0.1" data-max="6" data-step="0.1" data-val="2.0" data-unit="×e" data-fixed="1"></div>
         <label class="check"><input type="checkbox" id="nonlinear" checked /> nonlinear coupling (off = linear plate)</label>
@@ -255,15 +256,17 @@
                half of the claim: the cone integer CHANGES (measured 11/24/35/46/58) and keeps
                matching. Off-axis is the point — on an axis the Euclidean and Manhattan paths
                coincide and the claim would be untestable. -->
-      <fieldset class="group" data-show="airbox">
+      <fieldset class="group" data-show="airbox vkroom">
         <legend>The room — grid, walls, mic</legend>
-        <div class="slider" data-param="room_size"     data-min="0.5"  data-max="2.5"  data-step="0.05"  data-val="1.0"  data-unit="× (1.2·0.9·0.8 m)" data-fixed="2" data-show="airbox"></div>
-        <div class="slider" data-param="air_h"         data-min="0.02" data-max="0.10" data-step="0.005" data-val="0.03" data-unit="m" data-fixed="3" data-show="airbox"></div>
+        <div class="slider" data-param="room_size"     data-min="0.5"  data-max="2.5"  data-step="0.05"  data-val="1.0"  data-unit="× (1.2·0.9·0.8 m)" data-fixed="2" data-show="airbox vkroom"></div>
+        <div class="slider" data-param="air_h"         data-min="0.02" data-max="0.10" data-step="0.005" data-val="0.03" data-unit="m" data-fixed="3" data-show="airbox vkroom"></div>
         <div class="slider" data-param="air_cfl"       data-min="0.3"  data-max="0.99" data-step="0.01"  data-val="0.9"  data-unit="× 1/√3" data-fixed="2" data-show="airbox"></div>
-        <div class="slider" data-param="wall_zeta"     data-min="0.1"  data-max="50"   data-step="0.1"   data-val="3.0"  data-unit="ζ = Z/ρ₀c₀" data-fixed="1" data-show="airbox" data-domain="absorbing"></div>
-        <div class="slider" data-param="mic_position"  data-min="0.15" data-max="1.0"  data-step="0.01"  data-val="0.8"  data-fixed="2" data-show="airbox"></div>
-        <div class="slider" data-param="slice_position" data-min="0"   data-max="1"    data-step="0.01"  data-val="0.5"  data-fixed="2" data-show="airbox"></div>
+        <div class="slider" data-param="wall_zeta"     data-min="0.1"  data-max="50"   data-step="0.1"   data-val="3.0"  data-unit="ζ = Z/ρ₀c₀" data-fixed="1" data-show="airbox vkroom" data-domain="absorbing baffled suspended"></div>
+        <div class="slider" data-param="mic_position"  data-min="0.15" data-max="1.0"  data-step="0.01"  data-val="0.8"  data-fixed="2" data-show="airbox vkroom"></div>
+        <div class="slider" data-param="slice_position" data-min="0"   data-max="1"    data-step="0.01"  data-val="0.5"  data-fixed="2" data-show="airbox vkroom"></div>
+        <div class="slider" data-param="plate_N" data-min="8" data-max="16" data-step="1" data-val="16" data-fixed="0" data-show="vkroom"></div>
         <p class="hint" id="airbox-hint"></p>
+        <p class="hint" id="vkroom-hint"></p>
       </fieldset>
 
       <!-- The fret / flat rail: model #8's OTHER configuration, and the jawari's physical opposite —
@@ -393,7 +396,7 @@
         <!-- No audio_duration for the geometric string: it is the viewer's one viz-only model. See
              the note under the canvas — resolving its longitudinal wave forces fs ≈ 22× a normal
              string's, so a second of sound is ~10 minutes of compute. -->
-        <div class="slider" data-param="audio_duration"   data-min="0.2" data-max="6"    data-step="0.1"  data-val="2.0" data-unit="s" data-show="ideal stiff damped tension bow sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk bore reed"></div>
+        <div class="slider" data-param="audio_duration"   data-min="0.2" data-max="6"    data-step="0.1"  data-val="2.0" data-unit="s" data-show="ideal stiff damped tension bow sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk bore reed vkroom"></div>
         <!-- Hidden for the phantom regime: its window is fixed physics, not a preference. At 0.05 s
              the weakest phantom (2f₁) sits inside its neighbours' leakage skirts and is mislocated
              by 0.52 Hz (vs 0.039 Hz at 0.10 s), collapsing its margin to f₂ from 170× to 8×. -->

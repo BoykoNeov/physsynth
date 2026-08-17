@@ -2829,6 +2829,82 @@ diagnostics at ~2908, the new slice-set draw fn) · `tests/test_web_backend.py` 
 residual through the wrapper, frame bookkeeping, slice decimation, `λ > 1/√3` → a clean error
 payload, not a 500/NaN) · `scripts/verify_web_headless.py` (add the `airbox` case).
 
+### Batch 19 (DONE) — the gong in the room: radiation that CHANGES mid-strike
+
+**Built & browser-verified.** All-wrapper (`physsynth/core` untouched, core test count unchanged, the
+core-dep allowlist guard green — `airbox`'s VK classes are a new *import* for the web tier but add
+no third-party dependency, and the guard measures the `sys.modules` delta); **12 web tests**, ruff
+clean repo-wide. Both tiers render in a live browser: the hung cymbal shows two-sided lobes and the
+baffled gong a half-space arc off its wall, which is the physics of the two mountings and not a
+styling difference. Shipped defaults, measured through the payload: `fs = 57,904 Hz` (set by the
+ROOM), a 0.353 m cube of 32,768 nodes, 6,948 steps, 72 max Picard sweeps at a mean of 11.6, **all
+steps converged**, scene drift **2.6e-13**, cross-ledger residual **9.3e-15**, render ~23 s against
+the shipped `vk` model's 15.1 s default and 52.7 s ceiling.
+
+**Six things the build corrected, every one a measurement rather than a review comment.** Recorded
+because the wrong version of each was working code at the time:
+
+- **THE MAGNITUDE IS NOT GRID-CONVERGED, AND THE PLAN DID NOT KNOW IT.** The plan quoted 29.3× and
+  65.0× as if they were properties of the plate. Refining the air cell by 12 % (11.40 → 10.00 mm)
+  takes the struck arm's resolved spread **7.04 % → 5.00 % → 2.37 % → 1.99 %** while the linear twin
+  holds at 0.05–0.12 %; even a **0.1 %** change in `h` moves it 7.04 % → 2.78 %. So the **separation
+  is the claim** — never below ~17× at any rig measured, and 102× at the shipped one — and the
+  multiplier is **refused**, in the panel text as well as here. This is batch 5's and batch 6's own
+  doctrine arriving for a **third** time and with a stronger reason than either: not merely that
+  unresolved modes contaminate the figure, but that it is **not converged even inside the resolved
+  band**. *Generalizable: "quote the resolved band" is necessary and not sufficient — a
+  resolution-restricted observable can still be a function of the resolution.*
+- **…and part of that is the STATISTIC, not the physics: the spread is max/min of four near-equal
+  numbers.** The probe rig and the shipped payload differ by 0.03 % in sample rate. Their four
+  per-window efficiencies agree to ~1 % each — 0.6339/0.6523/0.6676/0.6662 against
+  0.6324/0.6532/0.6769/0.6694 — and yet the quoted multiplier differs by **33 %** (1.053 against
+  1.070), because a ratio of near-equal numbers amplifies whatever moves either end. The payload
+  therefore ships the **per-window values** as the evidence and the spread as a derived, captioned
+  number. *Generalizable, and cheap to miss: an effect quoted as max/min is reported with a
+  sensitivity nobody chose.*
+- **A free plate's fundamental is the FOURTH eigenvalue, and "the first frequency above epsilon"
+  silently picks a rigid-body mode.** The nullspace is exactly `{1, x, y}` (model #5b) but `eigh`
+  returns those three at ~1e-5 Hz rather than at 0, so the filter selected one, `f1` printed as
+  **0.0**, the animation stride came out ~3× longer than the entire window, and the plate pane
+  rendered **one frame**. The index 3 is a *fact about the model*, not a threshold, and that is why
+  it is now written as one.
+- **The claim's read-out is free to decimate 5×, and that was worth checking rather than assuming.**
+  Sampling the modal projection every step against every 5th moves the headline from 6.991 % to
+  7.045 % — inside the sensitivity above — so ~400 samples per window bound the window mean
+  honestly, and `proj_stride` ships so the bound is readable rather than implied (b18's `e_stride`
+  precedent).
+- **A HIDDEN CHROME TAB MAKES A CORRECT FIELD READ AS A BLANK CANVAS.** The field canvas measured
+  **0.0 % painted** with no console error, while calling the same draw function directly painted
+  **123,904** pixels: `requestAnimationFrame` does not fire in a background tab (measured **0 ticks
+  in 1.2 s**). This is b18's browser-verification hazard in a new costume and the *inverse* of it —
+  there, a leftover Chrome held the DevTools port so the script could not run at all; here the
+  browser runs fine and **throttles the very thing under test**, which fails in the direction of
+  looking like a bug rather than looking like a pass. Verify a canvas by driving its draw directly,
+  or foreground the tab first.
+- **The room was one commit away from shipping as DEAD PAYLOAD.** The field pane took the plate
+  (`dims: 2`) and *nothing* drew `room_frames` — a 0.4 MB block, built and serialized and never
+  looked at. That is precisely the built-but-unshown gap Phase D exists to close, about to be
+  created *inside the batch closing it*. It ships as a dual pane instead (b13's precedent), with the
+  two halves on **different clocks** — the plate on its first flexural mode, the room on acoustic
+  transit — mapped by time and clamped, because the plate window outlasts the room window.
+
+**What was refused, each with the number that decided it.** The **supported gong**: it runs at this
+rig (72 sweeps, converged) but resolves only 6 of 225 modes, on which the separation collapses to
+3.8× baffled and runs **backwards** suspended (0.3×) — so `domain` carries the mounting and the
+boundary is pinned to `free`. The **compact monopole** read-out (measured 3e-7…3e-6 of the truth) is
+shipped beside the claim as a caption, never as it, and the absence of a far-field pressure is
+asserted by a test. No `t50`, no directivity panel, and **no string drive** — the three-way-chain
+batch already measured this exact headline flat under a string (0.27 % against a 0.28 % control),
+because `w/e` is not an amplitude under a point force.
+
+**And one plan claim that died in the build.** "The two amplitude sliders are one knob" — the strike
+curvature `w/e ÷ width²`, which both cliff brackets put at 83–85 from opposite directions — is wrong
+off the diagonal: at a constant ratio of 75.3, `w/e` = 1 and 2 run (23 and 40 sweeps) while 5 and 8
+are dead. Amplitude binds and a broader strike does not buy it back.
+
+*What is below is the plan as written before the build, kept because two of its claims died in
+the build and that record is the point.*
+
 ### Batch 19 (PLAN, as written before the build) — the gong in the room: radiation that CHANGES mid-strike
 
 **The legality check first**, because this document forbids inferring a batch from itself. The
@@ -3082,6 +3158,13 @@ model class, and **batch 17 (above) surfaces it** — so the rule stands and thi
 it looks like. The same rule still governs what comes after: the 3-D air box is the one remaining
 built-but-unshown core family, and it needs a **new frontend capability** (a 3-D field type) before
 it is a batch, which is exactly the bar this sentence sets.*
+
+*Amended 2026-08-17: the gap **reopened**, which is the useful thing this line now records. Air-box
+batches 5 and 6 added core models after b18 shipped, and batch 6 closed itself with "still out: a
+viewer batch" — so "the built-but-unshown gap closes" is a statement about a moment, not a
+steady state, and the rule that governs it earns its keep by being re-applied rather than retired.
+**Batch 19 (above) closes it a third time.** The fork's arms are again Phase 5 (the real-time port)
+and a §12 thread — with the standing caveat that any new core model reopens this one.*
 
 *Amended 2026-08-10 (second time, same day): **batch 18 (above) is that capability**, and it clears
 the bar the sentence directly above sets rather than dodging it — the 3-D field type is built as

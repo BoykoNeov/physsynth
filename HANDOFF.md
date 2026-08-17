@@ -683,8 +683,22 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   self-consistently). The finding a later batch most needs: **the air grid cannot be coarsened to
   buy affordability, because coarsening the ROOM breaks the PLATE's fixed point** — 72 Picard
   sweeps at 57.9 kHz, NaN at 33.0 kHz — a second, independent reason this family's cost runs the
-  wrong way on top of the 3-D CFL's `h⁻⁴`. **Still out:** a viewer batch, which now has both the
-  new model and the new claim its own rule requires.
+  wrong way on top of the 3-D CFL's `h⁻⁴`. **The viewer batch is SHIPPED** (`vkroom`, viewer batch 19,
+  2026-08-17), and it did not merely surface this one — it corrected it. The headline's
+  **separation** survives everywhere (17-102x across every rig measured), but its
+  **magnitude is not grid-converged**: refining the air cell 12% takes the struck arm's
+  resolved spread 7.04% -> 1.99% while the linear control holds at 0.05-0.12%, and a 0.1%
+  change in `h` alone moves it 7.04% -> 2.78%. So batch 5's "quote the resolved band"
+  doctrine is **necessary and not sufficient** — a resolution-restricted observable can
+  still be a function of the resolution — and part of the sensitivity is the *statistic*
+  rather than the physics, since a max/min of four near-equal numbers amplifies whatever
+  moves either end (two rigs agreeing to ~1% per window differ 33% in the ratio). The
+  viewer batch also sharpened this bullet's own cost finding: coarsening breaks the fixed
+  point **along the CFL line**, where `h` and `fs` are tied. Hold `fs` fixed and lower the
+  Courant fraction and the fixed point is **untouched** (identical 72/5 sweeps at
+  0.90/0.60/0.45) while the node count falls as `(L*lambda)^3` — what breaks then is the
+  claim, since the resolved mode count collapses 17 -> 8 -> 6 of 289. A stability limit and
+  a validity limit are not interchangeable, and only the first announces itself.
 - **`StringVKPlateBridge` — the gong on a string — is SHIPPED**
   (`docs/dev/string-vk-plate-bridge-plan.md`). The last thing this section left out. All three of
   its named blockers resolved, and only one the way it was framed: `VKPlate.step()` gains `f_ext`

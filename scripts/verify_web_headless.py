@@ -288,6 +288,20 @@ def main() -> int:
             # The absorbing wall is the only lossy termination — and the only one that exposes ζ, so
             # it is also the case that proves the ζ slider is reachable rather than merely built.
             ("airbox_absorbing", "model=airbox&domain=absorbing"),
+            # The gong in the room (batch 19): a DUAL field pane — the plate on the left on
+            # its own flexural clock, the room's three slices on the right on acoustic
+            # transit. Two reasons it earns a pixel check beyond the backend suite. First it
+            # reuses batch 18's slice decode, so it inherits the transposition hazard above
+            # (C order, nv fastest) in a pane the suite never looks at. Second, and found the
+            # hard way: `requestAnimationFrame` does NOT fire in a background tab, so a
+            # perfectly correct field reads as a blank canvas with no console error — this
+            # driver's own foregrounded load is what makes the pixels mean anything.
+            # Kept SHORT (~7 s): the default 0.12 s render is ~23 s because the plate needs
+            # 57.9 kHz and a linear control twin is rendered beside it.
+            ("vkroom", "model=vkroom&audio_duration=0.02"),
+            # The other mounting, and the one whose room field looks different rather than
+            # merely differently scaled: baffled radiates into a half-space off its wall.
+            ("vkroom_baffled", "model=vkroom&domain=baffled&audio_duration=0.02"),
         ]
         # Optional name filters, so a single-model batch can re-check its own case without paying
         # for the whole sweep (the geometric regimes alone are ~2 minutes).
