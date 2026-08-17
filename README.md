@@ -49,9 +49,11 @@ pytest -m "not slow"    # the fast lane — skips the sweeps and refinement stud
 pytest -n 8 --dist loadgroup      # same tests, spread across cores (needs pytest-xdist)
 ```
 
-`-m "not slow"` is a **lane, not a gate**: CI runs the full harness on every push, and this is for
-the edit/run loop. What it gives up is specific — the four geometric-string (model #10) validation
-files, which are `test_geometric_whirl.py`, `test_geometric_phantom.py`, `test_geometric_limits.py`
+`-m "not slow"` is a **lane, not a gate**: CI runs the full harness on every push — split across
+three machines, one third of the files each, so the wall clock is a third of the work rather than a
+third of the tests — and this is for the edit/run loop. What it gives up is specific — the four
+geometric-string (model #10) validation files, which are `test_geometric_whirl.py`,
+`test_geometric_phantom.py`, `test_geometric_limits.py`
 and two tests of `test_geometric_energy.py`, plus the convergence/dispersion sweeps in the
 string files. That is roughly a third of the suite's CPU in a handful of files, because each of
 them re-runs the model it is studying: a convergence study refines and re-runs, a Mathieu tongue is
@@ -66,6 +68,12 @@ Pick the worker count deliberately rather than reaching for `-n auto`: `auto` ta
 *logical* core, which oversubscribes a hyperthreaded desktop that is also doing other work. `-n 8`
 is the configuration actually measured here. CI uses `-n auto` because its runners are small and
 otherwise idle.
+
+A new test file needs no registration to be run by CI: `scripts/shard_tests.py` partitions
+`glob("tests/test_*.py")`, so a file that exists is in exactly one shard by construction — the
+most it can do by being unknown to the cost table is unbalance a shard. Run it with
+`--of 3 --list` to see the balance; a skewed split means the profile is stale, not that
+anything is untested.
 
 `--dist loadgroup` matters: a handful of modules carry `pytest.mark.xdist_group` because their
 module-scoped fixtures are expensive (the whirling and phantom sweeps run 30–110 s of simulation

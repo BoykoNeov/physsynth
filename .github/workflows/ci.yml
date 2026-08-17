@@ -9,21 +9,58 @@ on:
     - cron: "0 4 * * *"
   workflow_dispatch:
 
+# Why the gate is SPLIT across machines (2026-08-17)
+# --------------------------------------------------
+# It used to be one job, and it took ~15 min. The standing explanation was that two `xdist_group`-
+# pinned modules held ~470 s and ~300 s of un-parallelisable chain, so the wall was a bottleneck.
+# Measured, that explanation is wrong: a 4-core runner offers ~3700 core-seconds across a 920 s
+# wall and the suite genuinely uses ~80-85% of them. The longest chain is barely half the wall, and
+# the rest of that worker was packed. This suite is BULK-bound, not bottleneck-bound.
+#
+# The confirming number was already on the record and had been read the other way round: the old
+# fast lane deselected the entire expensive family — 69 of 1721 tests, every one of the chains —
+# and still took 784 s against the full run's 922 s. Remove the bottleneck and you keep ~85% of the
+# wall, which is what "the bulk is the cost" means.
+#
+# A bulk-bound suite has exactly one lever: more cores. On a public repo more cores are free, in
+# units of one 4-core runner per job, so the suite is partitioned over N of them and the wall
+# becomes (total core-seconds)/(4N) — until it meets the longest single chain inside a shard, which
+# is where splitting the pins starts to matter and not before.
 jobs:
-  validate:
-    name: Validation harness (py${{ matrix.python-version }})
+  # The split's width lives in `scripts/shard_tests.py` as ONE Python constant, and this job is how
+  # the workflow reads it instead of repeating it. Writing it in both places fails silently: a
+  # matrix of [1, 2] against a split computed `--of 3` runs two thirds of the suite and goes green.
+  setup:
+    name: Plan the split
     runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+      # No install, no `setup-python`: the script is stdlib-only precisely so this job is ~5 s.
+      - id: plan
+        run: |
+          echo "shards=$(python3 scripts/shard_tests.py --matrix)" >> "$GITHUB_OUTPUT"
+          echo "count=$(python3 scripts/shard_tests.py --count)" >> "$GITHUB_OUTPUT"
+          python3 scripts/shard_tests.py --list
+
+  validate:
+    name: Validation harness (py${{ matrix.python-version }}, shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    needs: setup
     strategy:
-      # Do not cancel 3.12 because 3.11 went red: when they disagree, the disagreement IS the
-      # finding, and cancelling the other half hides which axis the split is on.
+      # Do not cancel 3.12 because 3.11 went red, and do not cancel shard 2 because shard 1 went
+      # red: when two of these disagree, the disagreement IS the finding, and cancelling the rest
+      # hides which axis the split is on.
       fail-fast: false
       matrix:
-        # Every push ran the whole ~1500-test suite TWICE, on 3.11 and 3.12 — and this is
-        # pure-numeric code whose failures have never once been interpreter-specific (the one
-        # real split in this repo's history was Windows vs Linux, an axis the matrix does not
-        # even cover). So pushes and PRs pay for one interpreter and the nightly pays for both.
+        # Pushes and PRs pay for one interpreter and the nightly pays for both. This is pure-numeric
+        # code whose failures have never once been interpreter-specific (the one real split in this
+        # repo's history was Windows vs Linux, an axis the matrix does not even cover).
         # fromJSON is required: a matrix value must be an ARRAY, and the ternary yields a string.
         python-version: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["3.11","3.12"]' || '["3.12"]') }}
+        shard: ${{ fromJSON(needs.setup.outputs.shards) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -39,12 +76,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Lint (ruff)
-        run: |
-          pip install ruff
-          ruff check .
-
-      # `-n auto` = one worker per available core (GitHub runners are small, so this is ~4).
+      # `-n auto` = one worker per available core (4 on a standard runner; `nproc` is echoed so the
+      # divisor is on the record next to the numbers it divides).
       # `--dist loadgroup` scatters tests freely EXCEPT where a module carries
       # `pytest.mark.xdist_group`, which keeps its expensive module-scoped fixtures on one worker.
       # conftest.py pins each worker to a single BLAS thread so the pool does not oversubscribe.
@@ -53,38 +86,57 @@ jobs:
       # `-qq`, which suppresses the `N passed in …` summary entirely — a green run and a red run
       # then end the same way on screen. Verified both ways on 2026-08-10.
       #
-      # `--durations=50` is free (it only reports what pytest already timed) and is the only
-      # QUIET-MACHINE profile of this suite that exists: local timings are taken on a contended
-      # box and inflate ~3x. Read it before optimising anything.
-      #
-      # TEMPORARY (2026-08-17): `--durations=0` instead of 50, for ONE run. The top-50 table
-      # answers "what is slowest" but not "how much CPU is there in total", and the sharding
-      # decision needs the total: at 50 entries the tail below 14.31s is 1671 tests wide and
-      # invisible. `nproc` is printed for the same reason -- `-n auto` reads it, and the core
-      # count is the divisor that turns core-seconds into a wall. Revert to 50 once measured.
-      - name: Run validation harness
+      # `--durations=25` is free (it only reports what pytest already timed). Per SHARD it is also
+      # the only way to see a shard going chain-bound: when one file's setup approaches the shard's
+      # own wall, more runners stop buying anything and the fix moves inside that file.
+      - name: Run validation harness (shard ${{ matrix.shard }}/${{ needs.setup.outputs.count }})
         run: |
           echo "cores: $(nproc)"
-          pytest -n auto --dist loadgroup --durations=0
+          files=$(python scripts/shard_tests.py --shard ${{ matrix.shard }} \
+                    --of ${{ needs.setup.outputs.count }})
+          pytest -n auto --dist loadgroup $files --durations=25
 
-  # The fast lane restores per-push coverage on the OTHER interpreter, which the single-version
-  # matrix above gives up. It is not a gate and it is not a substitute for the full run: it
-  # deselects `slow`, which is most of model #10. It exists so a version-specific import or
-  # dtype problem still surfaces on every push rather than waiting for the nightly.
-  fast:
-    name: Fast lane (py3.11, -m "not slow")
+  # Lint, plus the OUTER half of the shard guard.
+  #
+  # The inner half is `tests/test_shard_partition.py`, which asserts the split covers `tests/`
+  # exactly once — but it cannot catch a split that dropped the file it lives in, because then it
+  # does not run. So this job asks pytest itself, four times over, and does the arithmetic: the
+  # shards' collected counts must sum to the whole suite's. That subtraction is the only thing that
+  # can tell "everything ran, in pieces" apart from "a piece never ran and every job was green".
+  checks:
+    name: Lint + shard reconciliation
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    needs: setup
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
       - name: Install
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
-      - name: Run fast lane
-        run: pytest -n auto --dist loadgroup -m "not slow" --durations=25
+          pip install ruff
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      # Collection output is captured, never echoed: it is one line per test, and 4 x 1735 lines of
+      # ids would bury the two numbers this job exists to print.
+      - name: Shard split covers the suite exactly once
+        run: |
+          count_collected() {
+            pytest --collect-only "$@" | grep -oE '[0-9]+ tests? collected' | grep -oE '^[0-9]+'
+          }
+          total=$(count_collected)
+          sum=0
+          for i in $(seq 1 ${{ needs.setup.outputs.count }}); do
+            files=$(python scripts/shard_tests.py --shard "$i" --of ${{ needs.setup.outputs.count }})
+            n=$(count_collected $files)
+            echo "shard $i: $n tests"
+            sum=$((sum + n))
+          done
+          echo "shards sum to $sum; whole suite collects $total"
+          test "$sum" -eq "$total"
