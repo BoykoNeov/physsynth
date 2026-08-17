@@ -2955,8 +2955,10 @@ Running them found what never running them had hidden:
   **after** `applyModelRanges()` (that function rewrites `val` per model and would overwrite the
   link), takes values in the **backend's** units so `data-scale` is undone, and records every
   unknown name and every clamp or snap in `window.__urlParamNotes`. **That list is now part of the
-  pass/fail verdict**, so the failure cannot recur silently. Proof it took: 961 audio samples
-  against 5,761, and `plate_N = 8` reaching the payload from the URL.
+  pass/fail verdict** — for the cases that actually pass a parameter, which is the three `vkroom`
+  ones; the two `airbox` cases pass none, so their empty list is silence rather than evidence, and
+  the guard is not claimed to cover them. Proof it took: 961 audio samples against 5,761, and
+  `plate_N = 8` reaching the payload from the URL.
 - **The left-hand rig panel does NOT go stale on it**, which was the live hazard in making the fix —
   `setSlider` deliberately does not fire `onControlChange`, so a deep-linked value could have
   rendered 1,158 steps while the panel describing the rig still said 6,948. It does not, because
@@ -2982,7 +2984,12 @@ the spatial pattern `sigma_shape` is a functional of, compared between window 1 
 | struck | **0.9583** | 0.1269 |
 | linear twin | 1.0000 | 0.0035 |
 
-So the effect is real and separates from the control by ~36×, and the picture is **96 % unchanged**.
+The load-bearing pair is the **correlation**, which is well conditioned and says the whole thing:
+the struck plate's pattern is measurably not the same pattern, the linear one's is the same to four
+decimals, and the struck one is still **96 % unchanged**. *The ratio of the two TV distances is ~36×
+and is deliberately not quoted as the finding — it divides by a number sitting on the numerical
+floor of a nearly-identical pair, which is the same conditioning objection that keeps the spread
+separation below from being called a correction.*
 Widening the animation to the full run would have shown the eye nothing, while costing ~490 kB of
 frames and **freezing the room half** — the slices are on the wavefront's clock (87 frames) and
 would sit on their last frame for 98 % of the plate's animation. The 46 % modal-share drift is
