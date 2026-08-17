@@ -5405,9 +5405,52 @@ function applyUrlParams() {
   if (d && domainSel && [...domainSel.options].some((o) => o.value === d)) domainSel.value = d;
 }
 
+// The deep link carries CONTROL settings too, not just model/domain — and for the whole of Phase D
+// it silently did not. Batch 19's two headless cases were written as
+// `?model=vkroom&audio_duration=0.02` precisely to keep them cheap, and the parameter was dropped
+// on the floor: both ran the full 0.12 s default, ~23 s each rather than the ~7 s their own comment
+// claimed. Nothing failed, which is why it survived a batch — a deep link that ignores what it is
+// handed reads exactly like one that honoured it.
+//
+// Three rules, each the repo's own doctrine one level up:
+//   · values are in the BACKEND's units (what gatherParams sends), so `data-scale` is undone here —
+//     `?e=0.001` is 1 mm, matching the payload rather than the slider's label;
+//   · a name that is not a control, a value that is not a number, and a value the input CLAMPS or
+//     SNAPS are all reported rather than swallowed ("the snap is the resolution");
+//   · it must run AFTER applyModelRanges(), which rewrites `val` for the selected model and would
+//     otherwise overwrite whatever the link asked for.
+function applyUrlSliders() {
+  const notes = [];
+  new URLSearchParams(location.search).forEach((raw, key) => {
+    if (key === "model" || key === "domain") return;
+    if (key === "nonlinear" || key === "seed_velocity") {
+      const chk = key === "nonlinear" ? nonlinearChk : seedVelChk;
+      if (!chk) { notes.push(`${key}: no such control`); return; }
+      chk.checked = !(raw === "0" || raw === "false");
+      return;
+    }
+    const inp = sliders[key];
+    if (!inp) { notes.push(`${key}: no such control`); return; }
+    const scale = scaleOf[key] || 1;
+    const want = +raw / scale;
+    if (raw === "" || !Number.isFinite(want)) {
+      notes.push(`${key}: ${raw} is not a number`);
+      return;
+    }
+    setSlider(key, want);
+    const got = +inp.value;
+    if (Math.abs(got - want) > 1e-9 * Math.max(1, Math.abs(want))) {
+      notes.push(`${key}: asked ${raw}, got ${got * scale}`);
+    }
+  });
+  window.__urlParamNotes = notes;    // the headless harness reads this; empty is the pass
+  if (notes.length) console.warn("deep-link parameters not applied as given: " + notes.join("; "));
+}
+
 buildSliders();
 applyUrlParams();
 applyModelRanges();
+applyUrlSliders();
 updateVisibility();
 updateLambdaHint();
 speedVal.textContent = speed.toFixed(3) + "×";

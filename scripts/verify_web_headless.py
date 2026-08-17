@@ -63,6 +63,7 @@ PROBE = r"""
     status: document.getElementById('status').textContent,
     energy: document.getElementById('energy-readout').textContent,
     diag2: document.getElementById('partials-readout').textContent,
+    urlNotes: (window.__urlParamNotes || []).join(' | '),
     warm: warm, cool: cool, bg: bg, other: other, total: d.length / 4,
   });
 })()
@@ -101,6 +102,30 @@ def _evaluate(cdp: CDP, expr: str) -> object:
     return r.get("result", {}).get("result", {}).get("value")
 
 
+def _devtools_page(port: int, timeout_s: float) -> dict | None:
+    """First ``page`` target on ``port``, or None once ``timeout_s`` is up.
+
+    Chrome on Windows launches through a stub that hands off and EXITS, so the PID we spawn is
+    routinely gone (returncode 0) while the real browser is alive and listening — never treat the
+    launcher's exit as failure. Poll the endpoint instead; it is the only thing that means anything.
+    """
+    end = time.time() + timeout_s
+    while True:
+        try:
+            url = f"http://localhost:{port}/json"
+            targets = json.load(urllib.request.urlopen(url, timeout=2))
+            pages = [
+                t for t in targets if t.get("type") == "page" and t.get("webSocketDebuggerUrl")
+            ]
+            if pages:
+                return pages[0]
+        except Exception:  # noqa: BLE001 - endpoint not up yet is the normal case here
+            pass
+        if time.time() >= end:
+            return None
+        time.sleep(0.25)
+
+
 def run_case(cdp: CDP, name: str, query: str) -> bool:
     cdp.cmd("Page.navigate", {"url": f"{BASE}/?{query}"})
     status = ""
@@ -125,11 +150,18 @@ def run_case(cdp: CDP, name: str, query: str) -> bool:
             fh.write(base64.b64decode(png))
 
     painted = probe["warm"] + probe["cool"] + probe["other"]
-    ok = probe["status"].startswith("ok") and painted > 2000
+    # A deep-link parameter that is dropped on the floor is a PASS that proves nothing: batch 19's
+    # two cases asked for `audio_duration=0.02` for a whole batch and silently got the 0.12 s
+    # default, so they cost ~23 s each instead of the ~7 s their own comment claimed and never
+    # exercised the short run. `__urlParamNotes` is the page's own record of every name it did not
+    # know and every value it clamped or snapped; empty is the pass, and it is part of the verdict.
+    notes = probe.get("urlNotes", "")
+    ok = probe["status"].startswith("ok") and painted > 2000 and not notes
     print(f"\n=== {name} ({query}) ===")
     print(f"  status   : {probe['status']}")
     print(f"  energy   : {probe['energy'].splitlines()[0] if probe['energy'] else '(none)'}")
     print(f"  diag2    : {probe['diag2'].splitlines()[0] if probe['diag2'] else '(none)'}")
+    print(f"  url      : {notes if notes else 'every parameter applied as given'}")
     print(f"  painted  : warm={probe['warm']} cool={probe['cool']} other={probe['other']} "
           f"bg={probe['bg']} / {probe['total']}  -> {'PASS' if ok else 'FAIL'}")
     return ok
@@ -151,29 +183,39 @@ def main() -> int:
         print(f"server not reachable at {BASE}; start it with `python web/server.py`.")
         return 2
 
-    tmp = tempfile.mkdtemp(prefix="chrome-verify-")
-    proc = subprocess.Popen(
-        [chrome, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
-         f"--remote-debugging-port={PORT}", f"--user-data-dir={tmp}", "--remote-allow-origins=*",
-         "--window-size=1400,1000", "about:blank"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+    # ATTACH if something is already listening, LAUNCH otherwise. b18 recorded the opposite polarity
+    # of this as a scar — a leftover Chrome held the port and the script could not run at all — and
+    # attaching turns that failure into the supported way to drive it. It also gives a way through
+    # when spawning Chrome from *this process* does not work: measured 2026-08-17, three Popen
+    # variants (plain, DETACHED_PROCESS, DETACHED|NEW_PROCESS_GROUP) all had the launcher exit 0
+    # with the port never opening, while the same command line from a shell came up in 3.6 s. The
+    # cause is not established here and is not claimed to be a property of the machine — the airload
+    # screenshot in out/ is proof the launch path worked before. Pre-launching is the way round it:
+    #     chrome --headless=new --remote-debugging-port=9333 --user-data-dir=<fresh dir> about:blank
+    # NOTE: pass a FRESH profile dir when you have just edited web/static/*, or the attached browser
+    # may serve the cached old file and hand you a PASS that proves nothing.
+    page = _devtools_page(PORT, 0.5)
+    proc = None
+    tmp = ""
+    if page:
+        print(f"attaching to the Chrome already listening on :{PORT} (nothing launched).")
+    else:
+        tmp = tempfile.mkdtemp(prefix="chrome-verify-")
+        proc = subprocess.Popen(
+            [chrome, "--headless=new", "--disable-gpu", "--no-first-run",
+             "--no-default-browser-check", f"--remote-debugging-port={PORT}",
+             f"--user-data-dir={tmp}", "--remote-allow-origins=*",
+             "--window-size=1400,1000", "about:blank"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        page = _devtools_page(PORT, 30.0)
     try:
-        page = None
-        for _ in range(60):
-            try:
-                targets = json.load(urllib.request.urlopen(f"http://localhost:{PORT}/json"))
-                pages = [
-                    t for t in targets if t.get("type") == "page" and t.get("webSocketDebuggerUrl")
-                ]
-                if pages:
-                    page = pages[0]
-                    break
-            except Exception:
-                pass
-            time.sleep(0.25)
         if not page:
-            print("could not reach Chrome DevTools endpoint.")
+            print(f"could not reach Chrome DevTools endpoint on :{PORT} "
+                  f"(launcher returncode {proc.poll() if proc else 'n/a'}). Start one yourself and "
+                  f"re-run — this script will attach to it:\n"
+                  f'  "{chrome}" --headless=new --remote-debugging-port={PORT} '
+                  f"--user-data-dir=<a fresh dir> about:blank")
             return 2
 
         cdp = CDP(page["webSocketDebuggerUrl"])
@@ -296,12 +338,22 @@ def main() -> int:
             # hard way: `requestAnimationFrame` does NOT fire in a background tab, so a
             # perfectly correct field reads as a blank canvas with no console error — this
             # driver's own foregrounded load is what makes the pixels mean anything.
-            # Kept SHORT (~7 s): the default 0.12 s render is ~23 s because the plate needs
-            # 57.9 kHz and a linear control twin is rendered beside it.
+            # Kept SHORT: the default 0.12 s render is ~23 s because the plate needs 57.9 kHz and a
+            # linear control twin is rendered beside it. NOTE — until 2026-08-17 the deep link read
+            # only `model` and `domain`, so this `audio_duration` was silently ignored and both
+            # cases paid the full default. That is why `url` is now part of the verdict above.
             ("vkroom", "model=vkroom&audio_duration=0.02"),
             # The other mounting, and the one whose room field looks different rather than
             # merely differently scaled: baffled radiates into a half-space off its wall.
             ("vkroom_baffled", "model=vkroom&domain=baffled&audio_duration=0.02"),
+            # The COARSEST legal plate, and the case exists because the range was legal but never
+            # measured (the batch flagged that in its own record rather than leaving it to be
+            # found). It is measured now: the claim is alive at plate_N = 8 — modal-share drift
+            # separates 63x against the suite's 20x bar, and it clears that bar at every legal
+            # plate_N (63/35/94/43/66 at 8/10/12/14/16). What does NOT survive the axis is the
+            # efficiency spread's multiplier, which is non-monotone over 11-102x — the batch's own
+            # "the separation is the claim, the multiplier is refused", on one more axis.
+            ("vkroom_coarse", "model=vkroom&plate_N=8&audio_duration=0.02"),
         ]
         # Optional name filters, so a single-model batch can re-check its own case without paying
         # for the whole sweep (the geometric regimes alone are ~2 minutes).
@@ -314,7 +366,8 @@ def main() -> int:
         print(f"\n{sum(results)}/{len(results)} cases passed; screenshots in out/viewer_*.png")
         return 0 if all(results) else 1
     finally:
-        proc.terminate()
+        if proc is not None:      # never shut down a browser this run did not start
+            proc.terminate()
 
 
 if __name__ == "__main__":

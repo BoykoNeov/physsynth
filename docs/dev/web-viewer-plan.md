@@ -2929,6 +2929,95 @@ curvature `w/e ÷ width²`, which both cliff brackets put at 83–85 from opposi
 off the diagonal: at a constant ratio of 75.3, `w/e` = 1 and 2 run (23 and 40 sweeps) while 5 and 8
 are dead. Amplitude binds and a broader strike does not buy it back.
 
+#### The three things batch 19 recorded rather than resolved, resolved (2026-08-17)
+
+The batch closed by naming three items it had not done. All three are now measured. **Two of them
+end as measurements rather than as code**, which is the outcome and not a shortfall — one of them
+because the measurement says the change would have shown the eye nothing.
+
+**1. The headless cases run now — and the gap was TWO batches wide, not one.** `out/` contained no
+`viewer_airbox*.png` **at all**, so batch 18's pair had never been run either; that is a file
+listing rather than the inference b19 recorded. All five (`airbox`, `airbox_absorbing`, `vkroom`,
+`vkroom_baffled`, and the new `vkroom_coarse`) now pass. The dual pane paints into the **single**
+`#string` canvas, so the shipped probe was correctly targeted after all — worth establishing before
+trusting its verdict, because a probe pointed at one half of a two-half pane would have passed for
+the wrong reason. Both mountings differ in *pixels* rather than in styling (warm 62,676 vs 73,411,
+background 44,006 vs 34,092 at the full duration).
+
+Running them found what never running them had hidden:
+
+- **THE DEEP LINK SILENTLY DROPPED EVERY PARAMETER EXCEPT `model` AND `domain`.** `applyUrlParams`
+  read exactly those two, so batch 19's `?model=vkroom&audio_duration=0.02` — written to keep the
+  cases cheap — was ignored, and both cases ran the full 0.12 s default: **~23 s each, not the ~7 s
+  their own comment claimed**, and the short run they were written to exercise was never exercised.
+  Nothing failed, which is exactly why it survived a batch: a deep link that ignores what it is
+  handed reads precisely like one that honoured it. Fixed as `applyUrlSliders()`, which must run
+  **after** `applyModelRanges()` (that function rewrites `val` per model and would overwrite the
+  link), takes values in the **backend's** units so `data-scale` is undone, and records every
+  unknown name and every clamp or snap in `window.__urlParamNotes`. **That list is now part of the
+  pass/fail verdict**, so the failure cannot recur silently. Proof it took: 961 audio samples
+  against 5,761, and `plate_N = 8` reaching the payload from the URL.
+- **The left-hand rig panel does NOT go stale on it**, which was the live hazard in making the fix —
+  `setSlider` deliberately does not fire `onControlChange`, so a deep-linked value could have
+  rendered 1,158 steps while the panel describing the rig still said 6,948. It does not, because
+  `updateLambdaHint()` already runs after the new call in the boot sequence. Checked in pixels, not
+  reasoned about: the panel reads **1,158 steps** and `audio length 0.02 s`.
+- **The script attaches to an already-listening Chrome instead of insisting on launching one.** This
+  inverts b18's scar — there a leftover Chrome held the port and the script *could not run at all* —
+  into the supported way to drive it. It also gives a way through when spawning Chrome from the
+  calling process does not work: measured here, three `Popen` variants (plain, `DETACHED_PROCESS`,
+  `DETACHED|NEW_PROCESS_GROUP`) all had the launcher **exit 0 with the port never opening**, while
+  the identical command line from a shell came up in 3.6 s. **The cause is not established and is
+  not claimed to be a property of the machine** — the `airload` screenshot dated 2026-08-10 is proof
+  the launch path worked before. Use a **fresh** profile after editing `web/static/*`, or the
+  attached browser may serve the cached old file and hand back a PASS that proves nothing.
+
+**2. The plate pane's animation window STAYS where it is, because the drift is not in the picture.**
+The batch flagged that the pane shows 4 ms of a 120 ms run — the strike, not the shape drift it is
+named for. Measured before changing anything: the per-window **mean-square velocity map**, which is
+the spatial pattern `sigma_shape` is a functional of, compared between window 1 and window 4 —
+
+| | correlation w1↔w4 | total-variation distance |
+|---|---|---|
+| struck | **0.9583** | 0.1269 |
+| linear twin | 1.0000 | 0.0035 |
+
+So the effect is real and separates from the control by ~36×, and the picture is **96 % unchanged**.
+Widening the animation to the full run would have shown the eye nothing, while costing ~490 kB of
+frames and **freezing the room half** — the slices are on the wavefront's clock (87 frames) and
+would sit on their last frame for 98 % of the plate's animation. The 46 % modal-share drift is
+energy moving *between modes with near-identical mean-square footprints*, which is why the number is
+large and the map is not. **The claim panel is the drift's right home, and that is now a measurement
+rather than a default.** *A window-4-minus-window-1 difference map would render it — measured and
+declined, because it is a new panel rather than a tidy.*
+
+**3. The claim is ALIVE at the coarsest legal plate — and the multiplier wanders on one more axis.**
+`plate_N` was legal down to 8 and never measured there. At the shipped 0.12 s:
+
+| `plate_N` | resolved | struck spread | twin | spread separation | **drift separation** |
+|---|---|---|---|---|---|
+| 8 | 19/81 | 4.968 % | 0.062 % | 80.6× | **63.3×** |
+| 10 | 19/121 | 2.553 % | 0.144 % | 17.8× | **34.8×** |
+| 12 | 19/169 | 1.995 % | 0.177 % | 11.2× | **94.1×** |
+| 14 | 17/225 | 3.314 % | 0.105 % | 31.5× | **43.1×** |
+| 16 | 17/289 | 7.045 % | 0.069 % | 102.0× | **65.5×** |
+
+The `plate_N = 16` row reproduces the shipped 7.045 % and 102× exactly, which is what makes the
+other four rows worth reading. **The drift separation clears the suite's 20× bar at every legal
+setting**, so the range is safe as it stands and the "probably fine" the batch flagged is now
+measured. The **spread** separation is non-monotone over **11–102×**: that *widens the range the
+record quotes* rather than refuting its "never below ~17×" floor, because a ratio of two max/min
+spreads of four near-equal numbers is worse conditioned than either of them — the record's own
+1.053-vs-1.070 on a 0.03 % rig change. One more axis on which the separation is the claim and the
+multiplier is refused. Pinned by `test_vkroom_the_claim_survives_the_COARSEST_legal_plate` and by a
+`vkroom_coarse` browser case.
+
+*Two observations left deliberately unfixed, both wider than this batch.* The second panel's text
+element is never cleared between models, so a canvas-only panel (`vkroom`, `airbox`, `whirl` — none
+of which write it) shows the previously selected model's text; that is viewer-wide behaviour, not a
+batch 19 item. And `drawVKRoomClaim` draws its own text into the canvas by design, which is why the
+harness reads `(none)` for it rather than a missing readout.
+
 *What is below is the plan as written before the build, kept because two of its claims died in
 the build and that record is the point.*
 

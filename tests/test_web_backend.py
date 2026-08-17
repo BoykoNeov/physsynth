@@ -4658,6 +4658,42 @@ def test_vkroom_the_flag_off_makes_the_run_its_own_control():
     assert d["meta"]["convergence"]["max_iters"] == 1
 
 
+def test_vkroom_the_claim_survives_the_COARSEST_legal_plate():
+    """``plate_N`` was legal down to 8 and never measured there — the batch said so and left it.
+
+    Measured 2026-08-17 at the shipped 0.12 s, across the whole legal range. The two observables
+    disagree about what the axis does, and that disagreement is the point:
+
+    ======  ==========  ============  ================  =================
+    plate_N   resolved  struck spread  spread separation  DRIFT separation
+    ======  ==========  ============  ================  =================
+         8      19/ 81        4.968 %            80.6x              63.3x
+        10      19/121        2.553 %            17.8x              34.8x
+        12      19/169        1.995 %            11.2x              94.1x
+        14      17/225        3.314 %            31.5x              43.1x
+        16      17/289        7.045 %           102.0x              65.5x
+    ======  ==========  ============  ================  =================
+
+    The **drift** separation clears the 20x bar at every legal setting, so the claim is alive across
+    the whole range. The **spread** separation is non-monotone over 11-102x — which widens the
+    range the record quotes rather than refuting its floor, because a ratio of two max/min spreads
+    of four near-equal numbers is worse conditioned than either (the record's own 1.053-vs-1.070 on
+    a 0.03 % rig change). One more axis on which the separation is the claim and the multiplier is
+    not.
+
+    Asserted here at ``_vr``'s own 0.03 s, where the windows are 7.5 ms and the numbers are lower
+    but still clear: drift 40.2x, spread 9.8x.
+    """
+    d = _vr(plate_N=8)
+    c = d["meta"]["claim"]
+    assert d["meta"]["plate"]["N"] == 8
+    assert c["n_modes"] == 81 and c["n_resolved"] == 19, c
+    assert c["modal_drift"] > 20 * c["modal_drift_twin"], c
+    sep = (c["spread_resolved"] - 1) / max(c["spread_resolved_twin"] - 1, 1e-12)
+    assert sep > 3.0, (sep, c)
+    assert d["meta"]["convergence"]["all_converged"] is True, d["meta"]["convergence"]
+
+
 def test_vkroom_both_tiers_run_and_the_suspended_one_radiates_from_both_faces():
     for tier in ("baffled", "suspended"):
         d = _vr(domain=tier)
