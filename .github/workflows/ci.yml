@@ -123,18 +123,27 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
 
-      # Collection output is captured, never echoed: it is one line per test, and 4 x 1735 lines of
+      # Collection output is captured, never echoed: it is one line per test, and 4 x 1800 lines of
       # ids would bury the two numbers this job exists to print.
+      #
+      # `set -euo pipefail` is load-bearing, not boilerplate. Without `pipefail` the exit status of
+      # `pytest | grep` is GREP's, so a collection error inside pytest is invisible here; and without
+      # the emptiness check `sum=$((sum + ))` is a silent no-op rather than an error, so a shard that
+      # half-collected could still reconcile. A guard that can pass quietly is the failure it exists
+      # to catch, one level down.
       - name: Shard split covers the suite exactly once
         run: |
+          set -euo pipefail
           count_collected() {
             pytest --collect-only "$@" | grep -oE '[0-9]+ tests? collected' | grep -oE '^[0-9]+'
           }
           total=$(count_collected)
+          test -n "$total"
           sum=0
           for i in $(seq 1 ${{ needs.setup.outputs.count }}); do
             files=$(python scripts/shard_tests.py --shard "$i" --of ${{ needs.setup.outputs.count }})
             n=$(count_collected $files)
+            test -n "$n"
             echo "shard $i: $n tests"
             sum=$((sum + n))
           done
