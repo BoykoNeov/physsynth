@@ -69,12 +69,48 @@ identity (machine precision lossless; monotone decreasing at ``e^{-2 sigma t}`` 
 > not only the top partials. Passivity still holds unconditionally; the *rate*, not the sign, is
 > wrong above low modes. Cure = frequency-dependent loss (a later model). See the plan.
 
+**Grain (orthotropy) — ``grain_x``, ``grain_cross``, ``grain_y``, supported branch only.**
+Everything above assumes a material equally stiff in every direction. Real soundboards are wood.
+Passing the three dimensionless bending-stiffness ratios replaces ``B = L²`` with
+
+    B = g_x (δ_xx)² + 2 g_h (δ_xx δ_yy) + g_y (δ_yy)²
+
+(:func:`.operators2d.orthotropic_biharmonic`), the discrete
+``[D_x w_xxxx + 2H w_xxyy + D_y w_yyyy] / D_ref`` with ``kappa² = D_ref/rho_s`` carrying the scale.
+The default ``(1, 1, 1)`` is *not* re-routed through that assembly — it stays on the ``L @ L`` line
+above, byte-for-byte. The two agree only up to summation order, and whether that is bit-exact is
+**grid-dependent** (identical where ``1/h²`` is exactly representable, 1.7-2.4e-16 apart where it is
+not), so re-routing would move shipped plate numbers in their last digit on some grids and not
+others. The selecting flag is ``grain_is_isotropic`` -- named for the branch, not for the material.
+
+Because ``sin(mπx/Lx) sin(nπy/Ly)`` is already an exact discrete eigenvector of ``δ_xx`` and
+``δ_yy`` *separately*, it survives orthotropy exactly, and the closed-form oracle comes with it:
+
+    Q_mn = kappa² ( g_x λ_x² + 2 g_h λ_x λ_y + g_y λ_y² ),   λ_x = (4/h²)sin²(mπh/2Lx)
+    f_mn -> (π/2) sqrt( [D_x (m/Lx)⁴ + 2H (m/Lx)²(n/Ly)² + D_y (n/Ly)⁴] / rho_s )   (continuum)
+
+Three things a caller must know:
+
+- **The factor of 2 lives on the cross term here, not inside ``H``** (``H = D_1 + 2 D_xy``). The
+  rival packagings the literature invites land at 0.30x and 0.65x for nu = 0.3 and produce a
+  perfectly stable, exactly energy-conserving, wrong plate. Use
+  :func:`grain_ratios_from_material` rather than transcribing it.
+- **Stability is now a construction-time condition**, ``g_h > -sqrt(g_x g_y)``, and is rejected
+  below it. Above it the theta-scheme is unconditionally stable as before. Note ``mu`` is still
+  reported from the *reference* rigidity, so the stiffest axis sits at ``mu sqrt(max(g_x, g_y))``.
+- **The damping caveat above becomes anisotropic, and the energy report cannot see it.** ``Q`` is
+  no longer a function of the Laplacian eigenvalue alone, so two modes that were degenerate under
+  isotropy now decay at *different* rates depending on how their curvature splits along and across
+  the grain. The operator is still SPD, so passivity holds and ``energy()`` stays green either way
+  -- the correctness claim here rides on the modal-frequency oracle, not on the ledger.
+
 Headless: NumPy + SciPy (sparse LU). No I/O, no plotting.
 """
 
 from __future__ import annotations
 
-from typing import Literal
+import math
+from typing import Literal, NamedTuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -87,6 +123,7 @@ from .operators2d import (
     embed,
     free_plate_stiffness,
     laplacian_from_mask,
+    orthotropic_biharmonic,
     rectangle_mask,
 )
 
@@ -96,6 +133,79 @@ Boundary = Literal["supported", "free"]
 # Default a hair above 1/4 (accuracy-first per the plan) so the energy has a small positivity margin
 # while staying near the minimal-dispersion theta = 1/4 -- inherited from the stiff string.
 THETA_DEFAULT = 0.28
+
+
+class GrainSpec(NamedTuple):
+    """Everything :class:`Plate` needs from a material: ``kappa``, ``rho_s`` and three ratios.
+
+    A named tuple rather than a bare one on purpose. ``rho_s`` is the **areal** density
+    (``rho * thickness``) and :class:`Plate`'s ``rho`` argument is areal too, but the *material*
+    density fed to :func:`grain_ratios_from_material` is a **volume** density — so the one thing a
+    caller could plausibly do is pass the volume density straight through to ``Plate``. That slip
+    leaves every frequency correct (``kappa`` carries them) and every energy wrong by a factor of
+    the thickness, which is precisely the class of error this batch found no ledger and no modal
+    oracle can catch. Returning ``rho_s`` explicitly, named, removes the opportunity.
+    """
+
+    kappa: float
+    rho_s: float
+    grain_x: float
+    grain_cross: float
+    grain_y: float
+
+
+def grain_ratios_from_material(
+    *,
+    E_x: float,
+    E_y: float,
+    nu_xy: float,
+    G_xy: float,
+    thickness: float,
+    rho: float,
+) -> GrainSpec:
+    """Real orthotropic material -> a :class:`GrainSpec` for :class:`Plate`.
+
+    The **optional realism layer**. :class:`Plate` takes three dimensionless bending-stiffness
+    ratios, which lets a caller dial combinations no material has (that is deliberate — the core
+    API permits the unphysical and this helper offers the physical, rather than the surface
+    forbidding it). This maps an actual sheet to them:
+
+        nu_yx = nu_xy E_y / E_x                          (reciprocity)
+        D_x   = E_x t³ / (12 (1 - nu_xy nu_yx))          along-grain bending rigidity
+        D_y   = E_y t³ / (12 (1 - nu_xy nu_yx))          across-grain
+        D_1   = nu_yx D_x  ( == nu_xy D_y )              coupling rigidity
+        D_xy  = G_xy t³ / 12                             torsional rigidity
+        H     = D_1 + 2 D_xy                             the cross term
+
+    with ``D_ref = D_x`` as the reference, so ``kappa = sqrt(D_x / rho_s)``, ``grain_x = 1``,
+    ``grain_y = D_y/D_x``, ``grain_cross = H/D_x``. ``rho`` here is the material's **volume**
+    density (kg/m³); the returned ``rho_s = rho * thickness`` is the **areal** density
+    :class:`Plate` wants. Pass ``spec.rho_s``, never ``rho`` — see :class:`GrainSpec`.
+
+    Fed an isotropic material (``E_x = E_y``, ``G_xy = E/(2(1+nu))``) the three ratios come back
+    ``(1, 1, 1)`` exactly, i.e. the shipped plate — asserted in the suite, because the ``H``
+    convention is the one thing in this model most likely to be transcribed wrong.
+
+    Sitka-spruce-ish (11 GPa along, 0.8 GPa across, nu_xy 0.37, G_xy 0.7 GPa) gives
+    ``grain_y ≈ 0.073`` and ``grain_cross ≈ 0.153``. Note ``H/sqrt(D_x D_y) ≈ 0.57``, not 1: real
+    wood is **not** an isotropic plate with one axis stretched, and the cross term is an
+    independent axis. See ``docs/dev/orthotropic-plate-plan.md``.
+    """
+    if min(E_x, E_y, G_xy, thickness, rho) <= 0:
+        raise ValueError("E_x, E_y, G_xy, thickness and rho must all be positive.")
+    nu_yx = nu_xy * E_y / E_x
+    den = 1.0 - nu_xy * nu_yx
+    if den <= 0:
+        raise ValueError(
+            f"1 - nu_xy*nu_yx must be positive (thermodynamic admissibility); got {den:.6g} from "
+            f"nu_xy={nu_xy}, nu_yx={nu_yx:.6g}."
+        )
+    t3 = thickness**3
+    D_x = E_x * t3 / (12.0 * den)
+    D_y = E_y * t3 / (12.0 * den)
+    H = nu_yx * D_x + 2.0 * (G_xy * t3 / 12.0)
+    rho_s = rho * thickness  # AREAL density -- what Plate's `rho` argument means
+    return GrainSpec(math.sqrt(D_x / rho_s), rho_s, 1.0, H / D_x, D_y / D_x)
 
 
 class Plate:
@@ -155,6 +265,9 @@ class Plate:
         theta: float = THETA_DEFAULT,
         boundary: Boundary = "supported",
         nu: float = 0.3,
+        grain_x: float = 1.0,
+        grain_cross: float = 1.0,
+        grain_y: float = 1.0,
     ) -> None:
         if min(Lx, Ly, fs) <= 0:
             raise ValueError("Lx, Ly, fs must all be positive.")
@@ -173,6 +286,37 @@ class Plate:
         if boundary not in ("supported", "free"):
             raise ValueError(f"boundary must be 'supported' or 'free', got {boundary!r}.")
 
+        grain_x, grain_cross, grain_y = float(grain_x), float(grain_cross), float(grain_y)
+        # Selects the untouched `B = L @ L` line below. Deliberately NOT named `isotropic`:
+        # it is a fast-path flag about *this branch's* assembly, not a claim about the
+        # material in general -- the free branch has no grain yet and would set it True.
+        grain_is_isotropic = grain_x == 1.0 and grain_cross == 1.0 and grain_y == 1.0
+        if grain_x <= 0 or grain_y <= 0:
+            raise ValueError(
+                f"grain_x and grain_y (along/across bending stiffness ratios) must be positive, "
+                f"got ({grain_x}, {grain_y})."
+            )
+        # Definiteness of g_x a² + 2 g_h a b + g_y b² for a, b > 0 -- the theta-scheme's
+        # unconditional stability rests on the spatial operator being positive-definite, and with
+        # three coefficients that is a condition rather than a freebie. See the plan, §1.2.
+        cross_floor = -math.sqrt(grain_x * grain_y)
+        if grain_cross <= cross_floor:
+            raise ValueError(
+                f"grain_cross must exceed -sqrt(grain_x*grain_y) = {cross_floor:.6g} or the "
+                f"bending operator is indefinite (unstable); got {grain_cross}."
+            )
+        if not grain_is_isotropic and boundary != "supported":
+            raise NotImplementedError(
+                "grain (orthotropy) is implemented for boundary='supported' only. The free branch "
+                "assembles from the strain energy and needs the coupling and torsional rigidities "
+                "separately, not just their combination H -- a separate batch. See "
+                "docs/dev/orthotropic-plate-plan.md §3."
+            )
+
+        self.grain_x = grain_x
+        self.grain_cross = grain_cross
+        self.grain_y = grain_y
+        self.grain_is_isotropic = grain_is_isotropic
         self.kappa = float(kappa)
         self.rho = float(rho)
         self.fs = float(fs)
@@ -203,7 +347,15 @@ class Plate:
             # Masked Dirichlet Laplacian L (symmetric, negative-definite) and biharmonic B = L^2
             # (symmetric, positive-definite); B carries the simply-supported conditions for free.
             self.L, self.index_map = laplacian_from_mask(self.mask, self.h)
-            self.B = (self.L @ self.L).tocsr()
+            if self.grain_is_isotropic:
+                self.B = (self.L @ self.L).tocsr()
+            else:
+                # Grain: B = g_x (d_xx)² + 2 g_h d_xx d_yy + g_y (d_yy)². Deliberately a *separate*
+                # path -- routing the isotropic default through it too would agree only to ~2e-16
+                # (reassociation), which would perturb every shipped plate number in the last digit.
+                self.B, _ = orthotropic_biharmonic(
+                    self.N, Ny, self.h, self.grain_x, self.grain_cross, self.grain_y
+                )
             self.n_live = self.B.shape[0]
             if self.n_live < 1:
                 raise ValueError("the plate has no interior (live) nodes; refine the grid.")

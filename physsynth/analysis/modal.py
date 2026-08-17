@@ -34,6 +34,10 @@ __all__ = [
     # 2D plate (model #5)
     "rectangular_plate_freqs",
     "discrete_plate_eigenfrequency",
+    # 2D orthotropic plate -- model #5 with a grain direction
+    "orthotropic_plate_freqs",
+    "discrete_orthotropic_plate_eigenfrequency",
+    "dirichlet_axis_eigenvalue",
     # 1D free-free beam (model #5b-pre)
     "free_free_beam_betaL",
     "free_free_beam_freqs",
@@ -258,6 +262,103 @@ def discrete_plate_eigenfrequency(
     Q = kappa * kappa * Lambda_lap * Lambda_lap
     s = Q * k * k / (4.0 + 4.0 * theta * Q * k * k)
     return np.arcsin(np.sqrt(s)) / (np.pi * k)
+
+
+# -- orthotropic (grain) simply-supported plate: model #5 with a direction --------------------
+
+
+def orthotropic_plate_freqs(
+    kappa: float,
+    Lx: float,
+    Ly: float,
+    modes: list[tuple[int, int]],
+    grain_x: float = 1.0,
+    grain_cross: float = 1.0,
+    grain_y: float = 1.0,
+) -> NDArray[np.float64]:
+    """Continuum simply-supported **orthotropic** rectangular-plate frequencies.
+
+    The plate of a material with a grain — stiffer along one axis than across. The Navier modes are
+    still exactly ``sin(mπx/Lx) sin(nπy/Ly)`` (orthotropy does not mix them on a rectangle whose
+    axes are the material axes), but the frequency is no longer a function of the Laplacian
+    eigenvalue alone:
+
+        f_mn = (π/2) sqrt( [D_x (m/Lx)⁴ + 2H (m/Lx)²(n/Ly)² + D_y (n/Ly)⁴] / rho_s )
+
+    written in this module's ratio convention (``g = D/D_ref``, ``kappa² = D_ref/rho_s``) as
+
+        f_mn = (kappa/2π) · π² · sqrt( g_x a² + 2 g_h a b + g_y b² ),   a = (m/Lx)², b = (n/Ly)²
+
+    **The factor of 2 is on the cross term, and ``H = D_1 + 2 D_xy``** — see
+    :func:`physsynth.core.plate.grain_ratios_from_material`. At ``g_x = g_h = g_y = 1`` this is
+    :func:`rectangular_plate_freqs` exactly (``a² + 2ab + b² = (a+b)²``), which the suite asserts
+    rather than assumes.
+
+    Unlike the isotropic case, Poisson's ratio does **not** drop out — it enters through ``H``.
+    """
+    mn = np.asarray(modes, dtype=float)
+    a = (mn[:, 0] / Lx) ** 2
+    b = (mn[:, 1] / Ly) ** 2
+    q = grain_x * a * a + 2.0 * grain_cross * a * b + grain_y * b * b
+    if np.any(q <= 0.0):
+        raise ValueError(
+            "orthotropic modal stiffness is non-positive for at least one mode; grain_cross must "
+            "exceed -sqrt(grain_x*grain_y)."
+        )
+    return 0.5 * np.pi * kappa * np.sqrt(q)
+
+
+def discrete_orthotropic_plate_eigenfrequency(
+    lam_x: float | NDArray[np.float64],
+    lam_y: float | NDArray[np.float64],
+    kappa: float,
+    k: float,
+    theta: float,
+    grain_x: float = 1.0,
+    grain_cross: float = 1.0,
+    grain_y: float = 1.0,
+) -> NDArray[np.float64]:
+    """Discrete temporal frequency (Hz) of an **orthotropic** plate eigenmode, theta-scheme.
+
+    A separate function from :func:`discrete_plate_eigenfrequency` rather than an optional argument
+    on it, because the isotropic one is parameterised by the single Laplacian eigenvalue ``Λ`` and
+    this one genuinely needs the two axes apart: ``lam_x = (4/h²)sin²(mπh/2Lx)`` and ``lam_y``
+    likewise, both **positive**. The modal stiffness is
+
+        Q_mn = kappa² ( g_x lam_x² + 2 g_h lam_x lam_y + g_y lam_y² )
+
+    and from there the algebra is the isotropic one verbatim:
+
+        sin²(ω k/2) = s = Q k² / (4 + 4 θ Q k²),   f = arcsin(sqrt(s)) / (π k).
+
+    Because ``lam_x + lam_y = Λ`` and ``Q`` collapses to ``kappa² Λ²`` at ``g = (1,1,1)``, this
+    agrees with :func:`discrete_plate_eigenfrequency` there to machine precision.
+    """
+    lam_x = np.asarray(lam_x, dtype=float)
+    lam_y = np.asarray(lam_y, dtype=float)
+    q = grain_x * lam_x * lam_x + 2.0 * grain_cross * lam_x * lam_y + grain_y * lam_y * lam_y
+    if np.any(q <= 0.0):
+        raise ValueError(
+            "orthotropic modal stiffness is non-positive for at least one mode; grain_cross must "
+            "exceed -sqrt(grain_x*grain_y)."
+        )
+    Q = kappa * kappa * q
+    s = Q * k * k / (4.0 + 4.0 * theta * Q * k * k)
+    return np.arcsin(np.sqrt(s)) / (np.pi * k)
+
+
+def dirichlet_axis_eigenvalue(
+    m: int | NDArray[np.int64], L: float, h: float
+) -> NDArray[np.float64]:
+    """Positive 1-D Dirichlet second-difference eigenvalue ``(4/h²) sin²(mπh/2L)``.
+
+    The per-axis factor the orthotropic oracle needs. ``-`` this is the eigenvalue of ``δ_xx`` on
+    ``sin(mπx/L)`` sampled at the interior nodes; the isotropic Laplacian eigenvalue is the *sum*
+    of the two axes' values, which is why the isotropic oracle can take one number and the
+    orthotropic one cannot. Tends to ``(mπ/L)²`` as ``h → 0`` (the O(h²) source in both).
+    """
+    m = np.asarray(m, dtype=float)
+    return (4.0 / (h * h)) * np.sin(m * np.pi * h / (2.0 * L)) ** 2
 
 
 # -- 1D free-free Euler-Bernoulli beam (model #5b-pre): the free-edge plate de-risk ------------

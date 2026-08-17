@@ -237,6 +237,78 @@ def make_plate(
     return Plate(Lx=Lx, Ly=Ly, kappa=kappa, rho=rho, fs=fs, N=N, sigma=sigma, theta=theta)
 
 
+# Sitka-spruce-ish soundboard, the orthotropic batch's reference material. Along-grain Young's
+# modulus ~11 GPa against ~0.8 GPa across (a ratio near 14), nu_xy 0.37, shear 0.7 GPa. Fed through
+# plate.grain_ratios_from_material this gives grain_y ~ 0.073 and grain_cross ~ 0.153 -- and note
+# grain_cross / sqrt(grain_x*grain_y) ~ 0.57, NOT 1: wood is not a stretched isotropic plate.
+SPRUCE = dict(E_x=11.0e9, E_y=0.8e9, nu_xy=0.37, G_xy=0.7e9, thickness=3.0e-3, rho=420.0)
+
+
+def make_orthotropic_plate(
+    *,
+    N: int,
+    mu: float = MU_PLATE_DEFAULT,
+    kappa: float = KAPPA_PLATE_DEFAULT,
+    sigma: float = 0.0,
+    theta: float = THETA_DEFAULT,
+    Lx: float = 1.0,
+    Ly: float = 1.0,
+    rho: float = RHO_AREAL_DEFAULT,
+    grain_x: float = 1.0,
+    grain_cross: float = 1.0,
+    grain_y: float = 1.0,
+) -> Plate:
+    """:func:`make_plate` with a **grain**: three bending-stiffness ratios instead of one stiffness.
+
+    Same ``mu``-solves-``fs`` convention, so an orthotropic plate and its isotropic twin built at
+    the same ``N`` and ``mu`` share ``h``, ``k`` and ``theta`` exactly and differ only in ``B``.
+    ``kappa`` remains the *reference* stiffness (``kappa² = D_ref/rho_s``); the three ratios scale
+    it per axis. Defaults are all ``1.0``, which is :func:`make_plate` on the untouched ``L @ L``
+    path -- deliberately so that the isotropic-collapse tests can build the two through one door.
+    """
+    h = Lx / N
+    fs = kappa / (mu * h * h)
+    return Plate(
+        Lx=Lx,
+        Ly=Ly,
+        kappa=kappa,
+        rho=rho,
+        fs=fs,
+        N=N,
+        sigma=sigma,
+        theta=theta,
+        grain_x=grain_x,
+        grain_cross=grain_cross,
+        grain_y=grain_y,
+    )
+
+
+def orthotropic_mode_freqs(plate: Plate, modes: list[tuple[int, int]]) -> np.ndarray:
+    """Analytic theta-scheme frequencies (Hz) of the named ``(m, n)`` modes of a grained plate.
+
+    The closed-form counterpart of :func:`plate_low_eigenfrequencies`, and it has to be *named*
+    modes rather than "the lowest k": under orthotropy the mode ordering is not the isotropic one,
+    so asking ``eigsh`` for the smallest eigenvalues and pairing them with ``(m, n)`` by position
+    would silently mislabel them -- which is itself one of the things this batch measures. Uses the
+    plate's own snapped ``Ly`` (the requested ``Ly`` is rounded to a whole number of cells).
+    """
+    mn = np.asarray(modes, dtype=int)
+    lam_x = modal.dirichlet_axis_eigenvalue(mn[:, 0], plate.Lx, plate.h)
+    lam_y = modal.dirichlet_axis_eigenvalue(mn[:, 1], plate.Ly, plate.h)
+    return np.asarray(
+        modal.discrete_orthotropic_plate_eigenfrequency(
+            lam_x,
+            lam_y,
+            plate.kappa,
+            plate.k,
+            plate.theta,
+            plate.grain_x,
+            plate.grain_cross,
+            plate.grain_y,
+        )
+    )
+
+
 def make_free_plate(
     *,
     N: int,

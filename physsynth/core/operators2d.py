@@ -29,6 +29,7 @@ __all__ = [
     "grid_coords",
     "laplacian_from_mask",
     "biharmonic_from_mask",
+    "orthotropic_biharmonic",
     "free_plate_stiffness",
     "VonKarmanBracket",
     "AiryStressSolver",
@@ -142,6 +143,86 @@ def biharmonic_from_mask(
     """
     L, index_map = laplacian_from_mask(mask, h)
     B = (L @ L).tocsr()
+    return B, index_map
+
+
+def _dirichlet_interior_d2_1d(n_int: int, h: float) -> sparse.csr_matrix:
+    """``n_int × n_int`` second difference ``[1,-2,1]/h²`` on the *interior* nodes of a segment.
+
+    The 1D Dirichlet operator whose eigenvectors are exactly ``sin(mπx/L)`` sampled at the interior
+    nodes, with eigenvalue ``-(4/h²)sin²(mπh/2L)``. Distinct from :func:`_centered_d2_1d`, which is
+    the ``(N+1)×(N+1)`` *full-grid* operator: here the two rim nodes are not unknowns at all, so the
+    end rows simply have one neighbour. This is the 1D factor of the tensor-product rectangle —
+    :func:`laplacian_from_mask` on a :func:`rectangle_mask` is exactly
+    ``kron(I_y, D_x) + kron(D_y, I_x)`` built from it.
+    """
+    inv_h2 = 1.0 / (h * h)
+    main = np.full(n_int, -2.0 * inv_h2)
+    off = np.full(max(n_int - 1, 0), inv_h2)
+    return sparse.diags([off, main, off], [-1, 0, 1], shape=(n_int, n_int), format="csr")
+
+
+def orthotropic_biharmonic(
+    Nx: int,
+    Ny: int,
+    h: float,
+    grain_x: float = 1.0,
+    grain_cross: float = 1.0,
+    grain_y: float = 1.0,
+) -> tuple[sparse.csr_matrix, NDArray[np.int64]]:
+    """Orthotropic (grain-direction) bending operator on a simply-supported rectangle.
+
+    The plate of model #5 made of a material with a **grain**: stiffer along one axis than across
+    it. Where :func:`biharmonic_from_mask` builds the isotropic ``∇⁴ = (∇²)²``, this builds
+
+        B = g_x (δ_xx)² + 2 g_h (δ_xx δ_yy) + g_y (δ_yy)²
+
+    the discrete form of ``D_x w_xxxx + 2H w_xxyy + D_y w_yyyy`` divided by a reference rigidity
+    ``D_ref``, so the three arguments are **dimensionless ratios** ``g_x = D_x/D_ref`` etc. and the
+    caller's ``kappa² = D_ref/rho_s`` multiplies the whole thing (see :class:`.plate.Plate`).
+
+    **The factor of 2 belongs on the cross term here, in the operator, not inside** ``H``. With
+    ``H = D_1 + 2 D_xy`` (``D_1 = ν_yx D_x`` the coupling rigidity, ``D_xy = G_xy t³/12`` the
+    torsional one), the isotropic material gives ``H = D`` exactly. The two rival packagings that
+    the orthotropic literature invites — ``H = D_1`` and ``H = D_1 + D_xy`` — come out at 0.30 and
+    0.65 of the correct term for ν = 0.3, and **both produce a perfectly stable, exactly
+    energy-conserving, wrong plate**. See ``docs/dev/orthotropic-plate-plan.md`` §1.
+
+    Setting ``g_x = g_h = g_y`` recovers ``g · L @ L``, but **whether it does so bit-for-bit is
+    grid-dependent**: the three products are summed in a different order than ``L`` is squared, so a
+    grid where ``1/h²`` is exactly representable comes out identical and one where it is not comes
+    out 1.7–2.4e-16 apart (measured over seven grids; see ``docs/dev/orthotropic-plate-plan.md``
+    §2). Because neither behaviour can be relied on, :class:`.plate.Plate` keeps the isotropic
+    default on the untouched ``L @ L`` path rather than routing everything through here — otherwise
+    every shipped plate number would move in its last digit on *some* grids and not others.
+
+    Returns ``(B, index_map)`` with the same live-node ordering as
+    ``laplacian_from_mask(rectangle_mask(Nx, Ny), h)``.
+
+    **Definiteness is a condition here, not a freebie.** The eigenvalue on mode ``(m,n)`` is
+    ``g_x λ_x² + 2 g_h λ_x λ_y + g_y λ_y²`` with ``λ > 0``, which is positive for every mode iff
+    ``g_h > -sqrt(g_x g_y)``. The isotropic ``L²`` satisfies this with room to spare; a caller
+    dialling ``grain_cross`` does not. :class:`.plate.Plate` rejects the violation at construction —
+    this function does not, so it can be used to *build* the indefinite case for a test.
+    """
+    if Nx < 2 or Ny < 2:
+        raise ValueError(f"Nx and Ny must both be >= 2, got ({Nx}, {Ny}).")
+    mask = rectangle_mask(Nx, Ny)
+    index_map = np.full(mask.shape, -1, dtype=np.int64)
+    index_map[mask] = np.arange(int(mask.sum()))
+
+    # Live nodes are walked in C order (y outer, x inner) -- so x is the *inner* tensor factor.
+    dxx = sparse.kron(
+        sparse.identity(Ny - 1), _dirichlet_interior_d2_1d(Nx - 1, h), format="csr"
+    )
+    dyy = sparse.kron(
+        _dirichlet_interior_d2_1d(Ny - 1, h), sparse.identity(Nx - 1), format="csr"
+    )
+    B = (
+        float(grain_x) * (dxx @ dxx)
+        + (2.0 * float(grain_cross)) * (dxx @ dyy)
+        + float(grain_y) * (dyy @ dyy)
+    ).tocsr()
     return B, index_map
 
 

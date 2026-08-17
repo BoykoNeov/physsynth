@@ -243,6 +243,7 @@ in a new model live in the boundary handling** — check SBP first when `E^n` dr
 | 3 | Damped string | + frequency-dependent loss | measured decay rates per partial | Passivity test: energy decreases monotonically. |
 | 4 | Membrane (2D) | 2D wave equation, circular rim | Bessel zeros `f_{mn} = c*j_{m,n}/(2*pi*a)` | Visual showpiece begins. |
 | 5 | Plate (Kirchhoff) | biharmonic operator | `f_{mn} = (pi/2)*sqrt(D/rho_s)*[(m/Lx)^2+(n/Ly)^2]` | Chladni patterns as diagnostics. |
+| 5o | Orthotropic plate (grain) | `D_x u_xxxx + 2H u_xxyy + D_y u_yyyy` | `f_{mn} = (pi/2)*sqrt([D_x(m/Lx)^4 + 2H(m/Lx)^2(n/Ly)^2 + D_y(n/Ly)^4]/rho_s)` | Wood, not metal. Supported branch only; sine stays an *exact* eigenvector so the oracle is closed-form. `docs/dev/orthotropic-plate-plan.md`. |
 | 6 | Nonlinear plate | von Karman coupling | energy conservation (no analytic modes) | Gongs/cymbals. The deep end. |
 
 Steps 1–3 are one resonator family deepening in physics. Breadth (modal percussion, bowed string,
@@ -482,7 +483,21 @@ threads from here as the project matures; each bullet is a seed, not a spec.
 - **Sympathetic resonance / coupled systems:** piano soundboard with all strings, sitar jawari,
   sympathetic strings, multi-string coupling.
 - **Material realism:** anisotropy, layered/composite materials, inhomogeneity/aging, and
-  temperature/humidity dependence.
+  temperature/humidity dependence. **Anisotropy is done for the simply-supported plate** (model #5o,
+  2026-08-17): three bending stiffnesses instead of one, with a closed-form orthotropic Navier
+  oracle because the sine survives as an *exact* discrete eigenvector. Two things it settled that
+  are worth carrying forward. First, **the cross term changes tuning, not ordering**: it is a
+  genuinely independent axis — real spruce sits at 0.567 of the value a "stretched isotropic" plate
+  would be forced to — yet across the whole range between solid wood and no grain at all the mode
+  *ordering* never moves. What it does instead is detune selectively, by 1.3% to 29% depending on
+  the mode, with the leverage largest exactly where the direct stiffness is weakest. Second, and the
+  part a coupled chain has to know: **the grain lives in the partial series and not in the level**.
+  Against an isotropic plate matched on the fundamental, the mode ratios move 37% while the RMS at a
+  single node straddles 1 across five pluck/pickup geometries — so a body judged by how loud its
+  terminus rings is indistinguishable from metal. The remaining anisotropy work is the **free**
+  boundary (needs the coupling and torsional rigidities separately, not just their combination) and
+  then **orthotropic von Kármán** (needs a four-constant in-plane compliance tensor, and has no
+  closed-form oracle) — both deliberately refused here.
 - **Tube acoustics:** thermoviscous losses, radiation impedance at the bell.
 
 ### C. Numerical-methods frontier
