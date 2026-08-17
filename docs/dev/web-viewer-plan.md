@@ -2921,6 +2921,57 @@ restriction; the all-modes multiplier does not travel (it reads 38.4 / 42.8 / 91
 across the five probed rigs — junk from unresolved modes — while the resolved band reads a steady
 6.8–7.1 %). Only the separation is claimed. Render cost ~17–27 s loud, ~8–13 s quiet.
 
+**The resolved band earns its privilege twice, and the second leg is free.** Rig-invariance is
+above; **duration-invariance** is the other. Over a 5× range of observation window (0.06 / 0.12 /
+0.20 / 0.30 s) the resolved-band spread reads **1.044 / 1.053 / 1.050 / 1.053** — flat — while the
+all-modes spread **falls monotonically** 1.395 → 1.224 → 1.155 → 1.103. An observable that depends
+on how long you watch is not a property of the plate; the restricted one is.
+
+#### The shipped boundary is the FREE cymbal, and the supported gong is REFUSED with numbers
+
+Every claim above is measured on `boundary="free"`. The supported gong **runs** at this rig (72
+sweeps, `converged` True, 13.9–14.3 mean — probe 7), so the refusal is not a stability one. It is
+that **the claim is not measurable on it here**: the supported plate resolves only **6 of 225**
+modes against the free plate's 17 of 289, and on that band the separation collapses to **3.8×**
+baffled and, suspended, runs **backwards** — quiet 1.71 % against loud 0.44 %, a ratio of **0.3×**.
+A six-mode band is noise, and shipping it under this batch's headline would be captioning one rig's
+number with another's. So `domain` selects the **tier** (`baffled` / `suspended`) — which is the
+axis the comparison claim needs — and the boundary is fixed to `free`. The gong is reachable in the
+core and is a later batch's business, at a rig sized for it.
+
+#### The two amplitude sliders sit on a CLIFF, and it is not the one knob it looks like
+
+The defaults are on an edge, not in an interior, and both edges are **immediate**: at width 0.20,
+`w/e = 3.0` runs at 72 sweeps, **3.2 runs at 109**, and **3.4 is dead** (`converged` False at step
+0, NaN one step later). At `w/e = 3.0`, width **0.19 runs at 109** and **0.18 is dead**. Same
+signature, same failure — so `VK_WOVERE_MAX = 6.0` is unusable here and strike width cannot be a
+free slider.
+
+**DIED — "the two sliders are one knob."** The identical signatures, plus the fact that the von
+Kármán coupling is a functional of *stretching*, suggested a single guard on the strike's curvature
+`w/e ÷ width²`: both brackets put the cliff at 83–85, from opposite directions. Tested **off the
+diagonal** — same ratio, very different amplitudes — it fails outright. At a constant ratio of
+~75.3, `w/e` = 1.0 and 2.0 run (23 and 40 sweeps) while 5.0 and 8.0 are dead; at ~85.5, identically
+so. **Amplitude is the binding variable and a broader strike does not buy it back**, which sharpens
+batch 6's "a narrow strike is what fails to converge": narrow hurts, but broad does not rescue.
+Shipped: `w_over_e` capped at **3.0** with the cliff at 3.4 recorded beside it, and strike width
+**fixed at 0.20**, not exposed.
+
+#### What the payload does when it does not converge — the two failure modes are different
+
+Probe 1 and probe 8 measured both, and they want different handling:
+
+- **`converged` False with finite output** (`w/e = 3.4`, width 0.18, `h = 14 mm`): the run produced
+  numbers, and they are wrong in a way no ledger shows. This **renders**, with the per-step
+  convergence record carried as a first-class honesty line — `converged` over all steps, max and
+  mean sweeps — and a plain warning that the result is not trustworthy.
+- **NaN** (`w/e ≥ 3.6`, width ≤ 0.17, `h ≥ 17 mm`): caught in the wrapper and returned as a **clean
+  error payload**. It must never reach `json.dumps(..., allow_nan=False)` — b18's transport scar,
+  where a valid-looking payload died as a browser 500.
+
+The slider caps above put both outside reach; the handling exists because a cap is a claim about
+where the cliff is, and the cliff was measured on one rig.
+
 #### The control is a SLIDER, and it is the batch's own anchor
 
 `VKPlate(nonlinear=False)` is bit-identical to `Plate`, so this class with the flag off is
@@ -2982,7 +3033,10 @@ as a first-class number beside the two ledgers, never as a test-only assertion.*
 - Neither existing work cap covers this pairing (`VK_WORK_MAX` is `n_live × steps × sweeps`,
   `AIRBOX_WORK_MAX` is `nodes × steps`, and at this rig **both pass comfortably** while the render
   still takes ~25 s). A **two-term** budget is needed, and the plate term is the one that binds:
-  measured ~0.16 ms per Picard sweep against ~2e-8 s per node-step.
+  measured ~0.16 ms per Picard sweep against ~2e-8 s per node-step. **Price the plate term at
+  `couple_max_iter`, not at the measured mean**, the way `VK_WORK_MAX` already does — the mean is 13
+  and the cap is 120, so a configuration that is legal on the mean can be 9× past the 52.7 s
+  ceiling this batch cites as its bar, and the mean itself carries a 1.88× noise floor.
 
 #### Touch list
 
