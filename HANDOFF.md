@@ -669,6 +669,48 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   `k²/h⁴`, so **shrinking the plate breaks the fixed point** — 40 cm converges to `w = 9e`, 8 cm
   caps out by `w = 6e` — which means audio-band, string-drivable and Picard-convergent **cannot all
   hold** at this sample rate. A batch wanting the gong *impression* needs a mallet, not a budget.
+- **The three-way chain — `string → bridge → room-loaded gong → room` — is SHIPPED**
+  (`docs/dev/string-vk-plate-room-plan.md`). The thing the air-box family and the bridge batch each
+  deferred to the other. Two of its results arrived before any claim did: it composes with **zero
+  core edits** (the wrappers' `__getattr__` already reaches every name the guard assembles from,
+  and the guard comes out bit-identical to the bare plate's on all four combinations, because the
+  air load is *dissipative* — it enters `A`, never `G0`), and the bridge plan's **"third fixed
+  point" does not exist**. There is one: `F = K η^n` is sweep-invariant and enters the RHS outside
+  the Picard loop, the room's terms go into `rhs_fixed`, and `TᵀRT` folds into `A` once, so bare
+  and loaded bridges take the *same* sweep count at the same pluck (4/4 loud, 3/3 quiet). Say "the
+  room adds no outer iteration", never "the room does not affect convergence" — batch 6's finding
+  that *coarsening* the room breaks the plate's fixed point stands beside it, not against it. The
+  obvious headline then died against a shipped batch's own numbers: batch 6's `sigma_shape` with a
+  string in place of its strike, on batch 6's rig, at the **same** peak `w/e = 3`, is **flat to
+  four digits** — and the loud arm's spread lands *below its own quiet control*, which is what
+  makes it a null result rather than a small one. The reason is that **`w/e` is not an amplitude
+  when the drive is a point force**: a point force on a free plate feeds the `{1, x, y}` rigid
+  nullspace, rigid motion stretches nothing, and the von Kármán coupling is a functional of
+  *stretching* — so at matched peak displacement the string-driven plate carries ~190× less energy
+  than a struck one (normalised by `(w/e)²`; the un-normalised 781× compared two different
+  displacements and was wrong — batch 6's own warning landing inside the batch that cites it), with
+  95.5% of its motion rigid. Note the struck arm's 0.00% rigid share is an **identity, not a
+  measurement**: a displacement start gives the nullspace no velocity. The two boundaries are then
+  out of reach by *opposite* mechanisms — the free cymbal reaches `w/e = 3` and 95.5% of it is
+  bounce, while the supported gong has no nullspace to hide in and reaches only `w/e = 0.121` at
+  the same pluck. **The claim that replaced it: whether a string can play a gong nonlinearly is
+  decided by band overlap, not by how hard you pluck.** Hold the plate and move the *string's*
+  fundamental across the plate's first flexural mode (by length, so the wave impedance is fixed) at
+  constant pluck energy, and the rigid share collapses 95.5% → 4.5% while the departure from the
+  plate's own linear self spans ~5900× between the worst and best overlap — all at peak
+  displacements well inside where the model is faithful, and reproduced **across two rigs seven
+  times apart in sample rate**. That converts this section's own closing line above from an
+  assertion into a mechanism, and sharpens it: it is **not a budget question** — a string cannot
+  deliver the *shape* at any budget unless its band reaches the plate's. Two negative controls
+  matter as much: a **10× change in bridge stiffness** moves the rigid share by less than one point
+  (the coupling saturates in `K`, and the guard refuses beyond it anyway), and the rigid share is
+  **amplitude-invariant** to three figures across plucks 188× apart in energy. Its contribution to
+  the family's "no single detector is sufficient" rule is a new *kind* of blind spot: a wrong
+  string reaction is caught by the scene total (2.8e-15 → 8.8e-2) and invisible to the money test,
+  but a `drive_index` that merely **differs between two runs** moves the comparison 1.7× with
+  *every* detector at machine precision — because each run is internally consistent, so there is
+  nothing inconsistent to detect. **The three detectors are jointly insufficient against a
+  comparison, not only against a coefficient.**
 - **3D radiation modeling** with directivity, plus HRTF / ambisonics output — the box produces a
   pressure field; turning that into a binaural or B-format signal is a separate, non-physics batch.
 - **Room coupling:** place the modeled instrument inside a modeled acoustic space. Done for the
@@ -679,7 +721,10 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   `string → bridge → RoomLoadedPlate → AirBox` is a running chain. And as of batch 4 the room can
   reach the plate from **both** sides: `string → bridge → RoomSuspendedPlate → AirBox` runs with the
   same `connection.py`, and the stability guard comes out bit-identical to the bare plate's —
-  retiring batch 3's own prediction that the face cut would break it.
+  retiring batch 3's own prediction that the face cut would break it. And as of the three-way chain
+  the body may be **nonlinear** as well as distributed: `string → bridge → RoomLoadedVKPlate |
+  RoomSuspendedVKPlate → AirBox` runs on both tiers and both boundaries, again with no edit to
+  `connection.py`. Every combination this section can name is now a running chain.
 
 ### I. Ecosystem & product
 
