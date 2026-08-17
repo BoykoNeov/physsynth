@@ -75,39 +75,56 @@ the **exact** Sherman–Morrison margin two batches ago. The question is therefo
 answerable: *is the exact linear margin still sufficient when the body stiffens with amplitude?*
 §5 answers yes, with a reason, and §0.4 records what that answer does not cover.
 
-### 0.4 WHAT SURVIVED — the body's energy share, and a failure mode that migrates
+### 0.4 DEMOTED — the body's energy share as a *magnitude* (killed on the shipping rig, §10.2)
 
-**The headline.** The fraction of the pluck's energy that reaches the body is, for *any* linear
-body, **exactly independent of how hard you pluck** — every energy scales as amplitude², so the
-ratio does not scale at all. Measured: `0.717552853`, unchanged in all nine printed digits across a
-**400× amplitude range** on both boundaries. That is a machine-precision control obtained without an
-oracle, and it is what makes the nonlinear number mean something:
+The share of the pluck's energy that reaches the body looked, on the probe rig, like the headline:
+for *any* linear body it is **exactly independent of how hard you pluck** (every energy scales as
+amplitude², so the ratio does not scale at all — measured `0.717552853`, unchanged in all nine
+printed digits across a **400× amplitude range**, on both boundaries), while the von Kármán body's
+rose to **+21.1%** at `w/e = 11`, with fitted orders `1.99, 1.97, 1.84`.
 
-| pluck | peak `w/e` | linear share | von Kármán share | deviation |
-|---|---|---|---|---|
-| 1e-5 | 0.02 | 0.717552853 | 0.717593757 | +0.006% |
-| 1e-4 | 0.30 | 0.717552853 | 0.721092339 | +0.49% |
-| 5e-4 | 0.71 | 0.717552853 | 0.750577463 | +4.60% |
-| 1e-3 | 1.65 | 0.717552853 | 0.784621831 | +9.35% |
-| 4e-3 | 11.0 | 0.717552853 | 0.868830877 | **+21.1%** |
+The control half is true, rig-independent and kept (§7.4). **The magnitude half did not survive the
+shipping rig** and is demoted to a qualitative claim — see §10.2. The short version: peak share is a
+**bounded** quantity, so on a rig where the body already takes 82% it has no headroom left, goes
+non-monotone, and even changes **sign**. Which sign it takes is a fact about where the drive point
+sits relative to the impedance match, not about the nonlinearity.
 
-and the departure is **second order in the pluck** — fitted orders `1.99, 1.97, 1.84` over the first
-three amplitude ratios, rolling off to `1.38, 1.02, 0.43` as the response saturates. Second-order
-convergence to a machine-precision control is this repo's strongest evidence tier, and it is
-available here without a closed form.
-
-**Two honesty limits, both measured, both stated in the claim rather than after it.**
+Two further limits, measured, that apply however it is claimed:
 
 * The `max`-over-run rule is the only run-length-stable one (`0.784622` at 4000, 8000 *and* 16000
-  steps, supported); the time-mean and the final value both still climb at 16000 and are not
-  observables. But `max` is reached **early**, before the plate's boundary can matter — which is why
-  the supported and free branches agree to nine digits at small amplitude, and why the free branch's
-  own `max` does move (0.751 → 0.803) once the run is long enough for the edge to answer. So this
-  measures **the drive point's amplitude-dependent impedance**, not the whole plate's, and it is
-  claimed as that.
-* The free branch is monotone only up to `w/e ≈ 3`; beyond it the share wanders (+4.7%, +1.1%,
-  +24.2% at `w/e` = 4.8, 18.0, 61.6). The ordered claim is the supported branch's; the free
-  branch's is the small-amplitude order and the sign.
+  steps); the time-mean and the final value both still climb at 16000 and are not observables. But
+  `max` is reached **early**, before the plate's boundary can matter — which is why the supported and
+  free branches agree to nine digits at small amplitude. So it measures **the drive point's**
+  amplitude-dependent impedance, not the whole plate's.
+* The free branch is monotone only up to `w/e ≈ 3`.
+
+### 0.5 WHAT SURVIVED — departure from the linear body, at second order, and a migrated failure
+
+**The headline.** Run the *same* plate twice, `nonlinear=False` and `True`, and measure how far the
+string's trajectory moves:
+
+    dist(a) = max_t ‖u_nl(t) − u_lin(t)‖_∞ / max_t ‖u_lin(t)‖_∞
+
+It is identically **zero** for a linear body — not 1e-16, but `0.0`, because doubling the pluck
+doubles every quantity in a leapfrog and an LU back-substitution exactly — and it grows at **second
+order in the pluck amplitude**, on both boundaries and on both rigs:
+
+| pluck | 1e-5 | 2e-5 | 5e-5 | 1e-4 | 2e-4 | 5e-4 |
+|---|---|---|---|---|---|---|
+| distance (supported) | 5.19e-3 | 2.06e-2 | 1.22e-1 | 4.08e-1 | 7.39e-1 | 8.10e-1 |
+| fitted order | — | **1.99** | **1.94** | 1.74 | 0.86 | 0.10 |
+
+Second-order convergence away from a machine-precision zero is this repo's strongest evidence tier,
+and it is available here with no closed form and no oracle. It **saturates near 0.81** once the two
+trajectories decorrelate in phase, so only the small-amplitude orders are claimed — §0.1's lesson
+applied to §0.1's own measure.
+
+**The finding a later batch will want.** The exact linear stability margin stays sufficient (§5),
+but the failure mode does not disappear — it **migrates**. At 90% of the margin, a configuration the
+guard *passes*, a hard pluck fails by the plate's Picard iteration hitting its sweep cap, and goes
+NaN. The guard is structurally blind to it: it is a statement about a quadratic form, and
+non-convergence is a statement about a fixed point. Batch 6 met the same wall from the other side
+(coarsening the room broke the plate's fixed point); this is the same wall reached by amplitude.
 
 **The finding a later batch will want.** The exact linear stability margin stays sufficient (§5),
 but the failure mode does not disappear — it **migrates**. At 90% of the margin, a configuration the
@@ -239,9 +256,10 @@ amplitude on the nonlinear one, on a short window (§0.1).
 supported, 3.3e-13 free); monotone decrease with `sigma` on either part; `K = 0` bit-identical to
 the uncoupled parts; the string's own energy demonstrably *not* conserved.
 
-**7.4 The claim (§0.4).** Linear share amplitude-invariant to 9 digits over a 400× range; von
-Kármán share rising with order → 2 in the small-amplitude limit; supported branch monotone; run
-length fixed and stated as part of the observable.
+**7.4 The claim (§0.5).** Departure from the same plate's linear self, second order in the pluck
+(asserted `1.6 < order < 2.2` on the two smallest ratios, both boundaries). Plus the share's
+*control* half, which survives as its own statement: the linear body's share is amplitude-invariant
+to ~machine precision and the von Kármán body's is not, with neither size nor sign claimed (§10.2).
 
 **7.5 Rigid-mode immunity (free).** The Monge–Ampère bracket is built from second derivatives, so
 `l(w,w) ≡ 0` on span{1, x, y}: the nonlinearity is exactly blind to the rigid modes and
@@ -271,3 +289,95 @@ so none of batch 6's defensiveness about it is inherited.
 4. `tests/test_vk_connection.py` — §7.1–§7.6, both boundaries.
 5. `tests/helpers.py` — a `make_vk_plate_bridge` builder alongside the existing bridge builders.
 6. This document's §10, the post-build record.
+
+---
+
+## 10. What the build changed — the post-build record
+
+30 tests, 19 s, both boundaries. Everything in §2 shipped as planned; §0.4's headline did not
+survive its own shipping rig, and two things the plan did not anticipate came out of the rig itself.
+
+### 10.1 What survived exactly as planned
+
+* **The `f_ext` placement.** Sweep-invariant, added once outside the Picard loop, no `solve()` hook
+  needed. `VKPlate.step()`'s signature now matches `Plate.step()`'s.
+* **The shared denominator.** `VKPlate.force_denominator` is read by both `VKPlate.step()` and
+  `_VKPlateSurface`, and the sharing paid for itself immediately: falsifying it (§10.3) turns **46**
+  tests red across *both* consumers, where a duplicated expression would have failed only one.
+* **The guard.** Sufficient, for the stated reason, and measured at 95% of the ceiling under a
+  strongly nonlinear run. The nonlinear bridge's margin is bit-identically the linear twin's.
+* **Rigid-mode immunity.** Started in a pure tilt the free plate stays tilted: `F(w^0)` is exactly
+  `0.0`, `|F|` stays under 1e-18 for 400 steps, and the energy is under 1e-15.
+* **No `pressure()`.** Asserted as an absence, on both the bridge and `VKPlate`, so a later batch
+  that adds one has to argue with a test rather than with a comment.
+
+### 10.2 DEAD — §0.4's energy share as a magnitude, killed by the rig it had to ship on
+
+The probe rig gave `+21.1%`, monotone, orders `1.99/1.97/1.84`. The shipping rig gives orders
+`1.86, 1.72` and then a **sign change**: `+2.76e-4, +1.00e-3, +4.82e-3, +7.84e-3, +6.34e-3,
++2.42e-2, −7.26e-3`.
+
+The reason is structural and was visible in the plan if it had been read as a bound: **peak share is
+a bounded quantity**. On the probe rig the body took 72% and had room to move; on the shipping rig
+it takes 82% and does not. A bounded observable near its ceiling cannot carry an order.
+
+What is kept is the half that does not depend on headroom — the **control**: for any linear body the
+share is amplitude-invariant to ~machine precision (asserted `rel=1e-12` across 100×), and the von
+Kármán body's is not (asserted only that it *moves*). Neither size nor sign is claimed. This is the
+family's own rule arriving for the fourth time: ratios survive, magnitudes do not.
+
+Its replacement (§0.5) was chosen for the opposite property — distance from the linear body is
+**unbounded below saturation**, so it has an order to measure — and it reproduces `1.99/1.94`
+(supported) and `1.97/1.87` (free) on the shipping rig, matching the probe rig.
+
+### 10.3 The regression was checked for the ability to fail — three ways, and one is subtle
+
+Committed a checkpoint first, and reverted each edit *itself* rather than with `git checkout --`.
+
+| falsification | result |
+|---|---|
+| guard reads `rho_v` instead of `rho_s` | **6 red** (the bit-identity regression + the margin test) |
+| `force_denominator` reads `rho_v` | **46 red**, across the bridge *and* the air-box VK suites |
+| a pure **reassociation** of the `f_ext` term — `k²·f/d` → `(k²/d)·f` | **2 red** |
+
+The third is the one worth recording. It is mathematically an identity and changes only the rounding,
+and it is caught — but only by 2 of the regression's 4 parametrisations (`[0.0-free]` and
+`[2.0-supported]`, not the other two). Batch 6 measured the same thing (5 of 8 there). **A
+bit-identity regression's sensitivity to reassociation is parametrisation-dependent**, which is the
+argument for parametrising it over both the boundary *and* the loss rather than picking one case.
+
+### 10.4 The rig's size is set by the fixed point, and it costs the audio band
+
+Not anticipated by the plan, and it is §8's cost claim inverted. The plan said cost runs the right
+way here — no room, no 3-D CFL — and that is true of *wall-clock*. But the membrane coupling's
+difficulty scales like `k²/h⁴`, so **shrinking the plate makes the Picard fixed point harder, fast**:
+40 cm converges in ≤ 13 sweeps out to `w = 9 e`, while 8 cm hits the 50-sweep cap by `w = 6 e` and
+takes the energy drift with it (2.8e-2).
+
+The consequence is a real limit, stated in `helpers.py` rather than hidden: **this plate's modes sit
+below the audio band** (`f11 ≈ 3 Hz`). Audio-range modes at 0.1 mm need a ~7 cm plate (`f ∝ e/L²`) —
+exactly the size that will not converge — and thickening the plate instead costs about `e⁵` in the
+energy needed to reach `w ≈ e`, which a string does not have. **Audio-band, string-drivable and
+Picard-convergent cannot all hold at this sample rate.** This is a rig for the mechanism, not an
+impression of a gong, and a batch that wants the impression needs a different exciter (a mallet
+delivers the energy a pluck cannot) rather than a bigger budget.
+
+### 10.5 A trap the plan did not have: two things called `rho`
+
+`make_vk_plate_bridge` first took a single `rho` passthrough. `VKPlate` calls its *volumetric*
+density `rho` and the string helper family calls the *string's linear* density `rho`, so one
+argument silently retuned the wrong object — caught immediately, because it sent the stability
+margin to **204** and the constructor refused it. Split into `rho` (string) and `rho_plate`.
+
+It is the batch's own `rho_v`/`rho_s` trap one level up, and it failed *loudly* only by luck: the
+guard happened to reject the result. Had the mistuned string still been stable, it would have been
+exactly the silent kind.
+
+### 10.6 Numbers a later batch will want
+
+* Departure order: 1.99 / 1.94 (supported), 1.97 / 1.87 (free); saturation ceiling 0.81.
+* Picard sweeps vs amplitude on the shipping rig: 6 / 8 / 10 / 13 at `w/e` = 0.8 / 1.5 / 3.4 / 9.0.
+* Non-convergence at 90% of the margin: first failure at step 182 (probe rig, `w/e` unbounded).
+* Guard margins are **identical** for `supported` and `free` on this rig (0.2139) — the drive point
+  is an interior node, so it carries the same lumped mass either way.
+* Cost: 30 tests in 19 s; ~2 s per 2500-step nonlinear run at 225 live nodes.

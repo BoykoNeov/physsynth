@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 8506c3d9-c98e-4229-87cf-6160a3fd6c48
-  modified: 2026-08-10T04:11:39.214Z
+  modified: 2026-08-17T10:13:52.749Z
 ---
 
 **The distributed air node — `physsynth/core/airbox.py` `AirBox`.** The human's pick at the
@@ -665,10 +665,20 @@ loaded drift falls with `couple_tol` at the same rate as unloaded, within 1.2×.
 `tests/helpers.py::make_air_vk_plate` / `make_room_loaded_vk_plate` / `make_suspended_vk_plate` /
 `vk_linear_twin` / `vk_strike`; `scripts/diagnose_airbox_vk.py` (~4 min, one figure).
 
-**Still out, and now askable rather than blocked:** `StringVKPlateBridge` is its own batch —
-`connection.py` reads `plate.rho`, calls `plate.step(f_ext=...)` and delegates `plate.pressure()`,
-none of which model #6 has, and what a *linear* 2-DOF stability guard means for an
-amplitude-dependent stiffness is a real question, not plumbing. Because no bridge composes with these
-wrappers yet, `RoomLoadedVKPlate.__getattr__` is free of `RoomLoadedPlate`'s "NOTHING here may shadow
-a name the bridge reads" constraint. A **viewer batch** now has both the new model and the new claim
-its own rule requires ([[web-viewer-state]]).
+**`StringVKPlateBridge` SHIPPED 2026-08-17** as its own batch — see [[string-vk-bridge-state]]. All
+three named blockers resolved, one of them by **refusal**: `plate.rho` → `rho_s` (via a shared
+`VKPlate.force_denominator` that `_VKPlateSurface` now READS, so one wrong expression reddens 46
+tests across both consumers); `step(f_ext=...)` added, and the bridge force is **sweep-invariant** so
+it needs no `solve()` hook — *simpler* than this batch's load, not harder; and `pressure()` is
+**refused**, precisely because of this batch's 3e-7 / wrong-way monopole measurement, with the
+absence asserted by a test. The "linear 2-DOF guard" framing was stale (that footgun is
+`StringBodyBridge`'s): the **exact** margin stays sufficient because `H_mem` is a sum of squared
+norms with no cross-time term, but the failure mode **migrates** to Picard non-convergence.
+And this batch's fixed-point wall arrives there by *geometry* rather than grid: shrinking the PLATE
+breaks it too (`k²/h⁴`).
+
+Because no bridge composes with these *room* wrappers yet, `RoomLoadedVKPlate.__getattr__` remains
+free of `RoomLoadedPlate`'s "NOTHING here may shadow a name the bridge reads" constraint — but a
+bridge→room chain for #6 is now the obvious next composition, and it would be a **third** fixed
+point. A **viewer batch** now has both the new model and the new claim its own rule requires
+([[web-viewer-state]]).

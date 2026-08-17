@@ -635,11 +635,38 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   self-consistently). The finding a later batch most needs: **the air grid cannot be coarsened to
   buy affordability, because coarsening the ROOM breaks the PLATE's fixed point** — 72 Picard
   sweeps at 57.9 kHz, NaN at 33.0 kHz — a second, independent reason this family's cost runs the
-  wrong way on top of the 3-D CFL's `h⁻⁴`. **Still out and now askable rather than blocked:**
-  `StringVKPlateBridge` (its own batch — `connection.py` reads `plate.rho`, calls
-  `plate.step(f_ext=...)` and delegates `plate.pressure()`, none of which model #6 has, and what a
-  *linear* 2-DOF stability guard means for an amplitude-dependent stiffness is a real question), and
-  a viewer batch, which now has both the new model and the new claim its own rule requires.
+  wrong way on top of the 3-D CFL's `h⁻⁴`. **Still out:** a viewer batch, which now has both the
+  new model and the new claim its own rule requires.
+- **`StringVKPlateBridge` — the gong on a string — is SHIPPED**
+  (`docs/dev/string-vk-plate-bridge-plan.md`). The last thing this section left out. All three of
+  its named blockers resolved, and only one the way it was framed: `VKPlate.step()` gains `f_ext`
+  (the bridge force is **sweep-invariant**, so it is added to the RHS once *outside* the Picard
+  loop — strictly simpler than batch 6's room load, which is linear in the unknown `w^{n+1}` and had
+  to fold into `A`, which is why this batch needs no `solve()` hook); `plate.rho` becomes `rho_s`,
+  and the per-node force mass is now a shared `VKPlate.force_denominator` that `_VKPlateSurface`
+  reads, so one wrong expression turns **46** tests red across both consumers instead of one;
+  and `pressure()` is **refused** rather than supplied, because batch 6 measured the compact
+  monopole at 3e-7 of the truth and pointing the wrong way for a cymbal — the absence is asserted by
+  a test. This section's phrasing of the physics question was itself stale: the *2-DOF* estimate is
+  `StringBodyBridge`'s footgun, while `StringPlateBridge` has used the **exact** Sherman–Morrison
+  margin for two batches. Answering the sharper question: the exact linear margin **stays
+  sufficient**, because the conserved total is `E_lin + H_mem + E_conn` and `H_mem` is a sum of two
+  squared norms with *no cross-time term* — unlike the θ-weighted bending potential, which has an
+  indefinite one — so it cannot subtract and a PD linear form stays coercive at any amplitude
+  (verified at 95% of the ceiling under a strongly nonlinear run). But it is sufficient, **not
+  tight**, and no longer the whole safety story: the failure mode **migrates** to Picard
+  non-convergence, which a statement about a quadratic form is structurally blind to. The headline
+  is the string's departure from the *same plate's* linear self, which is identically `0.0` for a
+  linear body — doubling the pluck doubles a leapfrog and an LU back-substitution *exactly* — and
+  second order in the pluck (1.99/1.94 supported, 1.97/1.87 free), saturating near 0.81 once the
+  trajectories decorrelate. The plan's own energy-share headline died on the shipping rig: peak
+  share is a **bounded** observable, so at 82% it has no headroom, goes non-monotone and changes
+  **sign** — its control half survives (a linear body's share is amplitude-invariant to machine
+  precision) and neither its size nor its sign is claimed. And the batch's cost finding inverts §8's:
+  wall-clock runs the right way (no room, no 3-D CFL), but the coupling's difficulty goes like
+  `k²/h⁴`, so **shrinking the plate breaks the fixed point** — 40 cm converges to `w = 9e`, 8 cm
+  caps out by `w = 6e` — which means audio-band, string-drivable and Picard-convergent **cannot all
+  hold** at this sample rate. A batch wanting the gong *impression* needs a mallet, not a budget.
 - **3D radiation modeling** with directivity, plus HRTF / ambisonics output — the box produces a
   pressure field; turning that into a binaural or B-format signal is a separate, non-physics batch.
 - **Room coupling:** place the modeled instrument inside a modeled acoustic space. Done for the
