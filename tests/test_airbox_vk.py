@@ -773,18 +773,21 @@ def test_band_overlap_decides_the_rigid_share_not_the_pluck(tier):
     holding the wave impedance ``sqrt(T rho)``: as ``f1`` falls below the plate's first flexural
     mode the plate stops flexing and starts merely bouncing on the bridge.
 
-    Measured on this rig (plate's first free elastic mode ~36 Hz), 400 steps, rigid share
-    baffled / suspended::
+    Measured on this rig — whose plate's first free flexural mode is **35.57 Hz** (measured, not
+    taken off a table) — over 400 steps, rigid share baffled / suspended::
 
-        L (m)   f1 (Hz)   rigid share
-        0.6     91.3      4.3% / 4.2%
-        1.2     45.6      20.8% / 19.5%
-        2.4     22.8      77.9% / 72.0%
-        4.8     11.4      95.4% / 95.0%
+        L (m)   f1 (Hz)   f1/f_el   rigid share
+        0.6     91.3      2.566     4.3% / 4.2%
+        1.2     45.6      1.283     20.8% / 19.5%
+        2.4     22.8      0.642     77.9% / 72.0%
+        4.8     11.4      0.321     95.4% / 95.0%
 
-    and it is a **cross-rig** reproduction: the plan's own 57.9 kHz rig, a 100 mm plate and a
-    different string give 95.5% at ``f1/f_elastic = 0.28`` against 4.5% at 1.00. Two rigs seven
-    times apart in sample rate agree, which is what makes this a mechanism rather than a tuning.
+    and it is a **cross-rig** reproduction: the plan's 57.9 kHz rig — 7x the sample rate, a plate
+    3x smaller — gives 95.5% at ``f1/f_el = 0.28``, against 95.4% at 0.321 here. Note what does
+    and does not carry across: the **transition** reproduces quantitatively at the low-ratio end,
+    while above it the two rigs agree only in order (4.3% at 2.566 here, 1.7% at 2.00 there). The
+    transition is the claim; the residual floor is not, which is why this test asserts
+    monotonicity and the two endpoints rather than any interior value.
 
     Two things are asserted **not** to explain it. The peak displacement barely moves (``w/e``
     stays inside a factor of 2 while the rigid share moves 20x): ``w/e`` is not an amplitude when

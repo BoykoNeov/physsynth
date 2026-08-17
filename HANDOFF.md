@@ -690,8 +690,9 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   nullspace, rigid motion stretches nothing, and the von Kármán coupling is a functional of
   *stretching* — so at matched peak displacement the string-driven plate carries ~190× less energy
   than a struck one (158× raw, 190× normalised by `(w/e)²`; the un-normalised 781× compared two
-  different displacements and was wrong — batch 6's own warning landing inside the batch that
-  cites it), with
+  different displacements — its struck arm was started at `w/e = 3` and *rang up* to 5.213, so it
+  was not a matched peak at all — batch 6's own warning landing inside the batch that cites it),
+  with
   95.5% of its motion rigid. Note the struck arm's 0.00% rigid share is an **identity, not a
   measurement**: a displacement start gives the nullspace no velocity. The two boundaries are then
   out of reach by *opposite* mechanisms — the free cymbal reaches `w/e = 3` and 95.5% of it is

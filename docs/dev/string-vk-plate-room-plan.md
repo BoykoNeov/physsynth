@@ -72,10 +72,13 @@ Two disciplines this table has to carry, or it will be mis-cited:
   gives the nullspace no velocity, because there is no restoring force to accelerate it. It is
   structurally zero and proves nothing on its own. The contrast measured on *both* sides is
   string-driven **free** against string-driven **supported** (§0.3).
-* **This number was 781× when first written down, and 781× was wrong.** It compared 2.997 against
-  a struck arm that rings *up* to 5.213 — two different displacements. Air-box batch 6's own
-  docstring warns that magnitudes do not survive a change of conditions; this is that lesson
-  landing inside the batch that quotes it.
+* **This number was 781× when first written down, and 781× was wrong.** The struck arm was then
+  started at `w0/e = 3` and *rang up* to a peak of **5.213**, so 781× compared 2.997 against
+  5.213 — two different displacements — and called it "the same peak". The fix is both halves
+  of the row above: the struck arm is now started at `w0/e = 1.727` so its **peak** lands at
+  2.730, near the string-driven 2.994, *and* the figure is normalised by `(w/e)²`. Air-box
+  batch 6's own docstring warns that magnitudes do not survive a change of conditions; this is
+  that lesson landing inside the batch that quotes it.
 
 ### 0.3 The two boundaries fail for different reasons — the sentence no earlier batch could write
 
@@ -341,15 +344,28 @@ one-fixed-point measurement reproduced.
 
 The batch's own cheap 8 kHz rig — a 300 mm plate the *linear* chain test chose long before this
 batch existed — has a first flexural mode near 36 Hz against a 91 Hz string, i.e. `f1/f_el ≈ 2.5`.
-Its rigid share is **4.3%**, exactly where §1's curve puts that ratio. Nobody tuned it there. So
-the suite test does not merely re-run the plan's rig at lower resolution: it is a **cross-rig
-reproduction**, two rigs seven times apart in sample rate and three times apart in plate span,
-agreeing on where the transition sits. That is the difference between a mechanism and a tuning,
-and it is worth more than the extra digits the expensive rig buys.
+Its rigid share is **4.3%**, in the same place §1's curve puts that ratio. Nobody tuned it there —
+it is the *linear* chain test's rig, chosen before this batch existed. So the suite test does not
+merely re-run the plan's rig at lower resolution: it is a **cross-rig reproduction**, two rigs
+**7× apart in sample rate** (57.9 kHz against 8 kHz) and **3× apart in plate span** (100 mm against
+300 mm), agreeing on where the transition sits.
 
-Sweeping the string's length on that rig gives 4.3% -> 20.8% -> 77.9% -> 95.4% (baffled) at
-L = 0.6, 1.2, 2.4, 4.8 m, and the suite asserts monotonicity across three of them rather than a
-two-point ratio.
+Measured, not assumed: the suite plate's first flexural mode is **35.57 Hz**, and sweeping the
+string's length gives
+
+| L (m) | `f1/f_el` | rigid share (baffled) |
+|---|---|---|
+| 0.6 | 2.566 | 4.3% |
+| 1.2 | 1.283 | 20.8% |
+| 2.4 | 0.642 | 77.9% |
+| 4.8 | 0.321 | 95.4% |
+
+**Be precise about how well the two rigs agree.** At the low-ratio end it is quantitative and
+close: 0.321 -> 95.4% here against 0.28 -> 95.5% on the plan's rig. At the high-ratio end it is
+qualitative only — both land at a few percent, but 2.566 -> 4.3% here against 2.00 -> 1.7% there,
+a factor of ~2.5 apart. The *transition* reproduces across rigs; the residual floor above it does
+not, and is not claimed to. The suite asserts monotonicity across three points rather than a
+two-point ratio, which is the part that survives on both.
 
 ### 8.3 An observable that had to be thrown away mid-build
 
