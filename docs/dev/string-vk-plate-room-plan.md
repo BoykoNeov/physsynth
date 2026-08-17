@@ -209,7 +209,7 @@ every ingredient happily — so the guard could be computed against physics that
 and nothing would say so. It is safe for the same reason `test_string_bridge_plate_room_chain`
 already pins for the linear plate: `G0 = M + (theta - 1/4) k² S` is a statement about mass and
 theta-excess stiffness, while the air load is **dissipative** — it enters `A`, never `G0`.
-Measured, all four combinations, bare against loaded:
+Measured, all four combinations, bare against loaded, on the **suite's** 8 kHz rig at `K = 3000`:
 
 | | margin | identical to bare | scene drift | sweeps |
 |---|---|---|---|---|
@@ -217,6 +217,10 @@ Measured, all four combinations, bare against loaded:
 | baffled, free | 7.665222468590e-01 | yes | 2.5e-15 | 4 |
 | suspended, supported | 7.665222462503e-01 | yes | 1.5e-15 | 4 |
 | suspended, free | 7.665222468590e-01 | yes | 2.4e-15 | 4 |
+
+The margin is linear in `K`, so the tests — which run at the helper's `K = 800` — pin
+2.0440593233341828e-01 and 2.0440593249574418e-01 instead. **Only the identity is the assertion**;
+the value is a property of the configuration, not of this batch.
 
 Pinning the bit-identity means a future change that makes the load non-dissipative fails loudly
 instead of silently mis-guarding — the reason the linear chain's test gives that assertion its
@@ -275,15 +279,28 @@ which slip:
 
 | slip | scene total | `radiated == injected` | guard bit-identity |
 |---|---|---|---|
-| wrong `K` in `E_conn` only (not in the force) | ? | ? | ? |
-| wrong `beta_s` (the string's reaction impulse) | ? | ? | ? |
-| `rho_v` for `rho_s` in `force_denominator` | ? | ? | ? |
-| `drive_index` differing between the two departure runs | ? | ? | ? |
+| wrong `K` in `E_conn` only (not in the force) | **CAUGHT**, 2.2e-15 -> 2.2e-01 | blind, 5.4e-15 | blind |
+| wrong `beta_s` (the string's reaction impulse) | **CAUGHT**, 2.8e-15 -> 8.8e-02 | blind, 7.8e-15 | blind |
+| `rho_v` for `rho_s` in `force_denominator` | blind | blind | **CAUGHT** by the `nonlinear=False` reduction |
+| `drive_index` differing between the two departure runs | **blind** | **blind** | **blind** |
 
-Filled in by the build, in §7 — including, in advance, the expectation that the **last row is
-invisible to all three**, because it is a difference between two runs rather than an inconsistency
-inside one. If that holds, this batch's contribution to the family rule is that the three
-detectors are jointly insufficient against a *comparison*, not only against a coefficient.
+The first two rows are the spring's own arithmetic, and only the scene total sees them — the money
+test is a property of the port relation alone, and the port never sees the string. The guard is
+computed once at construction, so it cannot see a stepping slip at all; what it *does* catch is
+the third row, through the `nonlinear=False` reduction that batch 6 built for exactly that.
+
+**The fourth row is the batch's contribution to the family rule, and it is a new kind.** A
+`drive_index` that differs between the two runs a departure figure is computed from moves that
+figure **1.7×** while every detector sits at machine precision — 5.7e-15 scene drift and a money
+gap at 2e-19 on *both* runs. There is nothing inconsistent to detect: each run is internally
+consistent, and the error lives in the *pair*. So:
+
+> the three detectors are jointly insufficient against a **comparison**, not only against a
+> coefficient.
+
+Which is why the plan requires `drive_index` to be passed explicitly wherever two chains are
+compared (§4.1), and why the diagnose script pins it once in `main()` rather than letting each
+`build()` derive it.
 
 ---
 

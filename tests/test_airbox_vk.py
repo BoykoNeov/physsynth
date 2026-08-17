@@ -611,8 +611,10 @@ def test_the_chain_composes_and_the_guard_is_bit_identical(boundary, tier):
     the air load is **dissipative**: it enters ``A``, never ``G0``. Pinning the bit-identity means
     a future change making the load non-dissipative fails loudly instead of mis-guarding silently.
 
-    Measured 7.665222462503e-01 (supported) and 7.665222468590e-01 (free) on the plan's rig, the
-    same to the last digit loaded and bare, and on both tiers.
+    Measured on this rig (``K = 800``): 2.0440593233341828e-01 supported and
+    2.0440593249574418e-01 free, the same to the last digit loaded and bare, and on both tiers.
+    (The plan quotes 7.665222462503e-01 / 7.665222468590e-01 for the same four combinations at
+    ``K = 3000`` — the margin is linear in ``K``, and only the *identity* is the assertion.)
     """
     bridge = make_vk_room_chain(tier=tier, boundary=boundary, walls=WALLS["all-lossy"])
     bare = make_vk_room_bare_twin(bridge)
