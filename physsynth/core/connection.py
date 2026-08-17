@@ -41,7 +41,7 @@ from scipy import sparse
 from scipy.sparse.linalg import splu, spsolve
 
 from .body import ModalBody
-from .plate import Plate
+from .plate import Plate, VKPlate
 from .string_ideal import IdealString
 
 _CFL_TOL = 1e-12
@@ -448,6 +448,243 @@ class StringPlateBridge:
         it carries the driving-point coupling force.
         """
         return self.plate.pressure()
+
+
+class StringVKPlateBridge:
+    """A string terminated on a **von Kármán** plate (model #6) — the gong, played through a bridge.
+
+    :class:`StringPlateBridge` with the linear body swapped for the nonlinear one, on either
+    boundary (``"supported"`` = gong, ``"free"`` = cymbal). The spring, the explicit
+    ``F = K eta^n``, the Newton's-third-law split and the three-way energy decomposition are all
+    unchanged; what changes is what the string is attached *to*.
+
+    **What that buys, and no linear body can.** Every body in this repo — modal, plate, free plate,
+    air-loaded, room-loaded — presents the string a driving-point impedance that is a property of
+    the body. A von Kármán plate stiffens with amplitude, so here it is a property of the body
+    *and of how hard the string is playing it*. The measurable form: for **any** linear body the
+    fraction of the pluck's energy that reaches the body is exactly independent of pluck strength
+    (every energy scales as amplitude^2, so the ratio does not scale at all — measured invariant to
+    nine digits over a 400x amplitude range), while this one's rises ~21%, second-order in the
+    pluck. See ``docs/dev/string-vk-plate-bridge-plan.md`` §0.4 — including the two limits inside
+    that claim: the peak share is reached *early*, so it measures the **drive point's** impedance
+    rather than the whole plate's, and the free branch is monotone only to ``w ~ 3 e``.
+
+    **Why the coupling is still exactly energy-conserving.** The plate's ``+F`` enters the implicit
+    RHS before the solve (:meth:`~physsynth.core.plate.VKPlate.step`'s ``f_ext``), once, *outside*
+    the Picard loop — the spring force depends only on time-``n`` state, so it is invariant across
+    the sweeps. The theta-averaging touches only the elastic term and the ``mu``-averaged membrane
+    coupling never touches the source's placement, so a time-``n`` source contributes
+    ``k F delta_{t.} w_dp`` to the plate's energy regardless of theta *and* regardless of the
+    nonlinearity. The three increments telescope to zero exactly as in :class:`StringPlateBridge`,
+    with the plate's own conserved total (``E_lin + H_mem``) in place of its linear one.
+
+    **Stability — the exact linear margin is still sufficient, and still not the whole story.**
+    The guard is :class:`StringPlateBridge`'s verbatim, on the *linear* blocks only, and that is
+    enough: the conserved total is ``E_lin + H_mem + E_conn`` and the membrane energy
+    ``H_mem = 1/2 (H(F^{n+1}) + H(F^n))`` is a sum of two squared norms with **no cross-time term**
+    (unlike the theta-weighted bending potential, which has an indefinite one), so it cannot
+    subtract. A positive-definite ``G0 - (k^2/4) K a a^T`` therefore stays coercive at any
+    amplitude. Measured at 99% of the exact ceiling, driven to ``w = 7 e`` (supported) and ``36 e``
+    (free): drift 4.1e-13 and 1.4e-12, Picard converging in <= 9 sweeps.
+
+    It is **sufficient, not tight** — it may refuse configurations that would run — and the failure
+    mode **migrates rather than disappearing**: exact conservation holds only *at* the Picard fixed
+    point, so a configuration this guard passes can still fail by non-convergence (measured: at 90%
+    of the margin, a hard pluck on the free branch caps out at step 182 and goes NaN). The guard is
+    a statement about a quadratic form and cannot see a fixed point. Watch :attr:`converged` /
+    :attr:`n_iters` / :attr:`last_residual` **per step** — a plate can sit at the sweep cap all run
+    and still converge on its final step.
+
+    **No radiation read-out.** Model #6 has no ``pressure()`` and this class does not add one:
+    batch 6 measured the compact monopole at 3e-7 of the truth for a gong, and moving the *wrong
+    way* for a suspended cymbal. The radiation path for this body is
+    :class:`~physsynth.core.airbox.RoomLoadedVKPlate` /
+    :class:`~physsynth.core.airbox.RoomSuspendedVKPlate`, which resolve the surface rather than
+    lumping it.
+
+    Parameters
+    ----------
+    string : IdealString
+        The string; its right end must be ``"free"`` (build with ``boundary=("fixed", "free")``).
+    plate : VKPlate
+        The body — ``boundary="supported"`` (gong) or ``"free"`` (cymbal). ``nonlinear=False``
+        makes this class bit-identical to :class:`StringPlateBridge` on the matching linear plate
+        (the regression path; the twin's ``rho`` is the VK plate's **areal** ``rho_s``).
+    K : float
+        Bridge spring stiffness (N/m). ``K = 0`` decouples the two (the bit-identity check).
+    drive_index : int, optional
+        Live-node index on the plate where the string attaches. Defaults to the node nearest a
+        corner-offset point, as :class:`StringPlateBridge` does.
+
+    Raises
+    ------
+    ValueError
+        If the two timesteps differ, the string's right end is not free, the plate boundary is not
+        ``"supported"``/``"free"``, ``K < 0``, ``drive_index`` is out of range, or the exact
+        stability margin is ``>= 1``.
+    """
+
+    def __init__(
+        self,
+        *,
+        string: IdealString,
+        plate: VKPlate,
+        K: float,
+        drive_index: int | None = None,
+    ) -> None:
+        if not np.isclose(string.k, plate.k, rtol=0, atol=1e-15):
+            raise ValueError(
+                f"string and plate must share a timestep (got k={string.k:.3e} vs {plate.k:.3e}); "
+                "build them at the same fs."
+            )
+        if string._bc_right != "free":
+            raise ValueError(
+                "the string's right end must be 'free' to attach a plate bridge "
+                "(build it with boundary=('fixed', 'free'))."
+            )
+        if plate.boundary not in ("supported", "free"):  # VKPlate validates this, but be explicit
+            raise ValueError(
+                f"the plate body must be 'supported' or 'free', got {plate.boundary!r}."
+            )
+        if string.lam >= 1.0 - _CFL_TOL:
+            raise ValueError(
+                "the string must run at lambda < 1: its Nyquist mode is marginal at lambda = 1 and "
+                "the bridge spring pushes it unstable (the guard's string block G0_str is singular "
+                "there). Rebuild the string at lambda < 1 (0.9 is a good default)."
+            )
+        if K < 0:
+            raise ValueError("bridge stiffness K must be >= 0.")
+
+        self.string = string
+        self.plate = plate
+        self.K = float(K)
+        self.k = string.k
+
+        if drive_index is None:
+            drive_index = plate.pickup_index_at(0.3 * plate.Lx, 0.4 * plate.Ly)
+        if not (0 <= int(drive_index) < plate.n_live):
+            raise ValueError(f"drive_index {drive_index} out of range [0, {plate.n_live}).")
+        self.drive_index = int(drive_index)
+
+        self.beta_s = 2.0 * self.k * self.k / (string.rho * string.h)
+        self._f_ext = np.zeros(plate.n_live)
+
+        self.stability_margin = self._stability_margin()
+        if self.stability_margin >= 1.0 - _CFL_TOL:
+            raise ValueError(
+                f"connection unstable: stability margin = {self.stability_margin:.6f} >= 1. "
+                "Reduce K, raise fs, or increase the string/plate node mass."
+            )
+
+        self.n = 0
+
+    # -- stability (assembled once at construction, off the hot loop) --------------------
+
+    def _stability_margin(self) -> float:
+        """Exact coupled margin on the **linear** blocks — sufficient at any amplitude (class doc).
+
+        :meth:`StringPlateBridge._stability_margin`'s arithmetic with one substitution, and the
+        substitution is this class's silent-failure trap: :class:`~physsynth.core.plate.VKPlate`
+        has no ``rho``. It has ``rho_v`` (volumetric) and ``rho_s`` (areal), which differ by the
+        thickness — a factor of **1000** at ``e = 1 mm``. ``rho_v`` would not raise; it would return
+        a margin 1000x too small, pass every construction, and leave every energy ledger green,
+        because each side telescopes against whatever force *it* used. The ``nonlinear=False``
+        bit-identical regression against :class:`StringPlateBridge` is what catches it.
+        """
+        s, p = self.string, self.plate
+        quarter_k2 = 0.25 * self.k * self.k
+
+        N = s.N
+        m_diag = np.full(N, s.rho * s.h)
+        m_diag[-1] = 0.5 * s.rho * s.h
+        main = np.full(N, 2.0)
+        main[-1] = 1.0
+        dtd = sparse.diags([-np.ones(N - 1), main, -np.ones(N - 1)], [-1, 0, 1], format="csc")
+        s_str = (s.T / s.h) * dtd
+        g_str = sparse.diags(m_diag, format="csc") - quarter_k2 * s_str
+        e_end = np.zeros(N)
+        e_end[-1] = 1.0
+        g_str_inv_end = float(spsolve(g_str, e_end)[-1])
+
+        coeff = (p.theta - 0.25) * self.k * self.k * p.kappa * p.kappa
+        if p.boundary == "supported":
+            g_plate = (p.rho_s * p.h * p.h) * (
+                sparse.identity(p.n_live, format="csc") + coeff * p.B
+            )
+        else:  # free: W-weighted mass + PSD stiffness K (h² baked into both W and K)
+            g_plate = p.rho_s * (p.W + coeff * p.K)
+        e_dp = np.zeros(p.n_live)
+        e_dp[self.drive_index] = 1.0
+        g_plate_inv_dp = float(splu(g_plate.tocsc()).solve(e_dp)[self.drive_index])
+
+        return quarter_k2 * self.K * (g_str_inv_end + g_plate_inv_dp)
+
+    # -- helpers ------------------------------------------------------------------------
+
+    def _stretch(self, *, prev: bool = False) -> float:
+        """Spring stretch ``eta = u_end - w_dp`` now (``prev=True`` -> the previous step)."""
+        if prev:
+            return float(self.string.u_prev[-1] - self.plate.u_prev[self.drive_index])
+        return float(self.string.u[-1] - self.plate.u[self.drive_index])
+
+    def connection_force(self) -> float:
+        """Current bridge force ``F = K eta^n`` (explicit; N)."""
+        return self.K * self._stretch()
+
+    def driving_point_displacement(self) -> float:
+        """Plate displacement ``w_dp`` at the driving point (the body's motion the string feels)."""
+        return float(self.plate.u[self.drive_index])
+
+    # -- time stepping ------------------------------------------------------------------
+
+    def step(self) -> None:
+        """Advance one timestep. Explicit spring ``F = K eta^n`` drives both parts at time ``n``."""
+        F = self.connection_force()
+        # String: free-end leapfrog, then subtract the reaction impulse at the terminus node.
+        self.string.step()
+        self.string.u[-1] -= self.beta_s * F
+        # Plate: inject +F at the driving point (into the implicit RHS, before the Picard loop).
+        self._f_ext[self.drive_index] = F
+        self.plate.step(f_ext=self._f_ext)
+        self._f_ext[self.drive_index] = 0.0
+        self.n += 1
+
+    # -- diagnostics --------------------------------------------------------------------
+
+    def energy(self) -> float:
+        """Total discrete energy ``E_string + E_plate + E_conn`` (Joules).
+
+        ``E_plate`` is the von Kármán total (bending + kinetic + membrane), so this is conserved to
+        machine precision for a lossless run **at the Picard fixed point** — an under-converged step
+        is the one way a green ledger can mislead here, which is why :attr:`converged` is part of
+        the diagnostic surface rather than an internal detail.
+        """
+        e_conn = 0.5 * self.K * self._stretch() * self._stretch(prev=True)
+        return self.string.energy() + self.plate.energy() + e_conn
+
+    @property
+    def state(self) -> NDArray[np.float64]:
+        """The string displacement field (the excited resonator, for animation snapshots)."""
+        return self.string.state
+
+    def displacement_at(self, index: int) -> float:
+        """String pickup at node ``index`` (for spectral analysis of the driven string)."""
+        return self.string.displacement_at(index)
+
+    @property
+    def converged(self) -> bool:
+        """Did the **last step's** Picard iteration reach ``couple_tol``? Read it every step."""
+        return self.plate.converged
+
+    @property
+    def n_iters(self) -> int:
+        """Picard sweeps the last step used (rises with amplitude; the cap is the failure mode)."""
+        return self.plate.n_iters
+
+    @property
+    def last_residual(self) -> float:
+        """The last step's final ``‖Δw‖/‖w‖`` — watch this, not just the energy."""
+        return self.plate.last_residual
 
 
 class SympatheticStrings:

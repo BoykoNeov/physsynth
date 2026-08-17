@@ -29,6 +29,7 @@ from physsynth.core.collision import BarrierString
 from physsynth.core.connection import (
     StringBodyBridge,
     StringPlateBridge,
+    StringVKPlateBridge,
     SympatheticStrings,
 )
 from physsynth.core.engine import simulate
@@ -547,6 +548,95 @@ def make_free_plate_bridge(
         boundary="free", nu=nu,
     )
     return StringPlateBridge(string=string, plate=plate, K=K, drive_index=drive_index)
+
+
+# A string on a von Karman plate (model #6 as the body). Unlike the linear bridges above, the plate
+# has a MATERIAL surface (E, e, nu, rho) rather than an effective kappa, because the nonlinearity's
+# onset is at w ~ e and the thickness therefore has to be a real number.
+#
+# The default is a thin steel sheet, 40 cm square and 0.1 mm thick, and the SIZE is not free -- it
+# is picked by the Picard iteration, not by taste. The membrane coupling's difficulty scales like
+# k^2/h^4, so shrinking the plate at fixed grid makes the fixed point harder, fast: measured on this
+# rig, 40 cm converges in <= 13 sweeps out to w = 9 e, while 8 cm hits the 50-sweep cap by w = 6 e
+# and the energy drift goes with it (2.8e-2). That is batch 6's wall -- resolution against the fixed
+# point -- reached by geometry instead of by grid.
+#
+# The consequence is stated rather than hidden: f11 ~ 3 Hz here, so this plate's modes sit BELOW the
+# audio band. Audio-range modes at 0.1 mm need a ~7 cm plate (f ~ e/L^2), which is exactly the size
+# that will not converge; and thickening the plate instead costs ~e^5 in the energy needed to reach
+# w ~ e, which a string does not have. Audio-band, string-drivable and Picard-convergent cannot all
+# hold at this sample rate. This is a rig for the mechanism, not an impression of a gong.
+VK_BRIDGE_MAT = dict(E=2.0e11, e=1.0e-4, nu=0.3, rho=7800.0)
+VK_BRIDGE_SIDE = 0.4           # m, square
+VK_BRIDGE_K_DEFAULT = 3000.0   # N/m -- well inside the exact guard for both boundaries
+
+
+def make_vk_plate_bridge(
+    *,
+    N_string: int = 100,
+    N_plate: int = 16,
+    lam: float = 0.9,
+    K: float = VK_BRIDGE_K_DEFAULT,
+    sigma_string: float = 0.0,
+    sigma_plate: float = 0.0,
+    boundary: str = "supported",
+    nonlinear: bool = True,
+    drive_index: int | None = None,
+    L: float = L_DEFAULT,
+    T: float = T_DEFAULT,
+    rho: float = RHO_DEFAULT,
+    a: float = VK_BRIDGE_SIDE,
+    E: float | None = None,
+    e: float | None = None,
+    nu: float | None = None,
+    rho_plate: float | None = None,
+    couple_tol: float = 1e-13,
+    **plate_kw,
+) -> StringVKPlateBridge:
+    """Build a fixed/free string terminated on a **von Karman** plate body (model #6).
+
+    The nonlinear counterpart of :func:`make_plate_bridge` / :func:`make_free_plate_bridge`, with
+    the same shared-``fs`` construction (``fs = c N_string / (L lam)``, plate sample rate fixed by
+    the string). ``boundary="supported"`` is the gong and ``"free"`` the cymbal;
+    ``nonlinear=False`` is the regression path, bit-identical to :func:`make_vk_bridge_linear_twin`.
+
+    ``rho`` is the **string's** linear density and ``rho_plate`` the plate's **volumetric** one —
+    they are separate arguments on purpose. :class:`VKPlate` calls its own volumetric density
+    ``rho``, so a single passthrough name would silently retune the string when the caller meant
+    the plate (it does: it sends the margin to 204).
+    """
+    c = wave_speed(T, rho)
+    fs = c * N_string / (L * lam)
+    string = IdealString(
+        L=L, T=T, rho=rho, fs=fs, N=N_string, boundary=("fixed", "free"), sigma=sigma_string
+    )
+    mat = dict(VK_BRIDGE_MAT)
+    for name, value in (("E", E), ("e", e), ("nu", nu), ("rho", rho_plate)):
+        if value is not None:
+            mat[name] = value
+    plate = VKPlate(
+        Lx=a, Ly=a, fs=fs, N=N_plate, sigma=sigma_plate, boundary=boundary,
+        nonlinear=nonlinear, couple_tol=couple_tol, **mat, **plate_kw,
+    )
+    return StringVKPlateBridge(string=string, plate=plate, K=K, drive_index=drive_index)
+
+
+def make_vk_bridge_linear_twin(bridge: StringVKPlateBridge) -> StringPlateBridge:
+    """The :class:`StringPlateBridge` that ``make_vk_plate_bridge(nonlinear=False)`` must equal.
+
+    Both halves are rebuilt from the *bridge's own* numbers rather than from the arguments that
+    produced it — the string from its stored coefficients, the plate via :func:`vk_linear_twin`
+    (whose ``rho=vk.rho_s`` is the substitution this whole regression exists to police). The drive
+    index is copied rather than re-derived, so a defaulting difference cannot masquerade as a
+    coupling bug.
+    """
+    s, p = bridge.string, bridge.plate
+    twin_string = IdealString(
+        L=s.L, T=s.T, rho=s.rho, fs=s.fs, N=s.N, boundary=("fixed", "free"), sigma=s.sigma
+    )
+    return StringPlateBridge(
+        string=twin_string, plate=vk_linear_twin(p), K=bridge.K, drive_index=bridge.drive_index
+    )
 
 
 # Bowed string (nonlinear friction exciter). A flexible (kappa=0), fixed-end damped string bowed

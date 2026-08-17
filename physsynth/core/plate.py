@@ -609,6 +609,15 @@ class VKPlate:
             A = (1.0 + sk) * self.W + coeff * self.K
         self._lu = splu(A.tocsc())
 
+        # Per-node mass an external force divides by: rho_s h^2 for "supported" (the scalar mass),
+        # rho_s for "free" (W lives inside A and is divided out by the solve). AREAL density, never
+        # rho_v -- a factor of 1000 at e = 1 mm that no ledger can see. Exposed rather than inlined
+        # because airbox's _VKPlateSurface needs the same number: sharing it makes the two the same
+        # expression by construction instead of by inspection.
+        self.force_denominator = (
+            self.rho_s * self.h * self.h if self.boundary == "supported" else self.rho_s
+        )
+
         # Nonlinear pieces: the shared bracket (F-source and coupling) and the clamped Airy solve.
         self.bracket = VonKarmanBracket(self.N, Ny, self.h)
         self.airy = AiryStressSolver(self.N, Ny, self.h)
@@ -735,7 +744,7 @@ class VKPlate:
             + sk * (self.W @ self.u_prev)
         )
 
-    def step(self) -> None:
+    def step(self, f_ext: NDArray[np.float64] | None = None) -> None:
         """Advance one timestep.
 
         ``nonlinear=False``: one prefactored SS solve (model #5). ``nonlinear=True``: Picard iterate
@@ -743,8 +752,26 @@ class VKPlate:
         ``B_F``-solve (``F^{n+1}`` from ``w^{n+1}_{(j)}``) and one ``A``-solve (``w^{n+1}_{(j+1)}``
         with the ``μ``-averaged coupling ``+ k² l(μ_{t·}w, μ_{t·}F)/ρ_s`` on the RHS), until
         ``‖Δw‖/‖w‖ <= couple_tol``. Rolls the history and the cached ``F``.
+
+        ``f_ext`` is an optional external nodal force (live vector, N) applied at time ``n`` — the
+        driving-point coupling used when the plate is a body node
+        (:class:`~physsynth.core.connection.StringVKPlateBridge`), and the exact counterpart of
+        :meth:`Plate.step`'s. It enters ``δ_tt w`` as ``force / mass``, so it is added to the RHS
+        **before** the solve (a post-solve correction is invalid — the ``A``-solve couples all
+        nodes), dividing by :attr:`force_denominator`.
+
+        It is added **once, outside** the Picard loop, and that is a fact about the force rather
+        than a shortcut: a bridge spring's ``F = K η^n`` depends only on time-``n`` state, so it is
+        invariant across the sweeps. (Contrast the air-box load, which is linear in the *unknown*
+        ``w^{n+1}`` and therefore has to fold into ``A`` — see ``_VKPlateSurface``.) The
+        θ-averaging touches only the elastic term and the μ-averaged membrane coupling never touches
+        the source's placement, so a time-``n`` source contributes ``k F δ_{t·} w`` to the energy
+        regardless of θ *and* regardless of the nonlinearity — which is why the bridge's three-way
+        energy decomposition telescopes exactly as it does for the linear plate.
         """
         rhs_lin = self._linear_rhs()
+        if f_ext is not None:
+            rhs_lin = rhs_lin + self.k * self.k * f_ext / self.force_denominator
         if not self.nonlinear:
             w_next = self._lu.solve(rhs_lin)
             self.u_prev, self.u = self.u, w_next

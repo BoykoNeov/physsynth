@@ -3451,11 +3451,12 @@ class _VKPlateSurface:
         self.k = plate.k
         if plate.boundary == "supported":
             self.areas = np.full(plate.n_live, plate.h * plate.h)
-            # Per-node mass rho_s h^2 -- AREAL density, never rho_v (see the class docstring).
-            self.denominator = plate.rho_s * plate.h * plate.h
         else:
             self.areas = plate.wdiag.copy()  # lumped cell areas (h^2, h^2/2, h^2/4) -- no dead rim
-            self.denominator = plate.rho_s   # W lives inside A and is divided out by the solve
+        # Per-node mass: rho_s h^2 (supported) / rho_s (free, W divided out by the solve). Read off
+        # the model rather than recomputed, so this and VKPlate.step()'s own f_ext path are the same
+        # expression by construction -- AREAL density, never rho_v (see the class docstring).
+        self.denominator = plate.force_denominator
 
     def surface(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         """``(coords, areas)`` — live-node positions (m) and their areas (m^2), in model order."""
