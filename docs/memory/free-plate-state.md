@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: c7e3f34a-89a1-41b0-814a-0c24a661c871
-  modified: 2026-07-27T14:54:24.435Z
+  modified: 2026-08-17T14:23:18.894Z
 ---
 
 Phase-3 **model #5b — 2D free-edge (FFFF) Kirchhoff plate + curved Chladni figures** built & all
@@ -65,6 +65,12 @@ import), not the absolute set — still the shipped form. Correct semantics, har
 (where the .pth never loads, so the test passed there anyway). The alternative floated at the time
 (add pywin32 to the allowlist instead) was never taken up and needs no decision — the delta
 measurement makes it moot. Allowlist policy itself: [[stiff-string-state]].
+
+**Later correction (2026-08-17, [[free-plate-orthotropic-state]]):** "the fundamental is the
+saddle/twist" is a fact about an **isotropic** free plate. Give the plate a grain and the twist races
+a cross-grain bending mode, losing below `g_y/g_xy = 1.025`; real spruce sits only 12.6% above that
+crossing. Same batch: this plate's `nu` is the isotropic special case of a four-constant grain, and
+the free branch's `K` still comes out **bit-identical** through the generalized assembly.
 
 **Both follow-ons DONE:** model #6 — **nonlinear (von Kármán) plate** (the gong/cymbal deep end,
 [[von-karman-plate-state]]) — and wiring the SS + free plate into the web viewer (Phase C,

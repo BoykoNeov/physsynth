@@ -83,6 +83,14 @@ family: ratios survive, magnitudes do not. Also: peak share is reached **early**
 
 ## Still out
 
-A **viewer batch** for this (Phase D's rule is satisfied: new model *and* new claim), and
-`StringVKPlateBridge` **inside a room** — a third fixed point (spring, Picard, room load), which
-belongs to whoever owns the room next. See [[web-viewer-state]], [[air-box-state]].
+A **viewer batch** for this (Phase D's rule is satisfied: new model *and* new claim). See
+[[web-viewer-state]].
+
+**The room arm is DONE** — [[string-vk-room-chain-state]], shipped 2026-08-17 — and it retired two
+things written here. The "third fixed point (spring, Picard, room load)" **does not exist**: there
+is one, because the spring force and the room's terms are both sweep-invariant, so bare and loaded
+bridges take the same sweep count. And this file's closing line — *want the gong impression, use a
+MALLET* — is upgraded from assertion to **mechanism**, and sharpened: it is **not a budget question
+at all**. A string cannot deliver the *shape* at any budget unless its band reaches the plate's,
+because a point force feeds the free plate's rigid nullspace and rigid motion stretches nothing.
+`w/e` is not an amplitude when the drive is a point force. See [[air-box-state]].

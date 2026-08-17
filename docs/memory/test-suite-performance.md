@@ -5,10 +5,11 @@ metadata:
   node_type: memory
   type: project
   originSessionId: aae47a22-23c6-4ed1-8713-4f9ae587e626
-  modified: 2026-08-17T10:44:56.403Z
+  modified: 2026-08-17T15:14:18.268Z
 ---
 
-**1638 tests** as of 2026-08-17 (was 1476 when the profile below was taken), ~23 min full on CI.
+**1721 tests** as of 2026-08-17 (1690 and 1638 earlier the same day; 1476 when the profile below
+was taken), ~23 min full on CI.
 Reworked 2026-08-10 (see [[ci-runner-variance]] for the measurement trap that dominates all of this).
 
 ## The clean profile INVERTS the local one — the geometric family is the suite
@@ -109,3 +110,39 @@ the SAME run, or do not compare at all ([[ci-runner-variance]]).
 The local full run read **2017 s (33:37)**, and — same trap as the 44-min reading above — it is
 **NOT comparable**: ruff and a targeted 23 s re-run of `test_vk_connection.py` ran concurrently on
 the same box, on top of the human's own Python. Green (exit 0), which is all it was for.
+
+## 2026-08-17 — free-plate orthotropic (#5of)
+
+**1721** tests (was 1690): +31 `tests/test_free_plate_orthotropic.py`
+([[free-plate-orthotropic-state]]), ~2.3 s standalone. Local full run **2369 s (39:29)**, exit 0 —
+again **not comparable** (memory writes and doc edits ran alongside it), and again that is all it
+was for. The **arithmetic check is the useful part**: 1690 + 31 = 1721 exactly, which is what
+proves every new test was collected and nothing shipped was silently dropped. Do that check on
+every batch — a green exit code alone cannot distinguish "all passed" from "half never ran".
+
+**Harness trap, new:** the background task reported `completed` / exit 0 while `Read` on its output
+file returned *empty*. `Get-Item` showed 2001 bytes written three minutes earlier. The Read was
+stale, not the run — reach for PowerShell `Get-Content` (and check `Length`/`LastWriteTime`) before
+concluding a background suite produced no output.
+
+## A green local suite is NOT the gate — and CI can disagree on a NUMBER, not just wall-clock
+
+Everything above warns about comparing CI *timings*. 2026-08-17 produced the first case of CI and
+local disagreeing on a **result**: `test_plate_orthotropic::test_lossy_grained_plate_is_passive_…`
+passed on Windows and failed on **both** CI jobs and **both** interpreters (so: deterministic, a
+summation-order difference, not a flake). It sat red on `main` for an hour and a half because the
+batch was declared green off the local run — the repo's own 20-red-runs scar, repeated. **Check
+`gh run list --branch main` after every push, and check the PREVIOUS commit's run too** — the
+failure was inherited from the batch before, not caused by the one being pushed.
+
+**The bug class, worth recognising anywhere:** `assert np.all(np.diff(e) <= 0.0)` on a lossy run
+looks like the strictest possible passivity check and is actually a **coin toss**, because every
+test in this repo plucks **from rest**. At step 0 the velocity is exactly zero, so that one step
+dissipates essentially nothing — measured `-2.70e-18` against `-1.50e-10` at step 1 and `~1.09e-08`
+typical. A decrement 4e9x smaller than its neighbours has its **sign decided by BLAS accumulation
+order**. Fix = the relative roundoff bar the repo already uses elsewhere
+(`test_bore_radiation.py`, `test_airbox_port.py`): `<= 1e-12 * e[0]`, which is still ~5 orders
+BELOW a genuine decrement, so it cannot hide a real gain — plus a separate `e[-1] < e[0]` so a
+plate that does nothing cannot pass. **Measure the margin before loosening any bar**: at 8/s decay
+a positive increment could equally have been real physics, and only the step-0 localisation proved
+it wasn't.
