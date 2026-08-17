@@ -56,8 +56,16 @@ jobs:
       # `--durations=50` is free (it only reports what pytest already timed) and is the only
       # QUIET-MACHINE profile of this suite that exists: local timings are taken on a contended
       # box and inflate ~3x. Read it before optimising anything.
+      #
+      # TEMPORARY (2026-08-17): `--durations=0` instead of 50, for ONE run. The top-50 table
+      # answers "what is slowest" but not "how much CPU is there in total", and the sharding
+      # decision needs the total: at 50 entries the tail below 14.31s is 1671 tests wide and
+      # invisible. `nproc` is printed for the same reason -- `-n auto` reads it, and the core
+      # count is the divisor that turns core-seconds into a wall. Revert to 50 once measured.
       - name: Run validation harness
-        run: pytest -n auto --dist loadgroup --durations=50
+        run: |
+          echo "cores: $(nproc)"
+          pytest -n auto --dist loadgroup --durations=0
 
   # The fast lane restores per-push coverage on the OTHER interpreter, which the single-version
   # matrix above gives up. It is not a gate and it is not a substitute for the full run: it
