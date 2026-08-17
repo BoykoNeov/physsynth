@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: aae47a22-23c6-4ed1-8713-4f9ae587e626
-  modified: 2026-08-17T15:14:18.268Z
+  modified: 2026-08-17T15:36:21.097Z
 ---
 
 **1721 tests** as of 2026-08-17 (1690 and 1638 earlier the same day; 1476 when the profile below
@@ -146,3 +146,16 @@ BELOW a genuine decrement, so it cannot hide a real gain — plus a separate `e[
 plate that does nothing cannot pass. **Measure the margin before loosening any bar**: at 8/s decay
 a positive increment could equally have been real physics, and only the step-0 localisation proved
 it wasn't.
+
+**Confirmed on the gate, not just locally:** the fix ran green on both jobs — `1721 passed` on
+py3.12 (**identical to the local count**, which is the collection check crossing machines) and
+`1652 passed` on the 3.11 fast lane, ruff clean. Useful side-reading: the same suite takes
+**921 s on CI vs 2369 s locally**, because this box runs the human's own Python — so a local wall
+clock is not even the right order of magnitude, let alone comparable.
+
+**The class was then swept, and only that one file was at risk** — everything else already used a
+relative bar. The one other bare `<= 0.0` on an energy array,
+`test_geometric_energy.py::test_passivity_is_monotone_with_all_six_losses`, has the same
+displacement-only IC but its step 0 sits **222521 ulps** below zero against the plate's ~360, so it
+passes on merit and was deliberately **left alone**. Measure before "fixing" a bare bar; the pattern
+alone does not make it fragile.
