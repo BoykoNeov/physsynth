@@ -1,6 +1,6 @@
 ---
 name: air-box-state
-description: 3-D FDTD air box (HANDOFF §12H) batches 1, 2, 3 AND 4 SHIPPED & GREEN (batch 4 docs closed 2026-08-10) — the DISTRIBUTED air tier above the lumped port; the reward and the price both live at λ=1/√3; batch 2's port is a Thevenin source solved in ONE division, and the ROOM contaminated the port's own measured size by more than the effect; batch 3 is the DISTRIBUTED area coupling, whose finding is that CONSERVATION IS BLIND to a wrong coupling constant; **batch 4 = the plate becomes an OBJECT (interior two-sided dipole) — the cut is AirBox's only new machinery, the MONEY TEST is not sufficient either (only the coupled residual catches both halves of a wrong 2), and FOUR MORE plan claims died on measurement including its own ≤2 pass criterion**
+description: 3-D FDTD air box (HANDOFF §12H) batches 1–6 ALL SHIPPED — §12H's MODEL LIST IS COMPLETE (b6 built 2026-08-17); the DISTRIBUTED air tier above the lumped port; reward and price both live at λ=1/√3; b2's port is a Thevenin source in ONE division and the ROOM contaminated the port's own measured size by more than the effect; b3 = distributed area coupling, CONSERVATION IS BLIND to a wrong coupling constant; b4 = the plate becomes an OBJECT (two-sided dipole), the MONEY TEST is not sufficient either; b5 = the drumhead — NO SINGLE ONE OF THE THREE DETECTORS IS SUFFICIENT, and a drumhead is quiet because it is COMPACT not because it is subsonic; **b6 = the GONG — the first radiating object whose acoustic character depends on HOW HARD IT WAS HIT (σ_shape moves 46% loud vs 1.4% quiet, 33× the control), the money test is blind for a THIRD distinct reason (it is arithmetic on whatever w^{n+1} came out of the solve), the LEDGER is the wrong observable because the ROOM's own build-up moves the control as much as the effect moves the claim, and — the finding a later batch most needs — THE AIR GRID CANNOT BE COARSENED TO BUY AFFORDABILITY BECAUSE COARSENING THE ROOM BREAKS THE PLATE'S FIXED POINT** (72 Picard sweeps at 57.9 kHz, NaN at 33 kHz); the seam CALLS the model's _linear_rhs() rather than transcribing it, the opposite of _PlateSurface and for a reason; rho_v-vs-rho_s is a 1000× slip no ledger sees; §7.7 directivity REFUSED on a costed CONTRADICTION (a 120 ms window needs a 41 m room)
 metadata: 
   node_type: memory
   type: project
@@ -410,3 +410,265 @@ effect was hidden.**
 `scripts/diagnose_airbox_dipole.py` (~7 min, ~1 GB peak, three figures). A golden-number test pins
 batch 3's `SurfacePort` **bit-identical** across the `_PatchPort` refactor, captured from the
 pre-refactor code — the only way to cash that claim once the old code is gone.
+
+---
+
+## Batch 5 — the drumhead in the room (SHIPPED 2026-08-10)
+
+Plan `docs/dev/air-box-membrane-plan.md`. `Membrane` (#4) suspended + baffled. VK plate (#6) is
+**batch 6**, deliberately split off. Two commits pushed: the plan, then the plan's own corrections.
+
+**HANDOFF §12H's "the port needs no change for either" is DEAD — for the disk only.**
+`_check_footprint` builds its required set as a bounding **BOX** (a per-axis min/max outer product),
+so a *circular* membrane is refused at every resolution — 20/48/40 unfed at `N=40/56/72`, identical
+on both tiers — and **refining makes it worse, not better**, because the bbox corners sit ~0.41·R
+from the nearest live node and are not under the surface at all. A rectangle of the same spacing is
+accepted. Fix (validated before writing): required set = **rows ∪ columns** span-wise. Measured as
+the *union*, not inferred from rows — the first probe measured rows alone and the plan sentence
+described the union, which is strictly stronger. Union is 0 for every disk incl. odd `N=25/41/57` at
+`R=0.13` (non-square air footprint), 0 for non-square rectangles, and still refuses every comb
+(64/96/96 vs bbox 68/112/132). Comb threshold unmoved under both: `h_mem/h_air ∈ (2.02, 2.20]`.
+
+**The probe killed three more claims, two of them the plan's own:**
+- Draft's footprint ceiling `h_mem ≤ h_air` — **wrong**, a bilinear stencil spans **TWO** air cells,
+  so the ceiling is ~2. Hence `c/c₀ ≤ √2/λ_air = 2.449` at the room's CFL, **not** `√(3/2)=1.2247`.
+  The supersonic arm is roomy, not a marginal point. (Advisor independently guessed ~1.2 too.)
+- `airbox.py` L1974-6 says #4/#5/#5b all have a `pressure()` read-out. **`Membrane` does not**, and
+  cannot cheaply (two-level roll keeps no `_accel`) → doc fix, read-out stays absent.
+- Expectation that the channel would be ~1e-6 at a realistic head. **0.84 of E0** at `c/c₀=0.31`,
+  (0,1) bulge, rigid room (bump 0.23 — the short circuit *in the channel*). §7.2 needs no supersonic
+  head and no lossy room. A membrane has **no piston** (clamped rim, no rigid-body nullspace), so
+  batch 3's 0.9974 configuration doesn't exist — the `(0,1)` bulge is the named one.
+
+**The headline and its inverting trap.** `c = √(T/ρ)` has no `ω` in it → a membrane has **no
+coincidence frequency**: subsonic at every mode or supersonic at every mode, set by the single
+number the player tunes. (Real Mylar ≈ 0.31.) But the 5-point scheme's dispersion drops `c_ph` below
+`c`, so a marginally supersonic head falls **back** below `c₀` on the grid — `βh = 1.445` at
+`c/c₀ = 1.05`, ~2.2 nodes/wave — manufacturing exactly the coincidence the claim denies. Ships
+**bracketed**, band held below the 1% knee (`βh = 0.686`, ~4.6 nodes/wave at `λ=1/√2`). En route:
+**at `λ = 1/√2` the DIAGONAL is exactly dispersionless** (1.0000 across the band) while the axis
+degrades to 0.707 at Nyquist — the 2-D analogue of 1-D `λ=1`, on one direction only.
+
+**Design facts for the build.** The load goes in `A`, so the **explicit** membrane acquires a solve
+it never had — first batch in the family with that choice (every earlier load landed inside a solve
+that already existed); lagged-explicit ships once as a measured negative control, `spreading=
+"nearest"`'s precedent. Prototype already validates the scheme: `|radiated−injected|/channel`
+1e-16…1e-15, scene total flat to 1e-13, across 16 configurations. `coords = X[mask]` excludes the
+**dead clamped rim**, so area is the live sum not `πR²` (0.9943) and `blocked_area` is 1.228× the
+moving surface — batch 4 says the dipole magnitude tracks `blocked_area`, so this is exactly the
+shape that yields a plausible-wrong magnitude. Seam extraction (`a_bare`/`rhs`/`denominator`/
+`surface`/`commit`) goes **first and ALONE**, guarded by batches 3/4's bit-identity margins
+`0.2061806714931906` / `0.2061840079056186`; the membrane adapter must NOT be in that commit.
+`Membrane.step()` takes no `f_ext` (same gap as `VKPlate`) so the adapter's `f_ext` term is **new**
+arithmetic with no bit-identity anchor. VK is batch 6 because its conservation holds only at the
+**Picard fixed point** → its seam is a *loop hook*, and its money test becomes a two-parameter
+`couple_tol` claim.
+
+**Probe scripts:** `M:\claud_projects\temp\airbox-b5-probe\probe{,2,3}.py`.
+
+### What the build changed (2026-08-10, four more commits — SHIPPED)
+
+`RoomLoadedMembrane` + `RoomSuspendedMembrane`, both domains, on an extracted seam. 348 air-box
+tests (44 new). `plate.py` and `membrane.py` untouched, as promised.
+
+**The seam went first and alone, and its guard had to be BUILT — the suite could not check it.**
+The plan said the refactor was "guarded by construction" by batches 3/4's pinned stability margins.
+It is not: those come from `StringPlateBridge._stability_margin`, i.e. from `G0`, which the air load
+**never enters** — so they are blind to `rhs()` and `commit()` and would pass with a wrong RHS.
+Everything else asserts physics to a tolerance and a changed float operation order slides under
+1e-15. So: a byte-exact baseline captured at HEAD *before* the edit (16 configurations = 2 tiers ×
+supported/free × f_ext absent/present × σ 0/4; sha256 of the raw bytes of `u`, `u_prev`, `_accel`
+and the room's pressure field, `float.hex()` of the ledgers, `nnz_growth`, `lu_nnz`), compared after.
+All 16 bit-identical. `M:\claud_projects	empirbox-b5-seam\pin.py`. σ is in the cross product
+because σ=0 makes the `sk·u^{n-1}` term vanish, so a slip there would have been invisible.
+**No base class** — one implementation is unexercised scaffolding, and `commit()`'s `_accel` write
+is the plate's, not the seam's (Membrane has no `_accel`). Batch 6 adds the base when #6 arrives.
+
+**THE THIRD DETECTOR — the finding that outranks the physics.** The measured negative control (lag
+the load velocity at `(uⁿ−u^{n-1})/k` and keep the membrane explicit) drifts the scene total by
+**3.8e-2 of E0** while `|radiated − injected|` stays at **1.6e-16**. So the MONEY TEST is the blind
+one here and the CONSERVED TOTAL is the detector — the exact inverse of batches 3 and 4. Reason:
+`radiated == injected` is a property of the **port relation alone** (the room gets exactly the `q`
+it was handed at exactly the pressure it then has), so it cannot see which velocity produced the
+`q`. Batch 3: total blind. Batch 4: money test blind. Batch 5: money test blind again, opposite
+mechanism. **No single one of the three is sufficient** — that is now the family's standing rule,
+not a per-batch surprise.
+
+**The headline splits in two and only one half is size-free.** Kinematic half, exact, no simulation:
+`k₀/β = c/c₀` at EVERY membrane mode (measured 0.313 four times over modes (1,1)…(4,4)) against the
+plate's `√(κω)/c₀` = 0.864 → 1.727 → 2.591 → 3.454, which CROSSES. Operational half — "therefore
+short-circuited" — is **size-dependent, and that killed the plan's framing**. The corrugated-surface
+rig (prescribe `sin(βx)sin(βy)sin(ωt)` at FIXED ω, sweep β, so only `k₀/β` moves) measures at
+`ka = 8`: knee exactly at 1, each arm saturating at its OWN plane-wave asymptote (1 and 2 — which
+also retires batch 4's "ratio ≤ 2 is the wrong criterion", since there the baffled arm had simply
+not saturated), and a **70.2× / 74.8×** rise across the knee. **The multiplier is NOT the claim and
+I published a wrong one first**: the full sweep's 3773× / 8859× has its bottom point at 2.7 air
+cells per structural wave, i.e. an ALIASING floor as much as a cancellation floor, so it is an
+upper bound; 70× is the figure over the resolved band (`k₀/β` 0.60–1.25, ≥5 cells/wave). The KNEE
+is robust across 5.3 / 7.1 / 8.9 cells; batch 4's "the crossing is the claim, the magnitudes are
+not" applies to this batch's own headline number. At `ka = 1.2`, where a real head's first
+modes live (0.30 m Mylar fundamental = 253 Hz, ka = 0.78): **no knee at all**, 69×, peaking at
+`k₀/β = 0.60`, because the patch carries 0.3 structural periods. **A real drumhead's fundamental is
+quiet because the head is COMPACT, not because it is subsonic.** Both halves ship; stating only the
+first would have been true and misleading.
+
+**Five claims died, three of them the plan's own** (plan §10.1):
+1. §2.1's "comb threshold unmoved at (2.02, 2.20]" — probe 3's bbox column was computed from the
+   REACHED set; the shipped one is from the COORDINATE extent, inset by up to one node per side, so
+   the new criterion is slightly **stricter** (20 unfed vs 17 at 2.02) and that interval was another
+   room's. What survives: both criteria change verdict between the same two spacings.
+2. §7.6's "the lagged load breaks the ledger identity" — see the third detector above.
+3. §7.7's rig — a prescribed UNIFORM piston has **no structural wavenumber**, so `c` never enters
+   and the sweep would have been constant by construction. Redesigned as the corrugated surface.
+4. §1.1's operational half — size-dependent, above.
+5. The `f_ext` one-step oracle needed the load REMOVED: even from rest the first step's centred
+   velocity is nonzero, so the room loads the head immediately and moves the answer **0.96%** —
+   exactly the size an "approximately equal" test waves through. Pinned unloaded, plus a static
+   deflection `u_ss = −L⁻¹f/(T h²)` for the sign and the operator, because `Membrane.step()` takes
+   no force and this arithmetic has nothing to be bit-identical to.
+
+**Other build facts worth keeping.** The footprint tests assert the fix *discriminates* — each disk
+case recomputes the superseded required set and asserts it was nonzero, so a no-op could not pass.
+A membrane has **no piston** (clamped rim ⇒ no rigid-body nullspace), so batch 3's 0.9974 non-vacuous
+configuration does not exist; the single-signed bulge replaces it (0.14–0.82 of E0). The two areas
+bracket the nominal from opposite sides — the clamped rim makes the mover smaller, the staircased
+footprint makes the obstacle larger. Diagnose script `scripts/diagnose_airbox_membrane.py`; its
+figure 2 needs no room at all.
+
+
+## Batch 6 — the gong in the room (SHIPPED 2026-08-17)
+
+Model #6, the von Kármán nonlinear plate ([[von-karman-plate-state]]), as a baffled and a suspended
+surface, both boundary branches (`supported` = gong, `free` = cymbal). Plan
+`docs/dev/air-box-vk-plate-plan.md`. **This completes §12H's model list**: every resonator in
+`physsynth/core/` that can be a surface now can be one *in* the room.
+
+**Batch 5's handover was right about exactly one thing, and it was the load-bearing one.** The air
+load is linear in `w^{n+1}` and **independent of the Airy stress `F`** — that orthogonality is what
+makes the batch tractable at all. So it folds into `A` exactly once and the Picard loop is otherwise
+untouched. What the seam needed was a **loop hook**, not a second `rhs()`:
+`solve(lu, rhs_fixed) -> (w^{n+1}, F^{n+1})`, because the loaded back-substitution sits *inside* the
+fixed-point iteration. `rhs_fixed` is sweep-invariant (it depends only on `p̄_free` and `w^{n-1}`),
+which is why the hook is cheap. `commit(u_next, F_next)` rolls **two** histories; there is no
+`_accel` (model #6 has none, hence no `pressure()` on the wrapper, following batch 5).
+
+**The seam does the OPPOSITE of `_PlateSurface` in one place, deliberately.** `rhs()` **calls**
+`VKPlate._linear_rhs()` instead of transcribing it. The asymmetry is a fact about the two models:
+`Plate.step` *inlines* its theta-scheme RHS, so batch 3 had no choice but to copy; model #6 already
+hoists it out for the Picard loop. Calling it keeps `plate.py` untouched *and* deletes a whole class
+of transcription slip. Verified, not assumed — see below.
+
+**The trap: `rho -> rho_s`.** `VKPlate` has **no** `rho`. It has `rho_v` (volumetric) and `rho_s`
+(areal), differing by the thickness — **1000× at `e = 1 mm`**. Write `rho_v` and the load is 1000×
+too weak while every ledger still telescopes against the pressure it used: nothing green turns red.
+Only the `nonlinear=False` bit-identical regression catches it, which is why that regression is a
+commit of its own — and it was **falsified deliberately**, off-tree: `rho_v` everywhere fails 8/8
+cases, `rho_v` in the `f_ext` divide alone fails 8/8, and a **pure reassociation** of the `f_ext`
+term (same maths, different rounding) still fails 5/8. `vk_linear_twin()` exists because three of
+the comparison plate's inputs fail in a way that reads exactly like a load bug: `rho=vk.rho_s`, the
+**snapped** `Ly=vk.Ly` (re-snapping a nominal `Ly` can give a different `Ny`, hence `n_live`), and
+`nu=vk.nu` (inert supported, load-bearing free).
+
+### The headline — the first radiating object whose character depends on how hard it was hit
+
+Every radiator here before #6 is linear in its excitation, so radiated fraction, directivity and
+dipole-over-baffled are amplitude-**invariant** by construction. The VK coupling is quadratic, so the
+**shape** of the motion evolves during a single strike — and shape is what `SurfacePort` exists to
+make audible (batch 3). Hence:
+
+> **A loud plate's radiation is time-varying at fixed geometry, and a quiet one's is not.**
+
+No `R(ω)` can state it — a scalar-per-frequency load has *one* pattern per frequency.
+
+| tier | `w/e` | modal drift | `σ_shape` spread | resolved-band |
+|---|---|---|---|---|
+| baffled | 0.05 | 0.029 | **1.4%** | 0.2% |
+| baffled | 3 | 0.362 | **46.0%** (33× control) | 4.6% (20×) |
+| suspended | 0.05 | 0.009 | **0.4%** | 0.1% |
+| suspended | 3 | 0.336 | **17.3%** (39× control) | 1.6% (18×) |
+
+**Batch 5's doctrine bit its successor immediately**: only **17 of 289** modes keep ≥5 air cells per
+structural wave, and the cascade's destination modes are exactly the ones the air grid resolves
+worst. **The SEPARATION is the claim and survives the restriction (20×/18×); the MULTIPLIER is an
+upper bound and is not claimed.**
+
+**The compact limit does not merely under-read — it points the wrong way.** The monopole (everything
+`AirRadiation` / `RadiatedBody` / `RationalAirLoad` can see) is 3e-7…3e-6 of the true figure, and for
+the suspended cymbal at `w/e = 3` it **rises 1.38× while the true efficiency falls to 0.93×**. A
+lumped one-port would report the cymbal getting brighter as it dulls. This is plan §7.8, chosen over
+§7.7 on measurement as the plan required.
+
+### The detector finding — the money test is blind for a THIRD distinct reason
+
+A new error axis: model #6 conserves only at the **Picard fixed point**, so `couple_tol` sits beside
+the air load as an error source.
+
+| `couple_tol` | scene total | \|radiated − injected\| | `last_residual` | sweeps |
+|---|---|---|---|---|
+| 1e-13 | 1.2e-13 | 2.2e-15 | 9.9e-14 | 19 |
+| 1e-6 | 5.1e-7 | 8.7e-16 | 9.9e-7 | 9 |
+| 1e-3 | 1.0e-3 | 1.6e-15 | 1.0e-3 | 4 |
+
+`radiated == injected` is arithmetic on **whatever `w^{n+1}` came out of the solve**, so an
+under-converged one is ported *self-consistently*: the books balance to rounding while the physics is
+wrong by a part in a thousand. Batch 3's blind spot was the total, batch 4's a `2` in the
+factorization, batch 5's which velocity made the `q`, batch 6's this. **Four batches, four ways for a
+single detector to be insufficient.** The plan's *more* interesting hoped-for outcome — that the
+scene total might also be blind — **did not happen**, and the reason it was wrong is worth keeping:
+the committed `F^{n+1}` is the Airy solve of the **previous** iterate while `w^{n+1}` is the current
+one, and the gap between them *is* the increment the tolerance bounds. Self-certifying half passed:
+loaded drift falls with `couple_tol` at the same rate as unloaded, within 1.2×.
+
+### FIVE more claims died, two of them the plan's own
+
+1. **The ledger is the wrong observable for the headline.** Radiated energy per window does not
+   separate the runs: the **room's own build-up** moves the quiet *control* 1.79× while the effect
+   moves the claim 3.64×. Batch 2's lesson recurring — a magnitude wearing a ratio's clothes
+   (denominator the plate, numerator the room). What ships instead is a functional of the **shape
+   alone**, `σ_shape = vᵀ(TᵀRT)v / (ρ₀c₀A⟨v²⟩)`: the room's own resistive operator applied to the
+   plate's own *coupled* motion. The run stays coupled; only the read-out is a fixed quadratic form.
+2. **§7.7's directivity panel — refused on a COSTED CONTRADICTION, not on cost.** The pattern change
+   needs a 120 ms window; a reflection-free 120 ms needs a room **41 m** across. No room size
+   resolves it. Stronger than "too expensive".
+3. **§4's cost model, 8× optimistic.** The build cell is 109 ms per room step at 2.35 M nodes, i.e.
+   ~21 min for 0.2 s against the costed 2–3 min. Shipped room is 0.6 m — legitimate because every
+   claim is a ratio.
+4. **§0.5's convergence characterisation — and the correction is a genuinely new coupling between
+   the two grids.** The Picard sweep count was measured against plate *geometry* at a fixed 96 kHz.
+   It is a strong function of the **timestep** too, and **the room sets the timestep**: at `w/e = 3`,
+   **72 sweeps at 57.9 kHz, NO convergence (NaN) at 33.0 kHz, and at 22.0 kHz even `w/e = 2`
+   diverges.** So **the air grid cannot be coarsened to buy affordability — coarsening the ROOM
+   breaks the PLATE's fixed point.** A second, independent reason this family's cost runs the wrong
+   way, on top of the 3-D CFL's `h⁻⁴` ([[airbox-viewer-state]]). `couple_max_iter`'s default of 50
+   caps out at the build cell; the script raises it to 120.
+5. **§0.3's spectral peak, confirmed dead in practice:** identify modes by projection under the mass
+   matrix, never by an FFT peak — at `w/e = 3` a peak tracker reads a mode at 0.53× its own linear
+   frequency because the field has gone broadband.
+
+### Numbers a later batch will want
+
+* The **velocity** piston is the free plate's fat channel (27.6% of `E0` baffled, 4.6% suspended, vs
+  0.25%/0.13% for a strike) — and a rigid translation carries no stretching, so the VK coupling is
+  **asleep** there. Both configurations run in the suite for that reason. A **displacement** piston
+  is not a piston: no velocity, so it sits still and radiates nothing.
+* The coupled residual: 1.4e-14…3.5e-14 correct, vs 8.6e-2 with the VK term dropped, 4.3e-2 halved,
+  1.2e-2 with the air load halved — the one guard that sees the nonlinear force and the air load
+  **separately**.
+* **`F^{n-1}` must be captured BEFORE the step** in any external residual: `commit()` rolls it away,
+  and the `μ`-average is `(F^{n+1} + F^{n-1})/2`, not `(F^{n+1} + F^n)/2`. And the coupling must be
+  rebuilt from the **committed** state or it reports the Picard increment instead.
+* A **narrow** strike does not converge at large amplitude — the broad strike (0.20 `Lx`) is not a
+  stylistic choice, it is the only one that runs.
+
+**Files:** `physsynth/core/airbox.py` (`_VKPlateSurface`, `_RoomLoadedVKPlateMixin`,
+`RoomLoadedVKPlate`, `RoomSuspendedVKPlate`); `tests/test_airbox_vk.py` (64 tests, ~45 s);
+`tests/helpers.py::make_air_vk_plate` / `make_room_loaded_vk_plate` / `make_suspended_vk_plate` /
+`vk_linear_twin` / `vk_strike`; `scripts/diagnose_airbox_vk.py` (~4 min, one figure).
+
+**Still out, and now askable rather than blocked:** `StringVKPlateBridge` is its own batch —
+`connection.py` reads `plate.rho`, calls `plate.step(f_ext=...)` and delegates `plate.pressure()`,
+none of which model #6 has, and what a *linear* 2-DOF stability guard means for an
+amplitude-dependent stiffness is a real question, not plumbing. Because no bridge composes with these
+wrappers yet, `RoomLoadedVKPlate.__getattr__` is free of `RoomLoadedPlate`'s "NOTHING here may shadow
+a name the bridge reads" constraint. A **viewer batch** now has both the new model and the new claim
+its own rule requires ([[web-viewer-state]]).

@@ -604,6 +604,42 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   scene total by 3.8e-2 while `radiated == injected` stays at 1.6e-16 — so batch 3's blind spot was
   the total, batch 4's was the money test, and batch 5's is the money test again *for the opposite
   reason*. **The von Kármán plate (#6) is batch 6**, with its extension point named in the plan's §3.
+- **Batch 6 — the gong in the room — is SHIPPED** (`docs/dev/air-box-vk-plate-plan.md`).
+  `RoomLoadedVKPlate` and `RoomSuspendedVKPlate` put model #6 in the air box on both tiers and both
+  boundary branches (`supported` = gong, `free` = cymbal), which **completes §12H's model list**:
+  every resonator in `physsynth/core/` that can be a surface now can be one *in* the room. Batch 5's
+  extension point was right and is the only part of its handover that survived contact — the load is
+  linear in `w^{n+1}` and independent of the Airy stress `F`, so it folds into `A` once, and what the
+  seam needed was a **loop hook** (`solve(lu, rhs_fixed) -> (w^{n+1}, F^{n+1})`) rather than a second
+  `rhs()`, because the loaded back-substitution sits *inside* the Picard iteration. The one
+  substitution, `rho -> rho_s`, is the batch's silent-failure trap (model #6 has no `rho`; `rho_v`
+  and `rho_s` differ by 1000× at `e = 1 mm`, and every ledger stays green either way), so the
+  `nonlinear=False` bit-identical regression was **falsified deliberately** — the slip fails 8/8
+  cases two ways, and a pure *reassociation* of the `f_ext` term still fails 5/8.
+  The headline: **a loud plate's radiation is time-varying at fixed geometry, and a quiet one's is
+  not.** Same plate, same room, same strike position, one flag apart — the shape-radiation
+  functional moves 1.4% at `w/e = 0.05` and 46.0% at `w/e = 3` (33× the control; 39× suspended),
+  with modal-share drift 0.029 against 0.362 behind it. This is the first radiating object here
+  whose acoustic character is a function of **how hard it was hit**, and no `R(ω)` can state it: a
+  scalar-per-frequency load has one pattern per frequency. The **separation** survives batch 5's
+  resolution restriction (20× and 18× over the modes that keep ≥5 air cells per structural wave)
+  but the **multiplier does not** — the cascade's destination modes are exactly the ones the air
+  grid resolves worst, so only the separation is claimed. The compact limit does not merely
+  under-read: the monopole is 3e-7…3e-6 of the true figure and, for the suspended cymbal, moves the
+  **wrong way** (rising 1.38× while the true efficiency falls). Five more claims died on
+  measurement, two of them the plan's own: the ledger is the wrong observable (the room's own
+  build-up moves the *control* 1.79× while the effect moves the claim 3.64×); §7.7's directivity is
+  refused on a **costed contradiction**, not cost — a 120 ms window needs a 41 m room; the cost
+  model was 8× optimistic; and the money test is blind for a **third distinct reason** (it is
+  arithmetic on whatever `w^{n+1}` came out of the solve, so an under-converged one is ported
+  self-consistently). The finding a later batch most needs: **the air grid cannot be coarsened to
+  buy affordability, because coarsening the ROOM breaks the PLATE's fixed point** — 72 Picard
+  sweeps at 57.9 kHz, NaN at 33.0 kHz — a second, independent reason this family's cost runs the
+  wrong way on top of the 3-D CFL's `h⁻⁴`. **Still out and now askable rather than blocked:**
+  `StringVKPlateBridge` (its own batch — `connection.py` reads `plate.rho`, calls
+  `plate.step(f_ext=...)` and delegates `plate.pressure()`, none of which model #6 has, and what a
+  *linear* 2-DOF stability guard means for an amplitude-dependent stiffness is a real question), and
+  a viewer batch, which now has both the new model and the new claim its own rule requires.
 - **3D radiation modeling** with directivity, plus HRTF / ambisonics output — the box produces a
   pressure field; turning that into a binaural or B-format signal is a separate, non-physics batch.
 - **Room coupling:** place the modeled instrument inside a modeled acoustic space. Done for the

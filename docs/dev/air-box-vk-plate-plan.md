@@ -466,5 +466,142 @@ while the shape content is not. Choose between §7.7 and §7.8 on measurement, n
 
 ## 10. What the build changed — the post-build record
 
-*(To be written after the build, per the family's convention. §0 is already the plan-stage half of
-it: three claims died before this document asserted them.)*
+*§0 is the plan-stage half of this: three claims died before this document asserted them. Five more
+died during the build, and two of them are the plan's own §4 and §0.5.*
+
+### 10.1 What survived exactly as planned
+
+The extension point batch 5 named a batch in advance was right, and it is the only part of batch
+5's handover that survived contact (§0 killed the rest). The load is linear in `w^{n+1}` and
+independent of `F`, so it folds into `A` once; the seam needed a **loop hook**, not a second
+`rhs()`; `rhs_room` is sweep-invariant, so the hook takes one constant vector. `_VKPlateSurface` is
+`_PlateSurface` with `rho -> rho_s`, plus `solve()` and a two-history `commit()`. `airbox.py` grew
+by four classes and nothing else changed — the port, the cut, the footprint check and the ledger
+are all untouched, as §2.3 predicted.
+
+**One improvement over the plan.** §5.1 said the loop would be "`VKPlate.step()`'s arithmetic
+verbatim", i.e. transcribed. It is not: `rhs()` **calls** `VKPlate._linear_rhs()`. That is the
+opposite of what `_PlateSurface` does, and the asymmetry is a fact about the two models rather than
+a change of mind — `Plate.step` *inlines* its RHS so batch 3 had to copy it, while model #6 already
+hoists it out for the Picard loop. Calling it keeps `plate.py` untouched *and* removes a whole class
+of transcription slip. Verified by the injected-slip probe below: a pure **reassociation** of the
+one term that is still transcribed (`f_ext`) fails 5 of 8 regression cases.
+
+### 10.2 The regression was checked for the ability to fail, not assumed
+
+§7.1 is the whole of Commit A, and the `rho_v`/`rho_s` trap is invisible to every energy report in
+the repo — so the test was falsified deliberately, off-tree, three ways:
+
+| injected slip | cases failing (of 8) |
+|---|---|
+| `rho_v` everywhere (denominator **and** `_load_scale`) | **8** |
+| `rho_v` in the `f_ext` divide only | **8** |
+| `f_ext` term reassociated — same maths, different rounding | **5** |
+| control (unmodified) | 0 |
+
+`vk_linear_twin()` exists because three of the comparison plate's four inputs are ways to fail in a
+manner that reads exactly like a load bug: `rho=vk.rho_s`, the **snapped** `Ly=vk.Ly` (re-snapping a
+nominal `Ly` can land on a different `Ny`, hence a different `n_live`), and `nu=vk.nu`, which is
+inert for the supported branch and load-bearing for the free one.
+
+### 10.3 DEAD — "the scene total may be nearly blind to `couple_tol` too" (§7.3's hoped-for outcome)
+
+§7.3 enumerated three detectors and predicted none, precisely so the interesting outcome would be
+claimable. It did not happen, and the reason is worth more than the prediction was:
+
+| `couple_tol` | scene-total drift / `E0` | \|radiated − injected\| | `last_residual` | sweeps |
+|---|---|---|---|---|
+| `1e-13` | 1.2e-13 | 2.2e-15 | 9.9e-14 | 19 |
+| `1e-6` | 5.1e-7 | 8.7e-16 | 9.9e-7 | 9 |
+| `1e-3` | 1.0e-3 | 1.6e-15 | 1.0e-3 | 4 |
+
+The total tracks `couple_tol` almost exactly. The plan's reasoning — that `VKPlate.energy()` is
+built from `(u, u_prev, F, F_prev)` and the roll keeps those mutually consistent regardless of
+convergence — misses that the committed `F^{n+1}` is the Airy solve of the **previous** iterate
+while `w^{n+1}` is the current one, and the gap between them *is* the increment the tolerance
+bounds.
+
+**What did happen is the batch's methodological finding: the money test is blind for a third
+distinct reason.** Batch 4's blind spot was a `2` inside the factorization; batch 5's was which
+velocity produced the `q`; here it is that `radiated == injected` is arithmetic on whatever
+`w^{n+1}` came out of the solve, so an under-converged one is ported *self-consistently* and the
+books balance to rounding while the physics is wrong by a part in a thousand. Four batches, four
+ways for a single detector to be insufficient. The self-certifying half passed: **loaded drift falls
+with `couple_tol` at the same rate as unloaded**, within 1.2× at every tolerance — the air load adds
+no error floor of its own.
+
+### 10.4 DEAD — the ledger as the headline's observable
+
+The first attempt at §7.6 measured radiated energy per time window off the port's own books. It does
+not separate the runs: the **room's own build-up** moves the quiet control 1.79× while the effect
+moves the claim 3.64×. That is batch 2's lesson recurring ("the room contaminated the port's own
+measured size by more than the effect"), and it is a *magnitude wearing a ratio's clothes* — the
+denominator is the plate and the numerator is the room.
+
+The observable that ships instead is a functional of the **shape alone**,
+
+```
+    sigma_shape  =  v^T (T^T R T) v  /  (rho0 c0 A <v^2>)
+```
+
+— the room's own resistive load operator, the one inside the factorization, applied to the plate's
+*actual coupled* velocity field. The run stays fully coupled; only the read-out is a fixed quadratic
+form, which takes the room's transient out of the number without taking the room out of the physics.
+
+### 10.5 The headline, and the half of it that is resolution-limited
+
+Measured on a 0.10 m free steel plate in a 0.6 m lossy room, 120 ms in four windows, same geometry,
+same strike position, one flag apart:
+
+| tier | `w/e` | modal drift | `sigma_shape` spread | resolved-band spread |
+|---|---|---|---|---|
+| baffled | 0.05 | 0.029 | **1.4%** | 0.2% |
+| baffled | 3 | 0.362 | **46.0%** (33× the control) | 4.6% (20×) |
+| suspended | 0.05 | 0.009 | **0.4%** | 0.1% |
+| suspended | 3 | 0.336 | **17.3%** (39× the control) | 1.6% (18×) |
+
+Batch 5's doctrine bites its successor immediately: only **17 of 289** modes keep ≥5 air cells per
+structural wave, and the cascade's destination modes are exactly the ones the air grid resolves
+worst. So the multiplier is an upper bound. **The separation is the claim and it survives the
+restriction — 20× and 18× the control over resolved modes only — and the multiplier is not claimed.**
+
+**The compact limit does not merely under-read.** The monopole — everything `AirRadiation`,
+`RadiatedBody` and `RationalAirLoad` can see — is 3e-7…3e-6 of the true figure here, and for the
+suspended cymbal at `w/e = 3` it moves the **wrong way**: it rises 1.38× while the true efficiency
+falls to 0.93×. A lumped one-port would report this cymbal getting brighter as it actually dulls.
+This is §7.8, chosen over §7.7 on measurement exactly as the plan required.
+
+### 10.6 DEAD — §7.7's directivity panel, refused on a costed contradiction
+
+Not skipped: **impossible at any budget in this scheme.** The pattern change needs the 120 ms window
+above, and a reflection-free 120 ms needs a room 41 m across. The two requirements are in direct
+conflict, and no room size resolves them. That is a stronger statement than "too expensive", and it
+is why §7.8 is the alternative that ships.
+
+### 10.7 DEAD — §4's cost model and §0.5's convergence characterisation, both
+
+* **Cost.** §4 costed the build cell at ~2–3 min for 0.2 s. Measured: a 1.5 m room at
+  `h = 11.4 mm` is 2.35 M nodes at **109 ms per room step**, i.e. **~21 min for 0.2 s — 8× the
+  estimate.** The shipped room is 0.6 m for that reason, which is legitimate because every claim
+  here is a ratio (batch 2: a ratio survives a small room, a magnitude does not).
+* **Convergence, and this one is a genuinely new coupling between the two grids.** §0.5 measured the
+  Picard sweep count against plate *geometry* at a fixed 96 kHz. It is a strong function of the
+  **timestep** too — and the room sets the timestep. On this plate at `w/e = 3`: **72 sweeps at
+  57.9 kHz, no convergence at all (NaN) at 33.0 kHz, and at 22.0 kHz even `w/e = 2` diverges.**
+  So the air grid **cannot be coarsened to buy affordability — coarsening the ROOM breaks the
+  PLATE's fixed point.** That is a second, independent reason this family's cost runs the wrong way,
+  on top of the 3-D CFL's `h⁻⁴`. It also means `couple_max_iter`'s default of 50 caps out at the
+  build cell; the script raises it to 120.
+
+### 10.8 Numbers a later batch will want
+
+* The **velocity** piston is the free plate's fat channel (27.6% of `E0` baffled, 4.6% suspended,
+  against 0.25%/0.13% for a strike) — and a rigid translation carries no stretching, so the von
+  Kármán coupling is *asleep* in exactly that configuration. Both run in the suite for that reason.
+  A **displacement** piston is not a piston at all: it has no velocity, so it sits there and
+  radiates nothing.
+* The coupled residual comes out at 1.4e-14…3.5e-14, against 8.6e-2 with the von Kármán term
+  dropped, 4.3e-2 with it halved and 1.2e-2 with the air load halved — so it is the one guard that
+  sees the nonlinear force and the air load *separately*.
+* `F^{n-1}` must be captured **before** the step in any external residual: `commit()` rolls it away,
+  and the `μ`-average is `(F^{n+1} + F^{n-1})/2`, not `(F^{n+1} + F^n)/2`.

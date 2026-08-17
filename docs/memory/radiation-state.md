@@ -1,6 +1,6 @@
 ---
 name: radiation-state
-description: "Air/radiation node batches 1 (read-out AirRadiation) + 2 (constant-R LOAD RadiatedBody) + 3 (FREQUENCY-DEPENDENT load RationalAirLoad/ReactiveRadiatedBody, exact rational Z_a) ALL built & green; the lumped-impedance tier is now complete in frequency too"
+description: "Air/radiation node batches 1 (read-out AirRadiation) + 2 (constant-R LOAD RadiatedBody) + 3 (FREQUENCY-DEPENDENT load RationalAirLoad/ReactiveRadiatedBody, exact rational Z_a) ALL built & green and batch 3 SURFACED in the viewer as `airload`; batch 2's R and batch 3's R are DIFFERENT quantities (compact-source at one frequency vs saturated plane-wave)"
 metadata: 
   node_type: memory
   type: project
@@ -107,6 +107,21 @@ the passivity proof — `U` splits, resistor branch radiated, inertance branch s
   green (was 1129 at Phase D close; +44 all in `test_radiation.py`, so the delta *is* the batch),
   ruff clean.
 
-**Next horizon** = distributed/3D FDTD air box (§12H, the remaining half of the R(ω)/air-box fork)
-or plate/grid radiation load (deferred: area-weighted W, implicit θ-solve). See
-[[web-viewer-state]] for the fork list.
+**SURFACED IN THE VIEWER 2026-08-10 as `airload` (web-viewer batch 17)** — see
+[[web-viewer-state]]. The one thing that batch changed about *this* note: **batch 2's `R` and batch
+3's `R` are DIFFERENT PHYSICAL QUANTITIES and I nearly shipped a headline built on conflating
+them.** Batch 2's default came from `monopole_radiation_resistance` = the **compact-source**
+(`ka→0`) law at one frequency; batch 3's is the **saturated plane-wave** `ρ₀c₀/S`. Reading the
+former as a saturation implies a 0.497 m sphere whose exact `Re Z_a` over 110–440 Hz is
+66.6/101.3/113.0/125.3 — **−50…−94 %** against the law batch 2 quoted — and would have "proved"
+batch 2 confessed to a sin it never committed. The sphere batch 2's number actually describes is
+the **5 cm** one (132.1/410.4/710.7/1836.8, i.e. −1.0/−3.1/−5.4/−14.0 %), so batch 2's honesty note
+was CORRECT and its numbers were good to 14 %. The two limits meet only at `ka = 1`, which is also
+why `√(Rc₀/(ρ₀π))` ≡ batch 2's `f_match` — true, but near-tautological, so it is a sanity check and
+not evidence of continuity. *Two batches can name a slider `R`, cite the same medium, and mean
+different limits of the same formula.*
+
+**Next horizon** = distributed/3D FDTD air box (§12H — four batches SHIPPED in core, see
+[[air-box-state]], but still UNSURFACED in the viewer and needing a 3-D field type first) or
+plate/grid radiation load (deferred: area-weighted W, implicit θ-solve). See [[web-viewer-state]]
+for the fork list.
