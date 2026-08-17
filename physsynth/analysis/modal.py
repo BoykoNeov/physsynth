@@ -12,6 +12,8 @@ Pure NumPy. No dependency on the core (oracles are independent of the implementa
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from numpy.typing import NDArray
 from scipy import special
@@ -45,6 +47,9 @@ __all__ = [
     # 2D free-edge (FFFF) plate (model #5b)
     "free_plate_ffff_square_lambdas",
     "free_plate_freq_from_lambda",
+    # 2D free-edge ORTHOTROPIC plate -- model #5b with a grain (model #5of)
+    "free_plate_twist_bound",
+    "free_plate_coupling_form",
     # 1D acoustic bore (wind leg)
     "bore_resonance_frequencies",
     "discrete_bore_eigenfrequency",
@@ -446,6 +451,86 @@ def free_plate_freq_from_lambda(
     """
     lam = np.asarray(lam, dtype=float)
     return lam * kappa / (2.0 * np.pi * a * a)
+
+
+# -- 2D free-edge ORTHOTROPIC plate (model #5of): the free plate with a grain ---------------------
+#
+# The free orthotropic plate has no closed-form spectrum (neither does the isotropic one) and no
+# freely-citable table either, so its four bending constants are validated by four independent
+# probes instead. Two of them are closed-form and live here; the other two are exact reductions to
+# the shipped 1-D free beam (see docs/dev/orthotropic-free-plate-plan.md §1.1).
+
+
+def free_plate_twist_bound(
+    kappa: float, a: float, b: float, grain_torsion: float = 0.5
+) -> float:
+    """Rayleigh upper bound on the **first elastic frequency** of a free orthotropic plate (Hz).
+
+    The centred saddle ``w = x·y`` (coordinates from the plate's centroid) has ``w_xx = w_yy = 0``
+    and ``w_xy = 1``, so in the orthotropic bending energy every term dies except the torsional one
+    and the Rayleigh quotient closes in one line:
+
+        U = 2 D_xy a b,   ∫∫ w² dA = a³b³/144   =>   omega² <= 576 D_xy / (rho_s a² b²)
+        omega_1 <= 24 sqrt(D_xy / rho_s) / (a b),    f_1 <= 24 kappa sqrt(g_xy) / (2π a b)
+
+    written in this module's ratio convention (``g_xy = D_xy/D_ref``, ``kappa² = D_ref/rho_s``). The
+    saddle is odd about both centre lines, so on a symmetric grid it is exactly orthogonal to the
+    rigid-body space ``{1, x, y}`` and the bound is legitimate rather than contaminated by the
+    zero modes.
+
+    Three things this is and is not:
+
+    - **It depends on the torsional rigidity alone.** ``D_x``, ``D_y`` and the coupling rigidity
+      ``D_1`` cannot appear, which is what makes it a probe of ``g_xy`` in isolation — and is why
+      the wood literature reads ``G_xy`` off a tapped free plate (Caldersmith, *Acustica* **56**
+      (1984) 144–152). The default ``grain_torsion = 0.5`` is the isotropic ``ν = 0`` value; for
+      isotropic material pass ``(1 - nu)/2``.
+    - **It is informative, not vacuous.** Isotropic square at ``ν = 0.3``: the bound is
+      ``24 sqrt(0.35) = 14.20`` in ``λ = ω a²/κ`` units against the tabulated 13.468
+      (:func:`free_plate_ffff_square_lambdas`) — a 5.4% one-term overshoot.
+    - **It is ONE-SIDED.** A uniformly too-soft operator satisfies it comfortably. It must be used
+      alongside a two-sided check (the free-beam reduction) — see the plan's §7.
+    """
+    if kappa <= 0 or a <= 0 or b <= 0:
+        raise ValueError("kappa, a and b must all be positive.")
+    if grain_torsion <= 0:
+        raise ValueError(
+            f"grain_torsion (D_xy/D_ref) must be positive — at zero the saddle carries no energy "
+            f"and joins the rigid-body nullspace; got {grain_torsion}."
+        )
+    return 24.0 * kappa * math.sqrt(grain_torsion) / (2.0 * math.pi * a * b)
+
+
+def free_plate_coupling_form(
+    grain_coupling: float, h: float, Nx: int, Ny: int
+) -> float:
+    """Exact value of the free-plate bending form on the pair ``(x², y²)`` — the ``D_1`` probe.
+
+    On ``f = x²``, ``g = y²`` every term of the orthotropic bilinear form vanishes except the
+    coupling one (``f_yy = g_xx = 0``, ``f_xy = g_xy = 0``), leaving a closed form:
+
+        P(x², y²) = ∫∫ D_1 (f_xx g_yy + f_yy g_xx) dA = 4 D_1 a b        (continuum)
+
+    Discretely the collocated second differences return ``2`` at every interior node and ``0`` on
+    the respective free edges — where the *natural* boundary condition puts them — so the discrete
+    form is short of exactly one boundary strip and is itself **exact**:
+
+        fᵀ K g = 4 g_1 h² (Nx - 1) (Ny - 1)          (this function; machine precision)
+               -> 4 g_1 a b  as h -> 0               (the O(h) continuum statement)
+
+    Returned is the **discrete** value, in units of the reference rigidity (multiply by
+    ``rho_s kappa²`` for Joules). Measured to 5.9e-16 … 1.9e-14 relative across grids.
+
+    This is the **only** one of the free plate's four probes that responds to the coupling rigidity:
+    the twist bound is blind to it by construction, and the free-beam reduction is exact only *at*
+    ``g_1 = 0``. It is therefore load-bearing despite being the least glamorous of the three, and
+    is not to be dropped for looking like a unit test of an array sum.
+    """
+    if h <= 0:
+        raise ValueError("h must be positive.")
+    if Nx < 2 or Ny < 2:
+        raise ValueError(f"Nx and Ny must both be >= 2, got ({Nx}, {Ny}).")
+    return 4.0 * grain_coupling * h * h * (Nx - 1) * (Ny - 1)
 
 
 # -- 1D acoustic bore (wind leg): the air column of a clarinet / flute ------------------------

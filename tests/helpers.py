@@ -36,7 +36,7 @@ from physsynth.core.engine import simulate
 from physsynth.core.mallet import MalletMembrane, MalletWall
 from physsynth.core.membrane import Domain, Membrane
 from physsynth.core.plate import THETA_DEFAULT as PLATE_THETA_DEFAULT
-from physsynth.core.plate import Plate, VKPlate
+from physsynth.core.plate import Plate, VKPlate, grain_ratios_from_material
 from physsynth.core.radiation import (
     AirRadiation,
     RadiatedBody,
@@ -336,8 +336,51 @@ def make_free_plate(
     )
 
 
+def make_orthotropic_free_plate(
+    *,
+    N: int,
+    mu: float = MU_PLATE_DEFAULT,
+    kappa: float = KAPPA_PLATE_DEFAULT,
+    sigma: float = 0.0,
+    theta: float = THETA_DEFAULT,
+    a: float = 1.0,
+    b: float | None = None,
+    rho: float = RHO_AREAL_DEFAULT,
+    grain_x: float = 1.0,
+    grain_y: float = 1.0,
+    grain_coupling: float = 0.3,
+    grain_torsion: float = 0.35,
+) -> Plate:
+    """A **completely free** plate with a **grain** — model #5of, four bending constants.
+
+    :func:`make_free_plate` with the cross term split into its coupling and torsional halves, which
+    is what a free edge (unlike a pinned one) can tell apart. The defaults ``(1, 1, 0.3, 0.35)`` are
+    the isotropic ``nu = 0.3`` split, i.e. exactly :func:`make_free_plate` — the bit-identity tests
+    build both through this one door on purpose. ``b`` defaults to ``a`` (square, the Leissa
+    geometry); pass it for a strip, where the ``y``-independent modes separate cleanly.
+    """
+    h = a / N
+    fs = kappa / (mu * h * h)
+    return Plate(
+        Lx=a, Ly=a if b is None else b, kappa=kappa, rho=rho, fs=fs, N=N, sigma=sigma, theta=theta,
+        boundary="free", grain_x=grain_x, grain_y=grain_y,
+        grain_coupling=grain_coupling, grain_torsion=grain_torsion,
+    )
+
+
+def spruce_free_grain() -> dict[str, float]:
+    """The :data:`SPRUCE` material as free-branch grain kwargs (four constants, not three)."""
+    spec = grain_ratios_from_material(**SPRUCE)
+    return dict(
+        grain_x=spec.grain_x,
+        grain_y=spec.grain_y,
+        grain_coupling=spec.grain_coupling,
+        grain_torsion=spec.grain_torsion,
+    )
+
+
 def free_plate_low_eigenfrequencies(
-    plate: Plate, n_modes: int, *, return_rigid: bool = False
+    plate: Plate, n_modes: int, *, return_rigid: bool = False, lam1_hint: float | None = None
 ):
     """The ``n_modes`` lowest **elastic** eigenfrequencies (Hz) of a free ``plate`` (ascending).
 
@@ -352,7 +395,11 @@ def free_plate_low_eigenfrequencies(
     """
     n_total = n_modes + 3  # + the 3 rigid-body modes to discard
     a = plate.Lx
-    mu1_est = (13.0 / (a * a)) ** 2  # lambda_1 ~ 13.47 -> a safe (< mu_1) negative shift scale
+    # lambda_1 ~ 13.47 for the isotropic square -> a safe (< mu_1) negative shift scale. A GRAINED
+    # free plate sits far lower (spruce: lambda_1 ~ 5.7, since the twist mode is governed by the
+    # torsional rigidity alone), so `lam1_hint` lets a caller scale the shift with the material. The
+    # default is left as the literal 13.0 so every shipped free-plate number is untouched.
+    mu1_est = ((13.0 if lam1_hint is None else lam1_hint) / (a * a)) ** 2
     sigma = -1e-3 * mu1_est
     mu = eigsh(
         plate.K, k=n_total, M=plate.W, sigma=sigma, which="LM", return_eigenvectors=False

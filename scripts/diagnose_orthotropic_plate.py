@@ -78,7 +78,8 @@ def mode_freqs(p, modes):
 
 def main() -> None:
     os.makedirs(OUT, exist_ok=True)
-    _, _, gx, gh, gy = grain_ratios_from_material(**SPRUCE)
+    _spec = grain_ratios_from_material(**SPRUCE)
+    gx, gh, gy = _spec.grain_x, _spec.grain_cross, _spec.grain_y
     stretched = np.sqrt(gx * gy)
 
     print("Spruce, as three bending-stiffness ratios:")

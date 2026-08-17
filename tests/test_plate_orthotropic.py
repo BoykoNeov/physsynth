@@ -325,22 +325,19 @@ def test_degenerate_grain_arguments_are_rejected():
             make_orthotropic_plate(N=8, **kwargs)
 
 
-def test_grain_on_the_free_boundary_is_refused_not_silently_ignored():
+def test_grain_on_the_free_boundary_needs_the_split_and_says_so():
     """The free plate assembles from the strain energy and needs the coupling and torsional
-    rigidities *separately*, not just their combination ``H``. That is a real extension and a
-    separate batch — so it raises rather than quietly building an isotropic plate.
+    rigidities *separately*, not just their combination ``H``. As of model #5of it accepts them —
+    but a grain **without** them is still refused rather than silently completed from Poisson's
+    ratio, which would be a wrong default rather than a permitted unphysical choice.
     """
-    with pytest.raises(NotImplementedError, match="supported"):
-        Plate(
-            Lx=1.0,
-            Ly=1.0,
-            kappa=KAPPA,
-            rho=RHO_AREAL_DEFAULT,
-            fs=40000.0,
-            N=8,
-            boundary="free",
-            grain_y=0.5,
-        )
+    common = dict(Lx=1.0, Ly=1.0, kappa=KAPPA, rho=RHO_AREAL_DEFAULT, fs=40000.0, N=8,
+                  boundary="free")
+    with pytest.raises(ValueError, match="separately"):
+        Plate(**common, grain_y=0.5)
+    # ... and with the split it builds (model #5of; the free branch's own suite covers the physics).
+    p = Plate(**common, grain_y=0.5, grain_coupling=0.1, grain_torsion=0.3)
+    assert p.grain_cross == 0.1 + 2.0 * 0.3, "grain_cross must be derived from the split"
 
 
 # =====================================================================================
@@ -396,7 +393,8 @@ def test_spruce_is_not_a_stretched_isotropic_plate():
     independent axis and not a consequence of the stiffness ratio. Everything in the findings
     section below is downstream of this one number.
     """
-    _, _, gx, gh, gy = grain_ratios_from_material(**SPRUCE)
+    _spec = grain_ratios_from_material(**SPRUCE)
+    gx, gh, gy = _spec.grain_x, _spec.grain_cross, _spec.grain_y
     assert 13.0 < gx / gy < 15.0, f"spruce stiffness ratio {gx / gy:.2f} outside the expected band"
     ratio = gh / np.sqrt(gx * gy)
     assert 0.5 < ratio < 0.65, f"H/sqrt(Dx*Dy) = {ratio:.3f}"
@@ -423,7 +421,8 @@ def test_the_energy_ledger_cannot_see_a_wrongly_wired_grain():
     one of them is a symmetric definite operator and conserves to machine precision. Only the modal
     oracle separates them, and it separates them by a lot (tens of percent in frequency).
     """
-    _, _, gx, gh, gy = grain_ratios_from_material(**SPRUCE)
+    _spec = grain_ratios_from_material(**SPRUCE)
+    gx, gh, gy = _spec.grain_x, _spec.grain_cross, _spec.grain_y
     truth = dict(grain_x=gx, grain_cross=gh, grain_y=gy)
     mutations = {
         "swapped": dict(grain_x=gy, grain_cross=gh, grain_y=gx),
@@ -477,7 +476,8 @@ def test_a_square_plates_diagonal_modes_are_blind_to_the_grain_running_the_wrong
     suite's own falsification test above uses off-diagonal modes for exactly this reason, and this
     test is the record of why that was not an arbitrary choice.
     """
-    _, _, gx, gh, gy = grain_ratios_from_material(**SPRUCE)
+    _spec = grain_ratios_from_material(**SPRUCE)
+    gx, gh, gy = _spec.grain_x, _spec.grain_cross, _spec.grain_y
     square = dict(N=32, mu=2.0, Lx=1.0, Ly=1.0)
     right = make_orthotropic_plate(**square, grain_x=gx, grain_cross=gh, grain_y=gy)
     wrong = make_orthotropic_plate(**square, grain_x=gy, grain_cross=gh, grain_y=gx)
@@ -655,7 +655,8 @@ def test_the_grain_is_in_the_partial_series_and_not_in_the_level():
     rings, **you cannot tell wood from metal**. The grain is audible as tuning, not as output.
     """
     modes = [(m, n) for m in range(1, 4) for n in range(1, 4)]
-    _, _, gx, gh, gy = grain_ratios_from_material(**SPRUCE)
+    _spec = grain_ratios_from_material(**SPRUCE)
+    gx, gh, gy = _spec.grain_x, _spec.grain_cross, _spec.grain_y
 
     grained = make_orthotropic_plate(N=32, mu=1.0, grain_x=gx, grain_cross=gh, grain_y=gy)
     f_grained = np.sort(orthotropic_mode_freqs(grained, modes))

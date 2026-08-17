@@ -11,7 +11,9 @@ Two boundaries share one resonator (``boundary=``):
   of the free beam), Poisson's ratio ``nu`` re-enters, and the update is the **W-weighted** scheme
   (``W δ_tt u = -kappa² K(…)``, the beam's verbatim with 2D ``K, W``) not the ``I``-based one
   below. The free branch has no closed-form modal oracle — it is validated by the rigid-body
-  nullspace, O(h²) self-convergence, and Leissa's FFFF-square frequency parameters.
+  nullspace, O(h²) self-convergence, and Leissa's FFFF-square frequency parameters. It takes a
+  **grain** too, as of model #5of, and needs *four* constants where the supported branch needs
+  three — see "Grain" below and ``docs/dev/orthotropic-free-plate-plan.md``.
 
 The simply-supported plate (the rest of this docstring) is the
 composition of the two prior 2D/4th-order advances, with no fundamentally new machinery:
@@ -69,7 +71,8 @@ identity (machine precision lossless; monotone decreasing at ``e^{-2 sigma t}`` 
 > not only the top partials. Passivity still holds unconditionally; the *rate*, not the sign, is
 > wrong above low modes. Cure = frequency-dependent loss (a later model). See the plan.
 
-**Grain (orthotropy) — ``grain_x``, ``grain_cross``, ``grain_y``, supported branch only.**
+**Grain (orthotropy) — ``grain_x``, ``grain_cross``, ``grain_y`` on the supported branch; the free
+branch needs ``grain_cross`` split into ``grain_coupling`` and ``grain_torsion``.**
 Everything above assumes a material equally stiff in every direction. Real soundboards are wood.
 Passing the three dimensionless bending-stiffness ratios replaces ``B = L²`` with
 
@@ -104,6 +107,29 @@ Three things a caller must know:
   the grain. The operator is still SPD, so passivity holds and ``energy()`` stays green either way
   -- the correctness claim here rides on the modal-frequency oracle, not on the ledger.
 
+**The FREE branch's grain (model #5of) needs four constants, and this is why.** Merging ``D_1`` and
+``2 D_xy`` into ``H`` takes two integrations by parts whose boundary terms vanish only on a pinned
+rim. A free rim keeps them: its three natural conditions (zero bending moment, zero Kirchhoff shear,
+corner force) see the two rigidities differently, and the corner force ``4 D_xy w_xy`` is *pure*
+torsion. So ``Plate(boundary="free", ...)`` takes ``grain_coupling = D_1/D_ref`` and
+``grain_torsion = D_xy/D_ref`` and refuses a grain without them. Measured consequences:
+
+- two splits of the same ``H`` are the **same** supported plate (the operator is bit-identical,
+  ``0.0``) and **different** free plates (fundamental 6.5x apart across the admissible split);
+- the free plate's fundamental is the twist mode, whose frequency is set by ``D_xy`` **alone**:
+  ``omega_1 <= 24 sqrt(D_xy/rho_s)/(ab)`` (:func:`..analysis.modal.free_plate_twist_bound`), 5.4%
+  above the true value for an isotropic square. This is why wood's shear modulus is read off a
+  tapped free plate;
+- **the grain reorders the free plate's modes**, which it never does on the supported branch: the
+  twist races the cross-grain bending mode and loses below ``g_y/g_xy ≈ 1.025``. Real spruce sits
+  12.6% above that crossing, so the ordering is genuinely material-dependent;
+- ``grain_torsion = 0`` is not a stiff limit but a **degenerate** one — the saddle joins the
+  rigid-body nullspace as a 4th zero mode — and is rejected;
+- with a coupling rigidity, a ``y``-independent field stops being an eigenvector while its Rayleigh
+  quotient stays *exactly* the free beam's: anticlastic curvature changes the mode's **shape**, not
+  its energy, and whether the eigenvalue lands above or below the beam depends on the aspect ratio.
+  A plate is not a wide beam, and that is physics rather than a discretization artifact.
+
 Headless: NumPy + SciPy (sparse LU). No I/O, no plotting.
 """
 
@@ -136,7 +162,7 @@ THETA_DEFAULT = 0.28
 
 
 class GrainSpec(NamedTuple):
-    """Everything :class:`Plate` needs from a material: ``kappa``, ``rho_s`` and three ratios.
+    """Everything :class:`Plate` needs from a material: ``kappa``, ``rho_s`` and the grain ratios.
 
     A named tuple rather than a bare one on purpose. ``rho_s`` is the **areal** density
     (``rho * thickness``) and :class:`Plate`'s ``rho`` argument is areal too, but the *material*
@@ -145,6 +171,14 @@ class GrainSpec(NamedTuple):
     leaves every frequency correct (``kappa`` carries them) and every energy wrong by a factor of
     the thickness, which is precisely the class of error this batch found no ledger and no modal
     oracle can catch. Returning ``rho_s`` explicitly, named, removes the opportunity.
+
+    **Five ratios, not three, since model #5of.** ``grain_cross`` (``H/D_ref``) is what the
+    *supported* branch needs; ``grain_coupling`` and ``grain_torsion`` (``D_1/D_ref``,
+    ``D_xy/D_ref``) are the two halves of it that a *free* edge can tell apart, and are what the
+    free branch needs. `grain_cross == grain_coupling + 2*grain_torsion` by construction — the
+    two are not independent, they are the same material seen through two boundaries. Use attribute
+    access (``spec.grain_y``): the field list has grown once already and positional unpacking is
+    what broke when it did.
     """
 
     kappa: float
@@ -152,6 +186,8 @@ class GrainSpec(NamedTuple):
     grain_x: float
     grain_cross: float
     grain_y: float
+    grain_coupling: float
+    grain_torsion: float
 
 
 def grain_ratios_from_material(
@@ -178,18 +214,25 @@ def grain_ratios_from_material(
         H     = D_1 + 2 D_xy                             the cross term
 
     with ``D_ref = D_x`` as the reference, so ``kappa = sqrt(D_x / rho_s)``, ``grain_x = 1``,
-    ``grain_y = D_y/D_x``, ``grain_cross = H/D_x``. ``rho`` here is the material's **volume**
+    ``grain_y = D_y/D_x``, ``grain_cross = H/D_x`` — and, for the **free** branch, which needs the
+    cross term's two halves apart rather than their sum, ``grain_coupling = D_1/D_x`` and
+    ``grain_torsion = D_xy/D_x``. ``rho`` here is the material's **volume**
     density (kg/m³); the returned ``rho_s = rho * thickness`` is the **areal** density
     :class:`Plate` wants. Pass ``spec.rho_s``, never ``rho`` — see :class:`GrainSpec`.
 
     Fed an isotropic material (``E_x = E_y``, ``G_xy = E/(2(1+nu))``) the three ratios come back
     ``(1, 1, 1)`` exactly, i.e. the shipped plate — asserted in the suite, because the ``H``
-    convention is the one thing in this model most likely to be transcribed wrong.
+    convention is the one thing in this model most likely to be transcribed wrong. The split comes
+    back at ``(nu, (1-nu)/2)`` there, which is the isotropic free plate's own assembly.
 
     Sitka-spruce-ish (11 GPa along, 0.8 GPa across, nu_xy 0.37, G_xy 0.7 GPa) gives
-    ``grain_y ≈ 0.073`` and ``grain_cross ≈ 0.153``. Note ``H/sqrt(D_x D_y) ≈ 0.57``, not 1: real
-    wood is **not** an isotropic plate with one axis stretched, and the cross term is an
-    independent axis. See ``docs/dev/orthotropic-plate-plan.md``.
+    ``grain_y ≈ 0.073`` and ``grain_cross ≈ 0.153``, splitting as
+    ``grain_coupling ≈ 0.0269`` and ``grain_torsion ≈ 0.0630``. Note ``H/sqrt(D_x D_y) ≈ 0.57``,
+    not 1: real wood is **not** an isotropic plate with one axis stretched, and the cross term is an
+    independent axis. Note also how **lopsided the split is** — 82% of spruce's cross term is
+    torsional — which is why a free plate, whose fundamental is governed by ``D_xy`` alone, is the
+    boundary that can measure it. See ``docs/dev/orthotropic-plate-plan.md`` and
+    ``docs/dev/orthotropic-free-plate-plan.md``.
     """
     if min(E_x, E_y, G_xy, thickness, rho) <= 0:
         raise ValueError("E_x, E_y, G_xy, thickness and rho must all be positive.")
@@ -203,9 +246,15 @@ def grain_ratios_from_material(
     t3 = thickness**3
     D_x = E_x * t3 / (12.0 * den)
     D_y = E_y * t3 / (12.0 * den)
-    H = nu_yx * D_x + 2.0 * (G_xy * t3 / 12.0)
+    D_1 = nu_yx * D_x
+    D_xy = G_xy * t3 / 12.0
+    H = D_1 + 2.0 * D_xy
     rho_s = rho * thickness  # AREAL density -- what Plate's `rho` argument means
-    return GrainSpec(math.sqrt(D_x / rho_s), rho_s, 1.0, H / D_x, D_y / D_x)
+    # `H / D_x` is kept as the source of `grain_cross` rather than recomputed from the two halves:
+    # that is the shipped #5o expression, and it is what lands *exactly* 1.0 for isotropic material.
+    return GrainSpec(
+        math.sqrt(D_x / rho_s), rho_s, 1.0, H / D_x, D_y / D_x, D_1 / D_x, D_xy / D_x
+    )
 
 
 class Plate:
@@ -241,15 +290,34 @@ class Plate:
         ``"supported"`` = simply-supported (Navier) edges (the closed-form-oracle case).
         ``"free"`` = completely free edges -- the iconic curved-Chladni plate (model #5b), assembled
         energy-first; ``nu`` re-enters and the W-weighted update is used.
-    nu : float
+    nu : float, optional
         Poisson's ratio, in ``(-1, 1/2)``. **Only used for** ``boundary="free"`` (it drops out of
-        the simply-supported modal law). Default ``0.3`` (matches the Leissa FFFF tables).
+        the simply-supported modal law). Defaults to ``0.3`` (matches the Leissa FFFF tables). With
+        a grain split supplied this becomes an **output** rather than an input — see
+        ``grain_coupling`` — and passing both on the free branch is refused.
+    grain_x, grain_cross, grain_y : float, optional
+        Dimensionless bending-stiffness ratios ``D_x/D_ref``, ``H/D_ref``, ``D_y/D_ref`` (model
+        #5o). ``grain_cross`` is the *supported* branch's third number; on the free branch pass the
+        split below instead, which determines it.
+    grain_coupling, grain_torsion : float, optional
+        The two halves of the cross term, ``D_1/D_ref`` and ``D_xy/D_ref`` (model #5of) — coupling
+        and torsional rigidity. **Required, together, for a grained free plate**, which can tell
+        them apart where a supported plate cannot: the supported operator is bit-identical across
+        splits of the same ``H = D_1 + 2 D_xy``, while the free plate's fundamental moves 6.5x.
+        Supplying them supersedes both ``nu`` (Poisson's ratio lives in ``D_1 = nu_yx D_x``, and the
+        implied ``nu_yx = grain_coupling/grain_x`` is exposed as :attr:`nu`) and ``grain_cross`` (a
+        contradicting value is refused, not overridden). :func:`grain_ratios_from_material` returns
+        all five.
 
     Raises
     ------
     ValueError
         Non-physical parameters (negative kappa/rho/loss, non-positive Lx/Ly/fs, ``N < 2``),
-        ``theta`` outside ``(0, 1]``, ``nu`` outside ``(-1, 1/2)``, or an unsupported boundary.
+        ``theta`` outside ``(0, 1]``, ``nu`` outside ``(-1, 1/2)``, an unsupported boundary, a grain
+        outside the branch's admissible set (``grain_cross > -sqrt(g_x g_y)`` supported;
+        ``|grain_coupling| < sqrt(g_x g_y)`` and ``grain_torsion > 0`` free — a *different* set, not
+        a tighter one), half a split, a split contradicting ``grain_cross``, ``nu`` alongside a
+        split on the free branch, or a grained free plate with no split at all.
     """
 
     def __init__(
@@ -264,10 +332,12 @@ class Plate:
         sigma: float = 0.0,
         theta: float = THETA_DEFAULT,
         boundary: Boundary = "supported",
-        nu: float = 0.3,
+        nu: float | None = None,
         grain_x: float = 1.0,
-        grain_cross: float = 1.0,
+        grain_cross: float | None = None,
         grain_y: float = 1.0,
+        grain_coupling: float | None = None,
+        grain_torsion: float | None = None,
     ) -> None:
         if min(Lx, Ly, fs) <= 0:
             raise ValueError("Lx, Ly, fs must all be positive.")
@@ -281,41 +351,107 @@ class Plate:
             raise ValueError("sigma (loss) must be >= 0.")
         if not (0.0 < theta <= 1.0):
             raise ValueError(f"theta must be in (0, 1], got {theta}.")
-        if not (-1.0 < nu < 0.5):
-            raise ValueError(f"nu (Poisson's ratio) must be in (-1, 1/2), got {nu}.")
         if boundary not in ("supported", "free"):
             raise ValueError(f"boundary must be 'supported' or 'free', got {boundary!r}.")
 
-        grain_x, grain_cross, grain_y = float(grain_x), float(grain_cross), float(grain_y)
-        # Selects the untouched `B = L @ L` line below. Deliberately NOT named `isotropic`:
-        # it is a fast-path flag about *this branch's* assembly, not a claim about the
-        # material in general -- the free branch has no grain yet and would set it True.
+        # -- resolve the grain: three numbers (supported) or four (free) ------------------------
+        # The free branch assembles from the strain energy and needs the coupling and torsional
+        # rigidities SEPARATELY; the supported branch sees only their combination H. So the split is
+        # optional, and when it is given it *supersedes* both `nu` and `grain_cross` rather than
+        # sitting silently beside them. See docs/dev/orthotropic-free-plate-plan.md §6.
+        split_given = grain_coupling is not None or grain_torsion is not None
+        if split_given and (grain_coupling is None or grain_torsion is None):
+            raise ValueError(
+                "grain_coupling (D_1/D_ref) and grain_torsion (D_xy/D_ref) must be given together "
+                "-- defaulting one half of the split from Poisson's ratio while the other is "
+                "material data would silently mix two conventions."
+            )
+        if split_given and nu is not None and boundary == "free":
+            raise ValueError(
+                "pass either nu or (grain_coupling, grain_torsion), not both: on the free branch "
+                "the split carries Poisson's ratio (D_1 = nu_yx D_x), so nu would be a silently "
+                "ignored argument. The implied nu_yx = grain_coupling/grain_x is exposed as .nu."
+            )
+        if nu is not None and not (-1.0 < nu < 0.5):
+            raise ValueError(f"nu (Poisson's ratio) must be in (-1, 1/2), got {nu}.")
+
+        grain_x, grain_y = float(grain_x), float(grain_y)
+        if split_given:
+            g_1, g_xy = float(grain_coupling), float(grain_torsion)  # type: ignore[arg-type]
+            cross_eff = g_1 + 2.0 * g_xy
+            if grain_cross is not None and abs(float(grain_cross) - cross_eff) > 1e-12 * max(
+                1.0, abs(cross_eff)
+            ):
+                raise ValueError(
+                    f"grain_cross={grain_cross} contradicts the split "
+                    f"(grain_coupling + 2*grain_torsion = {cross_eff:.12g}). Pass one or the "
+                    f"other; H = D_1 + 2 D_xy is not an independent number."
+                )
+        else:
+            cross_eff = 1.0 if grain_cross is None else float(grain_cross)
+            # The nu-derived isotropic split. Bit-identical to the shipped isotropic assembly.
+            nu_for_split = 0.3 if nu is None else float(nu)
+            g_1, g_xy = nu_for_split, 0.5 * (1.0 - nu_for_split)
+        grain_cross = cross_eff
+        # Selects the untouched `B = L @ L` line below (SUPPORTED branch only -- the free branch
+        # runs one code path for both cases, see `free_plate_stiffness`). Deliberately NOT named
+        # `isotropic`: it is a fast-path flag about that branch's assembly, not a claim about the
+        # material -- a caller can reach H = 1 with a non-isotropic split and land here correctly.
         grain_is_isotropic = grain_x == 1.0 and grain_cross == 1.0 and grain_y == 1.0
         if grain_x <= 0 or grain_y <= 0:
             raise ValueError(
                 f"grain_x and grain_y (along/across bending stiffness ratios) must be positive, "
                 f"got ({grain_x}, {grain_y})."
             )
-        # Definiteness of g_x a² + 2 g_h a b + g_y b² for a, b > 0 -- the theta-scheme's
-        # unconditional stability rests on the spatial operator being positive-definite, and with
-        # three coefficients that is a condition rather than a freebie. See the plan, §1.2.
-        cross_floor = -math.sqrt(grain_x * grain_y)
-        if grain_cross <= cross_floor:
+        if boundary == "free" and not split_given and not (grain_x == 1.0 and grain_y == 1.0):
+            # Refusing rather than deriving D_1 from nu: on a plate that already has a grain, a
+            # nu-derived coupling rigidity is not a permissive unphysical choice (which this API
+            # allows on purpose) but a silent wrong default, which it does not.
             raise ValueError(
-                f"grain_cross must exceed -sqrt(grain_x*grain_y) = {cross_floor:.6g} or the "
-                f"bending operator is indefinite (unstable); got {grain_cross}."
+                "the free branch needs the grain's coupling and torsional rigidities separately: "
+                "pass grain_coupling (D_1/D_ref) and grain_torsion (D_xy/D_ref) alongside "
+                "grain_x/grain_y. Their combination H = D_1 + 2 D_xy is enough for "
+                "boundary='supported' but not for a free edge, whose corner force is pure torsion. "
+                "grain_ratios_from_material returns both. See "
+                "docs/dev/orthotropic-free-plate-plan.md."
             )
-        if not grain_is_isotropic and boundary != "supported":
-            raise NotImplementedError(
-                "grain (orthotropy) is implemented for boundary='supported' only. The free branch "
-                "assembles from the strain energy and needs the coupling and torsional rigidities "
-                "separately, not just their combination H -- a separate batch. See "
-                "docs/dev/orthotropic-plate-plan.md §3."
-            )
+        if boundary == "supported":
+            # Definiteness of g_x a² + 2 g_h a b + g_y b² for a, b > 0 -- the theta-scheme's
+            # unconditional stability rests on the spatial operator being positive-definite, and
+            # with three coefficients that is a condition rather than a freebie. See the plan, §1.2.
+            # SHARP for this operator (measured to 2% either side in #5o).
+            cross_floor = -math.sqrt(grain_x * grain_y)
+            if grain_cross <= cross_floor:
+                raise ValueError(
+                    f"grain_cross must exceed -sqrt(grain_x*grain_y) = {cross_floor:.6g} or the "
+                    f"bending operator is indefinite (unstable); got {grain_cross}."
+                )
+        else:
+            # The FREE branch's admissible set is a DIFFERENT one, and not just a tighter one: the
+            # strain-energy form is a pointwise quadratic in (w_xx, w_yy) plus a twist term, so
+            # semi-definiteness needs the 2x2 curvature block positive-definite AND positive
+            # torsion. Every H the supported guard admits has *some* admissible split (small g_1,
+            # large g_xy), but fixing both halves can land outside. Provably sufficient on any grid;
+            # measurably conservative by 4-20% on coarse ones (the margin shrinks as h -> 0), so the
+            # rejection is one-sided by design. See orthotropic-free-plate-plan.md §2.1.
+            coupling_ceiling = math.sqrt(grain_x * grain_y)
+            if abs(g_1) >= coupling_ceiling:
+                raise ValueError(
+                    f"|grain_coupling| must be < sqrt(grain_x*grain_y) = {coupling_ceiling:.6g} or "
+                    f"the free-edge bending energy is indefinite (unstable); got {g_1}."
+                )
+            if g_xy <= 0.0:
+                raise ValueError(
+                    f"grain_torsion (D_xy/D_ref) must be positive; got {g_xy}. At zero the saddle "
+                    f"xy carries no energy and joins the rigid-body nullspace as a 4th zero mode, "
+                    f"which is a different (and lower) plate, not a stiff one."
+                )
 
         self.grain_x = grain_x
         self.grain_cross = grain_cross
         self.grain_y = grain_y
+        self.grain_coupling = g_1
+        self.grain_torsion = g_xy
         self.grain_is_isotropic = grain_is_isotropic
         self.kappa = float(kappa)
         self.rho = float(rho)
@@ -323,7 +459,12 @@ class Plate:
         self.N = int(N)
         self.sigma = float(sigma)
         self.theta = float(theta)
-        self.nu = float(nu)
+        # `nu` is an INPUT in the isotropic case and an OUTPUT in the orthotropic one: with a split
+        # supplied, Poisson's ratio lives inside the coupling rigidity (D_1 = nu_yx D_x), so the
+        # implied nu_yx = g_1/g_x is exposed here rather than a stale 0.3. Reduces to `nu` exactly
+        # for isotropic material, so nothing downstream reads a fiction. Unused by the supported
+        # branch either way (it drops out of the Navier modal law).
+        self.nu = float(nu) if nu is not None else (g_1 / grain_x if split_given else 0.3)
         self.boundary: Boundary = boundary
 
         self.k = 1.0 / self.fs
@@ -363,7 +504,20 @@ class Plate:
             A = (1.0 + sk) * sparse.identity(self.n_live, format="csc") + coeff * self.B
         else:  # free: energy-first stiffness K + diagonal lumped mass W (W-weighted update)
             self.mask = np.ones((Ny + 1, self.N + 1), dtype=bool)  # every node is a free unknown
-            self.K, self.W, self.index_map = free_plate_stiffness(self.N, Ny, self.h, self.nu)
+            # The four constants are always passed explicitly -- ONE code path for isotropic and
+            # orthotropic. At the nu-derived split the coefficients are 1.0, 1.0, nu and
+            # 4*((1-nu)/2) == 2*(1-nu) exactly, so this is byte-identical to the pre-grain assembly
+            # on every grid (measured over the 7-grid survey #5o used, x 4 values of nu).
+            self.K, self.W, self.index_map = free_plate_stiffness(
+                self.N,
+                Ny,
+                self.h,
+                self.nu,
+                grain_x=self.grain_x,
+                grain_y=self.grain_y,
+                grain_coupling=self.grain_coupling,
+                grain_torsion=self.grain_torsion,
+            )
             self.w: NDArray[np.float64] = self.W.diagonal()  # lumped area mass (h², h²/2, h²/4)
             self.n_live = self.K.shape[0]
             # A = (1 + sigma k) W + theta k^2 kappa^2 K (SPD because W is, though K is only PSD).

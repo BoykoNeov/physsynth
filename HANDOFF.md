@@ -244,6 +244,7 @@ in a new model live in the boundary handling** — check SBP first when `E^n` dr
 | 4 | Membrane (2D) | 2D wave equation, circular rim | Bessel zeros `f_{mn} = c*j_{m,n}/(2*pi*a)` | Visual showpiece begins. |
 | 5 | Plate (Kirchhoff) | biharmonic operator | `f_{mn} = (pi/2)*sqrt(D/rho_s)*[(m/Lx)^2+(n/Ly)^2]` | Chladni patterns as diagnostics. |
 | 5o | Orthotropic plate (grain) | `D_x u_xxxx + 2H u_xxyy + D_y u_yyyy` | `f_{mn} = (pi/2)*sqrt([D_x(m/Lx)^4 + 2H(m/Lx)^2(n/Ly)^2 + D_y(n/Ly)^4]/rho_s)` | Wood, not metal. Supported branch only; sine stays an *exact* eigenvector so the oracle is closed-form. `docs/dev/orthotropic-plate-plan.md`. |
+| 5of | Orthotropic **free** plate | the same energy with `D_1` and `D_xy` **separate** (`H = D_1 + 2 D_xy` is not enough at a free edge) | no closed form — four probes, one per constant: free-beam reduction (exact at `D_1 = 0`), twist bound `24 sqrt(D_xy/rho_s)/(ab)`, `(x²,y²)` coupling form | A soundboard before it is glued in. Same `H`, two splits = the *same* supported plate and a **6.5x** different free one; the grain **reorders** the modes here. `docs/dev/orthotropic-free-plate-plan.md`. |
 | 6 | Nonlinear plate | von Karman coupling | energy conservation (no analytic modes) | Gongs/cymbals. The deep end. |
 
 Steps 1–3 are one resonator family deepening in physics. Breadth (modal percussion, bowed string,
@@ -494,10 +495,42 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   part a coupled chain has to know: **the grain lives in the partial series and not in the level**.
   Against an isotropic plate matched on the fundamental, the mode ratios move 37% while the RMS at a
   single node straddles 1 across five pluck/pickup geometries — so a body judged by how loud its
-  terminus rings is indistinguishable from metal. The remaining anisotropy work is the **free**
-  boundary (needs the coupling and torsional rigidities separately, not just their combination) and
-  then **orthotropic von Kármán** (needs a four-constant in-plane compliance tensor, and has no
-  closed-form oracle) — both deliberately refused here.
+  terminus rings is indistinguishable from metal.
+
+  **The free boundary is now done too** (model #5of, 2026-08-17,
+  `docs/dev/orthotropic-free-plate-plan.md`): a grained plate with a *free* edge, which is the
+  boundary a soundboard actually has before it is glued in. It needs **four** bending constants where
+  the supported branch needed three, and the reason is worth carrying: merging the coupling and
+  torsional rigidities into one cross term `H` takes two integrations by parts whose boundary terms
+  vanish only on a pinned rim, and a free rim keeps them — its corner force is *pure* torsion. The
+  consequence is measured on both sides in one file: **two splits of the same `H` are the same
+  supported plate bit-identically (a printed `0.0`) and different free plates by 6.5x in the
+  fundamental.** So the two boundaries do not ask the same question of a material, and a free plate
+  is an *instrument* for measuring wood — which is why the luthiery literature reads the shear
+  modulus off a tapped plate.
+
+  Three results generalise past this model. First, **the grain reorders the free plate's modes**,
+  which #5o found it never does on the supported branch: the low spectrum is a race between a twist
+  mode governed by the torsional rigidity *alone* (`omega_1 <= 24 sqrt(D_xy/rho_s)/(ab)`, a Rayleigh
+  bound whose 5.3–5.6% overshoot turns out to be nearly material-independent) and a cross-grain
+  bender governed by `D_y`; the crossing sits at `g_y/g_xy = 1.025` and real spruce is only 12.6%
+  above it. Second, **the validation had to be assembled from four independent probes with one
+  detector per constant** — no closed-form spectrum exists and no citable orthotropic table is
+  freely available, so the batch derived its own: an exact reduction to the shipped 1-D free beam
+  (which holds *only* at zero coupling), the twist quotient (provably blind to the other three), and
+  an `(x², y²)` bilinear probe with an exact discrete closed form, which is the **only** one of the
+  four that responds to the coupling rigidity at all. Third, the negative result: **the energy ledger
+  cannot referee any of it** — three visibly different plates (spruce, its split swapped, all of `H`
+  taken as torsion) conserve at 1.5–2.1e-13 with fundamentals of 5.68, 3.79 and 5.99. Two smaller
+  scars: an argument that is *superseded* but still validated is still a live constraint (the
+  isotropic `nu in (-1, 1/2)` check rejected a legitimate orthotropic plate whose implied `nu_yx` was
+  0.70), and "exact in exact arithmetic" is not exact in doubles when the terms are products of `h²`
+  with `1/h⁴` — two closed forms landed at 2.5e-14 rather than machine precision.
+
+  The remaining anisotropy work is **orthotropic von Kármán** (needs a four-constant in-plane
+  compliance tensor, and has no closed-form oracle) — deliberately refused again, with this batch as
+  its prerequisite since it shares the strain-energy assembly — and a **non-rectangular** (guitar-
+  shaped) outline, which is the membrane batch's staircasing problem in a 4th-order operator.
 - **Tube acoustics:** thermoviscous losses, radiation impedance at the bell.
 
 ### C. Numerical-methods frontier

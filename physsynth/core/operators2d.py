@@ -317,7 +317,15 @@ def _avg_d1_1d(N: int) -> sparse.csr_matrix:
 
 
 def free_plate_stiffness(
-    Nx: int, Ny: int, h: float, nu: float
+    Nx: int,
+    Ny: int,
+    h: float,
+    nu: float,
+    *,
+    grain_x: float = 1.0,
+    grain_y: float = 1.0,
+    grain_coupling: float | None = None,
+    grain_torsion: float | None = None,
 ) -> tuple[sparse.csr_matrix, sparse.csr_matrix, NDArray[np.int64]]:
     """Energy-first free-edge Kirchhoff-plate bending operator on the full ``(Nx+1)×(Ny+1)`` grid.
 
@@ -366,11 +374,56 @@ def free_plate_stiffness(
     ``index_map`` is the trivial full-grid map (all nodes live): ``index_map[j, i] = j*(Nx+1) + i``,
     matching the C-order (``j`` outer, ``i`` inner) flattening used by :func:`embed` and the
     Kronecker products here. ``nu`` must lie in ``(-1, 1/2)`` (energy positive-definite, physical).
+
+    **Grain (orthotropy) — model #5of, all four constants.** Wood, not metal, and *four* numbers
+    rather than the supported branch's three. The energy above generalises to
+
+        P(f, g) = ∫∫ [ D_x f_xx g_xx + D_y f_yy g_yy + D_1 (f_xx g_yy + f_yy g_xx)
+                       + 4 D_xy f_xy g_xy ] dA
+
+    with the dimensionless ratios ``grain_x = D_x/D_ref``, ``grain_y = D_y/D_ref``,
+    ``grain_coupling = D_1/D_ref`` and ``grain_torsion = D_xy/D_ref``. **The free branch needs the
+    coupling and torsional rigidities separately** — unlike the supported branch, which sees only
+    their combination ``H = D_1 + 2 D_xy`` (:func:`orthotropic_biharmonic`). The reason is the
+    boundary: merging them takes two integrations by parts whose boundary terms vanish only on a
+    pinned rim. On a free rim they do not, and the three free-edge conditions see the two rigidities
+    differently — the corner force ``4 D_xy w_xy`` is *pure* torsion. Two materials with the same
+    ``H`` and different splits are the **same** supported plate (bit-identically) and **different**
+    free plates: measured 6.5x apart in the fundamental. See
+    ``docs/dev/orthotropic-free-plate-plan.md``.
+
+    ``grain_coupling`` / ``grain_torsion`` default to the ``nu``-derived isotropic split
+    ``(nu, (1-nu)/2)``, which reproduces the isotropic assembly **bit-for-bit on every grid** — the
+    four coefficients multiply the same four matrix products in the same order, at ``1.0``, ``1.0``,
+    ``nu`` and an exactly-representable halving. (Contrast :func:`orthotropic_biharmonic`, whose
+    isotropic collapse is only *grid-dependently* bit-exact, which is why the supported branch keeps
+    a separate default path and this one does not.)
+
+    **Semi-definiteness is a condition here, and this function does not enforce it** (so a test can
+    build the indefinite case — the same policy as :func:`orthotropic_biharmonic`).
+    :class:`.plate.Plate` rejects at construction on
+
+        grain_x > 0,  grain_y > 0,  grain_coupling² < grain_x·grain_y,  grain_torsion > 0
+
+    which is *provably sufficient* on any grid (the energy is a sum of pointwise forms in
+    ``(w_xx, w_yy)`` plus a non-negative twist term) and measurably **conservative**: the discrete
+    operator survives 4–20% past it on coarse grids, with the margin shrinking under refinement, so
+    the pointwise bound is the sharp *continuum* condition. Note ``grain_torsion = 0`` is worse than
+    merely inadmissible — it puts the saddle ``xy`` **into** the nullspace (a 4th zero mode), which
+    is the cleanest statement of what the torsional rigidity is for.
     """
     if Nx < 2 or Ny < 2:
         raise ValueError("Nx, Ny must be >= 2 (need at least one interior node per axis).")
-    if not (-1.0 < nu < 0.5):
-        raise ValueError(f"nu (Poisson's ratio) must be in (-1, 1/2), got {nu}.")
+    # `nu` is validated only where it is actually USED, i.e. where it supplies a missing half of the
+    # split. An orthotropic plate's implied nu_yx = D_1/D_x legitimately exceeds 1/2 (its bound is
+    # nu_xy nu_yx < 1, i.e. grain_coupling² < grain_x grain_y, which Plate enforces instead), so
+    # applying the isotropic 3-D admissibility range to a superseded argument would reject a valid
+    # material -- and did, for grain_coupling = 0.70 at grain_y = 0.5.
+    if grain_coupling is None or grain_torsion is None:
+        if not (-1.0 < nu < 0.5):
+            raise ValueError(f"nu (Poisson's ratio) must be in (-1, 1/2), got {nu}.")
+    g_1 = nu if grain_coupling is None else float(grain_coupling)
+    g_xy = 0.5 * (1.0 - nu) if grain_torsion is None else float(grain_torsion)
 
     ix = sparse.identity(Nx + 1, format="csr")
     iy = sparse.identity(Ny + 1, format="csr")
@@ -392,12 +445,15 @@ def free_plate_stiffness(
     wa = np.kron(my, mx)  # C-order: node (j, i) -> my[j] * mx[i]
     Wa = sparse.diags(wa, format="csr")
 
+    # One code path for isotropic and orthotropic: at the nu-derived split the four coefficients are
+    # 1.0, 1.0, nu and 4*((1-nu)/2) == 2*(1-nu) exactly, so this is byte-identical to the isotropic
+    # assembly it replaced -- verified on all 7 grids of the #5o survey. See the docstring.
     cross = C2x.T @ (Wa @ C2y)
     K = (
-        C2x.T @ (Wa @ C2x)
-        + C2y.T @ (Wa @ C2y)
-        + nu * (cross + cross.T)
-        + 2.0 * (1.0 - nu) * (h * h) * (Dxy.T @ Dxy)
+        float(grain_x) * (C2x.T @ (Wa @ C2x))
+        + float(grain_y) * (C2y.T @ (Wa @ C2y))
+        + g_1 * (cross + cross.T)
+        + (4.0 * g_xy) * (h * h) * (Dxy.T @ Dxy)
     ).tocsr()
     W = Wa
 
