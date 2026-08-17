@@ -104,20 +104,30 @@ from helpers import (
 from physsynth.analysis.damping import spatial_eigenvalue_p2
 from physsynth.analysis.duffing import kc_mode_coefficients
 
-# Keep this module on ONE xdist worker (``--dist loadgroup``): its three module-scoped fixtures are
-# the most expensive setup in the suite (252 s + 125 s + 84 s on an idle 4-core CI runner).
-# Scattering the tests would rebuild them once per worker. Harmless when running serially.
+# This module holds the most expensive setup in the suite -- three module-scoped fixtures at
+# 204.6 s + 97.8 s + 66.5 s (CI, 2026-08-17), building 11 whirl runs with MEASURED ZERO OVERLAP
+# between them (distinct kappa_w / amplitude / seed). The sharing is already maximal and the cost is
+# the physics: a Mathieu tongue is mapped by running the string on both sides of it, repeatedly.
 #
-# ...which also makes this module the SUITE'S CRITICAL PATH: pinned, it is ~460 s of setup plus
-# ~260 s of calls on a single worker, ~720 s against a ~25 min wall. That is not slack to reclaim.
-# The three fixtures build 11 whirl runs and MEASURED ZERO OVERLAP between them (distinct kappa_w /
-# amplitude / seed), so the sharing is already maximal and the cost is the physics: a Mathieu
-# tongue is mapped by running the string on both sides of it, repeatedly.
+# So the fixtures must be built ONCE, which under ``--dist loadgroup`` means their consumers stay on
+# one worker -- but ONE GROUP PER FIXTURE, not one group per module. The distinction was worth
+# ~300 s once the gate was split across machines: pinning the whole module makes its 581.7 s a
+# single serial chain, and a chain longer than a shard's own wall is a floor no amount of runners
+# can divide. Per fixture, the longest chain here is the tongue's ~270 s and the other three run
+# beside it. Nothing is rebuilt -- the fixtures share no work to lose.
 #
-# Hence `slow` as well -- the marker is the only lever left here, and it is an honest one because
-# the claim is about the MODULE ("mapping a parametric instability is expensive by nature"), not
-# about a measured number that goes stale the next time anyone profiles.
-pytestmark = [pytest.mark.xdist_group("geometric_whirl"), pytest.mark.slow]
+# `slow` stays at MODULE level, because that claim really is about the whole file: "mapping a
+# parametric instability is expensive by nature", not a measured number that goes stale the next
+# time anyone profiles.
+#
+# ``tests/test_xdist_groups.py`` asserts every consumer of a fixture below carries the same group,
+# which is the failure this arrangement can otherwise have silently: a new test written against
+# ``tongue`` under the wrong group rebuilds 200 s of string on a second worker and still passes.
+pytestmark = pytest.mark.slow
+
+TONGUE_GROUP = pytest.mark.xdist_group("geometric_whirl_tongue")
+THRESHOLD_GROUP = pytest.mark.xdist_group("geometric_whirl_threshold")
+MARGINAL_GROUP = pytest.mark.xdist_group("geometric_whirl_marginal")
 
 # -- parameters, and why each is what it is --------------------------------------------------------
 
@@ -317,6 +327,7 @@ def angular_momentum_seed():
 # -- test 12: the whirling threshold ---------------------------------------------------------------
 
 
+@TONGUE_GROUP
 def test_the_whirling_growth_maps_the_mathieu_tongue(tongue):
     """**The headline.** Whirling is not a thing that happens above an amplitude — it is a
     *parametric resonance*, and the growth traces the tongue the Mathieu equation predicts.
@@ -363,6 +374,7 @@ def test_the_whirling_growth_maps_the_mathieu_tongue(tongue):
     assert tongue[0.25]["saturation"] > 20.0 * SEED_REL
 
 
+@TONGUE_GROUP
 def test_the_growth_rate_is_the_mathieu_rate_the_plan_discarded_as_a_precession_rate(tongue):
     """The tongue's **rate profile**, not just its shape — and the resurrection of a formula this
     plan wrote down, called wrong, and threw away. It was wrong. It was also this.
@@ -413,6 +425,7 @@ def test_the_growth_rate_is_the_mathieu_rate_the_plan_discarded_as_a_precession_
     assert _mathieu_rate(_kappa_w_at(0.25, amp), amp) == pytest.approx(ea2 / (8 * om), rel=1e-9)
 
 
+@TONGUE_GROUP
 def test_the_whirl_conserves_energy_and_stays_converged(tongue):
     """**The gate that makes the tongue mean anything**, and the family's contract at the one place
     it feels backwards: something grows by 76x and the energy is *flat to 1e-12*.
@@ -443,6 +456,7 @@ def test_the_whirl_conserves_energy_and_stays_converged(tongue):
         )
 
 
+@TONGUE_GROUP
 def test_whirling_must_be_seeded_and_never_leaks_from_a_planar_start(tongue):
     """**The honesty gate.** At the tongue centre, at 35 mm, with a 17 Hz detuning — the most
     unstable configuration in this file — an **unseeded** planar run stays planar ``== 0.0``,
@@ -481,6 +495,7 @@ def test_whirling_must_be_seeded_and_never_leaks_from_a_planar_start(tongue):
     assert tongue[0.25]["growth"] > 40.0
 
 
+@TONGUE_GROUP
 def test_only_the_plane_of_the_lower_mode_whirls(tongue):
     """**Gough's asymmetry, and the sharpest statement in the file**: same string, same amplitude,
     same seed — drive the *soft* polarization and it whirls 76x; drive the *stiff* one and the seed
@@ -513,6 +528,7 @@ def test_only_the_plane_of_the_lower_mode_whirls(tongue):
     assert stiff["drift"] < 1e-10 and stiff["n_not_converged"] == 0
 
 
+@THRESHOLD_GROUP
 def test_the_threshold_moves_as_the_square_root_of_the_detuning(threshold_moves):
     """**Gough's threshold, read in the amplitude direction** — ``A_c = sqrt(2 delta / eps)``, so
     doubling ``delta`` moves it by ``sqrt(2)``. Three runs pin that it *moves*, and that it moves by
@@ -556,6 +572,7 @@ def test_the_threshold_moves_as_the_square_root_of_the_detuning(threshold_moves)
         assert r["off_mode"] < 0.01, "the sqrt(delta) test reaches dT/T0 = 2.16 — check mode purity"
 
 
+@MARGINAL_GROUP
 def test_the_degenerate_string_is_marginal_not_exponential(angular_momentum_seed):
     """**The negative control**, and the one that needs the *velocity* seed to say anything.
 

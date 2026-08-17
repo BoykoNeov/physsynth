@@ -51,17 +51,26 @@ from physsynth.analysis.dispersion import stiff_dispersion_frequencies
 from physsynth.analysis.duffing import kc_mode_coefficients
 from physsynth.analysis.spectrum import detect_peaks, magnitude_spectrum
 
-# Keep this module on ONE xdist worker (``--dist loadgroup``): its three module-scoped fixtures cost
-# 217 s + 135 s + 73 s of setup on an idle 4-core CI runner, which scattering would rebuild per
-# worker. No effect serially.
+# Three module-scoped fixtures at 113 s + 59 s + 184 s of setup (CI, 2026-08-17), and three distinct
+# rigs -- the two-mode run at AMP, the same string at amp -> 0, and the circular-polarization run --
+# so there is no sharing left to find between them. They must each be built once, which under
+# ``--dist loadgroup`` means their consumers stay together on one worker.
 #
-# Pinned, that is ~425 s of setup on one worker -- the suite's second-longest single chain after
-# `test_geometric_whirl.py`. The three fixtures are distinct rigs (two-mode at AMP, the same string
-# at amp -> 0, and the circular-polarization run), so there is no sharing left to find, and `slow`
-# is the only remaining lever. Marked at MODULE level deliberately: the claim is that resolving a
-# quadratic phantom needs long records at fine resolution, which is a property of the measurement
-# and not a number to re-check.
-pytestmark = [pytest.mark.xdist_group("geometric_phantom"), pytest.mark.slow]
+# ONE GROUP PER RIG, not one per module, and the split is where the rigs are genuinely independent:
+# the ladder tests need ``phantom`` (and one of them ``linear`` alongside it, so those two travel
+# together), the circular tests need only ``polarization``. Pinning the whole module instead made
+# its 356.3 s one serial chain, which since the gate was split is a floor a shard cannot
+# divide; as two groups the longest chain here is ~184 s and the other runs beside it. Nothing is
+# rebuilt.
+#
+# `slow` stays at MODULE level: that claim is about the whole file -- resolving a quadratic phantom
+# needs long records at fine resolution, a property of the measurement and not a number to re-check.
+#
+# ``tests/test_xdist_groups.py`` holds the consumers and their group in agreement.
+pytestmark = pytest.mark.slow
+
+LADDER_GROUP = pytest.mark.xdist_group("geometric_phantom_ladder")
+CIRCULAR_GROUP = pytest.mark.xdist_group("geometric_phantom_circular")
 
 # -- parameters, and why each is what it is --------------------------------------------------------
 
@@ -178,6 +187,7 @@ def _in_band_peaks(run):
 # -- test 10: the phantom oracle -------------------------------------------------------------------
 
 
+@LADDER_GROUP
 def test_longitudinal_peaks_are_quadratic_combinations_of_the_transverse_partials(phantom):
     """**The mechanism.** Every peak the longitudinal field carries is a *quadratic* combination of
     the transverse partials — and the partials themselves are absent from it.
@@ -220,6 +230,7 @@ def test_longitudinal_peaks_are_quadratic_combinations_of_the_transverse_partial
         )
 
 
+@LADDER_GROUP
 def test_phantoms_are_displaced_from_the_partials_by_the_inharmonicity_defect(phantom):
     """**The Conklin signature — the primary form, with no oracle and no confound.** The
     displacement that puts a phantom in a *gap* is ``f2 - 2 f1``: a single number, measured in this
@@ -257,6 +268,7 @@ def test_phantoms_are_displaced_from_the_partials_by_the_inharmonicity_defect(ph
     )
 
 
+@LADDER_GROUP
 def test_the_phantom_lands_below_where_the_third_partial_would_be(phantom, linear):
     """**The plan's headline, kept as the secondary form** (Conklin 1999): ``f1 + f2`` lands
     ``~9 B f1`` **below** ``f3``, where no transverse partial exists. Mode 3 is not excited, so this
@@ -398,6 +410,7 @@ def polarization():
     return dict(planar=planar, naive=naive, tuned=tuned)
 
 
+@CIRCULAR_GROUP
 def test_a_circular_mode_does_not_pump_the_longitudinal_field(polarization):
     """**Tier A/3, the discriminator.** Same string, same mode, same amplitude — and the
     longitudinal spectrum five orders of magnitude apart, decided by **polarization alone**.
@@ -438,6 +451,7 @@ def test_a_circular_mode_does_not_pump_the_longitudinal_field(polarization):
     assert planar["w_max"] == 0.0, "the planar run must stay bit-exactly planar (Tier A/2)"
 
 
+@CIRCULAR_GROUP
 def test_the_circular_residual_is_ellipticity_not_a_defect_of_the_scheme(polarization):
     """*Why* the circular null is not bit-zero — and the answer is not the one the plan expected.
 
