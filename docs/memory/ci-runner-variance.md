@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: feedback
   originSessionId: aae47a22-23c6-4ed1-8713-4f9ae587e626
-  modified: 2026-08-10T12:01:28.344Z
+  modified: 2026-08-17T16:38:44.237Z
 ---
 
 **A CI wall-clock number is not a measurement until it is normalised.** GitHub hands out runner
@@ -23,10 +23,17 @@ code (see [[test-suite-performance]], and the airbox goldens/`_peak_monopole`/`p
 
 **How to apply:** before attributing any CI wall-clock change to an edit, pull an **unchanged**
 expensive test's duration from `--durations` in *both* runs and check they agree. If they don't, the
-comparison is void — wait for a matched pair rather than reporting the delta. A within-run
-comparison (two jobs of the same push) is the strongest form available; a cross-run comparison
+comparison is void — wait for a matched pair rather than reporting the delta. A cross-run comparison
 needs the reference check; a local comparison on this box is worthless either way (~3× inflation,
 and it reorders the ranking outright).
+
+**Correction, 2026-08-17: "two jobs of the same push" is NOT the strong form this file used to call
+it.** Every job gets its own runner, so two jobs of one push are exactly as incomparable as two
+runs. Measured when the gate was sharded ([[test-suite-performance]]): shard 1 is a fixed file set
+on untouched code and read **268.36 s** in one push and **476.36 s** in the next; inside a single
+push, one shard's machine ran ~2× the speed of another's. The only variance-immune comparison is
+**within one job** — a chain's length against its own job's wall, both timed by the same clock on
+the same machine. Both of that batch's claims were made that way on purpose.
 
 Corollary: never put a stopwatch reading into a test marker, a docstring, or an acceptance
 threshold. Encode the *claim* ("this is a refinement study") or normalise against a scale the

@@ -1,169 +1,105 @@
 ---
 name: test-suite-performance
-description: "The validation suite's cost, the CLEAN CI profile that inverts the local one, the slow-marker/fast-lane split, and why CI wall-clock cannot be compared across runs"
-metadata: 
+description: "The validation suite's cost, why it is BULK-bound and not bottleneck-bound, the sharded gate and its two guards, and why CI wall-clock cannot be compared across runs"
+metadata:
   node_type: memory
   type: project
   originSessionId: aae47a22-23c6-4ed1-8713-4f9ae587e626
-  modified: 2026-08-17T15:39:22.079Z
+  modified: 2026-08-17T16:38:19.541Z
 ---
 
-**1721 tests** as of 2026-08-17 (1690 and 1638 earlier the same day; 1476 when the profile below
-was taken), ~23 min full on CI.
-Reworked 2026-08-10 (see [[ci-runner-variance]] for the measurement trap that dominates all of this).
+**1808 tests** as of 2026-08-17 (1721 before this batch), **5027.9 core-seconds** of measured work.
+The gate is now **three concurrent jobs**, ~5-8 min wall depending on the runners, down from 15-21.
 
-## The clean profile INVERTS the local one — the geometric family is the suite
+## The suite is BULK-bound — the "two pinned modules" story was wrong
 
-`--durations=50` on an idle 4-core CI runner (added to CI 2026-08-10; before that no
-quiet-machine profile existed at all). The top is **not** `test_web_backend.py`:
+The story for a week was that `test_geometric_whirl.py` and `test_geometric_phantom.py` were pinned
+to one worker each and *were* the critical path. The first `--durations=0` run (the top-50 table had
+never priced the tail: its 50th entry was 14.31 s with **1671 tests below it**) settles it:
 
-```
-281s  test_geometric_energy::test_small_amplitude_recovers_three_linear_waves
-252s  test_geometric_whirl   [module fixture setup]
-217s  test_geometric_phantom [module fixture setup]
-180s  test_geometric_whirl::test_the_tongue_does_not_move_with_the_grid
-165s  test_geometric_limits::test_amplitude_shift_tracks_the_duffing_limit
- 83s  test_web_backend::test_fret_brightness…   <- the top of the file I had profiled
-```
+- 5027.9 core-seconds measured against a 1266.51 s wall on **4 cores** = 5066 available.
+  **99% of the budget is genuinely busy.** The longest chain was under half the wall.
+- The confirming number had been on the record for a week, read backwards: the old fast lane
+  deselects every one of those chains — 69 of 1721 tests — and still cost ~85% of the full run.
 
-**The shape matters more than the ranking.** `test_geometric_whirl.py` is `xdist_group`-pinned, so
-its ~460 s of fixture setup + ~260 s of calls run on ONE worker — **~720 s of single chain against
-a ~1400 s wall**. `test_geometric_phantom.py` is the same at ~425 s. **Two pinned modules are the
-critical path**, and no worker count divides them.
+**Lesson worth generalising: "X is the longest chain" is not evidence that X sets the wall.** Ask
+what fraction of the core-second budget is idle before optimising a chain. Measure the *tail*, not
+the top-N — a top-50 table cannot see 97% of the tests.
 
-**Verified irreducible before reaching for the marker:** the three whirl fixtures build 11 runs with
-**measured zero overlap** (distinct `kappa_w`/amplitude/seed). Sharing is already maximal; the cost
-is the physics. Check this first — overlapping fixtures would be free to fix, marking is not.
+## The gate is sharded, and the shard split is COMPUTED
 
-## The `slow` marker means a CLAIM, not a stopwatch reading
+Three jobs, one third of the **files** each, LPT-balanced on measured per-file cost:
+**1723.5 / 1682.1 / 1682.2** core-seconds. Machinery, all new 2026-08-17:
 
-Was 20 marks, **all** in the string files (stiff/damped/dispersion/convergence), **zero** on the
-geometric family, and no lane ever used it. Then 65 marks (**69 as of 2026-08-17** — see the
-reconciliation at the end of this file): whirl / phantom / limits at **module**
-level (the claim is about the file — "a convergence study re-runs the thing it studies"), and
-`test_geometric_energy.py` at **test** level for just 2 of its 26, because the other 24 are the
-cheap energy/passivity assertions a fast lane most wants to keep.
+- `scripts/shard_tests.py` — partitions `glob("tests/test_*.py")`. **Never a hand-written list**: a
+  file in no shard never runs and every job is green. Shard count is ONE Python constant (`SHARDS`)
+  that the workflow reads via `--matrix` / `--count`, because writing it in both places fails
+  silently too (matrix `[1,2]` against a split computed `--of 3` runs two thirds and passes).
+- `scripts/shard_costs.json` — a scheduling **hint**, never a claim. Stale means unbalanced, never
+  untested. Refresh with `gh run view <id> --log | python scripts/shard_costs_from_durations.py`
+  (it sums setup+call+teardown per file, and handles a multi-shard log in one pass).
+- **Two guards, deliberately different.** `tests/test_shard_partition.py` asserts coverage from
+  inside — but cannot catch a split that dropped *its own* file. The `checks` CI job asks pytest to
+  collect each shard and the whole suite and does the subtraction from outside. That subtraction
+  replaces the old `1721 − 1652 = 69` fast-lane ritual as the "nothing was silently dropped" check.
 
-Deliberately NOT marked: `test_web_backend.py` (fragmenting the one file holding the wrapper
-contract), `vk_free`/`vk_modal`/`plate_stability` (~3 % of CPU for three more places a mark drifts).
+**Three shards and not four**, because `test_web_backend.py` alone is **1723.5 s = 34% of the
+suite** and a file cannot split across machines. It is the floor; a fourth runner would idle against
+it. Splitting that file is the next lever if the wall ever needs to halve again — and it is exactly
+the file the repo deliberately refuses to fragment (it holds the wrapper contract), so that is a
+decision, not a chore.
 
-**Never define the marker as "took more than N seconds"** — that is a measurement, and measurements
-in this repo have now been wrong three times over for being taken on one machine.
+## Per-FIXTURE xdist groups — the coarse pin only became expensive once sharded
 
-CI = two jobs: full suite on 3.12 every push (the gate) + **fast lane on 3.11** with
-`-m "not slow"`, which restores the per-push second-interpreter coverage the single-version matrix
-gave up. Nightly + `workflow_dispatch` run both interpreters full. Push/PR no longer runs the whole
-suite twice.
+Pinning a whole module was free at a 15-min wall and fatal at a 4-min one. Measured in the first
+sharded run: shard 2 finished in **375.27 s** and whirl's pinned chain inside it was **~372 s** — the
+file *was* the wall, to within 1%. Shard 3: 490.92 s against phantom's ~426 s.
 
-## Measured effect (controlled)
+So the pin is now **one group per fixture**: whirl → `tongue` / `threshold` / `marginal`, phantom →
+`ladder` / `circular`, and the two tests that need no fixture float free. **Nothing is rebuilt** —
+the fixtures were already measured to share no work, which is why the coarse pin had nothing to buy.
+`slow` stays at module level (that claim really is about the file).
 
-| | full suite | note |
-|---|---|---|
-| before | 1501.9 s | 3 failing |
-| + `_sim` memo & fret split | **1366.1 s** | **−9.0 %** |
-| + slow marker | 1376.9 s | marker cannot affect the full lane; +0.8 % is noise |
-| fast lane, same commit | **725.0 s** | **1.90×**, 1411 of 1476 tests |
+After: whirl's longest chain 336 s against a 485 s wall (69%, was 99%). The variance-immune version
+of that statement — **the same run, no cross-run comparison** — is that the whole file on that
+machine would have been 721 s, i.e. more than the 485 s the shard actually took.
 
-Only 9 % because **the memo does not touch the bottleneck** — it cuts `test_web_backend.py`, and the
-geometric family is the critical path.
+**The new failure mode is silent**, hence `tests/test_xdist_groups.py`: a test requesting `tongue`
+under the neighbouring group rebuilds 200 s of string on another worker and **passes**. It reads all
+70 files with `ast` (no imports, 0.3 s) and asserts each module-scoped fixture's consumers agree on
+one group — plus a second test that these two files are still split per fixture and not re-merged.
 
-## NEVER compare CI wall-clock across runs
+## NEVER compare CI wall-clock across runs — and now, across SHARDS
 
-GitHub runner class varies by **~1.6×**. The *identical, untouched* whirl fixture measured
-**252.05 / 252.09 / 158.50 / 252.76 s** across four runs. A 15:56 run and a 22:46 run of nearly the
-same code differed only in which runner they landed on. **Always normalise against an unchanged
-reference test in the same run before attributing a wall-clock change to your own edit** — the 9 %
-above is trustworthy *only* because its two runs read 252.05 and 252.09 on that reference.
+GitHub runner class varies by **~1.6x**, and each shard is its own machine. Measured this batch:
+the *unchanged* shard 1 (web-backend only, same 372 tests, untouched code) read **268.36 s** in one
+run and **476.36 s** in the next. Two shards in the *same* run are no more comparable than two runs.
 
-Local timings are worse still: the box runs the human's own heavy Python, inflating ~3× and
-reordering the ranking outright.
+**What is legitimate: a within-shard, within-run comparison** — a chain's length against its own
+shard's wall. That is how both claims above were made.
 
-## Still true from before
+Local timings are worse still (~3x inflation, and the ranking reorders): the box runs the human's
+own heavy Python. Run via `python scripts/nicepytest.py …` (BelowNormal / `os.nice(10)`; workers
+inherit it) — the human asked for this explicitly again on 2026-08-17.
 
-- `--dist loadgroup`, **not** `loadscope` (loadscope's floor is `test_web_backend.py`; 21m39s vs
-  16m40s when measured at 1287 tests).
+## Still true
+
+- `--dist loadgroup`, **not** `loadscope`. `-n auto` in CI (4 cores); pick the count deliberately
+  locally.
 - `conftest.py` pins BLAS to one thread **only when `PYTEST_XDIST_WORKER` is set** — serial keeps
-  16-thread OpenBLAS, ~14 % faster; under `-n N` it inverts. Must happen before numpy imports.
-- Run via `python scripts/nicepytest.py …` (BelowNormal / `os.nice(10)`); workers inherit it.
-- **NEVER pass `-q`** — `addopts` already sets it and `-qq` suppresses the `N passed` summary.
-  **This was live in CI itself** until 2026-08-10 and is part of why 20 red runs went unread.
+  16-thread OpenBLAS, ~14% faster; under `-n N` it inverts. Must happen before numpy imports.
+- **NEVER pass `-q`** — `addopts` already sets it and `-qq` suppresses the `N passed` summary. This
+  was live in CI itself until 2026-08-10 and is part of why 20 red runs went unread.
+- The `slow` marker means a **CLAIM** ("this validation re-runs the thing it studies"), never a
+  stopwatch reading. It has **no CI consumer any more** — the per-push 3.11 fast lane was deleted
+  (at ~13 min it would have capped the sharded gate's win at 15%); 3.11 is covered by the nightly,
+  which runs both interpreters full. `-m "not slow"` survives as a local edit/run-loop lane.
 - **Windows trap:** `GetCurrentProcess()` needs an explicit `restype = wintypes.HANDLE`, or
   `SetPriorityClass` fails silently.
-- **Unresolved:** two early parallel runs aborted at ~65 % with `EXIT=1`, no summary, never
-  reproduced across many later full runs.
-
-## 2026-08-10 — air-box batch 5
-
-**1544** tests (was 1489): +44 `tests/test_airbox_membrane.py`, +11 in `test_airbox_surface.py`'s
-new footprint section. Standalone the two new blocks cost about **40 s** together.
-
-**The full-suite wall clock that day read 44 min and is NOT a usable reading** — two runs of
-`scripts/diagnose_airbox_membrane.py` (~150 s each of single-core 3-D FDTD) and the seam-pin script
-ran *concurrently* with it on the same machine. Recorded so a future session does not read 23 → 44
-min as a regression. The rule this repeats: normalise against an unchanged reference measured in
-the SAME run, or do not compare at all ([[ci-runner-variance]]).
-
-## 2026-08-17 — airbox batch 6 + `StringVKPlateBridge`
-
-**1638** tests (was 1544 after air-box batch 5): +~64 from [[air-box-state]] batch 6, +30 from
-`tests/test_vk_connection.py` ([[string-vk-bridge-state]]), which costs ~19–23 s standalone.
-
-The local full run read **2017 s (33:37)**, and — same trap as the 44-min reading above — it is
-**NOT comparable**: ruff and a targeted 23 s re-run of `test_vk_connection.py` ran concurrently on
-the same box, on top of the human's own Python. Green (exit 0), which is all it was for.
-
-## 2026-08-17 — free-plate orthotropic (#5of)
-
-**1721** tests (was 1690): +31 `tests/test_free_plate_orthotropic.py`
-([[free-plate-orthotropic-state]]), ~2.3 s standalone. Local full run **2369 s (39:29)**, exit 0 —
-again **not comparable** (memory writes and doc edits ran alongside it), and again that is all it
-was for. The **arithmetic check is the useful part**: 1690 + 31 = 1721 exactly, which is what
-proves every new test was collected and nothing shipped was silently dropped. Do that check on
-every batch — a green exit code alone cannot distinguish "all passed" from "half never ran".
-
-**Harness trap, new:** the background task reported `completed` / exit 0 while `Read` on its output
-file returned *empty*. `Get-Item` showed 2001 bytes written three minutes earlier. The Read was
-stale, not the run — reach for PowerShell `Get-Content` (and check `Length`/`LastWriteTime`) before
-concluding a background suite produced no output.
-
-## A green local suite is NOT the gate — and CI can disagree on a NUMBER, not just wall-clock
-
-Everything above warns about comparing CI *timings*. 2026-08-17 produced the first case of CI and
-local disagreeing on a **result**: `test_plate_orthotropic::test_lossy_grained_plate_is_passive_…`
-passed on Windows and failed on **both** CI jobs and **both** interpreters (so: deterministic, a
-summation-order difference, not a flake). It sat red on `main` for an hour and a half because the
-batch was declared green off the local run — the repo's own 20-red-runs scar, repeated. **Check
-`gh run list --branch main` after every push, and check the PREVIOUS commit's run too** — the
-failure was inherited from the batch before, not caused by the one being pushed.
-
-**The bug class, worth recognising anywhere:** `assert np.all(np.diff(e) <= 0.0)` on a lossy run
-looks like the strictest possible passivity check and is actually a **coin toss**, because every
-test in this repo plucks **from rest**. At step 0 the velocity is exactly zero, so that one step
-dissipates essentially nothing — measured `-2.70e-18` against `-1.50e-10` at step 1 and `~1.09e-08`
-typical. A decrement 4e9x smaller than its neighbours has its **sign decided by BLAS accumulation
-order**. Fix = the relative roundoff bar the repo already uses elsewhere
-(`test_bore_radiation.py`, `test_airbox_port.py`): `<= 1e-12 * e[0]`, which is still ~5 orders
-BELOW a genuine decrement, so it cannot hide a real gain — plus a separate `e[-1] < e[0]` so a
-plate that does nothing cannot pass. **Measure the margin before loosening any bar**: at 8/s decay
-a positive increment could equally have been real physics, and only the step-0 localisation proved
-it wasn't.
-
-**Confirmed on the gate, not just locally:** the fix ran green on both jobs — `1721 passed` on
-py3.12 (**identical to the local count**, which is the collection check crossing machines) and
-`1652 passed` on the 3.11 fast lane, ruff clean. (921 s vs the local 2369 s is consistent with the
-~3× local inflation already recorded above; it is un-normalised and cross-machine, so it is a
-sanity check, **not a measurement** — the rule in this file applies to my own readings too.)
-
-**The two CI counts reconcile exactly, and that is the check worth running:** 1721 − 1652 = 69, and
-`pytest --collect-only -m slow` collects **69**. The marker is now 69 tests, not the 65 recorded
-above — the four came from `test_airbox_vk.py`'s `test_couple_tol_moves_the_total_and_not_the_…`,
-one function doubly parametrized 2 boundaries × 2 tiers, added by air-box batch 6. #5of added none.
-Do this subtraction on every push: it is the only thing that proves the fast lane is skipping what
-it claims to skip and not silently dropping tests.
-
-**The class was then swept, and only that one file was at risk** — everything else already used a
-relative bar. The one other bare `<= 0.0` on an energy array,
-`test_geometric_energy.py::test_passivity_is_monotone_with_all_six_losses`, has the same
-displacement-only IC but its step 0 sits **222521 ulps** below zero against the plate's ~360, so it
-passes on merit and was deliberately **left alone**. Measure before "fixing" a bare bar; the pattern
-alone does not make it fragile.
+- Do the **collection arithmetic on every batch** (see [[free-plate-orthotropic-state]]): a green
+  exit code cannot tell "all passed" from "half never ran". The shard sum is now that check.
+- **A green local suite is NOT the gate.** 2026-08-17 produced the first case of CI and local
+  disagreeing on a *result* (a bare `<= 0.0` monotonicity bar on a lossy energy array is a coin toss
+  at step 0, because every test plucks from rest — see [[ci-runner-variance]] and the fix in
+  `test_plate_orthotropic.py`). Check `gh run list --branch main` after every push, **and the
+  previous commit's run too**.
