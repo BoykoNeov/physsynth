@@ -1961,3 +1961,157 @@ def vk_strike(vk: VKPlate, amplitude: float | None = None, width: float = 0.20) 
     dy = vk.Y - 0.5 * vk.Ly
     field = amp * np.exp(-((dx * dx + dy * dy) / (w * w)))
     return field[vk.mask]
+
+
+# The three-way chain: string -> StringVKPlateBridge -> RoomLoaded/SuspendedVKPlate -> AirBox.
+# The string is the linear chain's (test_airbox_surface.py::test_string_bridge_plate_room_chain),
+# so the two batches are driven by the same thing and only the body differs. Its lambda is 0.913
+# at AIRBOX_SURFACE_FS -- under 1, which the bridge requires (its Nyquist mode is marginal at 1
+# and the spring pushes it unstable).
+VK_ROOM_STRING = dict(L=0.6, T=60.0, rho=0.005, N=40)
+VK_ROOM_K = 800.0  # N/m -- the linear chain's bridge stiffness, well inside the exact guard
+VK_ROOM_NODES_PER_M = VK_ROOM_STRING["N"] / VK_ROOM_STRING["L"]  # holds lambda ~ 0.913 under L
+
+
+def make_vk_room_string(fs: float, L: float | None = None) -> IdealString:
+    """The chain's fixed/free string, built at the room's rate (the room and plate set ``fs``).
+
+    ``L`` moves the string's **band** — ``f1 = sqrt(T/rho) / 2L`` — while the tension and linear
+    density, hence the wave impedance ``sqrt(T rho)``, are held fixed. That is the one-variable
+    form of this batch's claim (plan §1); changing tension instead would move the impedance too.
+    ``N`` scales with ``L`` so ``lambda`` stays where the default puts it, since the bridge
+    requires ``lambda < 1`` and tuning toward 1 is the whole reason the default sits at 0.913.
+    """
+    kw = dict(VK_ROOM_STRING)
+    if L is not None:
+        kw["L"] = float(L)
+        kw["N"] = int(round(L * VK_ROOM_NODES_PER_M))
+    return IdealString(fs=fs, boundary=("fixed", "free"), **kw)
+
+
+def make_vk_room_chain(
+    *,
+    tier: str = "suspended",
+    boundary: str = "free",
+    K: float = VK_ROOM_K,
+    drive_index: int | None = None,
+    walls="rigid",
+    room: AirBox | None = None,
+    string_L: float | None = None,
+    **plate_kw,
+) -> StringVKPlateBridge:
+    """A string bridged onto a **von Karman** plate that is itself loaded by the room.
+
+    ``tier="baffled"`` mounts the plate flush in a wall (:class:`RoomLoadedVKPlate`);
+    ``"suspended"`` hangs it on an interior plane (:class:`RoomSuspendedVKPlate`). ``boundary``
+    is the plate's, ``"supported"`` = gong and ``"free"`` = cymbal.
+
+    Reach the parts as ``bridge.string``, ``bridge.plate`` (the **wrapper**),
+    ``bridge.plate.plate`` (the bare :class:`VKPlate`) and ``bridge.plate.room``. The conserved
+    statement is ``bridge.energy() + bridge.plate.room.energy()`` — the bridge's own ``energy()``
+    already routes through the wrapper's override, so the room's coupling channel is booked.
+
+    **Pass ``drive_index`` explicitly whenever two chains are being compared.** Both derive it
+    from ``pickup_index_at(0.3 Lx, 0.4 Ly)``, and a difference between two runs moves any
+    departure figure with no ledger turning red (plan §4.1).
+    """
+    if tier not in ("baffled", "suspended"):
+        raise ValueError(f"tier must be 'baffled' or 'suspended', got {tier!r}.")
+    inst = (
+        make_room_loaded_vk_plate(room=room, walls=walls, boundary=boundary, **plate_kw)
+        if tier == "baffled"
+        else make_suspended_vk_plate(room=room, walls=walls, boundary=boundary, **plate_kw)
+    )
+    string = make_vk_room_string(inst.plate.fs, string_L)
+    return StringVKPlateBridge(string=string, plate=inst, K=K, drive_index=drive_index)
+
+
+def make_vk_room_bare_twin(bridge: StringVKPlateBridge) -> StringVKPlateBridge:
+    """The **unloaded** bridge whose stability margin the room-loaded one must equal bit-for-bit.
+
+    Rebuilt from the loaded bridge's own numbers, as :func:`make_vk_bridge_linear_twin` is: the
+    plate from the wrapper's bare model, the string from its stored coefficients, and the drive
+    index **copied** rather than re-derived, so a defaulting difference cannot masquerade as the
+    load entering ``G0``. It must not: ``G0 = M + (theta - 1/4) k^2 S`` is mass and theta-excess
+    stiffness, while the air load is dissipative and enters ``A`` only.
+    """
+    p = bridge.plate.plate  # the bare VKPlate under the room wrapper
+    twin_plate = VKPlate(
+        Lx=p.Lx, Ly=p.Ly, fs=p.fs, N=p.N, E=p.E, e=p.e, nu=p.nu, rho=p.rho_v,
+        sigma=p.sigma, theta=p.theta, boundary=p.boundary, nonlinear=p.nonlinear,
+        couple_max_iter=p.couple_max_iter, couple_tol=p.couple_tol,
+    )
+    s = bridge.string
+    twin_string = IdealString(
+        L=s.L, T=s.T, rho=s.rho, fs=s.fs, N=s.N, boundary=("fixed", "free"), sigma=s.sigma
+    )
+    return StringVKPlateBridge(
+        string=twin_string, plate=twin_plate, K=bridge.K, drive_index=bridge.drive_index
+    )
+
+
+def vk_room_pluck(bridge: StringVKPlateBridge, amplitude: float = 1e-3) -> None:
+    """Half-sine pluck on the chain's string — the only excitation; the plate starts at rest."""
+    s = bridge.string
+    xs = np.linspace(0.0, s.L, s.N + 1)
+    s.set_state(amplitude * np.sin(np.pi * xs / s.L))
+
+
+def step_vk_room_chain(bridge: StringVKPlateBridge, steps: int) -> None:
+    """Step the chain in the family's order: every port solves, then **one** room step."""
+    room = bridge.plate.room
+    for _ in range(steps):
+        bridge.step()
+        room.step()
+
+
+def free_plate_rigid_basis(plate: VKPlate) -> np.ndarray:
+    """A ``W``-orthonormal basis for the free plate's rigid nullspace ``span{1, x, y}``.
+
+    Built directly rather than by an eigensolve: the nullspace of the free-edge stiffness is
+    exactly ``{1, x, y}`` (model #5b's own result), so three Gram-Schmidt passes under the lumped
+    mass ``wdiag`` are both cheaper and less circular than diagonalising ``K`` and trusting the
+    three smallest eigenvalues to be the zeros.
+    """
+    if plate.boundary != "free":
+        raise ValueError("only the free plate has a rigid nullspace.")
+    x, y = plate.X[plate.mask], plate.Y[plate.mask]
+    w = plate.wdiag
+    cols = []
+    for raw in (np.ones_like(x), x, y):
+        v = np.asarray(raw, dtype=float).copy()
+        for q in cols:
+            v -= (q @ (w * v)) * q
+        v /= np.sqrt(v @ (w * v))
+        cols.append(v)
+    return np.column_stack(cols)
+
+
+def vk_room_rigid_share(bridge: StringVKPlateBridge, steps: int) -> dict[str, float]:
+    """Run the chain; return ``{rigid, peak_we, peak_plate_energy}`` for the band-overlap claim.
+
+    ``rigid`` is the time-integrated share of the plate's kinetic energy living in the free
+    plate's ``{1, x, y}`` nullspace — integrated, not instantaneous, because a point force feeds
+    the nullspace steadily and a single sample says nothing. **Rigid motion stretches nothing**,
+    so ``l(w, w) = 0`` and the von Karman coupling is asleep in exactly this fraction of the
+    motion (``test_the_piston_is_the_free_plate_s_fat_channel`` names the same fact for a piston
+    start). That is why this share, not the peak displacement, says whether a string can play the
+    plate nonlinearly.
+
+    ``peak_plate_energy`` is the **maximum over the run**, never the value at the last step: the
+    plate's energy oscillates as it trades with the string through the spring, so an end-of-run
+    sample reads whatever phase it happened to stop on.
+    """
+    p, room = bridge.plate.plate, bridge.plate.room
+    basis, w = free_plate_rigid_basis(p), p.wdiag
+    rigid = total = peak = peak_energy = 0.0
+    for _ in range(steps):
+        vel = (p.u - p.u_prev) / p.k
+        c = basis.T @ (w * vel)
+        rigid += float(c @ c)
+        total += float(vel @ (w * vel))
+        bridge.step()
+        room.step()
+        peak = max(peak, float(np.max(np.abs(p.u))))
+        peak_energy = max(peak_energy, p.energy())
+    return dict(rigid=rigid / total, peak_we=peak / p.e, peak_plate_energy=peak_energy)

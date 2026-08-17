@@ -3592,10 +3592,13 @@ class _RoomLoadedVKPlateMixin:
         # n_live, boundary, state, stress_field, to_live, pickup_index_at, n_iters, converged,
         # last_residual, ...) so this is a drop-in wherever a bare VKPlate is expected. Only reached
         # for names not set on the instance, so the overrides always win. Note what is deliberately
-        # NOT here: `pressure()`, because model #6 has none -- and unlike RoomLoadedPlate this class
-        # is under no shadowing constraint, because no bridge composes with it yet (StringVKPlate-
-        # Bridge is its own batch: connection.py reads `plate.rho`, calls `plate.step(f_ext=...)`
-        # and delegates `plate.pressure()`, none of which model #6 has).
+        # NOT here: `pressure()`, because model #6 has none. That absence is now load-bearing
+        # rather than incidental: `StringVKPlateBridge` DOES compose with this class (the three-way
+        # chain, `docs/dev/string-vk-plate-room-plan.md`), and it composes precisely because the
+        # bridge batch supplied the two things model #6 lacked -- it reads `plate.rho_s` and calls
+        # `plate.step(f_ext=...)`, both of which delegation and the overrides below hand over -- and
+        # *refused* the third. A `pressure()` added here would silently give that chain a compact
+        # monopole read-out measured at 3e-7 of the truth, pointing the wrong way for a cymbal.
         if name == "plate":  # nothing to delegate through yet -- never recurse
             raise AttributeError(name)
         return getattr(self.plate, name)
