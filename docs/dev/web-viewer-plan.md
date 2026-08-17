@@ -2834,7 +2834,13 @@ payload, not a 500/NaN) · `scripts/verify_web_headless.py` (add the `airbox` ca
 **Built & browser-verified.** All-wrapper (`physsynth/core` untouched, core test count unchanged, the
 core-dep allowlist guard green — `airbox`'s VK classes are a new *import* for the web tier but add
 no third-party dependency, and the guard measures the `sys.modules` delta); **12 web tests**, ruff
-clean repo-wide. Both tiers render in a live browser: the hung cymbal shows two-sided lobes and the
+clean repo-wide. **The two headless cases are ADDED but were NOT run by the script**, and this record
+says so rather than implying otherwise -- b18's precedent, and its exact situation. What was verified
+is a live browser over CDP, not `scripts/verify_web_headless.py`'s own pass/fail path. That gap
+matters more than usual here, because the case added is precisely the one that would have caught the
+hidden-tab failure below, so its unexercised state is worth a line rather than silence.
+
+Both tiers render in a live browser: the hung cymbal shows two-sided lobes and the
 baffled gong a half-space arc off its wall, which is the physics of the two mountings and not a
 styling difference. Shipped defaults, measured through the payload: `fs = 57,904 Hz` (set by the
 ROOM), a 0.353 m cube of 32,768 nodes, 6,948 steps, 72 max Picard sweeps at a mean of 11.6, **all
@@ -2854,6 +2860,19 @@ because the wrong version of each was working code at the time:
   unresolved modes contaminate the figure, but that it is **not converged even inside the resolved
   band**. *Generalizable: "quote the resolved band" is necessary and not sufficient — a
   resolution-restricted observable can still be a function of the resolution.*
+
+  **...and that series had a confound, which was removed rather than argued away.** Refining `h`
+  moves the resolved SET with it -- `n_res` read 17 / 19 / 19 / 21 across those four rows -- so each
+  row measured a different set of modes, and the fall could have been the observable *changing*
+  rather than failing to converge. The fix is exact, not statistical: the modal basis does **not**
+  depend on the air grid (`plate.K`, `kappa`, `wdiag` are functions of the plate alone), asserted
+  rather than assumed -- `vecs` and `freqs` come out **bit-identical** at every `h`, and only the
+  boolean mask moves. Pinning the 17-mode mask from `h = 11.40 mm` and reusing it verbatim at every
+  finer grid, the spread falls **6.99 % -> 4.99 % -> 2.37 % -> 2.02 %**, i.e. the moving-band series
+  to within a tenth of a point, while that same fixed band holds the linear control at **0.08 % and
+  0.05 %**. The resolved-set change contributed almost nothing. The non-convergence is real, and the
+  correction this batch makes to a shipped batch's headline therefore rests on a controlled
+  measurement rather than a suggestive one.
 - **…and part of that is the STATISTIC, not the physics: the spread is max/min of four near-equal
   numbers.** The probe rig and the shipped payload differ by 0.03 % in sample rate. Their four
   per-window efficiencies agree to ~1 % each — 0.6339/0.6523/0.6676/0.6662 against
@@ -2896,6 +2915,14 @@ shipped beside the claim as a caption, never as it, and the absence of a far-fie
 asserted by a test. No `t50`, no directivity panel, and **no string drive** — the three-way-chain
 batch already measured this exact headline flat under a string (0.27 % against a 0.28 % control),
 because `w/e` is not an amplitude under a point force.
+
+**Two things this batch does NOT know, stated rather than left to be discovered.** The plate pane's
+animation window is 4 ms of a 120 ms run -- the *stride* was chosen deliberately (b18's trap) but the
+*window* is 3 % of the render, so the pane shows the **strike** and not the shape drift the batch is
+named for; the drift is carried quantitatively by the claim panel instead. And `plate_N` is dialable
+down to 8, where the plate is known to **converge** (probe 1D) but where the resolved band and the
+separation were never measured -- the range is legal and the numbers are probably fine, and that
+"probably" is exactly the distinction being flagged.
 
 **And one plan claim that died in the build.** "The two amplitude sliders are one knob" — the strike
 curvature `w/e ÷ width²`, which both cliff brackets put at 83–85 from opposite directions — is wrong
