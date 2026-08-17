@@ -131,9 +131,11 @@ from scipy import sparse
 from scipy.sparse.linalg import splu
 
 if TYPE_CHECKING:  # type-only: the room stays free of any dependency on the resonator modules
+    from scipy.sparse.linalg import SuperLU
+
     from physsynth.core.body import ModalBody
     from physsynth.core.membrane import Membrane
-    from physsynth.core.plate import Plate
+    from physsynth.core.plate import Plate, VKPlate
 
 __all__ = [
     "AirBox",
@@ -150,6 +152,8 @@ __all__ = [
     "RoomSuspendedPlate",
     "RoomLoadedMembrane",
     "RoomSuspendedMembrane",
+    "RoomLoadedVKPlate",
+    "RoomSuspendedVKPlate",
 ]
 
 # Ambient air (matches physsynth.core.radiation and .bore so every tier of the air node agrees).
@@ -3388,6 +3392,516 @@ class RoomSuspendedMembrane(_RoomLoadedMembraneMixin):
 
         u_next = self._lu_loaded.solve(rhs)
         self._surface.commit(u_next)
+
+        q = port.T @ ((u_next - u_nm1) / (2.0 * self.k))
+        d_pbar = d_free + 2.0 * port.R * q
+        port.inject(q)
+        self.radiated_energy += self.k * float(np.dot(d_pbar, q))
+        self.nodal_volume_velocity = q
+        self.pressure_jump = d_pbar
+        self.volume_velocity = float(np.sum(q))
+        self.n += 1
+
+    def _reset_books(self) -> None:
+        self.radiated_energy = 0.0
+        self.pressure_jump = np.zeros(self.port.face_count)
+        self.nodal_volume_velocity = np.zeros(self.port.face_count)
+        self.volume_velocity = 0.0
+        self.port.reset()
+        self.n = 0
+
+
+class _VKPlateSurface:
+    """The seam's von Kármán side (batch 6) — see :class:`_PlateSurface` for the six members.
+
+    Model #6 carries :class:`~physsynth.core.plate.Plate`'s entire linear vocabulary under the same
+    names (``theta``, ``kappa``, ``B``, ``K``, ``W``, ``h``, ``n_live``, ``mask``, ``index_map``,
+    ``X``, ``Y``, ``boundary``, ``u``, ``u_prev``, ``sigma``, ``k``), so batch 3's load arithmetic
+    carries over with **one substitution and three differences**:
+
+    * **``rho`` becomes ``rho_s``, and the substitution is this batch's silent-failure trap.**
+      :class:`~physsynth.core.plate.VKPlate` has no ``rho`` at all: it has ``rho_v`` (volumetric,
+      kg/m^3) and ``rho_s`` (areal, kg/m^2), which differ by the thickness ``e`` — a factor of
+      **1000** for a 1 mm plate. Writing ``rho_v`` leaves the air load 1000x too weak, and every
+      ledger still telescopes against the pressure it used, so **nothing green turns red**. It is
+      :class:`_PlateSurface`'s own documented failure class arriving through a different door, and
+      the ``nonlinear=False`` bit-identical regression is what catches it.
+    * **:meth:`rhs` delegates the linear half to the model** rather than transcribing it, which is
+      the opposite of what :class:`_PlateSurface` does — deliberately, and for a reason that is a
+      fact about the two models rather than a change of mind.
+      :meth:`~physsynth.core.plate.Plate.step` *inlines* its theta-scheme RHS, so batch 3 had no
+      choice but to copy it; :meth:`~physsynth.core.plate.VKPlate._linear_rhs` is already a method,
+      because the Picard loop needs it hoisted out. Calling it keeps ``plate.py`` untouched (the
+      rule batches 3–5 keep) *and* removes a whole class of transcription slip.
+    * **A fourth member, :meth:`solve`** — the Picard loop hook. The room's load folds into ``A``
+      once and is linear in ``w^{n+1}``, but the loaded back-substitution sits *inside* the
+      fixed-point iteration, so the seam has to own the loop rather than one solve.
+    * **:meth:`commit` takes both fields.** There is no ``_accel`` to refresh (``VKPlate`` has
+      none, and no ``pressure()`` to read it), but there *is* a second cached history to roll:
+      ``F_prev <- F <- F^{n+1}``. That is why :meth:`solve` hands ``F^{n+1}`` back instead of
+      stashing it — hidden ordered state is what this seam's docstring warns about, and a loop
+      between the read and the commit makes it worse.
+
+    ``u_prev`` remains a live read that the caller must take **before** :meth:`commit`, now with an
+    entire fixed-point iteration in between.
+    """
+
+    def __init__(self, plate: VKPlate) -> None:
+        self.model = plate
+        self.k = plate.k
+        if plate.boundary == "supported":
+            self.areas = np.full(plate.n_live, plate.h * plate.h)
+            # Per-node mass rho_s h^2 -- AREAL density, never rho_v (see the class docstring).
+            self.denominator = plate.rho_s * plate.h * plate.h
+        else:
+            self.areas = plate.wdiag.copy()  # lumped cell areas (h^2, h^2/2, h^2/4) -- no dead rim
+            self.denominator = plate.rho_s   # W lives inside A and is divided out by the solve
+
+    def surface(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """``(coords, areas)`` — live-node positions (m) and their areas (m^2), in model order."""
+        p = self.model
+        coords = np.column_stack((p.X[p.mask], p.Y[p.mask]))
+        return coords, self.areas
+
+    def a_bare(self) -> sparse.spmatrix:
+        """The unloaded system matrix: ``(1 + sigma k) I + theta k^2 kappa^2 B``, or its ``W`` form.
+
+        Batch 3's assembly verbatim — ``kappa`` already carries the areal density
+        (``kappa = sqrt(D/rho_s)``), so this is the one place the ``rho_v``/``rho_s`` trap cannot
+        reach. It reaches :attr:`denominator` and :attr:`RoomLoadedVKPlate._load_scale` instead.
+        """
+        p = self.model
+        sk = p.sigma * p.k
+        coeff = p.theta * p.k * p.k * p.kappa * p.kappa
+        if p.boundary == "supported":
+            return (1.0 + sk) * sparse.identity(p.n_live, format="csc") + coeff * p.B
+        return (1.0 + sk) * p.W + coeff * p.K
+
+    @property
+    def u_prev(self) -> NDArray[np.float64]:
+        """``w^{n-1}`` — read once per step, before :meth:`commit` (see :class:`_PlateSurface`)."""
+        return self.model.u_prev
+
+    def rhs(self, f_ext: NDArray[np.float64] | None) -> NDArray[np.float64]:
+        """The model's own linear theta-scheme RHS, plus the ``f_ext`` path.
+
+        The linear half is :meth:`~physsynth.core.plate.VKPlate._linear_rhs` itself (class
+        docstring), so it is bit-identical to the model by construction rather than by inspection —
+        and, because that method and :meth:`_PlateSurface.rhs` are the same expression in the same
+        operand order, bit-identical to batch 3's as well, which is what makes the
+        ``nonlinear=False`` regression a *byte-exact* claim.
+
+        The ``f_ext`` term is the new arithmetic, and unlike batch 5's it has a counterpart:
+        ``VKPlate.step()`` takes no force either, but :meth:`RoomLoadedPlate.step` does, so the
+        regression pins this coefficient exactly rather than leaving it to an oracle.
+        """
+        rhs = self.model._linear_rhs()
+        if f_ext is not None:
+            rhs = rhs + self.k * self.k * f_ext / self.denominator
+        return rhs
+
+    def solve(
+        self,
+        lu: SuperLU,
+        rhs_fixed: NDArray[np.float64],
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """One step's solve — ``(w^{n+1}, F^{n+1})``, Picard-iterated on the **loaded** operator.
+
+        ``rhs_fixed`` is the whole sweep-invariant right-hand side: the linear RHS, the ``f_ext``
+        path, and both of the room's terms. That the room's terms are sweep-invariant is what makes
+        this hook cheap — ``pbar_free`` and ``w^{n-1}`` are fixed for the step, so only the
+        ``mu``-averaged coupling changes between sweeps and the loop is
+        :meth:`~physsynth.core.plate.VKPlate.step`'s arithmetic otherwise verbatim.
+
+        Three rules, each a failure this seam has already documented:
+
+        * **``lu`` is an argument and is never assigned to the model.** The loaded factorization
+          must not become ``vk._lu``, or bare-vs-loaded stops being observable and the regression
+          stops meaning anything.
+        * **``F^{n+1}`` comes back as a return value**, not as state on the adapter.
+        * The model's ``n_iters`` / ``converged`` / ``last_residual`` diagnostics are written here,
+          exactly as the model's own step writes them, so a caller reading them through the
+          wrapper's ``__getattr__`` sees the loaded loop's truth. Read them **per step**: a plate
+          can sit at the sweep cap throughout a run and still converge on its final step.
+        """
+        p = self.model
+        if not p.nonlinear:
+            w_next = lu.solve(rhs_fixed)
+            p.n_iters = 1
+            p.converged = True
+            p.last_residual = 0.0
+            # F and F_prev are both zeros on this path and nothing writes them, so handing F back
+            # makes commit()'s roll a structural no-op rather than a coincidental one.
+            return w_next, p.F
+
+        k2 = self.k * self.k
+        # Coupling force -> RHS factor, the model's own: "supported" k^2 l/rho_s (scalar mass);
+        # "free" k^2 h^2 l/rho_s (A carries W's h^2, and the /W is the solve's, not ours).
+        couple_factor = k2 / p.rho_s
+        if p.boundary == "free":
+            couple_factor *= p.h * p.h
+        w_prev_full = p._to_full(p.u_prev)  # w^{n-1}
+        f_prev_full = p.F_prev              # F^{n-1} (cached)
+        w_j = 2.0 * p.u - p.u_prev          # predictor w^{n+1}_(0)
+        f_new_full = p.F                    # fallback (unused once the loop runs)
+        p.n_iters = 0
+        p.converged = False
+        for sweep in range(1, p.couple_max_iter + 1):
+            p.n_iters = sweep
+            w_j_full = p._to_full(w_j)
+            f_new_full = p._airy_F(w_j_full)          # F^{n+1}_(j)
+            w_avg = 0.5 * (w_j_full + w_prev_full)    # mu_{t.} w
+            f_avg = 0.5 * (f_new_full + f_prev_full)  # mu_{t.} F
+            coupling = p._to_live(p.bracket(w_avg, f_avg))
+            rhs = rhs_fixed + couple_factor * coupling
+            w_next = lu.solve(rhs)
+            incr = float(np.linalg.norm(w_next - w_j))
+            scale = float(np.linalg.norm(w_next))
+            w_j = w_next
+            p.last_residual = incr / max(scale, 1e-30)
+            if p.last_residual <= p.couple_tol:
+                p.converged = True
+                break
+        return w_j, f_new_full
+
+    def commit(
+        self,
+        u_next: NDArray[np.float64],
+        f_next: NDArray[np.float64],
+    ) -> None:
+        """Roll **both** histories: ``w^{n-1} <- w^n <- w^{n+1}`` and ``F^{n-1} <- F^n <- F^{n+1}``.
+
+        There is no acceleration cache to refresh (model #6 has none, hence no ``pressure()``), and
+        the ``F`` roll is the member neither predecessor has. Its order matters: ``F_prev`` must be
+        taken from the *old* ``F`` before ``F`` is overwritten, which is the model's own roll.
+        """
+        p = self.model
+        p.F_prev = p.F
+        p.F = f_next
+        p.u_prev = p.u
+        p.u = u_next
+        p.n += 1
+
+
+class _RoomLoadedVKPlateMixin:
+    """What :class:`RoomLoadedVKPlate` and :class:`RoomSuspendedVKPlate` share verbatim."""
+
+    def __getattr__(self, name: str):
+        # Delegate read accessors (u, u_prev, X, Y, mask, B, K, W, wdiag, theta, kappa, rho_s, h,
+        # n_live, boundary, state, stress_field, to_live, pickup_index_at, n_iters, converged,
+        # last_residual, ...) so this is a drop-in wherever a bare VKPlate is expected. Only reached
+        # for names not set on the instance, so the overrides always win. Note what is deliberately
+        # NOT here: `pressure()`, because model #6 has none -- and unlike RoomLoadedPlate this class
+        # is under no shadowing constraint, because no bridge composes with it yet (StringVKPlate-
+        # Bridge is its own batch: connection.py reads `plate.rho`, calls `plate.step(f_ext=...)`
+        # and delegates `plate.pressure()`, none of which model #6 has).
+        if name == "plate":  # nothing to delegate through yet -- never recurse
+            raise AttributeError(name)
+        return getattr(self.plate, name)
+
+    def energy(self) -> float:
+        """Total discrete energy ``E_plate + integral pbar . q dt`` (Joules).
+
+        **An explicit override, not a delegation** — ``__getattr__`` would otherwise hand back the
+        bare plate energy, i.e. the total *without* its coupling channel. Not monotone: a room gives
+        energy back. The conserved statement is the whole scene,
+        ``inst.energy() + inst.room.energy()`` — necessary and not sufficient for the fourth batch
+        running, and here it carries a **second** caveat that is new: model #6 conserves only at the
+        Picard fixed point, so a run that stops short of ``couple_tol`` has an error source the air
+        load knows nothing about. Read ``converged`` and ``n_iters`` per step beside this number.
+        """
+        return self.plate.energy() + self.radiated_energy
+
+    def set_state(
+        self,
+        u0: NDArray[np.float64],
+        v0: NDArray[np.float64] | float = 0.0,
+    ) -> None:
+        """Set the plate's initial state and reset this port's coupling ledger to zero.
+
+        The plate's own consistent second-order start is used verbatim, i.e. ``w^{-1}`` comes from
+        the **unloaded** acceleration — coupling included, room not, because the room has not acted
+        yet at ``n = 0``. It also seeds the cached ``F(w^0)`` and ``F(w^{-1})``.
+        """
+        self.plate.set_state(u0, v0)
+        self._reset_books()
+
+    def reset(self) -> None:
+        """Zero the plate state and the coupling ledger — reuse on a new run."""
+        self.plate.set_state(np.zeros(self.plate.n_live))
+        self._reset_books()
+
+
+class RoomLoadedVKPlate(_RoomLoadedVKPlateMixin):
+    """A :class:`~physsynth.core.plate.VKPlate` mounted flush in a wall — the **baffled gong**.
+
+    Batch 3's :class:`RoomLoadedPlate` with model #6 in place of model #5, and what changes is not
+    a refinement of the radiation — it is the first radiating object in this repo whose acoustic
+    character is a function of **how hard it was hit**.
+
+    Every other radiator here is linear in its excitation: strike it twice as hard and every
+    acoustic observable doubles, so radiated fraction, directivity and dipole-over-baffled are
+    amplitude-**invariant** by construction. The von Kármán coupling is quadratic, so the *shape* of
+    the motion evolves during a single strike — measured on the bare plate, 41% of the modal energy
+    moves to different modes within half a second at ``w = 3e``, against 0.26% at ``w -> 0``, same
+    geometry, same excitation, one flag apart. Shape is exactly what :class:`SurfacePort` was built
+    to make audible (batch 3: a surface radiates by the shape of its motion, not by its net volume
+    displacement), so:
+
+        **A loud plate's radiation is time-varying at fixed geometry, and a quiet one's is not.**
+
+    No ``R(omega)`` can state that — not :class:`~physsynth.core.radiation.AirRadiation`, not
+    :class:`~physsynth.core.radiation.RadiatedBody`, not
+    :class:`~physsynth.core.radiation.RationalAirLoad`: a scalar-per-frequency load has *one*
+    pattern per frequency and cannot change it mid-strike. The lumped read-out is measured blind to
+    it — net volume displacement runs very nearly linear in the strike amplitude (1 : 20 : 60
+    against amplitudes 1 : 20 : 60) while the shape content is not.
+
+    **Two things this class does not claim**, both costed and deferred rather than omitted. The
+    stiffening does *not* move coincidence usefully: the uniform-strain ansatz predicts 5.06x at
+    ``w = 3e`` and the measured free plate gives **1.18–1.41x**, because a free edge relieves the
+    stretching (the repo's own ``test_vk_free.py`` already asserted only ``>1.15x``). And resolving
+    coincidence at all needs ~89 M air nodes and ~5.25 h for half a second, which a 14% shift does
+    not touch. A cascade claim dies with it, and takes the *observable* with it: at ``w/e = 3`` a
+    spectral peak tracker reads a mode's frequency as 0.53x its own linear value, because the field
+    has gone broadband and "the" frequency has stopped existing. **Identify modes by projection
+    under the mass matrix here, never by an FFT peak.**
+
+    **The nonlinearity is also a control, in the same code path.** ``VKPlate(nonlinear=False)`` is
+    bit-identical to :class:`~physsynth.core.plate.Plate`, so this class with the flag off is
+    bit-identical to :class:`RoomLoadedPlate` — "frozen versus drifting" is one class and one flag,
+    not two rigs.
+
+    **The price is per sweep, not per step.** The loaded back-substitution runs once per Picard
+    sweep, and the sweep count is a strong function of the configuration: measured 5, 10, 29 and 50
+    (the cap, i.e. NaN) across plate geometries at ``w/e = 3``. A *narrow* strike on a small plate
+    does not converge at all — the model's own "the strong-cascade regime may not converge" warning
+    arriving as a hard limit on experiment design. Assert ``converged`` **per step**.
+
+    Parameters
+    ----------
+    plate : VKPlate
+        The resonator (model #6), ``boundary="supported"`` (the gong) or ``"free"`` (the cymbal).
+        Only its public state, its operators and its own two step helpers are used; ``plate.py`` is
+        untouched. Its sample rate must match the room's.
+    room : AirBox
+        The room to radiate into. The plate lies flush in one of its walls, so the rigid wall *is*
+        the textbook infinite baffle and the plate's back face is unloaded.
+    face : str
+        Which of the six walls (:data:`FACES`). Positive plate displacement is along that face's
+        inward normal (see :class:`SurfacePort`).
+    origin : (float, float), optional
+        The plate's ``(0, 0)`` corner in the face's own two coordinates (m). Defaults to
+        **centred**; an off-centre surface's even modes stop being exactly silent, linearly in the
+        offset with no threshold.
+    spreading : {"bilinear", "nearest"}
+        Forwarded to :class:`SurfacePort`. ``"nearest"`` is that class's measured negative control.
+
+    Raises
+    ------
+    ValueError
+        A sample-rate mismatch, or any of :class:`SurfacePort`'s refusals.
+
+    Notes
+    -----
+    **This class does not step the room**, exactly as batches 2–5 do not::
+
+        for n in range(n_steps):
+            inst.step(f_ext)
+            room.step()            # one room, one step, after every port has solved
+    """
+
+    def __init__(
+        self,
+        *,
+        plate: VKPlate,
+        room: AirBox,
+        face: str,
+        origin: Sequence[float] | None = None,
+        spreading: Spreading = "bilinear",
+    ) -> None:
+        self.plate = plate  # FIRST: any attribute miss before this makes __getattr__ recurse
+        _require_same_rate(plate, room, "plate")
+        self.room = room
+        self.k = plate.k
+
+        self._surface = _VKPlateSurface(plate)
+        coords, areas = self._surface.surface()
+        self._denominator = self._surface.denominator
+        self.port = SurfacePort(
+            room=room,
+            face=face,
+            coords=coords,
+            areas=areas,
+            origin=origin,
+            spreading=spreading,
+        )
+
+        # A_loaded = A + (k / 2 rho_s) T^T R T -- SPD, factored ONCE. The load is linear in w^{n+1}
+        # and independent of the Airy stress F, which is the orthogonality that makes this batch
+        # tractable: it folds into A exactly once and the Picard loop is otherwise untouched.
+        a_bare = self._surface.a_bare()
+        self._load_scale = 0.5 * plate.k / self._denominator
+        a_loaded = (a_bare + self._load_scale * self.port.load_matrix).tocsc()
+        # Drop the structural zeros the load's sparsity pattern contributes where its value is 0, so
+        # a zero-area surface (T = 0) factors the plate's OWN matrix and reduces to the bare plate.
+        a_loaded.eliminate_zeros()
+        self.nnz_growth = a_loaded.nnz / a_bare.tocsc().nnz
+        self._lu_loaded = splu(a_loaded)
+        self.lu_nnz = int(self._lu_loaded.L.nnz + self._lu_loaded.U.nnz)
+
+        self.radiated_energy = 0.0  # integral pbar . q dt: the work this plate did on the room
+        self.nodal_volume_velocity = np.zeros(self.port.node_count)  # last q (m^3/s per node)
+        self.surface_pressure = np.zeros(self.port.node_count)       # last pbar (Pa per node)
+        self.volume_velocity = 0.0  # last sum_j q_j -- the LUMPED tier's coupling, i.e. the control
+        self.n = 0
+
+    # -- time stepping ---------------------------------------------------------------------
+
+    def step(self, f_ext: NDArray[np.float64] | None = None) -> None:
+        """Advance one step: read the port, Picard-solve the **loaded** system, queue the injection.
+
+        ``f_ext`` is the optional external nodal force (live vector, newtons), added to the RHS with
+        exactly :meth:`RoomLoadedPlate.step`'s arithmetic — which is what gives it a byte-exact
+        counterpart, the first time this seam's force path has had one. The room's two terms are
+        sweep-invariant and go into the fixed RHS the loop hook iterates around
+        (:meth:`_VKPlateSurface.solve`). The room is **not** stepped here (class docstring).
+        """
+        port = self.port
+        port.require_ready()               # before mutating anything
+        pbar_free = port.free_pressure()   # read u^{n+1/2}, BEFORE room.step()
+
+        k2 = self.k * self.k
+        u_nm1 = self._surface.u_prev   # ONCE, and before commit() -- see _PlateSurface
+        rhs = self._surface.rhs(f_ext)
+        # The air load: the known open-circuit force, plus the w^{n-1} half of the centered
+        # velocity (its w^{n+1} half is already inside the factorization).
+        rhs = rhs - k2 * (port.T.T @ pbar_free) / self._denominator
+        rhs = rhs + self._load_scale * (port.load_matrix @ u_nm1)
+
+        u_next, f_next = self._surface.solve(self._lu_loaded, rhs)
+        self._surface.commit(u_next, f_next)
+
+        q = port.T @ ((u_next - u_nm1) / (2.0 * self.k))
+        pbar = pbar_free + port.R * q
+        port.inject(q)
+        self.radiated_energy += self.k * float(np.dot(pbar, q))
+        self.nodal_volume_velocity = q
+        self.surface_pressure = pbar
+        self.volume_velocity = float(np.sum(q))
+        self.n += 1
+
+    def _reset_books(self) -> None:
+        self.radiated_energy = 0.0
+        self.nodal_volume_velocity = np.zeros(self.port.node_count)
+        self.surface_pressure = np.zeros(self.port.node_count)
+        self.volume_velocity = 0.0
+        self.port.reset()
+        self.n = 0
+
+
+class RoomSuspendedVKPlate(_RoomLoadedVKPlateMixin):
+    """A :class:`~physsynth.core.plate.VKPlate` hanging **in** the room — the **cymbal on a stand**.
+
+    :class:`RoomLoadedVKPlate` with the wall taken away, i.e. batch 4's move applied to model #6:
+    the plate radiates from **both** faces, is driven by the pressure **jump** across it, and is an
+    *object* rather than a source — it also removes paths through the room, which is the cut
+    :class:`InteriorSurfacePort` registers. The load matrix and the ``pbar`` term both double, and
+    the ``2`` is the coefficient no single ledger catches (see :class:`InteriorSurfacePort`).
+
+    The two tiers ship together because this batch's claim is a **comparison**: the pattern the
+    loud plate changes during a strike is read against the baffled arm and against its own quiet
+    control, and batch 4's dipole-over-baffled ratio is the instrument that makes it a ratio rather
+    than a magnitude. ``boundary="free"`` here is the physically honest cymbal — free edge, hung in
+    air, radiating both sides — and it is the configuration batch 6's headline is measured on.
+
+    Parameters
+    ----------
+    plate : VKPlate
+        The resonator (model #6). Its sample rate must match the room's.
+    room : AirBox
+        The room. The cut is registered on construction and is **geometry, not state** — it
+        survives :meth:`reset`.
+    plane, index : str, int
+        Which interior plane (:data:`PLANES`) and which index along its normal axis.
+    origin : (float, float), optional
+        Defaults to **centred**.
+    spreading : {"bilinear", "nearest"}
+        Forwarded to :class:`InteriorSurfacePort`.
+
+    Raises
+    ------
+    ValueError
+        A sample-rate mismatch, or any of :class:`InteriorSurfacePort`'s refusals.
+    """
+
+    def __init__(
+        self,
+        *,
+        plate: VKPlate,
+        room: AirBox,
+        plane: str,
+        index: int,
+        origin: Sequence[float] | None = None,
+        spreading: Spreading = "bilinear",
+    ) -> None:
+        self.plate = plate  # FIRST: any attribute miss before this makes __getattr__ recurse
+        _require_same_rate(plate, room, "plate")
+        self.room = room
+        self.k = plate.k
+
+        self._surface = _VKPlateSurface(plate)
+        coords, areas = self._surface.surface()
+        self._denominator = self._surface.denominator
+        self.port = InteriorSurfacePort(
+            room=room,
+            plane=plane,
+            index=index,
+            coords=coords,
+            areas=areas,
+            origin=origin,
+            spreading=spreading,
+        )
+
+        # A_loaded = A + (k / 2 rho_s) 2 T^T R T -- the 2 is the two loaded faces, and the coupled
+        # residual at two timesteps is the only guard that catches BOTH ways of getting it wrong.
+        a_bare = self._surface.a_bare()
+        self._load_scale = 0.5 * plate.k / self._denominator
+        a_loaded = (a_bare + self._load_scale * self.port.load_matrix).tocsc()
+        a_loaded.eliminate_zeros()
+        self.nnz_growth = a_loaded.nnz / a_bare.tocsc().nnz
+        self._lu_loaded = splu(a_loaded)
+        self.lu_nnz = int(self._lu_loaded.L.nnz + self._lu_loaded.U.nnz)
+
+        self.radiated_energy = 0.0
+        self.pressure_jump = np.zeros(self.port.face_count)          # last (pbar_hi - pbar_lo), Pa
+        self.nodal_volume_velocity = np.zeros(self.port.face_count)  # last q (m^3/s per face)
+        self.volume_velocity = 0.0  # last sum_j q_j -- the LUMPED tier's coupling, i.e. the control
+        self.n = 0
+
+    # -- time stepping ---------------------------------------------------------------------
+
+    def step(self, f_ext: NDArray[np.float64] | None = None) -> None:
+        """Advance one step: read both planes, Picard-solve, queue the ``-q``/``+q`` pair.
+
+        ``f_ext`` is the optional external nodal force (live vector, newtons); see
+        :meth:`RoomLoadedVKPlate.step`. The room is **not** stepped here (class docstring).
+        """
+        port = self.port
+        port.require_ready()                      # before mutating anything
+        lo_free, hi_free = port.free_pressure()   # read u^{n+1/2}, BEFORE room.step()
+        d_free = hi_free - lo_free
+
+        k2 = self.k * self.k
+        u_nm1 = self._surface.u_prev   # ONCE, and before commit() -- see _PlateSurface
+        rhs = self._surface.rhs(f_ext)
+        # The air load: the known open-circuit pressure JUMP, plus the w^{n-1} half of the centered
+        # velocity (its w^{n+1} half is already inside the factorization).
+        rhs = rhs - k2 * (port.T.T @ d_free) / self._denominator
+        rhs = rhs + self._load_scale * (port.load_matrix @ u_nm1)
+
+        u_next, f_next = self._surface.solve(self._lu_loaded, rhs)
+        self._surface.commit(u_next, f_next)
 
         q = port.T @ ((u_next - u_nm1) / (2.0 * self.k))
         d_pbar = d_free + 2.0 * port.R * q

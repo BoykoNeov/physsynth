@@ -16,8 +16,10 @@ from physsynth.core.airbox import (
     RoomLoadedBody,
     RoomLoadedMembrane,
     RoomLoadedPlate,
+    RoomLoadedVKPlate,
     RoomSuspendedMembrane,
     RoomSuspendedPlate,
+    RoomSuspendedVKPlate,
 )
 from physsynth.core.beam import FreeBeam
 from physsynth.core.body import ModalBody
@@ -33,7 +35,7 @@ from physsynth.core.engine import simulate
 from physsynth.core.mallet import MalletMembrane, MalletWall
 from physsynth.core.membrane import Domain, Membrane
 from physsynth.core.plate import THETA_DEFAULT as PLATE_THETA_DEFAULT
-from physsynth.core.plate import Plate
+from physsynth.core.plate import Plate, VKPlate
 from physsynth.core.radiation import (
     AirRadiation,
     RadiatedBody,
@@ -1751,3 +1753,121 @@ def membrane_bulge(membrane: Membrane, amplitude: float = 1e-3) -> np.ndarray:
         return amplitude * np.sin(np.pi * x / membrane.Lx) * np.sin(np.pi * y / membrane.Ly)
     r = np.sqrt(x * x + y * y) / membrane.radius
     return amplitude * np.cos(0.5 * np.pi * np.clip(r, 0.0, 1.0))
+
+
+# -- air-box batch 6: the von KÁRMÁN plate as a baffled and suspended surface ---------------
+# Batches 3/4's room and plate span, with model #6 in place of model #5. The material is
+# test_vk_free.py's canonical steel sheet, so the nonlinearity's amplitude scale is the familiar
+# one: the onset is at w ~ e, i.e. at 1 mm.
+AIRBOX_VK_MATERIAL = dict(E=2.0e11, e=1.0e-3, nu=0.3, rho=7800.0)  # rho is VOLUMETRIC (kg/m^3)
+AIRBOX_VK_L = AIRBOX_SURFACE_PLATE_L  # m, square -- the batch-3 span, so the room is unchanged
+
+
+def make_air_vk_plate(
+    *,
+    fs: float = AIRBOX_SURFACE_FS,
+    N: int = 8,
+    L: float = AIRBOX_VK_L,
+    boundary: str = "supported",
+    sigma: float = 0.0,
+    theta: float = PLATE_THETA_DEFAULT,
+    nonlinear: bool = True,
+    **material,
+) -> VKPlate:
+    """A :class:`VKPlate` sized for the batch-3/4 room — ``sigma = 0`` so the only channel is air.
+
+    ``material`` overrides :data:`AIRBOX_VK_MATERIAL` (``E``, ``e``, ``nu``, ``rho``). Note ``rho``
+    here is **volumetric**: the areal density the air load divides by is ``rho_s = rho * e``, and
+    confusing the two is this batch's silent-failure trap (a factor of 1000 at ``e = 1 mm``).
+    """
+    kw = dict(AIRBOX_VK_MATERIAL)
+    kw.update(material)
+    return VKPlate(
+        Lx=L, Ly=L, fs=fs, N=N, sigma=sigma, theta=theta, boundary=boundary,
+        nonlinear=nonlinear, **kw,
+    )
+
+
+def make_room_loaded_vk_plate(
+    *,
+    room: AirBox | None = None,
+    walls="rigid",
+    N_room: tuple[int, int, int] = AIRBOX_SURFACE_N,
+    face: str = "z0",
+    origin: tuple[float, float] | None = None,
+    spreading: str = "bilinear",
+    **plate_kw,
+) -> RoomLoadedVKPlate:
+    """A :class:`VKPlate` mounted flush in a wall — the **baffled gong** (batch 6).
+
+    The room is on ``.room`` and the port on ``.port``. ``sigma = 0`` by default keeps the plate
+    lossless so the only energy channel is the room; the conserved statement is
+    ``inst.energy() + inst.room.energy()``, necessary and not sufficient, and here with the second
+    caveat that model #6 conserves only at the Picard fixed point (watch ``converged``).
+    """
+    fs = plate_kw.get("fs", AIRBOX_SURFACE_FS)
+    if room is None:
+        room = make_surface_room(fs=fs, N=N_room, walls=walls)
+    plate = make_air_vk_plate(**plate_kw)
+    return RoomLoadedVKPlate(
+        plate=plate, room=room, face=face, origin=origin, spreading=spreading
+    )
+
+
+def make_suspended_vk_plate(
+    *,
+    room: AirBox | None = None,
+    walls="rigid",
+    N_room: tuple[int, int, int] = AIRBOX_SURFACE_N,
+    plane: str = "z",
+    index: int = AIRBOX_DIPOLE_INDEX,
+    origin: tuple[float, float] | None = None,
+    spreading: str = "bilinear",
+    **plate_kw,
+) -> RoomSuspendedVKPlate:
+    """A :class:`VKPlate` hung on an interior plane — the **cymbal on a stand**, radiating both."""
+    fs = plate_kw.get("fs", AIRBOX_SURFACE_FS)
+    if room is None:
+        room = make_surface_room(fs=fs, N=N_room, walls=walls)
+    plate = make_air_vk_plate(**plate_kw)
+    return RoomSuspendedVKPlate(
+        plate=plate, room=room, plane=plane, index=index, origin=origin, spreading=spreading
+    )
+
+
+def vk_linear_twin(vk: VKPlate) -> Plate:
+    """The linear :class:`Plate` that ``VKPlate(nonlinear=False)`` is bit-identical to.
+
+    Built from the VK plate's **own** derived and snapped numbers, and every one of the four is a
+    way to fail the regression in a manner that looks exactly like a load bug:
+
+    * ``rho=vk.rho_s`` — the *areal* density, never ``rho_v`` (the factor of 1000);
+    * ``Ly=vk.Ly`` — the **snapped** span read back off the plate, not the nominal one passed in.
+      Both classes snap ``Ly`` to an integer number of square cells, so re-snapping a nominal value
+      can land on a different ``Ny``, a different ``n_live``, and a shape mismatch;
+    * ``kappa=vk.kappa`` — ``sqrt(D/rho_s)``, which is where the material surface collapses into
+      the linear plate's single stiffness;
+    * ``nu=vk.nu`` — inert for ``boundary="supported"`` but load-bearing for ``"free"``, where it
+      enters the free-edge stiffness matrix itself.
+    """
+    return Plate(
+        Lx=vk.Lx, Ly=vk.Ly, kappa=vk.kappa, rho=vk.rho_s, fs=vk.fs, N=vk.N,
+        sigma=vk.sigma, theta=vk.theta, boundary=vk.boundary, nu=vk.nu,
+    )
+
+
+def vk_strike(vk: VKPlate, amplitude: float | None = None, width: float = 0.20) -> np.ndarray:
+    """A centred raised-Gaussian strike on ``vk``'s live nodes, peak ``amplitude`` (default ``e``).
+
+    The default amplitude is the plate thickness, i.e. the onset of the nonlinearity — scale it by
+    ``w/e`` to move between the frozen control (``w << e``) and the drifting regime (``w ~ 3e``).
+    ``width`` is a fraction of ``Lx``, and it is not a free parameter: a *narrow* strike is what
+    fails to converge, hitting the Picard cap and producing NaN, so the broad strike is the only
+    one that runs at large amplitude.
+    """
+    amp = vk.e if amplitude is None else amplitude
+    w = width * vk.Lx
+    dx = vk.X - 0.5 * vk.Lx
+    dy = vk.Y - 0.5 * vk.Ly
+    field = amp * np.exp(-((dx * dx + dy * dy) / (w * w)))
+    return field[vk.mask]
