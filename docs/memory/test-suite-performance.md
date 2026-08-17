@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: aae47a22-23c6-4ed1-8713-4f9ae587e626
-  modified: 2026-08-17T15:36:21.097Z
+  modified: 2026-08-17T15:39:22.079Z
 ---
 
 **1721 tests** as of 2026-08-17 (1690 and 1638 earlier the same day; 1476 when the profile below
@@ -38,7 +38,8 @@ is the physics. Check this first — overlapping fixtures would be free to fix, 
 ## The `slow` marker means a CLAIM, not a stopwatch reading
 
 Was 20 marks, **all** in the string files (stiff/damped/dispersion/convergence), **zero** on the
-geometric family, and no lane ever used it. Now 65 marks: whirl / phantom / limits at **module**
+geometric family, and no lane ever used it. Then 65 marks (**69 as of 2026-08-17** — see the
+reconciliation at the end of this file): whirl / phantom / limits at **module**
 level (the claim is about the file — "a convergence study re-runs the thing it studies"), and
 `test_geometric_energy.py` at **test** level for just 2 of its 26, because the other 24 are the
 cheap energy/passivity assertions a fast lane most wants to keep.
@@ -149,9 +150,16 @@ it wasn't.
 
 **Confirmed on the gate, not just locally:** the fix ran green on both jobs — `1721 passed` on
 py3.12 (**identical to the local count**, which is the collection check crossing machines) and
-`1652 passed` on the 3.11 fast lane, ruff clean. Useful side-reading: the same suite takes
-**921 s on CI vs 2369 s locally**, because this box runs the human's own Python — so a local wall
-clock is not even the right order of magnitude, let alone comparable.
+`1652 passed` on the 3.11 fast lane, ruff clean. (921 s vs the local 2369 s is consistent with the
+~3× local inflation already recorded above; it is un-normalised and cross-machine, so it is a
+sanity check, **not a measurement** — the rule in this file applies to my own readings too.)
+
+**The two CI counts reconcile exactly, and that is the check worth running:** 1721 − 1652 = 69, and
+`pytest --collect-only -m slow` collects **69**. The marker is now 69 tests, not the 65 recorded
+above — the four came from `test_airbox_vk.py`'s `test_couple_tol_moves_the_total_and_not_the_…`,
+one function doubly parametrized 2 boundaries × 2 tiers, added by air-box batch 6. #5of added none.
+Do this subtraction on every push: it is the only thing that proves the fast lane is skipping what
+it claims to skip and not silently dropping tests.
 
 **The class was then swept, and only that one file was at risk** — everything else already used a
 relative bar. The one other bare `<= 0.0` on an energy array,
