@@ -323,7 +323,7 @@ found a new *kind* of hole. The ones visible from here:
 Everything §2 measured survived into tests. Four things the *build* added, in descending order of
 how much they change what a reader should believe.
 
-**9.1 A guard I wrote rejected a valid material, and the test that caught it is the one worth
+**8.1 A guard I wrote rejected a valid material, and the test that caught it is the one worth
 keeping.** `free_plate_stiffness` validated its `nu` argument against `(-1, 1/2)` unconditionally —
 correct for the isotropic case, wrong the moment a split supersedes it, because an orthotropic
 sheet's implied `nu_yx = D_1/D_x` is bounded by `nu_xy nu_yx < 1` and not by one half. A free plate
@@ -335,7 +335,7 @@ The general lesson is the one this family keeps relearning from a different angl
 argument that is still being validated is a live constraint**, and the two admissibility notions
 here (3-D thermodynamic, 2-D orthotropic-plate) are genuinely different sets.
 
-**9.2 "Exact" needed downgrading twice, in the same direction.** Two closed forms that are exact in
+**8.2 "Exact" needed downgrading twice, in the same direction.** Two closed forms that are exact in
 exact arithmetic are not exact in doubles, for the same reason: the terms are products of `h²` with
 `1/h⁴`, so the sums carry ordinary roundoff even when the algebra is a clean cancellation.
 
@@ -349,18 +349,37 @@ The bars in the suite are set at the measured magnitudes with the reason written
 each test *also* asserts the ordering — the clean build must be the closer of the two — so a future
 change that introduces cancellation where there was none fails rather than passing at a loose bar.
 
-**9.3 The split sweep changes the fundamental's identity, not just its frequency.** The plan's Q5
+**8.3 The split sweep changes the fundamental's identity, not just its frequency.** The plan's Q5
 reported a 6.5x span in `lambda_1` and read it as detuning. The shipped diagnostics label each mode,
 and the low end of the sweep is a *different mode*: at zero and negative coupling the fundamental is
 the cross-grain bender, and from `g_1 = 0.05` upward it is the twist. So H1's number is a
 mode-crossing plus a detuning, which is a stronger statement than the plan made and a more careful
 one than "the fundamental moves 6.5x".
 
-**9.4 The twist bound's overshoot is nearly material-independent.** Measured margin between the
+**8.4 The twist bound's overshoot is nearly material-independent.** Measured margin between the
 Rayleigh bound and the true fundamental: **5.27%** isotropic, **5.55%** spruce — despite the two
 plates' fundamentals differing by a factor of 2.4. So the bound's tightness is a property of the
 one-term trial function rather than of the material, which is what makes a single `< 15%` bar
 meaningful across both arms instead of needing one bar per material.
+
+**8.5 Acceptance, and the part of it a local run cannot give you.**
+`tests/test_free_plate_orthotropic.py` adds **31 tests** (~2.3 s), full suite **1721 passed** (1690
+before the batch — the sum landing exactly is what proves the new tests were collected rather than
+skipped; a zero exit code cannot tell those apart), `ruff check .` clean.
+
+That local run is *not* the gate, and this batch is the reason to write that down. The push
+immediately before it was **red on CI** — on both jobs and both interpreters — while passing on
+Windows, and it stayed red unread for an hour and a half. The failure was one line in the
+*supported* plate's module: `assert np.all(np.diff(e) <= 0.0)` on a lossy run, which looks like the
+strictest possible passivity check and is in fact a coin toss. Every energy test here plucks **from
+rest**, so step 0 has exactly zero velocity and dissipates essentially nothing — measured
+`-2.70e-18` against `-1.50e-10` at step 1 and `~1.09e-08` typical — and the sign of a decrement four
+billion times smaller than its neighbours is decided by BLAS summation order. Fixed to the relative
+roundoff bar already used elsewhere in the suite (`1e-12 * e[0]`, still five orders of magnitude
+below a genuine decrement, so it cannot hide a real energy gain) plus a separate assertion that the
+energy actually fell. The module added by *this* batch already used the relative bar and was never
+affected — but the lesson is a general one and it is now in the passivity helper's comment, with the
+numbers, so the bar is not re-tightened by a reader who sees slack.
 
 **Not done, and not silently:** the free plate's O(h²) self-convergence is asserted on the grained
 plate (orders 2.011, 2.001, 2.006), but there is still **no absolute external anchor** for the
