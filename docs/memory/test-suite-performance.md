@@ -5,11 +5,11 @@ metadata:
   node_type: memory
   type: project
   originSessionId: aae47a22-23c6-4ed1-8713-4f9ae587e626
-  modified: 2026-08-10T12:01:15.161Z
+  modified: 2026-08-17T10:44:56.403Z
 ---
 
-**1476 tests across 65 files**, ~23 min full on CI. Reworked 2026-08-10 (see
-[[ci-runner-variance]] for the measurement trap that dominates all of this).
+**1638 tests** as of 2026-08-17 (was 1476 when the profile below was taken), ~23 min full on CI.
+Reworked 2026-08-10 (see [[ci-runner-variance]] for the measurement trap that dominates all of this).
 
 ## The clean profile INVERTS the local one — the geometric family is the suite
 
@@ -100,3 +100,12 @@ new footprint section. Standalone the two new blocks cost about **40 s** togethe
 ran *concurrently* with it on the same machine. Recorded so a future session does not read 23 → 44
 min as a regression. The rule this repeats: normalise against an unchanged reference measured in
 the SAME run, or do not compare at all ([[ci-runner-variance]]).
+
+## 2026-08-17 — airbox batch 6 + `StringVKPlateBridge`
+
+**1638** tests (was 1544 after air-box batch 5): +~64 from [[air-box-state]] batch 6, +30 from
+`tests/test_vk_connection.py` ([[string-vk-bridge-state]]), which costs ~19–23 s standalone.
+
+The local full run read **2017 s (33:37)**, and — same trap as the 44-min reading above — it is
+**NOT comparable**: ruff and a targeted 23 s re-run of `test_vk_connection.py` ran concurrently on
+the same box, on top of the human's own Python. Green (exit 0), which is all it was for.
