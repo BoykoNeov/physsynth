@@ -441,10 +441,22 @@ class ReedBore:
 # the reason written in `crates/physsynth-core/src/root.rs`.
 #
 # Off by default. The Python model is still the reference oracle for every model not yet ported.
+# `bernoulli_flow` is swapped too, and that is not tidiness: `tests/test_reed_stability.py` imports
+# it BY NAME and asserts its oddness and passivity directly. Without the swap that file -- which is
+# in the flagged CI step -- would go on asserting the Python function while the run reported Rust,
+# which is exactly the vacuously-green shape this whole apparatus exists to prevent. The Python
+# `ReedBore` above looks the name up globally too, so under the flag it calls the Rust jet: the
+# lever doing what it is for.
 ReedBorePy = ReedBore
 """The pure-Python reference implementation, under a name the swap below never rebinds."""
+
+bernoulli_flow_py = bernoulli_flow
+"""The pure-Python jet, under a name the swap below never rebinds."""
 
 _USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
 
 if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
-    from physsynth_rs import ReedBore  # type: ignore[assignment]  # noqa: F811
+    from physsynth_rs import (
+        ReedBore,  # type: ignore[assignment]  # noqa: F811
+        bernoulli_flow,  # type: ignore[assignment]  # noqa: F811
+    )

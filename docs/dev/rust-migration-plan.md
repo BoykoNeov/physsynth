@@ -1287,7 +1287,7 @@ Both spellings are preserved on both sides, and both parity files assert it, so 
 that made the two agree fails loudly rather than quietly changing a number the acceptance runs were
 taken with.
 
-### 13.5 Two smaller things worth keeping
+### 13.5 Three smaller things worth keeping
 
 **A bell at both ends books each end's energy separately.** `_radiate_node` accumulates
 `radiated_energy` itself, once per node, so a two-ended bell computes `(E + e_l) + e_r` and never
@@ -1300,18 +1300,44 @@ test would be worse than none.
 the resistance rather than on the ends — so the `U_out` read-out pair still rotates while nothing
 radiates. A port that keyed the exit on the ends passes every other test in both files.
 
+**`boundary=` unpacks any 2-sequence, and a tuple-only parse is invisible until a client uses a
+list.** `(boundary, boundary) if isinstance(boundary, str) else boundary` accepts a list, a NumPy
+array of two strings, anything of length two — and a **list is exactly what a JSON round-trip
+produces**, which matters because `web/serialize.py` is a live client of this binding for the whole
+migration (§1.1). The first draft cast to `PyTuple`, compiled, and passed every test in the repo,
+because every call site today writes a literal tuple. Found by *trying* it rather than by reading
+the code, and it applies to `string_ideal`'s `boundary` too.
+
+One divergence there **cannot** be closed and is recorded instead: `Bore(boundary=None)` raises
+`TypeError` in Python and yields the default clarinet in Rust, because PyO3 maps both an omitted
+keyword and an explicitly-passed `None` to the same Rust `None` and no signature distinguishes
+them. `None` is not a legal boundary for either — the difference is refuse versus default — and
+nothing in the repo passes it, but the property belongs to *every* object-typed defaulted parameter
+in this binding layer, `string_ideal`'s included. `test_rust_parity_bore.py` asserts the current
+behaviour of both sides so a change becomes a failing test rather than a surprise.
+
 ### 13.6 The success condition
 
 `tests/test_bore_*.py` and `tests/test_reed_*.py` are **97 tests**, and unlike the body's this list
 is not widened by clients: nothing in `core/` imports `Bore` or `ReedBore` except `reed` itself.
-The wide client is the **viewer** — `web/serialize.py` builds both for its clarinet pages — and that
-is covered by the whole-suite run rather than by the named step.
+The wide client is the **viewer** — `web/serialize.py` builds both for its clarinet pages, and it
+is the only caller that drives `Lop`/`Cmat` through a *shift-invert* `eigsh` at `k = n_modes + 1`
+rather than the `k = 1` the tests use. Its 408 tests were run under the flag by hand and pass; they
+are covered by the whole-suite run rather than by the named step, which is a deliberate choice
+(§12.9) and not an omission.
 
 `tests/test_reed_signature.py` is in the CI list and that is not padding. The step's internal
 ordering — open-end pin, then the hook, then the radiating drain, then momentum — is load-bearing
 and **no energy test can see it**: get it wrong and the reed still oscillates and the books still
 roughly balance. The project's own reed work established that balance is not a sufficient detector
 there and the signature is.
+
+`bernoulli_flow` is swapped as well as `ReedBore`, and that is not tidiness:
+`tests/test_reed_stability.py` imports the function **by name** and asserts its oddness and
+passivity directly. Without the swap that file — which is *in* the flagged step — would go on
+asserting the Python function while the run reported Rust. Found by grepping the clients for direct
+imports rather than assuming a module's tests only reach it through its class; the same habit that
+found `_accel`.
 
 The swap guard gained `bore` and `reed`, plus the two-importer hazard in its sharper form: `reed.py`
 does `from .bore import Bore` at module scope, so a swap landing after it would leave the clarinet
@@ -1334,13 +1360,28 @@ reed refuses if the two implementations ever came apart.
 | `fallbacks`, step for step, coarse grid (>100 fallbacks in 3,000 steps) | **identical** |
 | `energy()` (inherits the bore's `np.dot`), worst relative | inside the 1e-13 Group A target |
 | The bore's and reed's own tests under `PHYSSYNTH_RS=1` | **97 passed, 0 failed** |
-| **The WHOLE suite under `PHYSSYNTH_RS=1`** | *(see below)* |
+| `tests/test_web_backend.py` under `PHYSSYNTH_RS=1` (the viewer) | **408 passed** in 772 s |
+| **The WHOLE suite under `PHYSSYNTH_RS=1`** | *(pending)* |
+| The whole suite on the default Python path, same tree | *(pending)* |
+
+One caveat on the manual whole-suite measurement, since it is not a gate (§12.9): it is taken with
+`-p no:randomly`, which **fixes import order** — and import order is exactly what the
+`reed.Bore is bore.Bore` hazard needs randomised to probe. The CI named step does not disable
+`randomly`, so the gate still covers it; the manual run should not be read as equivalent.
 
 ### 13.8 What the next batch inherits
 
 - **Batch order, from §11.2.2:** `radiation` (needs `body`, which landed in batch 2) and then
-  `engine` — and `mallet` only after `collision` lands in Phase 3. `bore` and `reed` were the last
-  two Group A models with no matrix at all.
+  `engine` — and `mallet` only after `collision` lands in Phase 3.
+- **§11.7's prediction that these would be "the first models with no matrix at all" was wrong, and
+  the correction is the useful part.** The bore's *step* has no matrix; the bore *object* carries
+  two, `Lop` and `Cmat`, built once by the binding as real `scipy.sparse` objects because four
+  files slice them and feed them to a generalized `eigsh`. So the question a new model owes is not
+  "does the step multiply by a matrix" but **"does any client reach for one"** — and the second
+  question is answered by grepping the clients, like every other surface question in this
+  migration. A batch that read "no matrix" and skipped the build-once check would put a
+  `csr_matrix` assembly inside `airbox`'s inner loop, which is the hazard `membrane`'s header
+  already documents.
 - **The re-entrant `step` shape is now the house pattern** for any model that calls back into
   Python mid-step, and `bow` is the next one that will.
 - **`root::brentq` exists and is exercised.** `collision` (Phase 3) and `bow` both do scalar solves;

@@ -71,34 +71,30 @@ use pyo3::types::{PyDict, PyString, PyTuple};
 /// Parse the `boundary=` argument into a `(left, right)` pair.
 ///
 /// Mirrors `(boundary, boundary) if isinstance(boundary, str) else boundary`: a bare string sets
-/// both ends, a 2-sequence sets them independently. Anything else yields `None`, which
+/// both ends, **any** 2-sequence sets them independently. Anything else yields `None`, which
 /// `Params::new` turns into the rejection *at the position in the check order where Python raises
 /// it* — after the scalar, `N`, `sigma` and `R_bell` checks, and before the CFL test.
+///
+/// **"Any 2-sequence" is load-bearing and was measured, not assumed.** The original unpacks
+/// whatever it is given, so `boundary=["closed", "open"]` is legal — and a list is exactly what a
+/// JSON round-trip produces, which matters because `web/serialize.py` is a live client of this
+/// binding for the whole migration. A tuple-only parse compiles, passes every test in the repo
+/// (every call site today writes a literal tuple) and refuses a caller the model accepts.
+fn parse_end(item: &Bound<'_, PyAny>) -> Option<core::End> {
+    core::End::parse(&item.cast::<PyString>().ok()?.to_cow().ok()?)
+}
+
 pub(crate) fn parse_boundary(obj: &Bound<'_, PyAny>) -> Option<(core::End, core::End)> {
+    // A `str` is a sequence of length 2 when it has two characters, so it has to be tested first.
     if let Ok(s) = obj.cast::<PyString>() {
         let e = core::End::parse(&s.to_cow().ok()?)?;
         return Some((e, e));
     }
-    let seq = obj.cast::<PyTuple>().ok()?;
-    if seq.len() != 2 {
+    if obj.len().ok()? != 2 {
         return None;
     }
-    let left = core::End::parse(
-        &seq.get_item(0)
-            .ok()?
-            .cast::<PyString>()
-            .ok()?
-            .to_cow()
-            .ok()?,
-    )?;
-    let right = core::End::parse(
-        &seq.get_item(1)
-            .ok()?
-            .cast::<PyString>()
-            .ok()?
-            .to_cow()
-            .ok()?,
-    )?;
+    let left = parse_end(&obj.get_item(0).ok()?)?;
+    let right = parse_end(&obj.get_item(1).ok()?)?;
     Some((left, right))
 }
 

@@ -36,8 +36,7 @@ import numpy as np
 import pytest
 
 from physsynth.core.bore import C0_AIR, BorePy
-from physsynth.core.reed import ReedBorePy
-from physsynth.core.reed import bernoulli_flow as bernoulli_flow_py
+from physsynth.core.reed import ReedBorePy, bernoulli_flow_py
 
 physsynth_rs = pytest.importorskip(
     "physsynth_rs", reason="the Rust extension is not built in this environment"

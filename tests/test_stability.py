@@ -265,6 +265,11 @@ def test_the_rust_swap_matches_the_environment():
             "norm2_2d",
         },
         exciter: set(exciter.__all__),
+        # `reed` is ported in full, but only ONE of its two public names is a function -- the
+        # class is checked by identity above. `bernoulli_flow` needs the swap because
+        # `tests/test_reed_stability.py` imports it by name and asserts its oddness and passivity
+        # directly, and that file is in the flagged CI step.
+        reed: {"bernoulli_flow"},
     }
     for module, expected_names in ported_expected.items():
         aliased = {n[:-3] for n in dir(module) if n.endswith("_py") and not n.startswith("_")}

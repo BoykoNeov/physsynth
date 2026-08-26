@@ -160,6 +160,86 @@ def test_the_boundary_argument_is_echoed_unchanged(case):
     assert type(py.boundary) is type(rs.boundary)
 
 
+@pytest.mark.parametrize(
+    "spec",
+    [
+        ("closed", "open"),
+        ["closed", "open"],
+        "closed",
+        "radiating",
+        np.array(["closed", "radiating"]),
+        ["closed", "bogus"],
+        {"a": 1, "b": 2},
+    ],
+    ids=["tuple", "list", "str", "str-radiating", "ndarray", "bad-token", "dict"],
+)
+def test_the_boundary_accepts_whatever_the_original_accepts(spec):
+    """``(boundary, boundary) if isinstance(boundary, str) else boundary`` unpacks **any**
+    2-sequence, so a **list** is legal — and a list is exactly what a JSON round-trip produces.
+
+    That matters because ``web/serialize.py`` is a live client of this binding for the whole
+    migration (plan §1.1). A tuple-only parse compiles, passes every test in the repo — every call
+    site today writes a literal tuple — and refuses a caller the model accepts. Found by trying it,
+    not by reading the code.
+    """
+    kw = dict(L=0.6, fs=C0_AIR / (0.6 / 60), N=60, R_bell=650.0, boundary=spec)
+
+    def build(cls):
+        try:
+            b = cls(**kw)
+            return (b._bc_left, b._bc_right)
+        except ValueError as e:
+            return ("ValueError", str(e))
+
+    assert build(BorePy) == build(physsynth_rs.Bore)
+
+
+def test_a_malformed_boundary_is_refused_by_both_if_not_with_the_same_words():
+    """Both refuse; the words differ, and that is fine.
+
+    For a boundary that is not a sequence of two strings — a 3-list, an int — Python fails in the
+    *unpack* (``too many values to unpack``, ``cannot unpack non-iterable int``) while the binding
+    reports its own ``each boundary end must be one of ...``. Both refuse, both name the argument,
+    nothing in the suite matches on either text, and the ``string_ideal`` binding has had the same
+    shape since Phase 0. What must not diverge is which *legal* inputs are **accepted**, which is
+    the test above.
+    """
+    for spec in (["closed", "open", "open"], 5, 3.5):
+        kw = dict(L=0.6, fs=C0_AIR / (0.6 / 60), N=60, boundary=spec)
+        with pytest.raises((ValueError, TypeError)):
+            BorePy(**kw)
+        with pytest.raises((ValueError, TypeError)):
+            physsynth_rs.Bore(**kw)
+
+
+def test_an_explicit_none_boundary_is_the_one_divergence_and_it_cannot_be_closed():
+    """``Bore(boundary=None)`` raises ``TypeError`` in Python and yields the **default** clarinet
+    in Rust. This is recorded rather than fixed because it is a property of PyO3, not a choice:
+    a Python-object parameter with a default has to be declared ``Option<Bound<PyAny>>``, and PyO3
+    maps *both* an omitted keyword and an explicitly-passed ``None`` to Rust's ``None``. There is
+    no signature that distinguishes them.
+
+    The consequences are bounded and worth stating so nobody re-derives them:
+
+    * ``None`` is not a legal boundary for either implementation — the difference is refuse versus
+      default, not two different bores.
+    * Nothing in ``physsynth/``, ``tests/`` or ``web/serialize.py`` passes it; every call site
+      writes a literal.
+    * The same is true of every other object-typed defaulted parameter in this binding layer,
+      including ``string_ideal``'s ``boundary`` since Phase 0.
+
+    Asserted, so that a future change to either side is a *failing* test rather than a surprise.
+    """
+    kw = dict(L=0.6, fs=C0_AIR / (0.6 / 60), N=60, boundary=None)
+    with pytest.raises(TypeError):
+        BorePy(**kw)
+    default = physsynth_rs.Bore(**kw)
+    assert (default._bc_left, default._bc_right) == ("closed", "open")
+    # ...and that default is the same bore the original builds when the argument is omitted.
+    omitted = BorePy(L=0.6, fs=C0_AIR / (0.6 / 60), N=60)
+    assert (omitted._bc_left, omitted._bc_right) == (default._bc_left, default._bc_right)
+
+
 @pytest.mark.parametrize("case", CASES, ids=_ids)
 def test_the_pressure_operator_agrees_bit_for_bit(case):
     py, rs = _pair(case)
