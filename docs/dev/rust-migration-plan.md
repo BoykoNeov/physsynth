@@ -1113,3 +1113,59 @@ drifts by far more than the effect being measured, cross-pair comparison is wort
 "same sign three times" should be read as weaker evidence than it looked at the time. **The only
 speed claim this migration can support is the controlled per-step one**; the suite-level number is
 useful for saying "nothing blew up", and for nothing else.
+
+### 12.8 What the `bore` + `reed` batch inherits — the pre-work, done before any Rust was written
+
+§12.2's rule ("derive the buffer list from what clients assign to, not from what the author marked
+public") was applied to `bore` and `reed` before designing their binding. Four results, and three of
+them change the design:
+
+**The Python-callable seam is load-bearing, not transitional.** `reed.ReedBore._inject` is not the
+only caller that passes `source=`: `tests/test_reed_stability.py` passes its own `lambda p: None` to
+assert the hook is inert when unused. So the binding must accept an arbitrary Python callable
+whatever happens to `reed` — porting `reed` in the same batch removes the *hot* crossing, not the
+capability. The design that follows: `physsynth-core`'s `Bore` takes a **Rust closure**
+(`Option<&mut dyn FnMut(&mut [f64])>`), and the binding wraps a Python callable into one. A PyO3
+type inside `physsynth-core` would break exactly what `crates/physsynth-core/tests/deps.rs` exists
+to guard, and it is the one mistake here that is expensive to undo.
+
+**`Lop`, `Cmat` and `dof` are public attributes, and they are the membrane's `L` problem again.**
+`_build_pressure_operator` is private and called once from `__init__`, but what it *returns* is
+assigned to three public names, and `tests/helpers.py`, `tests/test_bore_energy.py`,
+`tests/test_bore_modal.py` and `web/serialize.py` all reach for them — with fancy indexing
+(`bore.Lop[dof][:, dof]`) and as arguments to a generalized `eigsh`. So they must be real
+`scipy.sparse` objects on the instance, built once, which means the binding builds them itself
+(§11.4's "`physsynth-py` is a SciPy client"). Phase 1's triplet-shim does not apply: there is no
+call to wrap.
+
+**The step's internal ordering is load-bearing and no energy test can see it.** The hook fires
+*after* the open-end pin, *before* the radiating-end drain, *before* the momentum sub-step — so that
+`U^{n+3/2}` sees the corrected node pressure. Get it wrong and the reed still oscillates and the
+books still roughly balance; the project's own reed work already established that balance is not a
+sufficient detector there and the **signature** oracle is. `tests/test_reed_signature.py` therefore
+belongs in this batch's named CI step, not just `test_reed_energy.py`.
+
+**And one finding that is not about Rust at all.** `reed.py` computed its node-0 half-cell
+compliance from the bore's *public* geometry — deliberately, to avoid reaching into private arrays —
+and carried a comment claiming the result equals the bore's own `_p_pref[0]`. It does not. The bore
+spells the compliance `rho0 * c0**2` (one libm `pow`); the reed spells it `rho0 * c0 * c0` (two
+multiplies). **Measured, they disagree by one ulp in 3,531 of 3,552 tube/grid combinations**, worst
+4.1e-16 relative. This is §10.3's `h ** 4` finding in Python-vs-Python form, it predates the
+migration by a long way, and the physical consequence is nil — it scales an injection that is itself
+a correction. What matters is that a port which "tidied" the two spellings into agreement would be
+changing a number the acceptance runs were taken with. The comment is corrected in place rather than
+the code.
+
+### 12.9 A limit of the gate, stated so nobody assumes otherwise
+
+CI's Rust coverage is **exactly the four named lists** — the ideal string's tests, the operators'
+clients, the membrane's clients plus the 2-D builders, and the body's clients — plus the four parity
+files, which run *without* the flag. The three sharded `validate` jobs that cover the whole suite run
+on the **default Python path**; `PHYSSYNTH_RS=1` is never set there.
+
+That is the right shape while the named lists are the claim: a partition would hide which models the
+flag is actually asserted over, and §10.4's lesson is that the interesting tests are never in the
+file named after the module. But it means the **whole-suite flagged run is a manual measurement**,
+taken by hand at the end of each batch and recorded in §11.6 and §12.6 — not a gate. If it should
+become one, that is a deliberate decision to price (a fourth shard axis, roughly doubling the gate),
+not an omission to fix quietly.

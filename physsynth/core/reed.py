@@ -213,8 +213,17 @@ class ReedBore:
         # Node-0 half-cell capacitance C0 = (h/2) S / (rho c^2) and the injection prefactor k/C0.
         # Built from the bore's PUBLIC geometry so the half-cell weight (the node-0 gotcha) is
         # explicit and we never reach into the bore's private update arrays.
+        # NOT bit-equal to the bore's own ``_p_pref[0]``, and deliberately left that way. The bore
+        # spells its compliance ``rho0 * c0**2`` (one libm ``pow``); this spells it
+        # ``rho0 * c0 * c0`` (two multiplies), and the two round differently -- measured, they
+        # disagree by one ulp in 3531 of 3552 tube/grid combinations (worst 4.1e-16 relative).
+        # The difference is physically nothing: it scales an injection that is itself a
+        # correction. It is recorded because the equality used to be *claimed* here, and a
+        # future reader (or a Rust port) that 'fixes' one spelling to match the other would be
+        # changing a number the acceptance runs were taken with. Same class as the plan's
+        # ``h ** 4`` finding (docs/dev/rust-migration-plan.md §10.3), in Python-vs-Python form.
         c0_cap = (0.5 * bore.h) * bore.S_node[0] / (bore.rho0 * bore.c0 * bore.c0)
-        self._p_pref0 = self.k / c0_cap        # p0 += p_pref0 * U_inject  (== bore's _p_pref[0])
+        self._p_pref0 = self.k / c0_cap        # p0 += p_pref0 * U_inject
 
         # Reed leapfrog coefficients. y^{n+1} = y_hist + c_reed * dp_bar, from
         #   (1 + gk/2) y^{n+1} = (2 - wr^2 k^2) y^n + (gk/2 - 1) y^{n-1} - (Sr k^2/Mr)(p_m - p_bar)
