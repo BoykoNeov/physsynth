@@ -21,14 +21,20 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    analysis, viewer backend *and* the test suite — in favour of **Rust**, gradually and model by
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
-   **Phases 0 and 1 are built** (plan §9, §10): `crates/physsynth-core` + `crates/physsynth-py`,
-   with `string_ideal` and all of `operators` ported. `cargo test --workspace` runs the native bars
-   and the Cargo dependency allowlist; `pip install ./crates/physsynth-py` then `PHYSSYNTH_RS=1
-   pytest` runs the **existing, unmodified** Python tests against the Rust code. The flag is one
-   switch for the whole tree: with it set, five still-Python models (`string_stiff`,
-   `string_damped`, `string_nonlinear`, `string_geometric`, `beam`) run on Rust-built operators.
-   Both implementations stay alive for now — deleting a Python model waits on its clients, not on
-   its own phase (§1.2).
+   **Phases 0, 1 and the first batch of 2 are built** (plan §9, §10, §11):
+   `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all of `operators`,
+   `membrane`, `exciter` and the *builder half* of `operators2d` ported. `cargo test --workspace`
+   runs the native bars and the Cargo dependency allowlist; `pip install ./crates/physsynth-py`
+   then `PHYSSYNTH_RS=1 pytest` runs the **existing, unmodified** Python tests against the Rust
+   code. The flag is one switch for the whole tree: with it set, five still-Python string/beam
+   models run on Rust-built operators, and every plate — supported, free, orthotropic,
+   guitar-shaped — plus the von Karman bracket runs on Rust-built geometry. Both implementations
+   stay alive for now — deleting a Python model waits on its clients, not on its own phase (§1.2).
+   Three facts worth knowing before planning work: a file's risk group is the group of its
+   hardest function, so a module can port in halves (§11.2.1); `mallet` needs `collision`, so
+   **Phase 2 finishes after Phase 3 starts** (§11.2.2); and the speed win is **per-step
+   overhead, not arithmetic** — 8.7x on a small grid, ~1.1x once SciPy's compiled matvec
+   dominates, so the *test suite* does not get faster and the *real-time* case does (§11.6).
 4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
    never the reverse. Keeps the physics portable to C++/Rust later.
 5. **Unifying abstraction:** `exciter -> resonator (+- nonlinear coupling) -> body/radiation`.

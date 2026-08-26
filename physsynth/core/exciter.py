@@ -6,6 +6,8 @@ These return arrays sampled on the resonator's grid ``x``; feed them to
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -80,3 +82,35 @@ def raised_cosine_2d(
     inside = d < width
     field[inside] = amplitude * 0.5 * (1.0 + np.cos(np.pi * d[inside] / width))
     return field
+
+
+# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 2) -----------------------------------
+#
+# Same shape as `operators.py`'s: the ``_py`` aliases above the switch are the reference
+# implementations and are what every parity check reaches for; the public names below are bound to
+# whichever implementation this process is meant to exercise.
+#
+# One divergence worth naming rather than discovering: ``triangular_pluck`` builds its result with
+# ``np.empty_like(x)``, so on a float32 grid the Python version returns float32 while the Rust one
+# always returns float64. Nothing in this repo samples a resonator grid at single precision -- every
+# grid comes from ``np.linspace`` -- but the dtype is not preserved, and that is a difference a
+# future caller could notice.
+#
+# Off by default. The Python implementations are still the reference oracle.
+triangular_pluck_py = triangular_pluck
+raised_cosine_py = raised_cosine
+raised_cosine_2d_py = raised_cosine_2d
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    import physsynth_rs as _rs
+
+    def triangular_pluck(x, L, position, amplitude=1.0):  # type: ignore[misc]  # noqa: F811
+        return _rs.triangular_pluck(x, L, position, amplitude)
+
+    def raised_cosine(x, L, center, width, amplitude=1.0):  # type: ignore[misc]  # noqa: F811
+        return _rs.raised_cosine(x, L, center, width, amplitude)
+
+    def raised_cosine_2d(X, Y, center, width, amplitude=1.0):  # type: ignore[misc]  # noqa: F811
+        return _rs.raised_cosine_2d(X, Y, center, width, amplitude)

@@ -18,6 +18,8 @@ Headless: NumPy + SciPy (sparse). No I/O, no plotting.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 from numpy.typing import NDArray
 from scipy import sparse
@@ -938,3 +940,58 @@ def inner2d(f: NDArray[np.float64], g: NDArray[np.float64], h: float) -> float:
 def norm2_2d(f: NDArray[np.float64], h: float) -> float:
     """Squared discrete 2D norm ``||f||² = <f, f> = h² Σ f²`` (>= 0)."""
     return float(h * h * np.dot(f, f))
+
+
+# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 2) -----------------------------------
+#
+# **Only part of this module is ported, deliberately.** The plan's Group D puts `operators2d` at
+# Phase 5 because of `VonKarmanBracket` and `AiryStressSolver`, which factor with SuperLU. That is
+# right about the module and wrong about the unit of work: the membrane is a Phase 2 model, and the
+# seven functions below -- the grid, the two masks, the Laplacian, `embed` and the two inner
+# products -- assemble rather than solve. So they port with the membrane and the rest waits for the
+# plate family. `crates/physsynth-core/src/ops2d.rs` names what is deliberately absent.
+#
+# The matrix comes back from the binding as CSR triplets and is rebuilt here, exactly as in
+# `operators.py`: the core never learns what SciPy is, and the modules that
+# `from .operators2d import ...` never learn what Rust is.
+#
+# Off by default. The Python implementations are still the reference oracle.
+grid_coords_py = grid_coords
+rectangle_mask_py = rectangle_mask
+disk_mask_py = disk_mask
+laplacian_from_mask_py = laplacian_from_mask
+embed_py = embed
+inner2d_py = inner2d
+norm2_2d_py = norm2_2d
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    import physsynth_rs as _rs
+
+    def _csr2d(triplets: tuple) -> sparse.csr_matrix:
+        """Rebuild a ``csr_matrix`` from the binding's ``(data, indices, indptr, shape)``."""
+        data, indices, indptr, shape = triplets
+        return sparse.csr_matrix((data, indices, indptr), shape=shape)
+
+    def grid_coords(N, half_extent):  # type: ignore[misc]  # noqa: F811
+        return _rs.grid_coords(N, half_extent)
+
+    def rectangle_mask(Nx, Ny):  # type: ignore[misc]  # noqa: F811
+        return _rs.rectangle_mask(Nx, Ny)
+
+    def disk_mask(X, Y, radius):  # type: ignore[misc]  # noqa: F811
+        return _rs.disk_mask(X, Y, radius)
+
+    def laplacian_from_mask(mask, h):  # type: ignore[misc]  # noqa: F811
+        triplets, index_map = _rs.laplacian_from_mask_csr(mask, h)
+        return _csr2d(triplets), index_map
+
+    def embed(values, index_map):  # type: ignore[misc]  # noqa: F811
+        return _rs.embed(values, index_map)
+
+    def inner2d(f, g, h):  # type: ignore[misc]  # noqa: F811
+        return _rs.inner2d(f, g, h)
+
+    def norm2_2d(f, h):  # type: ignore[misc]  # noqa: F811
+        return _rs.norm2_2d(f, h)

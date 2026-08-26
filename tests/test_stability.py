@@ -170,10 +170,10 @@ def test_the_rust_swap_matches_the_environment():
     # name and is immune to the swap by design. It belongs here, with the other three portability
     # guards, and it runs on BOTH paths -- the default one included, where it asserts the Rust
     # model is *not* silently in play.
-    from physsynth.core import operators, string_ideal
+    from physsynth.core import exciter, membrane, operators, operators2d, string_ideal
 
     expected_rust = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
-    for module in (string_ideal, operators):
+    for module in (string_ideal, operators, membrane, operators2d, exciter):
         assert module._USE_RUST is expected_rust, (
             f"{module.__name__}'s reading of PHYSSYNTH_RS disagrees with this test's -- one of "
             "the two changed without the other"
@@ -186,9 +186,17 @@ def test_the_rust_swap_matches_the_environment():
             "PHYSSYNTH_RS is set but `IdealString` is still the Python class: this run is NOT "
             "exercising the Rust model, whatever it reports"
         )
+        assert membrane.Membrane is physsynth_rs.Membrane, (
+            "PHYSSYNTH_RS is set but `Membrane` is still the Python class: this run is NOT "
+            "exercising the Rust model, whatever it reports"
+        )
     else:
         assert string_ideal.IdealString is string_ideal.IdealStringPy, (
             "PHYSSYNTH_RS is unset but `IdealString` is not the Python class -- the default path "
+            "must stay the one the acceptance numbers came from"
+        )
+        assert membrane.Membrane is membrane.MembranePy, (
+            "PHYSSYNTH_RS is unset but `Membrane` is not the Python class -- the default path "
             "must stay the one the acceptance numbers came from"
         )
 
@@ -202,22 +210,51 @@ def test_the_rust_swap_matches_the_environment():
     # landed after them -- a lazy import, a reordered `physsynth.core.__init__` -- those five would
     # hold the Python functions while `operators` reported Rust, and the run would be green while
     # testing the wrong thing for five models at once.
-    for name in operators.__all__:
-        public = getattr(operators, name)
-        reference = getattr(operators, f"{name}_py")
-        if expected_rust:
-            assert public is not reference, (
-                f"PHYSSYNTH_RS is set but `operators.{name}` is still the Python function: this "
-                "run is NOT exercising the Rust operators, whatever it reports"
-            )
-        else:
-            assert public is reference, (
-                f"PHYSSYNTH_RS is unset but `operators.{name}` is not the Python function -- the "
-                "default path must stay the one the acceptance numbers came from"
-            )
+    #
+    # The set of swapped names is DERIVED from the `_py` aliases the module actually defines, not
+    # listed here -- so a function ported without an alias escapes nothing and a function aliased
+    # without being swapped fails loudly. It is then checked against a written-down expectation,
+    # which is what makes adding a port a reviewed edit rather than a silent one (the same
+    # reasoning as the hardcoded dependency allowlist below).
+    ported_expected = {
+        # `operators` is ported in full (plan Phase 1).
+        operators: set(operators.__all__),
+        # `operators2d` is ported in PART (plan Phase 2): the builders the membrane needs. The
+        # rest of the module -- the guitar outline, the biharmonic, the free-plate stiffness,
+        # `VonKarmanBracket`, `AiryStressSolver` -- waits for the plate family.
+        operators2d: {
+            "grid_coords",
+            "rectangle_mask",
+            "disk_mask",
+            "laplacian_from_mask",
+            "embed",
+            "inner2d",
+            "norm2_2d",
+        },
+        exciter: set(exciter.__all__),
+    }
+    for module, expected_names in ported_expected.items():
+        aliased = {n[:-3] for n in dir(module) if n.endswith("_py") and not n.startswith("_")}
+        assert aliased == expected_names, (
+            f"{module.__name__}'s `_py` aliases are {sorted(aliased)}, but this guard expects "
+            f"{sorted(expected_names)} -- a port landed (or left) without the guard being updated"
+        )
+        for name in sorted(expected_names):
+            public = getattr(module, name)
+            reference = getattr(module, f"{name}_py")
+            if expected_rust:
+                assert public is not reference, (
+                    f"PHYSSYNTH_RS is set but `{module.__name__}.{name}` is still the Python "
+                    "function: this run is NOT exercising the Rust code, whatever it reports"
+                )
+            else:
+                assert public is reference, (
+                    f"PHYSSYNTH_RS is unset but `{module.__name__}.{name}` is not the Python "
+                    "function -- the default path must stay the one the numbers came from"
+                )
 
     if expected_rust:
-        from physsynth.core import beam, string_stiff
+        from physsynth.core import beam, mallet, string_stiff
 
         assert string_stiff.biharmonic_matrix is operators.biharmonic_matrix, (
             "`string_stiff` captured a different `biharmonic_matrix` than `operators` now "
@@ -226,6 +263,16 @@ def test_the_rust_swap_matches_the_environment():
         )
         assert beam.free_beam_stiffness is operators.free_beam_stiffness, (
             "`beam` captured a different `free_beam_stiffness` than `operators` now exposes"
+        )
+        # The membrane's version of the same hazard: `mallet` does `from .membrane import
+        # Membrane` at import time, so a swap that landed after it would leave the mallet striking
+        # a Python drumhead while this run reports Rust.
+        assert mallet.Membrane is membrane.Membrane, (
+            "`mallet` captured a different `Membrane` than `membrane` now exposes -- the swap "
+            "landed after that module was imported"
+        )
+        assert membrane.laplacian_from_mask is operators2d.laplacian_from_mask, (
+            "`membrane` captured a different `laplacian_from_mask` than `operators2d` now exposes"
         )
 
 

@@ -8,7 +8,9 @@
 //! work; only what a completed phase has ported lives here. Phase 0 is `string_ideal` plus the two
 //! operators it calls; Phase 1 completes `ops` — the remaining pointwise differences and the three
 //! sparse builders — and brings in `sparse`, a hand-written CSR type whose reason for existing
-//! (rather than being a dependency) is written down in that module.
+//! (rather than being a dependency) is written down in that module. Phase 2 begins the explicit
+//! models: `exciter`, `membrane`, and `ops2d` — the *builder* half of `operators2d.py`, which the
+//! plan files under Group D for a solver the membrane never calls (see that module's header).
 //!
 //! # The shape every resonator here shares
 //!
@@ -29,6 +31,10 @@
 //! and monotonically decreasing when lossy. That is the project's acceptance contract, and it is
 //! asserted natively in `tests/` here as well as through the Python harness.
 
+pub mod exciter;
+pub mod fmt;
+pub mod membrane;
 pub mod ops;
+pub mod ops2d;
 pub mod sparse;
 pub mod string_ideal;

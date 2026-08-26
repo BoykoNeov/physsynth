@@ -184,6 +184,18 @@ gradient. Measured per file:
 **A file can appear in two groups** — `string_geometric` uses banded Cholesky *and* a sparse LU — so
 the group sizes below do not sum to 22. That is real, not a miscount.
 
+> **Correction, 2026-08-26, from building Phase 2.** The map above is keyed to **files**, and a
+> file's group is the group of its *hardest function*. That is the right way to price risk and the
+> wrong way to schedule work, because **the unit of porting is a function group, not a file.**
+>
+> Measured on `operators2d`: it is in Group D because of `VonKarmanBracket` and `AiryStressSolver`,
+> which factor with SuperLU — but `membrane` is a Phase 2 model and the five functions it reaches
+> for (`grid_coords`, `rectangle_mask`, `disk_mask`, `laplacian_from_mask`, `embed`) never solve
+> anything. So the module ported **in half** at Phase 2 and the solver half waits for the plate
+> family. Expect the same at `plate` (geometry vs the θ-scheme solve) and, most consequentially, at
+> `airbox`, whose 3,925 lines are six factorizations surrounded by a great deal of arithmetic that
+> is not. §11.2.1.
+
 **Group A — no linear solve at all (10 files, ~2,700 lines).**
 `string_ideal` · `membrane` · `bore` · `reed` · `mallet` · `body` · `radiation` · `exciter` ·
 `engine` · `operators`.
@@ -279,6 +291,19 @@ everything downstream needs.
 **Phase 2 — Group A, the remaining explicit models.** Eight files. Bulk transcription, low risk, and
 the phase where the Rust idiom for this project settles (state layout, the `Resonator` trait, how
 `energy()` is expressed). Get the idiom right here; every later model inherits it.
+*(Batch 1 landed 2026-08-26 — `exciter`, `membrane` and the builder half of `operators2d`; see
+§11.)*
+
+> **Correction, 2026-08-26.** The eight files are not independent, and one of them is blocked on a
+> later phase. Measured intra-`core` dependencies: `exciter`, `bore`, `body` and `engine` need
+> nothing; `membrane` needs the `operators2d` builders; `reed` needs `bore`; `radiation` needs
+> `body`; and **`mallet` needs `collision`**, which is Group C — Phase 3. So the honest statement of
+> the order below is that **Phase 2 finishes after Phase 3 starts.** §1.2 found that a ported model
+> waits on its *clients*; this is the same thing seen from the other side, and neither relation is
+> encoded in the phase numbering. §11.2.2.
+>
+> `engine` is also deferred within the phase, deliberately and for a design reason rather than a
+> scheduling one — see §11.3.
 
 **Phase 3 — Group B + C, then `bow`.** `string_stiff` first (259 lines, the smallest banded solve),
 then `string_damped`, `string_nonlinear`; then `collision`. Cheap, and they prove the LAPACK link.
@@ -335,6 +360,15 @@ between tolerable and not.
 core utilisation, and the bulk is FDTD timestepping — the thing Rust is good at. This is a genuine
 upside, not a consolation: the 15–21-minute gate is a Python cost.
 
+> **Measured at Phase 2 and it is wrong — see §11.6.** The first ported timestepping loop makes the
+> whole suite **3 % slower**, not faster, and the controlled measurement says why: Rust removes the
+> per-step *interpreter overhead* (8.7× on a 69-unknown membrane) and not the arithmetic (~1.1× by
+> 5,000 unknowns, where SciPy's compiled matvec dominates). The suite's expensive tests are all on
+> the wrong side of that crossover. The claim that survives is narrower and more useful: **small
+> grids stepped very often get dramatically faster**, which is the real-time case (§8, HANDOFF §9
+> Phase 8) and not the gate. Whether the gate speeds up is now a Phase 4 question — the SuperLU
+> factorizations — not a Phase 2 one.
+
 **Cargo test parallelism is threads, not processes**, unlike pytest-xdist's shards. The sharding
 machinery — computed from a glob, guarded inside and out — does not carry over and should not be
 recreated speculatively. But note what else the shards were quietly providing: **process
@@ -357,8 +391,13 @@ time someone tightens a comparison. Fix it (pass `v0`) before Phase 4, not durin
   Rust makes the *plugin* possible but does not make every model playable, and "which subset ships"
   remains an unanswered scoping question — now decoupled from the language decision, which is the
   main thing this document changes about it.
-- **Polyphony** (HANDOFF §11.3a) is still open and is an *engine-shape* question. It should be
-  settled before Phase 2 fixes the `Resonator` trait, or the trait is rebuilt later.
+- ~~**Polyphony** (HANDOFF §11.3a) is still open and is an *engine-shape* question. It should be
+  settled before Phase 2 fixes the `Resonator` trait, or the trait is rebuilt later.~~
+  **Checked 2026-08-26 and it is not open:** HANDOFF §11.3a settled it — field models per
+  instance, strings per voice — with only the voice-count *budget* deferred, and that is a
+  real-time-stage concern. So the trait is not blocked on the human. It is deferred to the batch
+  that ports `engine`, because that is its only consumer and §10.2's reasoning applies: do not fix
+  an interface before the requirement that ought to choose it exists. §11.3.
 - **The plugin framework** (`nih-plug`/CLAP vs a bespoke host) — still a genuine plugin-stage
   decision, and nothing before Phase 8 depends on it.
 
@@ -643,3 +682,279 @@ tests it is Phase 2's, where the explicit models' step functions move.
 - **The trait question from §8 is now due.** Phase 2 is where the `Resonator` trait gets fixed, and
   the plan says polyphony (HANDOFF §11.3a) should be settled first or the trait is rebuilt later.
   Nothing in Phase 0 or Phase 1 forced the question; the eight explicit models will.
+
+## 11. Phase 2, batch 1, as built (2026-08-26)
+
+`physsynth/core/exciter.py` and `physsynth/core/membrane.py` in full, plus the *builder half* of
+`physsynth/core/operators2d.py`. Two things make this batch different in kind from Phases 0 and 1
+rather than merely larger:
+
+- it is the first to move a **timestepping inner loop** into Rust — §10.5 said the number that
+  tests §7's speed prediction would be this one, and §11.6 is that number;
+- it is the first to port a module **in halves**, which turned out not to be a special case but a
+  correction to how the whole plan is ordered (§11.2.1).
+
+### 11.1 The shape on disk
+
+```
+crates/physsynth-core/src/ops2d.rs         2-D grid, masks, the masked 5-point Laplacian, embed
+crates/physsynth-core/src/membrane.rs      model #4, both domains, energy()
+crates/physsynth-core/src/exciter.rs       the three excitation shapes
+crates/physsynth-core/src/fmt.rs           repr() of a float, for ERROR TEXT only. §11.4
+crates/physsynth-core/tests/ops2d.rs       native geometry bars (10 tests)
+crates/physsynth-core/tests/membrane.rs    native membrane bars (12 tests)
+crates/physsynth-core/tests/exciter.rs     native excitation bars (8 tests)
+crates/physsynth-py/src/shape.rs           rank-agnostic array reads; Python's shape repr
+crates/physsynth-py/src/ops2d.rs           the seven builders
+crates/physsynth-py/src/membrane.rs        the class. The first place the binding calls SciPy
+crates/physsynth-py/src/exciter.rs         the three shapes
+physsynth/core/{membrane,operators2d,exciter}.py   + a swap block each, gated on PHYSSYNTH_RS
+tests/test_rust_parity_ops2d.py            Rust vs Python, geometry + excitations (174 tests)
+tests/test_rust_parity_membrane.py         Rust vs Python, the model (81 tests)
+```
+
+### 11.2 Two ordering findings — the phase list is a risk map, not a schedule
+
+#### 11.2.1 The unit of porting is a function group, not a file
+
+§4's risk map is keyed to files, and **a file's group is the group of its hardest function**. That
+is the right way to price risk and the wrong way to schedule work.
+
+`operators2d` is the demonstration. It sits in Group D — Phase 5 — because it contains
+`VonKarmanBracket` and `AiryStressSolver`, which factor with SuperLU. But `membrane` is a Phase 2
+model, and the five functions it reaches for (`grid_coords`, `rectangle_mask`, `disk_mask`,
+`laplacian_from_mask`, `embed`) never solve anything; they assemble. Waiting for Phase 5 would have
+held a Phase 2 model behind a solver it does not call. So the module ported in half, and the half
+that is deliberately absent is named in `ops2d.rs`'s header rather than left to be discovered:
+`guitar_*`, `live_cells`, `cells_per_node`, `prune_to_area_carrying`, `biharmonic_from_mask`,
+`orthotropic_biharmonic`, `free_plate_stiffness*`, `VonKarmanBracket`, `AiryStressSolver`.
+
+Expect the same split at `plate` (geometry versus the θ-scheme solve) and — most consequentially —
+at `airbox`, whose 3,925 lines are six factorizations surrounded by a great deal of arithmetic that
+is not. Reading §4 as a schedule would put the largest file in the project at the very end because
+of six functions inside it.
+
+**The rule this batch adds:** the phase of a *file* is the phase of its hardest function; the phase
+of a *function group* is its own. Port the group.
+
+#### 11.2.2 `mallet` needs `collision`, so Phase 2 finishes after Phase 3 starts
+
+The eight Group A files were listed as a phase, which implies they are independent. Measured, they
+are not. Intra-`core` dependencies: `exciter`, `bore`, `body` and `engine` need nothing; `membrane`
+needs the `operators2d` builders; `reed` needs `bore`; `radiation` needs `body`; and **`mallet`
+imports `collision`**, which is Group C — Phase 3.
+
+So the honest statement is that Phase 2 cannot finish before Phase 3 begins. §1.2 found that a
+ported model waits on its *clients*; this is the same relation seen from the supplier side, and
+neither is encoded in the phase numbering. The remaining batch order that follows from it:
+`bore` + `body` (nothing blocks them), then `reed` + `radiation`, then `engine` (§11.3), and
+`mallet` after `collision` lands in Phase 3.
+
+### 11.3 The `Resonator` trait, deferred within the phase — and polyphony was never the blocker
+
+§10.6 recorded the trait question as due at Phase 2, and §8 said it was blocked on polyphony being
+settled. **Checked, and it is not blocked:** HANDOFF §11.3a settled polyphony on 2026-08-10 — field
+models per instance, strings per voice — with only the voice-count *budget* deferred, and that is a
+real-time-stage concern that no trait signature depends on.
+
+The trait is deferred anyway, deliberately, and by §10.2's reasoning rather than for want of an
+answer. `engine` is the trait's only consumer. Fixing an interface now would mean deriving it from
+the two models that happen to be ported, and those two share almost nothing: `string_ideal` holds a
+1-D field on a uniform grid; `membrane` holds a live-node vector over a mask, with a second
+geometry (`state`, `to_live`, `index_map`) that has no 1-D counterpart at all. A trait fitted to
+that pair would be an interface chosen by a coincidence of scheduling. It arrives with `engine`,
+the batch that actually has a requirement for it.
+
+What the batch *does* fix, and what every later model should copy, is a set of conventions rather
+than a type:
+
+- the §9.1 three-way split — a plain-data `Params` that validates, free-function kernels, an owning
+  struct that holds state — now shown to survive a model with geometry attached;
+- `energy()` as an inherent method returning `f64`, evaluated through the same operator the update
+  uses;
+- the buffer contract (§9.3): rebound state in Python-owned arrays, everything immutable built once
+  and handed back by reference (§11.4);
+- errors as an enum whose `Display` reproduces the Python message verbatim.
+
+### 11.4 The findings
+
+**A sparse matvec inside a timestepping loop is still bit-identical — over 2,000 steps with
+feedback.** This is the sharpest form of §10.3's result and it was the batch's open question.
+`u^{n+1}` depends on `L @ u^n`, which is a reduction per row; the output is fed straight back in,
+so a single 1-ulp disagreement anywhere would compound and be visible long before step 2,000. It
+does not happen: the state matches `np.array_equal` at every checkpoint of a 2,000-step run, for
+both domains, lossless and lossy, from a displacement start and from a velocity start. The Rust
+`matvec` accumulates in ascending column index, which is what SciPy's CSR kernel does.
+
+The line §10.3 drew — *not* "does it contain a reduction" but "**is the summation order knowable**"
+— therefore holds through a loop and not merely through a build. What still cannot match is
+`energy()`, whose inner products go through `np.dot` and BLAS; it is held to the Group A target.
+The practical consequence for Phase 3: the first thing that will break bit-identity is a **solver**,
+not a step.
+
+**`physsynth-py` is now a SciPy client, and that is new.** Phase 1's seam handed matrices back as
+`(data, indices, indptr, shape)` triplets and rebuilt them in a Python shim, so the binding never
+imported SciPy. That works for a function return and not for `membrane.L`, which is a
+`csr_matrix` **on the instance** — there is no call to wrap. So the constructor imports
+`scipy.sparse` and builds the object itself. The portability rule is unweakened: it is about
+`physsynth-core`, whose dependency list is still empty and still enforced by
+`crates/physsynth-core/tests/deps.rs`. But the binding's Python-side dependencies are now real, and
+the day the binding is deleted is the day this import goes with it.
+
+**`L` had to be built once, and getting that wrong would have passed every test.**
+`airbox._MembraneSurface.rhs` evaluates `m.L @ m.u` once per timestep. A `L` getter that rebuilt a
+`csr_matrix` per access would assemble a sparse matrix inside the inner loop of some of the heaviest
+tests in the suite — every physics bar green, and the flagged run mysteriously *slower* than the
+Python one. `X`, `Y`, `mask`, `index_map` and `L` are built in the constructor and handed back by
+`clone_ref`; the parity test asserts it by **identity** (`rs.L is rs.L`), because a
+rebuild-per-access is invisible to any comparison of values.
+
+**The clients do not just read the state — they write it, and one of them rebinds it.**
+`mallet` does `mem.u[i] = u_free - g_s * f`: an in-place write to a single element, through the
+property, expecting the model to see it. `airbox._MembraneSurface.commit` does `m.u_prev = m.u` and
+then assigns a fresh array into `m.u`. Both halves of §9.3's contract are therefore load-bearing in
+2-D and not hypothetical, which is why the membrane's clients are in the gate as a named claim
+(§11.5) — no membrane test makes either call.
+
+**`cos` is the first transcendental in the port.** NumPy does not call the platform libm for
+`np.cos` on a float64 array; it has vectorised implementations with their own ~1 ulp budget. So the
+raised cosines are the first kernels whose exactness rests on two implementations agreeing rather
+than on IEEE-754 alone — the same shape as `delta_xxxx`'s reliance on two `pow`s (§10.3). Measured
+on this machine they agree bit-for-bit, and that is asserted and swept over widths and grid sizes,
+so a platform where it stops being true fails there, with an obvious cause, rather than as a
+mysterious partial three phases later.
+
+**A rejection message can need a float formatter, and this is the first time the "verbatim
+messages" convention was not free.** Most ported messages interpolate with an explicit precision,
+where Rust and Python already agree. `exciter.triangular_pluck` interpolates bare — and there
+Python's `repr(1.0)` is `1.0` where Rust's `{}` is `1`, and `repr(1e-5)` is `1e-05` where Rust's is
+`0.00001`. Rust's `Debug` is much closer (same shortest-round-trip algorithm, keeps the `.0`), so
+`fmt.rs` starts there and fixes what remains: the exponent's sign and two-digit padding, and
+`NaN`/`nan`. It is for error text only; nothing numeric goes through it, and no state crosses the
+boundary as text.
+
+**A mask is a geometry decision, not a number — and every detector this project owns is blind to
+it.** `disk_mask` is a strict `x² + y² < r²`, so a node one ulp from the rim changes whether it is
+an unknown at all. A membrane with one node fewer conserves energy just as beautifully as the right
+one, decays just as monotonically, and lands close enough to the Bessel oracle to pass a
+convergence-rate bar. So the masks are compared **elementwise**, against both parities of `N` (an
+even `N` puts a node exactly at the origin; an odd one does not, which changes the staircase), and
+never through anything downstream of them. This is the same lesson the guitar plate learned about
+its outline, arriving from the other direction.
+
+**One divergence is real, latent, and worth having written down.** `triangular_pluck` builds its
+result with `np.empty_like(x)`, so on a float32 grid the Python version returns float32 while the
+Rust one always returns float64. Checked: nothing under `physsynth/` uses float32 — every grid comes
+from `np.linspace` — so no caller can see it today. It is recorded at the swap block because the
+dtype is genuinely not preserved and a future caller could.
+
+### 11.5 The success condition, and what it covers that no membrane test can
+
+§10.4 generalised that a module's tests are not in the file named after it. The membrane confirms
+it twice over: there is no `tests/test_membrane.py`, the bars live in four files split by
+*criterion* (energy, modal, dispersion, stability), and the calls that decide whether the binding is
+right are in neither set. The CI step is therefore a named claim in three parts:
+
+- **the membrane's own four files**, which establish the physics;
+- **its clients** — `mallet` (three files) and `airbox` (membrane, surface) — which are where `.u`,
+  `.u_prev`, `.n` and `.L` get read, written and rebound once per timestep;
+- **the plate family**, because `plate.py` imports `rectangle_mask`, `disk_mask`,
+  `laplacian_from_mask` and `embed` from `operators2d`. Flipping the flag puts every plate —
+  supported, free, orthotropic, guitar-shaped — and the von Kármán bracket on **Rust-built geometry
+  while all of them are still Python models**. Same lever as Phase 1's, one dimension up.
+
+`exciter` gets no list of its own, on purpose: nearly every model's tests call `triangular_pluck` or
+a raised cosine, so a list would be the suite. The whole-suite run under the flag is its bar, and it
+is in §11.6.
+
+**The swap guard now derives what it checks.** Phase 1's version iterated `operators.__all__`, which
+works only for a module ported in full. `operators2d` is not, so the guard instead reads the set of
+`_py` aliases the module actually defines and compares it against a written-down expectation. A
+function ported without an alias fails the comparison; an alias added without a swap fails it too;
+and widening the ported set is a reviewed edit rather than a silent one — the same reasoning as the
+hardcoded dependency allowlist. The guard also gained the membrane's version of Phase 1's
+import-order hazard: `mallet` does `from .membrane import Membrane` at import time, so
+`mallet.Membrane is membrane.Membrane` is asserted, and likewise
+`membrane.laplacian_from_mask is operators2d.laplacian_from_mask`.
+
+**One configuration the swap creates that is worth naming rather than tripping over.**
+`membrane.py` imports its operators from `operators2d`, whose swap block has already run. So on the
+flagged path the *Python* membrane — `MembranePy`, the name every parity check reaches for — is
+stepping a *Rust*-built Laplacian. That is the lever working as designed (§1.2), and it is a third
+useful configuration rather than a gap; the bit-parity claim itself is measured on the default path,
+where both sides are unambiguous, which is why the parity CI step runs **without** the flag.
+
+### 11.6 What was measured
+
+| | |
+|---|---|
+| Native `cargo test --workspace` | **76 passed** (42 at the end of Phase 1) |
+| `tests/test_rust_parity_ops2d.py` | **174 passed** |
+| `tests/test_rust_parity_membrane.py` | **81 passed** |
+| Grid, masks, `index_map` — 9 sizes, both parities of `N`, both domains | **elementwise identical** |
+| Laplacian — `data`, `indices`, `indptr`, `nnz` | **bit-identical** |
+| Excitation shapes, including the two that call `cos` | **bit-identical** |
+| Membrane state over 2,000 steps — 2 domains × lossless/lossy × displacement/velocity start | **bit-identical** |
+| `inner2d` / `norm2_2d` / `energy()`, worst relative | inside the 1e-13 Group A target |
+| **The WHOLE suite under `PHYSSYNTH_RS=1`** | **2,283 passed, 0 failed** |
+| The whole suite on the default Python path, same tree | **2,283 passed, 0 failed** |
+| Whole-suite core-seconds, same machine, same partition, Rust vs default | 2,612.3 s vs 2,534.3 s |
+
+**The speed prediction, finally testable — and the answer is not the one §7 expects.**
+§10.5 said the number that tests §7's "the suite gets dramatically faster" would be Phase 2's,
+because Phase 2 is where a timestepping inner loop first moves. It moved, and at whole-suite scale
+the flagged run is **3.1 % slower**, not faster (per shard: +5.7 %, +1.1 %, +2.8 % — same sign three
+times, which is more than the two single runs of §10.5 could say). One machine, one run each, so the
+magnitude is still not worth much; the sign is now consistent across five measurements over two
+phases and should be believed.
+
+The controlled measurement explains it. Timing `step()` alone, best of seven runs, same process,
+release build:
+
+| `N` | live nodes | Python µs/step | Rust µs/step | speedup |
+|---:|---:|---:|---:|---:|
+| 10 | 69 | 5.17 | 0.59 | **8.7×** |
+| 20 | 305 | 6.47 | 1.62 | 4.0× |
+| 30 | 697 | 11.55 | 3.69 | 3.1× |
+| 40 | 1,245 | 10.60 | 6.58 | 1.6× |
+| 60 | 2,809 | 20.39 | 11.99 | 1.7× |
+| 80 | 5,013 | 23.60 | 22.29 | 1.1× |
+| 120 | 11,277 | 59.07 | 55.48 | 1.1× |
+| 160 | 20,069 | 106.43 | 90.26 | 1.2× |
+
+**What Rust removes is the per-step interpreter overhead, not the arithmetic.** Python needs ~5 µs
+to take one step of a 69-unknown membrane — the unknowns are not the cost; the dispatch is. Rust
+needs 0.59 µs. By 5,000 unknowns the sparse matvec dominates, SciPy's matvec is already compiled C,
+and the two converge to within ~10 %. The crossover is around `N = 80`.
+
+That single fact reconciles everything else on this page:
+
+- **The suite does not get faster because the suite's expensive tests are large-grid.** Convergence
+  studies, modal oracles and the airbox run at the resolutions where the win has already decayed to
+  nothing, and they spend most of their time in SciPy eigensolvers that this port has not touched.
+  §7's prediction should be restated: *the suite* will not get dramatically faster by porting
+  explicit models. It may still get faster at Phase 4, where the SuperLU factorizations live.
+- **The win lands exactly where the project actually needs it.** Real-time playability (HANDOFF §9
+  Phase 8) means small grids stepped 48,000 times a second, which is the left-hand end of that
+  table — 4× to 9×, and the whole reason the language decision was taken. The migration's payoff is
+  a *latency* result, not a *throughput* one, and measuring it on the test suite was always going to
+  under-read it.
+- **It also retires a worry.** A `L` getter that rebuilt its `csr_matrix` per access (§11.4) would
+  have shown up as the flagged run being *dramatically* slower, not 3 % slower. The small
+  consistent penalty is the boundary crossings themselves, which is what it should be.
+
+### 11.7 What batch 2 inherits
+
+- **Batch order, from §11.2.2:** `bore` + `body` next (nothing blocks either), then `reed` (needs
+  `bore`) and `radiation` (needs `body`), then `engine` — and `mallet` only after `collision` lands
+  in Phase 3.
+- **The `Resonator` trait arrives with `engine`, not before** (§11.3). Until then, models are
+  concrete types that share conventions rather than a signature.
+- **`Csr` is still minimal and still dependency-free**, and now carries a `matvec` that is exercised
+  2,000 times per parity case. The first conversion *out* of it is still Phase 3's to design.
+- **The swap guard's expectation table is the thing to edit when a port lands.** Adding a `_py`
+  alias without adding its name to `ported_expected` in `tests/test_stability.py` fails the gate,
+  which is the intended cost of widening the ported surface.
+- **`bore` and `reed` will be the first models with no matrix at all**, so they are also the first
+  chance to check whether the §9.1 three-way split survives a model whose state is two staggered
+  fields of different lengths.

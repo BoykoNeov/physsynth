@@ -39,6 +39,11 @@
 
 #![allow(non_snake_case)] // The Python API spells them `L`, `T`, `N`; the binding must match.
 
+mod exciter;
+mod membrane;
+mod ops2d;
+mod shape;
+
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1, PyUntypedArrayMethods};
 use physsynth_core::ops;
 use physsynth_core::sparse::Csr;
@@ -116,7 +121,10 @@ fn as_1d_f64(
 }
 
 /// Take the slice out of a stored state array, refusing a non-contiguous one with a clear error.
-fn state_slice<'a>(ro: &'a PyReadonlyArray1<'_, f64>, name: &str) -> PyResult<&'a [f64]> {
+pub(crate) fn state_slice<'a>(
+    ro: &'a PyReadonlyArray1<'_, f64>,
+    name: &str,
+) -> PyResult<&'a [f64]> {
     ro.as_slice().map_err(|_| {
         PyValueError::new_err(format!("{name} must be a contiguous 1-D float64 array."))
     })
@@ -498,14 +506,14 @@ fn n_intervals(n: i64) -> PyResult<usize> {
 }
 
 /// A CSR matrix as `(data, indices, indptr, (nrows, ncols))`, ready for `scipy.sparse.csr_matrix`.
-type CsrTriplets = (
+pub(crate) type CsrTriplets = (
     Py<PyArray1<f64>>,
     Py<PyArray1<i32>>,
     Py<PyArray1<i32>>,
     (usize, usize),
 );
 
-fn csr_triplets(py: Python<'_>, m: &Csr) -> PyResult<CsrTriplets> {
+pub(crate) fn csr_triplets(py: Python<'_>, m: &Csr) -> PyResult<CsrTriplets> {
     // SciPy switches its index width above 2^31 and so would this, but nothing in this project is
     // within three orders of magnitude of that. Refuse rather than wrap: `as i32` is a silent
     // truncation, and a truncated index array builds a *plausible* wrong matrix.
@@ -634,10 +642,12 @@ fn op_free_beam_stiffness(py: Python<'_>, N: i64, h: f64) -> PyResult<(CsrTriple
     Ok((csr_triplets(py, &k)?, csr_triplets(py, &w)?))
 }
 
-/// The extension module. One class and the operator module today; later phases add in place.
+/// The extension module. Two models, the operators, the 2-D builders and the excitations today;
+/// later phases add in place.
 #[pymodule]
 fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyIdealString>()?;
+    m.add_class::<membrane::PyMembrane>()?;
     m.add_function(wrap_pyfunction!(op_delta_x_forward, m)?)?;
     m.add_function(wrap_pyfunction!(op_delta_x_backward, m)?)?;
     m.add_function(wrap_pyfunction!(op_delta_xx, m)?)?;
@@ -647,5 +657,15 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(op_second_difference_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(op_biharmonic_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(op_free_beam_stiffness, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_grid_coords, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_rectangle_mask, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_disk_mask, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_laplacian_from_mask, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_embed, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_inner2d, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_norm2_2d, m)?)?;
+    m.add_function(wrap_pyfunction!(exciter::py_triangular_pluck, m)?)?;
+    m.add_function(wrap_pyfunction!(exciter::py_raised_cosine, m)?)?;
+    m.add_function(wrap_pyfunction!(exciter::py_raised_cosine_2d, m)?)?;
     Ok(())
 }

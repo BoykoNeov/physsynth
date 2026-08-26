@@ -29,6 +29,7 @@ Headless: NumPy + SciPy. No I/O, no plotting.
 
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 import numpy as np
@@ -235,3 +236,27 @@ class Membrane:
         ys = self.Y[live]
         d2 = (xs - x) ** 2 + (ys - y) ** 2
         return int(np.argmin(d2))
+
+
+# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 2) -----------------------------------
+#
+# `MembranePy` above is the reference implementation and stays the name every parity check reaches
+# for. Below it, `Membrane` is bound to whichever implementation this process is meant to exercise
+# -- and because `mallet.py`, `airbox.py` and `web/serialize.py` all import that one name, flipping
+# the switch swings the whole dependent tree, not just the membrane's own tests.
+#
+# Note the ordering that makes `MembranePy` a slightly different object under the flag than it is
+# by default: this module imports its operators from `operators2d`, whose own swap block has
+# already run, so on the flagged path the *Python* membrane is stepping a *Rust*-built Laplacian.
+# That is the intended behaviour of the switch (plan §1.2 -- the lever, not the deletion) and it is
+# a third useful configuration rather than a gap; the bit-parity claim itself is measured on the
+# default path, where both sides are unambiguous.
+#
+# Off by default. The Python model is still the reference oracle for every model not yet ported.
+MembranePy = Membrane
+"""The pure-Python reference implementation, under a name the swap below never rebinds."""
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    from physsynth_rs import Membrane  # type: ignore[assignment]  # noqa: F811
