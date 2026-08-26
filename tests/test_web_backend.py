@@ -1446,6 +1446,36 @@ def test_a_curved_outline_gets_NO_continuum_reference_whatever_its_bounding_box(
     assert len(rect["meta"]["spectrum"]["modes_continuum"]) > 0
 
 
+@pytest.mark.parametrize("Lx, Ly, N", [(0.15, 0.80, 16), (0.30, 0.80, 24)])
+def test_a_short_render_still_serialises_and_reports_a_POSITIVE_fundamental(Lx, Ly, N):
+    """A payload must never carry a NaN -- and the frequency that produced it must be positive.
+
+    ``audio_duration`` is bounded ``(0, MAX]``, so a 0.01 s render is a legal request; at this
+    geometry it leaves the FFT 256 bins wide with no peak inside the fundamental's search window.
+    The detector answered **-502 Hz**, ``modal.cents`` took its log, and ``json.dumps`` refused the
+    resulting NaN -- a 500 on a request the backend had accepted. The real fix is in the detector
+    (``tests/test_spectrum_detector.py``); this is the viewer-level witness that produced it, kept
+    because it is the shape a user actually hits: drag the duration down, get a server error.
+
+    ``allow_nan=False`` deliberately -- the default encoder emits a bare ``NaN`` token that no
+    strict JSON parser accepts, so a plain ``json.dumps`` would pass and the browser would still
+    break.
+
+    And the readout is asserted **present**, not merely non-NaN. Two guards stand between that
+    detector and this payload: the fix in ``_parabolic_refine``, and a ``> 0`` check on the reader
+    here. The reader alone is enough to make the payload serialise -- it just reports *nothing*
+    instead of reporting a lie. Checking only for the absence of a NaN would therefore pass with the
+    detector still broken, which is exactly the blind spot that let this ship.
+    """
+    payload = _sim(_guitar_params(Lx=Lx, Ly=Ly, N=N, mu=32.0, waist=0.42, asym=0.30,
+                                  audio_duration=0.01, animation_window=0.002))
+    assert "error" not in payload, payload.get("error")
+    json.dumps(payload, allow_nan=False)
+    detected = payload["meta"]["spectrum"]["f1_detected"]
+    assert detected is not None, "the reader suppressed a bad frequency, it did not get a good one"
+    assert detected > 0.0
+
+
 @pytest.mark.parametrize("mu", [2.0, 32.0])
 def test_the_claim_panel_and_the_spectrum_panel_quote_the_SAME_hertz(mu):
     """Two panels, one plate, one screen -- so they must not be computing frequency differently.

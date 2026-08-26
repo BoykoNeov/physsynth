@@ -36,8 +36,25 @@ def magnitude_spectrum(
 
 
 def _parabolic_refine(mag: NDArray[np.float64], i: int, fs: float, nfft: int) -> float:
-    """Sub-bin frequency (Hz) of the peak at bin ``i`` via log-magnitude parabolic interpolation."""
+    """Sub-bin frequency (Hz) of the peak at bin ``i`` via log-magnitude parabolic interpolation.
+
+    Refines only a bin that **is** a local maximum. :func:`measure_partials_near` takes its argmax
+    *inside a search window*, and a window whose magnitudes fall monotonically puts that argmax on
+    the window's own edge — a bin with no peak under it. Fitting a parabola through three
+    near-collinear log-magnitudes there makes the curvature ``a - 2b + c`` vanish and ``delta``
+    diverge: measured at -22.1 bins from bin 4, i.e. a "refined" frequency of **-502 Hz**, which
+    downstream became a NaN out of ``modal.cents``. The quieter form of the same fault extrapolates
+    to a *positive* frequency outside the window — the wrong partial, checked by nothing.
+
+    Note which guard this has to be. Both real witnesses had **negative** curvature, so testing the
+    sign of ``denom`` catches neither (``a=3, b=2, c=0`` is concave, decreasing, and still moves the
+    estimate 1.5 bins). The property that makes the interpolation meaningful, and that bounds
+    ``|delta| <= 1/2``, is that ``i`` is a genuine local max — so that is what is tested, and a
+    non-peak bin gets its honest bin centre back. See ``tests/test_spectrum_detector.py``.
+    """
     if i <= 0 or i >= len(mag) - 1:
+        return i * fs / nfft
+    if mag[i] < mag[i - 1] or mag[i] < mag[i + 1]:
         return i * fs / nfft
     a = np.log(mag[i - 1] + 1e-300)
     b = np.log(mag[i] + 1e-300)

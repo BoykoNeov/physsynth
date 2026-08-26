@@ -7543,7 +7543,10 @@ def _modal_spectrum_block(
     detected = float(
         spectrum.measure_partials_near(pickup, fs, np.asarray([f1]), search_hz=0.3 * f1)[0]
     )
-    cents_fund = float(modal.cents(detected, f1)) if math.isfinite(detected) else None
+    # ``> 0`` and not merely ``isfinite``: this value is about to enter a log. The detector no
+    # longer returns a negative frequency (see ``_parabolic_refine``), so this is belt-and-braces
+    # — but it is the fail-closed direction, and a NaN here is a 500 rather than a blank marker.
+    cents_fund = float(modal.cents(detected, f1)) if detected > 0.0 else None
     cents_geom = (
         float(modal.cents(f1, float(f_cont[0]))) if f_cont.size and f_cont[0] > 0 else None
     )
@@ -7556,7 +7559,7 @@ def _modal_spectrum_block(
         "modes_discrete": _finite_list(f_disc, 4),
         "modes_continuum": _finite_list(f_cont, 4),
         "f1_discrete": round(f1, 4),
-        "f1_detected": round(detected, 4) if math.isfinite(detected) else None,
+        "f1_detected": round(detected, 4) if detected > 0.0 else None,
         "cents_fundamental": round(cents_fund, 4) if cents_fund is not None else None,
         "cents_geometry": round(cents_geom, 4) if cents_geom is not None else None,
     }

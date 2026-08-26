@@ -3371,6 +3371,24 @@ now gets no continuum tier at all (the oracle #5g derived is for a *circle*; thi
 *guitar*), and the test asserts the free rectangle keeps its own — a blanket deletion would pass the
 first half just as well.
 
+#### And the same survey's second finding, which is not a viewer bug at all
+
+The `log2` warning behind that had **two** producers. The other is in `physsynth/analysis/spectrum.py`
+and belongs to every model, not to the guitar: `measure_partials_near` takes its argmax *inside a
+search window*, and a monotone window puts that argmax on its own **edge** — a bin with no peak under
+it. `_parabolic_refine` fitted a parabola through three near-collinear log-magnitudes, the curvature
+came out at `-7.9e-3`, and the correction was **-22.1 bins**, so the estimate left the window and
+crossed zero: **-502 Hz**, then a NaN out of `modal.cents`, then a 500. The frequency was wrong long
+before it was serialised.
+
+Both witnesses were **concave**, so a sign-of-curvature guard catches neither; the guard is that the
+bin is a genuine local max, which is also what bounds `|delta| <= 1/2`. And the negative number is
+only the loud version — the same edge argmax on a *rising* slope extrapolates **+7 bins** to a
+positive, plausible, wrong partial that nothing downstream would question. Fifteen test files lean on
+this function and none tested it, so the fix shipped with `tests/test_spectrum_detector.py` and with
+every one of those files' detector returns recorded as `float.hex()` **before and after** — "the
+suite still passes" is satisfied by a small shift, which is exactly what needed ruling out.
+
 #### Cost
 
 The guitar fills ~50–56 % of its bounding box, so it is about **half** a rectangle's cost at the same

@@ -415,6 +415,36 @@ full float copies of the animation buffer, where the point-sampling path took a 
 guitar the branch always fires. At a near-`MAX_FRAMES` run that is a transient few hundred MB. Fine
 for a local dev tool; not fine to rediscover as a mystery.
 
+### 11.4c The same survey's second finding: the detector could report a NEGATIVE frequency
+
+The `log2` warning in §11.4b had **two** producers, and only one of them was the mislabelled oracle.
+The other was in `physsynth/analysis/spectrum.py`, i.e. not in the viewer and not in the guitar:
+`measure_partials_near` takes its argmax **inside a search window**, and a window whose magnitudes
+fall monotonically puts that argmax on the window's own **edge** — a bin with no peak under it.
+`_parabolic_refine` then fits a parabola through three near-collinear log-magnitudes, the curvature
+comes out at `-7.9e-3`, and the "refinement" is **-22.1 bins** from bin 4: the estimate leaves the
+window, crosses zero, and lands at **-502 Hz**. `modal.cents` took the log of that and produced the
+NaN that `json.dumps` refuses — a 500 — but the *frequency was already wrong* long before anything
+serialised it.
+
+**The trap is which guard you reach for.** Both real witnesses had **negative** curvature, so testing
+the sign of the denominator catches neither; `a=3, b=2, c=0` is concave, decreasing, and still
+refines by -1.5 bins. The property that makes parabolic interpolation meaningful — and the one that
+bounds `|delta| <= 1/2` — is that the bin is a genuine **local maximum**. That is now the guard, and
+a non-peak bin gets the honest bin centre.
+
+**And the negative frequency is the loud version, not the bug.** The same edge-argmax at 137 Hz on a
+short damped 190 Hz tone pins to the *upper* edge on a rising slope and extrapolates **+7 bins** to
+191.5 Hz — the peak **outside** the window. Positive, finite, plausible, and the wrong partial. No
+amount of checking the sign would find it.
+
+**Fifteen test files depend on this function and not one tested it.** They all assert
+`abs(found - oracle) < tol`, which is a statement about the *model*; a detector that is wrong where
+no model looks satisfies every one of them. So the fix came with the bit-identity check the claim
+actually needs — every `measure_partials_near` return across those fifteen files recorded as
+`float.hex()` before and after — because "the suite still passes" would have been satisfied by a
+small shift, and `tests/test_spectrum_detector.py` now tests the primitive directly.
+
 ### 11.5 Still out
 
 - The **clamped** rim and **von Kármán on an outline** — both #5g §7 refusals, both core batches.
