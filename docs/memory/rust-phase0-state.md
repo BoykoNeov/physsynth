@@ -45,7 +45,7 @@ asserts it directly against *both* implementations.
 4,000 steps × 4 boundary spellings × loss on/off — an explicit step is pure elementwise arithmetic,
 so IEEE fixes it exactly **provided the operation order matches**, which is why the Rust kernels are
 written in NumPy's evaluation order longhand. Only *reductions* can't match (`np.dot` → BLAS):
-energy agrees to **7e-16**. So assert exactness wherever the arithmetic permits it — far sharper
+energy agrees to **7e-16**. Whole suite: 422s Python vs 382s Rust (direction only — 1 of 22 models). So assert exactness wherever the arithmetic permits it — far sharper
 than a tolerance and free. **The line is "does the step contain a reduction", NOT "is it Group A"**
 — `body`'s modal displacement and `mallet`'s contact force are both `np.dot` *inside the timestep*,
 so they sit in the 1e-15 bucket despite solving nothing. Read the update before asserting exactness.

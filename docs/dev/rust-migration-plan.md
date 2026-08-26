@@ -435,6 +435,7 @@ Every later phase inherits the same hazard the moment its model holds state.
 | State agreement, 4,000 steps × 4 boundary spellings × loss on/off | **bit-identical** |
 | Energy agreement, worst relative | **7e-16** (Group A target: 1e-13) |
 | The 38 ideal-string tests, wall clock, same machine | **23.7 s → 4.2 s** |
+| The whole suite, wall clock, same machine, back to back | **421.8 s → 382.4 s** (−9.3 %) |
 
 **The second row is the phase's real result, and it was not the expected one.** The plan budgeted
 for a *list of failures* here — the files whose access patterns the binding did not yet satisfy,
@@ -452,10 +453,13 @@ now asserts this on both paths, so a run that claims to be testing Rust cannot q
 Python — which is the §1 failure mode one level up, and the only way this phase could go green
 while meaning nothing.
 
-The wall-clock row is one machine, one small slice, one model out of twenty-two. It is a **floor**
-on what §7 predicts rather than a measurement of it, and the whole-suite figure is worth even less
-as evidence for the same reason — 21 of 22 models are still Python, so the bulk that §7 is about
-has not moved.
+**The two wall-clock rows should be read for direction, not for size.** Both are one machine, both
+are one model out of twenty-two ported, and neither was repeated — the whole-suite delta in
+particular is 9 % against an uncontrolled back-to-back pair, which is not separable from run-to-run
+noise on its own evidence and should not be quoted as if it were. What they *do* establish is a
+**floor**: the suite did not get slower, the default path is unchanged (1,954 green both ways), and
+the one slice that is genuinely all-Rust moved 5.6×. §7's prediction that the bulk is a Python cost
+is still a prediction; the number that will test it is Phase 2's, when ten models have moved.
 
 The 38th test is worth naming: `test_core_dependency_allowlist` **failed first**, on
 `physsynth_rs`. That is the §2.2 tripwire working — a new compiled dependency of the core could not
