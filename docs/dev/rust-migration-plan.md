@@ -25,12 +25,24 @@ oracle is the last thing to go, never the first:
 3. Run **the existing, unmodified Python tests** against the Rust model. Green means the Rust model
    reproduces the physics contract — asserted by the same code that asserted it for Python.
 4. *Then* port that model's tests to Rust, and run both.
-5. Only when the Rust tests are green **and** cover what the Python ones covered: delete the Python
-   model and the Python tests together.
+5. Re-point the **viewer** (`web/serialize.py`) at the Rust model — see §1.1, this clause is not
+   optional — then, and only when the Rust tests are green **and** cover what the Python ones
+   covered, delete the Python model and the Python tests together.
 
 At no point does a model exist without a validated oracle behind it, and at the end there is no
-Python left. The binding layer (`crates/physsynth-py`) is **temporary by construction** — it exists
-only to let step 3 happen, and it is deleted when the last model finishes step 5.
+Python left. The binding layer (`crates/physsynth-py`) is **temporary by construction** — it is
+deleted when the last model finishes step 5.
+
+### 1.1 The viewer is the binding's second consumer, and it breaks at Phase 0 without this
+
+`web/serialize.py` imports `physsynth` **21 times** and builds core objects directly. Step 5 as
+first drafted said nothing about it — so the moment `string_ideal.py` is deleted at the end of
+Phase 0, the viewer breaks and `tests/test_web_backend.py` (403 tests) goes red for a reason that
+has nothing to do with the port. Phase 8 is seven phases away and does not help.
+
+So the binding is **not** scaffolding that only the tests use. It is the viewer's live dependency
+for the entire migration, and its surface must satisfy the viewer's access pattern as well as the
+suite's — measured in §3.1.
 
 **The failure mode this rule exists to prevent:** porting the tests *first*, because they are the
 biggest chunk and it feels like progress. A Rust test suite written against a Rust model that was
@@ -96,16 +108,16 @@ code volume, and any schedule that treats it as a tail-end chore is wrong by a f
 This number decides whether the binding is thin or leaky, and therefore whether step 3 above is
 cheap:
 
-| Surface | Uses in `tests/` | Binding cost |
-|---|---:|---|
-| `step()` · `energy()` · `set_state()` · `state` · `displacement_at()` | ~1,080 | trivial — the `Resonator` protocol |
-| `.u`, `.u_prev` (raw state arrays) | 128 | zero-copy NumPy views via `rust-numpy` |
-| `.K`, `.W`, `.B` (assembled operators) | 66 | return CSR triplets; a shim rebuilds `scipy.sparse` |
-| `._lu` (the factorization itself) | 14 | **no clean binding** — port these tests to Rust early |
+| Surface | `tests/` | `web/` | Binding cost |
+|---|---:|---:|---|
+| `step` · `energy` · `set_state` · `state` · `displacement_at` | ~1,080 | 156 | trivial — the `Resonator` protocol |
+| `.u`, `.u_prev` (raw state arrays) | 128 | 32 | zero-copy NumPy views via `rust-numpy` |
+| `.K`, `.W`, `.B` (assembled operators) | 66 | 15 | return CSR triplets; a shim rebuilds `scipy.sparse` |
+| `._lu` (the factorization itself) | 14 | 0 | **no clean binding** — port these tests to Rust early |
 
-So: "the tests run unchanged" is true for ~84 % of call sites, and the remaining ~208 need a
-binding designed for them. That is a day of design, not a rewrite — but it is not free, and it is
-the reason Phase 0 exists.
+So: "the caller runs unchanged" is true for ~84 % of call sites, and the remaining **~255** (208 in
+the suite, 47 in the viewer) need a binding designed for them. That is a day of design, not a
+rewrite — but it is not free, and it is the reason Phase 0 exists.
 
 ---
 
@@ -114,11 +126,20 @@ the reason Phase 0 exists.
 An earlier summary of "seven models that solve a matrix" was too coarse and hid the actual risk
 gradient. Measured per file:
 
-**Group A — no linear solve at all (11 files, ~3,000 lines).**
-`string_ideal` · `membrane` · `bore` · `reed` · `mallet` · `body` · `radiation` · `bow` ·
-`exciter` · `engine` · `operators`.
+**A file can appear in two groups** — `string_geometric` uses banded Cholesky *and* a sparse LU — so
+the group sizes below do not sum to 22. That is real, not a miscount.
+
+**Group A — no linear solve at all (10 files, ~2,700 lines).**
+`string_ideal` · `membrane` · `bore` · `reed` · `mallet` · `body` · `radiation` · `exciter` ·
+`engine` · `operators`.
 Pure vectorized array arithmetic. The port is transcription. *Agreement target: state arrays to
 ~1e-13 relative over a short run; the physics bars thereafter.*
+
+**`bow` is not in Group A** — a first pass put it there and that was wrong. It owns no matrix, but
+it runs a **safeguarded Newton iteration** each step, seeded from the previous step's relative
+velocity (continuation through the multivalued Helmholtz regime), and it **delegates a banded solve
+to the string it bows**. So it ports after Group B, not with Group A, and its risk is the iteration
+count matching — not the arithmetic.
 
 **Group B — banded Cholesky (4 files).**
 `string_stiff` · `string_damped` · `string_nonlinear` · `string_geometric`, via
@@ -141,11 +162,18 @@ the project (`airbox`, 3,925 lines, six factorizations).
 
 ### 4.1 The manoeuvre that collapses Group D's risk
 
-**During migration, link SuperLU itself.** It is a C library; SciPy wraps the same one. Called from
-Rust with the same ordering and the same pivot threshold it produces the same factorization, so the
-Group D models can be held to the *same* tight agreement as Groups A–C, and any divergence is a bug
-in the port rather than a property of the solver. The comparison stays sharp exactly where it is
-hardest to keep sharp.
+**During migration, link SuperLU itself.** It is a C library, and SciPy wraps the same one. If it
+can be called from Rust reproducing SciPy's own defaults, the Group D models can be held to the
+*same* tight agreement as Groups A–C, and any divergence is a bug in the port rather than a property
+of the solver — the comparison stays sharp exactly where it is hardest to keep sharp.
+
+**This is a hypothesis Phase 4 tests, not a risk already collapsed.** Matching SciPy means matching
+its column-ordering choice (`permc_spec`), its `diag_pivot_thresh`, and its equilibration defaults —
+none of which have been checked yet. That is precisely why `beam` (254 lines, one factorization) is
+Phase 4: the smallest possible surface on which to find out. **If the manoeuvre fails there, Group D
+falls back to tolerance-level agreement validated by the physics bars alone** — which is survivable,
+but it is a different and looser comparison, and it should be discovered on 254 lines rather than on
+the 3,925-line room.
 
 **After migration, swapping solvers becomes a normal optimization.** Once the Rust test suite is the
 authority — physics bars, not Python — `beam`, `plate` and `airbox` can move to a pure-Rust solver
@@ -171,12 +199,14 @@ Rust*. Nothing else starts until that is green.
 
 **Phase 1 — `operators` (165 lines).** Shared infrastructure everything downstream needs.
 
-**Phase 2 — Group A, the remaining explicit models.** Ten files. Bulk transcription, low risk, and
+**Phase 2 — Group A, the remaining explicit models.** Eight files. Bulk transcription, low risk, and
 the phase where the Rust idiom for this project settles (state layout, the `Resonator` trait, how
 `energy()` is expressed). Get the idiom right here; every later model inherits it.
 
-**Phase 3 — Group B + C.** `string_stiff` first (259 lines, the smallest banded solve), then
-`string_damped`, `string_nonlinear`; then `collision`. Cheap, and they prove the LAPACK link.
+**Phase 3 — Group B + C, then `bow`.** `string_stiff` first (259 lines, the smallest banded solve),
+then `string_damped`, `string_nonlinear`; then `collision`. Cheap, and they prove the LAPACK link.
+`bow` comes last in the phase because it borrows the string's banded solve and cannot be checked
+before the string is trustworthy.
 
 **Phase 4 — `beam` (254 lines, one `splu`).** The Group D de-risker, chosen for exactly the reason
 it was chosen the first time. Proves the SuperLU link and the §4.1 manoeuvre on the smallest
@@ -230,7 +260,10 @@ upside, not a consolation: the 15–21-minute gate is a Python cost.
 
 **Cargo test parallelism is threads, not processes**, unlike pytest-xdist's shards. The sharding
 machinery — computed from a glob, guarded inside and out — does not carry over and should not be
-recreated speculatively.
+recreated speculatively. But note what else the shards were quietly providing: **process
+isolation**. Cargo runs the whole suite in one address space, and the airbox runs are memory-heavy,
+so expect **memory pressure, not test count, to be the constraint that replaces sharding** — and
+expect to discover it at Phase 6, where the room lands.
 
 **The four non-reproducible oracles.** `beam_low_eigenfrequencies` and its siblings call ARPACK
 (`eigsh`) with no fixed start vector, so the reference frequency wobbles in its last digits run to
