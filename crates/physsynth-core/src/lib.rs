@@ -34,6 +34,7 @@
 //! asserted natively in `tests/` here as well as through the Python harness.
 
 pub mod body;
+pub mod bore;
 pub mod exciter;
 pub mod fmt;
 pub mod membrane;

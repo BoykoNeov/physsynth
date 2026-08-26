@@ -172,6 +172,7 @@ def test_the_rust_swap_matches_the_environment():
     # model is *not* silently in play.
     from physsynth.core import (
         body,
+        bore,
         exciter,
         membrane,
         operators,
@@ -180,7 +181,7 @@ def test_the_rust_swap_matches_the_environment():
     )
 
     expected_rust = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
-    for module in (string_ideal, operators, membrane, operators2d, exciter, body):
+    for module in (string_ideal, operators, membrane, operators2d, exciter, body, bore):
         assert module._USE_RUST is expected_rust, (
             f"{module.__name__}'s reading of PHYSSYNTH_RS disagrees with this test's -- one of "
             "the two changed without the other"
@@ -201,6 +202,10 @@ def test_the_rust_swap_matches_the_environment():
             "PHYSSYNTH_RS is set but `ModalBody` is still the Python class: this run is NOT "
             "exercising the Rust model, whatever it reports"
         )
+        assert bore.Bore is physsynth_rs.Bore, (
+            "PHYSSYNTH_RS is set but `Bore` is still the Python class: this run is NOT "
+            "exercising the Rust model, whatever it reports"
+        )
     else:
         assert string_ideal.IdealString is string_ideal.IdealStringPy, (
             "PHYSSYNTH_RS is unset but `IdealString` is not the Python class -- the default path "
@@ -213,6 +218,10 @@ def test_the_rust_swap_matches_the_environment():
         assert body.ModalBody is body.ModalBodyPy, (
             "PHYSSYNTH_RS is unset but `ModalBody` is not the Python class -- the default "
             "path must stay the one the acceptance numbers came from"
+        )
+        assert bore.Bore is bore.BorePy, (
+            "PHYSSYNTH_RS is unset but `Bore` is not the Python class -- the default path "
+            "must stay the one the acceptance numbers came from"
         )
 
     # The operators (plan Phase 1) need the same guard for the same reason, and it has to be
@@ -269,7 +278,7 @@ def test_the_rust_swap_matches_the_environment():
                 )
 
     if expected_rust:
-        from physsynth.core import beam, connection, mallet, radiation, string_stiff
+        from physsynth.core import beam, connection, mallet, radiation, reed, string_stiff
 
         assert string_stiff.biharmonic_matrix is operators.biharmonic_matrix, (
             "`string_stiff` captured a different `biharmonic_matrix` than `operators` now "
@@ -300,6 +309,15 @@ def test_the_rust_swap_matches_the_environment():
                 f"`{client.__name__}` captured a different `ModalBody` than `body` now "
                 "exposes -- the swap landed after that module was imported"
             )
+
+        # The bore's version. `reed.py` does `from .bore import Bore` at module scope, so a swap
+        # that landed after it would leave the clarinet blowing a PYTHON air column while this run
+        # reported Rust -- and every reed test would still pass, because the reed's own physics is
+        # unchanged by which bore it drives. Same hazard as `mallet.Membrane`, one model on.
+        assert reed.Bore is bore.Bore, (
+            "`reed` captured a different `Bore` than `bore` now exposes -- the swap landed "
+            "after that module was imported"
+        )
 
 
 def test_core_does_not_import_sibling_layers():

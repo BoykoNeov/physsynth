@@ -40,6 +40,7 @@
 #![allow(non_snake_case)] // The Python API spells them `L`, `T`, `N`; the binding must match.
 
 mod body;
+mod bore;
 mod exciter;
 mod membrane;
 mod ops2d;
@@ -99,7 +100,7 @@ fn parse_boundary(obj: &Bound<'_, PyAny>) -> Option<(core::Boundary, core::Bound
 ///
 /// Going through NumPy rather than a direct downcast is what makes a *list* an acceptable `u0`,
 /// which the original accepts and some callers use. `want` is `N + 1`.
-fn as_1d_f64(
+pub(crate) fn as_1d_f64(
     py: Python<'_>,
     obj: &Bound<'_, PyAny>,
     name: &str,
@@ -650,6 +651,7 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyIdealString>()?;
     m.add_class::<membrane::PyMembrane>()?;
     m.add_class::<body::PyModalBody>()?;
+    m.add_class::<bore::PyBore>()?;
     m.add_function(wrap_pyfunction!(op_delta_x_forward, m)?)?;
     m.add_function(wrap_pyfunction!(op_delta_x_backward, m)?)?;
     m.add_function(wrap_pyfunction!(op_delta_xx, m)?)?;

@@ -102,6 +102,7 @@ Headless: NumPy only (SciPy sparse for the modal-oracle operator).
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from typing import Literal
 
@@ -467,3 +468,31 @@ class Bore:
             free[-1] = False
         dof = np.nonzero(free)[0].astype(np.int64)
         return Lop, Cmat, dof
+
+
+# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 2) -----------------------------------
+#
+# `BorePy` above is the reference implementation and stays the name every parity check reaches
+# for. Below it, `Bore` is bound to whichever implementation this process is meant to exercise --
+# and because `reed.py` and `web/serialize.py` both import that one name, flipping the switch
+# swings the clarinet as well as the bare air column.
+#
+# The thing to know before editing either side: **the `source` hook is part of the interface, not
+# scaffolding.** `ReedBore._inject` is not its only caller -- `tests/test_reed_stability.py` passes
+# its own `lambda p: None` to assert the hook is inert when unused -- so the binding accepts an
+# arbitrary Python callable and hands it a live, writable view of the pressure field the step is
+# about to commit. Porting `reed` removes the *hot* crossing, never the capability.
+#
+# The other thing: `_bc_left` is read by `reed.py` and `_open_left`/`_open_right` by
+# `tests/test_bore_radiation.py` and `web/serialize.py`, so all three are on the binding's surface
+# despite the underscores. Same finding as the body's `_accel` (plan section 12.2), derived the same
+# way -- grep the clients, do not read the author's intent off the name.
+#
+# Off by default. The Python model is still the reference oracle for every model not yet ported.
+BorePy = Bore
+"""The pure-Python reference implementation, under a name the swap below never rebinds."""
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    from physsynth_rs import Bore  # type: ignore[assignment]  # noqa: F811
