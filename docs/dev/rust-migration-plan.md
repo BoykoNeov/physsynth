@@ -262,7 +262,19 @@ Nothing else starts until that is green.
 > guessing the filename; a success condition naming a path that does not exist is one `pytest` away
 > from being vacuously green.
 
-**Phase 1 — `operators` (165 lines).** Shared infrastructure everything downstream needs.
+**Phase 1 — `operators` (165 lines).** *(Landed 2026-08-26 — see §10.)* Shared infrastructure
+everything downstream needs.
+
+> **The success condition is not the file named after the module.** `tests/test_operators.py` is
+> four tests, and it touches `inner`, `norm2`, `delta_x_forward` and `delta_xx` — none of
+> `delta_xxxx`, `second_difference_matrix`, `biharmonic_matrix` or `free_beam_stiffness`, which are
+> the four hardest things in the phase. This is Phase 0's §5 correction repeating itself one phase
+> on, and it generalises: **a module's tests are not in the file named after it, and neither are
+> its clients'.** What actually exercises the ported code is `test_stiff_string.py`,
+> `test_damped_string.py`, `test_tension_string.py`, `test_geometric_energy.py`,
+> `test_beam_modal.py`, `test_beam_stability.py`, `test_bow_stability.py`,
+> `test_free_plate_modal.py` and `test_free_plate_orthotropic.py` — because `operators` is not a
+> model, it is what five models are *built out of*.
 
 **Phase 2 — Group A, the remaining explicit models.** Eight files. Bulk transcription, low risk, and
 the phase where the Rust idiom for this project settles (state layout, the `Resonator` trait, how
@@ -480,3 +492,154 @@ entry was then added deliberately, with its reasoning, in the same commit.
   a long time. What the switch buys is that flipping it swings `connection.py`, `body.py` and the
   viewer onto the Rust string too — so the ported model is exercised through its real clients well
   before its Python twin comes out.
+
+---
+
+## 10. Phase 1, as built (2026-08-26)
+
+`physsynth/core/operators.py` in full: the four pointwise differences, `inner`/`norm2`, and the
+three sparse builders. What follows is what was chosen, what was measured, and the three things
+that were only discoverable by building it.
+
+### 10.1 The shape on disk
+
+```
+crates/physsynth-core/src/sparse.rs     a hand-written CSR type. Zero dependencies. §10.2
+crates/physsynth-core/src/ops.rs        the module, complete — Phase 0's stub filled in
+crates/physsynth-core/tests/ops.rs      native operator bars (14 tests)
+crates/physsynth-py/src/lib.rs          + nine free functions; the matrices come back as TRIPLETS
+physsynth/core/operators.py             + a swap block at the bottom, gated on PHYSSYNTH_RS
+tests/test_rust_parity_operators.py     Rust vs Python (70 tests)
+```
+
+The §9.1 three-way split (parameters · kernels · owning struct) does not apply here, because
+`operators` has no state and therefore no owning struct. What it has instead is the seam the rest
+of the migration will keep hitting: **a return type that Python cares about and the core must not
+know exists.** `physsynth-core` returns a `Csr`; the binding turns it into
+`(data, indices, indptr, shape)`; the shim at the bottom of `operators.py` rebuilds a
+`scipy.sparse.csr_matrix`. The core never learns what SciPy is, and the five modules that
+`from .operators import ...` never learn what Rust is.
+
+### 10.2 The dependency decision that was deferred rather than taken
+
+§9.5 said Phase 1 was where "the first real dependency decision gets made" and left `ALLOWED`
+empty so that it would have to be written down. **The decision was to keep it empty**, and the
+reasoning is worth recording because it comes up again at Phase 3 and Phase 4:
+
+Phase 1 only ever *constructs* matrices — transpose, multiply by another sparse matrix, scale.
+It never solves with one. The constraint that should actually pick a sparse library is a **solver**
+constraint (banded Cholesky at Phase 3, the SuperLU hypothesis at §4.1/Phase 4), and none of it has
+been measured yet. Taking `faer` or `nalgebra-sparse` now, to get a `matmul`, would fix the
+interchange type before the requirement that ought to choose it exists. So: ~200 lines of CSR with
+no dependencies, and when a solver does land, this type becomes the thing that converts *into*
+whatever that solver wants. That is a smaller commitment than the reverse, and it is reversible.
+
+### 10.3 The findings
+
+**A sparse matrix build is a reduction, and it still comes out bit-identical.** §2.1's correction
+draws the line at "does the step contain a reduction". Each entry of `D2 @ D2` is a sum of up to
+three products, so by that rule the matrices belong in the ~1e-15 bucket. They do not: `data`,
+`indices`, `indptr` and `nnz` all match SciPy exactly, at eight grid sizes and on a
+non-power-of-two grid. The line is therefore sharper than "reduction or not" — it is **whether the
+summation order is knowable**. BLAS's is not; a three-term sum over an explicit sparsity pattern
+is. The Rust `matmul` accumulates in ascending order of the contracted index, which is what SciPy's
+SMMP kernel does. (Measured separately, and worth knowing: for *these* structures ascending and
+descending accumulation give the same answer anyway, so the exactness is not balanced on that one
+choice.)
+
+**SciPy's own output is not canonical, and copying that would have been a mistake.** Measured:
+`biharmonic_matrix` comes back from `(d2 @ d2).tocsr()` with `has_sorted_indices == False` and its
+columns in *descending* order — SMMP's output list is a stack — while `free_beam_stiffness`, whose
+product goes through a transpose, comes back sorted. Reproducing that split would mean
+reimplementing a SciPy internal and pinning the port to a detail a point release is free to change:
+a red gate on an upgrade, for a non-bug. The Rust side is canonical in both cases and the parity
+test canonicalises the SciPy side before comparing. What is *not* relaxed is the arithmetic — the
+values are still required to be equal bit-for-bit, which is the part that can actually be wrong.
+
+**`h ** 4` is not `h*h*h*h`.** Python's `**` calls libm's `pow`, which returns the
+correctly-rounded fourth power; three chained multiplications round three times and land elsewhere.
+Measured over `h = 1/N` for `N = 2..3999`, the two disagree in **1400** of 3998 cases (and
+`(h*h)*(h*h)` in 1934). So `delta_xxxx` says `powf(4.0)`, and it is the one kernel in the module
+whose exactness rests on two libms agreeing rather than on IEEE-754 alone. The parity test sweeps
+`N` for that reason: a platform whose `pow` differs shows up there as a 1-ulp mismatch rather than
+as a physics failure three phases later.
+
+**And one scar, from the native bars rather than the port.** The free beam's stiffness `K`
+annihilates the rigid-body space `{1, x}` — that *is* the free-free boundary condition, and the
+first draft of the test asserted `K @ 1 == 0` exactly. It is not. `D2 @ 1` cancels exactly in
+IEEE-754, but `K` is an *assembled* matrix: applying it sums a row of already-rounded entries
+rather than re-deriving the cancellation. 8.2e-12 against an operator of scale 1/h³ = 8000, i.e.
+~1e-15 relative. The claim the builder actually supports is annihilation to rounding, stated
+relative to what the same operator does to a field that genuinely bends.
+
+### 10.4 The success condition, and the trap it walked into again
+
+Phase 0's §5 correction records that the phase originally named a test file that did not exist.
+Phase 1's version of the same mistake is subtler and was live until it was checked:
+`tests/test_operators.py` **does** exist, and it is the wrong file. Four tests, touching `inner`,
+`norm2`, `delta_x_forward` and `delta_xx` — **none** of `delta_xxxx` or the three matrix builders,
+which are the four hardest things in the phase. A gate naming it would have been green and would
+have asserted nothing about the difficult half.
+
+Generalised, for every later phase: **a module's tests are not in the file named after it, and
+neither are its clients'.** `operators` is not a model; it is what five models are built out of.
+The files that actually exercise the ported code are `test_stiff_string.py`,
+`test_damped_string.py`, `test_tension_string.py`, `test_geometric_energy.py`,
+`test_beam_modal.py`, `test_beam_stability.py`, `test_bow_stability.py`, `test_free_plate_modal.py`
+and `test_free_plate_orthotropic.py`, and they are in CI as a named claim rather than a partition.
+
+**The guard against the swap being a no-op is wider here too.**
+`test_the_rust_swap_matches_the_environment` gained an operator arm, and it could not be a copy of
+the string's: operators are functions, so there is no class identity to compare — the question is
+whether the public name still *is* the `_py` one. It also asserts something the string's version
+had no need to, because the string has one importer and the operators have five:
+`string_stiff.biharmonic_matrix is operators.biharmonic_matrix`, and the same for `beam`. Those
+five modules capture their operators at import time, so a swap that landed after them would leave
+all five on Python while `operators` reported Rust — green, and testing the wrong thing for five
+models at once.
+
+### 10.5 What was measured
+
+| | |
+|---|---|
+| Native `cargo test --workspace` | **42 passed** (19 at the end of Phase 0) |
+| `tests/test_rust_parity_operators.py` | **70 passed** |
+| Matrix agreement — `data`, `indices`, `indptr`, `nnz`; 8 sizes × 2 grid spacings | **bit-identical** |
+| Pointwise-difference agreement — 4 operators × 5 sizes × 2 fields | **bit-identical** |
+| `inner` / `norm2` agreement, worst relative | inside the 1e-13 Group A target |
+| **The WHOLE suite under `PHYSSYNTH_RS=1`** | **2,026 passed, 0 failed** (7 min 13 s) |
+| The whole suite on the default Python path, same tree | **2,026 passed, 0 failed** |
+| Whole-suite wall clock, same machine, Rust vs default | 432.6 s vs 397.9 s |
+
+**One tripwire did not fire, and the reason should be on the record.** Phase 0's
+`test_core_dependency_allowlist` went red the first time it met `physsynth_rs` — that was the §2.2
+rule working, refusing a new compiled dependency of the core without a human editing the allowlist.
+Phase 1 also makes `physsynth/core/operators.py` import `physsynth_rs` on the flagged path, and the
+test stayed green, because the entry Phase 0 reviewed already covers it. That is correct, not a
+gap. But it means **every later phase that imports the same extension gets the same free pass**,
+and the tripwire should not be read as still armed against it: what it guards is a *new name*, and
+there will not be another one until the binding is deleted. The rule that is still live for the
+Rust side is `crates/physsynth-core/tests/deps.rs`, whose allowlist Phase 1 deliberately left empty
+(§10.2).
+
+**On the two wall-clock numbers: they are not a regression, and they are not evidence of
+anything.** The flagged run took 432.6 s against the default path's 397.9 s, on one machine, one
+run each, not back to back and not controlled. §9.4 already warned that its own 9 % figure was
+inseparable from run-to-run noise on its own evidence; this is the same caveat with the sign
+flipped, and it should be read the same way. The plausible reading is that the operators are not
+where the bulk is — nothing in this phase touched a timestepping inner loop, and five models still
+run their Python schemes around Rust-built matrices that are assembled *once* at construction.
+§7's prediction that the suite gets dramatically faster is still a prediction, and the number that
+tests it is Phase 2's, where the explicit models' step functions move.
+
+### 10.6 What Phase 2 inherits
+
+- **`Csr` is the interchange type, and it is deliberately minimal.** `from_rows`, `transpose`,
+  `matmul`, `scaled`, `matvec`, `get`. Phase 2's Group A models need no more; the first solver will
+  need conversion *out* of it, which is the direction that stays cheap.
+- **The `_py` alias convention now covers a module of free functions, not just a class.** Nine
+  aliases, one per public name, and the swap guard iterates `__all__` — so a tenth function added
+  without an alias fails the guard rather than silently escaping the comparison.
+- **The trait question from §8 is now due.** Phase 2 is where the `Resonator` trait gets fixed, and
+  the plan says polyphony (HANDOFF §11.3a) should be settled first or the trait is rebuilt later.
+  Nothing in Phase 0 or Phase 1 forced the question; the eight explicit models will.

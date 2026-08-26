@@ -10,6 +10,8 @@ Headless: NumPy only. No I/O, no plotting.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 from numpy.typing import NDArray
 from scipy import sparse
@@ -163,3 +165,89 @@ def inner(f: NDArray[np.float64], g: NDArray[np.float64], h: float) -> float:
 def norm2(f: NDArray[np.float64], h: float) -> float:
     """Squared discrete norm ``||f||^2 = <f, f> = h * sum_l f[l]^2`` (>= 0)."""
     return float(h * np.dot(f, f))
+
+
+# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 1) -----------------------------------
+#
+# Same lever as ``string_ideal.py``'s, one phase on and pointed at a much wider blast radius. The
+# nine functions above are the reference implementations and keep a ``_py`` alias each, which every
+# parity check reaches for. Below, the public names are rebound to the Rust implementations when
+# ``PHYSSYNTH_RS`` is set -- and because ``string_stiff.py``, ``string_damped.py``,
+# ``string_nonlinear.py``, ``string_geometric.py`` and ``beam.py`` all do
+# ``from .operators import ...``, flipping the switch swings five still-Python models onto
+# Rust-built operators without one line of edit in any of them.
+#
+# That width is the point (plan Sec 1.2): the port gets exercised through its real clients long
+# before anything is deleted. It also means the honest success condition for this phase is the
+# whole suite under the flag, not the four tests in ``tests/test_operators.py``.
+#
+# Two deliberate seams, both of them here rather than in the binding:
+#
+# 1. **The scipy rebuild.** ``physsynth-core`` must not know what scipy is, so the Rust side hands
+#    back CSR triplets and this shim turns them into the ``csr_matrix`` the five callers expect.
+#    Putting the rebuild anywhere else would make those callers Rust-aware, which is exactly the
+#    property the swap exists to avoid.
+# 2. **The input coercion.** The binding is strict -- it wants a contiguous float64 array, and says
+#    so. NumPy is not: it will happily difference a strided view or an int array. ``_asarray``
+#    below re-widens the door to the original's, so a caller passing ``u[::2]`` gets an answer
+#    rather than a TypeError. It copies only when it has to.
+#
+# One divergence worth naming rather than discovering: for ``N < 2`` the Python
+# ``second_difference_matrix`` and ``biharmonic_matrix`` fall through to NumPy and raise
+# ``ValueError("negative dimensions are not allowed")``. The Rust side raises ``ValueError`` too,
+# with a message that says what is actually wrong. Same exception type, better text; nothing in
+# ``tests/`` matches on that string.
+#
+# Off by default. The Python implementations are still the reference oracle, and they are what the
+# acceptance numbers came from.
+delta_x_forward_py = delta_x_forward
+delta_x_backward_py = delta_x_backward
+delta_xx_py = delta_xx
+delta_xxxx_py = delta_xxxx
+inner_py = inner
+norm2_py = norm2
+second_difference_matrix_py = second_difference_matrix
+biharmonic_matrix_py = biharmonic_matrix
+free_beam_stiffness_py = free_beam_stiffness
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    import physsynth_rs as _rs
+
+    def _asarray(a: object) -> NDArray[np.float64]:
+        """Whatever the caller passed, as the contiguous float64 array the binding requires."""
+        return np.ascontiguousarray(np.asarray(a, dtype=np.float64))
+
+    def _csr(triplets: tuple) -> sparse.csr_matrix:
+        """Rebuild a ``csr_matrix`` from the binding's ``(data, indices, indptr, shape)``."""
+        data, indices, indptr, shape = triplets
+        return sparse.csr_matrix((data, indices, indptr), shape=shape)
+
+    def delta_x_forward(u, h):  # type: ignore[misc]  # noqa: F811
+        return _rs.delta_x_forward(_asarray(u), h)
+
+    def delta_x_backward(u, h):  # type: ignore[misc]  # noqa: F811
+        return _rs.delta_x_backward(_asarray(u), h)
+
+    def delta_xx(u, h):  # type: ignore[misc]  # noqa: F811
+        return _rs.delta_xx(_asarray(u), h)
+
+    def delta_xxxx(u, h):  # type: ignore[misc]  # noqa: F811
+        return _rs.delta_xxxx(_asarray(u), h)
+
+    def inner(f, g, h):  # type: ignore[misc]  # noqa: F811
+        return _rs.inner(_asarray(f), _asarray(g), h)
+
+    def norm2(f, h):  # type: ignore[misc]  # noqa: F811
+        return _rs.norm2(_asarray(f), h)
+
+    def second_difference_matrix(N, h):  # type: ignore[misc]  # noqa: F811
+        return _csr(_rs.second_difference_matrix_csr(N, h))
+
+    def biharmonic_matrix(N, h):  # type: ignore[misc]  # noqa: F811
+        return _csr(_rs.biharmonic_matrix_csr(N, h))
+
+    def free_beam_stiffness(N, h):  # type: ignore[misc]  # noqa: F811
+        k, w = _rs.free_beam_stiffness_csr(N, h)
+        return _csr(k), _csr(w)

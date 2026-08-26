@@ -1,0 +1,349 @@
+//! A minimal compressed-sparse-row matrix — just enough to *assemble* the operators.
+//!
+//! # Why this is hand-written rather than a dependency
+//!
+//! `crates/physsynth-core/tests/deps.rs` keeps the core's dependency list **empty**, and the
+//! migration plan (§2.2) says the first numeric crate arrives as a deliberate edit with its reason
+//! written next to it. Phase 1 does not supply that reason: the three operator builders only ever
+//! *construct* matrices — transpose, multiply, scale — and never solve with one. The constraint
+//! that should actually choose a sparse library is a **solver** constraint, and the plan puts it at
+//! Phase 3 (banded Cholesky) and Phase 4 (the SuperLU hypothesis, §4.1), where it can be measured.
+//! Pulling in `faer` or `nalgebra-sparse` now to get a `matmul` would fix the interchange type
+//! before the requirement that ought to pick it exists.
+//!
+//! So: ~200 lines, no dependencies, and the day a solver lands this type becomes the thing that
+//! converts *into* whatever that solver wants. That is a smaller commitment than the reverse.
+//!
+//! # Canonical form, and the one place this deliberately differs from SciPy
+//!
+//! Every matrix this module produces is **canonical**: column indices strictly ascending within
+//! each row, no duplicates, no explicit zeros. SciPy is not. Measured 2026-08-26,
+//! `biharmonic_matrix` comes back from `(d2 @ d2).tocsr()` with `has_sorted_indices == False` and
+//! its columns in *descending* order — an artifact of SciPy's SMMP kernel, whose output list is a
+//! stack. `free_beam_stiffness`, which reaches its product through a transpose, comes back sorted.
+//!
+//! Reproducing that split would mean reimplementing a SciPy internal *and* pinning the port to a
+//! detail SciPy is free to change in a point release — a red gate on an upgrade, for a non-bug.
+//! Both spellings describe the same matrix, and every consumer in this repo treats them as such:
+//! nothing downstream reads `.data` or `.indices`, the matrices are only ever used as operators.
+//! `tests/test_rust_parity_operators.py` therefore canonicalises the SciPy side before comparing,
+//! and says so.
+//!
+//! What is **not** relaxed is the arithmetic. Products are accumulated in ascending order of the
+//! contracted index, which is what SciPy's kernel does, and the resulting `data` is asserted equal
+//! to SciPy's bit-for-bit.
+
+/// A sparse matrix in canonical compressed-sparse-row form.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Csr {
+    nrows: usize,
+    ncols: usize,
+    /// Row starts; length `nrows + 1`, with `indptr[nrows] == data.len()`.
+    indptr: Vec<usize>,
+    /// Column index per stored value; ascending within each row.
+    indices: Vec<usize>,
+    data: Vec<f64>,
+}
+
+impl Csr {
+    /// Build from per-row `(column, value)` lists.
+    ///
+    /// Each row is sorted by column and exact zeros are dropped, so the result is canonical
+    /// whatever order the caller supplied. Duplicate columns within a row are a caller bug and
+    /// panic rather than being summed — none of the builders here produce one, and silently
+    /// accepting them would hide a stencil written twice.
+    ///
+    /// # Panics
+    /// If `rows` is the wrong length, a column index is out of range, or a row repeats a column.
+    pub fn from_rows(nrows: usize, ncols: usize, rows: Vec<Vec<(usize, f64)>>) -> Self {
+        assert_eq!(rows.len(), nrows, "expected one entry list per row");
+        let mut indptr = Vec::with_capacity(nrows + 1);
+        let mut indices = Vec::new();
+        let mut data = Vec::new();
+        indptr.push(0);
+        for mut row in rows {
+            row.sort_by_key(|&(j, _)| j);
+            let mut last: Option<usize> = None;
+            for (j, v) in row {
+                assert!(j < ncols, "column {j} out of range for {ncols} columns");
+                assert!(last != Some(j), "column {j} repeated in a row");
+                last = Some(j);
+                if v != 0.0 {
+                    indices.push(j);
+                    data.push(v);
+                }
+            }
+            indptr.push(data.len());
+        }
+        Self {
+            nrows,
+            ncols,
+            indptr,
+            indices,
+            data,
+        }
+    }
+
+    /// Square diagonal matrix with the given entries.
+    pub fn diagonal(d: &[f64]) -> Self {
+        let n = d.len();
+        Self::from_rows(
+            n,
+            n,
+            d.iter().enumerate().map(|(i, &v)| vec![(i, v)]).collect(),
+        )
+    }
+
+    pub fn nrows(&self) -> usize {
+        self.nrows
+    }
+
+    pub fn ncols(&self) -> usize {
+        self.ncols
+    }
+
+    pub fn nnz(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn indptr(&self) -> &[usize] {
+        &self.indptr
+    }
+
+    pub fn indices(&self) -> &[usize] {
+        &self.indices
+    }
+
+    pub fn data(&self) -> &[f64] {
+        &self.data
+    }
+
+    /// `self * s`, elementwise on the stored values.
+    ///
+    /// Structure is preserved even if a product underflows to zero, matching SciPy's
+    /// `_mul_scalar`, which multiplies `.data` and leaves the sparsity pattern alone.
+    pub fn scaled(&self, s: f64) -> Self {
+        Self {
+            nrows: self.nrows,
+            ncols: self.ncols,
+            indptr: self.indptr.clone(),
+            indices: self.indices.clone(),
+            data: self.data.iter().map(|v| v * s).collect(),
+        }
+    }
+
+    /// The transpose, by counting sort — which lands each output row's columns in ascending order
+    /// for free, so the result is canonical without a second pass.
+    pub fn transpose(&self) -> Self {
+        let mut counts = vec![0usize; self.ncols + 1];
+        for &j in &self.indices {
+            counts[j + 1] += 1;
+        }
+        for i in 0..self.ncols {
+            counts[i + 1] += counts[i];
+        }
+        let indptr = counts.clone();
+        let mut indices = vec![0usize; self.data.len()];
+        let mut data = vec![0.0f64; self.data.len()];
+        let mut next = counts;
+        for i in 0..self.nrows {
+            for p in self.indptr[i]..self.indptr[i + 1] {
+                let j = self.indices[p];
+                let dst = next[j];
+                indices[dst] = i;
+                data[dst] = self.data[p];
+                next[j] = dst + 1;
+            }
+        }
+        Self {
+            nrows: self.ncols,
+            ncols: self.nrows,
+            indptr,
+            indices,
+            data,
+        }
+    }
+
+    /// `self @ other`.
+    ///
+    /// The accumulation order is the load-bearing part. For output row `i` the contracted index
+    /// `j` runs over row `i` of `self` in **ascending** order, and within each `j` the column `k`
+    /// runs over row `j` of `other` ascending. That is what SciPy's SMMP kernel does, and floating
+    /// point makes it part of the definition rather than an implementation detail: `(p + 4p) + p`
+    /// and `(p + p) + 4p` are different numbers in general. Checked against SciPy at six grid
+    /// sizes, the resulting `data` is bit-identical — which is why the parity test asserts equality
+    /// rather than a tolerance.
+    ///
+    /// Entries that cancel to exactly zero are dropped, as SciPy's kernel drops them, so the two
+    /// sides agree on `nnz` as well as on the values.
+    ///
+    /// # Panics
+    /// If the inner dimensions disagree.
+    pub fn matmul(&self, other: &Csr) -> Self {
+        assert_eq!(
+            self.ncols, other.nrows,
+            "matmul shape mismatch: ({}x{}) @ ({}x{})",
+            self.nrows, self.ncols, other.nrows, other.ncols
+        );
+        let ncols = other.ncols;
+        let mut sums = vec![0.0f64; ncols];
+        let mut seen = vec![false; ncols];
+        let mut touched: Vec<usize> = Vec::new();
+        let mut rows: Vec<Vec<(usize, f64)>> = Vec::with_capacity(self.nrows);
+        for i in 0..self.nrows {
+            touched.clear();
+            for p in self.indptr[i]..self.indptr[i + 1] {
+                let j = self.indices[p];
+                let v = self.data[p];
+                for q in other.indptr[j]..other.indptr[j + 1] {
+                    let k = other.indices[q];
+                    sums[k] += v * other.data[q];
+                    if !seen[k] {
+                        seen[k] = true;
+                        touched.push(k);
+                    }
+                }
+            }
+            touched.sort_unstable();
+            let mut row = Vec::with_capacity(touched.len());
+            for &k in &touched {
+                if sums[k] != 0.0 {
+                    row.push((k, sums[k]));
+                }
+                sums[k] = 0.0;
+                seen[k] = false;
+            }
+            rows.push(row);
+        }
+        Self::from_rows(self.nrows, ncols, rows)
+    }
+
+    /// `self @ v` — for the native tests, which check an operator by what it does to a vector.
+    ///
+    /// # Panics
+    /// If `v` does not have `ncols` entries.
+    pub fn matvec(&self, v: &[f64]) -> Vec<f64> {
+        assert_eq!(v.len(), self.ncols, "matvec length mismatch");
+        (0..self.nrows)
+            .map(|i| {
+                let mut acc = 0.0;
+                for p in self.indptr[i]..self.indptr[i + 1] {
+                    acc += self.data[p] * v[self.indices[p]];
+                }
+                acc
+            })
+            .collect()
+    }
+
+    /// The stored value at `(i, j)`, or `0.0` — a test convenience, linear in the row's width.
+    pub fn get(&self, i: usize, j: usize) -> f64 {
+        for p in self.indptr[i]..self.indptr[i + 1] {
+            if self.indices[p] == j {
+                return self.data[p];
+            }
+        }
+        0.0
+    }
+
+    /// True if the matrix equals its own transpose exactly — structure and values, no tolerance.
+    pub fn is_symmetric(&self) -> bool {
+        self.nrows == self.ncols && *self == self.transpose()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `[1, -2, 1]` tridiagonal, unscaled — a stand-in for the real operator.
+    fn tri(n: usize) -> Csr {
+        Csr::from_rows(
+            n,
+            n,
+            (0..n)
+                .map(|i| {
+                    let mut row = vec![(i, -2.0)];
+                    if i > 0 {
+                        row.push((i - 1, 1.0));
+                    }
+                    if i + 1 < n {
+                        row.push((i + 1, 1.0));
+                    }
+                    row
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn from_rows_sorts_and_drops_exact_zeros() {
+        let m = Csr::from_rows(1, 4, vec![vec![(3, 1.0), (1, 0.0), (0, 2.0)]]);
+        assert_eq!(m.indices(), &[0, 3]);
+        assert_eq!(m.data(), &[2.0, 1.0]);
+        assert_eq!(m.indptr(), &[0, 2]);
+    }
+
+    #[test]
+    fn transpose_is_an_involution() {
+        let m = Csr::from_rows(2, 3, vec![vec![(2, 5.0), (0, 1.0)], vec![(1, -3.0)]]);
+        let t = m.transpose();
+        assert_eq!((t.nrows(), t.ncols()), (3, 2));
+        assert_eq!(t.get(2, 0), 5.0);
+        assert_eq!(t.get(1, 1), -3.0);
+        assert_eq!(t.transpose(), m);
+    }
+
+    #[test]
+    fn matmul_agrees_with_the_dense_definition() {
+        let a = tri(6);
+        let b = a.matmul(&a);
+        for i in 0..6 {
+            for j in 0..6 {
+                let dense: f64 = (0..6).map(|k| a.get(i, k) * a.get(k, j)).sum();
+                assert_eq!(b.get(i, j), dense, "entry ({i},{j})");
+            }
+        }
+    }
+
+    #[test]
+    fn matmul_drops_entries_that_cancel_exactly() {
+        // `[[1, 1]] @ [[1], [-1]] = [[0]]` — SciPy's kernel emits nothing for that entry, and
+        // neither does this one. None of the three operator builders exercises the branch, so it
+        // is exercised here rather than being an untested line that first matters at Phase 5.
+        let a = Csr::from_rows(1, 2, vec![vec![(0, 1.0), (1, 1.0)]]);
+        let b = Csr::from_rows(2, 1, vec![vec![(0, 1.0)], vec![(0, -1.0)]]);
+        let c = a.matmul(&b);
+        assert_eq!(c.nnz(), 0);
+        assert_eq!(c.get(0, 0), 0.0);
+    }
+
+    #[test]
+    fn a_gram_product_is_symmetric_exactly() {
+        let a = Csr::from_rows(
+            2,
+            3,
+            vec![vec![(0, 1.0), (1, -2.0)], vec![(1, 1.0), (2, 4.0)]],
+        );
+        assert!(a.transpose().matmul(&a).is_symmetric());
+    }
+
+    #[test]
+    fn scaling_preserves_structure() {
+        let m = tri(4);
+        let s = m.scaled(0.5);
+        assert_eq!(s.indptr(), m.indptr());
+        assert_eq!(s.indices(), m.indices());
+        assert_eq!(s.get(1, 1), -1.0);
+    }
+
+    #[test]
+    fn matvec_matches_get() {
+        let m = tri(5);
+        let v = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = m.matvec(&v);
+        for (i, yi) in y.iter().enumerate() {
+            let expect: f64 = (0..5).map(|j| m.get(i, j) * v[j]).sum();
+            assert_eq!(*yi, expect);
+        }
+    }
+}

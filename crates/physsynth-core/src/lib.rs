@@ -6,7 +6,9 @@
 //!
 //! **This crate is a migration in progress.** `docs/dev/rust-migration-plan.md` is the order of
 //! work; only what a completed phase has ported lives here. Phase 0 is `string_ideal` plus the two
-//! operators it calls.
+//! operators it calls; Phase 1 completes `ops` — the remaining pointwise differences and the three
+//! sparse builders — and brings in `sparse`, a hand-written CSR type whose reason for existing
+//! (rather than being a dependency) is written down in that module.
 //!
 //! # The shape every resonator here shares
 //!
@@ -28,4 +30,5 @@
 //! asserted natively in `tests/` here as well as through the Python harness.
 
 pub mod ops;
+pub mod sparse;
 pub mod string_ideal;

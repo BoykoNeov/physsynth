@@ -170,13 +170,14 @@ def test_the_rust_swap_matches_the_environment():
     # name and is immune to the swap by design. It belongs here, with the other three portability
     # guards, and it runs on BOTH paths -- the default one included, where it asserts the Rust
     # model is *not* silently in play.
-    from physsynth.core import string_ideal
+    from physsynth.core import operators, string_ideal
 
     expected_rust = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
-    assert string_ideal._USE_RUST is expected_rust, (
-        "the module's reading of PHYSSYNTH_RS disagrees with this test's -- one of the two "
-        "changed without the other"
-    )
+    for module in (string_ideal, operators):
+        assert module._USE_RUST is expected_rust, (
+            f"{module.__name__}'s reading of PHYSSYNTH_RS disagrees with this test's -- one of "
+            "the two changed without the other"
+        )
 
     if expected_rust:
         import physsynth_rs
@@ -189,6 +190,42 @@ def test_the_rust_swap_matches_the_environment():
         assert string_ideal.IdealString is string_ideal.IdealStringPy, (
             "PHYSSYNTH_RS is unset but `IdealString` is not the Python class -- the default path "
             "must stay the one the acceptance numbers came from"
+        )
+
+    # The operators (plan Phase 1) need the same guard for the same reason, and it has to be
+    # spelled differently: they are functions, so there is no class identity to compare. The
+    # question that matters is whether the PUBLIC name still refers to the `_py` implementation.
+    #
+    # This one is wider than the string's. `string_stiff`, `string_damped`, `string_nonlinear`,
+    # `string_geometric` and `beam` all do `from .operators import ...` at import time, so the
+    # binding they captured is fixed the moment their module was first imported. If the swap ever
+    # landed after them -- a lazy import, a reordered `physsynth.core.__init__` -- those five would
+    # hold the Python functions while `operators` reported Rust, and the run would be green while
+    # testing the wrong thing for five models at once.
+    for name in operators.__all__:
+        public = getattr(operators, name)
+        reference = getattr(operators, f"{name}_py")
+        if expected_rust:
+            assert public is not reference, (
+                f"PHYSSYNTH_RS is set but `operators.{name}` is still the Python function: this "
+                "run is NOT exercising the Rust operators, whatever it reports"
+            )
+        else:
+            assert public is reference, (
+                f"PHYSSYNTH_RS is unset but `operators.{name}` is not the Python function -- the "
+                "default path must stay the one the acceptance numbers came from"
+            )
+
+    if expected_rust:
+        from physsynth.core import beam, string_stiff
+
+        assert string_stiff.biharmonic_matrix is operators.biharmonic_matrix, (
+            "`string_stiff` captured a different `biharmonic_matrix` than `operators` now "
+            "exposes -- the swap landed after that module was imported, so the model is running "
+            "on the Python operator while this run claims otherwise"
+        )
+        assert beam.free_beam_stiffness is operators.free_beam_stiffness, (
+            "`beam` captured a different `free_beam_stiffness` than `operators` now exposes"
         )
 
 

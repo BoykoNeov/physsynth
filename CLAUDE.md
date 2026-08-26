@@ -21,11 +21,14 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    analysis, viewer backend *and* the test suite — in favour of **Rust**, gradually and model by
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
-   **Phase 0 is built** (plan §9): `crates/physsynth-core` + `crates/physsynth-py`, with
-   `string_ideal` ported. `cargo test --workspace` runs the native bars and the Cargo dependency
-   allowlist; `pip install ./crates/physsynth-py` then `PHYSSYNTH_RS=1 pytest` runs the **existing,
-   unmodified** Python tests against the Rust model. Both implementations stay alive for now —
-   deleting a Python model waits on its clients, not on its own phase (§1.2).
+   **Phases 0 and 1 are built** (plan §9, §10): `crates/physsynth-core` + `crates/physsynth-py`,
+   with `string_ideal` and all of `operators` ported. `cargo test --workspace` runs the native bars
+   and the Cargo dependency allowlist; `pip install ./crates/physsynth-py` then `PHYSSYNTH_RS=1
+   pytest` runs the **existing, unmodified** Python tests against the Rust code. The flag is one
+   switch for the whole tree: with it set, five still-Python models (`string_stiff`,
+   `string_damped`, `string_nonlinear`, `string_geometric`, `beam`) run on Rust-built operators.
+   Both implementations stay alive for now — deleting a Python model waits on its clients, not on
+   its own phase (§1.2).
 4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
    never the reverse. Keeps the physics portable to C++/Rust later.
 5. **Unifying abstraction:** `exciter -> resonator (+- nonlinear coupling) -> body/radiation`.

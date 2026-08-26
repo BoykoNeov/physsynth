@@ -40,6 +40,8 @@
 #![allow(non_snake_case)] // The Python API spells them `L`, `T`, `N`; the binding must match.
 
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1, PyUntypedArrayMethods};
+use physsynth_core::ops;
+use physsynth_core::sparse::Csr;
 use physsynth_core::string_ideal as core;
 use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
@@ -454,9 +456,196 @@ impl PyIdealString {
     }
 }
 
-/// The extension module. One class today; the plan's later phases add to it in place.
+// ==== operators (plan Phase 1) ===================================================================
+//
+// `physsynth/core/operators.py` is a module of free functions, not a class, so the binding is a
+// set of free functions too. Two shapes come back, and the difference is the whole design:
+//
+//   * the four pointwise differences return a fresh NumPy array, exactly as the original does;
+//   * the three matrix builders return **CSR triplets** — `(data, indices, indptr, shape)` — and
+//     *not* a matrix.
+//
+// The second is deliberate (plan §3.1). `physsynth-core` must not learn what SciPy is, and this
+// crate must not decide what a sparse matrix means to the caller. So the Rust side hands back the
+// four arrays and the shim at the bottom of `physsynth/core/operators.py` rebuilds a
+// `scipy.sparse.csr_matrix` from them. That keeps the swap invisible to `string_stiff.py`,
+// `string_damped.py`, `string_nonlinear.py`, `string_geometric.py` and `beam.py`, all five of
+// which do `from .operators import ...` and expect a SciPy object back — the "switch is the lever,
+// zero client edits" property Phase 0 established, now carrying five models instead of one.
+//
+// Index arrays come back as **int32**, which is what SciPy picks for every matrix this project
+// builds (measured at N = 4, 64 and 1000). Handing back int64 would work and would silently change
+// `.indices.dtype`, so the width is asserted rather than left to the rebuild.
+
+/// Borrow a contiguous 1-D float64 slice for an operator argument.
+fn op_slice<'a>(ro: &'a PyReadonlyArray1<'_, f64>, name: &str) -> PyResult<&'a [f64]> {
+    state_slice(ro, name)
+}
+
+/// Validate the interval count shared by the three builders.
+///
+/// The Python original rejects `N < 2` in two different voices: `free_beam_stiffness` raises its
+/// own message, while the other two fall through to NumPy's `negative dimensions are not allowed`.
+/// Both are `ValueError`, which is the part callers can depend on; the text here is the clearer of
+/// the two in all three cases. The divergence is noted in the swap block that installs these.
+fn n_intervals(n: i64) -> PyResult<usize> {
+    if n < 2 {
+        return Err(PyValueError::new_err(format!(
+            "N must be >= 2 (need at least one interior node); got {n}."
+        )));
+    }
+    Ok(n as usize)
+}
+
+/// A CSR matrix as `(data, indices, indptr, (nrows, ncols))`, ready for `scipy.sparse.csr_matrix`.
+type CsrTriplets = (
+    Py<PyArray1<f64>>,
+    Py<PyArray1<i32>>,
+    Py<PyArray1<i32>>,
+    (usize, usize),
+);
+
+fn csr_triplets(py: Python<'_>, m: &Csr) -> PyResult<CsrTriplets> {
+    // SciPy switches its index width above 2^31 and so would this, but nothing in this project is
+    // within three orders of magnitude of that. Refuse rather than wrap: `as i32` is a silent
+    // truncation, and a truncated index array builds a *plausible* wrong matrix.
+    let limit = i32::MAX as usize;
+    if m.nnz() > limit || m.nrows() > limit || m.ncols() > limit {
+        return Err(PyValueError::new_err(
+            "matrix is too large for 32-bit CSR indices; SciPy would widen to int64 here and this \
+             binding has never needed to",
+        ));
+    }
+    Ok((
+        PyArray1::from_slice(py, m.data()).unbind(),
+        PyArray1::from_vec(py, m.indices().iter().map(|&j| j as i32).collect()).unbind(),
+        PyArray1::from_vec(py, m.indptr().iter().map(|&j| j as i32).collect()).unbind(),
+        (m.nrows(), m.ncols()),
+    ))
+}
+
+/// Forward spatial difference `(u[l+1] - u[l]) / h`; `len(u) - 1` inter-node strains.
+#[pyfunction]
+#[pyo3(name = "delta_x_forward")]
+fn op_delta_x_forward(
+    py: Python<'_>,
+    u: PyReadonlyArray1<'_, f64>,
+    h: f64,
+) -> PyResult<Py<PyArray1<f64>>> {
+    let s = op_slice(&u, "u")?;
+    // NumPy's `u[1:] - u[:-1]` yields an empty array rather than raising when `u` is too short.
+    // The core kernel documents a precondition and panics instead, which is right for a Rust
+    // caller and wrong at an interpreter boundary — a panic here would surface as PanicException.
+    let out = if s.len() < 2 {
+        Vec::new()
+    } else {
+        ops::delta_x_forward(s, h)
+    };
+    Ok(PyArray1::from_vec(py, out).unbind())
+}
+
+/// Backward spatial difference — the same numbers as `delta_x_forward`, for notational symmetry.
+#[pyfunction]
+#[pyo3(name = "delta_x_backward")]
+fn op_delta_x_backward(
+    py: Python<'_>,
+    u: PyReadonlyArray1<'_, f64>,
+    h: f64,
+) -> PyResult<Py<PyArray1<f64>>> {
+    op_delta_x_forward(py, u, h)
+}
+
+/// Second spatial difference at the `len(u) - 2` interior nodes.
+#[pyfunction]
+#[pyo3(name = "delta_xx")]
+fn op_delta_xx(
+    py: Python<'_>,
+    u: PyReadonlyArray1<'_, f64>,
+    h: f64,
+) -> PyResult<Py<PyArray1<f64>>> {
+    let s = op_slice(&u, "u")?;
+    let out = if s.len() < 3 {
+        Vec::new()
+    } else {
+        ops::delta_xx(s, h)
+    };
+    Ok(PyArray1::from_vec(py, out).unbind())
+}
+
+/// Fourth spatial difference at the `len(u) - 4` nodes where the 5-point stencil fits.
+#[pyfunction]
+#[pyo3(name = "delta_xxxx")]
+fn op_delta_xxxx(
+    py: Python<'_>,
+    u: PyReadonlyArray1<'_, f64>,
+    h: f64,
+) -> PyResult<Py<PyArray1<f64>>> {
+    let s = op_slice(&u, "u")?;
+    let out = if s.len() < 5 {
+        Vec::new()
+    } else {
+        ops::delta_xxxx(s, h)
+    };
+    Ok(PyArray1::from_vec(py, out).unbind())
+}
+
+/// Discrete inner product `<f, g> = h * sum_l f[l] g[l]`.
+#[pyfunction]
+#[pyo3(name = "inner")]
+fn op_inner(f: PyReadonlyArray1<'_, f64>, g: PyReadonlyArray1<'_, f64>, h: f64) -> PyResult<f64> {
+    let a = op_slice(&f, "f")?;
+    let b = op_slice(&g, "g")?;
+    if a.len() != b.len() {
+        return Err(PyValueError::new_err(format!(
+            "inner() operands must have equal length; got ({},) and ({},).",
+            a.len(),
+            b.len()
+        )));
+    }
+    Ok(ops::inner(a, b, h))
+}
+
+/// Squared discrete norm `||f||^2 = <f, f>`.
+#[pyfunction]
+#[pyo3(name = "norm2")]
+fn op_norm2(f: PyReadonlyArray1<'_, f64>, h: f64) -> PyResult<f64> {
+    Ok(ops::norm2(op_slice(&f, "f")?, h))
+}
+
+/// `(N-1) x (N-1)` Dirichlet second-difference operator, as CSR triplets.
+#[pyfunction]
+#[pyo3(name = "second_difference_matrix_csr")]
+fn op_second_difference_matrix(py: Python<'_>, N: i64, h: f64) -> PyResult<CsrTriplets> {
+    csr_triplets(py, &ops::second_difference_matrix(n_intervals(N)?, h))
+}
+
+/// `(N-1) x (N-1)` simply-supported biharmonic operator `D2 @ D2`, as CSR triplets.
+#[pyfunction]
+#[pyo3(name = "biharmonic_matrix_csr")]
+fn op_biharmonic_matrix(py: Python<'_>, N: i64, h: f64) -> PyResult<CsrTriplets> {
+    csr_triplets(py, &ops::biharmonic_matrix(n_intervals(N)?, h))
+}
+
+/// Free-free Euler–Bernoulli `(K, W)` on the `N+1` nodes, as a pair of CSR triplets.
+#[pyfunction]
+#[pyo3(name = "free_beam_stiffness_csr")]
+fn op_free_beam_stiffness(py: Python<'_>, N: i64, h: f64) -> PyResult<(CsrTriplets, CsrTriplets)> {
+    let (k, w) = ops::free_beam_stiffness(n_intervals(N)?, h);
+    Ok((csr_triplets(py, &k)?, csr_triplets(py, &w)?))
+}
+
+/// The extension module. One class and the operator module today; later phases add in place.
 #[pymodule]
 fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyIdealString>()?;
+    m.add_function(wrap_pyfunction!(op_delta_x_forward, m)?)?;
+    m.add_function(wrap_pyfunction!(op_delta_x_backward, m)?)?;
+    m.add_function(wrap_pyfunction!(op_delta_xx, m)?)?;
+    m.add_function(wrap_pyfunction!(op_delta_xxxx, m)?)?;
+    m.add_function(wrap_pyfunction!(op_inner, m)?)?;
+    m.add_function(wrap_pyfunction!(op_norm2, m)?)?;
+    m.add_function(wrap_pyfunction!(op_second_difference_matrix, m)?)?;
+    m.add_function(wrap_pyfunction!(op_biharmonic_matrix, m)?)?;
+    m.add_function(wrap_pyfunction!(op_free_beam_stiffness, m)?)?;
     Ok(())
 }
