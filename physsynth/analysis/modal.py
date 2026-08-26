@@ -50,6 +50,10 @@ __all__ = [
     # 2D free-edge ORTHOTROPIC plate -- model #5b with a grain (model #5of)
     "free_plate_twist_bound",
     "free_plate_coupling_form",
+    # 2D free-edge CIRCULAR plate -- the derived oracle for a staircased outline (model #5g)
+    "free_circular_plate_lambda_roots",
+    "free_circular_plate_lambdas",
+    "free_circular_plate_saddle_bound",
     # 1D acoustic bore (wind leg)
     "bore_resonance_frequencies",
     "discrete_bore_eigenfrequency",
@@ -499,6 +503,136 @@ def free_plate_twist_bound(
             f"and joins the rigid-body nullspace; got {grain_torsion}."
         )
     return 24.0 * kappa * math.sqrt(grain_torsion) / (2.0 * math.pi * a * b)
+
+
+def free_circular_plate_lambda_roots(
+    nu: float, n: int, lam_max: float = 14.0, scan: int = 20000
+) -> NDArray[np.float64]:
+    """Roots ``lambda = k a`` of the **free circular** Kirchhoff plate for ``n`` nodal diameters.
+
+    The oracle the guitar-shaped plate (#5g) is validated against, **derived rather than cited** —
+    the same policy #5of adopted when its orthotropic tables turned out to be paywalled. A disk
+    exercises the identical staircased-mask machinery as a guitar outline and, unlike a guitar, has
+    a real answer.
+
+    With ``w = W(r) cos(n theta)``, the regular solution is ``W(rho) = A J_n(lam rho) +
+    B I_n(lam rho)`` on ``rho = r/a``, and ``k⁴ = rho_s omega²/D`` gives ``omega = kappa lam²/a²``.
+    **Note the square:** the frequency parameter tabulated in the plate literature is
+    ``Lambda = omega a²/kappa = lam²``, not ``lam`` (:func:`free_circular_plate_lambdas`). Getting
+    that backwards makes a correct root look like a 2.3x error.
+
+    The two free-edge conditions at ``rho = 1``, with primes ``d/drho`` (the ``a``-powers cancel
+    after multiplying the second by ``a³``):
+
+        M_r = 0:   W'' + nu (W' - n² W) = 0
+        V_r = 0:   W''' + W'' - [1 + n²(2-nu)] W' + n²(3-nu) W = 0
+
+    the second assembled from the Kirchhoff shear ``V_r = Q_r + (1/r) dM_rtheta/dtheta``, whose
+    ``(1-nu) n²`` twisting contribution is what makes the ``W'`` and ``W`` coefficients depend on
+    ``nu`` at all.
+
+    **This derivation is self-checked three ways**, because a plausible sign error survives most
+    checks (the tests assert all three):
+
+    1. **Rigid-body roots.** ``W = 1`` at ``n = 0`` and ``W = rho`` at ``n = 1`` annihilate both
+       lines identically — a translation and a tilt cost a free plate nothing.
+    2. **The plate's own energy.** Build ``W`` from each root's nullvector and evaluate the bending
+       Rayleigh quotient in polar coordinates: a genuine mode returns ``lam⁴`` exactly. Every root
+       found here passes, so the equation has no spurious roots to filter.
+    3. **A closed-form bound containing no Bessel function.** The pure saddle ``w = xy`` is
+       orthogonal to ``{1, x, y}`` on a disk and has ``w_xx = w_yy = 0``, ``w_xy = 1``, giving
+       ``P = 2(1-nu) pi a²`` against ``∫w² = pi a⁶/24`` and hence
+
+           Lambda_1 <= sqrt(48 (1 - nu))
+
+       — 5.79655 at ``nu = 0.3`` against a derived fundamental of 5.35833, an **8.18%** one-term
+       overshoot, the same character as the free *rectangle*'s 5.4% (:func:`free_plate_twist_bound`,
+       which is this same probe on the other outline).
+
+    ``lam = 0`` is a root for ``n = 0, 1`` (those rigid-body modes) and is deliberately **not**
+    returned: the caller wants elastic modes.
+    """
+    if not (-1.0 < nu < 0.5):
+        raise ValueError(f"nu (Poisson's ratio) must be in (-1, 1/2), got {nu}.")
+    if n < 0:
+        raise ValueError(f"n (nodal diameters) must be >= 0, got {n}.")
+
+    def _det(lam: float) -> float:
+        m = np.empty((2, 2))
+        for col, f in enumerate((special.jvp, special.ivp)):
+            d0, d1 = f(n, lam, 0), f(n, lam, 1) * lam
+            d2, d3 = f(n, lam, 2) * lam**2, f(n, lam, 3) * lam**3
+            m[0, col] = d2 + nu * (d1 - n * n * d0)
+            m[1, col] = (
+                d3 + d2 - (1.0 + n * n * (2.0 - nu)) * d1 + n * n * (3.0 - nu) * d0
+            )
+        # I_n grows like e^lam; rescale its column so the determinant stays finite. A positive
+        # scalar column scaling moves no root.
+        if lam > 1.0:
+            m[:, 1] *= math.exp(-lam)
+        return float(m[0, 0] * m[1, 1] - m[0, 1] * m[1, 0])
+
+    xs = np.linspace(1e-6, float(lam_max), int(scan))
+    vs = np.array([_det(x) for x in xs])
+    out: list[float] = []
+    for i in range(xs.size - 1):
+        if np.isfinite(vs[i]) and np.isfinite(vs[i + 1]) and vs[i] * vs[i + 1] < 0.0:
+            out.append(brentq(_det, xs[i], xs[i + 1], xtol=1e-13))
+    return np.array([v for v in out if v > 1e-3], dtype=float)
+
+
+def free_circular_plate_lambdas(
+    nu: float = 0.3, n_modes: int = 7, n_max: int = 8
+) -> tuple[NDArray[np.float64], NDArray[np.int64]]:
+    """Lowest ``n_modes`` elastic frequency parameters ``Lambda = omega a² sqrt(rho_s/D)`` of a
+    completely free circular plate, **with multiplicity**, plus each mode's nodal-diameter count.
+
+    ``Lambda = lam²`` from :func:`free_circular_plate_lambda_roots`. At ``nu = 0.3`` the first
+    entries are 5.35833 (n=2), 9.00314 (n=0), 12.43899 (n=3), 20.47455 (n=1), 21.83516 (n=4).
+
+    **Multiplicity is not decoration and omitting it is a trap that looks like a physics bug.**
+    Every ``n >= 1`` mode is a *degenerate pair* — ``cos(n theta)`` and ``sin(n theta)`` are
+    independent and cost the same energy — while ``n = 0`` modes are single. A discrete spectrum
+    contains both members, so comparing it against a list that names each pair once misaligns
+    everything past the first entry and reads as 26–42% errors that grow worse under refinement.
+    That is a *comparison* failure with no bug behind it, and it is why the pairs are expanded here
+    rather than at the call site.
+
+    The degeneracy is also a **zero-valued detector** in its own right: a square grid relates a
+    pair's axis-aligned and 45° members by no symmetry, so it splits them, and the exact answer for
+    that split is zero. Measured on a staircased disk: 0.69%, 1.01%, 0.06%, 0.52%, 0.17%, 0.013% at
+    N = 24…128 — shrinking but **not monotone**, so assert a ceiling that shrinks with ``h``, never
+    monotonicity.
+    """
+    if n_modes < 1:
+        raise ValueError(f"n_modes must be >= 1, got {n_modes}.")
+    found: list[tuple[float, int]] = []
+    for n in range(int(n_max) + 1):
+        for lam in free_circular_plate_lambda_roots(nu, n):
+            found += [(lam * lam, n)] * (1 if n == 0 else 2)
+    found.sort()
+    if len(found) < n_modes:
+        raise ValueError(
+            f"only {len(found)} modes below the root-scan ceiling; raise lam_max or n_max."
+        )
+    head = found[:n_modes]
+    return (
+        np.array([v for v, _ in head], dtype=float),
+        np.array([n for _, n in head], dtype=np.int64),
+    )
+
+
+def free_circular_plate_saddle_bound(nu: float) -> float:
+    """Closed-form Rayleigh bound ``Lambda_1 <= sqrt(48(1-nu))`` on the free circular plate.
+
+    The disk's version of :func:`free_plate_twist_bound` — same trial function ``w = xy``, same
+    one-term Rayleigh argument, different domain — and the one line of
+    :func:`free_circular_plate_lambda_roots`'s derivation a reader can check by hand. Contains no
+    Bessel function, so it cannot share a bug with the frequency equation it validates.
+    """
+    if not (-1.0 < nu < 0.5):
+        raise ValueError(f"nu (Poisson's ratio) must be in (-1, 1/2), got {nu}.")
+    return math.sqrt(48.0 * (1.0 - nu))
 
 
 def free_plate_coupling_form(

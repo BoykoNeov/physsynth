@@ -245,6 +245,7 @@ in a new model live in the boundary handling** — check SBP first when `E^n` dr
 | 5 | Plate (Kirchhoff) | biharmonic operator | `f_{mn} = (pi/2)*sqrt(D/rho_s)*[(m/Lx)^2+(n/Ly)^2]` | Chladni patterns as diagnostics. |
 | 5o | Orthotropic plate (grain) | `D_x u_xxxx + 2H u_xxyy + D_y u_yyyy` | `f_{mn} = (pi/2)*sqrt([D_x(m/Lx)^4 + 2H(m/Lx)^2(n/Ly)^2 + D_y(n/Ly)^4]/rho_s)` | Wood, not metal. Supported branch only; sine stays an *exact* eigenvector so the oracle is closed-form. `docs/dev/orthotropic-plate-plan.md`. |
 | 5of | Orthotropic **free** plate | the same energy with `D_1` and `D_xy` **separate** (`H = D_1 + 2 D_xy` is not enough at a free edge) | no closed form — four probes, one per constant: free-beam reduction (exact at `D_1 = 0`), twist bound `24 sqrt(D_xy/rho_s)/(ab)`, `(x²,y²)` coupling form | A soundboard before it is glued in. Same `H`, two splits = the *same* supported plate and a **6.5x** different free one; the grain **reorders** the modes here. `docs/dev/orthotropic-free-plate-plan.md`. |
+| 5g | Non-rectangular **outline** | none — the same operator on a *mask* | derived free-**circular**-plate frequency equation (self-checked 3 ways), and a zero-valued degenerate-pair split | The plate stops being a rectangle: a guitar top, with bouts and a waist. Free branch only — a supported curved plate is the membrane's spectrum *squared*, so it is refused rather than shipped. `docs/dev/guitar-plate-plan.md`. |
 | 6 | Nonlinear plate | von Karman coupling | energy conservation (no analytic modes) | Gongs/cymbals. The deep end. |
 
 Steps 1–3 are one resonator family deepening in physics. Breadth (modal percussion, bowed string,
@@ -529,8 +530,33 @@ threads from here as the project matures; each bullet is a seed, not a spec.
 
   The remaining anisotropy work is **orthotropic von Kármán** (needs a four-constant in-plane
   compliance tensor, and has no closed-form oracle) — deliberately refused again, with this batch as
-  its prerequisite since it shares the strain-energy assembly — and a **non-rectangular** (guitar-
-  shaped) outline, which is the membrane batch's staircasing problem in a 4th-order operator.
+  its prerequisite since it shares the strain-energy assembly. The **non-rectangular (guitar-shaped)
+  outline is now done** (model #5g, 2026-08-26, `docs/dev/guitar-plate-plan.md`): it was indeed the
+  membrane's staircasing problem in a 4th-order operator, and four results are worth carrying.
+
+  First, **the mask is not the outline.** A curved rim staircases into one-node spikes that touch no
+  complete quadrature cell, so their trapezoidal area weight is exactly `0` and the free plate's
+  *mass* matrix is singular — the time-step factorisation fails outright, and two such nodes are
+  enough. The fix (keep only nodes carrying area, to a fixed point) is a **silent geometry change**,
+  which is the second result: the rule is purely topological, so on a coarse grid with a deep waist
+  it can fire in the *middle* of the plate, and energy, nullspace and spectrum all survive that
+  intact. It is asserted geometrically instead — every dropped node within one `h` of the rim, which
+  the default outline meets at a measured 0.53–0.99 `h`.
+
+  Third, and the part that generalises past plates: **the staircase error is largely a domain-size
+  error rather than an operator error.** The frequency error tracks the mask's *area deficit*
+  mode-independently, so a staircased plate behaves like a well-modelled slightly *smaller* plate;
+  dividing the deficit out lifts O(h) toward O(h^1.5). That reading was measured on a disk, where it
+  is worth 6–15×, and it **survives on the guitar at only 3.7–7.4× and without the monotonicity** —
+  a uniformly convex boundary cannot distinguish "area deficit" from "distance from the rim", and a
+  concave waist beside convex bouts can. The plate reports its deficit and applies nothing.
+
+  Fourth, the **simply-supported branch is a negative result**: `B = L @ L` already accepted any
+  mask, and `eig(L²) = eig(L)²` makes a supported curved plate's spectrum exactly the membrane's
+  squared on the same outline. It is refused at construction rather than offered as a model surface
+  with no content. The oracle for the free branch had to be **derived** (a free *circular* plate,
+  self-checked three ways) because no closed form exists for the guitar itself — the same position
+  #5of was in.
 - **Tube acoustics:** thermoviscous losses, radiation impedance at the bell.
 
 ### C. Numerical-methods frontier

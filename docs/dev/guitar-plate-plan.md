@@ -1,6 +1,9 @@
 # Guitar-shaped plate plan — model #5g: the outline stops being a rectangle
 
-**Status: PROBED, not yet built** (2026-08-26). Every number below was measured by the probes in
+**Status: BUILT** (2026-08-26). The build record is §9 at the foot of this document; everything
+above it is the plan as it stood before the code, corrected once where a probe refuted it.
+
+**Status when written: PROBED, not yet built.** Every number below was measured by the probes in
 `M:/claud_projects/temp/guitar-plate/` before a line of core code was written, which is the point:
 the batch was *probed before it was planned*, as batch 19 was.
 
@@ -275,3 +278,78 @@ the waist depth is the knob that makes the shape a guitar rather than an ellipse
 - `tests/test_guitar_plate.py` — the tiers of §5.
 - **Not** `web/` — a viewer batch follows this one (the plan's standing rule: a new core model
   reopens the built-but-unshown gap), and it is not in this batch's scope.
+
+---
+
+## 9. Build record (2026-08-26)
+
+Everything above this line is the plan. This section is what building it actually found.
+
+### 9.1 The collapse gate FAILED first, and the reason is worth more than the gate
+
+§3 committed to making `free_plate_stiffness` a wrapper only if the bit-identity held across the
+whole #5o survey rather than at the single grid the probe had checked. Run properly — **7 grids × 4
+values of ν × 3 grain splits, 84 cases** — it came back `max|dK| = 7.3e-12`. Not zero.
+
+The cause is one character wide. The Kronecker twist operator is `kron(forward_d1, forward_d1)`, so
+its coefficient is the **product of two reciprocals**, `(1/h)·(1/h)`. The masked rewrite reached for
+the second difference's `1/(h·h)` instead. Those are the same number only when `h` is exactly
+representable, and the survey contains exactly one grid where it is not in the relevant way —
+`h = 0.05`, which failed for **every** ν and **every** split while the other six grids passed
+cleanly at every setting.
+
+⇒ Two things generalise. **A bit-identity measured on one grid is not measured.** And more
+specifically: when two spellings of a coefficient are algebraically equal, prefer the one that
+matches how the operator is *built*, not the one that matches how it is *written* — `Dxy` is a
+product of first differences and must be spelled like one. With that fixed the gate returns `0.0` on
+all 84 cases and `free_plate_stiffness` is now four lines that build a mask and delegate.
+
+### 9.2 What `Plate` grew
+
+`domain: "rectangle" | "circle" | "guitar"` plus `waist` and `asym`, and four reported attributes
+that exist on **every** plate so nothing downstream has to branch to read them: `n_pruned`, `area`,
+`outline_area`, `area_deficit`.
+
+Three decisions inside that are not obvious from the signature:
+
+- **`circle` and `guitar` are refused on the supported branch**, with the reason in the error
+  message rather than in a comment. §2 argued a supported curved plate has no content; refusing it
+  is that argument enforced, and it costs a caller nothing they cannot get from `Membrane`.
+- **The outline uses the plate's *snapped* length, not the requested one.** `Ly` is already snapped
+  to an integer number of square cells before the mask is built, so `outline_area` is the area of
+  the outline the plate actually has. The test asserts against `guitar_area(p.Ly, p.Lx)`, not
+  against the nominal `0.48`; asserting the nominal value is an off-by-one-cell error wearing a
+  tolerance failure.
+- **A rectangle's `area_deficit` is left *measured*, at ~2e-16, not forced to `0.0`.** The
+  trapezoidal weights really do sum to `Lx·Ly` there, and hardcoding a zero would hide the one case
+  where the quadrature is exactly right.
+
+`_count_components` (the pinch detector of §5.4) is hand-rolled rather than taken from
+`scipy.ndimage`: the core's dependency allowlist is a hardcoded set measured as the `sys.modules`
+delta, so pulling in a new SciPy subpackage is a deliberate edit elsewhere and not a free import
+here.
+
+### 9.3 The oracle landed in `analysis/modal.py` with its self-checks as tests
+
+`free_circular_plate_lambda_roots`, `free_circular_plate_lambdas`,
+`free_circular_plate_saddle_bound`. All three of §5.1's checks are **tests**, not comments — the
+rigid-body roots, the `λ⁴` Rayleigh quotient on every root, and the saddle bound bracketing the
+fundamental at 8.18%.
+
+`free_circular_plate_lambdas` returns the spectrum **with multiplicity** and the nodal-diameter
+count beside it, deliberately: expanding the degenerate pairs at the oracle rather than at the call
+site is what stops §5.2's misalignment from being re-derivable by the next caller.
+
+### 9.4 Tests
+
+`tests/test_guitar_plate.py`, **22 tests**, all green. The tiering is explicit in the module
+docstring and two of the tiers say in their own docstrings that they are *not* evidence: the energy
+ledger is a regression tier (it cannot see geometry) and the supported-branch identity cannot fail.
+The batch's weight sits on the derived disk oracle and the zero-valued degeneracy split.
+
+### 9.5 Still out
+
+- The **clamped** rim (§7) — the boundary a glued-in soundboard actually has.
+- **Von Kármán on an outline** (§7) — a gong that is not a rectangle.
+- A **viewer batch**. The plan's standing rule is that a new core model reopens the built-but-unshown
+  gap, and this reopens it for the fourth time.

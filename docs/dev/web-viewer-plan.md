@@ -3282,6 +3282,14 @@ it looks like. The same rule still governs what comes after: the 3-D air box is 
 built-but-unshown core family, and it needs a **new frontend capability** (a 3-D field type) before
 it is a batch, which is exactly the bar this sentence sets.*
 
+*Amended 2026-08-26: **reopened a fourth time.** Model #5g (the plate's outline stops being a
+rectangle — a guitar top with bouts and a waist, `docs/dev/guitar-plate-plan.md`) is a new core model
+and therefore a new built-but-unshown gap, exactly as the rule below predicts. It also arrives with a
+frontend requirement of its own, the same bar batch 18 had to clear: the viewer's field renderers all
+assume a **rectangular** field, and a masked outline needs dead nodes drawn as absent rather than as
+zero — which is a new capability, not a new parameter. So it is a candidate batch under the rule, not
+an automatic one.*
+
 *Amended 2026-08-17: the gap **reopened**, which is the useful thing this line now records. Air-box
 batches 5 and 6 added core models after b18 shipped, and batch 6 closed itself with "still out: a
 viewer batch" — so "the built-but-unshown gap closes" is a statement about a moment, not a

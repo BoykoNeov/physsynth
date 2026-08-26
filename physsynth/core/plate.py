@@ -146,19 +146,59 @@ from scipy.sparse.linalg import splu
 from .operators2d import (
     AiryStressSolver,
     VonKarmanBracket,
+    disk_mask,
     embed,
     free_plate_stiffness,
+    free_plate_stiffness_from_mask,
+    guitar_area,
+    guitar_half_width,
+    guitar_mask,
+    guitar_scale,
     laplacian_from_mask,
     orthotropic_biharmonic,
+    prune_to_area_carrying,
     rectangle_mask,
 )
 
 Boundary = Literal["supported", "free"]
+# The plate's OUTLINE, orthogonal to its boundary condition. "rectangle" is every plate the core
+# built before model #5g. "circle" and "guitar" are staircased onto the Cartesian grid and are
+# offered on the FREE branch only -- a *supported* curved plate would be free to add (B = L @ L
+# already takes any mask) and would be a model surface with no content, since its spectrum is
+# exactly the membrane's squared on the same outline. See docs/dev/guitar-plate-plan.md §2.
+Domain = Literal["rectangle", "circle", "guitar"]
 
 # theta below 1/4 is only conditionally stable; theta in (0, 1] keeps A SPD (genuinely implicit).
 # Default a hair above 1/4 (accuracy-first per the plan) so the energy has a small positivity margin
 # while staying near the minimal-dispersion theta = 1/4 -- inherited from the stiff string.
 THETA_DEFAULT = 0.28
+
+
+def _count_components(mask: NDArray[np.bool_]) -> int:
+    """Number of 4-connected components of a live-node mask.
+
+    Deliberately hand-rolled rather than pulled from ``scipy.ndimage``: the core's dependency
+    allowlist is a hardcoded set measured as the ``sys.modules`` delta, so reaching for a new
+    SciPy subpackage is a deliberate edit elsewhere, not a free import here.
+    """
+    m = np.asarray(mask, dtype=bool)
+    seen = np.zeros(m.shape, dtype=bool)
+    ny, nx = m.shape
+    n = 0
+    for start in zip(*np.nonzero(m), strict=True):
+        if seen[start]:
+            continue
+        n += 1
+        stack = [start]
+        seen[start] = True
+        while stack:
+            j, i = stack.pop()
+            for dj, di in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                a, b = j + dj, i + di
+                if 0 <= a < ny and 0 <= b < nx and m[a, b] and not seen[a, b]:
+                    seen[a, b] = True
+                    stack.append((a, b))
+    return n
 
 
 class GrainSpec(NamedTuple):
@@ -332,6 +372,9 @@ class Plate:
         sigma: float = 0.0,
         theta: float = THETA_DEFAULT,
         boundary: Boundary = "supported",
+        domain: Domain = "rectangle",
+        waist: float = 0.42,
+        asym: float = 0.30,
         nu: float | None = None,
         grain_x: float = 1.0,
         grain_cross: float | None = None,
@@ -466,8 +509,26 @@ class Plate:
         # branch either way (it drops out of the Navier modal law).
         self.nu = float(nu) if nu is not None else (g_1 / grain_x if split_given else 0.3)
         self.boundary: Boundary = boundary
+        if domain not in ("rectangle", "circle", "guitar"):
+            raise ValueError(f"domain must be 'rectangle', 'circle' or 'guitar'; got {domain!r}.")
+        if domain != "rectangle" and boundary != "free":
+            # Not a limitation -- a refusal. B = L @ L already accepts any mask, so a supported
+            # curved plate is free to build and says nothing: eig(L²) = eig(L)² makes its spectrum
+            # exactly the membrane's squared on the same outline. See the plan's §2.
+            raise ValueError(
+                f"domain={domain!r} is offered on boundary='free' only. A simply-supported plate "
+                f"on a curved outline has the membrane's spectrum squared (B = L @ L), so it is a "
+                f"model surface with no content -- use Membrane(domain=...) and square it."
+            )
+        self.domain: Domain = domain
+        self.waist = float(waist)
+        self.asym = float(asym)
 
         self.k = 1.0 / self.fs
+        # A circle takes Lx as its DIAMETER and squares the bounding box; a guitar takes Lx as its
+        # widest span and Ly as its length. Both are then snapped to square cells like a rectangle.
+        if domain == "circle":
+            Ly = Lx
         self.h = float(Lx) / self.N
         Ny = max(int(round(float(Ly) / self.h)), 1)
         self.Lx = float(Lx)
@@ -482,6 +543,16 @@ class Plate:
 
         sk = self.sigma * self.k
         coeff = self.theta * self.k * self.k * self.kappa * self.kappa
+
+        # Outline bookkeeping, defined for every plate so nothing downstream has to branch on the
+        # domain to read it. A rectangle prunes nothing; its measured area deficit is not forced to
+        # zero but comes out at rounding (~2e-16), because the trapezoidal weights really do sum to
+        # Lx*Ly there. Left measured rather than special-cased -- a hardcoded 0.0 would hide the one
+        # case where the quadrature is exactly right.
+        self.n_pruned = 0
+        self.outline_area = self.Lx * self.Ly
+        self.area = self.outline_area
+        self.area_deficit = 0.0
 
         if self.boundary == "supported":
             self.mask = rectangle_mask(self.N, Ny)
@@ -503,14 +574,18 @@ class Plate:
             # A = (1 + sigma k) I + theta k^2 kappa^2 B (SPD, 13-point, constant -> factor once).
             A = (1.0 + sk) * sparse.identity(self.n_live, format="csc") + coeff * self.B
         else:  # free: energy-first stiffness K + diagonal lumped mass W (W-weighted update)
-            self.mask = np.ones((Ny + 1, self.N + 1), dtype=bool)  # every node is a free unknown
+            raw = self._outline_mask(Ny)
+            # THE MASK IS NOT THE OUTLINE. A curved rim staircases into one-node spikes that touch
+            # no complete cell, so their trapezoidal area weight is exactly 0 and W -- hence A --
+            # is singular. Two such nodes are enough to make the factorisation fail outright.
+            self.mask, self.n_pruned = prune_to_area_carrying(raw)
+            self._check_pruned_nodes_are_at_the_rim(raw)
             # The four constants are always passed explicitly -- ONE code path for isotropic and
             # orthotropic. At the nu-derived split the coefficients are 1.0, 1.0, nu and
             # 4*((1-nu)/2) == 2*(1-nu) exactly, so this is byte-identical to the pre-grain assembly
-            # on every grid (measured over the 7-grid survey #5o used, x 4 values of nu).
-            self.K, self.W, self.index_map = free_plate_stiffness(
-                self.N,
-                Ny,
+            # on every grid (measured over the 7-grid survey #5o used, x 4 values of nu x 3 splits).
+            self.K, self.W, self.index_map = free_plate_stiffness_from_mask(
+                self.mask,
                 self.h,
                 self.nu,
                 grain_x=self.grain_x,
@@ -518,6 +593,13 @@ class Plate:
                 grain_coupling=self.grain_coupling,
                 grain_torsion=self.grain_torsion,
             )
+            # Area DEFICIT of the staircased mask against the true outline: the leading term of the
+            # staircase error and the plate's own statement of how converged it is. Reported, never
+            # applied -- dividing it out silently would make a coarse plate look converged.
+            area = float(self.W.diagonal().sum())
+            self.area = area
+            self.outline_area = self._true_outline_area()
+            self.area_deficit = area / self.outline_area - 1.0
             self.w: NDArray[np.float64] = self.W.diagonal()  # lumped area mass (h², h²/2, h²/4)
             self.n_live = self.K.shape[0]
             # A = (1 + sigma k) W + theta k^2 kappa^2 K (SPD because W is, though K is only PSD).
@@ -532,6 +614,80 @@ class Plate:
         # the plate is coupled as a body (the radiation read-out reads this). See :meth:`pressure`.
         self._accel: NDArray[np.float64] = np.zeros(self.n_live)
         self.n: int = 0  # completed steps
+
+    # -- outline (model #5g) ------------------------------------------------------------
+
+    def _outline_mask(self, Ny: int) -> NDArray[np.bool_]:
+        """Raw live-node mask for :attr:`domain`, before pruning.
+
+        A rectangle is the mask that happens to be all-ones — the case the free plate always was,
+        now stated as one outline among three rather than as the absence of an outline.
+        """
+        if self.domain == "rectangle":
+            return np.ones((Ny + 1, self.N + 1), dtype=bool)
+        if self.domain == "circle":
+            r = 0.5 * self.Lx
+            return disk_mask(self.X - r, self.Y - r, r)
+        return guitar_mask(
+            self.X - 0.5 * self.Lx, self.Y, self.Ly, self.Lx, self.waist, self.asym
+        )
+
+    def _true_outline_area(self) -> float:
+        """Area of the continuum outline — the denominator of :attr:`area_deficit`."""
+        if self.domain == "rectangle":
+            return self.Lx * self.Ly
+        if self.domain == "circle":
+            return math.pi * (0.5 * self.Lx) ** 2
+        return guitar_area(self.Ly, self.Lx, self.waist, self.asym)
+
+    def _check_pruned_nodes_are_at_the_rim(self, raw: NDArray[np.bool_]) -> None:
+        """Assert the pruned mask is still the plate the caller asked for.
+
+        Two failure modes, and neither is visible to any other detector this family has — energy
+        conserves, the nullspace stays 3-dimensional and the spectrum stays plausible through both.
+
+        1. **A mid-plate prune.** :func:`prune_to_area_carrying`'s rule is purely topological, so on
+           a coarse grid with a deep waist it can fire in the *middle* of the plate rather than at a
+           tip. Every dropped node must therefore lie within one ``h`` of the outline boundary.
+           Measured max depth on the default guitar: 0.53–0.99 ``h``, so this bar is tight.
+        2. **A pinched outline.** A deep enough waist on a coarse enough grid separates the two
+           bouts. That is silently *two plates* with a 6-dimensional rigid-body nullspace, and it
+           reads as a plate with a suspiciously low fundamental rather than as an error.
+        """
+        if self.domain == "rectangle":
+            return
+        dropped = raw & ~self.mask
+        if dropped.any():
+            depth = self._depth_inside_outline(self.X[dropped], self.Y[dropped])
+            if depth.max() > 1.0001 * self.h:
+                raise ValueError(
+                    f"prune_to_area_carrying dropped a node {depth.max() / self.h:.2f} h inside "
+                    f"the {self.domain} outline, not at its rim: the mask is no longer the shape "
+                    f"that was asked for. Refine the grid (N = {self.N}) or soften the outline."
+                )
+        n_parts = _count_components(self.mask)
+        if n_parts != 1:
+            raise ValueError(
+                f"the {self.domain} outline staircases into {n_parts} disconnected pieces at "
+                f"N = {self.N}: that is {n_parts} independent plates with a "
+                f"{3 * n_parts}-dimensional rigid-body nullspace, not one plate. Refine the grid "
+                f"or reduce waist (= {self.waist})."
+            )
+
+    def _depth_inside_outline(
+        self, x: NDArray[np.float64], y: NDArray[np.float64]
+    ) -> NDArray[np.float64]:
+        """Distance from ``(x, y)`` to the outline boundary, measured *inwards*."""
+        if self.domain == "circle":
+            r = 0.5 * self.Lx
+            return r - np.hypot(x - r, y - r)
+        half = (
+            guitar_scale(self.Lx, self.waist, self.asym)
+            * guitar_half_width(y / self.Ly, self.waist, self.asym)
+        )
+        across = half - np.abs(x - 0.5 * self.Lx)
+        along = np.minimum(y, self.Ly - y)
+        return np.minimum(across, along)
 
     # -- initial conditions -------------------------------------------------------------
 

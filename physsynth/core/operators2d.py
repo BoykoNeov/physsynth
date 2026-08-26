@@ -26,11 +26,19 @@ from scipy.sparse.linalg import SuperLU, splu
 __all__ = [
     "rectangle_mask",
     "disk_mask",
+    "guitar_mask",
+    "guitar_half_width",
+    "guitar_scale",
+    "guitar_area",
+    "live_cells",
+    "cells_per_node",
+    "prune_to_area_carrying",
     "grid_coords",
     "laplacian_from_mask",
     "biharmonic_from_mask",
     "orthotropic_biharmonic",
     "free_plate_stiffness",
+    "free_plate_stiffness_from_mask",
     "VonKarmanBracket",
     "AiryStressSolver",
     "embed",
@@ -74,6 +82,139 @@ def disk_mask(X: NDArray[np.float64], Y: NDArray[np.float64], radius: float) -> 
     ~O(h) while leaving energy conservation exact (the operator stays symmetric).
     """
     return (X * X + Y * Y) < (radius * radius)
+
+
+def guitar_half_width(
+    t: NDArray[np.float64] | float, waist: float = 0.42, asym: float = 0.30
+) -> NDArray[np.float64]:
+    """Un-normalised half-width profile of a guitar outline at ``t = y/L in [0, 1]``.
+
+        W(t) = sin(pi t) * [1 - waist*cos(4 pi (t - 1/2))] * [1 + asym*(t - 1/2)]
+
+    ``sin(pi t)`` closes the outline at both ends; the ``cos(4 pi ...)`` term places maxima at the
+    two bouts and the minimum at the **waist** (``waist`` is its depth, ``0`` = a plain lens);
+    ``asym`` widens the lower bout relative to the upper. Because the shape is defined as
+    ``|x| < W(y)`` it is simply connected and vertically convex **by construction** — there is no
+    outline for which the region can be a ring or two disjoint lobes, which matters because the
+    connectivity of the mask is otherwise a live failure mode (see :func:`prune_to_area_carrying`).
+
+    Returned un-normalised: :func:`guitar_mask` rescales so the widest point equals the requested
+    width. Exposed because the area of the true outline — the denominator of the plate's area
+    deficit — is a quadrature of this profile, and it must be the *same* profile.
+    """
+    t = np.asarray(t, dtype=float)
+    return (
+        np.sin(np.pi * t)
+        * (1.0 - waist * np.cos(4.0 * np.pi * (t - 0.5)))
+        * (1.0 + asym * (t - 0.5))
+    )
+
+
+def guitar_scale(width: float, waist: float, asym: float) -> float:
+    """Factor taking :func:`guitar_half_width` to a half-width whose maximum is ``width/2``."""
+    peak = float(guitar_half_width(np.linspace(0.0, 1.0, 20001), waist, asym).max())
+    return 0.5 * float(width) / peak
+
+
+def guitar_mask(
+    X: NDArray[np.float64],
+    Y: NDArray[np.float64],
+    length: float,
+    width: float,
+    waist: float = 0.42,
+    asym: float = 0.30,
+) -> NDArray[np.bool_]:
+    """Live-node mask for a guitar-shaped outline (HANDOFF §12B's non-rectangular plate).
+
+    ``X`` is measured from the centre line, ``Y`` from the neck end, so the region is
+    ``|x| < scale * W(y/length)`` with ``W`` from :func:`guitar_half_width` and ``scale`` chosen so
+    the widest point spans ``width``. The two end rows (``t = 0``, ``t = 1``) are excluded.
+
+    Like :func:`disk_mask` this is *staircased* onto the Cartesian grid, and the plate pays a
+    steeper price for it than the membrane did: see ``docs/dev/guitar-plate-plan.md`` §5.2. Two
+    facts worth carrying to any other outline. The error is **O(h), not O(h²)** — the same
+    first-order tax the membrane's Bessel match paid, now in a 4th-order operator. And it is
+    *largely* a **domain-size** error: the frequency error tracks the mask's area deficit
+    mode-independently, so a staircased plate behaves like a well-modelled slightly *smaller*
+    plate. That second reading was
+    measured on a disk first, where it is worth 6–15x, and it survives here at only 3.7–7.4x and
+    without the monotonicity — a uniformly convex boundary cannot distinguish "area deficit" from
+    "distance from the rim", and a concave waist beside convex bouts can.
+
+    **The result of this function is not yet a usable mask** — a curved outline produces nodes that
+    carry no area at all. Pass it through :func:`prune_to_area_carrying`.
+    """
+    if length <= 0.0 or width <= 0.0:
+        raise ValueError("length and width must be positive.")
+    if not (0.0 <= waist < 1.0):
+        raise ValueError(f"waist must lie in [0, 1); got {waist}.")
+    if abs(asym) >= 2.0:
+        raise ValueError(f"|asym| must be < 2 (the profile would go negative); got {asym}.")
+    t = np.asarray(Y, dtype=float) / float(length)
+    half = guitar_scale(width, waist, asym) * guitar_half_width(t, waist, asym)
+    return (t > 0.0) & (t < 1.0) & (np.abs(X) < half)
+
+
+def guitar_area(length: float, width: float, waist: float = 0.42, asym: float = 0.30) -> float:
+    """Area of the *true* guitar outline (fine midpoint quadrature of ``2 W(y)``).
+
+    The denominator of the area deficit that :class:`physsynth.core.plate.Plate` reports. Kept
+    beside :func:`guitar_mask` so the two can never drift onto different profiles.
+    """
+    m = 2_000_000
+    t = (np.arange(m) + 0.5) / m
+    prof = guitar_scale(width, waist, asym) * guitar_half_width(t, waist, asym)
+    return float(2.0 * np.sum(prof) * (float(length) / m))
+
+
+def live_cells(mask: NDArray[np.bool_]) -> NDArray[np.bool_]:
+    """Cells of the dual grid whose **four** corner nodes are all live.
+
+    The quadrature cells of the free-plate energy: the twist ``u_xy`` is evaluated on them, and a
+    node's area weight counts them (:func:`free_plate_stiffness_from_mask`).
+    """
+    m = np.asarray(mask, dtype=bool)
+    return m[:-1, :-1] & m[1:, :-1] & m[:-1, 1:] & m[1:, 1:]
+
+
+def cells_per_node(mask: NDArray[np.bool_]) -> NDArray[np.int64]:
+    """Number of live cells (0…4) touching each node. ``4`` interior, ``2`` edge, ``1`` corner."""
+    cell = live_cells(mask)
+    out = np.zeros(np.shape(mask), dtype=np.int64)
+    out[:-1, :-1] += cell
+    out[:-1, 1:] += cell
+    out[1:, :-1] += cell
+    out[1:, 1:] += cell
+    return out
+
+
+def prune_to_area_carrying(mask: NDArray[np.bool_]) -> tuple[NDArray[np.bool_], int]:
+    """Drop live nodes that touch **no** live cell, to a fixed point. Returns ``(mask, n_dropped)``.
+
+    **The mask is not the outline.** The outline is a predicate on coordinates; the mask is the set
+    of nodes that carry *area*. A curved rim staircases into one-node spikes whose trapezoidal area
+    weight is exactly ``0``, which makes the free plate's mass matrix ``W`` **singular** — and
+    ``A = (1+sigma k) W + theta k² kappa² K`` then cannot be factored at all. Two such nodes are
+    enough; the default guitar outline produces 2–4 of them at every grid tried.
+
+    Dropping a node can orphan its neighbour, so this iterates to a fixed point (one sweep sufficed
+    everywhere measured, but the loop is the correct statement, not an optimisation).
+
+    **This is a silent geometry change and callers must price it.** The rule is purely
+    topological — it says nothing about *where* the node was — so on a coarse grid with a deep
+    waist it can fire in the middle of the plate rather than at a tip, and energy, nullspace and
+    spectrum all look
+    healthy afterwards. :class:`physsynth.core.plate.Plate` therefore asserts that every dropped
+    node lay within one ``h`` of the outline boundary (measured max depth 0.53–0.99 ``h``, so that
+    bar is tight rather than decorative).
+    """
+    m = np.array(mask, dtype=bool, copy=True)
+    before = int(m.sum())
+    while True:
+        keep = m & (cells_per_node(m) > 0)
+        if np.array_equal(keep, m):
+            return m, before - int(m.sum())
+        m = keep
 
 
 def laplacian_from_mask(
@@ -414,6 +555,78 @@ def free_plate_stiffness(
     """
     if Nx < 2 or Ny < 2:
         raise ValueError("Nx, Ny must be >= 2 (need at least one interior node per axis).")
+    # A full bounding box IS the rectangle: every node is a free unknown, every cell is live, and
+    # the general routine's "live adjacent cells / 4" area rule evaluates to exactly the trapezoidal
+    # kron(m_y, m_x) it replaced. Collapsing the two paths was gated on re-measuring the
+    # bit-identity across the #5o survey rather than at one grid -- see
+    # free_plate_stiffness_from_mask, and test_guitar_plate's 84-case assertion.
+    mask = np.ones((Ny + 1, Nx + 1), dtype=bool)
+    return free_plate_stiffness_from_mask(
+        mask,
+        h,
+        nu,
+        grain_x=grain_x,
+        grain_y=grain_y,
+        grain_coupling=grain_coupling,
+        grain_torsion=grain_torsion,
+    )
+
+
+def free_plate_stiffness_from_mask(
+    mask: NDArray[np.bool_],
+    h: float,
+    nu: float,
+    *,
+    grain_x: float = 1.0,
+    grain_y: float = 1.0,
+    grain_coupling: float | None = None,
+    grain_torsion: float | None = None,
+) -> tuple[sparse.csr_matrix, sparse.csr_matrix, NDArray[np.int64]]:
+    """:func:`free_plate_stiffness` on an **arbitrary outline** — model #5g.
+
+    Same bilinear form, same four constants, same natural free-edge conditions; what changes is the
+    set of nodes it is assembled on. Every plate the core built before this one was a rectangle, and
+    the rectangle is now just the mask that happens to be all-ones.
+
+    **The generalisation, term by term.** Each rectangle rule turns out to be a special case of a
+    rule stated in terms of what is *live*, not in terms of where the bounding box ends:
+
+    - **Curvature.** ``[1,-2,1]/h²`` centred at a node **iff both neighbours along that axis are
+      live**, else a zero row. On a rectangle that reproduces :func:`_collocated_d2_1d` exactly,
+      including its zeroed end rows — "no normal curvature centred at a free edge" was never a
+      statement about index ``0``, it was a statement about a missing neighbour.
+    - **Twist.** One row per **live cell** (:func:`live_cells`), the cell-centred
+      ``(u[j+1,i+1]-u[j+1,i]-u[j,i+1]+u[j,i])/h²``.
+    - **Area weight.** ``h² · (live cells touching the node)/4``. This is not a new convention: it
+      *is* the trapezoidal weight, since an interior node touches 4 cells, an edge node 2 and a
+      corner 1. Three cases collapse into one expression.
+
+    ``W`` is that area weight; ``K`` is symmetric positive-semidefinite with nullspace **exactly**
+    the rigid-body space ``{1, x, y}`` — measured on a staircased guitar outline at every grid tried
+    (3 zero modes, rigid-body residual 6.7e-13, saddle ``xy`` not null). Note that this is a
+    *necessary* check, not a sufficient one: it looks identical for an assembly with the wrong
+    boundary treatment, which is why ``docs/dev/guitar-plate-plan.md`` §5 goes to a derived free-
+    **circular**-plate oracle instead.
+
+    ``index_map`` has the shape of ``mask``: the flat unknown index at a live node, ``-1`` elsewhere
+    (matching :func:`laplacian_from_mask`'s convention). For an all-ones mask it is the trivial
+    full-grid map, so the rectangle callers see no change.
+
+    **The mask must already carry area** — pass it through :func:`prune_to_area_carrying` first, or
+    a one-node spike at a tip gives ``W`` a zero on the diagonal and the plate's time-step matrix
+    becomes singular.
+
+    **On the bit-identity with the Kronecker assembly this replaced.** It holds *exactly* — a
+    measured ``0.0``, not a small residual — across the #5o 7-grid survey x 4 values of ``nu`` x
+    three grain splits, 84 cases. One thing had to be right for that, and it was wrong at first: the
+    twist coefficient is a **product of two forward differences**, ``(1/h)*(1/h)``, and *not*
+    ``1/(h*h)``. Those differ in the last digit whenever ``h`` is not exactly representable, which
+    showed up on exactly one grid of the survey (``h = 0.05``) for every ``nu`` and every split, and
+    on none of the others. Checking one grid would have reported success.
+    """
+    mask = np.asarray(mask, dtype=bool)
+    if mask.ndim != 2:
+        raise ValueError(f"mask must be 2-D, got shape {mask.shape}.")
     # `nu` is validated only where it is actually USED, i.e. where it supplies a missing half of the
     # split. An orthotropic plate's implied nu_yx = D_1/D_x legitimately exceeds 1/2 (its bound is
     # nu_xy nu_yx < 1, i.e. grain_coupling² < grain_x grain_y, which Plate enforces instead), so
@@ -425,25 +638,60 @@ def free_plate_stiffness(
     g_1 = nu if grain_coupling is None else float(grain_coupling)
     g_xy = 0.5 * (1.0 - nu) if grain_torsion is None else float(grain_torsion)
 
-    ix = sparse.identity(Nx + 1, format="csr")
-    iy = sparse.identity(Ny + 1, format="csr")
-    c2x_1d = _collocated_d2_1d(Nx, h)
-    c2y_1d = _collocated_d2_1d(Ny, h)
+    ny, nx = mask.shape
+    nlive = int(mask.sum())
+    if nlive < 1:
+        raise ValueError("the mask has no live nodes.")
+    index_map = np.full(mask.shape, -1, dtype=np.int64)
+    index_map[mask] = np.arange(nlive)
+    jj, ii = np.nonzero(mask)  # live coords in C-order -> flat index p
+    inv_h2 = 1.0 / (h * h)
 
-    # Second differences applied along one axis (kron(y_factor, x_factor) matches C-order order).
-    C2x = sparse.kron(iy, c2x_1d, format="csr")  # u_xx at every node (0 at the x free edges)
-    C2y = sparse.kron(c2y_1d, ix, format="csr")  # u_yy at every node (0 at the y free edges)
+    def _curvature(dj: int, di: int) -> sparse.csr_matrix:
+        """``[1,-2,1]/h²`` centred at each node with both ``(dj, di)`` neighbours live."""
+        jm, im, jp, ip = jj - dj, ii - di, jj + dj, ii + di
+        inside = (jm >= 0) & (im >= 0) & (jp < ny) & (ip < nx)
+        both = np.zeros(nlive, dtype=bool)
+        both[inside] = mask[jm[inside], im[inside]] & mask[jp[inside], ip[inside]]
+        p = np.nonzero(both)[0]
+        rows = np.repeat(p, 3)
+        cols = np.stack(
+            [index_map[jm[both], im[both]], index_map[jj[both], ii[both]],
+             index_map[jp[both], ip[both]]],
+            axis=1,
+        ).ravel()
+        data = np.tile(np.array([inv_h2, -2.0 * inv_h2, inv_h2]), p.size)
+        return sparse.coo_matrix((data, (rows, cols)), shape=(nlive, nlive)).tocsr()
 
-    # Cell-centered twist u_xy = (forward-x) ⊗ (forward-y) on the Nx·Ny cells.
-    Dxy = sparse.kron(_forward_d1_1d(Ny, h), _forward_d1_1d(Nx, h), format="csr")
+    C2x = _curvature(0, 1)
+    C2y = _curvature(1, 0)
 
-    # Diagonal area weight Wa = kron(m_y, m_x): interior h², edge h²/2, corner h²/4.
-    mx = np.full(Nx + 1, h)
-    mx[0] = mx[-1] = 0.5 * h
-    my = np.full(Ny + 1, h)
-    my[0] = my[-1] = 0.5 * h
-    wa = np.kron(my, mx)  # C-order: node (j, i) -> my[j] * mx[i]
-    Wa = sparse.diags(wa, format="csr")
+    # Cell-centred twist on the live cells. The coefficient is (1/h)*(1/h) and NOT 1/(h*h): this
+    # operator is a PRODUCT of two forward first differences, and the two spellings differ in the
+    # last digit for an h that is not exactly representable. See the docstring.
+    cell = live_cells(mask)
+    cj, ci = np.nonzero(cell)
+    ncell = cj.size
+    d1 = 1.0 / h
+    twist = d1 * d1
+    Dxy = sparse.coo_matrix(
+        (
+            np.tile(np.array([twist, -twist, -twist, twist]), ncell),
+            (
+                np.repeat(np.arange(ncell), 4),
+                np.stack(
+                    [index_map[cj, ci], index_map[cj, ci + 1],
+                     index_map[cj + 1, ci], index_map[cj + 1, ci + 1]],
+                    axis=1,
+                ).ravel(),
+            ),
+        ),
+        shape=(ncell, nlive),
+    ).tocsr()
+
+    # Area weight: h^2 * (live cells touching the node)/4 -- exactly h^2, h^2/2, h^2/4 on a
+    # rectangle, and bit-identical to the kron(m_y, m_x) it replaced (0.25 and 0.5 scale exactly).
+    Wa = sparse.diags((h * h) * (cells_per_node(mask)[mask] * 0.25), format="csr")
 
     # One code path for isotropic and orthotropic: at the nu-derived split the four coefficients are
     # 1.0, 1.0, nu and 4*((1-nu)/2) == 2*(1-nu) exactly, so this is byte-identical to the isotropic
@@ -455,10 +703,7 @@ def free_plate_stiffness(
         + g_1 * (cross + cross.T)
         + (4.0 * g_xy) * (h * h) * (Dxy.T @ Dxy)
     ).tocsr()
-    W = Wa
-
-    index_map = np.arange((Nx + 1) * (Ny + 1), dtype=np.int64).reshape(Ny + 1, Nx + 1)
-    return K, W, index_map
+    return K, Wa, index_map
 
 
 class VonKarmanBracket:
