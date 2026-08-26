@@ -170,10 +170,17 @@ def test_the_rust_swap_matches_the_environment():
     # name and is immune to the swap by design. It belongs here, with the other three portability
     # guards, and it runs on BOTH paths -- the default one included, where it asserts the Rust
     # model is *not* silently in play.
-    from physsynth.core import exciter, membrane, operators, operators2d, string_ideal
+    from physsynth.core import (
+        body,
+        exciter,
+        membrane,
+        operators,
+        operators2d,
+        string_ideal,
+    )
 
     expected_rust = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
-    for module in (string_ideal, operators, membrane, operators2d, exciter):
+    for module in (string_ideal, operators, membrane, operators2d, exciter, body):
         assert module._USE_RUST is expected_rust, (
             f"{module.__name__}'s reading of PHYSSYNTH_RS disagrees with this test's -- one of "
             "the two changed without the other"
@@ -190,6 +197,10 @@ def test_the_rust_swap_matches_the_environment():
             "PHYSSYNTH_RS is set but `Membrane` is still the Python class: this run is NOT "
             "exercising the Rust model, whatever it reports"
         )
+        assert body.ModalBody is physsynth_rs.ModalBody, (
+            "PHYSSYNTH_RS is set but `ModalBody` is still the Python class: this run is NOT "
+            "exercising the Rust model, whatever it reports"
+        )
     else:
         assert string_ideal.IdealString is string_ideal.IdealStringPy, (
             "PHYSSYNTH_RS is unset but `IdealString` is not the Python class -- the default path "
@@ -198,6 +209,10 @@ def test_the_rust_swap_matches_the_environment():
         assert membrane.Membrane is membrane.MembranePy, (
             "PHYSSYNTH_RS is unset but `Membrane` is not the Python class -- the default path "
             "must stay the one the acceptance numbers came from"
+        )
+        assert body.ModalBody is body.ModalBodyPy, (
+            "PHYSSYNTH_RS is unset but `ModalBody` is not the Python class -- the default "
+            "path must stay the one the acceptance numbers came from"
         )
 
     # The operators (plan Phase 1) need the same guard for the same reason, and it has to be
@@ -254,7 +269,7 @@ def test_the_rust_swap_matches_the_environment():
                 )
 
     if expected_rust:
-        from physsynth.core import beam, mallet, string_stiff
+        from physsynth.core import beam, connection, mallet, radiation, string_stiff
 
         assert string_stiff.biharmonic_matrix is operators.biharmonic_matrix, (
             "`string_stiff` captured a different `biharmonic_matrix` than `operators` now "
@@ -274,6 +289,17 @@ def test_the_rust_swap_matches_the_environment():
         assert membrane.laplacian_from_mask is operators2d.laplacian_from_mask, (
             "`membrane` captured a different `laplacian_from_mask` than `operators2d` now exposes"
         )
+
+        # The body's version, and it has TWO importers rather than one. `connection` and
+        # `radiation` both do `from .body import ModalBody` at module scope, so a swap that
+        # landed after either of them would leave the whole body/radiation leg on Python
+        # while this run reported Rust. (`airbox` imports the name only under TYPE_CHECKING
+        # and so captures nothing at runtime -- deliberately, and worth not un-doing.)
+        for client in (connection, radiation):
+            assert client.ModalBody is body.ModalBody, (
+                f"`{client.__name__}` captured a different `ModalBody` than `body` now "
+                "exposes -- the swap landed after that module was imported"
+            )
 
 
 def test_core_does_not_import_sibling_layers():

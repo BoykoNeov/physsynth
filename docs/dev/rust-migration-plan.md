@@ -360,7 +360,7 @@ between tolerable and not.
 core utilisation, and the bulk is FDTD timestepping — the thing Rust is good at. This is a genuine
 upside, not a consolation: the 15–21-minute gate is a Python cost.
 
-> **Measured at Phase 2 and it is wrong — see §11.6.** The first ported timestepping loop makes the
+> **Measured at Phase 2 and it is wrong — see §11.6, sharpened by §12.7.** The first ported timestepping loop makes the
 > whole suite **3 % slower**, not faster, and the controlled measurement says why: Rust removes the
 > per-step *interpreter overhead* (8.7× on a 69-unknown membrane) and not the arithmetic (~1.1× by
 > 5,000 unknowns, where SciPy's compiled matvec dominates). The suite's expensive tests are all on
@@ -908,6 +908,11 @@ times, which is more than the two single runs of §10.5 could say). One machine,
 magnitude is still not worth much; the sign is now consistent across five measurements over two
 phases and should be believed.
 
+> **Weakened by batch 2 — see §12.7.** A matched pair taken after `body` landed reads +0.14 %
+> with the per-shard signs *disagreeing*, and between the two pairs the same machine ran the
+> same suite ~20 % faster. The drift is larger than the effect, so "same sign three times" was
+> less evidence than it looked. The controlled per-step number below is the one that stands.
+
 The controlled measurement explains it. Timing `step()` alone, best of seven runs, same process,
 release build:
 
@@ -922,7 +927,10 @@ release build:
 | 120 | 11,277 | 59.07 | 55.48 | 1.1× |
 | 160 | 20,069 | 106.43 | 90.26 | 1.2× |
 
-**What Rust removes is the per-step interpreter overhead, not the arithmetic.** Python needs ~5 µs
+**What Rust removes is the per-step interpreter overhead, not the arithmetic.** (§12.7 sharpens
+this: the decay to ~1x is not about the state getting large, it is about SciPy's matvec being
+*already compiled*. A model with no compiled kernel under it keeps its advantage at any size.)
+Python needs ~5 µs
 to take one step of a 69-unknown membrane — the unknowns are not the cost; the dispatch is. Rust
 needs 0.59 µs. By 5,000 unknowns the sparse matvec dominates, SciPy's matvec is already compiled C,
 and the two converge to within ~10 %. The crossover is around `N = 80`.
@@ -958,3 +966,150 @@ That single fact reconciles everything else on this page:
 - **`bore` and `reed` will be the first models with no matrix at all**, so they are also the first
   chance to check whether the §9.1 three-way split survives a model whose state is two staggered
   fields of different lengths.
+
+## 12. Phase 2, batch 2, as built (2026-08-26)
+
+`physsynth/core/body.py` in full — the modal body, 203 lines, the smallest resonator in the
+project. It is also the one with the **longest client list of anything ported so far**, and that
+asymmetry is the whole content of this batch: the transcription took no findings with it, and the
+interface did.
+
+`bore` was the other candidate and was deliberately **not** started here. See §12.5.
+
+### 12.1 The shape on disk
+
+```
+crates/physsynth-core/src/body.rs       Params, five kernels, the native owning struct
+crates/physsynth-core/tests/body.rs     native body bars (14 tests)
+crates/physsynth-py/src/body.rs         the class — three settable state arrays, no SciPy
+physsynth/core/body.py                  + a swap block at the bottom, gated on PHYSSYNTH_RS
+tests/test_rust_parity_body.py          Rust vs Python (51 tests)
+```
+
+Nothing else changed shape. There is no matrix, no geometry, no mask and no immutable half to hand
+back by reference: every array is length `M` (the mode count, typically 3–20) and every kernel is
+elementwise. Measured against the membrane, this is the cheapest port in the migration so far.
+
+### 12.2 The finding: a leading underscore is not a statement about the interface
+
+The original keeps the modal acceleration in `_accel`, taken from the *actual* second difference of
+the last step so the pressure read-out carries every force — including a bridge force applied from
+outside. **Three modules assign to it**, once per timestep:
+
+```text
+radiation.RadiatedBody.step      b.q = b.q - (R*u) * corr  ;  b._accel = (b.q - 2 b.q_prev + q_nm1)/k^2
+radiation.<rational air load>    b.q = b.q - p * corr      ;  b._accel = (...)
+airbox.RoomLoadedBody.step       b.q = b.q - pbar * corr   ;  b._accel = (...)
+```
+
+All three follow the same idiom — snapshot `q^{n-1}`, step, apply a rank-1 correction to `q^{n+1}`,
+then rewrite `_accel` from the *corrected* second difference — and all three **rebind** `q` rather
+than writing into it. So under §9.3's rule the body has **three** Python-owned state buffers where
+the string and the membrane had two, and the third one is spelled private.
+
+Phase 0 recorded that `connection.py` *reads* the string's private names, and treated that as a
+scheduling problem (a client that pins a model's internals delays its deletion). This is the same
+discovery one step worse and with a different consequence: **a name's leading underscore says
+nothing about whether the port may change it.** The rule for the rest of the migration is to derive
+the buffer list from what clients actually touch, not from what the module's author marked public —
+and the cheapest way to get that list is `grep` for assignment, not for reference.
+
+A binding that got this wrong would not crash. A `_accel` setter that copied instead of adopting, or
+no setter at all, leaves each wrapper's correction on the floor: the body still conserves energy,
+still decays monotonically, still lands on every modal frequency, and radiates a sound that is
+missing its coupling term. The parity file asserts the whole idiom, against **both**
+implementations, because that is the only place it is visible.
+
+### 12.3 Two smaller things worth keeping
+
+**The step's `force` is only observable through the acceleration.** A port that reconstructed
+`q'' = -omega^2 q - 2 sigma q'` instead of taking the second difference passes every free-response
+test in the project and silently drops the bridge force. So the parity sweep drives the body as well
+as releasing it, and the native bars assert that a forced step's acceleration is *not* the
+free-response one.
+
+**The CFL rejection names the `argmax`, not the first offender.** With two modes over `omega k = 2`
+the original reports the larger CFL number. That is message-only — but the messages are matched on
+elsewhere in the suite, and reproducing `np.argmax` rather than "the first `i` that fails" is the
+kind of detail that is free to get right now and expensive to discover later.
+
+### 12.4 The success condition
+
+`tests/test_body.py` is nine tests. The gate for this batch is **268**, because `connection` and
+`radiation` both do `from .body import ModalBody` at module scope and the flag therefore swings the
+string-on-a-body bridge, the sympathetic-string bank, the plate and free-plate bridges, the von
+Kármán bridge, and all three radiation tiers. `airbox` imports the name only under `TYPE_CHECKING`
+and so captures nothing at runtime — deliberate, and worth not undoing.
+
+The swap guard gained the two-importer version of Phase 1's import-order hazard: it asserts
+`connection.ModalBody is body.ModalBody` and the same for `radiation`, so a swap that landed after
+either import would fail loudly rather than leave the whole body/radiation leg on Python while the
+run reported Rust.
+
+### 12.5 Why `bore` is not in this batch
+
+`bore.step(source=...)` takes a Python callable that mutates the pressure field **in place, mid-step**
+— between the pressure and momentum sub-steps — and `reed.ReedBore` is the caller that exists for it.
+That is not a transcription question. It is an interface decision about how the *exciter seam*
+crosses the language boundary, and the two answers (call back into Python per step through PyO3, or
+port `reed` in the same batch so the hook never crosses at all) commit the project for `bow`
+(Phase 3) and every continuous exciter after it.
+
+§11.3's reasoning applies unchanged: do not fix an interface before the requirement that ought to
+choose it exists. Here the requirement is `reed`, and §11.2.2 already says `reed` follows `bore`. So
+they go together, as one batch, next.
+
+### 12.6 What was measured
+
+| | |
+|---|---|
+| Native `cargo test --workspace` | **90 passed** (76 at the end of batch 1) |
+| `tests/test_rust_parity_body.py` | **51 passed** |
+| Every derived parameter — 5 configurations | **identical** |
+| State over 4,000 free steps and 2,000 driven steps, `q` / `q_prev` / `_accel` | **bit-identical** |
+| The rank-1 correction idiom, 500 rounds, both implementations | **bit-identical** |
+| `energy` / `pressure` / `bridge_displacement` / `bridge_velocity`, worst relative | inside the 1e-13 Group A target |
+| The body's clients under `PHYSSYNTH_RS=1` (10 files) | **268 passed, 0 failed** |
+| **The WHOLE suite under `PHYSSYNTH_RS=1`** | **2,335 passed, 0 failed** |
+| The whole suite on the default Python path, same tree | **2,335 passed, 0 failed** |
+| Whole-suite core-seconds, same machine, same partition, Rust vs default | 2,082.9 s vs 2,079.9 s |
+
+### 12.7 The speed result, sharpened: it is not about size, it is about what NumPy was already calling
+
+§11.6 measured the membrane's step at 8.7x on a small grid decaying to ~1.1x by 5,000 unknowns, and
+read that as "Rust removes the per-step interpreter overhead, not the arithmetic". The body sharpens
+it, because the body has **no compiled kernel on the Python side at all** — no sparse matvec, no
+BLAS call, just eight elementwise NumPy operations on short arrays. Timing `step()` alone, best of
+seven, release build:
+
+| modes | Python us/step | Rust us/step | speedup |
+|---:|---:|---:|---:|
+| 1 | 7.05 | 0.43 | **16.4x** |
+| 3 | 6.73 | 0.43 | 15.5x |
+| 8 | 7.52 | 0.45 | 16.8x |
+| 20 | 7.36 | 0.46 | 15.9x |
+| 64 | 7.52 | 0.54 | 13.9x |
+| 256 | 8.49 | 0.89 | 9.5x |
+| 1,024 | 12.43 | 2.17 | 5.7x |
+| 4,096 | 26.16 | 7.32 | 3.6x |
+
+A real modal body has between one and a few dozen modes, so the operating point is the flat top of
+that table: **~15x, and Python spends ~7 microseconds per step whether the bank has one mode or
+sixty-four.** That is dispatch, not arithmetic — eight NumPy calls at roughly a microsecond each.
+
+The refinement to §11.6: the membrane's speedup decayed to ~1x not because its grid got large but
+because at large `N` its hot operation was `scipy.sparse`'s **compiled** matvec, and Rust cannot beat
+compiled C at the same algorithm. The body never reaches such an operation, so it keeps a 3.6x edge
+even at an absurd 4,096 modes. **The question is not how big the state is, it is whether the Python
+side's hot path was already in C.** Applied forward: the models that will gain most are the ones
+whose steps are many short NumPy expressions — the exciters, the lumped models, the boundary
+corrections — and the ones that will gain least are the ones already dominated by a SciPy solve.
+
+**And a caution about the whole-suite numbers, stronger than §11.6's.** Batch 1's matched pair read
++3.1% (flagged slower) with the same sign in all three shards. Batch 2's matched pair reads **+0.14%**,
+and the per-shard signs *disagree* (-0.6%, -1.8%, +2.9%). Between the two pairs the same machine ran
+the same suite about 20% faster overall (2,612 s -> 2,083 s flagged). So the machine's throughput
+drifts by far more than the effect being measured, cross-pair comparison is worthless, and batch 1's
+"same sign three times" should be read as weaker evidence than it looked at the time. **The only
+speed claim this migration can support is the controlled per-step one**; the suite-level number is
+useful for saying "nothing blew up", and for nothing else.

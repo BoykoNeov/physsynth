@@ -39,6 +39,7 @@
 
 #![allow(non_snake_case)] // The Python API spells them `L`, `T`, `N`; the binding must match.
 
+mod body;
 mod exciter;
 mod membrane;
 mod ops2d;
@@ -648,6 +649,7 @@ fn op_free_beam_stiffness(py: Python<'_>, N: i64, h: f64) -> PyResult<(CsrTriple
 fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyIdealString>()?;
     m.add_class::<membrane::PyMembrane>()?;
+    m.add_class::<body::PyModalBody>()?;
     m.add_function(wrap_pyfunction!(op_delta_x_forward, m)?)?;
     m.add_function(wrap_pyfunction!(op_delta_x_backward, m)?)?;
     m.add_function(wrap_pyfunction!(op_delta_xx, m)?)?;

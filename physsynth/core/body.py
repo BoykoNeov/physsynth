@@ -27,6 +27,8 @@ Headless: NumPy only.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -201,3 +203,27 @@ class ModalBody:
     def displacement_at(self, index: int) -> float:
         """Modal coordinate ``q_index`` — lets :func:`engine.simulate` tap a single mode."""
         return float(self.q[index])
+
+
+# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 2) -----------------------------------
+#
+# `ModalBodyPy` above is the reference implementation and stays the name every parity check
+# reaches for. Below it, `ModalBody` is bound to whichever implementation this process is meant
+# to exercise -- and because `connection.py`, `radiation.py` and `airbox.py` all import that one
+# name, flipping the switch swings the whole body/radiation leg, not just this model's tests.
+#
+# The thing to know before editing either side: **three modules assign to `_accel`.**
+# `RadiatedBody`, the rational air load and `RoomLoadedBody` each apply a rank-1 correction to
+# `q` after `step()` returns and then overwrite `_accel` from the corrected second difference,
+# once per timestep. So the underscore is a statement of intent and not of interface: both `q`
+# and `_accel` have to be settable through the binding, and a setter that copied instead of
+# adopting would drop the correction while every energy bar stayed green.
+#
+# Off by default. The Python model is still the reference oracle for every model not yet ported.
+ModalBodyPy = ModalBody
+"""The pure-Python reference implementation, under a name the swap below never rebinds."""
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    from physsynth_rs import ModalBody  # type: ignore[assignment]  # noqa: F811
