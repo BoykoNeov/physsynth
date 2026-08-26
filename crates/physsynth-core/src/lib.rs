@@ -40,5 +40,7 @@ pub mod fmt;
 pub mod membrane;
 pub mod ops;
 pub mod ops2d;
+pub mod reed;
+pub mod root;
 pub mod sparse;
 pub mod string_ideal;

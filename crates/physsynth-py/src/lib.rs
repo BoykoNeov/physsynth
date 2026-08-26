@@ -44,6 +44,7 @@ mod bore;
 mod exciter;
 mod membrane;
 mod ops2d;
+mod reed;
 mod shape;
 
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1, PyUntypedArrayMethods};
@@ -652,6 +653,8 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<membrane::PyMembrane>()?;
     m.add_class::<body::PyModalBody>()?;
     m.add_class::<bore::PyBore>()?;
+    m.add_class::<reed::PyReedBore>()?;
+    m.add_function(wrap_pyfunction!(reed::py_bernoulli_flow, m)?)?;
     m.add_function(wrap_pyfunction!(op_delta_x_forward, m)?)?;
     m.add_function(wrap_pyfunction!(op_delta_x_backward, m)?)?;
     m.add_function(wrap_pyfunction!(op_delta_xx, m)?)?;

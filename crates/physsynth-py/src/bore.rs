@@ -249,6 +249,29 @@ impl PyBore {
         Ok(())
     }
 
+    /// One timestep driven by a **native** Rust corrector — the path `reed` takes, with no
+    /// crossing back into Python at all.
+    ///
+    /// The hook is fallible, and that is not decoration. When a Python callable raises, `step`
+    /// propagates the error before `finish_step` runs and the bore is left un-stepped, which is
+    /// what the original does. A native hook has to be able to refuse in the same way, or the two
+    /// paths would leave the bore in different states after the reed's (unreachable) bracket
+    /// failure.
+    pub(crate) fn step_native<F>(&mut self, py: Python<'_>, mut source: F) -> PyResult<()>
+    where
+        F: FnMut(&mut [f64]) -> PyResult<()>,
+    {
+        let p_next = self.pressure_step(py)?;
+        {
+            let mut rw = p_next.readwrite();
+            let slot = rw
+                .as_slice_mut()
+                .map_err(|_| PyValueError::new_err("p_next must be contiguous."))?;
+            source(slot)?;
+        }
+        self.finish_step(py, p_next)
+    }
+
     /// The current pressure field as a plain `Vec`, for a native caller that needs a snapshot.
     pub(crate) fn pressure_vec(&self, py: Python<'_>) -> PyResult<Vec<f64>> {
         let bound = self.pressure.bind(py);
@@ -609,14 +632,14 @@ impl PyBore {
     }
 
     /// Total conserved energy `E_bore + radiated_energy` (Joules).
-    fn energy(&self, py: Python<'_>) -> PyResult<f64> {
+    pub(crate) fn energy(&self, py: Python<'_>) -> PyResult<f64> {
         Ok(self.acoustic_energy(py)? + self.radiated_energy)
     }
 
     /// Pressure at node `index` — a microphone pickup for spectral analysis.
     ///
     /// Negative indices count from the end, as they do on the NumPy array this replaces.
-    fn displacement_at(&self, py: Python<'_>, index: i64) -> PyResult<f64> {
+    pub(crate) fn displacement_at(&self, py: Python<'_>, index: i64) -> PyResult<f64> {
         let nodes = self.params.nodes() as i64;
         let idx = if index < 0 { index + nodes } else { index };
         if idx < 0 || idx >= nodes {
@@ -633,7 +656,7 @@ impl PyBore {
     }
 
     /// Far-field monopole read-out: the bell's net volume acceleration `dU_out/dt` (m³/s²).
-    fn pressure(&self) -> f64 {
+    pub(crate) fn pressure(&self) -> f64 {
         (self.u_out - self.u_out_prev) / self.params.k
     }
 }

@@ -1169,3 +1169,184 @@ file named after the module. But it means the **whole-suite flagged run is a man
 taken by hand at the end of each batch and recorded in §11.6 and §12.6 — not a gate. If it should
 become one, that is a deliberate decision to price (a fourth shard axis, roughly doubling the gate),
 not an omission to fix quietly.
+
+---
+
+## 13. Phase 2, batch 3, as built (2026-08-26)
+
+`physsynth/core/bore.py` and `physsynth/core/reed.py` — the whole wind leg, 890 lines, ported as
+**one batch** because §12.5 held them together deliberately: the question this batch existed to
+answer was not how to transcribe either model but **how the exciter seam crosses the language
+boundary**, and that question needs both sides of the seam present to answer.
+
+### 13.1 The shape on disk
+
+```
+crates/physsynth-core/src/bore.rs      Params, the staggered p/U kernels, the rank-1 drain
+crates/physsynth-core/src/reed.rs      Params, State, the scalar solve, inject/commit
+crates/physsynth-core/src/root.rs      Brent, transcribed from SciPy — see §13.3
+crates/physsynth-core/tests/bore.rs    native bore bars (24 tests)
+crates/physsynth-core/tests/reed.rs    native reed bars (19 tests)
+crates/physsynth-core/tests/root.rs    native Brent bars (8 tests)
+crates/physsynth-py/src/bore.rs        the class; three state arrays, Lop/Cmat/dof via SciPy
+crates/physsynth-py/src/reed.rs        the class; holds the caller's PyBore, injects natively
+physsynth/core/{bore,reed}.py          + a swap block at the bottom, gated on PHYSSYNTH_RS
+tests/test_rust_parity_bore.py         Rust vs Python (148 tests)
+tests/test_rust_parity_reed.py         Rust vs Python (104 tests)
+```
+
+### 13.2 The answer to the seam question, and the finding that came with it
+
+**The hook stays a general Python callable, and the reed stops using it.** Both halves matter:
+
+- `PyBore.step(source=...)` accepts any Python callable and hands it a **live, writable view** of
+  the `p_next` the step is about to commit. §12.8 established this is not the reed's private
+  channel — `tests/test_reed_stability.py` passes its own `lambda p: None` — so the capability is
+  interface, not scaffolding. `p_next` is a Python-owned `PyArray1` rather than a `Vec` with a
+  temporary view over it, which is §9.3 for the third time.
+- `PyReedBore` **requires a `PyBore`** and injects through `PyBore::step_native`, a Rust closure.
+  So the clarinet's hot loop crosses once per `step()` rather than twice, and the scalar solve, the
+  Bernoulli jet and the Brent fallback never touch the interpreter. Handed the pure-Python `BorePy`
+  it raises `TypeError` rather than falling back, because a silent fallback would be a Rust reed
+  reporting Rust while blowing a Python tube.
+
+`physsynth_core::bore::Source` is `&mut dyn FnMut(&mut [f64])`. A PyO3 type inside `physsynth-core`
+would break exactly what `crates/physsynth-core/tests/deps.rs` guards, and §12.8 already named that
+as the one mistake here expensive to undo.
+
+**The finding: a `&mut self` `#[pymethods]` function cannot hand control back to Python and still be
+read.** PyO3 holds a `PyRefMut` on the object for the whole body of such a method. `Bore.step` calls
+out mid-step, and the reed's hook reads `self.bore.p[0]` — an ordinary read the original allows.
+The obvious binding refuses it with `RuntimeError: Already mutably borrowed`.
+
+So `step` takes the **object** (`slf: &Bound<'_, Self>`) and borrows it in two short phases with the
+callback in between, holding nothing. That restores the original exactly: while the hook runs, `p`
+is still the uncommitted `p^n`, `U` is still `U^{n+1/2}`, and `n` has not advanced.
+
+Three things about this are worth carrying forward rather than rediscovering:
+
+- **It is invisible to `cargo test`**, which never crosses the boundary. The native `Bore` takes the
+  same hook and is perfectly happy. Only a Python-side test can see it, which is why
+  `test_the_hook_can_read_the_bore_mid_step` exists and asserts *what* the hook sees, not merely
+  that the read did not raise — a binding that committed early would pass the weaker version.
+- **Every model that calls back into Python mid-step inherits the shape**, so `bow` (Phase 3) and
+  every continuous exciter after it should start from this pattern rather than meet the error.
+- **The error path is part of the contract too.** When a Python callable raises, `step` propagates
+  before committing and the bore is left un-stepped. `step_native` therefore takes a *fallible*
+  hook, so the native path refuses the same way rather than committing a step the Python path
+  would have abandoned.
+
+### 13.3 The measurement that decided the reed's design: the fallback fires
+
+The reed's scalar solve is a continuation-seeded Newton with a bracketed `scipy.optimize.brentq`
+fallback for the `sqrt` cusp at `dp = 0`. Before any Rust was written, the obvious question was
+whether that fallback is reachable in the configurations the suite actually builds. Measured over
+4,000 steps each:
+
+| configuration | fallbacks |
+|---|---:|
+| `p_mouth = 1200`, closed-open, lossless | 0 |
+| `p_mouth = 1500` (the flagship) | 5 |
+| `p_mouth = 1800` | 13 |
+| radiating bell, `gamma ~ 0.5` | 4 |
+| below threshold (`gamma ~ 0.1`) | 0 |
+| **`N = 40` (coarse grid)** | **219** |
+
+So it fires, routinely, and `physsynth-core`'s dependency list is empty by design — there is no
+SciPy to call. The choice was between transcribing SciPy's ~90-line `Zeros/brentq.c` and dropping
+the reed out of the bit-identical bucket. **The transcription was checked before it was relied on:**
+implemented in Python first and run against the real `brentq` on the reed's own residuals over
+**248 real calls**, the two returned bit-identical roots every time — not close, equal. That is what
+makes `tests/test_rust_parity_reed.py` able to assert `array_equal` rather than a tolerance.
+
+Two consequences that generalise past this model:
+
+- **A branch choice is part of the trajectory, not a diagnostic.** If Rust stalls Newton on a
+  different step than Python, the two separate *structurally* rather than by rounding, and no energy
+  bar sees it. So `fallbacks` is compared **step for step** over 2,000 steps, not at the end — a
+  sampled comparison would find the trajectories still identical long after the branches diverged,
+  because the two roots agree to ~1e-13 and it takes a while to show.
+- **The stall test is `!(|r_new| < |r|)`, not `|r_new| >= |r|`.** The original spells it
+  `if not (abs(r_new) < abs(r))`, which is *true* for a NaN residual. The inverted spelling is false
+  there and would iterate on a NaN forever. `clippy::neg_cmp_op_on_partial_ord` asks for the wrong
+  one; the `allow` carries the reason, and `tests/reed.rs::the_stall_test_is_nan_true` pins it.
+
+### 13.4 The other pre-measurement: `**2` is not `x * x`, but the one-ulp finding is not about `pow`
+
+§12.8 recorded that `bore` and `reed` compute the same physical compliance with different spellings
+and disagree by one ulp in 3,531 of 3,552 tube/grid combinations. The natural reading is that the
+bore's `rho0 * c0**2` goes through libm's `pow` and the reed's `rho0 * c0 * c0` does not. **That
+reading is wrong, and the correct one is more useful.** Measured:
+
+- `c0 ** 2 == c0 * c0` is `True` at the ambient 343 m/s — 343² = 117649 is exact in doubles.
+- The divergence is **associativity**: `rho0 * (c0*c0)` versus `(rho0*c0) * c0`.
+- But `x ** 2 != x * x` in **79 of 200,007** random positive doubles, so the `pow` spelling still
+  has to be reproduced in general — `powf(2.0)`, exactly as Phase 1 spelled `h ** 4` (§10.3).
+
+Both spellings are preserved on both sides, and both parity files assert it, so a future "tidy-up"
+that made the two agree fails loudly rather than quietly changing a number the acceptance runs were
+taken with.
+
+### 13.5 Two smaller things worth keeping
+
+**A bell at both ends books each end's energy separately.** `_radiate_node` accumulates
+`radiated_energy` itself, once per node, so a two-ended bell computes `(E + e_l) + e_r` and never
+`E + (e_l + e_r)`. That is a claim about the order of two additions rather than about physics; the
+two agree to 1e-12 and differ in the last bit. Asserted natively and in parity, with the test
+*failing* if the chosen configuration cannot distinguish the orders — a vacuous version of this
+test would be worse than none.
+
+**`R_bell > 0` with neither end radiating is a legal bore**, and the original's early exit keys on
+the resistance rather than on the ends — so the `U_out` read-out pair still rotates while nothing
+radiates. A port that keyed the exit on the ends passes every other test in both files.
+
+### 13.6 The success condition
+
+`tests/test_bore_*.py` and `tests/test_reed_*.py` are **97 tests**, and unlike the body's this list
+is not widened by clients: nothing in `core/` imports `Bore` or `ReedBore` except `reed` itself.
+The wide client is the **viewer** — `web/serialize.py` builds both for its clarinet pages — and that
+is covered by the whole-suite run rather than by the named step.
+
+`tests/test_reed_signature.py` is in the CI list and that is not padding. The step's internal
+ordering — open-end pin, then the hook, then the radiating drain, then momentum — is load-bearing
+and **no energy test can see it**: get it wrong and the reed still oscillates and the books still
+roughly balance. The project's own reed work established that balance is not a sufficient detector
+there and the signature is.
+
+The swap guard gained `bore` and `reed`, plus the two-importer hazard in its sharper form: `reed.py`
+does `from .bore import Bore` at module scope, so a swap landing after it would leave the clarinet
+blowing a Python air column while the run reported Rust — and every reed test would still pass,
+because the reed's own physics is unchanged by which bore it drives. The guard asserts
+`reed.Bore is bore.Bore` **and** actually constructs a `ReedBore` on a swapped bore, which the Rust
+reed refuses if the two implementations ever came apart.
+
+### 13.7 What was measured
+
+| | |
+|---|---|
+| Native `cargo test --workspace` | **141 passed** (90 at the end of batch 2) |
+| `tests/test_rust_parity_bore.py` | **148 passed** |
+| `tests/test_rust_parity_reed.py` | **104 passed** |
+| Every derived scalar and array — 8 bore / 10 reed configurations | **identical** |
+| `Lop` / `Cmat` `nnz`, `indptr`, `indices`, `data` (canonicalised) | **identical** |
+| Bore state over 2,000 steps, undriven and driven through the hook | **bit-identical** |
+| Reed state over 2,000 steps, all 10 configurations, **every step** | **bit-identical** |
+| `fallbacks`, step for step, coarse grid (>100 fallbacks in 3,000 steps) | **identical** |
+| `energy()` (inherits the bore's `np.dot`), worst relative | inside the 1e-13 Group A target |
+| The bore's and reed's own tests under `PHYSSYNTH_RS=1` | **97 passed, 0 failed** |
+| **The WHOLE suite under `PHYSSYNTH_RS=1`** | *(see below)* |
+
+### 13.8 What the next batch inherits
+
+- **Batch order, from §11.2.2:** `radiation` (needs `body`, which landed in batch 2) and then
+  `engine` — and `mallet` only after `collision` lands in Phase 3. `bore` and `reed` were the last
+  two Group A models with no matrix at all.
+- **The re-entrant `step` shape is now the house pattern** for any model that calls back into
+  Python mid-step, and `bow` is the next one that will.
+- **`root::brentq` exists and is exercised.** `collision` (Phase 3) and `bow` both do scalar solves;
+  the question for each of them is not whether a root-finder is available but whether the *original*
+  called SciPy's, because that is what decides bit-identity. Measure before assuming.
+- **The first thing to break bit-identity is still ahead.** Batch 1 predicted it would be a solver
+  rather than a step, and this batch is the first to contain one — a scalar solve, transcribed, and
+  it held. A *banded* or *sparse* solve (Phases 3-6) is a different proposition, because there the
+  library's pivoting is the thing that cannot be reproduced.

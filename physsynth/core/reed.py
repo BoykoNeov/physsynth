@@ -88,6 +88,7 @@ Headless: NumPy + SciPy (delegates the air column to :class:`Bore`, the scalar s
 from __future__ import annotations
 
 import math
+import os
 
 import numpy as np
 from numpy.typing import NDArray
@@ -419,3 +420,31 @@ class ReedBore:
         parameter. The reed beats shut statically at ``gamma = 1``; the note speaks around the
         small-oscillation threshold ``gamma ~ 1/3`` (Dalmont/Kergomard)."""
         return self.p_mouth / self.p_closing
+
+
+# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 2) -----------------------------------
+#
+# `ReedBorePy` above is the reference implementation and stays the name every parity check reaches
+# for. Below it, `ReedBore` is bound to whichever implementation this process is meant to exercise.
+#
+# The thing to know before editing either side: **the Rust reed requires a Rust bore.** It reaches
+# into the air column natively so that the clarinet's hot loop crosses the language boundary once
+# per step rather than twice, and it raises `TypeError` rather than falling back if it is handed
+# the pure-Python `BorePy`. That is deliberate: a silent fallback would be a Rust reed reporting
+# Rust while blowing a Python tube. Because `bore.py`'s swap block has already run by the time this
+# module imports `Bore`, the flag swings both together and no caller has to know.
+#
+# The other thing: the reed's scalar solve has a **bracketed Brent fallback, and it fires** -- 4-5
+# times per 4,000 steps at the flagship blowing pressure, 219 on a coarse grid. Which branch a step
+# took is part of the trajectory rather than a diagnostic, so `fallbacks` is compared step for step
+# in the parity file. The Rust side transcribes SciPy's `brentq` rather than reinventing it, for
+# the reason written in `crates/physsynth-core/src/root.rs`.
+#
+# Off by default. The Python model is still the reference oracle for every model not yet ported.
+ReedBorePy = ReedBore
+"""The pure-Python reference implementation, under a name the swap below never rebinds."""
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    from physsynth_rs import ReedBore  # type: ignore[assignment]  # noqa: F811
