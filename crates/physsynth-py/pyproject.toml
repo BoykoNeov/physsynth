@@ -1,0 +1,27 @@
+# The binding ships as its OWN distribution, built by maturin. The root `pyproject.toml` stays on
+# hatchling and stays pure Python.
+#
+# That separation is deliberate. The existing gate installs the project with `pip install -e .` and
+# runs 1,808 tests against it; if the root build backend became maturin, every one of those jobs
+# would grow a Rust compile and the pure-Python baseline — the thing each ported model is measured
+# against — would stop being installable on its own. Two distributions keep the comparison
+# available: `physsynth` alone is the Python side, `physsynth` + `physsynth-rs` is the Rust side,
+# and `PHYSSYNTH_RS` picks which one the suite exercises.
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "physsynth-rs"
+description = "Rust core for physsynth, exposed to Python. Temporary migration scaffolding."
+requires-python = ">=3.11"
+license = { file = "../../LICENSE" }
+authors = [{ name = "Boyko Neov" }]
+classifiers = ["Programming Language :: Rust"]
+dynamic = ["version"]
+
+[tool.maturin]
+# `abi3-py311` is set in Cargo.toml, so one wheel covers 3.11+ and the local machine tests the same
+# binary CI does.
+features = ["pyo3/extension-module"]
+module-name = "physsynth_rs"

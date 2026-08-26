@@ -8,7 +8,11 @@ metadata:
   modified: 2026-08-17T16:38:19.541Z
 ---
 
-**1808 tests** as of 2026-08-17 (1721 before this batch), **5027.9 core-seconds** of measured work.
+**1844 tests** as of 2026-08-26 (1808 at the 2026-08-17 measurement; model #5g's outline batch
+added 22). The **5027.9 core-seconds** figure is still the 2026-08-17 CI measurement and has NOT
+been re-measured — a local run is not a substitute for it and must not overwrite it. For scale only,
+2026-08-26 local: 618 s wall on `-n 6`, which is a *different machine and a different worker count*
+and therefore incomparable to the CI number by this file's own rule below.
 The gate is now **three concurrent jobs**, ~5-8 min wall depending on the runners, down from 15-21.
 
 ## The suite is BULK-bound — the "two pinned modules" story was wrong

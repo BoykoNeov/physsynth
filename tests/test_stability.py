@@ -100,7 +100,26 @@ def _run_core_probe(body: str) -> subprocess.CompletedProcess:
 # set (torch, requests, PIL, sounddevice, ...) is a real portability leak and must fail the test.
 # The mypyc runtime is named with a per-build hash prefix (e.g. "81d243...__mypyc"), so it is
 # matched structurally by its "__mypyc" suffix, not by name.
-_CORE_DEP_ALLOWLIST = {"numpy", "scipy", "charset_normalizer", "cython_runtime", "physsynth"}
+#
+# `physsynth_rs` (docs/dev/rust-migration-plan.md §2.2) is the ONE deliberate, reviewed addition
+# this list has ever taken. It is the compiled Rust core, and `sys.modules` cannot tell it apart
+# from any other third-party binary -- which is the whole reason it has to be named here rather
+# than pattern-matched. Two things follow, and both are the point:
+#
+#   - It only appears when `PHYSSYNTH_RS` is set, so on the default path this entry is inert. The
+#     list did not get looser for the runs that produce the acceptance numbers.
+#   - The rule it used to carry alone -- "the core depends on the numeric stack and nothing else"
+#     -- now lives on the Rust side too, as `crates/physsynth-core/tests/deps.rs`, which checks
+#     the same thing against `cargo metadata`. This test can no longer see inside the extension
+#     module, so something has to, and that is it. Same spirit, same visibility, other language.
+_CORE_DEP_ALLOWLIST = {
+    "numpy",
+    "scipy",
+    "charset_normalizer",
+    "cython_runtime",
+    "physsynth",
+    "physsynth_rs",
+}
 
 
 def test_core_dependency_allowlist():

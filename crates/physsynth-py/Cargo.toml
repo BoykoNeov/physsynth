@@ -1,0 +1,20 @@
+[package]
+name = "physsynth-py"
+description = "PyO3 binding exposing physsynth-core to Python as `physsynth_rs`. Temporary."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "physsynth_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+physsynth-core = { path = "../physsynth-core" }
+# `abi3-py311` matches `requires-python = ">=3.11"` in the root pyproject.toml. One wheel serves
+# every interpreter in that range, so the local machine (3.14) and CI (3.12, plus 3.11 nightly)
+# exercise the *same binary* — which removes an axis nobody wants to be debugging at Phase 6.
+pyo3 = { version = "0.29", features = ["abi3-py311", "extension-module"] }
+numpy = "0.29"

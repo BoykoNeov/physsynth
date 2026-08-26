@@ -1,0 +1,19 @@
+[package]
+name = "physsynth-core"
+description = "Headless DSP core — energy-based FDTD resonators. No I/O, no graphics, no Python."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# The shipped dependency list. Keeping it EMPTY is the Rust half of the portability contract
+# (plan §2.2); `tests/deps.rs` enforces it against `cargo metadata`, and adding a name here without
+# also adding it to that test's allowlist is a hard failure. That is deliberate: a new dependency
+# of the core is a reviewed edit in two places, never a silent one.
+[dependencies]
+
+# Test-only. Excluded from the allowlist rule by construction — `tests/deps.rs` walks NORMAL and
+# BUILD edges only, and asserts that serde_json itself is absent from what it walks, so the
+# exclusion is self-testing rather than asserted.
+[dev-dependencies]
+serde_json = "1"

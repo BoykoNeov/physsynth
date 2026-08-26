@@ -18,10 +18,16 @@ what makes the discrete energy conserved to machine precision for a lossless run
 same-time form ||delta_x+ u^n||^2 drifts at ~1e-3. Do not "simplify" it.
 
 Headless: NumPy only.
+
+This module is the Rust migration's Phase 0 (``docs/dev/rust-migration-plan.md``). The class
+below is the reference implementation; the block at the bottom of the file swaps ``IdealString``
+for the Rust one when ``PHYSSYNTH_RS`` is set, which is how the existing tests get run against
+the port without being edited.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 import numpy as np
@@ -204,3 +210,25 @@ class IdealString:
             u[0] = 0.0
         if self._bc_right == "fixed":
             u[-1] = 0.0
+
+
+# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 0) -----------------------------------
+#
+# `IdealStringPy` above is the reference implementation and stays the name every parity check
+# reaches for. Below it, `IdealString` is bound to whichever implementation this process is meant
+# to exercise -- and because `connection.py`, `body.py` and `web/serialize.py` all import that one
+# name, flipping the switch swings the whole dependent tree, not just the string's own tests.
+#
+# That is exactly what the plan's step 3 asks for: "run the existing, unmodified Python tests
+# against the Rust model". Not one line of `tests/` mentions Rust; the substitution happens here.
+#
+# Off by default. The Python model is still the reference oracle for every model that has not been
+# ported, and it is the thing a ported model is measured against -- so the default path must keep
+# being the one the acceptance numbers came from.
+IdealStringPy = IdealString
+"""The pure-Python reference implementation, under a name the swap below never rebinds."""
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    from physsynth_rs import IdealString  # type: ignore[assignment]  # noqa: F811

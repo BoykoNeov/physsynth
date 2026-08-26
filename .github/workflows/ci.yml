@@ -96,6 +96,90 @@ jobs:
                     --of ${{ needs.setup.outputs.count }})
           pytest -n auto --dist loadgroup $files --durations=25
 
+  # The Rust migration's gate (docs/dev/rust-migration-plan.md).
+  #
+  # A SEPARATE job, deliberately not a step inside the three shards. Those shards install the
+  # project with `pip install -e ".[dev]"` and run 1,808 tests against the pure-Python core; that
+  # run is the baseline every ported model is measured against, and it must not grow a Rust
+  # compile. Keeping the two apart also keeps the answer legible when they disagree: a red shard
+  # is a physics regression, a red `rust` job is a port regression.
+  #
+  # Three things are checked here, in increasing order of what they cost to discover:
+  #   1. the crates compile, are formatted, and pass clippy;
+  #   2. `cargo test` — the native physics bars, plus the Cargo dependency allowlist that is the
+  #      Rust half of the portability contract (plan §2.2);
+  #   3. the EXISTING Python tests, unmodified, run against the Rust model via `PHYSSYNTH_RS`.
+  #      That third one is the phase's actual success condition. The first two only make its
+  #      failures cheap to read.
+  rust:
+    name: Rust core (compile, native bars, Python harness against it)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # Rust compile times for a numeric crate are minutes and the cache is the difference between
+      # tolerable and not (plan §7). Keyed on Cargo.lock, which is committed for exactly this kind
+      # of reason -- a floating resolution would both miss the cache and move the numbers.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Format and lint
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets -- -D warnings
+
+      # Runs `crates/physsynth-core/tests/` — the native energy/passivity/modal bars, and the
+      # dependency allowlist. No interpreter involved, so a failure here is the physics or the
+      # crate graph, never the binding.
+      - name: Native validation + dependency allowlist
+        run: cargo test --workspace --release
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # `physsynth` and `physsynth-rs` are two distributions on purpose (see
+      # crates/physsynth-py/pyproject.toml): the pure-Python side stays installable on its own, so
+      # the baseline it defines stays available. The wheel is abi3-py311, so this 3.12 job builds
+      # and exercises the same binary a developer's 3.13/3.14 does.
+      - name: Install both sides
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install ./crates/physsynth-py
+
+      # Phase 0's success condition, stated as the plan states it: not "a string works" but *the
+      # existing tests passing unmodified against Rust*. Not one line of `tests/` mentions Rust --
+      # the substitution happens inside `physsynth/core/string_ideal.py`, gated on this variable.
+      #
+      # The file list is spelled out because it is a CLAIM, not a partition: these are the files
+      # that exercise `IdealString` directly, and the claim is that all of them stay green with the
+      # Rust model underneath. It is not the shard machinery and must not be confused for it --
+      # `scripts/shard_tests.py` still owns covering the suite, over in the `validate` job.
+      - name: The ideal string's own tests, unmodified, against Rust
+        env:
+          PHYSSYNTH_RS: "1"
+        run: |
+          pytest --durations=10 \
+            tests/test_energy.py \
+            tests/test_modal.py \
+            tests/test_convergence.py \
+            tests/test_dispersion.py \
+            tests/test_stability.py
+
+      # The comparison the physics bars are too loose to make: state arrays bit-for-bit, energy to
+      # the plan's Group A target, and the buffer-lifetime properties that no physics test can see.
+      # Runs WITHOUT the flag -- it imports both implementations by name and needs neither swapped.
+      - name: Rust vs Python parity
+        run: pytest tests/test_rust_parity.py --durations=10
+
   # Lint, plus the OUTER half of the shard guard.
   #
   # The inner half is `tests/test_shard_partition.py`, which asserts the split covers `tests/`

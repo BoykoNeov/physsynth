@@ -49,6 +49,31 @@ biggest chunk and it feels like progress. A Rust test suite written against a Ru
 never checked against Python asserts whatever the Rust model does. It would be green, and it would
 mean nothing.
 
+### 1.2 Step 5 does not fire per model — a ported model waits for its *clients*
+
+Discovered building Phase 0, 2026-08-26, and it generalises past the string.
+
+§1.1 named the viewer as the thing that breaks when a Python model is deleted. It is not the only
+one. `physsynth/core/connection.py` imports `IdealString` directly and reaches into
+`_bc_right` and `_second_diff` — **private** attributes — and `connection` is a Phase 5 model.
+`body.py`, `string_stiff.py` and `exciter.py` name it too (in docstrings, so those are free).
+
+So the ritual's step 5 is structurally impossible for `string_ideal` at the end of Phase 0, and the
+same will be true for `operators` at the end of Phase 1 and for every model something else builds
+on. **Phase 0 ends with both implementations alive, and that is the correct end state, not a
+shortfall.** A model's Python side comes out when its last *client* has moved, which for
+`string_ideal` means after `connection.py` (Phase 5) and the viewer (Phase 8).
+
+Two consequences worth stating rather than rediscovering:
+
+- **The binding must expose private names.** `_bc_left`, `_bc_right` and `_second_diff` are part of
+  the surface, because for the whole migration a Python module is a client of them. §3.1's table
+  measured the *test* surface; this is the same measurement run over `core/` itself.
+- **The switch is a better lever than a deletion.** Because `connection.py`, `body.py` and
+  `web/serialize.py` all import the one name `IdealString`, flipping `PHYSSYNTH_RS` swings every
+  dependent module onto Rust at once — so the port gets exercised through its real clients long
+  before anything is deleted. Deletion stops being the milestone; a green run under the flag is.
+
 ---
 
 ## 2. Two things the founding documents promise that cannot be kept
@@ -68,6 +93,28 @@ drift < 1e-10, partials within ~1 cent of the analytic oracle, convergence order
 deliberate 50× headroom between the 1e-10 bar and the ~1e-15 typically observed is *exactly* this
 situation, and is why that bar must not be tightened. Cross-implementation agreement is a
 **diagnostic**, not the contract — see §4 for what to hold each solver group to.
+
+**Corrected 2026-08-26, from Phase 0's measurements — the claim above is too pessimistic by half,
+and the half it is wrong about is worth having.** The paragraph lumps two different things together
+and they behave completely differently:
+
+- **The state trajectory is bit-identical**, at least for Group A. Measured on the ideal string
+  over 4,000 steps, across all four boundary spellings and with and without loss:
+  `np.array_equal(py.u, rs.u)` is `True`, not "close". A timestep of an explicit scheme is pure
+  elementwise arithmetic — no reduction, no library call — so IEEE-754 fixes the answer exactly,
+  provided the *operation order* matches. `(a - b) + c` and `a - (b - c)` are different functions
+  in floating point, so that provision is real work, but it is work, not luck. The Rust kernels are
+  written in NumPy's evaluation order deliberately and `tests/test_rust_parity.py` asserts the
+  result stays bit-identical, which makes an accidental reassociation a hard failure rather than a
+  slow drift.
+- **Reductions cannot match, and that is where the ~1e-15 lives.** `energy()` calls `np.dot`, which
+  goes through BLAS, which accumulates in an order no portable loop reproduces. Measured worst
+  disagreement over the same runs: **7e-16 relative** — two orders inside the Group A target.
+
+So the retraction stands where it was aimed — at the *solving* groups, and at any claim that a
+whole trajectory reproduces to 1e-15 — and should not be read as forbidding a bit-exact comparison
+where one is available. Where the arithmetic permits exactness, assert exactness: it is a far
+sharper detector than a tolerance, and it costs nothing to keep.
 
 ### 2.2 The three enforcement tests change meaning, deliberately
 
@@ -191,11 +238,21 @@ is retired, never during.
 The repo already established the principle: *the beam de-risked the plate.* Same move throughout —
 the smallest member of each new risk class goes first, purely to prove the machinery.
 
-**Phase 0 — the harness, proven on one trivial model.**
+**Phase 0 — the harness, proven on one trivial model.** *(Landed 2026-08-26 — see §9.)*
 `crates/physsynth-core` + `crates/physsynth-py` (PyO3/maturin), CI compiling on push, the
 allowlist tests redefined per §2.2, and **`string_ideal` (206 lines)** ported. Success is not
-"a string works" — it is *the existing `tests/test_string_ideal*.py` passing unmodified against
-Rust*. Nothing else starts until that is green.
+"a string works" — it is *the existing ideal-string tests passing unmodified against Rust*.
+Nothing else starts until that is green.
+
+> **Correction, 2026-08-26.** This phase originally named `tests/test_string_ideal*.py` as the
+> thing that has to go green. **There is no such file and there never was.** The ideal string's
+> tests are spread by *criterion*, not by model — `test_energy.py` (conservation and passivity),
+> `test_modal.py` (frequencies vs the analytic oracle), `test_convergence.py` (order of accuracy),
+> `test_dispersion.py`, and `test_stability.py` (CFL and construction guards) — **38 tests across
+> five files.** That layout is deliberate and predates the migration, so every later phase should
+> expect the same shape: a model's tests are not in a file named after it. Look them up rather than
+> guessing the filename; a success condition naming a path that does not exist is one `pytest` away
+> from being vacuously green.
 
 **Phase 1 — `operators` (165 lines).** Shared infrastructure everything downstream needs.
 
@@ -284,3 +341,112 @@ time someone tightens a comparison. Fix it (pass `v0`) before Phase 4, not durin
   settled before Phase 2 fixes the `Resonator` trait, or the trait is rebuilt later.
 - **The plugin framework** (`nih-plug`/CLAP vs a bespoke host) — still a genuine plugin-stage
   decision, and nothing before Phase 8 depends on it.
+
+---
+
+## 9. Phase 0, as built (2026-08-26)
+
+What exists, what was chosen and why, and the two things that were only discoverable by building it.
+
+### 9.1 The shape on disk
+
+```
+Cargo.toml                              workspace; Cargo.lock IS committed
+crates/physsynth-core/                  the DSP core. Zero dependencies.
+  src/ops.rs                            delta_x_forward, inner — the two the string calls
+  src/string_ideal.rs                   Params · kernels · a native owning IdealString
+  tests/string_ideal.rs                 native physics bars (13 tests)
+  tests/deps.rs                         the Cargo dependency allowlist (§2.2's Rust half)
+crates/physsynth-py/                    the PyO3 binding, exposed as `physsynth_rs`
+tests/test_rust_parity.py               Rust vs Python (75 tests) — the diagnostic, not the bar
+physsynth/core/string_ideal.py          + a swap block at the bottom, gated on PHYSSYNTH_RS
+```
+
+Each model splits three ways, and Phase 2 should keep the split rather than reinvent it:
+**parameters** (a validated immutable struct — all derivation and every rejection), **kernels**
+(free functions over `&[f64]`, holding no state), and **a native owning struct** (parameters plus
+`Vec` state, for Rust callers and `cargo test`). The binding does **not** wrap the owning struct —
+it calls the kernels directly, because its buffers have to be something else entirely. §9.3.
+
+### 9.2 Toolchain, and the one thing that had to be proven before any physics was written
+
+`pyo3` 0.29 · `rust-numpy` 0.29 · `maturin` 1.15, built **`abi3-py311`**.
+
+The `abi3` choice is not cosmetic. One wheel then serves every interpreter from 3.11 up, so the
+development machine (3.14) and CI (3.12, plus 3.11 on the nightly) exercise **the same binary** —
+which deletes an entire axis of "it only fails on the runner" before Phase 6 can land on it.
+Verified by import and round-trip on 3.13 and 3.14 locally, and on 3.12 in CI.
+
+That verification came *first*, before a line of the string was written, as a throwaway extension
+doing nothing but handing a zero-copy array back to Python. §3.1 prices 160 of the 255 hard call
+sites on zero-copy views working under `abi3`; if they had not, the binding design would have been
+a different one and finding out at Phase 5 would have been expensive.
+
+**Two Python distributions, deliberately.** The root `pyproject.toml` stays on hatchling and stays
+pure Python; the binding ships as its own maturin-built distribution. Converting the root would
+have grown a Rust compile onto all three existing gate shards and — worse — made the pure-Python
+side no longer installable alone. That side *is* the baseline every ported model is measured
+against, so it has to stay standalone for as long as the comparison matters.
+
+### 9.3 The finding: who owns the buffers, and why the obvious answer is a use-after-free
+
+This is the load-bearing design decision of the whole binding layer, and it is invisible to every
+physics test in the repo.
+
+Python's `step()` **rebinds** `self.u = u_next`; it does not write into the existing array. Two
+properties follow, and real callers depend on both:
+
+1. A reference taken *before* a step stays valid afterwards and keeps showing that step's values.
+2. A write *through* `.u` reaches the string — which is exactly how a bridge applies its force:
+   `self.string.u[-1] -= self.beta_s * F`, at four sites in `connection.py`.
+
+A Rust struct holding `Vec<f64>` state cannot honour both, and both wrong answers are silent:
+handing out a **copy** loses the write into a temporary, and handing out a **zero-copy view** over
+a `Vec` that a later step reallocates is worse — it is a use-after-free. Measured while probing
+this: a view held across a `Vec` reassignment *still returned the old contents*, which is precisely
+what a correct snapshot looks like, right up until the allocator reuses the page.
+
+So the binding's state buffers are **NumPy arrays owned by Python**; the type holds `Py<PyArray1>`
+handles and `step()` allocates a fresh array and rebinds. Lifetime is then refcounted by the
+interpreter, which is the only thing that actually knows who is still holding what. This costs
+nothing: it is the same allocation pattern the Python original already had.
+
+**None of the 38 ideal-string tests can see any of this** — they all reach the state through
+`state`, which copies. `tests/test_rust_parity.py` therefore asserts the buffer-lifetime properties
+directly, against *both* implementations, so the claim is about behaviour rather than about Rust.
+Every later phase inherits the same hazard the moment its model holds state.
+
+### 9.4 What was measured
+
+| | |
+|---|---|
+| The 38 existing tests, unmodified, under `PHYSSYNTH_RS=1` | **38 passed** |
+| Native `cargo test` (physics bars + allowlist + unit) | **19 passed** |
+| `tests/test_rust_parity.py` | **75 passed** |
+| State agreement, 4,000 steps × 4 boundary spellings × loss on/off | **bit-identical** |
+| Energy agreement, worst relative | **7e-16** (Group A target: 1e-13) |
+| Those 38 tests, wall clock, same machine | **23.7 s → 4.2 s** |
+
+The last row is one machine and one small slice of the suite, so it is an indication and not the
+§7 prediction coming true — but it points the way §7 expected, and the slice is FDTD-stepping-bound
+in the same way the bulk is.
+
+The 38th test is worth naming: `test_core_dependency_allowlist` **failed first**, on
+`physsynth_rs`. That is the §2.2 tripwire working — a new compiled dependency of the core could not
+appear without a human editing the allowlist, which is the entire point of it being hardcoded. The
+entry was then added deliberately, with its reasoning, in the same commit.
+
+### 9.5 What Phase 1 inherits
+
+- **The idiom above is settled but not yet stressed.** It has carried one model with no linear
+  solve and no shared operator infrastructure. Phase 1 (`operators`) is where the sparse matrix
+  builders arrive and the first real dependency decision gets made — and `ALLOWED` in
+  `crates/physsynth-core/tests/deps.rs` is deliberately **empty**, so that decision is an edit
+  someone has to write a reason next to.
+- **`ops.rs` is deliberately incomplete.** Two functions, because the string calls two. The other
+  four pointwise differences and all three matrix builders are Phase 1's, and leaving them visibly
+  absent is better than transcribing them now and having them look finished.
+- **The `PHYSSYNTH_RS` switch is the lever, not the deletion.** Per §1.2, nothing gets deleted for
+  a long time. What the switch buys is that flipping it swings `connection.py`, `body.py` and the
+  viewer onto the Rust string too — so the ported model is exercised through its real clients well
+  before its Python twin comes out.

@@ -1299,3 +1299,7 @@ literal next phase and the thing non-negotiable #1 deferred); or a §12 high-lev
 (port-Hamiltonian coupling, differentiable models, modal synthesis from measured IRs/FEM).
 **This is a human fork, not a lookup** — surface the menu, don't pick (see the global rule on
 ambiguous "continue"). Baseline at close: **1129 tests green**, 336 of them web.
+
+**The model list is not closed once — it REOPENS.** It was declared closed in 2026-07, reopened by `R(ω)` (b17), by the 3-D air box (b18, [[airbox-viewer-state]]), and again by air-box batches 5–6, which b19 surfaces ([[vkroom-viewer-state]], 2026-08-17). So "built-but-unshown is closed" is a statement about a moment, not a steady state: every new core model reopens it, and the rule that a batch needs a new model or a new capability earns its keep by being re-applied rather than retired.
+
+**Batch 20 (2026-08-26) closes it a FOURTH time** — model #5g's guitar outline, surfaced as the plate's third *domain* rather than a new model id ([[guitar-plate-viewer-state]]). Two corrections it forced on this plan: the amendment claiming #5g needed a new frontend capability (masked field rendering) was **false** — that shipped with the membrane; and the slider re-range gate was keyed on the *model*, so the first `plate:` regime would silently have started resetting sliders on a supported↔free switch the plan explicitly forbids.

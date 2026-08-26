@@ -28,3 +28,6 @@ out/
 *.png
 *.npz
 !docs/**/*.png
+
+# Rust build artifacts
+/target/

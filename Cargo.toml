@@ -1,0 +1,29 @@
+# Rust workspace — see `docs/dev/rust-migration-plan.md`.
+#
+# Two crates, and the split is the portability contract expressed as a crate graph (plan §2.2):
+#
+#   physsynth-core  the headless DSP core. Depends on NOTHING of ours and (per the allowlist in
+#                   `crates/physsynth-core/tests/deps.rs`) on essentially nothing of anyone's.
+#                   No I/O, no logging, no Python, no plugin framework.
+#   physsynth-py    the PyO3 binding. Depends on the core; the core never depends on it. Temporary
+#                   by construction — deleted when the last model finishes the §1 ritual.
+#
+# `Cargo.lock` IS committed. This repo's acceptance bars are numeric and its CI compares runs
+# across machines; a floating dependency resolution is exactly the kind of invisible variable the
+# harness exists to exclude.
+[workspace]
+resolver = "2"
+members = ["crates/physsynth-core", "crates/physsynth-py"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+
+# Release profile is what the acceptance runs use. `debug = true` keeps line numbers in a
+# backtrace without touching codegen; `overflow-checks` costs nothing measurable in FDTD code
+# (there is no integer arithmetic in the inner loop) and turns a silent index wrap into a panic.
+[profile.release]
+debug = true
+overflow-checks = true
