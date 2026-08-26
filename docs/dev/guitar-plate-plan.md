@@ -98,9 +98,15 @@ detector firing.** "Touches no live cell" says nothing about *where* the node is
 with an aggressive waist the same condition can fire in the **middle** of the plate — a silent
 geometry change nowhere near a tip — and the energy ledger, the nullspace and the spectrum all look
 fine afterwards. So the drop is asserted, not trusted: **every pruned node must lie within one `h`
-of the outline boundary.** Measured on the default guitar, max depth inside the rim = 0.71, 0.99,
-0.63, 0.53, 0.55 `h` at N = 20, 28, 40, 56, 80. The N=28 case sits at **0.99 h** — the bar is real
-and it is tight, not decorative.
+of the outline boundary.**
+
+*Corrected after the build (§9.6):* the probe measured 0.71, 0.99, 0.63, 0.53, 0.55 `h` at
+N = 20…80, and the **shipped** path measures 0.750, 0.733, 0.712, 0.704, 0.703 `h` — a tighter and
+much smoother band. The difference is not noise: the probe built its outline on the **nominal**
+length while `Plate` snaps `Ly` to whole cells *before* building the mask, which moves which nodes
+are spikes. Quote the shipped numbers; the probe's 0.99 `h` near-miss was an artefact of a grid the
+plate never uses. The bar is real either way, and it is asserted on the *measured value*, not on the
+absence of an exception.
 
 ---
 
@@ -342,7 +348,7 @@ site is what stops §5.2's misalignment from being re-derivable by the next call
 
 ### 9.4 Tests
 
-`tests/test_guitar_plate.py`, **22 tests**, all green. The tiering is explicit in the module
+`tests/test_guitar_plate.py`, **23 tests**, all green (22 at first push; §9.6 added one). The tiering is explicit in the module
 docstring and two of the tiers say in their own docstrings that they are *not* evidence: the energy
 ledger is a regression tier (it cannot see geometry) and the supported-branch identity cannot fail.
 The batch's weight sits on the derived disk oracle and the zero-valued degeneracy split.
@@ -353,3 +359,35 @@ The batch's weight sits on the derived disk oracle and the zero-valued degenerac
 - **Von Kármán on an outline** (§7) — a gong that is not a rectangle.
 - A **viewer batch**. The plan's standing rule is that a new core model reopens the built-but-unshown
   gap, and this reopens it for the fourth time.
+
+### 9.6 Three gaps an advisor pass found *after* the batch was pushed
+
+All three were "the test passes but does not test what it claims", which is the failure mode this
+whole plan is organised against — so they belong in the record rather than in a silent fixup.
+
+1. **`test_every_pruned_node_lies_at_the_rim` asserted nothing about the rim.** Its body was
+   `assert p.n_pruned >= 0` (vacuous) on the theory that construction performs the check. It does —
+   but only by *raising on violation*, so on a passing grid the depth is never observed, and a sign
+   error in `_depth_inside_outline` or an early return in the checker would leave all five grids
+   green. `Plate` now **exposes** `prune_depth_max` and the test asserts the value, with a **lower**
+   bound too: a zero would mean the check ran over an empty set.
+
+   Fixing it also corrected the numbers §4 quotes. The probe measured 0.53–0.99 `h`; the shipped
+   path measures **0.750, 0.733, 0.712, 0.704, 0.703 `h`** — tighter and much smoother. Not noise:
+   the probe built its outline on the *nominal* length, `Plate` snaps `Ly` to whole cells first, and
+   that moves which nodes are spikes. The 0.99 `h` near-miss was an artefact of a grid the plate
+   never uses.
+
+2. **The pinch test accepted either refusal.** `match="disconnected|inside the guitar outline"`
+   passes if the mid-plate-prune check fires first and the connectivity path never runs. Pinned to
+   `"disconnected pieces"`, and measured: connectivity is indeed what fires, at every waist in
+   0.90–0.99 × every N in 8–12.
+
+3. **The shipped `circle` path was anchored by nothing that can see geometry.** The oracle test
+   drove a locally-built mask, so `Plate(domain="circle")` — its own grid centring, snapping and
+   prune — was covered only by energy and passivity, both geometry-blind. Now tied to the oracle
+   directly. It reproduces the probe to three decimals (8.549 / 4.024 / 2.009 % at N = 32 / 64 /
+   128), and it settles **odd `N`**, where the disk's centre falls between nodes rather than on one:
+   7.60% at N=33 against 8.55% at N=32, so odd grids are allowed rather than rejected.
+
+**23 tests**, all green.

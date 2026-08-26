@@ -205,8 +205,10 @@ def prune_to_area_carrying(mask: NDArray[np.bool_]) -> tuple[NDArray[np.bool_], 
     waist it can fire in the middle of the plate rather than at a tip, and energy, nullspace and
     spectrum all look
     healthy afterwards. :class:`physsynth.core.plate.Plate` therefore asserts that every dropped
-    node lay within one ``h`` of the outline boundary (measured max depth 0.53–0.99 ``h``, so that
-    bar is tight rather than decorative).
+    node lay within one ``h`` of the outline boundary — and exposes the measured depth as
+    ``prune_depth_max``, because a bar checked only when it fails is never observed on a passing
+    grid. Measured on the shipped default guitar: **0.70–0.75 ``h``** across N = 20…80, so the bar
+    is tight rather than decorative.
     """
     m = np.array(mask, dtype=bool, copy=True)
     before = int(m.sum())

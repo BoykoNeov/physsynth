@@ -550,6 +550,10 @@ class Plate:
         # Lx*Ly there. Left measured rather than special-cased -- a hardcoded 0.0 would hide the one
         # case where the quadrature is exactly right.
         self.n_pruned = 0
+        # How deep inside the outline the deepest pruned node sat, in metres. 0.0 means nothing was
+        # pruned (a rectangle, or a grid fine enough to have no spikes) -- so a test asserting the
+        # bar must also assert this is non-zero, or it is asserting over an empty set.
+        self.prune_depth_max = 0.0
         self.outline_area = self.Lx * self.Ly
         self.area = self.outline_area
         self.area_deficit = 0.0
@@ -649,7 +653,10 @@ class Plate:
         1. **A mid-plate prune.** :func:`prune_to_area_carrying`'s rule is purely topological, so on
            a coarse grid with a deep waist it can fire in the *middle* of the plate rather than at a
            tip. Every dropped node must therefore lie within one ``h`` of the outline boundary.
-           Measured max depth on the default guitar: 0.53–0.99 ``h``, so this bar is tight.
+           Measured max depth on the default guitar: **0.70–0.75 ``h``** across N = 20…80, so
+           this bar is tight. It is also *exposed* as :attr:`prune_depth_max` rather than only
+           compared, since a bar that raises only on violation is never observed on a grid that
+           passes — a sign error here would leave every test green.
         2. **A pinched outline.** A deep enough waist on a coarse enough grid separates the two
            bouts. That is silently *two plates* with a 6-dimensional rigid-body nullspace, and it
            reads as a plate with a suspiciously low fundamental rather than as an error.
@@ -659,11 +666,16 @@ class Plate:
         dropped = raw & ~self.mask
         if dropped.any():
             depth = self._depth_inside_outline(self.X[dropped], self.Y[dropped])
-            if depth.max() > 1.0001 * self.h:
+            # Exposed, not just compared: a bar that is only ever checked when it FAILS is never
+            # observed on a passing grid, so a sign error in _depth_inside_outline (or an early
+            # return here) would leave every test green. Callers assert the value.
+            self.prune_depth_max = float(depth.max())
+            if self.prune_depth_max > 1.0001 * self.h:
                 raise ValueError(
-                    f"prune_to_area_carrying dropped a node {depth.max() / self.h:.2f} h inside "
-                    f"the {self.domain} outline, not at its rim: the mask is no longer the shape "
-                    f"that was asked for. Refine the grid (N = {self.N}) or soften the outline."
+                    f"prune_to_area_carrying dropped a node {self.prune_depth_max / self.h:.2f} h "
+                    f"inside the {self.domain} outline, not at its rim: the mask is no longer the "
+                    f"shape that was asked for. Refine the grid (N = {self.N}) or soften the "
+                    f"outline."
                 )
         n_parts = _count_components(self.mask)
         if n_parts != 1:

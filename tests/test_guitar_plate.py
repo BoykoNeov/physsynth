@@ -189,18 +189,41 @@ def test_every_pruned_node_lies_at_the_rim(N):
     "Touches no live cell" says nothing about where the node is: on a coarse grid with a deep waist
     the same condition can fire in the middle of the plate. That is a silent geometry change, and
     energy, nullspace and spectrum all survive it — which is why this assert exists at all.
-    Measured max depth on the default outline is 0.53–0.99 ``h``, so the bar is tight, not slack.
+
+    **The measured depth is asserted here, not merely the absence of an exception.** ``Plate``
+    raises only when the bar is *violated*, so on a passing grid nothing about depth is observed: a
+    sign error in ``_depth_inside_outline``, or an early return in the checker, would leave every
+    grid green. Both bounds matter — the upper one is the bar, and the **lower** one proves the
+    check ran over a non-empty set rather than vacuously.
+
+    Measured on the shipped path: 0.750, 0.733, 0.712, 0.704, 0.703 ``h`` at N = 20…80. (The plan's
+    probe reported a wider 0.53–0.99 ``h`` because it built the outline on the *nominal* length;
+    ``Plate`` snaps ``Ly`` to whole cells first, which moves which nodes are spikes.)
     """
     p = Plate(
         Lx=0.37, Ly=0.48, kappa=1.0, rho=2.0, fs=20000.0, N=N, boundary="free", domain="guitar"
     )
-    assert p.n_pruned >= 0  # construction itself performs the assertion; this pins it as tested
+    assert p.n_pruned > 0, "nothing was pruned, so the rim check ran over an empty set"
+    assert p.prune_depth_max > 0.0, "a pruned node was not inside the outline at all"
+    assert p.prune_depth_max <= 1.0001 * p.h, (
+        f"deepest pruned node sat {p.prune_depth_max / p.h:.3f} h inside the outline"
+    )
+    assert 0.6 < p.prune_depth_max / p.h < 0.85, (
+        f"depth {p.prune_depth_max / p.h:.3f} h is outside the measured 0.70-0.75 band; the "
+        f"outline or the prune rule has moved"
+    )
     assert p.mask.sum() == p.n_live
 
 
 def test_a_pinched_outline_is_refused_rather_than_silently_two_plates():
-    """A deep waist on a coarse grid separates the bouts — two plates, a 6-D nullspace, no error."""
-    with pytest.raises(ValueError, match="disconnected|inside the guitar outline"):
+    """A deep waist on a coarse grid separates the bouts — two plates, a 6-D nullspace, no error.
+
+    The match is pinned to the **connectivity** message specifically. A looser alternation would
+    also accept the mid-plate-prune refusal, and then this test would pass without the pinch path
+    ever running — measured, it is the connectivity check that fires here, at every waist in
+    0.90–0.99 and every N in 8–12.
+    """
+    with pytest.raises(ValueError, match="disconnected pieces"):
         Plate(
             Lx=0.37, Ly=0.48, kappa=1.0, rho=2.0, fs=20000.0, N=8,
             boundary="free", domain="guitar", waist=0.97,
@@ -316,6 +339,43 @@ def test_staircased_disk_matches_the_derived_oracle_and_converges():
         assert 1.25 < ratio < 2.6, (
             f"N {coarse}->{fine} improved by {ratio:.2f}x; O(h) predicts ~2 and O(h²) ~4"
         )
+
+
+def test_the_shipped_circle_path_matches_the_derived_oracle():
+    """The oracle must anchor ``Plate(domain="circle")`` itself, not only the bare mask helper.
+
+    The test above validates the *assembly* through a locally-built mask. That leaves the shipped
+    constructor — its own grid centring, its own snapping, its own prune — anchored by nothing but
+    energy and passivity, which this module's docstring already calls geometry-blind. So the
+    constructor is tied to the oracle directly.
+
+    It also settles **odd** ``N``: the disk's centre falls between nodes there rather than on one,
+    and the spectrum is unaffected (7.60% at N=33 against 8.55% at N=32), so odd grids are allowed
+    rather than rejected.
+    """
+    target, _ = free_circular_plate_lambdas(NU, 7)
+    prev = None
+    for N in (32, 33, 64, 128):
+        p = Plate(
+            Lx=2.0, Ly=2.0, kappa=1.0, rho=2.0, fs=200000.0, N=N, boundary="free", domain="circle"
+        )
+        mu = np.sort(
+            eigsh(p.K.tocsc(), k=11, M=p.W.tocsc(), sigma=-1e-8, which="LM",
+                  return_eigenvectors=False)
+        )
+        lam = (0.5 * p.Lx) ** 2 * np.sqrt(np.clip(mu[3:10], 0.0, None))
+        assert np.all(lam > target), "a staircased disk is SMALLER, so it must ring sharp"
+        err = float(np.abs(lam / target - 1.0).mean())
+        # The area deficit is the leading term, and it shows: the two track each other closely.
+        assert abs(err + p.area_deficit) < 0.012, (
+            f"N={N}: mean error {100 * err:.3f}% and area deficit {100 * p.area_deficit:.3f}% "
+            f"have come apart"
+        )
+        if prev is not None and N != 33:  # 33 refines 32 by only 3%, so it is not a rate step
+            assert err < prev
+        if N != 33:
+            prev = err
+    assert prev < 0.03, f"the finest disk is off by {100 * prev:.2f}%"
 
 
 def test_the_degenerate_pairs_split_and_the_exact_answer_is_zero():

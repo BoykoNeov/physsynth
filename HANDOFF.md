@@ -541,7 +541,9 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   which is the second result: the rule is purely topological, so on a coarse grid with a deep waist
   it can fire in the *middle* of the plate, and energy, nullspace and spectrum all survive that
   intact. It is asserted geometrically instead — every dropped node within one `h` of the rim, which
-  the default outline meets at a measured 0.53–0.99 `h`.
+  the default outline meets at a measured 0.70–0.75 `h`. The measured depth is *exposed* and
+  asserted rather than only compared: a bar that raises only when violated is never observed on a
+  grid that passes, so a sign error in it would leave every test green.
 
   Third, and the part that generalises past plates: **the staircase error is largely a domain-size
   error rather than an operator error.** The frequency error tracks the mask's *area deficit*
