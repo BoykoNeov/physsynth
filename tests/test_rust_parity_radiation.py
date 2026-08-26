@@ -29,6 +29,12 @@ have. It takes a weight like ``radiation=0.02`` to make the reduction differ at 
 are asserted below, on purpose: the exact one because it is what the suite actually runs, and the
 inexact one because it is the honest measurement.
 
+Scope checked rather than assumed (plan section 14.3): every ``ModalBody(`` site in the repo was
+read, the largest body anywhere is five modes, and no caller overrides a helper's ``freqs``. That
+matters because OpenBLAS **vectorises at sixteen terms**, and a vectorised reduction changes the
+summation *order* — which diverges from a left-to-right sum even when every product is exact. The
+powers-of-two argument covers this repo only because nothing in it reaches sixteen modes.
+
 **Read the difference against the run's amplitude, never pointwise.** The loaded body decays by
 four orders of magnitude over 20,000 steps, so an element-wise relative difference divides a
 frozen absolute error (~2e-17) by a vanishing signal and reports 1e-7 — an artifact of the metric,
@@ -52,7 +58,8 @@ What comes out bit-identical, and is asserted that way rather than to a toleranc
 * `AirRadiation.process` over a long random signal, because that path has no reduction in it at
   all — a scalar multiply and a delay line;
 * `_G` and `_corr`, the rank-1 precomputes: `np.sum`'s pairwise summation is plain left-to-right
-  for seven terms or fewer, and no body in this repo has eight modes;
+  for seven terms or fewer, no body in this repo has eight modes, and where ``m`` and ``sigma``
+  are uniform every term of the sum is identical so the order cannot matter at any ``M``;
 * `impedance`, `impedance_discrete` and `loaded_mode` across a sweep — complex division included,
   which is CPython's Smith's algorithm rather than the textbook formula;
 * the two reductions the original documents as exact (`R = 0` is a bare body, `M_a = inf` is the

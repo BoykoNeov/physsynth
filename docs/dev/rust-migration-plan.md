@@ -1476,11 +1476,33 @@ A fused multiply-add differs from a rounded one **only when the product rounds**
   of two, so the products are exact again, one step more subtly.
 
 Measured consequence: under `PHYSSYNTH_RS=1` the loaded body's state is **bit-identical over
-20,000 steps** in every configuration the test suite builds. The named CI step for this batch will
-therefore be green with a divergence of exactly zero — and that number is a property of the
-*tests*, not a measurement of the port. Only a body built with `radiation=0.02` (the weight the
-core's own single-mode rig uses, and not a power of two) makes the reduction differ at all, and
-`tests/test_rust_parity_radiation.py` builds one on purpose.
+20,000 steps** in every configuration the test suite hands these four types. The named CI step for
+this batch will therefore be green with a divergence of exactly zero — and that number is a
+property of the *tests*, not a measurement of the port. Only a body built with `radiation=0.02`
+(the weight the core's own single-mode rig uses, and not a power of two) makes the reduction
+differ at all, and `tests/test_rust_parity_radiation.py` builds one on purpose.
+
+**The scope of that claim was checked rather than assumed, and the check is reusable.** Every
+`ModalBody(` construction site in the repo was read: the largest body anywhere is **five modes**
+(`[137, 213, 330, 471, 620]`, the sympathetic-string rig), no caller overrides the `freqs=`
+default of any `tests/helpers.py` builder, and every multi-mode body handed to a `RadiatedBody` or
+a `ReactiveRadiatedBody` uses `phi=1.0` with no `radiation` weight. Three thresholds therefore all
+sit above anything this repo builds: `np.sum`'s pairwise split (8 terms), OpenBLAS's vectorised
+`ddot` (16), and — the one that would bite hardest — the point where **summation order alone**
+diverges even with exact products, which is that same 16. Above sixteen modes the powers-of-two
+argument stops saving anything, so **the guard to write into a future batch is `M >= 16`, not
+`M >= 8`.**
+
+Two refinements worth keeping with it:
+
+* `_G` is safer than "seven terms or fewer" suggests. Where `m` and `sigma` are uniform across the
+  bank — which is most fixtures — every term of the sum is *identical*, so pairwise order cannot
+  change the answer at any `M`. The seven-term bound is what holds when the per-mode vectors vary.
+* **`airbox`'s own fixture already has the shape that breaks this**, and it is the only one that
+  does: `tests/helpers.py::make_room_loaded_body` defaults `radiation` to a geometric series
+  `AIRBOX_PORT_RADIATION * 0.65 ** arange(M)` on a four-mode body. `RoomLoadedBody` runs the
+  identical rank-1 correction with its own `np.dot`, so when Phase 6 ports it the divergence
+  measured here will appear there **through the existing tests**, with no new fixture needed.
 
 **Generalisation worth carrying into Phases 3-6:** a suite whose fixtures use 1.0 and powers of
 two for its weights is systematically blind to fused-multiply-add divergence. Every later batch
@@ -1599,7 +1621,9 @@ that measures the port, for the reason §14.3 gives.
 | Peak-normalised `energy()` / `pressure()`, 2,000 steps | 2.0e-15 / 5.4e-15 |
 | `R = 0` vs a bare body, and `M_a = inf` vs the constant-`R` load, **within** each side | **bit-identical** |
 | The air node's clients under `PHYSSYNTH_RS=1` (785 tests) | **785 passed** in 765 s |
+| Largest `ModalBody` anywhere in the repo (every call site read) | **5 modes** — below all three thresholds |
 | **The WHOLE suite under `PHYSSYNTH_RS=1`** | *(pending)* |
+| The whole suite on the default Python path, same tree | *(pending)* |
 
 ### 14.10 What the next batch inherits
 
