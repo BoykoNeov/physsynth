@@ -21,16 +21,18 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    analysis, viewer backend *and* the test suite — in favour of **Rust**, gradually and model by
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
-   **Phases 0, 1 and the first three batches of 2 are built** (plan §9-§13): `crates/physsynth-core`
+   **Phases 0, 1 and the first four batches of 2 are built** (plan §9-§14): `crates/physsynth-core`
    + `crates/physsynth-py`, with `string_ideal`, all of `operators`, `membrane`, `exciter`, `body`,
-   `bore`, `reed` and the *builder half* of `operators2d` ported. `cargo test --workspace` runs the
+   `bore`, `reed`, the *builder half* of `operators2d` and all of `radiation` **except** its one
+   Bessel helper ported. `cargo test --workspace` runs the
    native bars and the Cargo dependency allowlist; `pip install ./crates/physsynth-py` then
    `PHYSSYNTH_RS=1 pytest` runs the **existing, unmodified** Python tests against the Rust code. The
    flag is one switch for the whole tree: with it set, five still-Python string/beam models run on
    Rust-built operators; every plate — supported, free, orthotropic, guitar-shaped — plus the von
    Karman bracket runs on Rust-built geometry; and the whole body/radiation leg (bridges,
    sympathetic strings, all three radiation tiers) runs on a Rust modal body; and the whole wind leg
-   — air column, radiating bell and the reed that blows it — is Rust end to end. Both
+   — air column, radiating bell and the reed that blows it — is Rust end to end; and the air node
+   itself — far-field read-out, radiation load, rational impedance — is Rust too. Both
    implementations stay alive for now — deleting a Python model waits on its clients, not on its own
    phase (§1.2). Five facts worth knowing before planning work: a file's risk group is the group of
    its hardest function, so a module can port in halves (§11.2.1); `mallet` needs `collision`, so
@@ -44,7 +46,16 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    self` pymethod cannot hand control back to Python and still be read** — the reed's hook does an
    ordinary `self.bore.p[0]` and PyO3 refuses it, so a model that calls out mid-step takes the
    *object* and borrows it in two phases (§13.2). That failure is invisible to `cargo test`, which
-   never crosses the boundary.
+   never crosses the boundary. And a sixth, from `radiation`, which retires an assumption the first
+   five batches were built on: **bit-identity is not available everywhere, and what ends it is a
+   BLAS reduction that feeds back into state — not a solver** (§14.2). `np.dot` fuses its
+   multiply-add and OpenBLAS picks its kernel by CPU, so matching it would be a claim about a
+   runner. The bar there is Group A over a *short* run and the physics bars thereafter, and the
+   question to ask of every remaining model is "does a reduction reach the next timestep?" One
+   corollary bites immediately: a fused multiply-add differs from a rounded one only when the
+   **product** rounds, and every body fixture in `tests/helpers.py` uses weights of 1.0, so the
+   suite is systematically blind to this class of divergence — a comparison of reductions needs at
+   least one fixture whose coefficients are not powers of two (§14.3).
 4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
    never the reverse. Keeps the physics portable to C++/Rust later.
 5. **Unifying abstraction:** `exciter -> resonator (+- nonlinear coupling) -> body/radiation`.

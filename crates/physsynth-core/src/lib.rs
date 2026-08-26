@@ -12,7 +12,9 @@
 //! models: `exciter`, `membrane`, and `ops2d` — the *builder* half of `operators2d.py`, which the
 //! plan files under Group D for a solver the membrane never calls (see that module's header).
 //! Its second batch adds `body`, the smallest resonator in the project — and the one whose
-//! clients write its state rather than only reading it.
+//! clients write its state rather than only reading it; its third the wind leg, `bore` and
+//! `reed`; its fourth `radiation`, the air node in three tiers, which is where the migration's
+//! bit-identity claim runs out (a BLAS reduction that feeds back into state — see that module).
 //!
 //! # The shape every resonator here shares
 //!
@@ -40,6 +42,7 @@ pub mod fmt;
 pub mod membrane;
 pub mod ops;
 pub mod ops2d;
+pub mod radiation;
 pub mod reed;
 pub mod root;
 pub mod sparse;

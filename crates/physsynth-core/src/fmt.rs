@@ -51,9 +51,39 @@ pub fn py_float(x: f64) -> String {
     }
 }
 
+/// `f"{x:.<prec>e}"` as Python formats it.
+///
+/// Rust's `{:e}` writes the exponent bare (`1.234e-5`, `0.000e0`); Python signs it and pads it to
+/// two digits (`1.234e-05`, `0.000e+00`). Same divergence [`py_float`] fixes for `repr`, and the
+/// same fix — only the exponent is touched, never the mantissa, so the digits are Rust's own
+/// correctly-rounded ones.
+pub fn py_exp(x: f64, prec: usize) -> String {
+    if x.is_nan() {
+        return "nan".to_owned();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 { "inf" } else { "-inf" }.to_owned();
+    }
+    let s = format!("{x:.prec$e}");
+    let Some(epos) = s.find('e') else {
+        return s;
+    };
+    let (mantissa, exp) = s.split_at(epos);
+    let exp = &exp[1..];
+    let (sign, digits) = match exp.strip_prefix('-') {
+        Some(rest) => ("-", rest),
+        None => ("+", exp.strip_prefix('+').unwrap_or(exp)),
+    };
+    if digits.len() < 2 {
+        format!("{mantissa}e{sign}0{digits}")
+    } else {
+        format!("{mantissa}e{sign}{digits}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::py_float;
+    use super::{py_exp, py_float};
 
     #[test]
     fn integral_values_keep_their_point_zero() {
@@ -82,5 +112,15 @@ mod tests {
         assert_eq!(py_float(f64::NAN), "nan");
         assert_eq!(py_float(f64::INFINITY), "inf");
         assert_eq!(py_float(f64::NEG_INFINITY), "-inf");
+    }
+    #[test]
+    fn the_exponent_form_matches_pythons_format_spec() {
+        // f"{0.0:.3e}" == "0.000e+00";  f"{1e-14:.1e}" == "1.0e-14" -- the two the refusal uses.
+        assert_eq!(py_exp(0.0, 3), "0.000e+00");
+        assert_eq!(py_exp(1e-14, 1), "1.0e-14");
+        assert_eq!(py_exp(1.2345e-5, 3), "1.234e-05");
+        assert_eq!(py_exp(-6.02e23, 2), "-6.02e+23");
+        assert_eq!(py_exp(1e100, 1), "1.0e+100");
+        assert_eq!(py_exp(f64::NAN, 3), "nan");
     }
 }

@@ -292,7 +292,9 @@ everything downstream needs.
 the phase where the Rust idiom for this project settles (state layout, the `Resonator` trait, how
 `energy()` is expressed). Get the idiom right here; every later model inherits it.
 *(Batch 1 landed 2026-08-26 — `exciter`, `membrane` and the builder half of `operators2d`; see
-§11.)*
+§11. Batch 2 — `body` — §12. Batch 3 — `bore` and `reed`, the wind leg — §13. Batch 4 —
+`radiation`, minus its one Bessel helper — §14. What is left in the phase is `engine`, deferred
+for the design reason in §14.10, and `mallet`, blocked on Phase 3.)*
 
 > **Correction, 2026-08-26.** The eight files are not independent, and one of them is blocked on a
 > later phase. Measured intra-`core` dependencies: `exciter`, `bore`, `body` and `engine` need
@@ -1391,3 +1393,234 @@ One caveat on the manual whole-suite measurement, since it is not a gate (§12.9
   rather than a step, and this batch is the first to contain one — a scalar solve, transcribed, and
   it held. A *banded* or *sparse* solve (Phases 3-6) is a different proposition, because there the
   library's pivoting is the thing that cannot be reproduced.
+
+  > **Wrong, and batch 4 is the correction (§14.2).** Bit-identity broke one batch later, in
+  > `radiation` — a Group A model with no matrix in it — because `np.dot` fuses its multiply-add
+  > and `RadiatedBody.step` **feeds that reduction back into state** instead of reading it out.
+  > The right question is not "does this model solve something" but "does a reduction reach the
+  > next timestep", and it should be asked of every remaining model rather than of the solver
+  > groups alone.
+
+---
+
+## 14. Phase 2, batch 4, as built (2026-08-26)
+
+`physsynth/core/radiation.py` — the air node in its three tiers (read-out, constant-`R` load,
+rational impedance), 807 lines, ported **minus one function**. It is the batch where the
+migration's bit-identity claim runs out, and where it runs out is not where §13.8 predicted.
+
+### 14.1 The shape on disk
+
+```
+crates/physsynth-core/src/radiation.rs   AirParams/AirRadiation, rank_one, LoadParams,
+                                         RationalAirLoad, both loaded bodies, py_round, c_div
+crates/physsynth-core/src/fmt.rs         + py_exp, Python's `{:.3e}` spelling
+crates/physsynth-core/tests/radiation.rs native bars (24 tests)
+crates/physsynth-py/src/radiation.rs     the four classes; the two loaded ones hold a PyModalBody
+crates/physsynth-py/src/body.rs          + four pub(crate) accessors the wrappers reach for
+physsynth/core/radiation.py              + a swap block at the bottom, gated on PHYSSYNTH_RS
+tests/test_rust_parity_radiation.py      Rust vs Python (73 tests)
+```
+
+### 14.2 The finding: bit-identity ends at a BLAS reduction, not at a solver
+
+Batch 1 predicted the first divergence would be "a solver, not a step". §13.8 sharpened that to
+pivoting, in Phases 3-6. **Both were wrong, and the correction is more useful than the prediction
+was.** The first thing to break bit-identity is one line in a Group A model that owns no matrix:
+
+```python
+u_free = float(np.dot(b.a, b.q - q_nm1)) / (2.0 * self.k)
+```
+
+`body.pressure()` has had the *identical* reduction since batch 2 and was held to Group A without
+anyone thinking twice, because it is a **read-out**: its last bit reaches an assertion and stops
+there. Here the same arithmetic decides `q^{n+1}`. That is the whole difference, and it is not
+visible in a file listing or a line count — the question a new model owes is not "does it solve
+something" but **"does a reduction feed back into state?"**
+
+The reason it cannot be matched is worth stating precisely, because "use the same algorithm" is
+the obvious wrong answer. `np.dot` on contiguous doubles is OpenBLAS, and OpenBLAS **fuses the
+multiply-add**. Measured here (numpy 2.4.6, scipy-openblas 0.3.31, `DYNAMIC_ARCH`, SkylakeX
+kernel), over 1000 random pairs per length:
+
+| terms | agrees with `fma`-per-term | agrees with multiply-then-add |
+|---|---|---|
+| 1 | 1000/1000 | 1000/1000 |
+| 2 – 15 | **1000/1000** | 302 – 752 /1000 |
+| 16 and up | 140 – 346 /1000 | 242 – 325 /1000 |
+
+So below sixteen terms it is a single-accumulator sequential `fma` loop, and at sixteen it
+vectorises. Reproducing that in Rust would mean `f64::mul_add` — which on the default x86-64
+target is a libm call rather than an instruction — *and* accepting that the threshold and the
+vector layout are chosen by `DYNAMIC_ARCH` at run time. A bit-identity assertion built on it
+would pass on this machine and fail on a CI runner that dispatches a Haswell kernel. **It would
+be a claim about a CPU, not about a port.** Rust sums plainly, left to right.
+
+Two reductions in the same file are unaffected, and keeping the three apart is what makes the
+residual attributable:
+
+* `_G` uses `np.sum`, whose pairwise summation is **plain left-to-right for seven terms or
+  fewer** (measured: 0/2000 mismatches at lengths 1-7, roughly half at 8+, where numpy switches
+  to eight partial accumulators). No body in this repo has eight modes, so `_G` and `_corr` come
+  out bit-identical and the state difference is `u_free`'s alone.
+* `AirRadiation.process` has no reduction at all — a scalar multiply and a delay line — so tier 1
+  is bit-identical over 20,000 random samples and the parity test asserts it exactly.
+
+### 14.3 The part that should change how the next batch is read: the suite cannot see this
+
+A fused multiply-add differs from a rounded one **only when the product rounds**. And:
+
+* `tests/helpers.py` builds every body with `phi=1.0` and no `radiation` weight, so `a_i = 1` and
+  every product `a_i * d_i` is exact;
+* the parity suite's own five-mode case uses `phi = [1, -0.5, 0.25, -0.125, 0.0625]` — all powers
+  of two, so the products are exact again, one step more subtly.
+
+Measured consequence: under `PHYSSYNTH_RS=1` the loaded body's state is **bit-identical over
+20,000 steps** in every configuration the test suite builds. The named CI step for this batch will
+therefore be green with a divergence of exactly zero — and that number is a property of the
+*tests*, not a measurement of the port. Only a body built with `radiation=0.02` (the weight the
+core's own single-mode rig uses, and not a power of two) makes the reduction differ at all, and
+`tests/test_rust_parity_radiation.py` builds one on purpose.
+
+**Generalisation worth carrying into Phases 3-6:** a suite whose fixtures use 1.0 and powers of
+two for its weights is systematically blind to fused-multiply-add divergence. Every later batch
+that compares a reduction should include at least one fixture whose coefficients are *not*
+exactly representable, or its bit-identity result means less than it looks like it means.
+
+### 14.4 Group A is a SHORT-run target, and this is the batch that needed the qualifier
+
+§4 words the Group A target as "state arrays to ~1e-13 relative over a **short run**; the physics
+bars thereafter". Four batches never had to test that qualifier because they were exact. Measured
+here on the weighted nine-mode body, worst state difference as a fraction of the run's amplitude:
+
+| steps | constant-`R` load | rational load |
+|---|---|---|
+| 100 | 0 | 1.1e-19 |
+| 1,000 | 1.8e-15 | 7.6e-16 |
+| **2,000** | **2.4e-14** | **1.4e-14** |
+| 5,000 | 2.4e-14 | 1.3e-13 |
+| 10,000 | 2.4e-14 | 1.9e-13 |
+| 20,000 | 2.4e-14 | **3.4e-13** |
+
+So a fed-back reduction's error **grows with run length** where a read-out's saturates, and
+1e-13 is met at 2,000 steps and exceeded by 3.4x at 20,000. The parity test asserts both lengths
+at their own bars rather than picking one number and calling it the answer. Neither *physics* bar
+moves at either length: each implementation conserves its own energy identity to the suite's
+1e-10, which is exactly the hand-off §4 describes.
+
+**A metric trap sits next to this and is worth naming, because it made the first measurement read
+1e-7.** The loaded body decays by four orders of magnitude over the run, so an element-wise
+relative difference divides a frozen absolute error (~2e-17) by a vanishing signal. Against the
+run's amplitude the same data reads 2.4e-14. **Normalise a decaying trajectory by its amplitude,
+never pointwise** — and the same applies to the read-outs, where peak-normalised energy and
+pressure differences are 2.0e-15 and 5.4e-15 against pointwise figures three orders of magnitude
+larger.
+
+### 14.5 `piston_radiation_resistance` did not port, and that is the §11.2.1 manoeuvre again
+
+It is the one name in the file that needs a Bessel `J1`, and `scipy.special.j1` is Cephes.
+Reproducing it means transcribing some forty-five seventeen-digit rational-approximation
+coefficients from a source this batch does not have open, or inventing a series/asymptotic split
+and owning its accuracy analysis. Neither is a load-batch decision, and **Phase 7 already exists
+for exactly this class of work** ("Bessel roots, closed-form eigenfrequencies, the spectrum
+detector"). It is stateless and coupled to nothing else in the module, so the swap block rebinds
+five names and leaves that one pointing at the Python function — `operators2d`'s half-a-module
+port, done for a special function instead of for a solver.
+
+The generalisable form: **the unit of porting is a function group (§11.2.1), and a special
+function is its own group.** A file's Bessel call does not drag the file into Phase 7; it drags
+that one function there.
+
+### 14.6 Three things that are not arithmetic and would each pass every physics bar
+
+1. **`int(round(x))` is round-half-to-EVEN.** Rust's `f64::round` is half-away-from-zero, so a
+   delay of 2.5 samples becomes 3 instead of 2. A one-sample error in the delay line is invisible
+   to energy, passivity, modal frequency and convergence order alike — the four detectors this
+   project owns. `radiation::py_round` transcribes CPython's `float.__round__` (C `round`, then
+   `2.0 * round(x / 2.0)` if the argument sat exactly halfway) and the parity test carries four
+   discriminating cases.
+2. **`np.isclose(a, b, rtol, atol=0.0)` is asymmetric** — the tolerance scales on the *second*
+   argument. `ReactiveRadiatedBody` uses it to compare the load's timestep against the body's, so
+   a symmetric transcription would accept and reject different pairs at the boundary.
+3. **Complex division is CPython's Smith's algorithm, not `a conj(b) / |b|^2`.** The two disagree
+   in the last ulp. Transcribed as `_Py_c_quot` spells it, and measured 20000/20000 agreement with
+   `complex.__truediv__` over the `(R, omega, tau)` ranges this model reaches — which is what lets
+   `impedance`, `impedance_discrete` and `loaded_mode` be asserted *exactly* across a 500-point
+   sweep rather than to a tolerance.
+
+### 14.7 Two smaller things worth keeping
+
+**A pyclass has no instance `__dict__`, so an attribute WRITE that Python accepted silently now
+raises.** That is the `_accel` finding (§12.2) in a new costume, and it was checked the same way —
+by grepping the clients rather than reading intent off the code. Result this time: `airbox.py`,
+`web/serialize.py`, `tests/` and `scripts/` read `_buf`, `u_l`, `_G`, `_corr`, `pressure_load`,
+`sphere_radius`, `tau` and `R_eff` off these four types, and **write none of them**. So the
+private names are on the binding's surface (as always), but `_buf` and `_idx` could stay plain
+Rust `Vec`/`usize` rather than Python-owned arrays — the first time in this migration that a
+buffer did *not* have to cross by reference, and the check is what established it rather than the
+underscore.
+
+**The refusal message this batch transcribes contains a bug, and it was transcribed anyway.**
+`loaded_mode`'s `for/else` reports `abs(w_next - w) / w_next` after the loop body has assigned
+`w = w_next`, so the "last relative step" it quotes is *always exactly zero*. Nothing matches on
+the text (`web/serialize.py`, the one caller, catches the `ValueError` and censors the point), so
+correcting it would have been free — and wrong. A port that improves messages stops being a port,
+and the two sides stop being comparable. It is recorded here and in both implementations'
+comments as a fix owed to `radiation.py`, to be applied to both sides at once.
+
+### 14.8 The success condition
+
+Same shape as every batch before it, with one difference stated up front: the named CI step
+proves the *physics* survives the swap, and it is `test_rust_parity_radiation.py` — not the step —
+that measures the port, for the reason §14.3 gives.
+
+* `tests/test_radiation.py` (72 tests) unmodified against Rust.
+* Its clients, because a `RadiatedBody` is a drop-in body: `test_bore_radiation.py`,
+  `test_airbox_freefield.py`, `test_airbox_scene.py`, `test_connection.py` and
+  `test_web_backend.py` — the last because `web/serialize.py` hands a `RadiatedBody` to
+  `StringBodyBridge`, which puts a Rust wrapper *inside* a Python bridge and exercises the
+  `__getattr__` delegation surface that no radiation test reaches.
+
+### 14.9 What was measured
+
+| | |
+|---|---|
+| Native `cargo test --workspace` | **166 passed** (141 at the end of batch 3) |
+| `tests/test_rust_parity_radiation.py` | **73 passed** |
+| Every construction constant, 5 air / 5 load / 3 sphere configurations | **identical** |
+| `latency_samples` and `retardation_residual`, halfway cases included | **identical** |
+| `AirRadiation.process`, 20,000 random samples x 5 configurations | **bit-identical** |
+| `_G` and `_corr`, all four body cases (M = 1, 4, 5, 9) | **identical** |
+| `impedance` / `impedance_discrete`, 500-point sweep x 5 loads | **identical** |
+| `loaded_mode`, 200-point sweep | **identical** |
+| Loaded state, 20,000 steps, every body the suite builds | **bit-identical** |
+| Loaded state, 20,000 steps, weights not powers of two | 3.4e-13 of amplitude |
+| Loaded state, 2,000 steps, same body | 1.4e-14 — inside Group A |
+| Peak-normalised `energy()` / `pressure()`, 2,000 steps | 2.0e-15 / 5.4e-15 |
+| `R = 0` vs a bare body, and `M_a = inf` vs the constant-`R` load, **within** each side | **bit-identical** |
+| The air node's clients under `PHYSSYNTH_RS=1` (785 tests) | **785 passed** in 765 s |
+| **The WHOLE suite under `PHYSSYNTH_RS=1`** | *(pending)* |
+
+### 14.10 What the next batch inherits
+
+- **Batch order:** `engine` is the last Group A file that is not blocked, and `mallet` still waits
+  on `collision` (§11.2.2). Phase 3 can start in parallel.
+- **`engine` is deliberately not in this batch, and the reason is not scheduling.** `simulate` is
+  the *loop*, not the step: it calls `resonator.step()`, `.energy()`, `.state` and
+  `.displacement_at()` on an arbitrary Python object once per iteration. Porting it moves the loop
+  into Rust and leaves four boundary crossings per iteration where §11.6's win — per-step
+  overhead, not arithmetic — does not apply, so it would make things *slower* until its callees
+  are Rust too. Its natural time is after Phase 3, and `SimResult` (a dataclass with a
+  `list[tuple[int, ndarray]]` field and a computed property) is fiddly surface with no physics in
+  it. Same shape of judgement as §12.5's on `bore`.
+- **The bit-identity question is now settled, and its answer is a rule rather than a phase.** Ask
+  of each remaining model: *does a reduction feed back into state?* If yes, the target is Group A
+  over a short run and the physics bars thereafter, whatever group the file is in. If no, expect
+  bit-identity and assert it. Group B's banded Cholesky, Group C's dense LU and Group D's SuperLU
+  are still their own question — but they are no longer the *first* question.
+- **A fixture whose coefficients are all powers of two proves less than it appears to.** §14.3.
+  This applies immediately to Phase 3: `collision` and `bow` both run iterations whose *count* is
+  the thing being compared, and an iteration count is exactly the kind of discrete quantity a
+  last-ulp difference flips.
+- **`fmt::py_exp` exists** alongside `py_float`, for a `{:.3e}`-style interpolation. Phase 7's
+  analytic oracles are the next place a message is likely to want one.

@@ -300,6 +300,37 @@ jobs:
         run: |
           pytest --durations=10             tests/test_bore_energy.py             tests/test_bore_modal.py             tests/test_bore_radiation.py             tests/test_bore_stability.py             tests/test_reed_energy.py             tests/test_reed_signature.py             tests/test_reed_stability.py
 
+      # Phase 2 batch 4's success condition -- the air node, and the first batch whose claim is
+      # NOT bit-identity.
+      #
+      # `radiation.RadiatedBody.step` reads `np.dot(b.a, b.q - q_nm1)` and feeds that number into
+      # the next state rather than reading it out, so OpenBLAS's fused multiply-add reaches the
+      # trajectory. Which kernel OpenBLAS picks is a property of the runner's CPU, so the bar is
+      # the plan's Group A target and not zero (plan section 14).
+      #
+      # The subtlety that decides what this step actually proves: `tests/helpers.py` builds every
+      # body with `phi=1.0` and no `radiation` weight, so `a_i = 1`, every product inside that
+      # `np.dot` is exact, and the fused and rounded forms are indistinguishable. Under this flag
+      # the divergence is therefore exactly zero -- which is a real property of these tests, not a
+      # measurement of the port. The measurement is in `test_rust_parity_radiation.py`, which
+      # builds a body whose weights are NOT powers of two on purpose.
+      #
+      # `test_web_backend.py` is in the list because `web/serialize.py` hands a `RadiatedBody` to
+      # `StringBodyBridge` as the body -- so the flag puts a Rust wrapper inside a Python bridge,
+      # which is the `__getattr__` delegation surface and nothing in `tests/test_radiation.py`
+      # exercises it.
+      - name: The air node and its clients, unmodified, against Rust
+        env:
+          PHYSSYNTH_RS: "1"
+        run: |
+          pytest --durations=10 \
+            tests/test_radiation.py \
+            tests/test_bore_radiation.py \
+            tests/test_airbox_freefield.py \
+            tests/test_airbox_scene.py \
+            tests/test_connection.py \
+            tests/test_web_backend.py
+
       # The comparison the physics bars are too loose to make: state arrays bit-for-bit, energy to
       # the plan's Group A target, and the buffer-lifetime properties that no physics test can see.
       # Runs WITHOUT the flag -- it imports both implementations by name and needs neither swapped.
@@ -317,7 +348,10 @@ jobs:
             tests/test_rust_parity_operators.py \
             tests/test_rust_parity_ops2d.py \
             tests/test_rust_parity_membrane.py \
-            tests/test_rust_parity_body.py             tests/test_rust_parity_bore.py             tests/test_rust_parity_reed.py
+            tests/test_rust_parity_body.py \
+            tests/test_rust_parity_bore.py \
+            tests/test_rust_parity_reed.py \
+            tests/test_rust_parity_radiation.py
 
   # Lint, plus the OUTER half of the shard guard.
   #

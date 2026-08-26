@@ -36,6 +36,7 @@ Headless: NumPy only.
 
 from __future__ import annotations
 
+import os
 from typing import Protocol
 
 import numpy as np
@@ -805,3 +806,47 @@ class ReactiveRadiatedBody:
         self.body.set_state(0.0)
         self.load.reset()
         self.n = 0
+
+
+# -- Rust swap (docs/dev/rust-migration-plan.md) ----------------------------------------------
+#
+# Phase 2 batch 4. `PHYSSYNTH_RS=1` replaces the four classes and the monopole helper with the
+# `physsynth_rs` implementations; every test in `tests/test_radiation.py` runs unmodified against
+# them, and so does the whole body/bridge leg, because `web/serialize.py` hands a `RadiatedBody`
+# to `StringBodyBridge` as the body.
+#
+# Two things to know before editing either side.
+#
+# **`piston_radiation_resistance` is NOT swapped, and that is deliberate.** It is the only name
+# here that needs a Bessel J1, `scipy.special.j1` is Cephes, and reproducing it is a special-
+# function problem rather than a load-batch one -- the plan already has a phase for it (Phase 7,
+# the analytic oracles). So this module ports in halves, exactly as `operators2d` did for a
+# solver the membrane never called. The Python function below stays the implementation under the
+# flag as well as without it.
+#
+# **The state is NOT bit-identical under the flag, and that is the first time in this migration.**
+# `RadiatedBody.step` reads `np.dot(b.a, b.q - q_nm1)`, and unlike `body.pressure()` -- the same
+# reduction, since batch 2 -- that number decides `q^{n+1}` rather than being read out. OpenBLAS
+# fuses the multiply-add and vectorises past sixteen terms, and which kernel it picks is a
+# property of the CPU, so Rust sums plainly and the agreement bar is the plan's Group A (1e-13)
+# rather than zero. `tests/test_rust_parity_radiation.py` measures what it actually is. Nothing in
+# the physics harness moves: the energy identities are exact in either arithmetic.
+#
+# Off by default. The Python model is still the reference oracle for every model not yet ported.
+AirRadiationPy = AirRadiation
+RadiatedBodyPy = RadiatedBody
+RationalAirLoadPy = RationalAirLoad
+ReactiveRadiatedBodyPy = ReactiveRadiatedBody
+monopole_radiation_resistance_py = monopole_radiation_resistance
+"""The pure-Python reference implementations, under names the swap below never rebinds."""
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    from physsynth_rs import (  # type: ignore[assignment]  # noqa: F811
+        AirRadiation,
+        RadiatedBody,
+        RationalAirLoad,
+        ReactiveRadiatedBody,
+        monopole_radiation_resistance,
+    )

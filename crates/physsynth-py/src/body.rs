@@ -118,6 +118,44 @@ impl PyModalBody {
     fn param_array(&self, py: Python<'_>, values: &[f64]) -> Py<PyArray1<f64>> {
         PyArray1::from_slice(py, values).unbind()
     }
+
+    // -- the surface the loading wrappers reach for -----------------------------------------
+    //
+    // `radiation::PyRadiatedBody` and `radiation::PyReactiveRadiatedBody` do in Rust exactly what
+    // `radiation.py` does in Python: correct `q` after `step()` returns and rewrite `_accel` from
+    // the corrected second difference. In Python that is plain attribute assignment; here the
+    // fields are private to this module, so the two operations get named `pub(crate)` methods
+    // rather than the wrappers going the long way round through `setattr` (which would work, and
+    // would re-validate an array this crate just built).
+
+    /// The validated parameter set, for a wrapper computing its rank-1 precomputes.
+    pub(crate) fn core_params(&self) -> &core::Params {
+        &self.p
+    }
+
+    /// A copy of `q^n`.
+    pub(crate) fn q_vec(&self, py: Python<'_>) -> PyResult<Vec<f64>> {
+        let bound = self.q.bind(py);
+        let ro = bound.readonly();
+        Ok(state_slice(&ro, "q")?.to_vec())
+    }
+
+    /// A copy of `q^{n-1}`.
+    pub(crate) fn q_prev_vec(&self, py: Python<'_>) -> PyResult<Vec<f64>> {
+        let bound = self.q_prev.bind(py);
+        let ro = bound.readonly();
+        Ok(state_slice(&ro, "q_prev")?.to_vec())
+    }
+
+    /// **Rebind** `q` and `_accel` to fresh arrays, as `RadiatedBody.step` does.
+    ///
+    /// Rebinding rather than writing in place is the original's behaviour and is load-bearing for
+    /// the same reason `step()` rebinds: a reference taken before the correction stays a snapshot
+    /// of what it was.
+    pub(crate) fn adopt_corrected(&mut self, py: Python<'_>, q: Vec<f64>, accel: Vec<f64>) {
+        self.q = PyArray1::from_vec(py, q).unbind();
+        self.accel = PyArray1::from_vec(py, accel).unbind();
+    }
 }
 
 #[pymethods]
@@ -293,7 +331,7 @@ impl PyModalBody {
     /// an object parameter, so it is `None` here and means the same zero. The difference is
     /// visible only to `inspect.signature`, which nothing in this repo reads.
     #[pyo3(signature = (q0, v0=None))]
-    fn set_state(
+    pub(crate) fn set_state(
         &mut self,
         py: Python<'_>,
         q0: &Bound<'_, PyAny>,
@@ -317,7 +355,7 @@ impl PyModalBody {
 
     /// Advance one timestep under an optional scalar bridge `force` (default 0).
     #[pyo3(signature = (force=0.0))]
-    fn step(&mut self, py: Python<'_>, force: f64) -> PyResult<()> {
+    pub(crate) fn step(&mut self, py: Python<'_>, force: f64) -> PyResult<()> {
         let m = self.p.n_modes();
         let mut next = vec![0.0; m];
         let mut accel = vec![0.0; m];
@@ -347,7 +385,7 @@ impl PyModalBody {
     // -- diagnostics -------------------------------------------------------------------------
 
     /// Discrete modal energy `E^n` (Joules), cross-time potential.
-    fn energy(&self, py: Python<'_>) -> PyResult<f64> {
+    pub(crate) fn energy(&self, py: Python<'_>) -> PyResult<f64> {
         let q_bound = self.q.bind(py);
         let qp_bound = self.q_prev.bind(py);
         let q_ro = q_bound.readonly();
@@ -382,7 +420,7 @@ impl PyModalBody {
     /// Radiated pressure read-out `p = sum_i a_i q_i''`.
     ///
     /// Reads `_accel` — including whatever a body-loading wrapper last wrote there.
-    fn pressure(&self, py: Python<'_>) -> PyResult<f64> {
+    pub(crate) fn pressure(&self, py: Python<'_>) -> PyResult<f64> {
         let bound = self.accel.bind(py);
         let ro = bound.readonly();
         Ok(core::pressure(state_slice(&ro, "_accel")?, &self.p))

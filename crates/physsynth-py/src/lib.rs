@@ -44,6 +44,7 @@ mod bore;
 mod exciter;
 mod membrane;
 mod ops2d;
+mod radiation;
 mod reed;
 mod shape;
 
@@ -654,6 +655,16 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<body::PyModalBody>()?;
     m.add_class::<bore::PyBore>()?;
     m.add_class::<reed::PyReedBore>()?;
+    m.add_class::<radiation::PyAirRadiation>()?;
+    m.add_class::<radiation::PyRadiatedBody>()?;
+    m.add_class::<radiation::PyRationalAirLoad>()?;
+    m.add_class::<radiation::PyReactiveRadiatedBody>()?;
+    m.add_function(wrap_pyfunction!(
+        radiation::py_monopole_radiation_resistance,
+        m
+    )?)?;
+    m.add("RHO0_AIR", physsynth_core::radiation::RHO0_AIR)?;
+    m.add("C0_AIR", physsynth_core::radiation::C0_AIR)?;
     m.add_function(wrap_pyfunction!(reed::py_bernoulli_flow, m)?)?;
     m.add_function(wrap_pyfunction!(op_delta_x_forward, m)?)?;
     m.add_function(wrap_pyfunction!(op_delta_x_backward, m)?)?;
