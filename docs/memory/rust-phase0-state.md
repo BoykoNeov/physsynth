@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: cd7b3b41-e492-4138-9e69-06b9fd5f5668
-  modified: 2026-08-26T12:30:47.469Z
+  modified: 2026-08-26T12:32:04.286Z
 ---
 
 **Phase 0 landed 2026-08-26**: `crates/physsynth-core` (zero dependencies) + `crates/physsynth-py`
@@ -45,10 +45,16 @@ asserts it directly against *both* implementations.
 4,000 steps × 4 boundary spellings × loss on/off — an explicit step is pure elementwise arithmetic,
 so IEEE fixes it exactly **provided the operation order matches**, which is why the Rust kernels are
 written in NumPy's evaluation order longhand. Only *reductions* can't match (`np.dot` → BLAS):
-energy agrees to **7e-16**. Whole suite: 422s Python vs 382s Rust (direction only — 1 of 22 models). So assert exactness wherever the arithmetic permits it — far sharper
+energy agrees to **7e-16**. So assert exactness wherever the arithmetic permits it — far sharper
 than a tolerance and free. **The line is "does the step contain a reduction", NOT "is it Group A"**
 — `body`'s modal displacement and `mallet`'s contact force are both `np.dot` *inside the timestep*,
 so they sit in the 1e-15 bucket despite solving nothing. Read the update before asserting exactness.
+
+**Speed, honestly:** the 38 ideal-string tests went **23.7s → 4.2s** (5.6×, genuinely all-Rust);
+the whole suite **421.8s → 382.4s**. Quote the first, not the second — the 9% is one uncontrolled
+back-to-back pair with 21 of 22 models still Python, i.e. not separable from noise. Both runs 1,954
+green, which is the useful half. The [[test-suite-performance]] "Rust makes the gate fast" claim
+stays a **prediction** until Phase 2 has moved ten models.
 
 **Step 5 (delete the Python model) cannot fire per model.** Not just the viewer ([[rust-migration-state]]):
 `connection.py` — a **Phase 5** model — imports `IdealString` and touches the **private**
