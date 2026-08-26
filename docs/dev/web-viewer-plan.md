@@ -3361,6 +3361,16 @@ default aspect: the plate opens in the twist regime and the crossing is somethin
 *back* to find. The waist cap stops **short** of the core's refusal (0.88 against ~0.9) rather than
 on it.
 
+#### One more thing a survey found that no test was looking for
+
+`_plate_continuum` gates its Leissa FFFF-**square** anchor on the plate being near-square — a test of
+the *bounding box*, when what matters is whether the reference *applies*. A guitar with a square
+bounding box passed it and was scored against the **rectangle's** anchor: **799 cents** off at
+`Lx = Ly = 0.60`, on the panel whose whole job is to report distance from theory. A curved outline
+now gets no continuum tier at all (the oracle #5g derived is for a *circle*; this domain is a
+*guitar*), and the test asserts the free rectangle keeps its own — a blanket deletion would pass the
+first half just as well.
+
 #### Cost
 
 The guitar fills ~50–56 % of its bounding box, so it is about **half** a rectangle's cost at the same

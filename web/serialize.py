@@ -8033,8 +8033,17 @@ def _plate_continuum(res: Any, n_modes: int) -> NDArray[np.float64]:
     ``"free"`` — the free plate has **no closed form**, so we fall back to the Leissa
     FFFF-**square** anchor and only when the plate is (near-)square; otherwise return empty (a
     reference that would be meaningless off-square is better omitted than mislabelled).
+
+    **And a curved outline gets no reference at all, whatever its bounding box is.** Both laws above
+    are *rectangle* laws. A guitar with a square bounding box passes the near-square test and was
+    handed the Leissa anchor — measured **799 cents** off at ``Lx = Ly = 0.60``, i.e. a marker line
+    most of a fifth away from the mode it appears to be labelling, on a panel whose whole job is to
+    say how far the discrete lines sit from theory. The rule this function already states ("better
+    omitted than mislabelled") is not about squareness, it is about the reference *applying*; the
+    check just tested the wrong property. The disk oracle #5g derived is for a **circle** and this
+    viewer's curved domain is a **guitar**, so there is nothing to put here yet — say nothing.
     """
-    if n_modes < 1:
+    if n_modes < 1 or getattr(res, "domain", None) != "rectangle":
         return np.asarray([], dtype=float)
     if res.boundary == "supported":
         rng = range(1, n_modes + 1)

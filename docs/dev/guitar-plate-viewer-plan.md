@@ -389,6 +389,27 @@ rather than quietly fixed.
    had never been exercised — which is *why* (3) survived. Two more aspects are now asserted: a long
    body (no crossing, and the panel says so) and a near-square one (crossing below 0.30).
 
+### 11.4b A fifth of a semitone-times-eight, found by a survey rather than by a test
+
+Sweeping the reachable geometry grid for clean refusals turned up a `log2` warning, and behind it a
+mislabelled oracle. `_plate_continuum`'s free branch falls back to the Leissa FFFF-**square** anchor
+and gates it on the plate being near-square — a test of the **bounding box**, when the property that
+matters is whether the reference *applies*. A guitar whose bounding box happens to be square passed
+that gate and was handed the **rectangle's** anchor: at `Lx = Ly = 0.60` the marker sat **799 cents**
+— most of a fifth — from the mode it appeared to be labelling, on the one panel whose job is to say
+how far the discrete lines are from theory. Nothing failed. The number was simply wrong on screen.
+
+The function's own comment already stated the rule ("a reference that would be meaningless off-square
+is better omitted than mislabelled"); the check tested the wrong property. A curved outline now gets
+no continuum tier at all — #5g derived a free-**circle** oracle and this viewer's curved domain is a
+**guitar**, so there is nothing to put there yet. The test asserts both halves, because a blanket
+deletion of the tier would satisfy the first one just as well.
+
+**And the survey is the method, not the accident.** Nineteen of 210 reachable geometries refuse, all
+cleanly and all for one of two stated reasons (the node-count ceiling, or the core's mid-plate-prune
+guard firing at ~2 h on a coarse extreme aspect). Walking the parameter space for *refusals* is
+cheap; it was walking it that produced the warning that produced this.
+
 **One known cost, recorded rather than fixed.** `_pool_field_mask`'s fallback branch allocates two
 full float copies of the animation buffer, where the point-sampling path took a view — and on a
 guitar the branch always fires. At a near-`MAX_FRAMES` run that is a transient few hundred MB. Fine

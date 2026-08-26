@@ -1421,6 +1421,31 @@ def test_guitar_sweep_grid_is_capped_independently_of_the_audio_grid():
     assert coarse["meta"]["claim"]["sweep_N"] == 20
 
 
+def test_a_curved_outline_gets_NO_continuum_reference_whatever_its_bounding_box():
+    """A rectangle law must not be drawn on a plate that is not a rectangle.
+
+    `_plate_continuum`'s free branch falls back to the Leissa FFFF-**square** anchor and gates it on
+    the plate being near-square -- a test of the bounding box, when the property that matters is
+    whether the reference *applies*. A guitar with a square bounding box passed that gate and was
+    handed the rectangle's anchor: measured **799 cents** off at Lx = Ly = 0.60, a marker line most
+    of a fifth from the mode it appears to label, on the one panel whose job is to say how far the
+    discrete lines sit from theory. Nothing failed; the number was simply wrong on screen.
+
+    #5g derived a free-**circle** oracle, and this viewer's curved domain is a **guitar**, so there
+    is nothing to put here yet. Say nothing rather than something that does not apply.
+    """
+    # the case that used to be mislabelled: a guitar whose bounding box IS square
+    square_box = _sim(_guitar_params(Lx=0.60, Ly=0.60, N=24, mu=32.0, audio_duration=0.05))
+    assert "error" not in square_box, square_box.get("error")
+    assert square_box["meta"]["spectrum"]["modes_continuum"] == []
+    assert square_box["meta"]["spectrum"]["cents_geometry"] is None
+    # and the free RECTANGLE keeps the anchor it is entitled to -- the fix must not be a blanket
+    # deletion of the tier, which would pass this test's first half just as well
+    rect = _sim(_plate_params(domain="free", Lx=1.0, Ly=1.0, N=24, mu=4.0, audio_duration=0.2))
+    assert "error" not in rect, rect.get("error")
+    assert len(rect["meta"]["spectrum"]["modes_continuum"]) > 0
+
+
 @pytest.mark.parametrize("mu", [2.0, 32.0])
 def test_the_claim_panel_and_the_spectrum_panel_quote_the_SAME_hertz(mu):
     """Two panels, one plate, one screen -- so they must not be computing frequency differently.
