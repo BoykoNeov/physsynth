@@ -117,7 +117,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # PINNED, not `stable`. `clippy -- -D warnings` below turns every lint a new stable release
+      # introduces into a red gate on an unrelated push, and this repo has already paid for unread
+      # red runs twice. Bumping is a deliberate edit: change the version here, run
+      # `cargo clippy --workspace --all-targets -- -D warnings` locally, fix what the new release
+      # noticed, and land both together.
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: rustfmt, clippy
 
@@ -149,6 +154,12 @@ jobs:
       # crates/physsynth-py/pyproject.toml): the pure-Python side stays installable on its own, so
       # the baseline it defines stays available. The wheel is abi3-py311, so this 3.12 job builds
       # and exercises the same binary a developer's 3.13/3.14 does.
+      #
+      # `pip install ./crates/physsynth-py` looks like it should not work -- the crate has a path
+      # dependency on `../physsynth-core`, which is outside the directory being installed. It does:
+      # pip builds a local directory IN TREE, so the relative path resolves and the compile lands
+      # in the shared workspace `target/` that the cache step above restored. Verified 2026-08-26,
+      # with and without build isolation. Do not "fix" this into a copy-out-and-build.
       - name: Install both sides
         run: |
           python -m pip install --upgrade pip
@@ -177,8 +188,16 @@ jobs:
       # The comparison the physics bars are too loose to make: state arrays bit-for-bit, energy to
       # the plan's Group A target, and the buffer-lifetime properties that no physics test can see.
       # Runs WITHOUT the flag -- it imports both implementations by name and needs neither swapped.
+      #
+      # The bare `import` first is not belt-and-braces. `test_rust_parity.py` opens with a
+      # module-level `pytest.importorskip`, so a failed or missing install SKIPS the file and the
+      # step exits 0 having asserted nothing at all -- the same shape as the empty-sum hazard the
+      # `checks` job below documents. The skip is right for the shard run, where the extension is
+      # genuinely absent; it is wrong here, where its absence is the failure.
       - name: Rust vs Python parity
-        run: pytest tests/test_rust_parity.py --durations=10
+        run: |
+          python -c "import physsynth_rs; print(physsynth_rs.__file__)"
+          pytest tests/test_rust_parity.py --durations=10
 
   # Lint, plus the OUTER half of the shard guard.
   #

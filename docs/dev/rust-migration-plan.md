@@ -98,18 +98,26 @@ situation, and is why that bar must not be tightened. Cross-implementation agree
 and the half it is wrong about is worth having.** The paragraph lumps two different things together
 and they behave completely differently:
 
-- **The state trajectory is bit-identical**, at least for Group A. Measured on the ideal string
+- **A step made only of elementwise arithmetic is bit-identical.** Measured on the ideal string
   over 4,000 steps, across all four boundary spellings and with and without loss:
-  `np.array_equal(py.u, rs.u)` is `True`, not "close". A timestep of an explicit scheme is pure
-  elementwise arithmetic — no reduction, no library call — so IEEE-754 fixes the answer exactly,
-  provided the *operation order* matches. `(a - b) + c` and `a - (b - c)` are different functions
-  in floating point, so that provision is real work, but it is work, not luck. The Rust kernels are
-  written in NumPy's evaluation order deliberately and `tests/test_rust_parity.py` asserts the
-  result stays bit-identical, which makes an accidental reassociation a hard failure rather than a
-  slow drift.
+  `np.array_equal(py.u, rs.u)` is `True`, not "close". With no reduction and no library call in
+  the update, IEEE-754 fixes the answer exactly — *provided the operation order matches*.
+  `(a - b) + c` and `a - (b - c)` are different functions in floating point, so that provision is
+  real work, but it is work, not luck. The Rust kernels are written out longhand in NumPy's
+  evaluation order deliberately, and `tests/test_rust_parity.py` asserts the result stays
+  bit-identical — which turns an accidental reassociation into a hard failure rather than a drift.
 - **Reductions cannot match, and that is where the ~1e-15 lives.** `energy()` calls `np.dot`, which
   goes through BLAS, which accumulates in an order no portable loop reproduces. Measured worst
   disagreement over the same runs: **7e-16 relative** — two orders inside the Group A target.
+
+**The line is "does the step contain a reduction", not "is it Group A".** Getting this wrong the
+other way would be just as expensive as the original over-pessimism, so it is worth being precise
+before Phase 2 writes eight parity files: `body`'s modal displacement is a sum over mode
+coefficients, and `mallet`'s contact force is a weighted sum over the membrane — both are `np.dot`
+*inside the timestep*, so both belong in the ~1e-15 bucket even though neither solves anything.
+Group A's other members look exact, but that is a per-model reading, not a group property. Check
+the update for a dot product before asserting exactness on a new model; assert the tolerance if
+there is one.
 
 So the retraction stands where it was aimed — at the *solving* groups, and at any claim that a
 whole trajectory reproduces to 1e-15 — and should not be read as forbidding a bit-exact comparison
@@ -420,16 +428,34 @@ Every later phase inherits the same hazard the moment its model holds state.
 
 | | |
 |---|---|
-| The 38 existing tests, unmodified, under `PHYSSYNTH_RS=1` | **38 passed** |
+| The 38 ideal-string tests, unmodified, under `PHYSSYNTH_RS=1` | **38 passed** |
+| **The WHOLE suite under `PHYSSYNTH_RS=1`** | **1,954 passed, 0 failed** |
 | Native `cargo test` (physics bars + allowlist + unit) | **19 passed** |
 | `tests/test_rust_parity.py` | **75 passed** |
 | State agreement, 4,000 steps × 4 boundary spellings × loss on/off | **bit-identical** |
 | Energy agreement, worst relative | **7e-16** (Group A target: 1e-13) |
-| Those 38 tests, wall clock, same machine | **23.7 s → 4.2 s** |
+| The 38 ideal-string tests, wall clock, same machine | **23.7 s → 4.2 s** |
 
-The last row is one machine and one small slice of the suite, so it is an indication and not the
-§7 prediction coming true — but it points the way §7 expected, and the slice is FDTD-stepping-bound
-in the same way the bulk is.
+**The second row is the phase's real result, and it was not the expected one.** The plan budgeted
+for a *list of failures* here — the files whose access patterns the binding did not yet satisfy,
+to be recorded as the surface spec and left for Phases 3–8. There were none. Every consumer is
+green: `connection.py`'s reach into the string's private `_bc_right` and `_second_diff`, the
+sympathetic-string bridge, the collision models, the string↔plate and string↔room chains, and all
+403 web-backend tests. §3.1's "~255 call sites need a designed binding" is answered for this model:
+they needed a designed binding, they got one, and nothing else needed changing.
+
+That claim is only worth as much as the swap actually reaching those consumers, so it was checked
+rather than assumed — under the flag, `helpers.make_string` returns a `physsynth_rs.IdealString`,
+and `connection.IdealString`, `body`'s and `web.serialize.IdealString` are all *the same object* as
+`physsynth_rs.IdealString`. `tests/test_stability.py::test_the_rust_swap_matches_the_environment`
+now asserts this on both paths, so a run that claims to be testing Rust cannot quietly be testing
+Python — which is the §1 failure mode one level up, and the only way this phase could go green
+while meaning nothing.
+
+The wall-clock row is one machine, one small slice, one model out of twenty-two. It is a **floor**
+on what §7 predicts rather than a measurement of it, and the whole-suite figure is worth even less
+as evidence for the same reason — 21 of 22 models are still Python, so the bulk that §7 is about
+has not moved.
 
 The 38th test is worth naming: `test_core_dependency_allowlist` **failed first**, on
 `physsynth_rs`. That is the §2.2 tripwire working — a new compiled dependency of the core could not

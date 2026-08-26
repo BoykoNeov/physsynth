@@ -6,6 +6,7 @@
 - physsynth.core imports no plotting/audio library (CLAUDE.md non-negotiable #4).
 """
 
+import os
 import subprocess
 import sys
 
@@ -153,6 +154,42 @@ def test_core_dependency_allowlist():
         f"core pulled third-party module(s) outside the allowlist {allowed}: "
         f"{result.stdout.strip()}"
     )
+
+
+def test_the_rust_swap_matches_the_environment():
+    # The guard without which the whole Rust CI job can be green and mean nothing.
+    #
+    # `PHYSSYNTH_RS=1 pytest ...` claims to run the existing tests against the Rust model. But
+    # nothing in those tests mentions Rust -- the substitution happens at the bottom of
+    # `physsynth/core/string_ideal.py` -- so if the variable were mistyped, or the swap block were
+    # refactored away, or an import-ordering change defeated it, the suite would run against
+    # PYTHON and pass. Green, and asserting nothing about the port. That is verbatim the failure
+    # mode `docs/dev/rust-migration-plan.md` §1 exists to prevent, one level up.
+    #
+    # This cannot live in `tests/test_rust_parity.py`: that file imports both implementations by
+    # name and is immune to the swap by design. It belongs here, with the other three portability
+    # guards, and it runs on BOTH paths -- the default one included, where it asserts the Rust
+    # model is *not* silently in play.
+    from physsynth.core import string_ideal
+
+    expected_rust = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+    assert string_ideal._USE_RUST is expected_rust, (
+        "the module's reading of PHYSSYNTH_RS disagrees with this test's -- one of the two "
+        "changed without the other"
+    )
+
+    if expected_rust:
+        import physsynth_rs
+
+        assert string_ideal.IdealString is physsynth_rs.IdealString, (
+            "PHYSSYNTH_RS is set but `IdealString` is still the Python class: this run is NOT "
+            "exercising the Rust model, whatever it reports"
+        )
+    else:
+        assert string_ideal.IdealString is string_ideal.IdealStringPy, (
+            "PHYSSYNTH_RS is unset but `IdealString` is not the Python class -- the default path "
+            "must stay the one the acceptance numbers came from"
+        )
 
 
 def test_core_does_not_import_sibling_layers():

@@ -5,12 +5,25 @@ metadata:
   node_type: memory
   type: project
   originSessionId: cd7b3b41-e492-4138-9e69-06b9fd5f5668
-  modified: 2026-08-26T12:22:03.615Z
+  modified: 2026-08-26T12:30:47.469Z
 ---
 
 **Phase 0 landed 2026-08-26**: `crates/physsynth-core` (zero dependencies) + `crates/physsynth-py`
 (PyO3, exposed as `physsynth_rs`), `string_ideal` ported, CI job added. Plan §9 records it.
 Context: [[rust-migration-state]].
+
+**The result was better than the plan budgeted for: the WHOLE suite is green under the flag —
+1,954 passed, 0 failed**, not just the string's 38. The plan expected a failure list to record as
+the binding's real surface spec; there wasn't one. `connection.py`'s private-name reach, the
+sympathetic/collision/plate/room couplings and all 403 web tests all pass. So §3.1's "~255 call
+sites need a designed binding" is *answered* for this model, not deferred.
+
+**But "green under the flag" is only worth the swap actually happening**, and nothing in the 38
+tests mentions Rust — so a mistyped variable or a refactored-away swap block would run **Python**
+and pass. `test_the_rust_swap_matches_the_environment` in `test_stability.py` now asserts both
+directions off the env var (set → the class *is* `physsynth_rs.IdealString`; unset → it is the
+Python one). Same reason the parity CI step runs a bare `import physsynth_rs` first: that file
+opens with `importorskip`, so a failed install would skip it and exit 0 having asserted nothing.
 
 **The model splits three ways and Phase 2 should keep the split**: a validated immutable `Params`
 (all derivation + every rejection), **kernels as free functions over `&[f64]`** (no state), and a
@@ -33,7 +46,9 @@ asserts it directly against *both* implementations.
 so IEEE fixes it exactly **provided the operation order matches**, which is why the Rust kernels are
 written in NumPy's evaluation order longhand. Only *reductions* can't match (`np.dot` → BLAS):
 energy agrees to **7e-16**. So assert exactness wherever the arithmetic permits it — far sharper
-than a tolerance and free.
+than a tolerance and free. **The line is "does the step contain a reduction", NOT "is it Group A"**
+— `body`'s modal displacement and `mallet`'s contact force are both `np.dot` *inside the timestep*,
+so they sit in the 1e-15 bucket despite solving nothing. Read the update before asserting exactness.
 
 **Step 5 (delete the Python model) cannot fire per model.** Not just the viewer ([[rust-migration-state]]):
 `connection.py` — a **Phase 5** model — imports `IdealString` and touches the **private**
