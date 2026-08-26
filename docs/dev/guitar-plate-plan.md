@@ -90,6 +90,15 @@ dropping 2–4 nodes.
 nodes that carry area. `Plate` must store the pruned mask and report the drop count, because §5's
 pricing depends on it.
 
+**The prune rule is topological, and that is the one thing here that can corrupt a result with no
+detector firing.** "Touches no live cell" says nothing about *where* the node is. On a coarse grid
+with an aggressive waist the same condition can fire in the **middle** of the plate — a silent
+geometry change nowhere near a tip — and the energy ledger, the nullspace and the spectrum all look
+fine afterwards. So the drop is asserted, not trusted: **every pruned node must lie within one `h`
+of the outline boundary.** Measured on the default guitar, max depth inside the rim = 0.71, 0.99,
+0.63, 0.53, 0.55 `h` at N = 20, 28, 40, 56, 80. The N=28 case sits at **0.99 h** — the bar is real
+and it is tight, not decorative.
+
 ---
 
 ## 5. Validation — and the honest fact that only ONE tier can falsify anything
@@ -159,22 +168,52 @@ All **seven** lowest elastic modes, uniformly, converging **from above**:
 | 128 | 12849 | −2.11% | 2.01% | 0.15% |
 | 160 | 20069 | −1.76% | 1.68% | 0.11% |
 
-**Two findings, and the second is the batch's headline.**
+**Two findings, and the second needed cutting down after it was first written.**
 
 First, the rate is **O(h), not O(h²)** — set the convergence test up expecting second order and the
 batch will be spent hunting a bug that is the boundary. The membrane already found the same tax on
 its Bessel match; this is the 4th-order operator paying it too.
 
-Second, and the part that generalises: **the staircase error is a DOMAIN-SIZE error, not an
-operator error.** Read the third and fourth columns together — −13.35 / 13.03, −8.98 / 8.55,
-−2.11 / 2.01. The frequency error tracks the *area deficit* to within a few percent of itself, and
-it does so **mode-independently** (the seven per-mode errors at N=128 span +1.92 to +2.08). The
-staircased disk is not a badly-modelled disk; it is a well-modelled *slightly smaller* disk.
+Second: **the staircase error is largely a DOMAIN-SIZE error rather than an operator error.** Read
+the third and fourth columns together — −13.35 / 13.03, −8.98 / 8.55, −2.11 / 2.01. The frequency
+error tracks the *area deficit* to within a few percent of itself, and it does so
+**mode-independently** (the seven per-mode errors at N=128 span +1.92 to +2.08). The staircased disk
+is not a badly-modelled disk; it is a well-modelled *slightly smaller* disk.
 
-Dividing the deficit out — `Λ_corr = Λ · area/(πa²)`, i.e. measuring the plate in its own effective
-radius — drops the error by 6× to 15× and lifts the rate to roughly **O(h^1.5)**. Ship this as a
-reported diagnostic, **not** as a silent correction inside the operator: it is a statement about the
-mask, and hiding it would make a coarse plate look converged when it is not.
+Dividing the deficit out — `ω_corr = ω · A_mask / A_outline`, the ratio of the mask's summed area
+weight to the true outline's area — drops the disk's error by **6× to 15×** and lifts the rate to
+roughly **O(h^1.5)**.
+
+**§5.2a — and the disk is the shape that cannot test that claim.** This was first written as
+"a domain-size error, not an operator error", full stop, on disk evidence alone. That is
+over-claimed, and the reason is geometric: a disk's boundary is *uniformly convex*, so its area
+deficit and its mean distance-from-the-true-rim are the same number up to a constant. A guitar has a
+**concave waist** next to **convex bouts**, and the two staircase with opposite sign — so the guitar
+is the shape that can falsify it. Measured there, by Richardson against an N=180 run (no oracle
+needed):
+
+| N | live | area deficit | raw error | corrected | gain |
+|---|---|---|---|---|---|
+| 20 | 295 | −16.03% | 13.34% | 2.91% | 4.6× |
+| 28 | 581 | −11.55% | 8.35% | 2.27% | 3.7× |
+| 40 | 1181 | −8.58% | 6.31% | 0.85% | 7.4× |
+| 56 | 2314 | −6.28% | 3.85% | 0.71% | 5.4× |
+| 80 | 4727 | −4.39% | 1.97% | 0.54% | 3.7× |
+| 112 | 9246 | −3.34% | 1.17% | 0.24% | 4.9× |
+
+**The claim survives, at about half the magnitude and with none of the smoothness.** The correction
+is worth **3.7×–7.4×** on the guitar against 6×–15× on the disk, and the gain is **not monotone in
+N** (4.6, 3.7, 7.4, 5.4, 3.7, 4.9) where the disk's was. So: the area deficit is the *leading* term
+of the staircase error on both shapes, but on a mixed-curvature outline there is a real remainder
+that the area does not see, and it does not shrink smoothly. Quote the range, never a single factor.
+
+⇒ **The correction's form is the area ratio, and deliberately not an "effective radius".** On a disk
+`Λ ∝ ω a²` and the area *is* `a²` up to π, so the two forms coincide and the radius reading is
+tempting. On a guitar there is no `a` for it to refer to. `A_mask / A_outline` is defined for every
+outline; `a_eff` is a disk fact wearing a general API.
+
+Ship it as a **reported diagnostic, never a silent correction inside the operator**: it is a
+statement about the mask, and hiding it would make a coarse plate look converged when it is not.
 
 ### 5.3 The zero-valued detector
 
@@ -185,8 +224,14 @@ monotone**. Assert a ceiling that shrinks with `h`, never monotonicity.
 
 ### 5.4 The two cheap asserts that are currently missing
 
-- **`mu.min() > -tol`.** The probes printed the 4th eigenvalue and never the 1st, so a small
-  *negative* eigenvalue on a staircased domain is not yet ruled out.
+- **The smallest eigenvalue is positive — but the bar has to be RELATIVE.** The probes printed the
+  4th eigenvalue and never the 1st, so a small *negative* eigenvalue on a staircased domain was not
+  ruled out. It is now, and an absolute `-tol` would have flaked: `K` is PSD with a 3-D nullspace, so
+  `mu[0:3]` are zeros produced by shift-invert with **arbitrary sign**, and their size grows with the
+  problem. Measured `max|mu[0:3]| / mu[3]` on the guitar: **1.6e-10** at N=80, **6.3e-11** at N=120,
+  **9.4e-9** at N=180 — non-monotone, and two orders worse at the finest grid purely from
+  conditioning. Assert `mu[3] > 0` and `max|mu[0:3]| < 1e-6 · mu[3]`; that still leaves six orders
+  of separation. A `1e-9` bar looks safe and fails at N=180.
 - **One connected component.** A coarse grid plus an aggressive waist can pinch the outline into two
   lobes. That is silently *two plates* with a 6-D nullspace, and every other detector passes.
 
@@ -221,7 +266,10 @@ the waist depth is the knob that makes the shape a guitar rather than an ellipse
 - `physsynth/core/operators2d.py` — `guitar_mask`, `prune_mask`, and the masked
   `free_plate_stiffness` (the Kronecker path collapses into it **iff** §3's survey gate passes).
 - `physsynth/core/plate.py` — `domain` parameter on `Plate` (`"rectangle" | "circle" | "guitar"`),
-  the pruned mask, the drop count and the area deficit as reported attributes.
+  the pruned mask, the drop count and the area deficit as reported attributes. **`circle` is offered
+  on the FREE branch only.** A supported circle would be free to add and would be a fourth model
+  surface with no content — its spectrum is the membrane's squared, by §2's own argument. It exists
+  on the free branch because that is where it is the oracle vehicle, which is a reason.
 - `physsynth/analysis/modal.py` — `free_circular_plate_lambdas(nu, n_modes)`, the derived oracle of
   §5.1, with its three self-checks as asserts rather than comments.
 - `tests/test_guitar_plate.py` — the tiers of §5.
