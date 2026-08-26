@@ -16,7 +16,11 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    real-time is a later port.
 2. **Energy-based / passive numerical methods** (Bilbao framework) are the foundation. Chosen for
    provable stability, measurable fidelity, and a path to nonlinear models (gongs/cymbals).
-3. **Prototype in Python (NumPy/SciPy).** Julia acceptable if the human prefers. Not C++/JUCE yet.
+3. ~~**Prototype in Python (NumPy/SciPy).** Julia acceptable if the human prefers. Not C++/JUCE
+   yet.~~ **SUPERSEDED 2026-08-26 (the human's call):** Python is being retired entirely — core,
+   analysis, viewer backend *and* the test suite — in favour of **Rust**, gradually and model by
+   model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
+   "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
 4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
    never the reverse. Keeps the physics portable to C++/Rust later.
 5. **Unifying abstraction:** `exciter -> resonator (+- nonlinear coupling) -> body/radiation`.

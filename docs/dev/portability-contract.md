@@ -4,6 +4,14 @@
 > This is the rule that keeps the eventual systems-language port cheap — and the answer to
 > "discipline drift." Treat a violation as a bug, not a style nit.
 
+> **Superseded in part, 2026-08-26.** Python is being retired for Rust — see
+> `docs/dev/rust-migration-plan.md`. Two clauses below no longer hold: Python does **not** stay the
+> permanent reference oracle (it is retired model by model, oracle last), and the "check the new
+> kernel to ~1e-15" bar is **not achievable** across languages — the acceptance bar is the physics
+> harness (energy drift < 1e-10, partials within a cent, convergence order ≈ 2). Everything else
+> here — the one-way dependency arrow, the no-I/O rule, the hot-path style — stands, and is what
+> makes the migration mechanical rather than a redesign.
+
 ## Why this exists
 
 Non-negotiables #3 (prototype in Python, port later) and #4 (headless core) commit us to a plan:
