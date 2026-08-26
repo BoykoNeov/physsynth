@@ -237,6 +237,12 @@ def main() -> int:
             ("string_bow", "model=bow"),
             ("plate_supported", "model=plate&domain=supported"),
             ("plate_free", "model=plate&domain=free"),
+            # The guitar outline (#5g, batch 20). Its own case rather than a parameter on
+            # plate_free: it is the only 2-D field in the viewer with a NON-CONVEX mask, and the one
+            # thing a headless render can see that a payload test cannot is that the outline is
+            # actually painted -- masked exterior, both bouts, the waist between them. N and mu are
+            # pinned low because the claim sweep is ~24 eigensolves on top of the audio run.
+            ("plate_guitar", "model=plate&domain=guitar&N=24&mu=8&audio_duration=0.3"),
             ("vk_supported", "model=vk&domain=supported"),
             ("vk_free", "model=vk&domain=free"),
             # The geometric string's four regimes. Slowest cases in the set: every step is a 3-field

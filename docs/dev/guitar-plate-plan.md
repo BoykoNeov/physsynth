@@ -357,8 +357,13 @@ The batch's weight sits on the derived disk oracle and the zero-valued degenerac
 
 - The **clamped** rim (§7) — the boundary a glued-in soundboard actually has.
 - **Von Kármán on an outline** (§7) — a gong that is not a rectangle.
-- A **viewer batch**. The plan's standing rule is that a new core model reopens the built-but-unshown
-  gap, and this reopens it for the fourth time.
+- ~~A **viewer batch**.~~ **DONE the same day** — `docs/dev/guitar-plate-viewer-plan.md`, viewer
+  batch 20. It found two things this plan did not: the viewer's *display* decimation can render the
+  outline as **two disconnected guitars** while the solver has one plate (128 of 53,613 reachable
+  configurations, every detector green), and the plate's own default strike sits close enough to the
+  centre line that the **odd** family — which is the fundamental past the waist crossing — is barely
+  excited. It also found the batch's claim, which is #5g's own open question answered: the waist
+  **reorders** (contra #5o, with #5of) and the detector is a mirror parity that reads exactly ±1.
 
 ### 9.6 Three gaps an advisor pass found *after* the batch was pushed
 

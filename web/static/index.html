@@ -38,7 +38,7 @@
             <option value="airbox">String → body → a 3-D ROOM — the air has a shape (#12H)</option>
             <option value="membrane">Membrane (2D drum)</option>
             <option value="mallet">Mallet → drum (contact, #7)</option>
-            <option value="plate">Kirchhoff plate (2D)</option>
+            <option value="plate">Kirchhoff plate (2D) — rectangle, or a guitar outline (#5g)</option>
             <option value="vk">von Kármán plate (nonlinear)</option>
             <option value="vkroom">Gong/cymbal in a 3-D ROOM — radiation that CHANGES mid-strike</option>
           </select>
@@ -62,8 +62,8 @@
       <fieldset class="group" data-show="membrane mallet plate vk">
         <legend>Geometry</legend>
         <div class="slider" data-param="radius" data-min="0.2" data-max="1.0" data-step="0.05" data-val="0.5" data-unit="m" data-domain="circle"></div>
-        <div class="slider" data-param="Lx" data-min="0.1" data-max="2.0" data-step="0.05" data-val="1.0" data-unit="m" data-domain="rectangle supported free"></div>
-        <div class="slider" data-param="Ly" data-min="0.1" data-max="2.0" data-step="0.05" data-val="0.8" data-unit="m" data-domain="rectangle supported free"></div>
+        <div class="slider" data-param="Lx" data-min="0.1" data-max="2.0" data-step="0.05" data-val="1.0" data-unit="m" data-domain="rectangle supported free guitar"></div>
+        <div class="slider" data-param="Ly" data-min="0.1" data-max="2.0" data-step="0.05" data-val="0.8" data-unit="m" data-domain="rectangle supported free guitar"></div>
       </fieldset>
 
       <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret bore reed body platebody radbody airload airbox membrane mallet plate vk">
@@ -267,6 +267,28 @@
         <div class="slider" data-param="plate_N" data-min="8" data-max="16" data-step="1" data-val="16" data-fixed="0" data-show="vkroom"></div>
         <p class="hint" id="airbox-hint"></p>
         <p class="hint" id="vkroom-hint"></p>
+      </fieldset>
+
+      <!-- The guitar outline (model #5g). Two knobs, and `waist` is the one the batch is about:
+           deepening it does not merely detune the plate, it SWAPS the fundamental — below the
+           crossing the lowest mode is a long bender (even under the plate's left-right mirror),
+           above it the twist (odd). The claim panel reports the parity, which reads exactly ±1
+           because the outline |x| < W(y) is mirror-symmetric whatever these two sliders do, so the
+           two families cannot couple and the crossing cannot be avoided.
+           The slider is QUANTISED and the hint says so: the outline is a staircase, so waist only
+           changes the plate when a node crosses the rim — 50 distinct plates at N = 16 (widest dead
+           band 0.107, more than a tenth of the travel), 675 at N = 80. A drag that does nothing is
+           the physics, not a broken viewer.
+           The cap stops SHORT of the refusal rather than on it: past ~0.9 the outline staircases
+           into two disconnected plates (6 rigid modes, not 3) and the core raises.
+           data-hide-domain, not data-domain, because that pass is the one that also honours
+           data-show — a bare data-domain fieldset would show for any model whose select happened to
+           read "guitar". -->
+      <fieldset class="group" data-show="plate" data-hide-domain="supported free">
+        <legend>Guitar outline</legend>
+        <div class="slider" data-param="waist" data-min="0" data-max="0.88" data-step="0.005" data-val="0.42" data-fixed="3"></div>
+        <div class="slider" data-param="asym"  data-min="0" data-max="0.8"  data-step="0.01"  data-val="0.30" data-fixed="2"></div>
+        <p class="hint" id="guitar-hint"></p>
       </fieldset>
 
       <!-- The fret / flat rail: model #8's OTHER configuration, and the jawari's physical opposite —

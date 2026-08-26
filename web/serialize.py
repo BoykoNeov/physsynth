@@ -52,6 +52,7 @@ from physsynth.core.engine import SimResult, simulate
 from physsynth.core.exciter import raised_cosine_2d, triangular_pluck
 from physsynth.core.mallet import MalletMembrane
 from physsynth.core.membrane import Membrane
+from physsynth.core.operators2d import guitar_mask, prune_to_area_carrying
 from physsynth.core.plate import Plate, VKPlate
 from physsynth.core.radiation import (
     AirRadiation,
@@ -134,6 +135,17 @@ PLATE_WORK_MAX = 7.0e8         # n_live x total steps (audio + animation)
 PLATE_AUDIO_MAX = 2.0
 PLATE_MU_MAX = 32.0            # implicit -> no CFL; large mu is just coarse (dispersive), stable
 N_PLATE_MODES = 6             # discrete eigenmodes marked on the spectrum panel
+
+# --- the guitar outline (model #5g, viewer batch 20) ---
+# The claim sweep is a SEPARATE short pass, decoupled from the audio run (batch 18's pattern): one
+# Plate + one eigsh per waist. Measured 1.40 / 2.07 / 2.71 s for 16 / 24 / 32 points at N = 40, so
+# the sweep grid is capped independently of the audio grid -- a user at N = 80 pays for the audio,
+# not for the panel.
+GUITAR_SWEEP_POINTS = 24
+GUITAR_SWEEP_N_MAX = 40
+GUITAR_WAIST_MAX = 0.88        # past ~0.9 the outline staircases into two plates and the core
+                               # refuses; the slider stops short of the refusal rather than on it
+GUITAR_CENTRELINE_TOL = 0.04   # |pluck_x - 1/2| below this and the odd (twist) family is not struck
 
 # --- von Karman nonlinear plate (2D, model #6) clamps + Picard-aware budget ---
 # The nonlinear plate is the expensive corner: each step Picard-iterates (up to couple_max_iter
@@ -7395,6 +7407,62 @@ def _decimate_field_mask(
     return frames_full[:, ::stride, ::stride], mask_full[::stride, ::stride]
 
 
+def _pool_field_mask(
+    frames_full: NDArray[np.float64], mask_full: NDArray[np.bool_]
+) -> tuple[NDArray[np.float64], NDArray[np.bool_], int]:
+    """Decimate a field + mask for display **without ever disconnecting the outline**.
+
+    :func:`_decimate_field_mask` point-samples, and on a **convex** outline that is benign -- which
+    is why the circular drumhead never found this. A guitar's waist is *concave*, and the row that
+    joins the two bouts is exactly the row a stride can skip: measured over 53,613 core-accepted
+    configurations, **128 render as two disconnected lobes while the solver has one plate**. Every
+    detector stays green through it (energy is geometry-blind, the nullspace is the solver's, the
+    audio is right); only the picture is wrong, and two lobes read as a design rather than a bug.
+
+    The mask is therefore **max-pooled**: a display cell is live iff *any* solver node in its
+    ``s x s`` block is live. That cannot split a connected plate, and the reason is a proof rather
+    than a measurement -- any 4-connected path in the solver mask steps between nodes differing by
+    one in a single coordinate, so their blocks differ by zero or one in that coordinate, so the
+    block sequence is itself a 4-connected path of live cells.
+
+    The **field** is point-sampled where the block's representative node is live and falls back to
+    the block's live-node mean only where it is not. Pooling the mask alone would render every such
+    block as a live cell holding ``0.0`` -- a fake node, at exactly the waist where it matters. On
+    an all-live mask (a rectangle) every representative is live, so this reduces to ``[::s, ::s]``
+    *exactly* and the rectangle payload does not move.
+
+    Returns ``(frames, mask, stride)``. Kept separate from :func:`_decimate_field_mask` rather than
+    replacing it: pooling never splits the disk either (checked at N = 32...200), so the membrane
+    has no bug here, and pooling *would* perturb its shipped rendering by 40-85 live cells for no
+    correctness gain -- #5o's precedent on paying for a reassociation that buys nothing.
+    """
+    ny, nx = mask_full.shape
+    s = max(1, math.ceil(max(ny, nx) / DISPLAY_MAX))
+    if s == 1:
+        return frames_full, mask_full, 1
+
+    py, px = math.ceil(ny / s), math.ceil(nx / s)
+    live = np.zeros((py * s, px * s), dtype=bool)
+    live[:ny, :nx] = mask_full
+    blocks = live.reshape(py, s, px, s)
+    mask_dec = blocks.any(axis=(1, 3))
+    counts = blocks.sum(axis=(1, 3))                       # live nodes per display cell
+
+    nf = frames_full.shape[0]
+    padded = np.zeros((nf, py * s, px * s), dtype=float)
+    padded[:, :ny, :nx] = frames_full
+    point = padded[:, ::s, ::s]                            # the representative node of each block
+    # Fall back only where the representative is dead but the block still carries plate.
+    rep_live = live[::s, ::s]
+    need = mask_dec & ~rep_live
+    if need.any():
+        totals = (padded * live).reshape(nf, py, s, px, s).sum(axis=(2, 4))
+        with np.errstate(invalid="ignore", divide="ignore"):
+            means = np.where(counts > 0, totals / np.maximum(counts, 1), 0.0)
+        point = np.where(need, means, point)
+    return point, mask_dec, s
+
+
 def _pool_band(
     freqs: NDArray[np.float64], mag: NDArray[np.float64], fmin: float, fmax: float
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]] | None:
@@ -7987,10 +8055,31 @@ def _build_plate(p: dict[str, Any]) -> tuple[Plate, float, str, dict[str, Any]]:
     time control is the plate Courant ``mu = kappa k / h²``: ``fs = kappa / (mu h²)`` with
     ``h = Lx/N`` reproduces the requested ``mu`` exactly. ``geom`` holds the *snapped* geometry read
     back off the ctor (``Ly`` is snapped to whole cells).
+
+    Model #5g adds a third value to that select -- ``guitar`` -- and it carries a *shape* where the
+    other two carry a boundary. That reads as a mixed axis until you notice the three options are
+    exactly the three plates that exist: a simply-supported guitar is refused by the core with a
+    reason (``B = L @ L`` makes its spectrum the membrane's squared, so it is a model surface with
+    no content), so "guitar" can only ever mean "guitar, free". The membrane's select is a shape
+    too.
     """
-    boundary = str(p.get("domain", "supported"))
-    if boundary not in ("supported", "free"):
-        raise ParamError(f"boundary must be 'supported' or 'free', got {boundary!r}.")
+    domain = str(p.get("domain", "supported"))
+    if domain not in ("supported", "free", "guitar"):
+        raise ParamError(
+            f"plate domain must be 'supported', 'free' or 'guitar', got {domain!r}."
+        )
+    boundary = "free" if domain == "guitar" else domain
+    outline = "guitar" if domain == "guitar" else "rectangle"
+    waist = _fnum(p, "waist", 0.42)
+    asym = _fnum(p, "asym", 0.30)
+    if outline == "guitar":
+        if not (0.0 <= waist <= GUITAR_WAIST_MAX):
+            raise ParamError(
+                f"waist must be in [0, {GUITAR_WAIST_MAX}], got {waist}. Deeper than that and the "
+                f"outline staircases into two disconnected plates on any grid this viewer offers."
+            )
+        if not (-1.0 < asym < 1.0):
+            raise ParamError(f"asym must be in (-1, 1), got {asym}.")
     kappa = _fnum(p, "kappa", 20.0)
     rho = _fnum(p, "rho", 0.005)  # areal density (kg/m²) — Plate.rho IS areal (cf. VKPlate)
     Lx = _fnum(p, "Lx", 1.0)
@@ -8017,7 +8106,7 @@ def _build_plate(p: dict[str, Any]) -> tuple[Plate, float, str, dict[str, Any]]:
     fs = kappa / (mu * h * h)
     res = Plate(
         Lx=Lx, Ly=Ly, kappa=kappa, rho=rho, fs=fs, N=N, sigma=sigma, boundary=boundary,
-        nu=nu, theta=theta,
+        nu=nu, theta=theta, domain=outline, waist=waist, asym=asym,
     )
     geom = {"Lx": float(res.Lx), "Ly": float(res.Ly)}
     if res.n_live > PLATE_NLIVE_MAX:
@@ -8033,8 +8122,13 @@ def _build_payload_plate(p: dict[str, Any]) -> dict[str, Any]:
     anim_win = _fnum(p, "animation_window", 0.03)
     playback_speed = _fnum(p, "playback_speed", 0.02)
     amplitude = _fnum(p, "amplitude", 1e-3)
-    pluck_fx = _fnum(p, "pluck_x", 0.4)
-    pluck_fy = _fnum(p, "pluck_y", 0.55)
+    # The guitar's strike defaults are NOT the rectangle's, and the reason is the claim: past the
+    # waist crossing the fundamental is ODD under the plate's left-right mirror, so a strike near
+    # the centre line (0.4 is one slider step from 0.5) barely touches it -- measured 12x weaker
+    # than the second partial at pluck_x = 0.4, and EXACTLY zero at 0.5. See the plan's §5.
+    guitar = str(p.get("domain", "supported")) == "guitar"
+    pluck_fx = _fnum(p, "pluck_x", 0.25 if guitar else 0.4)
+    pluck_fy = _fnum(p, "pluck_y", 0.35 if guitar else 0.55)
     pluck_wfrac = _fnum(p, "pluck_width", 0.3)
     pickup_fx = _fnum(p, "pickup_x", 0.62)
     pickup_fy = _fnum(p, "pickup_y", 0.58)
@@ -8092,7 +8186,19 @@ def _build_payload_plate(p: dict[str, Any]) -> dict[str, Any]:
     frames_full = np.array([st for _, st in anim_res.snapshots], dtype=float)  # (nf, ny, nx)
     frame_steps = np.array([i for i, _ in anim_res.snapshots], dtype=float)
 
-    frames_dec, mask_dec = _decimate_field_mask(frames_full, res.mask)
+    if res.domain == "rectangle":
+        frames_dec, mask_dec = _decimate_field_mask(frames_full, res.mask)
+    else:
+        # A concave outline needs the pooled path or the picture can split where the plate does not.
+        frames_dec, mask_dec, _stride = _pool_field_mask(frames_full, res.mask)
+        # The proof in _pool_field_mask is about the code as written, not the code as edited.
+        n_parts = _display_components(mask_dec)
+        if n_parts != 1:
+            raise ParamError(
+                f"the {res.domain} outline renders as {n_parts} disconnected "
+                f"pieces at the display resolution even though the plate is one piece -- refuse "
+                f"rather than draw two guitars. Reduce waist or N."
+            )
     nf, ny_dec, nx_dec = frames_dec.shape
     field_amp = float(np.max(np.abs(frames_dec))) if frames_dec.size else 0.0
 
@@ -8101,11 +8207,12 @@ def _build_payload_plate(p: dict[str, Any]) -> dict[str, Any]:
     return {
         "model": "plate",
         "boundary": boundary,
+        "outline": res.domain,
         "fs_sim": round(fs, 3),
         "mu": round(float(res.mu), 6),
         "grid": {
             "dims": 2, "nx": int(nx_dec), "ny": int(ny_dec),
-            "extent_x": round(Lx, 6), "extent_y": round(Ly, 6), "domain": "rectangle",
+            "extent_x": round(Lx, 6), "extent_y": round(Ly, 6), "domain": res.domain,
         },
         "frames": {
             "b64": _b64f32(frames_dec.ravel()),
@@ -8125,7 +8232,254 @@ def _build_payload_plate(p: dict[str, Any]) -> dict[str, Any]:
             "num_steps": int(n_audio),
             "n_frames": int(nf),
             "spectrum": _modal_spectrum_block(pickup, fs, f_disc, f_cont, "plate"),
+            # On EVERY plate, not only the curved ones, so nothing downstream has to branch to read
+            # it -- and so a rectangle's ~2e-16 deficit is visible as the one case where the
+            # trapezoidal quadrature is exactly right rather than hidden by a special case.
+            "outline_info": _outline_block(res),
+            **({"claim": _guitar_claim_block(p, res, pluck_fx, pluck_fy, pluck_wfrac)}
+               if res.domain == "guitar" else {}),
         },
+    }
+
+
+def _display_components(mask: NDArray[np.bool_]) -> int:
+    """4-connected component count of a *display* mask (the guard of the plan's §4.3).
+
+    Deliberately a local flood fill rather than an import of the core's private counter: this is a
+    display question about a decimated array, the core's is a physics question about the solver's,
+    and a wrapper reaching into ``physsynth.core.plate`` for an underscore name would couple them.
+    """
+    m = np.asarray(mask, dtype=bool)
+    seen = np.zeros_like(m)
+    n = 0
+    ys, xs = np.nonzero(m)
+    for y0, x0 in zip(ys.tolist(), xs.tolist(), strict=True):
+        if seen[y0, x0]:
+            continue
+        n += 1
+        stack = [(y0, x0)]
+        seen[y0, x0] = True
+        while stack:
+            y, x = stack.pop()
+            for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                j, i = y + dy, x + dx
+                if 0 <= j < m.shape[0] and 0 <= i < m.shape[1] and m[j, i] and not seen[j, i]:
+                    seen[j, i] = True
+                    stack.append((j, i))
+    return n
+
+
+def _outline_block(res: Plate) -> dict[str, Any]:
+    """What the plate reports about its own outline -- read straight off the core, never recomputed.
+
+    #5g is emphatic that the area correction is **reported and never silently applied**: dividing
+    the deficit out inside the operator would make a coarse plate look converged. Omitting it from
+    the panel is the same mistake from the other side, and the numbers are large -- the shipped
+    guitar's mask is **21.6 % smaller than the outline drawn on screen at N = 16**, falling to 4.6 %
+    at N = 80.
+    A viewer that does not say so lets an unconverged plate look finished.
+    """
+    return {
+        "domain": res.domain,
+        "n_live": int(res.n_live),
+        "n_box": int(res.mask.size),
+        "n_pruned": int(res.n_pruned),
+        "area": round(float(res.area), 8),
+        "outline_area": round(float(res.outline_area), 8),
+        "area_deficit": round(float(res.area_deficit), 6),
+        # In units of h: the bar the core asserts is "within one h of the rim", so the ratio is the
+        # number that means something. 0 means nothing was pruned.
+        "prune_depth_h": round(float(res.prune_depth_max / res.h), 4),
+        "waist": round(float(res.waist), 4),
+        "asym": round(float(res.asym), 4),
+    }
+
+
+def _mirror_parity(res: Plate, vec: NDArray[np.float64]) -> float:
+    """``<phi, mirror(phi)> / <phi, phi>`` -- the batch's whole detector, and it reads ±1 exactly.
+
+    The outline is ``|x| < W(y)``: mirror-symmetric about the centre line whatever ``waist`` and
+    ``asym`` do. So every mode is exactly even or exactly odd in ``x``, the two families do not
+    couple, and a crossing between one of each is a **true** crossing -- nothing is available to
+    open a gap. That is why this is one scalar with no threshold, no shape tracking and no
+    eigenvector matching across a near-degenerate pair, and why ``min f2/f1`` must NOT be shipped
+    beside it as evidence (it measures only how close the grid's representable waists landed; see
+    the plan §2.3).
+    """
+    full = np.zeros(res.mask.shape)
+    full[res.mask] = vec
+    denom = float(np.sum(full * full))
+    return float(np.sum(full * full[:, ::-1]) / denom) if denom else 0.0
+
+
+def _guitar_elastic_modes(q: Plate) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """The free plate's elastic eigenpairs, rigid-body trio dropped. Shared so the sweep and the
+    shipped plate cannot drift onto different solves."""
+    mu1 = (13.0 / (q.Lx * q.Ly)) ** 2
+    vals, vecs = eigsh(q.K.tocsc(), k=6, M=q.W.tocsc(), sigma=-1e-3 * mu1, which="LM")
+    order = np.argsort(vals)
+    return np.clip(vals[order][3:], 0.0, None), vecs[:, order][:, 3:]
+
+
+def _guitar_claim_block(
+    p: dict[str, Any], shipped: Plate, pluck_fx: float, pluck_fy: float, pluck_wfrac: float
+) -> dict[str, Any]:
+    """The waist sweep: deepening the waist SWAPS the guitar plate's fundamental.
+
+    Below a critical waist the fundamental is a long **bending** mode (even under the mirror); above
+    it, the **twist** (odd). The sweep reports both branch frequencies, the parity, and -- because
+    of the trap below -- how hard the shipped strike actually hits each of them.
+
+    **The strike can hide the claim, and no detector but this one would say so.** A raised-cosine
+    strike on the centre line has *exactly zero* overlap with every odd mode, so past the crossing
+    the fundamental would be struck with zero amplitude while this panel says the modes swapped: the
+    picture and the sound would silently disagree with the claim and every ledger would stay green.
+    Worse, there is no strike point that serves both branches -- a strike near the waist shows the
+    bender and hides the twist, one in a bout does the reverse. So the overlap is *reported*, not
+    designed around.
+
+    Run on its own short grid (``GUITAR_SWEEP_N_MAX``), decoupled from the audio run: a user at a
+    fine grid pays for the audio, not for the panel.
+    """
+    n_sweep = min(int(shipped.N), GUITAR_SWEEP_N_MAX)
+    # The sweep is a coarser GRID but must not be a different SCHEME. Two things follow.
+    # Its `mu` is the shipped plate's, not whatever `fs` happens to give at the coarser h -- so the
+    # sweep row at the shipped waist IS the shipped plate whenever the grid is not capped.
+    h_sweep = shipped.Lx / n_sweep
+    fs_sweep = shipped.kappa / (shipped.mu * h_sweep * h_sweep)
+    npts = GUITAR_SWEEP_POINTS
+    waists = np.linspace(0.0, GUITAR_WAIST_MAX, npts)
+    rows: list[dict[str, Any]] = []
+    for w in waists:
+        try:
+            q = Plate(
+                Lx=shipped.Lx, Ly=shipped.Ly, kappa=shipped.kappa, rho=shipped.rho,
+                fs=fs_sweep, N=n_sweep, sigma=0.0, boundary="free", nu=shipped.nu,
+                theta=shipped.theta, domain="guitar", waist=float(w), asym=shipped.asym,
+            )
+        except ValueError:
+            continue  # this waist staircases into two plates on the sweep's grid; skip the point
+        vals, vecs = _guitar_elastic_modes(q)
+        # And the frequencies are the theta-scheme's DISCRETE ones, not the continuum limit. Both
+        # panels ship Hz for the same plate, and mu rides all the way to 32 where the continuum
+        # formula reads 3.0 % high (51 cents) -- two numbers on one screen that disagree with each
+        # other is exactly the failure this batch spent itself on elsewhere.
+        freqs = modal.discrete_beam_eigenfrequency(vals, q.kappa, q.k, q.theta)
+        wdiag = q.W.diagonal()
+        for j in range(vecs.shape[1]):
+            nrm = float(vecs[:, j] @ (wdiag * vecs[:, j]))
+            if nrm > 0:
+                vecs[:, j] /= math.sqrt(nrm)
+        u0 = raised_cosine_2d(
+            q.X, q.Y, (pluck_fx * q.Lx, pluck_fy * q.Ly),
+            pluck_wfrac * min(q.Lx, q.Ly), amplitude=1e-3,
+        )
+        strike = q.to_live(u0)
+        amps = [abs(float(vecs[:, j] @ (wdiag * strike))) for j in range(min(4, vecs.shape[1]))]
+        scale = max(amps) or 1.0
+        rows.append({
+            "waist": round(float(w), 4),
+            "f1": round(float(freqs[0]), 3),
+            "f2": round(float(freqs[1]), 3),
+            "parity": round(_mirror_parity(q, vecs[:, 0]), 6),
+            "a1": round(amps[0] / scale, 5),
+            "a2": round(amps[1] / scale, 5) if len(amps) > 1 else 0.0,
+            "area_deficit": round(float(q.area_deficit), 6),
+        })
+
+    # The shipped plate's OWN row, computed on the shipped plate rather than read off the nearest
+    # sweep sample: it is what the "you" marker points at, and it is the number the spectrum panel
+    # quotes, so the two panels are tied together by construction instead of by coincidence.
+    you_vals, you_vecs = _guitar_elastic_modes(shipped)
+    you_f = modal.discrete_beam_eigenfrequency(you_vals, shipped.kappa, shipped.k, shipped.theta)
+    you = {
+        "f1": round(float(you_f[0]), 3),
+        "f2": round(float(you_f[1]), 3),
+        "parity": round(_mirror_parity(shipped, you_vecs[:, 0]), 6),
+    }
+
+    par = [r["parity"] for r in rows]
+    flips = [i for i in range(1, len(par)) if par[i] * par[i - 1] < 0]
+    # The crossing is an INTERVAL between two adjacent representable waists, never a number with a
+    # residual attached: the outline is a staircase, so `waist` only changes the plate when a node
+    # crosses the rim, and refining a scan inside one of those bands returns the identical answer.
+    bracket = ([rows[flips[0] - 1]["waist"], rows[flips[0]]["waist"]] if flips else None)
+    return {
+        "kind": "waist_crossing",
+        "sweep_N": int(n_sweep),
+        "rows": rows,
+        "n_flips": len(flips),
+        "crossing": bracket,
+        "shipped_waist": round(float(shipped.waist), 4),
+        "you": you,
+        # `none` is NOT `at`. With no flip in the sweep there is no crossing to be at, and reporting
+        # "right at the crossing" there would be the panel confidently saying the opposite of the
+        # truth -- reachable, since the crossing waist runs past this slider's cap at a long enough
+        # body (0.567 already at aspect 1.68). The parity of the shipped plate still says which
+        # family the fundamental is in, which is the useful half.
+        "shipped_side": ("none" if not bracket
+                         else "twist" if shipped.waist > bracket[1]
+                         else "bender" if shipped.waist < bracket[0] else "at"),
+        "quantisation": _waist_quantisation(shipped),
+        "pluck_x": round(float(pluck_fx), 4),
+        "centreline_warning": abs(pluck_fx - 0.5) < GUITAR_CENTRELINE_TOL,
+    }
+
+
+def _waist_quantisation(res: Plate) -> dict[str, Any]:
+    """The waist slider is QUANTISED, and a viewer that does not say so reads as broken.
+
+    The outline is a staircase, so ``waist`` only changes the plate when a node crosses the rim.
+    Between two crossings the mask is bit-identical and *nothing* moves -- not the picture, not the
+    audio, not one digit of the spectrum. Over waist 0...0.9 that is **50** distinct plates at
+    N = 16, where the widest dead band is **0.107** -- more than a tenth of the slider's travel
+    doing nothing at all -- rising to 675 distinct plates at N = 80.
+
+    Two numbers, because they answer different questions. ``dead_band`` is the interval around the
+    *current* waist that produces the *current* mask, bisected to 1e-5, and it is the one that
+    matters while dragging. ``distinct`` counts the reachable plates at a stated 1e-3 sampling and
+    is therefore a **lower bound** on a fine grid, which is why the sampling ships beside it rather
+    than being left for a reader to assume away. This quantum is also the width of the crossing
+    bracket: the crossing cannot be located more precisely than one dead band, which is exactly why
+    §2.3 refuses to quote ``min f2/f1`` as if it measured a gap.
+    """
+    h = res.Lx / res.N
+    ny = max(int(round(res.Ly / h)), 1)
+    X, Y = np.meshgrid(np.linspace(0.0, res.Lx, res.N + 1), np.linspace(0.0, res.Ly, ny + 1))
+
+    def mask_at(w: float) -> NDArray[np.bool_]:
+        return prune_to_area_carrying(
+            guitar_mask(X - 0.5 * res.Lx, Y, res.Ly, res.Lx, float(w), res.asym)
+        )[0]
+
+    here = mask_at(res.waist)
+
+    def edge(direction: int) -> float:
+        """Bisect outward to the last waist still giving `here`, in the given direction."""
+        same, other = res.waist, res.waist + direction * GUITAR_WAIST_MAX
+        other = min(max(other, 0.0), GUITAR_WAIST_MAX)
+        if np.array_equal(mask_at(other), here):
+            return other
+        for _ in range(20):
+            mid = 0.5 * (same + other)
+            if np.array_equal(mask_at(mid), here):
+                same = mid
+            else:
+                other = mid
+        return same
+
+    step = 0.001
+    ws = np.arange(0.0, GUITAR_WAIST_MAX + 0.5 * step, step)
+    prev, distinct = None, 0
+    for w in ws:
+        m = mask_at(float(w))
+        if prev is None or not np.array_equal(m, prev):
+            distinct += 1
+            prev = m
+    return {
+        "dead_band": [round(edge(-1), 5), round(edge(+1), 5)],
+        "distinct": int(distinct),
+        "sampling": step,
     }
 
 

@@ -33,6 +33,7 @@ const LABELS = {
   pluck_x: "strike x", pluck_y: "strike y", pluck_width: "strike width",
   pickup_x: "pickup x", pickup_y: "pickup y",
   mu: "plate Courant μ", fs: "sample rate fs", nu: "Poisson ν",
+  waist: "waist depth", asym: "bout asymmetry",
   E: "Young's E", e: "thickness e", w_over_e: "strike w/e",
   amplitude: "amplitude A", EA: "axial EA",
   lam_long: "longitudinal λ", dt_over_t0: "tension ΔT/T₀", tongue_position: "tongue δ/(εA²)",
@@ -102,6 +103,26 @@ const MODEL_RANGES = {
   plate: { N: { max: 80, val: 60 }, kappa: { min: 2, max: 80, step: 0.5, fixed: 1, val: 20 },
            rho: { min: 0.001, max: 0.02, step: 0.0005, fixed: 4, val: 0.005, unit: "kg/m²" },
            Lx: { val: 1.0 }, Ly: { val: 1.0 }, audio_duration: { max: 2, val: 1 } },
+  // The guitar outline (#5g). Geometry leads: a guitar top is 0.37 x 0.48 m, and the aspect is not
+  // decoration — the waist crossing MOVES with it (waist* = 0.18 at Ly/Lx = 1.08, 0.57 at 1.68), so
+  // shipping the plate's 1 x 1 square would put the claim somewhere else and quietly.
+  // N = 40 with mu = 2 is where a 1 s render fits the work budget (the guitar fills ~54 % of its
+  // bounding box, so it is about half a rectangle's cost at the same N).
+  // THE STRIKE IS NOT THE RECTANGLE'S, and this is the batch's second trap: past the crossing the
+  // fundamental is ODD under the plate's mirror, and a strike on the centre line has EXACTLY zero
+  // overlap with every odd mode. The plate's own default pluck_x = 0.4 is one slider step from 0.5
+  // and already strikes the fundamental 12x weaker than the second partial. pluck_y matters as much
+  // and in the OPPOSITE direction (a strike at the waist shows the bender and hides the twist, one
+  // in a bout does the reverse), so 0.25 / 0.35 is a measured compromise, not a preference — and
+  // the claim panel reports the overlap rather than hiding the conflict.
+  "plate:guitar": {
+    Lx: { min: 0.15, max: 0.8, step: 0.01, fixed: 2, val: 0.37 },
+    Ly: { min: 0.2, max: 1.0, step: 0.01, fixed: 2, val: 0.48 },
+    N: { min: 16, max: 80, val: 40 }, mu: { val: 2.0 },
+    waist: { val: 0.42 }, asym: { val: 0.30 },
+    pluck_x: { val: 0.25 }, pluck_y: { val: 0.35 },
+    audio_duration: { max: 2, val: 1 },
+  },
   vk: { N: { min: 8, max: 32, val: 20 },
         rho: { min: 2000, max: 12000, step: 100, fixed: 0, val: 7800, unit: "kg/m³" },
         Lx: { val: 0.3 }, Ly: { val: 0.3 }, audio_duration: { max: 1, val: 0.5 } },
@@ -250,6 +271,12 @@ const MODEL_RANGES = {
                lambda: { min: 0.5, max: 0.99, step: 0.01, fixed: 2, val: 0.9 },
                bridge_stiffness: { min: 0, max: 12000, step: 250, fixed: 0, val: 3000, unit: "N/m" },
                n_plate: { min: 8, max: 24, step: 1, fixed: 0, val: 16 },
+              // The guitar outline's two knobs. index.html's home IS the guitar regime's range, so
+              // _default only needs a base + val for the leak family — gatherParams ships every
+              // slider, so without a reset a guitar → rectangle switch would carry a stale waist
+              // into a payload that ignores it, and back in stale on the next visit.
+              waist: { min: 0, max: 0.88, step: 0.005, fixed: 3, val: 0.42 },
+              asym: { min: 0, max: 0.8, step: 0.01, fixed: 2, val: 0.30 },
                sigma_plate: { val: 0 },
                distance: { min: 0.5, max: 4.0, step: 0.1, fixed: 1, val: 1.0 },
                pluck_position: { val: 0.3 },
@@ -378,6 +405,12 @@ const MODEL_RANGES = {
               // reset a platebody -> other switch would carry a stale plate grid/loss into a model
               // that ignores them (harmless there) OR back in (re-overridden by MODEL_RANGES.platebody).
               n_plate: { min: 8, max: 24, step: 1, fixed: 0, val: 16 },
+              // The guitar outline's two knobs. index.html's home IS the guitar regime's range, so
+              // _default only needs a base + val for the leak family — gatherParams ships every
+              // slider, so without a reset a guitar → rectangle switch would carry a stale waist
+              // into a payload that ignores it, and back in stale on the next visit.
+              waist: { min: 0, max: 0.88, step: 0.005, fixed: 3, val: 0.42 },
+              asym: { min: 0, max: 0.8, step: 0.01, fixed: 2, val: 0.30 },
               sigma_plate: { min: 0, max: 80, step: 1, fixed: 0, val: 0, unit: "s⁻¹" },
               // radbody's radiation resistance (batch 15). Its index.html home IS radbody's range,
               // so this is the leak-family reset: no other model reads radiation_R, but the slider
@@ -415,7 +448,13 @@ const DOMAIN_MODELS = ["membrane", "mallet", "plate", "vk", "geometric", "sympat
 const DOMAIN_OPTS = {
   membrane: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
   mallet: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
-  plate: [["supported", "Simply-supported (#5)"], ["free", "Free edge — Chladni (#5b)"]],
+  // The plate's select gains a third value that carries a SHAPE where the other two carry a
+  // boundary, and that reads as a mixed axis until you notice the three options are exactly the
+  // three plates that exist: a simply-supported guitar is refused by the core with a reason
+  // (B = L @ L makes its spectrum the membrane's squared), so "guitar" can only mean "guitar, free".
+  // The membrane's select is a shape too — this is that precedent, not a new convention.
+  plate: [["supported", "Simply-supported (#5)"], ["free", "Free edge — Chladni (#5b)"],
+          ["guitar", "Guitar outline — free (#5g)"]],
   // The plate-as-body boundary: the free cymbal LEADS (the batch's headline — the biggest slosh and
   // the curved-Chladni ring you watch), the supported soundboard is the canonical guitar-body case.
   platebody: [["free", "Free cymbal — Chladni (#5b)"], ["supported", "Soundboard (#5)"]],
@@ -614,6 +653,20 @@ function hasRegimeRanges(model) {
   return Object.keys(MODEL_RANGES).some((k) => k.startsWith(model + ":"));
 }
 
+// Which regimes were last seen on each model's secondary select, so a domain change can tell
+// whether it is ENTERING or LEAVING a regime that declares ranges.
+let prevDomain = null;
+
+// Re-range on a domain switch only when the regime being entered OR the one being left declares its
+// own ranges. `hasRegimeRanges` alone was enough while every model with regime ranges had them on
+// EVERY regime — but the plate does not: #5g's guitar outline needs its own geometry and its own
+// strike, while `supported` and `free` share the rectangle's, and the invariant above says a
+// supported -> free switch must not reset the user's sliders. Gating on the model would have broken
+// exactly that, silently, the moment the guitar option was added.
+function regimeSwitchRerangs(model, from, to) {
+  return !!(MODEL_RANGES[model + ":" + to] || MODEL_RANGES[model + ":" + from]);
+}
+
 // Merge range specs PER PARAM, not per layer. Object.assign is shallow, so a later layer's
 // {val: 0.0015} would REPLACE the earlier {min, max, step, fixed, val} outright rather than override
 // one field of it — the slider would then keep whatever min/max/step index.html last left on it.
@@ -646,6 +699,37 @@ function applyModelRanges() {
     if (+inp.value < lo) inp.value = String(lo);
     if (updaters[pkey]) updaters[pkey]();
   }
+}
+
+// The outline's own numbers, in the sidebar beside the sliders that set them. Two jobs, and the
+// first one fires BEFORE a render is paid for (the fret hint's precedent): a strike on the centre
+// line cannot excite the odd family at all, and past the crossing the fundamental IS odd — so the
+// warning has to be visible while the slider is being dragged, not only in the readout afterwards.
+// The second job is the area deficit, which #5g requires be REPORTED and never applied: at a coarse
+// grid the plate being simulated is materially smaller than the guitar drawn on screen (−21.6 % at
+// N = 16), and a panel that omits it lets an unconverged plate look finished.
+function updateGuitarHint() {
+  const el = $("guitar-hint");
+  if (!el) return;
+  const onCentre = Math.abs(param("pluck_x") - 0.5) < 0.04;
+  const info = payload && payload.outline === "guitar" && payload.meta
+    && payload.meta.outline_info;
+  const parts = [];
+  if (info) {
+    parts.push(`${info.n_live} live nodes of ${info.n_box} in the box `
+      + `(${(100 * info.n_live / info.n_box).toFixed(0)} %); mask area is `
+      + `${(100 * info.area_deficit).toFixed(1)} % of the true outline — REPORTED, never divided `
+      + `out, so a coarse plate cannot look converged. ${info.n_pruned} node`
+      + `${info.n_pruned === 1 ? "" : "s"} pruned (deepest ${info.prune_depth_h} h inside the rim; `
+      + `the core refuses past 1 h).`);
+  }
+  parts.push(onCentre
+    ? "⚠ strike x is on the centre line: zero overlap with every odd mode, and past the crossing "
+      + "the fundamental is odd. Move it off centre before rendering."
+    : "waist is quantised — the outline is a staircase, so a drag that changes nothing is the "
+      + "physics, not a stuck slider.");
+  el.textContent = parts.join(" ");
+  el.style.color = onCentre ? "var(--bad)" : "var(--muted)";
 }
 
 function updateLambdaHint() {
@@ -1207,6 +1291,9 @@ function onControlChange(name) {
   // reaches the rail" while the rail had been dragged out of reach, i.e. the one warning meant to
   // fire BEFORE a ~10 s render is paid for was confidently saying the opposite.
   if (name === "clearance" || name === "rail_frac") updateLambdaHint();
+  // The guitar's centre-line warning is a BEFORE-the-render warning, so it tracks the strike slider
+  // (the fret precedent one line up) — and the waist, which is the other half of what it describes.
+  if (name === "pluck_x" || name === "waist" || name === "asym") updateGuitarHint();
   // The body's live guard-ceiling warning: the exact stability guard trips at a low K on this rig,
   // so the near-21.5k hint must track the bridge_stiffness slider (the fret/jawari precedent — the
   // one warning that must fire BEFORE a render is paid for, or an over-stiff K just errors out).
@@ -1216,13 +1303,15 @@ function onControlChange(name) {
 
 modelSel.addEventListener("change", () => {
   populateDomain(modelSel.value);
+  prevDomain = domainSel ? domainSel.value : null;
   applyModelRanges();
   updateVisibility();
   updateLambdaHint();
   scheduleAuto();
 });
 if (domainSel) domainSel.addEventListener("change", () => {
-  if (hasRegimeRanges(modelSel.value)) applyModelRanges();
+  if (regimeSwitchRerangs(modelSel.value, prevDomain, domainSel.value)) applyModelRanges();
+  prevDomain = domainSel.value;
   updateVisibility();
   updateLambdaHint();
   scheduleAuto();
@@ -1467,6 +1556,7 @@ function applyPayload(data) {
   hideOverlay();
   drawEnergy();
   drawDiagnostics();
+  updateGuitarHint();
 }
 
 // A model with no audio gets no player, and the note says WHY rather than leaving a dead button.
@@ -3424,6 +3514,16 @@ function drawDiagnostics() {
   const spec = payload && payload.meta && payload.meta.spectrum;
   // Checked before the dims gate: the tension string is a 1-D model that still wants a spectrum
   // panel, not the linear per-partial cents bars (its peak moves tens of percent with amplitude).
+  // The guitar outline (#5g): the claim panel takes the second pane from the plate's cents bars,
+  // because the batch's content is the OUTLINE and the bars say nothing about it. Dispatched on
+  // payload.outline, not on the model, since the guitar is a domain of the plate rather than a
+  // model of its own.
+  if (payload && payload.outline === "guitar") {
+    partialsTitle.firstChild.textContent = "Waist crossing ";
+    partialsSub.textContent = "deepen the waist and the fundamental swaps shape";
+    drawWaistCrossing();
+    return;
+  }
   if (spec && spec.kind === "tension") {
     partialsTitle.firstChild.textContent = "Amplitude shift ";
     partialsSub.textContent = "measured vs exact Duffing";
@@ -3667,6 +3767,165 @@ function drawSpectrum() {
 // the linear slider cannot. The curve is a CONTROLLED reference (fixed sweep N, σ_body = 0), so it
 // stays put while the render's grid, loss and duration move; the marker is the operating point
 // measured the same way, which is why it lies ON the curve rather than near it.
+// ── the guitar outline: the waist SWAPS the fundamental ──────────────────────────────────────
+// Two branch frequencies against waist, coloured by the mirror parity of the lowest mode — even
+// (a long bender) below the crossing, odd (the twist) above. The parity is the whole detector and
+// it reads exactly ±1: the outline |x| < W(y) is mirror-symmetric whatever the sliders do, so the
+// two families cannot couple and the crossing cannot be avoided.
+//
+// Three things this panel deliberately does NOT draw:
+//   · the gap between f₁ and f₂ at the crossing as if it measured anything. It measures only how
+//     close the grid's representable waists landed — the outline is a staircase, so the crossing is
+//     an INTERVAL between two adjacent reachable waists, and it is drawn as a band, not a line.
+//   · a smooth curve through the points. Adjacent sweep points can be the SAME plate.
+//   · the claim without the strike. A strike on the centre line has exactly zero overlap with every
+//     odd mode, so past the crossing the fundamental would be silent while this panel said the modes
+//     swapped — the overlap track along the bottom is what stops that being invisible.
+function drawWaistCrossing() {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height, padL = 36, padB = 17, top = 10;
+  g.clearRect(0, 0, W, H);
+  const out = $("partials-readout");
+  const c = payload && payload.meta && payload.meta.claim;
+  if (!c || !c.rows || !c.rows.length) { out.textContent = "no waist sweep"; return; }
+  const rows = c.rows;
+  const plotH = H - padB - top - 28;             // the bottom 28 px carry the strike-overlap track
+  const plotW = W - padL - 10;
+  g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(padL, top, plotW, plotH);
+
+  const wlo = rows[0].waist, whi = rows[rows.length - 1].waist;
+  let flo = Infinity, fhi = 0;
+  rows.forEach((r) => {
+    flo = Math.min(flo, r.f1); fhi = Math.max(fhi, r.f2);
+  });
+  // Fold the shipped plate's own pair into the range. It is computed on the SHIPPED grid at the
+  // SHIPPED waist, so it need not land inside the sweep's spread — and a "you" marker clipped off
+  // the axis is a marker that silently stops marking anything.
+  if (c.you) {
+    flo = Math.min(flo, c.you.f1); fhi = Math.max(fhi, c.you.f2);
+  }
+  flo *= 0.92; fhi *= 1.06;
+  const px = (w) => padL + ((w - wlo) / (whi - wlo || 1)) * plotW;
+  const py = (f) => top + plotH - ((f - flo) / (fhi - flo || 1)) * plotH;
+
+  g.fillStyle = "#8b98a8"; g.font = "9px ui-monospace, monospace";
+  g.strokeStyle = "rgba(139,152,168,.15)"; g.setLineDash([2, 3]);
+  for (let k = 0; k <= 4; k++) {
+    const f = flo + (k / 4) * (fhi - flo);
+    g.beginPath(); g.moveTo(padL, py(f)); g.lineTo(padL + plotW, py(f)); g.stroke();
+    g.fillText(f.toFixed(0), 3, py(f) + 3);
+  }
+  [0, 0.25, 0.5, 0.75].forEach((w) => {
+    if (w < wlo || w > whi) return;
+    g.beginPath(); g.moveTo(px(w), top); g.lineTo(px(w), top + plotH); g.stroke();
+    g.fillText(w.toFixed(2), px(w) - 8, H - 5);
+  });
+  g.setLineDash([]);
+  g.fillText("Hz", padL + 4, top + 9);
+  g.fillText("waist", W - 34, H - 5);
+
+  // the crossing BRACKET — a band one quantisation step wide, never a line
+  if (c.crossing) {
+    const x0 = px(c.crossing[0]), x1 = px(c.crossing[1]);
+    g.fillStyle = "rgba(255,209,102,.14)";
+    g.fillRect(x0, top, Math.max(2, x1 - x0), plotH);
+    g.fillStyle = "rgba(255,209,102,.85)";
+    g.fillText("crossing", Math.min(x0 + 4, padL + plotW - 52), top + 10);
+  }
+
+  // the two branches. Points, not a line through them: adjacent samples can be the same plate.
+  [["f1", "#4cc2ff"], ["f2", "#5fe3c0"]].forEach(([key, col]) => {
+    g.strokeStyle = col; g.lineWidth = 1.5; g.globalAlpha = 0.45; g.beginPath();
+    rows.forEach((r, i) => { const X = px(r.waist), Y = py(r[key]); if (i) g.lineTo(X, Y); else g.moveTo(X, Y); });
+    g.stroke(); g.globalAlpha = 1;
+  });
+  // parity colours the MARKERS: filled = the lowest mode is odd (the twist), hollow = even (bender)
+  rows.forEach((r) => {
+    const odd = r.parity < 0;
+    g.strokeStyle = "#4cc2ff"; g.fillStyle = "#4cc2ff";
+    g.beginPath(); g.arc(px(r.waist), py(r.f1), 3, 0, 2 * Math.PI);
+    if (odd) g.fill(); else g.stroke();
+    g.strokeStyle = "#5fe3c0"; g.fillStyle = "#5fe3c0";
+    g.beginPath(); g.arc(px(r.waist), py(r.f2), 3, 0, 2 * Math.PI);
+    if (odd) g.stroke(); else g.fill();
+  });
+
+  // Where the shipped plate sits -- and the DOT is computed on the shipped plate itself, not read
+  // off the nearest sweep sample, so it is the same number the spectrum panel marks.
+  const xw = px(c.shipped_waist);
+  g.strokeStyle = "rgba(255,143,76,.75)"; g.setLineDash([4, 3]); g.lineWidth = 1.5;
+  g.beginPath(); g.moveTo(xw, top); g.lineTo(xw, top + plotH); g.stroke(); g.setLineDash([]);
+  if (c.you) {
+    g.fillStyle = "#ff8f4c";
+    [c.you.f1, c.you.f2].forEach((f) => {
+      if (f >= flo && f <= fhi) {
+        g.beginPath(); g.arc(xw, py(f), 4, 0, 2 * Math.PI); g.fill();
+      }
+    });
+  }
+  g.fillStyle = "rgba(255,143,76,.9)";
+  g.fillText("you", Math.min(xw + 5, padL + plotW - 22), top + plotH - 4);
+
+  // The two curves are the SORTED spectrum, so they touch rather than cross -- what swaps is which
+  // SHAPE holds the lower slot, and the marker fill is what says so. Without this legend the picture
+  // reads as two curves that merely approach, which is the opposite of the claim.
+  g.font = "9px ui-monospace, monospace";
+  g.fillStyle = "#4cc2ff";
+  g.beginPath(); g.arc(padL + plotW - 118, top + 10, 3, 0, 2 * Math.PI); g.fill();
+  g.fillStyle = "#8b98a8"; g.fillText("filled = twist (odd)", padL + plotW - 110, top + 13);
+  g.strokeStyle = "#4cc2ff";
+  g.beginPath(); g.arc(padL + plotW - 118, top + 23, 3, 0, 2 * Math.PI); g.stroke();
+  g.fillStyle = "#8b98a8"; g.fillText("hollow = bender (even)", padL + plotW - 110, top + 26);
+
+  // the strike-overlap track: how hard THIS strike hits the lowest mode, at every waist. A bar that
+  // collapses is the claim going silent while the panel above still says it happened.
+  const ty = top + plotH + 10, th = 12;
+  g.fillStyle = "#8b98a8"; g.font = "9px ui-monospace, monospace";
+  g.fillText("strike→f₁", 3, ty + 9);
+  const bw = Math.max(2, plotW / rows.length - 1);
+  rows.forEach((r) => {
+    const h = Math.max(1, r.a1 * th);
+    g.fillStyle = r.a1 < 0.05 ? "#ff6b6b" : r.a1 < 0.2 ? "#ffd166" : "rgba(76,194,255,.65)";
+    g.fillRect(px(r.waist) - bw / 2, ty + th - h, bw, h);
+  });
+
+  const q = c.quantisation || {};
+  const band = q.dead_band ? (q.dead_band[1] - q.dead_band[0]) : 0;
+  // "none" is not "at": with no flip in the sweep there is no crossing to be at, and saying
+  // "right at the crossing" there would be the panel stating the opposite of the truth.
+  const family = (c.you && c.you.parity < 0) ? "the TWIST (odd under the mirror)"
+                                             : "a long BENDER (even under the mirror)";
+  const side = c.shipped_side === "twist" || c.shipped_side === "bender" ? family
+             : c.shipped_side === "at" ? family + ", right at the crossing"
+             : family;
+  out.textContent =
+    (c.n_flips === 1
+      ? `The waist SWAPS the fundamental: parity flips once, between waist `
+        + `${c.crossing[0]} and ${c.crossing[1]}. `
+      : c.n_flips === 0
+        ? "No crossing inside the sweep — the fundamental keeps ONE parity from waist 0 to the "
+          + "slider's cap, so at this geometry there is nothing to swap. The crossing waist climbs "
+          + "with the body's elongation (0.18 at aspect 1.08, 0.57 at 1.68), so a long enough body "
+          + "pushes it past the cap entirely. "
+        : `${c.n_flips} parity flips inside the sweep — read the markers, not this sentence. `)
+    + `At your waist = ${c.shipped_waist} the lowest mode is ${side}. `
+    + (c.crossing
+        ? "The crossing is a BRACKET, not a number: the outline is a staircase, so waist only "
+        : "The waist slider is QUANTISED: the outline is a staircase, so waist only ")
+    + `changes the plate when a node crosses the rim — ${q.distinct} distinct plates over the slider `
+    + `at this grid (sampled every ${q.sampling}), and your current waist holds from `
+    + `${q.dead_band[0]} to ${q.dead_band[1]} (${band.toFixed(3)} of travel doing nothing). `
+    + (c.centreline_warning
+        ? `⚠ Your strike x = ${c.pluck_x} is on the centre line, which has EXACTLY zero overlap `
+          + `with every odd mode — and ${c.you && c.you.parity < 0
+              ? "your fundamental is one of them, so it is not being struck at all"
+              : "whichever of the lowest pair is odd is not being struck at all"}. `
+          + `Move the strike off centre or the sound will not show the claim.`
+        : `The bars below the plot are how hard this strike hits the lowest mode; there is no strike `
+          + `point that serves both branches (near the waist shows the bender, in a bout shows the `
+          + `twist), so the compromise is reported rather than hidden.`);
+}
+
 function drawRadBodySweep() {
   const g = partialsCv.getContext("2d");
   const W = partialsCv.width, H = partialsCv.height, padL = 34, padB = 17, top = 10;
@@ -5403,6 +5662,8 @@ function applyUrlParams() {
   populateDomain(modelSel.value);          // options depend on the (possibly just-set) model
   const d = q.get("domain");
   if (d && domainSel && [...domainSel.options].some((o) => o.value === d)) domainSel.value = d;
+  // Seed the regime tracker so the FIRST domain change after a deep link knows what it is leaving.
+  prevDomain = domainSel ? domainSel.value : null;
 }
 
 // The deep link carries CONTROL settings too, not just model/domain — and for the whole of Phase D

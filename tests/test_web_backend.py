@@ -71,6 +71,10 @@ from web.serialize import (
     GEOM_PHANTOM_WINDOW,
     GEOM_PHANTOM_WORK_MAX,
     GEOM_WORK_MAX,
+    GUITAR_CENTRELINE_TOL,
+    GUITAR_SWEEP_N_MAX,
+    GUITAR_SWEEP_POINTS,
+    GUITAR_WAIST_MAX,
     JAWARI_AMP_MAX,
     JAWARI_DEPTH_MAX,
     JAWARI_ELEVATION_GATE,
@@ -1145,6 +1149,346 @@ def test_plate_low_mu_rejected_by_work_budget():
     assert "error" in payload
     msg = payload["error"]["message"].lower()
     assert "node-steps" in msg and "mu" in msg
+
+
+# == the guitar outline (model #5g, viewer batch 20) ===============================================
+#
+# The plate's third domain value carries a SHAPE where the other two carry a boundary, and the three
+# options are exactly the three plates that exist -- a simply-supported guitar is refused by the
+# core with a reason, so "guitar" can only mean "guitar, free".
+#
+# The tiers, and two of them say in their own docstrings that they are not evidence:
+#   1. the PARITY FLIP -- the claim, and the only tier here that can fail;
+#   2. the display mask stays connected where the solver's is (the trap that blocks);
+#   3. the rectangle path is untouched (pooling reduces to point-sampling on an all-live mask);
+#   4. the reported diagnostics are internally consistent and inside the core's own bars;
+#   5. energy -- a regression tier ONLY. It is geometry-blind, recorded three times now (#4, #5of,
+#      #5g), and a wrong outline conserves perfectly.
+
+GUITAR_GROUP = pytest.mark.xdist_group("web_guitar")
+
+
+def _guitar_params(**overrides):
+    """A short guitar run. The sweep panel is ~24 eigensolves, so these are shared via a fixture."""
+    p = _plate_params(
+        domain="guitar", Lx=0.37, Ly=0.48, N=24, mu=8.0,
+        waist=0.42, asym=0.30, pluck_x=0.25, pluck_y=0.35,
+        audio_duration=0.05, animation_window=0.01,
+    )
+    p.update(overrides)
+    return p
+
+
+@pytest.fixture(scope="module")
+def guitar_payload():
+    payload = _sim(_guitar_params())
+    assert "error" not in payload, payload.get("error")
+    return payload
+
+
+@GUITAR_GROUP
+def test_guitar_waist_swaps_the_fundamental(guitar_payload):
+    """THE CLAIM. Deepening the waist does not merely detune the plate -- it exchanges which shape
+    is the fundamental, and the detector is one scalar that reads +-1 exactly.
+
+    The outline is ``|x| < W(y)``: mirror-symmetric about the centre line whatever ``waist`` and
+    ``asym`` do. So every mode is exactly even or exactly odd in x, the two families cannot couple,
+    and a crossing between one of each is a **true** crossing -- there is nothing available to open
+    a gap. Hence no shape tracking, no overlap threshold, and no eigenvector matching across a
+    near-degenerate pair: just a parity that flips once.
+    """
+    claim = guitar_payload["meta"]["claim"]
+    assert claim["kind"] == "waist_crossing"
+    rows = claim["rows"]
+    assert len(rows) >= GUITAR_SWEEP_POINTS - 2      # a few waists may be refused by the core
+    # +-1 EXACTLY, not "mostly one sign": a parity that drifted off +-1 would mean the mirror
+    # symmetry had been broken somewhere, and the crossing would then be avoidable, not exact.
+    for r in rows:
+        assert abs(abs(r["parity"]) - 1.0) < 1e-6, r
+    assert claim["n_flips"] == 1
+    lo, hi = claim["crossing"]
+    assert 0.0 < lo < hi < GUITAR_WAIST_MAX
+    # below the crossing the fundamental is EVEN (a long bender), above it ODD (the twist)
+    assert all(r["parity"] > 0 for r in rows if r["waist"] <= lo)
+    assert all(r["parity"] < 0 for r in rows if r["waist"] >= hi)
+    assert claim["shipped_side"] == "twist"          # the default waist sits past the crossing
+
+
+@GUITAR_GROUP
+def test_guitar_crossing_is_a_bracket_not_a_number(guitar_payload):
+    """The crossing is reported as an INTERVAL, and the interval is real, not caution.
+
+    The outline is a staircase, so ``waist`` only changes the plate when a node crosses the rim.
+    Refining a scan *inside* one of those dead bands returns the identical answer -- six successive
+    bisections in the probe all came back with the same residual -- which is exactly why the batch
+    refuses to quote ``min f2/f1`` as though it measured a gap. So: a bracket, plus the quantum that
+    sets its width.
+    """
+    claim = guitar_payload["meta"]["claim"]
+    lo, hi = claim["crossing"]
+    assert hi > lo                                    # an interval, never a point
+    q = claim["quantisation"]
+    band_lo, band_hi = q["dead_band"]
+    assert band_lo <= claim["shipped_waist"] <= band_hi
+    assert band_hi > band_lo                          # the slider really does have dead travel
+    # A lower bound at the stated sampling, and it must be far short of "every slider position is a
+    # different plate" -- the whole point is that most of them are not.
+    assert 1 < q["distinct"] < (GUITAR_WAIST_MAX / q["sampling"])
+
+
+@GUITAR_GROUP
+def test_guitar_strike_overlap_is_reported_because_it_can_hide_the_claim(guitar_payload):
+    """A strike on the centre line cannot excite the odd family AT ALL, and past the crossing the
+    fundamental is one of them -- so the claim would be silent while the panel said it happened.
+
+    Every ledger stays green through that: energy conserves, the modes really did swap, the audio is
+    a correct rendering of a plate that was struck where it does not move. So the overlap ships as a
+    number rather than being designed around -- there is no strike point that serves both branches
+    (near the waist shows the bender, in a bout shows the twist).
+    """
+    claim = guitar_payload["meta"]["claim"]
+    assert claim["centreline_warning"] is False       # the shipped default is off centre
+    assert all(0.0 <= r["a1"] <= 1.0 for r in claim["rows"])
+    past = [r for r in claim["rows"] if r["waist"] >= claim["crossing"][1]]
+    assert past and max(r["a1"] for r in past) > 0.5  # the default really does strike the twist
+
+    on_centre = _sim(_guitar_params(pluck_x=0.5))
+    assert "error" not in on_centre, on_centre.get("error")
+    flagged = on_centre["meta"]["claim"]
+    assert flagged["centreline_warning"] is True
+    assert abs(flagged["pluck_x"] - 0.5) < GUITAR_CENTRELINE_TOL
+    # and it is not merely flagged -- the fundamental past the crossing is genuinely not struck
+    past = [r for r in flagged["rows"] if r["waist"] >= flagged["crossing"][1]]
+    assert past and max(r["a1"] for r in past) < 1e-4
+
+
+@GUITAR_GROUP
+def test_guitar_display_mask_is_connected_and_pooled_not_sampled(guitar_payload):
+    """THE TRAP THAT BLOCKS: point-sampling a concave waist can drop the row joining the two bouts.
+
+    A convex outline cannot lose its join, which is why the circular drumhead never found this. Here
+    every other detector stays green -- energy is geometry-blind, the nullspace is the *solver's*,
+    the audio is right -- and only the picture is wrong, in a way that reads as a design decision
+    rather than a bug. Asserted on the shipped payload, and pinned on a synthetic mask below.
+    """
+    nx, ny = guitar_payload["frames"]["nx"], guitar_payload["frames"]["ny"]
+    mask = _decode_u8(guitar_payload["mask"]["b64"]).reshape(ny, nx)
+    assert mask.size == nx * ny
+    assert 0 < mask.sum() < mask.size                 # a real outline, not an all-live rectangle
+    assert web_serialize._display_components(mask.astype(bool)) == 1
+    assert guitar_payload["grid"]["domain"] == "guitar"
+    assert guitar_payload["outline"] == "guitar" and guitar_payload["boundary"] == "free"
+
+
+def test_a_reachable_guitar_that_point_sampling_would_draw_as_two_plates():
+    """End to end, on a configuration the SLIDERS can reach -- the guard is load-bearing, not spare.
+
+    The waist cap (0.88) stops short of the core's own refusal, and the first hunt found splits only
+    past 0.93, which made it tempting to record the guard as belt-and-braces. Re-hunting inside the
+    viewer's actual ranges says otherwise: **249 of 140,349** reachable configurations render as two
+    disconnected lobes under point-sampling, and **0** under pooling. A narrow body with a
+    deep waist is enough -- no exotic parameter required.
+    """
+    payload = _sim(_guitar_params(
+        Lx=0.15, Ly=0.70, N=33, waist=0.88, asym=0.0, mu=32.0,
+        audio_duration=0.05, animation_window=0.005,
+    ))
+    assert "error" not in payload, payload.get("error")
+    nx, ny = payload["frames"]["nx"], payload["frames"]["ny"]
+    shipped = _decode_u8(payload["mask"]["b64"]).reshape(ny, nx).astype(bool)
+    assert web_serialize._display_components(shipped) == 1
+    # the same plate, point-sampled the way every other 2-D model still is
+    solver = web_serialize.Plate(
+        Lx=0.15, Ly=0.70, kappa=20.0, rho=0.005, fs=2e5, N=33, sigma=0.0,
+        boundary="free", nu=0.3, theta=0.28, domain="guitar", waist=0.88, asym=0.0,
+    ).mask
+    assert web_serialize._display_components(solver) == 1          # one plate in the solver
+    _, sampled = web_serialize._decimate_field_mask(np.ones((1,) + solver.shape), solver)
+    assert web_serialize._display_components(sampled) == 2         # two guitars on screen
+
+
+def test_pooling_keeps_a_one_node_isthmus_that_point_sampling_severs():
+    """The proof, pinned on the smallest case that shows it.
+
+    Two bouts joined by a neck one node wide, sitting entirely on ODD columns: point-sampling at
+    stride 2 lands on the even columns only, the neck vanishes, and the picture is two plates. Max-
+    pooling keeps it, because any 4-connected path in the solver mask steps between nodes differing
+    by one in a single coordinate, so their blocks differ by zero or one and the block sequence is
+    itself a 4-connected path of live cells.
+
+    Built at a size that FORCES stride 2 and asserts the stride it got. A toy small enough to take
+    stride 1 would exercise no pooling at all and pass without testing anything -- which is the
+    failure mode #5g SS9.6 caught three times in its own suite.
+    """
+    ny, nx = 2 * DISPLAY_MAX, DISPLAY_MAX - 8
+    m = np.zeros((ny, nx), dtype=bool)
+    upper, lower = ny // 2 - 5, ny // 2 + 5
+    m[:upper, :] = True                            # upper bout
+    m[lower:, :] = True                            # lower bout
+    m[upper:lower, 1] = True                       # the isthmus: one node wide, on an ODD column
+    assert web_serialize._display_components(m) == 1
+
+    frames = np.ones((1, ny, nx))
+    _, pooled, stride = web_serialize._pool_field_mask(frames, m)
+    # >= 2 rather than == 2: column 1 is missed by point-sampling at EVERY stride above 1, so
+    # the case does not depend on the display cap staying where it is today.
+    assert stride >= 2, "the toy must be big enough to force a real stride"
+    assert web_serialize._display_components(m[::stride, ::stride]) == 2  # point-sampling severs it
+    assert web_serialize._display_components(pooled) == 1                 # pooling keeps it
+
+
+def test_pooling_reduces_to_point_sampling_on_an_all_live_mask():
+    """Tier 3, and #5g SS9.1's lesson applied: a bit-identity measured at one grid is not measured.
+
+    The rectangle's payload must not move, and the mechanism is that on an all-live mask every
+    block's representative node is live, so the live-node-mean fallback never fires. Checked across
+    the strides the display budget actually produces, and against the shipped point-sampling helper
+    rather than against a re-implementation of it.
+    """
+    rng = np.random.default_rng(20260826)
+    seen = set()
+    for ny, nx in ((40, 40), (80, 65), (129, 100), (200, 51), (400, 90)):
+        mask = np.ones((ny, nx), dtype=bool)
+        frames = rng.standard_normal((3, ny, nx))
+        want_f, want_m = web_serialize._decimate_field_mask(frames, mask)
+        got_f, got_m, stride = web_serialize._pool_field_mask(frames, mask)
+        seen.add(stride)
+        assert np.array_equal(got_m, want_m)
+        assert np.array_equal(got_f, want_f)          # bit-identical, not "close"
+    assert len(seen) >= 3, f"only strides {sorted(seen)} exercised -- widen the grids"
+
+
+@pytest.mark.parametrize("boundary", ["supported", "free"])
+def test_rectangle_plate_still_reports_a_rectangle_and_no_claim(boundary):
+    """The outline path adds keys to the rectangle payload and changes none of its numbers."""
+    payload = _sim(_plate_params(domain=boundary))
+    assert payload["outline"] == "rectangle"
+    assert payload["grid"]["domain"] == "rectangle"
+    assert "claim" not in payload["meta"]
+    info = payload["meta"]["outline_info"]
+    assert info["n_pruned"] == 0 and info["prune_depth_h"] == 0.0
+    # Left MEASURED at ~2e-16, not forced to zero: the trapezoidal weights really do sum to Lx*Ly on
+    # a rectangle, and hardcoding a 0.0 would hide the one case where the quadrature is exact.
+    assert abs(info["area_deficit"]) < 1e-9
+    assert info["n_live"] <= info["n_box"]
+
+
+@GUITAR_GROUP
+def test_guitar_reports_its_own_outline_and_the_numbers_are_self_consistent(guitar_payload):
+    """#5g requires the area correction be REPORTED and never applied. Omitting it from the payload
+    would be the same mistake from the other side: at a coarse grid the plate being simulated is
+    materially smaller than the guitar drawn on screen (-21.6 % at N = 16), and a viewer that does
+    not say so lets an unconverged plate look finished.
+    """
+    info = guitar_payload["meta"]["outline_info"]
+    assert info["domain"] == "guitar"
+    assert info["area"] < info["outline_area"]              # the staircase always undershoots
+    assert info["area_deficit"] == pytest.approx(
+        info["area"] / info["outline_area"] - 1.0, abs=1e-5)
+    assert -0.30 < info["area_deficit"] < -0.01
+    assert 0.3 < info["n_live"] / info["n_box"] < 0.7              # a guitar fills ~half its box
+    # The prune bar with BOTH ends asserted. #5g SS9.6: a bar that only ever fires on violation is
+    # never observed on a passing grid, so a zero here would mean the check ran over an empty set --
+    # which is exactly how that test passed while asserting nothing.
+    assert info["n_pruned"] >= 1
+    assert 0.0 < info["prune_depth_h"] <= 1.0001
+
+
+@GUITAR_GROUP
+def test_guitar_energy_conserves_but_this_tier_is_NOT_evidence(guitar_payload):
+    """REGRESSION TIER ONLY -- and it is in the name so nobody promotes it later.
+
+    Energy conservation is geometry-blind. The membrane batch recorded it, #5of recorded it again
+    across three visibly different plates, and #5g recorded it a third time. A wrong outline, a
+    mid-plate prune and a display that draws two guitars all conserve perfectly. The batch's weight
+    is on the parity flip and the connectivity guard, not here.
+    """
+    energy = guitar_payload["energy"]
+    assert energy["sigma_is_zero"] is True
+    assert energy["lossless"]["drift"] < LOSSLESS_TOL
+    assert energy["lossless"]["pass"] is True
+
+
+def test_guitar_sweep_grid_is_capped_independently_of_the_audio_grid():
+    """The claim panel is a separate short pass: a user at a fine grid pays for the audio, not for
+    the panel. Without the cap a single render would be 24 eigensolves at the audio's own N.
+    """
+    fine = _sim(_guitar_params(N=56, mu=16.0))
+    assert "error" not in fine, fine.get("error")
+    assert fine["meta"]["claim"]["sweep_N"] == GUITAR_SWEEP_N_MAX
+    coarse = _sim(_guitar_params(N=20, mu=8.0))
+    assert "error" not in coarse, coarse.get("error")
+    assert coarse["meta"]["claim"]["sweep_N"] == 20
+
+
+@pytest.mark.parametrize("mu", [2.0, 32.0])
+def test_the_claim_panel_and_the_spectrum_panel_quote_the_SAME_hertz(mu):
+    """Two panels, one plate, one screen -- so they must not be computing frequency differently.
+
+    The spectrum panel marks the theta-scheme's DISCRETE eigenfrequencies; the sweep's first draft
+    returned the continuum limit (no k, no theta). At the guitar's shipped mu = 2 that is 0.01 % and
+    invisible. The plate Courant slider runs to 32, where it is **3.0 % -- 51 cents** -- and the two
+    numbers on screen would simply disagree with each other, with nothing failing.
+
+    Pinned at both ends of the slider, and against the shipped plate's OWN row rather than the
+    nearest sweep sample, so the check cannot be satisfied by two grids happening to be close.
+    """
+    payload = _sim(_guitar_params(N=24, mu=mu, audio_duration=0.05))
+    assert "error" not in payload, payload.get("error")
+    you = payload["meta"]["claim"]["you"]
+    assert you["f1"] == pytest.approx(payload["meta"]["f1"], rel=1e-6)
+    assert you["f2"] > you["f1"]
+    assert abs(abs(you["parity"]) - 1.0) < 1e-6
+
+
+def test_a_long_body_pushes_the_crossing_past_the_slider_and_the_panel_says_so():
+    """The claim's strongest sensitivity is the ASPECT ratio, and it must not be shown only at one.
+
+    The crossing waist climbs from 0.18 at aspect 1.08 to 0.57 at 1.68, so a long enough body pushes
+    it past the slider's cap entirely and the sweep sees NO flip. That branch has to say "there is
+    no crossing here", not "you are right at the crossing" -- a panel that reports the opposite of
+    the truth on a reachable geometry is the failure this whole batch is organised against.
+    """
+    long_body = _sim(_guitar_params(Lx=0.20, Ly=1.00, N=24, mu=16.0, audio_duration=0.05))
+    assert "error" not in long_body, long_body.get("error")
+    claim = long_body["meta"]["claim"]
+    assert claim["n_flips"] == 0
+    assert claim["crossing"] is None
+    assert claim["shipped_side"] == "none"          # NOT "at"
+    # the sweep still has to be a sweep: a couple of refused waists is fine, a collapsed one is not
+    assert len(claim["rows"]) >= GUITAR_SWEEP_POINTS - 2
+    assert all(abs(abs(r["parity"]) - 1.0) < 1e-6 for r in claim["rows"])
+    # and the near-square end of the range keeps a crossing, at a SHALLOWER waist than the default
+    squat = _sim(_guitar_params(Lx=0.42, Ly=0.46, N=24, mu=16.0, audio_duration=0.05))
+    assert "error" not in squat, squat.get("error")
+    sq = squat["meta"]["claim"]
+    assert sq["n_flips"] == 1
+    assert sq["crossing"][1] < 0.30
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"waist": GUITAR_WAIST_MAX + 0.01},
+        {"waist": -0.1},
+        {"asym": 1.5},
+        {"domain": "guitar-supported"},
+    ],
+)
+def test_guitar_bad_params_give_error_payload(bad):
+    """Out-of-range outline params return a clean error payload, never an exception/500."""
+    payload = _sim(_guitar_params(**bad))
+    assert "error" in payload and payload["error"]["message"]
+
+
+def test_guitar_domain_can_only_mean_a_free_guitar():
+    """A simply-supported curved plate has the membrane's spectrum squared (B = L @ L), so the core
+    refuses it -- and the viewer surfaces that by not offering the combination at all rather than by
+    routing around it. `guitar` maps to the free boundary, and there is no way to ask for the other.
+    """
+    payload = _sim(_guitar_params(audio_duration=0.02))
+    assert payload["boundary"] == "free"
+    assert payload["outline"] == "guitar"
 
 
 # == von Kármán nonlinear plate (2D, model #6) ====================================================

@@ -3244,6 +3244,138 @@ as a first-class number beside the two ledgers, never as a test-only assertion.*
 (`MODEL_RANGES` + `_default`, the viz dispatch, the energy/diagnostics branches, the dual
 plate-field + room-slice view) · `tests/test_web_backend.py` · `scripts/verify_web_headless.py`.
 
+### Batch 20 (DONE) — the guitar outline: the plate stops being a rectangle, and the waist SWAPS the fundamental
+
+Model #5g (`docs/dev/guitar-plate-plan.md`, built 2026-08-26) reaches the viewer. Plan and full
+measurements: `docs/dev/guitar-plate-viewer-plan.md`. Four things this batch settled that the
+sentence above does not contain.
+
+#### It is a DOMAIN of the plate, not a model of its own — and that was the codebase's own answer
+
+The first sketch added a `guitar` entry to the model dropdown. Building it exposed why that is
+wrong here: `Lx` and `Ly` are gated by `data-domain`, so a model with no secondary select cannot
+show them at all, and the guitar needs both. The plate's select already carries `supported | free`,
+so the outline became its third value — which reads as a mixed axis (a shape where the others are
+boundaries) until you notice **the three options are exactly the three plates that exist**. A
+simply-supported guitar is refused by the core with a reason (`B = L @ L` makes its spectrum the
+membrane's squared), so "guitar" can only ever mean "guitar, free". The membrane's select is a shape
+too; this is that precedent rather than a new convention. `payload.model` stays `"plate"`, the
+rectangle payload is **bit-identical** across 20 configurations (2 boundaries × 5 grids × 2 μ,
+measured against `git show HEAD:web/serialize.py`), and the batch adds keys without moving numbers.
+
+**One invariant had to be repaired to do it.** `hasRegimeRanges(model)` re-ranges sliders on *any*
+domain change once *any* `model:regime` key exists — and the plan's own comment says a plate
+supported→free switch must NOT reset the user's sliders. Adding `plate:guitar` would have broken
+that silently. The gate is now "re-range only when the regime being **entered or left** declares
+ranges", which needs one tracked variable and leaves supported↔free alone.
+
+#### The claim: the waist reorders, and the detector is a PARITY that reads exactly ±1
+
+Below a critical waist the fundamental is a long **bender** (even under the plate's left-right
+mirror); above it, the **twist** (odd). Neither precedent implied this — #5o detuned selectively
+without reordering, #5of reordered.
+
+The outline is `|x| < W(y)`, mirror-symmetric whatever `waist` and `asym` do, so every mode is
+exactly even or exactly odd in `x`, the two families cannot couple, and **the crossing is a true
+crossing, not an avoided one** — nothing is available to open a gap. So the detector is one scalar,
+`⟨φ₁, mirror(φ₁)⟩ / ⟨φ₁, φ₁⟩`, measuring **+1.00000 or −1.00000** and nothing between: no shape
+tracking, no overlap threshold, no eigenvector matching across a near-degenerate pair. Across 12
+configurations the sweep found **exactly one flip**, every time.
+
+Grid-converged: the crossing sits at waist 0.240 / 0.250 / 0.250 / 0.260 / 0.260 at N = 24…76. It is
+**not a universal constant** — it moves strongly with elongation (0.183 at `Ly/Lx` = 1.08 → 0.567 at
+1.68) and mildly with ν (0.280 at 0.15 → 0.220 at 0.45), which is why the guitar regime ships its own
+geometry rather than inheriting the plate's 1 × 1 square.
+
+**What is NOT shipped as evidence:** `min f₂/f₁`. It reads 1.00777, 1.00046, 1.00462, 1.00297,
+1.00068 at N = 24…76 — non-monotone, and not a gap. Six successive window bisections around the
+crossing all returned the *identical* residual `1.641e-03`, because the mask stops changing. The
+crossing is reported as an **interval between two adjacent representable waists**, never a number
+with a residual beside it.
+
+#### The trap that blocked: the picture can split into two guitars while the plate is one
+
+`_decimate_field_mask` point-samples, and on a **convex** outline that is benign — which is why the
+circular drumhead never found this in six batches. A guitar's waist is *concave*, and the row that
+joins the two bouts is exactly the row a stride can skip. Hunted over **53,613 core-accepted
+configurations: 128 render as two disconnected lobes** while the solver has one connected plate, and
+2,865 render the waist as a single pixel. Re-hunted afterwards inside the viewer's own slider ranges
+and under the shipped waist cap: **249 of 140,349 reachable configurations** split under
+point-sampling, **0** under pooling — so the guard is load-bearing, not spare, and the smallest case
+(a narrow body with a deep waist) is a test.
+
+Every detector stays green through it. Energy conserves (geometry-blind — recorded now for the
+fourth time). The nullspace is 3-dimensional, because the *solver's* plate is fine. The audio is
+correct. The core's own `_count_components` passes, because it guards the solver mask. Only the
+picture is wrong, and two lobes read as a design decision rather than a bug — batch 18's transposed
+slice decode, one model over.
+
+The fix is a **proof, not a retry loop**: max-pool the display mask (a display cell is live iff *any*
+solver node in its block is), which cannot split a connected plate because any 4-connected path maps
+to a 4-connected path of blocks. Confirmed anyway (35 point-sampled splits → **0** pooled), with the
+component count asserted in the payload path regardless, and pinned on a synthetic isthmus that
+point-sampling severs. The **field** is point-sampled where the representative node is live and falls
+back to the block's live-node mean only where it is not — which is exactly `[::s, ::s]` on an
+all-live mask, so the rectangle does not move. The membrane's disk keeps the old path: pooling never
+splits it either (checked at N = 32…200), so there is no bug to fix, and pooling *would* perturb its
+shipped rendering by 40–85 cells for nothing.
+
+#### The second trap: the shipped strike could not express the claim
+
+A raised-cosine strike on the centre line has **exactly zero** overlap with every odd mode, and past
+the crossing the fundamental is one of them — so the claim would be silent while the panel said the
+modes swapped, with every ledger green. Not a corner: at the plate's own default `pluck_x = 0.4` the
+fundamental is already struck **12× weaker** than the second partial, and one slider step to `0.5`
+takes it to `1.7e-14`. A pickup on the centre line nulls it too.
+
+And there is **no strike point that serves both branches** — a strike near the waist shows the bender
+and hides the twist, one in a bout does the reverse (measured `|a₁|/max|a_j|` = 1.000 / 0.241 at
+(0.25, 0.55) against 0.371 / 1.000 at (0.25, 0.35)). So the compromise ships as a **reported number**
+rather than a hidden choice: the guitar's defaults are (0.25, 0.35), the claim panel draws the
+strike's overlap with the lowest mode at every waist as a bar track under the plot, and a strike
+inside `GUITAR_CENTRELINE_TOL` of the centre line turns the sidebar hint red **before** a render is
+paid for (the fret hint's precedent).
+
+#### The waist slider is QUANTISED, and the panel says so
+
+The outline is a staircase, so `waist` only changes the plate when a node crosses the rim. Between
+crossings the mask is bit-identical and *nothing* moves. Over waist 0…0.9 that is **50 distinct
+plates at N = 16** — where the widest dead band is **0.107**, more than a tenth of the slider's
+travel doing nothing — rising to 675 at N = 80. The payload ships both the dead band around the
+*current* waist (bisected to 1e-5, the number that matters while dragging) and a distinct count at a
+**stated** 1e-3 sampling, labelled as the lower bound it is. This quantum is also the width of the
+crossing bracket.
+
+#### Also on screen, because #5g requires it
+
+`n_pruned`, `area`, `outline_area`, `area_deficit` and `prune_depth_max` ride on **every** plate
+payload, rectangle included. #5g is emphatic the area correction is reported and never applied;
+omitting it from the viewer is the same mistake from the other side. At viewer-reachable grids the
+deficit runs **−21.6 % at N = 16** to −4.6 % at N = 80 — at the coarse end the plate being simulated
+is a fifth smaller than the guitar drawn on screen.
+
+#### Defaults are not on a cliff, and this batch says so explicitly
+
+Unlike batch 19's amplitude sliders, the shipped `waist = 0.42` sits well past the crossing at the
+default aspect: the plate opens in the twist regime and the crossing is something the user slides
+*back* to find. The waist cap stops **short** of the core's refusal (0.88 against ~0.9) rather than
+on it.
+
+#### Cost
+
+The guitar fills ~50–56 % of its bounding box, so it is about **half** a rectangle's cost at the same
+`N`. The claim sweep is a separate short pass capped at `GUITAR_SWEEP_N_MAX` — 24 waist points at
+N = 40 is ~2.1 s, so a user at a fine grid pays for the audio, not for the panel.
+
+#### Touch list
+
+`web/serialize.py` (`_pool_field_mask`, `_display_components`, `_outline_block`, `_mirror_parity`,
+`_guitar_claim_block`, `_waist_quantisation`, the outline in `_build_plate`) ·
+`web/static/index.html` (the guitar fieldset, `data-domain` on Lx/Ly, the model label) ·
+`web/static/app.js` (`DOMAIN_OPTS.plate`, `MODEL_RANGES["plate:guitar"]` + `_default`,
+`regimeSwitchRerangs`, `drawWaistCrossing`, `updateGuitarHint`) · `tests/test_web_backend.py`
+(**16 tests**, group `web_guitar`). **No `physsynth/core/` edit** — the batch adds no physics.
+
 ### Later batches (rough map — not firm)
 
 - **Body / radiation** — the modal body + radiation read-out is **batch 12**; `StringPlateBridge`
@@ -3284,11 +3416,21 @@ it is a batch, which is exactly the bar this sentence sets.*
 
 *Amended 2026-08-26: **reopened a fourth time.** Model #5g (the plate's outline stops being a
 rectangle — a guitar top with bouts and a waist, `docs/dev/guitar-plate-plan.md`) is a new core model
-and therefore a new built-but-unshown gap, exactly as the rule below predicts. It also arrives with a
-frontend requirement of its own, the same bar batch 18 had to clear: the viewer's field renderers all
-assume a **rectangular** field, and a masked outline needs dead nodes drawn as absent rather than as
-zero — which is a new capability, not a new parameter. So it is a candidate batch under the rule, not
-an automatic one.*
+and therefore a new built-but-unshown gap, exactly as the rule below predicts. **Batch 20 (above)
+closes it a fourth time.***
+
+*Corrected 2026-08-26 while building batch 20: the paragraph above originally went on to claim #5g
+"arrives with a frontend requirement of its own … a masked outline needs dead nodes drawn as absent
+rather than as zero — which is a new capability, not a new parameter." **That was false.** `app.js`
+has drawn dead nodes as panel background since the membrane batch (`maskData[p] === 0` in all three
+2-D paint paths), the `mask` block has been in the payload since batch 13, and the circular drumhead
+exercises it on every render. So the batch was *cheaper* than the amendment priced it, and what
+authorises it is **model-newness alone** — which the rule below already permits ("a new model **or** a
+new capability"). Two things were genuinely new and neither is a rendering capability: no *free-plate*
+payload had ever shipped a non-trivial mask, and the display path had **no connectivity guard** where
+the core has one. The second of those turned out to be the batch's blocking trap (see batch 20). The
+lesson generalises: a gate written from memory of what the frontend does is a claim, and this one was
+wrong in the direction that would have made the batch look bigger than it was.*
 
 *Amended 2026-08-17: the gap **reopened**, which is the useful thing this line now records. Air-box
 batches 5 and 6 added core models after b18 shipped, and batch 6 closed itself with "still out: a
