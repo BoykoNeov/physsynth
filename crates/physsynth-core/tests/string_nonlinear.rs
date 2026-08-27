@@ -23,7 +23,9 @@
 //!   first version added a second lesson the hard way: opacity is what makes the difference
 //!   *observable*, but whether one exists at all belongs to the C library, so a hardcoded witness
 //!   is a claim about the runner. It separates on UCRT, does not on the CI runner, and was red for
-//!   two batches. The count is now searched for and reported, and only self-consistency asserted.
+//!   two batches. The witness is now searched for and the count reported; only self-consistency is
+//!   asserted, and the strict branch fires where the search succeeds. Whether it succeeds on the
+//!   runner is unmeasured, and this test is written so it does not have to be known.
 
 use physsynth_core::pyfloat::scalar_pow;
 use physsynth_core::string_damped as damped;
@@ -335,12 +337,16 @@ fn the_stretch_squares_with_pow_and_not_a_multiply() {
     // and it turned CI red for two batches while passing in both profiles on the machine that
     // wrote it -- so §17.2's "run it in release" was necessary and is not sufficient.
     //
-    // What is machine-specific is the WITNESS, not the phenomenon, and the runner said so itself.
-    // The same red run that failed here had `test_rust_parity_mallet` and `test_rust_parity_collision`
-    // pass on that machine, and both of those separate `pow` from a multiply at values of their
-    // own -- so witnesses exist on the runner and this hardcoded one merely is not among them.
-    // How dense they are, and where, is the C library's business and no port'''s: UCRT and the
-    // runner'''s libm round the same call differently, which is §14.2 arriving in a test.
+    // Whether ANY value separates the two spellings is the C library's business, and on the
+    // runner it is UNMEASURED -- deliberately, because this test no longer needs to know. UCRT's
+    // `pow` is not correctly rounded and 78 of the samples below separate on it. A correctly
+    // rounded `pow` returns the exact product rounded once, which is what `x * x` already is, and
+    // on such a library none would separate. Both are legitimate: where none do, the two spellings
+    // are the same function and `stretch_int` is right either way. An absence of witnesses is an
+    // answer, not a failure -- which is the whole reason the strict branch below is conditional.
+    //
+    // `test_rust_parity_mallet` reached this first and guards its own strict assert with
+    // `if k ** 2 != k * k`. This is that pattern, with the witness searched for instead of given.
     //
     // So this is `collision`'s rule -- report the count, assert only self-consistency -- arriving
     // in the one place its own comment said it would (§16.2). The teeth are kept where the

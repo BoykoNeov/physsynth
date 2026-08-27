@@ -3362,17 +3362,26 @@ the port evaluates the spelling the model specifies — on any machine. It may *
 the machine separates the two spellings, at a hardcoded witness or at all.
 
 The operational form: **search for the witness, report the count, and let the strict branch fire
-only where the search succeeds.** `collision` already did this and said so in a comment; the two
-tests below did not.
+only where the search succeeds.** `collision` said so in a comment and `test_rust_parity_mallet`
+implemented it as a guard; the two tests below did neither.
 
 ### 21.2 The two that were red, and what distinguishes them
 
 - `crates/physsynth-core/tests/string_nonlinear.rs` asserted that a witness found on Windows/UCRT
-  separates `pow` from a multiply. **The phenomenon is not machine-specific; the witness is.** The
-  same red run had `test_rust_parity_mallet` and `test_rust_parity_collision` — which separate the
-  same two spellings at values of their own — pass on that runner. So witnesses exist there and
-  this one merely is not among them. Searched rather than hardcoded, the test keeps its teeth on
-  both machines (78 of 199,999 samples separate on this one).
+  separates `pow` from a multiply. It does not on the runner, and **whether anything does there is
+  unmeasured** — the test is now written so it does not have to be known. A correctly rounded `pow`
+  returns the exact product rounded once, which is what `x * x` already is, so a library that
+  rounds it correctly has no witnesses at all; UCRT does not, and 78 of 199,999 sampled values
+  separate here. Where none separate, the two spellings are the same function and the port is right
+  either way. **`test_rust_parity_mallet` had already reached this** and guards its own strict
+  assert with `if k ** 2 != k * k`; this is that pattern with the witness searched for rather than
+  given, and generalising it is what §21.1 is.
+
+  A caution recorded because the first draft of this section got it wrong: that mallet test passing
+  on Linux is **not** evidence that witnesses exist there — its guard may simply have skipped — and
+  `test_rust_parity_collision`'s inequality is about the dense LU, not about `pow`, so it is not
+  evidence either. **A guarded assert reports nothing about the machine that skipped it**, which is
+  the price of the pattern and the reason the count is printed as well.
 - `tests/test_rust_parity_radiation.py` asserted `diverged` — that a weight of 0.02 makes NumPy's
   fused multiply-add visible against Rust's plain sum. **Here the phenomenon itself is
   machine-specific**, because a fused product differs from a rounded one only when the product
