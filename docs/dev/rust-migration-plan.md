@@ -312,6 +312,23 @@ then `string_damped`, `string_nonlinear`; then `collision`. Cheap, and they prov
 `bow` comes last in the phase because it borrows the string's banded solve and cannot be checked
 before the string is trustworthy.
 
+> **Correction, 2026-08-27, from building the phase.** The order above cannot be run, and the
+> obstacle is in `tests/`, not in the models. `string_stiff`, `string_damped`, `string_nonlinear`
+> and `string_geometric` are chained by three **bit-identity reduction anchors** — `sigma1 = 0`,
+> `EA = 0`, `EA = T` — each asserting `array_equal` between two *different* model classes. Porting
+> any one of them turns an intra-Python comparison into a cross-language one, and the banded solve
+> cannot carry that (OpenBLAS's `DTBSV` is a blocked kernel; no scalar transcription reproduces it
+> — §15.3). So the four are indivisible under a change of solver, and one of them is Group D.
+>
+> The phase therefore starts by porting the **solver** rather than a model: `physsynth/core/banded.py`,
+> the Phase 1 manoeuvre one level down. All four models change arithmetic together, every anchor
+> stays valid, and no sparse LU is touched — so `beam` keeps its §4.1 de-risking job. §15.
+>
+> Also: "they prove the LAPACK link" is not what happened. **Nothing is linked.** The allowlist is
+> still empty, and Group B's banded Cholesky is ~150 lines of transcription that needs no library.
+> §4's "this group is nearly free" was right; its assumption that freedom would come from linking
+> LAPACK was not.
+
 **Phase 4 — `beam` (254 lines, one `splu`).** The Group D de-risker, chosen for exactly the reason
 it was chosen the first time. Proves the SuperLU link and the §4.1 manoeuvre on the smallest
 possible surface.
@@ -1648,3 +1665,236 @@ that measures the port, for the reason §14.3 gives.
   last-ulp difference flips.
 - **`fmt::py_exp` exists** alongside `py_float`, for a `{:.3e}`-style interpolation. Phase 7's
   analytic oracles are the next place a message is likely to want one.
+
+---
+
+## 15. Phase 3, batch 1, as built (2026-08-27)
+
+`physsynth/core/banded.py` — a new module holding one thing, the banded Cholesky that four models
+share. No model was ported. That is not a shortfall in the batch; it is the batch's finding, and
+§15.2 is why.
+
+### 15.1 The shape on disk
+
+```
+crates/physsynth-core/src/banded.rs      DPBTF2 and DPBTRS, transcribed; BandedError
+crates/physsynth-core/tests/banded.rs    native bars (8 tests)
+crates/physsynth-py/src/banded.rs        the two functions + the NotPositiveDefinite exception
+physsynth/core/banded.py                 NEW — reference is SciPy's; swap block gated on the flag
+physsynth/core/string_stiff.py           import line only
+physsynth/core/string_damped.py          import line only
+physsynth/core/string_nonlinear.py       import line only
+physsynth/core/string_geometric.py       import line only
+tests/test_stability.py                  the swap guard, + the four models' captured bindings
+tests/test_rust_parity_banded.py         Rust vs LAPACK (49 tests)
+```
+
+### 15.2 The finding: a bit-identity anchor is a porting constraint, and it binds models together
+
+§5 says Phase 3 starts with `string_stiff` — "259 lines, the smallest banded solve". It does not,
+and the reason is not in the file. It is in `tests/`:
+
+```
+test_damped_string.py::test_sigma1_zero_reduces_to_stiff_string_bit_for_bit
+    StiffString                    == DampedStiffString(sigma1=0)   array_equal, 1500 steps
+test_tension_string.py::test_EA_zero_is_model3_bit_identical
+    TensionModulatedString(EA=0)   == DampedStiffString             array_equal, 400 steps
+test_geometric_energy.py::test_EA_equals_T_is_bit_identical_to_damped_string
+    GeometricString(EA=T)          == DampedStiffString             array_equal, 300 steps
+```
+
+These are *reduction anchors*: each says a richer model collapses onto a simpler one when its extra
+physics is switched off, and each asserts it with `array_equal` rather than a tolerance, on purpose
+— the linear path is the same expressions in the same order, and float addition is not associative,
+so bit-identity is a **provable** claim about the code and a tolerance would be a weaker one. They
+are among the most valuable tests in the repo.
+
+They are also a constraint on the migration that nothing in §§1–14 anticipated. **Port one of those
+four models and an intra-Python anchor becomes a cross-language one**, which §15.3 says the banded
+solve cannot carry. So `{string_stiff, string_damped, string_nonlinear, string_geometric}` is
+**indivisible** under a change of solver — and `string_geometric` is Group B *and* Group D, i.e.
+Phase 5. Taken literally, "port the smallest banded model first" drags a sparse-LU model into
+Phase 3 and forfeits §4.1's plan to test the SuperLU hypothesis on `beam` first.
+
+The way out is the manoeuvre Phase 1 already made and §11.2.1 already generalised, applied one level
+down: **the unit of porting is a function group, and here the function group is the solver, not the
+model.** `operators` was ported before any model that uses it, and flipping it swung five models at
+once. `banded` is the same shape: not a model, but what four models are built out of. Every anchor
+stays valid because all four models call the same code, whatever that code is.
+
+**The generalisable question, and it is cheap to ask:** before porting a model, grep the suite for
+`array_equal` against a *different* class. A same-class comparison (a bowed string against a bare
+one) survives any port, because both sides move together. A cross-class one is a chain, and the
+chain — not the file — is the unit of work. Four of this repo's `array_equal` anchors are
+cross-class; the rest are not, which is why fourteen batches went by without meeting one.
+
+### 15.3 What is transcribable here, and what is not
+
+SciPy dispatches `cholesky_banded` to `dpbtrf` and `cho_solve_banded` to `dpbtrs`. At `kd = 2` the
+blocked path in `dpbtrf` is never taken (`NB > KD`), so the factor is the unblocked `DPBTF2`, and
+`dpbtrs` is two `DTBSV` calls. Measured on 120 of this family's own matrices (2026-08-27):
+
+| transcription of DPBTF2 | agrees with OpenBLAS |
+|---|---|
+| reciprocal-once **and** fused multiply-add | **120/120** |
+| reciprocal-once, plain multiply-add | 82/120 |
+| divide-per-element, either way | 19/120 |
+
+So the **factor is reproducible**, and two details decide it. `DSCAL` forms `1/ajj` **once** and
+multiplies, which is worth 19/120 → 82/120 and is the reference algorithm's own behaviour — that is
+transcribed. `DSYR` fuses its multiply-add, which is worth 82/120 → 120/120 and is a property of the
+kernel `DYNAMIC_ARCH` picks at run time — that is **not** transcribed, for exactly the reason §14.2
+gives. A bit-identity assertion resting on it would pass here and fail on a runner that dispatched a
+different kernel: a claim about a CPU, not about a port.
+
+The **solve is not reproducible at all**, and that was established rather than assumed. Taking one
+15-element system, seeding each element from LAPACK's own exact predecessors, and asking which of
+{forward, reverse} × {plain, fused} × {divide, reciprocal} could produce it:
+
+* element 2 admitted only the dividing forms;
+* element 5 admitted only the fused forms;
+* element 9 admitted only the forward loop order;
+* element 14 excluded the forward order;
+* **element 7 admitted nothing at all.**
+
+The intersection is empty, and one element is outside the space entirely. No scalar recurrence
+produces OpenBLAS's `DTBSV`; it is blocked and vectorised. The Rust side therefore transcribes the
+reference `DTBSV` plainly and stops chasing.
+
+Worth naming, because it is the *shape* of this finding rather than its detail: §14.2 said the first
+thing to break bit-identity would be a reduction that feeds back into state, and predicted solvers
+would be a later and separate question. Both halves were right, and the two collapsed into one batch
+— a banded back-substitution **is** a chain of reductions, and its output is `u^{n+1}`.
+
+### 15.4 The first swap that changes the numbers, and where Group A actually lands
+
+Every batch through §14 could open with "bit-identical, except here". This one cannot, and the
+consequence is a correction to how §4's Group A target should be read.
+
+Measured on the stiff string (`N = 128`, `kappa = 2.7`, `sigma = 3`), worst state difference so far
+as a fraction of the run's amplitude:
+
+| steps | 100 | 500 | 1,000 | 2,000 | 5,000 | 20,000 |
+|---|---|---|---|---|---|---|
+| lossless | 8.7e-14 | 2.7e-13 | 3.4e-13 | 8.0e-13 | 1.1e-12 | 2.5e-12 |
+| `sigma = 3` | 1.1e-13 | 2.9e-13 | 4.1e-13 | 9.7e-13 | 2.0e-12 | 3.2e-12 |
+
+§14.4 established that Group A's "~1e-13 over a short run" is a **2,000-step** claim for a fed-back
+reduction. For a fed-back **solve** it is a **hundred-step** claim — an order of magnitude shorter
+at the same tolerance. The growth is roughly square-root, not linear and not saturating, which is
+what a random-walk accumulation of last-bit differences through a well-conditioned solve looks
+like.
+
+**And the physics does not move.** Lossless energy drift, same string, 4,000 steps: LAPACK 1.14e-12,
+Rust 1.16e-12, against the project's 1e-10 bar. The transcription is not worse than OpenBLAS, it is
+*different* from it — which is exactly the hand-off §4 describes and the first time this migration
+has had to lean on it.
+
+**The property that replaces bit-identity as this batch's sharp claim** is the one §15.2 is about:
+the four models still agree with **each other** to the bit. That is asserted three ways in
+`tests/test_rust_parity_banded.py` and again, through the suite's own anchors, under the flag.
+
+### 15.5 The shim's own validation cost more than the port saved
+
+`cholesky_banded(..., check_finite=True)` is the default, and the first version of the Python shim
+honoured it the obvious way — `np.isfinite(ab).all()` before handing the array over. Measured:
+
+| | one solve, `n = 31` | one factor, `n = 127` | 4,000 steps, `N = 64` |
+|---|---|---|---|
+| SciPy | 7.7 µs | 11.6 µs | 0.072 s |
+| Rust, check in the shim | — | — | 0.077 s (**0.96x**) |
+| Rust, check inside the binding | 2.6 µs | 2.8 µs | 0.049 s (**1.47x**) |
+
+The primitive is 2.2–2.9x faster on the solve and ~4x on the factor. A single extra pass over a
+`(3, n)` array in Python **erased all of it and then some**, because the win being spent is
+per-call overhead (§11.6) and an `np.isfinite` is another call of exactly that kind. Moving the
+check into the pass the binding already makes over the input restored it, and it belongs there
+anyway: it has to happen *before* the factorization, or a NaN diagonal comes back as
+`NotPositiveDefinite` — the right refusal for the wrong reason and the wrong exception type.
+
+**Generalisation for every remaining swap block:** the shim is on the hot path. Coercion and
+validation written there are paid per call, in the interpreter, against a saving that is measured in
+microseconds. Push them across the boundary, or measure what they cost.
+
+Model-level speedups: 1.47x at `N = 64`, 1.35x at 256, 1.17x at 1024 — falling with size exactly as
+§12.7 predicts, since what is being displaced is a compiled SciPy call and what remains is NumPy
+arithmetic that is still Python-driven.
+
+### 15.6 Four smaller things worth keeping
+
+1. **`LinAlgError` is not a `ValueError` subclass.** Reporting a non-SPD band as a `ValueError`
+   would silently change what a caller can catch. The binding raises its own
+   `physsynth_rs.NotPositiveDefinite` and the shim re-raises it as the `LinAlgError` the original
+   promises, with LAPACK's message text unchanged. Nothing in the repo catches it today — checked,
+   not assumed — but "no client catches it yet" is a fact about the clients, not a licence.
+2. **`b / sqrt(a) / sqrt(a)` is not `b / a`.** A diagonal band solved through its Cholesky factor
+   divides twice, and at `a = 2` the two spellings differ in the last bit (0.49999999999999994
+   against 0.5). The native test asserts the form the algorithm *computes*, so that a later "this is
+   just a division" simplification fails rather than quietly moving every model.
+3. **`kappa = 0` hands over a pentadiagonal band whose second superdiagonal is all zeros.** It is a
+   numerically empty band, not a structurally absent one, so a `kd = 2` loop with wrong bounds does
+   arithmetic that changes nothing and passes. The native bar is that the `kd = 2` and `kd = 1`
+   paths agree **to the bit** on that input.
+4. **The captured-binding hazard is at its widest here.** Four modules do
+   `from .banded import ...` at module scope. Everywhere else in this migration a mis-ordered swap
+   would leave one model on Python; here it would leave *three of four* on Rust and break the
+   anchors, which fail with a message about physics. `tests/test_stability.py` now asserts all four
+   captured bindings are the ones `banded` currently exposes.
+
+### 15.7 The success condition
+
+* `tests/test_stiff_string.py`, `test_damped_string.py`, `test_tension_string.py` and the six
+  `test_geometric_*.py` files unmodified against Rust — the four models themselves, including all
+  three anchors.
+* Their clients, because `DampedStiffString` is the most-reused resonator in the project:
+  `test_bow_*.py`, `test_collision_*.py`, `test_jawari.py`, `test_connection.py`,
+  `test_sympathetic.py`.
+* `test_beam_modal.py` and `test_beam_stability.py` as the **control**: `beam` is built on the same
+  operators but calls no banded solver, so a failure there is about Phase 1, not about this batch.
+
+### 15.8 What was measured
+
+| | |
+|---|---|
+| Native `cargo test --workspace` | **174 passed** (166 at the end of batch 4) |
+| Cargo dependency allowlist | still **EMPTY** — no LAPACK link, no sparse crate |
+| `tests/test_rust_parity_banded.py` | **49 passed**, 1 skipped off-flag |
+| DPBTF2 transcription vs OpenBLAS, 120 configs | 120/120 with fma, **82/120 without** (shipped) |
+| DTBSV: scalar recipes consistent with OpenBLAS | **none** — one element admits no candidate |
+| Factor, worst relative difference from LAPACK | **6.2e-16** |
+| Solve, worst relative difference from LAPACK, 6 sizes × 3 stiffnesses | inside 1e-13 |
+| State, 100 / 2,000 / 20,000 steps, as a fraction of amplitude | 1.1e-13 / 9.7e-13 / 3.2e-12 |
+| Lossless energy drift, 4,000 steps | LAPACK 1.14e-12, Rust 1.16e-12 (bar 1e-10) |
+| The four models' reduction anchors on the Rust solver | **bit-identical** |
+| One banded solve, `n` = 31 / 127 / 511 / 2047 | **2.9x / 2.2x / 1.5x / 1.1x** faster |
+| One factorization, `n` = 31 / 127 / 511 | **3.9x / 4.2x / 4.2x** faster |
+| A whole `StiffString` step, `N` = 64 / 256 / 1024 | **1.47x / 1.35x / 1.17x** faster |
+| The same, with `np.isfinite` in the shim | **0.96x** — slower than SciPy |
+| The four models and their clients under `PHYSSYNTH_RS=1` | *(pending)* |
+
+### 15.9 What the next batch inherits
+
+- **`collision` is next, and it is now unblocked in a way it was not before.** Group C is one file
+  and one dense LU, and it wraps a `DampedStiffString` rather than being one — so it does not join
+  the chain §15.2 found. Its own reduction anchor (`test_collision_energy.py:135`) compares a
+  barriered string to a bare one, both `DampedStiffString`, so it survives any port of either.
+- **`bow` after it**, for the reason §4 already gives, with one addition from this batch: `bow`
+  calls `string.apply_Ainv`, which is now a Rust solve, so its precomputed driving-point
+  admittance already differs from the numbers its acceptance run produced. §14.10's warning about
+  iteration counts is therefore live rather than prospective — and worth stating precisely,
+  because the suite is weaker here than it looks: `test_collision_energy.py` and `test_jawari.py`
+  assert `newton_iters < newton_maxiter`, i.e. that the contact solve *converged*, **not** that it
+  took the same number of iterations as before. A last-bit difference that costs one extra Newton
+  step is invisible to every test in the repo. That is survivable — the count is not a physical
+  quantity — but a batch that ports `collision` itself and wants to compare trajectories will need
+  to compare the counts explicitly, the way §13.3 compared the reed's branch choices.
+- **The four models themselves still have to port**, and when they do the anchors are no longer the
+  obstacle: with the solver already common, a Rust `StiffString` and a Python `DampedStiffString`
+  do the same arithmetic everywhere it matters (the sparse matvec was proved bit-identical in
+  batch 1, the elementwise arithmetic in Phase 0). Whether that survives contact is the next
+  batch's measurement, not this one's claim.
+- **Ask the `array_equal` question before every remaining model.** §15.2. It costs one grep and it
+  is the difference between a batch and a phase.
+- **Never write validation into a swap block without pricing it.** §15.5.
+- **§4.1's SuperLU hypothesis is still untested.** This batch deliberately links nothing: the
+  allowlist is still empty, and `beam` keeps its de-risking job at Phase 4.

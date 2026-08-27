@@ -39,6 +39,7 @@
 
 #![allow(non_snake_case)] // The Python API spells them `L`, `T`, `N`; the binding must match.
 
+mod banded;
 mod body;
 mod bore;
 mod exciter;
@@ -666,6 +667,12 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("RHO0_AIR", physsynth_core::radiation::RHO0_AIR)?;
     m.add("C0_AIR", physsynth_core::radiation::C0_AIR)?;
     m.add_function(wrap_pyfunction!(reed::py_bernoulli_flow, m)?)?;
+    m.add_function(wrap_pyfunction!(banded::py_cholesky_banded_upper, m)?)?;
+    m.add_function(wrap_pyfunction!(banded::py_cho_solve_banded_upper, m)?)?;
+    m.add(
+        "NotPositiveDefinite",
+        m.py().get_type::<banded::NotPositiveDefinite>(),
+    )?;
     m.add_function(wrap_pyfunction!(op_delta_x_forward, m)?)?;
     m.add_function(wrap_pyfunction!(op_delta_x_backward, m)?)?;
     m.add_function(wrap_pyfunction!(op_delta_xx, m)?)?;

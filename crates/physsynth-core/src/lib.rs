@@ -15,6 +15,9 @@
 //! clients write its state rather than only reading it; its third the wind leg, `bore` and
 //! `reed`; its fourth `radiation`, the air node in three tiers, which is where the migration's
 //! bit-identity claim runs out (a BLAS reduction that feeds back into state — see that module).
+//! Phase 3 opens with `banded`, which is not a model either: it is the banded Cholesky four
+//! theta-scheme string models share, ported ahead of all four because the suite chains them
+//! together with bit-identity reduction anchors that only survive if they change solver at once.
 //!
 //! # The shape every resonator here shares
 //!
@@ -35,6 +38,7 @@
 //! and monotonically decreasing when lossy. That is the project's acceptance contract, and it is
 //! asserted natively in `tests/` here as well as through the Python harness.
 
+pub mod banded;
 pub mod body;
 pub mod bore;
 pub mod exciter;

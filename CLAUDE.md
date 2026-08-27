@@ -21,10 +21,11 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    analysis, viewer backend *and* the test suite — in favour of **Rust**, gradually and model by
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
-   **Phases 0, 1 and the first four batches of 2 are built** (plan §9-§14): `crates/physsynth-core`
-   + `crates/physsynth-py`, with `string_ideal`, all of `operators`, `membrane`, `exciter`, `body`,
-   `bore`, `reed`, the *builder half* of `operators2d` and all of `radiation` **except** its one
-   Bessel helper ported. `cargo test --workspace` runs the
+   **Phases 0, 1, four batches of 2 and the first of 3 are built** (plan §9-§15):
+   `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all of `operators`,
+   `membrane`, `exciter`, `body`, `bore`, `reed`, the *builder half* of `operators2d`, all of
+   `radiation` **except** its one Bessel helper, and the **banded Cholesky** the four theta-scheme
+   strings share, ported. `cargo test --workspace` runs the
    native bars and the Cargo dependency allowlist; `pip install ./crates/physsynth-py` then
    `PHYSSYNTH_RS=1 pytest` runs the **existing, unmodified** Python tests against the Rust code. The
    flag is one switch for the whole tree: with it set, five still-Python string/beam models run on
@@ -32,9 +33,12 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    Karman bracket runs on Rust-built geometry; and the whole body/radiation leg (bridges,
    sympathetic strings, all three radiation tiers) runs on a Rust modal body; and the whole wind leg
    — air column, radiating bell and the reed that blows it — is Rust end to end; and the air node
-   itself — far-field read-out, radiation load, rational impedance — is Rust too. Both
+   itself — far-field read-out, radiation load, rational impedance — is Rust too; and the four
+   theta-scheme strings — stiff, damped, tension-modulated, geometrically exact — plus everything
+   that vibrates one (the bow, the fret barrier, the bridges, the sympathetic strings) now
+   back-substitute in Rust while the models themselves are still Python. Both
    implementations stay alive for now — deleting a Python model waits on its clients, not on its own
-   phase (§1.2). Five facts worth knowing before planning work: a file's risk group is the group of
+   phase (§1.2). Seven facts worth knowing before planning work: a file's risk group is the group of
    its hardest function, so a module can port in halves (§11.2.1); `mallet` needs `collision`, so
    **Phase 2 finishes after Phase 3 starts** (§11.2.2); and the speed win is **per-step overhead,
    not arithmetic** — 8.7x on a small grid, ~1.1x once SciPy's compiled matvec dominates, so the
@@ -55,7 +59,18 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    corollary bites immediately: a fused multiply-add differs from a rounded one only when the
    **product** rounds, and every body fixture in `tests/helpers.py` uses weights of 1.0, so the
    suite is systematically blind to this class of divergence — a comparison of reductions needs at
-   least one fixture whose coefficients are not powers of two (§14.3).
+   least one fixture whose coefficients are not powers of two (§14.3). And a seventh, from the
+   banded solver, which is about `tests/` rather than about arithmetic: **a bit-identity anchor
+   between two different model classes is a porting constraint that binds them into one unit**
+   (§15.2). Three `array_equal` reduction anchors chain the four theta-scheme strings together, one
+   of which is Group D — so the phase had to port the *solver* rather than any model, the Phase 1
+   manoeuvre one level down, and the question to ask before porting any model is "does the suite
+   compare it, to the bit, against a **different** class?" Two corollaries. The Group A target is
+   **run-length-dependent and shorter than it looks**: a fed-back reduction held 1e-13 out to 2,000
+   steps (§14.4), a fed-back *solve* holds it only to ~100 (§15.4) — while the energy bar does not
+   move at all. And **validation written into a swap block is on the hot path**: one
+   `np.isfinite(...).all()` in Python turned a 1.47x win into a 0.96x loss, because what is being
+   spent is per-call overhead and that check is another call of exactly that kind (§15.5).
 4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
    never the reverse. Keeps the physics portable to C++/Rust later.
 5. **Unifying abstraction:** `exciter -> resonator (+- nonlinear coupling) -> body/radiation`.

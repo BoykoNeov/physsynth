@@ -154,9 +154,9 @@ from typing import Literal, NamedTuple
 import numpy as np
 from numpy.typing import NDArray
 from scipy import sparse
-from scipy.linalg import cho_solve_banded, cholesky_banded
 from scipy.sparse.linalg import splu
 
+from .banded import cho_solve_banded, cholesky_banded
 from .operators import biharmonic_matrix, second_difference_matrix
 from .string_stiff import THETA_DEFAULT
 

@@ -171,6 +171,7 @@ def test_the_rust_swap_matches_the_environment():
     # guards, and it runs on BOTH paths -- the default one included, where it asserts the Rust
     # model is *not* silently in play.
     from physsynth.core import (
+        banded,
         body,
         bore,
         exciter,
@@ -182,7 +183,17 @@ def test_the_rust_swap_matches_the_environment():
     )
 
     expected_rust = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
-    for module in (string_ideal, operators, membrane, operators2d, exciter, body, bore, reed):
+    for module in (
+        string_ideal,
+        operators,
+        membrane,
+        operators2d,
+        exciter,
+        body,
+        bore,
+        reed,
+        banded,
+    ):
         assert module._USE_RUST is expected_rust, (
             f"{module.__name__}'s reading of PHYSSYNTH_RS disagrees with this test's -- one of "
             "the two changed without the other"
@@ -265,6 +276,12 @@ def test_the_rust_swap_matches_the_environment():
             "norm2_2d",
         },
         exciter: set(exciter.__all__),
+        # `banded` is ported in full (plan Phase 3), and it is the odd one out in this table: its
+        # `_py` aliases are SciPy's functions, not a Python transcription, because what this
+        # module ports is a choice of solver rather than a piece of arithmetic somebody wrote
+        # here. It is also the only swap so far that deliberately changes the numbers -- see the
+        # module's own header for why that is safe and what it buys.
+        banded: set(banded.__all__),
         # `reed` is ported in full, but only ONE of its two public names is a function -- the
         # class is checked by identity above. `bernoulli_flow` needs the swap because
         # `tests/test_reed_stability.py` imports it by name and asserts its oddness and passivity
@@ -292,7 +309,31 @@ def test_the_rust_swap_matches_the_environment():
                 )
 
     if expected_rust:
-        from physsynth.core import beam, connection, mallet, radiation, string_stiff
+        from physsynth.core import (
+            beam,
+            connection,
+            mallet,
+            radiation,
+            string_damped,
+            string_geometric,
+            string_nonlinear,
+            string_stiff,
+        )
+
+        # The banded solver's version of the captured-binding hazard, and it is the widest one in
+        # this test. Four models do `from .banded import cho_solve_banded, cholesky_banded` at
+        # module scope, and unlike every other entry here the consequence of a mis-ordered swap is
+        # not merely "one model runs Python". These four are chained by `array_equal` reduction
+        # anchors -- sigma1 = 0, EA = 0, EA = T -- which hold only while all four do the SAME
+        # arithmetic. If the swap reached three of them and not the fourth, those anchors would
+        # start comparing LAPACK against a transcription and fail with a message about physics.
+        for model in (string_stiff, string_damped, string_nonlinear, string_geometric):
+            for name in ("cholesky_banded", "cho_solve_banded"):
+                assert getattr(model, name) is getattr(banded, name), (
+                    f"`{model.__name__}` captured a different `{name}` than `banded` now exposes "
+                    "-- the swap landed after that module was imported, so this model is solving "
+                    "with LAPACK while the rest of the family solves with Rust"
+                )
 
         assert string_stiff.biharmonic_matrix is operators.biharmonic_matrix, (
             "`string_stiff` captured a different `biharmonic_matrix` than `operators` now "
