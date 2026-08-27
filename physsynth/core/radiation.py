@@ -36,6 +36,7 @@ Headless: NumPy only.
 
 from __future__ import annotations
 
+import math
 import os
 from typing import Protocol
 
@@ -581,7 +582,14 @@ class RationalAirLoad:
         """
         if np.isinf(self.tau):
             return complex(self.R if np.isinf(self.M_a) else 0.0)
-        s = 2j * np.tan(0.5 * float(omega) * self.k) / self.k
+        # `math.tan`, deliberately, not `np.tan`. NumPy does not call the platform libm for the
+        # transcendentals -- it has its own vectorised routines, dispatched by CPU feature -- so
+        # `np.tan` here would make this read-out's last bit a property of the machine, and the
+        # Rust port (which reaches libm) would match on one CI runner and not the next. That is
+        # exactly what happened to `x ** alpha` in `collision`; see the plan's section 22. CPython
+        # and Rust both reach the platform libm, so `math.tan` is the portable spelling. Nothing
+        # is lost: `omega` is a scalar, so there was no vectorisation here to give up.
+        s = 2j * math.tan(0.5 * float(omega) * self.k) / self.k
         return self.R * s * self.tau / (1.0 + s * self.tau)
 
     def loaded_mode(

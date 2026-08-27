@@ -25,7 +25,33 @@ would otherwise look like an arbitrary choice:
    blindness finding again, one level up: the fixture the suite uses most is in the blind spot, so
    the parity test has to bring its own stiff case.
 
-3. **The vector solve's Group A window is short, per fixture, and it closes for a dynamical
+3. **Which of these claims can be *exact* is decided by the machine, not by the port.** NumPy
+   does not call the platform C library for the transcendentals -- it carries its own vectorised
+   routines, dispatched at import by CPU feature -- while the Rust port calls libm. So
+   ``x ** 1.5`` on an array is two implementations agreeing, and whether they do is a property of
+   the processor GitHub happens to hand the job. Measured 2026-08-27, two CI runs of *identical*
+   code: on one, every claim below held; on the next, fifteen of them failed by one or two ulp,
+   and the failures correlate perfectly with the ufunc's shortcut ladder -- every exponent NumPy
+   spells as ``sqrt``/``x*x``/``x``/``1``/``1/x`` agreed, every exponent it hands to its own
+   ``pow`` did not.
+
+   So the exact claims here are pinned to ``alpha = 1.0``, which is the **only** exponent that
+   puts all three of the primitives' exponents (``alpha - 1``, ``alpha``, ``alpha + 1``) on that
+   ladder simultaneously -- both sides then perform literally the same multiply, and agreement is
+   a proof rather than a coincidence. It is still a one-sided contact, so the contact-set
+   detection, the Newton solve, the dense LU and the discrete gradient's 0/0 branch are all
+   exercised. The shipped physical exponent, ``alpha = 1.5``, keeps its coverage through the
+   Group A tolerance tests, which is where a machine-dependent last bit belongs.
+
+   Two things this does **not** buy, both of which cost a measurement to find out. The dense
+   matvec ``G @ F`` is still OpenBLAS against a hand-rolled loop, so the exact claims survive on
+   a reduction that is measured to agree rather than proved to; if a runner ever breaks *that*,
+   the finding is one level below this one and the fix is the same shape. And the exponent
+   cannot be swapped freely: at ``m = 79`` moving to ``alpha = 1.0`` **loses** item 2's blind
+   spot rather than keeping it, because the tangent stiffness stops vanishing at grazing contact.
+   The numbers are under that test.
+
+4. **The vector solve's Group A window is short, per fixture, and it closes for a dynamical
    reason rather than an arithmetic one.** A string buzzing against a one-sided barrier is
    chaotic, so the two trajectories do not drift apart -- they separate. Measured 2026-08-27, the
    step at which each fixture first exceeds 1e-13 of amplitude: the single- and two-node frets and
@@ -57,7 +83,26 @@ physsynth_rs = pytest.importorskip(
 GROUP_A_TOL = 1e-13     # the plan's short-run agreement target
 DRIFT_TOL = 1e-10       # CLAUDE.md's energy bar, which neither implementation may cross
 SHORT_RUN = 2000        # long enough for a bit-identity claim to mean something
-GROUP_A_RUN = 500       # a third of the tightest measured window -- see item 3 in the header
+GROUP_A_RUN = 500       # a third of the tightest measured window -- see item 4 in the header
+
+# The exponents NumPy's float64 `power` ufunc loop shortcuts, and which one each primitive uses.
+# On the ladder both sides perform the same arithmetic; off it, both call a `pow` and the last bit
+# belongs to whichever library each language reached. See item 3 in the header.
+LADDER = (-1.0, 0.0, 0.5, 1.0, 2.0)
+EXPONENT = {
+    "contact_potential": lambda a: a + 1.0,
+    "contact_force_elastic": lambda a: a,
+    "contact_stiffness": lambda a: a - 1.0,
+}
+ULP_BAR = 4             # off-ladder allowance; a transcription error is never four ulp
+
+
+def _worst_ulp(a, b):
+    """Worst elementwise separation between two float arrays, in units in the last place."""
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    scale = np.maximum(np.abs(a), np.abs(b))
+    gap = np.where(a == b, 0.0, np.abs(a - b) / np.spacing(np.maximum(scale, np.finfo(float).tiny)))
+    return float(np.max(gap))
 
 K_DEFAULT = 1.0e6
 K_STIFF = 1.0e8         # far enough from the identity Jacobian for the LU to reach the answer
@@ -150,11 +195,25 @@ PRIMITIVES = ["contact_potential", "contact_force_elastic", "contact_stiffness"]
 
 @pytest.mark.parametrize("alpha", [1.0, 1.5, 2.0, 2.3, 3.0])
 @pytest.mark.parametrize("name", PRIMITIVES)
-def test_primitives_are_bit_identical_on_the_array_path(name, alpha):
+def test_primitives_agree_on_the_array_path(name, alpha):
+    """Exact where NumPy shortcuts the exponent, within a few ulp where it calls its own ``pow``.
+
+    The split is not a hedge. On the ladder the two sides run the *same* multiply, so equality is
+    a proof and a failure is a transcription bug. Off it, equality would be a claim about which
+    processor ran the job -- see item 3 in the header for the two CI runs that established this --
+    so the assertion becomes an ulp bound and the measured separation is printed.
+    """
     eta = _penetrations(20000)
     py = np.asarray(getattr(C, name + "_py")(eta, K_DEFAULT, alpha), dtype=float)
     rs = np.asarray(getattr(physsynth_rs, name)(eta, K_DEFAULT, alpha), dtype=float)
-    np.testing.assert_array_equal(rs, py)
+    e = EXPONENT[name](alpha)
+    if e in LADDER:
+        np.testing.assert_array_equal(rs, py)
+        return
+    ulp = _worst_ulp(rs, py)
+    n = int(np.sum(rs != py))
+    print(f"{name} at exponent {e}: {n} of 20000 differ, worst {ulp:.1f} ulp on this math library")
+    assert ulp <= ULP_BAR, f"{name} at exponent {e} separated by {ulp:.1f} ulp"
 
 
 @pytest.mark.parametrize("alpha", [1.0, 1.5, 2.0, 2.3, 3.0])
@@ -189,19 +248,56 @@ def test_the_two_power_paths_really_do_differ_in_python(alpha, exponent):
     )
 
 
-@pytest.mark.parametrize("alpha", [1.0, 1.5, 2.3])
 @pytest.mark.parametrize("lam_h", [0.0, 2.0e4])
-def test_the_vector_force_and_derivative_are_bit_identical(alpha, lam_h):
+def test_the_vector_force_and_derivative_are_bit_identical(lam_h):
+    """``alpha = 1.0``: every exponent on the ladder, so this is exact -- the cause-separator.
+
+    The fixture is deliberately adversarial -- ``eta_next - eta_prev`` runs right down to the
+    ``tol`` that picks the discrete gradient's Taylor branch -- because that is where a
+    transcription error in the branch condition would show. It can only be asked here, at the
+    exponent where both sides do the same arithmetic; see the next test for why.
+    """
     en = _penetrations(20000)
     ep = en + _penetrations(20000, seed=99) * 1e-2
     np.testing.assert_array_equal(
-        physsynth_rs.force_total_vec(en, ep, K_DEFAULT, alpha, lam_h, KSTEP, TOL),
-        C.force_total_vec_py(en, ep, K_DEFAULT, alpha, lam_h, KSTEP, TOL),
+        physsynth_rs.force_total_vec(en, ep, K_DEFAULT, 1.0, lam_h, KSTEP, TOL),
+        C.force_total_vec_py(en, ep, K_DEFAULT, 1.0, lam_h, KSTEP, TOL),
     )
     np.testing.assert_array_equal(
-        physsynth_rs.deriv_total_vec(en, ep, K_DEFAULT, alpha, lam_h, KSTEP, TOL),
-        C.deriv_total_vec_py(en, ep, K_DEFAULT, alpha, lam_h, KSTEP, TOL),
+        physsynth_rs.deriv_total_vec(en, ep, K_DEFAULT, 1.0, lam_h, KSTEP, TOL),
+        C.deriv_total_vec_py(en, ep, K_DEFAULT, 1.0, lam_h, KSTEP, TOL),
     )
+
+
+@pytest.mark.parametrize("alpha", [1.5, 2.3])
+@pytest.mark.parametrize("lam_h", [0.0, 2.0e4])
+def test_the_vector_force_and_derivative_agree_where_the_expression_is_conditioned(alpha, lam_h):
+    """Off the ladder, and therefore a bound rather than an equality -- but the bound has to be
+    read against the *expression*, not against the port.
+
+    The discrete gradient divides by ``da = eta_next - eta_prev``, and its derivative divides by
+    ``da^2`` after a cancellation of the same order. So a last-bit difference in a ``pow`` is
+    amplified by roughly ``1/da^2``, and near the ``tol`` cutoff that is unbounded: measured
+    2026-08-27, injecting a one-ulp nudge into the powers at the rate CI observed moves the
+    derivative by **15% of its own scale** on the fixture above, and the force by 1.3e-7. Those
+    are properties of the formula that both implementations share, not a disagreement between
+    them, and no elementwise tolerance can tell the two apart there.
+
+    So this fixture keeps ``|da|`` away from ``tol``, where the same injection reads 6.1e-14 on
+    the force and 6.3e-10 on the derivative -- the ``1/da^2`` scaling is clean, a decade of floor
+    buys two decades of agreement. The near-``tol`` regime is covered exactly by the test above.
+    A transcription error is an O(1) relative difference and is caught by either bar.
+    """
+    en = _penetrations(20000)
+    gap = _penetrations(20000, seed=99) * 1e-2
+    gap = np.where(np.abs(gap) < 1e-3, np.copysign(1e-3, np.where(gap >= 0.0, 1.0, -1.0)), gap)
+    ep = en + gap
+    for fn, bar in (("force_total_vec", 1e-12), ("deriv_total_vec", 1e-8)):
+        py = getattr(C, fn + "_py")(en, ep, K_DEFAULT, alpha, lam_h, KSTEP, TOL)
+        rs = getattr(physsynth_rs, fn)(en, ep, K_DEFAULT, alpha, lam_h, KSTEP, TOL)
+        worst = float(np.max(np.abs(rs - py)) / np.max(np.abs(py)))
+        print(f"{fn} at alpha={alpha}, lam_h={lam_h}: worst {worst:.2e} of scale")
+        assert worst <= bar, f"{fn} at alpha={alpha} separated by {worst:.2e} of its scale"
 
 
 # -- 2. the scalar solve: bit-identical, through a whole model ------------------------------------
@@ -318,9 +414,17 @@ def _point_fret(N=80, node=None):
     return b
 
 
+def _two_frets(N=80):
+    b = np.full(N + 1, -np.inf)
+    b[27], b[54] = -2.0e-4, -2.0e-4
+    return b
+
+
 CASES = {
     "point fret (m=1)": {"N": 80, "barrier": _point_fret(), "lam": 0.4, "K": K_DEFAULT,
                          "alpha": 1.5},
+    "two frets (m=2)": {"N": 80, "barrier": _two_frets(), "lam": 0.4, "K": K_DEFAULT,
+                        "alpha": 1.5},
     "flat rail (m=79)": {"K": K_DEFAULT, "alpha": 1.5, "lam": 0.4},
     "flat rail alpha=1": {"K": K_DEFAULT, "alpha": 1.0, "lam": 0.4},
     "flat rail stiff": {"K": K_STIFF, "alpha": 1.5, "lam": 0.4},
@@ -330,12 +434,19 @@ CASES = {
 
 def test_a_single_contact_node_is_bit_identical():
     """The cause-separator. One node means ``G`` is 1x1, so the matvec is a single multiply and the
-    LU a scalar divide -- neither can round differently. Everything else in the solve is shared, so
-    a failure here is a transcription bug and nothing else."""
+    LU a scalar divide -- neither can round differently.
+
+    ``alpha = 1.0``, and that is load-bearing rather than incidental: it is the one exponent at
+    which "everything else in the solve is shared" is *true*. At the fixture's own 1.5 the two
+    sides reach two different ``pow`` implementations and a failure here would mean the runner
+    changed, not that the transcription did -- which is exactly how this test read on 2026-08-27.
+    See item 3 in the header. The shipped 1.5 keeps its Group A comparison below.
+    """
+    kw = dict(CASES["point fret (m=1)"], alpha=1.0)
     with python_vector_solve():
-        py = _barrier_run(SHORT_RUN, **CASES["point fret (m=1)"])
+        py = _barrier_run(SHORT_RUN, **kw)
     with rust_vector_solve():
-        rs = _barrier_run(SHORT_RUN, **CASES["point fret (m=1)"])
+        rs = _barrier_run(SHORT_RUN, **kw)
     np.testing.assert_array_equal(rs[0], py[0])
     np.testing.assert_array_equal(rs[1], py[1])
 
@@ -343,14 +454,12 @@ def test_a_single_contact_node_is_bit_identical():
 def test_two_contact_nodes_are_bit_identical_too():
     """``m = 2`` adds a real two-term sum to the matvec and a real pivot choice to the LU, and is
     still short enough that neither can reorder. It separates "the transcription is right" from
-    "the reduction is too short to disagree"."""
-    kw = {"N": 80, "lam": 0.4, "K": K_DEFAULT, "alpha": 1.5}
-    b = np.full(81, -np.inf)
-    b[27], b[54] = -2.0e-4, -2.0e-4
+    "the reduction is too short to disagree". At ``alpha = 1.0``, for the reason above."""
+    kw = dict(CASES["two frets (m=2)"], alpha=1.0)
     with python_vector_solve():
-        py = _barrier_run(SHORT_RUN, barrier=b, **kw)
+        py = _barrier_run(SHORT_RUN, **kw)
     with rust_vector_solve():
-        rs = _barrier_run(SHORT_RUN, barrier=b, **kw)
+        rs = _barrier_run(SHORT_RUN, **kw)
     np.testing.assert_array_equal(rs[0], py[0])
 
 
@@ -429,12 +538,27 @@ def test_a_soft_contact_hides_the_solver_and_that_is_why_the_stiff_case_is_here(
     fixture's *trajectory* separated by a non-zero amount, which is a measurement rather than a
     contract: it depends on the ambient state of ``PHYSSYNTH_RS``, because the flag changes the
     string's banded solve and hence the admittance block the contact solve is handed.
+
+    The soft run keeps ``alpha = 1.5`` and is held to Group A rather than to the bit, and both
+    halves of that are forced. It cannot be exact, because off the ladder the last bit belongs to
+    the machine (item 3 in the header). And it cannot move to ``alpha = 1.0`` to buy exactness,
+    because **the blind spot is a property of the exponent**: measured 2026-08-27 on this
+    fixture's own Jacobian, ``cond(J)`` is 1.0032 at ``alpha = 1.5``, 1.0625 at ``alpha = 1.0``
+    and 1.0001 at ``alpha = 2.3``. A *higher* exponent hides the solver *better*, because the
+    tangent stiffness ``K a eta^(a-1)`` vanishes at grazing contact for ``a > 1`` and is the flat
+    constant ``K`` at ``a = 1``. So the linear law is the one case where this rail is not soft in
+    the sense that matters, the LU reaches the answer, and the run separates within 2,000 steps --
+    which is item 2 arriving from the opposite direction and is why the run below is 1.5.
     """
+    soft_kw = CASES["flat rail (m=79)"]
     with python_vector_solve():
-        soft = _barrier_run(SHORT_RUN, **CASES["flat rail (m=79)"])
+        soft = _barrier_run(GROUP_A_RUN, **soft_kw)
     with rust_vector_solve():
-        soft_rs = _barrier_run(SHORT_RUN, **CASES["flat rail (m=79)"])
-    np.testing.assert_array_equal(soft_rs[0], soft[0])
+        soft_rs = _barrier_run(GROUP_A_RUN, **soft_kw)
+    amp = float(np.max(np.abs(soft[0])))
+    worst = float(np.max(np.abs(soft_rs[0] - soft[0]))) / amp
+    print(f"79 nodes in contact, soft: the two separated by {worst:.2e} of amplitude")
+    assert worst <= GROUP_A_TOL, f"the soft rail separated by {worst:.2e} of amplitude"
 
     jac = _live_jacobian(**CASES["flat rail (m=79)"])
     rhs = np.linspace(-1.0e-5, 3.0e-5, jac.shape[0])

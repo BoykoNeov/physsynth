@@ -3443,3 +3443,143 @@ steps the worst fixture reads 3.0e-14, a third of the bar.
 **The general form, and the one to carry into Phase 4:** when a bar is close to its measurement,
 ask what the measurement is a property of *before* adjusting the bar. Where the answer is "the
 machine", the run length is usually the thing that drifted from the claim, not the tolerance.
+
+## 22. NumPy does not use the platform libm — so an exact claim can be a claim about a CPU
+
+The run after §21's repair went red again, with **eighteen** failures where the previous run of
+effectively the same code had one. Nothing in the environment moved: same runner image
+(`ubuntu24/20260823.283`), same NumPy 2.5.2, same SciPy 1.18.1, same commit but for a step count.
+The only variable left is the hardware, and the failures name it precisely.
+
+### 22.1 The finding
+
+**NumPy does not call the platform C library for the transcendentals.** It carries its own
+vectorised routines, selected at import from the CPU's feature set. Rust's `f64::powf`/`tan` call
+libm. So every "bit-identical" claim whose quantity passes through one of those is two
+*implementations* agreeing, and whether they do is a property of the processor GitHub happened to
+hand the job.
+
+The correlation is exact and is what makes this a diagnosis rather than a guess. Fifteen of the
+eighteen were `collision`'s power primitives, and the pass/fail split follows §16.2's shortcut
+ladder without a single exception:
+
+| primitive | exponent | ladder exponents (passed) | off-ladder (failed) |
+|---|---|---|---|
+| `contact_potential` | `alpha + 1` | 1.0 | 1.5, 2.0, 2.3, 3.0 |
+| `contact_force_elastic` | `alpha` | 1.0, 2.0 | 1.5, 2.3, 3.0 |
+| `contact_stiffness` | `alpha - 1` | 1.0, 1.5, 2.0, 3.0 | 2.3 |
+
+Wherever NumPy spells the power as `sqrt`/`x*x`/`x`/`1`/`1/x`, both sides perform the same
+multiply and agree. Wherever it hands the exponent to its own `pow`, they differ by one or two
+ulp. The **scalar** path passed everywhere, because CPython's `float.__pow__` and Rust both reach
+glibc — §20.2's Windows/Linux note, now confirmed from the other side.
+
+The remaining three were `radiation`'s `impedance_discrete`, which is `np.tan` of a scalar. Its
+sibling `impedance` — the same rational function at `s = j omega`, no transcendental — passed.
+That pair isolates the cause on its own.
+
+**This is the fourth mechanism by which one expression is two computations**, after NumPy's ufunc
+ladder (§16.2), LLVM's constant fold (§17.2) and a hand-written hoist (§20.2). It is the first
+that is not visible anywhere in the source of either language: nothing about `x ** 1.5` says which
+library will evaluate it, and the answer is not even stable across two machines of the same
+operating system, compiler and NumPy build.
+
+### 22.2 A local repro was not available, and the reason is worth recording
+
+The obvious discriminator — `NPY_DISABLE_CPU_FEATURES`, stripping the top SIMD tier to force a
+different loop — **does nothing here**. On this Windows machine (NumPy 2.4.6, baseline `X86_V2`,
+found `X86_V3`) the divergence is zero at every setting, because on Windows NumPy has no
+dispatched `pow` loop to strip: both languages reach UCRT and always agree. §20.2 predicted
+exactly this asymmetry and it is why the whole class is invisible to local development. The
+diagnosis therefore had to be made from CI logs, and the failure/ladder correlation carried it.
+
+The workflow now prints `/proc/cpuinfo`'s model name and `numpy.show_runtime()` before the parity
+step, so the next occurrence is a comparison rather than an investigation.
+
+### 22.3 The rule, and where exactness survives
+
+The human's call: **keep exactness where it is provable, bound it where it is not.** Concretely —
+
+* an exact claim is legitimate when both sides perform *the same arithmetic*, which for the power
+  primitives means an exponent on the ladder. `PowPath::Array` in `collision.rs` spells `2.0` as
+  `x * x`, so this is readable from the source rather than assumed;
+* off the ladder the assertion becomes an ulp bound with the measured separation printed. Four ulp
+  is the bar. A transcription error is an O(1) relative difference, so nothing real is lost;
+* where a portable spelling exists at no cost, prefer it to either. `impedance_discrete` moved
+  from `np.tan` to `math.tan` — `omega` is a scalar, there was no vectorisation to give up, and
+  CPython and Rust reach the same libm on both platforms. Its assertion stays exact. **This is
+  `portable.py`'s manoeuvre (§18.2) a fourth time**, and the first applied to a transcendental
+  rather than to a summation order.
+
+`alpha = 1.0` is the only exponent that puts all three primitives' exponents — `alpha - 1`,
+`alpha`, `alpha + 1` — on the ladder simultaneously, so it is where the contact leg's exact
+trajectory claims now live. It is still a one-sided contact: contact-set detection, the Newton
+solve, the dense LU and the discrete gradient's 0/0 branch are all exercised.
+
+### 22.4 The blind spot is a property of the exponent, not only of the stiffness
+
+Moving §16.4's soft-rail test to `alpha = 1.0` for exactness **failed locally on Windows**, where
+it had been bit-identical at 1.5 for two thousand steps. That is not a regression; it is §16.4
+arriving from the other side. Measured on the fixture's own Jacobian:
+
+| `alpha` | `cond(J)` | `max abs(J - I)` |
+|---|---|---|
+| 1.0 | 1.0625 | 5.76e-02 |
+| 1.5 | 1.0032 | 2.96e-03 |
+| 2.3 | 1.0001 | 6.62e-05 |
+
+The tangent stiffness is `K a eta^(a-1)`, which **vanishes at grazing contact for `a > 1` and is
+the flat constant `K` at `a = 1`**. So a *higher* exponent hides the solver *better*, and the
+linear law is the one case where this rail is not soft in the sense §16.4 cares about — the LU
+reaches the answer and the run separates within 2,000 steps. The soft-rail test therefore keeps
+1.5 and moves to Group A over 500 steps.
+
+The general form: **§16.4 said the fixture the suite uses most can be the one that does not
+exercise the thing being ported. This adds that the exercise level is set by a physical parameter,
+so "pick a fixture that engages the solver" and "pick a fixture whose arithmetic is provable" can
+be in direct conflict** — here they were, and the conflict is resolved per test rather than
+globally.
+
+### 22.5 A tolerance has to be read against the expression, not against the port
+
+`deriv_total_vec` cannot be given a useful elementwise bound at an off-ladder exponent, and the
+reason is nothing to do with the port. The discrete gradient divides by `da = eta_next - eta_prev`
+and its derivative divides by `da^2` after a cancellation of the same order, so a last-bit
+difference in a `pow` is amplified by roughly `1/da^2` — unbounded as `da` approaches the `tol`
+that selects the Taylor branch. Injecting a one-ulp nudge into the powers at the rate CI observed
+(2.4% of entries) moves the derivative by **15% of its own scale** on the existing fixture.
+
+Calibration for that injection model: it predicts 1.3e-7 for `force_total_vec` at `alpha = 1.5`,
+where the runner measured 1.8e-7. Close enough to trust the derivative figure too.
+
+The floor on `|da|` buys agreement at exactly the `1/da^2` rate:
+
+| `abs(da)` floor | worst force | worst derivative |
+|---|---|---|
+| 1e-5 | 1.2e-11 | 3.2e-06 |
+| 1e-4 | 8.8e-13 | 6.3e-08 |
+| 1e-3 | 6.1e-14 | 6.3e-10 |
+| 1e-2 | 1.2e-14 | 1.3e-11 |
+
+So the off-ladder comparison runs on a fixture with `abs(da) >= 1e-3` and the near-`tol` regime —
+the one that actually tests the branch condition — is covered exactly at `alpha = 1.0`. **The
+question to ask of a failing agreement bar is not "how far apart are they" but "how far apart
+could the same formula put itself".**
+
+### 22.6 What did not need changing, and why that is the useful half
+
+`np.cos` was already known to be in this class — `exciter.rs`'s header says so, and
+`test_the_raised_cosine_survives_a_sweep_of_the_transcendental` asserts exact equality with the
+comment "a platform where they diverge by an ulp fails here with an obvious cause". That platform
+arrived, and the raised cosine **passed on it**. So this is not "NumPy differs from libm for
+transcendentals"; it is per-function and per-CPU, and `cos` is not currently exposed while `pow`
+and `tan` are. The exposed surface across ported modules is small enough to list: `collision`'s
+four powers with a caller-supplied exponent, `radiation`'s one `tan` (now fixed), `bow`'s `np.exp`
+(bounded by §20.2 — the array scan only decides whether a bracket exists), `exciter`'s two
+`np.cos`, and `operators2d`'s `sin`/`cos` in the guitar outline, where a last-bit difference is
+not an ulp but a **live/dead node**. The last two are asserted exactly and currently agree.
+
+**The rule for Phase 4 and beyond:** before writing an exact-equality assertion, ask which library
+computes each value on each side. Where the answer is "NumPy's own, chosen by CPU", the assertion
+is a claim about a runner and belongs in an ulp bound — or, better, the Python side should be
+spelled so both languages reach the same library.

@@ -167,6 +167,42 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    described in §16 as waiting on its host `DampedStiffString`, that host landed in §18, and nobody
    revisited the sentence, so Phase 3 is not finished (§20.11).
 
+   A **fifteenth**, which is not a batch but a **red CI run on unchanged code**, and which retires
+   the assumption every exact claim in the suite was written on: **NumPy does not call the platform
+   C library for the transcendentals — it carries its own vectorised routines, chosen at import
+   from the CPU's feature set — so a bit-identity claim whose value passes through one of them is a
+   claim about the machine GitHub happened to hand the job** (§22.1). Two runs of effectively
+   identical code, same runner image and same NumPy, read one failure and then eighteen. The
+   diagnosis is not a guess: fifteen of them were `collision`'s powers, and the pass/fail split
+   follows §16.2's shortcut ladder *without a single exception* — every exponent NumPy spells as
+   `sqrt`/`x*x`/`x`/`1`/`1/x` agreed, every exponent it hands to its own `pow` did not; the other
+   three were one `np.tan`, whose transcendental-free sibling passed. This is the **fourth** way one
+   expression is two computations (after the ufunc ladder §16.2, LLVM's fold §17.2 and a hand hoist
+   §20.2) and the first that is **invisible in the source of either language**. The human's call is
+   *exactness where it is provable, an ulp bound where it is not*: exact only at exponents on the
+   ladder (`alpha = 1.0` is the sole value putting all three of a contact primitive's exponents
+   there at once), four ulp with a printed count elsewhere, and where a portable spelling is free,
+   prefer it — `impedance_discrete` moved from `np.tan` to `math.tan` and keeps its exact
+   assertion, which is `portable.py`'s manoeuvre a **fourth** time and the first aimed at a
+   transcendental rather than a summation order (§22.3). Four corollaries. **A local repro is not
+   available and that is structural**: `NPY_DISABLE_CPU_FEATURES` does nothing on Windows because
+   there is no dispatched `pow` loop to strip — both languages reach UCRT — so this whole class is
+   invisible to local development and the workflow now prints the CPU model and
+   `numpy.show_runtime()` (§22.2). **§16.4's blind spot is set by a physical parameter**: moving the
+   soft-rail test to `alpha = 1.0` for exactness *lost* the blind spot, because the tangent
+   stiffness vanishes at grazing contact for `a > 1` and is the flat constant `K` at `a = 1` —
+   `cond(J)` is 1.0625 at 1.0 against 1.0032 at 1.5 — so "pick a fixture that engages the solver"
+   and "pick a fixture whose arithmetic is provable" can be in **direct conflict**, resolved per
+   test (§22.4). **A tolerance must be read against the expression, not the port**: the discrete
+   gradient's derivative divides by `da^2` after a cancellation of the same order, so a one-ulp
+   nudge moves it by **15% of its own scale** near the branch cutoff — no elementwise bound is
+   meaningful there, and the fix is a fixture that keeps `|da|` away from `tol`, which buys
+   agreement at exactly the `1/da^2` rate (§22.5). And **the negative result is the useful half**:
+   `np.cos` was already documented as being in this class and **passed on the divergent machine**,
+   so the exposure is per-function and per-CPU, not a blanket property — the whole exposed surface
+   across ported modules is four powers, one `tan`, one `exp` and three `cos`/`sin`, of which the
+   guitar outline's is the one where a last bit is not an ulp but a **live/dead node** (§22.6).
+
    And a **twelfth**, from the two theta-scheme strings, which is really the same finding twice and
    is about **SciPy rather than about Rust**: what blocked the first *model* out of the four-string
    chain was not the solver §15 had already dealt with but an **order of evaluation**, in two
