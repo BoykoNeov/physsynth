@@ -19,7 +19,11 @@
 //!   spelling is pinned here rather than left to a parity run.
 //! - [`the_stretch_squares_with_pow_and_not_a_multiply`]. §17.2: a test that pins an arithmetic
 //!   spelling asserts nothing in `--release` unless the exponent is opaque to LLVM, which is what
-//!   `scalar_pow`'s `#[inline(never)]` buys. Both profiles are run in CI for exactly this.
+//!   `scalar_pow`'s `#[inline(never)]` buys. Both profiles are run in CI for exactly this. Its
+//!   first version added a second lesson the hard way: opacity is what makes the difference
+//!   *observable*, but whether one exists at all belongs to the C library, so a hardcoded witness
+//!   is a claim about the runner. It separates on UCRT, does not on the CI runner, and was red for
+//!   two batches. The count is now searched for and reported, and only self-consistency asserted.
 
 use physsynth_core::pyfloat::scalar_pow;
 use physsynth_core::string_damped as damped;
@@ -321,26 +325,68 @@ fn stretch_int_association_is_left_to_right() {
 fn the_stretch_squares_with_pow_and_not_a_multiply() {
     // §17.3's spelling, at this module's own call site rather than in the abstract: the two end
     // terms are `** 2` on a Python float, which is the C library's `pow`. §17.2 is why this must
-    // also be run in `--release` — with a visible exponent LLVM folds the call into a multiply and
-    // the assertion evaporates. `scalar_pow`'s `#[inline(never)]` is what keeps it alive.
-    let x = 1.034_084_420_585_755_3;
-    assert_ne!(
-        scalar_pow(x, 2.0),
-        x * x,
-        "the witness no longer separates pow from a multiply"
-    );
+    // also be run in `--release` -- with a visible exponent LLVM folds the call into a multiply
+    // and the distinction evaporates. `scalar_pow`'s `#[inline(never)]` is what keeps it alive,
+    // and `black_box` on this side's own exponents is the belt to that pair of braces.
+    //
+    // WHAT MAY AND MAY NOT BE A§ERTED HERE, and the first version of this test had it backwards.
+    // It pinned a single witness, searched on Windows/UCRT, and asserted that `pow` and a multiply
+    // *disagree* on it. That is a claim about the runner's C library rather than about the port,
+    // and it turned CI red for two batches while passing in both profiles on the machine that
+    // wrote it -- so §17.2's "run it in release" was necessary and is not sufficient.
+    //
+    // What is machine-specific is the WITNESS, not the phenomenon, and the runner said so itself.
+    // The same red run that failed here had `test_rust_parity_mallet` and `test_rust_parity_collision`
+    // pass on that machine, and both of those separate `pow` from a multiply at values of their
+    // own -- so witnesses exist on the runner and this hardcoded one merely is not among them.
+    // How dense they are, and where, is the C library's business and no port'''s: UCRT and the
+    // runner'''s libm round the same call differently, which is §14.2 arriving in a test.
+    //
+    // So this is `collision`'s rule -- report the count, assert only self-consistency -- arriving
+    // in the one place its own comment said it would (§16.2). The teeth are kept where the
+    // library grows them: the witness is *searched for* rather than hardcoded, and the multiply is
+    // excluded only if the search finds one.
     let p = params(4, 0.0, 0.0, 0.0, 0.0);
+    let two = std::hint::black_box(2.0);
+
+    // The claim that holds on every machine: the end terms go through `scalar_pow`, whichever way
+    // that rounds. Bit for bit, and regardless of whether a multiply would have agreed. This also
+    // catches the fold happening inside the *port* -- there the two sides would part company.
+    let x = 1.034_084_420_585_755_3;
     let u = [x, x, x]; // du = 0, so the value is exactly the two end terms
-    let multiplied = ((0.0 + x * x) + x * x) / p.h;
-    assert_ne!(
-        nl::stretch_int(&u, &p),
-        multiplied,
-        "the stretch squared with a multiply"
-    );
     assert_eq!(
         nl::stretch_int(&u, &p),
-        ((0.0 + scalar_pow(x, 2.0)) + scalar_pow(x, 2.0)) / p.h
+        ((0.0 + scalar_pow(x, two)) + scalar_pow(x, two)) / p.h,
+        "the end terms must be `pow`, not a multiply"
     );
+
+    // How often the two spellings part company is a property of the C library, so it is counted
+    // and reported, never required (§14.2). 225 in 400,000 on Windows/UCRT.
+    let mut witnesses = 0usize;
+    let mut first: Option<f64> = None;
+    for i in 1..200_000 {
+        let y = 1.0 + 1e-5 * f64::from(i);
+        if scalar_pow(y, two) != y * y {
+            witnesses += 1;
+            first.get_or_insert(y);
+        }
+    }
+    println!("`pow` and a multiply differ in {witnesses} of 199,999 samples on this C library");
+    assert!(
+        witnesses < 199_999,
+        "the two spellings cannot disagree everywhere"
+    );
+
+    // Only where the library actually separates them is the multiply spelling detectable at all --
+    // and there, `stretch_int` must not be it.
+    if let Some(y) = first {
+        let v = [y, y, y];
+        assert_ne!(
+            nl::stretch_int(&v, &p),
+            ((0.0 + y * y) + y * y) / p.h,
+            "the stretch squared with a multiply"
+        );
+    }
 }
 
 // == construction ================================================================================

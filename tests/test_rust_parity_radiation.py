@@ -313,10 +313,12 @@ def test_the_loaded_state_is_bit_identical_when_the_weights_are_exact(case):
 def test_a_non_power_of_two_weight_is_where_the_two_part_company():
     """The measurement, and the qualifier on Group A that it forces.
 
-    The reduction differs in the last bit -- measured on this case, `np.dot` disagrees with a plain
-    left-to-right sum on 2817/5000 steps, worst 2.1e-13 relative -- so the trajectories are
-    genuinely different rather than merely differently rounded. Group A holds over a short run
-    (1.4e-14 of the amplitude at 2,000 steps) and is exceeded over a long one (3.4e-13 at 20,000),
+    The reduction differs in the last bit -- measured on this case ON WINDOWS, `np.dot` disagrees
+    with a plain left-to-right sum on 2817/5000 steps, worst 2.1e-13 relative -- so the trajectories
+    are genuinely different rather than merely differently rounded. Whether they differ at all is
+    the BLAS's business and is reported rather than asserted: the CI runner's kernel does not
+    separate this weight, and requiring it to turned that machine red. Group A holds over a
+    short run (1.4e-14 of the amplitude at 2,000 steps) and is exceeded over a long one (3.4e-13),
     which is why section 4 says "over a short run; the physics bars thereafter" rather than naming
     a single number. Both bars are asserted here so a regression in either is legible.
     """
@@ -336,7 +338,14 @@ def test_a_non_power_of_two_weight_is_where_the_two_part_company():
         worst = max(worst, _amplitude_error(bp.q, br.q, scale))
         if n + 1 == SHORT:
             short = worst
-    assert diverged, "a weight of 0.02 should make the fused product visible"
+    # Reported, never required -- and this line is why. It used to `assert diverged`, and that is
+    # a claim about the RUNNER, not about the port: whether `np.dot` fuses its multiply-add, and
+    # whether the fused product rounds differently on this particular weight, is OpenBLAS picking a
+    # kernel by CPU. It held on Windows and did not on the CI runner, which went red on it. The
+    # section-4 qualifier this test exists to justify does not need the divergence to be present --
+    # it needs the two BARS below to hold, which they do whether or not the machine separates them.
+    verdict = "separate" if diverged else "agree"
+    print(f"np.dot vs a left-to-right sum: the two {verdict} on this BLAS")
     assert short <= GROUP_A_TOL, f"short run diverged by {short:.3e} of the amplitude"
     assert worst <= LONG_RUN_TOL, f"long run diverged by {worst:.3e} of the amplitude"
 

@@ -3343,3 +3343,61 @@ Same crossover, same cause, and here it is visible within one model rather than 
   signal's own zeros into the comparison's excursions.
 - **§4.1's SuperLU hypothesis is still untested.** Group D remains the only untouched solver class,
   and `beam` keeps its de-risking job at Phase 4.
+
+## 21. The CI repair between batches 5 and 6 (2026-08-27)
+
+Not a batch. `main` was red for **seven consecutive runs**, and the reason is one defect class
+written four times. §16.2 found it, §17.2 named it, and §19 and §20 then reintroduced it — so it is
+recorded here as a rule rather than as another scar.
+
+### 21.1 The rule the four instances share
+
+**Opacity to the compiler makes an arithmetic difference *observable*; it does not make one
+*exist*.** §17.2 correctly concluded that a test pinning a spelling asserts nothing unless the
+exponent is hidden from LLVM, and both later batches applied that faithfully. What neither noticed
+is that the conclusion is only half of the condition. Whether `pow(x, 2.0)` and `x * x` differ *at
+a given x* is the C library's business, and whether `np.dot` and a left-to-right sum differ *at a
+given weight* is OpenBLAS picking a kernel by CPU. A test may assert **self-consistency** — that
+the port evaluates the spelling the model specifies — on any machine. It may **not** assert that
+the machine separates the two spellings, at a hardcoded witness or at all.
+
+The operational form: **search for the witness, report the count, and let the strict branch fire
+only where the search succeeds.** `collision` already did this and said so in a comment; the two
+tests below did not.
+
+### 21.2 The two that were red, and what distinguishes them
+
+- `crates/physsynth-core/tests/string_nonlinear.rs` asserted that a witness found on Windows/UCRT
+  separates `pow` from a multiply. **The phenomenon is not machine-specific; the witness is.** The
+  same red run had `test_rust_parity_mallet` and `test_rust_parity_collision` — which separate the
+  same two spellings at values of their own — pass on that runner. So witnesses exist there and
+  this one merely is not among them. Searched rather than hardcoded, the test keeps its teeth on
+  both machines (78 of 199,999 samples separate on this one).
+- `tests/test_rust_parity_radiation.py` asserted `diverged` — that a weight of 0.02 makes NumPy's
+  fused multiply-add visible against Rust's plain sum. **Here the phenomenon itself is
+  machine-specific**, because a fused product differs from a rounded one only when the product
+  rounds, and that is a kernel choice. The runner's kernel does not separate this weight. The two
+  Group A bars the test exists to justify hold either way and stay asserted; the divergence is now
+  printed.
+
+### 21.3 What the seven red runs actually cost
+
+The visible failure was never the expensive part. Because the native bars run **before** the twelve
+`PHYSSYNTH_RS=1` steps and the parity step, a red assert in `cargo test` skips all thirteen. Batches
+4 and 5 died there, so **the banded solver, collision, the mallet, the two theta-scheme strings, the
+tension string and the bow have never had their parity steps run green on the runner** — five
+batches. The one run that got furthest (the mallet's) is the only evidence any of it works on Linux,
+and it is what §21.2's first bullet is argued from.
+
+**Order a gate's steps so the cheap machine-specific claims cannot mask the expensive portable
+ones**, or accept that one red assert hides five batches of coverage.
+
+### 21.4 The one still-unproven claim of this class
+
+`tests/test_rust_parity_tension.py`'s `evals_a != evals_b` (§19.2's finding, that the two stretch
+spellings take a different number of `brentq` iterations) is the same kind of claim and **has never
+run on Linux**. It is left asserted deliberately: unlike radiation's fused product, it rests on
+summation *order across a whole vector*, which is far more robust than one product's rounding, and
+softening a guard on speculation costs a real test. If the runner goes red there, this is why.
+`test_rust_parity_bow`'s `np.any(hoisted != direct)` is **not** at risk — on Linux `np.exp` uses
+NumPy's SIMD loop while `math.exp` reaches glibc, so those two separate *more* there, not less.
