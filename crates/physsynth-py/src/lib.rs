@@ -42,6 +42,7 @@
 mod banded;
 mod body;
 mod bore;
+mod collision;
 mod exciter;
 mod membrane;
 mod ops2d;
@@ -667,6 +668,21 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("RHO0_AIR", physsynth_core::radiation::RHO0_AIR)?;
     m.add("C0_AIR", physsynth_core::radiation::C0_AIR)?;
     m.add_function(wrap_pyfunction!(reed::py_bernoulli_flow, m)?)?;
+    m.add_function(wrap_pyfunction!(collision::py_contact_potential, m)?)?;
+    m.add_function(wrap_pyfunction!(collision::py_contact_force_elastic, m)?)?;
+    m.add_function(wrap_pyfunction!(collision::py_contact_stiffness, m)?)?;
+    m.add_function(wrap_pyfunction!(collision::py_contact_force_dg, m)?)?;
+    m.add_function(wrap_pyfunction!(collision::py_contact_force_total, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        collision::py_contact_force_total_deriv,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(collision::py_force_total_vec, m)?)?;
+    m.add_function(wrap_pyfunction!(collision::py_deriv_total_vec, m)?)?;
+    m.add_function(wrap_pyfunction!(collision::py_solve_contact, m)?)?;
+    m.add_function(wrap_pyfunction!(collision::py_solve_contact_vector, m)?)?;
+    m.add_function(wrap_pyfunction!(collision::py_lu_factor, m)?)?;
+    m.add_function(wrap_pyfunction!(collision::py_lu_solve, m)?)?;
     m.add_function(wrap_pyfunction!(banded::py_cholesky_banded_upper, m)?)?;
     m.add_function(wrap_pyfunction!(banded::py_cho_solve_banded_upper, m)?)?;
     m.add(

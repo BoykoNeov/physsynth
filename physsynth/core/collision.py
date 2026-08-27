@@ -40,6 +40,8 @@ Headless: NumPy + SciPy (delegates the field solve to the string). No I/O, no pl
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 from numpy.typing import NDArray
 from scipy.linalg import lu_factor, lu_solve
@@ -494,3 +496,107 @@ class BarrierString:
     def contact_mask(self) -> NDArray[np.bool_]:
         """Boolean mask over the support: which nodes are currently in contact (``η > 0``)."""
         return self.penetration > 0.0
+
+
+# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 3 batch 2) ---------------------------
+#
+# This block rebinds the module's own names, so it reaches ``mallet.py`` too -- that module
+# re-exports the same five primitives and calls ``solve_contact`` -- without an edit inside it.
+# ``BarrierString`` above is untouched and stays Python this batch: it wraps a
+# ``DampedStiffString``, which has not ported.
+#
+# WHAT CHANGES, AND WHAT DOES NOT. The scalar solve contains no reduction at all and comes out
+# bit-identical; so does the vector solve on a SINGLE contact node, where the admittance ``G`` is
+# 1x1 and ``G @ F`` is one multiply. Above one node it is a dense BLAS matvec whose result feeds
+# back into the next Newton iterate, which is exactly the construction section 14.2 named as the
+# end of bit-identity -- so the flat-rail barrier agrees to a tolerance, not to the bit. The dense
+# LU underneath is NOT the reason: a perfectly reproduced factorization downstream of an
+# irreproducible matvec would buy nothing, which is why no attempt was made to chase LAPACK's
+# dgetrf the way section 15.3 chased its triangular band solve.
+#
+# THE ONE THING THAT HAD TO BE DISCOVERED BEFORE ANY OF IT WOULD MATCH. NumPy computes ``x ** e``
+# two different ways. The float64 ``power`` UFUNC LOOP carries a fast-path ladder for the exponents
+# -1, 0, 0.5, 1 and 2 -- spelling ``x ** 0.5`` as ``sqrt`` and ``x ** 2`` as ``x * x`` -- and the
+# SCALAR path does not, calling the C library's ``pow`` instead. Measured 2026-08-27 over 200,000
+# realistic penetrations they disagree in 94 cases at exponent 0.5 and 53 at exponent 2. The
+# exponents this module uses are ``alpha + 1``, ``alpha`` and ``alpha - 1``, so the difference
+# lands precisely on ``alpha = 1`` (the closed-form-oracle case) and ``alpha = 1.5`` (the barrier
+# default). The Rust side therefore carries BOTH spellings and picks by whether the argument
+# arrived as a scalar or an array -- which is the same thing as picking by which Python code path
+# it is standing in for.
+#
+# A consequence worth stating because it is a fact about the Python original, not about the port:
+# ``_force_total_vec``'s docstring says it is "numerically identical to calling
+# contact_force_total per component". It is not. At ``alpha = 1`` the two disagree in 174 of
+# 200,000 pairs, by up to 1.5e-12 relative. Repairing that would move both models' trajectories,
+# so the port reproduces it instead.
+#
+# Off by default. SciPy + NumPy are still the reference oracle.
+contact_potential_py = contact_potential
+contact_force_elastic_py = contact_force_elastic
+contact_stiffness_py = contact_stiffness
+contact_force_dg_py = contact_force_dg
+contact_force_total_py = contact_force_total
+contact_force_total_deriv_py = _contact_force_total_deriv
+force_total_vec_py = _force_total_vec
+deriv_total_vec_py = _deriv_total_vec
+solve_contact_py = solve_contact
+solve_contact_vector_py = solve_contact_vector
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    import physsynth_rs as _rs
+
+    contact_potential = _rs.contact_potential  # type: ignore[assignment]
+    contact_force_elastic = _rs.contact_force_elastic  # type: ignore[assignment]
+    contact_stiffness = _rs.contact_stiffness  # type: ignore[assignment]
+    contact_force_dg = _rs.contact_force_dg  # type: ignore[assignment]
+    contact_force_total = _rs.contact_force_total  # type: ignore[assignment]
+    _contact_force_total_deriv = _rs.contact_force_total_deriv  # type: ignore[assignment]
+    _force_total_vec = _rs.force_total_vec  # type: ignore[assignment]
+    _deriv_total_vec = _rs.deriv_total_vec  # type: ignore[assignment]
+    solve_contact = _rs.solve_contact  # type: ignore[assignment]
+
+    def solve_contact_vector(  # type: ignore[misc]  # noqa: F811
+        eta_free: NDArray[np.float64],
+        eta_prev: NDArray[np.float64],
+        G: NDArray[np.float64],
+        K: float,
+        alpha: float,
+        lam_h: float,
+        k: float,
+        *,
+        tol: float,
+        seed: NDArray[np.float64],
+        newton_tol: float = 1e-13,
+        maxiter: int = 60,
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64], int]:
+        """The vector contact solve, on the Rust transcription (plan section 16).
+
+        Two things happen here rather than in Rust, and both are deliberate. ``ascontiguousarray``
+        is a no-op returning the *same object* when the input is already a C-contiguous float64
+        array, which every call site's is -- so this is a type check, not the second pass over the
+        data that section 15.5 measured the last port's speed away on. And the non-convergence
+        warning is raised from this frame because ``stacklevel=2`` has to mean the same thing it
+        meant before, which it cannot if it is issued from inside an extension module.
+        """
+        eta, f, iters, residual, converged = _rs.solve_contact_vector(
+            np.ascontiguousarray(eta_free, dtype=float),
+            np.ascontiguousarray(eta_prev, dtype=float),
+            np.ascontiguousarray(G, dtype=float),
+            K, alpha, lam_h, k,
+            tol=tol,
+            seed=np.ascontiguousarray(seed, dtype=float),
+            newton_tol=newton_tol,
+            maxiter=maxiter,
+        )
+        if not converged:
+            import warnings
+            warnings.warn(
+                f"vector contact solve did not converge in {maxiter} iterations "
+                f"(residual {residual:.2e} > {newton_tol:.1e}); energy may drift. Raise "
+                f"newton_maxiter or oversample the contact.",
+                stacklevel=2,
+            )
+        return eta, f, iters

@@ -1898,3 +1898,330 @@ arithmetic that is still Python-driven.
 - **Never write validation into a swap block without pricing it.** §15.5.
 - **§4.1's SuperLU hypothesis is still untested.** This batch deliberately links nothing: the
   allowlist is still empty, and `beam` keeps its de-risking job at Phase 4.
+
+---
+
+## 16. Phase 3, batch 2, as built (2026-08-27)
+
+`physsynth/core/collision.py` — the contact primitives and both contact solves, plus `dense`, the
+project's only dense LU. `BarrierString` does not port: it wraps a `DampedStiffString`, which has
+not, so porting it would mean building a model on a model that has not moved. The port swings two
+models under the flag all the same, because `mallet.py` re-exports these primitives and calls the
+scalar solve — which is §11.2.2's ordering finding coming due. **Phase 2 is now unblocked**, not
+finished: `mallet` itself is the next batch.
+
+### 16.1 The shape on disk
+
+```
+crates/physsynth-core/src/dense.rs        dgetrf/dgetrs, transcribed unblocked; DenseError, Lu
+crates/physsynth-core/src/collision.rs    the primitives, both solves, PowPath
+crates/physsynth-core/tests/dense.rs      native bars (6 tests)
+crates/physsynth-core/tests/collision.rs  native bars (9 tests)
+crates/physsynth-py/src/collision.rs      the primitives, both solves, the LU, rank-dispatched
+physsynth/core/collision.py               swap block gated on the flag; `import os`
+tests/test_rust_parity_collision.py       Rust vs NumPy/SciPy (76 tests)
+.github/workflows/ci.yml                  the batch's flagged step, + a fix (§16.8)
+```
+
+### 16.2 The finding: a NumPy array and a NumPy scalar do not compute the same power
+
+This is the thing that had to be discovered before anything would match, and it is not about Rust.
+
+`contact_potential`, `contact_force_elastic` and `contact_stiffness` are written once in
+`collision.py` and called two ways: with a float, by the mallet's scalar solve, and with an array,
+by the barrier's vector solve. The module's docstrings treat the two as the same function used
+twice. **They are not the same computation.**
+
+NumPy's float64 `power` **ufunc loop** carries a fast-path ladder for the exponents `-1, 0, 0.5, 1,
+2` — it spells `x ** 0.5` as `sqrt` and `x ** 2` as `x * x`. Its **scalar** path takes no such
+shortcut and calls the C library's `pow`. Measured over 200,000 realistic penetrations:
+
+| exponent | array path vs `pow` |
+|---|---|
+| `0.5` | **94** disagree |
+| `2.0` | **53** disagree |
+| `1.0`, `1.5`, `2.5`, `3.0`, `-0.5` | 0 |
+
+Always by one ulp, always with the shortcut being the more accurate of the two (`sqrt` is
+correctly rounded; `pow` is not).
+
+The exponents this module uses are `α+1`, `α` and `α−1`. So the split lands **exactly on the two
+configurations the project uses most**: `α = 1`, the closed-form-oracle case, where `α+1 = 2`; and
+`α = 1.5`, the barrier default, where `α−1 = 0.5`. There is no realistic configuration where the
+distinction is academic.
+
+Two consequences.
+
+**First, the Rust side carries both spellings.** `PowPath::Array` reproduces the ladder;
+`PowPath::Scalar` calls `powf`. The binding picks between them by the *rank of the argument*, which
+is the same thing as picking by which Python code path it is standing in for. That dispatch is not
+a convenience — it is the port's arithmetic contract.
+
+**Second, an existing docstring in `collision.py` is wrong, and it predates this port.**
+`_force_total_vec` says it is "numerically identical to calling `contact_force_total` per
+component". Measured over 200,000 pairs at `α = 1`, the two disagree in **174** of them, by up to
+`1.5e-12` relative; the derivative pair disagrees in 86 of 100,000, by up to `5.6e-12`. Repairing
+that would move both models' trajectories — it is a physics change, not a cleanup — so the port
+reproduces the inconsistency and this note records it. Whoever retires the Python side inherits the
+decision.
+
+**The generalisation worth carrying forward:** when a Python function is vectorized, "the same
+function" can mean two different computations, and which one a caller gets is decided by the rank
+of what it passes. Every remaining port should ask, of every primitive with more than one call
+shape: *does NumPy special-case anything this reaches?*
+
+### 16.3 What is bit-identical, and the cause-separator that made the answer checkable
+
+The batch was designed around a question it could answer before it could answer anything else: the
+vector solve's `G @ F(η)` is a dense BLAS matvec **feeding back into the next Newton iterate**,
+which is §14.2's construction exactly, so bit-identity was known to be off the table for the
+barrier. That makes any divergence ambiguous — BLAS, or a transcription bug?
+
+The separator is the **single contact node**. With one finite barrier node (`-inf` elsewhere) the
+admittance block `G` is `1 × 1`, the matvec is one multiply, and the LU is a scalar divide with a
+degenerate pivot. Nothing in that case *can* round differently, so it must be bit-identical, and
+everything else in the solve — the primitives, the Newton path, the Armijo logic, the force
+injection — is shared with the general case.
+
+Measured, with the string's own banded solve deliberately left on SciPy so §15's change does not
+confound the reading:
+
+| | 2,000 steps |
+|---|---|
+| point fret, `m = 1` | **bit-identical** |
+| two frets, `m = 2` | **bit-identical** |
+| flat rail, `m = 79`, default `K` | **bit-identical** |
+| the whole mallet trajectory, 5 fixtures | **bit-identical**, fallback counts included |
+| `MalletWall`, every observable | **bit-identical** |
+
+The scalar half of this batch is therefore in the same bucket as Phases 0–2: it contains no
+reduction anywhere, and it matches. That includes the `brentq` bracket fallback, which is not
+hypothetical — measured over the mallet's own fixtures it fires once per 3,000 steps in the
+flagship configuration and eight times at `α = 1`, so §13.3's transcription of `brentq` is load
+bearing here for the second time, and `np.linspace`'s exact spelling (form the step once, then
+**overwrite the last element with `stop`**) had to be transcribed with it.
+
+One caveat that belongs next to the mallet's result rather than buried: under the *real*
+`PHYSSYNTH_RS=1` flag the mallet's `energy()` does differ, at `2e-15`. That is not the contact
+scheme — it is `Membrane.energy()`, a reduction that is a read-out and never reaches the state.
+`MalletWall`, which owns no field, is bit-identical in every observable including its energy, which
+is what makes the attribution rather than assumes it.
+
+### 16.4 The blind spot: a soft contact hides the solver, and the default fixture is in it
+
+The flat rail with 79 nodes in contact came out bit-identical, which is *not* what a batch that
+just introduced a new dense LU should have expected. The explanation is the finding:
+
+**The divergence tracks how far the Newton Jacobian `J = I + G·diag(F')` is from the identity — not
+the number of contact nodes, and not `α`.**
+
+(cond(J) here is taken at the run's deepest penetration with `η⁺ = η⁻`, which is a shape
+measurement rather than the exact matrix a given Newton step factors — the claim is an order
+of magnitude, not a digit.)
+
+| fixture | max cond(J) | active nodes | 2,000 steps |
+|---|---|---|---|
+| `α = 1.5`, `K = 1e6` (the default) | 1.004 | 59 | **bit-identical** |
+| `α = 2.3`, `K = 1e6` | 1.000 | 59 | **bit-identical** |
+| `α = 1`, `K = 1e4` | 1.001 | 59 | **bit-identical** |
+| `α = 1`, `K = 1e6` | 1.063 | 39 | 1.5e-13 |
+| `α = 1.5`, `K = 1e8` | 1.144 | 39 | 1.4e-13 |
+| `α = 1.5`, `K = 1e10` | 7.082 | 26 | 8.7e-14 |
+
+When `J` is within a percent of the identity the LU is effectively solving `I·δ = -r`, so its
+disagreement with LAPACK — which is real, 5,088 of 6,241 factor entries differ at `m = 79` — never
+reaches the answer. A bit-identical reading there is not evidence that the solvers match. **It is
+evidence that the solver was barely used.**
+
+This is §14.3's blindness finding one level up. There, the suite could not see a class of
+divergence because every fixture weight was `1.0`. Here, the fixture the suite uses most sits in a
+regime where the solver under test is nearly a no-op. Both have the same shape and the same
+remedy: *the parity test has to bring a fixture chosen to exercise the thing being ported, because
+the physics fixtures were chosen to exercise the physics.* `tests/test_rust_parity_collision.py`
+carries a stiff case for exactly this reason, and one test asserts **both halves**: the soft case
+identical, *and* the two dense solves disagreeing on the soft run's own Newton Jacobian — so the
+bit-identical reading above is pinned as "the solver was not exercised" rather than left ambiguous
+with "the solvers agree".
+
+**How that test had to be rewritten is itself worth keeping.** Its first version asserted that the
+*stiff fixture's trajectory* separated by a non-zero amount, which reads naturally and is wrong as
+a test: it passed with the flag unset and failed with it set, because `PHYSSYNTH_RS=1` moves the
+string's banded solve, which changes the admittance block, which changes whether the LU's last bits
+survive into the field. **An assertion that something differs is a measurement, and a measurement
+of a chaotic system is not a contract.** The rewritten version puts a real Jacobian in front of both
+solvers directly, which is deterministic and says the same thing. Every parity test in this
+migration should be green with the flag both set and unset. That had never been *checked* before;
+it was checked here for all nine earlier files as well, and all nine pass (banded reports 50 with
+the flag against 49 and a skip without, which is that file's own documented behaviour). So this is
+a convention now made explicit rather than a bug found — but it was found by a bug, in the one
+file where the ambient flag actually changed the answer.
+
+### 16.5 Group A's window is shorter here, and it closes for a dynamical reason
+
+§14.4 established that Group A is a run-length claim; §15.4 shortened it to ~100 steps for a
+fed-back *solve*. This batch shortens the framing again, and changes its kind.
+
+Measured — the step at which each fixture first exceeds `1e-13` of amplitude:
+
+| fixture | first step over 1e-13 |
+|---|---|
+| point fret, two frets, lossy rail | none within 6,000 |
+| flat rail, default `K` | none within 6,000 (8.2e-14 at 6,000) |
+| flat rail, `α = 1` | **1,175** |
+| flat rail, stiff `K = 1e8` | **1,584** |
+
+And past that the growth is not linear. On the stiff lossless fixture: `1.2e-13` at 5,000 steps,
+`3.4e-12` at 10,000, **`1.1e-7` at 20,000**. Every earlier batch's divergence grew roughly like the
+run length. This one grows like an exponent, because **a string buzzing against a one-sided barrier
+is chaotic** — the two trajectories do not drift apart, they separate.
+
+So the honest statement of this batch's agreement has three parts rather than one: bit-identical
+where no reduction is exercised; Group A out to about a thousand steps where one is; and past that
+**the physics bars, which do not move at all** — lossless drift `1.12e-12` on SciPy against
+`1.14e-12` on Rust, against a bar of `1e-10`.
+
+The generalisation: **for a nonlinear model, the agreement window is a property of the model's
+dynamics, not of the port.** A chaotic model has a short one no matter how good the transcription
+is, and asking for a longer one is asking the wrong question. That is a new thing to check before
+every remaining model — `string_nonlinear`, `string_geometric`, the von Kármán plate and the bow
+are all nonlinear, and the question to ask of each is not "how well does it agree" but "how long
+before it cannot".
+
+### 16.6 The branch hazard that did not fire, measured rather than assumed
+
+The sharpest risk identified before writing any code was **not** the LU. It was the Armijo test:
+
+```python
+if 0.5 * float(r_try @ r_try) < (1.0 - 1e-4 * t) * f0:
+```
+
+Both sides are reductions, and they sit inside a **branch condition**. A last-bit difference there
+does not perturb the answer by an ulp — it flips the acceptance, halves the step, and changes the
+iterate by `O(1)`. That is §13.3's "a branch choice is part of the trajectory" with a reduction
+behind it.
+
+It never fired. `newton_iters` came out **identical at every step of every fixture, out to 20,000
+steps** — 40,000 solves — and the mallet's `fallbacks` counter likewise. §15.9 pointed out that
+nothing in the repo compares iteration counts, only that they stayed under the cap; this batch's
+parity test compares them, so the hazard is now watched rather than merely survived.
+
+Two details of the original were reproduced deliberately on the way, either of which a "sensible"
+rewrite would have changed:
+
+* **The line search has no failure exit.** If all 40 backtracks are rejected the loop ends with
+  `t = 2⁻⁴⁰` and the step is taken anyway, unguarded. That is the reference behaviour.
+* **`np.max(np.abs(r))` propagates NaN, and `f64::max` discards it.** A fold written the obvious
+  Rust way would report a converged solve on a diverged state — silently, because the one thing
+  that comparison feeds is the convergence test that decides whether to warn.
+
+### 16.7 The dense LU: what was chased, and what deliberately was not
+
+§15.3 spent a batch establishing that OpenBLAS's `DTBSV` admits no scalar recipe. The same question
+could have been asked of `dgetrf` and was not, because the answer no longer decides anything: the
+matvec upstream of it is already irreproducible, so a perfectly reproduced factorization buys
+nothing. `dense.rs` is written the plain way — right-looking, summed left to right — and the
+agreement is a tolerance from the start.
+
+One thing it *does* keep from LAPACK, and holds to equality in the parity test: **the pivot
+sequence**. A pivot is a discrete decision, not a rounding. Choosing a different row is a different
+elimination, and it would separate the trajectories by far more than the arithmetic does. Measured:
+pivots match LAPACK at every size tried (`m` = 1, 2, 5, 20, 79), while the factor entries differ in
+5,088 of 6,241 at `m = 79` and the solve agrees to `9.6e-14`.
+
+The `IDAMAX` detail that makes that reproducible is worth naming: the search is **strictly
+greater**, so two equal candidates pivot to the **first**. A `>=` there would pass every accuracy
+test and pick different rows on a tie.
+
+### 16.8 Three smaller things worth keeping
+
+* **`G` is borrowed, not copied.** `BarrierString` holds the `m × m` admittance block and hands it
+  over once per timestep. Reading it through `PyReadonlyArray2` borrows the NumPy buffer;
+  `as_f64_field`, which the rest of the binding uses, would have copied 6,241 doubles per step for
+  the default fixture. The shim's `np.ascontiguousarray` is a type check rather than a second pass —
+  it returns *the same object* for an already-contiguous float64 array — which is the §15.5 lesson
+  applied rather than rediscovered.
+* **The warning is raised from Python, not from Rust.** `solve_contact_vector` warns rather than
+  failing when it hits the iteration cap, and it does so with `stacklevel=2`. That number means
+  "my caller", and it cannot mean the same thing issued from inside an extension module. So the
+  core returns `(residual, converged)` and the shim does the warning — the same split `radiation`
+  used for its refusals.
+* **The parity job has been failing to assert anything since batch 1, and the cause was one
+  character.** `ci.yml`'s Rust-vs-Python step listed its files across continued lines, and the last
+  continuation was a literal `\n` rather than a backslash and a newline. The shell reads that as
+  the argument `n`, so pytest was handed a path that does not exist and the step errored out before
+  running `test_rust_parity_banded.py` at all. Fixed here. The lesson is the same one §12.9 drew
+  about the gate's limits: a step that fails loudly is fine, but this one's failure mode is
+  indistinguishable at a glance from the file simply not being listed yet — and a parity test that
+  never runs is exactly the empty-assertion shape the `import physsynth_rs` line above it exists to
+  prevent, arriving through a different door.
+
+  There is a second, harmless instance of the same corruption elsewhere in the file: several steps
+  have their continuations collapsed into one long space-separated line. That *works* — the shell
+  sees the same argument list — so it is left alone rather than churned.
+
+  **And it was not the only broken gate.** `cargo clippy --workspace --all-targets -- -D warnings`
+  and `cargo fmt --all --check` were both failing on `banded.rs` as well as on this batch's new
+  files — the clippy failures on two spellings that batch chose *deliberately* (`!(ajj > 0.0)`,
+  which catches a NaN diagonal that `<= 0.0` would not, and `-1.0 * x`, which is DSYR's own
+  ordering). Both now carry a scoped `#[allow]` with the reason next to it, which is the right
+  outcome: the lint is correct in general and wrong here, and saying so in the file is better than
+  either silencing it globally or rewriting arithmetic to please it. Three gates red from one
+  batch, all three found only because this batch happened to run them — worth a habit, not just a
+  fix.
+
+### 16.9 The success condition
+
+* `tests/test_collision_energy.py`, `test_collision_modal.py`, `test_collision_signature.py` and
+  `test_jawari.py` unmodified against Rust — the barrier model and its buzzing-bridge
+  configuration.
+* `tests/test_mallet_energy.py`, `test_mallet_signature.py` and `test_mallet_wall.py` — the scalar
+  solve through its real client, which is the only place the `brentq` fallback is exercised.
+* `tests/test_rust_parity_collision.py` — 76 tests, the cause-separator and the blind-spot pin,
+  green **both with and without** the flag (§16.4).
+* `tests/test_damped_string.py` as the **control**: the barrier's host, ported in §15 and untouched
+  here, so a failure there is about the banded solver rather than about this batch.
+
+### 16.10 What was measured
+
+| | |
+|---|---|
+| Native `cargo test --workspace` | **189 passed** (174 at the end of batch 1) |
+| Cargo dependency allowlist | still **EMPTY** — no BLAS, no LAPACK, no linear-algebra crate |
+| `tests/test_rust_parity_collision.py` | **76 passed**, flag set and unset |
+| NumPy array vs scalar power, exponent 0.5 / 2.0, 200k samples | **94** / **53** disagree |
+| `_force_total_vec` vs per-component scalar, `α = 1`, 200k pairs | **174** disagree, to 1.5e-12 |
+| Primitives, array and scalar paths, 5 exponents | **bit-identical** |
+| Scalar `solve_contact`, 18k configurations | **bit-identical** |
+| Mallet trajectory, 5 fixtures, 2,000 steps | **bit-identical**, fallback counts too |
+| Barrier trajectory, `m` = 1 and 2, 6,000 steps | **bit-identical** |
+| Barrier trajectory, `m = 79` default `K`, 2,000 / 6,000 steps | **bit-identical** / 8.2e-14 |
+| Group A window, `α = 1` / stiff `K = 1e8` | first over 1e-13 at step **1,175** / **1,584** |
+| Stiff fixture at 5,000 / 10,000 / 20,000 steps | 1.2e-13 / 3.4e-12 / **1.1e-7** |
+| `newton_iters`, every fixture, to 20,000 steps | **identical at every step** |
+| Dense LU pivot sequence vs LAPACK, `m` = 1…79 | **identical** |
+| Dense LU factor entries differing, `m = 79` | 5,088 / 6,241 |
+| Dense solve vs LAPACK, `m = 79` | 9.6e-14 relative |
+| Lossless energy drift, stiff fixture, 5,000 steps | SciPy 1.12e-12, Rust 1.14e-12 (bar 1e-10) |
+| A whole `BarrierString` step, `m = 79` / `m = 1` | **2.97x / 3.39x** faster |
+| A whole mallet step (scalar solve), 4,000 steps | **1.42x** faster |
+| The two contact models + membrane + string family under `PHYSSYNTH_RS=1` | **405 passed** |
+| All ten parity files, flag unset | **910 passed**, 1 skipped |
+| All ten parity files, flag **set** | **all pass** — first time this was checked |
+
+### 16.11 What the next batch inherits
+
+- **`mallet` is next, and it finishes Phase 2.** §11.2.2 said Phase 2 would end after Phase 3
+  began, and this is that. Its host `Membrane` is already Rust and its contact solve is now Rust,
+  so what remains is the model shell: the flight integrator, the two force-injection sites, and
+  `MalletWall`. Both were measured bit-identical through the Python shell this batch, so a
+  divergence after porting the shell is the shell's.
+- **Ask the vectorization question before every remaining primitive.** §16.2. A NumPy function
+  called with an array and with a scalar is two computations whenever the exponents `-1, 0, 0.5,
+  1, 2` are in reach — and `**` is not the only ufunc with a loop-level fast path.
+- **Ask how long the model stays comparable, not how well it agrees.** §16.5. Four of the models
+  still to port are nonlinear, and for a chaotic one the agreement window is set by the physics.
+- **Bring a fixture that exercises the solver.** §16.4. The physics fixtures were chosen to
+  exercise the physics, and for a near-identity Jacobian that means the solver is not under test at
+  all. This one cost nothing to catch and would have been invisible for the rest of the migration.
+- **§4.1's SuperLU hypothesis is still untested**, and Group D is now the only untouched solver
+  class. `beam` keeps its de-risking job at Phase 4.

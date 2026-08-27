@@ -58,7 +58,11 @@ fn check_finite(values: &[f64]) -> PyResult<()> {
 }
 
 /// Read an `(kd + 1, n)` band argument as `(kd, n, values)` in row-major order.
-fn band_arg(py: Python<'_>, obj: &Bound<'_, PyAny>, name: &str) -> PyResult<(usize, usize, Vec<f64>)> {
+fn band_arg(
+    py: Python<'_>,
+    obj: &Bound<'_, PyAny>,
+    name: &str,
+) -> PyResult<(usize, usize, Vec<f64>)> {
     let (shape, values) = as_f64_field(py, obj, name)?;
     if shape.len() != 2 || shape[0] == 0 || shape[1] == 0 {
         return Err(PyValueError::new_err(format!(

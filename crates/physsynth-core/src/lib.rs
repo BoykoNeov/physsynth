@@ -18,6 +18,10 @@
 //! Phase 3 opens with `banded`, which is not a model either: it is the banded Cholesky four
 //! theta-scheme string models share, ported ahead of all four because the suite chains them
 //! together with bit-identity reduction anchors that only survive if they change solver at once.
+//! Its second batch is `collision` — the contact primitives and both contact solves, plus `dense`,
+//! the project's one dense LU — which is where the migration's last remaining bit-identity claim
+//! is retired for a *model*: the vector solve's admittance matvec feeds back into the next Newton
+//! iterate. Its scalar half, which contains no reduction at all, still matches to the bit.
 //!
 //! # The shape every resonator here shares
 //!
@@ -41,6 +45,8 @@
 pub mod banded;
 pub mod body;
 pub mod bore;
+pub mod collision;
+pub mod dense;
 pub mod exciter;
 pub mod fmt;
 pub mod membrane;

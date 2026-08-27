@@ -21,11 +21,12 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    analysis, viewer backend *and* the test suite — in favour of **Rust**, gradually and model by
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
-   **Phases 0, 1, four batches of 2 and the first of 3 are built** (plan §9-§15):
+   **Phases 0, 1, four batches of 2 and two of 3 are built** (plan §9-§16):
    `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all of `operators`,
    `membrane`, `exciter`, `body`, `bore`, `reed`, the *builder half* of `operators2d`, all of
-   `radiation` **except** its one Bessel helper, and the **banded Cholesky** the four theta-scheme
-   strings share, ported. `cargo test --workspace` runs the
+   `radiation` **except** its one Bessel helper, the **banded Cholesky** the four theta-scheme
+   strings share, and all of `collision` **except** `BarrierString` itself — the contact
+   primitives, both contact solves and the project's one **dense LU** — ported. `cargo test --workspace` runs the
    native bars and the Cargo dependency allowlist; `pip install ./crates/physsynth-py` then
    `PHYSSYNTH_RS=1 pytest` runs the **existing, unmodified** Python tests against the Rust code. The
    flag is one switch for the whole tree: with it set, five still-Python string/beam models run on
@@ -36,7 +37,9 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    itself — far-field read-out, radiation load, rational impedance — is Rust too; and the four
    theta-scheme strings — stiff, damped, tension-modulated, geometrically exact — plus everything
    that vibrates one (the bow, the fret barrier, the bridges, the sympathetic strings) now
-   back-substitute in Rust while the models themselves are still Python. Both
+   back-substitute in Rust while the models themselves are still Python; and the whole contact leg
+   — the mallet on its drumhead, the string buzzing on its fret, the sitar bridge — solves its
+   contact in Rust, again with the two model shells still Python. Both
    implementations stay alive for now — deleting a Python model waits on its clients, not on its own
    phase (§1.2). Seven facts worth knowing before planning work: a file's risk group is the group of
    its hardest function, so a module can port in halves (§11.2.1); `mallet` needs `collision`, so
@@ -59,7 +62,7 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    corollary bites immediately: a fused multiply-add differs from a rounded one only when the
    **product** rounds, and every body fixture in `tests/helpers.py` uses weights of 1.0, so the
    suite is systematically blind to this class of divergence — a comparison of reductions needs at
-   least one fixture whose coefficients are not powers of two (§14.3). And a seventh, from the
+   least one fixture whose coefficients are not powers of two (§14.3). A seventh, from the
    banded solver, which is about `tests/` rather than about arithmetic: **a bit-identity anchor
    between two different model classes is a porting constraint that binds them into one unit**
    (§15.2). Three `array_equal` reduction anchors chain the four theta-scheme strings together, one
@@ -71,6 +74,21 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    move at all. And **validation written into a swap block is on the hot path**: one
    `np.isfinite(...).all()` in Python turned a 1.47x win into a 0.96x loss, because what is being
    spent is per-call overhead and that check is another call of exactly that kind (§15.5).
+   And an eighth, from `collision`, which is about NumPy rather than about either language: **a
+   vectorized function called with an array and with a scalar is two different computations.**
+   NumPy's float64 power *ufunc loop* shortcuts the exponents -1, 0, 0.5, 1 and 2 (`x**0.5` is
+   `sqrt`, `x**2` is `x*x`) and its *scalar* path does not — so a port has to carry both spellings
+   and pick by argument rank, and one existing docstring claiming the two paths are identical is
+   measurably wrong (§16.2). A ninth, from the same batch, is about what the tests can see: **the
+   fixture the suite uses most can be the one that does not exercise the thing being ported.**
+   The barrier's default contact makes the Newton Jacobian 1.004 — near enough to the identity
+   that the new dense LU is a no-op and 79 nodes in contact still come out bit-identical — so a
+   parity test must bring a fixture chosen to exercise the *solver*, not the physics (§16.4). And
+   a tenth, which retires a question rather than answers one: **for a nonlinear model the
+   agreement window is set by the dynamics, not by the port.** A string buzzing on a barrier is
+   chaotic, so the two trajectories separate exponentially — 1e-13 at a thousand steps, 1e-7 at
+   twenty thousand — and the right question before porting the four remaining nonlinear models is
+   "how long before it cannot be compared", not "how well does it agree" (§16.5).
 4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
    never the reverse. Keeps the physics portable to C++/Rust later.
 5. **Unifying abstraction:** `exciter -> resonator (+- nonlinear coupling) -> body/radiation`.

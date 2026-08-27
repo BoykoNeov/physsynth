@@ -72,12 +72,20 @@ fn at(n: usize, row: usize, col: usize) -> usize {
 ///
 /// `ab` is consumed by value and returned factored, mirroring `cholesky_banded`'s contract of
 /// handing back a new array of the same shape rather than aliasing the input.
-pub fn cholesky_banded_upper(mut ab: Vec<f64>, kd: usize, n: usize) -> Result<Vec<f64>, BandedError> {
+pub fn cholesky_banded_upper(
+    mut ab: Vec<f64>,
+    kd: usize,
+    n: usize,
+) -> Result<Vec<f64>, BandedError> {
     if n == 0 || ab.len() != (kd + 1) * n {
         return Err(BandedError::BadShape);
     }
     for j in 0..n {
         let mut ajj = ab[at(n, kd, j)];
+        // `!(ajj > 0.0)`, not `ajj <= 0.0`: a NaN diagonal compares false against both, and it is
+        // the negated form that then refuses. DPBTF2 tests `AJJ.LE.ZERO` on a value it has already
+        // guaranteed non-NaN; here the caller may not have, so the refusal has to catch it.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
         if !(ajj > 0.0) {
             return Err(BandedError::NotPositiveDefinite(j + 1));
         }
@@ -103,6 +111,10 @@ pub fn cholesky_banded_upper(mut ab: Vec<f64>, kd: usize, n: usize) -> Result<Ve
         // The read locations (row `kd - 1 - i`) and the write locations (row `kd + p - q`, with
         // `p <= q`) can never coincide, so this reads its own output only where LAPACK does too.
         for q in 0..kn {
+            // `-1.0 * x` rather than `-x`, because DSYR's `alpha` multiplies `x[q]` first and the
+            // rounding of this batch's transcription is the point of it. Negation is exact for a
+            // finite double so the two agree — but the spelling is the reference kernel's.
+            #[allow(clippy::neg_multiply)]
             let temp = -1.0 * ab[at(n, kd - 1 - q, j + 1 + q)];
             for p in 0..=q {
                 let xp = ab[at(n, kd - 1 - p, j + 1 + p)];

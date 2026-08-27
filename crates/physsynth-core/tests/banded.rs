@@ -55,8 +55,16 @@ fn the_factor_reconstructs_the_matrix() {
             for j in i..(i + 3).min(n) {
                 let mut s = 0.0;
                 for r in 0..n {
-                    let uri = if i >= r && i - r <= 2 { u[(2 + r - i) * n + i] } else { 0.0 };
-                    let urj = if j >= r && j - r <= 2 { u[(2 + r - j) * n + j] } else { 0.0 };
+                    let uri = if i >= r && i - r <= 2 {
+                        u[(2 + r - i) * n + i]
+                    } else {
+                        0.0
+                    };
+                    let urj = if j >= r && j - r <= 2 {
+                        u[(2 + r - j) * n + j]
+                    } else {
+                        0.0
+                    };
                     s += uri * urj;
                 }
                 let want = a[i * n + j];
@@ -131,7 +139,11 @@ fn a_diagonal_band_factors_to_the_square_roots_exactly() {
     for j in 0..n {
         assert_eq!(x[j], 1.0 / ab[j].sqrt() / ab[j].sqrt());
     }
-    assert_ne!(x[4], 1.0 / ab[4], "a = 2 is the witness that the shortcut is a different number");
+    assert_ne!(
+        x[4],
+        1.0 / ab[4],
+        "a = 2 is the witness that the shortcut is a different number"
+    );
 }
 
 #[test]
@@ -165,10 +177,19 @@ fn a_zero_diagonal_is_refused_and_so_is_a_nan() {
 
 #[test]
 fn a_shape_that_is_not_a_band_is_refused() {
-    assert_eq!(cholesky_banded_upper(vec![], 2, 0), Err(BandedError::BadShape));
-    assert_eq!(cholesky_banded_upper(vec![1.0; 7], 2, 3), Err(BandedError::BadShape));
+    assert_eq!(
+        cholesky_banded_upper(vec![], 2, 0),
+        Err(BandedError::BadShape)
+    );
+    assert_eq!(
+        cholesky_banded_upper(vec![1.0; 7], 2, 3),
+        Err(BandedError::BadShape)
+    );
     let u = cholesky_banded_upper(model_band(5, 0.0), 2, 5).unwrap();
-    assert_eq!(cho_solve_banded_upper(&u, 2, 5, &[1.0; 4]), Err(BandedError::BadShape));
+    assert_eq!(
+        cho_solve_banded_upper(&u, 2, 5, &[1.0; 4]),
+        Err(BandedError::BadShape)
+    );
 }
 
 #[test]
