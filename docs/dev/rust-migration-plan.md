@@ -3496,6 +3496,25 @@ diagnosis therefore had to be made from CI logs, and the failure/ladder correlat
 The workflow now prints `/proc/cpuinfo`'s model name and `numpy.show_runtime()` before the parity
 step, so the next occurrence is a comparison rather than an investigation.
 
+The first reading came back on the run that made the tree green again (2026-08-27, run
+`33090052206`), and it is worth keeping because it confirms the mechanism from the *passing* side.
+The machine was an **AMD EPYC 9V74**, NumPy baseline `X86_V2`, found `X86_V3`, and every one of the
+eight off-ladder power comparisons — the exact cases that failed two runs earlier — read
+
+```
+contact_potential at exponent 2.5: 0 of 20000 differ, worst 0.0 ulp on this math library
+... 3.0, 3.3, 4.0, contact_force_elastic 1.5, 2.3, 3.0, contact_stiffness 1.3: all 0 of 20000
+```
+
+Same commit, same NumPy, same runner image, a different processor: **twenty thousand agreements
+where the other machine had one or two ulp of disagreement.** So §22.1's diagnosis is no longer an
+inference from a correlation, it is measured on both sides of the split. Two consequences. The
+divergent CPU is the *minority* case, which is why this class went unnoticed for twenty-one
+sections and why it will keep arriving as a surprise. And the ulp bars added in §22.3 are, on this
+machine, passing at **zero** — they are not exercised here, so a future run whose printed counts
+are non-zero is the signal that the job landed on the other kind of machine, not that anything
+regressed.
+
 ### 22.3 The rule, and where exactness survives
 
 The human's call: **keep exactness where it is provable, bound it where it is not.** Concretely —
