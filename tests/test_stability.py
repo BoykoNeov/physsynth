@@ -183,6 +183,7 @@ def test_the_rust_swap_matches_the_environment():
         reed,
         string_damped,
         string_ideal,
+        string_nonlinear,
         string_stiff,
     )
 
@@ -224,6 +225,7 @@ def test_the_rust_swap_matches_the_environment():
         mallet,
         string_stiff,
         string_damped,
+        string_nonlinear,
     ):
         for alias in dir(module):
             if not alias.endswith("Py") or alias.endswith("_py"):
@@ -243,6 +245,7 @@ def test_the_rust_swap_matches_the_environment():
         ("physsynth.core.mallet", "MalletWall"),
         ("physsynth.core.string_stiff", "StiffString"),
         ("physsynth.core.string_damped", "DampedStiffString"),
+        ("physsynth.core.string_nonlinear", "TensionModulatedString"),
     }
     assert set(swapped_classes) == expected_classes, (
         f"the swapped classes are {sorted(swapped_classes)}, but this guard expects "

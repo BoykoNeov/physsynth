@@ -51,6 +51,7 @@ mod radiation;
 mod reed;
 mod shape;
 mod string_damped;
+mod string_nonlinear;
 mod string_stiff;
 
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1, PyUntypedArrayMethods};
@@ -658,6 +659,7 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyIdealString>()?;
     m.add_class::<string_stiff::PyStiffString>()?;
     m.add_class::<string_damped::PyDampedStiffString>()?;
+    m.add_class::<string_nonlinear::PyTensionModulatedString>()?;
     m.add_class::<membrane::PyMembrane>()?;
     m.add_class::<body::PyModalBody>()?;
     m.add_class::<bore::PyBore>()?;

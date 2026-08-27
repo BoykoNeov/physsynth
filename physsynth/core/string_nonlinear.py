@@ -79,12 +79,23 @@ under grid/timestep refinement: same onset time, same unstable modes). Consequen
 This is the **planar** modal-exchange instability. It is *not* the out-of-plane whirling instability
 of real strings, which needs two transverse polarizations -- this model has one.
 
+**The stretch reduction.** ``I`` is a dot product, and *which order it is summed in* is part of
+this model in a way it is not for models #1-3. Their reductions are read-outs; this one is inside
+``_solve_tension``'s residual, so a last-bit difference does not stay a last bit -- it changes how
+many iterations ``brentq`` takes. Measured 2026-08-27, two spellings of the same sum took a
+different number of residual evaluations on **1,400 of 5,000 steps**. So ``_stretch`` and
+``_stretch_int`` use :func:`physsynth.core.portable.dot`, a strictly left-to-right accumulation
+that a Rust ``for`` loop reproduces exactly, rather than ``np.dot``, whose BLAS kernel no portable
+implementation can. The association ``(dot + u_0^2) + u_last^2`` is load-bearing for the same
+reason. See ``portable.py`` and plan section 19.
+
 Headless: NumPy + SciPy (banded Cholesky, brentq). No I/O, no plotting.
 See ``docs/dev/tension-modulated-string-plan.md``.
 """
 
 from __future__ import annotations
 
+import os
 import warnings
 from typing import Literal, NamedTuple
 
@@ -529,18 +540,20 @@ class TensionModulatedString:
         model-#8 "force *density*" trap -- it looks exactly like a mis-scaled ``EA`` and passes
         every qualitative test.
         """
-        # np.dot DELIBERATELY, not portable.dot: the stretch is on the UPDATE path (it is what
-        # `_solve_tension`'s residual brackets), so changing its summation order would move this
-        # model's trajectory rather than a reported number. The energy read-outs above are
-        # portable because an anchor compares them across classes; this one is compared to
-        # nothing. See `portable.py` for the read-out / update-path split.
+        # portable.dot, NOT np.dot -- and this reduction is on the UPDATE path, which is why the
+        # choice had to be re-taken rather than inherited. When `portable.py` was written this one
+        # was left on `np.dot` because "it is compared to nothing"; porting this model to Rust made
+        # that false. A left-to-right sum cannot reproduce BLAS `ddot` (measured: 612 of 800 real
+        # stretch vectors differ), and the difference does not stay at one bit -- it is inside a
+        # root-find residual, so it changes brentq's *iteration count* on ~28 % of steps. See the
+        # module docstring's "the stretch reduction" note and the plan doc, section 19.2.
         du = np.diff(u_full)
-        return float(np.dot(du, du) / self.h)
+        return float(dot(du, du) / self.h)
 
     def _stretch_int(self, u_int: NDArray[np.float64]) -> float:
         """Stretch of an interior-only vector (the clamped ends contribute their own slopes)."""
         du = np.diff(u_int)
-        return float((np.dot(du, du) + u_int[0] ** 2 + u_int[-1] ** 2) / self.h)
+        return float((dot(du, du) + u_int[0] ** 2 + u_int[-1] ** 2) / self.h)
 
     def _P(self, f: NDArray[np.float64], g: NDArray[np.float64]) -> float:
         """Potential bilinear form ``P(f,g) = <-L f, g> = h * (-L f) . g`` (interior vectors)."""
@@ -567,3 +580,38 @@ class TensionModulatedString:
         ab[1, 1:] = M.diagonal(1)
         ab[0, 2:] = M.diagonal(2)
         return ab
+
+
+# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 3) -----------------------------------
+#
+# `TensionModulatedStringPy` above is the reference implementation. Below it,
+# `TensionModulatedString` is bound to whichever implementation this process is meant to exercise.
+# This model has one client, `web/serialize.py`, and no core module builds one -- so unlike the two
+# strings ported before it, flipping the switch here swings exactly this model and the viewer.
+#
+# WHAT MOVED ON THE PYTHON SIDE FOR THIS PORT, and it is not in this block. `_stretch` and
+# `_stretch_int` were on `np.dot` deliberately (see `portable.py`), on the grounds that the stretch
+# is on the update path and is compared to nothing. Porting this model made the second half of that
+# false. They are now `portable.dot`, unconditionally and on the default path -- the same shape of
+# edit `portable.py` itself was, and made for the same reason: a left-to-right sum cannot reproduce
+# BLAS `ddot`, and here the difference does not stay at one bit. The stretch is inside a root-find
+# residual, so a last-bit disagreement changes `brentq`'s ITERATION COUNT -- measured on 1,400 of
+# 5,000 steps -- which is a different trajectory, not a looser one. Plan section 19.2.
+#
+# THE ONE METHOD THIS MODEL REFUSES is `apply_Ainv`, and the refusal is part of the interface: `A`
+# moves with the tension, so a constant driving-point admittance does not exist and a bow or a
+# barrier handed one of these must get a clean `NotImplementedError` rather than a wrong number.
+# The Rust class raises the same exception with the same text.
+#
+# `string_coefficients_from_material` and `StringCoefficients` are NOT swapped and stay Python.
+# They are a construction-time modelling oracle, never on a trajectory -- the crate module's header
+# says why porting them would buy nothing.
+#
+# Off by default. The Python model is still the reference oracle for every model not yet ported.
+TensionModulatedStringPy = TensionModulatedString
+"""The pure-Python reference implementation, under a name the swap below never rebinds."""
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    from physsynth_rs import TensionModulatedString  # type: ignore[assignment]  # noqa: F811

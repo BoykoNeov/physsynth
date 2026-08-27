@@ -26,7 +26,11 @@
 //! and `string_damped` — and the thing that had to move before either could is not in this crate
 //! at all: two *evaluation orders* SciPy chose and no portable implementation reproduces, one in a
 //! reduction and one in a matrix's column order. Both were answered on the Python side, in
-//! `physsynth/core/portable.py`; `sparse::Csr::sub` and `pyfloat` are what this side needed.
+//! `physsynth/core/portable.py`; `sparse::Csr::sub` and `pyfloat` are what this side needed. Its
+//! fourth batch is `string_nonlinear`, the first model here whose matrix changes every step: the
+//! banded factor moves inside a scalar root-find, so `banded` and `root` meet for the first time
+//! and a last bit in a reduction becomes a different *iteration count* rather than a different
+//! last bit.
 //!
 //! # The shape every resonator here shares
 //!
@@ -65,4 +69,5 @@ pub mod root;
 pub mod sparse;
 pub mod string_damped;
 pub mod string_ideal;
+pub mod string_nonlinear;
 pub mod string_stiff;

@@ -59,6 +59,22 @@ once, in the open. Measured 2026-08-27 on this machine, every string physics bar
 worst lossless drift over one second at 44.1 kHz is 9.4e-12 for the Python string and 9.6e-12 for
 the Rust one, against the 1e-10 acceptance bar. All three anchors stay exact.
 
+**A read-out / update-path split was the original rule, and it did not survive the next batch.**
+As first written this module covered only *reported* numbers: the energy reductions an anchor
+compares across model classes. :func:`dot` was deliberately kept out of
+``string_nonlinear._stretch``, which is on the **update** path, on the stated grounds that "this
+one is compared to nothing". Porting model #9 to Rust made that grounds false, and the port is now
+what compares it -- so both stretch reductions moved here too, unconditionally, in the same shape
+of edit and for the same reason (plan section 19.2).
+
+Two things are worth carrying forward from that. The first is the general rule: **a decision
+justified by "nothing downstream depends on this" has to be re-taken the moment something
+downstream ports**, and the answer may come out the other way. The second is why it could not be
+absorbed as a last bit: the stretch feeds a ``brentq`` residual, so a disagreement in the reduction
+changes the root-find's **iteration count** rather than its answer's last digit -- measured at 1,400
+of 5,000 steps. The question at each ``np.dot`` is therefore still "does this reduction reach the
+next timestep?", but the follow-up is "and does anything *downstream* of it branch on the answer?".
+
 **Scope is four models and nothing else.** :mod:`.plate`, :mod:`.beam`, the free-plate family and
 :mod:`.membrane` keep ``np.dot`` and keep SciPy's index order, because no anchor binds them to
 anything and each has a shipped parity measurement built on their current behaviour.

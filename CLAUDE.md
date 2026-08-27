@@ -21,10 +21,10 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    analysis, viewer backend *and* the test suite — in favour of **Rust**, gradually and model by
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
-   **PHASE 2 IS COMPLETE**; phases 0, 1, all five batches of 2 and three of 3 are built (plan
-   §9-§18): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all of
-   `operators`, `membrane`, `exciter`, `body`, `bore`, `reed`, **`mallet`**, **`string_stiff`** and
-   **`string_damped`**, the *builder half* of
+   **PHASE 2 IS COMPLETE**; phases 0, 1, all five batches of 2 and four of 3 are built (plan
+   §9-§19): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all of
+   `operators`, `membrane`, `exciter`, `body`, `bore`, `reed`, **`mallet`**, **`string_stiff`**,
+   **`string_damped`** and **`string_nonlinear`**, the *builder half* of
    `operators2d`, all of `radiation` **except** its one Bessel helper, the **banded Cholesky** the
    four theta-scheme strings share, and all of `collision` **except** `BarrierString` itself — the
    contact primitives, both contact solves and the project's one **dense LU** — ported. `cargo test --workspace` runs the
@@ -37,8 +37,9 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    — air column, radiating bell and the reed that blows it — is Rust end to end; and the air node
    itself — far-field read-out, radiation load, rational impedance — is Rust too; and the four
    theta-scheme strings — stiff, damped, tension-modulated, geometrically exact — plus everything
-   that vibrates one (the bow, the fret barrier, the bridges, the sympathetic strings) now
-   back-substitute in Rust while the models themselves are still Python; the whole contact leg
+   that vibrates one (the bow, the fret barrier, the bridges, the sympathetic strings)
+   back-substitute in Rust, and three of the four are now Rust models outright — only the
+   geometrically exact one, which needs Group D, is still Python; the whole contact leg
    — the mallet on its drumhead, the string buzzing on its fret, the sitar bridge — solves its
    contact in Rust; and the **mallet itself is now Rust end to end**, model shell included, both
    the drumhead version and the standalone mass-vs-wall rig that holds its closed-form oracle. Both
@@ -106,6 +107,26 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    re-contact separates at ~1,200 (§17.5). And **a swap guard can silently cover nothing**:
    `collision` was missing from the guard table for a whole batch because three of its public names
    start with an underscore and the derive could not resolve them (§17.6).
+   And a **thirteenth**, from `string_nonlinear`, which is §18.3's own rule coming due one batch
+   after it was written: **a reduction's summation order matters more when something downstream
+   *branches* on it than when something merely adds to it.** §18.2 deliberately left the tension
+   string's stretch on `np.dot` because "it is compared to nothing"; porting the model made that
+   false, and the reduction turned out not to be absorbable as a last bit at all — it sits inside a
+   `brentq` residual, so the two spellings take a **different number of iterations on 1,400 of
+   5,000 steps** (§19.2). So the question to ask at each reduction gains a clause: not only "does
+   this reach the next timestep" but "does anything downstream branch on it". Three corollaries.
+   **A public read-out can be a strictly sharper detector than the state**: the batch's one real
+   porting error — a mis-associated `((dot + u_0^2) + u_last^2)` — left the trajectory
+   **bit-identical for 2,000 steps** and was caught by `delta_tension`, because `beta` is ~4e-9 and
+   a last bit of the tension never reaches an O(1) band entry (§19.4). **The agreement window can
+   be set by an operating point inside the model**: the same code diverges 9.7e-11 at 20,000 steps
+   below the parametric threshold and **2.6e-3 by step 1,000** above it, so a parity fixture's
+   *amplitude* is part of its claim (§19.5) — the fourth answer to §16.5's question and the first
+   that is about neither the model class nor the nonlinearity's persistence. And **a shell line
+   continuation is checked by nothing**: a literal `\n` in a YAML `run:` block,
+   committed with the previous batch, had been failing the parity CI step ever since — loudly,
+   and for the wrong reason (§19.7).
+
    And a **twelfth**, from the two theta-scheme strings, which is really the same finding twice and
    is about **SciPy rather than about Rust**: what blocked the first *model* out of the four-string
    chain was not the solver §15 had already dealt with but an **order of evaluation**, in two

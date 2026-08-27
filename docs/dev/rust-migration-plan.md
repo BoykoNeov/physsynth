@@ -2519,6 +2519,13 @@ Three things about the fix are worth stating precisely.
   reach it (`EA = 0` returns before it). The question to ask at each `np.dot` is not "is this a
   reduction" but **"does this reduction reach the next timestep?"**
 
+  > **Reversed one batch later, by its own rule (§19.2).** Porting model #9 made "it is compared to
+  > nothing" false, so both stretch reductions moved to `portable.dot` after all. The bullet's
+  > *question* survives and the answer it gave did not — which is §18.3 arriving where §18.2 was
+  > standing. And the follow-up question the reversal adds: **does anything downstream of the
+  > reduction branch on it?** Here `brentq` does, so the difference was never going to stay at one
+  > bit.
+
 ### 18.3 Phase 1's canonical-`Csr` decision: the justification expired, the conclusion got stronger
 
 §10 wrote down that the Rust `Csr` is canonical while SciPy's is not, and gave two reasons:
@@ -2674,5 +2681,320 @@ three real matvecs.
   §18.3, and it is live at Phase 5 rather than hypothetical (§18.4).
 - **Re-examine a decision when its stated reason expires**, rather than either keeping it on
   inertia or reversing it on the loss of the reason alone. §18.3.
+- **§4.1's SuperLU hypothesis is still untested.** Group D remains the only untouched solver class,
+  and `beam` keeps its de-risking job at Phase 4.
+
+---
+
+## 19. Phase 3, batch 4, as built (2026-08-27)
+
+`physsynth/core/string_nonlinear.py` — model #9, the tension-modulated (Kirchhoff–Carrier) string.
+The third model out of the four-string chain §15.2 found, and the **first model in the project
+whose update matrix moves every step**: `A = A0 - beta D2` depends on the tension, so the banded
+factorization is inside a scalar root-find rather than at construction, and `banded` (§15) meets
+`root` (§13.3) for the first time.
+
+Two things make this batch worth reading. The obstacle §18.10 predicted turned out to have a
+different answer than the one it predicted — and the answer was written down one section later, in
+§18.3, before anyone knew it applied here. And the batch's one real porting error was **invisible
+to the trajectory** and caught by a telemetry attribute, which changes what a parity file for this
+class of model has to compare.
+
+### 19.1 The shape on disk
+
+```
+physsynth/core/string_nonlinear.py            portable.dot in both stretches; module note; swap block
+physsynth/core/portable.py                    the read-out/update-path split, retired (§19.2)
+crates/physsynth-core/src/string_nonlinear.rs Params/kernels/solve_tension/TensionModulatedString
+crates/physsynth-core/src/lib.rs              the module, and the batch's line in the header
+crates/physsynth-core/tests/string_nonlinear.rs native bars (13 tests)
+crates/physsynth-py/src/string_nonlinear.rs   PyTensionModulatedString — telemetry, the refusal, the warning
+crates/physsynth-py/src/lib.rs                registration
+tests/test_rust_parity_tension.py             Rust vs NumPy/SciPy (90 tests)
+tests/test_stability.py                       the model added to the derived swap guard
+.github/workflows/ci.yml                      the batch's flagged step, the parity file — and a FIX (§19.7)
+```
+
+### 19.2 The finding: §18.10's prediction was right about the obstacle and wrong about the fix
+
+§18.10 said the port would have to **match `np.dot` head-on** — "the first time this migration has
+had to match a BLAS call" — and told the next batch to measure whether it can before planning.
+
+Measured first, as instructed. **It cannot**, and by a wide margin:
+
+| | measured 2026-08-27 |
+|---|---|
+| `np.dot(du, du)` vs a left-to-right sum, random vectors n = 16 … 1,024 | 53 % … 93 % differ |
+| the same, on the **real** `_stretch` vectors from a 400-step run | **612 / 800** differ |
+| worst relative disagreement on those | 6.7e-16 |
+
+So the choice was the one §18.2 had already framed: leave `_stretch` on `np.dot` and accept a
+tolerance, or move it to `portable.dot` and change the reference implementation's numbers. §18.2
+chose the first, on the stated grounds that the stretch "is compared to nothing".
+
+**Porting this model is what made that grounds false**, which is exactly the rule §18.3 wrote down
+one section later — *a decision justified by "nothing downstream depends on this" has to be
+re-examined the moment something downstream is ported*. There it survived the loss of its reason on
+a different argument. Here it does not: the reduction moved, unconditionally and on the default
+path, and the module docstring says so where the old comment said the opposite.
+
+**What settles it is not the ulp, it is what the ulp reaches.** For models #2 and #3 an
+implementation difference of one bit stayed one bit. Here the stretch is inside `_solve_tension`'s
+residual, so a last-bit disagreement changes `brentq`'s **iterate sequence** — an integer:
+
+| | `np.dot` | `portable.dot` |
+|---|---|---|
+| residual evaluations over 5,000 steps, flagship fixture | 34,010 | 34,046 |
+| steps whose evaluation **count** differs | — | **1,400 / 5,000** |
+| `bracket_expansions`, `n_not_converged` | 0, 0 | 0, 0 |
+
+That is the argument against the alternative, and it is stronger than "the numbers would be
+looser". Under `np.dot` the parity bar would have had to be ~2e-12 of amplitude — **set by
+`tension_tol = 1e-13`, not by the reduction** — which is four orders looser than the last bit it
+would supposedly be guarding. A reassociation bug in the Rust stretch would have sat invisibly
+underneath it. A test that cannot fail for the reason it exists is not a test.
+
+**The generalisable form, which extends §18.2's own question by one clause.** Ask not only *does
+this reduction reach the next timestep?* but **does anything downstream of it branch on the
+answer?** A reduction feeding a linear update contributes a last bit. A reduction feeding a
+root-find, a Newton safeguard, an Armijo backtrack or a bracket test contributes a *control-flow
+decision*, and those do not average out.
+
+### 19.3 What is bit-identical
+
+| | |
+|---|---|
+| parameters, `x`, `_L` / `_D2` (`data`, `indices`, `indptr`, `nnz`), `_ab0`, `_ab_D2` | **bit-identical** |
+| `set_state` including `u^{-1}` — which carries `dT_0` — all `v0` spellings | **bit-identical** |
+| trajectory + `energy()` + `nonlinear_energy()`, 8 fixtures × 600 steps | **bit-identical** |
+| **all four telemetry attributes**, step for step, over the same runs | **bit-identical** |
+| the same, 20,000 steps | **bit-identical** |
+| a **Rust** model #9 at `EA = 0` vs a **Python** model #3, 4 loss settings × 600 steps | **bit-identical**, energy included |
+| all of the above **without** a shared banded solver | Group A, §19.5 |
+
+Every exact row requires both sides to run the same banded Cholesky — `PHYSSYNTH_RS=1` arranges it,
+and the parity file's `shared_solver()` arranges it otherwise. That qualifier is §15.3's and this
+batch neither introduced nor can remove it. But it **binds harder here than it did in §18**: there
+the solver ran once per step, so a solver gap was a per-step perturbation; here it runs ~7 times
+per step *inside a residual*, so it moves the root `brentq` converges on rather than only the
+solve. Measured: the step at which two otherwise-identical models first separate is **1,882 with
+SciPy's LAPACK and 210 with the Rust transcription**, on the same fixture. The separation step is a
+property of the solver, not of the port.
+
+### 19.4 The batch's one real porting error, and why the trajectory could not see it
+
+`_stretch_int` is `((dot + u_0**2) + u_last**2) / h`. The port grouped the two end terms first —
+`dot + (u_0**2 + u_last**2)` — which is a different sum in floating point.
+
+**The state was bit-identical through it, for 2,000 steps.** What caught it was `delta_tension`,
+differing in its last bit on roughly half the steps. The reason the trajectory is blind is
+quantitative rather than lucky: `beta = k^2 dT / (2 rho)` is ~4e-9 in every realistic fixture, so a
+one-ulp change in `dT` perturbs `beta` by ~1e-25 and the band entries — which are O(1) — round to
+exactly the same doubles.
+
+Two consequences, and the second is the one that generalises.
+
+* **The parity file compares the telemetry first, and exactly.** `delta_tension`, `converged`,
+  `bracket_expansions` and `n_not_converged` are public attributes; two of them are integers, so
+  they are compared for *equality*, not for closeness. A file that compared only `u` would have
+  passed with the kernel wrong.
+* **A public read-out can be a strictly sharper detector than the state, and the sharp one is the
+  quantity nearest the branch.** §14.3 found the suite systematically blind to a class of
+  divergence because every fixture weight was 1.0; this is the same shape one level up — the
+  observable that would have shown the bug was not the one a trajectory test looks at. Before
+  writing a parity file, ask **which quantity in this model is closest to a control-flow decision**
+  and compare that one exactly.
+
+The measurement that pins it, for the record: two Python models differing *only* in the stretch
+reduction take a different number of `brentq` evaluations within the first 100 steps, and their
+states stay `array_equal` for **1,882 steps** (LAPACK) or **210** (Rust banded). The parity file
+asserts both halves rather than describing them.
+
+### 19.5 A fourth agreement regime, and it is the first one set by the model's own dynamics
+
+§16.5 asked how long a model stays comparable and answered "the dynamics decide". §17.5 sharpened
+it to "does the nonlinearity *recur*". §18.6 added the linear case, where nothing amplifies at all.
+Model #9 supplies a case none of those three cover: **the same model, the same code, gives two
+completely different answers depending only on amplitude**, because it has a dynamical threshold
+inside it.
+
+Model #9's single-mode motion is parametrically unstable above `dT/T0 ~ 3` — real physics, not an
+artifact (the tension pumps at twice the mode frequency and roundoff-seeded neighbours sit in
+Mathieu tongues). Below that threshold the motion is regular; above it the mode disintegrates into
+its neighbours while conserving energy. Perturbing with the banded-solver gap, on the suite's own
+`EA = 1e5` fixture, mode 3:
+
+| step | sub-threshold (peak 2.11 × T0) | above threshold (peak 11.05 × T0) |
+|---|---|---|
+| 100 | 2.0e-14 | 1.4e-13 |
+| 500 | 1.4e-13 | **1.3e-8** |
+| 1,000 | 3.0e-13 | **2.6e-3** |
+| 2,000 | 1.4e-12 | **3.7e-1** |
+| 20,000 | 9.7e-11 | 7.3e-1 (saturated) |
+
+Both runs hold energy to better than 1e-10 throughout, which is the whole point: the divergence is
+the model being chaotic, not either implementation being wrong.
+
+**So a parity fixture's amplitude is part of its claim**, in the same way §16.4 found a parity
+fixture's stiffness was. The question to ask before porting a model is no longer "is it nonlinear"
+(§16.5) or "does the nonlinearity recur" (§17.5) but **"does this model have an operating point
+above which it amplifies, and where is my fixture relative to it?"** For #9 the honest statement is
+that it is comparable to the bit under a shared solver at *any* amplitude, and comparable at all
+without one only below threshold.
+
+### 19.6 The blind fixture, again — and this time it is blind to the thing the batch changed
+
+§16.4's rule fires for the third time, and it is worth recording because the *reason* is new each
+time. The barrier's default contact made the Newton Jacobian 1.004, so the new dense LU was a
+no-op. The mallet's contact was a transient. Here:
+
+**At small amplitude the tension excess is so small that `brentq` converges the same way whatever
+the stretch reduction is.** Measured: two Python models differing only in that reduction are
+`array_equal` at 400 steps at amplitude 1e-6, and their `dT` never exceeds 1e-8. A gentle fixture
+would therefore have been green **with the port's reduction wrong** — the very thing this batch
+existed to get right.
+
+So the parity file's trajectory fixtures are all at an amplitude where the root-find does real
+work, and the two halves of that claim are assertions rather than comments:
+`test_the_gentle_fixture_is_not_a_test` shows the blindness, and
+`test_the_root_find_sees_the_reduction_long_before_the_state_does` shows the chosen fixture is not
+blind. Both carry a message saying that a failure means the *measurement* needs re-taking, not the
+port.
+
+### 19.7 A CI step had been failing since the previous batch, and the fix is in this one
+
+While adding this batch's step, the `Rust vs Python parity` job was found to contain
+
+```
+tests/test_rust_parity_mallet.py \n            tests/test_rust_parity_strings.py
+```
+
+— a **literal backslash-n** rather than a line continuation, committed with §18's edit. In `bash`,
+`\n` outside quotes is an escaped `n`, so `pytest` was handed a path called `n`, could not find it,
+and exited 4. The step has been red since, and the twelve-parity-file number §18.9 reports was a
+local run.
+
+It is fixed here, along with the file this batch adds. The generalisable bit is small but real:
+**a shell continuation is not checked by anything** — YAML parses the block as an opaque string, no
+linter reads it, and the failure mode is a step that fails *loudly for the wrong reason*, which is
+easy to misread as flaky. Two other steps in the same file carry the opposite mangling (their
+continuations collapsed into one very long line); those are correct and were left alone.
+
+### 19.8 Four smaller things worth keeping
+
+* **The `dict[float, ...]` cache is performance only, and it was nearly dropped on a wrong
+  estimate.** The same `dT` refactors to the same bits, so the memo changes nothing observable, and
+  the first draft of the port left it out with a note saying it "saves the two evaluations `brentq`
+  makes at the bracket ends" and that recomputing costs "the same number". **Measured, that was
+  wrong by about a factor of two**: a step takes **4.4** banded solves with the memo and roughly
+  twice that without, because `brentq`'s first two evaluations land exactly on the bracket ends the
+  caller has already solved for *and* its last lands on the root the caller is about to solve for
+  again. So the memo is reproduced — as a short `Vec` scanned linearly, which is what a per-call
+  dict of a handful of entries actually is, keyed on `to_bits` because that is the comparison a
+  Python dict makes. The lesson is not about caches: **an "it costs nothing" claim in a comment is
+  a measurement, and this one was cheap to take and had not been.**
+* **`apply_Ainv` raises, and the refusal is part of the interface.** Every other string in the
+  family implements it; this one cannot, because `A` moves with the tension and a *constant*
+  driving-point admittance does not exist. `bow`, `collision::BarrierString` and `connection`'s
+  bridges all call it on whatever string they are handed, so the Rust class has to produce a clean
+  `NotImplementedError` with the same text — not a panic, and not a wrong number. This is the
+  §13.2 shape again: a surface property `cargo test` cannot see, because it is about what happens
+  at the boundary.
+* **The `RuntimeWarning` goes through Python's own `warnings` machinery.** A failed bracket warns
+  and quotes `self.n` *before* the increment. Emitting it from Rust as a print, or not at all,
+  would be invisible to `pytest.warns` and to `-W error` — and the message is the honesty gate that
+  says a run must not be rendered as physics. **It is not exercised by any test**, and that is
+  stated rather than hidden: the branch is reachable only when 40 bracket doublings all fail, which
+  the termination argument says cannot happen for a finite state. It is in the same class as the
+  doubling loop itself — written, reviewed, and unreached.
+* **The bracket-doubling loop is a dormant branch, and it is driven natively rather than assumed.**
+  Swept across ten fixtures spanning amplitude, grid, damping and Courant number, `bracket_expansions`
+  was **0** every time: the `max(I^{n+1}(0), I^{n-1})` seed already brackets. §16.6's Armijo hazard
+  in a new place — a safety net nothing exercises is a safety net nothing has checked — so
+  `crates/physsynth-core/tests/string_nonlinear.rs` calls `solve_tension` directly with a state
+  built to enter it.
+
+### 19.9 The success condition
+
+* `tests/test_tension_string.py` unmodified against Rust, including the `EA = 0` anchor (now
+  between a Rust model #9 and a Rust model #3) and the parametric-breakup signature test.
+* `tests/test_web_backend.py` against Rust — `web/serialize.py` builds a `TensionModulatedString`
+  for its `tension` model, so the viewer is this port's only other client (§1.1).
+* `tests/test_damped_string.py` against Rust — the anchor's other end, and the control that says a
+  failure is about this batch rather than about §18's.
+* `tests/test_stability.py`'s swap guard, with the model added to the **derived** class half.
+* `tests/test_rust_parity_tension.py` — 90 tests, green with and without the flag.
+* The four string files on the **default** path after the `portable.dot` edits, which is §18.2's
+  precedent: an unconditional change to the reference implementation has to show every physics bar
+  unmoved, measured rather than argued.
+* **Not** re-run: the geometric string's files. `string_geometric` does not import
+  `string_nonlinear` and the shared evaluation orders were already in place, so its flagged
+  configuration did not move. §18.8's rule is to re-run every step whose configuration *changed*,
+  which is not the same as re-running everything nearby.
+* One file **did** move without being listed anywhere, and it is worth naming because the way it
+  moved is the one that hides. `tests/test_rust_parity_banded.py`'s
+  `test_the_family_still_reduces_to_itself_exactly_on_the_rust_solver` builds all four strings
+  through their **swapped** names, so under the flag its `EA = 0` anchor became Rust-model-#9 versus
+  Rust-model-#3 where it had been Rust-versus-Python. That is only a real comparison because the two
+  Rust cores are separate transcriptions — `string_nonlinear` writes out model #3's right-hand side
+  again rather than calling `string_damped::step_rhs`, deliberately and for §18.7's reason. Had it
+  reused it, the anchor would have compared one implementation with itself and **still passed**,
+  which is what a vacuous test looks like from outside. It is covered by the parity step in both
+  modes (1,194 flagged / 1,193 + 1 skipped unflagged) rather than by a step of its own.
+
+  What the two cores *do* share is `update_matrix_bands`, so the `EA = 0` anchor is not an
+  independent check of `A0`'s assembly — the `sigma1 = 0` anchor is, because model #2 has its own.
+  The native test says so in place of implying otherwise.
+
+### 19.10 What was measured
+
+| | |
+|---|---|
+| Native `cargo test --workspace` | **228 passed** (215 at the end of §18) |
+| The same in `--release` | **228 passed** |
+| Cargo dependency allowlist | still **EMPTY** |
+| `tests/test_rust_parity_tension.py` | **90 passed**, flag set and unset |
+| All thirteen parity files | **1,194 passed** flagged; 1,193 + 1 skipped unflagged |
+| `tests/test_tension_string.py` against Rust | **39 passed** |
+| The batch's CI step, flagged (adds the viewer's 403) | **475 passed** |
+| The same files plus the swap guard, on the **default** path | **494 passed** |
+| `np.dot` vs a left-to-right sum, real `_stretch` vectors | **612 / 800** differ, worst 6.7e-16 |
+| brentq evaluation count, the two spellings, 5,000 steps | differs on **1,400** steps |
+| `bracket_expansions` over ten fixtures | **0** — the branch is dormant |
+| Banded solves per step, with the memo / without | **4.4** / roughly twice that |
+| Trajectory + energy + telemetry, shared solver, 8 fixtures × 600 steps | **bit-identical** |
+| The same, 20,000 steps | **bit-identical** |
+| First separation without a shared solver, LAPACK / Rust banded | step **1,882** / **210** |
+| Divergence sub-threshold, 100 / 1,000 / 20,000 steps | 2.0e-14 / 3.0e-13 / 9.7e-11 of amplitude |
+| Divergence above threshold, 100 / 1,000 / 20,000 steps | 1.4e-13 / **2.6e-3** / 7.3e-1 |
+| `np.float64(x) ** 2` vs `math.pow(x, 2.0)` | **0 / 200,000** differ — `scalar_pow` is the right spelling |
+| `np.float64(x) ** 2` vs `x * x` | 92 / 200,000 differ |
+| A whole step, `N` = 16 / 64 / 256 / 1,024 | **32.1x / 13.8x / 5.6x / 3.4x** faster |
+
+The step numbers are §11.6's crossover once more, and this model sits **higher on it than any
+string before it**: 32x at `N` = 16 against model #3's 19.8x, and 3.4x at `N` = 1,024 against its
+1.2x. The reason is the same reason the model is expensive — what Rust removes is per-call
+interpreter overhead, and a root-find pays that overhead **4.4 times per step** where a linear
+theta-scheme string pays it once. The models that gain most from the port are the ones whose Python
+loop calls a compiled kernel *many times with small arguments*, which is a property of the
+algorithm rather than of the grid.
+
+### 19.11 What the next batch inherits
+
+- **`bow` is the phase's last model**, and it is now fully unblocked: it calls
+  `string.apply_Ainv`, which is a Rust solve on a Rust string. Its safeguarded Newton iteration
+  count is compared by nothing in the repo — §19.2 is the reason that has to be added rather than
+  assumed, because a Newton *iteration count* is exactly the kind of downstream branch a last-bit
+  difference reaches. §13.3 compared the reed's branch choices; do the same here.
+- **`string_geometric` is the fourth and last of the chain**, and it is the one that needs Group D:
+  it uses banded Cholesky *and* a sparse LU. It is a Phase 5 model for that reason and not a
+  candidate yet.
+- **Ask what a reduction *feeds*, not only whether it reaches the next timestep.** §19.2. A
+  reduction under a root-find, a Newton safeguard or a bracket test contributes a control-flow
+  decision rather than a last bit.
+- **Ask which quantity is nearest a branch, and compare that one exactly.** §19.4. The trajectory
+  can be blind to an error the telemetry shows immediately.
+- **Ask where the fixture sits relative to the model's own amplification threshold.** §19.5. It is
+  the third form of §16.4's fixture question and the first one that is about *amplitude*.
 - **§4.1's SuperLU hypothesis is still untested.** Group D remains the only untouched solver class,
   and `beam` keeps its de-risking job at Phase 4.
