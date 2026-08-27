@@ -108,18 +108,44 @@ fn the_two_power_spellings_are_the_ones_numpy_uses() {
         );
     }
     // And the scalar path is deliberately NOT that — it is `pow`, whichever way that rounds.
+    //
+    // THE EXPONENT HAS TO BE OPAQUE OR THERE IS NO SCALAR PATH TO TEST, and the first version of
+    // this test did not know that. It asserted that the two paths *disagree somewhere*, passed
+    // in a debug build, and failed on CI, which builds `--release`. The cause is not the runner's
+    // libm: **LLVM constant-folds `powf` at a compile-time-known exponent** — `powf(x, 0.5)`
+    // becomes `sqrt(x)` and `powf(x, 2.0)` becomes `x * x`, which are precisely the two rungs of
+    // the ufunc ladder the array path exists to reproduce. Handed the literal `1.5` below, the
+    // optimiser propagated it into `alpha - 1.0`, folded the scalar path into `sqrt`, and made the
+    // two paths the same code. Measured 2026-08-27 in a release build on this machine: with the
+    // exponent folded, 0 of 200,000 samples differ; with it hidden behind `black_box`, 91 do.
+    //
+    // Nothing was wrong with the port. The *binding* takes `alpha` from Python at runtime, so it
+    // can never be folded — which is why every Python parity test agreed. It was wrong with the
+    // test, and the general form is worth keeping: **a distinction between two spellings of the
+    // same arithmetic is only observable while the compiler cannot see which one you meant.**
+    // `mallet::scalar_pow`'s `#[inline(never)]` is this same fact turned into a defence, in the
+    // one place the exponent genuinely is a literal in the source.
+    let opaque = std::hint::black_box(1.5);
     let mut differed = 0;
     for i in 1..200_000 {
         let x = 1e-6 * f64::from(i);
-        if contact_stiffness(x, K, 1.5, PowPath::Array)
-            != contact_stiffness(x, K, 1.5, PowPath::Scalar)
+        assert_eq!(
+            contact_stiffness(x, K, opaque, PowPath::Scalar),
+            K * 1.5 * x.powf(std::hint::black_box(0.5)),
+            "the scalar path must be `pow`, not the ufunc ladder's `sqrt`"
+        );
+        if contact_stiffness(x, K, opaque, PowPath::Array)
+            != contact_stiffness(x, K, opaque, PowPath::Scalar)
         {
             differed += 1;
         }
     }
+    // Reported rather than required: how *often* `pow` and `sqrt` disagree is a property of the C
+    // library (91 in 200,000 on Windows/UCRT), and asserting a count would be a claim about the
+    // machine — §14.2's rule, arriving in a test instead of in a port.
     assert!(
-        differed > 0,
-        "the two paths came out identical, which means one of them stopped being what it claims"
+        differed < 200_000,
+        "the two paths cannot disagree everywhere"
     );
 }
 

@@ -55,6 +55,8 @@ Headless: NumPy + SciPy (delegates the field solve to the membrane). No I/O, no 
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -364,3 +366,45 @@ class MalletWall:
     def velocity(self) -> float:
         """Mallet velocity ``δ_t- z_H`` (m/s): ``−strike_velocity`` inbound, ``+`` after rebound."""
         return (self.z_H - self.z_H_prev) / self.k
+
+
+# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 2, last batch) -----------------------
+#
+# THIS IS THE BATCH THAT FINISHES PHASE 2, and it is short because both of the model's hard parts
+# were already ported: the drumhead in Phase 2 batch 1 and the contact root-find in Phase 3 batch 2.
+# What swaps here is the SHELL -- the force-free flight integrator, the two force-injection sites,
+# and the admittances that scale the force. Section 16.11 said so before the code existed, which is
+# what makes a divergence after this point attributable rather than merely observed.
+#
+# THE ONE ARITHMETIC TRAP IN A SHELL THIS SMALL IS ``** 2``. Every constant this model owns is
+# built from a squaring -- ``k**2 / (rho h**2 (1 + sigma k))``, ``k**2 / M``, ``0.5 M v**2`` --
+# and those are PYTHON floats, so ``**`` is ``float.__pow__``, which is the C library's ``pow``
+# and NOT ``x * x``. Section 16.2 found that distinction inside NumPy; it applies one level out
+# here. Measured 2026-08-27 ON THIS MACHINE over 400,000 samples from the range these quantities
+# occupy, the two spellings disagree in 225 of them -- how OFTEN they differ is a property of the
+# C library and varies by platform, but which one Python computes does not (plan section 17.2).
+#
+# ``_g_s`` and ``_g_h`` multiply the contact force at every timestep, so the obvious ``k * k``
+# would put a last-bit error on the state of every step of every run -- while conserving energy
+# perfectly, which is why no physics bar could have caught it. The Rust side routes those through
+# an ``#[inline(never)]`` wrapper, because LLVM folds a literal ``powf(x, 2.0)`` straight back into
+# ``x * x``; ``crates/physsynth-core/tests/mallet.rs`` pins that structurally rather than with a
+# witness value, since how often the two disagree is the platform's business and not the port's.
+#
+# The Rust ``MalletMembrane`` REQUIRES a Rust ``Membrane`` and raises ``TypeError`` on anything
+# else -- the reed's rule (plan section 12.8), for the reed's reason: a silent fallback would be a
+# Rust mallet reporting Rust while striking a Python drumhead. Under the flag both swaps fire
+# together, and `tests/test_stability.py` asserts that ``mallet.Membrane is membrane.Membrane`` so
+# a mis-ordered import cannot leave them disagreeing.
+#
+# Off by default. The Python model is still the reference oracle for every model not yet ported.
+MalletMembranePy = MalletMembrane
+"""The pure-Python reference implementation, under a name the swap below never rebinds."""
+
+MalletWallPy = MalletWall
+"""The pure-Python standalone rig -- where model #7's closed-form oracle lives."""
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    from physsynth_rs import MalletMembrane, MalletWall  # type: ignore[assignment]  # noqa: F811

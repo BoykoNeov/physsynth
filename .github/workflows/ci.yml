@@ -379,11 +379,11 @@ jobs:
       # `DampedStiffString` and a `Membrane`, and a model is not ported ahead of what it is built
       # from (plan section 16).
       #
-      # The claim of this step is two-sided in a different way from the banded one above. The
-      # SCALAR half contains no reduction anywhere and is bit-identical, brentq bracket fallback
-      # included -- so the mallet files below are an equality claim. The VECTOR half is driven by
-      # `G @ F(eta)`, a dense BLAS matvec feeding back into the next Newton iterate, which is
-      # section 14.2's construction -- so the barrier files are a Group A claim.
+      # The claim was two-sided in a different way from the banded one above. The SCALAR half
+      # contains no reduction anywhere and is bit-identical, brentq bracket fallback included --
+      # that half is now asserted by the mallet's own step further down. The VECTOR half is driven
+      # by `G @ F(eta)`, a dense BLAS matvec feeding back into the next Newton iterate, which is
+      # section 14.2's construction -- so the barrier files below are a Group A claim.
       #
       # And the barrier's default fixture cannot see the difference, which is worth stating here
       # rather than leaving as a pleasant surprise: its Newton Jacobian is within 1e-2 of the
@@ -392,10 +392,44 @@ jobs:
       # used -- the fixture that actually exercises it lives in `test_rust_parity_collision.py`,
       # which is why that file is not optional coverage for this batch (plan section 16.4).
       #
-      # `test_mallet_wall.py` is the control that makes the attribution: it owns no field, so under
-      # this flag it is bit-identical in EVERY observable including its energy, where the
-      # mallet-on-a-membrane's energy differs at 2e-15 through `Membrane.energy()`'s reduction.
-      - name: The contact leg and its two models, unmodified, against Rust
+      # The mallet's three files moved to their own step when the mallet itself was ported one
+      # batch later (section 17); what is left here is the barrier, which is what this batch
+      # was about. The two steps are kept apart on purpose -- a batch's success condition
+      # should stay readable as the thing that batch claimed, not accrete its successors.
+      - name: The barrier string and its buzzing bridge, unmodified, against Rust
+        env:
+          PHYSSYNTH_RS: "1"
+        run: |
+          pytest --durations=10 \
+            tests/test_collision_energy.py \
+            tests/test_collision_modal.py \
+            tests/test_collision_signature.py \
+            tests/test_jawari.py
+
+      # PHASE 2'S LAST BATCH, and therefore the end of Phase 2 (plan section 17). The mallet's
+      # two model shells are now Rust as well: `MalletMembrane`, which holds the caller's own
+      # Rust `Membrane` and corrects one node of it per step, and `MalletWall`, the standalone
+      # rig where model #7's closed-form oracle lives.
+      #
+      # Section 16.11 pre-declared that any divergence here would be the shell's, since the
+      # drumhead and the contact solve had both already been ported. It is not: measured
+      # 2026-08-27, the whole trajectory -- mallet position, penetration, force, contact flag,
+      # fallback count and the drumhead's ENTIRE field -- is bit-identical over 2,000 steps
+      # across seven fixtures. `MalletWall` is bit-identical in every observable INCLUDING its
+      # energy, and that is what makes the attribution: the coupled model's `energy()` is the
+      # single exception, at 2e-16, and it differs because `Membrane.energy()` is a REDUCTION
+      # (section 14.2) rather than because anything in this batch moved.
+      #
+      # The one thing a shell this small could get wrong is `** 2`. Both admittances are built
+      # from one -- `k**2 / (rho h**2 (1 + sigma k))` and `k**2 / M` -- and on Python floats
+      # `**` is the C library's `pow`, NOT `x * x`. They are different doubles, they multiply
+      # the contact force at every timestep, and getting it wrong would conserve energy
+      # perfectly, so no physics bar in this repo could have caught it.
+      #
+      # The swap guard itself -- which this batch gave `collision` and `mallet` entries in --
+      # is NOT re-listed here: `tests/test_stability.py` already runs under the flag in the
+      # first step of this job, and once is enough.
+      - name: The mallet's two models, unmodified, against Rust
         env:
           PHYSSYNTH_RS: "1"
         run: |
@@ -403,10 +437,6 @@ jobs:
             tests/test_mallet_energy.py \
             tests/test_mallet_signature.py \
             tests/test_mallet_wall.py \
-            tests/test_collision_energy.py \
-            tests/test_collision_modal.py \
-            tests/test_collision_signature.py \
-            tests/test_jawari.py \
             tests/test_membrane_energy.py
 
       # The comparison the physics bars are too loose to make: state arrays bit-for-bit, energy to
@@ -431,7 +461,8 @@ jobs:
             tests/test_rust_parity_reed.py \
             tests/test_rust_parity_radiation.py \
             tests/test_rust_parity_banded.py \
-            tests/test_rust_parity_collision.py
+            tests/test_rust_parity_collision.py \
+            tests/test_rust_parity_mallet.py
 
   # Lint, plus the OUTER half of the shard guard.
   #

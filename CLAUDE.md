@@ -21,12 +21,12 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    analysis, viewer backend *and* the test suite — in favour of **Rust**, gradually and model by
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
-   **Phases 0, 1, four batches of 2 and two of 3 are built** (plan §9-§16):
-   `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all of `operators`,
-   `membrane`, `exciter`, `body`, `bore`, `reed`, the *builder half* of `operators2d`, all of
-   `radiation` **except** its one Bessel helper, the **banded Cholesky** the four theta-scheme
-   strings share, and all of `collision` **except** `BarrierString` itself — the contact
-   primitives, both contact solves and the project's one **dense LU** — ported. `cargo test --workspace` runs the
+   **PHASE 2 IS COMPLETE**; phases 0, 1, all five batches of 2 and two of 3 are built (plan
+   §9-§17): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all of
+   `operators`, `membrane`, `exciter`, `body`, `bore`, `reed`, **`mallet`**, the *builder half* of
+   `operators2d`, all of `radiation` **except** its one Bessel helper, the **banded Cholesky** the
+   four theta-scheme strings share, and all of `collision` **except** `BarrierString` itself — the
+   contact primitives, both contact solves and the project's one **dense LU** — ported. `cargo test --workspace` runs the
    native bars and the Cargo dependency allowlist; `pip install ./crates/physsynth-py` then
    `PHYSSYNTH_RS=1 pytest` runs the **existing, unmodified** Python tests against the Rust code. The
    flag is one switch for the whole tree: with it set, five still-Python string/beam models run on
@@ -37,13 +37,14 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    itself — far-field read-out, radiation load, rational impedance — is Rust too; and the four
    theta-scheme strings — stiff, damped, tension-modulated, geometrically exact — plus everything
    that vibrates one (the bow, the fret barrier, the bridges, the sympathetic strings) now
-   back-substitute in Rust while the models themselves are still Python; and the whole contact leg
+   back-substitute in Rust while the models themselves are still Python; the whole contact leg
    — the mallet on its drumhead, the string buzzing on its fret, the sitar bridge — solves its
-   contact in Rust, again with the two model shells still Python. Both
+   contact in Rust; and the **mallet itself is now Rust end to end**, model shell included, both
+   the drumhead version and the standalone mass-vs-wall rig that holds its closed-form oracle. Both
    implementations stay alive for now — deleting a Python model waits on its clients, not on its own
-   phase (§1.2). Seven facts worth knowing before planning work: a file's risk group is the group of
-   its hardest function, so a module can port in halves (§11.2.1); `mallet` needs `collision`, so
-   **Phase 2 finishes after Phase 3 starts** (§11.2.2); and the speed win is **per-step overhead,
+   phase (§1.2). Facts worth knowing before planning work: a file's risk group is the group of
+   its hardest function, so a module can port in halves (§11.2.1); `mallet` needed `collision`, so
+   **Phase 2 finished after Phase 3 started** — that prediction came due in §17; and the speed win is **per-step overhead,
    not arithmetic** — 8.7x on a small grid, ~1.1x once SciPy's compiled matvec dominates, so the
    *test suite* does not get faster and the *real-time* case does (§11.6) — and the crossover is
    about whether NumPy's hot path was **already compiled**, not about size: the modal body, which
@@ -88,7 +89,22 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    agreement window is set by the dynamics, not by the port.** A string buzzing on a barrier is
    chaotic, so the two trajectories separate exponentially — 1e-13 at a thousand steps, 1e-7 at
    twenty thousand — and the right question before porting the four remaining nonlinear models is
-   "how long before it cannot be compared", not "how well does it agree" (§16.5).
+   "how long before it cannot be compared", not "how well does it agree" (§16.5). An **eleventh**,
+   from `mallet`, which is about the compiler rather than about either language and which arrived
+   as a **red CI run**: **a distinction between two spellings of the same arithmetic is only
+   observable while the compiler cannot see which one you meant.** LLVM constant-folds `powf` at a
+   known exponent into exactly the rungs of NumPy's ladder — `powf(x, 0.5)` becomes `sqrt`,
+   `powf(x, 2.0)` becomes `x*x` — so §16.2's own test, handed a literal, folded the two paths into
+   one and asserted nothing; it passed in **debug** and failed in **release**, which is what CI
+   builds (§17.2). The port was never wrong (the binding takes its exponent from Python at
+   runtime), the *test* was — so a native test that pins an arithmetic spelling must be run in both
+   profiles, and the fix is an `#[inline(never)]` wherever the exponent really is a literal, as it
+   is in the mallet's `k**2` admittances. Two corollaries. **§16.5's window question needs one more
+   word:** ask not "is it nonlinear" but "does the nonlinearity **recur**" — the mallet's contact is
+   a transient, so its trajectory is bit-identical at 50,000 steps where the barrier's chaotic
+   re-contact separates at ~1,200 (§17.5). And **a swap guard can silently cover nothing**:
+   `collision` was missing from the guard table for a whole batch because three of its public names
+   start with an underscore and the derive could not resolve them (§17.6).
 4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
    never the reverse. Keeps the physics portable to C++/Rust later.
 5. **Unifying abstraction:** `exciter -> resonator (+- nonlinear coupling) -> body/radiation`.

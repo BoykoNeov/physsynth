@@ -2225,3 +2225,213 @@ test and pick different rows on a tie.
   all. This one cost nothing to catch and would have been invisible for the rest of the migration.
 - **§4.1's SuperLU hypothesis is still untested**, and Group D is now the only untouched solver
   class. `beam` keeps its de-risking job at Phase 4.
+
+---
+
+## 17. Phase 2, last batch, as built (2026-08-27) — **Phase 2 is finished**
+
+`physsynth/core/mallet.py` — `MalletMembrane` and `MalletWall`. §11.2.2 predicted that Phase 2
+would end *after* Phase 3 began, because `mallet` needs `collision` and `collision` is Group C.
+This is that batch, and it is the shortest in the migration: both of the model's hard parts were
+already ported, so what moved is the shell — a two-line force-free flight integrator, two
+force-injection sites, and the two admittances that scale the contact force.
+
+### 17.1 The shape on disk
+
+```
+crates/physsynth-core/src/mallet.rs       Params/WallParams/State, the free functions, scalar_pow
+crates/physsynth-core/tests/mallet.rs     native bars (12 tests)
+crates/physsynth-py/src/mallet.rs         PyMalletMembrane, PyMalletWall
+crates/physsynth-py/src/membrane.rs       four methods widened to pub(crate) + 3 node accessors
+physsynth/core/mallet.py                  swap block gated on the flag; `import os`
+tests/test_rust_parity_mallet.py          Rust vs NumPy/SciPy (45 tests)
+tests/test_stability.py                   the swap guard, + the `collision` gap it had (§17.6)
+crates/physsynth-core/tests/collision.rs  the red gate from batch 2, fixed (§17.2)
+.github/workflows/ci.yml                  the batch's flagged step, + the contact-leg step split
+```
+
+### 17.2 The finding: a constant exponent is not a scalar path, and it turned CI red
+
+**This batch started with two red CI runs, and the live one was §16.2's own test.**
+
+`crates/physsynth-core/tests/collision.rs` asserted that the two power spellings — NumPy's ufunc
+fast-path ladder (`x**0.5` as `sqrt`, `x**2` as `x*x`) and the scalar path's `pow` — *disagree
+somewhere* over 200,000 samples. It passed locally and failed on CI with "the two paths came out
+identical". The obvious explanation is the runner's libm, and it is wrong.
+
+**The cause is LLVM.** At a compile-time-known exponent, `powf` is constant-folded into exactly
+the rungs of the ladder it is supposed to be distinguished from: `powf(x, 0.5)` becomes `sqrt(x)`
+and `powf(x, 2.0)` becomes `x * x`. The test passed the literal `1.5`, the optimiser propagated it
+into `alpha - 1.0`, folded `PowPath::Scalar` into `PowPath::Array`, and made the two arms the same
+code. CI builds `--release`; the local run that had been trusted was `cargo test` in debug, where
+no folding happens. Measured on this machine in a release build:
+
+| | differing samples, 200,000 |
+|---|---|
+| array vs scalar, exponent folded (literal `1.5`) | **0** |
+| array vs scalar, exponent behind `black_box` | **91** |
+| `x.powf(2.0)` literal vs `x * x` | **0** |
+| an `#[inline(never)]` `pow` vs `x * x` | **105** |
+
+**Nothing was wrong with the port.** The binding takes `alpha` from Python at runtime, so it can
+never be folded, which is why every Python parity test agreed throughout. What was wrong was the
+test, and the general form is worth carrying: **a distinction between two spellings of the same
+arithmetic is only observable while the compiler cannot see which one you meant.** Two corollaries
+that are not obvious from the statement:
+
+* **The debug/release split is not a detail of this bug, it is the mechanism.** A native test that
+  pins a floating-point *spelling* asserts something in debug that it does not assert in release.
+  Every existing test of that kind should be run both ways; this batch ran the whole native suite
+  in both profiles for the first time, and only `collision.rs` differed. `reed.rs`'s neighbouring
+  one-ulp test survives because its finding is **associativity** (`rho0 * c0**2` against
+  `rho0 * c0 * c0`), which no exponent folding can erase — §13's distinction earning its keep.
+* **The audit the rule implies was run, and it is narrow.** Only exponent **2.0** is folded:
+  measured in release on this machine, a literal `powf(x, 2.0)` differs from an opaque one in 90 of
+  200,000 samples, while literal `powf(x, 3.0)` and `powf(x, 4.0)` differ in **0** — they reach the
+  real `pow`. So `ops.rs`'s `h.powf(4.0)` (§10's `h ** 4` finding) is safe as written, which is
+  independently confirmed by the operator parity tests still passing. Three production sites do use
+  a literal `2.0` and are therefore compiled as multiplies today: `bore.rs`'s `rho0 * c0.powf(2.0)`,
+  which is **provably** harmless because `c0` is exactly `343.0` and `343.0 ** 2` is exact; and
+  `reed.rs`'s `(wr * k).powf(2.0)` and `reed_velocity.powf(2.0)`, whose arguments are arbitrary
+  doubles and so *could* disagree at about one value in 2,000. Measured over 120 bore/reed
+  configurations × 300 steps, neither ever did — the reed's `_cy_n` was never spelling-sensitive
+  and `reed_damp_work` never differed. Latent, then, not live; recorded here so whoever next
+  touches `reed.rs` knows the comment above those lines describes an intent the optimiser discards.
+* **The replacement assertion had to change kind, not tighten.** "The two paths differ" is a
+  measurement of the C library; "the scalar path equals an opaque `pow`" is a property of this
+  code. Only the second is portable, and how *often* the two differ is now reported rather than
+  required. That is §14.2's rule — matching a reduction would be a claim about a runner — arriving
+  in a **test** rather than in a port, which is a door nobody had watched.
+
+### 17.3 The trap in the shell, which is the same finding pointed the other way
+
+Every constant the mallet owns is a squaring:
+
+```
+g_s = k**2 / (rho h**2 (1 + sigma k))     g_h = k**2 / M     KE = 0.5 M ((z - z')/k)**2
+```
+
+Those are **Python floats**, so `**` is `float.__pow__`, which is the C library's `pow` and not
+`x * x`. Measured 2026-08-27 over 400,000 samples from the range these quantities occupy, the two
+spellings disagree in **225**. `g_s` and `g_h` multiply the contact force at every timestep, so
+`k * k` would put a last-bit error on the state of every step of every run — **while conserving
+energy perfectly**, which is why no bar in this repo could have caught it.
+
+So `mallet::scalar_pow` is `#[inline(never)]`, and per §17.2 that attribute is the only thing
+making the distinction survive optimisation: here the exponent genuinely *is* a literal in the
+source, which is precisely the condition under which LLVM rewrites it. The native test pins the
+structural claim (`scalar_pow(x, 2.0) == x.powf(black_box(2.0))`) rather than a witness value, and
+the parity test pins the Python one (`rs._g == k ** 2 / M`) with the inequality asserted only where
+the platform makes it observable.
+
+### 17.4 What is bit-identical: everything, and further than anything before it
+
+§16.11 wrote down in advance that a divergence after this batch would be the shell's. It is not.
+
+| | |
+|---|---|
+| `MalletMembrane` trajectory, 7 fixtures, 2,000 steps | **bit-identical**, drumhead field included |
+| the same, default fixture, **50,000 steps** | **bit-identical** — position, penetration and the field; no first differing step |
+| `MalletWall`, every observable, **200,000 steps** | **bit-identical**, energy included |
+| `fallbacks`, compared step by step | identical; fires **27** times at `alpha = 1` |
+| `MalletMembrane.energy()`, 20,000 steps | differs at **381** steps, max `2.2e-16` (`2.5e-15` rel) |
+
+The energy exception is `Membrane.energy()` and nothing else. Two `np.dot` reductions against
+left-to-right sums — §14.2's construction — but a **read-out**, not a feedback path: it never
+reaches the next timestep, which is exactly why the trajectory stays identical while the number
+does not. `MalletWall` owns no field and is exact in every observable, and that contrast is what
+**attributes** the gap rather than assuming it. Isolated, the membrane's own energy differs by
+`5.7e-15` relative on the same grid.
+
+### 17.5 The question §16.11 said to ask, answered — and the answer is "never"
+
+§16.5 established that for a nonlinear model the agreement window is set by the **dynamics**: the
+barrier string is chaotic, so its two trajectories separate exponentially (`1e-13` at ~1,200 steps,
+`1.1e-7` at 20,000), and the right question before porting a nonlinear model is "how long before it
+cannot be compared". Asked of the mallet, the answer is that the window **does not close**, out to
+every run length tried.
+
+The reason is worth stating because it sharpens §16.5 rather than contradicting it. The barrier is
+a *sustained* nonlinearity: the string re-contacts the rail every period, so any difference is fed
+back through the contact indefinitely. The mallet's contact is a **transient** — the felt engages
+once, separates, and thereafter the mallet flies free and the drumhead is a linear FDTD. There is
+no mechanism to amplify a difference, and with no difference introduced in the first place there is
+nothing to amplify. So the refined question for the four nonlinear models still to port is not
+"is it nonlinear" but **"does the nonlinearity recur?"** — `string_nonlinear`, `string_geometric`,
+the von Kármán plate and the bow are all sustained, and should be expected to behave like the
+barrier rather than like this.
+
+### 17.6 Three smaller things worth keeping
+
+* **The borrow is one phase, and that is a property of the model.** §13.2 cost the reed a
+  `step_native` hook and a Rust closure because it injects *inside* the bore's leapfrog. The mallet
+  lets the membrane advance force-free and *then* corrects one node, so `step()` takes a single
+  `borrow_mut()` and never re-enters the interpreter. Reading and writing that one node goes
+  through `readonly()`/`readwrite()`, which borrow the NumPy buffer; `as_f64_field` would have
+  copied the whole live field twice per timestep to move one double (§15.5's lesson applied rather
+  than rediscovered).
+* **The warning stays in Rust, and its `stacklevel` changes number.** The original warns from
+  `__init__` with `stacklevel=2`, meaning "my caller". A Rust `__new__` pushes **no Python frame**,
+  so the caller is already at level 1 — the same frame, reached by a different count. This is the
+  mirror image of §16.8's split: `collision` moved its warning *out* of Rust because a shim frame
+  existed to host it; this one stays in because no such frame does. A parity test asserts both
+  implementations blame the same line of the same file, which is the only way that arithmetic is
+  observable at all.
+* **The swap guard had a hole one module wide, and it was shaped like §16.8's.** `collision` was
+  never added to `test_stability.py`'s `ported_expected` table, so its ten swapped functions were
+  unguarded for a whole batch. The cause is mechanical: three of its public names carry a **leading
+  underscore** while their `_py` aliases do not (`_force_total_vec` vs `force_total_vec_py`), so the
+  table's derive could not resolve them and the module was simply left out. A guard that silently
+  covers nothing is the same failure as a parity job that silently runs nothing — third door, same
+  room. Fixed by teaching the lookup the underscored spelling, which keeps the set **derived** from
+  the aliases rather than listed.
+
+### 17.7 The success condition
+
+* `tests/test_mallet_energy.py`, `test_mallet_signature.py`, `test_mallet_wall.py` unmodified
+  against Rust — the conservation money test, the strike signature, and the closed-form oracle.
+* `tests/test_membrane_energy.py` as the **control**: the mallet's host, ported in Phase 2 batch 1
+  and untouched here, so a failure there is about the drumhead rather than about this batch.
+* `tests/test_stability.py` under the flag, which is where the two new class-identity assertions
+  and the repaired `collision` guard live.
+* `tests/test_rust_parity_mallet.py` — 45 tests, green **both with and without** the flag (§16.4's
+  convention, checked here as it now is everywhere).
+
+### 17.8 What was measured
+
+| | |
+|---|---|
+| Native `cargo test --workspace` | **201 passed** (189 at the end of Phase 3 batch 2) |
+| The same, run in **both** debug and release for the first time | both green; §17.2 is why it matters |
+| Cargo dependency allowlist | still **EMPTY** |
+| `tests/test_rust_parity_mallet.py` | **45 passed**, flag set and unset |
+| All eleven parity files | **955 passed**, 1 skipped, flag set and unset |
+| `MalletMembrane` trajectory, 7 fixtures, 2,000 steps | **bit-identical** |
+| `MalletMembrane`, default fixture, 50,000 steps | **bit-identical** |
+| `MalletWall`, every observable, 200,000 steps | **bit-identical** |
+| `MalletMembrane.energy()`, 20,000 steps | max `2.2e-16` (`2.5e-15` of amplitude) |
+| `Membrane.energy()` alone, same grid | `5.7e-15` relative — the attribution |
+| `float ** 2` vs `x * x`, 400,000 samples | **225** disagree |
+| array vs scalar power in release, exponent folded / opaque | **0** / **91** of 200,000 |
+| A whole `MalletMembrane` step, `n_live` = 225 / 1,521 / 6,241 | **11.2x / 3.2x / 1.8x** faster |
+| A whole `MalletWall` step | **97x** faster |
+
+The `MalletWall` number is the modal body's finding (§12.7) at its limit: the rig calls no compiled
+NumPy kernel at all, so what is being removed is *entirely* per-step interpreter overhead. The
+coupled model's 11.2x to 1.8x slide across grid sizes is §11.6's crossover, unchanged — as the
+membrane's compiled sparse matvec grows, the overhead being saved stops dominating.
+
+### 17.9 What the next batch inherits
+
+- **Phase 2 is closed and Phase 3 has one batch behind it.** Every Group A/B model is ported. What
+  remains is Group C and D: the four theta-scheme strings (whose *solver* is already Rust), the
+  plate family, `BarrierString`, `bow`, `connection`, `airbox`, `engine`, and the two Group D
+  files. `beam` keeps its SuperLU de-risking job at Phase 4, and **§4.1's SuperLU hypothesis is
+  still untested** — Group D is the only untouched solver class.
+- **Run native tests in both profiles when they pin an arithmetic spelling.** §17.2. It is one
+  extra command and it is the difference between a test and a debug-only test.
+- **Ask whether the nonlinearity recurs, not whether it exists.** §17.5. A transient nonlinearity
+  has no agreement window to close; a sustained one has a short one no matter how good the
+  transcription is.
+- **Check that a swap guard actually resolves the names it claims to.** §17.6. `collision`'s entry
+  was absent for a batch because three public names start with an underscore, and nothing failed.

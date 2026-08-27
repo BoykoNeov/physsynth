@@ -174,7 +174,9 @@ def test_the_rust_swap_matches_the_environment():
         banded,
         body,
         bore,
+        collision,
         exciter,
+        mallet,
         membrane,
         operators,
         operators2d,
@@ -193,6 +195,8 @@ def test_the_rust_swap_matches_the_environment():
         bore,
         reed,
         banded,
+        collision,
+        mallet,
     ):
         assert module._USE_RUST is expected_rust, (
             f"{module.__name__}'s reading of PHYSSYNTH_RS disagrees with this test's -- one of "
@@ -222,6 +226,14 @@ def test_the_rust_swap_matches_the_environment():
             "PHYSSYNTH_RS is set but `ReedBore` is still the Python class: this run is NOT "
             "exercising the Rust model, whatever it reports"
         )
+        assert mallet.MalletMembrane is physsynth_rs.MalletMembrane, (
+            "PHYSSYNTH_RS is set but `MalletMembrane` is still the Python class: this run is NOT "
+            "exercising the Rust model, whatever it reports"
+        )
+        assert mallet.MalletWall is physsynth_rs.MalletWall, (
+            "PHYSSYNTH_RS is set but `MalletWall` is still the Python class: this run is NOT "
+            "exercising the Rust model, whatever it reports"
+        )
     else:
         assert string_ideal.IdealString is string_ideal.IdealStringPy, (
             "PHYSSYNTH_RS is unset but `IdealString` is not the Python class -- the default path "
@@ -241,6 +253,14 @@ def test_the_rust_swap_matches_the_environment():
         )
         assert reed.ReedBore is reed.ReedBorePy, (
             "PHYSSYNTH_RS is unset but `ReedBore` is not the Python class -- the default path "
+            "must stay the one the acceptance numbers came from"
+        )
+        assert mallet.MalletMembrane is mallet.MalletMembranePy, (
+            "PHYSSYNTH_RS is unset but `MalletMembrane` is not the Python class -- the default "
+            "path must stay the one the acceptance numbers came from"
+        )
+        assert mallet.MalletWall is mallet.MalletWallPy, (
+            "PHYSSYNTH_RS is unset but `MalletWall` is not the Python class -- the default path "
             "must stay the one the acceptance numbers came from"
         )
 
@@ -287,7 +307,39 @@ def test_the_rust_swap_matches_the_environment():
         # `tests/test_reed_stability.py` imports it by name and asserts its oddness and passivity
         # directly, and that file is in the flagged CI step.
         reed: {"bernoulli_flow"},
+        # `collision` is ported in full EXCEPT `BarrierString`, which is a class and waits on its
+        # host `DampedStiffString`. This entry was missing until the mallet's batch, and the
+        # reason is worth writing down rather than quietly fixing: three of the module's public
+        # names carry a LEADING UNDERSCORE while their aliases do not
+        # (`_force_total_vec` <-> `force_total_vec_py`), so the derive below could not find them
+        # and the whole module fell out of the table. A guard that silently covers nothing is the
+        # same shape as the empty parity job section 16.8 found, reached through a third door --
+        # so the lookup now tries the underscored spelling too, which keeps the set DERIVED rather
+        # than listed.
+        collision: {
+            "contact_potential",
+            "contact_force_elastic",
+            "contact_stiffness",
+            "contact_force_dg",
+            "contact_force_total",
+            "contact_force_total_deriv",
+            "force_total_vec",
+            "deriv_total_vec",
+            "solve_contact",
+            "solve_contact_vector",
+        },
     }
+
+    def _public(module, name):
+        """The public name an alias `<name>_py` refers to -- underscored or not.
+
+        `collision` exports `_force_total_vec` but aliases it `force_total_vec_py`, because the
+        alias namespace is flat and the module's is not.
+        """
+        if hasattr(module, name):
+            return getattr(module, name)
+        return getattr(module, f"_{name}")
+
     for module, expected_names in ported_expected.items():
         aliased = {n[:-3] for n in dir(module) if n.endswith("_py") and not n.startswith("_")}
         assert aliased == expected_names, (
@@ -295,7 +347,7 @@ def test_the_rust_swap_matches_the_environment():
             f"{sorted(expected_names)} -- a port landed (or left) without the guard being updated"
         )
         for name in sorted(expected_names):
-            public = getattr(module, name)
+            public = _public(module, name)
             reference = getattr(module, f"{name}_py")
             if expected_rust:
                 assert public is not reference, (

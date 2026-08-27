@@ -72,8 +72,13 @@ pub enum PowPath {
 }
 
 impl PowPath {
+    /// `x ** e` down whichever of the two paths this is.
+    ///
+    /// Public because `mallet` stands in for a `float.__pow__` outside this module and must reach
+    /// the same `pow` — see `mallet::scalar_pow`, which wraps it in an `#[inline(never)]` so that
+    /// a literal exponent cannot be constant-folded into `x * x` on the way.
     #[inline]
-    fn pow(self, x: f64, e: f64) -> f64 {
+    pub fn pow(self, x: f64, e: f64) -> f64 {
         match self {
             PowPath::Scalar => x.powf(e),
             PowPath::Array => {

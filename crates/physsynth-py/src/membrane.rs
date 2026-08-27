@@ -111,6 +111,56 @@ impl PyMembrane {
             shape_repr(shape)
         )))
     }
+
+    // -- what a coupled model reaches for ------------------------------------------------------
+    //
+    // `mallet::PyMalletMembrane` drives this type natively rather than through the interpreter,
+    // the way `PyReedBore` drives `PyBore` (plan §13.2). It needs three things beyond the public
+    // interface: the parameter set, and single-element read/write on the strike node. Those go
+    // through `readonly()`/`readwrite()`, which BORROW the NumPy buffer -- `as_f64_field` would
+    // copy the whole live field twice per timestep to move one double, which is §15.5's lesson
+    // applied rather than rediscovered.
+    //
+    // Four of the `#[pymethods]` below -- `step`, `energy`, `state` and `displacement_at` -- are
+    // widened to `pub(crate)` for the same caller. A `#[pymethods]` fn stays an ordinary inherent
+    // method, so the mallet calls them directly instead of paying an attribute lookup and a Python
+    // call per timestep; `PyBore` was widened the same way for the reed.
+
+    /// The validated parameters, for a coupled model that needs `rho`, `h`, `k`, `sigma`.
+    pub(crate) fn params(&self) -> &core::Params {
+        &self.p
+    }
+
+    /// `u[i]` — one live node of the current field.
+    pub(crate) fn u_at(&self, py: Python<'_>, i: usize) -> PyResult<f64> {
+        let bound = self.u.bind(py);
+        let ro = bound.readonly();
+        Ok(state_slice(&ro, "u")?[i])
+    }
+
+    /// `u_prev[i]` — one live node of the previous field.
+    ///
+    /// Only meaningful *before* `step()`, which rebinds `u_prev` to what `u` was. The mallet reads
+    /// it on its first line for exactly that reason.
+    pub(crate) fn u_prev_at(&self, py: Python<'_>, i: usize) -> PyResult<f64> {
+        let bound = self.u_prev.bind(py);
+        let ro = bound.readonly();
+        Ok(state_slice(&ro, "u_prev")?[i])
+    }
+
+    /// `u[i] = value` — the force injection, written straight into the live array.
+    ///
+    /// In place, not a rebind: a caller holding `.u` from before this step must see the correction,
+    /// which is the same property `connection.py` depends on for the string.
+    pub(crate) fn set_u_at(&self, py: Python<'_>, i: usize, value: f64) -> PyResult<()> {
+        let bound = self.u.bind(py);
+        let mut rw = bound.readwrite();
+        let s = rw
+            .as_slice_mut()
+            .map_err(|_| PyValueError::new_err("u must be a contiguous 1-D float64 array."))?;
+        s[i] = value;
+        Ok(())
+    }
 }
 
 #[pymethods]
@@ -305,7 +355,7 @@ impl PyMembrane {
 
     /// Current displacement field `u^n` as a full 2-D array (dead nodes are 0).
     #[getter]
-    fn state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+    pub(crate) fn state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let bound = self.u.bind(py);
         let ro = bound.readonly();
         let field = ops2d::embed(state_slice(&ro, "u")?, &self.p.index_map);
@@ -367,7 +417,7 @@ impl PyMembrane {
     // -- time stepping ---------------------------------------------------------------------
 
     /// Advance one timestep (rolls the history).
-    fn step(&mut self, py: Python<'_>) -> PyResult<()> {
+    pub(crate) fn step(&mut self, py: Python<'_>) -> PyResult<()> {
         let mut next = vec![0.0; self.p.n_live()];
         {
             let u_bound = self.u.bind(py);
@@ -389,7 +439,7 @@ impl PyMembrane {
     // -- diagnostics -----------------------------------------------------------------------
 
     /// Discrete energy `E^n` (Joules) using the cross-time potential term.
-    fn energy(&self, py: Python<'_>) -> PyResult<f64> {
+    pub(crate) fn energy(&self, py: Python<'_>) -> PyResult<f64> {
         let u_bound = self.u.bind(py);
         let up_bound = self.u_prev.bind(py);
         let u_ro = u_bound.readonly();
@@ -404,7 +454,7 @@ impl PyMembrane {
     /// Displacement at flat live-node `index` — a pickup for spectral analysis.
     ///
     /// Negative indices count from the end, as they do on the NumPy array this replaces.
-    fn displacement_at(&self, py: Python<'_>, index: i64) -> PyResult<f64> {
+    pub(crate) fn displacement_at(&self, py: Python<'_>, index: i64) -> PyResult<f64> {
         let n_live = self.p.n_live() as i64;
         let idx = if index < 0 { index + n_live } else { index };
         if idx < 0 || idx >= n_live {

@@ -44,6 +44,7 @@ mod body;
 mod bore;
 mod collision;
 mod exciter;
+mod mallet;
 mod membrane;
 mod ops2d;
 mod radiation;
@@ -657,6 +658,8 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<body::PyModalBody>()?;
     m.add_class::<bore::PyBore>()?;
     m.add_class::<reed::PyReedBore>()?;
+    m.add_class::<mallet::PyMalletMembrane>()?;
+    m.add_class::<mallet::PyMalletWall>()?;
     m.add_class::<radiation::PyAirRadiation>()?;
     m.add_class::<radiation::PyRadiatedBody>()?;
     m.add_class::<radiation::PyRationalAirLoad>()?;
