@@ -3410,3 +3410,36 @@ summation *order across a whole vector*, which is far more robust than one produ
 softening a guard on speculation costs a real test. If the runner goes red there, this is why.
 `test_rust_parity_bow`'s `np.any(hoisted != direct)` is **not** at risk — on Linux `np.exp` uses
 NumPy's SIMD loop while `math.exp` reaches glibc, so those two separate *more* there, not less.
+
+### 21.5 What the first green-through run actually found
+
+The repair above got the gate through all twelve `PHYSSYNTH_RS` steps — **the first time the banded
+solver, collision, the mallet, the two theta-scheme strings, the tension string and the bow have
+been exercised against Python on the runner.** All twelve passed. So did 1,226 of 1,227 parity
+tests. Five batches of porting are now verified on a second platform, which is the result; the
+seven red runs were never about the asserts they printed.
+
+**§21.4's prediction was wrong**, and worth keeping as a calibration note.
+`test_rust_parity_tension`'s `evals_a != evals_b` — the claim flagged as the one still-unproven
+machine assertion — **passed**. The reasoning for leaving it (summation order across a whole vector
+is far more robust than one product's rounding) held. The single failure came from somewhere the
+section did not look at all.
+
+### 21.6 A bar can be decided by the machine without ever mentioning one
+
+`test_rust_parity_strings::test_trajectory_meets_group_a_against_scipys_own_solver[coarse]` read
+1.01e-13 against a 1e-13 bar. Nothing asserts a platform fact here — it is an ordinary agreement
+tolerance — but the *quantity* it measures is one BLAS's blocked `DTBSV` against the reference
+transcription, so its value is a property of the runner exactly as §21.1's cases are. Windows read
+7.6e-14 on the same fixture: 76% of the bar. **A threshold sitting that close to its measurement is
+decided by whichever machine runs it**, and that is the same defect as §21.1 wearing a tolerance
+instead of an inequality.
+
+The fix changed **no tolerance**. The run was shortened from 500 steps to 100, which is the window
+§15.4 defines for a fed-back solve — Group A is a run-length claim (§14.4), and the 500-step version
+was testing four times past the claim it cites and buying its margin from the overshoot. At 100
+steps the worst fixture reads 3.0e-14, a third of the bar.
+
+**The general form, and the one to carry into Phase 4:** when a bar is close to its measurement,
+ask what the measurement is a property of *before* adjusting the bar. Where the answer is "the
+machine", the run length is usually the thing that drifted from the claim, not the tolerance.

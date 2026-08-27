@@ -437,9 +437,19 @@ def test_trajectory_meets_group_a_against_scipys_own_solver(name, kw):
 
     The gap is §15.3's — OpenBLAS's blocked ``DTBSV`` against the reference one transcribed — not
     this port's, which the test above establishes by removing it.
+
+    **100 steps, because that is the window §15.4 actually defines.** Group A is a run-length claim
+    (§14.4), and §15.4 shortened it to ~100 steps specifically for a *fed-back solve*, which is what
+    this is. The first version ran 500 and passed on Windows at 7.6e-14 — 76% of the bar, with the
+    margin coming from the run being four times longer than the claim it tests. On the CI runner the
+    same fixture read 1.01e-13 and went red. Nothing about the port differs between the two
+    machines: the quantity being measured is one BLAS's banded solve against another's, so its exact
+    value is a property of the runner (§21.1), and a bar this close to the measurement was going to
+    be decided by whichever machine ran it. At 100 steps the worst fixture reads 3.0e-14 here, a
+    third of the bar, and the *tolerance is unchanged* — which is the point. Measured 2026-08-27.
     """
     py, rs = DampedStiffStringPy(**kw), physsynth_rs.DampedStiffString(**kw)
-    _first, state_gap, energy_gap = _run_pair(py, rs, 500)
+    _first, state_gap, energy_gap = _run_pair(py, rs, 100)
     assert state_gap < GROUP_A_TOL, f"{name}: {state_gap:.2e} of amplitude"
     assert energy_gap < GROUP_A_TOL
 
