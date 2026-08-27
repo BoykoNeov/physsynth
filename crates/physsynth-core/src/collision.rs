@@ -3,9 +3,11 @@
 //! `docs/dev/rust-migration-plan.md` §16. The Python original, `physsynth/core/collision.py`, is
 //! the shared home of the energy-conserving contact scheme: the mallet (`mallet.py`, model #7)
 //! uses its **scalar** solve, the distributed barrier (`BarrierString`, model #8) its **vector**
-//! one. This module ports the primitives and both solves. `BarrierString` itself does not port in
-//! this batch — it wraps a `DampedStiffString`, which is still Python, so porting it would mean
-//! building a model on a model that has not moved.
+//! one. This module ports the primitives, both solves, and — since §23 — the barrier model itself.
+//!
+//! `BarrierString` was deferred at §16 because it wraps a `DampedStiffString`, which was Python
+//! then. That host landed in §18 and the deferral expired without anyone being told; §20.11 caught
+//! it, and [`BarrierString`] here is what closes Phase 3.
 //!
 //! # The physics, in one paragraph
 //!
@@ -53,9 +55,45 @@
 //! reduction at all and *is* expected to be bit-identical; so is the vector solve at `m = 1`, where
 //! the matvec is a single multiply. Those two cases are this batch's cause-separator: if either
 //! diverges, the transcription is wrong and no story about BLAS applies to it.
+//!
+//! # The barrier shell adds a SECOND matvec, and at two contact nodes the state cannot see it
+//!
+//! §23. [`apply`] injects the contact force through `u[1..-1] += force_pref * (cols_mat @ F)` — a
+//! second dense matvec, on the update path, and one nothing compared across the languages before
+//! the model itself ported. Measured 2026-08-27 against the left-to-right row sum written here,
+//! over the parity file's fixtures and 2,000 steps: identical at `m = 1` (0 rows — the sum is one
+//! product), and at `m = 2` it **differs in 1,291 of 158,000 rows** while the trajectory stays
+//! bit-identical.
+//!
+//! **That is a mechanism, not a coincidence, and the distinction is the finding.** A *two*-term
+//! sum can only be reordered into a different double if its two terms **cancel** — and where they
+//! cancel the sum is tiny, so the correction is tiny. At every one of those 1,291 rows the
+//! correction is at most `9.3e-13` of `u`, which makes one of *its* ulps worth about `1e-12` of one
+//! of `u`'s: it cannot survive the addition, and none of them does. The error of a two-term
+//! reduction is correlated with its own smallness.
+//!
+//! The control is the same code at 79 terms, where that correlation is gone. There the matvec
+//! differs on 14,746 rows, the correction is an ordinary size where it does (median `1.2e-4` of
+//! `u`), and roughly one difference in `1/1.2e-4` crosses a rounding boundary: 7 reach the state
+//! over 2,000 steps and 30 over 6,000, which is what the ratio predicts to within a factor of two.
+//! So **the exactness at two nodes is a statement about the length of the sum** — the general
+//! version of §16's "`m = 1` is the cause-separator", one term further along and with a reason
+//! attached.
+//!
+//! At `m = 79` the regime does not change, because the *solve's* matvec was already spending the
+//! bit-identity there: the shell contributes `<= 1.9e-14` of peak at 500 steps, against a `1e-13`
+//! bar and a measured window of 1,175-1,584 steps that the solve sets.
+//!
+//! That is also why `portable.py` was **not** extended here. Its manoeuvre — move the Python side
+//! to a spelling both languages can express — was considered and rejected on evidence: it would
+//! change a shipped model's reference numbers (and the viewer's fret and jawari output) to buy
+//! exactness that measurement shows is already there where it is provable, and that no spelling
+//! can buy where the solve has already spent it.
 
 use crate::dense;
+use crate::pyfloat::scalar_pow;
 use crate::root::{brentq, RootError};
+use crate::string_damped;
 
 /// Which of NumPy's two power spellings a primitive should reproduce.
 ///
@@ -702,5 +740,353 @@ pub fn solve_contact_vector(
         iters: maxiter,
         residual: rmax,
         converged: rmax <= newton_tol,
+    }
+}
+
+// -- the distributed barrier (model #8) -----------------------------------------------------------
+
+/// Why a barrier string was refused at construction.
+///
+/// The order of the variants is the order `BarrierString.__init__` checks them in; a call that is
+/// wrong in more than one way must report the same fault Python would.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BarrierError {
+    /// `stiffness <= 0`.
+    NonPositiveStiffness,
+    /// `alpha < 1`.
+    AlphaTooSmall,
+    /// `hysteresis < 0`.
+    NegativeHysteresis,
+    /// No interior node has a finite barrier height.
+    EmptySupport,
+}
+
+impl std::fmt::Display for BarrierError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BarrierError::NonPositiveStiffness => write!(f, "contact stiffness K must be > 0."),
+            BarrierError::AlphaTooSmall => write!(f, "contact exponent alpha must be >= 1."),
+            BarrierError::NegativeHysteresis => write!(f, "hysteresis lambda_h must be >= 0."),
+            BarrierError::EmptySupport => write!(
+                f,
+                "barrier has no finite interior node -> empty contact support."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for BarrierError {}
+
+/// Everything a barrier string derives from its string once, at construction.
+///
+/// The admittance block is the expensive half: `m` banded solves against the string's factor,
+/// which is why it is built here and never again. `g_mat` and `force_pref` are `pub` and meant to
+/// be written — `tests/test_collision_modal.py` doubles both to move the fixed point, which is the
+/// negative control for the coupling magnitude.
+#[derive(Debug, Clone)]
+pub struct BarrierParams {
+    /// Stiffness, exponent, hysteresis, timestep and Taylor threshold, as the solve wants them.
+    pub contact: ContactParams,
+    /// Newton convergence tolerance on `max|r|`.
+    pub newton_tol: f64,
+    /// Newton iteration cap.
+    pub newton_maxiter: usize,
+    /// `k^2 / rho` — a force **density** prefactor, not `k^2/(rho h)`.
+    pub force_pref: f64,
+    /// The string's grid spacing, for the barrier's potential energy `h * sum phi`.
+    pub h: f64,
+    /// `N + 1`, the full grid.
+    pub nodes: usize,
+    /// Grid node indices carrying a finite barrier, ascending — the contact support.
+    pub support: Vec<usize>,
+    /// Barrier heights on the support, same order.
+    pub b: Vec<f64>,
+    /// The support's indices into the *interior* array (`support[j] - 1`).
+    pub int_idx: Vec<usize>,
+    /// `A^{-1} e_support[j]` as column `j`, row-major `(N-1) x m` — the rank-`m` correction.
+    pub cols_mat: Vec<f64>,
+    /// `G = force_pref * (A^{-1})_{support,support}`, row-major `m x m`.
+    pub g_mat: Vec<f64>,
+}
+
+impl BarrierParams {
+    /// Validate, pick the support, and build the admittance block.
+    ///
+    /// `barrier_full` is the profile already broadcast onto the `N + 1` grid — the binding does
+    /// that, because "a scalar is a flat rail" is a NumPy broadcast in the original and its
+    /// failure text belongs to NumPy rather than here.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        sp: &string_damped::Params,
+        barrier_full: &[f64],
+        stiffness: f64,
+        alpha: f64,
+        hysteresis: f64,
+        eta_tol: f64,
+        newton_tol: f64,
+        newton_maxiter: i64,
+    ) -> Result<Self, BarrierError> {
+        if stiffness <= 0.0 {
+            return Err(BarrierError::NonPositiveStiffness);
+        }
+        if alpha < 1.0 {
+            return Err(BarrierError::AlphaTooSmall);
+        }
+        if hysteresis < 0.0 {
+            return Err(BarrierError::NegativeHysteresis);
+        }
+
+        let nodes = sp.nodes();
+        // The support is the *interior* nodes 1..N-1 whose barrier height is finite. `is_finite`
+        // is `np.isfinite`: a NaN is excluded as well as an infinity, which is what makes `-inf`
+        // the spelling for "no barrier here" and a point fret one finite entry.
+        let support: Vec<usize> = (1..nodes - 1)
+            .filter(|&i| barrier_full[i].is_finite())
+            .collect();
+        if support.is_empty() {
+            return Err(BarrierError::EmptySupport);
+        }
+        let b: Vec<f64> = support.iter().map(|&i| barrier_full[i]).collect();
+        let int_idx: Vec<usize> = support.iter().map(|&i| i - 1).collect();
+
+        // `k ** 2`, not `k * k`. The original writes `string.k ** 2 / string.rho`, which is
+        // `float.__pow__` and therefore the C library's `pow` — a different double from the
+        // multiply in 79 of 200,007 samples (§16.2). `bow.py` writes `self.k * self.k` at the
+        // same spot, which is why that model's port uses a multiply and this one must not.
+        let force_pref = scalar_pow(sp.k, 2.0) / sp.rho;
+
+        let interior = sp.interior();
+        let m = support.len();
+        let mut cols_mat = vec![0.0f64; interior * m];
+        for (j, &node) in support.iter().enumerate() {
+            let mut e = vec![0.0f64; interior];
+            e[node - 1] = 1.0;
+            let col = string_damped::apply_ainv(&e, sp);
+            for i in 0..interior {
+                cols_mat[i * m + j] = col[i];
+            }
+        }
+        let mut g_mat = vec![0.0f64; m * m];
+        for (a, &row) in int_idx.iter().enumerate() {
+            for bcol in 0..m {
+                g_mat[a * m + bcol] = force_pref * cols_mat[row * m + bcol];
+            }
+        }
+
+        Ok(BarrierParams {
+            contact: ContactParams {
+                stiffness,
+                alpha,
+                lam_h: hysteresis,
+                k: sp.k,
+                tol: eta_tol,
+            },
+            newton_tol,
+            // `int(newton_maxiter)` reaches a `range()` in the original, so a negative cap means
+            // "no Newton iterations", not an error — the mallet's binding makes the same reading.
+            newton_maxiter: newton_maxiter.max(0) as usize,
+            force_pref,
+            h: sp.h,
+            nodes,
+            support,
+            b,
+            int_idx,
+            cols_mat,
+            g_mat,
+        })
+    }
+
+    /// How many nodes are in the contact support.
+    pub fn support_len(&self) -> usize {
+        self.support.len()
+    }
+}
+
+/// The barrier's own state — the string holds the field, this holds the contact.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BarrierState {
+    /// Penetration `eta^n` on the support (positive in contact).
+    pub penetration: Vec<f64>,
+    /// Contact force density on the support for the last step (N/m).
+    pub contact_force: Vec<f64>,
+    /// Newton iterations the last step's solve took.
+    pub newton_iters: usize,
+    /// Completed steps.
+    pub n: usize,
+}
+
+/// `b - u[support]` — the penetration the barrier reads off a displacement field.
+pub fn penetration_of(p: &BarrierParams, u_full: &[f64], out: &mut [f64]) {
+    for (j, &node) in p.support.iter().enumerate() {
+        out[j] = p.b[j] - u_full[node];
+    }
+}
+
+/// Solve the contact and apply the rank-`m` correction to `u_full`, in place.
+///
+/// `eta_free` is the penetration after the string's force-free advance; `eta_prev` is the
+/// penetration at `u^{n-1}`, which must have been read *before* that advance rolled the history.
+/// The seed is the previous step's penetration — continuation, and the reason a converged solve
+/// usually costs two or three iterations rather than ten.
+///
+/// The correction is written as `u[i] = u[i] + force_pref * acc_i`, one row at a time and summed
+/// left to right, which is not `cols_mat @ f`'s order. See the module header for the measurement
+/// that says where that is visible and where it is not.
+///
+/// Returns the solve's residual and whether it converged, so the caller can raise the original's
+/// warning. Nothing here decides that: a stall is a `UserWarning` in Python and the frame it is
+/// attributed to is a property of the binding, not of the arithmetic.
+pub fn apply(
+    u_full: &mut [f64],
+    eta_free: &[f64],
+    eta_prev: &[f64],
+    s: &mut BarrierState,
+    p: &BarrierParams,
+) -> (f64, bool) {
+    let m = p.support.len();
+    let sol = solve_contact_vector(
+        eta_free,
+        eta_prev,
+        &p.g_mat,
+        p.contact,
+        &s.penetration,
+        p.newton_tol,
+        p.newton_maxiter,
+    );
+
+    let interior = p.nodes - 2;
+    for i in 0..interior {
+        let row = &p.cols_mat[i * m..i * m + m];
+        // `zip` rather than an index, and the order is the whole point: this accumulates strictly
+        // left to right, which is what §23.2's measurement is a measurement OF. Anything that
+        // reassociated it would be a third spelling of the same sum.
+        let mut acc = 0.0;
+        for (&a, &f) in row.iter().zip(sol.force.iter()) {
+            acc += a * f;
+        }
+        u_full[1 + i] += p.force_pref * acc;
+    }
+
+    s.penetration = sol.eta;
+    s.contact_force = sol.force;
+    s.newton_iters = sol.iters;
+    s.n += 1;
+    (sol.residual, sol.converged)
+}
+
+/// The barrier's stored potential energy, `h * sum_j 1/2 (phi(eta^n_j) + phi(eta^{n-1}_j))`.
+///
+/// The **two-time average** is the form that telescopes with the discrete-gradient force, so this
+/// is what makes the coupled energy conserve rather than merely stay bounded. Both sums accumulate
+/// left to right; `np.sum` is pairwise above eight elements, so at the 79-node rail this is a
+/// different last bit from the original's — measured at 236 of 2,000 steps, on a read-out that
+/// reaches no state.
+pub fn barrier_energy(p: &BarrierParams, u_full: &[f64], u_prev_full: &[f64]) -> f64 {
+    let path = PowPath::Array;
+    let mut sum_n = 0.0;
+    let mut sum_p = 0.0;
+    for (j, &node) in p.support.iter().enumerate() {
+        sum_n += contact_potential(
+            p.b[j] - u_full[node],
+            p.contact.stiffness,
+            p.contact.alpha,
+            path,
+        );
+        sum_p += contact_potential(
+            p.b[j] - u_prev_full[node],
+            p.contact.stiffness,
+            p.contact.alpha,
+            path,
+        );
+    }
+    0.5 * p.h * (sum_n + sum_p)
+}
+
+// -- the native owning struct ------------------------------------------------------------------
+
+/// A damped stiff string vibrating against a one-sided distributed barrier — model #8.
+///
+/// For Rust callers and for `cargo test`; the binding holds a Python-owned string instead, for the
+/// reason `bow`'s does.
+#[derive(Debug, Clone)]
+pub struct BarrierString {
+    /// The resonator.
+    pub string: string_damped::DampedStiffString,
+    /// The barrier's constants and admittance block.
+    pub p: BarrierParams,
+    /// The barrier's contact state.
+    pub s: BarrierState,
+}
+
+impl BarrierString {
+    /// Build a barrier on `string`, solving the `m` admittance columns once.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        string: string_damped::DampedStiffString,
+        barrier_full: &[f64],
+        stiffness: f64,
+        alpha: f64,
+        hysteresis: f64,
+        eta_tol: f64,
+        newton_tol: f64,
+        newton_maxiter: i64,
+    ) -> Result<Self, BarrierError> {
+        let p = BarrierParams::new(
+            &string.p,
+            barrier_full,
+            stiffness,
+            alpha,
+            hysteresis,
+            eta_tol,
+            newton_tol,
+            newton_maxiter,
+        )?;
+        let m = p.support_len();
+        let mut s = BarrierState {
+            penetration: vec![0.0; m],
+            contact_force: vec![0.0; m],
+            newton_iters: 0,
+            n: 0,
+        };
+        penetration_of(&p, &string.u, &mut s.penetration);
+        Ok(BarrierString { string, p, s })
+    }
+
+    /// Set the string's state, then refresh the continuation seed.
+    ///
+    /// `contact_force` and `newton_iters` are deliberately *not* cleared: the original does not
+    /// clear them either, and a fixture that reads a force before its first step must read the
+    /// same stale value on both sides.
+    pub fn set_state(&mut self, u0: &[f64], v0: &[f64]) {
+        self.string.set_state(u0, v0);
+        penetration_of(&self.p, &self.string.u, &mut self.s.penetration);
+        self.s.n = 0;
+    }
+
+    /// Advance one step: force-free string advance, vector contact solve, exact force inject.
+    pub fn step(&mut self) -> (f64, bool) {
+        let m = self.p.support_len();
+        let mut eta_prev = vec![0.0; m];
+        let mut eta_free = vec![0.0; m];
+        penetration_of(&self.p, &self.string.u_prev, &mut eta_prev);
+        self.string.step();
+        penetration_of(&self.p, &self.string.u, &mut eta_free);
+        apply(
+            &mut self.string.u,
+            &eta_free,
+            &eta_prev,
+            &mut self.s,
+            &self.p,
+        )
+    }
+
+    /// Total discrete energy: the string's plus the barrier's stored potential.
+    pub fn energy(&self) -> f64 {
+        self.string.energy() + barrier_energy(&self.p, &self.string.u, &self.string.u_prev)
+    }
+
+    /// Which support nodes are currently in contact.
+    pub fn contact_mask(&self) -> Vec<bool> {
+        self.s.penetration.iter().map(|&e| e > 0.0).collect()
     }
 }

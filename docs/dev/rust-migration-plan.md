@@ -343,6 +343,14 @@ before the string is trustworthy.
 > sentence was never revisited. So **`BarrierString` is the phase's last model**, and Phase 3 is not
 > finished when the bow is. §20.11 — the general shape being that a statement justified by a
 > dependency expires when the dependency lands, and nobody is notified (§18.3).
+>
+> **Phase 3 is complete, 2026-08-27.** `BarrierString` landed in §23 and with it Group B and Group
+> C are done. The phase ran: the *solver* (§15), the contact leg (§16), the two theta-scheme
+> strings (§18), the tension-modulated string (§19), the bow (§20), the barrier (§23) — six batches
+> against the four the order above imagined, and the two extra ones are both explained by the same
+> thing: what a model waits on is not visible from the model. `string_geometric` is the only string
+> left and it is **Phase 5**, not a Phase 3 leftover — it needs a sparse LU as well as the banded
+> Cholesky, so it needs Group D.
 
 **Phase 4 — `beam` (254 lines, one `splu`).** The Group D de-risker, chosen for exactly the reason
 it was chosen the first time. Proves the SuperLU link and the §4.1 manoeuvre on the smallest
@@ -3618,3 +3626,351 @@ not an ulp but a **live/dead node**. The last two are asserted exactly and curre
 computes each value on each side. Where the answer is "NumPy's own, chosen by CPU", the assertion
 is a claim about a runner and belongs in an ulp bound — or, better, the Python side should be
 spelled so both languages reach the same library.
+
+---
+
+## 23. Phase 3, batch 6, as built (2026-08-27) — **Phase 3 is finished**
+
+`physsynth/core/collision.BarrierString` — a damped stiff string vibrating against a one-sided
+distributed barrier, model #8. String–fret buzz, the sitar and tanpura *jawari*, the tanpura's
+cotton thread, prepared-piano rattle.
+
+It is here, after `bow`, for a reason that is itself the migration's most-repeated lesson. §16
+described it as waiting on its host `DampedStiffString`; §18 ported that host; nobody revisited the
+sentence, and §19.11 and §20 both went on calling the bow the phase's last model. §20.11 caught it
+by *checking* rather than inheriting. So this batch closes a gap that had been open for three
+batches and was invisible in every one of them.
+
+Almost nothing here is new machinery. The contact primitives, the vector solve and the dense LU
+landed in §16; the string in §18; the banded solve in §15. What is new is the **shell**:
+construction (broadcast the profile, pick the support, solve `m` admittance columns, form
+`k**2/rho`), the two penetration gathers, the rank-`m` force injection, and the barrier's
+two-time-averaged potential energy — plus one line of arithmetic and one dense matvec that nothing
+had ever compared across the two languages.
+
+Four things make the batch worth reading. The matvec turns out to be exact at two contact nodes for
+a **reason** rather than by luck, and the reason is a general fact about short reductions (§23.2).
+The one line of arithmetic is a spelling the *sister model does differently*, so "follow the bow"
+would have been wrong (§23.3). §17.2's constant-fold arrived for a **third** time, inside the test
+written to catch it, and made that test empty in `--release` only (§23.4). And the batch had to
+**rewrite** an existing parity section rather than extend it, because porting a class silently
+emptied it (§23.6).
+
+### 23.1 The shape on disk
+
+```
+physsynth/core/collision.py                        module note; the BarrierStringPy alias; swap block
+crates/physsynth-core/src/collision.rs             BarrierParams/BarrierState/penetration_of/apply/
+                                                   barrier_energy/BarrierString; header rewritten
+crates/physsynth-core/tests/collision_barrier.rs   NEW — native bars (12 tests)
+crates/physsynth-py/src/collision.rs               PyBarrierString — the refusal, the settable
+                                                   underscored getters, the warning
+crates/physsynth-py/src/string_damped.rs           two crate-internal read accessors; `set_state`
+                                                   made crate-visible; header corrected
+crates/physsynth-py/src/lib.rs                     registration
+tests/test_rust_parity_collision.py                sections 4 rewritten and 5 added (117 tests)
+tests/test_stability.py                            `collision` added to the class-guard DERIVE tuple,
+                                                   and `BarrierString` to its expectation
+.github/workflows/ci.yml                           the batch's flagged step; batch 2's stale sentence
+```
+
+### 23.2 The finding: a two-term reduction's error is correlated with its own smallness
+
+The shell injects the contact force through
+
+```text
+u[1:-1] += force_pref * (cols_mat @ f)
+```
+
+which is a dense BLAS matvec on the **update path**. §16 never compared it across the languages,
+because the shell was Python on both sides of every comparison it made. Porting the shell makes it a
+cross-language reduction, and §14.2 says that is where bit-identity ends.
+
+Measured 2026-08-27 against the left-to-right row sum the port writes, over the parity file's
+fixtures and 2,000 steps each:
+
+| fixture | rows compared | matvec differs | survives `* force_pref` | reaches `u` |
+|---|---|---|---|---|
+| point fret, `m = 1` | 158,000 | **0** | 0 | 0 |
+| two frets, `m = 2`, `a = 1.0` | 158,000 | 2,232 | 2,152 | **0** |
+| two frets, `m = 2`, `a = 1.5` | 158,000 | 3,719 | 3,625 | **0** |
+| flat rail, `m = 79`, `a = 1.5` | 158,000 | 45,822 | 44,653 | **30** |
+
+`m = 1` is not interesting — the sum is one product, and §16 already named that the cause-separator.
+`m = 2` is: the matvec **does** differ, thousands of times, and the trajectory is nevertheless
+bit-identical over 6,000 steps.
+
+The first explanation drafted for that was wrong, and the way it was wrong is the useful part. It
+said the correction is a small fraction of the field it is added to (at most `5.7e-3` of `u`), so
+one of its ulps sits below `u`'s last bit and rounds away. That is a *magnitude* argument, and the
+79-node row refutes it: there the ratio is **smaller** (`2.1e-3`) and differences reach the state
+anyway.
+
+The real mechanism is about the **length of the sum**. Two doubles summed in either order give the
+same result unless the addition **cancels** — and where it cancels, the sum is small. So a two-term
+reduction cannot disagree without also being tiny. Measured on the same run, restricted to the rows
+where the two spellings actually differ:
+
+| fixture | median `|correction| / |u|` where they differ | max |
+|---|---|---|
+| two frets, `m = 2` | **2.5e-18** | **9.3e-13** |
+| flat rail, `m = 79` | 1.2e-4 | 2.1e-3 |
+
+At two nodes the correction is at worst `9.3e-13` of `u` *at exactly the rows where it is wrong*, so
+one of its ulps is worth about `1e-12` of one of `u`'s and cannot survive the addition. At 79 terms
+the correlation is gone — a long sum reorders without the result being small — the correction is an
+ordinary size where it differs, and roughly one difference in `1/1.2e-4` crosses a rounding
+boundary. That predicts about 36 hits in 44,653; 30 were observed.
+
+So: **`m = 1` is exact because the sum has no additions; `m = 2` is exact because a two-term sum's
+error is correlated with its own smallness; `m = 79` is not exact, and the model does not say it
+is.** That is §16's cause-separator generalised one term along, with a reason attached rather than
+an observation recorded — and the reason is what makes it safe to keep an exact assertion there.
+
+**Which half of that is proved and which is measured, because the distinction decides how to read a
+red bar.** *Proved:* two doubles sum identically in either order unless the addition cancels, so a
+two-term reduction cannot disagree without its result being small. That does not depend on the
+fixture. *Measured:* that `force_pref` times such a cancelled sum stays below `u`'s last bit — the
+`9.3e-13` above — which is a property of this model's coupling strength at these fixtures, and the
+parity test asserts it separately (`< 1e-9`) rather than folding it into the exact claim. A fixture
+with a much stiffer contact or a much deeper rail could move it; the round-trip test in §23.9 walks
+straight into that regime on purpose, doubles the coupling, and is a Group A claim for exactly this
+reason. So if the exact `m = 2` assertion ever goes red, the first question is which of the two
+halves moved — and if it is the measured half, the fix is to downgrade that assertion with the count
+printed (§22.3's rule), not to "repair" a port that is faithful.
+Both halves are asserted: one test pins that the matvec differs and that the correction is tiny
+where it does, and a second pins the 79-node case as the control that shows where the argument
+stops applying. An exact test with no control next to it would read as "the two matvecs agree",
+which is false.
+
+The general rule for the phases ahead: **before asserting bit-identity across a ported reduction,
+ask how many terms it has.** Two is qualitatively different from many, and the difference is
+provable rather than empirical.
+
+### 23.3 `portable.py` was considered and rejected, on evidence
+
+§18.2's manoeuvre — move the *Python* side to a spelling both languages can express — was the
+obvious response to §23.2's matvec, and `portable.py` already holds a `dot` for exactly this class
+of problem. It was rejected, and the reasoning is recorded because the same question will arrive at
+Phase 5 with the plate family:
+
+* the exactness it would buy at `m = 1` and `m = 2` is **already there**, for the structural reason
+  above;
+* the exactness it would buy at `m = 79` is **not available at any price** — the *solve's* own
+  `G @ F` matvec already spends it (§16), and the shell's contribution is not even the binding
+  constraint. Measured: the shell alone contributes at most `1.9e-14` of peak at 500 steps against
+  a `1e-13` bar, and first crosses that bar between steps 1,597 and 3,076 by fixture, where the
+  solve's own window is 1,175–1,584;
+* and it would change a **shipped model's reference numbers** unconditionally — the barrier's, and
+  with it the viewer's fret, jawari and juari output — which `portable.py` has done twice before
+  and should only do when something is bought.
+
+The rule that generalises: `portable.py` is for a reduction whose order is *the only thing*
+standing between two implementations. Where a coarser divergence is already present downstream,
+moving the Python side buys nothing and costs a change to numbers people have looked at.
+
+### 23.4 The one line of arithmetic, and why "follow the bow" would have got it wrong
+
+```python
+self._force_pref = string.k ** 2 / string.rho      # collision.py
+self._force_pref = self.k * self.k / (string.rho * string.h)   # bow.py
+```
+
+Both are the rank-`m`/rank-1 force-injection prefactor of a model that holds a `DampedStiffString`
+and corrects it once per step. They are written differently, and `**` is `float.__pow__`, i.e. the C
+library's `pow` — a *different double* from the multiply for a small fraction of arguments. So the
+Rust barrier uses `scalar_pow` (§17.2's `#[inline(never)]` wrapper) where the Rust bow correctly
+uses `k * k`, and a port that had copied its sister model would have put a last-bit error on the
+state of every step of every run.
+
+Nothing in either suite could have caught it before this batch: the two models are never compared to
+each other, and an energy bar is blind to a one-ulp prefactor. Both suites now pin it.
+
+### 23.5 The witness could not be hardcoded, and that is §22.1 arriving before it bit
+
+The obvious pin for §23.4 is "at this sample rate the two spellings differ; assert the model took
+the `pow`". §22.1 says that is a bar decided by the runner: *which* arguments `pow` rounds
+differently from a multiply is a property of the C library the machine links, so a witness measured
+here would be a value that a different CI box is free to disagree about — §21.6's failure exactly.
+
+Both suites therefore **search** for a witness at runtime, over a deterministic sweep, and say so
+out loud if the machine has none. That makes the test bite wherever the distinction exists and stay
+quiet where it does not, without either outcome being a red bar about the wrong thing.
+
+Two smaller scars from getting that search working, both worth keeping:
+
+* **The predicate has to be the whole expression.** The first witness a `k ** 2 != k * k` sweep
+  returned had its difference **absorbed by the `/ rho`** that follows it, so the negative control
+  compared a value against itself and failed. What is being pinned is `force_pref`, so the sweep
+  has to test `force_pref`.
+* **§17.2, for the third time, inside the search itself.** Written the obvious way — `k.powf(2.0)`
+  — the Rust sweep passed in `--debug` and found **nothing** in `--release`: LLVM folds a literal
+  `2.0` exponent into `x * x`, so the search's own predicate became `x * x != x * x` and the test
+  reported a green tick having asserted nothing. Routing it through `scalar_pow` fixes it, and that
+  is also the function under test. §17.2 found this in a test, §16.8 found the same *shape* in an
+  empty CI job, and this is its third door: **a test written to catch a compiler rewrite is itself
+  subject to that rewrite.** Native tests that pin an arithmetic spelling must be run in both
+  profiles, and this one now is.
+
+### 23.6 Porting a class silently emptied an existing parity section
+
+§16 measured the vector solve *through* the Python `BarrierString`, by pinning
+`collision.solve_contact_vector` to each implementation in turn. That is the right rig — and it
+stops working the moment the class itself swaps, because with `PHYSSYNTH_RS=1` the Rust model never
+looks the name up. Every test in that section would have compared Rust against Rust and passed.
+
+Verified rather than assumed: with the flag set, a pin that raises on call is simply never called.
+Section 4 now builds `BarrierStringPy` explicitly, exactly as `test_rust_parity_mallet.py` learned
+to at §17, and section 5 is the new comparison of the shell.
+
+This is a **class** of hazard rather than an incident, and it is the same one as §17.6's empty guard
+and §16.8's empty CI job seen from a third angle: a comparison whose two sides are selected by a
+*module-level name* stops being a comparison when that name is rebound. The rule for the phases
+ahead: **when a model class ports, grep the parity suite for anything that pins one of its
+collaborators by name and check that the pin still reaches it.**
+
+### 23.7 The class guard was one name short, and had been for six batches
+
+`test_stability.py`'s class half derives the swapped set from the `<Name>Py` aliases the modules
+define — §17.6's fix. But the derive runs over a **hand-written tuple of modules**, and `collision`
+was not in it. So from §16 onwards a `BarrierStringPy` alias could have appeared with nothing
+noticing, in the very half of the guard §17.6's own text says it was applying the lesson to.
+
+Checked the way §17.6 says to: `collision` was added to the tuple *first*, the guard was run and
+observed to **fail** (`Extra items in the left set: ('physsynth.core.collision', 'BarrierString')`),
+and only then was the expectation updated. A guard that is not seen to fail is a guard that has not
+been shown to be live.
+
+The residue: **a derive is only as wide as the list it derives over**, and that list is the one part
+of it still written by hand.
+
+### 23.8 The warning had nowhere left to be raised from
+
+`solve_contact_vector` warns when the Newton cap is hit without convergence, and §16's swap block
+deliberately kept that warning **on the Python side**, because `stacklevel=2` names
+`BarrierString.step` and cannot mean the same thing from inside an extension module.
+
+Once the model itself is Rust, that frame does not exist. Nothing in the repo asserts the
+attribution — `tests/test_collision_energy.py` and `tests/test_jawari.py` both check
+`newton_iters < newton_maxiter` instead — so the warning would have been lost silently rather than
+loudly. The decision, taken rather than discovered: the Rust `step()` raises it with `stacklevel=1`,
+naming the Python code that called `step()`, which is the nearest true statement about who to blame.
+The message is byte-for-byte the original's, and a new parity test drives both implementations into
+a stall and compares the text.
+
+One implementation detail is load-bearing and is commented where it lives: the warning is raised
+**after** the string's `borrow_mut` is dropped. A `UserWarning` can be promoted to an exception by
+the caller's filters, and unwinding through a live PyO3 borrow is a panic rather than a Python
+error.
+
+### 23.9 The underscored half of the interface, and the stronger reading of §12.2
+
+§12.2's rule is that a leading underscore is not a statement about the interface. The barrier forces
+the stronger version: four of its underscored attributes are not merely *read* by clients but
+**assigned**.
+
+| attribute | written by | why |
+|---|---|---|
+| `_G` | `test_collision_modal.py`, `test_jawari.py` | doubling the coupling is the negative control that gives the magnitude gate teeth |
+| `_force_pref` | the same two files | the other half of the same double |
+| `_b` | `test_jawari.py` | flattening a curved bridge to a rail at its own crest — the contrast that says the wrap edge *travels* |
+| `penetration` | `test_collision_modal.py`, `test_jawari.py` | seating the model at a static equilibrium by hand |
+
+A binding with getters only would have looked complete and left three physics tests unable to run —
+and one of them (`_b`) was missed on the first pass and found by running the suite, not by reading
+it. `_b`'s setter deliberately does **not** rebuild `G` or the admittance columns, because the
+original does not either and is right not to: the support is chosen by which heights are *finite*,
+and a rewrite that keeps them finite leaves the string's admittance untouched.
+
+### 23.10 What is bit-identical
+
+Under a shared banded solver (`shared_solver()`, or `PHYSSYNTH_RS=1`, which arranges it anyway):
+
+* **construction** — `G`, the admittance columns, `_b`, `_support`, `_int_idx` and `force_pref` —
+  exact on every fixture. This is the cause-separator for everything below: a trajectory that
+  separated on a fixture whose `G` already differed would be reporting the string, not the shell;
+* **`m = 1`** (point fret) — the field, `energy()` and the Newton iteration count, exact over 2,000
+  steps;
+* **`m = 2`** (two frets) — the field and `energy()`, exact over 2,000 steps, for §23.2's reason;
+* **`m = 79`** (flat rail, all four variants) — Group A, `<= 1e-13` of amplitude over 500 steps,
+  with the iteration count compared step for step and identical.
+
+Without a shared solver the two strings differ in the last bit from step one for §15.3's reason,
+which this batch did not introduce.
+
+### 23.11 The success condition
+
+* `tests/test_collision_energy.py`, `tests/test_collision_modal.py`,
+  `tests/test_collision_signature.py` and `tests/test_jawari.py` unmodified against Rust — the
+  model's own bars, including the static-equilibrium magnitude oracle and its doubled-coupling
+  negative control, both of which run *through* the settable underscored attributes of §23.9.
+* `tests/test_web_backend.py` against Rust — `web/serialize.py` builds a `BarrierString` for
+  **three** of its models (jawari, juari, fret), so the viewer is this port's largest client (§1.1).
+* `tests/test_damped_string.py` against Rust — the string underneath, and the control that says a
+  failure is about this batch rather than about §18's.
+* `tests/test_stability.py`'s swap guard, with `collision` added to the derive tuple (§23.7) and
+  `BarrierString` to its expectation.
+* `tests/test_rust_parity_collision.py` — 117 tests, green with and without the flag, section 4
+  rewritten (§23.6) and section 5 new.
+* `crates/physsynth-core/tests/collision_barrier.rs` — 12 native bars, in **both** profiles (§23.5).
+
+### 23.12 What was measured
+
+| | |
+|---|---|
+| Native `cargo test --workspace` | **251 passed** (239 at the end of §20) |
+| The same in `--release` | **251 passed** |
+| Cargo dependency allowlist | still **EMPTY** |
+| `tests/test_rust_parity_collision.py` | **117 passed**, flag set and unset |
+| The barrier's four own files against Rust | **31 passed** |
+| `tests/test_web_backend.py` against Rust | **408 passed** |
+| All fourteen parity files | **1,269 passed** flagged; 1,268 + 1 skipped unflagged |
+| Injection matvec, `m = 1`, 2,000 steps | **0 of 158,000 rows** differ |
+| Injection matvec, `m = 2`, 2,000 steps | 2,232–3,719 rows differ; **0** reach `u` |
+| Injection matvec, `m = 79`, 2,000 steps | 45,822 rows differ; **30** reach `u` |
+| `\|correction\| / \|u\|` where the matvec differs, `m = 2` | median **2.5e-18**, max **9.3e-13** |
+| The same at `m = 79` | median **1.2e-4**, max 2.1e-3 |
+| Shell's own contribution at 500 steps, `m = 79` | `<= 1.9e-14` of peak (bar: 1e-13) |
+| Shell's own first crossing of 1e-13 | steps **1,597–3,076** by fixture (solve's own: 1,175–1,584) |
+| `k ** 2` vs `k * k` over sample rates in range | differ in **86 of 200,000** |
+| Bit-identity, shared solver, `m = 1` and `m = 2` | **exact** in field, `energy()` and Newton count |
+| Group A, shared solver, six fixtures × 500 steps | `<= 1e-13` of amplitude; iteration counts identical |
+| Speed, point fret (`m = 1`, `N = 80`) | **47.6x** (149.7 µs/step → 3.1 µs) |
+| Speed, flat rail (`m = 79`, `N = 80`) | **5.3x** (274.4 µs/step → 52.0 µs) |
+| Speed, flat rail (`m = 199`, `N = 200`) | **2.6x** (1,315 µs/step → 514 µs) |
+| The two dense LUs, head to head, `m = 79` / `m = 199` | LAPACK 42.9 / 580.0 µs, port 46.7 / 617.9 µs |
+| The barrier's four own files, flag on vs off | **14.1 s** vs **55.0 s** |
+
+The `m = 1` figure is the largest speedup the migration has measured, and the `m = 199` figure the
+smallest for a model whose Python side has no compiled inner kernel — both for the same reason, and
+it is §11.6's rather than anything new. At one contact node the step is a Newton loop over
+**one-element NumPy arrays**: there is no arithmetic to speak of, so the whole cost is per-call
+overhead and essentially all of it goes away. As `m` grows the dense factorization comes to dominate,
+and the last row above is the check that this is the ordinary story rather than a weak transcription:
+the port's reference `dgetrf` is within **9%** of LAPACK's blocked one at both sizes, so neither side
+wins the arithmetic and the ratio falls toward 1 as the arithmetic's share rises.
+
+One consequence for the real-time port, which is what §11.6 says these numbers are actually about:
+the *cheap* configurations gain most. A fret, a jawari bridge and a tanpura thread are all small-`m`
+contacts — 1 to ~15 nodes — so they sit at the top of that table, not the bottom.
+
+### 23.13 What Phase 4 inherits
+
+* **Phase 3 is finished.** Group B and Group C are ported: `banded`, the four theta-scheme strings'
+  solver, `string_stiff`, `string_damped`, `string_nonlinear`, `collision` in full including
+  `BarrierString`, and `bow`. `string_geometric` is the one string that remains, and it is a
+  **Phase 5** model rather than a Phase 3 leftover — it needs a sparse LU as well as the banded
+  Cholesky, so it needs Group D.
+* **`beam` is next, and its job is unchanged.** §4.1's SuperLU hypothesis is still untested; Group D
+  is the only solver class the migration has not touched; `beam` is 254 lines with one `splu` and
+  was chosen as the de-risker for exactly that. Nothing in Phases 2 or 3 moved it.
+* **Ask how many terms a reduction has before asserting bit-identity across it.** §23.2. Two is
+  provably safe; many is not; one is trivial. This is the sharpest tool the migration has for
+  deciding in advance which claims are available, and it costs no measurement.
+* **When a class ports, re-read the parity tests that pin its collaborators by name.** §23.6. The
+  pin does not fail — it stops reaching anything, and the tests go on passing.
+* **A derive is only as wide as the list it derives over.** §23.7.
+* **Check inherited sentences about what is blocked on what.** §20.11 caught one that had been
+  false for three batches; §23 and the CI comment corrected two more written by earlier batches.
+  The general form (§18.3) is that a statement justified by a dependency expires when the
+  dependency lands, and nobody is notified.

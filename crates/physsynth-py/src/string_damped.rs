@@ -10,8 +10,10 @@
 //! [`PyDampedStiffString::apply_Ainv`] exposes the action of the update matrix's inverse, and it is
 //! the interface three coupled models reach through: `bow` precomputes a driving-point admittance
 //! with it, `collision::BarrierString` builds a whole admittance *block* out of `N - 1` calls to
-//! it, and `connection`'s bridges do the same. Those callers are still Python and stay so this
-//! batch, which is the ordinary state of a migration — a ported model waits on its clients (§1.2).
+//! it, and `connection`'s bridges do the same. Two of those three have since ported and no longer
+//! come through this method at all — they call `physsynth_core::string_damped::apply_ainv`
+//! directly. `connection` is Phase 5 and still arrives here, which is the ordinary state of a
+//! migration: a ported model waits on its clients (§1.2).
 
 use crate::string_stiff::{bad_boundary, boundary_ok, csr_object, node_value, velocity_arg};
 use crate::{as_1d_f64, state_slice};
@@ -82,6 +84,28 @@ impl PyDampedStiffString {
         let bound = self.u_prev.bind(py);
         let ro = bound.readonly();
         Ok(state_slice(&ro, "u_prev")?[i])
+    }
+
+    /// Run `f` over the current field, read-only.
+    ///
+    /// `u_at` one node at a time is what the bow needs; `collision::BarrierString` gathers a whole
+    /// support of up to `N - 1` nodes twice per step, and taking the borrow once rather than `2m`
+    /// times is the difference between a gather and a per-node round trip into PyO3.
+    pub(crate) fn with_u_ref<R>(&self, py: Python<'_>, f: impl FnOnce(&[f64]) -> R) -> PyResult<R> {
+        let bound = self.u.bind(py);
+        let ro = bound.readonly();
+        Ok(f(state_slice(&ro, "u")?))
+    }
+
+    /// The same over `u^{n-1}`. Only meaningful *before* `step()` rolls the history.
+    pub(crate) fn with_u_prev_ref<R>(
+        &self,
+        py: Python<'_>,
+        f: impl FnOnce(&[f64]) -> R,
+    ) -> PyResult<R> {
+        let bound = self.u_prev.bind(py);
+        let ro = bound.readonly();
+        Ok(f(state_slice(&ro, "u_prev")?))
     }
 
     /// Run `f` over the live `u` buffer, in place.
@@ -284,7 +308,7 @@ impl PyDampedStiffString {
 
     /// Set the initial displacement (and optional velocity), ends clamped.
     #[pyo3(signature = (u0, v0=None))]
-    fn set_state(
+    pub(crate) fn set_state(
         &mut self,
         py: Python<'_>,
         u0: &Bound<'_, PyAny>,

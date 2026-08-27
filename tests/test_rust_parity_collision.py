@@ -62,19 +62,64 @@ would otherwise look like an arbitrary choice:
    like the run length. So the tolerance assertions below run for 500 steps, roughly a third of
    the tightest measured window, and past a few thousand the honest statement is not a tolerance
    at all but the physics bars.
+
+5. **The model shell ported later than the solve it drives, and section 4 had to be rewritten
+   rather than reused.** Batch 2 left ``BarrierString`` in Python and measured the vector solve
+   *through* it, by pinning ``collision.solve_contact_vector``. Once the class itself swaps, that
+   pin reaches nothing under ``PHYSSYNTH_RS=1`` -- the Rust model never looks the name up -- so
+   every test in section 4 would have been comparing Rust against Rust and passing for the wrong
+   reason. Verified, not assumed: with the flag set, a pin that raises on call is simply never
+   called. Section 4 therefore builds ``BarrierStringPy`` explicitly, and section 5 is the new
+   comparison of the *shell*.
+
+6. **The shell's own matvec differs at two contact nodes, and the state provably cannot see
+   it.** Injecting the force is a second dense matvec -- ``u[1:-1] += force_pref * (cols_mat @ f)``
+   -- that nothing compared across the languages until the model ported. Measured 2026-08-27 over
+   2,000 steps: identical at ``m = 1`` (0 rows, the sum is one product), and at ``m = 2`` it
+   differs in **1,291 of 158,000 rows** while the trajectory stays bit-identical.
+
+   That is not luck, and the distinction matters because an exact assertion resting on luck is one
+   that expires without warning. A **two**-term sum can only be reordered into a different double
+   if its two terms *cancel* -- and where they cancel the correction is tiny: at every one of
+   those 1,291 rows it is at most ``9.3e-13`` of ``u``, so one of its ulps is worth about
+   ``1e-12`` of one of ``u``'s and cannot survive the addition. The error of a two-term reduction
+   is correlated with its own smallness.
+
+   The control is the same code at 79 terms, where that correlation is gone: the matvec differs on
+   14,746 rows, the correction there is an ordinary size (median ``1.2e-4`` of ``u``), and about
+   one difference in ``1/1.2e-4`` crosses a rounding boundary -- 7 reach the state over 2,000 steps
+   and 30 over 6,000. So the exactness at two nodes is a statement about the *length of the sum*,
+   and both halves are asserted below, because the exact claim is only honest next to the fixture
+   that shows where it stops being available.
 """
 
 import contextlib
+import re
 import warnings
 
 import numpy as np
 import pytest
-from helpers import make_barrier_string, make_damped_string, make_mallet, make_mallet_wall
+from helpers import (
+    BARRIER_ALPHA_DEFAULT,
+    BARRIER_HEIGHT_DEFAULT,
+    BARRIER_K_DEFAULT,
+    L_DEFAULT,
+    RHO_DEFAULT,
+    T_DEFAULT,
+    THETA_DEFAULT,
+    make_barrier_string,
+    make_damped_string,
+    make_mallet,
+    make_mallet_wall,
+    wave_speed,
+)
 from scipy.linalg import lu_factor as sp_lu_factor
 from scipy.linalg import lu_solve as sp_lu_solve
 
 from physsynth.core import collision as C
 from physsynth.core import mallet as M
+from physsynth.core import string_damped
+from physsynth.core.string_damped import DampedStiffStringPy
 
 physsynth_rs = pytest.importorskip(
     "physsynth_rs", reason="the Rust extension is not built in this environment"
@@ -399,8 +444,63 @@ def test_an_identity_system_is_solved_exactly():
 
 # -- 4. the vector solve, through the barrier string -----------------------------------------------
 
-def _barrier_run(steps, **kw):
-    bar = make_barrier_string(**kw)
+def rs_cholesky(ab, lower=False):
+    return physsynth_rs.cholesky_banded_upper(np.ascontiguousarray(ab, dtype=float))
+
+
+def rs_cho_solve(cb_and_lower, b):
+    cb, _lower = cb_and_lower
+    return physsynth_rs.cho_solve_banded_upper(
+        np.ascontiguousarray(cb, dtype=float), np.ascontiguousarray(b, dtype=float)
+    )
+
+
+@contextlib.contextmanager
+def shared_solver():
+    """Put the Python string on the Rust banded solver for the duration of the block.
+
+    Section 5 needs it and section 4 does not: comparing the two *shells* means holding everything
+    under them constant, and the banded back-substitution is the one piece a Python string and a
+    Rust string would otherwise do differently (§15.3 -- OpenBLAS's blocked ``DTBSV`` against the
+    reference one transcribed). ``string_damped`` captures the name at import, which is the hazard
+    ``test_stability.py``'s guard watches, so patching the captured binding is the only way to hold
+    it. Under ``PHYSSYNTH_RS=1`` this is already the state of the world and the patch is a no-op.
+    Same helper as ``test_rust_parity_bow.py``'s.
+    """
+    saved = (string_damped.cholesky_banded, string_damped.cho_solve_banded)
+    string_damped.cholesky_banded = rs_cholesky
+    string_damped.cho_solve_banded = rs_cho_solve
+    try:
+        yield
+    finally:
+        string_damped.cholesky_banded, string_damped.cho_solve_banded = saved
+
+
+def _string_kw(*, N=80, lam=0.9, kappa=0.0, sigma0=0.0, sigma1=0.0, theta=THETA_DEFAULT):
+    c = wave_speed(T_DEFAULT, RHO_DEFAULT)
+    return dict(L=L_DEFAULT, T=T_DEFAULT, rho=RHO_DEFAULT, fs=c * N / (L_DEFAULT * lam), N=N,
+                kappa=kappa, sigma0=sigma0, sigma1=sigma1, theta=theta)
+
+
+def _build(barrier_cls, string_cls, *, N=80, lam=0.9, K=BARRIER_K_DEFAULT,
+           alpha=BARRIER_ALPHA_DEFAULT, barrier=BARRIER_HEIGHT_DEFAULT, hysteresis=0.0,
+           kappa=0.0, sigma0=0.0, sigma1=0.0, theta=THETA_DEFAULT, newton_tol=1e-13,
+           newton_maxiter=60):
+    """``helpers.make_barrier_string``, with the two implementations spelled out.
+
+    The helper picks both classes off the swapped module names, which is right for every other
+    file and wrong for this one -- see item 5 in the module docstring. The defaults here track the
+    helper's, and ``test_the_local_builder_is_the_shipped_fixture`` is what keeps them tracking.
+    """
+    s = string_cls(**_string_kw(N=N, lam=lam, kappa=kappa, sigma0=sigma0, sigma1=sigma1,
+                                theta=theta))
+    return barrier_cls(string=s, barrier=barrier, stiffness=K, alpha=alpha,
+                       hysteresis=hysteresis, newton_tol=newton_tol,
+                       newton_maxiter=newton_maxiter)
+
+
+def _drive(bar, steps):
+    """Set the standard half-sine start and step, recording field, energy and Newton work."""
     x = np.linspace(0.0, 1.0, bar.string.N + 1)
     bar.set_state(5.0e-3 * np.sin(np.pi * x))
     u = np.empty((steps, bar.string.N + 1))
@@ -412,6 +512,18 @@ def _barrier_run(steps, **kw):
         energy[n] = bar.energy()
         iters[n] = bar.newton_iters
     return u, energy, iters
+
+
+def _barrier_run(steps, **kw):
+    """Section 4's rig: the **Python** shell, on whichever string the ambient flag selects.
+
+    Pinning the shell is what keeps the ``solve_contact_vector`` swap below meaningful -- with
+    ``PHYSSYNTH_RS`` set, ``collision.BarrierString`` is the Rust class and never looks that name
+    up at all. The string is deliberately left ambient: both runs then use the same one, which is
+    consistent and therefore harmless, whereas one run per implementation would confound the
+    reading.
+    """
+    return _drive(_build(C.BarrierStringPy, string_damped.DampedStiffString, **kw), steps)
 
 
 def _point_fret(N=80, node=None):
@@ -617,3 +729,477 @@ def test_an_out_of_reach_barrier_is_bit_identical_to_a_bare_string_on_rust_too()
             bar.step()
         assert np.all(bar.contact_force == 0.0)
         np.testing.assert_array_equal(bar.string.u, bare.u)
+
+
+# -- 5. the model shell: BarrierString itself ------------------------------------------------------
+#
+# Everything above compares a piece of the barrier with the rest of it held in Python. This section
+# compares the whole model: `BarrierStringPy` on a Python string against the Rust
+# `physsynth_rs.BarrierString` on a Rust one, with the banded solver shared so that the only
+# thing varying is the shell. What the
+# shell does is construction (broadcast the profile, pick the support, solve `m` admittance columns,
+# form `k**2/rho`), the two penetration gathers, the force injection, and the barrier's potential
+# energy. Three of those five are new arithmetic; see items 5 and 6 in the module docstring.
+
+def _pow_multiply_witness():
+    """The first sample rate where `k ** 2 / rho` and `k * k / rho` differ, or None.
+
+    Searched rather than hardcoded, and that is item 3's lesson applied one function along: which
+    arguments the C library's `pow` rounds differently from a multiply is a property of the runner,
+    so pinning a value measured here would be a bar decided by the machine (plan section 21.6).
+    On the machine this was written on, 86 of 200,000 sample rates in this range separate the two
+    powers -- but the predicate here is the WHOLE expression, division included, because the first
+    witness a `k ** 2 != k * k` sweep returned had its difference absorbed by the `/ rho` and left
+    the negative control below comparing a value against itself. The Rust twin of this function
+    carries a third scar the Python one cannot have: written with a literal exponent it found
+    nothing at all under `--release`, because LLVM folds `powf(x, 2.0)` into `x * x` and the
+    search's own predicate became a tautology (plan section 17.2, third occurrence).
+    """
+    fs = 20000.0
+    for _ in range(400000):
+        k = 1.0 / fs
+        if k ** 2 / RHO_DEFAULT != k * k / RHO_DEFAULT:
+            return fs
+        fs += 0.7
+    return None
+
+
+def _pair(**kw):
+    """The two shells on the same fixture, each on its own implementation's string."""
+    py = _build(C.BarrierStringPy, DampedStiffStringPy, **kw)
+    rs = _build(physsynth_rs.BarrierString, physsynth_rs.DampedStiffString, **kw)
+    return py, rs
+
+
+def test_the_local_builder_is_the_shipped_fixture():
+    """`_build` duplicates `helpers.make_barrier_string`, and this is what keeps the copy honest.
+
+    The duplication is forced -- the helper reads both classes off the swapped module names, which
+    is exactly what this file must not do -- but a fixture that drifts from the shipped one is a
+    parity test measuring something nobody runs. Bit-for-bit on the derived scalars and on 200
+    steps of the field, so a changed default in `helpers` fails here rather than silently.
+    """
+    ship = make_barrier_string()
+    mine = _build(type(ship), type(ship.string))
+    for name in ("K", "alpha", "lam_h", "k", "eta_tol", "newton_tol", "newton_maxiter"):
+        assert getattr(mine, name) == getattr(ship, name), f"{name} drifted from helpers'"
+    np.testing.assert_array_equal(mine._b, ship._b)
+    np.testing.assert_array_equal(mine._support, ship._support)
+    np.testing.assert_array_equal(mine._G, ship._G)
+    np.testing.assert_array_equal(_drive(mine, 200)[0], _drive(ship, 200)[0])
+
+
+# -- 5a. construction ------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("label", list(CASES))
+def test_the_admittance_block_is_bit_identical(label):
+    """`G` and the correction columns are `m` banded solves and one scalar multiply each.
+
+    Under a shared solver they must match to the bit -- construction happens before any contact,
+    so nothing here has passed through the vector solve yet. This is the cause-separator for
+    everything in 5b: a trajectory that separates on a fixture whose `G` already differs would be
+    telling you about the string, not about the shell.
+    """
+    with shared_solver():
+        py, rs = _pair(**CASES[label])
+    np.testing.assert_array_equal(rs._G, py._G)
+    np.testing.assert_array_equal(rs._cols_mat, py._cols_mat)
+    np.testing.assert_array_equal(rs._b, py._b)
+    np.testing.assert_array_equal(rs._support, py._support)
+    np.testing.assert_array_equal(rs._int_idx, py._int_idx)
+    assert rs._force_pref == py._force_pref
+
+
+def test_the_force_prefactor_is_a_pow_not_a_multiply():
+    """`force_pref = string.k ** 2 / string.rho` is `float.__pow__`, i.e. the C library's `pow`.
+
+    Not `k * k`, which is a different double for a small fraction of sample rates -- and `bow.py`
+    writes `self.k * self.k` at the same spot, so the two models' ports have to spell their
+    prefactor differently to stay faithful to their own originals. Every shipped fixture's `fs`
+    happens to be a value where the two agree, which is what makes this test necessary rather than
+    redundant: it goes and finds an `fs` where they do not.
+    """
+    fs = _pow_multiply_witness()
+    if fs is None:  # pragma: no cover - not seen on any machine yet
+        pytest.skip("this machine's pow never separates k**2 from k*k in 20-300 kHz")
+    k = 1.0 / fs
+    rs = physsynth_rs.BarrierString(
+        string=physsynth_rs.DampedStiffString(
+            L=L_DEFAULT, T=T_DEFAULT, rho=RHO_DEFAULT, fs=fs, N=80, theta=THETA_DEFAULT,
+        ),
+        barrier=BARRIER_HEIGHT_DEFAULT, stiffness=BARRIER_K_DEFAULT, alpha=1.0,
+    )
+    assert rs._force_pref == k ** 2 / RHO_DEFAULT
+    assert rs._force_pref != k * k / RHO_DEFAULT
+
+
+@pytest.mark.parametrize("kwargs, message", [
+    ({"stiffness": 0.0}, "contact stiffness K must be > 0."),
+    ({"stiffness": -1.0}, "contact stiffness K must be > 0."),
+    ({"alpha": 0.5}, "contact exponent alpha must be >= 1."),
+    ({"hysteresis": -1.0}, "hysteresis lambda_h must be >= 0."),
+])
+def test_both_reject_the_same_construction_with_the_same_text(kwargs, message):
+    good = dict(barrier=BARRIER_HEIGHT_DEFAULT, stiffness=BARRIER_K_DEFAULT, alpha=1.5,
+                hysteresis=0.0)
+    for cls, string_cls in ((C.BarrierStringPy, DampedStiffStringPy),
+                            (physsynth_rs.BarrierString, physsynth_rs.DampedStiffString)):
+        with pytest.raises(ValueError, match=re.escape(message)):
+            cls(string=string_cls(**_string_kw()), **{**good, **kwargs})
+
+
+def test_both_refuse_a_barrier_with_no_finite_interior_node():
+    """A profile that is `-inf` everywhere has an empty support, and the original refuses it at
+    construction rather than handing an empty system to the solve."""
+    b = np.full(81, -np.inf)
+    for cls, string_cls in ((C.BarrierStringPy, DampedStiffStringPy),
+                            (physsynth_rs.BarrierString, physsynth_rs.DampedStiffString)):
+        with pytest.raises(ValueError, match="empty contact support"):
+            cls(string=string_cls(**_string_kw()), barrier=b, stiffness=BARRIER_K_DEFAULT)
+
+
+def test_the_endpoints_are_outside_the_support_on_both_sides():
+    """A finite barrier at node 0 or node N is ignored: the support is the *interior*, because the
+    two end nodes are clamped and cannot move into anything. Worth pinning because it is the one
+    place the port had to reproduce a `range` rather than an expression."""
+    b = np.full(81, -np.inf)
+    b[0], b[80], b[40] = -1.0e-4, -1.0e-4, -1.0e-4
+    with shared_solver():
+        py = C.BarrierStringPy(string=DampedStiffStringPy(**_string_kw()), barrier=b,
+                               stiffness=BARRIER_K_DEFAULT)
+        rs = physsynth_rs.BarrierString(
+            string=physsynth_rs.DampedStiffString(**_string_kw()), barrier=b,
+            stiffness=BARRIER_K_DEFAULT,
+        )
+    np.testing.assert_array_equal(rs._support, py._support)
+    assert list(py._support) == [40]
+
+
+def test_the_rust_barrier_refuses_a_python_string():
+    """The reed's rule (plan section 12.8) for the reed's reason: a Rust model reporting Rust while
+    driving a Python resonator is the green-and-meaningless run the swap guard exists to prevent.
+    """
+    with pytest.raises(TypeError, match="needs a Rust DampedStiffString"):
+        physsynth_rs.BarrierString(
+            string=DampedStiffStringPy(**_string_kw()), barrier=BARRIER_HEIGHT_DEFAULT,
+            stiffness=BARRIER_K_DEFAULT,
+        )
+
+
+def test_a_wrong_shaped_barrier_is_refused_the_same_way():
+    """The original never reaches its own shape check -- `np.broadcast_to` fails first -- so the
+    message a caller sees is NumPy's, and the port quotes it rather than improving on it."""
+    b = np.zeros(5)
+    for cls, string_cls in ((C.BarrierStringPy, DampedStiffStringPy),
+                            (physsynth_rs.BarrierString, physsynth_rs.DampedStiffString)):
+        with pytest.raises(ValueError, match="could not be broadcast"):
+            cls(string=string_cls(**_string_kw()), barrier=b, stiffness=BARRIER_K_DEFAULT)
+
+
+# -- 5b. the trajectory ----------------------------------------------------------------------------
+
+def test_the_shell_is_bit_identical_at_one_contact_node():
+    """`m = 1`: the solve's matvec is one multiply and so is the injection's. Nothing in either
+    implementation can round differently, so this must be exact -- and if it ever is not, the
+    transcription is wrong and no story about BLAS applies. `alpha = 1.0` for item 3's reason."""
+    kw = dict(CASES["point fret (m=1)"], alpha=1.0)
+    with shared_solver():
+        py, rs = _pair(**kw)
+        py_run, rs_run = _drive(py, SHORT_RUN), _drive(rs, SHORT_RUN)
+    np.testing.assert_array_equal(rs_run[0], py_run[0])
+    np.testing.assert_array_equal(rs_run[1], py_run[1])
+    np.testing.assert_array_equal(rs_run[2], py_run[2])
+
+
+def test_the_shell_is_bit_identical_at_two_contact_nodes():
+    """`m = 2`, and this one is exact for a reason that is NOT "the arithmetic agrees".
+
+    The force-injection matvec genuinely differs here -- the test below measures it -- and the
+    state cannot see it, because the correction is a small enough fraction of `u` that one of its
+    ulps falls off the end of the addition. Both facts are asserted, in that order, so nobody
+    later reads this pass as evidence the two matvecs are the same computation.
+    """
+    kw = dict(CASES["two frets (m=2)"], alpha=1.0)
+    with shared_solver():
+        py, rs = _pair(**kw)
+        py_run, rs_run = _drive(py, SHORT_RUN), _drive(rs, SHORT_RUN)
+    np.testing.assert_array_equal(rs_run[0], py_run[0])
+    np.testing.assert_array_equal(rs_run[1], py_run[1])
+
+
+def _injection_spellings(bar, steps):
+    """Step `bar`, comparing `cols_mat @ f` against a left-to-right row sum at every step.
+
+    Returns `(rows, differ, differ_scaled, differ_added, ratio_where_differing)` -- the last being
+    every `|force_pref * (cols_mat @ f)| / |u|` at a row where the two spellings disagree. That
+    ratio is the whole argument: it is how many of `u`'s last bits one of the correction's last
+    bits is worth.
+    """
+    x = np.linspace(0.0, 1.0, bar.string.N + 1)
+    bar.set_state(5.0e-3 * np.sin(np.pi * x))
+    m = bar.penetration.size
+    rows = differ = differ_scaled = differ_added = 0
+    ratios = []
+    for _ in range(steps):
+        bar.step()
+        f, A, u_int = bar.contact_force, bar._cols_mat, bar.string.u[1:-1]
+        blas = A @ f
+        ltr = np.zeros(A.shape[0])
+        for j in range(m):
+            ltr = ltr + A[:, j] * f[j]
+        sb, sl = bar._force_pref * blas, bar._force_pref * ltr
+        live = np.abs(u_int) > 0.0
+        d = (blas != ltr) & live
+        rows += int(live.sum())
+        differ += int(d.sum())
+        differ_scaled += int(np.count_nonzero((sb != sl) & live))
+        differ_added += int(np.count_nonzero(((u_int + sb) != (u_int + sl)) & live))
+        if d.any():
+            ratios.append(np.abs(sb[d]) / np.abs(u_int[d]))
+    return rows, differ, differ_scaled, differ_added, (
+        np.concatenate(ratios) if ratios else np.zeros(0)
+    )
+
+
+def test_two_terms_cannot_disagree_without_cancelling_and_so_cannot_reach_the_state():
+    """The mechanism behind the exact two-node claim -- and it is a mechanism, not a coincidence.
+
+    A two-term sum is reordered by BLAS and by a `for` loop into the same value unless the two
+    terms **cancel**; and where they cancel the sum is tiny, so the correction is tiny, so its
+    last bit is far below the field's. Measured 2026-08-27 over 2,000 steps at this fixture: the
+    matvec disagrees on 1,291 rows, and at every one of them the correction is at most **9.3e-13**
+    of `u` -- i.e. one of its ulps is about `1e-12` of one of `u`'s. Nothing that small can survive
+    an addition, and none of them does.
+
+    Stated this way the claim is falsifiable in the right place. It is not "the two matvecs agree"
+    (they do not) and not "the difference happened to vanish" (it cannot); it is that a two-term
+    reduction's error is *correlated with its own smallness*, which is a property of the length 2.
+    The companion test below is the control: at 79 terms that correlation is gone.
+    """
+    kw = dict(CASES["two frets (m=2)"], alpha=1.0)
+    with shared_solver():
+        rows, differ, scaled, added, ratio = _injection_spellings(
+            _build(C.BarrierStringPy, DampedStiffStringPy, **kw), SHORT_RUN
+        )
+    print(f"m=2 injection: {differ}/{rows} rows differ, {scaled} survive the scaling, "
+          f"{added} survive the add; |correction|/|u| where they differ <= {ratio.max():.2e}")
+    assert differ > 0, (
+        "the two spellings of the injection matvec agreed everywhere, which would make the "
+        "bit-identity claim above uninformative -- either NumPy stopped dispatching to BLAS here "
+        "or the fixture stopped putting two nodes in contact"
+    )
+    assert ratio.max() < 1.0e-9, (
+        f"where the matvec differs, the correction reached {ratio.max():.2e} of the field -- the "
+        "cancellation argument has stopped holding and the exact two-node claim above now rests "
+        "on nothing"
+    )
+    assert added == 0, (
+        f"{added} of the injection's differences reached `u`, so the exact two-node claim above "
+        "is no longer true; downgrade it to Group A with the count printed rather than 'fixing' "
+        "the port, which is faithful"
+    )
+
+
+def test_at_seventy_nine_terms_the_cancellation_argument_does_not_apply():
+    """The control, and the reason the test above is worth writing down.
+
+    A 79-term reduction can be reordered into a different double without the result being small,
+    so where it differs the correction is an ordinary size -- median `1.2e-4` of `u`, measured
+    2026-08-27 -- and roughly one such difference in `1/1.2e-4` crosses a rounding boundary and
+    reaches the state. It does: 7 of 14,746 over 2,000 steps, 30 of 44,653 over 6,000, which is
+    what that ratio predicts to within a factor of two. So the exact claim at two nodes is about
+    the *length of the sum*, and this is where the same code stops being able to make it.
+    """
+    with shared_solver():
+        rows, differ, scaled, added, ratio = _injection_spellings(
+            _build(C.BarrierStringPy, DampedStiffStringPy, **CASES["flat rail (m=79)"]), SHORT_RUN
+        )
+    median = float(np.median(ratio))
+    print(f"m=79 injection: {differ}/{rows} rows differ, {scaled} survive the scaling, "
+          f"{added} survive the add; median |correction|/|u| where they differ = {median:.2e}")
+    assert median > 1.0e-6, (
+        f"the 79-node correction shrank to {median:.2e} of the field where the matvec differs, "
+        "which would make it the two-node case and leave that test's claim unsupported by a "
+        "contrast"
+    )
+    assert added > 0, (
+        "no difference in the 79-node injection reached `u` over 2,000 steps, so this fixture is "
+        "no longer a control and the two-node exactness above is unattributed"
+    )
+
+
+@pytest.mark.parametrize("label", list(CASES))
+def test_the_shell_agrees_to_group_a_over_a_short_run(label):
+    """At 79 nodes the shell's matvec DOES reach the state -- and the regime does not change,
+    because the solve's own matvec was already spending the bit-identity there (item 4).
+
+    Measured 2026-08-27, the shell's contribution alone at 500 steps is at most 1.9e-14 of peak
+    against this 1e-13 bar, and it first crosses the bar between steps 1,597 and 3,076 depending
+    on fixture -- later than the solve's own window of 1,175-1,584. So the run length below stays
+    the one item 4 chose, and it stays chosen by the solve.
+    """
+    with shared_solver():
+        py, rs = _pair(**CASES[label])
+        py_run, rs_run = _drive(py, GROUP_A_RUN), _drive(rs, GROUP_A_RUN)
+    amp = float(np.max(np.abs(py_run[0])))
+    worst = float(np.max(np.abs(rs_run[0] - py_run[0]))) / amp
+    print(f"{label}: the two shells separated by {worst:.2e} of amplitude over {GROUP_A_RUN} steps")
+    assert worst <= GROUP_A_TOL, f"{label}: the shells separated by more than the Group A target"
+    # The iteration count is a branch, not a value -- section 16.6's convention, applied to the
+    # model rather than to the solve.
+    np.testing.assert_array_equal(rs_run[2], py_run[2])
+
+
+@pytest.mark.parametrize("label", list(CASES))
+def test_the_energy_bars_hold_on_the_rust_model(label):
+    """What survives past the Group A window: the physics, on the model as shipped.
+
+    Distinct from the identically-named test in section 4, which held the Python shell to the bar
+    on two different solves. This one holds the Rust *model* to it -- so a shell that got the
+    two-time-averaged barrier potential subtly wrong shows up here even though every trajectory
+    comparison above would still be green.
+    """
+    kw = dict(CASES[label], sigma0=0.0, sigma1=0.0, hysteresis=0.0)
+    with shared_solver():
+        e = _drive(_build(physsynth_rs.BarrierString, physsynth_rs.DampedStiffString, **kw),
+                   SHORT_RUN)[1]
+    drift = abs(e[-1] - e[0]) / abs(e[0])
+    assert drift < DRIFT_TOL, f"{label} on the Rust model: lossless energy drifted {drift:.2e}"
+
+
+def test_the_rust_model_is_passive_under_loss():
+    """Hysteresis and string damping both on: the total must decrease monotonically."""
+    kw = dict(CASES["flat rail lossy"], sigma0=0.5, sigma1=0.05)
+    with shared_solver():
+        e = _drive(_build(physsynth_rs.BarrierString, physsynth_rs.DampedStiffString, **kw),
+                   1000)[1]
+    rise = float(np.max(np.diff(e)))
+    assert rise <= 1.0e-12 * abs(e[0]), f"energy rose by {rise:.2e} on a lossy run"
+
+
+# -- 5c. the interface -----------------------------------------------------------------------------
+
+def test_the_settable_underscored_attributes_round_trip():
+    """`_G`, `_force_pref`, `_b` and `penetration` are written by tests and by the viewer.
+
+    Section 12.2's rule -- a leading underscore is not a statement about the interface -- with the
+    stronger reading this model forces: three of these four are not merely read but *assigned*,
+    and one of them (`_G`) is how `test_collision_modal.py` builds its negative control. A getter
+    would have looked complete and left that test unable to run.
+    """
+    with shared_solver():
+        py, rs = _pair(**dict(CASES["two frets (m=2)"], alpha=1.0))
+    for bar in (py, rs):
+        bar._G = bar._G * 2.0
+        bar._force_pref = bar._force_pref * 2.0
+        bar._b = np.full_like(bar._b, -1.0e-3)
+        bar.penetration = bar._b - bar.string.u[bar._support]
+    np.testing.assert_array_equal(rs._G, py._G)
+    assert rs._force_pref == py._force_pref
+    np.testing.assert_array_equal(rs._b, py._b)
+    np.testing.assert_array_equal(rs.penetration, py.penetration)
+    # Group A rather than the bit, and the reason is the finding two tests up: doubling the
+    # coupling and raising the rail doubles the correction and deepens the contact, which is
+    # precisely the regime where the injection's cancelled-and-therefore-tiny correction stops
+    # being tiny. Measured here at 3.7e-10 relative -- so this rig can check that both sides
+    # *honour* the writes, and cannot check them to the bit.
+    py_run, rs_run = _drive(py, 200), _drive(rs, 200)
+    amp = float(np.max(np.abs(py_run[0])))
+    assert np.max(np.abs(rs_run[0] - py_run[0])) <= 1.0e-9 * amp
+
+
+def test_the_doubled_coupling_moves_the_trajectory_on_both_sides():
+    """The negative control's mechanism, checked here rather than only in the physics suite: the
+    two writes above are not decoration, they change what the model computes."""
+    with shared_solver():
+        base = _drive(_build(physsynth_rs.BarrierString, physsynth_rs.DampedStiffString,
+                             **CASES["flat rail (m=79)"]), 200)[0]
+        bad = _build(physsynth_rs.BarrierString, physsynth_rs.DampedStiffString,
+                     **CASES["flat rail (m=79)"])
+        bad._G = bad._G * 2.0
+        bad._force_pref = bad._force_pref * 2.0
+        moved = _drive(bad, 200)[0]
+    assert not np.array_equal(base, moved), "writing `_G` and `_force_pref` changed nothing"
+
+
+def test_the_observables_and_the_delegated_reads_match():
+    """`contact_mask`, `state`, `displacement_at`, `n` and the two per-step arrays."""
+    with shared_solver():
+        py, rs = _pair(**dict(CASES["two frets (m=2)"], alpha=1.0))
+        x = np.linspace(0.0, 1.0, py.string.N + 1)
+        for bar in (py, rs):
+            bar.set_state(5.0e-3 * np.sin(np.pi * x))
+        for i in range(300):
+            py.step()
+            rs.step()
+            np.testing.assert_array_equal(rs.contact_mask(), py.contact_mask(), err_msg=f"{i}")
+            assert rs.n == py.n
+    np.testing.assert_array_equal(rs.penetration, py.penetration)
+    np.testing.assert_array_equal(rs.contact_force, py.contact_force)
+    np.testing.assert_array_equal(rs.state, py.state)
+    assert rs.displacement_at(40) == py.displacement_at(40)
+    assert rs.newton_iters == py.newton_iters
+
+
+def test_set_state_resets_the_step_count_but_not_the_last_force():
+    """The original's `set_state` refreshes the seed and zeroes `n`, and leaves `contact_force` and
+    `newton_iters` alone. Faithful rather than tidy: a fixture that reads a force before its first
+    step must read the same stale value on both sides."""
+    with shared_solver():
+        py, rs = _pair(**dict(CASES["two frets (m=2)"], alpha=1.0))
+        x = np.linspace(0.0, 1.0, py.string.N + 1)
+        for bar in (py, rs):
+            bar.set_state(5.0e-3 * np.sin(np.pi * x))
+            for _ in range(50):
+                bar.step()
+        stale_py, stale_rs = py.contact_force.copy(), rs.contact_force.copy()
+        for bar in (py, rs):
+            bar.set_state(5.0e-3 * np.sin(np.pi * x))
+    assert py.n == rs.n == 0
+    np.testing.assert_array_equal(rs.contact_force, stale_rs)
+    np.testing.assert_array_equal(stale_rs, stale_py)
+    np.testing.assert_array_equal(rs.penetration, py.penetration)
+
+
+def test_the_string_is_the_object_that_was_passed_in():
+    """`.string` hands back the caller's object, not a copy -- `web/serialize.py` reads
+    `bar.string.u` for every animation frame and `tests/` call `bar.string.set_state`."""
+    s = physsynth_rs.DampedStiffString(**_string_kw())
+    bar = physsynth_rs.BarrierString(string=s, barrier=BARRIER_HEIGHT_DEFAULT,
+                                     stiffness=BARRIER_K_DEFAULT)
+    assert bar.string is s
+    s.set_state(np.zeros(s.N + 1) + 0.0)
+    bar.step()
+    assert bar.string is s
+
+
+def test_a_stalled_solve_warns_with_the_original_text():
+    """Capped at one Newton iteration a deep contact cannot converge, so the warning fires.
+
+    The message is byte-for-byte the original's -- including the two `%` formats, which had to be
+    reproduced by hand because Rust's `{:e}` is not Python's `{:.2e}`. What cannot match is
+    `stacklevel`: the original raises it from inside `solve_contact_vector` with `stacklevel=2`,
+    naming `BarrierString.step`, and that frame does not exist once the model is Rust. The Rust
+    side names the Python code that called `step()` instead, which is the nearest true statement
+    about who to blame. Nothing in the repo asserts the attribution, which is exactly why the
+    choice is written down here rather than left to be discovered.
+    """
+    kw = dict(CASES["flat rail stiff"], alpha=1.0, newton_maxiter=1)
+    with shared_solver():
+        py, rs = _pair(**kw)
+        messages = {}
+        for name, bar in (("py", py), ("rs", rs)):
+            x = np.linspace(0.0, 1.0, bar.string.N + 1)
+            bar.set_state(5.0e-3 * np.sin(np.pi * x))
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                for _ in range(200):
+                    bar.step()
+            messages[name] = [str(w.message) for w in caught
+                              if "did not converge" in str(w.message)]
+    assert messages["py"], "the Python model stopped stalling -- the fixture no longer bites"
+    assert messages["rs"], "the Rust model stalled without warning"
+    assert messages["rs"][0].startswith("vector contact solve did not converge in 1 iterations")
+    assert messages["rs"][0].endswith(
+        "energy may drift. Raise newton_maxiter or oversample the contact."
+    )

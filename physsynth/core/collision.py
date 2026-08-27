@@ -498,12 +498,40 @@ class BarrierString:
         return self.penetration > 0.0
 
 
-# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 3 batch 2) ---------------------------
+# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 3 batches 2 and 6) -------------------
 #
 # This block rebinds the module's own names, so it reaches ``mallet.py`` too -- that module
 # re-exports the same five primitives and calls ``solve_contact`` -- without an edit inside it.
-# ``BarrierString`` above is untouched and stays Python this batch: it wraps a
-# ``DampedStiffString``, which has not ported.
+#
+# BATCH 6 ADDS ``BarrierString`` ITSELF, AND WITH IT PHASE 3 ENDS. Batch 2 left the class here on
+# the stated grounds that it wraps a ``DampedStiffString``, which had not ported. That host landed
+# one batch later and the sentence was never revisited; plan section 20.11 caught it. So this is
+# section 18.3's rule in its plainest form -- a statement justified by a dependency expires when
+# the dependency lands, and nobody is notified.
+#
+# THE SHELL PERFORMS A SECOND MATVEC, AND AT TWO CONTACT NODES THE STATE CANNOT SEE IT. The force
+# injection ``u[1:-1] += force_pref * (cols_mat @ f)`` is a dense BLAS matvec that no test compared
+# across the languages until the model itself ported. Measured 2026-08-27 over the parity file's
+# fixtures, 2,000 steps each: identical at one contact node (0 rows -- the sum is one product), and
+# at two nodes it DIFFERS in 1,291 of 158,000 rows while the trajectory stays bit-identical.
+#
+# That is a mechanism rather than a coincidence, which matters because an exact assertion resting
+# on a coincidence expires without warning. A TWO-term sum can only be reordered into a different
+# double if its two terms CANCEL, and where they cancel the correction is tiny: at every one of
+# those 1,291 rows it is at most 9.3e-13 of ``u``, so one of its ulps is worth about 1e-12 of one
+# of ``u``'s and cannot survive the addition. The control is the same code at 79 terms, where that
+# correlation is gone -- the matvec differs on 14,746 rows, the correction is an ordinary size
+# where it does (median 1.2e-4 of ``u``), and 7 differences reach the state over 2,000 steps, 30
+# over 6,000. So the exactness at two nodes is a claim about the LENGTH OF THE SUM.
+#
+# That is also why ``portable.py`` was NOT extended to cover this -- doing so would move a shipped
+# model's reference numbers (and the viewer's fret and jawari output) to buy exactness the
+# measurement says is already there where it is provable.
+#
+# ONE ARITHMETIC TRAP IN THE SHELL, and it is one line. ``force_pref = string.k ** 2 / string.rho``
+# is ``float.__pow__``, i.e. the C library's ``pow`` -- NOT ``k * k``, which is a different double
+# in 79 of 200,007 samples. ``bow.py`` writes ``self.k * self.k`` at the same spot, so the two
+# models' ports must spell their prefactor differently to stay faithful to their own originals.
 #
 # WHAT CHANGES, AND WHAT DOES NOT. The scalar solve contains no reduction at all and comes out
 # bit-identical; so does the vector solve on a SINGLE contact node, where the admittance ``G`` is
@@ -532,6 +560,9 @@ class BarrierString:
 # so the port reproduces it instead.
 #
 # Off by default. SciPy + NumPy are still the reference oracle.
+BarrierStringPy = BarrierString
+"""The pure-Python reference implementation, under a name the swap below never rebinds."""
+
 contact_potential_py = contact_potential
 contact_force_elastic_py = contact_force_elastic
 contact_stiffness_py = contact_stiffness
@@ -548,6 +579,7 @@ _USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false",
 if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
     import physsynth_rs as _rs
 
+    BarrierString = _rs.BarrierString  # type: ignore[assignment,misc]
     contact_potential = _rs.contact_potential  # type: ignore[assignment]
     contact_force_elastic = _rs.contact_force_elastic  # type: ignore[assignment]
     contact_stiffness = _rs.contact_stiffness  # type: ignore[assignment]

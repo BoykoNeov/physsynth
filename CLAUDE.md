@@ -21,14 +21,17 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    analysis, viewer backend *and* the test suite — in favour of **Rust**, gradually and model by
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
-   **PHASE 2 IS COMPLETE**; phases 0, 1, all five batches of 2 and five of 3 are built (plan
-   §9-§20): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all of
-   `operators`, `membrane`, `exciter`, `body`, `bore`, `reed`, **`mallet`**, **`string_stiff`**,
-   **`string_damped`**, **`string_nonlinear`** and **`bow`**, the *builder half* of
-   `operators2d`, all of `radiation` **except** its one Bessel helper, the **banded Cholesky** the
-   four theta-scheme strings share, and all of `collision` **except** `BarrierString` itself — the
-   contact primitives, both contact solves and the project's one **dense LU** — ported. `cargo test --workspace` runs the
-   native bars and the Cargo dependency allowlist; `pip install ./crates/physsynth-py` then
+   **PHASES 2 AND 3 ARE BOTH COMPLETE**; phases 0, 1, all five batches of 2 and all six of 3 are
+   built (plan §9-§23): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
+   of `operators`, `membrane`, `exciter`, `body`, `bore`, `reed`, **`mallet`**, **`string_stiff`**,
+   **`string_damped`**, **`string_nonlinear`**, **`bow`** and **all of `collision`** — the contact
+   primitives, both contact solves, the project's one **dense LU** and now `BarrierString` itself
+   — plus the *builder half* of `operators2d`, all of `radiation` **except** its one Bessel helper,
+   and the **banded Cholesky** the four theta-scheme strings share — ported. What is left of the
+   core is Group D: `beam` (Phase 4, the SuperLU de-risker), then `operators2d`'s remaining half,
+   `plate`, `connection` and `string_geometric` (Phase 5), then `airbox` and `analysis/`.
+   `cargo test --workspace` runs the native bars and the Cargo dependency allowlist;
+   `pip install ./crates/physsynth-py` then
    `PHYSSYNTH_RS=1 pytest` runs the **existing, unmodified** Python tests against the Rust code. The
    flag is one switch for the whole tree: with it set, five still-Python string/beam models run on
    Rust-built operators; every plate — supported, free, orthotropic, guitar-shaped — plus the von
@@ -44,7 +47,9 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    contact in Rust; and the **mallet itself is now Rust end to end**, model shell included, both
    the drumhead version and the standalone mass-vs-wall rig that holds its closed-form oracle; and
    the **bow is Rust too** — the project's first continuous nonlinear exciter, friction curve,
-   scalar root-find, bracketed fallback and all. Both
+   scalar root-find, bracketed fallback and all; and so is the **barrier string**, so the fret, the
+   sitar jawari and the tanpura thread are Rust end to end and the viewer draws three of its models
+   from a Rust one. Both
    implementations stay alive for now — deleting a Python model waits on its clients, not on its own
    phase (§1.2). Facts worth knowing before planning work: a file's risk group is the group of
    its hardest function, so a module can port in halves (§11.2.1); `mallet` needed `collision`, so
@@ -165,7 +170,8 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    introduced by *tooling* rather than by typing, so it is now asserted in `tests/test_ci_workflow.py`
    rather than remembered (§20.7); and **`bow` is not the phase's last model** — `BarrierString` was
    described in §16 as waiting on its host `DampedStiffString`, that host landed in §18, and nobody
-   revisited the sentence, so Phase 3 is not finished (§20.11).
+   revisited the sentence, so Phase 3 was not finished (§20.11). It is now: §23 ported the barrier
+   and closed the phase.
 
    A **fifteenth**, which is not a batch but a **red CI run on unchanged code**, and which retires
    the assumption every exact claim in the suite was written on: **NumPy does not call the platform
@@ -202,6 +208,40 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    so the exposure is per-function and per-CPU, not a blanket property — the whole exposed surface
    across ported modules is four powers, one `tan`, one `exp` and three `cos`/`sin`, of which the
    guitar outline's is the one where a last bit is not an ulp but a **live/dead node** (§22.6).
+
+   And a **sixteenth**, from `BarrierString` — the phase's true last model, and the one that closes
+   it: **whether bit-identity is available across a ported reduction is decided by how many terms
+   the reduction has, and at two terms it is provable rather than lucky.** The barrier's shell
+   injects its contact force through a dense BLAS matvec on the *update* path, which nothing had
+   compared across the languages while the shell was Python on both sides of every comparison. It
+   differs from a left-to-right row sum in **0 of 158,000** rows at one contact node (the sum is one
+   product), **2,232-3,719** at two, and **45,822** at seventy-nine — and yet the trajectory is
+   bit-identical at two nodes and not at seventy-nine. The first explanation written for that was a
+   magnitude argument ("the correction is a small fraction of the field, so its last bits fall off
+   the end") and it is **wrong**: at seventy-nine nodes the ratio is *smaller* and the difference
+   reaches the state anyway. The real mechanism is that two doubles sum the same in either order
+   **unless they cancel**, and a cancelled sum is tiny — so restricted to the rows where the matvec
+   actually differs, the correction is at most **9.3e-13** of the field at two nodes against a
+   median **1.2e-4** at seventy-nine, and one ulp of the former cannot survive the addition while
+   about one in 1/1.2e-4 of the latter does (predicting ~36 of 44,653; 30 observed). So the question
+   to ask before writing an exact assertion across a ported reduction is **"how long is it?"**, and
+   it costs no measurement (§23.2). Five corollaries. **`portable.py` was declined for the first
+   time, on evidence**: it would buy nothing where exactness is already structural and nothing is
+   *available* where a coarser divergence sits downstream, while changing a shipped model's numbers
+   and the viewer's output — the rule being that it is for a reduction whose order is the *only*
+   thing between two implementations (§23.3). **The sister model spells the same quantity
+   differently**, so "follow the model this one most resembles" would have been wrong: `collision.py`
+   writes `k ** 2` and `bow.py` writes `k * k` at the structurally identical spot, and those are
+   different doubles in 86 of 200,000 sample rates (§23.4). **§17.2's constant fold arrived inside
+   the test written to catch it** — the witness search passed in debug and found *nothing* in
+   release, so the test went green having asserted nothing; and in the same search, a predicate
+   tested on the sub-expression rather than the whole expression found a witness whose difference the
+   following division absorbed (§23.5). **Porting a class silently emptied an existing parity
+   section**: §16 measured the contact solve by pinning a module-level name, and a Rust model never
+   looks that name up — so with the flag set those tests compared Rust against Rust and passed, which
+   is the empty-guard and empty-CI-job shape reached through a third door (§23.6). And **a derive is
+   only as wide as the list it derives over** — the class swap guard had been one module short for
+   six batches, in the very half §17.6 claimed to be fixing (§23.7).
 
    And a **twelfth**, from the two theta-scheme strings, which is really the same finding twice and
    is about **SciPy rather than about Rust**: what blocked the first *model* out of the four-string

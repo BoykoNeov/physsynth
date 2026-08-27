@@ -229,7 +229,13 @@ def test_the_rust_swap_matches_the_environment():
         string_damped,
         string_nonlinear,
         bow,
+        collision,
     ):
+        # `collision` joined this tuple in Phase 3's last batch, and it was ABSENT before -- so for
+        # the whole of §16's batch and after, a `BarrierStringPy` alias could have been added with
+        # nothing noticing. That is §17.6's finding a second time, in the half of the guard §17.6's
+        # own text says it was applying the lesson TO. The derive is only as wide as the tuple it
+        # is derived over, which is the one thing about it that still has to be written by hand.
         for alias in dir(module):
             if not alias.endswith("Py") or alias.endswith("_py"):
                 continue
@@ -250,6 +256,7 @@ def test_the_rust_swap_matches_the_environment():
         ("physsynth.core.string_damped", "DampedStiffString"),
         ("physsynth.core.string_nonlinear", "TensionModulatedString"),
         ("physsynth.core.bow", "BowedString"),
+        ("physsynth.core.collision", "BarrierString"),
     }
     assert set(swapped_classes) == expected_classes, (
         f"the swapped classes are {sorted(swapped_classes)}, but this guard expects "
@@ -315,9 +322,10 @@ def test_the_rust_swap_matches_the_environment():
         # `tests/test_reed_stability.py` imports it by name and asserts its oddness and passivity
         # directly, and that file is in the flagged CI step.
         reed: {"bernoulli_flow"},
-        # `collision` is ported in full EXCEPT `BarrierString`, which is a class and waits on its
-        # host `DampedStiffString`. This entry was missing until the mallet's batch, and the
-        # reason is worth writing down rather than quietly fixing: three of the module's public
+        # `collision` is ported in full, `BarrierString` included since Phase 3's last batch --
+        # the class half of that is checked by identity above. This entry was missing until the
+        # mallet's batch, and the reason is worth writing down rather than quietly fixing: three
+        # of the module's public
         # names carry a LEADING UNDERSCORE while their aliases do not
         # (`_force_total_vec` <-> `force_total_vec_py`), so the derive below could not find them
         # and the whole module fell out of the table. A guard that silently covers nothing is the

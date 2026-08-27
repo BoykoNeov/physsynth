@@ -377,9 +377,16 @@ jobs:
       # `physsynth/core/collision.py` holds the contact primitives and BOTH contact solves: the
       # scalar one the mallet uses and the vector one the barrier string uses. `mallet.py`
       # re-exports the five primitives and calls the scalar solve, so this one swap swings two
-      # models. `BarrierString` and `MalletMembrane` themselves are still Python -- they wrap a
-      # `DampedStiffString` and a `Membrane`, and a model is not ported ahead of what it is built
-      # from (plan section 16).
+      # models. `BarrierString` and `MalletMembrane` themselves were still Python when this step
+      # was written -- they wrap a `DampedStiffString` and a `Membrane`, and a model is not ported
+      # ahead of what it is built from (plan section 16).
+      #
+      # BOTH OF THOSE SHELLS HAVE SINCE PORTED (the mallet in section 17, the barrier in section
+      # 23), so the four files below no longer exercise a Python model over a Rust solve -- they
+      # exercise a Rust model. The step is kept because its CLAIM is still worth making and still
+      # true; the sentence above is corrected rather than deleted because a step whose meaning
+      # changed under it is exactly what section 20.11 caught in the prose, and leaving the
+      # original wording would repeat that.
       #
       # The claim was two-sided in a different way from the banded one above. The SCALAR half
       # contains no reduction anywhere and is bit-identical, brentq bracket fallback included --
@@ -540,6 +547,60 @@ jobs:
             tests/test_bow_energy.py \
             tests/test_bow_modal.py \
             tests/test_bow_stability.py \
+            tests/test_damped_string.py \
+            tests/test_web_backend.py
+
+      # Phase 3 batch 6's success condition, and the ACTUAL END OF PHASE 3 -- the distributed
+      # barrier, model #8. The previous step called itself the end of the phase and was wrong:
+      # `collision.BarrierString` had been described in batch 2 as waiting on its host
+      # `DampedStiffString`, that host landed in batch 3, and the sentence was never revisited
+      # (plan section 20.11). This step is what finishes the phase.
+      #
+      # Almost nothing here is new machinery -- the contact primitives, the vector solve and the
+      # dense LU all landed in batch 2, the string in batch 3, the banded solve in batch 1. What is
+      # new is the SHELL: construction (broadcast the profile, pick the support, solve `m`
+      # admittance columns), the two penetration gathers, the rank-`m` force injection, and the
+      # barrier's two-time-averaged potential energy.
+      #
+      # THE ARITHMETIC, and it is one line. `force_pref = string.k ** 2 / string.rho` is
+      # `float.__pow__`, i.e. the C library's `pow` -- NOT `k * k`, which is a different double for
+      # a small fraction of sample rates. `bow.py` writes `self.k * self.k` at the same spot, so the
+      # two models' ports must spell their prefactor differently to stay faithful to their own
+      # originals. Both suites pin it, and both go and FIND a witness sample rate at runtime rather
+      # than hardcoding one, because which arguments `pow` rounds differently is a property of the
+      # runner (plan section 22.1) and a hardcoded witness would be a bar decided by the machine.
+      #
+      # THE SECOND MATVEC. Injecting the force is `u[1:-1] += force_pref * (cols_mat @ f)`, a dense
+      # BLAS matvec on the update path that nothing compared across the languages until the model
+      # itself ported. At two contact nodes it differs in 1,291 of 158,000 rows and the trajectory
+      # stays bit-identical -- because a TWO-term sum can only be reordered into a different double
+      # if its terms cancel, and a cancelled correction is 9.3e-13 of the field, far below its last
+      # bit. At 79 terms that correlation is gone and 7 differences in 2,000 steps reach the state.
+      # So the exactness at two nodes is a claim about the LENGTH OF THE SUM, and
+      # `tests/test_rust_parity_collision.py` asserts both halves.
+      #
+      # `test_web_backend.py` is here because `web/serialize.py` builds a `BarrierString` for THREE
+      # of its models -- the jawari bridge, the juari thread and the fret rail -- so the viewer is
+      # this port's largest client (plan section 1.1).
+      #
+      # The four barrier files overlap with batch 2's step above, and that is deliberate rather
+      # than an oversight: there they are a claim about the vector SOLVE with a Python shell over
+      # it, here they are a claim about the shell. The overlap costs about fifteen seconds and
+      # keeps each batch's success condition readable as the thing that batch claimed.
+      #
+      # `test_damped_string.py` is the third copy of that file in this job (batch 3's step and the
+      # bow's both run it) and is here for the reason the bow's step gives: it is the CONTROL. If
+      # this step goes red and that file is green in it, the failure is the barrier's shell; if
+      # they go red together, it is the string underneath and belongs to section 18.
+      - name: The distributed barrier and the viewer, unmodified, against Rust
+        env:
+          PHYSSYNTH_RS: "1"
+        run: |
+          pytest --durations=10 \
+            tests/test_collision_energy.py \
+            tests/test_collision_modal.py \
+            tests/test_collision_signature.py \
+            tests/test_jawari.py \
             tests/test_damped_string.py \
             tests/test_web_backend.py
 

@@ -666,6 +666,7 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<bore::PyBore>()?;
     m.add_class::<reed::PyReedBore>()?;
     m.add_class::<bow::PyBowedString>()?;
+    m.add_class::<collision::PyBarrierString>()?;
     m.add_class::<mallet::PyMalletMembrane>()?;
     m.add_class::<mallet::PyMalletWall>()?;
     m.add_class::<radiation::PyAirRadiation>()?;
