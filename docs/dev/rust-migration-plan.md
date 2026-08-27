@@ -328,6 +328,14 @@ before the string is trustworthy.
 > still empty, and Group B's banded Cholesky is ~150 lines of transcription that needs no library.
 > §4's "this group is nearly free" was right; its assumption that freedom would come from linking
 > LAPACK was not.
+>
+> **Second correction, 2026-08-27, from batch 3.** With the solver common, §15.9 expected the
+> anchors to stop being the obstacle. They did not: they bind on **evaluation order**, twice over,
+> and only one of the two orders was the solver's. The energy anchors compare `np.dot` reductions
+> and the trajectory anchors compare a sparse matvec whose accumulation order SciPy leaves
+> *descending*. Both were resolved the way the solver was — by moving all four models to one
+> spelling at once, this time on the Python side (`physsynth/core/portable.py`) — after which
+> `string_stiff` and `string_damped` ported normally. §18.
 
 **Phase 4 — `beam` (254 lines, one `splu`).** The Group D de-risker, chosen for exactly the reason
 it was chosen the first time. Proves the SuperLU link and the §4.1 manoeuvre on the smallest
@@ -2435,3 +2443,226 @@ membrane's compiled sparse matvec grows, the overhead being saved stops dominati
   transcription is.
 - **Check that a swap guard actually resolves the names it claims to.** §17.6. `collision`'s entry
   was absent for a batch because three public names start with an underscore, and nothing failed.
+
+---
+
+## 18. Phase 3, batch 3, as built (2026-08-27)
+
+`physsynth/core/string_stiff.py` and `physsynth/core/string_damped.py` — models #2 and #3, the
+first two **models** out of the four-string chain §15.2 found. The port itself is a transcription;
+what makes this batch worth reading is that **neither of its two obstacles was in Rust**, and both
+were removed by changing the *Python* side.
+
+### 18.1 The shape on disk
+
+```
+physsynth/core/portable.py                  the two spellings, and the reason (new module)
+physsynth/core/string_stiff.py              portable.dot + portable.canonical; swap block; import os
+physsynth/core/string_damped.py             the same, plus its own swap block
+physsynth/core/string_nonlinear.py          the same two edits; `_stretch` deliberately NOT changed
+physsynth/core/string_geometric.py          the same two edits, via `_wave_operator`
+crates/physsynth-core/src/pyfloat.rs        `scalar_pow`, moved out of `mallet` (new module)
+crates/physsynth-core/src/sparse.rs         `Csr::sub`
+crates/physsynth-core/src/string_stiff.rs   Params/kernels/StiffString
+crates/physsynth-core/src/string_damped.rs  Params/kernels/DampedStiffString/apply_ainv
+crates/physsynth-core/tests/string_stiff.rs native bars for both models (14 tests)
+crates/physsynth-py/src/string_stiff.rs     PyStiffString + the helpers both classes share
+crates/physsynth-py/src/string_damped.rs    PyDampedStiffString
+tests/test_rust_parity_strings.py           Rust vs NumPy/SciPy (148 tests)
+tests/test_stability.py                     the class half of the swap guard, now DERIVED (§18.7)
+.github/workflows/ci.yml                    the batch's flagged step, the parity file, both profiles
+```
+
+### 18.2 The finding: both obstacles were an evaluation *order*, and the fix is on the Python side
+
+§15.2 said the four theta-scheme strings are bound into one unit by three `array_equal` anchors
+across model *classes* — `sigma1 = 0`, `EA = 0`, `EA = T` — and that the solver therefore had to
+port before any model. With the solver common, §15.9 predicted the anchors would no longer be the
+obstacle. **They still were, twice, and neither time for the reason that had been anticipated.**
+
+| | Python spells it | Rust can spell | measured disagreement |
+|---|---|---|---|
+| the energy reduction | `np.dot` → BLAS `ddot` | a left-to-right `for` | **16,797 / 20,000** vectors at n = 99 |
+| the operator's column order | SciPy SMMP → **descending** | canonical `Csr` → ascending | **2,000 / 2,000** matvecs, every grid size |
+
+The first is §14.2's rule arriving where nobody had looked for it: all three anchors assert
+`a.energy() == b.energy()`, so a Rust model's energy has to equal a *Python* model's exactly, and a
+BLAS reduction cannot be reproduced portably.
+
+The second is worse and was on no list at all. `biharmonic_matrix` is `D2 @ D2`, and SciPy's SMMP
+kernel emits each row as a **stack** — `has_sorted_indices == False`, columns descending. A CSR
+matvec accumulates a row in *stored* order, so `L @ u` is a different sum in the two spellings.
+That is not a read-out: it builds the right-hand side of every timestep, so it is a different
+trajectory from step one.
+
+**Both were fixed by moving the Python side to the spelling both languages can express**, in a new
+module (`portable.py`) scoped to exactly the four models an anchor binds. That is the Phase 1
+manoeuvre for the third time and one level down again: `operators` was not a model and swung five;
+`banded` was not a model and swung four; this is neither a model nor a solver but an *order of
+evaluation*, and it swings the same four.
+
+Three things about the fix are worth stating precisely.
+
+* **It changes the reference implementation's numbers, unconditionally.** `banded`'s swap only
+  changed them under the flag. Flag-gating a *Python* model's arithmetic would be worse — it makes
+  the default path depend on an environment variable — so the edit is unconditional and in the
+  open. Measured: 156 string tests green on the default path, every physics bar unmoved.
+* **The reduction was transcribable and the banded solve was not**, which is the contrast that
+  makes §15.3 legible. `np.cumsum` is the one NumPy spelling that is sequential by construction —
+  measured equal to a naive Python loop in 3,300/3,300 samples at lengths 1 … 4,097 — so the Python
+  side stays compiled and costs ~2.5 µs against `np.dot`'s 0.6 µs. `np.sum`, `arr.sum()` and
+  `np.add.reduce` are all **pairwise** above a blocksize of 128 and would have been a third answer;
+  so would `math.fsum`, which is correctly-rounded and therefore a fourth.
+* **The read-out / update-path split is a decision, not a sweep.** `string_nonlinear._stretch` is
+  also an `np.dot`, and it is *inside* the tension solve's residual — changing it would move model
+  #9's trajectory rather than a reported number. It was left on `np.dot`, and the anchors do not
+  reach it (`EA = 0` returns before it). The question to ask at each `np.dot` is not "is this a
+  reduction" but **"does this reduction reach the next timestep?"**
+
+### 18.3 Phase 1's canonical-`Csr` decision: the justification expired, the conclusion got stronger
+
+§10 wrote down that the Rust `Csr` is canonical while SciPy's is not, and gave two reasons:
+reproducing SciPy's order would mean reimplementing a SciPy internal, and *"nothing downstream reads
+`.data` or `.indices`, the matrices are only ever used as operators."*
+
+**The second reason is now false** — a stiff string multiplies by `L` in its inner loop, and that
+matvec is exactly a read of `.data` in `.indices` order. But the first reason is *more* forceful
+than it was, not less: under the alternative the Rust side would carry SciPy 1.16's stack order as
+a constant, and a point release that reordered SMMP's output would silently move every string
+trajectory in the project. Sorting the Python side makes the operator independent of which kernel
+assembled it, which is what the migration is for. It also avoids giving `Csr` — the type every
+future model's matrices flow through — a "which SciPy path built me" mode in order to serve one
+model family.
+
+The generalisable form: **a decision justified by "nothing downstream depends on this" has to be
+re-examined the moment something downstream is ported, and the question is whether the original
+conclusion survives the loss of its stated reason.** Here it did, on a different argument.
+
+### 18.4 What this means for the plate family, recorded rather than fixed
+
+`plate.py` evaluates `self.B @ self.u_prev` every timestep with `B` built from `biharmonic_matrix`,
+and `beam.py` does the same with `K`. **Phase 5 hits this wall**, and it now has the answer in
+advance: the fix is `portable.canonical` at the operator's assignment, applied to the whole plate
+family at once for the same anchor-shaped reason. It is deliberately not done here — those models
+have shipped parity measurements built on their current behaviour (§14.2, §17.4), and changing a
+number nobody is comparing yet buys nothing.
+
+### 18.5 What is bit-identical, and the qualifier the claim cannot be stated without
+
+| | |
+|---|---|
+| parameters, `x`, `_L` (`data`, `indices`, `indptr`, `nnz`), 75 fixtures | **bit-identical** |
+| `set_state`, all `v0` spellings | **bit-identical**, `u^{-1}` included |
+| `StiffString` trajectory + `energy()`, 6 fixtures × 2,000 steps | **bit-identical** |
+| `DampedStiffString` trajectory + `energy()`, 6 fixtures × 2,000 steps | **bit-identical** |
+| the same, 20,000 steps | **bit-identical** |
+| `apply_Ainv`, random and unit right-hand sides | **bit-identical** |
+| a **Rust** stiff string vs a **Python** damped string at `sigma1 = 0`, 600 steps | **bit-identical**, energy included |
+| all of the above **without** a shared banded solver | 1.7e-14 of amplitude at 100 steps, 1.6e-13 at 20,000 |
+
+**Every exact row above requires both sides to use the same banded solver**, which is what
+`PHYSSYNTH_RS=1` arranges and what the parity file's `shared_solver()` arranges otherwise. Without
+it SciPy calls OpenBLAS's blocked `DTBSV` and Rust runs the reference `DTBSV` transcribed, and the
+two differ in the last bit from the first step. That gap is §15.3's; this batch neither introduced
+it nor can remove it — but the parity file *separates* the two causes by holding the solver fixed,
+which is what makes "bit-identical" a claim about the port rather than about OpenBLAS. A batch that
+could not make that separation would have had to report a tolerance and guess at the cause.
+
+### 18.6 A third agreement regime, and it is the boring one
+
+§16.5 asked how long a model stays comparable and answered "the dynamics decide". §17.5 sharpened
+it to "does the nonlinearity *recur*". This batch supplies the third case, and it is the one that
+needed no qualifier: **a linear model has no mechanism to amplify a difference at all.**
+
+| model | mechanism | 1e-13 reached at |
+|---|---|---|
+| `BarrierString` (§16.5) | chaotic re-contact, sustained | ~1,200 steps |
+| `MalletMembrane` (§17.5) | contact is a transient | never (exact at 50,000) |
+| `DampedStiffString` (here) | linear, no contact at all | never with a shared solver; **1.6e-13 at 20,000** without |
+
+The last row is the interesting one, because it is a divergence that *is* introduced (by the
+solver) and still does not run away: it grows like a random walk — 1.7e-14 → 4.8e-14 → 8.6e-14 →
+1.6e-13 across 100/500/2,000/20,000 steps, i.e. roughly as the square root of the step count. So
+Group A's target is not a "short run" bar here the way §14.4 and §15.4 had to make it. **What sets
+the window is not the size of the perturbation but whether the model amplifies it.**
+
+### 18.7 Three smaller things worth keeping
+
+* **The two cores are deliberately near-duplicates, and the duplication buys a detector.** Model #3
+  is model #2 plus one term, and one superset `Params` would have been ~150 lines less code. It
+  would also have made `test_damped_string.py`'s `sigma1 = 0` anchor **vacuous under the flag** —
+  the anchor compares two independent transcriptions, and two names for one implementation compare
+  equal for free. §17.6's lesson (a guard that silently covers nothing) says to pay the 150 lines.
+* **The class half of the swap guard is now derived, like the function half.** §17.6 found
+  `collision` missing from the *function* table and fixed that derive; the *class* half was a block
+  of hand-written `assert mallet.MalletWall is physsynth_rs.MalletWall` lines with exactly the same
+  hole, one forgotten paste wide. It now reads the swapped classes off the `<Name>Py` aliases the
+  modules actually define and checks that set against a written-down expectation — so adding a
+  model is a reviewed edit and forgetting one is a failure.
+* **`A` is never assembled.** Only its three diagonals are read, and `csr.diagonal(d)` picks by
+  column and is independent of stored order — so §18.2's sort provably cannot move the Cholesky
+  factor. Measured before the port was written, over 288 parameter combinations: zero of the three
+  bands changed. That check is the one assumption in the batch that would have invalidated it
+  silently, because a moved `ab` moves the factor and every number downstream of it.
+
+### 18.8 The success condition
+
+* `tests/test_stiff_string.py` and `tests/test_damped_string.py` unmodified against Rust —
+  including the `sigma1 = 0` anchor, now between two Rust classes.
+* `tests/test_tension_string.py` and `tests/test_geometric_energy.py` unmodified against Rust —
+  the anchors' **other end**, still Python, still `array_equal` to a Rust string. These are the
+  files that would have failed had `portable.py` not existed.
+* The clients: `test_bow_*`, `test_collision_energy.py`, `test_jawari.py`, `test_connection.py`,
+  `test_sympathetic.py`, `test_free_plate_connection.py` — every model that vibrates a
+  `DampedStiffString`, all still Python, now driving a Rust one.
+* `tests/test_beam_modal.py` as the **control**: `beam` builds its own operators and never touches
+  this family's, so a failure there is about `operators` rather than about this batch.
+* `tests/test_rust_parity_strings.py` — 148 tests, green **both with and without** the flag.
+
+### 18.9 What was measured
+
+| | |
+|---|---|
+| Native `cargo test --workspace` | **215 passed** (201 at the end of Phase 2) |
+| The same in **both** profiles, now enforced in CI | both green |
+| Cargo dependency allowlist | still **EMPTY** |
+| `tests/test_rust_parity_strings.py` | **148 passed**, flag set and unset |
+| All twelve parity files | **1,104 passed** flagged; 1,103 + 1 skipped unflagged |
+| The batch's CI step, flagged | **297 passed** |
+| The four string files on the **default** path, after the `portable.py` edits | **156 passed** |
+| `np.dot` vs a left-to-right sum, n = 99 | **16,797 / 20,000** differ |
+| `np.cumsum(a*b)[-1]` vs a naive loop, n = 1 … 4,097 | **0 / 3,300** differ |
+| `L @ u`, descending vs ascending indices | **2,000 / 2,000** differ |
+| `A.diagonal(0/1/2)` before vs after the sort, 288 configs | **0** differ |
+| Trajectory + energy, shared solver, 12 fixtures × 2,000 steps | **bit-identical** |
+| The same, 20,000 steps | **bit-identical** |
+| Trajectory without a shared solver, 100 / 500 / 2,000 / 20,000 steps | 1.7e-14 / 4.8e-14 / 8.6e-14 / 1.6e-13 of amplitude |
+| A whole `DampedStiffString` step, `N` = 16 / 64 / 256 / 1,024 / 4,096 | **19.8x / 10.1x / 4.1x / 1.8x / 1.2x** faster |
+| `energy()` alone, `N` = 64 / 1,024 | **15.6x / 2.7x** faster |
+
+The step numbers are §11.6's crossover again, unchanged in shape: what is being removed is per-step
+interpreter overhead, so the win is large where the grid is small and fades as SciPy's compiled
+sparse matvec and banded solve come to dominate. `energy()` slides the same way for the same
+reason — at `N` = 64 it is four Python-level calls around three tiny matvecs; at `N` = 1,024 it is
+three real matvecs.
+
+### 18.10 What the next batch inherits
+
+- **`string_nonlinear` is the natural next model**, and it is the last one in the chain that does
+  not need Group D. Its `_L` and its energy already use the portable spellings, so what remains is
+  the tension solve: a `brentq` on a residual that refactors the band at every candidate `dT`,
+  which is `reed`'s transcribed Brent (§13.3) meeting `banded`'s factor. **Its `_stretch` is on the
+  update path and stays on `np.dot`** (§18.2) — a port must reproduce *that* reduction rather than
+  route around it, which is the first time this migration has had to match a BLAS call head-on.
+  Measure whether it can before planning the batch.
+- **`bow` is still the phase's last model** and is now unblocked in the way §15.9 described: it
+  calls `string.apply_Ainv`, which is a Rust solve on a Rust string. Its safeguarded Newton
+  iteration count is compared by nothing in the repo — that has to be added, the way §13.3 compared
+  the reed's branch choices.
+- **Ask whether a reduction reaches the next timestep, not whether it is a reduction.** §18.2.
+- **Ask whether an operator is multiplied in a loop before trusting `Csr`'s canonical form.**
+  §18.3, and it is live at Phase 5 rather than hypothetical (§18.4).
+- **Re-examine a decision when its stated reason expires**, rather than either keeping it on
+  inertia or reversing it on the loss of the reason alone. §18.3.
+- **§4.1's SuperLU hypothesis is still untested.** Group D remains the only untouched solver class,
+  and `beam` keeps its de-risking job at Phase 4.

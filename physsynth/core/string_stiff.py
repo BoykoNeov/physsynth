@@ -38,6 +38,7 @@ Headless: NumPy + SciPy (banded Cholesky). No I/O, no plotting.
 
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 import numpy as np
@@ -46,6 +47,7 @@ from scipy import sparse
 
 from .banded import cho_solve_banded, cholesky_banded
 from .operators import biharmonic_matrix, second_difference_matrix
+from .portable import canonical, dot
 
 Boundary = Literal["supported"]
 
@@ -142,7 +144,11 @@ class StiffString:
         self._L = (self.c ** 2) * d2
         if self.kappa != 0.0:
             self._L = self._L - (self.kappa ** 2) * biharmonic_matrix(self.N, self.h)
-        self._L = self._L.tocsr()
+        # `canonical` (not merely `tocsr`): the biharmonic block arrives from SciPy's SMMP
+        # kernel with DESCENDING column indices, and a CSR matvec sums each row in stored
+        # order -- so `L @ u` differs from the sorted spelling in every random vector tried,
+        # on the update path. See `portable.py`; the four theta-scheme strings all do this.
+        self._L = canonical(self._L.tocsr())
 
         # A = (1 + sigma k) I - theta k^2 L  (pentadiagonal SPD, constant in time -> factor once).
         sk = self.sigma * self.k
@@ -228,7 +234,7 @@ class StiffString:
         un = self.u[1:-1]
         up = self.u_prev[1:-1]
         dt_u = (un - up) / self.k  # delta_t- u^n on the interior (boundary velocity is 0)
-        kinetic = 0.5 * self.h * float(np.dot(dt_u, dt_u))
+        kinetic = 0.5 * self.h * dot(dt_u, dt_u)
 
         p_nn = self._P(un, un)
         p_pp = self._P(up, up)
@@ -250,10 +256,44 @@ class StiffString:
         Uses the *same* matrix ``L`` as the update, so the energy identity is exact. ``-L`` is
         positive-definite, hence ``P(f,f) >= 0``.
         """
-        return -self.h * float(np.dot(self._L @ f, g))
+        return -self.h * dot(self._L @ f, g)
 
     def _apply_L(self, u_full: NDArray[np.float64]) -> NDArray[np.float64]:
         """``L u`` returned on the full grid (zeros at the clamped boundary nodes)."""
         out = np.zeros_like(u_full)
         out[1:-1] = self._L @ u_full[1:-1]
         return out
+
+
+# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 3) -----------------------------------
+#
+# `StiffStringPy` above is the reference implementation and stays the name every parity check
+# reaches for. Below it, `StiffString` is bound to whichever implementation this process is meant
+# to exercise.
+#
+# WHAT THIS SWAP INHERITED RATHER THAN SOLVED. Two evaluation orders had to move to the PYTHON side
+# before this model could port at all, and both are in `portable.py`: the energy reduction (BLAS
+# `ddot` is not a left-to-right sum) and the operator's column order (SciPy's SMMP kernel returns
+# the biharmonic block DESCENDING, and a CSR matvec sums each row in stored order -- measured to
+# differ in 2000 of 2000 random vectors, on the update path). Those two edits are unconditional and
+# apply to all four theta-scheme strings, because the suite chains the four together with
+# bit-identity anchors that only survive if every model in the chain does the same arithmetic in
+# the same order. This swap is the reason they exist; it is not where they live.
+#
+# WHAT IS BIT-IDENTICAL, AND THE QUALIFIER THAT MATTERS. Under the flag -- where both sides also
+# share the Rust banded solver -- the Rust and Python strings agree to the BIT in every observable
+# including `energy()`, over 2,000 steps, across every fixture tried. WITHOUT the flag they do not,
+# and the reason is not this port: SciPy's `cho_solve_banded` is OpenBLAS's blocked DTBSV and the
+# Rust side is the reference DTBSV transcribed (plan section 15.3), so the two solvers differ in
+# the last bit from the first step. Measured 2026-08-27, that gap grows like a random walk rather
+# than exponentially -- 1.7e-14 of amplitude at 100 steps, 1.6e-13 at 20,000 -- which is Group A's
+# target holding far longer than a nonlinear model's would.
+#
+# Off by default. The Python model is still the reference oracle for every model not yet ported.
+StiffStringPy = StiffString
+"""The pure-Python reference implementation, under a name the swap below never rebinds."""
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    from physsynth_rs import StiffString  # type: ignore[assignment]  # noqa: F811

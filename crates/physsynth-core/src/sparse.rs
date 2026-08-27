@@ -132,6 +132,69 @@ impl Csr {
         }
     }
 
+    /// `self - other`, over the union of the two sparsity patterns.
+    ///
+    /// SciPy's `csr - csr` computes `a - b` at every position either operand occupies, treating a
+    /// missing entry as `0.0`, and drops results that are exactly zero. Both are reproduced: the
+    /// arithmetic because `0.0 - b` is what a missing left entry contributes, the zero-dropping
+    /// because `nnz` is compared against SciPy's in the parity tests.
+    ///
+    /// SciPy picks between two kernels here — a canonical merge when both operands have sorted,
+    /// duplicate-free rows and a linked-list merge otherwise — and the two disagree on the *order*
+    /// of the output row, not on its contents. This one always produces canonical order, which is
+    /// the whole point: see `physsynth/core/portable.py` for why the Python side is sorted to meet
+    /// it rather than the other way round.
+    ///
+    /// # Panics
+    /// If the shapes disagree.
+    pub fn sub(&self, other: &Csr) -> Self {
+        assert_eq!(
+            (self.nrows, self.ncols),
+            (other.nrows, other.ncols),
+            "sub shape mismatch: ({}x{}) - ({}x{})",
+            self.nrows,
+            self.ncols,
+            other.nrows,
+            other.ncols
+        );
+        let mut rows: Vec<Vec<(usize, f64)>> = Vec::with_capacity(self.nrows);
+        for i in 0..self.nrows {
+            let (mut p, p_end) = (self.indptr[i], self.indptr[i + 1]);
+            let (mut q, q_end) = (other.indptr[i], other.indptr[i + 1]);
+            let mut row: Vec<(usize, f64)> = Vec::with_capacity((p_end - p) + (q_end - q));
+            while p < p_end || q < q_end {
+                let ja = if p < p_end {
+                    self.indices[p]
+                } else {
+                    usize::MAX
+                };
+                let jb = if q < q_end {
+                    other.indices[q]
+                } else {
+                    usize::MAX
+                };
+                match ja.cmp(&jb) {
+                    std::cmp::Ordering::Less => {
+                        row.push((ja, self.data[p]));
+                        p += 1;
+                    }
+                    std::cmp::Ordering::Greater => {
+                        row.push((jb, 0.0 - other.data[q]));
+                        q += 1;
+                    }
+                    std::cmp::Ordering::Equal => {
+                        row.push((ja, self.data[p] - other.data[q]));
+                        p += 1;
+                        q += 1;
+                    }
+                }
+            }
+            rows.push(row);
+        }
+        // `from_rows` drops the exact zeros, which is SciPy's kernel's behaviour too.
+        Self::from_rows(self.nrows, self.ncols, rows)
+    }
+
     /// The transpose, by counting sort — which lands each output row's columns in ascending order
     /// for free, so the result is canonical without a second pass.
     pub fn transpose(&self) -> Self {

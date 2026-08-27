@@ -44,16 +44,13 @@
 use crate::collision::{self, contact_potential, ContactError, ContactParams, PowPath};
 use crate::membrane;
 
-/// `x ** e` as CPython's `float.__pow__` spells it: the C library's `pow`, for any exponent.
+/// `x ** e` as CPython's `float.__pow__` spells it — re-exported from [`crate::pyfloat`].
 ///
-/// **The `#[inline(never)]` is the point of the function.** With the exponent visible as a literal
-/// LLVM rewrites `powf(x, 2.0)` into `x * x`, and per the module header those are different
-/// doubles in about one sample in 1,800 of the range this model works in. Keeping the call opaque
-/// keeps the exponent a runtime value and the call a real `pow`.
-#[inline(never)]
-pub fn scalar_pow(x: f64, e: f64) -> f64 {
-    PowPath::Scalar.pow(x, e)
-}
+/// Lived here first, and moved out when the theta-scheme strings needed the same guard: the
+/// `#[inline(never)]` that keeps a literal `2.0` from being folded into `x * x` is not a property
+/// of the mallet, it is a property of standing in for `float.__pow__` at all. The name stays
+/// because this module's own tests and header speak of it.
+pub use crate::pyfloat::scalar_pow;
 
 /// Why a mallet was refused at construction.
 ///

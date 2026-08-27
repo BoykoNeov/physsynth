@@ -95,6 +95,7 @@ from scipy.optimize import brentq
 
 from .banded import cho_solve_banded, cholesky_banded
 from .operators import biharmonic_matrix, second_difference_matrix
+from .portable import canonical, dot
 from .string_stiff import THETA_DEFAULT
 
 Boundary = Literal["supported"]
@@ -264,11 +265,14 @@ class TensionModulatedString:
         self.x: NDArray[np.float64] = np.linspace(0.0, self.L, self.N + 1)
 
         # Conservative linear operator L = c^2 delta_xx - kappa^2 delta_xxxx (model #3, verbatim).
-        self._D2 = second_difference_matrix(self.N, self.h)
+        self._D2 = canonical(second_difference_matrix(self.N, self.h).tocsr())
         self._L = (self.c**2) * self._D2
         if self.kappa != 0.0:
             self._L = self._L - (self.kappa**2) * biharmonic_matrix(self.N, self.h)
-        self._L = self._L.tocsr()
+        # Canonical index order on both operators: they are multiplied on the update path and
+        # a CSR matvec sums in stored order, which SciPy's SMMP kernel leaves DESCENDING for
+        # the biharmonic block. `portable.py` has the measurement and the reason.
+        self._L = canonical(self._L.tocsr())
 
         # A0 = (1 + sigma0 k) I - theta k^2 L - sigma1 k D2  (model #3's matrix, verbatim).
         # A(beta) = A0 - beta D2 gains the nonlinear tension; both SPD pentadiagonal.
@@ -510,7 +514,7 @@ class TensionModulatedString:
         un = self.u[1:-1]
         up = self.u_prev[1:-1]
         dt_u = (un - up) / self.k  # delta_t- u^n on the interior (boundary velocity is 0)
-        kinetic = 0.5 * self.h * float(np.dot(dt_u, dt_u))
+        kinetic = 0.5 * self.h * dot(dt_u, dt_u)
 
         p_nn = self._P(un, un)
         p_pp = self._P(up, up)
@@ -525,6 +529,11 @@ class TensionModulatedString:
         model-#8 "force *density*" trap -- it looks exactly like a mis-scaled ``EA`` and passes
         every qualitative test.
         """
+        # np.dot DELIBERATELY, not portable.dot: the stretch is on the UPDATE path (it is what
+        # `_solve_tension`'s residual brackets), so changing its summation order would move this
+        # model's trajectory rather than a reported number. The energy read-outs above are
+        # portable because an anchor compares them across classes; this one is compared to
+        # nothing. See `portable.py` for the read-out / update-path split.
         du = np.diff(u_full)
         return float(np.dot(du, du) / self.h)
 
@@ -535,7 +544,7 @@ class TensionModulatedString:
 
     def _P(self, f: NDArray[np.float64], g: NDArray[np.float64]) -> float:
         """Potential bilinear form ``P(f,g) = <-L f, g> = h * (-L f) . g`` (interior vectors)."""
-        return -self.h * float(np.dot(self._L @ f, g))
+        return -self.h * dot(self._L @ f, g)
 
     def _apply_L(self, u_full: NDArray[np.float64]) -> NDArray[np.float64]:
         """``L u`` returned on the full grid (zeros at the clamped boundary nodes)."""

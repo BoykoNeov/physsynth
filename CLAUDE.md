@@ -21,9 +21,10 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    analysis, viewer backend *and* the test suite — in favour of **Rust**, gradually and model by
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
-   **PHASE 2 IS COMPLETE**; phases 0, 1, all five batches of 2 and two of 3 are built (plan
-   §9-§17): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all of
-   `operators`, `membrane`, `exciter`, `body`, `bore`, `reed`, **`mallet`**, the *builder half* of
+   **PHASE 2 IS COMPLETE**; phases 0, 1, all five batches of 2 and three of 3 are built (plan
+   §9-§18): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all of
+   `operators`, `membrane`, `exciter`, `body`, `bore`, `reed`, **`mallet`**, **`string_stiff`** and
+   **`string_damped`**, the *builder half* of
    `operators2d`, all of `radiation` **except** its one Bessel helper, the **banded Cholesky** the
    four theta-scheme strings share, and all of `collision` **except** `BarrierString` itself — the
    contact primitives, both contact solves and the project's one **dense LU** — ported. `cargo test --workspace` runs the
@@ -105,6 +106,27 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    re-contact separates at ~1,200 (§17.5). And **a swap guard can silently cover nothing**:
    `collision` was missing from the guard table for a whole batch because three of its public names
    start with an underscore and the derive could not resolve them (§17.6).
+   And a **twelfth**, from the two theta-scheme strings, which is really the same finding twice and
+   is about **SciPy rather than about Rust**: what blocked the first *model* out of the four-string
+   chain was not the solver §15 had already dealt with but an **order of evaluation**, in two
+   places, and both were fixed by changing the **Python** side (§18.2). `np.dot` is BLAS `ddot` and
+   disagrees with a left-to-right sum in ~84% of this family's vectors, which matters because all
+   three chain anchors assert `a.energy() == b.energy()` across model classes; and
+   `biharmonic_matrix` comes back from SciPy's sparse-product kernel with **descending** column
+   indices, so `L @ u` — which builds every timestep's right-hand side — is a different sum from
+   the sorted spelling in **2,000 of 2,000** vectors. A new module, `physsynth/core/portable.py`,
+   holds both spellings and is applied to all four theta-scheme strings at once; it is the Phase 1
+   manoeuvre a third time, one level lower again (not a model, not a solver, an *order*). Three
+   corollaries. **A decision justified by "nothing downstream depends on this" expires the moment
+   something downstream ports** — §10 kept the Rust `Csr` canonical partly because nothing read
+   `.indices`, which is now false, and the decision survived only because its *other* reason got
+   stronger (§18.3); the plate family hits the same wall at Phase 5 and the answer is written down
+   in advance (§18.4). **Ask whether a reduction reaches the next timestep**, not whether it is a
+   reduction — `string_nonlinear`'s stretch integral is inside the tension solve and was
+   deliberately left on `np.dot` (§18.2). And §16.5's agreement-window question gets its third
+   answer: **a linear model does not amplify a difference at all**, so the introduced solver gap
+   grows like a random walk (1.7e-14 at 100 steps, 1.6e-13 at 20,000) rather than exponentially,
+   and what sets the window is amplification, not perturbation size (§18.6).
 4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
    never the reverse. Keeps the physics portable to C++/Rust later.
 5. **Unifying abstraction:** `exciter -> resonator (+- nonlinear coupling) -> body/radiation`.

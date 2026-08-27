@@ -50,6 +50,8 @@ mod ops2d;
 mod radiation;
 mod reed;
 mod shape;
+mod string_damped;
+mod string_stiff;
 
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1, PyUntypedArrayMethods};
 use physsynth_core::ops;
@@ -654,6 +656,8 @@ fn op_free_beam_stiffness(py: Python<'_>, N: i64, h: f64) -> PyResult<(CsrTriple
 #[pymodule]
 fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyIdealString>()?;
+    m.add_class::<string_stiff::PyStiffString>()?;
+    m.add_class::<string_damped::PyDampedStiffString>()?;
     m.add_class::<membrane::PyMembrane>()?;
     m.add_class::<body::PyModalBody>()?;
     m.add_class::<bore::PyBore>()?;

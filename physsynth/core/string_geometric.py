@@ -158,6 +158,7 @@ from scipy.sparse.linalg import splu
 
 from .banded import cho_solve_banded, cholesky_banded
 from .operators import biharmonic_matrix, second_difference_matrix
+from .portable import canonical, dot
 from .string_stiff import THETA_DEFAULT
 
 Boundary = Literal["supported"]
@@ -432,13 +433,15 @@ class GeometricString:
         self.x: NDArray[np.float64] = np.linspace(0.0, self.L, self.N + 1)
 
         n_int = self.N - 1
-        self._D2 = second_difference_matrix(self.N, self.h)
+        # Canonical index order: every operator below is multiplied on the update path and a
+        # CSR matvec sums in stored order (`portable.py`). D2 already arrives sorted.
+        self._D2 = canonical(second_difference_matrix(self.N, self.h).tocsr())
 
         # Per-field conservative linear operators. The detuning kappa_u != kappa_w lives HERE and
         # nowhere else -- c is shared, and the nonlinearity sees only r^2 = u_x^2 + w_x^2.
         self._L_u = self._wave_operator(self.kappa_u)
         self._L_w = self._wave_operator(self.kappa_w)
-        self._L_v = ((self.c_long**2) * self._D2).tocsr()  # no bending: longitudinal has none
+        self._L_v = canonical(((self.c_long**2) * self._D2).tocsr())  # no bending here
 
         # A_f = (1 + sigma0 k) I - theta k^2 L_f - sigma1 k D2 -- model #3's matrix, per field.
         # NOTE: unlike model #9, A does NOT move with the state: the nonlinearity is a force on the
@@ -491,7 +494,7 @@ class GeometricString:
         op = (self.c**2) * self._D2
         if kappa != 0.0:
             op = op - (kappa**2) * biharmonic_matrix(self.N, self.h)
-        return op.tocsr()
+        return canonical(op.tocsr())
 
     def _update_matrix(
         self, op: sparse.csr_matrix, sigma0: float, sigma1: float
@@ -1019,7 +1022,7 @@ TensionModulatedString.stretch`, this is a **field** -- which is the whole point
     def _kinetic(self, fn: NDArray[np.float64], fp: NDArray[np.float64]) -> float:
         """``(1/2) ||delta_t- f^n||^2`` on the interior (the clamped ends have zero velocity)."""
         dt_f = (fn[1:-1] - fp[1:-1]) / self.k
-        return 0.5 * self.h * float(np.dot(dt_f, dt_f))
+        return 0.5 * self.h * dot(dt_f, dt_f)
 
     def _potential(
         self, fn: NDArray[np.float64], fp: NDArray[np.float64], op: sparse.csr_matrix
@@ -1036,7 +1039,7 @@ TensionModulatedString.stretch`, this is a **field** -- which is the whole point
         self, op: sparse.csr_matrix, f: NDArray[np.float64], g: NDArray[np.float64]
     ) -> float:
         """Potential bilinear form ``P(f,g) = <-L f, g> = h (-L f) . g`` (interior vectors)."""
-        return -self.h * float(np.dot(op @ f, g))
+        return -self.h * dot(op @ f, g)
 
     def _apply_full(
         self, op: sparse.csr_matrix, f_full: NDArray[np.float64]

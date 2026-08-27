@@ -181,7 +181,9 @@ def test_the_rust_swap_matches_the_environment():
         operators,
         operators2d,
         reed,
+        string_damped,
         string_ideal,
+        string_stiff,
     )
 
     expected_rust = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
@@ -197,72 +199,71 @@ def test_the_rust_swap_matches_the_environment():
         banded,
         collision,
         mallet,
+        string_stiff,
+        string_damped,
     ):
         assert module._USE_RUST is expected_rust, (
             f"{module.__name__}'s reading of PHYSSYNTH_RS disagrees with this test's -- one of "
             "the two changed without the other"
         )
 
+    # The class half of the guard, DERIVED rather than listed -- section 17.6's finding applied to
+    # the half it was not applied to. `collision` fell out of the function table below for a whole
+    # batch because its names were spelled unexpectedly, and nothing failed; a block of
+    # hand-written `assert mallet.MalletWall is physsynth_rs.MalletWall` lines has exactly the same
+    # hole, one forgotten paste wide. So the set of swapped CLASSES is read off the `<Name>Py`
+    # aliases the modules actually define, and then checked against a written-down expectation --
+    # which is what keeps adding a port a reviewed edit rather than a silent one.
+    swapped_classes = {}
+    for module in (
+        string_ideal,
+        membrane,
+        body,
+        bore,
+        reed,
+        mallet,
+        string_stiff,
+        string_damped,
+    ):
+        for alias in dir(module):
+            if not alias.endswith("Py") or alias.endswith("_py"):
+                continue
+            name = alias[:-2]
+            reference = getattr(module, alias)
+            if isinstance(reference, type) and isinstance(getattr(module, name, None), type):
+                swapped_classes[(module.__name__, name)] = (module, name, reference)
+
+    expected_classes = {
+        ("physsynth.core.string_ideal", "IdealString"),
+        ("physsynth.core.membrane", "Membrane"),
+        ("physsynth.core.body", "ModalBody"),
+        ("physsynth.core.bore", "Bore"),
+        ("physsynth.core.reed", "ReedBore"),
+        ("physsynth.core.mallet", "MalletMembrane"),
+        ("physsynth.core.mallet", "MalletWall"),
+        ("physsynth.core.string_stiff", "StiffString"),
+        ("physsynth.core.string_damped", "DampedStiffString"),
+    }
+    assert set(swapped_classes) == expected_classes, (
+        f"the swapped classes are {sorted(swapped_classes)}, but this guard expects "
+        f"{sorted(expected_classes)} -- a model was ported (or unported) without the guard "
+        "being updated"
+    )
+
     if expected_rust:
         import physsynth_rs
 
-        assert string_ideal.IdealString is physsynth_rs.IdealString, (
-            "PHYSSYNTH_RS is set but `IdealString` is still the Python class: this run is NOT "
-            "exercising the Rust model, whatever it reports"
-        )
-        assert membrane.Membrane is physsynth_rs.Membrane, (
-            "PHYSSYNTH_RS is set but `Membrane` is still the Python class: this run is NOT "
-            "exercising the Rust model, whatever it reports"
-        )
-        assert body.ModalBody is physsynth_rs.ModalBody, (
-            "PHYSSYNTH_RS is set but `ModalBody` is still the Python class: this run is NOT "
-            "exercising the Rust model, whatever it reports"
-        )
-        assert bore.Bore is physsynth_rs.Bore, (
-            "PHYSSYNTH_RS is set but `Bore` is still the Python class: this run is NOT "
-            "exercising the Rust model, whatever it reports"
-        )
-        assert reed.ReedBore is physsynth_rs.ReedBore, (
-            "PHYSSYNTH_RS is set but `ReedBore` is still the Python class: this run is NOT "
-            "exercising the Rust model, whatever it reports"
-        )
-        assert mallet.MalletMembrane is physsynth_rs.MalletMembrane, (
-            "PHYSSYNTH_RS is set but `MalletMembrane` is still the Python class: this run is NOT "
-            "exercising the Rust model, whatever it reports"
-        )
-        assert mallet.MalletWall is physsynth_rs.MalletWall, (
-            "PHYSSYNTH_RS is set but `MalletWall` is still the Python class: this run is NOT "
-            "exercising the Rust model, whatever it reports"
-        )
+        for module, name, _reference in swapped_classes.values():
+            assert getattr(module, name) is getattr(physsynth_rs, name), (
+                f"PHYSSYNTH_RS is set but `{name}` is still the Python class: this run is NOT "
+                "exercising the Rust model, whatever it reports"
+            )
     else:
-        assert string_ideal.IdealString is string_ideal.IdealStringPy, (
-            "PHYSSYNTH_RS is unset but `IdealString` is not the Python class -- the default path "
-            "must stay the one the acceptance numbers came from"
-        )
-        assert membrane.Membrane is membrane.MembranePy, (
-            "PHYSSYNTH_RS is unset but `Membrane` is not the Python class -- the default path "
-            "must stay the one the acceptance numbers came from"
-        )
-        assert body.ModalBody is body.ModalBodyPy, (
-            "PHYSSYNTH_RS is unset but `ModalBody` is not the Python class -- the default "
-            "path must stay the one the acceptance numbers came from"
-        )
-        assert bore.Bore is bore.BorePy, (
-            "PHYSSYNTH_RS is unset but `Bore` is not the Python class -- the default path "
-            "must stay the one the acceptance numbers came from"
-        )
-        assert reed.ReedBore is reed.ReedBorePy, (
-            "PHYSSYNTH_RS is unset but `ReedBore` is not the Python class -- the default path "
-            "must stay the one the acceptance numbers came from"
-        )
-        assert mallet.MalletMembrane is mallet.MalletMembranePy, (
-            "PHYSSYNTH_RS is unset but `MalletMembrane` is not the Python class -- the default "
-            "path must stay the one the acceptance numbers came from"
-        )
-        assert mallet.MalletWall is mallet.MalletWallPy, (
-            "PHYSSYNTH_RS is unset but `MalletWall` is not the Python class -- the default path "
-            "must stay the one the acceptance numbers came from"
-        )
+        for module, name, reference in swapped_classes.values():
+            assert getattr(module, name) is reference, (
+                f"PHYSSYNTH_RS is unset but `{name}` is not the Python class -- the default path "
+                "must stay the one the acceptance numbers came from"
+            )
 
     # The operators (plan Phase 1) need the same guard for the same reason, and it has to be
     # spelled differently: they are functions, so there is no class identity to compare. The

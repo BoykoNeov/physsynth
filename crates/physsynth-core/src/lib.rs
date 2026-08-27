@@ -21,7 +21,12 @@
 //! Its second batch is `collision` — the contact primitives and both contact solves, plus `dense`,
 //! the project's one dense LU — which is where the migration's last remaining bit-identity claim
 //! is retired for a *model*: the vector solve's admittance matvec feeds back into the next Newton
-//! iterate. Its scalar half, which contains no reduction at all, still matches to the bit.
+//! iterate. Its scalar half, which contains no reduction at all, still matches to the bit. Its
+//! third batch brings the first two models out of the theta-scheme string chain, `string_stiff`
+//! and `string_damped` — and the thing that had to move before either could is not in this crate
+//! at all: two *evaluation orders* SciPy chose and no portable implementation reproduces, one in a
+//! reduction and one in a matrix's column order. Both were answered on the Python side, in
+//! `physsynth/core/portable.py`; `sparse::Csr::sub` and `pyfloat` are what this side needed.
 //!
 //! # The shape every resonator here shares
 //!
@@ -53,8 +58,11 @@ pub mod mallet;
 pub mod membrane;
 pub mod ops;
 pub mod ops2d;
+pub mod pyfloat;
 pub mod radiation;
 pub mod reed;
 pub mod root;
 pub mod sparse;
+pub mod string_damped;
 pub mod string_ideal;
+pub mod string_stiff;

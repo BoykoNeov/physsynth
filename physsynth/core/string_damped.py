@@ -44,6 +44,7 @@ Headless: NumPy + SciPy (banded Cholesky). No I/O, no plotting.
 
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 import numpy as np
@@ -52,6 +53,7 @@ from scipy import sparse
 
 from .banded import cho_solve_banded, cholesky_banded
 from .operators import biharmonic_matrix, second_difference_matrix
+from .portable import canonical, dot
 from .string_stiff import THETA_DEFAULT
 
 Boundary = Literal["supported"]
@@ -142,11 +144,14 @@ class DampedStiffString:
 
         # Conservative interior operator L = c^2 delta_xx - kappa^2 delta_xxxx, on u[1 .. N-1].
         # D2 is kept separately for the frequency-dependent loss term (sigma1 delta_t. delta_xx u).
-        self._D2 = second_difference_matrix(self.N, self.h)
+        self._D2 = canonical(second_difference_matrix(self.N, self.h).tocsr())
         self._L = (self.c ** 2) * self._D2
         if self.kappa != 0.0:
             self._L = self._L - (self.kappa ** 2) * biharmonic_matrix(self.N, self.h)
-        self._L = self._L.tocsr()
+        # Both operators canonical, because both are multiplied on the update path and a CSR
+        # matvec sums in stored-index order (`portable.py`). D2 already arrives sorted; the
+        # call makes that an invariant of this class rather than a property of SciPy's.
+        self._L = canonical(self._L.tocsr())
 
         # A = (1 + sigma0 k) I - theta k^2 L - sigma1 k D2  (pentadiagonal SPD; factor once).
         s0k = self.sigma0 * self.k
@@ -239,7 +244,7 @@ class DampedStiffString:
         un = self.u[1:-1]
         up = self.u_prev[1:-1]
         dt_u = (un - up) / self.k  # delta_t- u^n on the interior (boundary velocity is 0)
-        kinetic = 0.5 * self.h * float(np.dot(dt_u, dt_u))
+        kinetic = 0.5 * self.h * dot(dt_u, dt_u)
 
         p_nn = self._P(un, un)
         p_pp = self._P(up, up)
@@ -267,10 +272,39 @@ class DampedStiffString:
 
     def _P(self, f: NDArray[np.float64], g: NDArray[np.float64]) -> float:
         """Potential bilinear form ``P(f,g) = <-L f, g> = h * (-L f) . g`` (interior vectors)."""
-        return -self.h * float(np.dot(self._L @ f, g))
+        return -self.h * dot(self._L @ f, g)
 
     def _apply_L(self, u_full: NDArray[np.float64]) -> NDArray[np.float64]:
         """``L u`` returned on the full grid (zeros at the clamped boundary nodes)."""
         out = np.zeros_like(u_full)
         out[1:-1] = self._L @ u_full[1:-1]
         return out
+
+
+# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 3) -----------------------------------
+#
+# `DampedStiffStringPy` above is the reference implementation. Below it, `DampedStiffString` is
+# bound to whichever implementation this process is meant to exercise -- and this one swings more
+# than its own tests: `bow.py`, `collision.py`, `connection.py`, `beam.py`'s docstring family and
+# `web/serialize.py` all import THIS name, so flipping the switch puts a Rust string under the bow,
+# under the fret barrier, under the sitar bridge and under every sympathetic-string rig. Those
+# clients stay Python this batch, which is the ordinary shape of the migration (plan section 1.2).
+#
+# The two evaluation-order edits this port needed live in `portable.py` and are unconditional; the
+# stiff string's swap block explains them, and everything it says about what is bit-identical (and
+# about the banded solver's own last-bit gap when the flag is OFF) applies verbatim here.
+#
+# ONE THING IS THIS MODEL'S ALONE: `apply_Ainv`. Three coupled models precompute a driving-point
+# admittance through it, and a Rust string hands back the Rust banded solve -- so a bow or a
+# barrier built on a Rust string already differs in the last bit from the numbers its acceptance
+# run produced, exactly as plan section 15.9 warned. That is a change in the SOLVER, not in this
+# port, and it is why the anchors were moved to a common spelling before any model moved.
+#
+# Off by default. The Python model is still the reference oracle for every model not yet ported.
+DampedStiffStringPy = DampedStiffString
+"""The pure-Python reference implementation, under a name the swap below never rebinds."""
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    from physsynth_rs import DampedStiffString  # type: ignore[assignment]  # noqa: F811
