@@ -94,7 +94,13 @@ EXPONENT = {
     "contact_force_elastic": lambda a: a,
     "contact_stiffness": lambda a: a - 1.0,
 }
-ULP_BAR = 4             # off-ladder allowance; a transcription error is never four ulp
+# A *detection* threshold, not a measurement. The one machine that has been read separated
+# by 4.0e-16 relative, i.e. between 1.8 and 3.6 ulp depending on where the value sits in
+# its binade -- and that quantity has just been shown to vary with the CPU, so a bar set
+# near it would be decided by the runner in exactly the way section 21.6 warns about.
+# Nothing is bought by tightening it: a transcription error is an O(1) relative
+# difference, which is ~1e16 ulp. The printed count is what tracks drift.
+ULP_BAR = 64
 
 
 def _worst_ulp(a, b):

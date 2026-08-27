@@ -3511,6 +3511,22 @@ The human's call: **keep exactness where it is provable, bound it where it is no
   `portable.py`'s manoeuvre (§18.2) a fourth time**, and the first applied to a transcendental
   rather than to a summation order.
 
+That last change carries a second one that is easy to miss and is worth stating: `2j * np.tan(...)`
+produced an `np.complex128`, so the division that follows was **NumPy's** complex division;
+`2j * math.tan(...)` produces a Python `complex`, so it is now **CPython's Smith algorithm** --
+which is the one the Rust side transcribed, and which that test's own comment says the port was
+built against. So the spelling moved the read-out onto the intended division as well as onto the
+intended `tan`. Confirmed by type and by value: the method now returns
+`0.9868 + 38.4603j` at the fixture's failing frequency, which is the value **Rust** produced on the
+divergent runner.
+
+Also widened in the same pass: the off-ladder allowance started at 4 ulp, which is 1.1x-2.2x the
+one machine-dependent measurement that exists (4.0e-16 relative is 1.8-3.6 ulp depending on the
+binade). That is §21.6's defect rebuilt. It is now **64**, and nothing is lost by it -- there is no
+detection power between 4 and 64, because a transcription error is an O(1) relative difference and
+therefore ~1e16 ulp. The printed count, not the bar, is what tracks drift; the parity step gained
+`-rP` so those reports survive a green run instead of being captured and discarded.
+
 `alpha = 1.0` is the only exponent that puts all three primitives' exponents — `alpha - 1`,
 `alpha`, `alpha + 1` — on the ladder simultaneously, so it is where the contact leg's exact
 trajectory claims now live. It is still a one-sided contact: contact-set detection, the Newton

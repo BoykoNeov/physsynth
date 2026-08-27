@@ -564,7 +564,11 @@ jobs:
       - name: Rust vs Python parity
         run: |
           python -c "import physsynth_rs; print(physsynth_rs.__file__)"
-          pytest --durations=10 \
+          # `-rP` prints the captured stdout of tests that PASSED. Several parity tests
+          # measure a separation and report it rather than asserting a number that would
+          # be a claim about the machine (plan 22.1); without this the reports are
+          # discarded on exactly the runs where they are the news.
+          pytest --durations=10 -rP \
             tests/test_rust_parity.py \
             tests/test_rust_parity_operators.py \
             tests/test_rust_parity_ops2d.py \
