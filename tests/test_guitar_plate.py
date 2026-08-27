@@ -20,6 +20,8 @@ mask machinery the guitar uses. See ``docs/dev/guitar-plate-plan.md``.
 from __future__ import annotations
 
 import math
+import os
+from hashlib import sha256
 
 import numpy as np
 import pytest
@@ -74,6 +76,30 @@ def _guitar(N: int, length: float = 0.48, width: float = 0.37):
     X, Y = np.meshgrid(xs, ys)
     mask, dropped = prune_to_area_carrying(guitar_mask(X, Y, length, width))
     return mask, h, dropped
+
+
+def _fingerprint(mask, h):
+    """Everything needed to tell "the geometry differed" from "the eigensolve did".
+
+    Added 2026-08-27 because this file's degenerate-pair bar failed twice on the CI runner, with a
+    *different* wrong value each time, while the identical invocation on the development machine
+    was stable and correct and the two geometry paths hashed the same there. A bar that fails has
+    to say what it saw, or the next reading costs another run to obtain.
+    """
+    K, W, _ = free_plate_stiffness_from_mask(mask, h, NU)
+    Kc = K.tocsc()
+    mu = np.sort(eigsh(Kc, k=8, M=W.tocsc(), sigma=-1e-8, which="LM", return_eigenvectors=False))
+    sym = float(abs(Kc - Kc.T).max()) if Kc.nnz else 0.0
+    return "".join(
+        "\n    " + line
+        for line in (
+            f"live nodes {int(mask.sum())}, mask sha {sha256(mask.tobytes()).hexdigest()[:16]}",
+            f"K nnz {K.nnz}, max abs(K - K.T) {sym:.3e}, "
+            f"indices sha {sha256(Kc.indices.tobytes()).hexdigest()[:16]}",
+            f"mu[0:8] {np.array2string(mu, precision=6, max_line_width=200)}",
+            f"PHYSSYNTH_RS={os.environ.get('PHYSSYNTH_RS', 'unset')}",
+        )
+    )
 
 
 def _elastic_lambdas(mask, h, n_modes, a2, nu=NU, **grain):
@@ -389,7 +415,9 @@ def test_the_degenerate_pairs_split_and_the_exact_answer_is_zero():
         mask, h = _disk(N)
         lam = _elastic_lambdas(mask, h, 2, a2=1.0)
         split = 2.0 * abs(lam[1] - lam[0]) / (lam[1] + lam[0])
-        assert split < ceiling, f"N={N}: the m=2 pair splits by {100 * split:.3f}%"
+        assert split < ceiling, (
+            f"N={N}: the m=2 pair splits by {100 * split:.3f}%" + _fingerprint(mask, h)
+        )
 
 
 # =====================================================================================
