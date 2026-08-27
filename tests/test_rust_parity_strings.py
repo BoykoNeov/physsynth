@@ -127,12 +127,14 @@ def test_portable_dot_is_a_left_to_right_sum(n):
 
 
 def test_portable_dot_actually_differs_from_np_dot():
-    """The measurement that justifies the module existing, reported rather than required.
+    """The measurement that justifies the module existing — **reported, not asserted**.
 
     How *often* BLAS's reduction differs from a left-to-right one is a property of the kernel
-    OpenBLAS picked for this CPU (§14.2), so this reports the count and asserts only that the
-    module is not a no-op on at least one vector — if it ever were, the four models would still be
-    consistent with each other and nothing here would be wrong, but the module would be pointless.
+    OpenBLAS picked for this CPU (§14.2), and on a machine whose kernel happened to accumulate
+    left to right the count would be zero while nothing here was wrong — the four models would
+    still be consistent with each other, which is the property that matters. So this prints and
+    asserts nothing, deliberately. A test that *looks* like it asserts and does not is §17.2's
+    failure mode, so the docstring says so rather than leaving the reader to check the body.
     """
     rng = np.random.default_rng(20260827)
     differ = sum(
@@ -176,7 +178,12 @@ def test_the_unsorted_operator_would_have_been_a_different_matvec():
         not np.array_equal(py._L @ v, desc @ v)
         for v in (rng.standard_normal(py.N - 1) * 1e-3 for _ in range(200))
     )
-    assert differ > 0, "the index order must matter, or §18 was solving nothing"
+    # REPORTED, not asserted, for the reason above it is tempting to assert: a non-zero count
+    # here is a claim about SciPy's `csr_matvec` honouring stored index order and about `@` not
+    # sorting on the way in. Both hold for SciPy 1.16 and neither is promised, so requiring them
+    # would turn a SciPy upgrade that made this edit unnecessary into a red gate for a non-bug —
+    # which is §18.3's own argument pointed at this file. The port does not depend on the count:
+    # `canonical` makes the order well-defined whatever the kernel does with it.
     print(f"L @ u differs between ascending and descending order in {differ} of 200 vectors")
 
 
@@ -556,10 +563,12 @@ def test_the_state_arrays_are_writable_in_place():
     assert rs.u[7] == before[7] + 1e-4, "an in-place write did not reach the model"
     rs.u[1:-1] = rs.u[1:-1] + 1e-5
     assert rs.u[7] == before[7] + 1e-4 + 1e-5
-    # And the object identity a snapshot depends on: `u_prev` after a step IS the old `u`.
+    # And the object identity a snapshot depends on: `u_prev` after a step IS the old `u` — the
+    # same object, not a copy of it, which is what lets a caller hold a reference across a step
+    # and still have a valid snapshot of the level it took (§9.3).
     held = rs.u
     rs.step()
-    assert rs.u_prev is not None and np.array_equal(rs.u_prev, held)
+    assert rs.u_prev is held
 
 
 def test_state_and_displacement_at_match():

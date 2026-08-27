@@ -55,8 +55,9 @@ the spelling both languages can express and the one SciPy itself calls canonical
 **This changes the reference implementation's numbers, unconditionally** -- unlike
 :mod:`.banded`, whose swap only changes them under the flag. That is a deliberate choice: gating a
 Python model's arithmetic on an environment variable would be worse than a last-bit change made
-once, in the open. Measured 2026-08-27, every string physics bar is unmoved (lossless drift stays
-at ~1e-12 against a 1e-10 acceptance bar) and all three anchors stay exact.
+once, in the open. Measured 2026-08-27 on this machine, every string physics bar is unmoved: the
+worst lossless drift over one second at 44.1 kHz is 9.4e-12 for the Python string and 9.6e-12 for
+the Rust one, against the 1e-10 acceptance bar. All three anchors stay exact.
 
 **Scope is four models and nothing else.** :mod:`.plate`, :mod:`.beam`, the free-plate family and
 :mod:`.membrane` keep ``np.dot`` and keep SciPy's index order, because no anchor binds them to
@@ -65,7 +66,8 @@ anything and each has a shipped parity measurement built on their current behavi
 :func:`canonical` when it ports -- ``plate.py`` multiplies by a ``biharmonic_matrix``-derived
 operator every step -- but that is Phase 5's edit to make, with this measurement already in hand.
 
-Headless: NumPy + SciPy. No I/O, no plotting.
+Headless: NumPy. (:func:`canonical` acts on a SciPy matrix but does not import one.)
+No I/O, no plotting.
 """
 
 from __future__ import annotations

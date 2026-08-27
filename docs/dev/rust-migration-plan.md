@@ -2551,7 +2551,7 @@ number nobody is comparing yet buys nothing.
 
 | | |
 |---|---|
-| parameters, `x`, `_L` (`data`, `indices`, `indptr`, `nnz`), 75 fixtures | **bit-identical** |
+| parameters, `x`, `_L` (`data`, `indices`, `indptr`, `nnz`), 70 fixtures | **bit-identical** |
 | `set_state`, all `v0` spellings | **bit-identical**, `u^{-1}` included |
 | `StiffString` trajectory + `energy()`, 6 fixtures × 2,000 steps | **bit-identical** |
 | `DampedStiffString` trajectory + `energy()`, 6 fixtures × 2,000 steps | **bit-identical** |
@@ -2617,6 +2617,14 @@ the window is not the size of the perturbation but whether the model amplifies i
   `DampedStiffString`, all still Python, now driving a Rust one.
 * `tests/test_beam_modal.py` as the **control**: `beam` builds its own operators and never touches
   this family's, so a failure there is about `operators` rather than about this batch.
+* And the eight files already in §15's flagged step that this batch's own step does not repeat —
+  `test_geometric_{phantom,polarization,rotating_wave,whirl}.py`, `test_bow_modal.py`,
+  `test_collision_{modal,signature}.py`, `test_beam_stability.py`. They are not redundant with the
+  default-path run: their flagged configuration *changed* under this batch (Rust banded solver plus
+  a **sorted** `_L`, where before it was Rust banded plus a descending one), and they are the
+  tolerance-tight dynamical bars — the Mathieu tongue, the phantom-partial ladder, the Helmholtz
+  slip pattern. Run flagged in the new configuration: 89 passed. **A batch that changes numbers has
+  to re-run every step whose configuration moved, not only the step it added.**
 * `tests/test_rust_parity_strings.py` — 148 tests, green **both with and without** the flag.
 
 ### 18.9 What was measured
@@ -2629,12 +2637,14 @@ the window is not the size of the perturbation but whether the model amplifies i
 | `tests/test_rust_parity_strings.py` | **148 passed**, flag set and unset |
 | All twelve parity files | **1,104 passed** flagged; 1,103 + 1 skipped unflagged |
 | The batch's CI step, flagged | **297 passed** |
+| Batch 1's step's other eight files, flagged in the **new** configuration | **89 passed** |
 | The four string files on the **default** path, after the `portable.py` edits | **156 passed** |
 | `np.dot` vs a left-to-right sum, n = 99 | **16,797 / 20,000** differ |
 | `np.cumsum(a*b)[-1]` vs a naive loop, n = 1 … 4,097 | **0 / 3,300** differ |
 | `L @ u`, descending vs ascending indices | **2,000 / 2,000** differ |
 | `A.diagonal(0/1/2)` before vs after the sort, 288 configs | **0** differ |
 | Trajectory + energy, shared solver, 12 fixtures × 2,000 steps | **bit-identical** |
+| Worst lossless drift over 1 s at 44.1 kHz, Python / Rust | 9.4e-12 / 9.6e-12 (bar: 1e-10) |
 | The same, 20,000 steps | **bit-identical** |
 | Trajectory without a shared solver, 100 / 500 / 2,000 / 20,000 steps | 1.7e-14 / 4.8e-14 / 8.6e-14 / 1.6e-13 of amplitude |
 | A whole `DampedStiffString` step, `N` = 16 / 64 / 256 / 1,024 / 4,096 | **19.8x / 10.1x / 4.1x / 1.8x / 1.2x** faster |
