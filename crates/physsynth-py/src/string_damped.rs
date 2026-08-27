@@ -61,6 +61,46 @@ impl PyDampedStiffString {
         state_slice(&ro, name)?;
         Ok(arr.unbind())
     }
+
+    /// The validated parameter block — what a model built on this string derives from.
+    pub(crate) fn params(&self) -> &core::Params {
+        &self.p
+    }
+
+    /// `u[i]` — one node of the current field.
+    pub(crate) fn u_at(&self, py: Python<'_>, i: usize) -> PyResult<f64> {
+        let bound = self.u.bind(py);
+        let ro = bound.readonly();
+        Ok(state_slice(&ro, "u")?[i])
+    }
+
+    /// `u_prev[i]` — one node of the previous field.
+    ///
+    /// Only meaningful *before* `step()`, which rebinds `u_prev` to what `u` was. The bow reads it
+    /// on its first line for exactly that reason.
+    pub(crate) fn u_prev_at(&self, py: Python<'_>, i: usize) -> PyResult<f64> {
+        let bound = self.u_prev.bind(py);
+        let ro = bound.readonly();
+        Ok(state_slice(&ro, "u_prev")?[i])
+    }
+
+    /// Run `f` over the live `u` buffer, in place.
+    ///
+    /// In place, not a rebind: `bow` applies its rank-1 force correction through this, and a caller
+    /// holding `.u` from before the step must see it — the property `connection.py` already
+    /// depends on for the bridge force.
+    pub(crate) fn with_u_mut<R>(
+        &self,
+        py: Python<'_>,
+        f: impl FnOnce(&mut [f64]) -> R,
+    ) -> PyResult<R> {
+        let bound = self.u.bind(py);
+        let mut rw = bound.readwrite();
+        let s = rw
+            .as_slice_mut()
+            .map_err(|_| PyValueError::new_err("u must be a contiguous 1-D float64 array."))?;
+        Ok(f(s))
+    }
 }
 
 #[pymethods]
@@ -234,7 +274,7 @@ impl PyDampedStiffString {
 
     /// Current displacement field (a copy, safe to mutate/store for plotting).
     #[getter]
-    fn state(&self, py: Python<'_>) -> PyResult<Py<PyArray1<f64>>> {
+    pub(crate) fn state(&self, py: Python<'_>) -> PyResult<Py<PyArray1<f64>>> {
         let bound = self.u.bind(py);
         let ro = bound.readonly();
         Ok(PyArray1::from_slice(py, state_slice(&ro, "u")?).unbind())
@@ -263,7 +303,7 @@ impl PyDampedStiffString {
     // -- time stepping ---------------------------------------------------------------------
 
     /// Advance one timestep via the banded back-substitution, rolling the history.
-    fn step(&mut self, py: Python<'_>) -> PyResult<()> {
+    pub(crate) fn step(&mut self, py: Python<'_>) -> PyResult<()> {
         let mut next = vec![0.0; self.p.nodes()];
         {
             let u_bound = self.u.bind(py);
@@ -285,7 +325,7 @@ impl PyDampedStiffString {
     // -- diagnostics -----------------------------------------------------------------------
 
     /// Discrete energy `E^n` (Joules) — model #2's form, unchanged.
-    fn energy(&self, py: Python<'_>) -> PyResult<f64> {
+    pub(crate) fn energy(&self, py: Python<'_>) -> PyResult<f64> {
         let u_bound = self.u.bind(py);
         let up_bound = self.u_prev.bind(py);
         let u_ro = u_bound.readonly();
@@ -298,7 +338,7 @@ impl PyDampedStiffString {
     }
 
     /// Displacement at grid node `index` — a pickup for spectral analysis.
-    fn displacement_at(&self, py: Python<'_>, index: i64) -> PyResult<f64> {
+    pub(crate) fn displacement_at(&self, py: Python<'_>, index: i64) -> PyResult<f64> {
         let bound = self.u.bind(py);
         let ro = bound.readonly();
         let s = state_slice(&ro, "u")?;

@@ -174,6 +174,7 @@ def test_the_rust_swap_matches_the_environment():
         banded,
         body,
         bore,
+        bow,
         collision,
         exciter,
         mallet,
@@ -202,6 +203,7 @@ def test_the_rust_swap_matches_the_environment():
         mallet,
         string_stiff,
         string_damped,
+        bow,
     ):
         assert module._USE_RUST is expected_rust, (
             f"{module.__name__}'s reading of PHYSSYNTH_RS disagrees with this test's -- one of "
@@ -226,6 +228,7 @@ def test_the_rust_swap_matches_the_environment():
         string_stiff,
         string_damped,
         string_nonlinear,
+        bow,
     ):
         for alias in dir(module):
             if not alias.endswith("Py") or alias.endswith("_py"):
@@ -246,6 +249,7 @@ def test_the_rust_swap_matches_the_environment():
         ("physsynth.core.string_stiff", "StiffString"),
         ("physsynth.core.string_damped", "DampedStiffString"),
         ("physsynth.core.string_nonlinear", "TensionModulatedString"),
+        ("physsynth.core.bow", "BowedString"),
     }
     assert set(swapped_classes) == expected_classes, (
         f"the swapped classes are {sorted(swapped_classes)}, but this guard expects "
@@ -320,6 +324,10 @@ def test_the_rust_swap_matches_the_environment():
         # same shape as the empty parity job section 16.8 found, reached through a third door --
         # so the lookup now tries the underscored spelling too, which keeps the set DERIVED rather
         # than listed.
+        # `bow` is ported in full. Both module-level functions are swapped because
+        # `tests/test_bow_stability.py` imports them BY NAME and asserts the friction curve's
+        # oddness, peak and derivative directly -- the same reason `reed.bernoulli_flow` is here.
+        bow: {"friction_smooth", "friction_smooth_deriv"},
         collision: {
             "contact_potential",
             "contact_force_elastic",
@@ -420,6 +428,18 @@ def test_the_rust_swap_matches_the_environment():
                 f"`{client.__name__}` captured a different `ModalBody` than `body` now "
                 "exposes -- the swap landed after that module was imported"
             )
+
+        # The string's version, and the one this batch added. `bow.py` does `from .string_damped
+        # import DampedStiffString` at module scope, so a swap that landed after it would leave the
+        # bow drawing across a PYTHON string while this run reported Rust. Unlike the four
+        # `cho_solve_banded` captures above, this one is caught for free at construction -- the
+        # Rust `BowedString` raises `TypeError` on a Python string rather than falling back -- so
+        # the assertion is here to say WHICH of the two broke, not to be the only thing that
+        # notices.
+        assert bow.DampedStiffString is string_damped.DampedStiffString, (
+            "`bow` captured a different `DampedStiffString` than `string_damped` now exposes -- "
+            "the swap landed after that module was imported"
+        )
 
         # The bore's version. `reed.py` does `from .bore import Bore` at module scope, so a swap
         # that landed after it would leave the clarinet blowing a PYTHON air column while this run

@@ -336,6 +336,13 @@ before the string is trustworthy.
 > *descending*. Both were resolved the way the solver was — by moving all four models to one
 > spelling at once, this time on the Python side (`physsynth/core/portable.py`) — after which
 > `string_stiff` and `string_damped` ported normally. §18.
+>
+> **Third correction, 2026-08-27, from batch 5.** "then `bow`" is right about the bow and wrong
+> about the phase: `bow` ported last of the models §16 could see, but `collision.BarrierString`
+> was described there as waiting on its host `DampedStiffString`, that host landed in §18, and the
+> sentence was never revisited. So **`BarrierString` is the phase's last model**, and Phase 3 is not
+> finished when the bow is. §20.11 — the general shape being that a statement justified by a
+> dependency expires when the dependency lands, and nobody is notified (§18.3).
 
 **Phase 4 — `beam` (254 lines, one `splu`).** The Group D de-risker, chosen for exactly the reason
 it was chosen the first time. Proves the SuperLU link and the §4.1 manoeuvre on the smallest
@@ -2996,5 +3003,343 @@ algorithm rather than of the grid.
   can be blind to an error the telemetry shows immediately.
 - **Ask where the fixture sits relative to the model's own amplification threshold.** §19.5. It is
   the third form of §16.4's fixture question and the first one that is about *amplitude*.
+- **§4.1's SuperLU hypothesis is still untested.** Group D remains the only untouched solver class,
+  and `beam` keeps its de-risking job at Phase 4.
+
+---
+
+## 20. Phase 3, batch 5, as built (2026-08-27)
+
+`physsynth/core/bow.py` — the bowed string, the project's first **continuous nonlinear exciter** and
+the model §19.11 called the phase's last. Almost everything hard about it was ported before this
+batch: the banded solve in §15, the string it draws across in §18, the transcribed Brent in §13.3,
+and the scan-and-bracket idiom in §16. What is left is a shell, one line of arithmetic, and the
+question §19.11 asked and could not answer from where it stood.
+
+Three things make the batch worth reading. The one line of arithmetic is a **third kind** of
+two-spelling hazard, after §16.2's ufunc ladder and §17.2's compiler fold. §19.11's question — does a
+last bit reach the Newton iteration count and the fallback branch — was **measured rather than
+assumed**, and the answer is the opposite of the tension string's. And §16.5's agreement-window
+question gets a fifth answer that is the first one where the gap **does not grow at all**, for a
+reason that is about the physics rather than about the port.
+
+### 20.1 The shape on disk
+
+```
+physsynth/core/bow.py                     module note; the two _py aliases; swap block
+crates/physsynth-core/src/bow.rs          Params/State/friction/residual+scan_residual/solve/apply/BowedString
+crates/physsynth-core/src/collision.rs    `linspace` made `pub` — the two models share one scan grid
+crates/physsynth-core/src/lib.rs          the module, and the batch's line in the header
+crates/physsynth-core/tests/bow.rs        native bars (11 tests), including the spelling pin
+crates/physsynth-py/src/bow.rs            PyBowedString — the refusal, the getters, `step_reporting`
+crates/physsynth-py/src/string_damped.rs  four crate-internal accessors the bow needs
+crates/physsynth-py/src/lib.rs            registration
+tests/test_rust_parity_bow.py             Rust vs NumPy/SciPy (34 tests)
+tests/test_stability.py                   the model and its two functions added to the swap guard
+tests/test_ci_workflow.py                 NEW — §19.7's bug, asserted rather than remembered (§20.7)
+.github/workflows/ci.yml                  the batch's flagged step, the parity file — and §19.7 again
+```
+
+### 20.2 The finding: a *hand hoist* is the third kind of two-spelling hazard
+
+`physsynth/core/bow.py` evaluates the friction residual in two places. They look like the same
+expression and are not:
+
+```python
+# _residual, which Newton and brentq both call
+v_rel - v_free + self._g * self._friction(v_rel)
+#   ... where _friction is  force * sqrt(2a) * v * exp(-a v^2 + 1/2)
+#   so the assembled shape is:   (v - v_free) + g * (((force*sqrt(2a)) * v) * exp(...))
+
+# _bracketed_root, which scans for sign changes
+vs - v_free + g * (force * math.sqrt(2.0 * a)) * vs * np.exp(-a * vs * vs + 0.5)
+#   so the assembled shape is:   (v - v_free) + (((g * (force*sqrt(2a))) * v) * exp(...))
+```
+
+The second hoists `g * (force * sqrt(2a))` into a single Python float so NumPy can apply one scalar
+to the whole 512-point scan array, instead of multiplying by `g` after the array product. Floating-
+point multiplication is not associative, so these are **different doubles**. Measured 2026-08-27 at
+the canonical rig's real `g` (0.318), over 20,000 samples per fixture: they disagree in **4,158** of
+them at the flagship `force = 4, a = 120`, in 5,372 at the default `force = 1`, and in 568 at the
+weak `force = 0.02`. The spread is the point — the fraction is set by how large `g * force * sqrt(2a)`
+is next to `v - v_free`, so it is a property of where the bow is being played and not a fixed number.
+(An earlier draft of this section quoted 306, from a scratch script that had hardcoded `g = 1e-3`
+rather than reading it off the model. Recorded rather than quietly corrected: a measurement taken at
+a parameter the model never uses is the same error as a fixture that does not exercise the solver
+(§16.4), reached from the measuring side.)
+
+This is the third distinct way this migration has found one expression to be two computations, and
+the three have nothing in common except the consequence:
+
+| | what makes the two spellings | who introduced it |
+|---|---|---|
+| §16.2 | array vs scalar dispatch — NumPy's power *ufunc loop* shortcuts `-1, 0, 0.5, 1, 2` | NumPy |
+| §17.2 | a literal exponent — LLVM folds `powf(x, 2.0)` into `x * x` | the compiler |
+| §20.2 | a **hoist**, written by hand for the array path | the author of `bow.py` |
+
+The first two are a library's or a compiler's business, and the port's job is to know they exist.
+The third is *in the source*, visible, and reads like a duplicate that wants tidying. Which is
+exactly why it needs a pin: nothing about the physics changes if the two are merged, and no bar in
+this repo moves. What changes is **which brackets exist**. The scan's only purpose is
+`rs[:-1] * rs[1:] < 0.0`, so a value that moves by a last bit across zero is one `brentq` call that
+does not happen — and at a slip event, where the stick root has just vanished, the surviving root is
+the branch the string takes. So the port carries `residual` and `scan_residual` as two functions with
+a comment saying they must not be merged, and both suites pin it:
+`crates/physsynth-core/tests/bow.rs::the_two_residual_spellings_are_not_the_same_double` and the
+Python file's counterpart. Unlike §17.2's pin this one needs no `#[inline(never)]` — LLVM may not
+reassociate floating-point multiplication without fast-math, which Rust does not enable — but it is
+run in both profiles anyway, because that is what §17.2 established and it costs nothing.
+
+**And one hazard that was checked and is not real — on this machine.** The scan calls `np.exp` on an
+array while `_residual` calls `math.exp` on a scalar, which is precisely §16.2's shape. Measured over
+20,000 samples across this model's argument range (`-a v^2 + 0.5`, so everything at or below 0.5),
+the two agreed **20,000 times out of 20,000**. NumPy's power ufunc has a shortcut ladder; its `exp`
+does not.
+
+That is a claim about a **runner**, in §14.2's exact sense, and it is worth saying which one. On
+Windows all three implementations — NumPy's array loop, CPython's `math.exp`, Rust's `f64::exp` —
+reach UCRT's `exp`, which is why they agree transitively. On the Linux CI runner NumPy uses its own
+SIMD loop while CPython and Rust both reach glibc, so the array and scalar paths are genuinely two
+implementations there and may differ in a last bit.
+
+**The exposure if they do is bounded and does not reach the trajectory**, which is why this is an
+accuracy note rather than a risk. The scan's values are used for exactly one thing —
+`rs[:-1] * rs[1:] < 0.0` — so a last bit changes an answer only for a sample within an ulp of zero,
+and even then the bracket on either side of it still contains the same root. `brentq` is then handed
+`_residual`, which is the same libm call on both sides. So a divergence costs at most one redundant
+or one skipped bracket around a root that is found anyway.
+
+### 20.3 §19.11's question, answered — and the answer is the opposite of §19.2's
+
+§19.11 asked for the bow's safeguarded-Newton iteration count and its fallback branch to be
+*compared* rather than assumed, because §19.2 had just found a last bit in a reduction changing the
+tension string's `brentq` iteration count on **1,400 of 5,000 steps**. The comparison needed
+something to compare: neither implementation reported the count. So the Rust binding grew
+`step_reporting`, which is not part of the Python model's interface and exists only for the parity
+file, and the Python side is instrumented in the test by patching `_residual`, counting calls, and
+muting the bracket for the duration.
+
+What is counted is **residual evaluations in the Newton phase, seed included** — not accepted steps.
+Two reasons, both about being comparable at all: it is what the Python side can count without being
+rewritten, and it separates a *rejected* Newton attempt from a converged one, which an accepted-step
+count folds together.
+
+Measured 2026-08-27, over 4,000 and 20,000 steps, on three fixtures:
+
+* under a **shared solver**, the eval counts are identical on every step and the fallback fires on
+  the same steps — **0 differences in 20,000 steps on all three fixtures**, with the string's field
+  bit-identical at every one of those steps;
+* with **independent solvers** — SciPy's blocked `DTBSV` against the transcription — the fallback
+  branch still never differs, and the eval count differs **at most once in 20,000 steps**.
+
+The reason it is not the tension string's answer is worth stating, because it is the rule rather
+than the number. There, the perturbed quantity was inside a `brentq` bracket test whose scale was the
+quantity itself, so a last bit was a coin flip near the tolerance. Here the perturbation is ~1e-14
+**relative** while the Newton tolerance is 1e-13 **absolute** in velocity units of order 0.1 — so the
+test `abs(r) <= newton_tol` is being asked about a number two orders of magnitude away from the
+threshold on almost every step. So §19.2's rule gains its own qualifier: *ask what a reduction feeds*
+is right, and the follow-up is **how far the fed quantity sits from the branch's threshold**. A
+control-flow difference needs the perturbation and the threshold to be the same size.
+
+### 20.4 What is bit-identical
+
+Under a shared banded solver — which is what `PHYSSYNTH_RS=1` arranges, and what
+`test_rust_parity_bow.py`'s `shared_solver()` arranges without it — **everything**, on all three
+fixtures and at every one of 20,000 steps (the parity file asserts 4,000, which is what fits a test's
+budget; the 20,000 is the measurement behind it): the string's whole field, `v_rel`, `bow_force`, `bow_power`, `bow_work`,
+`fallbacks`, `n`, `energy()`, the Newton eval count per step, and the fallback flag per step.
+
+`energy()` being on that list is not the usual case and is worth attributing rather than enjoying:
+`DampedStiffString.energy()` is a reduction, and §14.2 is the section that says a reduction is where
+bit-identity ends. It survives here because §18.2 already moved this family's reduction off `np.dot`
+and onto `portable.dot`, a left-to-right sum both languages can express. The bow inherits that; it
+did not earn it.
+
+`_a_full` — the driving-point admittance — is the one construction-time quantity that is *not*
+bit-identical without a shared solver, because it is a banded solve. It agrees to 1e-16 relative,
+well inside Group A, and it is also the reason this model escapes §15.4's window: **the admittance is
+solved once**, at construction, not once per step.
+
+### 20.5 A fifth agreement regime, and the first one that does not grow
+
+§16.5 asked how long a model stays comparable rather than how well it agrees. The four answers so
+far: the barrier separates exponentially because it is chaotic (§16.5); the mallet never separates
+because its nonlinearity is a transient (§17.5); the linear strings drift like a random walk because
+nothing amplifies (§18.6); the tension string does either depending on which side of its parametric
+threshold the fixture sits (§19.5).
+
+The bow is a **recurring** nonlinearity — a slip every period, forever — so §17.5's rule predicts the
+barrier's regime. It is wrong. Measured 2026-08-27 with independent solvers, over 20,000 steps, on
+all three fixtures: the field gap sits at ~1e-14 of the run's peak amplitude from step 500 onward and
+never exceeds **6.7e-14**. Flat. Not a trend, and in the flagship fixture the last reading is *smaller*
+than the peak.
+
+The reason is that a bowed string is driven onto a **stable limit cycle**. Helmholtz motion is an
+attractor: the amplitude is set by the balance of bow work against loss, so a perturbation transverse
+to the cycle is squeezed back onto it rather than amplified. The barrier's re-contact is chaotic —
+positive Lyapunov exponent, neighbouring trajectories separate; the bow's is contracting.
+
+So §17.5's question — *does the nonlinearity recur?* — is necessary and not sufficient, and the
+missing word is the one that decides the sign:
+
+> Ask whether the recurring nonlinearity drives the system **onto** an attractor or **off** one.
+> Recurrence says the difference keeps being fed; only the sign of the transverse exponent says
+> whether it is amplified or absorbed.
+
+This is the first regime in the migration where a longer run is *better* evidence than a short one,
+and it is why the parity file asserts a **ceiling over 8,000 steps** rather than a short-run Group A
+target. A ceiling is a meaningless assertion against an exponential and a real one against a flat
+line.
+
+### 20.6 The normaliser is part of the claim, and it moved the number by two orders of magnitude
+
+§14.2 established that a decaying trajectory must be normalised by amplitude rather than pointwise —
+a pointwise comparison of a decaying signal reads 1e-7 and means nothing. The bow needs one more
+word, and the first bar written for this batch failed because of it.
+
+Normalising by the **instantaneous** field maximum, the same runs read a worst case of **2.9e-12**,
+with visible spikes at particular steps. Normalising by the **running peak** amplitude, they read
+**6.6e-14**, flat. The difference is entirely the denominator: Helmholtz motion beats, so the
+instantaneous maximum passes through near-nodes where it is an order of magnitude below the run's
+scale, and a fixed numerator divided by a dipping denominator looks like a divergence event. The
+spikes are in the normaliser, not the trajectory.
+
+The general form, which applies to every remaining oscillatory model:
+
+> Normalise by a **monotone** scale — the running peak — not by the instantaneous one. An
+> instantaneous normaliser reports the *signal's* zeros as the *comparison's* excursions, and a bar
+> set from it is a bar set from a beat pattern.
+
+This one cost only a failing test, because the trajectory was flat and the artefact was 40x. Had the
+model been genuinely diverging, the same artefact would have been indistinguishable from the thing
+being measured.
+
+### 20.7 §19.7's bug, reintroduced by the batch that cites it — and now guarded
+
+§19.7 found a CI step that had been red since the previous batch because a shell line continuation in
+a `run:` block had been written as the two characters backslash-`n` instead of a backslash and a
+newline. The section's closing line was that "a shell line continuation is checked by nothing".
+
+Adding this batch's step to the same file **reproduced it**, in the same file, within an hour of
+citing the finding. Not by typing it: the step was added by a script, and the string passed through
+one round of escaping too few. That is the whole mechanism, and it is why remembering the finding was
+not enough to avoid it — the failure is introduced by *tooling*, and tooling does not read section
+headers.
+
+So `tests/test_ci_workflow.py` now asserts it, and the design of that file is the part worth keeping:
+
+* it scans the **raw text**, not the parsed YAML. After parsing, a literal backslash-`n` and a real
+  newline are both just characters in a string and the distinction is gone. The raw file is where the
+  two are still different things — which also means no YAML parser is imported and the test adds no
+  dependency;
+* it asserts the *general* form as well as the specific one: every `tests/...py` token anywhere in
+  the workflow must be a file that exists. That catches a renamed test and a deleted one as well as a
+  mangled continuation;
+* it asserts the **count** of tokens it found (117 today, bar set at 50). A scan that quietly stopped
+  matching would pass forever while checking nothing — §16.8's shape, reached through a fourth door.
+
+### 20.8 Four smaller things worth keeping
+
+* **`collision::linspace` is now `pub`, and it is the one NumPy spelling in this crate that is
+  shared.** The crate open-codes `np.linspace` in eight places — every model's `grid()`,
+  `membrane::linspace_from_zero`, `ops2d::grid_coords` — and that stays as it is, because those are
+  one-off coordinate axes that are read once. This one is different in kind: `collision::solve_contact`
+  and `bow::bracketed_root` run the *same algorithm* over different residuals, and the grid decides
+  which brackets exist. Two copies of it would be two things to keep in step at the exact point where
+  drifting changes an answer. The distinction is "same algorithm" versus "same one-liner", and it is
+  the reason for the exception rather than a general move toward sharing.
+* **The borrow is one phase, and that is a property of the model rather than a precaution.** §13.2
+  found that a `&mut self` pymethod cannot hand control back to Python and still be read — the reed
+  pays for that with `step_native` and a Rust closure because it injects *inside* the bore's leapfrog.
+  The bow, like the mallet, lets the string advance force-free and *then* corrects it, so `step()`
+  takes one `borrow_mut()` and never re-enters the interpreter. Two of the three coupled models
+  avoid §13.2 by their physics; only the reed had to be engineered around it.
+* **`u +=` had to stay an in-place write.** The original's
+  `self.string.u += self._force_pref * f_B * self._a_full` is an in-place `__iadd__` followed by an
+  assignment of *the same object* back through the property, so a caller holding `.u` from before the
+  step sees the correction — the property `connection.py` depends on for its bridge force. The
+  binding writes through the live buffer for that reason; rebinding to a fresh array would have been
+  green in every bow test and wrong for the viewer.
+* **The `force = 0` anchor is a cross-class bit-identity claim and must not be short-circuited.**
+  `test_zero_force_is_bit_identical_to_bare_string` compares a bowed string against a bare
+  `DampedStiffString` — §15.2's shape, one model further out. It holds because `u += (pref * 0) * a`
+  is an addition of a signed zero, which is the identity on every entry. A `if f_B == 0: return`
+  fast path on one side only would empty the anchor while making it faster, which is the same failure
+  shape as a guard that covers nothing (§17.6).
+
+### 20.9 The success condition
+
+* `tests/test_bow_energy.py`, `tests/test_bow_modal.py` and `tests/test_bow_stability.py`
+  unmodified against Rust — the model's own four criteria, including the stick-slip signature and
+  the slip-fraction-equals-`beta` oracle that a last-bit perturbation could plausibly move.
+* `tests/test_web_backend.py` against Rust — `web/serialize.py` builds a `BowedString` for its `bow`
+  model, so the viewer is this port's only other client (§1.1).
+* `tests/test_damped_string.py` against Rust — the string underneath, and the control that says a
+  failure is about this batch rather than about §18's.
+* `tests/test_stability.py`'s swap guard, with the model added to the **derived** class half, both
+  module functions added to the function half, and a new captured-binding assertion
+  (`bow.DampedStiffString is string_damped.DampedStiffString`). That last one is belt-and-braces
+  here and deliberately kept: the Rust `BowedString` raises `TypeError` on a Python string, so a
+  mis-ordered import fails loudly at construction anyway — the assertion exists to say *which* of the
+  two broke.
+* `tests/test_rust_parity_bow.py` — 34 tests, green with and without the flag.
+* `tests/test_ci_workflow.py` — 2 tests, and they are about the gate rather than the physics (§20.7).
+* **Not** re-run: the barrier's and the mallet's files. Neither model's configuration changed —
+  `collision` and `mallet` do not import `bow` and nothing they call moved. §18.8's rule is to re-run
+  every step whose configuration *changed*, which is not the same as re-running everything nearby.
+
+### 20.10 What was measured
+
+| | |
+|---|---|
+| Native `cargo test --workspace` | **239 passed** (228 at the end of §19) |
+| The same in `--release` | **239 passed** |
+| Cargo dependency allowlist | still **EMPTY** |
+| `tests/test_rust_parity_bow.py` | **34 passed**, flag set and unset |
+| All fourteen parity files | **1,228 passed** flagged; 1,227 + 1 skipped unflagged |
+| The bow's own three files against Rust | **59 passed** |
+| `tests/test_web_backend.py` against Rust | **408 passed** |
+| The batch's CI step, flagged (all five files) | **495 passed** |
+| Bit-identity, shared solver, 3 fixtures × 20,000 steps | **exact** in every observable, `energy()` included |
+| Newton eval count, shared solver | identical on **20,000 of 20,000** steps, all three fixtures |
+| Newton eval count, independent solvers | differs on **at most 1** step in 20,000 |
+| Fallback branch, independent solvers | identical on **20,000 of 20,000** steps |
+| Field gap, independent solvers, 20,000 steps | **6.6e-14** worst of running peak amplitude — flat |
+| The same, normalised instantaneously | 2.9e-12 worst — an artefact of the denominator (§20.6) |
+| `residual` vs `scan_residual`, at the model's real `g` | differ in **4,158 of 20,000** (flagship); 568-5,372 across fixtures |
+| `np.exp` (array) vs `math.exp` (scalar), **on Windows** | agree in **20,000 of 20,000** — a claim about a runner (§20.2) |
+| Speed, `N = 100`, three fixtures | **7.8x – 8.4x** (26.7–28.7 µs/step → 3.4–3.6 µs) |
+| Speed, `N = 400`, three fixtures | **3.3x – 3.6x** (34.0–34.9 µs/step → 9.7–10.2 µs) |
+
+The speed numbers are §11.6's rule with the clearest illustration the migration has produced. The
+bow's per-step cost is a scalar root-find written in Python — an interpreted loop of attribute
+lookups and `math.exp` calls, with no compiled kernel to hide behind — so at `N = 100` the win is the
+full per-step-overhead factor. At `N = 400` the string's own compiled banded back-substitution starts
+to dominate and the factor falls by more than half, without either implementation getting slower.
+Same crossover, same cause, and here it is visible within one model rather than across two.
+
+### 20.11 What the next batch inherits
+
+- **`BarrierString` is the phase's true last model, not `bow`.** §19.11 said the bow was, and that
+  was inherited from §16, where `BarrierString` was correctly described as waiting on its host
+  `DampedStiffString`. §18 ported that host and the sentence was never revisited. Checked rather than
+  assumed: `collision.BarrierString` now needs only ported machinery — `apply_Ainv` on a Rust string,
+  `solve_contact_vector`, and the dense LU — so **Phase 3 is not finished**, and finishing it is a
+  batch rather than an audit. This is §18.3's rule in its plainest form: a statement justified by a
+  dependency expires when the dependency lands, and nobody is notified.
+- **`string_geometric` remains a Phase 5 model.** It uses banded Cholesky *and* a sparse LU, so it
+  needs Group D. Unchanged by this batch.
+- **A hoist is a spelling.** §20.2. Before porting any function that evaluates the same expression
+  on an array and on a scalar, diff the two by *association*, not only by which library call they
+  reach. The array path will have had a scalar factored out of it, because that is what makes the
+  array path worth writing.
+- **Ask how far the perturbed quantity sits from the branch's threshold**, not only whether it
+  reaches a branch. §20.3. §19.2's rule finds the branches; this one says which of them can actually
+  flip.
+- **Ask whether a recurring nonlinearity drives the system onto an attractor or off one.** §20.5.
+  Recurrence decides that the difference keeps being fed; the sign of the transverse exponent decides
+  whether it grows.
+- **Normalise a comparison by a monotone scale.** §20.6. An instantaneous normaliser turns the
+  signal's own zeros into the comparison's excursions.
 - **§4.1's SuperLU hypothesis is still untested.** Group D remains the only untouched solver class,
   and `beam` keeps its de-risking job at Phase 4.

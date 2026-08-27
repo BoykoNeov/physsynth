@@ -57,6 +57,7 @@ Headless: NumPy only (delegates the banded solve to the string).
 from __future__ import annotations
 
 import math
+import os
 
 import numpy as np
 from numpy.typing import NDArray
@@ -316,3 +317,64 @@ class BowedString:
         ``v_bow`` during stick and swings away during the once-per-period slip.
         """
         return self.v_rel + self.v_bow
+
+
+# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 3, batch 5) --------------------------
+#
+# THE LAST MODEL OF PHASE 3, and the one that needed the fewest new mechanisms: the banded solve is
+# batch 1's, the string underneath is batch 3's, the Brent fallback is Phase 2 batch 3's, and the
+# scan-and-bracket idiom is batch 2's. What is genuinely new is one line of arithmetic.
+#
+# THE FRICTION RESIDUAL IS SPELLED TWICE IN THIS FILE, AND THE TWO SPELLINGS ARE DIFFERENT
+# DOUBLES. ``_residual`` multiplies by ``g`` last, through ``friction_smooth``;
+# ``_bracketed_root`` hoists ``g * (force * sqrt(2a))`` into one scalar so NumPy can apply it to
+# the whole scan array at once. Multiplication is not associative in floating point, so the two
+# disagree -- measured 2026-08-27 at the canonical rig's real ``g`` (0.318), in 4,158 of 20,000
+# samples at the flagship fixture and 568-5,372 across the three the suite builds. That is section
+# 16.2's finding through a third door: not a ufunc-versus-scalar split
+# and not a compiler fold, but a hoist a caller performed by hand. The port carries BOTH
+# spellings, deliberately, because the scan's values decide WHICH BRACKETS EXIST -- one sign that
+# flips is one ``brentq`` call that does not happen, and at a slip event that is a different
+# branch. Neither side may "tidy" them into one function.
+#
+# What section 16.2 would predict and does NOT happen ON THIS MACHINE: ``np.exp`` on an array and
+# ``math.exp`` on a scalar agreed in 20,000 of 20,000 samples over this model's argument range. That
+# is a claim about a RUNNER (section 14.2) -- on Windows all three of NumPy, CPython and Rust reach
+# UCRT's ``exp``; on Linux NumPy uses its own SIMD loop while the other two reach glibc. If they
+# ever diverge the exposure does not reach the trajectory: the scan decides only whether a bracket
+# EXISTS, which needs a sample within an ulp of zero, and ``brentq`` then re-evaluates through
+# ``_residual``, which is the same libm call on both sides.
+#
+# THE ADMITTANCE IS BUILT ONCE. ``a = A^-1 e_i`` is a construction-time solve, so this model is
+# not inside section 15.4's ~100-step window: the only banded solve that differs between the two
+# implementations without the flag happens before the run starts.
+#
+# The Rust ``BowedString`` REQUIRES a Rust ``DampedStiffString`` and raises ``TypeError`` on
+# anything else -- the reed's rule (plan section 12.8) for the reed's reason. Under the flag both
+# swaps fire together and ``tests/test_stability.py`` asserts that
+# ``bow.DampedStiffString is string_damped.DampedStiffString``, so a mis-ordered import cannot
+# leave them disagreeing.
+#
+# ``friction_smooth`` and ``friction_smooth_deriv`` are swapped too, and that is not tidiness:
+# ``tests/test_bow_stability.py`` imports both BY NAME and asserts the curve's shape directly.
+# Without the swap that file -- which is in the flagged CI step -- would go on asserting the
+# Python functions while the run reported Rust.
+#
+# Off by default. The Python model is still the reference oracle for every model not yet ported.
+BowedStringPy = BowedString
+"""The pure-Python reference implementation, under a name the swap below never rebinds."""
+
+friction_smooth_py = friction_smooth
+"""The pure-Python friction characteristic, under a name the swap below never rebinds."""
+
+friction_smooth_deriv_py = friction_smooth_deriv
+"""The pure-Python derivative, under a name the swap below never rebinds."""
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    from physsynth_rs import (
+        BowedString,  # type: ignore[assignment]  # noqa: F811
+        friction_smooth,  # type: ignore[assignment]  # noqa: F811
+        friction_smooth_deriv,  # type: ignore[assignment]  # noqa: F811
+    )

@@ -383,7 +383,13 @@ pub struct ContactSolution {
 /// where the arithmetic would not have been. The bracket scan below compares neighbouring signs,
 /// so an endpoint differing in the last bit is a different bracket and, one `brentq` later, a
 /// different root.
-fn linspace(start: f64, stop: f64, num: usize) -> Vec<f64> {
+///
+/// Public because [`crate::bow`] runs the *same* scan-and-bracket algorithm over its own residual
+/// and needs the same grid. The crate open-codes this NumPy spelling in half a dozen other places
+/// (each model's `grid()`, `membrane::linspace_from_zero`, `ops2d::grid_coords`) and that stays as
+/// it is — those are one-off coordinate axes. This one is shared because a second copy would be a
+/// second thing to keep in step at the exact point where drifting changes which roots exist.
+pub fn linspace(start: f64, stop: f64, num: usize) -> Vec<f64> {
     let div = (num - 1) as f64;
     let step = (stop - start) / div;
     let mut y: Vec<f64> = (0..num).map(|i| (i as f64) * step + start).collect();

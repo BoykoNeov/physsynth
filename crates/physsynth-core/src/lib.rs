@@ -30,7 +30,10 @@
 //! fourth batch is `string_nonlinear`, the first model here whose matrix changes every step: the
 //! banded factor moves inside a scalar root-find, so `banded` and `root` meet for the first time
 //! and a last bit in a reduction becomes a different *iteration count* rather than a different
-//! last bit.
+//! last bit. Its fifth is `bow`, the project's first continuous nonlinear *exciter* — a shell over
+//! machinery four earlier batches already ported, whose one new piece of arithmetic is a residual
+//! the original spells twice, because the array path has a scalar hoisted out of it and the scalar
+//! path does not.
 //!
 //! # The shape every resonator here shares
 //!
@@ -54,6 +57,7 @@
 pub mod banded;
 pub mod body;
 pub mod bore;
+pub mod bow;
 pub mod collision;
 pub mod dense;
 pub mod exciter;

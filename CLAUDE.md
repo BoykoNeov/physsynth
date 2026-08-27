@@ -21,10 +21,10 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    analysis, viewer backend *and* the test suite — in favour of **Rust**, gradually and model by
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
-   **PHASE 2 IS COMPLETE**; phases 0, 1, all five batches of 2 and four of 3 are built (plan
-   §9-§19): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all of
+   **PHASE 2 IS COMPLETE**; phases 0, 1, all five batches of 2 and five of 3 are built (plan
+   §9-§20): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all of
    `operators`, `membrane`, `exciter`, `body`, `bore`, `reed`, **`mallet`**, **`string_stiff`**,
-   **`string_damped`** and **`string_nonlinear`**, the *builder half* of
+   **`string_damped`**, **`string_nonlinear`** and **`bow`**, the *builder half* of
    `operators2d`, all of `radiation` **except** its one Bessel helper, the **banded Cholesky** the
    four theta-scheme strings share, and all of `collision` **except** `BarrierString` itself — the
    contact primitives, both contact solves and the project's one **dense LU** — ported. `cargo test --workspace` runs the
@@ -42,7 +42,9 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    geometrically exact one, which needs Group D, is still Python; the whole contact leg
    — the mallet on its drumhead, the string buzzing on its fret, the sitar bridge — solves its
    contact in Rust; and the **mallet itself is now Rust end to end**, model shell included, both
-   the drumhead version and the standalone mass-vs-wall rig that holds its closed-form oracle. Both
+   the drumhead version and the standalone mass-vs-wall rig that holds its closed-form oracle; and
+   the **bow is Rust too** — the project's first continuous nonlinear exciter, friction curve,
+   scalar root-find, bracketed fallback and all. Both
    implementations stay alive for now — deleting a Python model waits on its clients, not on its own
    phase (§1.2). Facts worth knowing before planning work: a file's risk group is the group of
    its hardest function, so a module can port in halves (§11.2.1); `mallet` needed `collision`, so
@@ -126,6 +128,44 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    continuation is checked by nothing**: a literal `\n` in a YAML `run:` block,
    committed with the previous batch, had been failing the parity CI step ever since — loudly,
    and for the wrong reason (§19.7).
+
+   A **fourteenth**, from `bow`, which finishes the list of ways one expression can be two
+   computations: after NumPy's ufunc ladder (§16.2) and LLVM's constant fold (§17.2), the third is
+   a **hoist somebody wrote by hand**. `bow.py` evaluates its friction residual twice — the scalar
+   path multiplies by `g` last, the array path factors `g * force * sqrt(2a)` out so NumPy can
+   apply one scalar to the whole 512-point scan — and those are different doubles in **4,158 of
+   20,000** samples at the flagship fixture (568-5,372 across the three the suite builds; the
+   fraction is set by how large `g*force*sqrt(2a)` is next to `v - v_free`, so it is a property of
+   where the bow is played). Unlike the first two this one is *visible in the source and reads like
+   a duplicate that wants tidying*, which is exactly why it needs a pin in both suites: merging them
+   changes **which brackets exist**, and at a slip event that is a different branch, while no physics
+   bar moves (§20.2). Its negative result is worth as much but is **a claim about a runner**: `np.exp`
+   on an array and `math.exp` on a scalar agreed 20,000/20,000 *on Windows*, where all three of
+   NumPy, CPython and Rust reach UCRT — on Linux NumPy uses its own SIMD loop and only the other two
+   reach glibc. The exposure is bounded and cannot reach the trajectory (the scan decides only
+   whether a bracket *exists*, and `brentq` re-evaluates through the scalar path). A methodological
+   scar with it: the first draft of that 306 came from a scratch script that had hardcoded
+   `g = 1e-3` when the model's is 0.318 — **a measurement taken at a parameter the model never uses
+   is §16.4's blind fixture seen from the measuring side.**
+   Three corollaries. **§19.2's branch rule needs a size**: the tension string's reduction flipped
+   an iteration count on 1,400 of 5,000 steps because the perturbation and the bracket test were the
+   same size, whereas here a ~1e-14 *relative* perturbation is asked about a 1e-13 *absolute*
+   tolerance on a quantity of order 0.1, so the branch never flips and the count differs at most
+   once in 20,000 steps (§20.3) — ask how far the fed quantity sits from the threshold, not only
+   whether it reaches one. **A recurring nonlinearity can CONTRACT**: §17.5 said to ask whether the
+   nonlinearity recurs, and the bow's does — once per period, forever — yet the two implementations
+   do not separate at all (flat at ~1e-14 out to 20,000 steps), because Helmholtz motion is a
+   *stable limit cycle* and a perturbation is squeezed back onto it. The missing word is whether the
+   recurrence drives the system **onto** an attractor or **off** one (§20.5). And **the normaliser
+   is part of the claim**: the same runs read 2.9e-12 normalised by the *instantaneous* amplitude
+   and 6.6e-14 normalised by the *running peak*, because Helmholtz motion beats and the
+   instantaneous maximum passes through near-nodes — §14.2's "normalise by amplitude" needs
+   "monotone" added to it (§20.6). Two more, neither about arithmetic: §19.7's literal `\\n` in a
+   YAML `run:` block was **reintroduced by the batch that cites it**, because the failure is
+   introduced by *tooling* rather than by typing, so it is now asserted in `tests/test_ci_workflow.py`
+   rather than remembered (§20.7); and **`bow` is not the phase's last model** — `BarrierString` was
+   described in §16 as waiting on its host `DampedStiffString`, that host landed in §18, and nobody
+   revisited the sentence, so Phase 3 is not finished (§20.11).
 
    And a **twelfth**, from the two theta-scheme strings, which is really the same finding twice and
    is about **SciPy rather than about Rust**: what blocked the first *model* out of the four-string

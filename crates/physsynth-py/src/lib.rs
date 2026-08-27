@@ -42,6 +42,7 @@
 mod banded;
 mod body;
 mod bore;
+mod bow;
 mod collision;
 mod exciter;
 mod mallet;
@@ -664,6 +665,7 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<body::PyModalBody>()?;
     m.add_class::<bore::PyBore>()?;
     m.add_class::<reed::PyReedBore>()?;
+    m.add_class::<bow::PyBowedString>()?;
     m.add_class::<mallet::PyMalletMembrane>()?;
     m.add_class::<mallet::PyMalletWall>()?;
     m.add_class::<radiation::PyAirRadiation>()?;
@@ -677,6 +679,8 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("RHO0_AIR", physsynth_core::radiation::RHO0_AIR)?;
     m.add("C0_AIR", physsynth_core::radiation::C0_AIR)?;
     m.add_function(wrap_pyfunction!(reed::py_bernoulli_flow, m)?)?;
+    m.add_function(wrap_pyfunction!(bow::py_friction_smooth, m)?)?;
+    m.add_function(wrap_pyfunction!(bow::py_friction_smooth_deriv, m)?)?;
     m.add_function(wrap_pyfunction!(collision::py_contact_potential, m)?)?;
     m.add_function(wrap_pyfunction!(collision::py_contact_force_elastic, m)?)?;
     m.add_function(wrap_pyfunction!(collision::py_contact_stiffness, m)?)?;
