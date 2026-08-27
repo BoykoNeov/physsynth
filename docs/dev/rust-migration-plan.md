@@ -3687,14 +3687,16 @@ because the shell was Python on both sides of every comparison it made. Porting 
 cross-language reduction, and §14.2 says that is where bit-identity ends.
 
 Measured 2026-08-27 against the left-to-right row sum the port writes, over the parity file's
-fixtures and 2,000 steps each:
+fixtures and **6,000** steps each (the 2,000-step figures the tests themselves run are in the last
+column):
 
-| fixture | rows compared | matvec differs | survives `* force_pref` | reaches `u` |
-|---|---|---|---|---|
-| point fret, `m = 1` | 158,000 | **0** | 0 | 0 |
-| two frets, `m = 2`, `a = 1.0` | 158,000 | 2,232 | 2,152 | **0** |
-| two frets, `m = 2`, `a = 1.5` | 158,000 | 3,719 | 3,625 | **0** |
-| flat rail, `m = 79`, `a = 1.5` | 158,000 | 45,822 | 44,653 | **30** |
+| fixture | rows compared | matvec differs | survives `* force_pref` | reaches `u` | reaches `u` by step 2,000 |
+|---|---|---|---|---|---|
+| point fret, `m = 1`, `a = 1.0` | 474,000 | **0** | 0 | 0 | 0 |
+| point fret, `m = 1`, `a = 1.5` | 474,000 | **0** | 0 | 0 | 0 |
+| two frets, `m = 2`, `a = 1.0` | 474,000 | 2,232 | 2,152 | **0** | 0 |
+| two frets, `m = 2`, `a = 1.5` | 474,000 | 3,719 | 3,625 | **0** | 0 |
+| flat rail, `m = 79`, `a = 1.5` | 474,000 | 45,822 | 44,653 | **30** | 7 |
 
 `m = 1` is not interesting — the sum is one product, and §16 already named that the cause-separator.
 `m = 2` is: the matvec **does** differ, thousands of times, and the trajectory is nevertheless
@@ -3711,13 +3713,16 @@ same result unless the addition **cancels** — and where it cancels, the sum is
 reduction cannot disagree without also being tiny. Measured on the same run, restricted to the rows
 where the two spellings actually differ:
 
-| fixture | median `|correction| / |u|` where they differ | max |
-|---|---|---|
-| two frets, `m = 2` | **2.5e-18** | **9.3e-13** |
-| flat rail, `m = 79` | 1.2e-4 | 2.1e-3 |
+| fixture (2,000 steps) | rows differing | median `|correction| / |u|` there | max |
+|---|---|---|---|
+| two frets, `m = 2`, `a = 1.5` | 1,291 | **2.5e-18** | **9.3e-13** |
+| two frets, `m = 2`, `a = 1.0` | 764 | — | **7.0e-12** |
+| flat rail, `m = 79`, `a = 1.5` | 14,746 | 1.2e-4 | 2.1e-3 |
 
-At two nodes the correction is at worst `9.3e-13` of `u` *at exactly the rows where it is wrong*, so
-one of its ulps is worth about `1e-12` of one of `u`'s and cannot survive the addition. At 79 terms
+At two nodes the correction is at worst `7e-12` of `u` *at exactly the rows where it is wrong* (and
+`9.3e-13` at the shipped exponent), so one of its ulps is worth about `1e-11` of one of `u`'s and
+cannot survive the addition — which is why the parity test's bar on that ratio is `1e-9`, three
+orders above the worst reading and eleven below where it would start to matter. At 79 terms
 the correlation is gone — a long sum reorders without the result being small — the correction is an
 ordinary size where it differs, and roughly one difference in `1/1.2e-4` crosses a rounding
 boundary. That predicts about 36 hits in 44,653; 30 were observed.
@@ -3731,7 +3736,7 @@ an observation recorded — and the reason is what makes it safe to keep an exac
 red bar.** *Proved:* two doubles sum identically in either order unless the addition cancels, so a
 two-term reduction cannot disagree without its result being small. That does not depend on the
 fixture. *Measured:* that `force_pref` times such a cancelled sum stays below `u`'s last bit — the
-`9.3e-13` above — which is a property of this model's coupling strength at these fixtures, and the
+`7e-12` above — which is a property of this model's coupling strength at these fixtures, and the
 parity test asserts it separately (`< 1e-9`) rather than folding it into the exact claim. A fixture
 with a much stiffer contact or a much deeper rail could move it; the round-trip test in §23.9 walks
 straight into that regime on purpose, doubles the coupling, and is a Group A claim for exactly this
@@ -3742,6 +3747,13 @@ Both halves are asserted: one test pins that the matvec differs and that the cor
 where it does, and a second pins the 79-node case as the control that shows where the argument
 stops applying. An exact test with no control next to it would read as "the two matvecs agree",
 which is false.
+
+One deliberate restraint in how those two are written: the **ratio** is the bar and the **count of
+differences that reach `u`** is printed, not asserted. That count is a handful of rounding-boundary
+crossings out of tens of thousands of chances, and which kernel OpenBLAS picks for a `dgemv` is a
+property of the CPU (§14.2) — so a bar on it would be a small integer partly decided by the runner,
+which is §21.6's failure. Both tests also **skip** rather than fail if a machine's BLAS turns out to
+sum these matvecs left to right, because on such a machine there is simply nothing to demonstrate.
 
 The general rule for the phases ahead: **before asserting bit-identity across a ported reduction,
 ask how many terms it has.** Two is qualitatively different from many, and the difference is
@@ -3925,10 +3937,10 @@ which this batch did not introduce.
 | The barrier's four own files against Rust | **31 passed** |
 | `tests/test_web_backend.py` against Rust | **408 passed** |
 | All fourteen parity files | **1,269 passed** flagged; 1,268 + 1 skipped unflagged |
-| Injection matvec, `m = 1`, 2,000 steps | **0 of 158,000 rows** differ |
-| Injection matvec, `m = 2`, 2,000 steps | 2,232–3,719 rows differ; **0** reach `u` |
-| Injection matvec, `m = 79`, 2,000 steps | 45,822 rows differ; **30** reach `u` |
-| `\|correction\| / \|u\|` where the matvec differs, `m = 2` | median **2.5e-18**, max **9.3e-13** |
+| Injection matvec, `m = 1`, 6,000 steps | **0 of 474,000 rows** differ, both exponents |
+| Injection matvec, `m = 2`, 6,000 steps | 2,232–3,719 rows differ; **0** reach `u` |
+| Injection matvec, `m = 79`, 6,000 steps | 45,822 rows differ; **30** reach `u` (7 by step 2,000) |
+| `\|correction\| / \|u\|` where the matvec differs, `m = 2` | max **9.3e-13** (`a = 1.5`), **7.0e-12** (`a = 1.0`) |
 | The same at `m = 79` | median **1.2e-4**, max 2.1e-3 |
 | Shell's own contribution at 500 steps, `m = 79` | `<= 1.9e-14` of peak (bar: 1e-13) |
 | Shell's own first crossing of 1e-13 | steps **1,597–3,076** by fixture (solve's own: 1,175–1,584) |

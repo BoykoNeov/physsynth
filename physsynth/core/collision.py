@@ -518,8 +518,9 @@ class BarrierString:
 # That is a mechanism rather than a coincidence, which matters because an exact assertion resting
 # on a coincidence expires without warning. A TWO-term sum can only be reordered into a different
 # double if its two terms CANCEL, and where they cancel the correction is tiny: at every one of
-# those 1,291 rows it is at most 9.3e-13 of ``u``, so one of its ulps is worth about 1e-12 of one
-# of ``u``'s and cannot survive the addition. The control is the same code at 79 terms, where that
+# those 1,291 rows it is at most 9.3e-13 of ``u`` (7e-12 at the linear exponent the parity test
+# uses), so one of its ulps is worth about 1e-11 of one of ``u``'s and cannot survive the addition.
+# The control is the same code at 79 terms, where that
 # correlation is gone -- the matvec differs on 14,746 rows, the correction is an ordinary size
 # where it does (median 1.2e-4 of ``u``), and 7 differences reach the state over 2,000 steps, 30
 # over 6,000. So the exactness at two nodes is a claim about the LENGTH OF THE SUM.

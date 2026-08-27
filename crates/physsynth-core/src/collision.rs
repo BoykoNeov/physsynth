@@ -68,9 +68,10 @@
 //! **That is a mechanism, not a coincidence, and the distinction is the finding.** A *two*-term
 //! sum can only be reordered into a different double if its two terms **cancel** — and where they
 //! cancel the sum is tiny, so the correction is tiny. At every one of those 1,291 rows the
-//! correction is at most `9.3e-13` of `u`, which makes one of *its* ulps worth about `1e-12` of one
-//! of `u`'s: it cannot survive the addition, and none of them does. The error of a two-term
-//! reduction is correlated with its own smallness.
+//! correction is at most `9.3e-13` of `u` (`7e-12` at the linear exponent the parity test uses),
+//! which makes one of *its* ulps worth about `1e-11` of one of `u`'s: it cannot survive the
+//! addition, and none of them does. The error of a two-term reduction is correlated with its own
+//! smallness.
 //!
 //! The control is the same code at 79 terms, where that correlation is gone. There the matvec
 //! differs on 14,746 rows, the correction is an ordinary size where it does (median `1.2e-4` of

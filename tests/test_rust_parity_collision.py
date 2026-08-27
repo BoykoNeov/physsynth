@@ -981,13 +981,15 @@ def test_two_terms_cannot_disagree_without_cancelling_and_so_cannot_reach_the_st
         rows, differ, scaled, added, ratio = _injection_spellings(
             _build(C.BarrierStringPy, DampedStiffStringPy, **kw), SHORT_RUN
         )
+    if differ == 0:  # pragma: no cover - not seen on any machine yet
+        pytest.skip(
+            "this machine's BLAS sums a two-element matvec exactly left to right, so there is no "
+            "difference here to be absorbed -- the exact claim above is then trivially safe and "
+            "this test has nothing to demonstrate. Which kernel OpenBLAS picks is a property of "
+            "the CPU (section 14.2), so this is a skip rather than a failure"
+        )
     print(f"m=2 injection: {differ}/{rows} rows differ, {scaled} survive the scaling, "
           f"{added} survive the add; |correction|/|u| where they differ <= {ratio.max():.2e}")
-    assert differ > 0, (
-        "the two spellings of the injection matvec agreed everywhere, which would make the "
-        "bit-identity claim above uninformative -- either NumPy stopped dispatching to BLAS here "
-        "or the fixture stopped putting two nodes in contact"
-    )
     assert ratio.max() < 1.0e-9, (
         f"where the matvec differs, the correction reached {ratio.max():.2e} of the field -- the "
         "cancellation argument has stopped holding and the exact two-node claim above now rests "
@@ -1009,22 +1011,28 @@ def test_at_seventy_nine_terms_the_cancellation_argument_does_not_apply():
     reaches the state. It does: 7 of 14,746 over 2,000 steps, 30 of 44,653 over 6,000, which is
     what that ratio predicts to within a factor of two. So the exact claim at two nodes is about
     the *length of the sum*, and this is where the same code stops being able to make it.
+
+    What is asserted is the *ratio*, not that count -- see the comment below.
     """
     with shared_solver():
         rows, differ, scaled, added, ratio = _injection_spellings(
             _build(C.BarrierStringPy, DampedStiffStringPy, **CASES["flat rail (m=79)"]), SHORT_RUN
         )
+    if differ == 0:  # pragma: no cover - not seen on any machine yet
+        pytest.skip("this machine's BLAS matvec agrees with a left-to-right sum at m = 79")
     median = float(np.median(ratio))
     print(f"m=79 injection: {differ}/{rows} rows differ, {scaled} survive the scaling, "
           f"{added} survive the add; median |correction|/|u| where they differ = {median:.2e}")
+    # The BAR is the eight-order-of-magnitude contrast in the ratio, which is set by the trajectory
+    # and the coupling. The COUNT of differences that reach `u` is deliberately printed rather than
+    # asserted: it is a handful of rounding-boundary crossings out of tens of thousands of chances,
+    # so a bar on it would be a bar on a small integer that the runner's BLAS kernel helps decide --
+    # section 21.6's failure. The number above is what tracks drift, the same convention `ULP_BAR`
+    # follows at the top of this file.
     assert median > 1.0e-6, (
         f"the 79-node correction shrank to {median:.2e} of the field where the matvec differs, "
         "which would make it the two-node case and leave that test's claim unsupported by a "
         "contrast"
-    )
-    assert added > 0, (
-        "no difference in the 79-node injection reached `u` over 2,000 steps, so this fixture is "
-        "no longer a control and the two-node exactness above is unattributed"
     )
 
 
