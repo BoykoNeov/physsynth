@@ -40,6 +40,7 @@ from physsynth.core.operators2d import (
     free_plate_stiffness,
     free_plate_stiffness_from_mask,
     guitar_area,
+    guitar_half_width,
     guitar_mask,
     laplacian_from_mask,
     prune_to_area_carrying,
@@ -84,22 +85,26 @@ def _outline_mask_before_2026_08_28(X, Y, length, width, waist, asym):
     return (t > 0.0) & (t < 1.0) & (np.abs(X) < half)
 
 
-@pytest.mark.parametrize("N", [8, 16, 20, 24, 32, 33, 40, 48, 64, 96])
-@pytest.mark.parametrize(
-    "waist,asym",
-    # The shipped defaults, the two fixtures below, the viewer's long narrow plate, the first
-    # point of its waist sweep (`waist = 0.0`, the outline with a node ONE ulp from the rim) and a
-    # negative asymmetry.
-    [(0.42, 0.30), (0.97, 0.30), (0.88, 0.0), (0.0, 0.0), (0.60, -0.30)],
-)
-@pytest.mark.parametrize("Lx,Ly", [(0.37, 0.48), (0.15, 0.70)])
-def test_the_scalar_libm_spelling_moved_no_node_of_any_shipped_outline(Lx, Ly, waist, asym, N):
+# The shipped defaults, the two fixtures below, the viewer's long narrow plate and a negative
+# asymmetry. The degenerate lens (`waist = 0, asym = 0`) is deliberately NOT here -- see the test
+# after this one for what it gets instead, and why.
+_SHIPPED_OUTLINES = [(0.42, 0.30), (0.97, 0.30), (0.88, 0.0), (0.60, -0.30)]
+_OUTLINE_GRIDS = [8, 16, 20, 24, 32, 33, 40, 48, 64, 96]
+
+
+def _outline_grid(Lx, Ly, N):
     h = Lx / N
     Ny = max(int(round(Ly / h)), 1)
     Ly_snapped = Ny * h
     X, Y = np.meshgrid(np.linspace(0.0, Lx, N + 1), np.linspace(0.0, Ly_snapped, Ny + 1))
-    X = X - 0.5 * Lx
+    return X - 0.5 * Lx, Y, Ly_snapped
 
+
+@pytest.mark.parametrize("N", _OUTLINE_GRIDS)
+@pytest.mark.parametrize("waist,asym", _SHIPPED_OUTLINES)
+@pytest.mark.parametrize("Lx,Ly", [(0.37, 0.48), (0.15, 0.70)])
+def test_the_scalar_libm_spelling_moved_no_node_of_any_shipped_outline(Lx, Ly, waist, asym, N):
+    X, Y, Ly_snapped = _outline_grid(Lx, Ly, N)
     now = guitar_mask(X, Y, Ly_snapped, Lx, waist, asym)
     before = _outline_mask_before_2026_08_28(X, Y, Ly_snapped, Lx, waist, asym)
     moved = int(np.count_nonzero(now != before))
@@ -113,6 +118,35 @@ def test_the_scalar_libm_spelling_moved_no_node_of_any_shipped_outline(Lx, Ly, w
     # can take a neighbour with it.
     assert np.array_equal(
         prune_to_area_carrying(now)[0], prune_to_area_carrying(before)[0]
+    )
+
+
+@pytest.mark.parametrize("N", _OUTLINE_GRIDS)
+def test_the_degenerate_lens_gets_the_weaker_claim_it_can_actually_support(N):
+    """The one outline where mask equality across the two spellings would be a claim about a CPU.
+
+    A plain lens is ``0.5*Lx*sin(pi t)``, and its rim passes exactly through grid nodes at rational
+    ``t`` — at ``N = 32`` four nodes sit **one ulp** outside the outline and two sit exactly on it.
+    So "the mask did not move when the spelling changed" is, *for this outline only*, a statement
+    about whether NumPy's vectorised ``sin`` and the platform's scalar one happen to round the same
+    way. They do on Windows. On a Linux runner NumPy uses its own SIMD loop and CPython uses glibc,
+    and there is no local repro for that (plan §22.2), so asserting it would be red for a reason
+    that is not a bug.
+
+    What the pin above is actually for is a **transcription slip** in ``_profile`` — a
+    mis-parenthesised ``4.0 * pi * (t - 0.5)``, a dropped factor — and that moves the profile by
+    orders of magnitude, not by an ulp. The four real outlines catch it with 1.9e7 ulps of margin
+    to spare. This test gives the lens the strongest claim it can support: the two spellings agree
+    on the half-width to a few ulps, which a slip fails and a rounding difference does not.
+    """
+    X, Y, Ly_snapped = _outline_grid(0.37, 0.48, N)
+    t = Y / Ly_snapped
+    now = guitar_half_width(t, 0.0, 0.0)
+    before = _outline_half_width_before_2026_08_28(t, 0.0, 0.0)
+    worst = float(np.max(np.abs(now - before) / np.maximum(np.spacing(np.abs(before)), 5e-324)))
+    assert worst <= 4.0, (
+        f"N={N}: the two spellings of the lens profile differ by {worst:.1f} ulps -- that is not a "
+        "libm rounding, it is a different formula"
     )
 DRIFT_TOL = 1e-10  # tier 1: the same acceptance bar as every other resonator
 

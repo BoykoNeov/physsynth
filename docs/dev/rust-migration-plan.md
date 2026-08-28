@@ -4336,7 +4336,7 @@ physsynth/core/operators2d.py               `_profile` / `_profile_vec`; `guitar
                                             `_py` aliases and the swap block
 tests/test_rust_parity_ops2d.py             the batch's comparison (174 tests -> 406)
 tests/test_guitar_plate.py                  the pre-change spelling, written out once, and
-                                            the shipped masks pinned against it (100 tests)
+                                            the shipped masks pinned against it (90 tests)
 tests/test_stability.py                     seven names added to the guard's operators2d set, and
                                             `plate`'s captured bindings asserted for the first time
 ```
@@ -4447,9 +4447,19 @@ leaves a hole exactly the width of a transcription slip — a mis-parenthesised 
 in `_profile` would be reproduced faithfully by the port and agreed on by every parity assertion,
 and no physics bar can see a mask. So `tests/test_guitar_plate.py` now carries the **pre-change
 NumPy expression written out verbatim**, and asserts the shipped masks — and their prunes — node for
-node against it, over the same 130-configuration sweep. That is the assertion that protects the
-geometry the plate family was validated on, and it lives in the default suite because it is a claim
-about the *model*, not about the port.
+node against it. That is the assertion that protects the geometry the plate family was validated on,
+and it lives in the default suite because it is a claim about the *model*, not about the port.
+
+**With one outline held out, and holding it out is the same reasoning as §25.3's.** That pin
+compares two genuinely different `sin` implementations, so at the degenerate lens — where four nodes
+sit one ulp from the rim — "the mask did not move" is a statement about which libm rounded, not
+about this code. It is true on Windows and unverifiable on a Linux runner (§22.2). What the pin is
+*for* is a transcription slip, and a slip moves the profile by orders of magnitude, so the four real
+outlines catch it with 1.9e7 ulps to spare. The lens gets the strongest claim it can support
+instead: the two spellings agree on the half-width **to within four ulps**, which a slip fails and a
+rounding difference does not. The general form — **a pin must assert the weakest statement that
+still catches what it is for**, or it becomes a machine claim wearing a correctness claim's error
+message.
 
 ### 25.6 The one number not asserted exact, and the precedent it follows
 
