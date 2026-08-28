@@ -291,6 +291,44 @@ impl Csr {
         Self::from_rows(nrows, ncols, rows)
     }
 
+    /// The column restriction `self[:, keep]` — the columns whose flag is `true`, in order.
+    ///
+    /// SciPy spells this `a.tocsc()[:, mask]`; the two agree on values trivially (nothing is
+    /// computed) and on **order** for a reason worth stating, because order is what this whole
+    /// group of functions turns on: dropping columns is a *monotone* renumbering, so a row that
+    /// arrived ascending leaves ascending. That matters because the restricted operator is then
+    /// transposed and used as the left factor of a Gram product, where the stored order of its
+    /// rows *is* the contraction order (plan §27.2).
+    ///
+    /// # Panics
+    /// If `keep` does not have one flag per column.
+    pub fn select_columns(&self, keep: &[bool]) -> Self {
+        assert_eq!(
+            keep.len(),
+            self.ncols,
+            "select_columns() needs one flag per column, got {} for {} columns",
+            keep.len(),
+            self.ncols
+        );
+        let mut renumber = vec![usize::MAX; self.ncols];
+        let mut ncols = 0usize;
+        for (j, &k) in keep.iter().enumerate() {
+            if k {
+                renumber[j] = ncols;
+                ncols += 1;
+            }
+        }
+        let rows = (0..self.nrows)
+            .map(|i| {
+                (self.indptr[i]..self.indptr[i + 1])
+                    .filter(|&p| keep[self.indices[p]])
+                    .map(|p| (renumber[self.indices[p]], self.data[p]))
+                    .collect()
+            })
+            .collect();
+        Self::from_rows(self.nrows, ncols, rows)
+    }
+
     /// The transpose, by counting sort — which lands each output row's columns in ascending order
     /// for free, so the result is canonical without a second pass.
     pub fn transpose(&self) -> Self {

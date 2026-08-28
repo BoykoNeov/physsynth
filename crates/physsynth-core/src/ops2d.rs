@@ -28,13 +28,20 @@
 //! Python side, which is §18.2's manoeuvre for the string family landing exactly where §18.4 said
 //! in advance that it would. See `biharmonic_from_mask` below.
 //!
-//! Still deliberately **not** here: the four private 1-D differences the von Kármán pieces use
-//! (`_collocated_d2_1d`, `_forward_d1_1d`, `_centered_d2_1d`, `_avg_d1_1d`), `VonKarmanBracket`
-//! and `AiryStressSolver`. Those are the *nonlinear* plate, and the last of them factors with
-//! SuperLU — so its parity claim is a measured tolerance rather than an equality (§24.2) and it
-//! does not belong in a batch whose whole result is an exact one. Leaving them visibly absent is
-//! the same choice Phase 0 made with `ops.rs` — an incomplete module that looks incomplete beats
-//! a complete-looking one that is not.
+//! Phase 5's **third** batch finishes the module with the *nonlinear* plate: the five private 1-D
+//! differences, `VonKarmanBracket` and `AiryStressSolver`. Two of the three kinds of claim in this
+//! file meet there. The bracket is **exact** — every matvec in it is a canonical row gather, the
+//! `Acell.T` one included, for a reason that is a lemma rather than a measurement (see the type).
+//! The Airy solve is **not and cannot be**: it factors with SuperLU on the other side and §24.2
+//! settled that in advance. What separates them is §24.4's manoeuvre — put the Python solver on
+//! the Rust factorization and the two go bit-identical, so the whole residue is the solver.
+//!
+//! That batch also cost the reference one edit, and it is a *pair of parentheses*: `BᵀWB` has two
+//! bracketings, the values are identical under either (both outer factors share a mantissa,
+//! §26.5), and the association nonetheless moves the **sum**, because SciPy hands the
+//! left bracketing's intermediate back descending. Note what this crate could not have done about
+//! it: `Csr::from_rows` sorts, so a descending row is not expressible here at all. See
+//! `AiryStressSolver`.
 //!
 //! # Flat ordering, everywhere
 //!
@@ -46,6 +53,7 @@
 //! reason both are named in every signature.
 
 use crate::sparse::Csr;
+use crate::sparse_lu::{SparseLu, SparseLuError};
 
 /// A live-node mask over a `(nrows, ncols)` node grid — which nodes are unknowns.
 ///
@@ -692,6 +700,495 @@ pub fn free_plate_stiffness(
         grain_coupling,
         grain_torsion,
     )
+}
+
+// --- the nonlinear plate's 1-D differences ------------------------------------------------------
+//
+// Five one-axis operators that `VonKarmanBracket` and `AiryStressSolver` lift onto the grid with
+// `kron`. They are private in the Python module and public here, for the reason
+// `dirichlet_interior_d2_1d` is: the parity test compares them one at a time, and comparing them
+// one at a time is the only way to tell an assembly mistake from an ordering one.
+//
+// Every one of them is a *fixed pattern of exact scalings of one reciprocal*, so all five are
+// bit-identical to SciPy's whatever the grid: `inv_h2 = 1.0 / (h * h)` rounds once and `-2.0 *`,
+// `2.0 *` and the sign flips are exact. What is NOT free is spelling the reciprocal the same way
+// -- `-2.0 / (h * h)` is a different rounding from `-2.0 * (1.0 / (h * h))`, which is why every
+// builder in this module writes the second.
+
+/// `(n+1) x (n+1)` collocated second difference `[1, -2, 1]/h^2` with **empty end rows**.
+///
+/// Row `l` for `l = 1 .. n-1` is the curvature centred at node `l`; rows `0` and `n` carry no
+/// entries at all -- not a stored zero, *nothing* -- because the free beam evaluates curvature at
+/// interior nodes only. The distinction is visible in `nnz` and the parity test asserts it.
+///
+/// Annihilates linear data exactly, which is the free plate's `{1, x, y}` nullspace in one axis.
+///
+/// This has no caller left in the reference: `free_plate_stiffness` builds its curvature from the
+/// mask now, and `tests/test_free_plate_modal.py` keeps this as an independent oracle for it. It
+/// is ported anyway, because an oracle that is not compared is an oracle nobody is checking.
+pub fn collocated_d2_1d(n: usize, h: f64) -> Csr {
+    let inv_h2 = 1.0 / (h * h);
+    let main = -2.0 * inv_h2;
+    let rows = (0..=n)
+        .map(|l| {
+            if l == 0 || l == n {
+                Vec::new()
+            } else {
+                vec![(l - 1, inv_h2), (l, main), (l + 1, inv_h2)]
+            }
+        })
+        .collect();
+    Csr::from_rows(n + 1, n + 1, rows)
+}
+
+/// `n x (n+1)` forward first difference: row `i` is `(u[i+1] - u[i])/h`, living on cell `i`.
+///
+/// The dual-grid difference whose tensor square is the **cell-centred** twist. That choice is
+/// physics, not taste: the collocated centred mixed difference has a checkerboard `(-1)^(i+j)`
+/// nullspace, which injects spurious near-zero modes into the low plate spectrum.
+///
+/// Spelled `-1.0 / h` and `1.0 / h`, two divisions, as the original writes them. They round to
+/// exact negatives of each other, so nothing turns on it here -- but the *product* of two of these
+/// is what `kron` forms for the twist, and `(1/h) * (1/h)` is not `1/(h*h)`; that one has already
+/// been wrong once in this module.
+pub fn forward_d1_1d(n: usize, h: f64) -> Csr {
+    let rows = (0..n)
+        .map(|i| vec![(i, -1.0 / h), (i + 1, 1.0 / h)])
+        .collect();
+    Csr::from_rows(n, n + 1, rows)
+}
+
+/// `(n+1) x (n+1)` ordinary tridiagonal second difference `[1, -2, 1]/h^2` at **every** node.
+///
+/// Unlike `collocated_d2_1d`, the two end rows are kept: they hold the one-sided Dirichlet-ghost
+/// curvature `(u[1] - 2u[0])/h^2`. This is the `d_xx` of the von Karman bracket's straight terms;
+/// for a field vanishing on the rim those end values meet a zero test field and drop out of the
+/// trilinear form, so only the interior curvature is ever weighed.
+///
+/// # Panics
+/// If `n` is 0 -- a one-node axis has no difference on it.
+pub fn centered_d2_1d(n: usize, h: f64) -> Csr {
+    assert!(n >= 1, "centered_d2_1d needs n >= 1");
+    let inv_h2 = 1.0 / (h * h);
+    let main = -2.0 * inv_h2;
+    let rows = (0..=n)
+        .map(|l| {
+            let mut row = Vec::with_capacity(3);
+            if l > 0 {
+                row.push((l - 1, inv_h2));
+            }
+            row.push((l, main));
+            if l < n {
+                row.push((l + 1, inv_h2));
+            }
+            row
+        })
+        .collect();
+    Csr::from_rows(n + 1, n + 1, rows)
+}
+
+/// `(n+1) x (n+1)` second difference with the **clamped ghost mirror** at both ends.
+///
+/// Interior rows are `centered_d2_1d`'s; the two end rows **double** their single off-diagonal.
+/// The clamped edge `F,n = 0` gives the mirror `F_{-1} = F_1`, so the boundary-node curvature is
+/// `(F_1 - 2F_0 + F_{-1})/h^2 = (2F_1 - 2F_0)/h^2` and row 0 is `[-2, 2, 0, ...]/h^2`.
+///
+/// The matrix is **not** symmetric -- the end rows are one-sided -- but the Gram form `Lc^T Wa Lc`
+/// with the trapezoidal area weight is, and it reproduces the textbook clamped-plate biharmonic
+/// exactly: near-boundary diagonal `7`, interior `6`, off-diagonals `-4` and `1`. With `Wa = I`
+/// the `7` comes out `9`, a different and wrong operator, so the weight is load-bearing.
+///
+/// The reference builds this through `lil` and two scalar assignments, which **replace** the
+/// end off-diagonals rather than adding to them. `2.0 * inv_h2` here, not `inv_h2 + inv_h2`;
+/// they agree, but only one of them is what the original says.
+///
+/// # Panics
+/// If `n` is below 2 -- the mirror needs a distinct interior neighbour at each end.
+pub fn clamped_d2_1d(n: usize, h: f64) -> Csr {
+    assert!(n >= 2, "clamped_d2_1d needs n >= 2");
+    let inv_h2 = 1.0 / (h * h);
+    let main = -2.0 * inv_h2;
+    let mirror = 2.0 * inv_h2;
+    let rows = (0..=n)
+        .map(|l| {
+            if l == 0 {
+                vec![(0, main), (1, mirror)]
+            } else if l == n {
+                vec![(n - 1, mirror), (n, main)]
+            } else {
+                vec![(l - 1, inv_h2), (l, main), (l + 1, inv_h2)]
+            }
+        })
+        .collect();
+    Csr::from_rows(n + 1, n + 1, rows)
+}
+
+/// `n x (n+1)` node-to-cell average `(u[i] + u[i+1])/2` on cell `i` -- `forward_d1_1d`'s partner.
+///
+/// Carries no `h`. Its tensor product maps a node field to the 0.25-weighted average of a cell's
+/// four corners, and the **adjoint** of that scatters a cell-centred quantity back onto nodes --
+/// the step that makes the bracket's trilinear form exactly triple self-adjoint.
+pub fn avg_d1_1d(n: usize) -> Csr {
+    let rows = (0..n).map(|i| vec![(i, 0.5), (i + 1, 0.5)]).collect();
+    Csr::from_rows(n, n + 1, rows)
+}
+
+/// The discrete von Karman / Monge-Ampere bracket `l(a, b)` on the full `(nx+1) x (ny+1)` grid.
+///
+/// `L(a, b) = a_xx b_yy + a_yy b_xx - 2 a_xy b_xy` -- the nonlinear coupling of the Foppl-von
+/// Karman plate (HANDOFF section 5 model #6). `l(w, w)` sources the Airy stress function and
+/// `l(w, F)` is the membrane restoring force. The property the whole conservative scheme rests on
+/// is that the trilinear form `T(a, b, c) = <l(a, b), c>` is symmetric under **any** permutation
+/// of its three arguments, to machine precision, for fields vanishing on the rim.
+///
+/// That symmetry is not free and the naive collocated bracket does not have it. It appears only
+/// when the twist term is discretised on **cell centres** (`forward_d1_1d` tensored with itself)
+/// and its product averaged back to nodes by the adjoint of the corner average (`avg_d1_1d`):
+///
+/// ```text
+/// l(a, b) = (d_xx a)(d_yy b) + (d_yy a)(d_xx b)  -  2 * A^T[ (D_xy a)(D_xy b) ]
+/// ```
+///
+/// **Domain requirement, not a bug.** The cancellation is a summation-by-parts identity with no
+/// leftover boundary term only when the fields are zero on the bounding-box rim. Callers pass
+/// full-grid vectors of length `(nx+1)(ny+1)` with the rim held at zero.
+///
+/// # Every matvec here is a canonical row gather, and one of them had to be checked
+///
+/// `Sxx`, `Syy` and `Dxy` are used as SciPy uses them, `M @ v`, and all three come out of `kron`
+/// ascending. `Acell` is used **transposed** -- and in SciPy `csr.T` is a *CSC*, whose matvec
+/// scatters columns rather than gathering rows. Those are different orders in general, but not
+/// here, and the reason is worth one line because it is a lemma rather than a measurement: a CSC
+/// matvec accumulates each output entry over increasing column index, and a sorted-CSR row gather
+/// accumulates over increasing column index, so the two coincide for every canonically-stored
+/// matrix. Measured 0 differing entries in 21,780 at four grids, as predicted (plan section 27.3).
+#[derive(Debug, Clone)]
+pub struct VonKarmanBracket {
+    nx: usize,
+    ny: usize,
+    h: f64,
+    n_nodes: usize,
+    sxx: Csr,
+    syy: Csr,
+    dxy: Csr,
+    acell: Csr,
+    acell_t: Csr,
+}
+
+impl VonKarmanBracket {
+    /// Build the four operators on an `(nx+1) x (ny+1)` node grid of spacing `h`.
+    ///
+    /// # Panics
+    /// If `nx` or `ny` is below 2, or `h` is not positive -- the two refusals the original raises.
+    pub fn new(nx: usize, ny: usize, h: f64) -> Self {
+        assert!(
+            nx >= 2 && ny >= 2,
+            "Nx, Ny must be >= 2 (need at least one interior node per axis)."
+        );
+        assert!(h > 0.0, "h (grid spacing) must be positive.");
+        let ix = Csr::identity(nx + 1);
+        let iy = Csr::identity(ny + 1);
+        // C order: y is the outer tensor factor, x the inner.
+        let sxx = iy.kron(&centered_d2_1d(nx, h));
+        let syy = centered_d2_1d(ny, h).kron(&ix);
+        let dxy = forward_d1_1d(ny, h).kron(&forward_d1_1d(nx, h));
+        let acell = avg_d1_1d(ny).kron(&avg_d1_1d(nx));
+        let acell_t = acell.transpose();
+        VonKarmanBracket {
+            nx,
+            ny,
+            h,
+            n_nodes: (nx + 1) * (ny + 1),
+            sxx,
+            syy,
+            dxy,
+            acell,
+            acell_t,
+        }
+    }
+
+    /// Segments along x.
+    pub fn nx(&self) -> usize {
+        self.nx
+    }
+
+    /// Segments along y.
+    pub fn ny(&self) -> usize {
+        self.ny
+    }
+
+    /// Grid spacing.
+    pub fn h(&self) -> f64 {
+        self.h
+    }
+
+    /// `(nx+1)(ny+1)` -- the length of every vector this type takes and returns.
+    pub fn n_nodes(&self) -> usize {
+        self.n_nodes
+    }
+
+    /// `d_xx` lifted onto the grid.
+    pub fn sxx(&self) -> &Csr {
+        &self.sxx
+    }
+
+    /// `d_yy` lifted onto the grid.
+    pub fn syy(&self) -> &Csr {
+        &self.syy
+    }
+
+    /// The cell-centred twist `D_xy`, one row per cell.
+    pub fn dxy(&self) -> &Csr {
+        &self.dxy
+    }
+
+    /// The node-to-cell corner average `A`, one row per cell.
+    pub fn acell(&self) -> &Csr {
+        &self.acell
+    }
+
+    /// The nodal field `l(a, b)`, symmetric in its two arguments by construction.
+    ///
+    /// The assembly order is the original's, spelled out because it is arithmetic: the two
+    /// straight products are summed left to right and the twist is subtracted after being doubled,
+    /// `(sxx_a * syy_b + syy_a * sxx_b) - 2.0 * twist`.
+    ///
+    /// # Panics
+    /// If `a` or `b` is not a full-grid vector.
+    pub fn eval(&self, a: &[f64], b: &[f64]) -> Vec<f64> {
+        assert_eq!(a.len(), self.n_nodes, "a must be a full-grid vector");
+        assert_eq!(b.len(), self.n_nodes, "b must be a full-grid vector");
+        let sxx_a = self.sxx.matvec(a);
+        let syy_b = self.syy.matvec(b);
+        let syy_a = self.syy.matvec(a);
+        let sxx_b = self.sxx.matvec(b);
+        let dxy_a = self.dxy.matvec(a);
+        let dxy_b = self.dxy.matvec(b);
+        let cell: Vec<f64> = dxy_a.iter().zip(dxy_b.iter()).map(|(p, q)| p * q).collect();
+        let twist = self.acell_t.matvec(&cell);
+        (0..self.n_nodes)
+            .map(|i| (sxx_a[i] * syy_b[i] + syy_a[i] * sxx_b[i]) - 2.0 * twist[i])
+            .collect()
+    }
+
+    /// The trilinear form `T(a, b, c) = <l(a, b), c> = h^2 sum l(a, b) c`.
+    ///
+    /// Triple self-adjoint to machine precision **iff** the fields vanish on the rim. This is the
+    /// one quantity here whose parity claim is a tolerance rather than an equality, and the reason
+    /// is `inner2d`: NumPy contracts it with `np.dot`, which is BLAS, and section 14.2 settled
+    /// that matching a BLAS reduction would be a claim about a runner.
+    pub fn trilinear(&self, a: &[f64], b: &[f64], c: &[f64]) -> f64 {
+        inner2d(&self.eval(a, b), c, self.h)
+    }
+}
+
+/// Elliptic solve for the von Karman **Airy stress function** `F` -- model #6, Part 2.
+///
+/// Solves `lap^2 F = source` on a rectangular grid with the **clamped** in-plane condition
+/// `F = 0, F,n = 0`, which is the physically correct movable-edge condition for a simply-supported
+/// plate. It is deliberately *not* the `B = L^2` Navier operator of `biharmonic_from_mask`.
+///
+/// Built from the energy: the membrane energy is `(1/2Ee)*||lap F||^2`, and for clamped edges that
+/// norm needs no mixed term, so the operator is a single Laplacian squared --
+///
+/// ```text
+/// B_F = Lc_r^T Wa Lc_r
+/// ```
+///
+/// with `Lc` the full-grid Laplacian built from `clamped_d2_1d`, `Wa` the trapezoidal area weight
+/// (`h^2` interior, `h^2/2` edge, `h^2/4` corner) and `Lc_r` the rim **columns** dropped, all rows
+/// kept. Symmetric positive definite by construction -- clamping leaves no rigid-body mode, so
+/// unlike the free plate's `{1, x, y}` the nullspace here is empty -- and factored once.
+///
+/// # The association is the whole arithmetic story, and it is not the multiplication
+///
+/// The reference writes `Lc_r.T @ Wa @ Lc_r`, which Python left-associates. Ask the two questions
+/// section 26.2 separated and they come apart cleanly:
+///
+/// * **Values.** Every entry of `Lc` is `{1, 2, 4}` times one reciprocal and every entry of `Wa`
+///   is `{1, 1/2, 1/4}` times one product, so each *term* `A*W*B` has the same two outer mantissas
+///   whichever way it is bracketed, and `fl(fl(aw)a) = fl(a*fl(wa))` by commutativity. Measured
+///   over five grids: not one term differs. Section 26.5's rule holds.
+/// * **Order.** And it settles nothing, because the association does not move the products, it
+///   moves the **sum**. SciPy hands back `Lc_r^T @ Wa` with every row *descending*, so the outer
+///   product contracts the shared index in descending order; the right-associated spelling
+///   contracts it ascending. Those are different sums on 2 of the 22 grids the test suite builds,
+///   up to 46 entries of 1,889.
+///
+/// So the fix is a pair of parentheses rather than a canonicaliser: the reference now writes
+/// `Lc_r^T @ (Wa @ Lc_r)`, whose contraction runs over `Lc_r^T`'s own ascending rows, and this
+/// module spells the same association. That is a *third* remedy for an ordering problem, after
+/// "reproduce the values" and "sort the storage" (plan section 27.2).
+#[derive(Debug, Clone)]
+pub struct AiryStressSolver {
+    nx: usize,
+    ny: usize,
+    h: f64,
+    n_nodes: usize,
+    n_interior: usize,
+    mask: Mask,
+    index_map: Vec<i64>,
+    bf: Csr,
+    load_weight: Vec<f64>,
+    lu: SparseLu,
+}
+
+impl AiryStressSolver {
+    /// Assemble and factor `B_F` on an `(nx+1) x (ny+1)` node grid of spacing `h`.
+    ///
+    /// # Errors
+    /// If the assembled operator has no admissible pivot -- which for an SPD matrix means the
+    /// caller built something that is not one.
+    ///
+    /// # Panics
+    /// If `nx` or `ny` is below 2, or `h` is not positive.
+    pub fn new(nx: usize, ny: usize, h: f64) -> Result<Self, SparseLuError> {
+        assert!(
+            nx >= 2 && ny >= 2,
+            "Nx, Ny must be >= 2 (need at least one interior node per axis)."
+        );
+        assert!(h > 0.0, "h (grid spacing) must be positive.");
+        let mask = rectangle_mask(nx, ny);
+        let index_map = mask.index_map();
+        let n_interior = mask.n_live();
+        let n_nodes = (nx + 1) * (ny + 1);
+
+        let ix = Csr::identity(nx + 1);
+        let iy = Csr::identity(ny + 1);
+        let lc = iy
+            .kron(&clamped_d2_1d(nx, h))
+            .add(&clamped_d2_1d(ny, h).kron(&ix));
+
+        // Trapezoidal area weight Wa = kron(m_y, m_x): h^2 interior, h^2/2 edge, h^2/4 corner. The
+        // halvings are exact, so every entry shares the mantissa of `h * h` -- the fact the
+        // association argument above turns on.
+        let mut mx = vec![h; nx + 1];
+        mx[0] = 0.5 * h;
+        mx[nx] = 0.5 * h;
+        let mut my = vec![h; ny + 1];
+        my[0] = 0.5 * h;
+        my[ny] = 0.5 * h;
+        let mut wa_diag = Vec::with_capacity(n_nodes);
+        for wy in &my {
+            for wx in &mx {
+                wa_diag.push(wy * wx);
+            }
+        }
+        let wa = Csr::diagonal(&wa_diag);
+
+        let keep = mask.flags();
+        let lc_r = lc.select_columns(keep);
+        // Right-associated, deliberately: see the type docstring. `Lc_r^T`'s rows are ascending
+        // (the transpose is a counting sort and the column restriction is monotone), so this
+        // contracts the shared index in ascending order -- the one order both languages can say.
+        let bf = lc_r.transpose().matmul(&wa.matmul(&lc_r));
+
+        let load_weight: Vec<f64> = wa_diag
+            .iter()
+            .zip(keep.iter())
+            .filter(|(_, &k)| k)
+            .map(|(w, _)| *w)
+            .collect();
+        let lu = SparseLu::factor(&bf)?;
+        Ok(AiryStressSolver {
+            nx,
+            ny,
+            h,
+            n_nodes,
+            n_interior,
+            mask,
+            index_map,
+            bf,
+            load_weight,
+            lu,
+        })
+    }
+
+    /// Segments along x.
+    pub fn nx(&self) -> usize {
+        self.nx
+    }
+
+    /// Segments along y.
+    pub fn ny(&self) -> usize {
+        self.ny
+    }
+
+    /// Grid spacing.
+    pub fn h(&self) -> f64 {
+        self.h
+    }
+
+    /// `(nx+1)(ny+1)` -- the length of every full-grid vector here.
+    pub fn n_nodes(&self) -> usize {
+        self.n_nodes
+    }
+
+    /// The number of interior unknowns.
+    pub fn n_interior(&self) -> usize {
+        self.n_interior
+    }
+
+    /// The interior mask -- `F` is held at zero on the bounding-box rim.
+    pub fn mask(&self) -> &Mask {
+        &self.mask
+    }
+
+    /// Full-grid node to interior-unknown index, `-1` on the rim.
+    pub fn index_map(&self) -> &[i64] {
+        &self.index_map
+    }
+
+    /// The assembled SPD operator `B_F`, on the interior unknowns.
+    pub fn bf(&self) -> &Csr {
+        &self.bf
+    }
+
+    /// Solve `lap^2 F = source`; both vectors are full-grid with the rim at zero.
+    ///
+    /// The interior load is `Wa`-weighted here, because `Wa` lives *inside* `B_F` -- the caller
+    /// passes the physical source and never has to remember the quadrature weight. Forgetting it
+    /// is an O(1) error against a fine operator, not a small one.
+    ///
+    /// # Errors
+    /// If the right-hand side does not match the factorization.
+    ///
+    /// # Panics
+    /// If `source` is not a full-grid vector.
+    pub fn solve(&self, source: &[f64]) -> Result<Vec<f64>, SparseLuError> {
+        assert_eq!(
+            source.len(),
+            self.n_nodes,
+            "source must be a full-grid vector"
+        );
+        let rhs: Vec<f64> = (0..self.n_nodes)
+            .filter(|&p| self.index_map[p] >= 0)
+            .enumerate()
+            .map(|(k, p)| self.load_weight[k] * source[p])
+            .collect();
+        let interior = self.lu.solve(&rhs)?;
+        Ok(embed(&interior, &self.index_map))
+    }
+
+    /// Discrete `||lap F||^2 = F^T B_F F` for a full-grid `F`; the area weights are already inside.
+    ///
+    /// A read-out, and the only thing in this type that touches a reduction. `>= 0`.
+    ///
+    /// # Panics
+    /// If `f` is not a full-grid vector.
+    pub fn laplacian_norm_sq(&self, f: &[f64]) -> f64 {
+        assert_eq!(f.len(), self.n_nodes, "F must be a full-grid vector");
+        let fi: Vec<f64> = (0..self.n_nodes)
+            .filter(|&p| self.index_map[p] >= 0)
+            .map(|p| f[p])
+            .collect();
+        let bfi = self.bf.matvec(&fi);
+        let mut acc = 0.0;
+        for (a, b) in fi.iter().zip(bfi.iter()) {
+            acc += a * b;
+        }
+        acc
+    }
 }
 
 /// Scatter a flat live-node vector back onto the full node grid, zeros at dead nodes.

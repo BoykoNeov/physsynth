@@ -922,6 +922,24 @@ class AiryStressSolver:
     operator. :meth:`solve` applies it; the matching Part-3 membrane energy is then the plain
     quadratic ``(1 / (2 E e))·Fᵀ B_F F`` (:meth:`laplacian_norm_sq`).
 
+    **The association is the order, and it is not the multiplication** (plan §27.2). ``BᵀWB`` has
+    two bracketings and Python's bare ``Lc_r.T @ Wa @ Lc_r`` picks the left one. Ask §26.2's two
+    questions of it and they come apart. *Values*: every entry of ``Lc`` is ``{1, 2, 4}`` times one
+    reciprocal and every entry of ``Wa`` is ``{1, 1/2, 1/4}`` times one product, so both outer
+    factors of every term share a mantissa and ``fl(fl(aw)b) = fl(a·fl(wb))`` by commutativity --
+    measured over five grids, not one *term* differs, and §26.5's rule holds exactly as written.
+    *Order*: and that settles nothing, because the association does not move the products, it moves
+    the **sum**. SciPy hands ``Lc_rᵀ @ Wa`` back with every row *descending*, so the left bracketing
+    contracts the shared index descending where the right one contracts it ascending. Those are
+    different matrices on **2 of the 22 grids this test suite builds** -- 2 entries of 501 at
+    ``(8, 8, h=0.0375)`` and 46 of 1,889 at ``(16, 12, h=0.06)``, both at ~1e-16 of the entry.
+
+    So this is written right-associated. It is the third remedy this project has needed for an
+    ordering problem, after "reproduce the values" and "sort the storage" (:mod:`.portable`), and
+    the cheapest: a pair of parentheses, chosen so that the contraction runs over an operand whose
+    order both languages can say. Its sibling :func:`free_plate_stiffness` writes the same form the
+    same way, and there it was invisible.
+
     **Interoperation.** ``F`` and the ``source`` are passed as **full-grid** vectors of length
     ``(Nx+1)(Ny+1)`` with the rim held at zero — the same representation the
     :class:`VonKarmanBracket` uses, so the pipeline is
@@ -968,7 +986,11 @@ class AiryStressSolver:
         Wa = sparse.diags(wa, format="csr")
 
         Lc_r = Lc.tocsc()[:, self._cols]  # drop rim columns (F = 0); keep all rows
-        self.Bf: sparse.csc_matrix = (Lc_r.T @ Wa @ Lc_r).tocsc()
+        # Right-associated, and the parentheses are the whole of it -- see "The association is the
+        # order" in the class docstring. `canonical` states the requirement the association leans
+        # on rather than assuming it: the shared index is contracted in the stored order of the
+        # LEFT operand's rows, so that operand has to be the one whose order is expressible.
+        self.Bf: sparse.csc_matrix = (canonical(Lc_r.T) @ (Wa @ Lc_r)).tocsc()
         # Interior Galerkin load weights (all h² for a rectangle — the rim half-weights are dropped
         # with the rim columns), used to form Wa · source in solve().
         self._load_weight = wa[self._cols]
@@ -1044,7 +1066,17 @@ def norm2_2d(f: NDArray[np.float64], h: float) -> float:
 # forms `B @ u` twice per timestep -- so the order is on the update path. The values were already
 # identical. `free_plate_stiffness`'s K needed nothing: SciPy returns a Gram product sorted already.
 #
-# `crates/physsynth-core/src/ops2d.rs` names what is still deliberately absent.
+# Phase 5's THIRD batch finishes the module with the nonlinear plate -- the five private 1-D
+# differences, `VonKarmanBracket` and `AiryStressSolver`. It cost the reference exactly one edit
+# and it is a pair of parentheses in the Airy Gram (see that class). Two things about the swap are
+# worth knowing here rather than in the plan. First, `plate.py` needed NO change: `VKPlate` holds a
+# bracket and a solver and calls three methods on them, and the Rust classes wear the same
+# interface. Second, the two classes are rebound WHOLESALE below, so a test that pins
+# `operators2d.VonKarmanBracket` to measure what that name builds is comparing Rust against Rust
+# once the flag is set -- which is why the parity file reaches for the `*Py` aliases instead
+# (plan section 23.6).
+#
+# The module is now ported in full.
 #
 # The matrix comes back from the binding as CSR triplets and is rebuilt here, exactly as in
 # `operators.py`: the core never learns what SciPy is, and the modules that
@@ -1071,9 +1103,20 @@ dirichlet_interior_d2_1d_py = _dirichlet_interior_d2_1d
 orthotropic_biharmonic_py = orthotropic_biharmonic
 free_plate_stiffness_py = free_plate_stiffness
 free_plate_stiffness_from_mask_py = free_plate_stiffness_from_mask
+collocated_d2_1d_py = _collocated_d2_1d
+forward_d1_1d_py = _forward_d1_1d
+centered_d2_1d_py = _centered_d2_1d
+clamped_d2_1d_py = _clamped_d2_1d
+avg_d1_1d_py = _avg_d1_1d
 embed_py = embed
 inner2d_py = inner2d
 norm2_2d_py = norm2_2d
+
+VonKarmanBracketPy = VonKarmanBracket
+"""The pure-Python bracket, under a name the swap below never rebinds."""
+
+AiryStressSolverPy = AiryStressSolver
+"""The pure-Python Airy solve, under a name the swap below never rebinds."""
 
 _USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
 
@@ -1160,3 +1203,26 @@ if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the d
 
     def norm2_2d(f, h):  # type: ignore[misc]  # noqa: F811
         return _rs.norm2_2d(f, h)
+
+    def _collocated_d2_1d(N, h):  # type: ignore[misc]  # noqa: F811
+        return _csr2d(_rs.collocated_d2_1d_csr(N, h))
+
+    def _forward_d1_1d(N, h):  # type: ignore[misc]  # noqa: F811
+        return _csr2d(_rs.forward_d1_1d_csr(N, h))
+
+    def _centered_d2_1d(N, h):  # type: ignore[misc]  # noqa: F811
+        return _csr2d(_rs.centered_d2_1d_csr(N, h))
+
+    def _clamped_d2_1d(N, h):  # type: ignore[misc]  # noqa: F811
+        return _csr2d(_rs.clamped_d2_1d_csr(N, h))
+
+    def _avg_d1_1d(N):  # type: ignore[misc]  # noqa: F811
+        return _csr2d(_rs.avg_d1_1d_csr(N))
+
+    # The two classes are rebound wholesale, as every ported model is. Note what that does to a
+    # test that pins a module-level NAME to measure the thing the name builds: with the flag set,
+    # `VKPlate` holds a Rust bracket and a Rust solver, so a comparison written against
+    # `operators2d.VonKarmanBracket` is Rust against Rust and asserts nothing. That is section
+    # 23.6's finding, and it is why the parity file reaches for the `*Py` aliases above instead.
+    VonKarmanBracket = _rs.VonKarmanBracket  # type: ignore[assignment,misc]  # noqa: F811
+    AiryStressSolver = _rs.AiryStressSolver  # type: ignore[assignment,misc]  # noqa: F811

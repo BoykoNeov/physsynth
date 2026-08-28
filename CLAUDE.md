@@ -22,27 +22,27 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
    **PHASES 2, 3 AND 4 ARE ALL COMPLETE** and **PHASE 5 IS UNDER WAY**; phases 0, 1, all five
-   batches of 2, all six of 3, phase 4 and the first two batches of 5 are
-   built (plan §9-§26): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
+   batches of 2, all six of 3, phase 4 and the first three batches of 5 are
+   built (plan §9-§27): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
    of `operators`, `membrane`, `exciter`, `body`, `bore`, `reed`, **`mallet`**, **`string_stiff`**,
    **`string_damped`**, **`string_nonlinear`**, **`bow`**, **all of `collision`** — the contact
    primitives, both contact solves, the project's one **dense LU** and `BarrierString` itself —
-   and now **`beam`**, plus the *builder half* of `operators2d`, **its guitar-outline
-   geometry** and **all five of its matrices** — the biharmonic, the interior second difference,
-   the orthotropic bending operator and both free-plate stiffnesses — all of `radiation` **except**
-   its
+   and **`beam`**, and now **all of `operators2d`**: the builder half, the guitar-outline geometry,
+   all five of its matrices (the biharmonic, the interior second difference, the orthotropic
+   bending operator and both free-plate stiffnesses) and, as of batch 3, the **nonlinear plate** —
+   the five private 1-D differences, the **von Kármán bracket** and the **clamped Airy solve** —
+   plus all of `radiation` **except** its
    one Bessel helper, the **banded Cholesky** the four theta-scheme strings share and the
-   **sparse LU** the whole of Group D will share — ported. What is left of the
-   core is the rest of Group D: `operators2d`'s **von Karman half** (four private 1-D differences,
-   the bracket and the Airy solver — the only piece of the module whose parity claim is a
-   *tolerance* rather than an equality, because it factors with SuperLU), `plate`, `connection` and
-   `string_geometric` (Phase 5), then `airbox` and `analysis/`.
+   **sparse LU** the whole of Group D shares — ported. What is left of the
+   core is `plate`, `connection` and `string_geometric` (Phase 5), then `airbox` and `analysis/`.
    `cargo test --workspace` runs the native bars and the Cargo dependency allowlist;
    `pip install ./crates/physsynth-py` then
    `PHYSSYNTH_RS=1 pytest` runs the **existing, unmodified** Python tests against the Rust code. The
    flag is one switch for the whole tree: with it set, the one still-Python string model runs on
-   Rust-built operators; every plate — supported, free, orthotropic, guitar-shaped — plus the von
-   Karman bracket runs on Rust-built geometry **and on Rust-built stiffness matrices**; and the
+   Rust-built operators; every plate — supported, free, orthotropic, guitar-shaped — runs on
+   Rust-built geometry **and on Rust-built stiffness matrices**, and the **nonlinear** one sources
+   its Airy stress function from a Rust factorization and forms its coupling force with a Rust
+   bracket, so `VKPlate` is now a NumPy timestepping loop around three Rust objects; and the
    whole body/radiation leg (bridges,
    sympathetic strings, all three radiation tiers) runs on a Rust modal body; and the whole wind leg
    — air column, radiating bell and the reed that blows it — is Rust end to end; and the air node
@@ -381,6 +381,52 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    `free_plate_stiffness` is **slower** than SciPy's (3.49 ms vs 2.53 ms at N = 32), which is §11.6
    exactly — five compiled SMMP calls with nothing around them to win, and construction-time only
    (§26.8).
+
+   And a **twentieth**, from the nonlinear plate — Phase 5's third batch, which finishes
+   `operators2d` — which corrects a rule §26 wrote one batch earlier and is really about *where an
+   ordering difference enters an expression*: **§26.5's mantissa test is a statement about the
+   products, and an association can move the sum instead.** The Airy solver assembles `BᵀWB` with
+   no parentheses, which Python left-associates. Ask §26.5's question and the answer is the
+   predicted one — every entry of the operator is `{1,2,4}` times one reciprocal and every entry of
+   the weight is `{1,½,¼}` times one product, so the two outer factors of every term share a
+   mantissa and **not one term differs** — and the two matrices differ anyway, because the two
+   bracketings route the contraction through differently-*ordered* intermediates: SciPy hands
+   `Lc_rᵀ @ Wa` back **descending**, and a sparse product contracts the shared index in the stored
+   order of its left operand's rows. Over the **22 grids the suite actually builds** (enumerated
+   from an instrumented run, not sampled) those are different matrices on **2** — 46 entries of
+   1,889 at one of them — so unlike §16.4 the suite's own fixtures contain the witness. The remedy
+   is the cheapest this project has found for an ordering problem and the **third kind**: after
+   "reproduce the values" (§26.2) and "sort the storage" (`portable.py`, §18.2), **re-associate** —
+   pick the bracketing whose contraction runs over an operand that is already canonical. It changes
+   no module, adds no call and costs nothing at run time, and the question that finds it is "which
+   operand's stored order does this contraction run over, and did I choose it or did SciPy?"
+   (§27.2). Six corollaries. **The Rust side could not have fixed this**: `Csr::from_rows` sorts, so
+   a descending row is not expressible in the crate at all — §10's decision paying off a third time,
+   and the reason the edit had to be Python's. **A CSC scatter and a canonical CSR gather are the
+   same sum**, which is a lemma rather than a measurement (both accumulate each output entry over
+   increasing column index) and is why the bracket is bit-identical even though `Acell.T` is a CSC
+   in SciPy and a CSR in Rust — §23.2's cheap-question move applied to a *loop structure* (§27.3).
+   **One constant is the wrong shape for a Group D bar**: the Airy solve's gap is 3.1e-16 at 4×4 and
+   **5.2e-10** at the 160×128 the airbox tests build, which is `N⁴` — a biharmonic's condition
+   number — and since both sides are *backward stable* (asserted, so the growing tolerance cannot be
+   misread as the port decaying) the forward difference says nothing about either implementation
+   (§27.4). **§24.4's shared-factorization manoeuvre, third use, is what makes the assembly claim
+   sayable at all**: put the Python solver on the Rust factorization and the two solves go
+   bit-identical, so the entire residue is the solver (§27.4). **A seventh agreement regime, and the
+   first where the trajectory becomes unrelated while every physics bar stays green**: the same
+   plate at the same amplitude gives answers twelve orders apart — one regime random-walks to
+   1.1e-13 at 1,000 steps (and is *bit-identical* for 4,000 below `w/e ≈ 0.1`, §23.2's mechanism in
+   a model), the other is chaotic and e-folds every **~57 steps**, reaching **0.59 of the peak by
+   step 2,000** — with the energy at 5.1e-14 and the drift at 2.6e-14 on both sides throughout. So
+   the bar reads the **energy**, never `max|du|/amp`: §24.5's conclusion by a different mechanism,
+   and the plain form is that **a conserved quantity is not a trajectory comparison**. What
+   separates the two regimes is **not the fixture and not the amplitude** — both of those were
+   tried and falsified — it is the **Picard sweep count**, which is the model's own public report
+   of how hard the nonlinearity is working: two to six is the random walk, eleven or more is the
+   exponential (§27.5). §19.2's Picard branch was watched and is a *consequence*, not a cause —
+   first flip at step 1,553, when the deviation is already 2.1e-3. And **§19.7's YAML line
+   continuation happened a third time, from a third tool, and never reached CI**, because §20.7 had
+   turned that scar from a paragraph into a test (§27.7).
 
 4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
    never the reverse. Keeps the physics portable to C++/Rust later.

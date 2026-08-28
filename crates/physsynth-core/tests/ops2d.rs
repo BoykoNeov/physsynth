@@ -9,10 +9,12 @@
 //! covers the properties that make the model correct in the first place.
 
 use physsynth_core::ops2d::{
-    biharmonic_from_mask, cells_per_node, dirichlet_interior_d2_1d, disk_mask, embed,
+    avg_d1_1d, biharmonic_from_mask, cells_per_node, centered_d2_1d, clamped_d2_1d,
+    collocated_d2_1d, dirichlet_interior_d2_1d, disk_mask, embed, forward_d1_1d,
     free_plate_stiffness, free_plate_stiffness_from_mask, grid_coords, guitar_area,
     guitar_half_width, guitar_mask, guitar_scale, inner2d, laplacian_from_mask, live_cells,
-    norm2_2d, orthotropic_biharmonic, prune_to_area_carrying, rectangle_mask, Mask,
+    norm2_2d, orthotropic_biharmonic, prune_to_area_carrying, rectangle_mask, AiryStressSolver,
+    Mask, VonKarmanBracket,
 };
 use physsynth_core::sparse::Csr;
 
@@ -802,6 +804,356 @@ fn the_gram_association_is_invisible_here_and_that_is_a_property_of_the_values()
         witness.is_some(),
         "no witness in 64 draws: the two associations agree even off the plate's value set,          so the first half of this test says nothing"
     );
+}
+
+// --- the nonlinear plate ------------------------------------------------------------------------
+
+#[test]
+fn the_five_one_d_differences_carry_the_stencils_they_claim() {
+    let (n, h) = (6usize, 0.05);
+    let inv_h2 = 1.0 / (h * h);
+
+    let c = collocated_d2_1d(n, h);
+    assert_eq!((c.nrows(), c.ncols()), (n + 1, n + 1));
+    // The end rows are EMPTY, not zero-valued: the free beam samples curvature at interior nodes
+    // only, and `nnz` is where that shows.
+    assert_eq!(c.nnz(), 3 * (n - 1));
+    assert_eq!(c.indptr()[0], c.indptr()[1]);
+    assert_eq!(c.indptr()[n], c.indptr()[n + 1]);
+    for l in 1..n {
+        assert_eq!(c.get(l, l - 1), inv_h2);
+        assert_eq!(c.get(l, l), -2.0 * inv_h2);
+        assert_eq!(c.get(l, l + 1), inv_h2);
+    }
+
+    let d = centered_d2_1d(n, h);
+    assert_eq!((d.nrows(), d.ncols()), (n + 1, n + 1));
+    // ... where the ordinary tridiagonal keeps both, so it has four more entries than the above.
+    assert_eq!(d.nnz(), 3 * (n - 1) + 4);
+    assert_eq!(d.get(0, 0), -2.0 * inv_h2);
+    assert_eq!(d.get(0, 1), inv_h2);
+    assert_eq!(d.get(n, n - 1), inv_h2);
+
+    let m = clamped_d2_1d(n, h);
+    assert_eq!((m.nrows(), m.ncols()), (n + 1, n + 1));
+    assert_eq!(m.nnz(), d.nnz());
+    // The mirror DOUBLES the end off-diagonal and leaves everything else alone.
+    assert_eq!(m.get(0, 1), 2.0 * inv_h2);
+    assert_eq!(m.get(n, n - 1), 2.0 * inv_h2);
+    for l in 1..n {
+        assert_eq!(m.get(l, l - 1), inv_h2);
+        assert_eq!(m.get(l, l), -2.0 * inv_h2);
+        assert_eq!(m.get(l, l + 1), inv_h2);
+    }
+    assert!(
+        !m.is_symmetric(),
+        "the clamped difference is one-sided at the ends"
+    );
+
+    let f = forward_d1_1d(n, h);
+    assert_eq!((f.nrows(), f.ncols()), (n, n + 1));
+    assert_eq!(f.nnz(), 2 * n);
+    for i in 0..n {
+        assert_eq!(f.get(i, i), -1.0 / h);
+        assert_eq!(f.get(i, i + 1), 1.0 / h);
+    }
+
+    let a = avg_d1_1d(n);
+    assert_eq!((a.nrows(), a.ncols()), (n, n + 1));
+    for i in 0..n {
+        assert_eq!(a.get(i, i), 0.5);
+        assert_eq!(a.get(i, i + 1), 0.5);
+    }
+}
+
+#[test]
+fn the_collocated_difference_annihilates_linear_data_exactly() {
+    // The free plate's `{1, x}` nullspace along one axis, and the reason the end rows are empty:
+    // a one-sided end row would NOT annihilate a ramp, and the rigid-body modes would acquire a
+    // frequency.
+    let (n, h) = (9usize, 0.037);
+    let c = collocated_d2_1d(n, h);
+    let inv_h2 = 1.0 / (h * h);
+    // A constant is annihilated to the BIT -- `(p - 2p) + p` cancels exactly, whatever `p` is.
+    let ones = vec![1.0; n + 1];
+    for (l, got) in c.matvec(&ones).iter().enumerate() {
+        assert_eq!(*got, 0.0, "row {l} did not annihilate a constant exactly");
+    }
+    // A ramp is annihilated to rounding and not further, and the difference is the ramp's, not
+    // the operator's: `-0.4 + 1.7*i*h` is not exactly affine in doubles, so the cancellation it
+    // is asked for does not exist to cancel. The bar is the curvature's own scale, `1/h^2` times
+    // the field, which is what a one-ulp perturbation of the field would produce.
+    let ramp: Vec<f64> = (0..=n).map(|i| -0.4 + 1.7 * (i as f64) * h).collect();
+    let scale = inv_h2 * ramp.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+    for (l, got) in c.matvec(&ramp).iter().enumerate() {
+        assert!(
+            got.abs() < 1e-13 * scale,
+            "row {l} left {got:.3e} on a ramp of scale {scale:.3e}"
+        );
+    }
+}
+
+#[test]
+fn the_clamped_gram_is_the_textbook_clamped_biharmonic() {
+    // The whole reason the end off-diagonal is doubled. `Lc_r^T Wa Lc_r` with the TRAPEZOIDAL
+    // weight is the standard clamped-beam biharmonic: near-boundary diagonal 7, interior 6,
+    // off-diagonals -4 and 1. With `Wa = I` the 7 comes out 9 -- a different, wrong operator --
+    // so this pins the weight as much as the mirror.
+    let (n, h) = (8usize, 0.1);
+    let d2c = clamped_d2_1d(n, h);
+    let mut m = vec![h; n + 1];
+    m[0] = 0.5 * h;
+    m[n] = 0.5 * h;
+    let wa = Csr::diagonal(&m);
+    let keep: Vec<bool> = (0..=n).map(|i| i > 0 && i < n).collect();
+    let d2c_r = d2c.select_columns(&keep);
+    let b = d2c_r.transpose().matmul(&wa.matmul(&d2c_r));
+    let scale = h * h * h;
+    let ni = n - 1;
+    assert!((b.get(0, 0) * scale - 7.0).abs() < 1e-12);
+    assert!((b.get(ni - 1, ni - 1) * scale - 7.0).abs() < 1e-12);
+    for i in 1..ni - 1 {
+        assert!((b.get(i, i) * scale - 6.0).abs() < 1e-12, "diagonal {i}");
+    }
+    for i in 0..ni - 1 {
+        assert!(
+            (b.get(i, i + 1) * scale + 4.0).abs() < 1e-12,
+            "off-diagonal {i}"
+        );
+    }
+    for i in 0..ni - 2 {
+        assert!(
+            (b.get(i, i + 2) * scale - 1.0).abs() < 1e-12,
+            "second band {i}"
+        );
+    }
+    // ... and the flat weight really does give the wrong number, so the line above is a claim.
+    let flat = Csr::identity(n + 1).scaled(h);
+    let wrong = d2c_r.transpose().matmul(&flat.matmul(&d2c_r));
+    assert!((wrong.get(0, 0) * scale - 9.0).abs() < 1e-12);
+}
+
+/// A rim-vanishing full-grid field, deterministic — the domain the bracket's identity holds on.
+fn rim_vanishing(nx: usize, ny: usize, seed: u64) -> Vec<f64> {
+    let v = pseudorandom((nx + 1) * (ny + 1), seed);
+    let mut f = vec![0.0; (nx + 1) * (ny + 1)];
+    for j in 1..ny {
+        for i in 1..nx {
+            f[j * (nx + 1) + i] = v[j * (nx + 1) + i];
+        }
+    }
+    f
+}
+
+#[test]
+fn the_bracket_is_symmetric_in_its_two_arguments() {
+    let br = VonKarmanBracket::new(7, 5, 0.06);
+    let a = rim_vanishing(7, 5, 3);
+    let b = rim_vanishing(7, 5, 9);
+    // Symmetric by construction rather than to a tolerance: the two straight terms swap and the
+    // twist product commutes, so the SAME doubles are added in the same order either way.
+    assert_eq!(br.eval(&a, &b), br.eval(&b, &a));
+}
+
+#[test]
+fn the_bracket_is_triple_self_adjoint_on_rim_vanishing_fields() {
+    // The operator money test, with no 1-D analogue: energy conservation of the whole nonlinear
+    // scheme rests on `T(a, b, c)` being invariant under ANY permutation of its three arguments.
+    // It holds only because the twist lives on cell centres and is averaged back by the adjoint of
+    // the corner average -- the naive collocated bracket leaves an O(1) remainder.
+    for (nx, ny, h) in [(6usize, 6usize, 0.05), (9, 7, 0.037), (12, 12, 1.0 / 3.0)] {
+        let br = VonKarmanBracket::new(nx, ny, h);
+        let a = rim_vanishing(nx, ny, 1);
+        let b = rim_vanishing(nx, ny, 2);
+        let c = rim_vanishing(nx, ny, 3);
+        let t1 = br.trilinear(&a, &b, &c);
+        let t2 = br.trilinear(&a, &c, &b);
+        let t3 = br.trilinear(&c, &b, &a);
+        let scale = t1.abs().max(t2.abs()).max(t3.abs()).max(1e-30);
+        assert!(
+            (t1 - t2).abs() / scale < 1e-11,
+            "T(a,b,c) != T(a,c,b) at {nx}x{ny}"
+        );
+        assert!(
+            (t1 - t3).abs() / scale < 1e-11,
+            "T(a,b,c) != T(c,b,a) at {nx}x{ny}"
+        );
+    }
+}
+
+#[test]
+fn the_bracket_annihilates_affine_data() {
+    // `l(a, affine) = 0`: an affine field has no curvature and no twist, so both straight terms
+    // and the twist term vanish. The bracket is symmetric, so both argument orders vanish.
+    let (nx, ny, h) = (8usize, 6usize, 0.05);
+    let br = VonKarmanBracket::new(nx, ny, h);
+    let a = rim_vanishing(nx, ny, 5);
+    let affine: Vec<f64> = (0..(nx + 1) * (ny + 1))
+        .map(|p| {
+            let (j, i) = (p / (nx + 1), p % (nx + 1));
+            0.3 - 1.1 * (i as f64) * h + 0.7 * (j as f64) * h
+        })
+        .collect();
+    let worst = br
+        .eval(&a, &affine)
+        .iter()
+        .chain(br.eval(&affine, &a).iter())
+        .fold(0.0f64, |m, v| m.max(v.abs()));
+    assert!(worst < 1e-9, "affine data left a residue of {worst:.3e}");
+}
+
+#[test]
+fn the_bracket_is_asymmetric_when_the_field_does_not_vanish_on_the_rim() {
+    // The domain requirement is a CONTRACT, not a bug, and this is what makes the test above a
+    // claim: off the rim-vanishing domain the trilinear form is asymmetric at O(1), not at
+    // machine precision. Without this half, a bracket that was accidentally symmetric for a
+    // trivial reason would pass.
+    let (nx, ny, h) = (7usize, 7usize, 0.05);
+    let br = VonKarmanBracket::new(nx, ny, h);
+    let a = pseudorandom((nx + 1) * (ny + 1), 11);
+    let b = pseudorandom((nx + 1) * (ny + 1), 12);
+    let c = pseudorandom((nx + 1) * (ny + 1), 13);
+    let t1 = br.trilinear(&a, &b, &c);
+    let t2 = br.trilinear(&a, &c, &b);
+    let scale = t1.abs().max(t2.abs()).max(1e-30);
+    assert!(
+        (t1 - t2).abs() / scale > 1e-3,
+        "a non-vanishing rim must break the identity macroscopically"
+    );
+}
+
+#[test]
+fn the_airy_operator_is_symmetric_and_the_solve_inverts_it() {
+    for (nx, ny, h) in [(6usize, 6usize, 0.05), (10, 8, 0.037), (12, 9, 1.0 / 3.0)] {
+        let airy = AiryStressSolver::new(nx, ny, h).expect("SPD");
+        let bf = airy.bf();
+        assert_eq!(bf.nrows(), airy.n_interior());
+        assert!(
+            bf.is_symmetric(),
+            "B_F is a Gram product and must be symmetric"
+        );
+        // Positive definite: clamping removes every rigid-body mode, so unlike the free plate's
+        // `{1, x, y}` the nullspace here is empty. A Rayleigh quotient on a spread of vectors is
+        // a smoke test; the factorization succeeding is the stronger one.
+        for seed in 0..8u64 {
+            let v = pseudorandom(airy.n_interior(), seed);
+            let q: f64 = v.iter().zip(bf.matvec(&v).iter()).map(|(a, b)| a * b).sum();
+            assert!(q > 0.0, "B_F is not positive definite at seed {seed}");
+        }
+        // ... and the solve really inverts it, weight included: `B_F f = Wa * source`.
+        let src = rim_vanishing(nx, ny, 21);
+        let f = airy.solve(&src).expect("solve");
+        let fi: Vec<f64> = (0..airy.n_nodes())
+            .filter(|&p| airy.index_map()[p] >= 0)
+            .map(|p| f[p])
+            .collect();
+        let lhs = bf.matvec(&fi);
+        let wa_diag: Vec<f64> = {
+            let mut mx = vec![h; nx + 1];
+            mx[0] = 0.5 * h;
+            mx[nx] = 0.5 * h;
+            let mut my = vec![h; ny + 1];
+            my[0] = 0.5 * h;
+            my[ny] = 0.5 * h;
+            let mut w = Vec::with_capacity((nx + 1) * (ny + 1));
+            for wy in &my {
+                for wx in &mx {
+                    w.push(wy * wx);
+                }
+            }
+            w
+        };
+        let rhs: Vec<f64> = (0..airy.n_nodes())
+            .filter(|&p| airy.index_map()[p] >= 0)
+            .map(|p| wa_diag[p] * src[p])
+            .collect();
+        let scale = rhs.iter().fold(0.0f64, |m, v| m.max(v.abs())).max(1e-300);
+        let worst = lhs
+            .iter()
+            .zip(rhs.iter())
+            .fold(0.0f64, |m, (a, b)| m.max((a - b).abs()))
+            / scale;
+        assert!(
+            worst < 1e-9,
+            "solve did not invert B_F at {nx}x{ny}: {worst:.3e}"
+        );
+        // The rim is held at zero on the way out, which is what makes `F` a bracket argument.
+        for (value, &live) in f.iter().zip(airy.index_map().iter()) {
+            if live < 0 {
+                assert_eq!(*value, 0.0);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_zero_source_gives_exactly_zero() {
+    let airy = AiryStressSolver::new(9, 7, 0.05).expect("SPD");
+    let f = airy.solve(&vec![0.0; airy.n_nodes()]).expect("solve");
+    assert!(f.iter().all(|&v| v == 0.0));
+    assert_eq!(airy.laplacian_norm_sq(&f), 0.0);
+}
+
+#[test]
+fn the_membrane_energy_read_out_is_the_quadratic_form_it_claims_to_be() {
+    let airy = AiryStressSolver::new(11, 8, 0.06).expect("SPD");
+    let f = rim_vanishing(11, 8, 31);
+    let fi: Vec<f64> = (0..airy.n_nodes())
+        .filter(|&p| airy.index_map()[p] >= 0)
+        .map(|p| f[p])
+        .collect();
+    let mut expected = 0.0;
+    for (a, b) in fi.iter().zip(airy.bf().matvec(&fi).iter()) {
+        expected += a * b;
+    }
+    assert_eq!(airy.laplacian_norm_sq(&f), expected);
+    assert!(expected > 0.0);
+}
+
+#[test]
+fn a_column_restriction_keeps_the_ascending_order_the_gram_contracts_over() {
+    // The Airy assembly's arithmetic depends on `Lc_r^T`'s rows being ascending, because a Gram
+    // product contracts the shared index in the STORED order of its left operand's rows. Two
+    // facts make that structural rather than lucky, and this pins both: dropping columns is a
+    // monotone renumbering, and the transpose is a counting sort.
+    //
+    // Note what CANNOT be written here: a descending row. `Csr::from_rows` sorts, so the order
+    // SciPy's kernel hands back for the left-associated spelling is not expressible in this crate
+    // at all -- which is exactly why the fix for it had to be made on the Python side.
+    let (nx, ny, h) = (7usize, 5usize, 0.05);
+    let lc = Csr::identity(ny + 1)
+        .kron(&clamped_d2_1d(nx, h))
+        .add(&clamped_d2_1d(ny, h).kron(&Csr::identity(nx + 1)));
+    let keep = rectangle_mask(nx, ny).flags().to_vec();
+    let lc_r = lc.select_columns(&keep);
+    assert_eq!(lc_r.nrows(), lc.nrows());
+    assert_eq!(lc_r.ncols(), keep.iter().filter(|&&k| k).count());
+    for m in [&lc_r, &lc_r.transpose()] {
+        for i in 0..m.nrows() {
+            let row = &m.indices()[m.indptr()[i]..m.indptr()[i + 1]];
+            assert!(
+                row.windows(2).all(|w| w[0] < w[1]),
+                "row {i} is not ascending"
+            );
+        }
+    }
+    // Restriction drops columns and nothing else: every surviving entry keeps its value.
+    let mut renumber = vec![usize::MAX; keep.len()];
+    let mut next = 0;
+    for (j, &k) in keep.iter().enumerate() {
+        if k {
+            renumber[j] = next;
+            next += 1;
+        }
+    }
+    for i in 0..lc.nrows() {
+        for p in lc.indptr()[i]..lc.indptr()[i + 1] {
+            let j = lc.indices()[p];
+            if keep[j] {
+                assert_eq!(lc_r.get(i, renumber[j]), lc.data()[p]);
+            }
+        }
+    }
 }
 
 /// A pruned guitar outline at grid `n` — the shipped shape, on the unit square.

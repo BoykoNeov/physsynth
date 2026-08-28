@@ -233,6 +233,7 @@ def test_the_rust_swap_matches_the_environment():
         bow,
         collision,
         beam,
+        operators2d,
     ):
         # `collision` joined this tuple in Phase 3's last batch, and it was ABSENT before -- so for
         # the whole of §16's batch and after, a `BarrierStringPy` alias could have been added with
@@ -258,6 +259,8 @@ def test_the_rust_swap_matches_the_environment():
         ("physsynth.core.string_stiff", "StiffString"),
         ("physsynth.core.string_damped", "DampedStiffString"),
         ("physsynth.core.string_nonlinear", "TensionModulatedString"),
+        ("physsynth.core.operators2d", "VonKarmanBracket"),
+        ("physsynth.core.operators2d", "AiryStressSolver"),
         ("physsynth.core.bow", "BowedString"),
         ("physsynth.core.collision", "BarrierString"),
         ("physsynth.core.beam", "FreeBeam"),
@@ -302,12 +305,14 @@ def test_the_rust_swap_matches_the_environment():
     ported_expected = {
         # `operators` is ported in full (plan Phase 1).
         operators: set(operators.__all__),
-        # `operators2d` is ported in PART, and in three batches: the builders the membrane needs
-        # (plan Phase 2), the guitar outline's geometry (Phase 5's first batch) and the plate's
-        # matrices (Phase 5's second). What still waits is the four private 1-D differences the
-        # von Karman pieces use, `VonKarmanBracket` and `AiryStressSolver`.
+        # `operators2d` is ported in FULL as of Phase 5's third batch, and it took four of them:
+        # the builders the membrane needs (plan Phase 2), the guitar outline's geometry (Phase 5
+        # batch 1), the plate's matrices (batch 2) and the nonlinear plate -- the five private 1-D
+        # differences, `VonKarmanBracket` and `AiryStressSolver` -- in batch 3. The two classes are
+        # checked by identity above rather than here, and `operators2d` had to be ADDED to that
+        # derive's tuple to be seen at all, which is section 23.7's finding coming due on schedule.
         #
-        # `dirichlet_interior_d2_1d` is here under its unprefixed spelling for the reason
+        # The five 1-D differences are here under their unprefixed spellings for the reason
         # `collision`'s entry records: the module names it `_dirichlet_interior_d2_1d` and the
         # alias namespace is flat, so `_public` below tries the underscored form too. That
         # mismatch is exactly what dropped a whole module out of this table for a batch.
@@ -328,6 +333,11 @@ def test_the_rust_swap_matches_the_environment():
             "orthotropic_biharmonic",
             "free_plate_stiffness",
             "free_plate_stiffness_from_mask",
+            "collocated_d2_1d",
+            "forward_d1_1d",
+            "centered_d2_1d",
+            "clamped_d2_1d",
+            "avg_d1_1d",
             "embed",
             "inner2d",
             "norm2_2d",

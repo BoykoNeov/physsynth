@@ -10,8 +10,10 @@
 //! returns a pair too, with only the first half in triplet form. That asymmetry is the honest
 //! shape of the original and is better than inventing a wrapper object for it.
 
-use crate::shape::{as_bool_field, as_f64_field, shape_repr, to_2d_bool, to_2d_f64};
+use crate::shape::{as_bool_field, as_f64_field, shape_repr, to_2d_bool, to_2d_f64, to_2d_i64};
+use crate::string_stiff::csr_object;
 use crate::{csr_triplets, CsrTriplets};
+use numpy::PyArray1;
 use physsynth_core::ops2d::{self, Mask};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -421,4 +423,295 @@ pub fn py_inner2d(
 pub fn py_norm2_2d(py: Python<'_>, f: &Bound<'_, PyAny>, h: f64) -> PyResult<f64> {
     let (_, a) = as_f64_field(py, f, "f")?;
     Ok(ops2d::norm2_2d(&a, h))
+}
+
+// --- the nonlinear plate ------------------------------------------------------------------------
+//
+// Two classes and the five 1-D differences they are built from. The differences come back as CSR
+// triplets like every other matrix here; the classes are `pyclass`es, because the reference's
+// clients hold them (`plate.VKPlate` keeps a bracket and a solver for the life of the model) and
+// rebuilding four `kron`s per bracket call would be paying construction cost per timestep.
+//
+// `Sxx`, `Syy`, `Dxy`, `Acell` and `Bf` are built as SciPy objects **once**, in the constructor,
+// for the same reason `beam`'s `K` and `W` are: they are documented attributes that tests hand
+// straight to dense solvers, not conveniences for the parity file.
+
+/// Read a full-grid vector argument of the expected length, whatever shape it arrived in.
+///
+/// The reference writes `np.asarray(a, dtype=float).ravel()`, so a `(ny+1, nx+1)` array and a flat
+/// one are the same argument. Only the total length is a contract.
+fn full_grid_arg(
+    py: Python<'_>,
+    obj: &Bound<'_, PyAny>,
+    name: &str,
+    n_nodes: usize,
+) -> PyResult<Vec<f64>> {
+    let (shape, values) = as_f64_field(py, obj, name)?;
+    if values.len() != n_nodes {
+        return Err(PyValueError::new_err(format!(
+            "{name} must have {n_nodes} entries (the full node grid), got shape {}.",
+            shape_repr(&shape)
+        )));
+    }
+    Ok(values)
+}
+
+/// `Nx, Ny must be >= 2 ...` / `h ... must be positive.` — the two refusals both classes share.
+fn vk_grid_args(nx: i64, ny: i64, h: f64) -> PyResult<(usize, usize)> {
+    if nx < 2 || ny < 2 {
+        return Err(PyValueError::new_err(
+            "Nx, Ny must be >= 2 (need at least one interior node per axis).",
+        ));
+    }
+    if h <= 0.0 {
+        return Err(PyValueError::new_err("h (grid spacing) must be positive."));
+    }
+    Ok((nx as usize, ny as usize))
+}
+
+/// `(n+1) x (n+1)` collocated second difference with zero end rows — `_collocated_d2_1d`.
+#[pyfunction]
+#[pyo3(name = "collocated_d2_1d_csr")]
+pub fn py_collocated_d2_1d(py: Python<'_>, N: i64, h: f64) -> PyResult<CsrTriplets> {
+    if N < 1 {
+        return Err(PyValueError::new_err("N must be >= 1."));
+    }
+    csr_triplets(py, &ops2d::collocated_d2_1d(N as usize, h))
+}
+
+/// `N x (N+1)` forward first difference on the cell midpoints — `_forward_d1_1d`.
+#[pyfunction]
+#[pyo3(name = "forward_d1_1d_csr")]
+pub fn py_forward_d1_1d(py: Python<'_>, N: i64, h: f64) -> PyResult<CsrTriplets> {
+    if N < 1 {
+        return Err(PyValueError::new_err("N must be >= 1."));
+    }
+    csr_triplets(py, &ops2d::forward_d1_1d(N as usize, h))
+}
+
+/// `(N+1) x (N+1)` ordinary tridiagonal second difference — `_centered_d2_1d`.
+#[pyfunction]
+#[pyo3(name = "centered_d2_1d_csr")]
+pub fn py_centered_d2_1d(py: Python<'_>, N: i64, h: f64) -> PyResult<CsrTriplets> {
+    if N < 1 {
+        return Err(PyValueError::new_err("N must be >= 1."));
+    }
+    csr_triplets(py, &ops2d::centered_d2_1d(N as usize, h))
+}
+
+/// `(N+1) x (N+1)` second difference with the clamped ghost mirror — `_clamped_d2_1d`.
+#[pyfunction]
+#[pyo3(name = "clamped_d2_1d_csr")]
+pub fn py_clamped_d2_1d(py: Python<'_>, N: i64, h: f64) -> PyResult<CsrTriplets> {
+    if N < 2 {
+        return Err(PyValueError::new_err("N must be >= 2."));
+    }
+    csr_triplets(py, &ops2d::clamped_d2_1d(N as usize, h))
+}
+
+/// `N x (N+1)` node-to-cell average — `_avg_d1_1d`. Carries no `h`.
+#[pyfunction]
+#[pyo3(name = "avg_d1_1d_csr")]
+pub fn py_avg_d1_1d(py: Python<'_>, N: i64) -> PyResult<CsrTriplets> {
+    if N < 1 {
+        return Err(PyValueError::new_err("N must be >= 1."));
+    }
+    csr_triplets(py, &ops2d::avg_d1_1d(N as usize))
+}
+
+/// The discrete von Karman bracket — the Rust implementation, wearing the Python interface.
+///
+/// Attribute-for-attribute and method-for-method compatible with
+/// `physsynth.core.operators2d.VonKarmanBracket`; the docstring on that class is the reference.
+#[pyclass(name = "VonKarmanBracket", module = "physsynth_rs")]
+pub struct PyVonKarmanBracket {
+    inner: ops2d::VonKarmanBracket,
+    sxx: Py<PyAny>,
+    syy: Py<PyAny>,
+    dxy: Py<PyAny>,
+    acell: Py<PyAny>,
+}
+
+#[pymethods]
+impl PyVonKarmanBracket {
+    #[new]
+    fn new(py: Python<'_>, Nx: i64, Ny: i64, h: f64) -> PyResult<Self> {
+        let (nx, ny) = vk_grid_args(Nx, Ny, h)?;
+        let inner = ops2d::VonKarmanBracket::new(nx, ny, h);
+        Ok(PyVonKarmanBracket {
+            sxx: csr_object(py, inner.sxx())?,
+            syy: csr_object(py, inner.syy())?,
+            dxy: csr_object(py, inner.dxy())?,
+            acell: csr_object(py, inner.acell())?,
+            inner,
+        })
+    }
+
+    /// The nodal field `l(a, b)` as a flat full-grid vector.
+    fn __call__(
+        &self,
+        py: Python<'_>,
+        a: &Bound<'_, PyAny>,
+        b: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyArray1<f64>>> {
+        let n = self.inner.n_nodes();
+        let av = full_grid_arg(py, a, "a", n)?;
+        let bv = full_grid_arg(py, b, "b", n)?;
+        Ok(PyArray1::from_vec(py, self.inner.eval(&av, &bv)).unbind())
+    }
+
+    /// The trilinear form `T(a, b, c) = <l(a, b), c>`.
+    fn trilinear(
+        &self,
+        py: Python<'_>,
+        a: &Bound<'_, PyAny>,
+        b: &Bound<'_, PyAny>,
+        c: &Bound<'_, PyAny>,
+    ) -> PyResult<f64> {
+        let n = self.inner.n_nodes();
+        let av = full_grid_arg(py, a, "a", n)?;
+        let bv = full_grid_arg(py, b, "b", n)?;
+        let cv = full_grid_arg(py, c, "c", n)?;
+        Ok(self.inner.trilinear(&av, &bv, &cv))
+    }
+
+    #[getter]
+    fn Nx(&self) -> usize {
+        self.inner.nx()
+    }
+
+    #[getter]
+    fn Ny(&self) -> usize {
+        self.inner.ny()
+    }
+
+    #[getter]
+    fn h(&self) -> f64 {
+        self.inner.h()
+    }
+
+    #[getter]
+    fn n_nodes(&self) -> usize {
+        self.inner.n_nodes()
+    }
+
+    /// `d_xx` lifted onto the grid, as the `csr_matrix` the original holds. Built once.
+    #[getter]
+    fn Sxx(&self, py: Python<'_>) -> Py<PyAny> {
+        self.sxx.clone_ref(py)
+    }
+
+    /// `d_yy` lifted onto the grid, as the `csr_matrix` the original holds. Built once.
+    #[getter]
+    fn Syy(&self, py: Python<'_>) -> Py<PyAny> {
+        self.syy.clone_ref(py)
+    }
+
+    /// The cell-centred twist, as the `csr_matrix` the original holds. Built once.
+    #[getter]
+    fn Dxy(&self, py: Python<'_>) -> Py<PyAny> {
+        self.dxy.clone_ref(py)
+    }
+
+    /// The node-to-cell corner average, as the `csr_matrix` the original holds. Built once.
+    #[getter]
+    fn Acell(&self, py: Python<'_>) -> Py<PyAny> {
+        self.acell.clone_ref(py)
+    }
+}
+
+/// The clamped Airy-stress solve — the Rust implementation, wearing the Python interface.
+///
+/// Attribute-for-attribute and method-for-method compatible with
+/// `physsynth.core.operators2d.AiryStressSolver`; the docstring on that class is the reference.
+///
+/// `Bf` comes back as a `csc_matrix`, which is the format the original stores and the one
+/// `scipy.sparse.linalg.splu` wants — a caller that re-factors it should not pay a conversion and
+/// a caller that compares formats should not see a difference.
+#[pyclass(name = "AiryStressSolver", module = "physsynth_rs")]
+pub struct PyAiryStressSolver {
+    inner: ops2d::AiryStressSolver,
+    bf: Py<PyAny>,
+    mask: Py<PyAny>,
+    index_map: Py<PyAny>,
+}
+
+#[pymethods]
+impl PyAiryStressSolver {
+    #[new]
+    fn new(py: Python<'_>, Nx: i64, Ny: i64, h: f64) -> PyResult<Self> {
+        let (nx, ny) = vk_grid_args(Nx, Ny, h)?;
+        let inner = ops2d::AiryStressSolver::new(nx, ny, h)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let (nrows, ncols) = (inner.mask().nrows(), inner.mask().ncols());
+        let bf = csr_object(py, inner.bf())?
+            .bind(py)
+            .call_method0("tocsc")?
+            .unbind();
+        Ok(PyAiryStressSolver {
+            bf,
+            mask: to_2d_bool(py, inner.mask().flags().to_vec(), nrows, ncols)?,
+            index_map: to_2d_i64(py, inner.index_map().to_vec(), nrows, ncols)?,
+            inner,
+        })
+    }
+
+    /// Solve for `F` (full-grid in, full-grid out, rim held at zero).
+    fn solve(&self, py: Python<'_>, source: &Bound<'_, PyAny>) -> PyResult<Py<PyArray1<f64>>> {
+        let s = full_grid_arg(py, source, "source", self.inner.n_nodes())?;
+        let f = self
+            .inner
+            .solve(&s)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(PyArray1::from_vec(py, f).unbind())
+    }
+
+    /// Discrete `||lap F||^2 = F^T B_F F` for a full-grid `F`.
+    fn laplacian_norm_sq(&self, py: Python<'_>, F: &Bound<'_, PyAny>) -> PyResult<f64> {
+        let f = full_grid_arg(py, F, "F", self.inner.n_nodes())?;
+        Ok(self.inner.laplacian_norm_sq(&f))
+    }
+
+    #[getter]
+    fn Nx(&self) -> usize {
+        self.inner.nx()
+    }
+
+    #[getter]
+    fn Ny(&self) -> usize {
+        self.inner.ny()
+    }
+
+    #[getter]
+    fn h(&self) -> f64 {
+        self.inner.h()
+    }
+
+    #[getter]
+    fn n_nodes(&self) -> usize {
+        self.inner.n_nodes()
+    }
+
+    #[getter]
+    fn n_interior(&self) -> usize {
+        self.inner.n_interior()
+    }
+
+    /// The interior mask, as the 2-D boolean array the original holds.
+    #[getter]
+    fn mask(&self, py: Python<'_>) -> Py<PyAny> {
+        self.mask.clone_ref(py)
+    }
+
+    /// Full-grid node to interior index, `-1` on the rim; the 2-D array the original holds.
+    #[getter]
+    fn index_map(&self, py: Python<'_>) -> Py<PyAny> {
+        self.index_map.clone_ref(py)
+    }
+
+    /// The assembled SPD operator, as the `csc_matrix` the original holds. Built once.
+    #[getter]
+    fn Bf(&self, py: Python<'_>) -> Py<PyAny> {
+        self.bf.clone_ref(py)
+    }
 }

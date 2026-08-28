@@ -781,3 +781,374 @@ def test_both_sides_reject_an_empty_mask_with_the_same_words():
     with pytest.raises(ValueError) as rs_err:
         physsynth_rs.free_plate_stiffness_from_mask_csr(empty, 0.01, 0.3, 1.0, 1.0, None, None)
     assert str(py_err.value) == str(rs_err.value)
+
+
+class _RustLu:
+    """``splu(...)``'s one method, from Rust — the shared-factorization hook of plan §24.4."""
+
+    def __init__(self, m):
+        m = sparse.csr_matrix(m, copy=True)
+        m.sort_indices()
+        self.lu = physsynth_rs.SparseLu(
+            m.data, m.indices.astype(np.int32), m.indptr.astype(np.int32), m.shape[0]
+        )
+
+    def solve(self, b):
+        return np.asarray(self.lu.solve(np.ascontiguousarray(b, dtype=float)))
+
+
+# -- Phase 5, batch 3: the nonlinear plate ---------------------------------------------------------
+#
+# The five private 1-D differences, the bracket and the clamped Airy solve. Three different kinds
+# of claim live here and keeping them apart is the point of the section:
+#
+# * the five differences and the four bracket operators are **matrices** -- exact, every grid;
+# * the bracket's `__call__` is an **update path** -- exact, because every matvec in it is a
+#   canonical row gather and the elementwise algebra is spelled the same way on both sides;
+# * `AiryStressSolver.solve` is a **SuperLU solve** -- a measured tolerance and nothing better,
+#   settled in advance by plan section 24.2. What keeps that from swallowing an assembly error is
+#   section 24.4's manoeuvre, repeated here: drive the *Python* solver through the *Rust*
+#   factorization and the two go bit-identical, so the whole residue is the solver.
+
+# The grids `AiryStressSolver` is actually built on, read off an instrumented run of the whole von
+# Karman half of the suite, plus three that are not. Two of them -- (8, 8, 0.0375) and
+# (16, 12, 0.06) -- are the ones where the Gram's two associations part company, which is why the
+# list is enumerated rather than sampled.
+AIRY_GRIDS = [
+    (6, 6, 0.05),
+    (8, 8, 0.0375),
+    (8, 8, 0.05),
+    (10, 8, 0.1),
+    (12, 10, 0.05),
+    (12, 12, 1.0 / 30.0),
+    (13, 9, 0.08),
+    (14, 11, 0.07),
+    (16, 12, 0.06),
+    (16, 16, 0.025),
+    (18, 14, 0.05555555555555555),
+    (20, 16, 0.05),
+    (24, 19, 1.0 / 60.0),
+    (5, 3, 1.0 / 3.0),
+    (9, 4, 0.125),
+    (4, 4, 0.25),
+]
+
+ONE_D_SIZES = [2, 3, 4, 5, 8, 9, 16, 17, 32]
+ONE_D_STEPS = [0.1, 0.0625, 0.0375, 1.0 / 3.0, 0.006]
+
+
+@pytest.mark.parametrize("n", ONE_D_SIZES)
+@pytest.mark.parametrize("h", ONE_D_STEPS)
+def test_the_five_one_d_differences_are_bit_identical(n, h):
+    # Each is a fixed pattern of exact scalings of one reciprocal, so exactness here is structural
+    # -- but only while both sides spell the reciprocal the same way. `-2.0 / (h*h)` is a different
+    # rounding from `-2.0 * (1.0/(h*h))`, and the sweep over `h` is what would catch it.
+    _assert_identical(
+        o2.collocated_d2_1d_py(n, h),
+        _rebuild(physsynth_rs.collocated_d2_1d_csr(n, h)),
+        f"collocated n={n} h={h}",
+    )
+    _assert_identical(
+        o2.forward_d1_1d_py(n, h),
+        _rebuild(physsynth_rs.forward_d1_1d_csr(n, h)),
+        f"forward n={n} h={h}",
+    )
+    _assert_identical(
+        o2.centered_d2_1d_py(n, h),
+        _rebuild(physsynth_rs.centered_d2_1d_csr(n, h)),
+        f"centered n={n} h={h}",
+    )
+    _assert_identical(
+        o2.clamped_d2_1d_py(n, h),
+        _rebuild(physsynth_rs.clamped_d2_1d_csr(n, h)),
+        f"clamped n={n} h={h}",
+    )
+    _assert_identical(
+        o2.avg_d1_1d_py(n),
+        _rebuild(physsynth_rs.avg_d1_1d_csr(n)),
+        f"avg n={n}",
+    )
+
+
+@pytest.mark.parametrize("n", ONE_D_SIZES)
+@pytest.mark.parametrize("h", ONE_D_STEPS)
+def test_the_collocated_and_centered_differences_are_not_the_same_matrix(n, h):
+    # The pair the module is most likely to confuse: same interior stencil, and the ONLY difference
+    # is whether the two end rows exist. A port that used one for the other would be caught by
+    # nothing else here -- both are symmetric, both annihilate constants on the interior, and the
+    # bracket's identity would survive because rim-vanishing fields never weigh those rows.
+    coll = o2.collocated_d2_1d_py(n, h)
+    cent = o2.centered_d2_1d_py(n, h)
+    assert coll.nnz + 4 == cent.nnz
+    rs_coll = _rebuild(physsynth_rs.collocated_d2_1d_csr(n, h))
+    rs_cent = _rebuild(physsynth_rs.centered_d2_1d_csr(n, h))
+    assert rs_coll.nnz + 4 == rs_cent.nnz
+    assert rs_coll.indptr[0] == rs_coll.indptr[1], "row 0 must be empty, not zero-valued"
+
+
+BRACKET_GRIDS = [(4, 4, 0.25), (8, 6, 0.1), (12, 12, 1.0 / 3.0), (16, 12, 0.06)]
+
+
+@pytest.mark.parametrize("nx,ny,h", BRACKET_GRIDS)
+def test_the_bracket_operators_are_bit_identical(nx, ny, h):
+    py = o2.VonKarmanBracketPy(nx, ny, h)
+    rs = physsynth_rs.VonKarmanBracket(nx, ny, h)
+    for name in ("Sxx", "Syy", "Dxy", "Acell"):
+        _assert_identical(getattr(py, name), getattr(rs, name), f"{name} {nx}x{ny} h={h}")
+    assert (rs.Nx, rs.Ny, rs.h, rs.n_nodes) == (py.Nx, py.Ny, py.h, py.n_nodes)
+
+
+@pytest.mark.parametrize("nx,ny,h", BRACKET_GRIDS)
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_the_bracket_evaluation_is_bit_identical(nx, ny, h, seed):
+    # The nonlinear plate's UPDATE path: `l(w, w)` sources the Airy solve and `l(w, F)` is the
+    # coupling force, both every Picard sweep of every timestep. Exactness here is not decoration,
+    # it is what keeps the two trajectories comparable at all.
+    py = o2.VonKarmanBracketPy(nx, ny, h)
+    rs = physsynth_rs.VonKarmanBracket(nx, ny, h)
+    rng = np.random.default_rng(seed)
+    a = rng.standard_normal(py.n_nodes)
+    b = rng.standard_normal(py.n_nodes)
+    assert np.array_equal(np.asarray(rs(a, b)), py(a, b))
+    # ... and symmetric in its two arguments on both sides, to the bit.
+    assert np.array_equal(np.asarray(rs(b, a)), np.asarray(rs(a, b)))
+
+
+@pytest.mark.parametrize("nx,ny,h", [(6, 6, 0.05), (12, 12, 1.0 / 3.0)])
+def test_the_transposed_corner_average_is_the_same_sum_either_way(nx, ny, h):
+    """``Acell.T @ v`` is a CSC *scatter* in SciPy and a CSR *gather* in Rust — and equal anyway.
+
+    This is a lemma rather than a measurement, and it is the one place in the bracket where the two
+    languages do genuinely different loops. A CSC matvec accumulates each output entry over
+    **increasing column index**; a sorted-CSR row gather accumulates over increasing column index.
+    Same order, same doubles, same result — for any canonically-stored matrix. The assertion is
+    here because the *premise* (canonical storage) is the thing this whole batch turns on, so a
+    future operator that arrived unsorted would break the lemma silently.
+    """
+    py = o2.VonKarmanBracketPy(nx, ny, h)
+    scatter = py.Acell.T
+    assert sparse.isspmatrix_csc(scatter), "SciPy's csr.T is a CSC; the lemma is about that"
+    gather = sparse.csr_matrix(py.Acell.T)
+    rng = np.random.default_rng(4)
+    for _ in range(8):
+        v = rng.standard_normal(py.Acell.shape[0])
+        assert np.array_equal(scatter @ v, gather @ v)
+
+
+@pytest.mark.parametrize("nx,ny,h", [(6, 6, 0.05), (12, 12, 1.0 / 3.0), (16, 12, 0.06)])
+def test_the_trilinear_form_agrees_to_the_group_a_target(nx, ny, h):
+    # The one quantity in the bracket that is NOT exact, and the reason is `inner2d`: NumPy
+    # contracts it with `np.dot`, which is BLAS, and section 14.2 settled that matching a BLAS
+    # reduction would be a claim about a runner rather than about this code. A read-out, so a
+    # tolerance is all it needs.
+    py = o2.VonKarmanBracketPy(nx, ny, h)
+    rs = physsynth_rs.VonKarmanBracket(nx, ny, h)
+    rng = np.random.default_rng(5)
+    for _ in range(4):
+        a, b, c = (rng.standard_normal(py.n_nodes) for _ in range(3))
+        t_py = py.trilinear(a, b, c)
+        t_rs = rs.trilinear(a, b, c)
+        assert abs(t_rs - t_py) <= GROUP_A_TOL * max(abs(t_py), 1e-30)
+
+
+@pytest.mark.parametrize("nx,ny,h", AIRY_GRIDS)
+def test_the_airy_operator_is_bit_identical(nx, ny, h):
+    """``B_F`` matches entry for entry — which took a pair of parentheses in the reference.
+
+    See :class:`physsynth.core.operators2d.AiryStressSolver`. The *values* were never in question
+    (both outer factors of every term share a mantissa, so the association cannot move a product);
+    what the association moves is the **sum**, because SciPy hands ``Lc_rᵀ @ Wa`` back descending
+    and the left bracketing then contracts the shared index in that order.
+    """
+    py = o2.AiryStressSolverPy(nx, ny, h)
+    rs = physsynth_rs.AiryStressSolver(nx, ny, h)
+    _assert_identical(py.Bf, rs.Bf, f"Bf {nx}x{ny} h={h}")
+    # ... and in the CSC the original actually stores, arrays and all: `tocsr()` sorts, so the
+    # comparison above would survive a stored-order difference that a re-factorization would not.
+    assert sparse.isspmatrix_csc(rs.Bf), "the original stores a csc and splu wants one"
+    assert np.array_equal(py.Bf.indptr, rs.Bf.indptr)
+    assert np.array_equal(py.Bf.indices, rs.Bf.indices)
+    assert np.array_equal(py.Bf.data, rs.Bf.data)
+    assert np.array_equal(np.asarray(rs.mask), py.mask)
+    assert np.array_equal(np.asarray(rs.index_map), py.index_map)
+    assert np.asarray(rs.index_map).dtype == py.index_map.dtype
+    assert (rs.Nx, rs.Ny, rs.h, rs.n_nodes, rs.n_interior) == (
+        py.Nx, py.Ny, py.h, py.n_nodes, py.n_interior,
+    )
+
+
+def test_the_gram_association_is_a_different_sum_and_this_finds_the_witness():
+    """The batch's finding, pinned so that removing the parentheses turns this red.
+
+    Searching rather than asserting a constant (section 26.6): the two associations agree on most
+    grids, so a hand-picked one is a coin flip and a test that landed on an agreeing grid would go
+    green having asserted nothing. This walks the grids the suite actually builds and requires at
+    least one witness — and then checks that the *shipped* spelling is the ascending one.
+    """
+    witnesses = []
+    unsorted = 0
+    for nx, ny, h in AIRY_GRIDS:
+        ix = sparse.identity(nx + 1, format="csr")
+        iy = sparse.identity(ny + 1, format="csr")
+        Lc = sparse.kron(iy, o2.clamped_d2_1d_py(nx, h)) + sparse.kron(
+            o2.clamped_d2_1d_py(ny, h), ix
+        )
+        mx = np.full(nx + 1, h)
+        mx[0] = mx[-1] = 0.5 * h
+        my = np.full(ny + 1, h)
+        my[0] = my[-1] = 0.5 * h
+        Wa = sparse.diags(np.kron(my, mx), format="csr")
+        cols = o2.rectangle_mask_py(nx, ny).ravel()
+        Lc_r = Lc.tocsc()[:, cols]
+        # The intermediate SciPy hands back for the left bracketing: descending, in every row.
+        mid = (Lc_r.T @ Wa).tocsr()
+        if not mid.has_sorted_indices:
+            unsorted += 1
+        left = _canonical((Lc_r.T @ Wa @ Lc_r).tocsr())
+        right = _canonical((Lc_r.T @ (Wa @ Lc_r)).tocsr())
+        differing = int((left.data != right.data).sum())
+        if differing:
+            witnesses.append((nx, ny, h, differing, left.nnz))
+        # The shipped operator is the right-associated one, whichever way this grid falls.
+        _assert_identical(o2.AiryStressSolverPy(nx, ny, h).Bf, right, f"shipped {nx}x{ny}")
+    assert unsorted, (
+        "SciPy handed back a sorted `Lc_r.T @ Wa` on every grid -- the kernel behaviour the "
+        "parentheses were chosen against is gone, and the reasoning needs re-measuring"
+    )
+    assert witnesses, (
+        "no grid distinguishes the two associations -- this test asserts nothing, and the "
+        "parentheses in AiryStressSolver would be free to disappear"
+    )
+
+
+# The grids the suite builds that are too large to want in every parametrisation, but where the
+# claim below actually bites: the Airy gap is largest here and a bar tested only on small grids
+# would be slack by two orders exactly where it matters (section 16.4's shape, in a tolerance).
+AIRY_LARGE_GRIDS = [
+    (40, 32, 0.025),
+    (48, 48, 1.0 / 120.0),
+    (80, 64, 0.0125),
+    (96, 96, 1.0 / 240.0),
+    (160, 128, 0.00625),
+]
+
+
+def airy_solve_tol(nx, ny):
+    """Group D's bar for the Airy solve, which is a SCALING LAW and not a constant.
+
+    SuperLU is supernodal, so matching ``lu.solve`` would be a claim about how SciPy was built
+    (plan section 24.2). What that section could not say, and this one can, is how big the residue
+    is: the gap runs 3.1e-16 at 4x4 to 1.3e-13 at 24x19 and **5.2e-10 at the 160x128 the airbox
+    tests build**, which is ``N^4`` -- the condition number of a biharmonic. Both solves are
+    backward stable to machine precision (asserted separately), so the forward difference between
+    them is conditioning times epsilon and says nothing about either implementation.
+
+    So the bar is proportional to the number of unknowns squared. The constant is fitted to the
+    *worst* measured ratio and left about 8x slack, which is uniform across four orders of grid
+    size -- a single constant would be meaningless at one end and wrong at the other.
+    """
+    return 1e-17 * float(nx * ny) ** 2
+
+
+@pytest.mark.parametrize("nx,ny,h", AIRY_GRIDS + AIRY_LARGE_GRIDS)
+def test_the_airy_solve_is_the_measured_superlu_tolerance(nx, ny, h):
+    py = o2.AiryStressSolverPy(nx, ny, h)
+    rs = physsynth_rs.AiryStressSolver(nx, ny, h)
+    rng = np.random.default_rng(11)
+    for _ in range(3):
+        src = rng.standard_normal(py.n_nodes)
+        src[~py.mask.ravel()] = 0.0
+        f_py = py.solve(src)
+        f_rs = np.asarray(rs.solve(src))
+        scale = np.max(np.abs(f_py))
+        assert np.max(np.abs(f_rs - f_py)) <= airy_solve_tol(nx, ny) * scale
+        # The rim comes back exactly zero on both sides -- that is a structural claim, not a
+        # tolerance, and it is what makes `F` a legal bracket argument.
+        assert np.array_equal(f_rs[~py.mask.ravel()], np.zeros(int((~py.mask).sum())))
+
+
+@pytest.mark.parametrize("nx,ny,h", AIRY_GRIDS[:8])
+def test_the_python_solver_on_the_rust_factorization_is_bit_identical(nx, ny, h):
+    """Section 24.4's manoeuvre: hold the solver constant and let only the assembly vary.
+
+    Without this the SuperLU gap (~1e-14 of amplitude) is two orders larger than a reassociated
+    assembly would be, so a genuine porting error would sit invisibly underneath it — which is
+    section 19.4's finding, a real bug the trajectory could not see, waiting to happen. With the
+    same factorization on both sides the two solves agree **to the bit**, which is the strongest
+    statement available about the part of this class that is not the solver.
+    """
+    py = o2.AiryStressSolverPy(nx, ny, h)
+    rs = physsynth_rs.AiryStressSolver(nx, ny, h)
+    shared = _RustLu(py.Bf)
+    saved, py._lu = py._lu, shared
+    try:
+        rng = np.random.default_rng(11)
+        for _ in range(3):
+            src = rng.standard_normal(py.n_nodes)
+            src[~py.mask.ravel()] = 0.0
+            assert np.array_equal(np.asarray(rs.solve(src)), py.solve(src))
+    finally:
+        py._lu = saved
+
+
+@pytest.mark.parametrize("nx,ny,h", AIRY_GRIDS[:8])
+def test_the_membrane_energy_read_out_agrees_to_the_group_a_target(nx, ny, h):
+    # `laplacian_norm_sq` is `fi @ (Bf @ fi)`: an exact matvec followed by a BLAS dot. A read-out
+    # -- `VKPlate.membrane_energy` is reported, never branched on -- so section 14.2's tolerance is
+    # the right bar and nothing downstream cares.
+    py = o2.AiryStressSolverPy(nx, ny, h)
+    rs = physsynth_rs.AiryStressSolver(nx, ny, h)
+    rng = np.random.default_rng(7)
+    F = rng.standard_normal(py.n_nodes)
+    F[~py.mask.ravel()] = 0.0
+    a, b = py.laplacian_norm_sq(F), rs.laplacian_norm_sq(F)
+    assert abs(b - a) <= GROUP_A_TOL * abs(a)
+    assert a > 0.0 and b > 0.0
+
+
+@pytest.mark.parametrize("nx,ny,h", [(1, 5, 0.1), (5, 1, 0.1), (5, 5, 0.0), (5, 5, -0.1)])
+def test_both_sides_reject_the_same_von_karman_grids_with_the_same_words(nx, ny, h):
+    for py_cls, rs_cls in (
+        (o2.VonKarmanBracketPy, physsynth_rs.VonKarmanBracket),
+        (o2.AiryStressSolverPy, physsynth_rs.AiryStressSolver),
+    ):
+        with pytest.raises(ValueError) as py_err:
+            py_cls(nx, ny, h)
+        with pytest.raises(ValueError) as rs_err:
+            rs_cls(nx, ny, h)
+        assert str(py_err.value) == str(rs_err.value)
+
+
+@pytest.mark.parametrize("nx,ny,h", AIRY_GRIDS[:10])
+def test_both_airy_solves_are_backward_stable_so_the_gap_is_conditioning(nx, ny, h):
+    """The forward gap grows with the grid; the *backward* error does not, on either side.
+
+    That is the whole explanation for why ``AIRY_SOLVE_TOL`` cannot be one small constant. A
+    backward-stable solve returns the exact answer to a slightly perturbed problem, so
+    ``||B_F f - rhs|| / (||B_F|| ||f||)`` sits at machine precision whatever the grid, while the
+    *forward* difference between two such solves is that times the condition number — and a
+    biharmonic's condition number grows like ``N^4``. Without this the growing tolerance above
+    would look like the port getting worse on finer grids, which is the opposite of the truth.
+    """
+    py = o2.AiryStressSolverPy(nx, ny, h)
+    rs = physsynth_rs.AiryStressSolver(nx, ny, h)
+    live = py.mask.ravel()
+    wa = np.zeros(py.n_nodes)
+    mx = np.full(nx + 1, h)
+    mx[0] = mx[-1] = 0.5 * h
+    my = np.full(ny + 1, h)
+    my[0] = my[-1] = 0.5 * h
+    wa[:] = np.kron(my, mx)
+    rng = np.random.default_rng(11)
+    src = rng.standard_normal(py.n_nodes)
+    src[~live] = 0.0
+    rhs = wa[live] * src[live]
+    norm_b = np.max(np.abs(py.Bf.toarray()).sum(axis=1))
+    scale = norm_b * max(np.max(np.abs(py.solve(src)[live])), 1e-300)
+    for solver in (py, rs):
+        f = np.asarray(solver.solve(src))[live]
+        residual = np.max(np.abs(py.Bf @ f - rhs))
+        assert residual <= 1e-13 * scale, (
+            f"{type(solver).__name__} is not backward stable at {nx}x{ny}: "
+            f"{residual / scale:.3e}"
+        )

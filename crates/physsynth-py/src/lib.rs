@@ -743,6 +743,13 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(ops2d::py_free_plate_stiffness, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_collocated_d2_1d, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_forward_d1_1d, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_centered_d2_1d, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_clamped_d2_1d, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_avg_d1_1d, m)?)?;
+    m.add_class::<ops2d::PyVonKarmanBracket>()?;
+    m.add_class::<ops2d::PyAiryStressSolver>()?;
     m.add_function(wrap_pyfunction!(ops2d::py_embed, m)?)?;
     m.add_function(wrap_pyfunction!(ops2d::py_inner2d, m)?)?;
     m.add_function(wrap_pyfunction!(ops2d::py_norm2_2d, m)?)?;

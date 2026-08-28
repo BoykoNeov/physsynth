@@ -4889,3 +4889,289 @@ the Airy solver — which cannot have one — is in the next batch instead.
   biharmonic and wrong as a general rule; in two dimensions the order is *neither*, in 600 of 610
   rows. A rule written from one measurement should be re-measured before it is relied on in a new
   place.
+
+## 27. Phase 5, batch 3, as built (2026-08-28) — the nonlinear plate, and a reassociation that moved a sum rather than a product
+
+This finishes `operators2d` and with it the fourth of the module's four batches. What is ported is
+the *nonlinear* plate: the five private 1-D differences, `VonKarmanBracket` and `AiryStressSolver`.
+
+§26 split the previous batch on **what kind of claim is available at the end** and sent the two
+inexact pieces here on purpose, so that the exact half would not be hostage to the negotiation over
+the inexact one. That was the right split and it paid twice: the bracket turned out to be *exactly*
+reproducible — every matvec in it is a canonical row gather — while the Airy solve is a SuperLU
+solve and can only ever be a measured tolerance (§24.2). Bundling them would have hidden the first
+result under the second.
+
+The batch's own finding is a correction to a rule §26 wrote one batch ago, and it is worth stating
+precisely because §26's version is not wrong so much as **too narrow**.
+
+### 27.1 The shape on disk
+
+```
+crates/physsynth-core/src/sparse.rs         `Csr::select_columns`
+crates/physsynth-core/src/ops2d.rs          collocated_d2_1d / forward_d1_1d / centered_d2_1d /
+                                            clamped_d2_1d / avg_d1_1d, `VonKarmanBracket`,
+                                            `AiryStressSolver`; header rewritten
+crates/physsynth-core/tests/ops2d.rs        11 new native bars, including the bracket's triple
+                                            self-adjointness and its negative control
+crates/physsynth-py/src/ops2d.rs            five bindings, two pyclasses, the refusals reproduced
+crates/physsynth-py/src/lib.rs              five registrations, two classes
+physsynth/core/operators2d.py               ONE pair of parentheses in `AiryStressSolver`; five
+                                            `_py` aliases, two `*Py` aliases, the swap block
+tests/test_rust_parity_ops2d.py             the batch's comparison (520 tests -> 694)
+tests/test_stability.py                     `operators2d` joins the CLASS derive's tuple; five
+                                            names and two classes added to the expectations
+.github/workflows/ci.yml                    one new flagged step
+```
+
+### 27.2 The finding: §26.5's mantissa rule is about products, and the association moved the sum
+
+`AiryStressSolver` assembles `B_F = Lc_rᵀ Wa Lc_r`, and the reference wrote it with no parentheses,
+which Python left-associates. §26.5 had already established the question to ask of a form like that
+— *do the outer factors share a mantissa?* — and had used it to retire the same hazard in
+`free_plate_stiffness` without a measurement. §26.11 predicted the argument "probably extends" here
+and told the next batch to make it rather than inherit it.
+
+It does extend, exactly as predicted, and it settles nothing.
+
+Every entry of `Lc` is `{1, 2, 4}` times the single reciprocal `1.0/(h*h)` (the `2` is the clamped
+ghost mirror, the `4` is the two axes' diagonals meeting under `+`); every entry of `Wa` is
+`{1, 1/2, 1/4}` times the single product `h*h`. So in every term `A_ki · W_kk · B_kj` the two outer
+factors carry the *same* mantissa, `fl(fl(αω)·α)` and `fl(α·fl(ωα))` differ only by commuting a
+multiplication, and IEEE multiplication commutes exactly. Measured term by term at the entries that
+disagree: **not one term differs**.
+
+And the two matrices differ anyway. The association does not move the products, it moves the
+**sum** — because the two bracketings route the contraction through differently-*ordered*
+intermediates. SciPy hands `Lc_rᵀ @ Wa` back with every row **descending**, and a sparse product
+contracts the shared index in the stored order of its left operand's rows, so:
+
+| bracketing | contraction order |
+| --- | --- |
+| `(Lc_rᵀ @ Wa) @ Lc_r` — what Python does with no parentheses | **descending** |
+| `Lc_rᵀ @ (Wa @ Lc_r)` | **ascending** |
+
+Over the 22 grids the test suite actually builds an `AiryStressSolver` on — enumerated from an
+instrumented run, not sampled — those are different matrices on **2**: 2 entries of 501 at
+`(8, 8, h = 0.0375)` and **46 of 1,889** at `(16, 12, h = 0.06)`, both at ~1e-16 of the entry.
+So the hazard is live on shipped configurations, and §16.4's blind-fixture story does *not* apply
+here: the suite's own grids contain witnesses.
+
+**The remedy is a pair of parentheses**, and that is the part worth carrying forward. This project
+has now needed three different fixes for an ordering problem:
+
+1. **reproduce the values** — an ascending-`k` accumulation matches SciPy's SMMP kernel (§26.2);
+2. **sort the storage** — `portable.canonical`, where the kernel's output order is the difference
+   and no rule reproduces it (§18.2, §26.2);
+3. **re-associate** — where the order enters through an *intermediate* the algebra never asked for,
+   and one of the two legal bracketings contracts over an operand that is already canonical.
+
+The third is the cheapest of the three by a wide margin: it changes no module, adds no call, and
+costs nothing at run time. The question that finds it is "which operand's stored order does this
+contraction run over, and did I choose it or did SciPy?"
+
+One corollary about what the Rust side could not have done: **the descending intermediate is not
+expressible in this crate at all.** `Csr::from_rows` sorts, so a Rust `Csr` is canonical by
+construction and both associations of the Gram give the same matrix. There was therefore no way to
+"just match the reference" from the Rust side — which is §10's decision to keep the Rust `Csr`
+canonical paying off for the third time, and the reason the edit had to be Python's.
+
+### 27.3 The bracket is exact, including the one place the two languages do different loops
+
+`VonKarmanBracket.__call__` is the nonlinear plate's update path: `l(w, w)` sources the Airy solve
+and `l(w, F)` is the coupling force, both once per Picard sweep of every timestep. It comes out
+**bit-identical**, at every grid and every field tried, and three of its four matvecs are trivially
+so — `Sxx`, `Syy` and `Dxy` are used as `M @ v` and all three come out of `kron` ascending.
+
+The fourth is not trivial and is worth a paragraph because the answer is a *lemma* rather than a
+measurement. `Acell` is used **transposed**, and in SciPy `csr.T` is a **CSC**, whose matvec
+scatters columns where a CSR gathers rows. Those are genuinely different loops. They are also the
+same order: a CSC matvec accumulates each output entry over increasing *column* index, and a
+sorted-CSR row gather accumulates over increasing column index. Identical for any canonically
+stored matrix, and measured 0 differing entries in 21,780 at four grids.
+
+That is §23.2's move — ask a cheap question about the shape of the arithmetic before measuring it —
+applied to a *loop structure* rather than to a sum's length. The premise is canonical storage,
+which is exactly what this batch's other half turns on, so the parity file pins it rather than
+leaving it as a remark.
+
+The one part of the bracket that is *not* exact is `trilinear`, and for a reason already on the
+books: it contracts with `inner2d`, which is `np.dot`, which is BLAS (§14.2). A read-out, held to
+the Group A target.
+
+### 27.4 The Airy solve, and why one constant is the wrong shape for its bar
+
+`AiryStressSolver.solve` factors with SuperLU on the Python side and with `sparse_lu` on the Rust
+side, and §24.2 settled in advance that this can only be a measured tolerance. What the measurement
+says is more useful than a number:
+
+| grid | max &#124;Δ&#124; / amplitude |
+| --- | --- |
+| 4 × 4 | 3.1e-16 |
+| 12 × 10 | 8.5e-15 |
+| 16 × 12 | 3.6e-14 |
+| 24 × 19 | 1.3e-13 |
+| 48 × 48 | 2.3e-12 |
+| 80 × 64 | 9.5e-12 |
+| 96 × 96 | 5.4e-11 |
+| 160 × 128 (the largest the suite builds) | **5.2e-10** |
+
+That is not a port degrading; it is `N⁴`, which is a biharmonic's condition number. Both solves are
+**backward stable** — the residual `‖B_F f − rhs‖ / (‖B_F‖ ‖f‖)` sits at machine precision on both
+sides at every grid — so the forward difference between them is conditioning times epsilon and says
+nothing about either implementation. The parity file asserts the backward errors precisely so that
+the growing forward tolerance cannot be misread. A single small constant would have failed at
+24 × 19 and been meaningless at 4 × 4.
+
+The parity file asserts this as a **scaling law** rather than a constant — `1e-17 · (n_x n_y)²`,
+fitted to the worst measured ratio with ~8x slack, which is uniform across four orders of grid size
+— and it parametrises over the large grids as well as the small ones. A bar tested only up to
+24 × 19 would have been slack by two orders exactly where the claim bites, which is §16.4's shape
+arriving in a *tolerance* instead of in a fixture.
+
+It is worth saying why the flagged CI step is green at 160 × 128 rather than noting that it is.
+Nothing in the von Kármán or airbox suites compares a *displacement* across implementations: the
+airbox bars are `DRIFT_TOL` and `LEDGER_TOL`, both `1e-12` **relative on an energy**, and every
+`array_equal` in `test_airbox_vk.py` compares two configurations of the *same* implementation (the
+zero-load reduction, the `nonlinear=False` reduction) rather than two languages. A 5.2e-10
+displacement difference cannot reach any of them. That is the same conclusion as §27.5's from the
+other end, and it is the reason the step passes for a reason rather than by luck.
+
+**And §24.4's manoeuvre separates the two questions completely.** Driving the *Python* Airy solver
+through the *Rust* factorization makes the two solves **bit-identical, at every grid tried**. So the
+assembly is exactly right and the entire residue above is the solver — which is the strongest
+statement available here, and the only thing that would have caught a reassociated assembly, since
+the solver gap is two orders larger than one would be (§19.4's finding waiting to happen).
+
+### 27.5 A seventh agreement regime, and the first where the trajectory becomes unrelated while every physics bar stays green
+
+§16.5 asked how long two implementations of a nonlinear model stay comparable, and the answers have
+accumulated: the model class (§16.5), whether the nonlinearity recurs (§17.5), whether the
+recurrence drives the system onto an attractor or off one (§20.5), the amplitude (§19.5), the
+absence of amplification in a linear model (§18.6), and a boundary condition's nullspace (§24.5).
+The von Kármán plate adds one more, and it is the sharpest so far because **the two answers differ
+by twelve orders of magnitude in the same model at the same amplitude**.
+
+Measured at `N = 12`, `Lx = Ly = 0.4`, `fs = 48 kHz`, `σ = 0`, with only the Airy solve differing
+(the bracket being bit-identical):
+
+* one regime **random-walks and stays there** — 5.6e-15 of the running peak at step 100, 1.1e-13 at
+  1,000, 5.7e-13 at 4,000 — and it does *not* leave that regime when driven harder: at ten times the
+  plate thickness it is still 1.2e-13 at 1,000. Below `w/e ≈ 0.1` the two are **bit-identical for
+  4,000 steps**, because the coupling correction is a small enough fraction of the field that its
+  last bits fall off the end of the addition — §23.2's mechanism, in a model rather than in a matvec.
+* the other is **chaotic**, and the gap e-folds every **~57 steps**: 4.2e-14 at step 100, 4.1e-13 at
+  200, 2.4e-9 at 700, 3.4e-7 at 1,000, and **0.59 of the peak by step 2,000** — completely
+  decorrelated.
+* **the energy does not move through any of it.** At step 2,000, with the displacements unrelated,
+  the two energies agree to 5.1e-14 relative and the lossless drift is 2.6e-14 on both sides against
+  the 1e-10 bar.
+
+**What separates the two is not the fixture, and naming the fixture would have been the wrong
+lesson.** The first attempt at this said "a smooth mode against a broadband one", and a broadband
+start *normalised to the same peak* falsifies that immediately — it random-walks, 3.4e-13 at 1,500.
+The next attempt said "amplitude", and the amplitude sweep falsifies that too: from `w/e = 0.5` to
+`w/e = 10` the window is flat at ~1e-13. The observable that separates every run actually done is
+the **Picard sweep count**: two to six sweeps a step is the random walk, eleven or more is the
+exponential. That is the model's own report of how hard the nonlinearity is working, it is already
+a public attribute (`n_iters`), and a future batch can read it without reconstructing this fixture
+set — which is the only form of this finding worth carrying.
+
+So the parity bar for a von Kármán trajectory reads the **energy**, never `max|du|/amp`. That is
+§24.5's conclusion reached by an entirely different mechanism — there a rigid-body nullspace
+integrated a per-step gap twice, here a positive Lyapunov exponent multiplies it — and the general
+form is worth writing down plainly: **a conserved quantity is not a trajectory comparison.** Two
+runs can agree on every invariant the project measures and share no digits of state.
+
+A second mechanism was watched for and is a *consequence* rather than a cause. `VKPlate`'s Picard
+loop branches on `‖Δw‖/‖w‖ ≤ couple_tol`, which is §19.2's hazard exactly: a solve that reaches a
+branch. The sweep counts differ on 90 of 2,000 steps — but the **first** difference is at step
+1,553, by which time the deviation is already 2.1e-3. On the smooth fixtures the counts never differ
+at all, over 4,000 steps at every amplitude tried. So §20.3's refinement applies: the residual falls
+geometrically and crosses `couple_tol` with orders of room, so a 1e-14 perturbation cannot flip the
+comparison until the trajectories have separated for other reasons.
+
+### 27.6 What did not have to change, and one thing that did
+
+`plate.py` needed **no edit**. `VKPlate` holds a bracket and a solver and calls three methods on
+them; the two Rust classes present the same attributes, so the swap is a rebinding and nothing else.
+That is the first Group D port with no client change at all.
+
+The one Python edit outside the parentheses is the swap block, and it carries §23.6's warning
+explicitly: with the flag set, a test that pins `operators2d.VonKarmanBracket` to measure the thing
+that name builds is comparing Rust against Rust. The parity file reaches for `VonKarmanBracketPy`
+and `AiryStressSolverPy` instead, and `tests/test_stability.py` grew `operators2d` in the **class**
+derive's tuple — which it had never been in, so a `*Py` alias here would have been invisible to the
+guard. That is §23.7's finding coming due exactly where §23.7 said it would: *a derive is only as
+wide as the list it derives over.*
+
+`_collocated_d2_1d` is worth one line of its own: it has **no production call site left**. §26 moved
+`free_plate_stiffness` onto a mask-built curvature, so the only thing that still calls this function
+is `tests/test_free_plate_modal.py`, which uses it as an independent oracle for that operator. It is
+ported anyway — an oracle nobody compares is an oracle nobody is checking — and the parity file
+asserts the one property that distinguishes it from its near-twin `centered_d2_1d`: the two end rows
+are **empty**, not zero-valued, a difference visible only in `nnz`.
+
+### 27.7 §19.7's line continuation, a third time — and the pin worked
+
+A literal `\n` in a YAML `run:` block was introduced in §19, cited-and-reintroduced by §20 (which is
+what proved the failure comes from *tooling* rather than from typing), and asserted in
+`tests/test_ci_workflow.py` as a result. It happened again in this batch, from a third tool.
+
+This time it never reached CI: `test_no_run_block_line_is_a_swallowed_continuation` failed on the
+first local run, named the line, and the fix took one minute. That is what the pin was for, and it
+is the cheapest confirmation available that a scar written down as a *test* outperforms the same
+scar written down as a *paragraph* — §20.7 argued that in the abstract and this is the receipt.
+
+### 27.8 The measured comparison
+
+| | |
+|---|---|
+| `collocated_d2_1d`, 9 sizes × 5 grids | **bit-identical** (`data`, `indices`, `indptr`, `nnz`) |
+| `forward_d1_1d`, `centered_d2_1d`, `clamped_d2_1d`, `avg_d1_1d`, same sweep | **bit-identical** |
+| `Sxx`, `Syy`, `Dxy`, `Acell`, 4 grids | **bit-identical** |
+| `VonKarmanBracket.__call__`, 4 grids × 3 fields | **bit-identical** |
+| `Acell.T @ v` — CSC scatter vs CSR gather | **0 of 21,780** entries differ |
+| `AiryStressSolver.Bf`, 16 grids, CSC arrays included | **bit-identical** (after the parentheses) |
+| ... with the left-associated spelling instead | 2 grids differ, up to 46 of 1,889 entries |
+| `AiryStressSolver.solve`, same grids | 3.1e-16 to 1.3e-13 of amplitude; both backward stable |
+| ... with the Rust factorization on both sides | **bit-identical** |
+| `trilinear`, `laplacian_norm_sq` | ~1e-16 relative — `np.dot`, §14.2 |
+| `mask`, `index_map`, dtype included | identical |
+| the refusals, message for message | identical |
+
+### 27.9 The success condition
+
+* `cargo test --workspace` green, **debug and release** — 11 new native bars.
+* `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` and
+  `ruff check .` green — §25.8, in the batch's list rather than CI's.
+* `pip install ./crates/physsynth-py` **before** any parity number is believed — §25.8a.
+* `pytest tests/test_rust_parity_ops2d.py` green with the flag and without it — 694 tests.
+* `PHYSSYNTH_RS=1 pytest` green on the whole von Kármán family — bracket, Airy solve, energy,
+  modal, free, stability, connection and the room-loaded plate — plus the rest of the plate family,
+  all on Rust-built operators.
+* The whole Python suite green on the default path, and the shipped numbers moved **only** where
+  §27.2 says: two of the 22 Airy grids, at ~1e-16 of an entry, construction-time.
+
+### 27.10 What the next batch inherits
+
+* **`operators2d` is finished.** What is left of Phase 5 is `plate`, `connection` and
+  `string_geometric`; then `airbox` and `analysis/`.
+* **The plate is now the only Python thing between two Rust halves.** `VKPlate` holds a Rust
+  bracket, a Rust Airy solver and Rust-built matrices, and does its own timestepping in NumPy. That
+  makes it the cheapest remaining model to port and the one whose port will change the least.
+* **Ask which operand's stored order a contraction runs over.** §27.2. It is a third remedy for an
+  ordering problem, it costs nothing, and the question is answerable by reading the expression.
+* **Read the energy, not the displacement, on anything chaotic.** §27.5. And measure the window at
+  *two* fixtures — a smooth one and a rough one — because the same model at the same amplitude gave
+  answers twelve orders apart.
+* **Hold the solver constant before believing an assembly claim.** §24.4's manoeuvre, third use,
+  and the only reason this batch can say the assembly is exact rather than "within the solver gap".
+* **The Rust factorization is slower than SuperLU, it is construction-time, and it is invisible.**
+  2.5 s against 0.16 s at 160 × 128, 0.43 s against 0.06 s at 96 × 96 — §11.6's shape again, nothing
+  to win around five compiled kernel calls. It was worth checking whether that is felt, because
+  unlike §26.8's 1 ms it is seconds; it is not. The same 24 files, on this machine, back to back:
+  **350.9 s on the default path against 291.6 s with the flag set**, 614 tests either way. The
+  flagged path is *faster*, because the per-step overhead the rest of the tree wins back is larger
+  than the factorization it pays for. A paired same-machine run is the only variance-immune way to
+  ask that question, which is why it was asked that way.
