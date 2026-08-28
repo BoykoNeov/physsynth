@@ -9,7 +9,9 @@
 //! covers the properties that make the model correct in the first place.
 
 use physsynth_core::ops2d::{
-    disk_mask, embed, grid_coords, inner2d, laplacian_from_mask, norm2_2d, rectangle_mask, Mask,
+    cells_per_node, disk_mask, embed, grid_coords, guitar_area, guitar_half_width, guitar_mask,
+    guitar_scale, inner2d, laplacian_from_mask, live_cells, norm2_2d, prune_to_area_carrying,
+    rectangle_mask, Mask,
 };
 
 /// Row-major flat index of node `(j, i)` on a grid `ncols` nodes wide — the one ordering every
@@ -171,4 +173,240 @@ fn the_two_dimensional_inner_product_carries_the_cell_area() {
     assert_eq!(inner2d(&f, &g, h), (h * h) * (4.0 - 2.0 + 1.5));
     assert_eq!(norm2_2d(&f, h), inner2d(&f, &f, h));
     assert!(norm2_2d(&f, h) > 0.0);
+}
+
+// --- the guitar outline (model #5g's geometry) ---------------------------------------------
+
+/// The `(nrows, ncols)` node grid a guitar plate builds on: `x` from the centre line, `y` from the
+/// neck end, cells square, and `Ly` snapped to a whole number of them exactly as `plate.py` does.
+fn guitar_grid(lx: f64, ly_asked: f64, n: usize) -> (Vec<f64>, Vec<f64>, f64, usize, usize) {
+    let h = lx / (n as f64);
+    let ny = ((ly_asked / h).round() as usize).max(1);
+    let ly = (ny as f64) * h;
+    let (nrows, ncols) = (ny + 1, n + 1);
+    let mut x = Vec::with_capacity(nrows * ncols);
+    let mut y = Vec::with_capacity(nrows * ncols);
+    for j in 0..nrows {
+        for i in 0..ncols {
+            // np.linspace: `i * step`, with the final entry overwritten by the endpoint.
+            let xi = if i == n {
+                lx
+            } else {
+                (i as f64) * (lx / (n as f64))
+            };
+            let yj = if j == ny {
+                ly
+            } else {
+                (j as f64) * (ly / (ny as f64))
+            };
+            x.push(xi - 0.5 * lx);
+            y.push(yj);
+        }
+    }
+    (x, y, ly, nrows, ncols)
+}
+
+#[test]
+fn the_outline_closes_at_both_ends_and_peaks_where_the_scale_says() {
+    for &(waist, asym) in &[(0.42, 0.30), (0.0, 0.0), (0.88, 0.0), (0.60, -0.30)] {
+        assert_eq!(guitar_half_width(0.0, waist, asym), 0.0, "t = 0 must close");
+        // sin(pi * 1.0) is not exactly 0 in doubles -- pi is not pi -- so the far end closes to
+        // within the argument error, which is what the outline's `t < 1` test relies on anyway.
+        assert!(
+            guitar_half_width(1.0, waist, asym).abs() < 1e-15,
+            "t = 1 must close"
+        );
+
+        // `scale` normalises the sampled peak to half the requested width. Sampled, so the true
+        // maximum can sit between two samples -- hence a tolerance rather than an equality.
+        let width = 0.37;
+        let scale = guitar_scale(width, waist, asym);
+        let peak = (0..=20_000)
+            .map(|i| scale * guitar_half_width((i as f64) / 20_000.0, waist, asym))
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            (peak - 0.5 * width).abs() < 1e-15,
+            "waist {waist}: peak {peak} against {}",
+            0.5 * width
+        );
+    }
+}
+
+#[test]
+fn the_three_factors_multiply_left_to_right() {
+    // Section 17.2's finding, and section 23.5's: a claim about a *spelling* is only testable
+    // while the compiler cannot see which spelling was meant. With literal arguments LLVM folds
+    // both associations into the same constant and the test asserts nothing -- in release, where
+    // it matters, and not in debug, where it would be noticed. `black_box` is what keeps the two
+    // multiplications separate, and the search runs until it finds a genuine witness so the test
+    // fails loudly if the class of difference ever stops existing.
+    let mut witnesses = 0;
+    for i in 0..20_000 {
+        let t = std::hint::black_box(((i as f64) + 0.5) / 20_000.0);
+        let waist = std::hint::black_box(0.42);
+        let asym = std::hint::black_box(0.30);
+        let a = (t * std::f64::consts::PI).sin();
+        let b = 1.0 - waist * (4.0 * std::f64::consts::PI * (t - 0.5)).cos();
+        let c = 1.0 + asym * (t - 0.5);
+        let left = (a * b) * c;
+        let right = a * (b * c);
+        assert_eq!(
+            guitar_half_width(t, waist, asym),
+            left,
+            "the implementation must be the left-associated product"
+        );
+        if left != right {
+            witnesses += 1;
+        }
+    }
+    assert!(
+        witnesses > 0,
+        "no argument distinguished (a*b)*c from a*(b*c) -- this test is asserting nothing"
+    );
+}
+
+#[test]
+fn the_area_quadrature_matches_the_closed_form_for_a_symmetric_outline() {
+    // With `asym = 0` the profile integrates in closed form:
+    //     int_0^1 sin(pi t) [1 - w cos(4 pi (t - 1/2))] dt = (2/pi) (1 + w/15)
+    // so the outline's area is 2 * scale * L * that. A real oracle for the quadrature rather than
+    // a stored number -- it is the only bar here that would catch a wrong midpoint rule.
+    let (length, width) = (0.48, 0.37);
+    for &waist in &[0.0, 0.42, 0.88] {
+        let scale = guitar_scale(width, waist, 0.0);
+        let exact = 2.0 * scale * length * (2.0 / std::f64::consts::PI) * (1.0 + waist / 15.0);
+        let got = guitar_area(length, width, waist, 0.0);
+        assert!(
+            ((got - exact) / exact).abs() < 1e-12,
+            "waist {waist}: quadrature {got} against closed form {exact}"
+        );
+    }
+}
+
+#[test]
+fn the_outline_excludes_its_two_end_rows_and_is_mirror_symmetric() {
+    let (x, y, ly, nrows, ncols) = guitar_grid(0.37, 0.48, 24);
+    let m = guitar_mask(&x, &y, ly, 0.37, 0.42, 0.30, nrows, ncols);
+    for i in 0..ncols {
+        assert!(!m.at(0, i), "the neck row is not part of the plate");
+        assert!(!m.at(nrows - 1, i), "the tail row is not part of the plate");
+    }
+    // The predicate is `|x| < half`, and the grid is symmetric about the centre line, so the mask
+    // has to be too -- a plate that is a little wider on one side is exactly the kind of geometry
+    // error that leaves every physics bar green.
+    for j in 0..nrows {
+        for i in 0..ncols {
+            assert_eq!(m.at(j, i), m.at(j, ncols - 1 - i), "node ({j}, {i})");
+        }
+    }
+    assert!(m.n_live() > 0);
+}
+
+#[test]
+fn a_deeper_waist_removes_nodes_and_a_wider_asymmetry_moves_them() {
+    let (x, y, ly, nrows, ncols) = guitar_grid(0.37, 0.48, 32);
+    let plain = guitar_mask(&x, &y, ly, 0.37, 0.0, 0.0, nrows, ncols).n_live();
+    let waisted = guitar_mask(&x, &y, ly, 0.37, 0.42, 0.0, nrows, ncols).n_live();
+    assert!(
+        waisted < plain,
+        "a waist is a bite out of the outline: {waisted} against {plain}"
+    );
+    // `asym` widens the lower bout at the expense of the upper, so it redistributes rather than
+    // adds. The count is free to move either way; what must not happen is nothing moving.
+    let tilted = guitar_mask(&x, &y, ly, 0.37, 0.42, 0.30, nrows, ncols);
+    let square = guitar_mask(&x, &y, ly, 0.37, 0.42, 0.0, nrows, ncols);
+    assert!(
+        (0..nrows).any(|j| (0..ncols).any(|i| tilted.at(j, i) != square.at(j, i))),
+        "asym changed no node at all"
+    );
+}
+
+#[test]
+fn every_cell_of_a_full_grid_is_live_and_the_node_counts_are_four_two_one() {
+    let m = Mask::new(4, 5, vec![true; 20]);
+    assert_eq!(live_cells(&m), vec![true; 12]);
+    let counts = cells_per_node(&m);
+    for j in 0..4 {
+        for i in 0..5 {
+            let edge_j = j == 0 || j == 3;
+            let edge_i = i == 0 || i == 4;
+            let expected = match (edge_j, edge_i) {
+                (true, true) => 1,
+                (true, false) | (false, true) => 2,
+                (false, false) => 4,
+            };
+            assert_eq!(counts[j * 5 + i], expected, "node ({j}, {i})");
+        }
+    }
+}
+
+#[test]
+fn a_grid_thinner_than_a_cell_has_no_cells() {
+    assert!(live_cells(&Mask::new(1, 5, vec![true; 5])).is_empty());
+    assert_eq!(
+        cells_per_node(&Mask::new(1, 5, vec![true; 5])),
+        vec![0i64; 5]
+    );
+}
+
+#[test]
+fn pruning_a_full_rectangle_drops_nothing() {
+    let m = Mask::new(4, 5, vec![true; 20]);
+    let (pruned, dropped) = prune_to_area_carrying(&m);
+    assert_eq!(dropped, 0);
+    assert_eq!(pruned.flags(), m.flags());
+}
+
+#[test]
+fn pruning_iterates_to_a_fixed_point_rather_than_sweeping_once() {
+    // The case that makes the loop a correctness statement instead of an optimisation: a two-node
+    // spike. The tip carries no cell and goes on the first sweep; only then does the node behind
+    // it carry none either. A single sweep leaves a node with zero area weight, which is exactly
+    // what makes the free plate's mass matrix singular.
+    //
+    //   row 0:  # # . .      (a 2x2 block of live nodes, plus a two-node tail off its corner)
+    //   row 1:  # # . .
+    //   row 2:  . . . .
+    let mut live = vec![false; 4 * 5];
+    for j in 0..2 {
+        for i in 0..2 {
+            live[j * 5 + i] = true;
+        }
+    }
+    live[2 * 5 + 2] = true; // the second node of the tail
+    live[2 * 5 + 3] = true; // the tip
+    let (pruned, dropped) = prune_to_area_carrying(&Mask::new(4, 5, live));
+    assert_eq!(
+        dropped, 2,
+        "both tail nodes carry no area, one after the other"
+    );
+    assert_eq!(pruned.n_live(), 4);
+    for j in 0..2 {
+        for i in 0..2 {
+            assert!(
+                pruned.at(j, i),
+                "the block is area-carrying and must survive"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_shipped_guitar_produces_spikes_and_pruning_removes_them_all() {
+    // The reason `prune_to_area_carrying` exists: a curved rim staircases into nodes whose
+    // trapezoidal weight is exactly zero, and two are enough to make `W` singular. Measured at
+    // 2-4 of them on every grid the plate ships.
+    for n in [20, 24, 32, 40, 48] {
+        let (x, y, ly, nrows, ncols) = guitar_grid(0.37, 0.48, n);
+        let raw = guitar_mask(&x, &y, ly, 0.37, 0.42, 0.30, nrows, ncols);
+        let (pruned, dropped) = prune_to_area_carrying(&raw);
+        assert!(dropped > 0, "N = {n}: the outline produced no spike at all");
+        assert!(
+            cells_per_node(&pruned)
+                .iter()
+                .zip(pruned.flags().iter())
+                .all(|(&c, &alive)| !alive || c > 0),
+            "N = {n}: a live node still carries no area"
+        );
+    }
 }

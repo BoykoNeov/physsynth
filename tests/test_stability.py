@@ -302,13 +302,21 @@ def test_the_rust_swap_matches_the_environment():
     ported_expected = {
         # `operators` is ported in full (plan Phase 1).
         operators: set(operators.__all__),
-        # `operators2d` is ported in PART (plan Phase 2): the builders the membrane needs. The
-        # rest of the module -- the guitar outline, the biharmonic, the free-plate stiffness,
-        # `VonKarmanBracket`, `AiryStressSolver` -- waits for the plate family.
+        # `operators2d` is ported in PART, and in two batches: the builders the membrane needs
+        # (plan Phase 2) and the guitar outline's geometry (Phase 5's first batch). What still
+        # waits for the plate family is the matrices -- the biharmonic, the orthotropic bending
+        # operator, the free-plate stiffness, `VonKarmanBracket` and `AiryStressSolver`.
         operators2d: {
             "grid_coords",
             "rectangle_mask",
             "disk_mask",
+            "guitar_half_width",
+            "guitar_scale",
+            "guitar_mask",
+            "guitar_area",
+            "live_cells",
+            "cells_per_node",
+            "prune_to_area_carrying",
             "laplacian_from_mask",
             "embed",
             "inner2d",
@@ -389,6 +397,7 @@ def test_the_rust_swap_matches_the_environment():
             beam,
             connection,
             mallet,
+            plate,
             radiation,
             string_damped,
             string_geometric,
@@ -429,6 +438,23 @@ def test_the_rust_swap_matches_the_environment():
         assert membrane.laplacian_from_mask is operators2d.laplacian_from_mask, (
             "`membrane` captured a different `laplacian_from_mask` than `operators2d` now exposes"
         )
+        # The plate's version, added with Phase 5's first batch. `plate` is not ported, but it
+        # does `from .operators2d import guitar_mask, ...` at module scope, so it is a CLIENT of
+        # names that are -- and the geometry is the half of the module where a mis-ordered swap
+        # would be worst. A Python `guitar_mask` under a run that claims Rust is a plate with a
+        # possibly different set of nodes, which every physics bar in the suite would pass.
+        for name in (
+            "guitar_half_width",
+            "guitar_scale",
+            "guitar_mask",
+            "guitar_area",
+            "prune_to_area_carrying",
+        ):
+            assert getattr(plate, name) is getattr(operators2d, name), (
+                f"`plate` captured a different `{name}` than `operators2d` now exposes -- the "
+                "swap landed after that module was imported, so this plate's outline is being "
+                "built by the Python code while the run reports Rust"
+            )
 
         # The body's version, and it has TWO importers rather than one. `connection` and
         # `radiation` both do `from .body import ModalBody` at module scope, so a swap that

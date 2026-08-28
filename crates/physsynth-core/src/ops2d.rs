@@ -1,20 +1,27 @@
-//! Two-dimensional grid geometry and the masked 5-point Laplacian.
+//! Two-dimensional grid geometry, the guitar outline, and the masked 5-point Laplacian.
 //!
-//! Port of the *builder* half of `physsynth/core/operators2d.py`, HANDOFF §5 model #4.
+//! Port of the *builder* half of `physsynth/core/operators2d.py`, HANDOFF §5 model #4, plus the
+//! outline geometry of model #5g.
 //!
-//! # Why only half of that module is here
+//! # Why only part of that module is here
 //!
 //! The migration plan's §4 risk map is keyed to **files**, and it puts `operators2d` in Group D
 //! (sparse LU, Phase 5) because the module contains `VonKarmanBracket` and `AiryStressSolver`,
 //! which factor with SuperLU. That grouping is right about the module and wrong about the *unit of
 //! porting*: `membrane` is a Phase 2 model, and what it reaches for — `grid_coords`,
 //! `rectangle_mask`, `disk_mask`, `laplacian_from_mask`, `embed` — never solves anything. It
-//! assembles. So the file splits cleanly in two, and this is the half with no solver in it.
+//! assembles. So the file split in two, and this is the half with no solver in it.
 //!
-//! The half deliberately **not** here: `guitar_*`, `live_cells`, `cells_per_node`,
-//! `prune_to_area_carrying`, `biharmonic_from_mask`, `orthotropic_biharmonic`,
-//! `free_plate_stiffness*`, `VonKarmanBracket`, `AiryStressSolver`. Those belong to the plate
-//! family and arrive with it. Leaving them visibly absent is the same choice Phase 0 made with
+//! Phase 5's first batch adds the **geometry** of the plate family: `guitar_half_width`,
+//! `guitar_scale`, `guitar_mask`, `guitar_area`, `live_cells`, `cells_per_node` and
+//! `prune_to_area_carrying`. They are grouped together and ported apart from the operators they
+//! serve because they are the part of the module whose output is **discrete** — a node is an
+//! unknown or it is not — which makes a last bit of `sin` a geometry change rather than a
+//! rounding (plan §22.6, and `guitar_mask` here).
+//!
+//! Still deliberately **not** here: `biharmonic_from_mask`, `orthotropic_biharmonic`,
+//! `free_plate_stiffness*`, `VonKarmanBracket`, `AiryStressSolver`. Those are the matrices, and
+//! they arrive with the plate. Leaving them visibly absent is the same choice Phase 0 made with
 //! `ops.rs` — an incomplete module that looks incomplete beats a complete-looking one that is not.
 //!
 //! # Flat ordering, everywhere
@@ -169,6 +176,198 @@ pub fn disk_mask(x: &[f64], y: &[f64], radius: f64, nrows: usize, ncols: usize) 
         .map(|(&xv, &yv)| (xv * xv + yv * yv) < r2)
         .collect();
     Mask::new(nrows, ncols, live)
+}
+
+/// One point of the guitar outline's half-width profile, un-normalised, at `t = y/L` in `[0, 1]`.
+///
+/// `W(t) = sin(pi t) * [1 - waist*cos(4 pi (t - 1/2))] * [1 + asym*(t - 1/2)]`
+///
+/// `sin(pi t)` closes the outline at both ends; the `cos(4 pi ...)` term puts maxima at the two
+/// bouts and the minimum at the **waist**; `asym` widens the lower bout. The shape is defined as
+/// `|x| < W(y)`, so it is simply connected and vertically convex by construction.
+///
+/// # Why this is a scalar and the Python side is a loop
+///
+/// `f64::sin` here and `math.sin` there are the same call — the platform C library, UCRT on
+/// Windows and glibc on Linux. `np.sin` on a float64 array is a *third* implementation: NumPy
+/// carries its own vectorised routines and selects one at import from the CPU's features, so what
+/// it returns is a property of the machine (plan §22.1). Everywhere else in this module that would
+/// be a last bit in a reported number. Here it decides whether a node exists — see `guitar_mask` —
+/// so `operators2d.py` gives up the vectorised spelling on the mask path and evaluates this
+/// formula one point at a time, in order to be saying the same thing as this function.
+///
+/// The three factors multiply **left to right**. Reassociating is a different double.
+pub fn guitar_half_width(t: f64, waist: f64, asym: f64) -> f64 {
+    (t * std::f64::consts::PI).sin()
+        * (1.0 - waist * (4.0 * std::f64::consts::PI * (t - 0.5)).cos())
+        * (1.0 + asym * (t - 0.5))
+}
+
+/// Factor taking `guitar_half_width` to a half-width whose maximum is `width/2`.
+///
+/// The peak is *sampled* over 20,001 points rather than solved for, so the grid is part of the
+/// answer: the `t` values are `np.linspace(0.0, 1.0, 20001)` reproduced operation for operation —
+/// `i * step` with `step = 1/20000`, and the last entry overwritten with the endpoint exactly, as
+/// NumPy does. One ulp in the result is one ulp on every node of the outline at once, because
+/// `scale` multiplies every half-width the mask compares against.
+pub fn guitar_scale(width: f64, waist: f64, asym: f64) -> f64 {
+    const M: usize = 20_000;
+    let step = 1.0 / (M as f64);
+    let mut peak = f64::NEG_INFINITY;
+    for i in 0..=M {
+        let t = if i == M { 1.0 } else { (i as f64) * step };
+        let w = guitar_half_width(t, waist, asym);
+        if w > peak {
+            peak = w;
+        }
+    }
+    0.5 * width / peak
+}
+
+/// Live-node mask for a guitar-shaped outline (HANDOFF §12B's non-rectangular plate).
+///
+/// `x` is measured from the centre line and `y` from the neck end, so the region is
+/// `|x| < scale * W(y/length)` with `scale` chosen so the widest point spans `width`. The two end
+/// rows (`t = 0`, `t = 1`) are excluded.
+///
+/// **The result is not yet a usable mask.** A curved outline staircases into nodes that carry no
+/// area at all, whose trapezoidal weight is exactly zero and whose presence makes the free plate's
+/// mass matrix singular. Pass it through `prune_to_area_carrying`.
+///
+/// The comparison is `|x| < half`, strict, and it is *the geometry* rather than a number about it.
+/// How much room a last bit has here was measured before this was ported: over 130 shipped
+/// configurations the smallest margin is ~1.9e7 ulps of `half` for every real guitar — and
+/// **1 ulp** for the degenerate lens (`waist = 0, asym = 0`), where four nodes sit mathematically
+/// *exactly* on the rim because `sin(pi/6)` is 1/2. That case is why the profile is spelled the
+/// way it is; see `guitar_half_width`.
+///
+/// # Panics
+/// If `x`/`y` are not `nrows * ncols` long, or the outline parameters are out of range.
+#[allow(clippy::too_many_arguments)]
+pub fn guitar_mask(
+    x: &[f64],
+    y: &[f64],
+    length: f64,
+    width: f64,
+    waist: f64,
+    asym: f64,
+    nrows: usize,
+    ncols: usize,
+) -> Mask {
+    assert_eq!(x.len(), nrows * ncols, "x must be a full node field");
+    assert_eq!(y.len(), nrows * ncols, "y must be a full node field");
+    assert!(
+        length > 0.0 && width > 0.0,
+        "length and width must be positive"
+    );
+    assert!((0.0..1.0).contains(&waist), "waist must lie in [0, 1)");
+    assert!(asym.abs() < 2.0, "|asym| must be < 2");
+    let scale = guitar_scale(width, waist, asym);
+    let live = y
+        .iter()
+        .zip(x.iter())
+        .map(|(&yv, &xv)| {
+            let t = yv / length;
+            let half = scale * guitar_half_width(t, waist, asym);
+            t > 0.0 && t < 1.0 && xv.abs() < half
+        })
+        .collect();
+    Mask::new(nrows, ncols, live)
+}
+
+/// Area of the *true* guitar outline — a fine midpoint quadrature of `2 W(y)`.
+///
+/// The denominator of the area deficit a guitar plate reports, and the one number in this group
+/// that is **not** bit-identical across the port, by decision rather than by accident.
+///
+/// Two million midpoints are summed here left to right and by `np.sum` on the Python side, which
+/// is *pairwise* above a blocksize of 128 — a different number in the last few bits, and one that
+/// no portable loop reproduces. Matching it would mean transcribing NumPy's blocking, which is the
+/// same bargain §18.2 refused for SciPy's sparse-product kernel: a claim about a library internal
+/// that a point release may change. So this is a tolerance-level quantity and is measured as one.
+/// It can afford to be: nothing branches on it and it reaches no timestep — it is divided into a
+/// mask area to report how converged a staircase is (plan §19.2's question, answered "no").
+pub fn guitar_area(length: f64, width: f64, waist: f64, asym: f64) -> f64 {
+    const M: usize = 2_000_000;
+    let scale = guitar_scale(width, waist, asym);
+    let mut acc = 0.0;
+    for i in 0..M {
+        let t = ((i as f64) + 0.5) / (M as f64);
+        acc += scale * guitar_half_width(t, waist, asym);
+    }
+    2.0 * acc * (length / (M as f64))
+}
+
+/// Cells of the dual grid whose **four** corner nodes are all live, row-major, `(nrows-1) x
+/// (ncols-1)`.
+///
+/// The quadrature cells of the free-plate energy: the twist `u_xy` is evaluated on them, and a
+/// node's area weight counts them. Empty when the mask is thinner than two nodes on either axis.
+pub fn live_cells(mask: &Mask) -> Vec<bool> {
+    let (nrows, ncols) = (mask.nrows(), mask.ncols());
+    let (cr, cc) = (nrows.saturating_sub(1), ncols.saturating_sub(1));
+    let mut out = Vec::with_capacity(cr * cc);
+    for j in 0..cr {
+        for i in 0..cc {
+            out.push(
+                mask.at(j, i) && mask.at(j + 1, i) && mask.at(j, i + 1) && mask.at(j + 1, i + 1),
+            );
+        }
+    }
+    out
+}
+
+/// Number of live cells (0..=4) touching each node — `4` interior, `2` edge, `1` corner.
+pub fn cells_per_node(mask: &Mask) -> Vec<i64> {
+    let (nrows, ncols) = (mask.nrows(), mask.ncols());
+    let (cr, cc) = (nrows.saturating_sub(1), ncols.saturating_sub(1));
+    let cells = live_cells(mask);
+    let mut out = vec![0i64; nrows * ncols];
+    for j in 0..cr {
+        for i in 0..cc {
+            if cells[j * cc + i] {
+                out[j * ncols + i] += 1;
+                out[j * ncols + i + 1] += 1;
+                out[(j + 1) * ncols + i] += 1;
+                out[(j + 1) * ncols + i + 1] += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Drop live nodes that touch **no** live cell, to a fixed point. Returns `(mask, n_dropped)`.
+///
+/// **The mask is not the outline.** The outline is a predicate on coordinates; the mask is the set
+/// of nodes that carry *area*. A curved rim staircases into one-node spikes whose trapezoidal area
+/// weight is exactly `0`, and those make the free plate's mass matrix `W` singular — two are
+/// enough, and the shipped guitar produces 2-4 at every grid tried.
+///
+/// Dropping a node can orphan its neighbour, so this iterates to a fixed point. One sweep sufficed
+/// everywhere measured; the loop is the correct statement rather than an optimisation.
+///
+/// **A silent geometry change, and callers must price it.** The rule is purely topological — it
+/// says nothing about *where* the node was — so on a coarse grid with a deep waist it can fire in
+/// the middle of the plate rather than at a tip, and energy, nullspace and spectrum all look
+/// healthy afterwards. The plate asserts every dropped node lay within one `h` of the outline.
+pub fn prune_to_area_carrying(mask: &Mask) -> (Mask, usize) {
+    let (nrows, ncols) = (mask.nrows(), mask.ncols());
+    let mut live = mask.flags().to_vec();
+    let before = live.iter().filter(|&&b| b).count();
+    loop {
+        let current = Mask::new(nrows, ncols, live.clone());
+        let touching = cells_per_node(&current);
+        let keep: Vec<bool> = live
+            .iter()
+            .zip(touching.iter())
+            .map(|(&alive, &n)| alive && n > 0)
+            .collect();
+        if keep == live {
+            let after = live.iter().filter(|&&b| b).count();
+            return (Mask::new(nrows, ncols, live), before - after);
+        }
+        live = keep;
+    }
 }
 
 /// Symmetric 5-point Laplacian on the live nodes of `mask`, plus the mask's `index_map`.

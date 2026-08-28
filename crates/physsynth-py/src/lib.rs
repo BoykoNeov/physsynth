@@ -725,6 +725,15 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ops2d::py_grid_coords, m)?)?;
     m.add_function(wrap_pyfunction!(ops2d::py_rectangle_mask, m)?)?;
     m.add_function(wrap_pyfunction!(ops2d::py_disk_mask, m)?)?;
+    // Phase 5's first batch: the guitar outline's geometry, ported apart from the matrices it
+    // serves because its output is DISCRETE -- a node is an unknown or it is not.
+    m.add_function(wrap_pyfunction!(ops2d::py_guitar_half_width, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_guitar_scale, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_guitar_mask, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_guitar_area, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_live_cells, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_cells_per_node, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_prune_to_area_carrying, m)?)?;
     m.add_function(wrap_pyfunction!(ops2d::py_laplacian_from_mask, m)?)?;
     m.add_function(wrap_pyfunction!(ops2d::py_embed, m)?)?;
     m.add_function(wrap_pyfunction!(ops2d::py_inner2d, m)?)?;

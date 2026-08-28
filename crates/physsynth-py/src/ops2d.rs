@@ -86,6 +86,123 @@ pub fn py_disk_mask(
     to_2d_bool(py, m.flags().to_vec(), xshape[0], xshape[1])
 }
 
+/// Un-normalised half-width profile of the guitar outline at `t = y/L` in `[0, 1]`.
+///
+/// Vectorised over `t` like the original, and — like the original since Phase 5 — evaluated one
+/// point at a time so that both languages reach the same libm.
+#[pyfunction]
+#[pyo3(name = "guitar_half_width", signature = (t, waist=0.42, asym=0.30))]
+pub fn py_guitar_half_width(
+    py: Python<'_>,
+    t: &Bound<'_, PyAny>,
+    waist: f64,
+    asym: f64,
+) -> PyResult<Py<PyAny>> {
+    let (shape, ts) = as_f64_field(py, t, "t")?;
+    let w: Vec<f64> = ts
+        .iter()
+        .map(|&tv| ops2d::guitar_half_width(tv, waist, asym))
+        .collect();
+    crate::shape::to_shaped_f64(py, w, &shape)
+}
+
+/// Factor taking the half-width profile to a maximum of `width/2`.
+#[pyfunction]
+#[pyo3(name = "guitar_scale")]
+pub fn py_guitar_scale(width: f64, waist: f64, asym: f64) -> f64 {
+    ops2d::guitar_scale(width, waist, asym)
+}
+
+/// Live-node mask for a guitar-shaped outline.
+#[pyfunction]
+#[pyo3(name = "guitar_mask", signature = (X, Y, length, width, waist=0.42, asym=0.30))]
+#[allow(clippy::too_many_arguments)]
+pub fn py_guitar_mask(
+    py: Python<'_>,
+    X: &Bound<'_, PyAny>,
+    Y: &Bound<'_, PyAny>,
+    length: f64,
+    width: f64,
+    waist: f64,
+    asym: f64,
+) -> PyResult<Py<PyAny>> {
+    let (xshape, xs) = as_f64_field(py, X, "X")?;
+    let (yshape, ys) = as_f64_field(py, Y, "Y")?;
+    if xshape.len() != 2 || xshape != yshape {
+        return Err(PyValueError::new_err(format!(
+            "X and Y must be 2-D arrays of the same shape; got {} and {}.",
+            shape_repr(&xshape),
+            shape_repr(&yshape)
+        )));
+    }
+    // The three refusals are the original's, message for message: a guitar with no length is not
+    // a degenerate guitar, and an `asym` past 2 turns the profile negative and folds the outline
+    // inside out rather than tilting it.
+    if length <= 0.0 || width <= 0.0 {
+        return Err(PyValueError::new_err("length and width must be positive."));
+    }
+    if !(0.0..1.0).contains(&waist) {
+        return Err(PyValueError::new_err(format!(
+            "waist must lie in [0, 1); got {}.",
+            physsynth_core::fmt::py_float(waist)
+        )));
+    }
+    if asym.abs() >= 2.0 {
+        return Err(PyValueError::new_err(format!(
+            "|asym| must be < 2 (the profile would go negative); got {}.",
+            physsynth_core::fmt::py_float(asym)
+        )));
+    }
+    let m = ops2d::guitar_mask(&xs, &ys, length, width, waist, asym, xshape[0], xshape[1]);
+    to_2d_bool(py, m.flags().to_vec(), xshape[0], xshape[1])
+}
+
+/// Area of the *true* guitar outline (fine midpoint quadrature).
+#[pyfunction]
+#[pyo3(name = "guitar_area", signature = (length, width, waist=0.42, asym=0.30))]
+pub fn py_guitar_area(length: f64, width: f64, waist: f64, asym: f64) -> f64 {
+    ops2d::guitar_area(length, width, waist, asym)
+}
+
+/// Cells of the dual grid whose four corner nodes are all live.
+#[pyfunction]
+#[pyo3(name = "live_cells")]
+pub fn py_live_cells(py: Python<'_>, mask: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let m = mask_arg(py, mask, "mask")?;
+    let (nrows, ncols) = (m.nrows(), m.ncols());
+    to_2d_bool(
+        py,
+        ops2d::live_cells(&m),
+        nrows.saturating_sub(1),
+        ncols.saturating_sub(1),
+    )
+}
+
+/// Number of live cells (0..4) touching each node.
+#[pyfunction]
+#[pyo3(name = "cells_per_node")]
+pub fn py_cells_per_node(py: Python<'_>, mask: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let m = mask_arg(py, mask, "mask")?;
+    let (nrows, ncols) = (m.nrows(), m.ncols());
+    crate::shape::to_2d_i64(py, ops2d::cells_per_node(&m), nrows, ncols)
+}
+
+/// Drop live nodes that touch no live cell, to a fixed point; returns `(mask, n_dropped)`.
+#[pyfunction]
+#[pyo3(name = "prune_to_area_carrying")]
+pub fn py_prune_to_area_carrying(
+    py: Python<'_>,
+    mask: &Bound<'_, PyAny>,
+) -> PyResult<(Py<PyAny>, usize)> {
+    let m = mask_arg(py, mask, "mask")?;
+    let (nrows, ncols) = (m.nrows(), m.ncols());
+    let (pruned, dropped) = ops2d::prune_to_area_carrying(&m);
+    Ok((
+        to_2d_bool(py, pruned.flags().to_vec(), nrows, ncols)?,
+        dropped,
+    ))
+}
+
 /// Symmetric 5-point Laplacian on the live nodes, as `(csr_triplets, index_map)`.
 #[pyfunction]
 #[pyo3(name = "laplacian_from_mask_csr")]

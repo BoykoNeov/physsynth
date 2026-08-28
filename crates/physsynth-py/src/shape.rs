@@ -40,12 +40,15 @@ pub fn as_f64_field(
 ) -> PyResult<(Vec<usize>, Vec<f64>)> {
     let np = py.import("numpy")?;
     let arr = np.call_method1("asarray", (obj, np.getattr("float64")?))?;
+    // The shape is read from `asarray`, NOT from the contiguous copy below: `ascontiguousarray`
+    // promotes a **0-d** array to shape `(1,)`, and `guitar_half_width` is vectorised over
+    // whatever it is handed, including a bare float. The original returns `()` there.
+    let shape: Vec<usize> = arr.getattr("shape")?.extract()?;
     let arr = np.call_method1("ascontiguousarray", (arr,))?;
     let arr: Bound<'_, PyArrayDyn<f64>> = arr
         .cast_into()
         .map_err(|_| PyValueError::new_err(format!("{name} must be an array of floats.")))?;
     let ro = arr.readonly();
-    let shape = ro.shape().to_vec();
     let values = ro
         .as_slice()
         .map_err(|_| PyValueError::new_err(format!("{name} must be contiguous.")))?
@@ -105,4 +108,22 @@ pub fn to_2d_i64(
 ) -> PyResult<Py<PyAny>> {
     let flat = numpy::PyArray1::from_vec(py, values);
     Ok(flat.reshape([nrows, ncols])?.into_any().unbind())
+}
+
+/// A flat row-major `Vec<f64>` as a fresh NumPy array of arbitrary rank.
+///
+/// `guitar_half_width` is vectorised over whatever shape it is handed — a scalar, a row of
+/// midpoints, a whole meshgrid — and the original returns the shape it was given. Reproducing that
+/// is the difference between a drop-in swap and one that works until somebody passes a 1-D array.
+pub fn to_shaped_f64(py: Python<'_>, values: Vec<f64>, shape: &[usize]) -> PyResult<Py<PyAny>> {
+    // Built through `ArrayD` rather than by reshaping a 1-D array, because rank **zero** is a real
+    // case here and the two spellings disagree about it: `PyArray1::reshape(vec![])` comes back
+    // shape `(1,)`, while `np.asarray(0.3)` and therefore the original's return value are `()`.
+    // A scalar `t` is exactly what `plate._depth_inside_outline` can hand this.
+    use numpy::ndarray::{ArrayD, IxDyn};
+    let arr = ArrayD::from_shape_vec(IxDyn(shape), values)
+        .map_err(|e| PyValueError::new_err(format!("cannot shape the result: {e}")))?;
+    Ok(numpy::PyArray::from_owned_array(py, arr)
+        .into_any()
+        .unbind())
 }

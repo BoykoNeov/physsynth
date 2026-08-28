@@ -4300,3 +4300,322 @@ that Phase 8 does not have to rediscover it.
   model has.
 * **Check inherited sentences.** §24.9's "four oracles" was twenty, and §24.2's third obstacle had
   been called moot on two fixtures. Both were written by earlier batches in good faith.
+
+---
+
+## 25. Phase 5, batch 1, as built (2026-08-28) — the guitar outline, and a batch boundary drawn by what the output *is*
+
+Phase 5 is the rest of Group D except the room: `operators2d`'s remaining half, `plate`,
+`connection` and `string_geometric`. §11.2.1 already said that half ports as a group rather than as
+a file. This batch says something narrower and, it turns out, more useful: **that group splits
+again, and the line is not size or difficulty but whether the function's output is a number or a
+decision.**
+
+Seven functions ported here — `guitar_half_width`, `guitar_scale`, `guitar_mask`, `guitar_area`,
+`live_cells`, `cells_per_node`, `prune_to_area_carrying` — and they are exactly the functions whose
+answer is a **set of nodes**. The matrices they serve (`biharmonic_from_mask`,
+`orthotropic_biharmonic`, six private 1-D differences and `free_plate_stiffness*`) stay behind for
+the next batch, with `VonKarmanBracket` and `AiryStressSolver`, together with `portable.canonical`, which §18.4 pre-registered for them.
+
+### 25.1 The shape on disk
+
+```
+crates/physsynth-core/src/ops2d.rs          the outline: guitar_half_width / guitar_scale /
+                                            guitar_mask / guitar_area, live_cells /
+                                            cells_per_node / prune_to_area_carrying; header rewritten
+crates/physsynth-core/tests/ops2d.rs        10 new native bars, including the closed-form area
+                                            oracle and the left-association pin
+crates/physsynth-py/src/ops2d.rs            seven bindings, three refusals reproduced verbatim
+crates/physsynth-py/src/shape.rs            `to_shaped_f64`; and `as_f64_field` now reads the shape
+                                            BEFORE `ascontiguousarray` (§25.7)
+crates/physsynth-py/src/lib.rs              seven registrations
+(crates/physsynth-core/src/sparse_lu.rs     four `needless_range_loop`s and seventeen formatting
+                                            diffs, fixed in Phase 4's own commit — §25.8)
+physsynth/core/operators2d.py               `_profile` / `_profile_vec`; `guitar_half_width` and
+                                            `guitar_scale` moved to the scalar libm; the seven
+                                            `_py` aliases and the swap block
+tests/test_rust_parity_ops2d.py             the batch's comparison (174 tests -> 406)
+tests/test_guitar_plate.py                  the pre-change spelling, written out once, and
+                                            the shipped masks pinned against it (100 tests)
+tests/test_stability.py                     seven names added to the guard's operators2d set, and
+                                            `plate`'s captured bindings asserted for the first time
+```
+
+### 25.2 The finding: a discrete output is a different porting problem from a continuous one
+
+Everything the migration has learned about last bits so far has been about *how far a difference
+travels* — does the reduction reach the next timestep (§14.2), does anything branch on it (§19.2),
+does the nonlinearity amplify it or contract it (§20.5). All of those questions presuppose that the
+quantity is a number, and that the answer is a tolerance.
+
+`guitar_mask` is not a number. It is `|x| < half(y)` evaluated at every node, and its output is
+which nodes exist. A last bit does not make the plate slightly wrong; it makes it a **different
+plate**, with one node more or fewer, and §22.6 already recorded that this is the sharpest instance
+of NumPy's CPU-dispatched transcendentals in the whole repo. Every detector this project owns —
+energy drift, the rigid-body nullspace, the spectrum, the area deficit — passes on a plate with one
+node too few. That was measured on the disk two model-batches ago and written down as "the mask is
+not the outline"; this is the same statement arriving on the porting side.
+
+So the batch boundary was drawn there, and the reason is worth stating as a rule: **port the
+discrete-output functions together, and settle their arithmetic before porting anything that
+consumes them.** Had the geometry ridden along with `free_plate_stiffness`'s 500 lines of Kronecker
+products, the one decision that actually needed making would have been one line in a large diff.
+
+### 25.3 The measurement that decided it, and the outline it does not cover
+
+The question is how much room the comparison has. Measured before a line of Rust was written, over
+130 shipped configurations (two plate geometries × five outline parameter sets × thirteen grid
+sizes), as `min | |x| − half |` in **ulps of `half`**:
+
+| outline | smallest margin |
+|---|---|
+| `waist = 0.42, asym = 0.30` (shipped default) | 1.9e7 ulps |
+| `waist = 0.97, asym = 0.30` | 9.9e7 ulps |
+| `waist = 0.88, asym = 0.0` | 1.9e10 ulps |
+| `waist = 0.60, asym = −0.30` | 5.5e9 ulps |
+| median over all 130 cases | 8.6e11 ulps |
+| **`waist = 0.0, asym = 0.0`** (the degenerate lens) | **1 ulp**, and 0 |
+
+For every real guitar the exactness of the mask is **structural**: a hundred million ulps of slack
+is not a coincidence that could go the other way on another CPU, and the exact assertion has a proof
+behind it rather than a hope. That is §23.2's move — ask a cheap question about the *shape* of the
+arithmetic before writing an exact assertion — applied to a comparison instead of to a sum.
+
+The lens is the exception and it is exact in the other direction. With `waist = asym = 0` the
+profile is `0.5·Lx·sin(πt)`, and the grid puts nodes at rational `t`:
+
+* at `t = 1/2`, `sin` returns exactly `1.0`, so `half` is `0.5·Lx` and the bounding-box node is
+  `0.5·Lx` — the same double. The strict `<` makes it dead, reproducibly, on any libm.
+* at `t = 1/6`, `sin(π/6)` is `1/2` in real arithmetic and the `N = 32` grid puts a node exactly at
+  `0.25·Lx`. In doubles it comes out one ulp low and the node is dead — **decided by the last bit of
+  one `sin` call**, four times over (the ±x, t = 1/6, 5/6 quadruple).
+
+This is reachable, not hypothetical: the viewer's waist sweep is `np.linspace(0.0, WAIST_MAX, n)`
+and its first point is `0.0`.
+
+### 25.4 §22.3's manoeuvre a fifth time — and the first one that costs something
+
+§22.3 established the human's rule: exactness where it is provable, an ulp bound where it is not,
+and *where a portable spelling is free, prefer it*. `portable.py` took that route three times for a
+summation order and `impedance_discrete` took it a fourth time for `np.tan`. This is the fifth, and
+the first where the parenthetical bites: the portable spelling is **not** free.
+
+`math.sin` in CPython and `f64::sin` in Rust are the same call — the platform C library, UCRT on
+Windows and glibc on Linux. `np.sin` on a float64 array is a third implementation chosen at import
+from the CPU's features (§22.1). So the portable spelling is the scalar one, and taking it means
+`guitar_half_width` evaluates its profile **one point at a time in a Python loop**. Measured:
+
+| call | NumPy | scalar loop |
+|---|---|---|
+| `guitar_half_width`, 5,000 points (a mask row set) | 0.05 ms | 1.1 ms |
+| `guitar_scale`, 20,001 points | 0.21 ms | 4.4 ms |
+| `guitar_area`, **2,000,000** points | 45.9 ms | 467.4 ms |
+
+The first two are nothing. The third is half a second on every guitar plate anyone builds, and the
+viewer's waist sweep builds sixteen to thirty-two of them behind an endpoint that currently answers
+in 1.4–2.7 s. So the spelling was taken for the mask path and refused for the quadrature, and
+`operators2d.py` now carries both: `_profile` (scalar, portable) and `_profile_vec` (NumPy, fast).
+
+**What makes that split safe is not a magnitude argument, it is §19.2's question.** `guitar_mask`
+*branches* on the profile — the value decides whether a node exists — so it needs the spelling both
+languages can express. `guitar_area` *averages* two million of them into a reported denominator, so
+a last bit is invisible by construction. The rule generalises past this module: **give the portable
+spelling to the consumer that branches, and the fast one to the consumer that averages.**
+
+### 25.5 The deliberate duplicate, and why it is pinned twice rather than commented once
+
+`_profile` and `_profile_vec` are the same formula written twice, four lines apart, and they differ
+in the last bit — 221,580 of the profile values over the 130-case sweep. That is §20.2's hazard
+exactly: a hand-written duplicate that *reads like something that wants tidying*, where tidying it
+changes which computation runs. The bow's version was a hoist and this one is a spelling, but the
+shape is the same and so is the remedy — a pin in the suite rather than a comment in the source:
+
+* `guitar_half_width` is asserted **equal, to the bit,** to a list comprehension over `_profile`. A
+  tidy-up back onto `np.sin` fails there, on any machine where the two disagree — which is exactly
+  the set of machines where the tidy-up would matter.
+* `guitar_area` is asserted **equal, to the bit,** to a quadrature spelled through `_profile_vec`. A
+  tidy-up the other way — routing the quadrature through the public profile for tidiness — fails
+  there, and would otherwise have cost half a second per plate silently.
+
+Neither assertion is a claim about a CPU. Each says only "this call site uses this spelling", which
+is a property of the code.
+
+**And one more pin, which is a different kind and belongs in the default suite rather than the
+parity file.** Both of the above compare the code against *itself*: they say which spelling each
+call site uses, and every other test in the batch compares Rust against the **new** Python. That
+leaves a hole exactly the width of a transcription slip — a mis-parenthesised `4.0 * pi * (t - 0.5)`
+in `_profile` would be reproduced faithfully by the port and agreed on by every parity assertion,
+and no physics bar can see a mask. So `tests/test_guitar_plate.py` now carries the **pre-change
+NumPy expression written out verbatim**, and asserts the shipped masks — and their prunes — node for
+node against it, over the same 130-configuration sweep. That is the assertion that protects the
+geometry the plate family was validated on, and it lives in the default suite because it is a claim
+about the *model*, not about the port.
+
+### 25.6 The one number not asserted exact, and the precedent it follows
+
+`guitar_area` sums two million midpoints. `np.sum` is **pairwise** above a blocksize of 128; a Rust
+`for` loop is not. Reproducing NumPy's blocking is possible — the algorithm is deterministic — and
+it is refused for the reason §18.2 refused to reproduce SciPy's SMMP index order: it would pin the
+port to a library internal that a point release is free to change, and here it would buy nothing,
+because nothing branches on the answer and it reaches no timestep. Measured gap: **1.2e-13
+relative**, worst over the sweep, against a `rel=1e-9` bar that the plate's own test already uses.
+
+The native side gets a real oracle instead of a stored number. With `asym = 0` the profile
+integrates in closed form —
+
+    ∫₀¹ sin(πt)·[1 − w·cos(4π(t − ½))] dt = (2/π)·(1 + w/15)
+
+— so the outline's area is `2·scale·L` times that, and the quadrature is checked against it at three
+waists to 1e-12. That is the one bar here that would catch a wrong midpoint rule rather than a
+transcription slip.
+
+### 25.7 A rank-zero array is a shape, and `ascontiguousarray` disagrees
+
+`guitar_half_width` returns the shape it was handed, and the original hands `np.asarray(t)` straight
+through — so a bare float in gives a **0-d array** out. The binding returned `(1,)`.
+
+The cause is one line of the shared 2-D reader, which has been there since Phase 2:
+`np.ascontiguousarray` **promotes a 0-d array to shape `(1,)`**, and the shape was being read from
+its result. Every previous caller demanded rank 2 and rejected anything else, so the promotion was
+invisible for three phases; the first function vectorised over an arbitrary shape found it
+immediately. The fix reads the shape from `asarray` and the values from the contiguous copy.
+
+`as_f64_field` is shared by every 2-D binding — `disk_mask`, `embed`, `laplacian_from_mask` and the
+membrane's `u0`, which is the one that *branches* on rank — so the change is not local. It is
+verified rather than argued: the parity files for all of them, plus 524 flagged tests across the
+membrane and the whole plate family, re-ran green after it.
+
+Same family as §24.7's `boundary=None`: **an interface detail that no existing caller exercises is
+not an interface detail that no caller will ever exercise**, and the way it surfaces is a new
+function with a wider signature, not a new test on an old one.
+
+### 25.8 Phase 4 had never been through the lint gate
+
+Found at the start of this batch, on Phase 4's *committed-pending* tree: `cargo fmt --all --check`
+was red in seventeen places and `cargo clippy --workspace --all-targets -- -D warnings` in four,
+both of which CI runs before it runs a single test. Phase 4's own success condition (§24.11) lists
+`cargo test` in both profiles and four pytest invocations, and does not mention either linter — so
+the batch was checked against its own list and its list was one item short.
+
+The residue is small but it is the fourth time in six batches that CI was red for something the
+batch could have seen locally (§19.7, §20.7, §21, now this): **a success condition is only as good
+as its coverage of the gate**, and the gate's first two steps are the ones a batch never thinks
+about because they never fail while you are writing physics.
+
+### 25.8a Phase 4 changed a behaviour and left the test that recorded the old one
+
+The whole-suite run at the end of this batch came back **1 failed, 3464 passed**, and the failure
+was not in anything this batch touched. `tests/test_rust_parity_bore.py` held a test called
+*"an explicit None boundary is the one divergence and it cannot be closed"*, asserting that
+`Bore(boundary=None)` raises in Python and quietly builds the default clarinet in Rust — the
+behaviour §24.7 **fixed**, in all six bindings, one batch earlier.
+
+Two things kept it green until now. The first is that it is the only place in the suite that passes
+`None` to a *Bore*, so §24.7's new guard in `test_rust_parity.py` and this one are the only two
+opinions on the subject and nothing compared them. The second is more mundane and is the real
+lesson: **the installed extension was older than the source.** `PHYSSYNTH_RS` and the parity files
+read whatever wheel is installed, and Phase 4's fix was in `crates/` without ever being in
+`site-packages`, so the batch's own suite run — and this batch's, until the wheel was rebuilt at the
+start of it — was measuring the code from before the fix.
+
+So the rule has two halves, and the second is the one that generalises past this repo:
+
+* **A batch that changes a shared behaviour has to re-run the tests that recorded the old one**, and
+  a `grep` for the argument is how you find them. §24.13's "check inherited sentences" arriving as a
+  red test rather than as a stale paragraph.
+* **`pip install ./crates/physsynth-py` before believing any parity number.** Nothing in the suite
+  can tell a stale wheel from a fresh one; the failure mode is a green run measuring last week's
+  code, which is the same shape as §16.8's empty CI job and §23.6's emptied parity section, reached
+  through a fourth door.
+
+The test is now the opposite assertion with the history in its docstring, and it pins both halves —
+`None` refused, omission still defaulting — because §24.7's `Option<Option<_>>` arm order is
+inverted from the obvious guess and is exactly the sort of thing a later refactor flips back.
+
+### 25.9 The guard, widened in both halves
+
+§23.7's residue — *a derive is only as wide as the list it derives over* — applied twice here.
+
+* The function half's `operators2d` entry gained the seven new names. Checked the way §23.7 says to:
+  one name was removed, the guard was **observed to fail** with the right message, and only then
+  restored.
+* A new entry: `plate` does `from .operators2d import guitar_mask, …` at module scope, so it is a
+  **client** of ported names while being unported itself. That is the captured-binding hazard the
+  guard already covers for `membrane`, `mallet`, `reed` and four strings, and it is worse here than
+  for any of them — a Python `guitar_mask` under a run that reports Rust is a plate with a possibly
+  different node set, which every physics bar in the suite would pass.
+
+### 25.10 What is bit-identical
+
+| | |
+|---|---|
+| `guitar_half_width`, 20,001 points × 5 outlines | **bit-identical** |
+| … and the returned *shape*, ranks 0 through 3 | identical |
+| `guitar_scale`, 5 outlines × 3 widths | **bit-identical** |
+| `guitar_mask`, 2 geometries × 5 outlines × 8 grids | **identical, node for node** |
+| `live_cells`, `cells_per_node` (dtype included) | **identical** |
+| `prune_to_area_carrying`, mask *and* dropped count | **identical** |
+| the three refusals, message for message | identical |
+| `guitar_area` | 1.2e-13 relative — **by decision**, §25.6 |
+
+The exact rows are a claim about the port. They are *not* a claim about a CPU, and that is the
+batch's point: for the four real outlines the comparison has ≥1.9e7 ulps of slack, so the mask
+cannot move even if `sin` does.
+
+### 25.11 The success condition
+
+* `cargo test --workspace` green, debug **and** release — 10 new native bars, including one that
+  searches for a witness distinguishing `(a·b)·c` from `a·(b·c)` and **fails if it finds none**,
+  which is §17.2's constant fold and §23.5's empty witness search guarded in advance.
+* `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings` green —
+  which is §25.8, and they are now part of a batch's list rather than of CI's.
+* `pytest tests/test_rust_parity_ops2d.py` green with the flag and without it — 406 tests.
+* `PHYSSYNTH_RS=1 pytest` green on the whole plate family — the **existing, unmodified** Python
+  tests for the supported plate, the free plate, the orthotropic plate, the guitar plate, the von
+  Kármán bracket and the membrane, all running on a Rust-built outline.
+* The whole Python suite green on the default path — 3,565 passed, 1 skipped, after §25.8a — and the shipped
+  numbers **unmoved**: 0 mask
+  node flips, 0 ulps on `scale`, 0 relative change in `guitar_area` against the previous spelling.
+  That first number is a *test* — `tests/test_guitar_plate.py` holds the old expression and 100
+  parametrisations of the comparison — not a scratch script that ran once.
+
+### 25.12 What was measured
+
+| quantity | value |
+| --- | --- |
+| smallest comparison margin, four real outlines | 1.9e7 … 1.9e10 ulps of `half` |
+| … median over 130 configurations | 8.6e11 ulps |
+| … degenerate lens, `N = 32` | **1 ulp** (four nodes), and 0 at `t = ½` |
+| `np.sin`/`np.cos` vs `math.sin`/`math.cos`, profile values | differ in 221,580 of the sweep |
+| … resulting mask flips on this machine | **0** |
+| … resulting change in `guitar_scale` | **0 ulps** |
+| Rust vs Python: profile, scale, mask, cells, prune | **bit-identical / identical** |
+| Rust vs Python: `guitar_area` | 1.2e-13 relative |
+| quadrature vs the closed form, three waists | < 1e-12 relative |
+| scalar vs vectorised profile, 2,000,000 points | 467.4 ms vs 45.9 ms |
+| scalar vs vectorised profile, 20,001 points | 4.4 ms vs 0.21 ms |
+| spikes the shipped outline produces, `N = 20…48` | 2–4, all removed by one prune |
+
+### 25.13 What the next batch inherits
+
+* **The matrices are what is left of `operators2d`**, and `portable.canonical` goes on with them —
+  §18.4 wrote the decision down in advance and §24.13 repeated it. `biharmonic_from_mask` is
+  `L @ L` through SciPy's SMMP kernel, so it comes back with **descending** column indices, and
+  `plate.py` multiplies by that operator every timestep.
+* **Ask whether the output is discrete before asking how exact it is.** §25.2. The remaining
+  functions in this module are all matrices, so the question is settled for them — but `connection`
+  and the plate's own construction contain index choices, and an index is a decision too.
+* **A margin measurement costs one script and settles a spelling.** §25.3. It is cheaper than the
+  argument about whether an exact assertion is safe, and it produces a *test* rather than a note.
+* **A batch's success condition must cover the gate's first two steps.** §25.8.
+* **Rebuild the wheel before believing a parity number, and re-run what recorded the behaviour you
+  changed.** §25.8a. Phase 4's `boundary=None` fix sat in `crates/` and not in `site-packages`, so
+  the test contradicting it stayed green for a whole batch.
+* **When a port changes the reference, pin the reference's *old* behaviour somewhere the port
+  cannot reach.** §25.5's third pin. Every parity assertion compares Rust against the Python as it
+  is now; only a test holding the previous expression can tell a faithful port of a slip from a
+  faithful port. The next batch changes `plate.py`'s operator assignment (`portable.canonical`), so
+  the same hole opens there — and there the quantity is continuous, so the pin is a tolerance on
+  the spectrum rather than an equality on a mask.
+* **Check inherited sentences** — still true, and now with a fourth instance: Phase 4's §24.11 was
+  complete about the tests and silent about the linters.

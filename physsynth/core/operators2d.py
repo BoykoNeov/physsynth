@@ -18,6 +18,7 @@ Headless: NumPy + SciPy (sparse). No I/O, no plotting.
 
 from __future__ import annotations
 
+import math
 import os
 
 import numpy as np
@@ -86,6 +87,57 @@ def disk_mask(X: NDArray[np.float64], Y: NDArray[np.float64], radius: float) -> 
     return (X * X + Y * Y) < (radius * radius)
 
 
+def _profile(t: float, waist: float, asym: float) -> float:
+    """One point of the outline profile, in the spelling **both languages can express**.
+
+    ``math.sin`` and ``math.cos`` are CPython's calls straight through to the platform C library
+    — UCRT on Windows, glibc on Linux — which is where Rust's ``f64::sin``/``f64::cos`` land
+    too. ``np.sin``/``np.cos`` on a float64 array are neither: NumPy carries its own vectorised
+    routines and picks one at import from the CPU's feature set, so what they return is a property
+    of the machine (``docs/dev/rust-migration-plan.md`` §22.1). For a *reported* number that is
+    a last bit and nobody cares. For this one it is not — see :func:`guitar_mask`.
+
+    The three factors are multiplied left to right, which is what the Rust port does and what the
+    original NumPy expression did. Do not reassociate.
+    """
+    return (
+        math.sin(math.pi * t)
+        * (1.0 - waist * math.cos(4.0 * math.pi * (t - 0.5)))
+        * (1.0 + asym * (t - 0.5))
+    )
+
+
+def _profile_vec(t: NDArray[np.float64], waist: float, asym: float) -> NDArray[np.float64]:
+    """The same formula in NumPy's vectorised spelling — for :func:`guitar_area` only.
+
+    **A deliberate duplicate, and merging it back into** :func:`_profile` **would be a bug.** The
+    two differ in the last bit of ``sin``/``cos`` (measured 2026-08-28: 221,580 of the profile
+    values over a 130-case sweep), which is precisely the difference this module has just gone to
+    some trouble to keep out of the mask. What buys the duplicate is speed and nothing else: the
+    area quadrature evaluates the profile at **two million** points, where the scalar spelling
+    costs 467 ms against 46 ms — half a second on every guitar plate anyone builds.
+
+    The trade is only available because of what the two consumers do with the answer.
+    :func:`guitar_mask` **branches** on it — the value decides whether a node exists at all — so
+    it takes the spelling that is the same on both sides of the port. :func:`guitar_area`
+    **averages** two million of them into a reported denominator, where a last bit is invisible by
+    construction. That is the plan's §19.2 question ("does anything downstream branch on this?")
+    asked of a transcendental instead of a reduction, and it is why the split is safe.
+
+    ``tests/test_rust_parity_ops2d.py`` pins **both call sites** to the bit —
+    :func:`guitar_half_width` against a comprehension over :func:`_profile`, and
+    :func:`guitar_area` against a quadrature spelled through this function. Collapsing the pair in
+    either direction fails there rather than moving a plate's geometry, or costing half a second a
+    plate, three phases later (plan §20.2). Neither assertion is a claim about a CPU: each says
+    only that a call site uses the spelling it is supposed to.
+    """
+    return (
+        np.sin(np.pi * t)
+        * (1.0 - waist * np.cos(4.0 * np.pi * (t - 0.5)))
+        * (1.0 + asym * (t - 0.5))
+    )
+
+
 def guitar_half_width(
     t: NDArray[np.float64] | float, waist: float = 0.42, asym: float = 0.30
 ) -> NDArray[np.float64]:
@@ -102,18 +154,29 @@ def guitar_half_width(
 
     Returned un-normalised: :func:`guitar_mask` rescales so the widest point equals the requested
     width. Exposed because the area of the true outline — the denominator of the plate's area
-    deficit — is a quadrature of this profile, and it must be the *same* profile.
+    deficit — is a quadrature of this same formula (:func:`guitar_area`, through
+    :func:`_profile_vec`; the two agree to a last bit and the split is deliberate).
+
+    Vectorised over ``t`` but evaluated **one point at a time through the scalar libm**
+    (:func:`_profile`) rather than through ``np.sin``/``np.cos``. The cost is real — about
+    0.2 us a point, ~5 ms for a fine grid — and it is paid because this profile decides a
+    *discrete* question; :func:`guitar_mask` says what that means.
     """
     t = np.asarray(t, dtype=float)
-    return (
-        np.sin(np.pi * t)
-        * (1.0 - waist * np.cos(4.0 * np.pi * (t - 0.5)))
-        * (1.0 + asym * (t - 0.5))
-    )
+    out = np.empty(t.shape, dtype=float)
+    flat = out.reshape(-1)
+    for i, tv in enumerate(t.reshape(-1)):
+        flat[i] = _profile(float(tv), float(waist), float(asym))
+    return out
 
 
 def guitar_scale(width: float, waist: float, asym: float) -> float:
-    """Factor taking :func:`guitar_half_width` to a half-width whose maximum is ``width/2``."""
+    """Factor taking :func:`guitar_half_width` to a half-width whose maximum is ``width/2``.
+
+    The peak is a *sampled* maximum over 20,001 points rather than a closed form, so it inherits
+    :func:`_profile`'s spelling — and it has to, because ``scale`` multiplies every half-width
+    the mask compares against. One ulp here is one ulp on every node of the outline at once.
+    """
     peak = float(guitar_half_width(np.linspace(0.0, 1.0, 20001), waist, asym).max())
     return 0.5 * float(width) / peak
 
@@ -165,7 +228,10 @@ def guitar_area(length: float, width: float, waist: float = 0.42, asym: float = 
     """
     m = 2_000_000
     t = (np.arange(m) + 0.5) / m
-    prof = guitar_scale(width, waist, asym) * guitar_half_width(t, waist, asym)
+    # `_profile_vec`, NOT `guitar_half_width`: two million scalar libm calls cost half a second
+    # here, and this quadrature is the one consumer that cannot tell the difference. The two
+    # spellings, and why the split is safe, are in `_profile_vec`'s docstring.
+    prof = guitar_scale(width, waist, asym) * _profile_vec(t, waist, asym)
     return float(2.0 * np.sum(prof) * (float(length) / m))
 
 
@@ -947,9 +1013,16 @@ def norm2_2d(f: NDArray[np.float64], h: float) -> float:
 # **Only part of this module is ported, deliberately.** The plan's Group D puts `operators2d` at
 # Phase 5 because of `VonKarmanBracket` and `AiryStressSolver`, which factor with SuperLU. That is
 # right about the module and wrong about the unit of work: the membrane is a Phase 2 model, and the
-# seven functions below -- the grid, the two masks, the Laplacian, `embed` and the two inner
-# products -- assemble rather than solve. So they port with the membrane and the rest waits for the
-# plate family. `crates/physsynth-core/src/ops2d.rs` names what is deliberately absent.
+# first seven functions below -- the grid, the two masks, the Laplacian, `embed` and the two inner
+# products -- assemble rather than solve. So they ported with the membrane.
+#
+# Phase 5's first batch adds the next seven: the **geometry** of the plate family. They are grouped
+# apart from the matrices they serve for a reason worth stating, because it is what decided the
+# batch boundary -- their output is DISCRETE. `guitar_mask` returns a set of nodes, not a field, so
+# a last bit of `sin` is a node that exists or does not, and every detector this project owns stays
+# green on a plate with one node too few (plan sections 22.6 and 25). That is also why
+# `guitar_half_width` gives up NumPy's vectorised `sin`/`cos` for the scalar libm: see `_profile`.
+# `crates/physsynth-core/src/ops2d.rs` names what is still deliberately absent.
 #
 # The matrix comes back from the binding as CSR triplets and is rebuilt here, exactly as in
 # `operators.py`: the core never learns what SciPy is, and the modules that
@@ -959,6 +1032,13 @@ def norm2_2d(f: NDArray[np.float64], h: float) -> float:
 grid_coords_py = grid_coords
 rectangle_mask_py = rectangle_mask
 disk_mask_py = disk_mask
+guitar_half_width_py = guitar_half_width
+guitar_scale_py = guitar_scale
+guitar_mask_py = guitar_mask
+guitar_area_py = guitar_area
+live_cells_py = live_cells
+cells_per_node_py = cells_per_node
+prune_to_area_carrying_py = prune_to_area_carrying
 laplacian_from_mask_py = laplacian_from_mask
 embed_py = embed
 inner2d_py = inner2d
@@ -982,6 +1062,27 @@ if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the d
 
     def disk_mask(X, Y, radius):  # type: ignore[misc]  # noqa: F811
         return _rs.disk_mask(X, Y, radius)
+
+    def guitar_half_width(t, waist=0.42, asym=0.30):  # type: ignore[misc]  # noqa: F811
+        return _rs.guitar_half_width(t, waist, asym)
+
+    def guitar_scale(width, waist, asym):  # type: ignore[misc]  # noqa: F811
+        return _rs.guitar_scale(width, waist, asym)
+
+    def guitar_mask(X, Y, length, width, waist=0.42, asym=0.30):  # type: ignore[misc]  # noqa: F811
+        return _rs.guitar_mask(X, Y, length, width, waist, asym)
+
+    def guitar_area(length, width, waist=0.42, asym=0.30):  # type: ignore[misc]  # noqa: F811
+        return _rs.guitar_area(length, width, waist, asym)
+
+    def live_cells(mask):  # type: ignore[misc]  # noqa: F811
+        return _rs.live_cells(mask)
+
+    def cells_per_node(mask):  # type: ignore[misc]  # noqa: F811
+        return _rs.cells_per_node(mask)
+
+    def prune_to_area_carrying(mask):  # type: ignore[misc]  # noqa: F811
+        return _rs.prune_to_area_carrying(mask)
 
     def laplacian_from_mask(mask, h):  # type: ignore[misc]  # noqa: F811
         triplets, index_map = _rs.laplacian_from_mask_csr(mask, h)

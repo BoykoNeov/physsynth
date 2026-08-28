@@ -47,6 +47,73 @@ from physsynth.core.operators2d import (
 from physsynth.core.plate import Plate
 
 NU = 0.3
+
+
+# -- the outline the plate family shipped with, pinned against a change of spelling ---------------
+#
+# `guitar_half_width` was moved from NumPy's vectorised `sin`/`cos` to the scalar libm on
+# 2026-08-28, so that the Rust port and the Python reference reach the *same* implementation and
+# the mask can be compared to the bit (`docs/dev/rust-migration-plan.md` section 25.4). NumPy
+# picks its transcendental routines by CPU feature, so it was never a spelling this code could
+# share -- and it is the one place in the repo where a last bit is not a rounding but a live node.
+#
+# Everything downstream of that change is asserted against the NEW spelling, which is exactly the
+# hole this test fills: a transcription slip in the new profile would be reproduced faithfully by
+# the port and agreed on by every parity test. So the OLD expression is written out here, once,
+# and the mask it produces is compared node for node. It is not a claim about a CPU -- if the two
+# spellings ever disagree in a way that moves a node, that is the news, and this is where it lands.
+
+
+def _outline_half_width_before_2026_08_28(t, waist, asym):
+    """The pre-change vectorised profile, kept verbatim as the geometry's reference."""
+    t = np.asarray(t, dtype=float)
+    return (
+        np.sin(np.pi * t)
+        * (1.0 - waist * np.cos(4.0 * np.pi * (t - 0.5)))
+        * (1.0 + asym * (t - 0.5))
+    )
+
+
+def _outline_mask_before_2026_08_28(X, Y, length, width, waist, asym):
+    peak = float(
+        _outline_half_width_before_2026_08_28(np.linspace(0.0, 1.0, 20001), waist, asym).max()
+    )
+    scale = 0.5 * float(width) / peak
+    t = np.asarray(Y, dtype=float) / float(length)
+    half = scale * _outline_half_width_before_2026_08_28(t, waist, asym)
+    return (t > 0.0) & (t < 1.0) & (np.abs(X) < half)
+
+
+@pytest.mark.parametrize("N", [8, 16, 20, 24, 32, 33, 40, 48, 64, 96])
+@pytest.mark.parametrize(
+    "waist,asym",
+    # The shipped defaults, the two fixtures below, the viewer's long narrow plate, the first
+    # point of its waist sweep (`waist = 0.0`, the outline with a node ONE ulp from the rim) and a
+    # negative asymmetry.
+    [(0.42, 0.30), (0.97, 0.30), (0.88, 0.0), (0.0, 0.0), (0.60, -0.30)],
+)
+@pytest.mark.parametrize("Lx,Ly", [(0.37, 0.48), (0.15, 0.70)])
+def test_the_scalar_libm_spelling_moved_no_node_of_any_shipped_outline(Lx, Ly, waist, asym, N):
+    h = Lx / N
+    Ny = max(int(round(Ly / h)), 1)
+    Ly_snapped = Ny * h
+    X, Y = np.meshgrid(np.linspace(0.0, Lx, N + 1), np.linspace(0.0, Ly_snapped, Ny + 1))
+    X = X - 0.5 * Lx
+
+    now = guitar_mask(X, Y, Ly_snapped, Lx, waist, asym)
+    before = _outline_mask_before_2026_08_28(X, Y, Ly_snapped, Lx, waist, asym)
+    moved = int(np.count_nonzero(now != before))
+    assert moved == 0, (
+        f"Lx={Lx} waist={waist} asym={asym} N={N}: {moved} node(s) changed when the outline "
+        "profile moved to the scalar libm. The plate that ships is no longer the plate that was "
+        "validated -- and no energy, nullspace or spectrum bar can see it."
+    )
+    # Both prunes too: a node dropped for carrying no area is a geometry decision as much as a
+    # node that failed the outline test, and `prune_to_area_carrying` iterates, so one moved node
+    # can take a neighbour with it.
+    assert np.array_equal(
+        prune_to_area_carrying(now)[0], prune_to_area_carrying(before)[0]
+    )
 DRIFT_TOL = 1e-10  # tier 1: the same acceptance bar as every other resonator
 
 # The #5o 7-grid survey, reused verbatim. It deliberately contains grids where the *supported*

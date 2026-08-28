@@ -21,16 +21,18 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    analysis, viewer backend *and* the test suite — in favour of **Rust**, gradually and model by
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
-   **PHASES 2, 3 AND 4 ARE ALL COMPLETE**; phases 0, 1, all five batches of 2, all six of 3 and
-   phase 4 are
-   built (plan §9-§24): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
+   **PHASES 2, 3 AND 4 ARE ALL COMPLETE** and **PHASE 5 IS UNDER WAY**; phases 0, 1, all five
+   batches of 2, all six of 3, phase 4 and the first batch of 5 are
+   built (plan §9-§25): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
    of `operators`, `membrane`, `exciter`, `body`, `bore`, `reed`, **`mallet`**, **`string_stiff`**,
    **`string_damped`**, **`string_nonlinear`**, **`bow`**, **all of `collision`** — the contact
    primitives, both contact solves, the project's one **dense LU** and `BarrierString` itself —
-   and now **`beam`**, plus the *builder half* of `operators2d`, all of `radiation` **except** its
+   and now **`beam`**, plus the *builder half* of `operators2d` **and its guitar-outline
+   geometry**, all of `radiation` **except** its
    one Bessel helper, the **banded Cholesky** the four theta-scheme strings share and the
    **sparse LU** the whole of Group D will share — ported. What is left of the
-   core is the rest of Group D: `operators2d`'s remaining half,
+   core is the rest of Group D: `operators2d`'s **matrices** (the biharmonic, the orthotropic
+   bending operator, the free-plate stiffness, the von Karman bracket and the Airy solver),
    `plate`, `connection` and `string_geometric` (Phase 5), then `airbox` and `analysis/`.
    `cargo test --workspace` runs the native bars and the Cargo dependency allowlist;
    `pip install ./crates/physsynth-py` then
@@ -301,6 +303,45 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    non-reproducible oracles" were twenty**, of which the ones that mattered return *eigenvectors*
    fed to `set_state`: an unpinned ARPACK start vector made the two exactly-degenerate rigid modes
    come back **1e-1 apart** run to run, which is an initial condition, not a last digit (§24.9).
+
+   And an **eighteenth**, from the guitar outline — Phase 5's first batch, which is about *where a
+   batch boundary goes* and answers it with a distinction none of the previous seventeen needed:
+   **a function whose output is a decision is a different porting problem from one whose output is
+   a number.** Every rule the migration has built — does the reduction reach the next timestep
+   (§14.2), does anything branch on it (§19.2), does the nonlinearity amplify or contract it
+   (§20.5) — assumes the answer is a quantity and the verdict is a tolerance. `guitar_mask` is
+   `|x| < half(y)` at every node and its answer is *which nodes exist*, so a last bit is not a
+   rounding but a **different plate** — and every detector this repo owns (energy, nullspace,
+   spectrum, area deficit) passes on a plate with one node too few. So the seven discrete-output
+   functions ported as a group, ahead of the seven matrices they serve, and the rule is **settle
+   the arithmetic of the discrete-output functions before porting anything that consumes them**
+   (§25.2). Five corollaries. **A margin measurement costs one script and settles a spelling**:
+   over 130 shipped configurations every *real* guitar clears its own rim by ≥1.9e7 ulps of the
+   half-width, so the mask's exactness is **structural** — §23.2's "ask a cheap question about the
+   shape of the arithmetic" applied to a comparison instead of a sum — while the **degenerate lens**
+   (`waist = 0`) does not: four nodes sit **one ulp** out at N = 32 and two sit *exactly* on the rim,
+   because `sin(π/6)` is ½ and the grid puts a node there, and the viewer's waist sweep starts at
+   0.0 (§25.3). **§22.3's portable-spelling manoeuvre a fifth time, and the first where the
+   parenthetical bites**: `math.sin` and Rust's `f64::sin` are the same libm call and `np.sin` is a
+   third implementation, but taking the portable spelling means a Python loop — 0.2 ms→4.4 ms at
+   `guitar_scale`'s 20,001 points is nothing, **45.9 ms→467.4 ms** at `guitar_area`'s two million is
+   half a second on every plate built. So the module now carries **both** spellings, and what makes
+   that safe is §19.2 again: **give the portable spelling to the consumer that branches and the fast
+   one to the consumer that averages** (§25.4). **A deliberate duplicate needs a pin at each end**,
+   not a comment in the middle — §20.2's hazard, and both call sites are asserted to the bit, which
+   is a claim about the code rather than about a CPU (§25.5). **A rank-zero array is a shape**:
+   `np.ascontiguousarray` promotes 0-d to `(1,)`, so a reader written three phases ago returned the
+   wrong shape the moment a function was vectorised over an arbitrary one — §24.7's lesson again,
+   surfacing through a *wider signature* rather than a new test (§25.7). And **a batch's success
+   condition must cover the gate's first two steps**: Phase 4 shipped with `cargo fmt --check` red
+   in seventeen places and `clippy -D warnings` red in four, because §24.11 listed the tests and not
+   the linters — the fourth time in six batches that CI was red for something visible locally
+   (§25.8) — and its sibling, found by the whole-suite run at the end of this batch: **a batch that
+   changes a shared behaviour must re-run the tests that recorded the old one**, because §24.7's
+   `boundary=None` fix left a Phase-2 test asserting the opposite, and that test stayed green for a
+   whole batch for the mundane reason that **the installed extension was older than the source** —
+   so `pip install ./crates/physsynth-py` before believing any parity number, since nothing in the
+   suite can tell a stale wheel from a fresh one (§25.8a).
 
 4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
    never the reverse. Keeps the physics portable to C++/Rust later.

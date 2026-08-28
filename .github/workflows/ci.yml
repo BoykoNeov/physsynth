@@ -228,7 +228,9 @@ jobs:
       # * `plate.py` imports `rectangle_mask`, `disk_mask`, `laplacian_from_mask` and `embed` from
       #   `operators2d`, so flipping the flag puts every plate -- supported, free, orthotropic,
       #   guitar-shaped -- and the von Karman bracket on Rust-built geometry while all of them are
-      #   still Python models. Same lever as Phase 1's, one dimension up.
+      #   still Python models. Same lever as Phase 1's, one dimension up. Since Phase 5's first
+      #   batch it also imports the OUTLINE (`guitar_mask` and friends), which is a sharper lever
+      #   again -- see the plate-outline step further down.
       #
       # `exciter` gets no list of its own on purpose: nearly every model's tests call
       # `triangular_pluck` or a raised cosine, so a list would be the suite. The whole-suite run
@@ -677,6 +679,39 @@ jobs:
             tests/test_beam_energy.py \
             tests/test_beam_modal.py \
             tests/test_beam_stability.py \
+            tests/test_stability.py
+
+      # Phase 5 batch 1's success condition, and it is a different KIND of claim from every step
+      # above it. What ported here is the guitar outline -- `guitar_mask` and the six functions
+      # around it -- and its output is not a number, it is a SET OF NODES. `|x| < half(y)` with
+      # `half` built from `sin` and `cos`, so section 22.1's finding (NumPy computes
+      # transcendentals with its own CPU-dispatched routines, not the platform libm) lands
+      # directly on a live/dead decision. A plate with one node too few conserves energy
+      # beautifully, keeps a 3-dimensional nullspace and reports a plausible spectrum: every
+      # detector in this repo passes it. So the mask is compared node for node in the parity step,
+      # and these files are here to prove that a Rust-built outline drives the real models.
+      #
+      # Why the exact comparison is safe at all was measured before the port: over 130 shipped
+      # configurations every REAL guitar clears its own rim by at least 1.9e7 ulps of `half`, so a
+      # last bit cannot move a node. The degenerate lens (waist = 0, asym = 0) does not clear it --
+      # four nodes sit ONE ulp out at N = 32 and two sit exactly on the rim -- which is why
+      # `operators2d.py` now evaluates the profile through the scalar libm, where CPython and Rust
+      # meet, and keeps NumPy's vectorised spelling only for the area quadrature (plan 25.3-25.5).
+      - name: The plate family's outline, unmodified, against Rust
+        env:
+          PHYSSYNTH_RS: "1"
+        run: |
+          pytest --durations=10 \
+            tests/test_guitar_plate.py \
+            tests/test_free_plate_energy.py \
+            tests/test_free_plate_modal.py \
+            tests/test_free_plate_orthotropic.py \
+            tests/test_plate_energy.py \
+            tests/test_plate_modal.py \
+            tests/test_plate_orthotropic.py \
+            tests/test_vk_free.py \
+            tests/test_vk_energy.py \
+            tests/test_membrane_modal.py \
             tests/test_stability.py
 
       - name: Record what decides the last bit

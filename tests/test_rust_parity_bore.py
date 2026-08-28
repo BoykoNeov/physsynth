@@ -212,32 +212,41 @@ def test_a_malformed_boundary_is_refused_by_both_if_not_with_the_same_words():
             physsynth_rs.Bore(**kw)
 
 
-def test_an_explicit_none_boundary_is_the_one_divergence_and_it_cannot_be_closed():
-    """``Bore(boundary=None)`` raises ``TypeError`` in Python and yields the **default** clarinet
-    in Rust. This is recorded rather than fixed because it is a property of PyO3, not a choice:
-    a Python-object parameter with a default has to be declared ``Option<Bound<PyAny>>``, and PyO3
-    maps *both* an omitted keyword and an explicitly-passed ``None`` to Rust's ``None``. There is
-    no signature that distinguishes them.
+def test_an_explicit_none_boundary_is_refused_by_both_and_omitting_it_still_defaults():
+    """``Bore(boundary=None)`` is refused on both sides — and it was not always.
 
-    The consequences are bounded and worth stating so nobody re-derives them:
+    **The history is the point.** As first written this test asserted the opposite: that Python
+    raised and Rust quietly built the default clarinet, "recorded rather than fixed because it is a
+    property of PyO3, not a choice". That reading was wrong. PyO3 does collapse an omitted keyword
+    and an explicit ``None`` onto the same ``Option::None``, but ``Option<Option<_>>``
+    distinguishes them — with the arm order inverted from the obvious guess, because PyO3 wraps the
+    *default expression*, so ``Some(None)`` means "argument omitted" and a bare ``None`` is the
+    caller's literal. Phase 4 found that while writing the beam's parity file and fixed all six
+    bindings (plan §24.7).
 
-    * ``None`` is not a legal boundary for either implementation — the difference is refuse versus
-      default, not two different bores.
-    * Nothing in ``physsynth/``, ``tests/`` or ``web/serialize.py`` passes it; every call site
-      writes a literal.
-    * The same is true of every other object-typed defaulted parameter in this binding layer,
-      including ``string_ideal``'s ``boundary`` since Phase 0.
+    What it did not do is come back here, and nothing noticed for a batch: the assertion below is
+    the only place in the suite that passed ``None`` to a *Bore*, and it was passing against an
+    extension built before the fix. **A batch that changes a shared behaviour has to re-run the
+    tests that recorded the old one** — the general shape of §24.13's "check inherited sentences",
+    arriving as a red test rather than as a stale sentence.
 
-    Asserted, so that a future change to either side is a *failing* test rather than a surprise.
+    Both halves are pinned, because the arm order is exactly the kind of thing a later refactor
+    inverts silently: an explicit ``None`` is refused, and omitting the argument still defaults.
+    The exception *types* differ and that is deliberate — ``Bore`` unpacks its boundary, so
+    Python's refusal is an incidental ``TypeError`` from the unpacking while the binding raises its
+    own ``ValueError`` naming what it wanted. Nothing in ``physsynth/``, ``tests/`` or
+    ``web/serialize.py`` passes ``None``; every call site writes a literal.
     """
     kw = dict(L=0.6, fs=C0_AIR / (0.6 / 60), N=60, boundary=None)
     with pytest.raises(TypeError):
         BorePy(**kw)
-    default = physsynth_rs.Bore(**kw)
-    assert (default._bc_left, default._bc_right) == ("closed", "open")
-    # ...and that default is the same bore the original builds when the argument is omitted.
-    omitted = BorePy(L=0.6, fs=C0_AIR / (0.6 / 60), N=60)
-    assert (omitted._bc_left, omitted._bc_right) == (default._bc_left, default._bc_right)
+    with pytest.raises(ValueError):
+        physsynth_rs.Bore(**kw)
+
+    omitted_py = BorePy(L=0.6, fs=C0_AIR / (0.6 / 60), N=60)
+    omitted_rs = physsynth_rs.Bore(L=0.6, fs=C0_AIR / (0.6 / 60), N=60)
+    assert (omitted_py._bc_left, omitted_py._bc_right) == ("closed", "open")
+    assert (omitted_rs._bc_left, omitted_rs._bc_right) == ("closed", "open")
 
 
 @pytest.mark.parametrize("case", CASES, ids=_ids)
