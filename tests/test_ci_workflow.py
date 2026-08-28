@@ -105,3 +105,35 @@ def test_no_run_block_line_is_a_swallowed_continuation(workflow_lines):
         f"{RUN_LINE_LIMIT} characters -- almost certainly two shell lines joined by a line "
         f"continuation that lost its backslash AND its newline: {offenders}"
     )
+
+
+def test_every_rust_parity_file_guards_its_extension_import():
+    """A parity file must reach the extension through ``importorskip``, never a bare ``import``.
+
+    The default gate does not build ``physsynth_rs``: the sharded validation harness installs only
+    the Python package, and the shard-reconciliation step runs a bare ``pytest --collect-only``. A
+    module-scope ``import physsynth_rs`` is therefore a **collection error** there, not a skip --
+    it fails the shard it lands in and it makes the reconciliation step's ``grep`` find no count at
+    all, so two jobs go red for one line.
+
+    None of that is visible on a development machine, where the extension is always installed, and
+    ruff's import sorting will happily tidy a bare import into the third-party block where it looks
+    exactly like every other line. Fifteen parity files had it right and the sixteenth did not;
+    this is that scar as a test rather than as a paragraph, which is the trade plan section 20.7
+    argued for and section 27.7 collected on.
+    """
+    root = Path(__file__).resolve().parent
+    files = sorted(root.glob("test_rust_parity*.py"))
+    assert len(files) >= 15, f"only found {len(files)} parity files -- the glob is wrong"
+    for path in files:
+        text = path.read_text(encoding="utf-8")
+        for lineno, line in enumerate(text.splitlines(), 1):
+            stripped = line.strip()
+            assert stripped != "import physsynth_rs", (
+                f"{path.name}:{lineno} imports the extension directly. Use "
+                'pytest.importorskip("physsynth_rs") -- the default gate does not build it, and a '
+                "bare import is a collection error rather than a skip."
+            )
+        assert 'importorskip(' in text and '"physsynth_rs"' in text, (
+            f"{path.name} never reaches the extension through importorskip"
+        )

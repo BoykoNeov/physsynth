@@ -5440,6 +5440,40 @@ was measured before the plate moved.
   name, and a test helper.
 * The whole Python suite green **under the flag**: **4,036 passed, none skipped, none failed**.
 
+### 28.12 A red CI run, and a scar that *does* have a local repro
+
+The batch went in green on everything above and came back red on two jobs, for one line.
+`tests/test_rust_parity_plate.py` opened with a bare `import physsynth_rs`. The other **fifteen**
+parity files reach the extension through `pytest.importorskip`, and the reason is that the default
+gate does not build it: the sharded validation harness installs only the Python package, and the
+shard-reconciliation step beside it runs a plain `pytest --collect-only`. A module-scope import is
+therefore a **collection error** rather than a skip, so
+
+* the shard the file lands in fails outright — 659 passed, 1 error;
+* and the reconciliation step's `pytest --collect-only | grep -oE '[0-9]+ tests collected'` finds
+  nothing at all, its `test -n "$total"` fails, and a second job goes red for the same line.
+
+Two things make this shape worth writing down rather than just fixing.
+
+**It is invisible on a development machine and it is ruff-shaped.** The extension is always
+installed here, so every local run — including the two whole-suite runs §28.10 records — passes. And
+the import does not look wrong: `ruff check --fix` *sorted* it into the third-party block, where it
+sits between `numpy` and `pytest` looking exactly like the other two.
+
+**Unlike §22.1's class, it has a local repro, and it is one command.** `pip uninstall physsynth-rs`
+and the failure reproduces exactly, in seconds — collection errors, the reconciliation loop finds no
+count. That is worth stating next to §22.2, which had to conclude the opposite about NumPy's CPU
+dispatch: *check whether the local repro exists before concluding it does not.* With the extension
+removed the suite collects 1,995 tests instead of 4,036 and the three shards sum to exactly that,
+which is the whole reconciliation claim.
+
+The fix is `importorskip`, and the pin is `test_ci_workflow.py::
+test_every_rust_parity_file_guards_its_extension_import`, which reads all sixteen parity files and
+refuses a bare import in any of them. That is §20.7's trade a third time — a scar written down as a
+test outperforms the same scar written down as a paragraph — and it is the *fifth* time in eight
+batches that CI was red for something a local check could have caught (§19.7, §20.7, §25.8, §27.7,
+and now this).
+
 ### 28.11 What the next batch inherits
 
 * **Left in the core: `connection` and `string_geometric`, then `airbox` and `analysis/`.**
@@ -5455,6 +5489,9 @@ was measured before the plate moved.
 * **A class that builds its collaborators by module-global name is swapped further than it looks.**
   §28.4. The parity file must construct the `*Py` collaborators explicitly or it compares Rust to
   Rust.
+* **A parity file must `importorskip` the extension.** §28.12, now pinned. And the wider habit it
+  belongs to: before concluding a failure has no local repro, try removing the thing CI does not
+  have.
 * **The nonlinear step is where the speed is.** 2.99x, against 1.17–1.32x for a linear one. Every
   remaining model with an inner iteration — the geometrically exact string, the room-loaded plates —
   is in that regime.

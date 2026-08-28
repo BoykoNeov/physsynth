@@ -30,7 +30,6 @@ from __future__ import annotations
 import math
 
 import numpy as np
-import physsynth_rs
 import pytest
 from scipy import sparse
 
@@ -42,6 +41,15 @@ from physsynth.core.plate import (
 )
 from physsynth.core.plate import (
     grain_ratios_from_material_py as grain_ratios_py,
+)
+
+# NOT a bare `import physsynth_rs`. The default gate -- the sharded validation harness and the
+# shard-reconciliation step beside it -- does **not** build the extension, so a module-scope import
+# is a collection ERROR there rather than a skip, and it takes the whole shard down with it. That
+# is invisible on a development machine, where the extension is always installed; it is pinned in
+# `tests/test_ci_workflow.py` instead.
+physsynth_rs = pytest.importorskip(
+    "physsynth_rs", reason="the Rust extension is not built in this environment"
 )
 
 FS = 20_000.0
