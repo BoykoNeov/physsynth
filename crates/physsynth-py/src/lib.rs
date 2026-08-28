@@ -735,6 +735,14 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ops2d::py_cells_per_node, m)?)?;
     m.add_function(wrap_pyfunction!(ops2d::py_prune_to_area_carrying, m)?)?;
     m.add_function(wrap_pyfunction!(ops2d::py_laplacian_from_mask, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_biharmonic_from_mask, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_dirichlet_interior_d2_1d, m)?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_orthotropic_biharmonic, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        ops2d::py_free_plate_stiffness_from_mask,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(ops2d::py_free_plate_stiffness, m)?)?;
     m.add_function(wrap_pyfunction!(ops2d::py_embed, m)?)?;
     m.add_function(wrap_pyfunction!(ops2d::py_inner2d, m)?)?;
     m.add_function(wrap_pyfunction!(ops2d::py_norm2_2d, m)?)?;

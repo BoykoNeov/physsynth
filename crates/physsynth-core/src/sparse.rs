@@ -94,6 +94,11 @@ impl Csr {
         )
     }
 
+    /// The `n x n` identity — `diagonal` at `1.0`, named because that is how the call sites read.
+    pub fn identity(n: usize) -> Self {
+        Self::diagonal(&vec![1.0; n])
+    }
+
     pub fn nrows(&self) -> usize {
         self.nrows
     }
@@ -193,6 +198,97 @@ impl Csr {
         }
         // `from_rows` drops the exact zeros, which is SciPy's kernel's behaviour too.
         Self::from_rows(self.nrows, self.ncols, rows)
+    }
+
+    /// `self + other`, over the union of the two sparsity patterns — the mirror of `sub`.
+    ///
+    /// Same contract, and for the same reason: SciPy computes `a + b` at every position either
+    /// operand occupies, treats a missing entry as `0.0`, and drops a result that is exactly zero.
+    /// The output is canonical whatever order the operands arrived in, which is the property
+    /// `physsynth/core/portable.py` sorts the Python side to meet.
+    ///
+    /// A two-term sum needs no note about association — but the *chain* of them does. The plate's
+    /// operators are three- and four-term sums, and Python evaluates `a + b + c` as `(a + b) + c`;
+    /// a caller folding them in another order gets a different matrix in the last bit. Every call
+    /// site here spells the association out.
+    ///
+    /// # Panics
+    /// If the shapes disagree.
+    pub fn add(&self, other: &Csr) -> Self {
+        assert_eq!(
+            (self.nrows, self.ncols),
+            (other.nrows, other.ncols),
+            "add shape mismatch: ({}x{}) + ({}x{})",
+            self.nrows,
+            self.ncols,
+            other.nrows,
+            other.ncols
+        );
+        let mut rows: Vec<Vec<(usize, f64)>> = Vec::with_capacity(self.nrows);
+        for i in 0..self.nrows {
+            let (mut p, p_end) = (self.indptr[i], self.indptr[i + 1]);
+            let (mut q, q_end) = (other.indptr[i], other.indptr[i + 1]);
+            let mut row: Vec<(usize, f64)> = Vec::with_capacity((p_end - p) + (q_end - q));
+            while p < p_end || q < q_end {
+                let ja = if p < p_end {
+                    self.indices[p]
+                } else {
+                    usize::MAX
+                };
+                let jb = if q < q_end {
+                    other.indices[q]
+                } else {
+                    usize::MAX
+                };
+                match ja.cmp(&jb) {
+                    std::cmp::Ordering::Less => {
+                        row.push((ja, self.data[p]));
+                        p += 1;
+                    }
+                    std::cmp::Ordering::Greater => {
+                        row.push((jb, other.data[q]));
+                        q += 1;
+                    }
+                    std::cmp::Ordering::Equal => {
+                        row.push((ja, self.data[p] + other.data[q]));
+                        p += 1;
+                        q += 1;
+                    }
+                }
+            }
+            rows.push(row);
+        }
+        Self::from_rows(self.nrows, self.ncols, rows)
+    }
+
+    /// The Kronecker product `self ⊗ other`.
+    ///
+    /// Block `(i, j)` of the result is `self[i, j] * other`, so entry
+    /// `(i * other.nrows + p, j * other.ncols + q)` is `self[i, j] * other[p, q]`. Each output
+    /// entry is a **single product** — no reduction, so nothing here depends on an order and the
+    /// result is bit-identical to `scipy.sparse.kron(a, b, format="csr")`, which was measured
+    /// canonical for every operand this module builds.
+    ///
+    /// Used to lift the 1-D differences onto the grid, C-order throughout: `kron(iy, dx)`
+    /// differentiates along `x` (the *inner* factor) and `kron(dy, ix)` along `y`.
+    pub fn kron(&self, other: &Csr) -> Self {
+        let nrows = self.nrows * other.nrows;
+        let ncols = self.ncols * other.ncols;
+        let mut rows: Vec<Vec<(usize, f64)>> = Vec::with_capacity(nrows);
+        for i in 0..self.nrows {
+            for p in 0..other.nrows {
+                let mut row = Vec::new();
+                for a in self.indptr[i]..self.indptr[i + 1] {
+                    let j = self.indices[a];
+                    let va = self.data[a];
+                    for b in other.indptr[p]..other.indptr[p + 1] {
+                        row.push((j * other.ncols + other.indices[b], va * other.data[b]));
+                    }
+                }
+                rows.push(row);
+            }
+        }
+        Self::from_rows(nrows, ncols, rows)
     }
 
     /// The transpose, by counting sort — which lands each output row's columns in ascending order
@@ -397,6 +493,54 @@ mod tests {
         assert_eq!(s.indptr(), m.indptr());
         assert_eq!(s.indices(), m.indices());
         assert_eq!(s.get(1, 1), -1.0);
+    }
+
+    #[test]
+    fn addition_is_over_the_union_and_drops_exact_cancellations() {
+        let a = Csr::from_rows(2, 3, vec![vec![(0, 1.0), (2, 3.0)], vec![(1, 5.0)]]);
+        let b = Csr::from_rows(2, 3, vec![vec![(1, 2.0), (2, -3.0)], vec![(0, 7.0)]]);
+        let s = a.add(&b);
+        // Row 0: 1 from a alone, 2 from b alone, and 3 + (-3) which cancels and is not stored --
+        // SciPy's kernel drops it too, and the parity tests compare nnz.
+        assert_eq!(s.indices(), &[0, 1, 0, 1]);
+        assert_eq!(s.data(), &[1.0, 2.0, 7.0, 5.0]);
+        assert_eq!(s.nnz(), 4);
+    }
+
+    #[test]
+    fn addition_agrees_with_subtracting_the_negation() {
+        let a = tri(6);
+        let b = a.scaled(0.375);
+        assert_eq!(a.add(&b).data(), a.sub(&b.scaled(-1.0)).data());
+    }
+
+    #[test]
+    fn the_kronecker_product_places_scaled_blocks() {
+        let a = Csr::from_rows(2, 2, vec![vec![(0, 2.0), (1, 3.0)], vec![(1, 5.0)]]);
+        let b = Csr::from_rows(2, 2, vec![vec![(0, 7.0)], vec![(0, 11.0), (1, 13.0)]]);
+        let k = a.kron(&b);
+        assert_eq!((k.nrows(), k.ncols()), (4, 4));
+        for i in 0..2 {
+            for j in 0..2 {
+                for p in 0..2 {
+                    for q in 0..2 {
+                        assert_eq!(
+                            k.get(i * 2 + p, j * 2 + q),
+                            a.get(i, j) * b.get(p, q),
+                            "block ({i},{j}) entry ({p},{q})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_identity_is_the_multiplicative_one() {
+        let a = tri(5);
+        assert_eq!(Csr::identity(5).matmul(&a).data(), a.data());
+        assert_eq!(a.matmul(&Csr::identity(5)).data(), a.data());
+        assert_eq!(Csr::identity(3).kron(&a).nnz(), 3 * a.nnz());
     }
 
     #[test]

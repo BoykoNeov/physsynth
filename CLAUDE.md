@@ -22,24 +22,28 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
    **PHASES 2, 3 AND 4 ARE ALL COMPLETE** and **PHASE 5 IS UNDER WAY**; phases 0, 1, all five
-   batches of 2, all six of 3, phase 4 and the first batch of 5 are
-   built (plan §9-§25): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
+   batches of 2, all six of 3, phase 4 and the first two batches of 5 are
+   built (plan §9-§26): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
    of `operators`, `membrane`, `exciter`, `body`, `bore`, `reed`, **`mallet`**, **`string_stiff`**,
    **`string_damped`**, **`string_nonlinear`**, **`bow`**, **all of `collision`** — the contact
    primitives, both contact solves, the project's one **dense LU** and `BarrierString` itself —
-   and now **`beam`**, plus the *builder half* of `operators2d` **and its guitar-outline
-   geometry**, all of `radiation` **except** its
+   and now **`beam`**, plus the *builder half* of `operators2d`, **its guitar-outline
+   geometry** and **all five of its matrices** — the biharmonic, the interior second difference,
+   the orthotropic bending operator and both free-plate stiffnesses — all of `radiation` **except**
+   its
    one Bessel helper, the **banded Cholesky** the four theta-scheme strings share and the
    **sparse LU** the whole of Group D will share — ported. What is left of the
-   core is the rest of Group D: `operators2d`'s **matrices** (the biharmonic, the orthotropic
-   bending operator, the free-plate stiffness, the von Karman bracket and the Airy solver),
-   `plate`, `connection` and `string_geometric` (Phase 5), then `airbox` and `analysis/`.
+   core is the rest of Group D: `operators2d`'s **von Karman half** (four private 1-D differences,
+   the bracket and the Airy solver — the only piece of the module whose parity claim is a
+   *tolerance* rather than an equality, because it factors with SuperLU), `plate`, `connection` and
+   `string_geometric` (Phase 5), then `airbox` and `analysis/`.
    `cargo test --workspace` runs the native bars and the Cargo dependency allowlist;
    `pip install ./crates/physsynth-py` then
    `PHYSSYNTH_RS=1 pytest` runs the **existing, unmodified** Python tests against the Rust code. The
    flag is one switch for the whole tree: with it set, the one still-Python string model runs on
    Rust-built operators; every plate — supported, free, orthotropic, guitar-shaped — plus the von
-   Karman bracket runs on Rust-built geometry; and the whole body/radiation leg (bridges,
+   Karman bracket runs on Rust-built geometry **and on Rust-built stiffness matrices**; and the
+   whole body/radiation leg (bridges,
    sympathetic strings, all three radiation tiers) runs on a Rust modal body; and the whole wind leg
    — air column, radiating bell and the reed that blows it — is Rust end to end; and the air node
    itself — far-field read-out, radiation load, rational impedance — is Rust too; and the four
@@ -342,6 +346,41 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    whole batch for the mundane reason that **the installed extension was older than the source** —
    so `pip install ./crates/physsynth-py` before believing any parity number, since nothing in the
    suite can tell a stale wheel from a fresh one (§25.8a).
+
+   And a **nineteenth**, from the plate's matrices — Phase 5's second batch — which is about a
+   question every previous batch asked as one and which is really two: **when a port meets a library
+   kernel, whether the *values* agree and whether the *stored order* agrees are separate questions,
+   with different answers and different remedies.** Here the values agreed everywhere, immediately —
+   an ascending-`k` accumulation reproduces SciPy's sparse product bit for bit, 0 differing entries
+   out of 2,629 — and only the order did not. And §18.2's own rule turned out to be too specific:
+   it found the 1-D biharmonic coming back **descending** and wrote the rule that way, but in two
+   dimensions the order is **neither ascending nor descending in 600 of 610 rows**. It is whatever
+   the kernel touched first, so no rule reproduces it and the fix is `portable.canonical` on the
+   Python side — §18.4's prediction coming true unchanged (§26.2). Five corollaries. **The free
+   plate needed nothing, and that is what made the batch safe**: `free_plate_stiffness`'s `K` is a
+   Gram product and SciPy returns those already sorted, measured canonical in *every* row of every
+   rectangle, disk and guitar — so only the supported plate moved (1.2e-13 of amplitude over 2,000
+   steps, drift unmoved at 2e-14 against the 1e-10 bar) and the free, orthotropic-free and guitar
+   plates are bit-identical. Had `K` needed it, §24.5's t² integration along the `{1,x,y}` nullspace
+   would have made porting a matrix into a re-tolerancing of three models (§26.3). **§15.2's anchor
+   rule reached the plate family**: `plate.py` spelled `L @ L` inline in *two* classes, and
+   `VKPlate(nonlinear=False)` must be `array_equal` to `Plate`, so both call sites had to move to
+   the shared builder in one edit (§26.4). **Ask whether the outer factors share a mantissa before
+   assuming a reassociation is visible**: the module writes `BᵀWB` right-associated in one place and
+   left-associated in the other, ~35% of value triples distinguish those, and *none* of this
+   operator's do — every curvature entry is `1/h²` times an exact power of two, so both associations
+   commute into the same product. §23.2's cheap-question move applied to a product instead of a sum
+   (§26.5). **A spelling pin must search, not assert a constant** — the association witness was
+   first written as three hand-picked numbers, they landed in the agreeing two-thirds, and the test
+   went *red*; that is §23.5's empty search seen from the other side, and only the searching form
+   can tell "no difference exists" from "I did not look in the right place" (§26.6). And **the swap
+   guard caught its own hazard inside the batch that made it**: `dirichlet_interior_d2_1d` is the
+   module's first private-but-swapped name, the natural alias `_dirichlet_interior_d2_1d_py` is
+   invisible to a derive that filters leading underscores, and §17.6's finding fired by name on the
+   first run instead of hiding for a batch (§26.7). One non-finding worth keeping: the Rust
+   `free_plate_stiffness` is **slower** than SciPy's (3.49 ms vs 2.53 ms at N = 32), which is §11.6
+   exactly — five compiled SMMP calls with nothing around them to win, and construction-time only
+   (§26.8).
 
 4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
    never the reverse. Keeps the physics portable to C++/Rust later.

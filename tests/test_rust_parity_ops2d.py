@@ -45,6 +45,31 @@ So ``physsynth/core/operators2d.py`` gives the mask path the *scalar* libm (``ma
 where Rust's ``f64::sin`` also lands) and keeps NumPy's vectorised spelling only for the two-million
 point area quadrature, which averages rather than branches. Both halves of that split are pinned
 below.
+
+Phase 5's **second** batch adds the matrices those masks are for — ``biharmonic_from_mask``,
+``orthotropic_biharmonic`` and ``free_plate_stiffness*`` — and every one of them is compared
+**exactly**, on ``data``, ``indices``, ``indptr`` and ``nnz``. That took one edit to the reference
+and it is worth saying which:
+
+* **The values were already identical; only the stored order was not.** SciPy's sparse product
+  hands back each row in whatever order its kernel touched the columns — measured here as neither
+  ascending nor descending, and not a property of the algebra. A CSR matvec sums a row in *stored*
+  order and :class:`.plate.Plate` forms ``B @ u`` twice per timestep, so that order reaches the
+  trajectory. :func:`physsynth.core.portable.canonical` sorts the Python side, which is §18.2's
+  manoeuvre for the string family arriving where §18.4 said in advance that it would.
+
+* **``free_plate_stiffness`` needed nothing.** Its ``K`` is a ``AᵀWB`` Gram product, and SciPy
+  returns those already sorted — measured canonical in every row of every rectangle, disk and
+  guitar tried. So the free plate, the orthotropic free plate and the guitar plate are *unmoved*
+  by this batch, and only the supported plate's last bits move.
+
+* **The one association that looks dangerous is provably harmless.** ``operators2d.py`` writes the
+  free plate's Gram products right-associated, ``C2xᵀ @ (Wa @ C2y)``, while ``AiryStressSolver``
+  writes the same mathematical form with no parentheses at all, which Python left-associates. About
+  a third of value triples distinguish those two — but *none* of this operator's do, because every
+  curvature entry is the same mantissa ``1/h²`` times an exact power of two and IEEE multiplication
+  commutes exactly. That is asserted natively rather than here; see
+  ``crates/physsynth-core/tests/ops2d.rs``.
 """
 
 import numpy as np
@@ -542,4 +567,217 @@ def test_both_sides_reject_the_same_outlines_with_the_same_words(kwargs):
         o2.guitar_mask_py(X, Y, args["length"], args["width"], args["waist"], args["asym"])
     with pytest.raises(ValueError) as rs_err:
         physsynth_rs.guitar_mask(X, Y, args["length"], args["width"], args["waist"], args["asym"])
+    assert str(py_err.value) == str(rs_err.value)
+
+
+# -- the matrices (Phase 5 batch 2) ---------------------------------------------------------------
+
+# Grids the plate family actually ships on, plus one where `1/h**2` is exactly representable and one
+# where it is not -- the distinction that decides whether the orthotropic assembly collapses onto
+# `L @ L` bit-for-bit, and the one a single-grid check would have missed.
+MATRIX_GRIDS = [(6, 5, 0.037), (8, 8, 0.05), (12, 9, 0.0125), (16, 16, 0.03125), (20, 13, 0.1 / 7)]
+
+# Grain triples: isotropic, a generic orthotropy, spruce's own cross term, and one that violates
+# `g_h > -sqrt(g_x g_y)` -- the operator builds the indefinite case on purpose, so the port must
+# too.
+GRAINS = [(1.0, 1.0, 1.0), (1.3, 0.9, 1.1), (1.0, 0.153, 0.073), (1.0, -0.1, 0.5)]
+
+
+def _assert_identical(py_m, rs_m, what):
+    """Bit-for-bit, including the stored order -- the claim this batch is making."""
+    a = py_m.tocsr()
+    b = rs_m.tocsr()
+    assert a.shape == b.shape, f"{what}: shape {a.shape} vs {b.shape}"
+    assert a.nnz == b.nnz, f"{what}: nnz {a.nnz} vs {b.nnz}"
+    assert np.array_equal(a.indptr, b.indptr), f"{what}: indptr"
+    assert np.array_equal(a.indices, b.indices), (
+        f"{what}: stored column order differs -- a CSR matvec sums a row in stored order, so this "
+        "is a different operator on the update path, not a cosmetic difference"
+    )
+    assert np.array_equal(a.data, b.data), (
+        f"{what}: {int((a.data != b.data).sum())} of {a.nnz} entries differ"
+    )
+
+
+def _pruned_guitar(n):
+    X, Y, Ly = _guitar_grid(0.37, 0.48, n)
+    return o2.prune_to_area_carrying_py(o2.guitar_mask_py(X, Y, Ly, 0.37, 0.42, 0.30))[0], 0.37 / n
+
+
+def _pruned_disk(n):
+    X, Y, h = o2.grid_coords_py(n, 0.5)
+    return o2.prune_to_area_carrying_py(o2.disk_mask_py(X, Y, 0.4))[0], h
+
+
+@pytest.mark.parametrize("nx,ny,h", MATRIX_GRIDS)
+def test_the_biharmonic_is_bit_identical_on_a_rectangle(nx, ny, h):
+    mask = o2.rectangle_mask_py(nx, ny)
+    B, index_map = o2.biharmonic_from_mask_py(mask, h)
+    triplets, im_rs = physsynth_rs.biharmonic_from_mask_csr(mask, h)
+    _assert_identical(B, _rebuild(triplets), f"B({nx},{ny},{h})")
+    assert np.array_equal(index_map, im_rs)
+    assert im_rs.dtype == np.int64
+
+
+@pytest.mark.parametrize("nx,ny,h", MATRIX_GRIDS)
+def test_the_rust_product_is_canonical_before_anything_sorts_it(nx, ny, h):
+    """The exact-index claim above is about the *port*, not about two calls to ``sort_indices``.
+
+    Both sides of that comparison are sorted -- the Python reference by ``portable.canonical`` and
+    the Rust side by ``Csr::from_rows``. So on its own it would still pass if the binding emitted
+    rows in an arbitrary order and the shim tidied them up, which is a weaker claim than the one
+    being made. This asserts the property at the source: what comes *out of the binding* is already
+    canonical, so `physsynth/core/operators2d.py`'s shim is rebuilding a matrix rather than fixing
+    one, and a future Rust-side reordering fails here with an obvious cause.
+    """
+    mask = o2.rectangle_mask_py(nx, ny)
+    for raw in (
+        _rebuild(physsynth_rs.biharmonic_from_mask_csr(mask, h)[0]),
+        _rebuild(physsynth_rs.orthotropic_biharmonic_csr(nx, ny, h, 1.3, 0.9, 1.1)[0]),
+        _rebuild(physsynth_rs.free_plate_stiffness_csr(nx, ny, h, 0.3, 1.0, 1.0, None, None)[0]),
+    ):
+        # `has_sorted_indices` is a lazily-set FLAG, and `csr_matrix((data, indices, indptr))`
+        # trusts it rather than checking -- so the flag alone would assert nothing. Read the
+        # indices.
+        for r in range(raw.shape[0]):
+            idx = raw.indices[raw.indptr[r] : raw.indptr[r + 1]]
+            assert np.all(np.diff(idx) > 0), (
+                f"row {r} of the raw binding output is not ascending -- the Rust side is relying "
+                "on the Python shim to sort it, which makes the exact-index comparison a test of "
+                "`sort_indices` rather than of the port"
+            )
+
+
+@pytest.mark.parametrize("n", [16, 24, 32])
+@pytest.mark.parametrize("shape", ["guitar", "disk"])
+def test_the_biharmonic_is_bit_identical_on_a_staircased_outline(n, shape):
+    # A staircased rim is where `L`'s rows stop being uniform, so `L @ L`'s per-entry reduction
+    # stops being the same length everywhere -- which is the thing plan section 23.2 says decides
+    # whether an exact claim is available at all.
+    mask, h = _pruned_guitar(n) if shape == "guitar" else _pruned_disk(n)
+    B, _ = o2.biharmonic_from_mask_py(mask, h)
+    _assert_identical(B, _rebuild(physsynth_rs.biharmonic_from_mask_csr(mask, h)[0]), shape)
+
+
+@pytest.mark.parametrize("n_int", [1, 2, 5, 17, 40])
+@pytest.mark.parametrize("h", [0.037, 0.05, 0.1 / 7, 0.5])
+def test_the_interior_second_difference_is_bit_identical(n_int, h):
+    # `n_int == 1` is the degenerate end -- `sparse.diags` is handed an empty off-diagonal, and a
+    # plate at `N = 2` is a legal (if useless) plate. `n_int == 0` is left out deliberately: the
+    # only caller is `orthotropic_biharmonic`, which refuses `Nx < 2` first, and what the reference
+    # does at zero is `scipy.sparse.diags`'s own bounds error rather than anything this module
+    # says. Pinning a library internal is the bargain plan section 18.2 refused.
+    _assert_identical(
+        o2.dirichlet_interior_d2_1d_py(n_int, h),
+        _rebuild(physsynth_rs.dirichlet_interior_d2_1d_csr(n_int, h)),
+        f"D2({n_int},{h})",
+    )
+
+
+@pytest.mark.parametrize("nx,ny,h", MATRIX_GRIDS)
+@pytest.mark.parametrize("grain", GRAINS)
+def test_the_orthotropic_biharmonic_is_bit_identical(nx, ny, h, grain):
+    B, index_map = o2.orthotropic_biharmonic_py(nx, ny, h, *grain)
+    triplets, im_rs = physsynth_rs.orthotropic_biharmonic_csr(nx, ny, h, *grain)
+    _assert_identical(B, _rebuild(triplets), f"Bo({nx},{ny},{h},{grain})")
+    assert np.array_equal(index_map, im_rs)
+
+
+@pytest.mark.parametrize("nx,ny,h", MATRIX_GRIDS)
+@pytest.mark.parametrize("nu", [0.0, 0.3, -0.5, 0.45])
+def test_the_free_plate_stiffness_is_bit_identical_on_a_rectangle(nx, ny, h, nu):
+    K, W, index_map = o2.free_plate_stiffness_py(nx, ny, h, nu)
+    k, w, im_rs = physsynth_rs.free_plate_stiffness_csr(nx, ny, h, nu, 1.0, 1.0, None, None)
+    _assert_identical(K, _rebuild(k), f"K({nx},{ny},{h},{nu})")
+    _assert_identical(W, _rebuild(w), f"W({nx},{ny},{h},{nu})")
+    assert np.array_equal(index_map, im_rs)
+
+
+@pytest.mark.parametrize("nx,ny,h", MATRIX_GRIDS[:3])
+@pytest.mark.parametrize("g_1", [-0.1, 0.0, 0.05, 0.1])
+def test_the_free_plate_stiffness_is_bit_identical_across_the_four_constant_splits(nx, ny, h, g_1):
+    # The free branch needs the coupling and torsional rigidities SEPARATELY -- four splits of the
+    # same `H` that the supported branch cannot tell apart and that move the free plate's
+    # fundamental by 6.5x. If the port collapsed them back to three constants, only this sees it.
+    kw = dict(grain_x=1.0, grain_y=0.073, grain_coupling=g_1, grain_torsion=0.5 * (0.153 - g_1))
+    K, W, _ = o2.free_plate_stiffness_py(nx, ny, h, 0.3, **kw)
+    k, w, _ = physsynth_rs.free_plate_stiffness_csr(
+        nx, ny, h, 0.3, kw["grain_x"], kw["grain_y"], kw["grain_coupling"], kw["grain_torsion"]
+    )
+    _assert_identical(K, _rebuild(k), f"K split g_1={g_1}")
+    _assert_identical(W, _rebuild(w), f"W split g_1={g_1}")
+
+
+@pytest.mark.parametrize("n", [16, 24, 32])
+@pytest.mark.parametrize("shape", ["guitar", "disk"])
+@pytest.mark.parametrize("nu", [0.0, 0.3])
+def test_the_free_plate_stiffness_is_bit_identical_on_a_staircased_outline(n, shape, nu):
+    mask, h = _pruned_guitar(n) if shape == "guitar" else _pruned_disk(n)
+    K, W, index_map = o2.free_plate_stiffness_from_mask_py(mask, h, nu)
+    k, w, im_rs = physsynth_rs.free_plate_stiffness_from_mask_csr(mask, h, nu, 1.0, 1.0, None, None)
+    _assert_identical(K, _rebuild(k), f"K {shape} N={n} nu={nu}")
+    _assert_identical(W, _rebuild(w), f"W {shape} N={n} nu={nu}")
+    assert np.array_equal(index_map, im_rs)
+
+
+@pytest.mark.parametrize("nx,ny,h", MATRIX_GRIDS[:3])
+def test_a_full_bounding_box_is_the_rectangle_on_both_sides(nx, ny, h):
+    # The rectangle is just the mask that happens to be all-ones, and that is asserted rather than
+    # asserted-in-prose: one code path, and it has to be the same one code path in both languages.
+    full = np.ones((ny + 1, nx + 1), dtype=bool)
+    K_py, W_py, _ = o2.free_plate_stiffness_py(nx, ny, h, 0.3)
+    M_py, _, _ = o2.free_plate_stiffness_from_mask_py(full, h, 0.3)
+    _assert_identical(K_py, M_py, "python box vs rectangle")
+    k, w, _ = physsynth_rs.free_plate_stiffness_from_mask_csr(full, h, 0.3, 1.0, 1.0, None, None)
+    _assert_identical(K_py, _rebuild(k), "rust box vs python rectangle")
+    _assert_identical(W_py, _rebuild(w), "rust box weight")
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        (1, 5, 0.01, 1.0, 1.0, 1.0),
+        (5, 1, 0.01, 1.0, 1.0, 1.0),
+        (0, 0, 0.01, 1.0, 1.0, 1.0),
+    ],
+)
+def test_both_sides_reject_the_same_orthotropic_grids_with_the_same_words(args):
+    with pytest.raises(ValueError) as py_err:
+        o2.orthotropic_biharmonic_py(*args)
+    with pytest.raises(ValueError) as rs_err:
+        physsynth_rs.orthotropic_biharmonic_csr(*args)
+    assert str(py_err.value) == str(rs_err.value)
+
+
+@pytest.mark.parametrize("nx,ny", [(1, 5), (5, 1), (0, 3)])
+def test_both_sides_reject_the_same_free_plate_grids_with_the_same_words(nx, ny):
+    with pytest.raises(ValueError) as py_err:
+        o2.free_plate_stiffness_py(nx, ny, 0.01, 0.3)
+    with pytest.raises(ValueError) as rs_err:
+        physsynth_rs.free_plate_stiffness_csr(nx, ny, 0.01, 0.3, 1.0, 1.0, None, None)
+    assert str(py_err.value) == str(rs_err.value)
+
+
+@pytest.mark.parametrize("nu", [0.5, 1.0, -1.0, -2.5])
+def test_both_sides_reject_the_same_poisson_ratios_with_the_same_words(nu):
+    # ... and only where `nu` is actually USED. An orthotropic plate's implied nu_yx legitimately
+    # exceeds 1/2, so supplying both halves of the split must make the same out-of-range `nu`
+    # harmless on both sides -- a port that validated unconditionally would reject a valid material.
+    with pytest.raises(ValueError) as py_err:
+        o2.free_plate_stiffness_py(6, 5, 0.01, nu)
+    with pytest.raises(ValueError) as rs_err:
+        physsynth_rs.free_plate_stiffness_csr(6, 5, 0.01, nu, 1.0, 1.0, None, None)
+    assert str(py_err.value) == str(rs_err.value)
+
+    K, _, _ = o2.free_plate_stiffness_py(6, 5, 0.01, nu, grain_coupling=0.2, grain_torsion=0.4)
+    k, _, _ = physsynth_rs.free_plate_stiffness_csr(6, 5, 0.01, nu, 1.0, 1.0, 0.2, 0.4)
+    _assert_identical(K, _rebuild(k), f"superseded nu={nu}")
+
+
+def test_both_sides_reject_an_empty_mask_with_the_same_words():
+    empty = np.zeros((5, 5), dtype=bool)
+    with pytest.raises(ValueError) as py_err:
+        o2.free_plate_stiffness_from_mask_py(empty, 0.01, 0.3)
+    with pytest.raises(ValueError) as rs_err:
+        physsynth_rs.free_plate_stiffness_from_mask_csr(empty, 0.01, 0.3, 1.0, 1.0, None, None)
     assert str(py_err.value) == str(rs_err.value)

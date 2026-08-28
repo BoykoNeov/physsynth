@@ -220,6 +220,146 @@ pub fn py_laplacian_from_mask(
     ))
 }
 
+/// `B = L @ L` on the live nodes of `mask`; returns `(triplets, index_map)`.
+#[pyfunction]
+#[pyo3(name = "biharmonic_from_mask_csr")]
+pub fn py_biharmonic_from_mask(
+    py: Python<'_>,
+    mask: &Bound<'_, PyAny>,
+    h: f64,
+) -> PyResult<(CsrTriplets, Py<PyAny>)> {
+    let m = mask_arg(py, mask, "mask")?;
+    let (nrows, ncols) = (m.nrows(), m.ncols());
+    let (b, index_map) = ops2d::biharmonic_from_mask(&m, h);
+    Ok((
+        csr_triplets(py, &b)?,
+        crate::shape::to_2d_i64(py, index_map, nrows, ncols)?,
+    ))
+}
+
+/// The `n_int x n_int` interior Dirichlet second difference; returns triplets.
+#[pyfunction]
+#[pyo3(name = "dirichlet_interior_d2_1d_csr")]
+pub fn py_dirichlet_interior_d2_1d(py: Python<'_>, n_int: i64, h: f64) -> PyResult<CsrTriplets> {
+    if n_int < 0 {
+        return Err(PyValueError::new_err(format!(
+            "n_int must be >= 0, got {n_int}."
+        )));
+    }
+    csr_triplets(py, &ops2d::dirichlet_interior_d2_1d(n_int as usize, h))
+}
+
+/// The orthotropic simply-supported bending operator; returns `(triplets, index_map)`.
+#[pyfunction]
+#[pyo3(name = "orthotropic_biharmonic_csr")]
+pub fn py_orthotropic_biharmonic(
+    py: Python<'_>,
+    Nx: i64,
+    Ny: i64,
+    h: f64,
+    grain_x: f64,
+    grain_cross: f64,
+    grain_y: f64,
+) -> PyResult<(CsrTriplets, Py<PyAny>)> {
+    if Nx < 2 || Ny < 2 {
+        return Err(PyValueError::new_err(format!(
+            "Nx and Ny must both be >= 2, got ({Nx}, {Ny})."
+        )));
+    }
+    let (nx, ny) = (Nx as usize, Ny as usize);
+    let (b, index_map) = ops2d::orthotropic_biharmonic(nx, ny, h, grain_x, grain_cross, grain_y);
+    Ok((
+        csr_triplets(py, &b)?,
+        crate::shape::to_2d_i64(py, index_map, ny + 1, nx + 1)?,
+    ))
+}
+
+/// Validate `nu` exactly where the reference does — only where it supplies a missing half.
+fn check_nu(nu: f64, grain_coupling: Option<f64>, grain_torsion: Option<f64>) -> PyResult<()> {
+    if (grain_coupling.is_none() || grain_torsion.is_none()) && !(-1.0 < nu && nu < 0.5) {
+        return Err(PyValueError::new_err(format!(
+            "nu (Poisson's ratio) must be in (-1, 1/2), got {}.",
+            physsynth_core::fmt::py_float(nu)
+        )));
+    }
+    Ok(())
+}
+
+/// The free-edge stiffness on an arbitrary outline; returns `(K, W, index_map)`.
+#[pyfunction]
+#[pyo3(name = "free_plate_stiffness_from_mask_csr")]
+#[allow(clippy::too_many_arguments)]
+pub fn py_free_plate_stiffness_from_mask(
+    py: Python<'_>,
+    mask: &Bound<'_, PyAny>,
+    h: f64,
+    nu: f64,
+    grain_x: f64,
+    grain_y: f64,
+    grain_coupling: Option<f64>,
+    grain_torsion: Option<f64>,
+) -> PyResult<(CsrTriplets, CsrTriplets, Py<PyAny>)> {
+    let m = mask_arg(py, mask, "mask")?;
+    check_nu(nu, grain_coupling, grain_torsion)?;
+    if m.n_live() < 1 {
+        return Err(PyValueError::new_err("the mask has no live nodes."));
+    }
+    let (nrows, ncols) = (m.nrows(), m.ncols());
+    let (k, w, index_map) = ops2d::free_plate_stiffness_from_mask(
+        &m,
+        h,
+        nu,
+        grain_x,
+        grain_y,
+        grain_coupling,
+        grain_torsion,
+    );
+    Ok((
+        csr_triplets(py, &k)?,
+        csr_triplets(py, &w)?,
+        crate::shape::to_2d_i64(py, index_map, nrows, ncols)?,
+    ))
+}
+
+/// The free-edge stiffness on a full bounding box; returns `(K, W, index_map)`.
+#[pyfunction]
+#[pyo3(name = "free_plate_stiffness_csr")]
+#[allow(clippy::too_many_arguments)]
+pub fn py_free_plate_stiffness(
+    py: Python<'_>,
+    Nx: i64,
+    Ny: i64,
+    h: f64,
+    nu: f64,
+    grain_x: f64,
+    grain_y: f64,
+    grain_coupling: Option<f64>,
+    grain_torsion: Option<f64>,
+) -> PyResult<(CsrTriplets, CsrTriplets, Py<PyAny>)> {
+    if Nx < 2 || Ny < 2 {
+        return Err(PyValueError::new_err(
+            "Nx, Ny must be >= 2 (need at least one interior node per axis).",
+        ));
+    }
+    check_nu(nu, grain_coupling, grain_torsion)?;
+    let (nx, ny) = (Nx as usize, Ny as usize);
+    let (k, w, index_map) = ops2d::free_plate_stiffness(
+        nx,
+        ny,
+        h,
+        nu,
+        grain_x,
+        grain_y,
+        grain_coupling,
+        grain_torsion,
+    );
+    Ok((
+        csr_triplets(py, &k)?,
+        csr_triplets(py, &w)?,
+        crate::shape::to_2d_i64(py, index_map, ny + 1, nx + 1)?,
+    ))
+}
+
 /// Scatter a flat live-node vector back onto the full 2-D grid (zeros at dead nodes).
 #[pyfunction]
 #[pyo3(name = "embed")]

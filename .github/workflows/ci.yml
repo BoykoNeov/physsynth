@@ -706,7 +706,19 @@ jobs:
       # four nodes sit ONE ulp out at N = 32 and two sit exactly on the rim -- which is why
       # `operators2d.py` now evaluates the profile through the scalar libm, where CPython and Rust
       # meet, and keeps NumPy's vectorised spelling only for the area quadrature (plan 25.3-25.5).
-      - name: The plate family's outline, unmodified, against Rust
+      #
+      # Phase 5 batch 2 widens this step from the outline to the OPERATORS. The five matrix
+      # builders are ported, so with the flag set every plate here steps on a Rust-built `B`
+      # or `K`. Their agreement is exact -- but only after one edit to the REFERENCE, and it
+      # is the one section 18.4 wrote down in advance: SciPy's sparse product hands each row
+      # back in whatever order its kernel touched the columns (measured NEITHER ascending nor
+      # descending, in 600 of 610 rows), a CSR matvec sums a row in stored order, and
+      # `Plate.step` forms `B @ u` twice per timestep -- so `portable.canonical` sorts the
+      # Python side. The free branch needed nothing: SciPy returns a Gram product already
+      # sorted, so only the supported plate's last bits moved (1.2e-13 of amplitude over
+      # 2,000 steps, drift unmoved against the 1e-10 bar). `test_plate_modal.py` holds the
+      # pre-port spelling and asserts both halves.
+      - name: The plate family's outline and operators, unmodified, against Rust
         env:
           PHYSSYNTH_RS: "1"
         run: |
@@ -720,6 +732,8 @@ jobs:
             tests/test_plate_orthotropic.py \
             tests/test_vk_free.py \
             tests/test_vk_energy.py \
+            tests/test_vk_airy.py \
+            tests/test_vk_bracket.py \
             tests/test_membrane_modal.py \
             tests/test_stability.py
 

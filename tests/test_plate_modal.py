@@ -21,7 +21,7 @@ from scipy.sparse.linalg import eigsh
 from physsynth.analysis import modal, spectrum
 from physsynth.core.engine import simulate
 from physsynth.core.exciter import raised_cosine_2d
-from physsynth.core.operators2d import biharmonic_from_mask
+from physsynth.core.operators2d import biharmonic_from_mask, laplacian_from_mask
 
 KAPPA = KAPPA_PLATE_DEFAULT
 THETA = 0.28
@@ -44,10 +44,12 @@ def test_biharmonic_eigenvalues_are_squared_laplacian():
     rel = np.max(np.abs(bih_numeric - bih_oracle) / bih_oracle)
     assert rel < 1e-10, f"biharmonic eigenvalue mismatch {rel:.2e} (B is mis-assembled)"
 
-    # The standalone operators2d.biharmonic_from_mask must reproduce Plate's inline B = L @ L.
+    # `Plate` builds its B through operators2d.biharmonic_from_mask (it used to spell `L @ L`
+    # inline); a fresh build must give the same matrix, structure included.
     B_helper, _ = biharmonic_from_mask(p.mask, p.h)
-    d = (B_helper - p.B).tocoo()
-    assert d.nnz == 0 or np.abs(d.data).max() < 1e-12, "biharmonic_from_mask != Plate's assembled B"
+    assert np.array_equal(B_helper.indptr, p.B.indptr)
+    assert np.array_equal(B_helper.indices, p.B.indices)
+    assert np.array_equal(B_helper.data, p.B.data), "biharmonic_from_mask != Plate's assembled B"
 
 
 # -- Continuum frequency error converges at O(h²) (k ∝ h² at fixed mu, so temporal error ∝ h⁴).
@@ -115,3 +117,105 @@ def test_fft_peak_at_fundamental():
     assert cents < 5.0, (
         f"FFT fundamental off by {cents:.2f} cents (found {found:.2f}, want {f_disc:.2f})"
     )
+
+
+# -- The pre-port spelling, held here so a faithful port of a slip is distinguishable. ------------
+#
+# The Rust port of `biharmonic_from_mask` (plan section 26) changed the reference: SciPy's sparse
+# product returns each row in whatever order its kernel touched the columns, and a CSR matvec sums a
+# row in STORED order, so `B @ u` -- which `Plate.step` forms twice per timestep -- was a different
+# sum on the two sides. `portable.canonical` sorts the Python side to the order both languages can
+# express. That is a change to the shipped numbers, and every parity assertion in the suite compares
+# Rust against the Python AS IT IS NOW: only a test holding the PREVIOUS expression can tell a
+# faithful port of a slip from a faithful port. Plan section 25.5, third pin -- and here the
+# quantity is continuous, so the pin is a tolerance on the trajectory rather than an equality.
+
+
+def _biharmonic_before_2026_08_28(mask, h):
+    """``Plate``'s biharmonic exactly as it was assembled before the canonical sort."""
+    L, _ = laplacian_from_mask(mask, h)
+    return (L @ L).tocsr()
+
+
+def test_the_canonical_sort_changed_an_order_and_not_a_value():
+    """The two operators hold the *same numbers*; only where they are stored moved."""
+    for N in (8, 12, 16, 24):
+        p = make_plate(N=N, mu=1.0)
+        before = _biharmonic_before_2026_08_28(p.mask, p.h)
+        assert not before.has_sorted_indices, (
+            f"N={N}: SciPy now returns this product sorted, so this test compares an operator "
+            "against itself and the pin has quietly stopped pinning anything"
+        )
+        after = before.copy()
+        after.sort_indices()
+        assert np.array_equal(after.indptr, p.B.indptr)
+        assert np.array_equal(after.indices, p.B.indices)
+        assert np.array_equal(after.data, p.B.data), (
+            f"N={N}: sorting the old operator does not reproduce the shipped one -- the port "
+            "changed a VALUE, which is a different (and much worse) claim than changing an order"
+        )
+
+
+def test_the_canonical_sort_left_the_shipped_plate_where_it_was():
+    """... and the trajectory it produces is unmoved at 1e-11 of its amplitude, drift unmoved."""
+    rng = np.random.default_rng(20260828)
+    for N in (12, 16):
+        p_new = make_plate(N=N, mu=1.0)
+        p_old = make_plate(N=N, mu=1.0)
+        p_old.B = _biharmonic_before_2026_08_28(p_old.mask, p_old.h)
+        u0 = 1e-4 * rng.standard_normal(p_new.n_live)
+        v0 = np.zeros(p_new.n_live)
+        drifts = []
+        states = []
+        for plate in (p_new, p_old):
+            plate.set_state(u0, v0)
+            e0 = plate.energy()
+            worst = 0.0
+            for _ in range(2000):
+                plate.step()
+                worst = max(worst, abs(plate.energy() / e0 - 1.0))
+            drifts.append(worst)
+            states.append(plate.state.copy())
+        amp = np.abs(states[0]).max()
+        moved = np.abs(states[0] - states[1]).max() / amp
+        assert moved < 1e-11, f"N={N}: the shipped plate moved by {moved:.2e} of its amplitude"
+        for drift, which in zip(drifts, ("canonical", "pre-port"), strict=True):
+            assert drift < 1e-10, f"N={N}: the {which} operator drifts {drift:.2e}"
+
+
+def test_the_free_plate_was_not_touched_at_all():
+    """The free branch's ``K`` comes back from SciPy already sorted, so the sort is a no-op there.
+
+    Which is why the free plate, the orthotropic free plate and the guitar plate keep their shipped
+    numbers to the bit across this batch, and only the supported plate's last digits moved. Asserted
+    rather than assumed: if a SciPy release started returning a Gram product unsorted, the free
+    plate would join the supported one in moving, and this is where that would surface.
+
+    Asserted on the **builder**, not on ``Plate.K``. The claim belongs to ``operators2d`` -- it is
+    about what SciPy's kernel returns -- and routing it through the model would let a future change
+    in how ``Plate`` stores its stiffness quietly empty the test, which is the shape of the parity
+    section that stopped comparing anything in plan section 23.6.
+    """
+    from physsynth.core.operators2d import (
+        free_plate_stiffness,
+        free_plate_stiffness_from_mask,
+        grid_coords,
+        guitar_mask,
+        prune_to_area_carrying,
+    )
+
+    built = []
+    for N in (8, 12, 16):
+        built.append(free_plate_stiffness(N, N, 1.0 / N, 0.3)[0])
+        X, Y, h = grid_coords(N, 0.5)
+        mask, _ = prune_to_area_carrying(guitar_mask(X, Y + 0.5, 1.0, 0.62, 0.42, 0.30))
+        if mask.sum():
+            built.append(free_plate_stiffness_from_mask(mask, h, 0.3)[0])
+    for K in built:
+        K = K.tocsr()
+        for r in range(K.shape[0]):
+            idx = K.indices[K.indptr[r] : K.indptr[r + 1]]
+            assert np.all(np.diff(idx) > 0), (
+                "SciPy no longer returns this Gram product in canonical order -- the free plate "
+                "now needs `portable.canonical` too, and its shipped numbers are about to move"
+            )

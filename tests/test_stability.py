@@ -302,10 +302,15 @@ def test_the_rust_swap_matches_the_environment():
     ported_expected = {
         # `operators` is ported in full (plan Phase 1).
         operators: set(operators.__all__),
-        # `operators2d` is ported in PART, and in two batches: the builders the membrane needs
-        # (plan Phase 2) and the guitar outline's geometry (Phase 5's first batch). What still
-        # waits for the plate family is the matrices -- the biharmonic, the orthotropic bending
-        # operator, the free-plate stiffness, `VonKarmanBracket` and `AiryStressSolver`.
+        # `operators2d` is ported in PART, and in three batches: the builders the membrane needs
+        # (plan Phase 2), the guitar outline's geometry (Phase 5's first batch) and the plate's
+        # matrices (Phase 5's second). What still waits is the four private 1-D differences the
+        # von Karman pieces use, `VonKarmanBracket` and `AiryStressSolver`.
+        #
+        # `dirichlet_interior_d2_1d` is here under its unprefixed spelling for the reason
+        # `collision`'s entry records: the module names it `_dirichlet_interior_d2_1d` and the
+        # alias namespace is flat, so `_public` below tries the underscored form too. That
+        # mismatch is exactly what dropped a whole module out of this table for a batch.
         operators2d: {
             "grid_coords",
             "rectangle_mask",
@@ -318,6 +323,11 @@ def test_the_rust_swap_matches_the_environment():
             "cells_per_node",
             "prune_to_area_carrying",
             "laplacian_from_mask",
+            "biharmonic_from_mask",
+            "dirichlet_interior_d2_1d",
+            "orthotropic_biharmonic",
+            "free_plate_stiffness",
+            "free_plate_stiffness_from_mask",
             "embed",
             "inner2d",
             "norm2_2d",
@@ -443,12 +453,21 @@ def test_the_rust_swap_matches_the_environment():
         # names that are -- and the geometry is the half of the module where a mis-ordered swap
         # would be worst. A Python `guitar_mask` under a run that claims Rust is a plate with a
         # possibly different set of nodes, which every physics bar in the suite would pass.
+        # The second batch widens it from the outline to the OPERATORS: `plate` also captures the
+        # three matrix builders, and `Plate.step` multiplies by two of them every timestep. A
+        # mis-ordered swap there is subtler than a wrong outline and not much better -- the plate
+        # would step on a SciPy-ordered operator while the run reported Rust, which is a different
+        # trajectory in its last bits and nothing in the suite says so.
         for name in (
             "guitar_half_width",
             "guitar_scale",
             "guitar_mask",
             "guitar_area",
             "prune_to_area_carrying",
+            "biharmonic_from_mask",
+            "orthotropic_biharmonic",
+            "free_plate_stiffness",
+            "free_plate_stiffness_from_mask",
         ):
             assert getattr(plate, name) is getattr(operators2d, name), (
                 f"`plate` captured a different `{name}` than `operators2d` now exposes -- the "

@@ -146,6 +146,7 @@ from scipy.sparse.linalg import splu
 from .operators2d import (
     AiryStressSolver,
     VonKarmanBracket,
+    biharmonic_from_mask,
     disk_mask,
     embed,
     free_plate_stiffness,
@@ -564,7 +565,10 @@ class Plate:
             # (symmetric, positive-definite); B carries the simply-supported conditions for free.
             self.L, self.index_map = laplacian_from_mask(self.mask, self.h)
             if self.grain_is_isotropic:
-                self.B = (self.L @ self.L).tocsr()
+                # Deliberately the shared builder rather than a second spelling of `L @ L` here:
+                # both are multiplied by every timestep and both therefore need the canonical
+                # column order, and one expression that is right beats two that agree today.
+                self.B, _ = biharmonic_from_mask(self.mask, self.h)
             else:
                 # Grain: B = g_x (d_xx)² + 2 g_h d_xx d_yy + g_y (d_yy)². Deliberately a *separate*
                 # path -- routing the isotropic default through it too would agree only to ~2e-16
@@ -1070,7 +1074,11 @@ class VKPlate:
         if self.boundary == "supported":
             self.mask = rectangle_mask(self.N, Ny)
             self.L, self.index_map = laplacian_from_mask(self.mask, self.h)
-            self.B = (self.L @ self.L).tocsr()
+            # The same builder `Plate` uses -- the two are bound by a bit-identity anchor
+            # (`tests/test_vk_energy.py`: a linear VKPlate must equal a Plate exactly), so a
+            # canonical column order on one side and SciPy's kernel order on the other would
+            # break it. See `operators2d.biharmonic_from_mask`.
+            self.B, _ = biharmonic_from_mask(self.mask, self.h)
             self.n_live = self.B.shape[0]
             if self.n_live < 1:
                 raise ValueError("the plate has no interior (live) nodes; refine the grid.")

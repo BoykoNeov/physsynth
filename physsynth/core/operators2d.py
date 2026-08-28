@@ -26,6 +26,8 @@ from numpy.typing import NDArray
 from scipy import sparse
 from scipy.sparse.linalg import SuperLU, splu
 
+from .portable import canonical
+
 __all__ = [
     "rectangle_mask",
     "disk_mask",
@@ -351,9 +353,17 @@ def biharmonic_from_mask(
     rectangular modes stay *exact* discrete eigenvectors (eigenvalue ``Λ_{mn}²``). Energy
     conservation for the plate needs only this symmetry — exactly as the membrane's conservation
     needed only ``L``'s. See ``docs/dev/plate-plan.md``.
+
+    **The stored column order is canonical, and that is not free.** SciPy's sparse product returns
+    each row in whatever order its kernel touched the columns — neither ascending nor descending,
+    and not a property of the algebra. A CSR matvec sums a row in *stored* order, and
+    :class:`.plate.Plate` forms ``B @ u`` twice per timestep, so the order reaches the trajectory.
+    :func:`physsynth.core.portable.canonical` sorts it, which is the spelling the Rust port can also
+    express (plan §18.2, applied here by §25.13). It moved every shipped supported plate by ~1e-13
+    of its amplitude over 2,000 steps and left the energy drift at 2e-14 against the 1e-10 bar.
     """
     L, index_map = laplacian_from_mask(mask, h)
-    B = (L @ L).tocsr()
+    B = canonical((L @ L).tocsr())
     return B, index_map
 
 
@@ -408,7 +418,9 @@ def orthotropic_biharmonic(
     every shipped plate number would move in its last digit on *some* grids and not others.
 
     Returns ``(B, index_map)`` with the same live-node ordering as
-    ``laplacian_from_mask(rectangle_mask(Nx, Ny), h)``.
+    ``laplacian_from_mask(rectangle_mask(Nx, Ny), h)``, and with **canonical** column order for the
+    reason given in :func:`biharmonic_from_mask` — this operator is multiplied by every timestep
+    too.
 
     **Definiteness is a condition here, not a freebie.** The eigenvalue on mode ``(m,n)`` is
     ``g_x λ_x² + 2 g_h λ_x λ_y + g_y λ_y²`` with ``λ > 0``, which is positive for every mode iff
@@ -429,11 +441,13 @@ def orthotropic_biharmonic(
     dyy = sparse.kron(
         _dirichlet_interior_d2_1d(Ny - 1, h), sparse.identity(Nx - 1), format="csr"
     )
-    B = (
-        float(grain_x) * (dxx @ dxx)
-        + (2.0 * float(grain_cross)) * (dxx @ dyy)
-        + float(grain_y) * (dyy @ dyy)
-    ).tocsr()
+    B = canonical(
+        (
+            float(grain_x) * (dxx @ dxx)
+            + (2.0 * float(grain_cross)) * (dxx @ dyy)
+            + float(grain_y) * (dyy @ dyy)
+        ).tocsr()
+    )
     return B, index_map
 
 
@@ -1022,6 +1036,14 @@ def norm2_2d(f: NDArray[np.float64], h: float) -> float:
 # a last bit of `sin` is a node that exists or does not, and every detector this project owns stays
 # green on a plate with one node too few (plan sections 22.6 and 25). That is also why
 # `guitar_half_width` gives up NumPy's vectorised `sin`/`cos` for the scalar libm: see `_profile`.
+#
+# Phase 5's second batch adds the five matrix builders those masks are for. They cost the reference
+# one change, and it is the one section 18.4 wrote down in advance: `portable.canonical` at the two
+# assignments that build a *squared* operator. SciPy's sparse product returns each row in whatever
+# order its kernel touched the columns, a CSR matvec sums a row in STORED order, and `plate.py`
+# forms `B @ u` twice per timestep -- so the order is on the update path. The values were already
+# identical. `free_plate_stiffness`'s K needed nothing: SciPy returns a Gram product sorted already.
+#
 # `crates/physsynth-core/src/ops2d.rs` names what is still deliberately absent.
 #
 # The matrix comes back from the binding as CSR triplets and is rebuilt here, exactly as in
@@ -1040,6 +1062,15 @@ live_cells_py = live_cells
 cells_per_node_py = cells_per_node
 prune_to_area_carrying_py = prune_to_area_carrying
 laplacian_from_mask_py = laplacian_from_mask
+biharmonic_from_mask_py = biharmonic_from_mask
+# Underscored in the module, unprefixed in the alias -- the alias namespace is flat and the
+# module's is not, exactly as `collision.py` spells its own private-but-swapped names. The swap
+# guard's derive looks for a bare `<name>_py`, so `_dirichlet_interior_d2_1d_py` would be invisible
+# to it and the whole module would fall out of the table (plan sections 17.6 and 23.7).
+dirichlet_interior_d2_1d_py = _dirichlet_interior_d2_1d
+orthotropic_biharmonic_py = orthotropic_biharmonic
+free_plate_stiffness_py = free_plate_stiffness
+free_plate_stiffness_from_mask_py = free_plate_stiffness_from_mask
 embed_py = embed
 inner2d_py = inner2d
 norm2_2d_py = norm2_2d
@@ -1087,6 +1118,39 @@ if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the d
     def laplacian_from_mask(mask, h):  # type: ignore[misc]  # noqa: F811
         triplets, index_map = _rs.laplacian_from_mask_csr(mask, h)
         return _csr2d(triplets), index_map
+
+    def biharmonic_from_mask(mask, h):  # type: ignore[misc]  # noqa: F811
+        triplets, index_map = _rs.biharmonic_from_mask_csr(mask, h)
+        return _csr2d(triplets), index_map
+
+    def _dirichlet_interior_d2_1d(n_int, h):  # type: ignore[misc]  # noqa: F811
+        return _csr2d(_rs.dirichlet_interior_d2_1d_csr(n_int, h))
+
+    def orthotropic_biharmonic(  # type: ignore[misc]  # noqa: F811
+        Nx, Ny, h, grain_x=1.0, grain_cross=1.0, grain_y=1.0
+    ):
+        triplets, index_map = _rs.orthotropic_biharmonic_csr(
+            Nx, Ny, h, grain_x, grain_cross, grain_y
+        )
+        return _csr2d(triplets), index_map
+
+    def free_plate_stiffness(  # type: ignore[misc]  # noqa: F811
+        Nx, Ny, h, nu, *, grain_x=1.0, grain_y=1.0,
+        grain_coupling=None, grain_torsion=None,
+    ):
+        k, w, index_map = _rs.free_plate_stiffness_csr(
+            Nx, Ny, h, nu, grain_x, grain_y, grain_coupling, grain_torsion
+        )
+        return _csr2d(k), _csr2d(w), index_map
+
+    def free_plate_stiffness_from_mask(  # type: ignore[misc]  # noqa: F811
+        mask, h, nu, *, grain_x=1.0, grain_y=1.0,
+        grain_coupling=None, grain_torsion=None,
+    ):
+        k, w, index_map = _rs.free_plate_stiffness_from_mask_csr(
+            mask, h, nu, grain_x, grain_y, grain_coupling, grain_torsion
+        )
+        return _csr2d(k), _csr2d(w), index_map
 
     def embed(values, index_map):  # type: ignore[misc]  # noqa: F811
         return _rs.embed(values, index_map)

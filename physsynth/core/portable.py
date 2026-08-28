@@ -75,12 +75,32 @@ changes the root-find's **iteration count** rather than its answer's last digit 
 of 5,000 steps. The question at each ``np.dot`` is therefore still "does this reduction reach the
 next timestep?", but the follow-up is "and does anything *downstream* of it branch on the answer?".
 
-**Scope is four models and nothing else.** :mod:`.plate`, :mod:`.beam`, the free-plate family and
-:mod:`.membrane` keep ``np.dot`` and keep SciPy's index order, because no anchor binds them to
-anything and each has a shipped parity measurement built on their current behaviour.
-:mod:`.string_ideal` is excluded for the same reason. The plate family *will* need
-:func:`canonical` when it ports -- ``plate.py`` multiplies by a ``biharmonic_matrix``-derived
-operator every step -- but that is Phase 5's edit to make, with this measurement already in hand.
+**Scope was four models, and Phase 5's second batch made it six functions as well.** The
+prediction in the paragraph this replaces came true unchanged: ``plate.py`` multiplies by a
+squared-Laplacian operator every step, so :func:`canonical` is now applied inside
+:func:`~physsynth.core.operators2d.biharmonic_from_mask` and
+:func:`~physsynth.core.operators2d.orthotropic_biharmonic`, at the assignment that builds the
+operator. Three things about that are worth carrying:
+
+* **The values never differed.** Measured over seven grids and two staircased outlines, an
+  ascending-``k`` accumulation reproduces SciPy's sparse product bit for bit -- 0 differing entries
+  out of 2,629. What differs is only *where each entry is stored*, and that reaches the trajectory
+  solely because a CSR matvec sums a row in stored order.
+
+* **The free plate needed nothing.** ``free_plate_stiffness``'s ``K`` is a ``AᵀWB`` Gram product and
+  SciPy returns those already sorted -- measured canonical in every row of every rectangle, disk and
+  guitar tried. So the sort moved the *supported* plate by ~1e-13 of its amplitude over 2,000 steps
+  (drift unmoved at 2e-14 against the 1e-10 bar) and left the free, orthotropic-free and guitar
+  plates bit-identical. ``tests/test_plate_modal.py`` holds the pre-change spelling and asserts
+  both halves.
+
+* **Two model classes were bound by it.** ``VKPlate`` at ``nonlinear=False`` must be
+  ``array_equal`` to ``Plate``, so both had to take the sort in the same edit -- section 15.2's
+  rule, arriving in the plate family.
+
+:mod:`.beam`, :mod:`.membrane` and :mod:`.string_ideal` still keep ``np.dot`` and SciPy's index
+order, because no anchor binds them to anything and each has a shipped parity measurement built on
+their current behaviour.
 
 Headless: NumPy. (:func:`canonical` acts on a SciPy matrix but does not import one.)
 No I/O, no plotting.

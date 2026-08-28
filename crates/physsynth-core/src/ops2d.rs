@@ -19,10 +19,22 @@
 //! unknown or it is not — which makes a last bit of `sin` a geometry change rather than a
 //! rounding (plan §22.6, and `guitar_mask` here).
 //!
-//! Still deliberately **not** here: `biharmonic_from_mask`, `orthotropic_biharmonic`,
-//! `free_plate_stiffness*`, `VonKarmanBracket`, `AiryStressSolver`. Those are the matrices, and
-//! they arrive with the plate. Leaving them visibly absent is the same choice Phase 0 made with
-//! `ops.rs` — an incomplete module that looks incomplete beats a complete-looking one that is not.
+//! Phase 5's second batch adds the **matrices** those masks are for: `biharmonic_from_mask`,
+//! `dirichlet_interior_d2_1d`, `orthotropic_biharmonic` and `free_plate_stiffness*`. Every one of
+//! them is bit-identical to SciPy's, `data`, `indices` and `nnz` alike — but that took an edit to
+//! the *reference*, not to this file. The values were never in question; the stored column order
+//! was, because SciPy's sparse product hands back each row in the order its kernel happened to
+//! touch the columns and a CSR matvec sums a row in stored order. `portable.canonical` sorts the
+//! Python side, which is §18.2's manoeuvre for the string family landing exactly where §18.4 said
+//! in advance that it would. See `biharmonic_from_mask` below.
+//!
+//! Still deliberately **not** here: the four private 1-D differences the von Kármán pieces use
+//! (`_collocated_d2_1d`, `_forward_d1_1d`, `_centered_d2_1d`, `_avg_d1_1d`), `VonKarmanBracket`
+//! and `AiryStressSolver`. Those are the *nonlinear* plate, and the last of them factors with
+//! SuperLU — so its parity claim is a measured tolerance rather than an equality (§24.2) and it
+//! does not belong in a batch whose whole result is an exact one. Leaving them visibly absent is
+//! the same choice Phase 0 made with `ops.rs` — an incomplete module that looks incomplete beats
+//! a complete-looking one that is not.
 //!
 //! # Flat ordering, everywhere
 //!
@@ -410,6 +422,276 @@ pub fn laplacian_from_mask(mask: &Mask, h: f64) -> (Csr, Vec<i64>) {
         }
     }
     (Csr::from_rows(n_live, n_live, rows), index_map)
+}
+
+/// Symmetric 2-D biharmonic `∇⁴ = (∇²)²` on the live nodes, built as `B = L @ L`.
+///
+/// The plate's flexural operator (HANDOFF §5 model #5). `L` is the *Dirichlet* (zero-ghost)
+/// Laplacian above, so `w = L u` already vanishes on the rim and applying `L` twice enforces both
+/// simply-supported conditions with no hand-coded 13-point boundary rows.
+///
+/// **This is where the port and the reference part company on storage order, and only there.**
+/// SciPy's sparse product returns each row in the order its kernel happened to touch the columns —
+/// neither ascending nor descending, and not a property of the algebra. The values agree to the
+/// bit (measured at seven grids and two guitar outlines, 0 differing entries out of 2,629), so the
+/// disagreement is entirely about *order* — and a CSR matvec sums a row in stored order, which
+/// makes `B @ u` a different sum on the two sides. `plate.py` forms `B @ u` twice per timestep, so
+/// the fix is `physsynth.core.portable.canonical` on the Python side, exactly as §18.2 did for the
+/// string family: the sorted order is the one both languages can express, and the one SciPy itself
+/// calls canonical.
+pub fn biharmonic_from_mask(mask: &Mask, h: f64) -> (Csr, Vec<i64>) {
+    let (l, index_map) = laplacian_from_mask(mask, h);
+    (l.matmul(&l), index_map)
+}
+
+/// `n_int x n_int` second difference `[1, -2, 1]/h²` on the *interior* nodes of a segment.
+///
+/// The 1-D Dirichlet operator whose eigenvectors are exactly `sin(m pi x / L)` sampled at the
+/// interior nodes. The two end rows have one neighbour each because the rim nodes are not unknowns
+/// at all — distinct from a full-grid operator, which keeps them.
+///
+/// Spelled `-2.0 * inv_h2` and `inv_h2` with `inv_h2 = 1.0 / (h * h)`, as `laplacian_from_mask` is
+/// and for the same reason: `-2.0 / (h * h)` is a different rounding.
+pub fn dirichlet_interior_d2_1d(n_int: usize, h: f64) -> Csr {
+    let inv_h2 = 1.0 / (h * h);
+    let main = -2.0 * inv_h2;
+    let rows = (0..n_int)
+        .map(|i| {
+            let mut row = vec![(i, main)];
+            if i > 0 {
+                row.push((i - 1, inv_h2));
+            }
+            if i + 1 < n_int {
+                row.push((i + 1, inv_h2));
+            }
+            row
+        })
+        .collect();
+    Csr::from_rows(n_int, n_int, rows)
+}
+
+/// Orthotropic (grain-direction) bending operator on a simply-supported rectangle.
+///
+/// `B = g_x (d_xx)^2 + 2 g_h (d_xx d_yy) + g_y (d_yy)^2`, the discrete form of
+/// `D_x w_xxxx + 2H w_xxyy + D_y w_yyyy` over a reference rigidity, so the three grain arguments
+/// are dimensionless ratios. **The factor of 2 belongs on the cross term here, in the operator,
+/// not inside `H`** — the two rival packagings the orthotropic literature invites both produce a
+/// perfectly stable, exactly energy-conserving, wrong plate.
+///
+/// Live nodes are walked in C order (y outer, x inner), so `x` is the *inner* tensor factor.
+///
+/// Two orders are load-bearing and both are spelled out rather than left to an optimiser: the
+/// three terms are summed **left to right**, `(t1 + t2) + t3`, which is what Python's `+` chain
+/// does, and each scalar multiplies the *assembled* product rather than being folded into a
+/// factor. Note also what this deliberately does **not** do: at `g_x = g_h = g_y` it is `g · L @ L`
+/// in exact arithmetic but only *grid-dependently* so in doubles, which is why `plate.py` keeps
+/// the isotropic default on the squared-Laplacian path instead of routing everything through here.
+///
+/// Definiteness is a condition, not a freebie (`g_h > -sqrt(g_x g_y)`), and this does not enforce
+/// it — so a test can build the indefinite case.
+///
+/// # Panics
+/// If `nx` or `ny` is below 2.
+pub fn orthotropic_biharmonic(
+    nx: usize,
+    ny: usize,
+    h: f64,
+    grain_x: f64,
+    grain_cross: f64,
+    grain_y: f64,
+) -> (Csr, Vec<i64>) {
+    assert!(nx >= 2 && ny >= 2, "nx and ny must both be >= 2");
+    let mask = rectangle_mask(nx, ny);
+    let index_map = mask.index_map();
+    let dxx = Csr::identity(ny - 1).kron(&dirichlet_interior_d2_1d(nx - 1, h));
+    let dyy = dirichlet_interior_d2_1d(ny - 1, h).kron(&Csr::identity(nx - 1));
+    let b = dxx
+        .matmul(&dxx)
+        .scaled(grain_x)
+        .add(&dxx.matmul(&dyy).scaled(2.0 * grain_cross))
+        .add(&dyy.matmul(&dyy).scaled(grain_y));
+    (b, index_map)
+}
+
+/// Energy-first free-edge Kirchhoff-plate bending operator on the live nodes of `mask` — model #5g.
+///
+/// Returns `(K, W, index_map)`: the symmetric positive-*semi*definite stiffness, the diagonal
+/// lumped area weight, and the live-node map. The bilinear form is
+///
+/// ```text
+/// P(f, g) = ∫∫ [ D_x f_xx g_xx + D_y f_yy g_yy + D_1 (f_xx g_yy + f_yy g_xx) + 4 D_xy f_xy g_xy ]
+/// ```
+///
+/// assembled **from the energy**, so symmetry, the natural free-edge conditions and the rigid-body
+/// nullspace `{1, x, y}` all fall out by construction rather than from ghost-point elimination on
+/// a 13-point stencil. `grain_coupling` / `grain_torsion` default to the `nu`-derived isotropic
+/// split `(nu, (1-nu)/2)`, at which the four coefficients are `1`, `1`, `nu` and an
+/// exactly-representable halving — bit-identical to the isotropic assembly on every grid.
+///
+/// Each rectangle rule is the special case of a rule about what is *live*: curvature is centred at
+/// a node iff **both** neighbours along that axis are live (a zeroed end row was never a statement
+/// about index 0, it was a statement about a missing neighbour), the twist gets one row per live
+/// cell, and the area weight is `h² · (live cells touching the node) / 4` — which *is* the
+/// trapezoidal weight, three cases collapsed into one expression.
+///
+/// **The mask must already carry area** (`prune_to_area_carrying`), or a one-node spike gives `W`
+/// a zero on the diagonal and the plate's time-step matrix is singular.
+///
+/// Three spellings here are arithmetic rather than algebra, and each was wrong once or could be:
+///
+/// * the twist coefficient is `(1/h) * (1/h)`, **not** `1/(h*h)` — this operator is a product of
+///   two forward first differences, and the two differ in the last digit whenever `h` is not
+///   exactly representable. It showed up on exactly one grid of the seven-grid survey, so checking
+///   one grid would have reported success.
+/// * the Gram products are **right**-associated, `C2xᵀ @ (Wa @ C2y)`, because that is how
+///   `operators2d.py` parenthesises them. Its sibling `AiryStressSolver` writes the same
+///   mathematical form `BᵀWB` with **no** parentheses, which Python left-associates — so those two
+///   are different matrices in the last bit, and a shared helper would silently pick one of them.
+/// * the four terms are summed left to right, `((t1 + t2) + t3) + t4`.
+///
+/// # Panics
+/// If the mask has no live nodes, or `nu` is outside `(-1, 1/2)` where it is actually *used*, i.e.
+/// where it supplies a missing half of the split. An orthotropic plate's implied `nu_yx` may
+/// legitimately exceed 1/2, so applying the isotropic range to a superseded argument would reject
+/// a valid material — and did, once.
+#[allow(clippy::too_many_arguments)]
+pub fn free_plate_stiffness_from_mask(
+    mask: &Mask,
+    h: f64,
+    nu: f64,
+    grain_x: f64,
+    grain_y: f64,
+    grain_coupling: Option<f64>,
+    grain_torsion: Option<f64>,
+) -> (Csr, Csr, Vec<i64>) {
+    if grain_coupling.is_none() || grain_torsion.is_none() {
+        assert!(
+            -1.0 < nu && nu < 0.5,
+            "nu (Poisson's ratio) must be in (-1, 1/2)"
+        );
+    }
+    let g_1 = grain_coupling.unwrap_or(nu);
+    let g_xy = grain_torsion.unwrap_or(0.5 * (1.0 - nu));
+
+    let (nrows, ncols) = (mask.nrows(), mask.ncols());
+    let n_live = mask.n_live();
+    assert!(n_live >= 1, "the mask has no live nodes");
+    let index_map = mask.index_map();
+    let inv_h2 = 1.0 / (h * h);
+    let main = -2.0 * inv_h2;
+
+    // `[1, -2, 1]/h²` centred at each node with both `(dj, di)` neighbours live; a node without
+    // them contributes an empty row, not a zero one.
+    let curvature = |dj: i64, di: i64| -> Csr {
+        let mut rows: Vec<Vec<(usize, f64)>> = Vec::with_capacity(n_live);
+        for j in 0..nrows {
+            for i in 0..ncols {
+                if !mask.at(j, i) {
+                    continue;
+                }
+                let (jm, im) = (j as i64 - dj, i as i64 - di);
+                let (jp, ip) = (j as i64 + dj, i as i64 + di);
+                let inside = jm >= 0
+                    && im >= 0
+                    && jp < nrows as i64
+                    && ip < ncols as i64
+                    && mask.at(jm as usize, im as usize)
+                    && mask.at(jp as usize, ip as usize);
+                if !inside {
+                    rows.push(Vec::new());
+                    continue;
+                }
+                rows.push(vec![
+                    (
+                        index_map[jm as usize * ncols + im as usize] as usize,
+                        inv_h2,
+                    ),
+                    (index_map[j * ncols + i] as usize, main),
+                    (
+                        index_map[jp as usize * ncols + ip as usize] as usize,
+                        inv_h2,
+                    ),
+                ]);
+            }
+        }
+        Csr::from_rows(n_live, n_live, rows)
+    };
+    let c2x = curvature(0, 1);
+    let c2y = curvature(1, 0);
+
+    // Cell-centred twist on the live cells. The coefficient is (1/h)*(1/h) and NOT 1/(h*h).
+    let cells = live_cells(mask);
+    let (cr, cc) = (nrows.saturating_sub(1), ncols.saturating_sub(1));
+    let d1 = 1.0 / h;
+    let twist = d1 * d1;
+    let mut cell_rows: Vec<Vec<(usize, f64)>> = Vec::new();
+    for j in 0..cr {
+        for i in 0..cc {
+            if !cells[j * cc + i] {
+                continue;
+            }
+            cell_rows.push(vec![
+                (index_map[j * ncols + i] as usize, twist),
+                (index_map[j * ncols + i + 1] as usize, -twist),
+                (index_map[(j + 1) * ncols + i] as usize, -twist),
+                (index_map[(j + 1) * ncols + i + 1] as usize, twist),
+            ]);
+        }
+    }
+    let dxy = Csr::from_rows(cell_rows.len(), n_live, cell_rows);
+
+    // Area weight: h² * (live cells touching the node)/4 — exactly h², h²/2, h²/4 on a rectangle.
+    let touching = cells_per_node(mask);
+    let wdiag: Vec<f64> = (0..nrows * ncols)
+        .filter(|&p| index_map[p] >= 0)
+        .map(|p| (h * h) * ((touching[p] as f64) * 0.25))
+        .collect();
+    let wa = Csr::diagonal(&wdiag);
+
+    let cross = c2x.transpose().matmul(&wa.matmul(&c2y));
+    let k = c2x
+        .transpose()
+        .matmul(&wa.matmul(&c2x))
+        .scaled(grain_x)
+        .add(&c2y.transpose().matmul(&wa.matmul(&c2y)).scaled(grain_y))
+        .add(&cross.add(&cross.transpose()).scaled(g_1))
+        .add(&dxy.transpose().matmul(&dxy).scaled((4.0 * g_xy) * (h * h)));
+    (k, wa, index_map)
+}
+
+/// `free_plate_stiffness_from_mask` on a full `(ny+1) x (nx+1)` bounding box.
+///
+/// A full box **is** the rectangle: every node is a free unknown, every cell is live, and the
+/// general routine's "live adjacent cells / 4" area rule evaluates to exactly the trapezoidal
+/// weight it replaced. One code path, not two.
+///
+/// # Panics
+/// If `nx` or `ny` is below 2 — at least one interior node per axis is needed.
+#[allow(clippy::too_many_arguments)]
+pub fn free_plate_stiffness(
+    nx: usize,
+    ny: usize,
+    h: f64,
+    nu: f64,
+    grain_x: f64,
+    grain_y: f64,
+    grain_coupling: Option<f64>,
+    grain_torsion: Option<f64>,
+) -> (Csr, Csr, Vec<i64>) {
+    assert!(
+        nx >= 2 && ny >= 2,
+        "nx, ny must be >= 2 (need at least one interior node per axis)"
+    );
+    let mask = Mask::new(ny + 1, nx + 1, vec![true; (ny + 1) * (nx + 1)]);
+    free_plate_stiffness_from_mask(
+        &mask,
+        h,
+        nu,
+        grain_x,
+        grain_y,
+        grain_coupling,
+        grain_torsion,
+    )
 }
 
 /// Scatter a flat live-node vector back onto the full node grid, zeros at dead nodes.

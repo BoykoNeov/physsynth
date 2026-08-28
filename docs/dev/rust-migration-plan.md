@@ -4629,3 +4629,263 @@ cannot move even if `sin` does.
   the spectrum rather than an equality on a mask.
 * **Check inherited sentences** — still true, and now with a fourth instance: Phase 4's §24.11 was
   complete about the tests and silent about the linters.
+
+## 26. Phase 5, batch 2, as built (2026-08-28) — the plate's matrices, and an order that was never the algebra
+
+§25 split Phase 5's first group on what a function's output *is*. This batch takes the other half of
+that split — the matrices — and splits it again, on a different question: **what kind of claim is
+available at the end.** `biharmonic_from_mask`, `dirichlet_interior_d2_1d`, `orthotropic_biharmonic`
+and `free_plate_stiffness*` are assemblies, so an *exact* claim is available for all four once one
+question is settled. `VonKarmanBracket` and `AiryStressSolver` are not: the second factors with
+SuperLU, and §24.2 already established that SuperLU parity is a measured tolerance and cannot be
+anything else. Bundling them would have made the exact half hostage to the negotiation over the
+inexact one, so the Airy solver and the four private 1-D differences that serve it go to batch 3.
+
+The batch's own finding is smaller than §25's and more useful than it looks: **the thing standing
+between the two implementations was never the arithmetic. It was where each number is stored.**
+
+### 26.1 The shape on disk
+
+```
+crates/physsynth-core/src/sparse.rs         `Csr::add`, `Csr::kron`, `Csr::identity`; four new
+                                            unit bars
+crates/physsynth-core/src/ops2d.rs          biharmonic_from_mask / dirichlet_interior_d2_1d /
+                                            orthotropic_biharmonic / free_plate_stiffness{,_from_mask};
+                                            header rewritten
+crates/physsynth-core/tests/ops2d.rs        8 new native bars, including the nullspace money test
+                                            and two spelling pins that fail if they find no witness
+crates/physsynth-py/src/ops2d.rs            five bindings, five refusals reproduced verbatim
+crates/physsynth-py/src/lib.rs              five registrations
+physsynth/core/operators2d.py               `portable.canonical` at the two squared-operator
+                                            assignments; five `_py` aliases and the swap block
+physsynth/core/plate.py                     `Plate` and `VKPlate` route their isotropic `B` through
+                                            `biharmonic_from_mask` instead of spelling `L @ L`
+physsynth/core/portable.py                  the scope paragraph, whose prediction came true
+tests/test_rust_parity_ops2d.py             the batch's comparison (406 tests -> 520)
+tests/test_plate_modal.py                   the pre-change spelling, held where the port cannot
+                                            reach it, plus the free plate's "unmoved" assertion
+tests/test_stability.py                     five names in the guard's operators2d set, four more in
+                                            `plate`'s captured bindings
+```
+
+### 26.2 The finding: SciPy's product disagreed on order, not on value — and the order is on the update path
+
+Every previous batch that met a SciPy sparse product asked whether the *values* could be matched.
+Here they could, immediately and everywhere. An accumulation that runs the contracted index `k` over
+row `i` of the left operand in ascending order — which is what SciPy's SMMP kernel does and what a
+plain Rust loop does — reproduces `L @ L` **bit for bit**: 0 differing entries out of 2,629 at
+`N = 16`, and 0 at every one of seven grids and two staircased outlines. The same holds for the
+three products inside `orthotropic_biharmonic` and the four inside `free_plate_stiffness`.
+
+What did not match is the **stored column order**, and the shape of that disagreement is worth
+stating precisely, because §18.2 has a sentence about it that turns out to be too specific. §18.2
+found `biharmonic_matrix` coming back **descending** and wrote the rule that way. In two dimensions
+it is not descending. Over the shipped grids, of 610 rows with more than one entry:
+
+| row order out of SciPy's `L @ L` | rows |
+| --- | --- |
+| ascending | 0 |
+| descending | 10 |
+| **neither** | **600** |
+
+The order is the order the kernel happened to touch the columns in. It is not a property of the
+algebra, it is not reversible by a rule, and it is not something a second implementation can
+reproduce without transcribing a SciPy internal — which is the bargain §10 refused and §18.3
+re-refused.
+
+And it reaches the trajectory. A CSR matvec accumulates a row in *stored* order, and `Plate.step`
+forms `B @ u` twice per timestep. So this is §18.2's situation exactly: not a read-out discrepancy
+but a different sum on the update path from step one.
+
+The fix is §18.2's fix, applied where §18.4 said in advance it would be needed:
+`portable.canonical` at the two assignments that build a squared operator. **The general rule this
+sharpens:** when a port meets a library kernel, ask *separately* whether the values agree and
+whether the order does. They are different questions with different answers and different remedies —
+the values are arithmetic and can be matched; the order is a library internal and must be
+normalised on the side that has one.
+
+### 26.3 The free plate needed nothing, and that is a measurement rather than a hope
+
+`free_plate_stiffness`'s `K` is a Gram product, `C2xᵀ (Wa C2x)` and friends, and SciPy returns those
+**already sorted** — measured canonical in *every* row of every rectangle (5 grids), every disk and
+every guitar (3 resolutions each) tried. So `canonical` is a no-op there and was not applied.
+
+The consequence is the batch's whole risk profile. Only the **supported** plate's numbers move:
+
+| | |
+|---|---|
+| supported plate, `max\|Δu\|/amp` over 2,000 steps, `N = 12` | 1.2e-13 |
+| … `N = 16` | 6.0e-14 |
+| … orthotropic supported, `N = 12` | 7.7e-14 |
+| lossless energy drift, before the sort | 2.2e-14 |
+| … after | 2.3e-14 |
+| free / orthotropic-free / guitar plate | **bit-identical, unmoved** |
+
+The drift bar is 1e-10 and does not notice. This matters more than the size of the number, because
+§24.5 established that a free-edge model *integrates* a per-step difference twice along its
+`{1, x, y}` nullspace — growth like t². Had `K` needed the sort, this batch would have been
+re-tolerancing the free plate, the orthotropic free plate and the guitar plate as a side effect of
+porting a matrix. It did not, and the reason is checkable rather than lucky, so
+`tests/test_plate_modal.py` asserts it: if a SciPy release ever starts returning a Gram product
+unsorted, the free plate joins the supported one in moving, and that test is where it surfaces.
+
+### 26.4 Two model classes were bound together by an anchor, again
+
+`plate.py` did not call `biharmonic_from_mask` at all before this batch. Both `Plate` and `VKPlate`
+spelled `self.B = (self.L @ self.L).tocsr()` **inline**, in two places, and `biharmonic_from_mask`
+was a helper used only by tests.
+
+That is §15.2's shape and it had to be resolved the same way. `tests/test_vk_energy.py` and
+`tests/test_vk_free.py` assert that a `VKPlate` with `nonlinear=False` is `array_equal` to a
+`Plate` — a bit-identity anchor between two *different* model classes. Canonicalising one operator
+and not the other would have broken it, with a message about physics. So both call sites moved to
+the shared builder in one edit, which also removes a §25.5-style deliberate duplicate rather than
+pinning it: two expressions that agree today, one of which was about to stop agreeing.
+
+### 26.5 The association that looks dangerous is provably harmless, and the reason costs no measurement
+
+The two Gram products in this module associate **differently**, and it is visible in the source:
+
+```python
+free_plate_stiffness_from_mask:  cross  = C2x.T @ (Wa @ C2y)     # explicit parens -> RIGHT
+AiryStressSolver:                self.Bf = (Lc_r.T @ Wa @ Lc_r)  # no parens -> Python gives LEFT
+```
+
+Same mathematical form `BᵀWB`, opposite association. A port that wrote one helper and reused it, or
+that followed the sibling (§23.4's hazard), would silently pick one — and for a general three-factor
+product that is a different matrix. Measured: **about a third of random value triples distinguish
+`(x·w)·z` from `x·(w·z)`** (69,943 of 200,000).
+
+None of *this* operator's do — 0 of 16, and 0 differing entries over five rectangles, three guitars
+and three disks. The reason is structural and needed no measurement to see. Every curvature entry is
+`1/h²` times an exact power of two (`1`, `-2`), and every area weight is `h²` times one of
+`{1, ½, ¾, ¼}`. Scaling by a power of two is exact, so both associations reduce to `fl(fl(a·w)·a)`
+and `fl(a·fl(w·a))` with the *same* `a` at both ends — and those are equal because IEEE
+multiplication commutes. The outer two factors sharing a mantissa is what does it, and a staircased
+rim's `¾` weight does not disturb it.
+
+This is §23.2's move applied to a product instead of a sum: **ask a cheap question about the shape
+of the arithmetic before assuming a reassociation is visible.** The port keeps the faithful
+right-association regardless, because the property belongs to the values and not to the code — and
+`crates/physsynth-core/tests/ops2d.rs` asserts both halves, the agreement on the plate's value set
+*and* a searched witness off it, so the first half cannot go green while saying nothing.
+
+### 26.6 The two spelling pins, and why both are searches rather than constants
+
+Two arithmetic spellings in this operator are load-bearing and neither is visible in the algebra.
+
+The **twist coefficient** is `(1/h) * (1/h)` and not `1/(h*h)`, because the cell-centred twist is a
+product of two forward first differences. Those differ in the last digit whenever `h` is not exactly
+representable, which showed up on exactly one grid of the seven-grid survey this operator was first
+validated over — so the pin sweeps seven grids and **fails if it finds no witness**, and the helper
+functions carry `#[inline(never)]` so §17.2's constant fold cannot merge them.
+
+The **association** pin, above, is a search for the same reason but a sharper one, and it caught its
+own first draft. The witness was written as three hand-picked constants; they landed in the agreeing
+two-thirds, the `assert_ne!` fired, and the test was rewritten to search a deterministic sequence
+until it finds one. That is §23.5 with the roles reversed: there, a search found nothing and the
+test went green; here, a *constant* found nothing and the test went red. Both failures are the same
+failure — **a spelling test must be able to tell "no difference exists" from "I did not look in the
+right place"** — and only the searching form can.
+
+### 26.7 The guard caught the exact hazard it was written for, on the same day
+
+§17.6 recorded that `collision` fell out of the swap guard's table for a whole batch because three
+of its public names carry a leading underscore while their `_py` aliases do not, and the derive
+could not resolve them. §23.7 recorded that the *class* half of the guard had been one name short
+for six batches.
+
+`dirichlet_interior_d2_1d` is this module's first private-but-swapped name, and the first draft
+aliased it `_dirichlet_interior_d2_1d_py` — the natural spelling, and one the derive skips because
+it filters names starting with `_`. The guard failed immediately and by name. Cost: one rename, and
+a comment in `operators2d.py` saying which convention applies and why, so the next private swap does
+not rediscover it. This is the first time in the migration that a guard has caught a guard-shaped
+hole *inside the batch that made it*, which is the only outcome that makes the machinery worth its
+weight.
+
+The rename then broke the parity file, which had been written and run against the *old* alias — and
+that is §25.8a arriving inside the batch that cites it, for the third batch running. The rule keeps
+being restated because it keeps being the same shape: **a change to a shared name is not finished
+until the tests that named it have been re-run**, and the only reliable way to know is to re-run
+them rather than to reason about who imports what. It cost one `sed` here because the batch's own
+success condition names the file; a batch whose condition named only the *models* would have shipped
+it.
+
+### 26.8 What the port did not buy: speed
+
+Honest and worth recording, because §11.6's rule predicts it. Construction-time only, `N = 32`:
+
+| | Python | Rust |
+| --- | --- | --- |
+| `biharmonic_from_mask` | 0.63 ms | 0.44 ms |
+| `free_plate_stiffness` | 2.53 ms | **3.49 ms** |
+
+The stiffness is *slower* in Rust, and that is §11.6 exactly: the win is per-call overhead, not
+arithmetic, and `free_plate_stiffness` is five sparse products through SciPy's compiled SMMP kernel
+with only a handful of Python-level calls around them. There is nothing to win, and the Rust side
+pays for building each row as its own `Vec`. Neither number is on any hot path: `free_plate_stiffness` is called **exactly once per
+`Plate.__init__`**, and `biharmonic_from_mask` likewise. A future reader should not read the table
+as a regression — no optimisation was made and none is warranted until `plate.py` itself ports and
+the *step* becomes the thing being measured.
+
+### 26.9 What is bit-identical
+
+| | |
+|---|---|
+| `biharmonic_from_mask`, 5 rectangles | **bit-identical** (`data`, `indices`, `indptr`, `nnz`) |
+| … 3 guitar and 3 disk outlines | **bit-identical** |
+| `dirichlet_interior_d2_1d`, 5 sizes × 4 grids | **bit-identical** |
+| `orthotropic_biharmonic`, 5 grids × 4 grain triples | **bit-identical** |
+| `free_plate_stiffness`, 5 grids × 4 values of `nu` | **bit-identical** (`K` and `W`) |
+| … 3 grids × 4 constant splits | **bit-identical** |
+| `free_plate_stiffness_from_mask`, 6 outlines × 2 `nu` | **bit-identical** |
+| every `index_map`, dtype included | identical |
+| the five refusals, message for message | identical |
+
+There is no tolerance-level row in this batch. That is what the split in §26 bought, and it is why
+the Airy solver — which cannot have one — is in the next batch instead.
+
+### 26.10 The success condition
+
+* `cargo test --workspace` green, **debug and release** — 8 new native bars in `ops2d`, 4 new unit
+  bars in `sparse`, including two spelling pins that fail if they find no witness.
+* `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings` green, and
+  `ruff check .` green — §25.8, in the batch's list rather than CI's.
+* `pip install ./crates/physsynth-py` **before** any parity number is believed — §25.8a.
+* `pytest tests/test_rust_parity_ops2d.py` green with the flag and without it — 520 tests.
+* `PHYSSYNTH_RS=1 pytest` green on the whole plate family — the existing, unmodified Python tests
+  for the supported plate, the free plate, the orthotropic plate, the guitar plate, the von Kármán
+  bracket, the Airy solver and the membrane, all running on Rust-built matrices.
+* The whole Python suite green on the default path, and the shipped numbers moved **only** where
+  this section says: supported plate 1.2e-13 of amplitude with drift unmoved, free / orthotropic-
+  free / guitar plates bit-identical. That is a *test* — `tests/test_plate_modal.py` holds the
+  pre-port expression and asserts both halves — not a scratch script that ran once.
+
+### 26.11 What the next batch inherits
+
+* **What is left of `operators2d` is the nonlinear plate**: `_collocated_d2_1d`, `_forward_d1_1d`,
+  `_centered_d2_1d`, `_avg_d1_1d`, `VonKarmanBracket` and `AiryStressSolver`. The infrastructure it
+  needs — `add`, `kron`, `identity`, and the sparse LU from Phase 4 — is already in place, so that
+  batch is cheaper than this one by everything except the solver.
+* **Its claim will be a tolerance, and that is settled in advance** (§24.2). `AiryStressSolver`
+  factors with SuperLU, which is supernodal; matching it is a claim about how SciPy was built. Do
+  not spend the batch re-litigating that.
+* **The order question there is not `_clamped_d2_1d`, it is the slice.** That matrix is built
+  through `lil` and two scalar assignments, and `lil.tocsr()` sorts, so it is almost certainly
+  canonical already. What is unmeasured is `Lc.tocsc()[:, self._cols]` — a CSC *column slice* — and
+  then `Lc_rᵀ @ Wa @ Lc_r`, which Python **left**-associates where `free_plate_stiffness` writes the
+  same form right-associated. §26.5's mantissa argument probably extends (the ghost-mirror end rows
+  are `2/h²` alongside `1/h²` and `-2/h²`, still all powers of two times one mantissa) — but
+  "probably" is what §26.5 replaced with a one-line argument, so make the argument rather than
+  inheriting the conclusion.
+* **Ask the value question and the order question separately.** §26.2. They have different answers
+  and different remedies, and conflating them is how a batch ends up believing the arithmetic is
+  unmatchable when only the storage was.
+* **Ask whether the outer factors share a mantissa** before assuming a reassociation is visible.
+  §26.5. It costs no measurement and it settled a hazard the previous batch would have spent a
+  script on.
+* **A spelling pin must search, not assert a constant.** §26.6, and §23.5 from the other side.
+* **Check inherited sentences** — still true. §18.2's "descending" was accurate about the 1-D
+  biharmonic and wrong as a general rule; in two dimensions the order is *neither*, in 600 of 610
+  rows. A rule written from one measurement should be re-measured before it is relied on in a new
+  place.
