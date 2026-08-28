@@ -295,3 +295,63 @@ def test_the_cfl_rejection_carries_the_same_message():
 def test_courant_exactly_one_is_accepted_by_both():
     py, rs = _pair(**_params(lam=1.0))
     assert py.lam == rs.lam == pytest.approx(1.0, abs=1e-12)
+
+
+# -- an omitted keyword and an explicit `None` are different arguments (plan §24.7) -------------
+#
+# Found while writing the beam's parity file, and it was true of every binding in the crate. PyO3
+# maps a Python `None` and a missing argument onto the same Rust `Option::None`, so a binding
+# written the obvious way treats `boundary=None` as "not supplied" and quietly builds the DEFAULT
+# boundary, while the Python original rejects it. Nothing caught it: no parity file passed `None`
+# to a constructor, because `None` is not a plausible boundary and nobody thinks to try it.
+#
+# The fix is `Option<Option<_>>`, and the arm order is the surprising half -- PyO3 wraps the
+# *default expression*, so `Some(None)` means "argument omitted" and a bare `None` is the caller's
+# literal. That is exactly the kind of thing that gets silently inverted in a later refactor, so
+# both halves are pinned here: the default still applies when the argument is absent, and an
+# explicit `None` is still refused.
+#
+# Two of the six refuse it with a different exception TYPE from Python's, and that is deliberate.
+# `IdealString` and `Bore` unpack their boundary (`left, right = boundary`), so Python's refusal is
+# an incidental `TypeError` from the unpacking rather than a designed message; the Rust side raises
+# its own `ValueError` naming what it wanted. Reproducing an accident is not worth a special case,
+# but silently accepting the value was, which is what this guard is for.
+
+BOUNDARY_CASES = [
+    ("StiffString", dict(L=1.0, T=200.0, rho=0.005, fs=48000.0, N=16), "supported", ValueError),
+    ("DampedStiffString", dict(L=1.0, T=200.0, rho=0.005, fs=48000.0, N=16), "supported",
+     ValueError),
+    ("TensionModulatedString", dict(L=1.0, T=200.0, rho=0.005, fs=48000.0, N=16), "supported",
+     ValueError),
+    ("IdealString", dict(L=1.0, T=200.0, rho=0.005, fs=48000.0, N=16), "fixed", Exception),
+    ("Bore", dict(L=0.5, fs=48000.0, N=64), ("closed", "open"), Exception),
+    ("FreeBeam", dict(L=1.0, rho=0.005, fs=48000.0, N=16, kappa=20.0), "free", ValueError),
+]
+
+
+@pytest.mark.parametrize("name,kwargs,default,exc", BOUNDARY_CASES)
+def test_omitting_the_boundary_keeps_the_default(name, kwargs, default, exc):
+    assert getattr(physsynth_rs, name)(**kwargs).boundary == default
+
+
+@pytest.mark.parametrize("name,kwargs,default,exc", BOUNDARY_CASES)
+def test_an_explicit_none_boundary_is_refused_by_both(name, kwargs, default, exc):
+    import physsynth.core.beam as beam_mod
+    import physsynth.core.bore as bore_mod
+    import physsynth.core.string_damped as damped_mod
+    import physsynth.core.string_ideal as ideal_mod
+    import physsynth.core.string_nonlinear as tension_mod
+    import physsynth.core.string_stiff as stiff_mod
+
+    python_classes = {
+        "StiffString": stiff_mod.StiffStringPy,
+        "DampedStiffString": damped_mod.DampedStiffStringPy,
+        "TensionModulatedString": tension_mod.TensionModulatedStringPy,
+        "IdealString": ideal_mod.IdealStringPy,
+        "Bore": bore_mod.BorePy,
+        "FreeBeam": beam_mod.FreeBeamPy,
+    }
+    with pytest.raises(exc):
+        python_classes[name](**kwargs, boundary=None)
+    with pytest.raises(exc):
+        getattr(physsynth_rs, name)(**kwargs, boundary=None)

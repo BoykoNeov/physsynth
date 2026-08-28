@@ -40,6 +40,7 @@
 #![allow(non_snake_case)] // The Python API spells them `L`, `T`, `N`; the binding must match.
 
 mod banded;
+mod beam;
 mod body;
 mod bore;
 mod bow;
@@ -51,6 +52,7 @@ mod ops2d;
 mod radiation;
 mod reed;
 mod shape;
+mod sparse_lu;
 mod string_damped;
 mod string_nonlinear;
 mod string_stiff;
@@ -195,7 +197,7 @@ impl PyIdealString {
     // a different Python one.
     #[allow(clippy::too_many_arguments)]
     #[new]
-    #[pyo3(signature = (*, L, T, rho, fs, N, boundary=None, sigma=0.0))]
+    #[pyo3(signature = (*, L, T, rho, fs, N, boundary=None::<Py<PyAny>>, sigma=0.0))]
     fn new(
         py: Python<'_>,
         L: f64,
@@ -203,12 +205,18 @@ impl PyIdealString {
         rho: f64,
         fs: f64,
         N: i64,
-        boundary: Option<Bound<'_, PyAny>>,
+        boundary: Option<Option<Py<PyAny>>>,
         sigma: f64,
     ) -> PyResult<Self> {
+        // `Option<Option<_>>` so that an OMITTED `boundary` and an explicit `boundary=None` are
+        // distinguishable -- a plain `Option` collapses them and silently ACCEPTS `boundary=None`,
+        // which the Python original rejects with a message quoting `None` (§24.7). The arm order
+        // is the surprising part and is pinned by a test: PyO3 wraps the DEFAULT expression, so
+        // `Some(None)` is "argument omitted" and a bare `None` is the caller's literal `None`.
         let boundary = match boundary {
-            Some(b) => b,
-            None => PyString::new(py, "fixed").into_any(),
+            Some(None) => PyString::new(py, "fixed").into_any(),
+            None => py.None().into_bound(py),
+            Some(Some(b)) => b.into_bound(py),
         };
         let bc = parse_boundary(&boundary);
         let p = core::Params::new(L, T, rho, fs, N, sigma, bc).map_err(|e| match e {
@@ -659,6 +667,8 @@ fn op_free_beam_stiffness(py: Python<'_>, N: i64, h: f64) -> PyResult<(CsrTriple
 fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyIdealString>()?;
     m.add_class::<string_stiff::PyStiffString>()?;
+    m.add_class::<beam::PyFreeBeam>()?;
+    m.add_class::<sparse_lu::PySparseLu>()?;
     m.add_class::<string_damped::PyDampedStiffString>()?;
     m.add_class::<string_nonlinear::PyTensionModulatedString>()?;
     m.add_class::<membrane::PyMembrane>()?;

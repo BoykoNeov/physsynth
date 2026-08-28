@@ -37,6 +37,7 @@ from helpers import (
     KAPPA_PLATE_DEFAULT,
     RHO_AREAL_DEFAULT,
     SPRUCE,
+    arpack_v0,
     free_plate_low_eigenfrequencies,
     make_free_plate,
     make_orthotropic_free_plate,
@@ -607,7 +608,10 @@ def test_free_plate_is_not():
         p = make_orthotropic_free_plate(
             N=24, mu=0.5, grain_y=0.073, grain_coupling=g_1, grain_torsion=0.5 * (g_h - g_1)
         )
-        vals = np.sort(eigsh(p.K, k=6, M=p.W, sigma=-1e-4, which="LM", return_eigenvectors=False))
+        vals = np.sort(
+            eigsh(p.K, k=6, M=p.W, sigma=-1e-4, which="LM", return_eigenvectors=False,
+                  v0=arpack_v0(p.K))
+        )
         lams.append(_lam(vals[3], p.Lx))
     assert max(lams) / min(lams) > 4.0, (
         f"the free plate barely noticed the split ({max(lams) / min(lams):.2f}x) — the batch's "

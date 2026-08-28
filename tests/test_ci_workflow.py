@@ -66,3 +66,42 @@ def test_every_test_file_the_workflow_names_exists(workflow_lines):
     )
     missing = sorted({t for t in named if not (REPO_ROOT / t).is_file()})
     assert not missing, f"the workflow names test files that do not exist: {missing}"
+
+
+# The same escaping failure with the opposite sign, found in §24 and pre-existing on three steps.
+#
+# §19.7's variant leaves a literal backslash-``n`` behind, and the test above catches it. The
+# variant found while adding the beam's step *swallows* the continuation instead: the same tooling
+# round-trip that turns ``\`` + newline into two visible characters can also consume both, and what
+# is left is two shell lines JOINED into one. Three earlier steps had it, and none of them failed,
+# because ``pytest a.py b.py`` runs the same whether the file names were on one line or four.
+#
+# It is only harmless while what follows a continuation is another *argument*. The moment a
+# swallowed continuation sits between two commands -- ``pip install ...`` and ``pytest ...`` --
+# the second becomes an argument of the first and the step silently stops doing half its job. That
+# is invisible to the backslash-n test (there is no backslash left to find), to a YAML parser (the
+# block scalar is valid) and to the eye (the line runs off the screen).
+#
+# A length limit is what distinguishes the two shapes without asserting anything about content. The
+# longest legitimate ``run:`` line in this workflow is well under 120 characters; a joined one is
+# 300 to 850.
+RUN_LINE_LIMIT = 120
+
+
+def test_no_run_block_line_is_a_swallowed_continuation(workflow_lines):
+    inside, block_indent, offenders = False, 0, []
+    for n, line in enumerate(workflow_lines, 1):
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+        if inside and stripped and indent <= block_indent:
+            inside = False
+        if stripped.endswith("run: |") or stripped.endswith("run: |-"):
+            inside, block_indent = True, indent
+            continue
+        if inside and len(line) > RUN_LINE_LIMIT:
+            offenders.append((n, len(line), line.strip()[:80]))
+    assert not offenders, (
+        "a `run:` line over "
+        f"{RUN_LINE_LIMIT} characters -- almost certainly two shell lines joined by a line "
+        f"continuation that lost its backslash AND its newline: {offenders}"
+    )

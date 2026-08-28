@@ -7,6 +7,7 @@ expected frequencies are easy to reason about.
 from __future__ import annotations
 
 import numpy as np
+from numpy.typing import NDArray
 from scipy.sparse.linalg import eigsh
 
 from physsynth.analysis import modal, spectrum
@@ -74,6 +75,29 @@ MU_PLATE_DEFAULT = 2.0
 # beta_1 L ~ 4.730, i.e. ~ 71.3 Hz at kappa = 20, L = 1.
 KAPPA_BEAM_DEFAULT = 20.0
 MU_BEAM_DEFAULT = 2.0
+
+
+# ARPACK start vector. `eigsh` without `v0` draws a RANDOM one, so every eigensolve in the suite is
+# non-reproducible run to run -- measured on the free-free beam: the elastic eigenvalues wobble by
+# ~1e-12 relative and their eigenvectors by ~5e-11, and the two RIGID-BODY modes (mu ~ 0, exactly
+# degenerate) come back as an arbitrary basis of the {1, x} nullspace, differing by ~1e-1. That is
+# harmless against a 5-cent bar, but an oracle that is not bit-reproducible reads as a port bug the
+# first time a comparison is tightened, and an eigenvector fed to `set_state` makes a genuinely
+# different trajectory (rust-migration-plan.md Sec 7). Pinned here so it cannot.
+ARPACK_SEED = 20260828
+
+
+def arpack_v0(op) -> NDArray[np.float64]:
+    """A fixed ARPACK start vector sized for ``op`` (a square matrix, or its dimension).
+
+    Uniform doubles from a seeded PCG64 stream: deterministic across platforms and NumPy versions,
+    generic (no symmetry, so it is orthogonal to no eigenvector -- unlike the obvious ``arange``,
+    which is antisymmetric about the centre of a symmetric operator and would starve every
+    symmetric mode), and free of any transcendental, whose CPU-dispatched NumPy loop would put the
+    start vector itself back in the class of things that vary by machine (Sec 22.1).
+    """
+    n = int(op) if isinstance(op, (int, np.integer)) else int(op.shape[0])
+    return np.random.default_rng(ARPACK_SEED).random(n)
 
 
 def wave_speed(T: float = T_DEFAULT, rho: float = RHO_DEFAULT) -> float:
@@ -402,7 +426,8 @@ def free_plate_low_eigenfrequencies(
     mu1_est = ((13.0 if lam1_hint is None else lam1_hint) / (a * a)) ** 2
     sigma = -1e-3 * mu1_est
     mu = eigsh(
-        plate.K, k=n_total, M=plate.W, sigma=sigma, which="LM", return_eigenvectors=False
+        plate.K, k=n_total, M=plate.W, sigma=sigma, which="LM", return_eigenvectors=False,
+        v0=arpack_v0(plate.K),
     )
     mu = np.sort(mu)
     rigid, elastic = mu[:3], mu[3:n_total]
@@ -452,7 +477,8 @@ def beam_low_eigenfrequencies(
     mu1_est = (4.730041 / beam.L) ** 4  # continuum fundamental scale -> a safe (< mu_1) shift
     sigma = -1e-3 * mu1_est
     mu = eigsh(
-        beam.K, k=n_total, M=beam.W, sigma=sigma, which="LM", return_eigenvectors=False
+        beam.K, k=n_total, M=beam.W, sigma=sigma, which="LM", return_eigenvectors=False,
+        v0=arpack_v0(beam.K),
     )
     mu = np.sort(mu)
     rigid, elastic = mu[:2], mu[2:n_total]
@@ -471,7 +497,10 @@ def plate_low_eigenfrequencies(plate: Plate, n_modes: int) -> np.ndarray:
     biharmonic stiffness ``Q = kappa² Λ²``). Degeneracy-robust: it returns sorted values, so the
     square plate's ``(m,n)<->(n,m)`` pairs appear as the near-equal entries they are.
     """
-    lam_vals = eigsh(-plate.L, k=n_modes, sigma=0.0, which="LM", return_eigenvectors=False)
+    lam_vals = eigsh(
+        -plate.L, k=n_modes, sigma=0.0, which="LM", return_eigenvectors=False,
+        v0=arpack_v0(plate.L),
+    )
     lam_vals = np.sort(lam_vals)
     return np.asarray(
         modal.discrete_plate_eigenfrequency(lam_vals, plate.kappa, plate.k, plate.theta)
@@ -487,7 +516,10 @@ def membrane_low_eigenfrequencies(membrane: Membrane, n_modes: int) -> np.ndarra
     Degeneracy-robust: it just returns sorted values, so
     cos/sin (and square ``(m,n)<->(n,m)``) pairs appear as the near-equal entries they are.
     """
-    lam_vals = eigsh(-membrane.L, k=n_modes, sigma=0.0, which="LM", return_eigenvectors=False)
+    lam_vals = eigsh(
+        -membrane.L, k=n_modes, sigma=0.0, which="LM", return_eigenvectors=False,
+        v0=arpack_v0(membrane.L),
+    )
     lam_vals = np.sort(lam_vals)
     return np.asarray(modal.discrete_membrane_eigenfrequency(lam_vals, membrane.c, membrane.k))
 
@@ -1179,11 +1211,15 @@ def bore_low_eigenfrequencies(bore: Bore, n_modes: int) -> np.ndarray:
         w1_scale = (np.pi * bore.c0 / bore.L) ** 2  # ~ first resonance ω² -> a safe negative shift
         shift = -1e-3 * w1_scale
         w2 = eigsh(
-            Lfree, k=n_modes + 1, M=Cfree, sigma=shift, which="LM", return_eigenvectors=False
+            Lfree, k=n_modes + 1, M=Cfree, sigma=shift, which="LM", return_eigenvectors=False,
+            v0=arpack_v0(Lfree),
         )
         w2 = np.sort(w2)[1 : n_modes + 1]  # drop the ω≈0 constant-pressure mode
     else:
-        w2 = eigsh(Lfree, k=n_modes, M=Cfree, sigma=0.0, which="LM", return_eigenvectors=False)
+        w2 = eigsh(
+            Lfree, k=n_modes, M=Cfree, sigma=0.0, which="LM", return_eigenvectors=False,
+            v0=arpack_v0(Lfree),
+        )
         w2 = np.sort(w2)
     return np.asarray(modal.discrete_bore_eigenfrequency(w2, bore.k))
 

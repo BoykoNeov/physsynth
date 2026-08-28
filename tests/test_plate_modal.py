@@ -9,7 +9,13 @@ operator correctness is proved instead by the ``B``-eigenvalue == ``Λ²`` money
 """
 
 import numpy as np
-from helpers import KAPPA_PLATE_DEFAULT, convergence_orders, make_plate, plate_low_eigenfrequencies
+from helpers import (
+    KAPPA_PLATE_DEFAULT,
+    arpack_v0,
+    convergence_orders,
+    make_plate,
+    plate_low_eigenfrequencies,
+)
 from scipy.sparse.linalg import eigsh
 
 from physsynth.analysis import modal, spectrum
@@ -32,7 +38,8 @@ def test_biharmonic_eigenvalues_are_squared_laplacian():
     lap = np.sort(modal.rectangular_discrete_eigenvalues(p.h, N, Ny, modes))
     bih_oracle = lap ** 2
     bih_numeric = np.sort(
-        eigsh(p.B, k=len(modes), sigma=0.0, which="LM", return_eigenvectors=False)
+        eigsh(p.B, k=len(modes), sigma=0.0, which="LM", return_eigenvectors=False,
+              v0=arpack_v0(p.B))
     )
     rel = np.max(np.abs(bih_numeric - bih_oracle) / bih_oracle)
     assert rel < 1e-10, f"biharmonic eigenvalue mismatch {rel:.2e} (B is mis-assembled)"

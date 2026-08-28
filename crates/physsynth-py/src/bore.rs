@@ -287,7 +287,7 @@ impl PyBore {
 impl PyBore {
     #[new]
     #[pyo3(signature = (
-        *, L, fs, N, radius=0.008, boundary=None, sigma=0.0, R_bell=0.0,
+        *, L, fs, N, radius=0.008, boundary=None::<Py<PyAny>>, sigma=0.0, R_bell=0.0,
         rho0=1.2041, c0=343.0
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -297,7 +297,7 @@ impl PyBore {
         fs: f64,
         N: i64,
         radius: f64,
-        boundary: Option<Bound<'_, PyAny>>,
+        boundary: Option<Option<Py<PyAny>>>,
         sigma: f64,
         R_bell: f64,
         rho0: f64,
@@ -305,9 +305,15 @@ impl PyBore {
     ) -> PyResult<Self> {
         // The original's default is the tuple `("closed", "open")` — the ideal clarinet — and
         // `.boundary` echoes whatever was passed, so the default has to be a real tuple object.
+        // `Option<Option<_>>` so that an OMITTED `boundary` and an explicit `boundary=None` are
+        // distinguishable -- a plain `Option` collapses them and silently ACCEPTS `boundary=None`,
+        // which the Python original rejects with a message quoting `None` (§24.7). The arm order
+        // is the surprising part and is pinned by a test: PyO3 wraps the DEFAULT expression, so
+        // `Some(None)` is "argument omitted" and a bare `None` is the caller's literal `None`.
         let boundary = match boundary {
-            Some(obj) => obj,
-            None => PyTuple::new(py, ["closed", "open"])?.into_any(),
+            Some(None) => PyTuple::new(py, ["closed", "open"])?.into_any(),
+            None => py.None().into_bound(py),
+            Some(Some(obj)) => obj.into_bound(py),
         };
         let params = build_params(&boundary, L, fs, N, radius, sigma, R_bell, rho0, c0)?;
 

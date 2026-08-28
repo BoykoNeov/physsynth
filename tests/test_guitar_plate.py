@@ -25,6 +25,7 @@ from hashlib import sha256
 
 import numpy as np
 import pytest
+from helpers import arpack_v0
 from scipy.sparse.linalg import eigsh
 
 from physsynth.analysis.modal import (
@@ -88,7 +89,10 @@ def _fingerprint(mask, h):
     """
     K, W, _ = free_plate_stiffness_from_mask(mask, h, NU)
     Kc = K.tocsc()
-    mu = np.sort(eigsh(Kc, k=8, M=W.tocsc(), sigma=-1e-8, which="LM", return_eigenvectors=False))
+    mu = np.sort(
+        eigsh(Kc, k=8, M=W.tocsc(), sigma=-1e-8, which="LM", return_eigenvectors=False,
+              v0=arpack_v0(Kc))
+    )
     sym = float(abs(Kc - Kc.T).max()) if Kc.nnz else 0.0
     return "".join(
         "\n    " + line
@@ -110,7 +114,7 @@ def _elastic_lambdas(mask, h, n_modes, a2, nu=NU, **grain):
     K, W, _ = free_plate_stiffness_from_mask(mask, h, nu, **grain)
     mu = np.sort(
         eigsh(K.tocsc(), k=n_modes + 4, M=W.tocsc(), sigma=-1e-8, which="LM",
-              return_eigenvectors=False)
+              return_eigenvectors=False, v0=arpack_v0(K))
     )
     # The bar is RELATIVE and it has to be. K is PSD with a 3-D nullspace, so mu[0:3] come out of
     # shift-invert with arbitrary sign, and their size grows with the problem: measured
@@ -387,7 +391,7 @@ def test_the_shipped_circle_path_matches_the_derived_oracle():
         )
         mu = np.sort(
             eigsh(p.K.tocsc(), k=11, M=p.W.tocsc(), sigma=-1e-8, which="LM",
-                  return_eigenvectors=False)
+                  return_eigenvectors=False, v0=arpack_v0(p.K))
         )
         lam = (0.5 * p.Lx) ** 2 * np.sqrt(np.clip(mu[3:10], 0.0, None))
         assert np.all(lam > target), "a staircased disk is SMALLER, so it must ring sharp"
@@ -436,8 +440,8 @@ def test_a_supported_curved_plate_is_the_membrane_squared_and_therefore_says_not
     mask, h, _ = _guitar(24)
     L, _ = laplacian_from_mask(mask, h)
     B, _ = biharmonic_from_mask(mask, h)
-    lam_L = np.sort(-eigsh(L, k=6, which="SM", return_eigenvectors=False))
-    lam_B = np.sort(eigsh(B, k=6, which="SM", return_eigenvectors=False))
+    lam_L = np.sort(-eigsh(L, k=6, which="SM", return_eigenvectors=False, v0=arpack_v0(L)))
+    lam_B = np.sort(eigsh(B, k=6, which="SM", return_eigenvectors=False, v0=arpack_v0(B)))
     assert np.allclose(lam_B, lam_L**2, rtol=1e-8), "B = L @ L is not an identity here"
 
     with pytest.raises(ValueError, match="offered on boundary='free' only"):

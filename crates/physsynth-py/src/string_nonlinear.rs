@@ -100,7 +100,7 @@ impl PyTensionModulatedString {
     #[new]
     #[pyo3(signature = (*, L, T, rho, fs, N, kappa=0.0, EA=0.0, sigma0=0.0, sigma1=0.0,
                         theta=physsynth_core::string_stiff::THETA_DEFAULT,
-                        boundary=None,
+                        boundary=None::<Py<PyAny>>,
                         tension_tol=physsynth_core::string_nonlinear::TENSION_TOL_DEFAULT))]
     fn new(
         py: Python<'_>,
@@ -114,12 +114,18 @@ impl PyTensionModulatedString {
         sigma0: f64,
         sigma1: f64,
         theta: f64,
-        boundary: Option<Bound<'_, PyAny>>,
+        boundary: Option<Option<Py<PyAny>>>,
         tension_tol: f64,
     ) -> PyResult<Self> {
+        // `Option<Option<_>>` so that an OMITTED `boundary` and an explicit `boundary=None` are
+        // distinguishable -- a plain `Option` collapses them and silently ACCEPTS `boundary=None`,
+        // which the Python original rejects with a message quoting `None` (§24.7). The arm order
+        // is the surprising part and is pinned by a test: PyO3 wraps the DEFAULT expression, so
+        // `Some(None)` is "argument omitted" and a bare `None` is the caller's literal `None`.
         let boundary = match boundary {
-            Some(b) => b,
-            None => PyString::new(py, "supported").into_any(),
+            Some(None) => PyString::new(py, "supported").into_any(),
+            None => py.None().into_bound(py),
+            Some(Some(b)) => b.into_bound(py),
         };
         let ok = boundary_ok(&boundary);
         let p = core::Params::new(

@@ -17,7 +17,7 @@ numerically-computed eigenvector of ``K φ = mu W φ`` (the 2D plate will do the
 
 import numpy as np
 import pytest
-from helpers import make_beam
+from helpers import arpack_v0, make_beam
 from scipy.sparse.linalg import eigsh
 
 from physsynth.core.engine import simulate
@@ -40,7 +40,10 @@ def _elastic_eigenvector(beam, which):
     """The ``which``-th **elastic** eigenvector of ``K φ = mu W φ`` (0 = fundamental; skips the 2
     rigid-body modes). W-orthonormal (φᵀWφ = 1)."""
     mu1_est = (4.730041 / beam.L) ** 4
-    vals, vecs = eigsh(beam.K, k=which + 3, M=beam.W, sigma=-1e-3 * mu1_est, which="LM")
+    vals, vecs = eigsh(
+        beam.K, k=which + 3, M=beam.W, sigma=-1e-3 * mu1_est, which="LM",
+        v0=arpack_v0(beam.K),
+    )
     order = np.argsort(vals)
     return vecs[:, order[2 + which]]
 

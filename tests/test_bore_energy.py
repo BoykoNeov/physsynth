@@ -13,7 +13,7 @@ same-time square is the classic bug this test is built to catch.
 
 import numpy as np
 import pytest
-from helpers import make_bore
+from helpers import arpack_v0, make_bore
 from scipy.sparse.linalg import eigsh
 
 from physsynth.core.engine import simulate
@@ -76,7 +76,10 @@ def test_decay_rate_matches_2sigma_single_mode():
     sigma, secs = 40.0, 0.15
     bore = make_bore(N=150, lam=0.8, boundary=("closed", "open"), sigma=sigma)
     dof = bore.dof
-    _, vec = eigsh(bore.Lop[dof][:, dof], k=1, M=bore.Cmat[dof][:, dof], sigma=0.0, which="LM")
+    Lfree = bore.Lop[dof][:, dof]
+    _, vec = eigsh(
+        Lfree, k=1, M=bore.Cmat[dof][:, dof], sigma=0.0, which="LM", v0=arpack_v0(Lfree)
+    )
     phi = np.zeros(bore.N + 1)
     phi[dof] = vec[:, 0]
     bore.set_state(phi * 1e-3)

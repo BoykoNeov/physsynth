@@ -13,6 +13,7 @@ Two geometries, two acceptance bars (per the human's 2026-06-21 decision):
 import numpy as np
 from helpers import (
     RADIUS_DEFAULT,
+    arpack_v0,
     convergence_orders,
     make_membrane,
     membrane_low_eigenfrequencies,
@@ -34,7 +35,10 @@ def test_rectangle_eigenvalues_match_closed_form():
     Ny = round(m.Ly / m.h)
     modes = [(1, 1), (2, 1), (1, 2), (2, 2), (3, 1), (1, 3)]
     oracle = np.sort(modal.rectangular_discrete_eigenvalues(m.h, N, Ny, modes))
-    numeric = np.sort(eigsh(-m.L, k=len(modes), sigma=0.0, which="LM", return_eigenvectors=False))
+    numeric = np.sort(
+        eigsh(-m.L, k=len(modes), sigma=0.0, which="LM", return_eigenvectors=False,
+              v0=arpack_v0(m.L))
+    )
     rel = np.max(np.abs(numeric - oracle) / oracle)
     assert rel < 1e-10, f"discrete eigenvalue mismatch {rel:.2e} (operator is mis-assembled)"
 
@@ -107,7 +111,9 @@ def test_circle_fft_peak_at_fundamental():
     pickup = m.pickup_index_at(0.3 * a, 0.2 * a)
     res = simulate(m, num_steps=int(0.5 * m.fs), pickup_index=pickup)
     detected = modal.discrete_membrane_eigenfrequency(  # anchor the search at the discrete fund.
-        eigsh(-m.L, k=1, sigma=0.0, which="LM", return_eigenvectors=False), C, m.k
+        eigsh(-m.L, k=1, sigma=0.0, which="LM", return_eigenvectors=False, v0=arpack_v0(m.L)),
+        C,
+        m.k,
     )
     from physsynth.analysis import spectrum
 

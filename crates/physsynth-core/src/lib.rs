@@ -55,6 +55,7 @@
 //! asserted natively in `tests/` here as well as through the Python harness.
 
 pub mod banded;
+pub mod beam;
 pub mod body;
 pub mod bore;
 pub mod bow;
@@ -71,6 +72,7 @@ pub mod radiation;
 pub mod reed;
 pub mod root;
 pub mod sparse;
+pub mod sparse_lu;
 pub mod string_damped;
 pub mod string_ideal;
 pub mod string_nonlinear;

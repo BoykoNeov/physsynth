@@ -172,6 +172,7 @@ def test_the_rust_swap_matches_the_environment():
     # model is *not* silently in play.
     from physsynth.core import (
         banded,
+        beam,
         body,
         bore,
         bow,
@@ -204,6 +205,7 @@ def test_the_rust_swap_matches_the_environment():
         string_stiff,
         string_damped,
         bow,
+        beam,
     ):
         assert module._USE_RUST is expected_rust, (
             f"{module.__name__}'s reading of PHYSSYNTH_RS disagrees with this test's -- one of "
@@ -230,6 +232,7 @@ def test_the_rust_swap_matches_the_environment():
         string_nonlinear,
         bow,
         collision,
+        beam,
     ):
         # `collision` joined this tuple in Phase 3's last batch, and it was ABSENT before -- so for
         # the whole of §16's batch and after, a `BarrierStringPy` alias could have been added with
@@ -257,6 +260,7 @@ def test_the_rust_swap_matches_the_environment():
         ("physsynth.core.string_nonlinear", "TensionModulatedString"),
         ("physsynth.core.bow", "BowedString"),
         ("physsynth.core.collision", "BarrierString"),
+        ("physsynth.core.beam", "FreeBeam"),
     }
     assert set(swapped_classes) == expected_classes, (
         f"the swapped classes are {sorted(swapped_classes)}, but this guard expects "
@@ -479,4 +483,54 @@ def test_core_does_not_import_sibling_layers():
     result = _run_core_probe(body)
     assert result.returncode == 0, (
         f"core imported a sibling layer (must not): {result.stdout.strip()}"
+    )
+
+
+# -- the ARPACK start vector is pinned everywhere (rust-migration-plan.md Sec 7) ----------------
+#
+# `eigsh` without `v0` draws a RANDOM start vector, so the oracle it computes is not reproducible
+# run to run. Measured on the free-free beam: elastic eigenvalues wobble ~1e-12 relative, their
+# eigenvectors ~5e-11, and the two rigid-body modes come back as an arbitrary basis of the {1, x}
+# nullspace (~1e-1 apart). An eigenvector fed to `set_state` is an INITIAL CONDITION, so that is a
+# different trajectory, not a last-digit difference -- and it would read as a port bug. The first
+# test asserts the property; the second asserts it cannot be lost by adding a call site, which is
+# the shape of guard Sec 17.6 and Sec 23.7 record going quietly empty.
+
+
+def test_arpack_oracles_are_bit_reproducible():
+    from helpers import beam_low_eigenfrequencies, make_beam, make_free_plate
+    from helpers import free_plate_low_eigenfrequencies as fp
+
+    beam = make_beam(N=32)
+    plate = make_free_plate(N=12)
+    for name, first, second in (
+        ("beam", beam_low_eigenfrequencies(beam, 4), beam_low_eigenfrequencies(beam, 4)),
+        ("free plate", fp(plate, 3), fp(plate, 3)),
+    ):
+        assert np.array_equal(first, second), (
+            f"{name} oracle is not bit-reproducible: {first} vs {second} -- an eigsh call lost "
+            "its pinned v0"
+        )
+
+
+def test_every_eigsh_call_in_the_tests_pins_v0():
+    import ast
+    import pathlib
+
+    here = pathlib.Path(__file__).parent
+    unpinned = []
+    for path in sorted(here.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
+            if name != "eigsh":
+                continue
+            if not any(kw.arg == "v0" for kw in node.keywords):
+                unpinned.append(f"{path.name}:{node.lineno}")
+    assert not unpinned, (
+        "eigsh called without a pinned v0 (use helpers.arpack_v0), so the oracle is not "
+        f"reproducible run to run: {', '.join(unpinned)}"
     )

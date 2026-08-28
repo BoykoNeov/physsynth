@@ -300,7 +300,14 @@ jobs:
         env:
           PHYSSYNTH_RS: "1"
         run: |
-          pytest --durations=10             tests/test_bore_energy.py             tests/test_bore_modal.py             tests/test_bore_radiation.py             tests/test_bore_stability.py             tests/test_reed_energy.py             tests/test_reed_signature.py             tests/test_reed_stability.py
+          pytest --durations=10 \
+            tests/test_bore_energy.py \
+            tests/test_bore_modal.py \
+            tests/test_bore_radiation.py \
+            tests/test_bore_stability.py \
+            tests/test_reed_energy.py \
+            tests/test_reed_signature.py \
+            tests/test_reed_stability.py
 
       # Phase 2 batch 4's success condition -- the air node, and the first batch whose claim is
       # NOT bit-identity.
@@ -369,7 +376,27 @@ jobs:
         env:
           PHYSSYNTH_RS: "1"
         run: |
-          pytest --durations=10             tests/test_stiff_string.py             tests/test_damped_string.py             tests/test_tension_string.py             tests/test_geometric_energy.py             tests/test_geometric_limits.py             tests/test_geometric_phantom.py             tests/test_geometric_polarization.py             tests/test_geometric_rotating_wave.py             tests/test_geometric_whirl.py             tests/test_bow_energy.py             tests/test_bow_modal.py             tests/test_bow_stability.py             tests/test_collision_energy.py             tests/test_collision_modal.py             tests/test_collision_signature.py             tests/test_jawari.py             tests/test_connection.py             tests/test_sympathetic.py             tests/test_beam_modal.py             tests/test_beam_stability.py
+          pytest --durations=10 \
+            tests/test_stiff_string.py \
+            tests/test_damped_string.py \
+            tests/test_tension_string.py \
+            tests/test_geometric_energy.py \
+            tests/test_geometric_limits.py \
+            tests/test_geometric_phantom.py \
+            tests/test_geometric_polarization.py \
+            tests/test_geometric_rotating_wave.py \
+            tests/test_geometric_whirl.py \
+            tests/test_bow_energy.py \
+            tests/test_bow_modal.py \
+            tests/test_bow_stability.py \
+            tests/test_collision_energy.py \
+            tests/test_collision_modal.py \
+            tests/test_collision_signature.py \
+            tests/test_jawari.py \
+            tests/test_connection.py \
+            tests/test_sympathetic.py \
+            tests/test_beam_modal.py \
+            tests/test_beam_stability.py
 
       # Phase 3 batch 2's success condition -- the contact leg, and the batch that finally makes
       # the mallet run on Rust arithmetic without the mallet itself having been ported.
@@ -483,7 +510,20 @@ jobs:
         env:
           PHYSSYNTH_RS: "1"
         run: |
-          pytest --durations=10             tests/test_stiff_string.py             tests/test_damped_string.py             tests/test_tension_string.py             tests/test_geometric_energy.py             tests/test_geometric_limits.py             tests/test_bow_energy.py             tests/test_bow_stability.py             tests/test_collision_energy.py             tests/test_jawari.py             tests/test_connection.py             tests/test_sympathetic.py             tests/test_free_plate_connection.py             tests/test_beam_modal.py
+          pytest --durations=10 \
+            tests/test_stiff_string.py \
+            tests/test_damped_string.py \
+            tests/test_tension_string.py \
+            tests/test_geometric_energy.py \
+            tests/test_geometric_limits.py \
+            tests/test_bow_energy.py \
+            tests/test_bow_stability.py \
+            tests/test_collision_energy.py \
+            tests/test_jawari.py \
+            tests/test_connection.py \
+            tests/test_sympathetic.py \
+            tests/test_free_plate_connection.py \
+            tests/test_beam_modal.py
 
       # Phase 3 batch 4's success condition -- the tension-modulated string, model #9, and the
       # first model in the project whose UPDATE MATRIX MOVES EVERY STEP. The banded factor is
@@ -604,6 +644,41 @@ jobs:
             tests/test_damped_string.py \
             tests/test_web_backend.py
 
+      # PHASE 4 -- `beam`, and the batch was sent to answer a question rather than to add a model.
+      #
+      # `beam` is the smallest member of the sparse-LU group (254 lines, one `splu`) and plan
+      # section 4.1 chose it as the place to find out whether Rust could link SuperLU and hold that
+      # whole group to the bit-identity Groups A-C get. It cannot. Of section 4.1's three named
+      # obstacles, two are non-issues (COLAMD's order is a closed form in `n`; SciPy calls `gstrf`
+      # rather than the driver, so equilibration never runs) and the third is real only above
+      # N = 48, where the matrix stops being diagonally largest and SuperLU begins swapping rows.
+      # What decides it is a fourth nobody listed: SuperLU is SUPERNODAL, and handed its own
+      # factors a longhand triangular solve still disagrees with `lu.solve` in ~20% of entries at
+      # ~4e-16 -- a property of how SciPy BUILT its copy, i.e. section 22.1 one layer down. Group D
+      # therefore runs on the fallback section 4.1 already named: tolerance-level agreement.
+      #
+      # WHAT THE TOLERANCE IS, and it is the batch's finding. `K`'s nullspace is exactly `{1, x}`,
+      # so along the rigid-body directions a free-free beam is a FREE PARTICLE and a per-step
+      # solver difference is integrated twice: the rigid component grows like t^2 (3.7e-17 at one
+      # step, 3.3e-9 of amplitude at 20,000) while the elastic component random-walks to ~1.4e-12
+      # and the energy stays inside 7e-12. That is a sixth agreement regime and the first set by a
+      # BOUNDARY CONDITION -- inherited by every free-edge model in Phases 5 and 6, which is why it
+      # is written here and not only in the test.
+      #
+      # These four files are the unmodified Python beam tests. They pass because they assert the
+      # PHYSICS -- the closed-form `cos(bL)cosh(bL) = 1` oracle through a generalized `eigsh` on
+      # `K` and `W`, the energy identity, the rejections -- and none of that moves at 1e-9. The
+      # comparison that the physics cannot make is in the parity step below.
+      - name: The free-free beam, unmodified, against Rust
+        env:
+          PHYSSYNTH_RS: "1"
+        run: |
+          pytest --durations=10 \
+            tests/test_beam_energy.py \
+            tests/test_beam_modal.py \
+            tests/test_beam_stability.py \
+            tests/test_stability.py
+
       - name: Record what decides the last bit
         # NumPy carries its own vectorised transcendentals, dispatched by CPU feature, while
         # the Rust port calls libm -- so which agreement claims below can hold is a property
@@ -643,7 +718,8 @@ jobs:
             tests/test_rust_parity_mallet.py \
             tests/test_rust_parity_strings.py \
             tests/test_rust_parity_tension.py \
-            tests/test_rust_parity_bow.py
+            tests/test_rust_parity_bow.py \
+            tests/test_rust_parity_beam.py
 
   # Lint, plus the OUTER half of the shard guard.
   #

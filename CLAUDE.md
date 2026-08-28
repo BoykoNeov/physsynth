@@ -21,19 +21,21 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    analysis, viewer backend *and* the test suite — in favour of **Rust**, gradually and model by
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
-   **PHASES 2 AND 3 ARE BOTH COMPLETE**; phases 0, 1, all five batches of 2 and all six of 3 are
-   built (plan §9-§23): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
+   **PHASES 2, 3 AND 4 ARE ALL COMPLETE**; phases 0, 1, all five batches of 2, all six of 3 and
+   phase 4 are
+   built (plan §9-§24): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
    of `operators`, `membrane`, `exciter`, `body`, `bore`, `reed`, **`mallet`**, **`string_stiff`**,
-   **`string_damped`**, **`string_nonlinear`**, **`bow`** and **all of `collision`** — the contact
-   primitives, both contact solves, the project's one **dense LU** and now `BarrierString` itself
-   — plus the *builder half* of `operators2d`, all of `radiation` **except** its one Bessel helper,
-   and the **banded Cholesky** the four theta-scheme strings share — ported. What is left of the
-   core is Group D: `beam` (Phase 4, the SuperLU de-risker), then `operators2d`'s remaining half,
+   **`string_damped`**, **`string_nonlinear`**, **`bow`**, **all of `collision`** — the contact
+   primitives, both contact solves, the project's one **dense LU** and `BarrierString` itself —
+   and now **`beam`**, plus the *builder half* of `operators2d`, all of `radiation` **except** its
+   one Bessel helper, the **banded Cholesky** the four theta-scheme strings share and the
+   **sparse LU** the whole of Group D will share — ported. What is left of the
+   core is the rest of Group D: `operators2d`'s remaining half,
    `plate`, `connection` and `string_geometric` (Phase 5), then `airbox` and `analysis/`.
    `cargo test --workspace` runs the native bars and the Cargo dependency allowlist;
    `pip install ./crates/physsynth-py` then
    `PHYSSYNTH_RS=1 pytest` runs the **existing, unmodified** Python tests against the Rust code. The
-   flag is one switch for the whole tree: with it set, five still-Python string/beam models run on
+   flag is one switch for the whole tree: with it set, the one still-Python string model runs on
    Rust-built operators; every plate — supported, free, orthotropic, guitar-shaped — plus the von
    Karman bracket runs on Rust-built geometry; and the whole body/radiation leg (bridges,
    sympathetic strings, all three radiation tiers) runs on a Rust modal body; and the whole wind leg
@@ -49,7 +51,8 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    the **bow is Rust too** — the project's first continuous nonlinear exciter, friction curve,
    scalar root-find, bracketed fallback and all; and so is the **barrier string**, so the fret, the
    sitar jawari and the tanpura thread are Rust end to end and the viewer draws three of its models
-   from a Rust one. Both
+   from a Rust one; and the **free-free beam is Rust**, carrying with it the **sparse LU** the rest
+   of Group D will use. Both
    implementations stay alive for now — deleting a Python model waits on its clients, not on its own
    phase (§1.2). Facts worth knowing before planning work: a file's risk group is the group of
    its hardest function, so a module can port in halves (§11.2.1); `mallet` needed `collision`, so
@@ -264,6 +267,41 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    answer: **a linear model does not amplify a difference at all**, so the introduced solver gap
    grows like a random walk (1.7e-14 at 100 steps, 1.6e-13 at 20,000) rather than exponentially,
    and what sets the window is amplification, not perturbation size (§18.6).
+
+   A **seventeenth**, from `beam` — Phase 4, which was sent to answer a question rather than to add
+   a model, and which **answers it in the negative**: §4.1's plan to link SuperLU and hold the whole
+   sparse-LU group to the bit-identity everything else gets **does not work**, and the reason is not
+   on §4.1's own list of three. Two of that list are non-issues — the fill-reducing column order is
+   a *closed form in n* for this family (verified at seventeen grid sizes), and equilibration never
+   runs at all because SciPy calls the factorization routine and not the driver that would scale the
+   matrix. The third, the pivot threshold, is **real but only above a grid size the batch's first
+   two fixtures did not reach**: the reference takes the diagonal up to N = 48 and starts swapping
+   rows at N = 64, which is §16.4's blind fixture arriving in the *measurement* rather than in the
+   model, and the general form is **parametrise over the grid before concluding anything about a
+   solver**. What actually decides it is a fourth thing invisible in SciPy's Python: SuperLU is
+   **supernodal**, and handed its *own* factors a longhand triangular solve still disagrees with
+   `lu.solve` in ~20% of entries at ~4e-16 — so matching it is a claim about how SciPy was *built*,
+   which is §22.1 one layer down. The human's call (2026-08-28) is **tolerance-level agreement,
+   quantified**, and the dependency list stays empty (§24.2). Five corollaries. **The port itself is
+   exact and the tooling to prove it is a two-line patch**: driving the Python beam through the Rust
+   factorization makes the two models bit-identical over 2,000 steps at four fixtures, which is the
+   strings' `shared_solver()` manoeuvre a second time and is the only thing that would catch a
+   reassociation, because the solver gap is two orders larger (§24.4). **A sixth agreement regime,
+   and the first set by a boundary condition**: a free-free beam's stiffness has the rigid-body
+   nullspace `{1, x}`, so along it the beam is a *free particle* and a per-step solver difference is
+   integrated twice — the rigid part grows like t² (3.7e-17 at one step, 3.3e-9 at 20,000) while the
+   elastic part random-walks to 1.4e-12 and the energy stays inside 7.2e-12, so a parity bar on any
+   free-edge model reads the **rigid/elastic split or the energy**, never `max|du|/amp` (§24.5).
+   **`portable.py` was declined a second time and on the opposite grounds** — §23.3's was "exactness
+   is already structural", this one is "exactness is not *available* downstream of a coarser
+   divergence" (§24.6). **An omitted keyword and an explicit `None` were the same argument in every
+   binding** — PyO3 collapses them, so `boundary=None` silently built the default where Python
+   raises; no parity file had ever passed `None` to a constructor because nobody thinks to try it,
+   and the fix's arm order is inverted from the obvious guess (§24.7). And **§7's "four
+   non-reproducible oracles" were twenty**, of which the ones that mattered return *eigenvectors*
+   fed to `set_state`: an unpinned ARPACK start vector made the two exactly-degenerate rigid modes
+   come back **1e-1 apart** run to run, which is an initial condition, not a last digit (§24.9).
+
 4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
    never the reverse. Keeps the physics portable to C++/Rust later.
 5. **Unifying abstraction:** `exciter -> resonator (+- nonlinear coupling) -> body/radiation`.

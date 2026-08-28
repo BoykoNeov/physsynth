@@ -59,6 +59,7 @@ Headless: NumPy + SciPy (sparse LU). No I/O, no plotting.
 
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 import numpy as np
@@ -252,3 +253,36 @@ class FreeBeam:
         positive-semidefinite (nullspace ``{1, x}``), hence ``P(f,f) >= 0``.
         """
         return self.kappa * self.kappa * float((self.K @ f) @ g)
+
+
+# -- the Rust swap (plan Phase 4) ---------------------------------------------------------------
+#
+# WHAT THIS BATCH WAS SENT TO FIND OUT, AND WHAT IT FOUND. `beam` is the smallest member of the
+# sparse-LU group -- 254 lines, one `splu` -- and plan section 4.1 chose it as the place to test
+# whether the Rust side could link SuperLU itself and hold this whole group to the bit-identity
+# Groups A-C get. It cannot. Section 4.1 named three obstacles; two are non-issues (COLAMD's order
+# is a closed form in `n` here, and SciPy calls `gstrf` rather than the driver, so there is NO
+# equilibration) and the third is real but only above N = 48, where the matrix stops being
+# diagonally largest and SuperLU starts swapping rows. The one that DECIDES it is a fourth nobody
+# listed: SuperLU is SUPERNODAL, and handed its own factors a longhand triangular solve still
+# disagrees with `lu.solve` in ~20% of entries at ~4e-16. That blocking is a property of how SciPy
+# BUILT its copy, so linking would buy a claim about a build rather than about a library. The
+# human's call (2026-08-28) is the fallback section 4.1 had already named: tolerance-level
+# agreement, measured.
+#
+# WHAT THE TOLERANCE IS, AND WHY IT IS BIGGER THAN ANYTHING BEFORE IT. `K`'s nullspace is exactly
+# the rigid-body space `{1, x}` -- that is what free-free means -- and along it the beam is a FREE
+# PARTICLE, so a per-step solver difference is integrated twice. Measured at N = 32 over 20,000
+# steps: the rigid part grows like t^2 (3.9e-18 -> 1.7e-9 of amplitude) and the elastic part
+# saturates (5.1e-14 at 100 steps, 5.0e-11 at 20,000, and LOWER at 20,000 than at 5,000). Energy
+# agrees to 6.0e-12 relative throughout. So a parity bar here reads the rigid/elastic split or the
+# energy, never `max|du|/amp` -- see `tests/test_rust_parity_beam.py`.
+#
+# Off by default. The Python model is still the reference oracle for every model not yet ported.
+FreeBeamPy = FreeBeam
+"""The pure-Python reference implementation, under a name the swap below never rebinds."""
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    from physsynth_rs import FreeBeam  # type: ignore[assignment]  # noqa: F811

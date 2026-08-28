@@ -14,6 +14,7 @@ the ``nonlinear=False → model #5b`` regression and the ``w → 0 → model #5b
 
 import numpy as np
 import pytest
+from helpers import arpack_v0
 from scipy.sparse.linalg import eigsh
 
 from physsynth.core.plate import Plate, VKPlate
@@ -182,7 +183,9 @@ def test_pitch_glide_hardening_free():
     Lxs = Lys = 0.15  # small plate → high fundamental → many periods per run
     fs = 96000.0
     base = VKPlate(Lx=Lxs, Ly=Lys, fs=fs, N=18, boundary="free", **MAT)
-    vals, vecs = eigsh(base.K.tocsc(), k=6, M=base.W.tocsc(), sigma=-1e-3, which="LM")
+    vals, vecs = eigsh(
+        base.K.tocsc(), k=6, M=base.W.tocsc(), sigma=-1e-3, which="LM", v0=arpack_v0(base.K)
+    )
     mode = vecs[:, np.argsort(vals)[3]]  # first elastic mode (skip the 3 rigid-body zeros)
     mode = mode / np.max(np.abs(mode))
     freqs = []

@@ -9,7 +9,7 @@ under-damp) carries over from the beam/SS plate and is itself pinned as a test.
 
 import numpy as np
 import pytest
-from helpers import make_free_plate
+from helpers import arpack_v0, make_free_plate
 from scipy.sparse.linalg import eigsh
 
 from physsynth.core.engine import simulate
@@ -28,7 +28,9 @@ def _elastic_mode(p, which):
     """The ``which``-th elastic eigenvector (0 = saddle fundamental), as a full live-node vector."""
     a = p.Lx
     mu1 = (13.0 / (a * a)) ** 2
-    vals, vecs = eigsh(p.K, k=which + 4, M=p.W, sigma=-1e-3 * mu1, which="LM")
+    vals, vecs = eigsh(
+        p.K, k=which + 4, M=p.W, sigma=-1e-3 * mu1, which="LM", v0=arpack_v0(p.K)
+    )
     order = np.argsort(vals)
     return vecs[:, order[3 + which]]
 

@@ -15,6 +15,7 @@ anchors of increasing externality:
 import numpy as np
 from helpers import (
     KAPPA_PLATE_DEFAULT,
+    arpack_v0,
     free_plate_low_eigenfrequencies,
     make_free_plate,
 )
@@ -147,7 +148,10 @@ def test_exactly_three_zero_modes():
     p = make_free_plate(N=20)
     a = p.Lx
     mu1 = (13.0 / (a * a)) ** 2
-    vals = np.sort(eigsh(p.K, k=8, M=p.W, sigma=-1e-3 * mu1, which="LM", return_eigenvectors=False))
+    vals = np.sort(
+        eigsh(p.K, k=8, M=p.W, sigma=-1e-3 * mu1, which="LM", return_eigenvectors=False,
+              v0=arpack_v0(p.K))
+    )
     n_zero = int(np.sum(np.abs(vals) < 1e-3 * abs(vals[3])))
     assert n_zero == 3, f"expected exactly 3 near-zero modes, got {n_zero}: {vals}"
 
@@ -218,7 +222,7 @@ def test_fundamental_is_saddle():
     p = make_free_plate(N=40)
     a = p.Lx
     mu1 = (13.0 / (a * a)) ** 2
-    vals, vecs = eigsh(p.K, k=6, M=p.W, sigma=-1e-3 * mu1, which="LM")
+    vals, vecs = eigsh(p.K, k=6, M=p.W, sigma=-1e-3 * mu1, which="LM", v0=arpack_v0(p.K))
     order = np.argsort(vals)
     phi = vecs[:, order[3]]  # first elastic mode (after the 3 rigid)
     field = phi.reshape(p.N + 1, p.N + 1)
@@ -270,7 +274,10 @@ def test_ss_operators_through_generalized_map_match_model5():
     K_ss = (h * h) * B  # the unified scheme's SS special case: K = h²B, W = h²I
     W_ss = sparse.identity(n, format="csr") * (h * h)
     # Generalized K φ = μ W φ -> μ = Λ² (the biharmonic eigenvalue); f = κ√μ/2π = κΛ/2π.
-    mu = np.sort(eigsh(K_ss, k=6, M=W_ss, sigma=0.0, which="LM", return_eigenvectors=False))
+    mu = np.sort(
+        eigsh(K_ss, k=6, M=W_ss, sigma=0.0, which="LM", return_eigenvectors=False,
+              v0=arpack_v0(K_ss))
+    )
     kappa = KAPPA
     f_gen = kappa * np.sqrt(mu) / (2.0 * np.pi)
     # Model #5's own oracle (squared-Laplacian eigenvalues mapped to continuum plate frequencies).

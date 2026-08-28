@@ -3986,3 +3986,317 @@ contacts — 1 to ~15 nodes — so they sit at the top of that table, not the bo
   false for three batches; §23 and the CI comment corrected two more written by earlier batches.
   The general form (§18.3) is that a statement justified by a dependency expires when the
   dependency lands, and nobody is notified.
+
+---
+
+## 24. Phase 4, as built (2026-08-28) — **`beam`, and §4.1's hypothesis answered**
+
+`physsynth/core/beam.FreeBeam` — the free-free Euler–Bernoulli beam, model #5b-pre, and the
+smallest member of Group D at 254 lines with one `splu`.
+
+This batch was sent to answer a question rather than to add a model. §4.1 proposed that Group D's
+risk could be collapsed by **linking SuperLU itself**, so that the six sparse-LU models could be
+held to the same bit-identity as Groups A–C, and it named `beam` as the smallest surface on which
+to find out. Six batches carried the hypothesis forward untested. It is now tested, and it fails —
+for a reason that is not on §4.1's list, and after one of that list's three items turned out to be
+real in a way the batch's own first two fixtures could not see.
+
+The human's call (2026-08-28), with the measurements below in front of them: **Group D runs on
+tolerance-level agreement, quantified**, which is the fallback §4.1 had already named as
+survivable. No C dependency is added, and `physsynth-core`'s `[dependencies]` list stays empty for
+the fifth phase running.
+
+### 24.1 The shape on disk
+
+```
+crates/physsynth-core/src/sparse_lu.rs      NEW — Gilbert–Peierls left-looking sparse LU, natural
+                                            order, diagonal-preferring pivot; the Group D solver
+crates/physsynth-core/src/beam.rs           NEW — Params/initial_previous/step_rhs/step_into/
+                                            energy/FreeBeam
+crates/physsynth-core/tests/sparse_lu.rs    NEW — native solver bars (11 tests)
+crates/physsynth-core/src/lib.rs            two registrations
+crates/physsynth-py/src/beam.rs             NEW — PyFreeBeam; `K` and `W` as built-once csr_matrix
+crates/physsynth-py/src/sparse_lu.rs        NEW — PySparseLu, so the PYTHON beam can be driven
+                                            through the Rust factorization
+crates/physsynth-py/src/{lib,string_stiff,string_damped,string_nonlinear,bore}.rs
+                                            the `Option<Option<_>>` boundary fix (§24.7)
+physsynth/core/beam.py                      module note; the FreeBeamPy alias; swap block
+tests/helpers.py                            `arpack_v0`, and the five oracle eigsh sites pinned
+tests/test_*.py (9 files)                   the other fifteen eigsh sites pinned
+tests/test_stability.py                     the two ARPACK guards; `beam` added to BOTH swap-guard
+                                            tuples and `FreeBeam` to the class expectation
+tests/test_rust_parity_beam.py              NEW — the batch's comparison (53 tests)
+tests/test_rust_parity.py                   the boundary=None guard, over all six classes
+tests/test_ci_workflow.py                   the swallowed-continuation guard (§24.8)
+.github/workflows/ci.yml                    the batch's flagged step; three pre-existing joined
+                                            `run:` lines repaired
+```
+
+### 24.2 The finding: §4.1 named three obstacles, two are non-issues, one is real, and a fourth decides it
+
+§4.1 said matching SciPy means matching "its column-ordering choice (`permc_spec`), its
+`diag_pivot_thresh`, and its equilibration defaults — none of which have been checked yet."
+Measured on the beam's own `A = (1 + σk)W + θk²κ²K`:
+
+**The column ordering is a closed form in `n`.** COLAMD on this pentadiagonal family returns the
+identity except that the two pairs at `n-5, n-4` and `n-3, n-2` are exchanged — verified over
+seventeen grid sizes from `N = 4` to `N = 200`, without exception. It could have been hardcoded and
+asserted. It was not reproduced, because once the hypothesis fails there is nothing left for it to
+buy: COLAMD exists to reduce fill, and in the natural order this matrix has none.
+
+**Equilibration never runs.** `Equil=True` and `Equil=False` produce bit-identical factors, in both
+directions. The reason is structural rather than a coincidence of defaults: SciPy's `splu` calls
+`_superlu.gstrf`, the *factorization*, and equilibration lives in the `gssvx` **driver**, which
+SciPy does not call. So there is no hidden row/column scaling to reproduce, for `beam` or for any
+other Group D model.
+
+**The pivot threshold is real, and it is real only above a grid size the first two fixtures did not
+reach.** At `N = 8` and `N = 32` — the two sizes the first probe used — `perm_r == perm_c` and
+`diag_pivot_thresh=0.0` reproduces the default exactly, which reads as "pivoting is moot here".
+It is not. The stiffness term grows like `h⁻³` against the mass's `h`, so the matrix stops being
+diagonally largest as the grid refines: SuperLU takes the diagonal up to `N = 48` and starts
+swapping rows at `N = 64`, and the fill follows — `U` holds 773 entries at `N = 200` where the band
+is 600. **This is §16.4's blind fixture, arriving in the measurement rather than in the model**, and
+it was caught only because the parity test parametrised over `N` and the second fixture went past
+the transition.
+
+**What actually decides it is a fourth thing, and it is invisible in SciPy's Python.** SuperLU is
+**supernodal**. `relax` and `panel_size` visibly change the factors; and — the measurement that
+settles the question — handed SuperLU's *own* `L` and `U`, a longhand column-oriented triangular
+solve still disagrees with `lu.solve` in **about 20 % of entries at ~4e-16**, at every size tried.
+Reproducing that means reproducing supernode and panel blocking, which depends on how SciPy
+**built** its copy: the `relax`/`panel_size` defaults compiled in, whether an external BLAS was
+linked, the vendored patch level. That is **§22.1's shape one layer down** — a claim about a build
+rather than about a library — and it is why linking was declined rather than attempted.
+
+Four spelling variants were tried against SuperLU's factors before the supernodal cause was
+identified (right-looking vs left-looking; divide vs multiply-by-reciprocal). The reciprocal
+spelling is clearly closer, as §15.3 found for the banded factor, and none of the four is exact:
+the residual disagreement moves between 0 and 6 entries as `N` and `relax` change, without
+converging. **A recipe that is exact at two sizes out of four is not a recipe**; §15.3's "no scalar
+recipe" for `DTBSV`, one solver class down.
+
+### 24.3 The solver, and the one place it parts company with the reference on purpose
+
+`crates/physsynth-core/src/sparse_lu.rs` is a left-looking Gilbert–Peierls sparse LU: each column's
+nonzero pattern is the set of nodes reachable from `A(:,k)` in the graph of `L`, found by an
+iterative depth-first search, and the factorization costs the nonzeros of the factors rather than
+`n²`. The DFS is iterative rather than recursive so that Phase 6's room cannot overflow the stack.
+Natural column order; no fill-reducing ordering in front of it, for the reason above.
+
+The pivot rule is where it deliberately differs. SciPy's default `diag_pivot_thresh` is `1.0`
+(strict partial pivoting); this module's `DIAG_PIVOT_THRESH` is `0.1`, i.e. take the diagonal
+whenever it is at least a tenth of the largest candidate. That is legal here for a reason SuperLU
+has no way to know: **every Group D matrix in this project is symmetric positive definite** — all
+of them are `(mass) + (positive coefficient)·(PSD stiffness)` — and on an SPD matrix elimination
+with no pivoting at all is unconditionally stable, which is exactly what makes Cholesky a valid
+algorithm. The margin was measured rather than assumed: the beam's diagonal stays the chosen pivot
+for any threshold below **~0.50** at every size from `N = 8` to `N = 200`, so `0.1` has a factor of
+five and the margin stops shrinking.
+
+`dense.rs` warns that a pivot choice is a different *elimination* rather than a different last bit,
+and that warning is honoured here by making the divergence a stated and priced decision rather than
+an accident — see §24.5. The payoff is that the Rust factorization has **zero fill at every size**
+against the reference's growing `U`, and that a coarse-grid and a fine-grid beam are the same
+computation on this side.
+
+### 24.4 The manoeuvre that separates the port from the solver, and what it found
+
+The whole comparison would otherwise be confounded: any transcription error would be buried under a
+solver gap two orders of magnitude larger, which is §19.4's finding — a real bug that left the
+trajectory bit-identical for 2,000 steps — waiting to happen. So `physsynth-py` exposes the Rust
+factorization as a `SparseLu` class wearing `splu`'s interface, and `tests/test_rust_parity_beam.py`
+patches `beam.splu` for the length of a block. That is `test_rust_parity_strings.py`'s
+`shared_solver()` a second time; unlike there, it is **never a no-op**, because the Rust beam
+factors internally under the flag as much as without it.
+
+With the solver held constant the two beams are **bit-identical** — `u`, `u_prev` and the whole
+history — over 2,000 steps at four fixtures spanning `θ ∈ {0.25, 0.28, 0.5, 1.0}`, `σ ∈ {0, 4}` and
+`N ∈ {8, 32, 48}`. `energy()` is the single exception at ~3e-16 relative, which is the `np.dot`
+reduction and nothing else. So the port is exact and **the entire divergence below is the solver**.
+
+### 24.5 A sixth agreement regime, and the first one set by a boundary condition
+
+`K`'s nullspace is exactly the rigid-body space `{1, x}` — that is what free-free *means*, and #5b
+was built to have it. A per-step solver difference therefore has a component the scheme never
+restores: along `{1, x}` the beam is a **free particle**, so a velocity error integrates once into a
+displacement error and then again every step after. Splitting the difference in the `W` inner
+product, at `N = 32`, `σ = 0`, normalised by the running peak (§20.6):
+
+| steps | total | rigid | elastic | ΔE/E |
+| --- | --- | --- | --- | --- |
+| 1 | 2.2e-16 | 3.7e-17 | 1.9e-16 | 4.8e-15 |
+| 100 | 8.2e-14 | 8.8e-14 | 3.4e-14 | 1.7e-13 |
+| 1,000 | 6.8e-12 | 6.9e-12 | 6.0e-14 | 3.0e-13 |
+| 5,000 | 2.0e-10 | 2.0e-10 | 7.9e-13 | 8.4e-14 |
+| 20,000 | 3.3e-09 | 3.3e-09 | 1.4e-12 | 5.7e-13 |
+
+The rigid part is `t²` and swamps everything past about a hundred steps. The elastic part is not:
+it grows by 40 while the step count grows by 200, which is §18.6's random walk — what a *linear*
+scheme does with a perturbation it can restore. **Damping attenuates the growth without removing
+it**: 3.3e-9 at `σ = 0` against 2.1e-10 at `σ = 100`, because a damped free particle's velocity
+error decays but its accumulated displacement does not come back.
+
+The five earlier regimes were set by nonlinearity (§16.5), by whether it recurs (§17.5), by
+linearity (§18.6), by amplitude (§19.5) and by an attractor (§20.5). This one is set by a **boundary
+condition**, and the rule it generates is inherited by every free-edge model in Phases 5 and 6:
+**a parity bar on a model with a rigid-body nullspace reads the rigid/elastic split or the energy,
+never `max|du|/amp`** — which will read as a failure that is not one.
+
+Two things bound the damage. The energy — which is what the acceptance contract is written on —
+stays inside **7.2e-12 relative** across every fixture measured, four orders inside CLAUDE.md's
+1e-10 bar, and does not inherit the `t²`. And the price of §24.3's deliberate pivot disagreement is
+visible but small: the rigid divergence at 5,000 steps grows about 20× between `N = 48` (below the
+reference's pivot transition) and `N = 96` (above it), from 2.4e-10 to 9.3e-9, while the energies
+agree to ~1e-12 at both. `test_the_divergence_grows_where_the_reference_starts_pivoting` asserts it,
+so the cost cannot quietly stop being paid or quietly grow.
+
+### 24.6 `portable.py` was re-taken for `beam` and declined again, on both counts
+
+`portable.py`'s scope note names `beam` as out of scope "because no anchor binds it to anything",
+and §19.2's rule is that such a decision expires the moment the model ports. Re-taken:
+
+* **The matvec order** (§18.2's hazard — `K @ u` runs twice per step and SciPy's sparse product can
+  leave descending column indices) buys nothing, because under the flag the Python beam gets its
+  `K` from the *same* Rust `free_beam_stiffness` this module builds. Asserted rather than assumed:
+  the parity file compares `K.indices` and `W.indices`, not only the data.
+* **The energy reduction** buys nothing for §23.3's reason exactly — nothing exact is *available*
+  downstream of a coarser divergence, and the trajectories differ at 1e-9 from the solver.
+
+So this is the second time `portable.py` has been declined on evidence, and the two refusals have
+different grounds: §23.3's was "exactness is already structural", this one is "exactness is not
+available". Both are worth keeping, because they are the two halves of the question.
+
+### 24.7 An omitted keyword and an explicit `None` were the same argument, in every binding
+
+Found while writing the beam's boundary rejection test, and it was true of **all six** classes that
+take a boundary: PyO3 maps a Python `None` and a *missing* argument onto the same Rust
+`Option::None`, so a binding written the obvious way treats `boundary=None` as "not supplied" and
+silently builds the default, where the Python original raises. No parity file had ever passed
+`None` to a constructor, because `None` is not a plausible boundary and nobody thinks to try it —
+§23.6's shape through a fourth door: a comparison that was never made rather than one that stopped
+being made.
+
+The fix is `Option<Option<_>>`, and **the arm order is the surprising half**: PyO3 wraps the
+*default expression*, so `Some(None)` means "argument omitted" and a bare `None` is the caller's
+literal. The first attempt had them the other way round and inverted the behaviour rather than
+fixing it — it passed the beam's own test while breaking the default path — so both halves are now
+pinned by `tests/test_rust_parity.py`. Four of the six now match Python exactly; `IdealString` and
+`Bore` unpack their boundary (`left, right = boundary`), so Python's refusal is an incidental
+`TypeError` from the unpacking rather than a designed message, and the Rust side raises its own
+`ValueError` naming what it wanted. Both **refuse**, which is the property that mattered;
+reproducing an accident was judged not worth a special case, and is recorded here rather than
+silently left.
+
+### 24.8 §19.7's escaping bug with the opposite sign, pre-existing on three steps
+
+§19.7 found a `run:` continuation written as the two characters backslash-`n`; §20.7 saw it
+reintroduced by the batch citing it and turned it into an assertion. The beam's step produced the
+**other** variant: the same tooling round-trip that can leave a visible backslash-`n` can instead
+consume *both* the backslash and the newline, leaving two shell lines **joined into one**. Three
+earlier steps in `ci.yml` already had it — at 308, 550 and 852 characters — and none of them ever
+failed, because `pytest a.py b.py` runs the same whether the names were on one line or four.
+
+It is harmless only while what follows a continuation is another *argument*. A swallowed
+continuation between two **commands** makes the second an argument of the first, and the step
+silently stops doing half its job — invisible to the backslash-`n` test (there is no backslash left
+to find), to a YAML parser (the block scalar is valid) and to the eye (the line runs off the
+screen). `tests/test_ci_workflow.py` now caps a `run:` line at 120 characters, which separates the
+two shapes without asserting anything about content, and the three joined lines are repaired.
+
+### 24.9 The ARPACK chore §7 asked for, and it was wider and sharper than §7 said
+
+§7 recorded that `beam_low_eigenfrequencies` "and its siblings" call `eigsh` with no fixed start
+vector, called it four oracles, judged it harmless against a 5-cent bar, and said to fix it
+**before** Phase 4. Both halves of that sentence needed correcting.
+
+**It is twenty sites, not four** — five in `tests/helpers.py` and fifteen in nine test files. The
+count was written early and nobody revisited it, which is §18.3's inherited-sentence failure again.
+
+**The frequencies were the harmless half.** Measured on the beam at `N = 48`, four runs in one
+process: the elastic eigenvalues wobble by ~1e-12 relative and their eigenvectors by ~5e-11, which
+is indeed nothing against a 5-cent bar. But three sites return **eigenvectors** and feed them to
+`set_state` — and an eigenvector is an *initial condition*, so an unpinned one is a different
+trajectory, not a last digit. Worse, the two rigid-body modes are exactly degenerate at `μ ≈ 0`, so
+ARPACK returns an arbitrary basis of the `{1, x}` nullspace and they came back **~1e-1 apart** run
+to run. Against a beam whose two implementations differ at 1e-9, an oracle that moves by 1e-1 would
+have made the parity numbers unreadable.
+
+`helpers.arpack_v0` supplies a fixed start vector — uniform doubles from a seeded PCG64 stream,
+which is deterministic across platforms and NumPy versions, generic (so it is orthogonal to no
+eigenvector, unlike the obvious `arange`, which is antisymmetric about the centre of a symmetric
+operator and would starve every symmetric mode), and free of any transcendental, whose
+CPU-dispatched NumPy loop would put the *start vector* back in §22.1's class.
+`tests/test_stability.py` asserts both that two oracle calls now agree to the bit and that no
+`eigsh` in `tests/` lacks a `v0` — the second by walking the AST, because a guard that lists its
+call sites is one paste away from covering nothing (§17.6, §23.7).
+
+Deliberately not done: the six `eigsh` calls in `web/serialize.py`. They render pictures rather than
+feed a comparison, and the viewer is Phase 8. The nondeterminism is real there — a free plate's
+Chladni figure can pick a different basis of its nullspace between runs — and it is recorded here so
+that Phase 8 does not have to rediscover it.
+
+### 24.10 What is bit-identical
+
+* **Structure, always:** every scalar parameter, `x`, `w`, and both `K` and `W` down to `indices`,
+  `indptr`, `data` and `nnz`, at `N ∈ {4, 8, 32, 64}`. So is `u^{-1}` out of `set_state`, which
+  involves no solve.
+* **The trajectory, under a shared solver:** `u` and `u_prev` over 2,000 steps at four fixtures.
+  This is the porting claim and it is the only exact claim about the *model* available.
+* **`energy()`, never:** ~3e-16 relative under a shared solver (the `np.dot` reduction, §14.2), and
+  up to 7.2e-12 with each side on its own factorization.
+* **The trajectory, each side on its own solver:** not at any run length. See §24.5 for what
+  replaces it.
+
+### 24.11 The success condition
+
+* `cargo test --workspace` green, debug **and** release — 11 new native solver bars, and the
+  `sparse_lu` file asserts the no-fill property of the *shipped* beam operator rather than of a
+  lookalike, because that property is what the natural-order decision rests on.
+* `PHYSSYNTH_RS=1 pytest tests/test_beam_energy.py tests/test_beam_modal.py
+  tests/test_beam_stability.py tests/test_stability.py` green — the **existing, unmodified** Python
+  beam tests against the Rust model, including the closed-form `cos(βL)·cosh(βL) = 1` oracle run
+  through a generalized `eigsh` on the Rust-built `K` and `W`.
+* `pytest tests/test_rust_parity_beam.py` green with the flag and without it — 53 tests.
+* The whole Python suite green on the default path, unchanged by the ARPACK pin.
+
+### 24.12 What was measured
+
+| quantity | value |
+| --- | --- |
+| COLAMD order vs the closed form | identical at 17 sizes, `N = 4 … 200` |
+| `Equil=True` vs `Equil=False` factors | bit-identical, both directions |
+| SuperLU pivots (`perm_r ≠ perm_c`) | never at `N ≤ 48`; always at `N ≥ 64` |
+| reference `nnz(U)` at `N = 200` | 773, against a band of 600 |
+| Rust `nnz(U)` at `N = 200` | 600 — no fill at any size |
+| longhand solve vs `lu.solve`, SuperLU's own factors | ~20 % of entries differ, worst ~4.3e-16 |
+| diagonal-pivot margin on the beam | threshold `0.50` at `N = 200`, vs the `0.1` used |
+| Rust vs Python beam, shared solver | `array_equal` at 2,000 steps, 4 fixtures |
+| … its `energy()` | ≤ 1e-14 relative |
+| Rust vs Python beam, own solvers, `N = 32` | rigid 3.3e-9, elastic 1.4e-12 at 20,000 steps |
+| … at `σ = 100` | rigid 2.1e-10 at 20,000 steps |
+| … energy, worst over four fixtures | 7.2e-12 relative |
+| rigid divergence at 5,000 steps, `N = 48` → `N = 96` | 2.4e-10 → 9.3e-9 |
+| ARPACK eigenvector reproducibility, unpinned | elastic ~5e-11; rigid pair ~1e-1 |
+| … pinned | `array_equal`, values and vectors |
+
+### 24.13 What Phase 5 inherits
+
+* **Group D's bar is tolerance-level and the shape of the tolerance is known.** Do not write an
+  exact assertion across a `splu`; do write one with the solver held constant, which is now a
+  two-line patch (`SparseLu` wears `splu`'s interface).
+* **`sparse_lu.rs` is built and is the phase's solver.** `operators2d`, `plate`, `connection` and
+  `string_geometric` need no new solver work. What they *will* need is `portable.canonical`, which
+  §18.4 wrote down in advance — `plate.py` multiplies by a `biharmonic_matrix`-derived operator
+  every step, and that decision was deferred to this phase with the measurement already in hand.
+* **Ask whether the model has a rigid-body nullspace before choosing a parity bar.** §24.5. The free
+  plate and the free beam have one; the supported plate does not; the room does not. It is the
+  difference between a `t²` divergence and a random walk.
+* **Ask how many terms a reduction has before asserting bit-identity across it.** §23.2, unchanged
+  and still the sharpest advance tool the migration has.
+* **A fixture that is coarse is a fixture that may be blind.** §24.2's pivot transition sits between
+  `N = 48` and `N = 64`, and the two sizes first probed were both below it. Parametrise over the
+  grid before concluding anything about a solver, and put one fixture past every threshold the
+  model has.
+* **Check inherited sentences.** §24.9's "four oracles" was twenty, and §24.2's third obstacle had
+  been called moot on two fixtures. Both were written by earlier batches in good faith.
