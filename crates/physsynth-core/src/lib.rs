@@ -67,6 +67,7 @@ pub mod mallet;
 pub mod membrane;
 pub mod ops;
 pub mod ops2d;
+pub mod plate;
 pub mod pyfloat;
 pub mod radiation;
 pub mod reed;

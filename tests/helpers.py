@@ -256,9 +256,30 @@ def make_plate(
     feature -- a coarse-grid / large-timestep regime the explicit plate could not run. Smaller
     ``mu`` means a finer timestep (less numerical dispersion), used for the tight modal tests.
     """
+    return Plate(**plate_kwargs(N=N, mu=mu, kappa=kappa, sigma=sigma, theta=theta,
+                                Lx=Lx, Ly=Ly, rho=rho))
+
+
+def plate_kwargs(
+    *,
+    N: int,
+    mu: float = MU_PLATE_DEFAULT,
+    kappa: float = KAPPA_PLATE_DEFAULT,
+    sigma: float = 0.0,
+    theta: float = THETA_DEFAULT,
+    Lx: float = 1.0,
+    Ly: float = 1.0,
+    rho: float = RHO_AREAL_DEFAULT,
+) -> dict:
+    """:func:`make_plate`'s arguments, without the construction.
+
+    Exists for the one test whose subject is a stored column order and which therefore has to name
+    the *Python* class explicitly (``test_plate_modal.py``): it needs the same plate this helper
+    builds, from a constructor the module-level swap does not rebind.
+    """
     h = Lx / N
     fs = kappa / (mu * h * h)
-    return Plate(Lx=Lx, Ly=Ly, kappa=kappa, rho=rho, fs=fs, N=N, sigma=sigma, theta=theta)
+    return dict(Lx=Lx, Ly=Ly, kappa=kappa, rho=rho, fs=fs, N=N, sigma=sigma, theta=theta)
 
 
 # Sitka-spruce-ish soundboard, the orthotropic batch's reference material. Along-grain Young's

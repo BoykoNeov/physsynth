@@ -58,13 +58,18 @@ from helpers import (
     surface_scene_energy,
 )
 from scipy import sparse
-from scipy.sparse.linalg import splu
 
+# `splu` comes from `airbox` rather than from SciPy on purpose: these tests re-derive the
+# loaded matrix and factor it themselves to claim a **bit-identical** reduction to the bare
+# model, and that claim is only about the right-hand side if both sides use the same
+# factorizer. `airbox.splu` is the name the Rust swap rebinds (plan section 28), so importing
+# it here keeps the reduction exact under the flag instead of measuring two solvers.
 from physsynth.core.airbox import (
     PLANES,
     InteriorSurfacePort,
     RoomSuspendedPlate,
     impedance_from_zeta,
+    splu,
 )
 from physsynth.core.connection import StringPlateBridge
 from physsynth.core.plate import Plate

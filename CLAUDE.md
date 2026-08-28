@@ -22,8 +22,8 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
    **PHASES 2, 3 AND 4 ARE ALL COMPLETE** and **PHASE 5 IS UNDER WAY**; phases 0, 1, all five
-   batches of 2, all six of 3, phase 4 and the first three batches of 5 are
-   built (plan §9-§27): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
+   batches of 2, all six of 3, phase 4 and the first four batches of 5 are
+   built (plan §9-§28): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
    of `operators`, `membrane`, `exciter`, `body`, `bore`, `reed`, **`mallet`**, **`string_stiff`**,
    **`string_damped`**, **`string_nonlinear`**, **`bow`**, **all of `collision`** — the contact
    primitives, both contact solves, the project's one **dense LU** and `BarrierString` itself —
@@ -33,8 +33,10 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    the five private 1-D differences, the **von Kármán bracket** and the **clamped Airy solve** —
    plus all of `radiation` **except** its
    one Bessel helper, the **banded Cholesky** the four theta-scheme strings share and the
-   **sparse LU** the whole of Group D shares — ported. What is left of the
-   core is `plate`, `connection` and `string_geometric` (Phase 5), then `airbox` and `analysis/`.
+   **sparse LU** the whole of Group D shares — and, as of batch 4, **all of `plate`**: both
+   classes at once, the linear plate on every one of its four branches (supported, free,
+   circle, guitar) with both grains, and the **von Karman plate** with them — ported. What is left
+   of the core is `connection` and `string_geometric` (Phase 5), then `airbox` and `analysis/`.
    `cargo test --workspace` runs the native bars and the Cargo dependency allowlist;
    `pip install ./crates/physsynth-py` then
    `PHYSSYNTH_RS=1 pytest` runs the **existing, unmodified** Python tests against the Rust code. The
@@ -42,7 +44,10 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    Rust-built operators; every plate — supported, free, orthotropic, guitar-shaped — runs on
    Rust-built geometry **and on Rust-built stiffness matrices**, and the **nonlinear** one sources
    its Airy stress function from a Rust factorization and forms its coupling force with a Rust
-   bracket, so `VKPlate` is now a NumPy timestepping loop around three Rust objects; and the
+   bracket; and as of batch 4 **every plate in the tree is a Rust model outright** — the shipped
+   plates, the gong, the cymbal, the guitar soundboard, the bodies the bridges drive and the
+   surfaces the room loads — with `airbox.py`, which is *not* ported, given the one swapped name
+   (`splu`) its own bit-identity claims turn out to need; and the
    whole body/radiation leg (bridges,
    sympathetic strings, all three radiation tiers) runs on a Rust modal body; and the whole wind leg
    — air column, radiating bell and the reed that blows it — is Rust end to end; and the air node
@@ -427,6 +432,49 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    first flip at step 1,553, when the deviation is already 2.1e-3. And **§19.7's YAML line
    continuation happened a third time, from a third tool, and never reached CI**, because §20.7 had
    turned that scar from a paragraph into a test (§27.7).
+
+   And a **twenty-first**, from the plate itself — Phase 5's fourth batch, which finishes the
+   model — which is about **where a batch has to stop** and answers it the opposite way from §25:
+   **a bit-identity anchor does not only bind two models, it can bind a model to a client that is
+   not being ported at all.** `airbox.py` deliberately *reassembles* the plate's system matrix
+   rather than reaching into it, and four of its reduction tests turn that into an exact claim —
+   switch the room's load off and a loaded plate must reproduce a bare one byte for byte, which is
+   what pins `airbox`'s own transcription of the theta-scheme. Move the plate's solver to Rust and
+   that claim breaks for a reason having nothing to do with either side. Twelve of the batch's
+   fourteen red tests were this. The remedy is one name — `airbox` gets the module-level `splu`
+   swap every ported module has — and the general question to ask before scoping a batch is **"does
+   anything outside this module re-derive what it computes, and does a test compare the two
+   exactly?"** Grepping clients for *private names*, which this migration has done five times and
+   which §0 predicted for `connection.py`, does not find it: `airbox` reaches nothing private on the
+   linear plate, it recomputes instead. (`connection.py` itself, §0's named suspect, turned out to
+   touch no plate privates at all.) Six corollaries. **The anchor made the batch, not a judgement
+   call**: `VKPlate(nonlinear=False)` must be `array_equal` to `Plate` over 150 steps, so §15.2 put
+   both classes in one batch — and here the anchor became **structural**, because `VkParams` owns a
+   `Params` and both classes step through one `step_rhs`, where the original keeps two spellings in
+   step by docstring. **A read-out's relative error can be meaningless for a physical reason**: a
+   free plate's stiffness annihilates the constant vector, so an unforced free plate has **no
+   monopole at all** and `pressure()` returns pure cancellation residue (2e-16 to 1e-13 of the sum
+   of its terms, against 0.16-0.57 supported) — the first parity bar failed by 1e-1 and the port was
+   right; drive the plate and the quantity exists again (0.34). Two rules follow: **normalise a sum
+   by the sum of its absolute terms**, which is §20.6's normaliser question answered for a
+   reduction, and **ask whether the compared quantity is identically zero before writing a relative
+   bar**. **§23.6's emptied comparison has a fourth and a fifth door**: a test whose subject is a
+   *stored column order* cannot run against an implementation where `Csr::from_rows` sorts — the
+   difference being measured is inexpressible, so it would pass having compared a plate with itself
+   — and a class that constructs its collaborators by **module-global name** is swapped further than
+   it looks, so the parity file's Python `VKPlate` was holding a *Rust* Airy solver until it was made
+   to build `AiryStressSolverPy` explicitly. **§24.5's free-particle error crosses over inside the
+   run**: on the free plate's three-dimensional nullspace the rigid part grows like t^1.9 and the
+   elastic part like t^0.8, and they **cross at about step 500** — at step 100 the rigid part is the
+   smaller and by 20,000 it is 229x the larger, so the same bar measures two different things
+   depending only on run length. And **§27.5's Picard threshold is reproduced one level up and
+   refined**: the whole model random-walks at 3.1 and 5.0 mean sweeps (3.4e-12 and 8.0e-13 at 2,000
+   steps) and decorrelates at 13.5 (**2.3e-3**), with the energy at **3.1e-15** and the drift at
+   8.6e-13 throughout — so amplitude is still not the discriminator, but it is one of the things
+   that *moves the sweep count*, which is. Read `n_iters`. One measurement worth keeping: the
+   nonlinear step is **2.99x** faster in Rust against 1.17-1.32x for a linear one, because a Picard
+   loop is per-call overhead and nothing else — the largest per-step win the migration has measured
+   for a field model, and the one the real-time port is about.
 
 4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
    never the reverse. Keeps the physics portable to C++/Rust later.

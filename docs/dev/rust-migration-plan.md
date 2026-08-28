@@ -5175,3 +5175,291 @@ scar written down as a *paragraph* — §20.7 argued that in the abstract and th
   flagged path is *faster*, because the per-step overhead the rest of the tree wins back is larger
   than the factorization it pays for. A paired same-machine run is the only variance-immune way to
   ask that question, which is why it was asked that way.
+
+## §28 Phase 5, batch 4, as built (2026-08-28) — the plate, and an anchor that reached a client
+
+`plate.py` is ported: `Plate` (models #5, #5b, #5o, #5of, #5g) and `VKPlate` (model #6), together,
+with the material helper and the component count. What is left of the core is `connection` and
+`string_geometric`, then `airbox` and `analysis/`.
+
+The batch's finding is about **where a batch boundary has to stop**, and it answers it the opposite
+way from §25. There the question was how far *back* to go — settle the discrete-output functions
+before porting what consumes them. Here it is how far *forward*: a bit-identity anchor does not
+only bind two models (§15.2) or two classes in a file, it can bind a model to a **client that is not
+being ported at all**, and the client has to move with it.
+
+### 28.1 Why both classes, and why that is not a choice
+
+`tests/test_vk_energy.py` and `tests/test_vk_free.py` each assert that a `VKPlate` with the coupling
+switched off is `array_equal` to a `Plate` at every one of 150 steps, and that their energies compare
+`==`. The port moves the solve — `scipy.sparse.linalg.splu` there, the crate's `SparseLu` here, which
+§24.2 settled cannot agree to the bit — so swapping one class and not the other breaks that anchor
+for a reason having nothing to do with either model. §15.2's finding, reaching two classes in one
+file rather than four models across four files. A class cannot be half-swapped either, so the free
+branch, all three outlines and both grains came with it.
+
+**In this implementation the anchor is structural rather than transcribed**, and that is worth more
+than the parity number it produces. `VkParams` *owns* a `Params` — the nonlinear plate literally
+holds the linear plate — and both classes step through the same `step_rhs`. The Python original keeps
+them in step by writing the theta-scheme out twice and saying so in a docstring; here `nonlinear =
+False` reduces to `Plate` because there is only one expression. The 150-step assertion is repeated
+natively in `crates/physsynth-core/tests/plate.rs`, where it cannot fail for a transcription reason.
+
+### 28.2 The finding: the anchor reached `airbox.py`, which is not being ported
+
+Fourteen tests went red under the flag on the first whole-family run, and twelve of them were one
+thing. `airbox.py`'s `_PlateSurface` and `_VKPlateSurface` **reassemble** the plate's system matrix
+and factor it themselves, deliberately — the docstring says "reassembled here rather than reached
+into, because `plate.py` stays untouched — which is exactly why the coupled cross-check at two
+timesteps exists to pin it." Four of the family's reduction tests then turn that into a bit-identity
+claim: with the load switched off, `a_loaded` **is** the plate's own `A`, so a loaded plate must
+reproduce a bare one byte for byte. That is what pins `airbox`'s transcription of the right-hand
+side, and it holds only while both sides factor with the same solver.
+
+So the anchor is between a **model and its client**, the client is three phases from its own port,
+and the claim it protects is about the client's Python code rather than about the plate at all. The
+remedy is one name: `airbox.py` gets the same module-level swap every ported module has, rebinding
+`splu` to a Rust-backed shim under the flag. `splu` is looked up as a global at call time, so the
+rebinding is the whole of the change and nothing else in the file knows. Three test files that
+re-derive the same matrix now import `splu` **from `airbox`** rather than from SciPy, which is more
+correct than it was: a test that factors the matrix a module would factor should use the module's
+factorizer, not a second one that happened to coincide.
+
+The general form, and the question to ask before scoping a batch: **does anything outside this
+module re-derive what this module computes, and does a test compare the two exactly?** If so the
+client is inside the batch whether or not it is being ported. Grepping the clients for *private
+names* — §0's prediction, and the thing this migration has checked five times — was not enough here,
+because `airbox` reaches nothing private on the linear plate. It re-derives instead, which is a
+dependency no name search finds.
+
+One corollary that is a relief rather than a scar. `connection.py` was §0's named Phase-5 client of a
+model's private names, and for the string that came true. For the **plate** it did not: `connection`
+reads `n_live`, `u`, `u_prev`, `converged`, `n_iters`, `last_residual` and calls `step(f_ext=...)`,
+`energy()` and `pressure()`, and touches nothing private at all. Two tests read `plate._lu` to check
+that a bridge's coupling force reached the acceleration, which is §12.2 for a third time and is
+answered the way §12.2 is always answered — the attribute is exposed, because a leading underscore is
+not a statement about the interface.
+
+### 28.3 A read-out whose relative error is meaningless, and it is physics
+
+`Plate.pressure()` is the monopole read-out, `sum_i area_i u_i''`. The first parity bar written for
+it compared the two implementations relatively and failed on **every free-edge fixture, by 1e-4 to
+1e-1** — six orders worse than the supported branch and far too large for a summation order.
+
+It is not the port. A free plate's stiffness annihilates the constant vector, so `1ᵀ W δ_tt u =
+-κ² 1ᵀ K (θ-average) = 0` **term for term**: an unforced free plate has no monopole at all, and what
+floating point returns is the cancellation residue. Measured over 200 steps, `|p| / Σ|terms|` is
+
+| | unforced | forced |
+|---|---|---|
+| supported | 6.3e-4 … 5.7e-1 | 6.4e-1 |
+| free | 2.1e-16 … 1.0e-13 | 3.4e-1 |
+
+so on the free branch the quantity being compared *is* the rounding, and a relative comparison of
+two roundings is a comparison of nothing. An external force breaks the nullspace and the read-out
+becomes a real number again, which is where it can be compared — and that is what the parity test
+does. It is also, retroactively, why this family has dipole classes at all.
+
+Two general forms, and the second is the one to carry:
+
+* **Normalise a reduction by the sum of its absolute terms, not by its own value.** §20.6 said the
+  normaliser is part of the claim and asked for a *monotone* one; this adds that for a **sum** the
+  right denominator is what went into it. With that normaliser every branch, guitar included, comes
+  in under 1e-15 and the bar is a genuine last bit.
+* **Ask whether the quantity being compared is identically zero before writing a relative bar.** No
+  detector in this project can tell "the port is wrong" from "the physics cancels", and the second
+  reads exactly like the first.
+
+### 28.4 §23.6's fourth door: a test whose subject the implementation cannot express
+
+`test_plate_modal.py::test_the_canonical_sort_left_the_shipped_plate_where_it_was` is §26's
+regression pin: it steps one plate on the canonical biharmonic and another on SciPy's kernel-order
+one and asserts the trajectory did not move. Under the flag it failed on `p_old.B = ...`, because a
+Rust `Plate` does not offer a settable operator.
+
+The fix is not a setter, and that is the point. `Csr::from_rows` **sorts** — a descending row is not
+expressible in the crate at all, which is precisely why §27.2's remedy had to be applied on the
+Python side. With the flag set both plates would therefore carry the *same* operator and the
+comparison would assert nothing while staying green. So the test is pinned to `PlatePy` and says why.
+
+That is §23.6's emptied-comparison shape reached through a fourth door. The first three were a
+rebound module-level name (§23.6), an empty guard table (§17.6) and an empty CI job; this one is
+**an implementation in which the difference being measured does not exist**. A fifth arrived inside
+this batch's own parity file: `VKPlatePy.__init__` looks up the module-global `AiryStressSolver`,
+which the swap has already rebound, so the Python model was holding a *Rust* Airy solver and the
+shared-factorization test compared Rust against Rust — green, and asserting nothing. It now builds
+`VonKarmanBracketPy` and `AiryStressSolverPy` explicitly. **A class that constructs its collaborators
+by module-global name is swapped further than it looks.**
+
+### 28.5 Three parity bars, because there are three ways this plate diverges
+
+The exactness claim is §24.4's manoeuvre for the third time and it is unqualified: drive the Python
+model through the Rust factorization and the two are **bit-identical over 400 steps at all eight
+fixtures**, with and without an external nodal force, acceleration cache included. There are four
+spellings of the right-hand side here (supported/free × forced/unforced) and this is the only test
+that can see a reassociation in any of them — the solver gap is two orders larger.
+
+What is left is the solver, and it is read differently on each branch. `du` normalised by the running
+peak, over 20,000 steps:
+
+| step | supported | free (rigid) | free (elastic) | free (energy) |
+|---|---|---|---|---|
+| 1 | 9.5e-16 | 2.0e-17 | 6.9e-16 | 1.4e-15 |
+| 100 | 3.0e-13 | 3.4e-14 | 1.6e-13 | 1.0e-13 |
+| 2,000 | 1.5e-12 | 3.0e-11 | 2.1e-12 | 5.1e-14 |
+| 20,000 | 1.7e-11 | 2.5e-09 | 1.1e-11 | 5.6e-13 |
+
+* **supported, linear** — §18.6's random walk, three orders over four of run length.
+* **free, linear** — §24.5, in two dimensions and with a **three**-dimensional nullspace `{1, x, y}`.
+  The rigid part grows like `t²` (a factor 7.2e4 over a 200-fold increase in steps, i.e. `t^1.9`)
+  while the elastic part random-walks (68-fold, `t^0.8`), and the two **cross over around step 500**:
+  at step 100 the rigid part is the *smaller* of the two and by step 20,000 it is 229 times the
+  larger. A bar written at a short run length would therefore measure the elastic part and a bar
+  written at a long one would measure the rigid part, without the fixture changing. Read the split,
+  or read the energy, which moves by three orders less than either.
+* **von Kármán** — §27.5's conclusion, below.
+
+The guitar behaves as the rectangle does on every line of that table, which is the useful negative
+result: the outline changes the mask and changes nothing about the divergence.
+
+### 28.6 §27.5's threshold, reproduced one level up — and what amplitude actually does
+
+§27 found that the *Airy solver* had two agreement regimes twelve orders apart, that the fixture and
+the amplitude were both falsified as discriminators, and that the observable that separated every run
+was the **Picard sweep count**: two to six is a random walk, eleven or more is exponential. The whole
+model reproduces that threshold exactly, at three amplitudes of one fixture:
+
+| `w/e` | mean sweeps | `du/peak` at 2,000 | energy agreement | drift |
+|---|---|---|---|---|
+| 0.3 | 3.11 | 3.4e-12 | 5.2e-13 | 5.8e-15 |
+| 3 | 5.02 | 8.0e-13 | 2.7e-13 | 9.9e-14 |
+| 12 | 13.50 | **2.3e-03** | 3.1e-15 | 8.6e-13 |
+
+This **refines** §27.5 rather than contradicting it. Amplitude is still not the discriminator — 0.3
+and 3 are an order apart in amplitude and land in the same regime with the same window — but
+amplitude is one of the things that *moves the sweep count*, and the sweep count is the
+discriminator. The right statement is that the regime is set by how hard the nonlinearity is working,
+and amplitude selects it only *through* that. So the question to ask of a von Kármán fixture is not
+"how hard is it driven" but "what does `n_iters` say", which costs nothing and is already public.
+
+And the energy is flat across all of it: **3.1e-15 relative agreement at the amplitude whose
+trajectory is completely decorrelated**, with the shipped drift bar at 8.6e-13 against 1e-10. *A
+conserved quantity is not a trajectory comparison* — §27.5's plain form, now asserted of a model.
+
+### 28.7 The reductions, and `portable.py` declined a fourth time
+
+`energy()` and `_P` are `np.dot` (§14.2's BLAS reduction), `pressure()` is `np.sum` on the supported
+branch (NumPy's pairwise blocking) and `np.dot` on the free one, and `area` is `W.diagonal().sum()`.
+None is reproduced. `ops2d::guitar_area` and `collision::barrier_energy` already declined NumPy's
+blocking with the reason written down — transcribing it is a claim about a library internal that a
+point release may change, and §22.1 later added that it is also a claim about the runner's CPU — and
+this port follows them.
+
+`portable.py` is declined a fourth time, on §24.6's grounds rather than §23.3's: exactness is not
+*available* downstream of the solve, so buying it in a read-out would buy nothing. With the solver
+held constant the state is bit-identical and the residue is the reduction alone, measured at **under
+1e-14 for the energy** and **under 1e-15 of the terms for the pressure**, at every branch.
+
+Three construction-time numbers are not bit-identical and they are the only three: `area`,
+`outline_area` (on a guitar, where it is `guitar_area`'s two-million-point quadrature) and their
+quotient `area_deficit`. Nothing branches on them and none reaches a timestep. One consequence is
+worth recording because it looks like a regression and is not: a rectangle's trapezoidal weights
+really do sum to `Lx*Ly`, and **in NumPy's pairwise order they land on it exactly**, so the Python
+deficit is a literal `0.0` where this one is 1.0e-15 away from it. The shipped bar is `abs=1e-14`
+and both clear it by an order.
+
+### 28.8 Speed
+
+Paired, back to back on one machine:
+
+| | `n_live` | construct | step |
+|---|---|---|---|
+| supported, N = 24 | 529 | 2.24 ms → 3.04 ms (**0.74x**) | 50.6 µs → 38.3 µs (1.32x) |
+| guitar, N = 40 | 907 | 69.9 ms → 30.0 ms (2.33x) | 100.5 µs → 86.2 µs (1.17x) |
+| `VKPlate`, N = 20 | 361 | — | 818 µs → 274 µs (**2.99x**) |
+
+§11.6 exactly, in both directions. A supported plate's construction is five compiled SciPy kernel
+calls with nothing around them to win, so Rust *loses* there; a guitar's is dominated by the outline
+quadrature and the pruning loop, which are Python, so Rust wins 2.3x. The step gains a third on the
+linear plate — one matvec and one solve, both already compiled — and **triples** on the nonlinear
+one, because a von Kármán step is a Picard loop making three to fifteen small calls per sweep and the
+thing being paid for is per-call overhead. That is the largest per-step win the migration has
+measured for a field model, and it is the one that matters for the eventual real-time port.
+
+The whole suite, paired and back to back on one machine, is **1,939 s on the default path against
+998 s with the flag set** — 4,036 tests either way, 1.94x. That is the first whole-suite figure this
+migration has been willing to quote, and only because it is a *within-session* pair: the batch-3
+number of 654 s is from another session and is not comparable to either (the parity file itself is
+6 s, so it explains none of that gap). What the pair does say is that the flagged tree is now
+roughly twice the speed of the Python one on real work, and §27.10's much narrower 350.9 s / 291.6 s
+was measured before the plate moved.
+
+### 28.9 The measured comparison
+
+| | |
+|---|---|
+| every derived scalar, 8 fixtures | **bit-identical** (26 of them) |
+| `X`, `Y`, `mask`, `index_map`, dtype and shape included | **bit-identical** |
+| `B`, `L` (supported); `K`, `W`, `w` (free) | **bit-identical**, all 8 fixtures |
+| `area`, `outline_area`, `area_deficit` | ≤1e-13 relative — three reductions, by decision |
+| the second-order start, three `v0` spellings | **bit-identical** |
+| the trajectory, on a shared factorization, 400 steps | **bit-identical**, forced and unforced |
+| ... the acceleration cache with it | **bit-identical** |
+| the trajectory, own factorizations | §28.5's three bars |
+| `energy()`, shared solver, 200 steps | < 1e-14 relative — `np.dot` |
+| `pressure()`, shared solver, 100 steps | < 1e-15 of `Σ|terms|` |
+| an unforced free plate's monopole | cancels on both sides, 1e-16…1e-13 |
+| `pickup_index_at`, ties included | identical — a **discrete** output |
+| `to_live`, `state`, `displacement_at` | **bit-identical** |
+| `grain_ratios_from_material`, 4 materials × 7 fields | **bit-identical** |
+| `VKPlate` construction, both branches | **bit-identical**, bracket and Airy included |
+| `_to_full`, `_to_live`, `_linear_rhs` | **bit-identical** |
+| the von Kármán step, both factorizations shared, 120 steps | **bit-identical**, Picard count included |
+| `VKPlate(nonlinear=False)` vs `Plate`, 150 steps | **bit-identical** *within* each implementation |
+| the refusals — 26 for `Plate`, 12 for `VKPlate`, 4 materials | identical, message for message |
+| a branch-only attribute (`B` on a free plate) | absent on both |
+
+### 28.10 The success condition
+
+* `cargo test --workspace` green, **debug and release** — 19 new native bars.
+* `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` and
+  `ruff check .` green — §25.8, in the batch's list rather than CI's.
+* `pip install ./crates/physsynth-py` **before** any parity number is believed — §25.8a.
+* `pytest tests/test_rust_parity_plate.py` green with the flag and without it — **183** tests.
+* The whole-suite count reconciles exactly: 3,852 before, **4,036** after. 183 of the 184 new tests are the parity file; the 184th is `test_xdist_groups.py`, which is parametrised over the *glob* of test modules, so adding a file adds a test there. A count that did not reconcile would falsify §28.10's claim that nothing on the default path moved, which is why it is written down rather than eyeballed.
+* `PHYSSYNTH_RS=1 pytest` green on the **whole suite**, not a chosen subset. That is §25.8a's
+  discipline and it is load-bearing here in a way it was not for the last four batches: `plate` has
+  more clients than any other model in the tree, and `tests/helpers.py` imports both classes, so
+  every helper that builds a plate now builds a Rust one. The flagged CI step's file list is
+  likewise **derived** rather than chosen -- `grep -l` over the plate constructors, minus what the
+  batch-3 step already runs -- which is what added `test_web_backend.py`, `test_airbox_membrane.py`
+  and `test_airbox_port.py` to it after the first draft had missed all three.
+* The whole Python suite green on the default path — **4,035 passed, 1 skipped** (that skip is
+  `test_rust_parity_banded.py`'s, which exists only on the Rust path and is not this batch's) — and
+  **no shipped number moves at all**: the only Python edits are the swap blocks, `airbox`'s `splu`
+  name, and a test helper.
+* The whole Python suite green **under the flag**: **4,036 passed, none skipped, none failed**.
+
+### 28.11 What the next batch inherits
+
+* **Left in the core: `connection` and `string_geometric`, then `airbox` and `analysis/`.**
+  `connection` is the cheapest of them — it touches no private names on either of its two resonator
+  families and its arithmetic is a rank-1 update it already spells explicitly.
+* **Grep for re-derivation, not only for private names.** §28.2. A client that recomputes what a
+  model computes is bound to it by any test that compares the two exactly, and no name search finds
+  that dependency. `airbox.py` is now half-swapped by one name; its own port inherits the rest.
+* **Ask whether a compared quantity is identically zero.** §28.3, and normalise a reduction by the
+  sum of its absolute terms.
+* **Read `n_iters`, not the amplitude.** §28.6. It is public, it costs nothing, and it is what
+  actually predicts whether a nonlinear trajectory can be compared at all.
+* **A class that builds its collaborators by module-global name is swapped further than it looks.**
+  §28.4. The parity file must construct the `*Py` collaborators explicitly or it compares Rust to
+  Rust.
+* **The nonlinear step is where the speed is.** 2.99x, against 1.17–1.32x for a linear one. Every
+  remaining model with an inner iteration — the geometrically exact string, the room-loaded plates —
+  is in that regime.
+* **A module-scope `from .plate import Plate` is a capture, and `connection.py` has one.**
+  `tests/test_stability.py` now asserts `connection.Plate is plate.Plate`, which is §0's named
+  failure mode made checkable. `airbox.py` needs no such entry — its import of the two classes sits
+  under `if TYPE_CHECKING:`, so it captures nothing at runtime; what it captures is `splu`, which
+  §28.2 rebinds and the bare-vs-loaded reduction tests already pin exactly.

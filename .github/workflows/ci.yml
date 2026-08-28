@@ -770,6 +770,38 @@ jobs:
       # it does not show: the same 24 files run 350.9 s on the default path and 291.6 s with the
       # flag set, back to back on one machine. The per-step overhead the rest of the tree wins back
       # is larger than the factorization this step pays for.
+      # Phase 5, batch 4: `plate.py` -- BOTH classes, because the suite binds them into one.
+      # `test_vk_energy.py` and `test_vk_free.py` assert that a linear `VKPlate` is
+      # `array_equal` to a `Plate` over 150 steps, and this port moves the solve, so swapping
+      # one class and not the other would break that anchor for a reason having nothing to do
+      # with either model (plan section 15.2, reaching two classes in one file).
+      #
+      # This step is much wider than the previous four because the plate has more clients than
+      # any other model in the tree: the bridges, the sympathetic strings, the whole airbox
+      # leg and the viewer's plate models all step one. `airbox.py` is NOT ported and it
+      # reassembles the plate's own system matrix; the batch gives it the same `splu` swap
+      # every module gets, so its four zero-load reduction tests stay bit-identical.
+      - name: The plate, unmodified, against Rust
+        env:
+          PHYSSYNTH_RS: "1"
+        run: |
+          pytest --durations=10 \
+            tests/test_plate_energy.py \
+            tests/test_plate_modal.py \
+            tests/test_plate_stability.py \
+            tests/test_plate_orthotropic.py \
+            tests/test_plate_connection.py \
+            tests/test_free_plate_energy.py \
+            tests/test_free_plate_modal.py \
+            tests/test_free_plate_connection.py \
+            tests/test_guitar_plate.py \
+            tests/test_airbox_surface.py \
+            tests/test_airbox_dipole.py \
+            tests/test_airbox_scene.py \
+            tests/test_airbox_membrane.py \
+            tests/test_airbox_port.py \
+            tests/test_web_backend.py \
+            tests/test_stability.py
       - name: The nonlinear plate's bracket and Airy solve, unmodified, against Rust
         env:
           PHYSSYNTH_RS: "1"
@@ -817,7 +849,8 @@ jobs:
             tests/test_rust_parity_strings.py \
             tests/test_rust_parity_tension.py \
             tests/test_rust_parity_bow.py \
-            tests/test_rust_parity_beam.py
+            tests/test_rust_parity_beam.py \
+            tests/test_rust_parity_plate.py
 
   # Lint, plus the OUTER half of the shard guard.
   #

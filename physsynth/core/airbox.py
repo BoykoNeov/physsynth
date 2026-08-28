@@ -122,6 +122,7 @@ Headless: NumPy only.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Literal
 
@@ -3923,3 +3924,53 @@ class RoomSuspendedVKPlate(_RoomLoadedVKPlateMixin):
         self.volume_velocity = 0.0
         self.port.reset()
         self.n = 0
+
+
+# -- the Rust swap (plan section 28) ------------------------------------------------------------
+#
+# `airbox.py` is not ported. What it needs from this batch is one name.
+#
+# Every room-loaded class **reassembles** the plate's system matrix and factors it here, rather
+# than reaching into `plate.py` -- and four of the family's reduction tests turn that into a
+# bit-identity claim: with the load switched off, `a_loaded` IS the plate's own `A`, so a loaded
+# plate must reproduce a bare one byte for byte. That claim is what pins this module's
+# transcription of the theta-scheme right-hand side, and it survives only while both sides
+# factor with the same solver. Porting `plate.py` moved the model's solver to Rust, so this
+# module's has to move with it or the anchor breaks for a reason having nothing to do with
+# `airbox.py` -- section 15.2's finding reaching a model and its *client* rather than two models.
+#
+# The shim is the whole of the change: `splu` is looked up as a module global at call time, so
+# rebinding it here is enough, and nothing else in the file knows.
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    import physsynth_rs as _rs
+
+    class _Fill:
+        """Just enough of a SuperLU factor for `lu_nnz` to read `.nnz` off it."""
+
+        __slots__ = ("nnz",)
+
+        def __init__(self, nnz: int) -> None:
+            self.nnz = nnz
+
+    class _RustSuperLU:
+        """`splu(A)`'s object, from the crate: `solve`, and the two fill counts."""
+
+        __slots__ = ("_lu", "L", "U")
+
+        def __init__(self, a) -> None:
+            m = sparse.csr_matrix(a, copy=True)
+            m.sort_indices()
+            self._lu = _rs.SparseLu(
+                m.data, m.indices.astype(np.int32), m.indptr.astype(np.int32), m.shape[0]
+            )
+            l_nnz, u_nnz = self._lu.nnz
+            self.L = _Fill(l_nnz)
+            self.U = _Fill(u_nnz)
+
+        def solve(self, b):
+            return np.asarray(self._lu.solve(np.ascontiguousarray(b, dtype=float)))
+
+    splu = _RustSuperLU  # type: ignore[assignment,misc]  # noqa: F811

@@ -136,6 +136,7 @@ Headless: NumPy + SciPy (sparse LU). No I/O, no plotting.
 from __future__ import annotations
 
 import math
+import os
 from typing import Literal, NamedTuple
 
 import numpy as np
@@ -1370,3 +1371,33 @@ class VKPlate:
         if self.boundary == "supported":
             return self.kappa * self.kappa * self.h * self.h * float(np.dot(self.B @ f, g))
         return self.kappa * self.kappa * float(np.dot(self.K @ f, g))
+
+
+# -- the Rust swap (plan section 28) -----------------------------------------------------------
+#
+# `Plate` and `VKPlate` swap TOGETHER, and that is a constraint rather than a convenience. The
+# suite asserts `VKPlate(nonlinear=False)` is `array_equal` to `Plate` over 150 steps on both
+# branches, and the port moves the solve -- `scipy.sparse.linalg.splu` there, the crate's own
+# sparse LU here, which section 24.2 settled cannot agree to the bit. Swapping one and not the
+# other would break that anchor for a reason having nothing to do with either model: section 15.2's
+# finding, reaching two classes in one file.
+#
+# Everything up to the solve stays bit-identical, so the exactness claim is made section 24.4's
+# way, by holding the solver constant. See `tests/test_rust_parity_plate.py`.
+
+PlatePy = Plate
+"""The pure-Python linear plate, under a name the swap below never rebinds."""
+
+VKPlatePy = VKPlate
+"""The pure-Python nonlinear plate, under a name the swap below never rebinds."""
+
+grain_ratios_from_material_py = grain_ratios_from_material
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    import physsynth_rs as _rs
+
+    Plate = _rs.Plate  # type: ignore[assignment,misc]  # noqa: F811
+    VKPlate = _rs.VKPlate  # type: ignore[assignment,misc]  # noqa: F811
+    grain_ratios_from_material = _rs.grain_ratios_from_material  # type: ignore[assignment,misc]  # noqa: F811, E501

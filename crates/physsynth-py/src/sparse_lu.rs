@@ -32,6 +32,18 @@ pub struct PySparseLu {
     lu: SparseLu,
 }
 
+impl PySparseLu {
+    /// Wrap an already-factored matrix — what `Plate._lu` hands out.
+    ///
+    /// Private by name and public by use, for a third time (§12.2): `test_plate_connection.py`
+    /// reads `plate._lu.solve(...)` to check that a bridge's coupling force reached the
+    /// acceleration, and `airbox.py` reassembles the same matrix rather than reaching in. Cloning
+    /// copies the factors; it does not factor again.
+    pub(crate) fn from_core(lu: SparseLu) -> Self {
+        PySparseLu { lu }
+    }
+}
+
 #[pymethods]
 impl PySparseLu {
     /// Factor a square matrix given as CSR triplets (`data`, `indices`, `indptr`).

@@ -532,6 +532,24 @@ pub struct PyVonKarmanBracket {
     acell: Py<PyAny>,
 }
 
+impl PyVonKarmanBracket {
+    /// Wrap an already-built core bracket — what `VKPlate.bracket` hands out.
+    ///
+    /// The plate owns its bracket inside `VkParams`, so exposing it as an attribute means cloning
+    /// rather than rebuilding: the clone copies four small matrices, where `new` would assemble
+    /// them again. Cheap here and load-bearing next door, where the same move over
+    /// `AiryStressSolver` saves a second factorization.
+    pub(crate) fn from_core(py: Python<'_>, inner: ops2d::VonKarmanBracket) -> PyResult<Self> {
+        Ok(PyVonKarmanBracket {
+            sxx: csr_object(py, inner.sxx())?,
+            syy: csr_object(py, inner.syy())?,
+            dxy: csr_object(py, inner.dxy())?,
+            acell: csr_object(py, inner.acell())?,
+            inner,
+        })
+    }
+}
+
 #[pymethods]
 impl PyVonKarmanBracket {
     #[new]
@@ -634,6 +652,27 @@ pub struct PyAiryStressSolver {
     bf: Py<PyAny>,
     mask: Py<PyAny>,
     index_map: Py<PyAny>,
+}
+
+impl PyAiryStressSolver {
+    /// Wrap an already-built core solver — what `VKPlate.airy` hands out.
+    ///
+    /// Cloning rather than rebuilding is the whole point: `AiryStressSolver::new` **factors**
+    /// `B_F`, which at the 160 x 128 grid the airbox tests build is seconds, and a getter that
+    /// paid it again would double the construction cost of every nonlinear plate.
+    pub(crate) fn from_core(py: Python<'_>, inner: ops2d::AiryStressSolver) -> PyResult<Self> {
+        let (nrows, ncols) = (inner.mask().nrows(), inner.mask().ncols());
+        let bf = csr_object(py, inner.bf())?
+            .bind(py)
+            .call_method0("tocsc")?
+            .unbind();
+        Ok(PyAiryStressSolver {
+            bf,
+            mask: to_2d_bool(py, inner.mask().flags().to_vec(), nrows, ncols)?,
+            index_map: to_2d_i64(py, inner.index_map().to_vec(), nrows, ncols)?,
+            inner,
+        })
+    }
 }
 
 #[pymethods]

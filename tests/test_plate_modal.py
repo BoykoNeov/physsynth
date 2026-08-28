@@ -14,6 +14,7 @@ from helpers import (
     arpack_v0,
     convergence_orders,
     make_plate,
+    plate_kwargs,
     plate_low_eigenfrequencies,
 )
 from scipy.sparse.linalg import eigsh
@@ -22,6 +23,7 @@ from physsynth.analysis import modal, spectrum
 from physsynth.core.engine import simulate
 from physsynth.core.exciter import raised_cosine_2d
 from physsynth.core.operators2d import biharmonic_from_mask, laplacian_from_mask
+from physsynth.core.plate import PlatePy
 
 KAPPA = KAPPA_PLATE_DEFAULT
 THETA = 0.28
@@ -157,11 +159,21 @@ def test_the_canonical_sort_changed_an_order_and_not_a_value():
 
 
 def test_the_canonical_sort_left_the_shipped_plate_where_it_was():
-    """... and the trajectory it produces is unmoved at 1e-11 of its amplitude, drift unmoved."""
+    """... and the trajectory it produces is unmoved at 1e-11 of its amplitude, drift unmoved.
+
+    **Pinned to the Python plate, and that is the claim rather than a workaround.** This test's
+    subject is a *stored column order*: it steps one plate on the canonical operator and another
+    on the kernel-order one and asserts the trajectory did not move. The Rust `Csr` cannot hold a
+    non-canonical row -- `from_rows` sorts, which is exactly why plan section 27.2's remedy had to
+    be applied on the Python side -- so with the flag set both plates would carry the *same*
+    operator and the comparison would assert nothing while staying green. That is section 23.6's
+    emptied-comparison shape reached through a fourth door: not a rebound name, but an
+    implementation in which the difference being measured is inexpressible.
+    """
     rng = np.random.default_rng(20260828)
     for N in (12, 16):
-        p_new = make_plate(N=N, mu=1.0)
-        p_old = make_plate(N=N, mu=1.0)
+        p_new = PlatePy(**plate_kwargs(N=N, mu=1.0))
+        p_old = PlatePy(**plate_kwargs(N=N, mu=1.0))
         p_old.B = _biharmonic_before_2026_08_28(p_old.mask, p_old.h)
         u0 = 1e-4 * rng.standard_normal(p_new.n_live)
         v0 = np.zeros(p_new.n_live)

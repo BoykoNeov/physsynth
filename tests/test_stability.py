@@ -182,6 +182,7 @@ def test_the_rust_swap_matches_the_environment():
         membrane,
         operators,
         operators2d,
+        plate,
         reed,
         string_damped,
         string_ideal,
@@ -234,6 +235,7 @@ def test_the_rust_swap_matches_the_environment():
         collision,
         beam,
         operators2d,
+        plate,
     ):
         # `collision` joined this tuple in Phase 3's last batch, and it was ABSENT before -- so for
         # the whole of §16's batch and after, a `BarrierStringPy` alias could have been added with
@@ -264,6 +266,8 @@ def test_the_rust_swap_matches_the_environment():
         ("physsynth.core.bow", "BowedString"),
         ("physsynth.core.collision", "BarrierString"),
         ("physsynth.core.beam", "FreeBeam"),
+        ("physsynth.core.plate", "Plate"),
+        ("physsynth.core.plate", "VKPlate"),
     }
     assert set(swapped_classes) == expected_classes, (
         f"the swapped classes are {sorted(swapped_classes)}, but this guard expects "
@@ -303,6 +307,11 @@ def test_the_rust_swap_matches_the_environment():
     # which is what makes adding a port a reviewed edit rather than a silent one (the same
     # reasoning as the hardcoded dependency allowlist below).
     ported_expected = {
+        # `plate` is ported in full as of Phase 5's fourth batch. Both CLASSES are checked by
+        # identity above; the only free FUNCTION in the module is the material helper. Its private
+        # `_count_components` is deliberately NOT aliased: it is not swapped either, and an alias
+        # with no swap behind it is exactly what this derive is built to catch.
+        plate: {"grain_ratios_from_material"},
         # `operators` is ported in full (plan Phase 1).
         operators: set(operators.__all__),
         # `operators2d` is ported in FULL as of Phase 5's third batch, and it took four of them:
@@ -483,6 +492,26 @@ def test_the_rust_swap_matches_the_environment():
                 f"`plate` captured a different `{name}` than `operators2d` now exposes -- the "
                 "swap landed after that module was imported, so this plate's outline is being "
                 "built by the Python code while the run reports Rust"
+            )
+
+        # The same assertion one level out, added with Phase 5's fourth batch, which is what
+        # creates the exposure: `connection.py` does `from .plate import Plate, VKPlate` at module
+        # SCOPE, so it holds whatever those names were bound to when it was imported. That is
+        # section 0's named failure mode verbatim -- a lazy import or a reordered
+        # `physsynth.core.__init__` and the bridges would build Python plates while the run
+        # reported Rust, which is a different trajectory in its last bits and nothing else in the
+        # suite would say so.
+        #
+        # `airbox.py` needs no entry here and that is worth stating rather than leaving to a
+        # reader: its `from physsynth.core.plate import Plate, VKPlate` sits under
+        # `if TYPE_CHECKING:`, so it captures nothing at runtime. What airbox DOES capture is
+        # `splu`, which it re-binds itself (plan section 28.2) and which the bare-vs-loaded
+        # reduction tests already pin exactly.
+        for name in ("Plate", "VKPlate"):
+            assert getattr(connection, name) is getattr(plate, name), (
+                f"`connection` captured a different `{name}` than `plate` now exposes -- the swap "
+                "landed after that module was imported, so a bridge is driving a Python plate "
+                "while the run reports Rust"
             )
 
         # The body's version, and it has TWO importers rather than one. `connection` and

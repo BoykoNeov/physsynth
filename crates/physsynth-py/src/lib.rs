@@ -49,6 +49,7 @@ mod exciter;
 mod mallet;
 mod membrane;
 mod ops2d;
+mod plate;
 mod radiation;
 mod reed;
 mod shape;
@@ -750,6 +751,9 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ops2d::py_avg_d1_1d, m)?)?;
     m.add_class::<ops2d::PyVonKarmanBracket>()?;
     m.add_class::<ops2d::PyAiryStressSolver>()?;
+    m.add_class::<plate::PyPlate>()?;
+    m.add_class::<plate::PyVKPlate>()?;
+    m.add_function(wrap_pyfunction!(plate::grain_ratios_from_material, m)?)?;
     m.add_function(wrap_pyfunction!(ops2d::py_embed, m)?)?;
     m.add_function(wrap_pyfunction!(ops2d::py_inner2d, m)?)?;
     m.add_function(wrap_pyfunction!(ops2d::py_norm2_2d, m)?)?;
