@@ -3993,17 +3993,22 @@ RoomPortPy = RoomPort
 SurfacePortPy = SurfacePort
 InteriorSurfacePortPy = InteriorSurfacePort
 free_pressure_nodes_py = _free_pressure_nodes
+face_axes_py = _face_axes
+impedance_from_zeta_py = impedance_from_zeta
 
 RoomLoadedBodyPy = RoomLoadedBody
 RoomLoadedPlatePy = RoomLoadedPlate
 RoomSuspendedPlatePy = RoomSuspendedPlate
 RoomLoadedVKPlatePy = RoomLoadedVKPlate
 RoomSuspendedVKPlatePy = RoomSuspendedVKPlate
+RoomLoadedMembranePy = RoomLoadedMembrane
+RoomSuspendedMembranePy = RoomSuspendedMembrane
 _PlateSurfacePy = _PlateSurface
 _VKPlateSurfacePy = _VKPlateSurface
-"""The pure-Python wrapper tier and its two seams, under names the swap never rebinds.
+_MembraneSurfacePy = _MembraneSurface
+"""The pure-Python wrapper tier and its three seams, under names the swap never rebinds.
 
-The two seams keep their leading underscore in the alias (`_PlateSurfacePy`), unlike
+The seams keep their leading underscore in the alias (`_PlateSurfacePy`), unlike
 `free_pressure_nodes_py`: `tests/test_stability.py` skips a leading underscore when it collects
 `<name>_py` FUNCTION aliases and does not when it collects `<Name>Py` CLASS aliases, so this is the
 spelling that keeps the guard covering them.
@@ -4062,6 +4067,8 @@ if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the d
     SurfacePort = _rs.SurfacePort  # type: ignore[assignment,misc]  # noqa: F811
     InteriorSurfacePort = _rs.InteriorSurfacePort  # type: ignore[assignment,misc]  # noqa: F811
     _free_pressure_nodes = _rs._free_pressure_nodes  # type: ignore[assignment,misc]  # noqa: F811
+    _face_axes = _rs._face_axes  # type: ignore[assignment,misc]  # noqa: F811
+    impedance_from_zeta = _rs.impedance_from_zeta  # type: ignore[assignment,misc]  # noqa: F811
     _PlateSurface = _rs._PlateSurface  # type: ignore[assignment,misc]  # noqa: F811
     _VKPlateSurface = _rs._VKPlateSurface  # type: ignore[assignment,misc]  # noqa: F811
     RoomLoadedBody = _rs.RoomLoadedBody  # type: ignore[assignment,misc]  # noqa: F811
@@ -4069,3 +4076,6 @@ if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the d
     RoomSuspendedPlate = _rs.RoomSuspendedPlate  # type: ignore[assignment,misc]  # noqa: F811
     RoomLoadedVKPlate = _rs.RoomLoadedVKPlate  # type: ignore[assignment,misc]  # noqa: F811
     RoomSuspendedVKPlate = _rs.RoomSuspendedVKPlate  # type: ignore[assignment,misc]  # noqa: F811
+    _MembraneSurface = _rs._MembraneSurface  # type: ignore[assignment,misc]  # noqa: F811
+    RoomLoadedMembrane = _rs.RoomLoadedMembrane  # type: ignore[assignment,misc]  # noqa: F811
+    RoomSuspendedMembrane = _rs.RoomSuspendedMembrane  # type: ignore[assignment,misc]  # noqa: F811

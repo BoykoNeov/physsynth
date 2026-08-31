@@ -269,11 +269,14 @@ def test_the_rust_swap_matches_the_environment():
         ("physsynth.core.airbox", "InteriorSurfacePort"),
         ("physsynth.core.airbox", "_PlateSurface"),
         ("physsynth.core.airbox", "_VKPlateSurface"),
+        ("physsynth.core.airbox", "_MembraneSurface"),
         ("physsynth.core.airbox", "RoomLoadedBody"),
         ("physsynth.core.airbox", "RoomLoadedPlate"),
         ("physsynth.core.airbox", "RoomSuspendedPlate"),
         ("physsynth.core.airbox", "RoomLoadedVKPlate"),
         ("physsynth.core.airbox", "RoomSuspendedVKPlate"),
+        ("physsynth.core.airbox", "RoomLoadedMembrane"),
+        ("physsynth.core.airbox", "RoomSuspendedMembrane"),
         ("physsynth.core.string_ideal", "IdealString"),
         ("physsynth.core.membrane", "Membrane"),
         ("physsynth.core.body", "ModalBody"),
@@ -331,13 +334,14 @@ def test_the_rust_swap_matches_the_environment():
     # which is what makes adding a port a reviewed edit rather than a silent one (the same
     # reasoning as the hardcoded dependency allowlist below).
     ported_expected = {
-        # `airbox` is ported in HALVES: the room in Phase 5's sixth batch and the port tier in the
-        # seventh, with the six `RoomLoaded*` / `RoomSuspended*` wrappers still Python. Its three
-        # port CLASSES are checked by identity above; the one free function that moved is the
-        # helper the ports share. The alias is `free_pressure_nodes_py` and not
-        # `_free_pressure_nodes_py`, because the collection below skips aliases beginning with an
-        # underscore -- `collision`'s spelling, for `collision`'s reason.
-        airbox: {"free_pressure_nodes"},
+        # `airbox` is ported in THIRDS and is complete as of Phase 5's ninth batch: the room in
+        # the sixth, the port tier in the seventh, the plate and body wrappers in the eighth and
+        # the membrane pair in the ninth. Its eleven CLASSES are checked by identity above; the one
+        # free function that moved is the helper the ports share. The alias is
+        # `free_pressure_nodes_py` and not `_free_pressure_nodes_py`, because the collection below
+        # skips aliases beginning with an underscore -- `collision`'s spelling, for `collision`'s
+        # reason.
+        airbox: {"free_pressure_nodes", "face_axes", "impedance_from_zeta"},
         # `plate` is ported in full as of Phase 5's fourth batch. Both CLASSES are checked by
         # identity above; the only free FUNCTION in the module is the material helper. Its private
         # `_count_components` is deliberately NOT aliased: it is not swapped either, and an alias

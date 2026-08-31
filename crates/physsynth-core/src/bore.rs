@@ -44,6 +44,7 @@
 //! [`Params::new`]) and the zero-seeded accumulation in [`divergence_into`]. The only read-outs
 //! that cannot be bit-identical are the two `np.dot` reductions in [`acoustic_energy`].
 
+use crate::pyfloat::scalar_pow;
 use crate::sparse::Csr;
 
 /// A per-end termination.
@@ -204,7 +205,14 @@ impl Params {
     /// not a multiply. The two agree at the ambient 343 m/s (343² = 117649 is exact in doubles)
     /// but **not in general**: measured over 200,000 random positive doubles, `x ** 2` and `x * x`
     /// disagree in 79. Same class of finding as the plan's `h ** 4` (§10.3), so it is spelled the
-    /// same way — `powf(2.0)`, not `c0 * c0`.
+    /// same way — a real `pow`, not `c0 * c0`.
+    ///
+    /// It has to go through [`crate::pyfloat::scalar_pow`] rather than a bare `c0.powf(2.0)`,
+    /// because LLVM folds a literal exponent of 2.0 straight back into a multiply and does so only
+    /// in `--release` (§17.2). Written as a bare `powf` this call was the fold's *shipped* case for
+    /// six batches: at the ambient 343 m/s nothing can see it (343² is exact), and one ulp above
+    /// it the release build's bore and the reference's separate at 9.4e-15 of amplitude over 200
+    /// steps. Measured 2026-08-31, before and after.
     ///
     /// This matters twice over, because `reed` computes the *same physical quantity* with the
     /// other spelling — `rho0 * c0 * c0` — and the two disagree by one ulp in 3,531 of 3,552
@@ -259,7 +267,7 @@ impl Params {
 
         // `self._w * self.S_node / (self.rho0 * self.c0**2)` — the product before the divide, and
         // the denominator formed once. See the note above on `powf(2.0)`.
-        let denom = rho0 * c0.powf(2.0);
+        let denom = rho0 * scalar_pow(c0, 2.0);
         let c: Vec<f64> = (0..=n).map(|i| (w[i] * s_node[i]) / denom).collect();
         // `self.h * self.rho0 / self.S_seg`.
         let m: Vec<f64> = (0..n).map(|j| (h * rho0) / s_seg[j]).collect();

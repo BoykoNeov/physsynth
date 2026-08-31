@@ -6609,3 +6609,286 @@ that scar became a test.
   small batch, and the second of them is a `--release`-only divergence in shipped code.
 * **`crates/physsynth-core/src/lib.rs`'s module header is still stale**, as §30.13 and §31.11 both
   recorded. Nothing watches it. Unchanged, still one line to know, and now three batches behind.
+## §33 Phase 5, batch 9, as built (2026-08-31) — the membrane pair, and a getter that takes a write away
+
+`airbox.py` finished. §30 ported the room, §31 the three ports, §32 the plate and body wrappers,
+and this batch ports what was left: `_MembraneSurface`, `RoomLoadedMembrane`,
+`RoomSuspendedMembrane` and the mixin they share — plus the two module-level helpers nobody had
+noticed were still Python, `_face_axes` and `impedance_from_zeta`. Every class and every function
+in the file's 4,071 lines now has a Rust implementation behind the flag.
+
+Not one line of the ten `test_airbox_*.py` files was touched, for the fourth batch running, and the
+flagged CI step's file list has not changed once across the four tiers.
+
+The batch adds **no stepping arithmetic**, and that is worth stating first because it decides
+everything else. `RoomLoadedMembrane.step` and `RoomLoadedPlate.step` are the same eleven lines
+over a different seam, so §32's `Wrap` is reused unchanged and the two membrane classes are two
+more arms of the same enum. What is genuinely new is a seam whose `a_bare` is `(1 + sigma k) I`,
+a `commit` that is a two-level roll with no acceleration cache, and one right-hand-side term with
+no oracle.
+
+### 33.1 The shape on disk
+
+* `crates/physsynth-py/src/airbox_wrap.rs` — `PyMembraneSurface`, `PyRoomLoadedMembrane`,
+  `PyRoomSuspendedMembrane`, and `Wrap`/`plate_wrapper!` generalised into `grid_wrapper!`.
+* `crates/physsynth-py/src/airbox_port.rs` — the two module helpers bound.
+* `crates/physsynth-core/src/lib.rs` — the module header, three batches stale since §30.13, brought
+  current through Phase 5. Nothing watches it; it is still one line to know.
+* `crates/physsynth-core/src/bore.rs`, `src/reed.rs` — the three parked `powf(2.0)` literals
+  (§33.6). **This is a change to shipped numbers**, on the Rust arm only, and it is a fix.
+* `physsynth/core/airbox.py` — five `*Py` aliases and five names under the flag. **No edit to the
+  reference.**
+* `tests/test_rust_parity_airbox_memb.py` — **new**, 83 tests.
+* `tests/test_rust_parity_bore.py`, `tests/test_rust_parity_reed.py` — three pins for §33.6.
+* `tests/test_stability.py` — three classes into the class table, two functions into the ported
+  table.
+* `.github/workflows/ci.yml` — the new parity file, and the airbox comment block.
+
+No `physsynth-core` model code and no new native tests, for §32.2's reason: there is no arithmetic
+in this tier that can be exercised without a Python interpreter.
+
+### 33.2 The finding: a `#[getter]` with no `#[setter]` silently makes a plain attribute read-only
+
+§32.6 found that a `#[pyclass]` getter is a data descriptor and therefore **shadows** `__getattr__`
+permanently, where Python's `__getattr__` only fires on a miss — so every getter added to a
+drop-in wrapper silently takes a name away from the model it stands in for. This batch found the
+other half of the same fact, and it points the opposite way.
+
+A `#[getter]` with no `#[setter]` is *still* a data descriptor. Its `__set__` exists and raises. So
+porting a class does not only decide which names can be **read** through it; it silently decides
+which can be **written**, and the default is *none* — where the reference, being Python, allowed
+every one of them. The reference's `RoomLoadedMembrane.n` is a plain integer attribute a caller may
+advance; the ported one, written the obvious way, is read-only, and neither `cargo test` nor any
+physics bar can see the difference.
+
+There is exactly one client of it in the whole tree, and it is not the shape any earlier search
+would have found:
+
+```python
+# tests/test_airbox_membrane.py:387 -- the lagged-velocity negative control
+port.require_ready()
+pbar_free = port.free_pressure()
+q = port.T @ ((m.u - m.u_prev) / m.k)      # BACKWARD, not centered: the whole change
+rhs = inst._surface.rhs(None) - m.k * m.k * (port.T.T @ pbar) / inst._denominator
+inst._surface.commit(lu.solve(rhs))
+inst.radiated_energy += m.k * float(np.dot(pbar, q))
+inst.n += 1
+```
+
+That test does not replace a collaborator (§31, §32) and does not reach a private name (§0, §3.1).
+It **bypasses `step` entirely** and hand-rolls a different scheme out of the wrapper's own parts, so
+what it needs is not to read the object but to *drive* it. §30.3's rule — grep for assignment, not
+only for reference — is the right search and it was aimed one object too far away: §30.3 ran it
+against the room's *collaborators*, and what it has to be run against is **the class being ported
+itself**.
+
+The failure mode is the good one, which is luck rather than design: an unwritable `n` raises, so a
+correct port goes red instead of quietly green. It is worth noticing that it is luck. Had the
+reference's attribute been one a client *reads back* after writing — say a ledger a test seeds
+before a run — a swallowed write would have produced the ordinary silent shape instead.
+
+The remedy is one setter, and it went into the shared macro rather than into the membrane arms, so
+the four plate wrappers gained it too. That is deliberate: the reference lets a caller write `n` on
+all six classes, and a Rust class that refuses is a fidelity gap whether or not a test happens to
+exist. **The general form is that the port of a Python class starts from "every attribute is
+writable" and has to justify each refusal, not the other way round.**
+
+### 33.3 Three spellings of one name, and the failure is not where you look for it
+
+The wrapper's model attribute is named in three places, and they must agree:
+
+1. the `#[getter]` the class exposes (`inst.membrane`),
+2. the label `_require_same_rate` puts in its refusal (`"membrane fs = ... but room fs = ..."`),
+   which `test_airbox_membrane.py` matches on, and
+3. the name `__getattr__` refuses to delegate, so a lookup cannot recurse.
+
+Reusing §32's macro without parameterising it gets all three wrong at once, and the interesting one
+is the third. With the getter still named `plate`, `inst.membrane` is a **miss**, so it falls
+through to `__getattr__`; the guard compares against `"plate"` and does not match; the lookup is
+delegated to the model — and a `Membrane` has no `.membrane`. The wrapper loses access to its own
+resonator, and it does so by way of a delegation that is working exactly as designed.
+
+So `Wrap` carries a `model_name: &'static str` and the macro takes the getter's identifier, and the
+two are documented as halves of one decision. `test_the_wrapper_answers_for_its_own_model` is the
+one assertion; it also checks `not hasattr(inst, "plate")` on both languages, because a membrane
+wrapper that answered to `.plate` would be a name the reference does not have.
+
+### 33.4 The one term with no oracle, and the parametrization that reaches it
+
+§32.10 called `_MembraneSurface` a two-place difference from `_PlateSurface`. The seam's own
+docstring names three, and the third is the one that shapes the parity file:
+
+> `rhs`'s `f_ext` term has no counterpart in the model. `Plate.step` has its own `f_ext` path, so
+> batch 3's copy of it could be checked against the original; `Membrane.step()` takes no force at
+> all. This term is therefore *new* arithmetic.
+
+For the plate, `rhs(None)` reduces to `Plate.step`'s own line and the model is the oracle. For the
+membrane there is nothing to reduce to — and `f_ext=None` is the default that every airbox test
+and every natural parity fixture passes. A parity file written the obvious way compares the shared
+half twice and never touches the half with no oracle, and passes: §23.6's emptied comparison
+through an **eighth** door, reached this time not by a swap or a replaced collaborator but by a
+**default argument**.
+
+Every trajectory test in the new file is therefore parametrized over `forced`, and the seam's own
+right-hand-side test asserts, on the forced arm, that `rhs(f_ext)` is not `rhs(None)` — so the
+parametrization cannot decay into two spellings of one comparison.
+
+### 33.5 The two associations, pinned by a search — and the search failed twice first
+
+The seam has two scalar folds the reference writes left to right and a tidy-up would rewrite:
+`denominator = (rho * h) * h` and `c2k2 = ((c * c) * k) * k`. §26.6 says a spelling pin must
+*search* for a witness rather than assert hand-picked constants, and that rule held: witnesses for
+both exist within a few hundred neighbouring values and the pin is a real one.
+
+The same rule then failed twice in this batch's other half, in two ways worth separating, because
+between them they say what a witness search actually has to do.
+
+**A predicate on the sub-expression is not a predicate on the expression.** The first pin for the
+reed's `(wr k)**2` searched for a value where `t**2 != t*t` — found one immediately — and then
+asserted the trajectory, which was bit-identical, because the enclosing `2.0 - t^2` **absorbs** one
+ulp of `t^2` whenever `t^2` is small against 2. That is §23.5 verbatim ("a predicate tested on the
+sub-expression rather than the whole expression found a witness whose difference the following
+division absorbed"), arriving inside the test written to catch §17.2, one batch after §23.5 was
+written down. The predicate has to be the whole coefficient `(2.0 - (wr k)^2) / den`, and the
+fixture that satisfies it is a very stiff reed near `wr k = sqrt(2)`, where the subtraction cancels
+and the last bit is the answer. §16.4's rule, in the measurement rather than in the model.
+
+**An `np.nextafter` walk is the wrong search space, and it fails by reporting "none".** `pow` and a
+multiply disagree in roughly 5 of every 10,000 values drawn from a decade-wide band, and they do it
+in **clusters**. A walk of 200,000 consecutive doubles spans about 1e6 times less range than that
+sampling, so it explores one neighbourhood and either finds several witnesses or none at all —
+measured, **0 in 200,000 consecutive doubles from 1.41421356** against **47 per 100,000 samples
+drawn from [1, 2)**. Both searches now step by a *relative* 1e-9, which covers 2e-4 of the value in
+the same budget, and both assert that a witness was found.
+
+**And a third: the comparison has to be made while the accumulator is empty.** The pin for
+`reed_velocity ** 2` first ran 4,000 steps at the shipped fixture, verified that three of them
+landed on a witness — and passed against a deliberately reverted binary anyway, because by step
+4,000 `reed_damp_work` is large against one increment and the addition swallows the last bit
+outright. That is §23.2's mechanism in a ledger instead of a field. The fixture is now searched
+over `p_mouth` for one whose **first** step lands on a witness, and the ledger is read after that
+one step, where it *is* the increment.
+
+Each of the three was verified the same way: revert the Rust spelling, rebuild, watch the pin go
+red, restore, rebuild, watch it go green.
+
+### 33.6 The parked `powf(2.0)`, which was a shipped divergence and had been for six batches
+
+§31.11 parked three `c0.powf(2.0)`-style literals in `bore.rs:262`, `reed.rs:229` and `reed.rs:505`
+as "a `--release`-only divergence in shipped code". That description was right and understated.
+
+CPython's `float.__pow__` is the C library's `pow` for every exponent, `2.0` included; LLVM folds
+`powf(x, 2.0)` into `x * x` whenever the exponent is a visible literal, and it does so **only in
+release** (§17.2). `pip install` builds release. So for six batches the shipped extension computed
+`c0 * c0` where the reference computed `pow(c0, 2)`, and nothing saw it — because the ambient
+`c0 = 343.0` is one of the values where the two agree (343² = 117649 is exact in doubles) and no
+fixture in the suite happened to sit anywhere else.
+
+Measured before the fix, at the first `c0` above 343 where they disagree: the two bores separate at
+**9.4e-15 of amplitude over 200 steps**. Measured after: bit-identical, at that `c0` and at the two
+next witnesses. The reed's stiffness coefficient diverges at **step 1** at its witness fixture, and
+its damping ledger at the first step. All three now go through `pyfloat::scalar_pow`, whose
+`#[inline(never)]` is the whole point of the function.
+
+`crates/physsynth-core/src/pyfloat.rs` has said since §17 that this is the shape to watch for. What
+this batch adds is that the *shipped* code had it, that a native spelling test in both profiles does
+not cover a site with no native test, and that the cheap general guard is a **Python** pin at a
+searched fixture: it runs against the installed extension, which is a release build, so unlike a
+`cargo test` it needs no second profile to mean anything.
+
+### 33.7 The speed, and the room's own step diluting it
+
+§32 measured the plate wrapper tier at 1.06–1.13x and called it the price of §32.2. The membrane
+tier is the same shape, and the measurement is reported two ways because the obvious one is
+misleading.
+
+End to end — one `inst.step()` plus one `room.step()`, which is the contract's order — the Rust arm
+is **0.98x–1.35x**. But the room in *both* arms is the Python `AirBox` (the parity fixtures do not
+set the flag), and it costs **175 µs** per step at the 8,410-node fixture, which is most of the
+measurement. Subtracting it:
+
+| tier | N | Python | Rust | ratio |
+|---|---|---|---|---|
+| baffled | 12 | 197 µs | 144 µs | 1.36x |
+| baffled | 24 | 326 µs | 274 µs | 1.19x |
+| baffled | 40 | 628 µs | 642 µs | 0.98x |
+| suspended | 12 | 309 µs | 196 µs | 1.58x |
+| suspended | 24 | 387 µs | 241 µs | 1.61x |
+| suspended | 40 | 710 µs | 601 µs | 1.18x |
+
+§11.6 exactly: the win is per-call overhead, it decays as SciPy's compiled work grows, and it
+crosses to a small loss when the sparse solve dominates. The suspended tier wins more than the
+baffled one for the reason the shape predicts rather than a surprising one — it reads two pressure
+planes and forms a jump per step, so it has more interpreter calls to remove and the same solve.
+
+**Two figures a reader should not take from this table.** It is not a claim about the real-time
+port, which is §29's territory (an inner iteration whose body ports with it, 15.5x). And it is not
+a reason to regret §32.2: the alternative to computing through SciPy was ten tests passing having
+compared a loaded head with itself.
+
+### 33.8 The file's last two functions, which were not a tier
+
+`airbox.py` still owned `_face_axes` and `impedance_from_zeta`. Both had Rust twins with native
+tests **since §31** and were simply never bound and never swapped, so the module was one tier *and
+two functions* from finished while every note said "one tier". Neither is hard — an integer table
+and a left-folded product of three doubles — and both are now bound, swapped and pinned (values
+across all six faces and six zetas, defaults and explicit air, plus the refusal text word for
+word, which is the only thing in `_face_axes` that can differ and which `test_airbox_surface.py`
+matches on).
+
+The small lesson is about bookkeeping rather than arithmetic: **"what is left in this file" was
+tracked by tier, and two functions that belong to no tier fell out of the count.** The swap guard
+could not catch it either — its `ported_expected` table is a written-down expectation, so a
+function that is neither aliased nor swapped is simply absent from both sides of the comparison and
+nothing fires. A derive over `dir(module)` catches a *wrong* alias; only reading the module catches
+a *missing* one.
+
+### 33.9 Everything is bit-identical, and here that is a sharp test
+
+Every comparison in the new parity file is exact: the seam's surface, matrix, right-hand side
+(forced and unforced) and commit; construction including both fill reports; sixty coupled steps of
+state and every ledger on both tiers, both head shapes, lossless and lossy, forced and unforced;
+the reduction to a bare `Membrane` under a zeroed load; and all four substitutions the reference's
+own tests make.
+
+This is §32.2's reason, unchanged — the sparse products, the assembly, the factorization and
+`np.dot` are the same calls on the same objects in both languages, and elementwise `+ - * /`
+admits no reassociation — and it is worth restating that exactness *here* is a claim about the
+transcription rather than about the dynamics. The two implementations are not two discretizations.
+
+### 33.10 The success condition
+
+* `cargo test --workspace` — 25 test binaries green, including the dependency allowlist (still
+  empty).
+* `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings` — clean.
+* `ruff check .` — clean.
+* `PHYSSYNTH_RS=1 pytest` over the ten airbox files plus `test_stability.py` and
+  `test_web_backend.py` — **858 passed**, the same number as §32.9 and the whole of that list. The
+  count does not move because the new parity file is not in it and no test was added to the
+  reference's own suite.
+* `pytest tests/test_rust_parity_airbox_memb.py` — **83 passed**.
+* Every parity file together — **2,465 passed, 1 skipped**.
+* Default path unchanged: the same files green without the flag.
+* The swap guard's class table went up by **three** and its function table by **two** — checked, per
+  §23.7, rather than assumed.
+* `pip install ./crates/physsynth-py` before believing any of it (§32.8), and `--no-cache-dir
+  --force-reinstall` when a rebuild has to be certain: an ordinary `pip install` can serve a cached
+  wheel, which is §25.8a with a second way in.
+
+### 33.11 What the next batch inherits
+
+* **`airbox.py` is finished, and `connection.py` is the next file.** §32.10 discharged its last
+  blocker and this batch changes nothing about it: `connection` needs no membrane wrapper, touches
+  no private name on any collaborator, and its three bridges are now handed Rust objects on every
+  path the suite exercises. It is pure duck typing (§31.11), so what it needs from a port is that
+  the objects answer — and §33.2 adds one clause to that: **that they answer to a write, too.**
+  Grep `tests/test_*connection*.py` and the bridge tests for assignment against the bridge itself,
+  not only against its collaborators.
+* **After `connection`, `analysis/`**, and that is the whole of the core.
+* **A `#[pyclass]` getter decides both directions.** §32.6 for reads, §33.2 for writes. Neither is
+  visible to `cargo test` or to any physics bar, and the read half is silent while the write half is
+  loud — so the write half is the one that has been getting caught.
+* **The parked room-energy tightening is still parked**, and is now four batches old: the room's own
+  `dissipated`/`injected` books could be exact with `reduce::sum` (§31.11's half of it survives;
+  the `powf` half is discharged by §33.6). It changes numbers in a ledger, so it wants its own
+  measurement and its own batch.

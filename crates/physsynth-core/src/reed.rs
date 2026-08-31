@@ -48,6 +48,7 @@
 //! plausible.
 
 use crate::bore::{self, Bore};
+use crate::pyfloat::scalar_pow;
 use crate::root::{self, RootError};
 
 /// A construction-time rejection. Every variant's `Display` is the Python original's message
@@ -225,8 +226,10 @@ impl Params {
         let gk = g * k;
         let den = 1.0 + 0.5 * gk;
         // `(2.0 - (self.wr * self.k) ** 2) / self._den` — `** 2` is libm's `pow`, not a multiply
-        // (plan §10.3; measured, `x ** 2 != x * x` in 79 of 200,007 random doubles).
-        let cy_n = (2.0 - (wr * k).powf(2.0)) / den;
+        // (plan §10.3; measured, `x ** 2 != x * x` in 79 of 200,007 random doubles). Through
+        // `scalar_pow` and not a bare `powf(2.0)`, whose literal exponent LLVM folds back into a
+        // multiply in release builds only (§17.2).
+        let cy_n = (2.0 - scalar_pow(wr * k, 2.0)) / den;
         let cy_prev = (0.5 * gk - 1.0) / den;
         // `(self.k * self.k / self.mu) / self._den`.
         let c_reed = ((k * k) / mu) / den;
@@ -501,8 +504,9 @@ pub fn commit(p: &Params, s: &mut State) {
     let k = p.k;
     s.mouth_work += (k * s.p_mouth) * s.flow;
     s.jet_loss += (k * s.dp) * s.jet_flow;
-    // `k * self.Mr * self.g * self.reed_velocity ** 2` — `** 2` is libm's `pow`.
-    s.reed_damp_work += ((k * p.mr) * p.g) * s.reed_velocity.powf(2.0);
+    // `k * self.Mr * self.g * self.reed_velocity ** 2` — `** 2` is libm's `pow`, and through
+    // `scalar_pow` so that a release build does not fold the literal exponent (§17.2).
+    s.reed_damp_work += ((k * p.mr) * p.g) * scalar_pow(s.reed_velocity, 2.0);
     s.n += 1;
 }
 

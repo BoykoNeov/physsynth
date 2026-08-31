@@ -33,7 +33,28 @@
 //! last bit. Its fifth is `bow`, the project's first continuous nonlinear *exciter* — a shell over
 //! machinery four earlier batches already ported, whose one new piece of arithmetic is a residual
 //! the original spells twice, because the array path has a scalar hoisted out of it and the scalar
-//! path does not.
+//! path does not. Its sixth closes the phase with `BarrierString` in `collision`, and settles when
+//! an exact claim survives a ported reduction: not by magnitude but by *length*, because two
+//! doubles sum the same in either order unless they cancel.
+//!
+//! Phase 4 is `beam`, sent to answer a question rather than to add a model, and it answers it in
+//! the negative: `sparse_lu` cannot be held to bit-identity against SciPy, because SuperLU is
+//! supernodal and matching it would be a claim about how SciPy was built. Everything downstream of
+//! a sparse solve therefore runs on a measured tolerance — and only what *owns* a solve, which is
+//! a distinction Phase 5 needed.
+//!
+//! Phase 5 is the field models and the room. It opens with the guitar outline in `ops2d`, whose
+//! functions return *decisions* rather than numbers (a last bit there is a different plate, not a
+//! rounding), then the plate's five matrices, then the nonlinear plate — the von Karman bracket
+//! and the clamped Airy solve — which finishes `ops2d`; then `plate` itself, both classes at once
+//! because an `array_equal` anchor binds them; then `string_geometric`, the last of the four
+//! theta-scheme strings, which is where an unknown *ordering* in front of the sparse LU turns out
+//! to cost thirteen times the fill while changing no digit. The last three batches are one file in
+//! three tiers: `airbox`, the 3-D room; `airbox_port`, the terminals that open into it; and the
+//! resonator wrappers above those, which live in the binding crate alone and have no half here at
+//! all — the tier below deliberately stores its matrices as Python objects tests replace, so the
+//! wrapper computes *through* SciPy and what is Rust is only the control flow and the elementwise
+//! arithmetic between those calls.
 //!
 //! # The shape every resonator here shares
 //!

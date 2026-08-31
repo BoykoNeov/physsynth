@@ -351,6 +351,34 @@ pub fn free_pressure_nodes(
     Ok(f64_to_py(py, out))
 }
 
+/// `physsynth.core.airbox._face_axes(face)`.
+///
+/// `(normal axis, end, in-plane axis 0, in-plane axis 1)`. Pure integer arithmetic off a
+/// six-element table, so there is nothing here to be bit-identical about -- what has to match is
+/// the refusal, whose message the reference formats from `FACES` and which
+/// `test_airbox_surface.py` matches on.
+#[pyfunction]
+#[pyo3(name = "_face_axes")]
+pub fn face_axes_py(face: &str) -> PyResult<(usize, usize, usize, usize)> {
+    core::face_axes(face).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "unknown face '{face}'; expected one of ('x0', 'x1', 'y0', 'y1', 'z0', 'z1')."
+        ))
+    })
+}
+
+/// `physsynth.core.airbox.impedance_from_zeta(zeta, rho0=RHO0_AIR, c0=C0_AIR)`.
+///
+/// `float(zeta) * rho0 * c0`, left-folded as Python folds it -- `(zeta rho0) c0`. Both defaults
+/// are the module's ambient air, and they are spelled here rather than read off the module so that
+/// a caller who passes neither gets the same two constants either implementation is built with.
+#[pyfunction]
+#[pyo3(name = "impedance_from_zeta")]
+#[pyo3(signature = (zeta, *, rho0 = 1.2041, c0 = 343.0))]
+pub fn impedance_from_zeta_py(zeta: f64, rho0: f64, c0: f64) -> f64 {
+    physsynth_core::airbox::impedance_from_zeta(zeta, rho0, c0)
+}
+
 /// `physsynth_core::reduce::sum` — NumPy's pairwise blocking, exposed so the claim can be tested.
 ///
 /// Not used by `airbox.py`. It exists because the claim it rests on is the riskiest thing in this

@@ -398,6 +398,53 @@ def test_writing_through_the_state_reaches_the_model(case):
     _assert_state_identical(py, rs, "50 steps after an in-place write")
 
 
+def _pow_witness(start, n=200_000, step=1e-9):
+    """The first value near ``start`` where CPython's ``x ** 2`` is not ``x * x``.
+
+    Searched rather than hardcoded (plan section 26.6): the shipped ``c0 = 343.0`` is one of the
+    values where the two agree — 343 squared is 117649, exact in doubles — so a pin written at the
+    default would assert nothing at all, and no fixture in this file happens to land on a witness.
+
+    The sweep is **relative and wide**, not an ``np.nextafter`` walk. ``pow`` and a multiply
+    disagree in about 5 of every 10,000 values drawn from a decade-wide band, and they do it in
+    clusters: a walk of 200,000 consecutive doubles covers a band some 1e6 times narrower than that
+    measurement and can report "none" from a neighbourhood that simply has no witness in it
+    (measured — 0 in 200,000 consecutive doubles from 1.41421356, against 47 per 100,000 samples
+    from [1, 2)). Stepping by a relative 1e-9 covers 2e-4 of the value in the same budget.
+    """
+    for i in range(n):
+        x = float(start) * (1.0 + i * step)
+        if x * x != x**2:
+            return x
+    return None
+
+
+def test_the_compliance_denominator_uses_a_real_pow_in_release_too():
+    """``rho0 * c0 ** 2`` is libm's ``pow``, and staying that way is a claim about the COMPILER.
+
+    LLVM folds ``powf(x, 2.0)`` back into ``x * x`` whenever the exponent is a visible literal, and
+    it does so only in ``--release`` (plan section 17.2, which arrived as a red CI run). For six
+    batches this module's denominator was written as a bare ``c0.powf(2.0)`` and was therefore the
+    fold's *shipped* case: invisible at the ambient 343 m/s, and measured 2026-08-31 at 9.4e-15 of
+    amplitude over 200 steps one ulp above it.
+
+    It runs against the INSTALLED extension, which is a release build — so unlike a native spelling
+    test it needs no second profile to mean anything.
+    """
+    c0 = _pow_witness(C0_AIR)
+    assert c0 is not None, "no witness for c0 ** 2 != c0 * c0 -- search wider"
+    case = dict(N=48, lam=0.95, boundary=("closed", "open"), c0=c0)
+    py, rs = _pair(case)
+    p0 = _bump(py)
+    py.set_state(p0.copy())
+    rs.set_state(p0.copy())
+    for step in range(200):
+        py.step()
+        rs.step()
+        assert np.array_equal(py.p, rs.p), f"p diverged at step {step} -- a folded exponent"
+    assert np.array_equal(py.U, rs.U)
+
+
 # -- the source hook -----------------------------------------------------------------------------
 
 

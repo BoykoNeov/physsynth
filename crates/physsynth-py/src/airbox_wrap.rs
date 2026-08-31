@@ -376,6 +376,135 @@ impl PyPlateSurface {
     }
 }
 
+/// The seam on the `Membrane` side — model #4, and three differences from the plate, each of them a
+/// fact about the model rather than a convenience (the reference's docstring is the specification).
+///
+/// * **The mass is uniform.** Every live node carries `rho h^2`; there is no lumped `W` and no
+///   free-boundary branch, because a membrane's rim is clamped and dead. So `denominator` is one
+///   number and the load's `(k / 2 rho h^2) T^T R T` is a plain scaling.
+/// * **There is no `_accel`** to refresh, so `commit` is the two-level roll and nothing else.
+/// * **`rhs`'s `f_ext` term has no counterpart in the model.** `Plate.step` has its own `f_ext`
+///   path, so the plate seam's copy of it can be checked against the original; `Membrane.step()`
+///   takes no force at all. That term is therefore arithmetic with nothing in the model to be
+///   bit-identical *to*, and the parity file has to drive it deliberately -- a run that only ever
+///   passes `f_ext=None` compares the shared half twice and never reaches this one.
+#[pyclass(dict, name = "_MembraneSurface", module = "physsynth_rs")]
+pub struct PyMembraneSurface {
+    model: Py<PyAny>,
+    k: f64,
+    areas: Py<PyAny>,
+    denominator: f64,
+}
+
+#[pymethods]
+impl PyMembraneSurface {
+    #[new]
+    fn new(py: Python<'_>, membrane: Py<PyAny>) -> PyResult<Self> {
+        let m = membrane.bind(py);
+        let k = f64_attr(m, "k")?;
+        let n_live: usize = m.getattr("n_live")?.extract()?;
+        let h = f64_attr(m, "h")?;
+        // Per-node mass rho h^2, uniform: the clamped rim is dead, not lightly weighted. Both
+        // spellings are the reference's own left-to-right fold -- `(rho * h) * h`, and `h * h`
+        // rather than a squaring call, which is section 23.4's hazard and section 17.2's.
+        let areas = pyarr(py, vec![h * h; n_live]);
+        let denominator = f64_attr(m, "rho")? * h * h;
+        Ok(Self {
+            model: membrane,
+            k,
+            areas,
+            denominator,
+        })
+    }
+
+    #[getter]
+    fn model(&self, py: Python<'_>) -> Py<PyAny> {
+        self.model.clone_ref(py)
+    }
+
+    #[getter]
+    fn k(&self) -> f64 {
+        self.k
+    }
+
+    #[getter]
+    fn areas(&self, py: Python<'_>) -> Py<PyAny> {
+        self.areas.clone_ref(py)
+    }
+
+    #[getter]
+    fn denominator(&self) -> f64 {
+        self.denominator
+    }
+
+    /// `(coords, areas)` — the **live** nodes only, which is the moving surface: a membrane's rim
+    /// is clamped and dead, so the radiating surface is one cell inside the nominal boundary.
+    fn surface(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let coords = surface_coords(py, self.model.bind(py))?;
+        Ok(PyTuple::new(py, [coords, self.areas.clone_ref(py)])?
+            .into_any()
+            .unbind())
+    }
+
+    /// `(1 + sigma k) I` — and its emptiness is the tier's main design fact: model #4 is a **pure
+    /// explicit** update, and the air load's unknown is `u^{n+1}`, so putting the load in `A` buys
+    /// `radiated == injected` as an identity at the price of a factorization the model never had.
+    fn a_bare(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let m = self.model.bind(py);
+        let sk = f64_attr(m, "sigma")? * f64_attr(m, "k")?;
+        let n_live: usize = m.getattr("n_live")?.extract()?;
+        let scipy = py.import("scipy.sparse")?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("format", "csc")?;
+        let eye = scipy.call_method("identity", (n_live,), Some(&kwargs))?;
+        Ok(eye.mul(1.0 + sk)?.unbind())
+    }
+
+    /// `u^{n-1}` — read once per step, before `commit` (see the plate seam).
+    #[getter]
+    fn u_prev(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        Ok(self.model.bind(py).getattr("u_prev")?.unbind())
+    }
+
+    /// `2 u^n - (1 - sigma k) u^{n-1} + c^2 k^2 L u^n`, plus `k^2 f_ext / rho h^2`.
+    ///
+    /// The first part is `Membrane.step`'s own numerator in its own operand order, so a zero air
+    /// load and no force reduce to the bare membrane exactly.
+    #[pyo3(signature = (f_ext))]
+    fn rhs(&self, py: Python<'_>, f_ext: Option<Py<PyAny>>) -> PyResult<Py<PyAny>> {
+        let m = self.model.bind(py);
+        let sk = f64_attr(m, "sigma")? * self.k;
+        let c = f64_attr(m, "c")?;
+        // `m.c * m.c * self.k * self.k` left to right: ((c c) k) k, NOT (c k) squared.
+        let c2k2 = c * c * self.k * self.k;
+
+        let u_obj = m.getattr("u")?;
+        let v_obj = m.getattr("u_prev")?;
+        let u = vec1(py, &u_obj, "u")?;
+        let v = vec1(py, &v_obj, "u_prev")?;
+        let lu = vec1(py, &m.getattr("L")?.matmul(&u_obj)?, "L @ u")?;
+        let rhs: Vec<f64> = (0..u.len())
+            .map(|i| (2.0 * u[i] - (1.0 - sk) * v[i]) + c2k2 * lu[i])
+            .collect();
+
+        let bound = f_ext.map(|f| f.into_bound(py));
+        let rhs = add_f_ext(py, rhs, bound.as_ref(), self.k * self.k, self.denominator)?;
+        Ok(pyarr(py, rhs))
+    }
+
+    /// Roll `u^{n-1} <- u^n <- u^{n+1}`. There is no acceleration cache to refresh, which is the
+    /// same gap that leaves `Membrane` without a `pressure()` read-out.
+    fn commit(&self, py: Python<'_>, u_next: Py<PyAny>) -> PyResult<()> {
+        let m = self.model.bind(py);
+        let u_obj = m.getattr("u")?;
+        m.setattr("u_prev", u_obj)?;
+        m.setattr("u", u_next)?;
+        let n: i64 = m.getattr("n")?.extract()?;
+        m.setattr("n", n + 1)?;
+        Ok(())
+    }
+}
+
 /// The seam on the `VKPlate` side — the linear half is the model's own `_linear_rhs`, and the
 /// Picard loop is `VKPlate.step`'s arithmetic with the room's terms held fixed.
 #[pyclass(dict, name = "_VKPlateSurface", module = "physsynth_rs")]
@@ -572,10 +701,16 @@ enum Tier {
     Suspended,
 }
 
-/// Everything the four plate wrappers hold. The differences between them are two enum arms and a
-/// ledger name; the arithmetic is one function.
+/// Everything the six grid wrappers hold. The differences between them are two enum arms, a
+/// ledger name and the model's own attribute name; the arithmetic is one function.
 struct Wrap {
-    plate: Py<PyAny>,
+    model: Py<PyAny>,
+    /// What the wrapper calls the resonator it holds -- "plate" or "membrane". It is three things
+    /// at once and they must agree: the `#[getter]` the class exposes, the label
+    /// `_require_same_rate` puts in its message, and the name `__getattr__` refuses to delegate so
+    /// the lookup cannot recurse. Getting the third wrong takes the wrapper's own model away from
+    /// it, silently: the miss falls through to a delegation the model itself cannot answer.
+    model_name: &'static str,
     room: Py<PyAny>,
     k: f64,
     surface: Py<PyAny>,
@@ -611,19 +746,20 @@ fn ledger_len(py: Python<'_>, port: &Py<PyAny>, tier: Tier) -> PyResult<usize> {
 #[allow(clippy::too_many_arguments)]
 fn build(
     py: Python<'_>,
-    plate: Py<PyAny>,
+    model: Py<PyAny>,
+    model_name: &'static str,
     room: Py<PyAny>,
     seam_name: &str,
     port_name: &str,
     port_kwargs: &Bound<'_, PyDict>,
     tier: Tier,
 ) -> PyResult<Wrap> {
-    let p = plate.bind(py);
-    require_same_rate(p, room.bind(py), "plate")?;
+    let p = model.bind(py);
+    require_same_rate(p, room.bind(py), model_name)?;
     let k = f64_attr(p, "k")?;
     let module = airbox_module(py)?;
 
-    let surface = module.getattr(seam_name)?.call1((plate.clone_ref(py),))?;
+    let surface = module.getattr(seam_name)?.call1((model.clone_ref(py),))?;
     let pair = surface.call_method0("surface")?;
     let coords = pair.get_item(0)?;
     let areas = pair.get_item(1)?;
@@ -653,7 +789,8 @@ fn build(
     let port = port.unbind();
     let n_ledger = ledger_len(py, &port, tier)?;
     Ok(Wrap {
-        plate,
+        model,
+        model_name,
         room,
         k,
         surface: surface.unbind(),
@@ -756,7 +893,7 @@ impl Wrap {
     /// Total discrete energy `E_plate + integral pbar . q dt` (Joules) — an explicit override, not
     /// a delegation, because the delegated number is the total *without* its coupling channel.
     fn energy(&self, py: Python<'_>) -> PyResult<f64> {
-        let e: f64 = self.plate.bind(py).call_method0("energy")?.extract()?;
+        let e: f64 = self.model.bind(py).call_method0("energy")?.extract()?;
         Ok(e + self.radiated_energy)
     }
 
@@ -775,25 +912,29 @@ impl Wrap {
     /// expected -- notably `StringPlateBridge`, which reassembles the plate's `G0` block out of
     /// exactly those. NOTHING exposed above may shadow a name that bridge reads.
     fn getattr(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
-        if name == "plate" {
+        if name == self.model_name {
             // Nothing to delegate through yet -- never recurse.
             return Err(PyAttributeError::new_err(name.to_string()));
         }
-        Ok(self.plate.bind(py).getattr(name)?.unbind())
+        Ok(self.model.bind(py).getattr(name)?.unbind())
     }
 }
 
-/// Generate the shared `#[pymethods]` surface of a plate wrapper: the state it sets on itself, the
-/// four overrides and the delegation. Written once because the reference's four classes are one
+/// Generate the shared `#[pymethods]` surface of a grid wrapper: the state it sets on itself, the
+/// four overrides and the delegation. Written once because the reference's six classes are one
 /// class with two enum arms, and because an `array_equal` anchor across them (section 15.2) means
 /// a difference between two transcriptions would be a failure rather than a divergence.
-macro_rules! plate_wrapper {
-    ($cls:ident, $ledger:ident, { $($extra:item)* }) => {
+///
+/// `$model` is the attribute the wrapper calls its resonator, and it MUST be the same string
+/// `build` was handed: the getter emitted here and `Wrap::getattr`'s recursion guard are two
+/// halves of one decision (see `Wrap::model_name`).
+macro_rules! grid_wrapper {
+    ($cls:ident, $model:ident, $ledger:ident, { $($extra:item)* }) => {
         #[pymethods]
         impl $cls {
             #[getter]
-            fn plate(&self, py: Python<'_>) -> Py<PyAny> {
-                self.w.plate.clone_ref(py)
+            fn $model(&self, py: Python<'_>) -> Py<PyAny> {
+                self.w.model.clone_ref(py)
             }
 
             #[getter]
@@ -877,11 +1018,21 @@ macro_rules! plate_wrapper {
                 self.w.n
             }
 
+            /// Settable, and the reference gets that for free by being Python. A `#[getter]` with
+            /// no `#[setter]` is a data descriptor whose `__set__` raises, so a plain attribute
+            /// the reference lets a caller advance becomes read-only the moment it is ported --
+            /// and `test_airbox_membrane.py`'s hand-rolled lagged-velocity control does exactly
+            /// that (`inst.n += 1`) while it drives the seam itself.
+            #[setter]
+            fn set_n(&mut self, value: i64) {
+                self.w.n = value;
+            }
+
             fn energy(&self, py: Python<'_>) -> PyResult<f64> {
                 self.w.energy(py)
             }
 
-            /// Set the plate's initial state and reset this port's coupling ledger to zero.
+            /// Set the model's initial state and reset this port's coupling ledger to zero.
             ///
             /// `v0`'s default is `0.0`, so an omitted argument and an explicit `None` are NOT the
             /// same call — section 24.7's arm order, and PyO3 wraps the default expression, so
@@ -893,20 +1044,20 @@ macro_rules! plate_wrapper {
                 u0: Py<PyAny>,
                 v0: Option<Option<Py<PyAny>>>,
             ) -> PyResult<()> {
-                let plate = self.w.plate.bind(py);
+                let model = self.w.model.bind(py);
                 match v0 {
-                    Some(None) => plate.call_method1("set_state", (u0, 0.0))?,
-                    None => plate.call_method1("set_state", (u0, py.None()))?,
-                    Some(Some(v)) => plate.call_method1("set_state", (u0, v))?,
+                    Some(None) => model.call_method1("set_state", (u0, 0.0))?,
+                    None => model.call_method1("set_state", (u0, py.None()))?,
+                    Some(Some(v)) => model.call_method1("set_state", (u0, v))?,
                 };
                 self.w.reset_books(py)
             }
 
-            /// Zero the plate state and the coupling ledger — reuse on a new run.
+            /// Zero the model state and the coupling ledger — reuse on a new run.
             fn reset(&mut self, py: Python<'_>) -> PyResult<()> {
-                let plate = self.w.plate.bind(py);
-                let n_live: usize = plate.getattr("n_live")?.extract()?;
-                plate.call_method1("set_state", (zeros(py, n_live),))?;
+                let model = self.w.model.bind(py);
+                let n_live: usize = model.getattr("n_live")?.extract()?;
+                model.call_method1("set_state", (zeros(py, n_live),))?;
                 self.w.reset_books(py)
             }
 
@@ -929,7 +1080,7 @@ pub struct PyRoomLoadedPlate {
     w: Wrap,
 }
 
-plate_wrapper!(PyRoomLoadedPlate, surface_pressure, {
+grid_wrapper!(PyRoomLoadedPlate, plate, surface_pressure, {
     #[new]
     #[pyo3(signature = (*, plate, room, face, origin=None, spreading=None::<Py<PyAny>>))]
     fn new(
@@ -948,6 +1099,7 @@ plate_wrapper!(PyRoomLoadedPlate, surface_pressure, {
             w: build(
                 py,
                 plate,
+                "plate",
                 room,
                 "_PlateSurface",
                 "SurfacePort",
@@ -965,7 +1117,7 @@ plate_wrapper!(PyRoomLoadedPlate, surface_pressure, {
     /// The plate's **monopole** read-out, reflecting the load — right for free, because the load
     /// was inside the solve and `_accel` carries it with no post-solve refresh.
     fn pressure(&self, py: Python<'_>) -> PyResult<f64> {
-        self.w.plate.bind(py).call_method0("pressure")?.extract()
+        self.w.model.bind(py).call_method0("pressure")?.extract()
     }
 });
 
@@ -975,7 +1127,7 @@ pub struct PyRoomSuspendedPlate {
     w: Wrap,
 }
 
-plate_wrapper!(PyRoomSuspendedPlate, pressure_jump, {
+grid_wrapper!(PyRoomSuspendedPlate, plate, pressure_jump, {
     #[new]
     #[pyo3(signature = (*, plate, room, plane, index, origin=None, spreading=None::<Py<PyAny>>))]
     fn new(
@@ -996,6 +1148,7 @@ plate_wrapper!(PyRoomSuspendedPlate, pressure_jump, {
             w: build(
                 py,
                 plate,
+                "plate",
                 room,
                 "_PlateSurface",
                 "InteriorSurfacePort",
@@ -1011,7 +1164,7 @@ plate_wrapper!(PyRoomSuspendedPlate, pressure_jump, {
     }
 
     fn pressure(&self, py: Python<'_>) -> PyResult<f64> {
-        self.w.plate.bind(py).call_method0("pressure")?.extract()
+        self.w.model.bind(py).call_method0("pressure")?.extract()
     }
 });
 
@@ -1025,7 +1178,7 @@ pub struct PyRoomLoadedVKPlate {
     w: Wrap,
 }
 
-plate_wrapper!(PyRoomLoadedVKPlate, surface_pressure, {
+grid_wrapper!(PyRoomLoadedVKPlate, plate, surface_pressure, {
     #[new]
     #[pyo3(signature = (*, plate, room, face, origin=None, spreading=None::<Py<PyAny>>))]
     fn new(
@@ -1044,6 +1197,7 @@ plate_wrapper!(PyRoomLoadedVKPlate, surface_pressure, {
             w: build(
                 py,
                 plate,
+                "plate",
                 room,
                 "_VKPlateSurface",
                 "SurfacePort",
@@ -1065,7 +1219,7 @@ pub struct PyRoomSuspendedVKPlate {
     w: Wrap,
 }
 
-plate_wrapper!(PyRoomSuspendedVKPlate, pressure_jump, {
+grid_wrapper!(PyRoomSuspendedVKPlate, plate, pressure_jump, {
     #[new]
     #[pyo3(signature = (*, plate, room, plane, index, origin=None, spreading=None::<Py<PyAny>>))]
     fn new(
@@ -1086,6 +1240,7 @@ plate_wrapper!(PyRoomSuspendedVKPlate, pressure_jump, {
             w: build(
                 py,
                 plate,
+                "plate",
                 room,
                 "_VKPlateSurface",
                 "InteriorSurfacePort",
@@ -1098,6 +1253,104 @@ plate_wrapper!(PyRoomSuspendedVKPlate, pressure_jump, {
     #[pyo3(signature = (f_ext=None))]
     fn step(&mut self, py: Python<'_>, f_ext: Option<Py<PyAny>>) -> PyResult<()> {
         self.w.step(py, f_ext, true)
+    }
+});
+
+/// A `Membrane` **loaded by a room** through one face of it — the baffled drumhead.
+///
+/// `RoomLoadedPlate` with model #4 in place of model #5. The arithmetic is `Wrap::step`'s,
+/// unchanged: the two tiers differ in the seam they drive and in nothing else, which is why this
+/// batch adds no stepping code at all.
+///
+/// Note what is deliberately absent, here and on the suspended arm: **`pressure()`**. Model #4 has
+/// no monopole read-out, because it caches no acceleration, and the reference's mixin says so in
+/// as many words. A getter or method added here would be a permanent shadow over `__getattr__`
+/// (section 32.6) and would answer a question the model cannot.
+#[pyclass(dict, name = "RoomLoadedMembrane", module = "physsynth_rs")]
+pub struct PyRoomLoadedMembrane {
+    w: Wrap,
+}
+
+grid_wrapper!(PyRoomLoadedMembrane, membrane, surface_pressure, {
+    #[new]
+    #[pyo3(signature = (*, membrane, room, face, origin=None, spreading=None::<Py<PyAny>>))]
+    fn new(
+        py: Python<'_>,
+        membrane: Py<PyAny>,
+        room: Py<PyAny>,
+        face: Py<PyAny>,
+        origin: Option<Py<PyAny>>,
+        spreading: Option<Option<Py<PyAny>>>,
+    ) -> PyResult<Self> {
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("face", face)?;
+        kwargs.set_item("origin", origin_arg(py, origin))?;
+        kwargs.set_item("spreading", spreading_arg(py, spreading))?;
+        Ok(Self {
+            w: build(
+                py,
+                membrane,
+                "membrane",
+                room,
+                "_MembraneSurface",
+                "SurfacePort",
+                &kwargs,
+                Tier::Baffled,
+            )?,
+        })
+    }
+
+    #[pyo3(signature = (f_ext=None))]
+    fn step(&mut self, py: Python<'_>, f_ext: Option<Py<PyAny>>) -> PyResult<()> {
+        self.w.step(py, f_ext, false)
+    }
+});
+
+/// A `Membrane` hanging **in** the room on an interior plane — the frame drum.
+///
+/// `RoomSuspendedPlate` with model #4: the head radiates from both faces, is driven by the
+/// pressure **jump** across it, and is an *object* rather than a source, which is the cut
+/// `InteriorSurfacePort` registers. Both doublings -- the load matrix and the `pbar` term -- are
+/// `Tier::Suspended`'s, already in `Wrap::step`.
+#[pyclass(dict, name = "RoomSuspendedMembrane", module = "physsynth_rs")]
+pub struct PyRoomSuspendedMembrane {
+    w: Wrap,
+}
+
+grid_wrapper!(PyRoomSuspendedMembrane, membrane, pressure_jump, {
+    #[new]
+    #[pyo3(signature = (*, membrane, room, plane, index, origin=None, spreading=None::<Py<PyAny>>))]
+    fn new(
+        py: Python<'_>,
+        membrane: Py<PyAny>,
+        room: Py<PyAny>,
+        plane: Py<PyAny>,
+        index: Py<PyAny>,
+        origin: Option<Py<PyAny>>,
+        spreading: Option<Option<Py<PyAny>>>,
+    ) -> PyResult<Self> {
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("plane", plane)?;
+        kwargs.set_item("index", index)?;
+        kwargs.set_item("origin", origin_arg(py, origin))?;
+        kwargs.set_item("spreading", spreading_arg(py, spreading))?;
+        Ok(Self {
+            w: build(
+                py,
+                membrane,
+                "membrane",
+                room,
+                "_MembraneSurface",
+                "InteriorSurfacePort",
+                &kwargs,
+                Tier::Suspended,
+            )?,
+        })
+    }
+
+    #[pyo3(signature = (f_ext=None))]
+    fn step(&mut self, py: Python<'_>, f_ext: Option<Py<PyAny>>) -> PyResult<()> {
+        self.w.step(py, f_ext, false)
     }
 });
 

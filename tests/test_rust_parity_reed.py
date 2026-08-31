@@ -159,6 +159,87 @@ def test_the_node_zero_compliance_is_not_the_bores_own(case):
     assert py.dp == rs.dp
 
 
+def _cy_n(f_reed, k, q_reed, spell):
+    """The reed's ``y^n`` coefficient, in both spellings of its one squaring.
+
+    ``(2.0 - (wr k) ** 2) / (1 + g k / 2)``, which is what ``reed.py`` computes and what
+    ``reed.rs`` has to reproduce. The predicate has to be this whole expression and not the
+    squaring alone: ``2.0 - t^2`` absorbs a last bit of ``t^2`` outright whenever ``t^2`` is small
+    against 2, which is plan section 23.5's absorbed sub-expression arriving inside the test
+    written to catch section 17.2.
+    """
+    wr = 2.0 * np.pi * f_reed
+    t = wr * k
+    den = 1.0 + 0.5 * ((wr / q_reed) * k)
+    return (2.0 - (t**2 if spell == "pow" else t * t)) / den
+
+
+def test_the_reeds_stiffness_coefficient_uses_a_real_pow_in_release_too():
+    """``(wr * k) ** 2`` is libm's ``pow`` in a release build too.
+
+    The bore's sibling of this test carries the mechanism (plan section 17.2): LLVM folds a literal
+    exponent of 2.0 back into a multiply, in ``--release`` only, so a bare ``powf(2.0)`` is a
+    shipped divergence a debug ``cargo test`` cannot see. This one was bare until 2026-08-31.
+
+    The fixture is **searched**, and where it lands is the finding rather than a detail: the two
+    spellings are only observable where ``2.0 - (wr k)^2`` does not swallow them, i.e. near
+    ``wr k = sqrt(2)``, which is a very stiff reed close to the CFL ceiling. That is section 16.4
+    read the usual way — pick the fixture that exercises the thing, not the one the physics ships
+    with — and it is why none of this file's own cases could have caught it.
+    """
+    base = dict(N=200, lam=1.0, p_mouth=1500.0, q_reed=8.0)
+    k = _build(BorePy, ReedBorePy, dict(base, f_reed=1200.0)).k
+    f0 = np.sqrt(2.0) / (2.0 * np.pi * k)  # where 2 - (wr k)^2 cancels
+    f_reed = None
+    for i in range(200_000):
+        f = float(f0) * (1.0 + i * 1e-9)
+        if _cy_n(f, k, 8.0, "pow") != _cy_n(f, k, 8.0, "mul"):
+            f_reed = f
+            break
+    assert f_reed is not None, "no witness for the stiffness coefficient -- search wider"
+
+    py, rs = _pair(dict(base, f_reed=f_reed))
+    for step in range(400):
+        py.step()
+        rs.step()
+        assert py.y == rs.y, f"reed displacement diverged at step {step} -- a folded exponent"
+    _assert_reed_state(py, rs, "after a run at a stiffness-coefficient witness")
+
+
+def test_the_reeds_damping_ledger_uses_a_real_pow_in_release_too():
+    """``reed_velocity ** 2`` in ``reed_damp_work`` — the same fold, in a book rather than a state.
+
+    The fixture is searched for a ``p_mouth`` whose **first** step lands the reed velocity on a
+    ``pow``/multiply witness, and the ledger is read after that one step. Both halves of that are
+    the finding:
+
+    * a run has to *reach* a witness — the reed's velocity crosses one about five times in ten
+      thousand steps, so the search is over ``p_mouth`` and its success is asserted; and
+    * the comparison has to happen while the accumulator is **empty**. A first form of this test
+      ran 4,000 steps at the shipped case, hit three witnesses, and still passed against a
+      deliberately reverted binary: by then ``reed_damp_work`` is large against one increment and
+      the addition absorbs the last bit outright (plan section 23.2's mechanism, in a ledger rather
+      than a field). After one step the ledger *is* the increment and nothing can swallow it.
+    """
+    p_mouth = None
+    for i in range(20_000):
+        candidate = 1500.0 * (1.0 + i * 1e-9)
+        probe = _build(BorePy, ReedBorePy, dict(N=200, lam=1.0, p_mouth=candidate))
+        probe.step()
+        v = probe.reed_velocity
+        if v * v != v**2:
+            p_mouth = candidate
+            break
+    assert p_mouth is not None, "no fixture put the first step's velocity on a witness"
+
+    py, rs = _pair(dict(N=200, lam=1.0, p_mouth=p_mouth))
+    py.step()
+    rs.step()
+    assert py.reed_velocity == rs.reed_velocity
+    assert py.reed_damp_work == rs.reed_damp_work
+    assert py.reed_damp_work != 0.0, "the ledger is empty -- this run asserts nothing"
+
+
 # -- construction-time refusals ------------------------------------------------------------------
 
 

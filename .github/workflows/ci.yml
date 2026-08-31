@@ -855,15 +855,23 @@ jobs:
       # Section 30 ported the room; section 31 ported the PORT TIER above it (`RoomPort`,
       # `SurfacePort`, `InteriorSurfacePort` and the `_free_pressure_nodes` helper they share);
       # section 32 ported the WRAPPER TIER above that -- `RoomLoadedBody`, both plate wrappers,
-      # both von Karman wrappers and the two seams they drive. The file list has not changed once
-      # across the three, which is the point of plan section 1's design: three tiers moved and not
-      # one of these tests was touched. The membrane wrappers are the only Python left in the file.
+      # both von Karman wrappers and the two seams they drive; and section 33 the MEMBRANE PAIR
+      # and its seam, which finishes the file. The file list has not changed once across the four,
+      # which is the point of plan section 1's design: four tiers moved and not one of these tests
+      # was touched. `airbox.py` is now Rust end to end.
       #
       # Section 32's own hazard is what this step covers and a parity file cannot: ten of these
       # tests REPLACE a collaborator on the instance -- `port.T`, `port.load_matrix`, `port.R`,
       # the port's own methods, and `inst._lu_loaded` -- to switch a coupling off, halve it or
       # invert its sign. A wrapper that cached any of them would keep loading the plate and every
       # one of those tests would pass having compared a loaded plate with itself.
+      #
+      # `test_airbox_membrane.py` carries section 33's variant of that hazard, and it is a
+      # different SHAPE: its lagged-velocity negative control does not replace a collaborator, it
+      # bypasses `step` entirely -- driving the seam, the port and the books by hand and advancing
+      # the wrapper's own `inst.n += 1`. A `#[getter]` with no `#[setter]` is a data descriptor
+      # whose `__set__` raises, so that assignment is the one thing in this list that turns a
+      # correct port RED rather than quietly green, and it is the only client of it in the tree.
       - name: The room, its ports and the resonators they load, unmodified, against Rust
         env:
           PHYSSYNTH_RS: "1"
@@ -934,7 +942,8 @@ jobs:
             tests/test_rust_parity_geometric.py \
             tests/test_rust_parity_airbox.py \
             tests/test_rust_parity_airbox_port.py \
-            tests/test_rust_parity_airbox_wrap.py
+            tests/test_rust_parity_airbox_wrap.py \
+            tests/test_rust_parity_airbox_memb.py
 
   # Lint, plus the OUTER half of the shard guard.
   #

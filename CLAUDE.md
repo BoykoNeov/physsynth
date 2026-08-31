@@ -46,9 +46,11 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    the `_free_pressure_nodes` helper they share — is Rust too, so a room and everything that opens
    a terminal into it are ported; and as of batch 8 the **wrapper tier** on top of *that* —
    `RoomLoadedBody`, both plate wrappers, both von Kármán wrappers and the two seams
-   (`_PlateSurface`, `_VKPlateSurface`) they drive — so the only Python left in the file is the
-   **membrane** pair and its mixin, about 410 lines. What is left
-   of the core is **the membrane wrappers in `airbox`, then `connection`, then `analysis/`**, and
+   (`_PlateSurface`, `_VKPlateSurface`) they drive; and as of batch 9 the **membrane pair**, its
+   seam and its mixin — plus the two module-level helpers (`_face_axes`, `impedance_from_zeta`)
+   that belonged to no tier and had been missed by every "one tier left" note — so **`airbox.py`
+   is finished**, all 4,071 lines of it. What is left
+   of the core is **`connection`, then `analysis/`**, and
    that order was a finding rather than a preference: §28.11 called `connection` the cheapest
    remaining file because it touches no private names, and §29.1 found that the instrument was
    wrong. `connection` is **polymorphic over its collaborators' types** — its three bridges are
@@ -59,7 +61,8 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    the bridge tests pass under the flag with a Rust wrapper standing in for a plate, and
    `connection` needs no membrane wrapper. §31.11 also corrects §29.1 on one point worth keeping:
    `connection.py` contains no `isinstance`, `hasattr`, `getattr` or `type(` at all, so it is *pure
-   duck typing*, and what blocked it was only that the wrapper objects must exist and answer.
+   duck typing*, and what blocked it was only that the wrapper objects must exist and answer —
+   to which §33.2 adds one clause: **and answer to a write**.
    `cargo test --workspace` runs the native bars and the Cargo dependency allowlist;
    `pip install ./crates/physsynth-py` then
    `PHYSSYNTH_RS=1 pytest` runs the **existing, unmodified** Python tests against the Rust code. The
@@ -619,7 +622,8 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    and a binding that copied its buffers would be **asymptotically** wrong rather than merely slower
    (678 µs of copying against a 12.9 µs read at 139,995 nodes, every answer bit-identical
    throughout). Two tightenings are parked on purpose: the room's own energy books could now be
-   exact, and `bore`/`reed` still spell `c0.powf(2.0)` with a literal exponent.
+   exact, and `bore`/`reed` still spell `c0.powf(2.0)` with a literal exponent. (The second was
+   discharged in batch 9 and was a **shipped** divergence all along; the first is still parked.)
 
    And a **twenty-fifth**, from the wrapper tier — Phase 5's eighth batch, which finishes
    `airbox.py` except for its membrane pair — which is about a kind of constraint the migration had
@@ -662,6 +666,56 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    stale wheel (built, not installed) made a correct `Option<Option<_>>` fix look exactly like
    PyO3 contradicting §31.7's documented arm order — the wrong diagnosis a stale wheel produces
    need not look like staleness at all.
+
+   And a **twenty-sixth**, from the membrane pair — Phase 5's ninth batch, which **finishes
+   `airbox.py`** — which is §32.6's own finding pointing the other way and is about what porting a
+   class silently decides: **a `#[getter]` with no `#[setter]` is still a data descriptor, so
+   porting a class decides not only which names can be *read* through it but which can be
+   *written*, and the default is none — where the reference, being Python, allowed every one.**
+   §32.6 found that a getter *shadows* `__getattr__` permanently and so takes a name away from the
+   model a wrapper stands in for; this is the same descriptor rule aimed at assignment. The
+   reference's `RoomLoadedMembrane.n` is a plain integer a caller may advance, and the ported one
+   written the obvious way refuses. There is exactly one client in the tree and it is a shape no
+   earlier search would have found: `test_airbox_membrane.py`'s lagged-velocity negative control
+   does not replace a collaborator (§31, §32) and reaches no private name (§0) — it **bypasses
+   `step` entirely**, hand-rolling a different scheme out of the wrapper's own parts, so what it
+   needs is to *drive* the object rather than read it. §30.3's rule (grep for assignment, not only
+   for reference) is the right search aimed one object too far away: it was run against the room's
+   *collaborators*, and it has to be run against **the class being ported itself**. The failure
+   mode here is the good one — an unwritable attribute raises, so a correct port goes red rather
+   than quietly green — and that is luck, not design: an attribute a client writes and then reads
+   back would have swallowed the write silently. So the port of a Python class starts from
+   **every attribute is writable** and justifies each refusal, not the other way round.
+   Six corollaries. **Three spellings of one name, and the failure is not where you look**: the
+   wrapper's model attribute names the getter, the label `_require_same_rate` puts in its message,
+   and the name `__getattr__` refuses to delegate — and reusing the plate tier's macro unchanged
+   makes `inst.membrane` a *miss*, which falls through to a delegation the membrane itself cannot
+   answer, so the wrapper loses its own model by way of a mechanism working exactly as designed.
+   **A default argument is an eighth door onto §23.6's empty comparison**: the membrane seam's
+   `f_ext` term is the one piece of arithmetic with nothing in the model to be bit-identical *to*
+   (`Membrane.step()` takes no force at all), and `f_ext=None` is what every airbox test and every
+   natural fixture passes — so a parity file written the obvious way compares the shared half twice
+   and passes. **A witness search has to be wide, whole-expression, and read before the accumulator
+   fills**, which the batch learned by getting all three wrong on the parked `powf` work: a
+   predicate on `t**2` rather than on `(2 - t^2)/den` finds a witness the subtraction absorbs
+   (§23.5 arriving *inside* the test written to catch §17.2); an `np.nextafter` walk spans about a
+   millionth of the range that measured the ~5e-4 disagreement rate and reports "none" from a
+   neighbourhood that has none (**0 in 200,000 consecutive doubles from 1.41421356** against **47
+   per 100,000 samples from [1, 2)**); and a ledger compared after 4,000 steps passes against a
+   deliberately reverted binary because the addition swallows one ulp of one increment (§23.2 in an
+   accumulator instead of a field). **The parked `powf(2.0)` was a shipped divergence and had been
+   for six batches**: `pip install` builds release, LLVM folds a literal exponent of 2.0 into a
+   multiply only in release, and the ambient `c0 = 343.0` is one of the values where `pow` and a
+   multiply agree — so nothing could see it. Measured one ulp above 343: **9.4e-15 of amplitude
+   over 200 steps**, and bit-identical after. The cheap general guard is a **Python** pin at a
+   searched fixture, because it runs against the installed extension and therefore needs no second
+   build profile. **The speed is §11.6 again and the room dilutes it**: 0.98-1.35x end to end,
+   1.0-1.6x with the Python room's own 175 µs step subtracted, decaying to a small loss as the
+   sparse solve grows — the price of §32.2, which bought ten tests that assert something. And
+   **"what is left in this file" was tracked by tier, so two functions belonging to no tier fell
+   out of the count** — `_face_axes` and `impedance_from_zeta` had Rust twins with native tests
+   since §31 and were simply never bound; the swap guard cannot catch that, because a function that
+   is neither aliased nor swapped is absent from both sides of its comparison.
 
 4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
    never the reverse. Keeps the physics portable to C++/Rust later.
