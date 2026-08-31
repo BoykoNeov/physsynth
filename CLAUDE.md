@@ -22,8 +22,8 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
    **PHASES 2, 3 AND 4 ARE ALL COMPLETE** and **PHASE 5 IS UNDER WAY**; phases 0, 1, all five
-   batches of 2, all six of 3, phase 4 and the first six batches of 5 are
-   built (plan §9-§30): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
+   batches of 2, all six of 3, phase 4 and the first seven batches of 5 are
+   built (plan §9-§31): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
    of `operators`, `membrane`, `exciter`, `body`, `bore`, `reed`, **`mallet`**, **`string_stiff`**,
    **`string_damped`**, **`string_nonlinear`**, **`bow`**, **all of `collision`** — the contact
    primitives, both contact solves, the project's one **dense LU** and `BarrierString` itself —
@@ -41,15 +41,21 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    anchors that chain it now compare one Rust class against another — and, as of batch 6, the
    **`AirBox`** class itself, the 3-D room, which is the **first half of a file** rather than a
    file: `airbox.py` is 3,976 lines and only the room ported, the ports and the six `RoomLoaded*` /
-   `RoomSuspended*` wrappers above it staying Python and working unchanged — ported. What is left
-   of the core is **the second half of `airbox`, then `connection`, then `analysis/`**, and that
+   `RoomSuspended*` wrappers above it staying Python and working unchanged — ported; and as of
+   batch 7 the **port tier** on top of it — `RoomPort`, `SurfacePort`, `InteriorSurfacePort` and
+   the `_free_pressure_nodes` helper they share — is Rust too, so a room and everything that opens
+   a terminal into it are ported and only the six wrappers are left. What is left
+   of the core is **the wrapper half of `airbox`, then `connection`, then `analysis/`**, and that
    order is a finding rather than a preference: §28.11 called `connection` the cheapest remaining
    file because it touches no private names, and §29.1 found that the instrument was wrong.
    `connection` is **polymorphic over its collaborators' types** — its three bridges are handed
    Rust bodies and plates *and* `airbox`'s duck-typed Python wrappers, with three `test_airbox_*`
    files pinning `bridge.stability_margin == bare.stability_margin` **exactly** across that
-   boundary — so it cannot move before those wrappers do, which is the half batch 6 did *not*
-   port. Do not re-open that ordering without reading §29.1 and §30.13.
+   boundary — so it cannot move before those wrappers do, which is the half batches 6 and 7
+   did *not* port. Do not re-open that ordering without reading §29.1, §30.13 and §31.11 — the
+   last of which corrects §29.1 on one point: `connection.py` contains no `isinstance`, `hasattr`,
+   `getattr` or `type(` at all, so it is *pure duck typing*, and what blocks it is only that the
+   wrapper objects must exist and answer, not that it discriminates on their types.
    `cargo test --workspace` runs the native bars and the Cargo dependency allowlist;
    `pip install ./crates/physsynth-py` then
    `PHYSSYNTH_RS=1 pytest` runs the **existing, unmodified** Python tests against the Rust code. The
@@ -561,6 +567,55 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    rather than a read-out, and it is the first time the manoeuvre was taken purely on the strength
    of §22.1 with no local measurement able to justify it (0 differences in 2,239 values here).
    And **§19.7's line continuation happened a fifth time from a fifth tool and never reached CI**.
+
+   And a **twenty-fourth**, from the ports — Phase 5's seventh batch, the *second* half of
+   `airbox.py`'s first tier — which corrects the batch immediately before it and is the first time
+   this migration has taken back a refusal: **NumPy's pairwise `np.sum` is one fixed algorithm, not
+   a CPU-dispatched kernel, so it transcribes exactly and §30.2's "bit-identity is unavailable at
+   eight terms or more" was avoidable.** §30.2's *measurement* stands and is still the cheapest
+   question in the toolkit — below eight elements `np.sum` **is** a left-to-right loop, whatever the
+   values. What it got wrong was the conclusion: the blocking above eight (eight accumulators
+   **seeded** from the first eight, the ragged tail folded into the *combined* result, a split at
+   `n/2` rounded **down** to a multiple of eight) reproduces `np.sum` with **0 disagreements** over
+   sixteen lengths from 1 to 40,000, over whole-array sums of 3-D arrays, and over a **strided**
+   reduction, which is a different code path. The distinction from §22.1 is the whole finding and
+   the two look alike: a transcendental's last bit is fixed by an **instruction selection** chosen
+   per CPU at import, where a summation's is fixed by an **order** — and NumPy unrolls by eight
+   precisely so that a vector unit cannot change it. It is also not §14.2's bargain, because BLAS
+   `ddot` *fuses* its multiply-add and has no scalar recipe at all. It mattered here and did not
+   matter in §30 because §14.2's question is answered **yes** three times in this tier — the port's
+   weights, its resistance and its free-pressure read are all on the update path — so the choice was
+   transcribe or lose exactness, and **every port size is bit-identical** where the prediction going
+   in was "a point port exact, a ball port a tolerance". The risky half is stated rather than
+   buried: "NumPy's blocking is the same on every machine" is asserted in exactly **one** named
+   test, so a runner that disagrees produces one diagnosis instead of §22.1's eighteen. Six
+   corollaries. **Take the callee first, and the reason is §13.2 rather than dependency order**: a
+   wrapper calls `free_pressure()`, solves, then `inject(q)`, so a Rust *caller* over a Python
+   callee would be a `&mut self` pymethod handing control out twice mid-step — which is also why
+   this tier could be exact at all, since every one of the file's six `splu` calls is in the wrapper
+   half. **Ask what a client DOES to the object, not only what it reads**: §30.3's "grep for
+   assignment" finds four attributes a test replaces wholesale, and then one door further on a test
+   **replaces the port's methods on the instance** (`port.free_pressure = lambda: ...`) to invert a
+   sign convention — which no attribute search finds and which a `#[pyclass]` refuses outright
+   without `dict`; it works because CPython's descriptor rules do not care which language defined
+   the class, so a getter/setter pair beats the instance dict and a pymethod loses to it. **A
+   diagonal inside a product is not neutral**: `T.T @ diags(R) @ T` left-associates, so SciPy forms
+   `(T_ki R_k) T_kj` and that differs from the right-folded spelling in **2,028 of 6,845** entries —
+   and the fixture that cannot see it, one of six pinned goldens, is blind *provably* rather than by
+   measurement, because `spreading="nearest"` makes every stored entry in a row of `T` the same
+   number and `(x d) x` is `x (d x)` identically. **Two SciPy routines in one expression disagree
+   about explicit zeros** — `coo.tocsr()` keeps a stored `0.0` and `csr_matmat` prunes one — so the
+   crate needed a second constructor, and no fixture the suite builds contains an explicit zero, so
+   nothing measured it. **§24.7's inverted arm order bit again despite being written down**: with
+   `Option<Option<_>>`, `Some(None)` is *omitted* and a bare `None` is the caller's literal, and
+   getting it backwards silently accepted `spreading=None`. And **the speed curve does not
+   converge**: §11.6 said the win is per-call overhead and disappears once the compiled kernel
+   dominates, but the missing clause is *dominates the **same work*** — the port's read is
+   `O(patch)` in an `O(room)` array, so it is 14.7x at 27 room nodes and still **3.7x** at 41,615,
+   and a binding that copied its buffers would be **asymptotically** wrong rather than merely slower
+   (678 µs of copying against a 12.9 µs read at 139,995 nodes, every answer bit-identical
+   throughout). Two tightenings are parked on purpose: the room's own energy books could now be
+   exact, and `bore`/`reed` still spell `c0.powf(2.0)` with a literal exponent.
 
 4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
    never the reverse. Keeps the physics portable to C++/Rust later.

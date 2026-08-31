@@ -3939,9 +3939,24 @@ class RoomSuspendedVKPlate(_RoomLoadedVKPlateMixin):
         self.n = 0
 
 
-# -- the Rust swap (plan sections 28 and 30) -----------------------------------------------------
+# -- the Rust swap (plan sections 28, 30 and 31) --------------------------------------------------
 #
-# Two things happen here, one batch apart.
+# Three things happen here, one batch apart each.
+#
+# **Section 31 (this batch): the port tier is ported** -- `RoomPort`, `SurfacePort` and
+# `InteriorSurfacePort`, plus the module-level `_free_pressure_nodes` they share. The six
+# `RoomLoaded*` / `RoomSuspended*` wrappers below still stay Python, and they keep working because
+# a Rust port carries `dict` (two tests replace `free_pressure` and `inject` with lambdas ON THE
+# INSTANCE) and exposes `T`, `load_matrix`, `R`, `areas` and `_queued_at` as settable slots holding
+# whatever SciPy or NumPy object a caller assigns. `_PatchPort` is not swapped: it is a private base
+# that exists to hold shared code, nothing outside this file names it, and the Rust classes share
+# that code as free functions instead.
+#
+# The ports go before the wrappers for a reason worth keeping: a wrapper's `step` calls
+# `port.free_pressure()`, solves, then calls `port.inject(q)`, so a Rust wrapper over a Python port
+# would be a `&mut self` pymethod handing control back to Python twice mid-step -- section 13.2's
+# refusal, which `bore` and `reed` already paid for. The other direction needs no contortion. And
+# this tier owns no `splu` at all: every factorization in the file is in the wrapper tier.
 #
 # **Section 30 (this batch): `AirBox` itself is ported.** Only the class -- the ports and the six
 # `RoomLoaded*` / `RoomSuspended*` wrappers below it stay Python, and they keep working because the
@@ -3973,6 +3988,26 @@ class RoomSuspendedVKPlate(_RoomLoadedVKPlateMixin):
 
 AirBoxPy = AirBox
 """The pure-Python reference implementation, under a name the swap below never rebinds."""
+
+RoomPortPy = RoomPort
+SurfacePortPy = SurfacePort
+InteriorSurfacePortPy = InteriorSurfacePort
+free_pressure_nodes_py = _free_pressure_nodes
+"""The pure-Python port tier and its shared helper, under names the swap never rebinds.
+
+`free_pressure_nodes_py` matters more than it looks. Its docstring's claim -- that a local
+divergence read reproduces `_divergence()`-then-closure exactly, at wall, edge and corner nodes
+alike -- is asserted in the parity file, and if the only spelling of the function were the Rust one
+that assertion would compare Rust with Rust and pass having compared nothing (plan section 23.6,
+which has now arrived through five different doors). Both spellings therefore stay live, and the
+parity file compares them to each other.
+
+The alias drops the leading underscore on purpose: `tests/test_stability.py`'s swap derive collects
+`<name>_py` aliases and skips any that begin with one, which is the shape that dropped `collision`
+out of that table for a whole batch (plan section 17.6). Following `collision`'s spelling is what
+keeps this guard covering something.
+parity file compares them to each other.
+"""
 
 _USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
 
@@ -4008,3 +4043,7 @@ if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the d
     splu = _RustSuperLU  # type: ignore[assignment,misc]  # noqa: F811
 
     AirBox = _rs.AirBox  # type: ignore[assignment,misc]  # noqa: F811
+    RoomPort = _rs.RoomPort  # type: ignore[assignment,misc]  # noqa: F811
+    SurfacePort = _rs.SurfacePort  # type: ignore[assignment,misc]  # noqa: F811
+    InteriorSurfacePort = _rs.InteriorSurfacePort  # type: ignore[assignment,misc]  # noqa: F811
+    _free_pressure_nodes = _rs._free_pressure_nodes  # type: ignore[assignment,misc]  # noqa: F811

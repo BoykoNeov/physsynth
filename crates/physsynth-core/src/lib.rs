@@ -55,6 +55,7 @@
 //! asserted natively in `tests/` here as well as through the Python harness.
 
 pub mod airbox;
+pub mod airbox_port;
 pub mod banded;
 pub mod beam;
 pub mod body;
@@ -71,6 +72,7 @@ pub mod ops2d;
 pub mod plate;
 pub mod pyfloat;
 pub mod radiation;
+pub mod reduce;
 pub mod reed;
 pub mod root;
 pub mod sparse;

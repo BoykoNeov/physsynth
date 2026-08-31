@@ -852,7 +852,12 @@ jobs:
       # initial CONDITION rather than a read-out, so `airbox.py` now builds those cosines with
       # `math.cos` -- section 22.3's portable spelling a sixth time, and free at ~60 calls a room.
       # A Linux runner is the only place that change can be observed at all (section 22.2).
-      - name: The room, unmodified, against Rust
+      # Section 30 ported the room; section 31 ported the PORT TIER above it (`RoomPort`,
+      # `SurfacePort`, `InteriorSurfacePort` and the `_free_pressure_nodes` helper they share).
+      # The file list is unchanged because it was already the whole airbox family -- which is the
+      # point of plan section 1's design: the ports were ported and not one of these tests was
+      # touched. The six `RoomLoaded*` / `RoomSuspended*` wrappers are still Python.
+      - name: The room and its ports, unmodified, against Rust
         env:
           PHYSSYNTH_RS: "1"
         run: |
@@ -920,7 +925,8 @@ jobs:
             tests/test_rust_parity_beam.py \
             tests/test_rust_parity_plate.py \
             tests/test_rust_parity_geometric.py \
-            tests/test_rust_parity_airbox.py
+            tests/test_rust_parity_airbox.py \
+            tests/test_rust_parity_airbox_port.py
 
   # Lint, plus the OUTER half of the shard guard.
   #

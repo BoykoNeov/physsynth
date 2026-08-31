@@ -84,6 +84,49 @@ impl Csr {
         }
     }
 
+    /// Build from per-row `(column, value)` lists, **keeping** entries whose value is exactly zero.
+    ///
+    /// [`Csr::from_rows`] drops them, which is right for every matrix this crate assembles from a
+    /// stencil: a structural zero and a dropped one are the same operator and the sparser storage
+    /// is free. It is wrong for a matrix that has to be handed back to SciPy and compared, because
+    /// SciPy's `coo_matrix(...).tocsr()` and its sparse product both keep a stored `0.0` and
+    /// `nnz` is asserted exactly. `airbox_port` builds two such matrices — `T`, whose reference
+    /// deliberately keeps the entries of a zero-**area** surface node so that the `T = 0` reduction
+    /// to a bare resonator stays exercisable, and the load matrix built from it.
+    ///
+    /// # Panics
+    /// As [`Csr::from_rows`].
+    pub fn from_rows_keeping_zeros(
+        nrows: usize,
+        ncols: usize,
+        rows: Vec<Vec<(usize, f64)>>,
+    ) -> Self {
+        assert_eq!(rows.len(), nrows, "expected one entry list per row");
+        let mut indptr = Vec::with_capacity(nrows + 1);
+        let mut indices = Vec::new();
+        let mut data = Vec::new();
+        indptr.push(0);
+        for mut row in rows {
+            row.sort_by_key(|&(j, _)| j);
+            let mut last: Option<usize> = None;
+            for (j, v) in row {
+                assert!(j < ncols, "column {j} out of range for {ncols} columns");
+                assert!(last != Some(j), "column {j} repeated in a row");
+                last = Some(j);
+                indices.push(j);
+                data.push(v);
+            }
+            indptr.push(data.len());
+        }
+        Self {
+            nrows,
+            ncols,
+            indptr,
+            indices,
+            data,
+        }
+    }
+
     /// Square diagonal matrix with the given entries.
     pub fn diagonal(d: &[f64]) -> Self {
         let n = d.len();

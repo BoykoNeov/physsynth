@@ -264,6 +264,9 @@ def test_the_rust_swap_matches_the_environment():
 
     expected_classes = {
         ("physsynth.core.airbox", "AirBox"),
+        ("physsynth.core.airbox", "RoomPort"),
+        ("physsynth.core.airbox", "SurfacePort"),
+        ("physsynth.core.airbox", "InteriorSurfacePort"),
         ("physsynth.core.string_ideal", "IdealString"),
         ("physsynth.core.membrane", "Membrane"),
         ("physsynth.core.body", "ModalBody"),
@@ -321,6 +324,13 @@ def test_the_rust_swap_matches_the_environment():
     # which is what makes adding a port a reviewed edit rather than a silent one (the same
     # reasoning as the hardcoded dependency allowlist below).
     ported_expected = {
+        # `airbox` is ported in HALVES: the room in Phase 5's sixth batch and the port tier in the
+        # seventh, with the six `RoomLoaded*` / `RoomSuspended*` wrappers still Python. Its three
+        # port CLASSES are checked by identity above; the one free function that moved is the
+        # helper the ports share. The alias is `free_pressure_nodes_py` and not
+        # `_free_pressure_nodes_py`, because the collection below skips aliases beginning with an
+        # underscore -- `collision`'s spelling, for `collision`'s reason.
+        airbox: {"free_pressure_nodes"},
         # `plate` is ported in full as of Phase 5's fourth batch. Both CLASSES are checked by
         # identity above; the only free FUNCTION in the module is the material helper. Its private
         # `_count_components` is deliberately NOT aliased: it is not swapped either, and an alias

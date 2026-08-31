@@ -40,6 +40,7 @@
 #![allow(non_snake_case)] // The Python API spells them `L`, `T`, `N`; the binding must match.
 
 mod airbox;
+mod airbox_port;
 mod banded;
 mod beam;
 mod body;
@@ -670,6 +671,11 @@ fn op_free_beam_stiffness(py: Python<'_>, N: i64, h: f64) -> PyResult<(CsrTriple
 fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyIdealString>()?;
     m.add_class::<airbox::PyAirBox>()?;
+    m.add_class::<airbox_port::PyRoomPort>()?;
+    m.add_class::<airbox_port::PySurfacePort>()?;
+    m.add_class::<airbox_port::PyInteriorSurfacePort>()?;
+    m.add_function(wrap_pyfunction!(airbox_port::free_pressure_nodes, m)?)?;
+    m.add_function(wrap_pyfunction!(airbox_port::pairwise_sum, m)?)?;
     m.add_class::<string_stiff::PyStiffString>()?;
     m.add_class::<beam::PyFreeBeam>()?;
     m.add_class::<sparse_lu::PySparseLu>()?;

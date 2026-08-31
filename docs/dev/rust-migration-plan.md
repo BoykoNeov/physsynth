@@ -6066,3 +6066,320 @@ See §30.5's table. 13.1x at 27 nodes, 4.2x at 560, ~1.1-1.5x from 4,641 nodes u
     that at **99 in 200,000** plausible sound speeds; it is invisible at the ambient 343 m/s because
     `343^2 = 117649` is exact. The fix is `pyfloat::scalar_pow`, which did not exist when `bore` was
     written. It is a re-tolerancing of two shipped models, so it belongs to a batch of its own.
+
+## §31 Phase 5, batch 7, as built (2026-08-31) — the ports, and a refusal that was avoidable
+
+`airbox.py`'s second half, first tier. §30 ported the room; this batch ports the three **ports** on
+it — `RoomPort`, `SurfacePort`, `InteriorSurfacePort` — plus the module-level
+`_free_pressure_nodes` they share. The six `RoomLoaded*` / `RoomSuspended*` wrappers above them are
+still Python and are the next batch.
+
+Not one line of the ten `test_airbox_*.py` files was touched. That is plan §1's design paying out
+again, and it is why the CI step's file list is unchanged.
+
+### 31.1 The shape on disk
+
+* `crates/physsynth-core/src/reduce.rs` — **new**. NumPy's pairwise summation, transcribed, with six
+  native tests. §31.2 is why it exists.
+* `crates/physsynth-core/src/airbox_port.rs` — the kernels: the ball node set, the bilinear/nearest
+  spreading operator, the plane-node gather, `T`, the per-node resistance, the triple product, the
+  span-wise footprint count, and `free_pressure_nodes`. Nine `cargo test`s.
+* `crates/physsynth-core/src/sparse.rs` — one new constructor, `Csr::from_rows_keeping_zeros`
+  (§31.4).
+* `crates/physsynth-py/src/airbox_port.rs` — the three `#[pyclass(dict)]`es and two module
+  functions. Larger than the core, as `airbox`'s binding was, and for the same reason one tier up.
+* `physsynth/core/airbox.py` — `RoomPortPy` / `SurfacePortPy` / `InteriorSurfacePortPy` /
+  `free_pressure_nodes_py`, and four more names under the flag. **No edit to the reference.**
+* `tests/test_rust_parity_airbox_port.py` — 58 tests.
+* `tests/test_stability.py` — the three classes into the class table, `airbox` into the function
+  table. The guard fired by name on the first flagged run.
+* `.github/workflows/ci.yml` — the room's step renamed and its comment extended; the new parity
+  file added to the parity step.
+
+### 31.2 The finding: `np.sum`'s blocking is an algorithm, not a kernel — so §30.2's refusal was avoidable
+
+§30.2 is one batch old and it is half wrong. Its measurement stands and is the sharpest thing in the
+migration's toolkit: **below eight elements `np.sum` is a plain left-to-right loop**, so exactness
+across a short reduction is free and decidable by counting terms, whatever the values are. Its
+*conclusion* — that above eight, matching it "would be a claim about a library internal, and after
+§22.1 a claim about the CPU as well" — is not true, and this batch needed it not to be.
+
+NumPy's pairwise sum is thirty lines and fully determined:
+
+```text
+n < 8      ->  plain left-to-right loop from 0.0
+n <= 128   ->  eight accumulators SEEDED from a[0..8], unrolled by eight, combined
+               ((r0+r1) + (r2+r3)) + ((r4+r5) + (r6+r7)), then the ragged tail left to right
+n  > 128   ->  split at n/2 rounded DOWN to a multiple of eight, recurse, add the halves
+```
+
+Transcribed, it reproduces `np.sum` **exactly**: 0 disagreements in 2,000 random vectors at each of
+n = 1, 4, 7, 8, 9, 15, 16, 20, 30, 56, 128, 129, 200, 560 and 4,641; 0 in 200 at n = 40,000; 0 in 200
+for whole-array sums of 3-D arrays at five shapes up to 41x33x25; and 0 in 200 for a **strided**
+reduction, which is a different code path.
+
+**Why this is not §22.1, said plainly, because the two look alike.** §22.1's hazard is that NumPy
+computes `pow`, `sin` and `exp` with its own routines, *dispatched at import from the CPU's feature
+set* — two machines, two instruction selections, two last bits, and nothing in the source of either
+language shows it. A summation has no comparable freedom to exercise. The order is fixed by the
+blocking above, and the unroll by eight exists precisely so a vector unit can be used **without
+changing that order**. A transcription is a claim about an algorithm; §22.1's would have been a
+claim about an instruction selection. It is also not §14.2's bargain: BLAS `ddot` *fuses* its
+multiply-add and OpenBLAS picks its kernel by CPU, so there is no scalar recipe at all. Here there
+is one.
+
+**Why it mattered here and did not matter there.** §14.2's question — does the reduction reach the
+next timestep? — was answered *no* for the room, whose two energy books are pure bookkeeping. It is
+answered **yes** three times over in this tier: `w = W / W.sum()` is the share of the volume
+velocity each node receives, `R_room` is what the coupled solve divides by, and `free_pressure` is
+the pressure the body is pushed by. A last bit in any of them is a different trajectory. So the
+choice was transcribe or give up exactness on the update path, and the prediction going in — a
+point port exact, a ball port a tolerance — turned out to be avoidable. **Every port size is
+bit-identical.**
+
+The risk is stated rather than buried. "NumPy's blocking is the same on every machine" is the
+riskiest sentence in the batch, and `test_numpy_pairwise_blocking_is_an_algorithm_not_a_kernel` is
+the single place it is asserted, with `_pairwise_sum` exposed from the crate for no other purpose.
+If it is ever false on a runner, that named test says so — instead of §22.1's morning, where
+eighteen exact assertions went red at once with no diagnosis.
+
+Two mis-transcriptions are worth recording because each is invisible at the lengths the other is
+wrong at, and one of them is a **non**-difference. The ragged tail folds into the *combined* result
+and not back into the accumulators — a real distinction, asserted. Starting the eight accumulators
+at zero instead of seeding them from `a[0..8]` is **not** a distinction: `0.0 + x` is exactly `x`,
+so the zeroed variant's first block reproduces the seeding step for step. That was written first as
+a test that could never fail, and it went red having searched for a difference that does not exist —
+§23.5's empty search, once more inside the test written to catch that class.
+
+### 31.3 The association: a diagonal is not neutral, and the blind fixture is provably blind
+
+`load_matrix = (T.T @ diags(R) @ T).tocsr()` is a sparse contraction, so after §26 and §27 it is
+three questions. Measured over the fixtures the suite's own builders make — §27.2's method,
+enumerate rather than sample:
+
+* **Stored order**: not an issue here, which is unusual for this migration. `T` comes from
+  `coo_matrix(...).tocsr()` and the product ends in a CSC-to-CSR conversion; both canonicalize, and
+  every row of every fixture came back ascending. `portable.canonical` was not needed at all, and
+  `Csr::from_rows`'s own sorting is already right. That is the first time in Phase 5 that the answer
+  to §18.2's question was simply *nothing to do*.
+* **Values**: an ascending-`k` accumulation reproduces SciPy's kernel bit for bit — 0 differing
+  entries of 6,845 over five fixtures, §26.2 holding again.
+* **Association**: live, and the reason the first two are easy is not that this one is. `diags(R)`
+  sits *between* the two factors and Python left-associates, so SciPy forms `(T_ki R_k) T_kj` and
+  not `T_ki (R_k T_kj)`. Those are different doubles in **2,028 of 6,845** entries — 30%.
+
+So §26.5's question ("do the outer factors share a mantissa, in which case the association is
+invisible?") has to be asked of a *diagonal sitting inside a product*, not only of a bracketing. And
+the fixture that cannot see it is worth naming, because it is one of the six goldens
+`tests/test_airbox_dipole.py` pins: with `spreading="nearest"` each surface node lands on exactly
+one air node with weight 1, so **every stored entry in a row of `T` is the same uniform node area**
+— and `(x d) x` is `x (d x)` **identically**, for every `x` and `d`, because the two outer factors
+are not merely commensurate, they are the same number (0 differences in 200,000 random pairs,
+against 69,943 when the factors differ). §16.4's blind fixture for a fourth time, and the first with
+a proof instead of a measurement.
+
+### 31.4 Two SciPy routines in one expression disagree about whether a stored zero survives
+
+`coo_matrix(...).tocsr()` **keeps** an explicit `0.0`. `csr_matmat` **prunes** one — it writes an
+entry only `if (sums[head] != 0)`. Both are called by the port's construction, four lines apart.
+
+The reference is explicit that this matters: `_spread` drops entries whose *geometric* weight is
+zero and keeps entries whose node **area** is zero, "so a zero-area surface still names the nodes it
+covers and the `T = 0` reduction to the bare resonator stays exercisable". So on a surface with
+zero-area nodes the reference's `T` carries stored zeros and its load matrix does not — 182 and 91
+stored entries where a uniform treatment gives 182 and 208.
+
+`Csr::from_rows` drops zeros, which is right for every matrix this crate had assembled until now (a
+structural zero and a dropped one are the same operator, and the sparser storage is free). The port
+needs both behaviours, so `Csr::from_rows_keeping_zeros` was added and `T` uses it while the load
+matrix does not. **No fixture the suite builds contains an explicit zero**, so nothing measured this
+and every physics bar passes either way — §16.4 again, this time in the library rather than in the
+model. The parity file constructs a half-zero-area surface on purpose.
+
+### 31.5 Why the ports go before the wrappers, which is not the dependency argument
+
+The obvious reason is that a wrapper holds a port. The real one is §13.2. A wrapper's `step` calls
+`port.free_pressure()`, solves, then calls `port.inject(q)` — it hands control **out** twice per
+step. A Rust wrapper over a Python port is therefore a `&mut self` pymethod that must release and
+re-take its own state mid-step, which is exactly what `bore` and `reed` paid for and exactly what
+PyO3 refuses. A Python wrapper over a Rust port is the ordinary direction. **Take the callee first**
+is the general form, and it is worth carrying into the wrapper batch, whose own callers
+(`connection`'s three bridges) sit above it in the same relation.
+
+The second reason is what made this batch cheap: the port tier owns **no factorization**. All six
+`splu` calls in `airbox.py` are in the wrapper tier, so nothing here is in §4's sparse-LU risk group
+and every claim above can be exact. The next batch will not have that.
+
+A port also reads its room through **Python attribute access and Python method calls**, never
+through the Rust room's `Params` — `room.node_index(at)`, `room._plane_axis(plane)`,
+`room._register_cut(...)`, `room._ports.append(self)`, `room._pending_ports.append(...)`. Three
+reasons, in increasing order of what they cost to get wrong: a port must accept `AirBoxPy` *and*
+`_rs.AirBox` (§29.1's duck typing, one tier down, and asserted); the refusals are the room's to
+write, so calling `node_index` gets "outside the room" exactly right for free in whichever
+implementation the caller has; and `_register_cut` **mutates** the room, so re-implementing it here
+would be a second writer of `_cut_mask` — §30.4's bug through another door.
+
+### 31.6 The seam from the other side: a test replaces the port's *methods*
+
+§30.3's rule was *grep for assignment, not only for reference*, and applied to this tier it finds
+four attributes a test writes on a port — `T`, `load_matrix`, `R` and `areas`, all replaced wholesale
+with arbitrary SciPy or NumPy objects across five test files to switch a coupling off or halve it —
+plus `_queued_at`, which `AirBox.set_state` resets on every registered port. All five are `Py<PyAny>`
+slots with a setter, and `net_area` reads `areas` **live** so that zeroing it works.
+
+And one door further on, which no attribute search finds:
+`test_a_sign_flip_is_invisible_to_every_energy_quantity` **replaces the port's methods on the
+instance** — `port.free_pressure = lambda: tuple(reversed(free()))` — and the wrapper then calls the
+lambda. A `#[pyclass]` has no `__dict__` and refuses that outright, so all three classes carry
+`dict`. The precedence works because CPython's lookup rules do not care which language defined the
+class: a `#[getter]`/`#[setter]` pair is a *data* descriptor and beats the instance dict, while a
+`#[pymethod]` is a *non-data* descriptor and loses to it. So `port.T = x` still runs the setter and
+an assigned lambda still shadows the method, which is exactly what is wanted.
+
+The general form is the sixth entry on §30.3's list, and it is not "grep harder": **ask what a
+client does to the object, not only what it reads off it** — and *replacing a method* is a thing
+Python clients do that a port to a compiled language does not support by default.
+
+Attributes nothing writes — `nodes`, `w`, `R_room`, `index`, `_flat` — are exposed get-only, so an
+assignment raises `AttributeError` rather than leaving a cached Rust index vector disagreeing with
+the array the room is handed. A deliberate narrowing of the reference, in the loud direction.
+
+### 31.7 §24.7 again, in the arm the plan had already written down
+
+`spreading` has a default and a value the reference rejects by name, so an omitted argument and an
+explicit `spreading=None` are different calls — and PyO3 collapses them. `beam` hit this in §24.7,
+the plan recorded that the fix's arm order is inverted from the obvious guess, and this batch got it
+wrong anyway: PyO3 wraps the **default expression**, so with `Option<Option<_>>` it is `Some(None)`
+that means "omitted" and a bare `None` that is the caller's literal. Written the obvious way round,
+eleven tests in `test_airbox_surface.py` went red — because their fixture forwards a `spreading=None`
+default. Caught immediately and cheaply; recorded because a written-down finding did not prevent it,
+which is a fact about how the finding was written rather than about PyO3.
+
+### 31.8 What is bit-identical
+
+Everything, at every fixture measured. There is no tolerance in this batch.
+
+* **Construction**: `index`, `nodes`, `_flat`, `w`, `R_room`, `volume`, `node_count`, `radius`;
+  `coords`, `areas`, `origin`, `n_surface`, `in_plane_axes`, `_where`, `footprint_empty`,
+  `net_area`, `R`, `nodes_lo`, `nodes_hi`, `_in_plane`, `face_count`, `blocked_area`; and `T` and
+  `load_matrix` **as stored** — `indptr`, `indices` and `data`, so structure, order and values.
+* **The field**: `max |dp| = 0.0` over 2,000 steps of read-solve-inject on four wall
+  configurations at a point port and at a 123-node ball; over 1,000 steps through a wall-mounted
+  patch with both spreadings; and over 1,000 steps through an interior patch's `-q`/`+q` pair
+  across its own cut. The loop is **closed** — the injection is `amp - pbar_free / (4 R)`, the
+  scalar Thevenin solve a wrapper does — which is what makes these comparisons about the *port*.
+  The first draft injected a prescribed function of the step index, and would have produced an
+  identical field even if `free_pressure` had returned garbage: it would have been §30's comparison
+  of the room, made again. A closed loop also has to be scale-free — a fixed termination impedance
+  divided by a 123-element pressure vector made the feedback gain grow with the node count and
+  overflowed, which is why the divisor is the port's own `R`.
+* **The read-out, step for step**: `free_pressure()` compared at every one of 400 steps, not only
+  at the end — it is the quantity the coupled solve consumes.
+* **The books**: a port's `injected` at **one node** — a sum of length one, exact on any spelling.
+  At 123 nodes it is **not**, and that is the batch's one tolerance and belongs to the *room*:
+  `AirBox.step` books `np.sum(w * 0.5 * (p_next + p_old))` over the port's nodes, and `airbox.rs`
+  was written one batch before `reduce` existed and still books it with a plain loop. Measured
+  1.6e-16 relative under an open-loop drive and **exactly 0.0** under the closed loop — §30.2's
+  "they wander in and out of agreement at a last bit", so the bar is a bound and not a difference.
+  Taking §31.11's parked tightening would make it exact at every size.
+* **The cut**: `cut_faces`, `_cut_mask` and `_cut_index` after an interior port registers.
+* **The shared helper**: `_free_pressure_nodes` Python against Rust at wall, edge, corner and
+  interior nodes on four wall types — and, separately, the Rust helper against the Rust room's own
+  `_divergence()`-then-closure, because porting the helper turned that docstring claim from
+  cross-language into within-Rust and it had to be re-asserted rather than inherited (§23.6, a
+  sixth door: the Python spelling is kept alive under `free_pressure_nodes_py` for exactly this).
+
+### 31.9 Speed, and a curve that does not converge
+
+The port tier is the first thing in this migration whose work is **not proportional to the array it
+reads**, and the speed curve says so. Per step, read-solve-inject with the room's own step included,
+and then `free_pressure()` alone:
+
+| room nodes | port nodes | whole step, Python | Rust | x | `free_pressure` Py | Rust | x |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 27 | 1 | 77.0 us | 8.5 | **9.0** | 41.5 us | 2.8 | **14.7** |
+| 560 | 1 | 90.4 | 15.9 | 5.7 | 36.4 | 3.0 | 12.1 |
+| 560 | 123 | 103.1 | 24.3 | 4.3 | 44.4 | 7.0 | 6.3 |
+| 2,856 | 123 | 134.3 | 42.9 | 3.1 | 41.1 | 8.0 | 5.2 |
+| 15,225 | 257 | 293.7 | 233.2 | 1.3 | 56.1 | 14.7 | 3.8 |
+| 41,615 | 257 | 635.3 | 492.4 | 1.3 | 43.3 | 11.9 | **3.7** |
+
+The *step* column is §11.6 exactly — 9x where per-call overhead is everything, converging to ~1.3x
+once NumPy's compiled loops own the room's update. The `free_pressure` column does **not** converge:
+it flattens at ~3.7x and stays there, because neither implementation's cost grows with the room. The
+rule §11.6 gave was "the win is per-step overhead, and it disappears once the compiled kernel
+dominates"; the missing clause is *once the compiled kernel dominates **the same work***. An
+`O(patch)` read into an `O(room)` array never reaches that point.
+
+Which is also the sharpest available form of §30.5's lesson. The room's copying draft cost a
+constant factor because its copy was proportional to its work. A copying **port** binding would pay
+a cost proportional to the *room* for work proportional to the *patch*:
+
+| room nodes | `free_pressure` (borrowing) | what four `to_vec()`s would cost | ratio |
+| --- | --- | --- | --- |
+| 27 | 2.78 us | 1.15 us | 0.4 |
+| 2,856 | 6.92 | 3.28 | 0.5 |
+| 15,225 | 11.94 | 12.49 | 1.0 |
+| 41,615 | 17.76 | 26.80 | 1.5 |
+| 139,995 | 12.85 | **678.18** | **52.8** |
+
+So the penalty for getting the buffer discipline wrong is not §30.5's cliff at one size, it is
+**asymptotic** — and every answer would have stayed bit-identical throughout. §29.2's rule ("if a
+port introduces an algorithmic choice, the assertion has to be about the work") with the strongest
+instance the migration has produced. The last row carries §30.5's cliff on top of the asymptotics:
+26.8 us to 678 us for a 3.4x larger copy.
+
+### 31.10 The success condition
+
+* `cargo test --workspace` — 25 test binaries green, including six new `reduce` tests, nine new
+  `airbox_port` tests and the dependency allowlist (still empty).
+* `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings` — clean.
+  Both were red first and both were run before the batch was called done, which is §25.8's scar
+  holding for the third batch running.
+* `ruff check .` — clean.
+* `PHYSSYNTH_RS=1 pytest` over the ten airbox files plus `test_stability.py` and
+  `test_web_backend.py` — **893 passed**.
+* `pytest tests/test_rust_parity_airbox_port.py` — **58 passed**.
+* Default path unchanged: the same files green without the flag.
+* `pip install ./crates/physsynth-py` before believing any of it. §25.8a bit again — the first run
+  of the new parity file failed on a missing `_pairwise_sum` that had been compiled but not
+  installed, and nothing in the suite can tell a stale wheel from a fresh one.
+
+### 31.11 What the next batch inherits
+
+* **What is left of `airbox.py`:** the six `RoomLoaded*` / `RoomSuspended*` wrappers and the four
+  private surface adapters (`_PlateSurface`, `_MembraneSurface`, `_VKPlateSurface`, plus the two
+  mixins) — about 1,750 lines of code, and **all six `splu` factorizations in the file**. That makes
+  it a Group D batch under §24's measured-tolerance rule, unlike this one.
+* **`connection` is now blocked on exactly one thing.** §30.13 said its three bridges must still
+  accept `RoomLoadedBody`, `_PlateSurface` and `RoomSuspendedPlate`, which are precisely the
+  wrapper tier. One correction to §29.1 worth having: `connection.py` contains **no** `isinstance`,
+  `hasattr`, `getattr` or `type(` at all — it is pure duck typing. So "polymorphic over its
+  collaborators' types" means it calls methods, not that it discriminates, and no module-global name
+  swap is needed to satisfy it. The blocker is only that the objects must exist and answer.
+* **Take the callee first.** §31.5. Not dependency order — §13.2. A Rust caller that hands control
+  back to Python mid-step cannot hold `&mut self` across the gap.
+* **`reduce::sum` exists now.** §31.2. Use it wherever a ported `np.sum` reaches the next timestep,
+  and keep the plain loop where it does not. Two tightenings are deliberately **left undone**, both
+  in shipped code, both listed here rather than done silently:
+  * `crates/physsynth-core/src/airbox.rs` still books `dissipated` and `injected` with a plain loop
+    and still computes `acoustic_energy` with one, so §30.9's "~1e-16 relative" tolerances stand.
+    They could now all be exact. It is a re-tolerancing of a shipped model's parity file, which
+    §30.13's own precedent says belongs to a batch of its own.
+  * §30.13's other parked item is unchanged: `bore.rs:262`, `reed.rs:229` and `:505` spell the
+    compliance denominator `c0.powf(2.0)` with a **literal** exponent, which LLVM folds to `c0 * c0`
+    in `--release` where CPython calls libm's `pow` (99 in 200,000 plausible sound speeds differ).
+    The fix is `pyfloat::scalar_pow`. Still a batch of its own — and now there are two of them,
+    which together would make one.
+* **The wrappers construct their ports by module-global name**, so §28.4's trap is already
+  loaded: today that is why the flagged suite exercises Rust ports through Python wrappers and it
+  is correct, but the moment the wrappers port, a `RoomLoadedPlatePy` will silently hold a **Rust**
+  port unless the parity file builds `RoomPortPy` explicitly. That is verbatim §28.4's "the parity
+  file's Python `VKPlate` was holding a Rust Airy solver", queued one batch in advance.
+* **Ask what a client *does* to the object.** §31.6. Reading and writing attributes are two
+  searches; **replacing a method** is a third, it is what a Python test does when it wants to invert
+  a sign convention without touching the model, and a compiled class refuses it unless it was built
+  with `dict`.
+* **`crates/physsynth-core/src/lib.rs`'s module header is still stale**, as §30.13 recorded, and now
+  by two more modules (`airbox_port`, `reduce`). Nothing watches it. Unchanged, and still one line
+  to know.
