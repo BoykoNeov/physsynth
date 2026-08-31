@@ -3993,6 +3993,21 @@ RoomPortPy = RoomPort
 SurfacePortPy = SurfacePort
 InteriorSurfacePortPy = InteriorSurfacePort
 free_pressure_nodes_py = _free_pressure_nodes
+
+RoomLoadedBodyPy = RoomLoadedBody
+RoomLoadedPlatePy = RoomLoadedPlate
+RoomSuspendedPlatePy = RoomSuspendedPlate
+RoomLoadedVKPlatePy = RoomLoadedVKPlate
+RoomSuspendedVKPlatePy = RoomSuspendedVKPlate
+_PlateSurfacePy = _PlateSurface
+_VKPlateSurfacePy = _VKPlateSurface
+"""The pure-Python wrapper tier and its two seams, under names the swap never rebinds.
+
+The two seams keep their leading underscore in the alias (`_PlateSurfacePy`), unlike
+`free_pressure_nodes_py`: `tests/test_stability.py` skips a leading underscore when it collects
+`<name>_py` FUNCTION aliases and does not when it collects `<Name>Py` CLASS aliases, so this is the
+spelling that keeps the guard covering them.
+"""
 """The pure-Python port tier and its shared helper, under names the swap never rebinds.
 
 `free_pressure_nodes_py` matters more than it looks. Its docstring's claim -- that a local
@@ -4047,3 +4062,10 @@ if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the d
     SurfacePort = _rs.SurfacePort  # type: ignore[assignment,misc]  # noqa: F811
     InteriorSurfacePort = _rs.InteriorSurfacePort  # type: ignore[assignment,misc]  # noqa: F811
     _free_pressure_nodes = _rs._free_pressure_nodes  # type: ignore[assignment,misc]  # noqa: F811
+    _PlateSurface = _rs._PlateSurface  # type: ignore[assignment,misc]  # noqa: F811
+    _VKPlateSurface = _rs._VKPlateSurface  # type: ignore[assignment,misc]  # noqa: F811
+    RoomLoadedBody = _rs.RoomLoadedBody  # type: ignore[assignment,misc]  # noqa: F811
+    RoomLoadedPlate = _rs.RoomLoadedPlate  # type: ignore[assignment,misc]  # noqa: F811
+    RoomSuspendedPlate = _rs.RoomSuspendedPlate  # type: ignore[assignment,misc]  # noqa: F811
+    RoomLoadedVKPlate = _rs.RoomLoadedVKPlate  # type: ignore[assignment,misc]  # noqa: F811
+    RoomSuspendedVKPlate = _rs.RoomSuspendedVKPlate  # type: ignore[assignment,misc]  # noqa: F811

@@ -22,7 +22,7 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
    **PHASES 2, 3 AND 4 ARE ALL COMPLETE** and **PHASE 5 IS UNDER WAY**; phases 0, 1, all five
-   batches of 2, all six of 3, phase 4 and the first seven batches of 5 are
+   batches of 2, all six of 3, phase 4 and the first eight batches of 5 are
    built (plan §9-§31): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
    of `operators`, `membrane`, `exciter`, `body`, `bore`, `reed`, **`mallet`**, **`string_stiff`**,
    **`string_damped`**, **`string_nonlinear`**, **`bow`**, **all of `collision`** — the contact
@@ -44,18 +44,22 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    `RoomSuspended*` wrappers above it staying Python and working unchanged — ported; and as of
    batch 7 the **port tier** on top of it — `RoomPort`, `SurfacePort`, `InteriorSurfacePort` and
    the `_free_pressure_nodes` helper they share — is Rust too, so a room and everything that opens
-   a terminal into it are ported and only the six wrappers are left. What is left
-   of the core is **the wrapper half of `airbox`, then `connection`, then `analysis/`**, and that
-   order is a finding rather than a preference: §28.11 called `connection` the cheapest remaining
-   file because it touches no private names, and §29.1 found that the instrument was wrong.
-   `connection` is **polymorphic over its collaborators' types** — its three bridges are handed
-   Rust bodies and plates *and* `airbox`'s duck-typed Python wrappers, with three `test_airbox_*`
+   a terminal into it are ported; and as of batch 8 the **wrapper tier** on top of *that* —
+   `RoomLoadedBody`, both plate wrappers, both von Kármán wrappers and the two seams
+   (`_PlateSurface`, `_VKPlateSurface`) they drive — so the only Python left in the file is the
+   **membrane** pair and its mixin, about 410 lines. What is left
+   of the core is **the membrane wrappers in `airbox`, then `connection`, then `analysis/`**, and
+   that order was a finding rather than a preference: §28.11 called `connection` the cheapest
+   remaining file because it touches no private names, and §29.1 found that the instrument was
+   wrong. `connection` is **polymorphic over its collaborators' types** — its three bridges are
+   handed Rust bodies and plates *and* `airbox`'s duck-typed wrappers, with three `test_airbox_*`
    files pinning `bridge.stability_margin == bare.stability_margin` **exactly** across that
-   boundary — so it cannot move before those wrappers do, which is the half batches 6 and 7
-   did *not* port. Do not re-open that ordering without reading §29.1, §30.13 and §31.11 — the
-   last of which corrects §29.1 on one point: `connection.py` contains no `isinstance`, `hasattr`,
-   `getattr` or `type(` at all, so it is *pure duck typing*, and what blocks it is only that the
-   wrapper objects must exist and answer, not that it discriminates on their types.
+   boundary — so it could not move before those wrappers did. **As of §32 it can**: all three
+   collaborators §31.11 named (`RoomLoadedBody`, `_PlateSurface`, `RoomSuspendedPlate`) are Rust,
+   the bridge tests pass under the flag with a Rust wrapper standing in for a plate, and
+   `connection` needs no membrane wrapper. §31.11 also corrects §29.1 on one point worth keeping:
+   `connection.py` contains no `isinstance`, `hasattr`, `getattr` or `type(` at all, so it is *pure
+   duck typing*, and what blocked it was only that the wrapper objects must exist and answer.
    `cargo test --workspace` runs the native bars and the Cargo dependency allowlist;
    `pip install ./crates/physsynth-py` then
    `PHYSSYNTH_RS=1 pytest` runs the **existing, unmodified** Python tests against the Rust code. The
@@ -616,6 +620,48 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    (678 µs of copying against a 12.9 µs read at 139,995 nodes, every answer bit-identical
    throughout). Two tightenings are parked on purpose: the room's own energy books could now be
    exact, and `bore`/`reed` still spell `c0.powf(2.0)` with a literal exponent.
+
+   And a **twenty-fifth**, from the wrapper tier — Phase 5's eighth batch, which finishes
+   `airbox.py` except for its membrane pair — which is about a kind of constraint the migration had
+   not met: **a tier below can decide what porting the tier above it is even allowed to mean.**
+   §31 stored a port's `T`, `R` and `load_matrix` as plain Python slots rather than as crate types,
+   because eight tests replace them wholesale to switch a coupling off, halve it or flip its sign,
+   and two more replace the port's *methods* on the instance. That was right there and it is
+   binding here: three more tests replace the **factorization** (`inst._lu_loaded = splu(a)`) and
+   two call the seam's `rhs()` and `a_bare()` directly, so the port, the seam and the solver are
+   all objects this tier *holds and calls*, never things it is. A wrapper that cached any of them
+   would keep loading a plate the test had switched off and every one of those tests would pass
+   having compared a loaded plate with itself — §23.6's emptied comparison through a **seventh**
+   door. So this is the first ported module with **no core half at all**: every sparse product, the
+   assembly, the factorization and `np.dot` go through Python, and what is Rust is the control
+   flow, the guards, the ledgers and the elementwise arithmetic between those calls — exact by
+   construction, because elementwise `+ - * /` admits no reassociation. The question to ask before
+   scoping a batch on top of a ported one is therefore **"what did the tier below promise its
+   clients it would let them replace?"**, and no name grep finds it: the searches this migration
+   has needed are now six (private names, re-derivation, duck-typed types, written public
+   attributes, replaced methods, replaced collaborators) and none finds the others. Five
+   corollaries. **Everything is bit-identical, the von Kármán trajectory included**, which §27.5
+   says is impossible for a nonlinear plate over any useful run — and is possible here precisely
+   because the two implementations are not two discretizations but one Picard loop called through
+   one factorization, so exactness is a *sharp* test of the transcription rather than a claim about
+   the dynamics. **§31.11's Group D prediction is wrong and the correction is a rule**: the wrapper
+   does not *own* a factorization, it calls one (`splu` is a module global read at construction), so
+   a solver group is a property of **ownership, not of the file a factorization appears in** —
+   §24.4's shared-factorization manoeuvre gets its fifth use and its first as a *negative control*,
+   moving nothing because nothing was there to move. **The price is the speed, and it is stated
+   rather than buried**: 1.06-1.13x on the linear plate and *indistinguishable from neutral* on the
+   von Kármán one (the machine's own drift, 716-1234 µs on the Python arm alone, exceeds the
+   effect). That sharpens §29's headline with the clause it lacked — an inner iteration is where
+   the real-time win lives **only if the iteration's body ports with it**, since a ported *caller*
+   over unported callees multiplies boundary crossings by the sweep count; the first draft folded
+   the Picard averages in Rust, paid a copy in and out per sweep, and read 0.91x. **A `#[pyclass]`
+   getter is the opposite default from `__getattr__`** — it is a data descriptor and beats both the
+   instance dict and delegation, permanently — so on a class whose whole job is to be a drop-in for
+   the model it holds, every getter silently takes a name away from `connection.py`'s bridges, and
+   nothing in `cargo test` or any physics bar can see it. And **§25.8a faked a library bug**: a
+   stale wheel (built, not installed) made a correct `Option<Option<_>>` fix look exactly like
+   PyO3 contradicting §31.7's documented arm order — the wrong diagnosis a stale wheel produces
+   need not look like staleness at all.
 
 4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
    never the reverse. Keeps the physics portable to C++/Rust later.

@@ -41,6 +41,7 @@
 
 mod airbox;
 mod airbox_port;
+mod airbox_wrap;
 mod banded;
 mod beam;
 mod body;
@@ -676,6 +677,13 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<airbox_port::PyInteriorSurfacePort>()?;
     m.add_function(wrap_pyfunction!(airbox_port::free_pressure_nodes, m)?)?;
     m.add_function(wrap_pyfunction!(airbox_port::pairwise_sum, m)?)?;
+    m.add_class::<airbox_wrap::PyPlateSurface>()?;
+    m.add_class::<airbox_wrap::PyVKPlateSurface>()?;
+    m.add_class::<airbox_wrap::PyRoomLoadedBody>()?;
+    m.add_class::<airbox_wrap::PyRoomLoadedPlate>()?;
+    m.add_class::<airbox_wrap::PyRoomSuspendedPlate>()?;
+    m.add_class::<airbox_wrap::PyRoomLoadedVKPlate>()?;
+    m.add_class::<airbox_wrap::PyRoomSuspendedVKPlate>()?;
     m.add_class::<string_stiff::PyStiffString>()?;
     m.add_class::<beam::PyFreeBeam>()?;
     m.add_class::<sparse_lu::PySparseLu>()?;

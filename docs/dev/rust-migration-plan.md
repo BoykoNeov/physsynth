@@ -6383,3 +6383,229 @@ instance the migration has produced. The last row carries §30.5's cliff on top 
 * **`crates/physsynth-core/src/lib.rs`'s module header is still stale**, as §30.13 recorded, and now
   by two more modules (`airbox_port`, `reduce`). Nothing watches it. Unchanged, and still one line
   to know.
+
+## §32 Phase 5, batch 8, as built (2026-08-31) — the room's resonators, and a tier that cannot own its arithmetic
+
+`airbox.py`'s third and last slice. §30 ported the room, §31 the three ports, and this batch ports
+what sits on top of them: `RoomLoadedBody`, `RoomLoadedPlate`, `RoomSuspendedPlate`,
+`RoomLoadedVKPlate`, `RoomSuspendedVKPlate` and the two seams (`_PlateSurface`, `_VKPlateSurface`)
+the four plate wrappers drive. The membrane wrappers stay Python — nothing in `connection.py` needs
+them and no exact anchor binds them to these classes.
+
+Not one line of the ten `test_airbox_*.py` files was touched, for the third batch running, and the
+flagged CI step's file list has not changed once across the three tiers.
+
+### 32.1 The shape on disk
+
+* `crates/physsynth-py/src/airbox_wrap.rs` — **new**, and the first ported module with **no core
+  half at all**. §32.2 is why.
+* `physsynth/core/airbox.py` — seven `*Py` aliases and seven names under the flag. **No edit to the
+  reference.**
+* `tests/test_rust_parity_airbox_wrap.py` — 107 tests.
+* `tests/test_stability.py` — the seven classes into the class table.
+* `.github/workflows/ci.yml` — the new parity file, and the flagged step renamed.
+
+### 32.2 The finding: a tier below can decide what "porting" this tier is allowed to mean
+
+Every ported module until now holds its own state and does its own arithmetic. This one does
+neither, and the reason is not a judgement call — it is an interface decision the tier *below* made
+deliberately one batch earlier, and it propagates upward.
+
+§31 stored a port's `T`, `R` and `load_matrix` as plain `Py<PyAny>` slots rather than as crate
+types, because **eight tests replace them wholesale** to switch a coupling off, halve it or flip
+its sign, and two more replace the port's *methods* on the instance. That decision was correct
+there and it is binding here: a wrapper that cached any of those would read a matrix a test had
+already replaced, and every one of those tests would pass having compared a loaded plate with
+itself — §23.6's emptied comparison through a seventh door. It is not only the ports. Three tests
+assign `inst._lu_loaded = splu(a)`, replacing the factorization, and two call `inst._surface.rhs()`
+and `.a_bare()` directly. The factorization, the seam and the port are all objects this tier
+**holds and calls**, never things it is.
+
+So the line falls in a place no earlier batch had to draw:
+
+* **Through Python:** every sparse product (`B @ u`, `T.T @ pbar`, `load_matrix @ u`), the assembly
+  of `a_loaded`, the factorization and its `solve`, `np.dot`, and every call on a port, a seam or a
+  model.
+* **In Rust:** the control flow, the guards, the ledgers and the elementwise arithmetic between
+  those calls — exact by construction, because elementwise `+ - * /` on doubles admits no
+  reassociation, which is what lets the five-term theta-scheme right-hand side be a Rust fold over
+  slices rather than five NumPy temporaries.
+
+The general form, and the question to ask before scoping a batch that sits on top of a ported one:
+**what did the tier below promise its clients it would let them replace?** A port that stores its
+coupling as substitutable Python objects has decided that its callers compute through Python. No
+name grep finds this — the six searches this migration has needed are now private names,
+re-derivation, duck-typed types, written public attributes, replaced methods (§31.6) and now
+**replaced collaborators**, and none of them finds the others.
+
+Two consequences are worth separating, because one is good and one is a cost.
+
+The good one: **everything in this batch is bit-identical, including the von Karman wrapper's
+trajectory**, which §27.5 says should be impossible for a nonlinear plate over any useful run. It
+is possible here because the two implementations are not two discretizations: they are one Picard
+loop, called through one factorization, over one set of SciPy kernels. What would separate them is
+a transcription difference and nothing else — so the parity file's exactness is a *sharp* test of
+the port rather than a statement about the dynamics.
+
+The cost: there is no arithmetic left for Rust to win. §32.4.
+
+### 32.3 §31.11's Group D prediction is wrong, and the correction is a rule
+
+§31.11 wrote that this would be "a Group D batch under §24's measured-tolerance rule, unlike this
+one", on the grounds that **all six of the file's `splu` factorizations are in this tier**. That is
+true and it does not follow. The wrapper does not *own* a factorization, it *calls* one — `splu` is
+read as a module global at construction, exactly as the reference reads it, so both languages'
+wrappers factor the same matrix with the same routine and there is no solver difference to
+tolerance at all. `test_the_shared_factorization_changes_nothing` puts both sides on the crate's
+sparse LU instead of SuperLU (§24.4's manoeuvre, fifth use) and the trajectory does not move,
+because it never could: this is the first use of that manoeuvre as a **negative control**.
+
+So: **a solver group is a property of ownership, not of the file a factorization appears in.** Ask
+who *implements* the solve, not what is downstream of one. Counting `splu` call sites, which is
+what §31.11 did, counts the wrong thing.
+
+### 32.4 The speed, which is the price of §32.2 and is stated rather than buried
+
+Measured on the flagged composition, five interleaved rounds, minimum per arm:
+
+| model | live nodes | Python | Rust | ratio |
+| --- | --- | --- | --- | --- |
+| linear plate, baffled | 49 | 132.8 us | 117.8 us | 1.13x |
+| linear plate, baffled | 225 | 171.3 us | 151.8 us | 1.13x |
+| linear plate, baffled | 961 | 613.0 us | 578.5 us | 1.06x |
+| von Karman plate, baffled | 49 | 716.5 us | 725.0 us | 0.99x |
+| von Karman plate, baffled | 225 | 1479.2 us | 1001.6 us | 1.48x |
+
+The last two rows are not a measurement of anything: over nine interleaved rounds the *Python* arm
+alone spans 716-1234 us at 49 nodes and 1479-1998 us at 225, so the machine's own drift is larger
+than the effect and the median-to-median ratios (0.93x and 1.01x) point the other way from the
+min-to-min ones. The honest report is **the linear wrapper is a small consistent win and the von
+Karman wrapper is indistinguishable from neutral**, which is §11.6's rule with the calls still
+present: what a port buys is per-call overhead, and this tier's calls did not go away, they changed
+language.
+
+That is the expected outcome of §32.2 rather than a failed batch — the alternative was ten tests
+that assert nothing. But it sharpens §29's headline, which needs a clause it did not have. §29
+measured **15.5x** on a model with an inner iteration and concluded that models with inner
+iterations are where the real-time port lives. True, *and only if the iteration's body is ported
+with it*: a ported **caller** over unported callees multiplies the boundary crossings by the sweep
+count instead of eliminating them. The first draft of the Picard hook made that mistake in the
+small — it folded the two `mu`-averages in Rust, which cost a copy in and a copy out per sweep, and
+that alone read 0.91x; keeping them as NumPy objects (three calls, no copies) recovered it. Two
+notes from the same tuning, both cheap and both worth having:
+
+* `vec1` originally went through `np.ascontiguousarray` unconditionally, which is an **import and
+  two calls per extraction** and seven extractions per step. A downcast fast path costs nothing and
+  is what the reference effectively gets for free, because it reaches NumPy through operators that
+  are already C where a port reaches it through the interpreter.
+* A timing pair measured once, apart, is not a comparison on this machine. Interleave the arms and
+  take a minimum, and say so.
+
+### 32.5 The anchor decided the batch's shape, and the grep that found it is one line
+
+§15.2's rule again, and the fifth time it has set a batch boundary. `test_airbox_vk.py` asserts
+that `RoomLoadedVKPlate(nonlinear=False)` reproduces `RoomLoadedPlate` **`array_equal`** on both
+stored levels, on the coupling ledger and on the energy, for 50 steps, across both tiers and both
+boundaries. So the four plate wrappers are one unit and cannot split — which reversed the plan the
+batch started with (body and the linear plates now, von Karman with the membrane later). The
+membrane wrappers, by contrast, are anchored only against a *bare* `Membrane`, so they are
+separable and are deferred.
+
+The structural answer, which is §28.4's one tier down: both seams share one `assemble_a_bare`, and
+the von Karman seam's linear half is the model's own `_linear_rhs`, so the reduction is exact by
+construction rather than by two transcriptions kept in step by docstring.
+
+### 32.6 A `#[pyclass]` getter is the opposite default from `__getattr__`, and the source says so
+
+These wrappers are **drop-ins for the models they hold**: `connection.py`'s three bridges reassemble
+a plate's coupling block out of `n_live`, `u`, `u_prev`, `k`, `boundary`, `Lx`, `Ly`,
+`pickup_index_at` and a dozen more, and the reference's own comment reads *"NOTHING here may shadow
+a name that bridge reads"*. In Python that warning is nearly free, because `__getattr__` fires only
+on a miss. In PyO3 it is the opposite: a getter is a data descriptor on the type and **beats both
+the instance dict and `__getattr__`, permanently**. Every getter added to one of these classes is
+therefore a name taken away from the model, silently, and no physics bar and no `cargo test` can
+see it.
+
+So the exposed set is exactly the reference's instance attributes plus its four overrides. Two
+tests guard it and the second is the one that matters: `test_every_delegated_name_reaches_the_model`
+walks `connection.py`'s list **by name**, which documents the contract and only catches names
+somebody thought to write down, while `test_the_wrappers_own_surface_matches_the_reference`
+**derives** it — `dir(instance)` on both implementations, asserted equal — so it fires on the *next*
+getter added to any of these classes whether or not the name it shadows was ever listed. That is
+§17.6 and §23.7's lesson a third time: a derive catches the paste a list forgets. (Compared on
+*instances*, not classes: the reference sets these in `__init__` where PyO3 makes them type
+descriptors, so the class-level sets differ by construction and only the instance-level sets are the
+contract.) A companion, `test_no_model_name_is_unreachable_through_the_wrapper`, walks `dir(plate)`
+from the other end.
+
+Two details of the interface that are easy to leave implicit and are not: the bridges call
+`body.step(force=F)` and `plate.step(f_ext=...)` **by keyword**, so the parameter *names* are part
+of the contract and are asserted; and the von Karman wrappers must have **no `pressure()`**, because
+model #6 has none and `StringVKPlateBridge` composes with them precisely because the bridge batch
+refused to invent one.
+
+### 32.7 Collaborators are looked up as module globals, deliberately
+
+`RoomLoadedPlate.__init__` calls the *module-global* `_PlateSurface`, `SurfacePort` and `splu`, so
+the Rust class imports `physsynth.core.airbox` and reads the same three names at call time. A Rust
+class reaching back into the Python module it replaces looks odd and is the faithful transcription;
+it is also what makes three things possible at once: the monkeypatch contract keeps working, the
+parity file can put both languages on one factorization (§32.3), and §28.4's trap becomes visible
+instead of silent — a Rust wrapper built in the default gate holds **Python** collaborators, which
+is a useful comparison and a misleading one to make by accident, so
+`test_a_rust_wrapper_built_without_the_patch_holds_python_collaborators` asserts which is which.
+
+### 32.8 Two scars, both already written down, both caught by the thing that was written
+
+**§25.8a, and this time it faked a library bug.** After tightening `set_state`'s `v0` to keep an
+omitted argument and an explicit `None` apart (§24.7), the parity file failed with the two
+collapsed — and the failure looked exactly like PyO3 behaving differently for a positional argument
+than for the keyword-only one §31.7 documented. It was a **stale wheel**: `cargo build` had run and
+`pip install` had not. Probing the arms directly (a temporary marker in each branch) showed them
+behaving precisely as §31.7 says. The lesson is one this plan already carries and is worth
+restating with its new failure mode: *nothing in the suite can tell a stale wheel from a fresh one*,
+and the wrong diagnosis it produces need not look like staleness at all — it can look like a
+well-documented library invariant being false.
+
+**§19.7's line continuation, a sixth time, from a sixth tool — and the mechanism is now identified.**
+A literal backslash-n went into the YAML again, and §20.7's test caught it in seconds. The cause is
+not typing: the editing path collapses one backslash level even inside a quoted heredoc, so a
+correctly written continuation arrives as a two-character escape. Writing the newline as an
+explicit character code sidesteps it entirely. Six occurrences, and still zero red CI runs since
+that scar became a test.
+
+### 32.9 The success condition
+
+* `cargo test --workspace` — 25 test binaries green, including the dependency allowlist (still
+  empty). This batch adds **no** native tests, which is itself a consequence of §32.2: there is no
+  arithmetic in it that can be exercised without a Python interpreter.
+* `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings` — clean.
+* `ruff check .` — clean.
+* `PHYSSYNTH_RS=1 pytest` over the ten airbox files plus `test_stability.py` and
+  `test_web_backend.py` — **858 passed**, which is the whole of that list (858 collected). §31.10's
+  893 for "the same" list included batch 6's `test_rust_parity_airbox.py` as well; the difference is
+  bookkeeping, not a lost test, and is recorded here so the next batch does not re-derive it.
+* `pytest tests/test_rust_parity_airbox_wrap.py` — **107 passed**.
+* Default path unchanged: the same files green without the flag.
+* `pip install ./crates/physsynth-py` before believing any of it (§32.8).
+
+### 32.10 What the next batch inherits
+
+* **`airbox.py` is one tier from finished.** What is left is `_MembraneSurface`, the two membrane
+  wrappers and their shared mixin — about 410 lines, the same shape as the plate pair, and the
+  transcription is now a known quantity. `_MembraneSurface` differs from `_PlateSurface` in two
+  places only (the mass is the membrane's own and there is no acceleration cache to refresh), so
+  the seam should reuse `assemble_a_bare`'s pattern rather than gain a third copy.
+* **`connection.py` is unblocked, and that was the point of the ordering.** §31.11 named
+  `RoomLoadedBody`, `_PlateSurface` and `RoomSuspendedPlate` as the three collaborators its bridges
+  are handed; all three are Rust now, and `test_airbox_vk.py`'s bridge tests pass under the flag
+  with a Rust wrapper standing in for a plate. The remaining blocker named in §31.11 — that the
+  wrapper objects must exist and answer — is discharged. `connection` needs no membrane wrapper.
+* **Do not add a getter to these classes without checking the delegated list.** §32.6. The failure
+  is silent in both `cargo test` and every physics bar.
+* **The two parked tightenings are still parked**, unchanged since §31.11 and now three batches
+  old: the room's own energy books could be exact with `reduce::sum`, and `bore.rs:262`,
+  `reed.rs:229` and `:505` still spell `c0.powf(2.0)` with a literal exponent. Together they are one
+  small batch, and the second of them is a `--release`-only divergence in shipped code.
+* **`crates/physsynth-core/src/lib.rs`'s module header is still stale**, as §30.13 and §31.11 both
+  recorded. Nothing watches it. Unchanged, still one line to know, and now three batches behind.

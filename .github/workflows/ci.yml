@@ -853,11 +853,18 @@ jobs:
       # `math.cos` -- section 22.3's portable spelling a sixth time, and free at ~60 calls a room.
       # A Linux runner is the only place that change can be observed at all (section 22.2).
       # Section 30 ported the room; section 31 ported the PORT TIER above it (`RoomPort`,
-      # `SurfacePort`, `InteriorSurfacePort` and the `_free_pressure_nodes` helper they share).
-      # The file list is unchanged because it was already the whole airbox family -- which is the
-      # point of plan section 1's design: the ports were ported and not one of these tests was
-      # touched. The six `RoomLoaded*` / `RoomSuspended*` wrappers are still Python.
-      - name: The room and its ports, unmodified, against Rust
+      # `SurfacePort`, `InteriorSurfacePort` and the `_free_pressure_nodes` helper they share);
+      # section 32 ported the WRAPPER TIER above that -- `RoomLoadedBody`, both plate wrappers,
+      # both von Karman wrappers and the two seams they drive. The file list has not changed once
+      # across the three, which is the point of plan section 1's design: three tiers moved and not
+      # one of these tests was touched. The membrane wrappers are the only Python left in the file.
+      #
+      # Section 32's own hazard is what this step covers and a parity file cannot: ten of these
+      # tests REPLACE a collaborator on the instance -- `port.T`, `port.load_matrix`, `port.R`,
+      # the port's own methods, and `inst._lu_loaded` -- to switch a coupling off, halve it or
+      # invert its sign. A wrapper that cached any of them would keep loading the plate and every
+      # one of those tests would pass having compared a loaded plate with itself.
+      - name: The room, its ports and the resonators they load, unmodified, against Rust
         env:
           PHYSSYNTH_RS: "1"
         run: |
@@ -926,7 +933,8 @@ jobs:
             tests/test_rust_parity_plate.py \
             tests/test_rust_parity_geometric.py \
             tests/test_rust_parity_airbox.py \
-            tests/test_rust_parity_airbox_port.py
+            tests/test_rust_parity_airbox_port.py \
+            tests/test_rust_parity_airbox_wrap.py
 
   # Lint, plus the OUTER half of the shard guard.
   #
