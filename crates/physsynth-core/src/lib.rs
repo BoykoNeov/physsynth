@@ -54,6 +54,7 @@
 //! and monotonically decreasing when lossy. That is the project's acceptance contract, and it is
 //! asserted natively in `tests/` here as well as through the Python harness.
 
+pub mod airbox;
 pub mod banded;
 pub mod beam;
 pub mod body;

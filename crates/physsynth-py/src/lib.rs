@@ -39,6 +39,7 @@
 
 #![allow(non_snake_case)] // The Python API spells them `L`, `T`, `N`; the binding must match.
 
+mod airbox;
 mod banded;
 mod beam;
 mod body;
@@ -668,6 +669,7 @@ fn op_free_beam_stiffness(py: Python<'_>, N: i64, h: f64) -> PyResult<(CsrTriple
 #[pymodule]
 fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyIdealString>()?;
+    m.add_class::<airbox::PyAirBox>()?;
     m.add_class::<string_stiff::PyStiffString>()?;
     m.add_class::<beam::PyFreeBeam>()?;
     m.add_class::<sparse_lu::PySparseLu>()?;
@@ -759,6 +761,7 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ops2d::py_embed, m)?)?;
     m.add_function(wrap_pyfunction!(ops2d::py_inner2d, m)?)?;
     m.add_function(wrap_pyfunction!(ops2d::py_norm2_2d, m)?)?;
+    m.add_function(wrap_pyfunction!(airbox::py_impedance_from_zeta, m)?)?;
     m.add_function(wrap_pyfunction!(exciter::py_triangular_pluck, m)?)?;
     m.add_function(wrap_pyfunction!(exciter::py_raised_cosine, m)?)?;
     m.add_function(wrap_pyfunction!(exciter::py_raised_cosine_2d, m)?)?;

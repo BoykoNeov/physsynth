@@ -22,8 +22,8 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
    **PHASES 2, 3 AND 4 ARE ALL COMPLETE** and **PHASE 5 IS UNDER WAY**; phases 0, 1, all five
-   batches of 2, all six of 3, phase 4 and the first five batches of 5 are
-   built (plan §9-§29): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
+   batches of 2, all six of 3, phase 4 and the first six batches of 5 are
+   built (plan §9-§30): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
    of `operators`, `membrane`, `exciter`, `body`, `bore`, `reed`, **`mallet`**, **`string_stiff`**,
    **`string_damped`**, **`string_nonlinear`**, **`bow`**, **all of `collision`** — the contact
    primitives, both contact solves, the project's one **dense LU** and `BarrierString` itself —
@@ -38,14 +38,18 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    circle, guitar) with both grains, and the **von Karman plate** with them — and, as of batch 5,
    **`string_geometric`** (model #10, the geometrically exact string), which is the **last of the
    four theta-scheme strings**, so the whole string family is Rust and the three bit-identity
-   anchors that chain it now compare one Rust class against another — ported. What is left of the
-   core is **`airbox`, then `connection`, then `analysis/`**, and that order is a finding rather
-   than a preference: §28.11 called `connection` the cheapest remaining file because it touches no
-   private names, and §29.1 found that the instrument was wrong. `connection` is **polymorphic over
-   its collaborators' types** — its three bridges are handed Rust bodies and plates *and*
-   `airbox`'s duck-typed Python wrappers, with three `test_airbox_*` files pinning
-   `bridge.stability_margin == bare.stability_margin` **exactly** across that boundary — so it
-   cannot move before `airbox` does. Do not re-open that ordering without reading §29.1.
+   anchors that chain it now compare one Rust class against another — and, as of batch 6, the
+   **`AirBox`** class itself, the 3-D room, which is the **first half of a file** rather than a
+   file: `airbox.py` is 3,976 lines and only the room ported, the ports and the six `RoomLoaded*` /
+   `RoomSuspended*` wrappers above it staying Python and working unchanged — ported. What is left
+   of the core is **the second half of `airbox`, then `connection`, then `analysis/`**, and that
+   order is a finding rather than a preference: §28.11 called `connection` the cheapest remaining
+   file because it touches no private names, and §29.1 found that the instrument was wrong.
+   `connection` is **polymorphic over its collaborators' types** — its three bridges are handed
+   Rust bodies and plates *and* `airbox`'s duck-typed Python wrappers, with three `test_airbox_*`
+   files pinning `bridge.stability_margin == bare.stability_margin` **exactly** across that
+   boundary — so it cannot move before those wrappers do, which is the half batch 6 did *not*
+   port. Do not re-open that ordering without reading §29.1 and §30.13.
    `cargo test --workspace` runs the native bars and the Cargo dependency allowlist;
    `pip install ./crates/physsynth-py` then
    `PHYSSYNTH_RS=1 pytest` runs the **existing, unmodified** Python tests against the Rust code. The
@@ -521,6 +525,42 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    speed: the nonlinear step is **15.5x** faster in Rust, which retires §28's 2.99x as the record by
    a wide margin — a Newton step is a dozen tiny NumPy/SciPy calls per iteration and every one of
    them is per-call overhead. **Models with an inner iteration are where the real-time port lives.**
+
+   And a **twenty-third**, from the room — Phase 5's sixth batch, the first **half of a file** and
+   the first whose question is "does the seam hold" rather than "are the numbers right": **NumPy's
+   pairwise reduction has a written-down cutoff, so whether bit-identity is available across a
+   ported `np.sum` is decidable by counting the terms and costs no measurement at all.** Below
+   **eight** elements `np.sum` *is* a left-to-right loop (measured 0 disagreements at n = 4, 6 and 7
+   against 803/2,000 at n = 8, 1,398 at 56, 1,944 at 4,641) — §23.2's "how long is the sum?" applied
+   to a blocking rule instead of a cancellation, and sharper, because it does not depend on the
+   values. For this model the answer is a hard no in one direction and a yes in two: the smallest
+   room the class can build has exactly **eight** pressure nodes, so `acoustic_energy` is never
+   structurally exact; a 1x1-cell wall face has four, so *that* ledger is bit-identical over 2,000
+   steps; and a one-node port books a sum of length one, so it is exact too. The bar is therefore
+   the **field** bit-identical (0.0 over 2,000 steps on five wall types, with cuts, with a source,
+   from an exact mode) and the **energy books** a tolerance (~1e-16) — affordable for a reason no
+   earlier refusal had: `dissipated` and `injected` are pure bookkeeping, so §14.2's question
+   ("does the reduction reach the next timestep?") is answered *no* for the first time on a
+   reduction that is fed back into a running accumulator. Six corollaries. **The seam is fifteen
+   names wide and the fifteenth is public**: fourteen private ones the ports and wrappers reach
+   through, six of which they *write*, plus `source_index`, which a test **assigns** — so the
+   migration has now needed four different searches to find a blocking dependency (private names,
+   re-derivation, duck-typed types, and written public attributes) and none finds the others; the
+   general form is **grep for assignment, not only for reference**. **A binding that copies its
+   buffers has made an algorithmic choice**: the first draft `to_vec()`d the four state arrays every
+   step, every answer stayed bit-identical, and at one room size (41x33x25) it ran **3.2x slower
+   than NumPy** — §29.2's cost regression arriving one batch after it was written down, in the
+   binding rather than in an algorithm; borrowing instead gives 13x at 27 nodes falling to ~1.1-1.5x
+   above 4,000. **`Bound::clone` is a reference clone**, so `_cut_mask` and `_cut_index` built from
+   one `PyList::new` were one object and `cut_faces` reported 375 instead of 136 — a wrong *count*,
+   not a wrong number, caught by an existing test on the first flagged run. **A comment can claim an
+   order it does not have**: booking the wall flux as a per-step subtotal is `D + (f0 + f1)` where
+   the reference books per face, `(D + f0) + f1`, and fixing that free association moved the gap
+   from 2.2e-15 to **1.4e-16**. **§22.3's portable spelling, a sixth time and the first aimed at an
+   initial condition** — `mode_shape`'s cosines moved to `math.cos` because `set_mode` seeds a *run*
+   rather than a read-out, and it is the first time the manoeuvre was taken purely on the strength
+   of §22.1 with no local measurement able to justify it (0 differences in 2,239 values here).
+   And **§19.7's line continuation happened a fifth time from a fifth tool and never reached CI**.
 
 4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
    never the reverse. Keeps the physics portable to C++/Rust later.

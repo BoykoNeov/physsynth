@@ -5758,3 +5758,297 @@ lives**, and this is the sharpest evidence yet.
 * **`airbox` is already half-swapped** (§28.2 gave it `splu`) and it is the largest file in the
   project: 3,976 lines and six factorizations, of which §11.2.1 predicts most of the arithmetic is
   not a solve at all. Expect it to port in halves.
+
+## §30 Phase 5, batch 6, as built (2026-08-31) — the room, and a cutoff that makes exactness decidable
+
+`airbox.py` is 3,976 lines, the largest file in the project, and §29.7 predicted it would "port in
+halves." It does. This batch is the **first half**: `AirBox` itself, the 3-D room on a Yee grid.
+The three tiers above it — `RoomPort`, `SurfacePort`, `InteriorSurfacePort` and the six
+`RoomLoaded*` / `RoomSuspended*` wrappers — stay Python and keep working unchanged.
+
+That makes it the first batch whose success condition is not only "are the numbers right" but
+**"does the seam hold"**, and the seam turned out to be wider than any private-name grep this
+migration has run.
+
+### 30.1 The shape on disk
+
+* `crates/physsynth-core/src/airbox.rs` — `Params` (validation, the trapezoid weights, the wall
+  closure, the CFL gate), the kernels (`divergence`, `momentum`, `apply_cut`, `pressure_step`, the
+  two injections, `apply_walls`, the two books, `acoustic_energy`, the modal oracle) and a native
+  `AirBox` shell with ten `cargo test`s.
+* `crates/physsynth-py/src/airbox.rs` — the binding. Larger than the core, and the reason is §30.3.
+* `physsynth/core/airbox.py` — `AirBoxPy = AirBox` plus `AirBox = _rs.AirBox` under the flag, and
+  **one edit to the reference**: `mode_shape` builds its cosines with `math.cos` (§30.6).
+* `tests/test_rust_parity_airbox.py` — 35 tests.
+* `tests/test_stability.py` — `airbox` added to *both* guard tables (§30.7).
+* `.github/workflows/ci.yml` — a new "The room, unmodified, against Rust" step, and the parity file.
+
+### 30.2 The finding: NumPy's pairwise reduction has a written-down cutoff, so exactness across a ported sum is decidable by counting terms
+
+Every batch since §14 has asked some version of "will this reduction agree?", and the answers have
+been probabilistic or empirical. §14.2 measured a BLAS `ddot` and concluded matching it would be a
+claim about a runner. §23.2 asked "how long is the sum?" and answered *at two terms it is provable*
+— because two doubles sum the same in either order unless they cancel. Both are statements about
+the *values* being summed.
+
+`AirBox` has four reductions and all four are `np.sum` rather than `np.dot`: the volume compliance
+sum and three kinetic sums in `acoustic_energy`, the per-face wall flux in `step`, and a port
+injection's `pbar`. And `np.sum`'s pairwise blocking has a **constant in it**:
+
+```text
+n < 8      ->  plain left-to-right loop
+n <= 128   ->  eight accumulators, unrolled by eight, combined pairwise
+n  > 128   ->  split at n/2 rounded down to a multiple of eight, recurse
+```
+
+Measured (2026-08-31, random positive vectors, this machine), against a plain left-to-right
+accumulation:
+
+| n | 4 | 6 | 7 | 8 | 16 | 56 | 560 | 4,641 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| disagreements | **0** | **0** | **0** | 803/2000 | 1,097/2000 | 1,398/2000 | 1,802/2000 | 1,944/2000 |
+
+Below eight it is not "usually equal", it is **the same computation**. So for this class of
+reduction the question "is bit-identity available?" costs no measurement at all — count the terms.
+That is §23.2's move applied to a *blocking rule* rather than to a cancellation, and it is sharper,
+because it does not depend on the values.
+
+The corollary is what decides this batch's bar, and it is a hard no:
+
+* **The volume sum is never below the cutoff.** The smallest room `AirBox` will build is one cell
+  per axis, which is `2 x 2 x 2 = 8` pressure nodes. The model's own minimum sits exactly one node
+  past the boundary, so `acoustic_energy` cannot be structurally exact for *any* room.
+* **A wall face can be.** A face carries `(N+1)(N+1) >= 4` nodes, so a 1x1-cell face is below it —
+  and measured over 2,000 steps at `N = (1,1,1)` the two `dissipated` ledgers are **bit-identical**,
+  0 differing steps. At the 56-node face of the default fixture they are not.
+* **A one-node port books exactly**, because its `pbar` is a sum of length one. Asserted.
+
+So the bar is: the **field** is bit-identical and the **energy books** are a tolerance. That is
+affordable here for a reason no earlier refusal had. §14.2's rule is "ask whether the reduction
+reaches the next timestep"; `dissipated` and `injected` are pure bookkeeping — nothing in the update
+path reads them, they exist only so `energy()` can close the ledger. The answer is **no**, for the
+first time in this migration on a reduction that *is* fed back into a running accumulator and still
+does not matter.
+
+One number worth keeping honest, because a one-shot equality check will mislead. The two
+`dissipated` books do not diverge once and stay apart; they **wander in and out of agreement at a
+last bit**. Over 2,000 steps at `N = (9,7,6)`: one lossy wall differs on **59** steps and finishes on
+exactly the same double; two lossy walls differ on 2,000 of 2,000 and finish 1.7e-16 apart; six
+differ on 1,997. The first draft of this section's measurement script ran one configuration for 200
+steps, read `identical=True`, and would have recorded a coincidence as a structural claim.
+
+### 30.2a The association inside the accumulator, which was nearly a false comment
+
+The first draft of `step` computed a per-step subtotal of the wall flux and added it once. The
+reference books **per face**: with two lossy walls it forms `(D + f0) + f1` where the draft formed
+`D + (f0 + f1)`. Different association on a running accumulator. The draft carried a comment
+claiming the two were "the same sum in the same order", which was true of `injected` and false of
+`dissipated` — §18.3's shape, a decision justified by a sentence that is not quite true.
+
+Fixing it costs nothing (`apply_walls` takes `&mut f64` and books each face onto it) and it is
+*measurable*: the final relative gap on the two-lossy-wall fixture fell from **2.2e-15 to 1.4e-16**,
+an order of magnitude, and on the all-lossy fixture from 6.6e-15 to 1.4e-16. A tolerance-level
+quantity is still worth getting right when the right version is free.
+
+### 30.3 The seam: fifteen names, six of them written from outside — and the fifteenth is public
+
+The ports and wrappers reach into the room through names the reference spells with a leading
+underscore. Enumerated before a line of Rust was written:
+
+| name | read by | **written** by |
+| --- | --- | --- |
+| `_w` | `_free_pressure_nodes` | — |
+| `_W` | every port, `test_airbox_modal`, `test_airbox_port` | — |
+| `_beta`, `_open`, `_has_walls` | `_free_pressure_nodes`, two test files | — |
+| `_pending` | three test files | the same |
+| `_pending_ports` | every port | every port, and `test_airbox_dipole` |
+| `_ports` | the disjointness check | every port |
+| `_cut_mask`, `_cut_index`, `_cuts` | `cut_faces`, `step` | `test_airbox_dipole::_uncut` |
+| `_register_cut`, `_plane_axis` | `InteriorSurfacePort` | — |
+| `_divergence` | `test_airbox_port`, `test_airbox_surface` | — |
+
+That is §12.2 ("a leading underscore is not a statement about the interface") at its widest: three
+phases after `body` found three modules assigning to a `_accel`, six containers here are Python
+objects a client *writes*, so none of them can be mirrored in Rust. The binding holds them as plain
+`Py<PyAny>` slots and reads them back every step.
+
+**And the enumeration was still one name short.** `tests/test_airbox_freefield.py` relocates the
+source with `box.source_index = box.node_index(centre)` — a **public** attribute, invisible to a
+private-name grep, and it turned two tests red. The migration has now needed four different searches
+to find a blocking dependency: private names (§0), re-derivation (§28.2), duck-typed collaborator
+types (§29.1), and now **public attributes that are written rather than read**. None of the four
+finds the others, and the general form is: *grep for assignment, not only for reference.*
+
+The one seam claim worth stating separately is `_free_pressure_nodes`. It is a module-level Python
+helper the ports share, it is unchanged, and it now reads a **Rust** room's arrays. Its docstring
+already claimed that a local divergence read reproduces `_divergence()`-then-closure exactly, at
+wall, edge and corner nodes alike — a within-language claim while the room was Python on both sides.
+Porting the room turned it into a cross-language one. It holds, and it is asserted; note the
+direction, which is §28.2 seen from the other end: there an unported client re-derived what the port
+computed and the *anchor* broke, here the unported client re-derives it and the *port* is the
+reference.
+
+### 30.4 Two identity bugs, and what caught them
+
+Neither was arithmetic and neither would have been caught by an energy bar.
+
+**`_cut_mask` and `_cut_index` were the same list.** The constructor built one `PyList` of three
+`None`s and used `Bound::clone` for the second field — which is a *reference* clone. So
+`_register_cut`, which writes both, overwrote each with the other, and `cut_faces` (which counts
+non-zeros in the mask) read an index tuple instead: **375 faces instead of 136**. It was caught by
+`test_airbox_cut.py::test_cuts_are_additive`, an existing test, on the first flagged run — and it is
+now pinned directly in the parity file, because the failure is a property of the *binding* that
+nothing in the physics can see.
+
+**`source_index` was not settable.** §30.3. Caught by `test_airbox_freefield.py`.
+
+Both arrived from running the **existing, unmodified** suite under the flag, which is the whole
+argument for plan §1's design.
+
+### 30.5 §29.2's cost regression, in the batch that cites it — and this time it was in the binding
+
+§29.7 wrote it down: *"a cost regression is invisible to every bar this project owns; if a port
+introduces an algorithmic choice, the assertion has to be about the work."* One batch later, here it
+is — and it was not an algorithmic choice, it was four `to_vec()` calls.
+
+The first draft copied `p`, `ux`, `uy` and `uz` out of their NumPy buffers into fresh `Vec`s on
+every step. Every answer stayed bit-identical. The speed did not:
+
+| nodes | 27 | 120 | 560 | 4,641 | 33,825 | 274,625 |
+| --- | --- | --- | --- | --- | --- | --- |
+| copying draft | 15.1x | 9.8x | 5.7x | 1.49x | **0.31x** | 1.15x |
+| borrowing | 13.1x | 10.7x | 4.2x | 1.45x | **1.09x** | 1.53x |
+
+`0.31x` is **3.2x slower than NumPy**, reproducibly, at one room size (41 x 33 x 25 nodes) — four
+array-sized memcpys per step crossing whatever allocator threshold that size sits on. The fix is to
+hold read borrows of the four buffers across the whole step and copy nothing; it needs the
+`&mut self` work (reading `_pending`, `_pending_ports`, `_cut_index`) hoisted above the borrow,
+which is a small restructuring and no arithmetic change at all.
+
+The lesson is narrower and more useful than §29.2's: **a binding's buffer discipline is an
+algorithmic choice.** §9.3 established that state must live in Python-owned arrays; what this batch
+adds is that *reading* them must borrow, not copy, and that the cost of getting it wrong is not a
+constant factor but a cliff at one size.
+
+The rest of the curve is §11.6 exactly: 13x on a tiny room where per-call overhead is everything,
+converging to ~1.1-1.5x once NumPy's compiled loops dominate. A room is not where the real-time port
+lives; §29.5's models-with-an-inner-iteration still are.
+
+### 30.6 §22.3's portable spelling a sixth time, and the first aimed at an initial condition
+
+`mode_shape` is a tensor cosine, `set_mode` seeds a run from it, and §22.1 established that NumPy
+computes transcendentals with its own CPU-dispatched routines rather than the platform libm — so
+`np.cos` makes a value a claim about which machine ran the job.
+
+Everywhere that has bitten before, it cost a last bit in a **read-out**. Here it would seed an
+initial **condition**: two implementations starting from different fields are not two roundings of
+one run, they are two runs. So `airbox.py` now builds its three cosine vectors with `math.cos`,
+where CPython and Rust meet at the same libm.
+
+It is free — about sixty calls per room, against §25.4's two-million-point quadrature where the same
+manoeuvre was **refused**. And it is invisible here: measured 0 differences in 2,239 values on this
+Windows machine, where NumPy, CPython and Rust all reach UCRT. §22.2 said that whole class has no
+local repro; this is the first time the migration has taken the portable spelling *purely on the
+strength of the written-down finding*, with no local measurement able to justify it.
+
+### 30.7 The two discrete outputs, and the guard that was one module short again
+
+`N = int(round(L / h))` and `node_index` are **decisions**, not numbers (§25.2). Python's `round` is
+half-to-**even**; Rust's `f64::round` is half-away-from-zero. At a tie the naive port builds a room
+one cell larger on an axis, which conserves energy perfectly and reports a plausible spectrum — it
+is simply a different room. Both go through `round_ties_even`, the scar `membrane` and `radiation`
+already carry, and the parity test **searches** for ties rather than asserting a constant (§26.6):
+of 35 exact ties in the search range, 17 have an even floor and are witnesses (half-to-even keeps
+the value, half-away goes up), and all 17 are caught.
+
+`_LAMBDA_MAX` is spelled `1.0 / 3.0_f64.sqrt()` rather than as a literal, so a fixture built exactly
+at the CFL ceiling — which is deliberately allowed — constructs on both sides.
+
+`self.c0 ** 2` is CPython's `float.__pow__`, i.e. libm's `pow`, and **not** `c0 * c0`: they disagree
+in **99 of 200,000** sound speeds in the range this class accepts, and the quantity multiplies the
+divergence at every timestep. It goes through `pyfloat::scalar_pow`, whose `#[inline(never)]` is what
+keeps LLVM from folding it back into a multiply in `--release` (§17.2). The parity test searches for
+a witness `c0` and drives 500 steps at it.
+
+And the mechanical one: `airbox` had read `PHYSSYNTH_RS` since §28.2 gave it the `splu` swap, and was
+**not** in `test_stability.py`'s `_USE_RUST` tuple — a whole batch in which its reading of the flag
+could have diverged with nothing noticing. §17.6/§23.7/§26.7's finding for the fourth time: *the
+derive is only as wide as the list it derives over.*
+
+### 30.8 §19.7's line continuation, a fifth time from a fifth tool
+
+Writing the new CI step through a Python heredoc collapsed every backslash-newline pair into one
+500-character line. Same failure, fifth different tool, and `tests/test_ci_workflow.py` — the test
+§20.7 wrote when the scar was reintroduced by the batch citing it — caught it in under a second.
+**Five occurrences, zero red CI runs since the test exists.** The fix is to build the backslash from
+`chr(92)` so no layer can eat it.
+
+### 30.9 What is bit-identical
+
+Everything on the update path, at every fixture measured:
+
+* every construction product — `N`, `L_actual`, `lam`, `walls`, `_w`, `_W`, `_Wx`/`_Wy`/`_Wz`,
+  `_beta`, `_open`, `_has_walls`, `source_index`;
+* `p`, `ux`, `uy`, `uz`, `ux_prev`, `uy_prev`, `uz_prev` over 2,000 steps at **max |dp| = 0.0**, on
+  all five wall configurations (rigid, one lossy face, two lossy faces, all lossy, an open face),
+  with a cut room, with a driven source, with a hand-built port injection, and started from an exact
+  discrete mode;
+* `mode_shape`, `mode_frequency`, `continuum_mode_frequency`, `node_index`, `snapped`,
+  `pressure_at`, `_divergence`, `cut_faces`, `_cut_mask`, `_cut_index`;
+* `injected` for a scalar source **and** for a one-node port — both are sums of length one;
+* `dissipated` for a room whose lossy face is below the eight-node cutoff.
+
+Not bit-identical, by decision: `acoustic_energy` and `energy` (~1e-16 relative), `dissipated` for a
+face at or above the cutoff (~1.7e-16 relative), and a spread port's booked work.
+
+### 30.10 The measured comparison
+
+| claim | fixture | result |
+| --- | --- | --- |
+| field, 2,000 steps | five wall configurations | max abs difference `0.0` |
+| field, 2,000 steps | cut room, two cuts, one with an extent | `0.0` |
+| field, 1,000 steps | driven soft source | `0.0`, `injected` **equal** |
+| field, 500 steps | one-node port on `_pending_ports` | `0.0`, `injected` **equal** |
+| field, 400 steps | from `set_mode`, four modes | `0.0` |
+| energy | rigid | 9.8e-16 relative |
+| energy | two lossy faces | 1.4e-16 relative |
+| energy | all lossy | 1.4e-16 relative |
+| energy drift, 1,000 steps | both implementations, all five walls | < 1e-10 (the standing bar) |
+| `_free_pressure_nodes` | wall, edge, corner and interior nodes | `array_equal`, both directions |
+
+### 30.11 Speed
+
+See §30.5's table. 13.1x at 27 nodes, 4.2x at 560, ~1.1-1.5x from 4,641 nodes up.
+
+### 30.12 The success condition
+
+* `cargo test --workspace` — 25 test binaries green, including ten new native `airbox` tests and the
+  dependency allowlist (still empty).
+* `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings` — clean.
+* `ruff check .` — clean.
+* `PHYSSYNTH_RS=1 pytest` over the ten airbox files plus `test_stability.py` — **450 passed**.
+* `PHYSSYNTH_RS=1 pytest tests/test_web_backend.py` — green (the viewer builds `AirBox` for its
+  `airbox` and `vkroom` models).
+* `pytest tests/test_rust_parity_airbox.py` — **35 passed**.
+* Default path unchanged: the same ten airbox files, `test_stability.py`, `test_shard_partition.py`
+  and `test_web_backend.py` all green without the flag.
+
+### 30.13 What the next batch inherits
+
+* **What is left of `airbox.py`:** the ports (`RoomPort`, `SurfacePort`, `InteriorSurfacePort`) and
+  the six `RoomLoaded*` / `RoomSuspended*` wrappers — roughly 3,000 of the file's 3,976 lines, and
+  the half that owns all six `splu` factorizations. `AirBox` itself has none.
+* **`connection` is still blocked, and §29.1's reason is only *half* discharged.** Its three bridges
+  are polymorphic over their collaborators' types, and the Python collaborators they must still
+  accept — `RoomLoadedBody`, `_PlateSurface`, `RoomSuspendedPlate` — are exactly the half of
+  `airbox.py` this batch did not port. The order stays `airbox`'s second half, then `connection`,
+  then `analysis/`.
+* **Count the terms.** §30.2. For an `np.sum` the availability of bit-identity is decidable without
+  measuring anything: below eight elements it is the same computation, at eight or above it is not.
+  Ask it of every remaining reduction before writing a bar.
+* **Grep for assignment, not only for reference.** §30.3. Four searches now, none of which finds the
+  others: private names, re-derivation, duck-typed types, and public attributes that are *written*.
+* **A binding that copies its buffers has made an algorithmic choice.** §30.5. Borrow the NumPy
+  arrays for the whole step; the cost of not doing so is a cliff, not a constant.
+* **`Bound::clone` is a reference clone.** §30.4. Two struct fields built from one `PyList::new` are
+  one object, and the symptom is a wrong *count*, not a wrong number.

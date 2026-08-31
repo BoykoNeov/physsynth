@@ -831,6 +831,45 @@ jobs:
             tests/test_web_backend.py \
             tests/test_stability.py
 
+      # Phase 5, batch 6: `AirBox` -- the 3-D room, and the first HALF of a file rather than a
+      # file. `airbox.py` is 3,976 lines and the three tiers above the class (the ports and the six
+      # `RoomLoaded*` / `RoomSuspended*` wrappers) stay Python, so this step asks a question no
+      # earlier one had to: does the SEAM hold? Everything above `AirBox` reaches into it through
+      # fifteen names -- fourteen private plus `source_index`, which is PUBLIC and which the
+      # private-name grep that found the other fourteen could not see -- and SIX of them are
+      # containers a client WRITES. A wrapper that silently stopped seeing a room's
+      # `_pending_ports` would inject nothing and every energy ledger in these files would stay
+      # green, so the list below is the whole airbox family rather than the room's own tests.
+      #
+      # The field is bit-identical on every boundary type, with cuts, with injections and from an
+      # exact discrete mode; the four `np.sum` energy books are not, and cannot be (NumPy's
+      # pairwise blocking above eight elements, plan section 30.2). That is affordable here for a
+      # reason no earlier refusal had: `dissipated` and `injected` are pure bookkeeping, so the
+      # reduction reaches no timestep -- section 14.2's question asked and answered "no".
+      #
+      # `test_airbox_modal.py` is load-bearing in a way it does not look. `mode_shape` is a tensor
+      # cosine, and section 22.1 makes `np.cos` a claim about the runner's CPU; `set_mode` seeds an
+      # initial CONDITION rather than a read-out, so `airbox.py` now builds those cosines with
+      # `math.cos` -- section 22.3's portable spelling a sixth time, and free at ~60 calls a room.
+      # A Linux runner is the only place that change can be observed at all (section 22.2).
+      - name: The room, unmodified, against Rust
+        env:
+          PHYSSYNTH_RS: "1"
+        run: |
+          pytest --durations=10 \
+            tests/test_airbox_energy.py \
+            tests/test_airbox_modal.py \
+            tests/test_airbox_cut.py \
+            tests/test_airbox_port.py \
+            tests/test_airbox_freefield.py \
+            tests/test_airbox_scene.py \
+            tests/test_airbox_surface.py \
+            tests/test_airbox_membrane.py \
+            tests/test_airbox_dipole.py \
+            tests/test_airbox_vk.py \
+            tests/test_web_backend.py \
+            tests/test_stability.py
+
       - name: The nonlinear plate's bracket and Airy solve, unmodified, against Rust
         env:
           PHYSSYNTH_RS: "1"
@@ -880,7 +919,8 @@ jobs:
             tests/test_rust_parity_bow.py \
             tests/test_rust_parity_beam.py \
             tests/test_rust_parity_plate.py \
-            tests/test_rust_parity_geometric.py
+            tests/test_rust_parity_geometric.py \
+            tests/test_rust_parity_airbox.py
 
   # Lint, plus the OUTER half of the shard guard.
   #

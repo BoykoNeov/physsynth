@@ -122,6 +122,7 @@ Headless: NumPy only.
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Literal
@@ -847,7 +848,19 @@ class AirBox:
         ``0 <= l <= Nx`` etc.; meaningful only for rigid walls.
         """
         idx = self._mode_indices(l, m, n)
-        cos = [np.cos(q * np.pi * np.arange(N + 1) / N) for q, N in zip(idx, self.N, strict=True)]
+        # ``math.cos``, not ``np.cos``. NumPy carries its own CPU-dispatched transcendental loops
+        # rather than calling the platform libm (``docs/dev/rust-migration-plan.md`` section 22.1,
+        # which arrived as a red CI run on unchanged code), so a value that passes through one is a
+        # claim about the machine that ran the job. Everywhere else in this repo that only costs a
+        # last bit in a read-out; here it would seed an initial CONDITION, because :meth:`set_mode`
+        # starts a run from this field. The portable spelling is a Python loop over ~N values per
+        # axis -- ~60 calls for a whole room, which is free. (Section 25.4 is where the same
+        # manoeuvre was REFUSED, at a two-million-point quadrature.) The evaluation order is the
+        # array version's, unchanged: ``((q * pi) * i) / N``.
+        cos = [
+            np.array([math.cos(q * np.pi * i / N) for i in range(N + 1)])
+            for q, N in zip(idx, self.N, strict=True)
+        ]
         return cos[0][:, None, None] * cos[1][None, :, None] * cos[2][None, None, :]
 
     def mode_frequency(self, l: int, m: int, n: int) -> float:
@@ -3926,9 +3939,25 @@ class RoomSuspendedVKPlate(_RoomLoadedVKPlateMixin):
         self.n = 0
 
 
-# -- the Rust swap (plan section 28) ------------------------------------------------------------
+# -- the Rust swap (plan sections 28 and 30) -----------------------------------------------------
 #
-# `airbox.py` is not ported. What it needs from this batch is one name.
+# Two things happen here, one batch apart.
+#
+# **Section 30 (this batch): `AirBox` itself is ported.** Only the class -- the ports and the six
+# `RoomLoaded*` / `RoomSuspended*` wrappers below it stay Python, and they keep working because the
+# binding exposes the whole private surface they reach through (`_w`, `_W`, `_beta`, `_open`,
+# `_has_walls`, `_pending`, `_pending_ports`, `_ports`, `_cut_mask`, `_cut_index`, `_cuts`,
+# `_register_cut`, `_plane_axis`, `_divergence`) as settable attributes rather than mirroring any
+# of it. Six of those are containers a client WRITES -- every port appends to `_pending_ports`, and
+# `tests/test_airbox_dipole.py::_uncut` assigns a fresh `[None, None, None]` over the three cut
+# fields -- so they are Python objects the Rust class merely holds and reads back each step.
+#
+# `AirBoxPy` below is the reference implementation and stays the name every parity check reaches
+# for. `_free_pressure_nodes`, the module-level helper the ports share, is unchanged and reads the
+# Rust room's arrays directly; its docstring's bit-identity claim against `_divergence`-then-closure
+# is therefore now a CROSS-LANGUAGE claim, and `tests/test_rust_parity_airbox.py` asserts it.
+#
+# **Section 28 (the previous batch): one imported name.**
 #
 # Every room-loaded class **reassembles** the plate's system matrix and factors it here, rather
 # than reaching into `plate.py` -- and four of the family's reduction tests turn that into a
@@ -3941,6 +3970,9 @@ class RoomSuspendedVKPlate(_RoomLoadedVKPlateMixin):
 #
 # The shim is the whole of the change: `splu` is looked up as a module global at call time, so
 # rebinding it here is enough, and nothing else in the file knows.
+
+AirBoxPy = AirBox
+"""The pure-Python reference implementation, under a name the swap below never rebinds."""
 
 _USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
 
@@ -3974,3 +4006,5 @@ if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the d
             return np.asarray(self._lu.solve(np.ascontiguousarray(b, dtype=float)))
 
     splu = _RustSuperLU  # type: ignore[assignment,misc]  # noqa: F811
+
+    AirBox = _rs.AirBox  # type: ignore[assignment,misc]  # noqa: F811

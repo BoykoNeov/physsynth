@@ -171,6 +171,7 @@ def test_the_rust_swap_matches_the_environment():
     # guards, and it runs on BOTH paths -- the default one included, where it asserts the Rust
     # model is *not* silently in play.
     from physsynth.core import (
+        airbox,
         banded,
         beam,
         body,
@@ -195,6 +196,11 @@ def test_the_rust_swap_matches_the_environment():
     for module in (
         string_ideal,
         operators,
+        # `airbox` has read PHYSSYNTH_RS since Phase 5's fourth batch (it takes the `splu` swap),
+        # and it was NOT in this tuple until the fifth ported `AirBox` itself -- a whole batch in
+        # which its reading of the flag could have diverged with nothing noticing. The derive is
+        # only as wide as the tuple it derives over, for the fourth time.
+        airbox,
         membrane,
         operators2d,
         exciter,
@@ -226,6 +232,7 @@ def test_the_rust_swap_matches_the_environment():
     # which is what keeps adding a port a reviewed edit rather than a silent one.
     swapped_classes = {}
     for module in (
+        airbox,
         string_ideal,
         membrane,
         body,
@@ -256,6 +263,7 @@ def test_the_rust_swap_matches_the_environment():
                 swapped_classes[(module.__name__, name)] = (module, name, reference)
 
     expected_classes = {
+        ("physsynth.core.airbox", "AirBox"),
         ("physsynth.core.string_ideal", "IdealString"),
         ("physsynth.core.membrane", "Membrane"),
         ("physsynth.core.body", "ModalBody"),
