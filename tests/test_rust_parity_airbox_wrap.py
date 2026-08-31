@@ -620,6 +620,24 @@ PAIRS = [("linear", "baffled"), ("linear", "suspended"), ("vk", "baffled"), ("vk
 
 
 @pytest.mark.parametrize(("kind", "tier"), PAIRS)
+def test_the_wrappers_step_count_is_settable(kind, tier):
+    """§33.2, asserted on the four classes the setter was *widened* to rather than the two that
+    needed it.
+
+    The membrane batch found that a ``#[getter]`` with no ``#[setter]`` is still a data descriptor,
+    so a plain Python attribute becomes read-only the moment it is ported, and put the setter in
+    the shared macro — which changed these four shipped classes. Nothing in that batch's own run
+    could see the difference: a setter adds no name to ``dir()``, so
+    :func:`test_the_wrappers_own_surface_matches_the_reference` passes identically either way.
+    """
+    py_inst, rs_inst = _pair(kind, tier)
+    for inst in (py_inst, rs_inst):
+        inst.n = 7
+        inst.n += 3
+    assert py_inst.n == rs_inst.n == 10
+
+
+@pytest.mark.parametrize(("kind", "tier"), PAIRS)
 def test_the_wrappers_own_surface_matches_the_reference(kind, tier):
     """DERIVED, not listed — and this is the guard §32.6 actually needs.
 

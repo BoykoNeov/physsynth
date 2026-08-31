@@ -49,7 +49,10 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    (`_PlateSurface`, `_VKPlateSurface`) they drive; and as of batch 9 the **membrane pair**, its
    seam and its mixin — plus the two module-level helpers (`_face_axes`, `impedance_from_zeta`)
    that belonged to no tier and had been missed by every "one tier left" note — so **`airbox.py`
-   is finished**, all 4,071 lines of it. What is left
+   is finished**: every class it exposes and every function any outside client reaches is Rust.
+   (Two things are deliberately not swapped, checked rather than assumed: the module's constants,
+   which are values and not implementations, and `_require_same_rate`, which has a Rust twin but no
+   caller outside the file — it stays live for the same reason `AirBoxPy` does.) What is left
    of the core is **`connection`, then `analysis/`**, and
    that order was a finding rather than a preference: §28.11 called `connection` the cheapest
    remaining file because it touches no private names, and §29.1 found that the instrument was

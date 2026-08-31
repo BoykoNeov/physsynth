@@ -6614,8 +6614,18 @@ that scar became a test.
 `airbox.py` finished. §30 ported the room, §31 the three ports, §32 the plate and body wrappers,
 and this batch ports what was left: `_MembraneSurface`, `RoomLoadedMembrane`,
 `RoomSuspendedMembrane` and the mixin they share — plus the two module-level helpers nobody had
-noticed were still Python, `_face_axes` and `impedance_from_zeta`. Every class and every function
-in the file's 4,071 lines now has a Rust implementation behind the flag.
+noticed were still Python, `_face_axes` and `impedance_from_zeta`. **Every class the module exposes
+and every function any client outside it reaches now has a Rust implementation behind the flag.**
+
+That sentence is deliberately narrower than "the file is Rust", and §33.8 is why the difference is
+worth spelling out. What is *not* swapped, after checking rather than assuming: the module's
+constants (`FACES`, `PLANES`, `RHO0_AIR`, `C0_AIR`, `_AXES`, `_LAMBDA_MAX`, `_LAMBDA_TOL`,
+`_SPREADINGS`), which are values rather than implementations and which a swap would buy nothing
+for; and `_require_same_rate`, which **has a Rust twin** (`airbox_wrap::require_same_rate`, used by
+every Rust wrapper) but no client outside the module at all — grepped, not assumed. It stays live
+for exactly the reason `AirBoxPy` does: its only callers are the reference's own classes, which
+stay live until §1 deletes them. It is not a fourth orphan and the next batch should not treat it
+as one.
 
 Not one line of the ten `test_airbox_*.py` files was touched, for the fourth batch running, and the
 flagged CI step's file list has not changed once across the four tiers.
@@ -6867,7 +6877,11 @@ transcription rather than about the dynamics. The two implementations are not tw
   count does not move because the new parity file is not in it and no test was added to the
   reference's own suite.
 * `pytest tests/test_rust_parity_airbox_memb.py` — **83 passed**.
-* Every parity file together — **2,465 passed, 1 skipped**.
+* Every parity file together — **2,478 passed, 1 skipped**, which includes four tests
+  added to `test_rust_parity_airbox_wrap.py` for the setter this batch widened onto the
+  four plate wrappers. Nothing in the batch's own run could see that widening otherwise:
+  a setter adds no name to `dir()`, so the derived surface guard passes identically
+  either way.
 * Default path unchanged: the same files green without the flag.
 * The swap guard's class table went up by **three** and its function table by **two** — checked, per
   §23.7, rather than assumed.
@@ -6877,7 +6891,8 @@ transcription rather than about the dynamics. The two implementations are not tw
 
 ### 33.11 What the next batch inherits
 
-* **`airbox.py` is finished, and `connection.py` is the next file.** §32.10 discharged its last
+* **`airbox.py` is finished in the sense §33's opening defines, and `connection.py` is the next
+  file.** §32.10 discharged its last
   blocker and this batch changes nothing about it: `connection` needs no membrane wrapper, touches
   no private name on any collaborator, and its three bridges are now handed Rust objects on every
   path the suite exercises. It is pure duck typing (§31.11), so what it needs from a port is that
