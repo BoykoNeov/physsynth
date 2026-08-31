@@ -5500,3 +5500,261 @@ and now this).
   failure mode made checkable. `airbox.py` needs no such entry — its import of the two classes sits
   under `if TYPE_CHECKING:`, so it captures nothing at runtime; what it captures is `splu`, which
   §28.2 rebinds and the bare-vs-loaded reduction tests already pin exactly.
+
+---
+
+## §29 Phase 5, batch 5, as built (2026-08-31) — the geometrically exact string, and an ordering that was never a rounding
+
+`string_geometric.py` is ported: `GeometricString` (model #10), the **last of the four theta-scheme
+strings** and the last model in `physsynth/core/` outside `connection`, `airbox` and `analysis/`.
+Flipping it closes the bit-identity chain `portable.py` was written to protect — `sigma1 = 0`, `EA =
+0` and `EA = T` now all compare one Rust class against another.
+
+The batch's finding is about **a kind of divergence the migration had not met**. Every finding since
+§14 has been about *which digits* two implementations produce: a reduction's order (§14.2, §18.2,
+§27.2), a compiler's fold (§17.2), a library's CPU dispatch (§22.1), a solver's blocking (§24.2).
+This one changes no digit at all. The two implementations of the sparse LU agree to a tolerance
+either way; what the port got wrong on its first draft was **how much work the elimination does**,
+by a factor of thirteen — and no bar in this project could have seen it, because the answers stay
+right and the model merely gets slow.
+
+### 29.1 Why this model, and not `connection` — §28.11's own estimate, corrected
+
+§28.11 named `connection` as the next batch and "the cheapest of them", on the grounds that it
+"touches no private names on either of its two resonator families". That is true and it is the wrong
+instrument, which is the same complaint §28.2 had just made about a name grep. `connection` is
+**polymorphic over its collaborator's type**, and that is a third door:
+
+* `StringBodyBridge` is handed a `ModalBody`, a `RadiatedBody`, a `ReactiveRadiatedBody` — all Rust
+  — **and** `airbox.RoomLoadedBody`, which is Python and three phases from its own port
+  (`tests/test_airbox_port.py`, `tests/test_radiation.py`, `web/serialize.py` three times over).
+* `StringPlateBridge` and `StringVKPlateBridge` are handed `Plate`/`VKPlate` **and** airbox's
+  `_PlateSurface` / `RoomSuspendedPlate` wrappers, which reach the plate through `__getattr__`.
+* And `tests/test_airbox_surface.py`, `test_airbox_dipole.py` and `test_airbox_vk.py` each assert
+  `bridge.stability_margin == bridge_bare.stability_margin` **exactly** across that boundary —
+  §28.2's anchor-to-an-unported-client, one level further out.
+
+So a Rust bridge would have to either refuse the duck-typed wrappers (three test files red, and the
+`bow.rs` precedent says refusing is the *right* answer to a mixed pair) or call back into Python for
+its collaborator every step, which is the reentrancy shape §13.2 documents. It also has two problems
+of its own: `_max_leapfrog_eigenvalue` is a **dense nonsymmetric eigensolver** (`np.linalg.eigvals`,
+LAPACK `dgeev`) with the project's dependency list empty, and `_stability_margin` needs the plate's
+sparse operators *read back out* of a Rust model to reassemble `G0`. And the payoff is ~zero: the
+bridge is a handful of scalar operations per step wrapped around collaborators that are already Rust.
+
+**The decision is to port `connection` after `airbox`, not before it.** One note for whoever does:
+the eigenproblem is easier than it looks. `A = M^-1 S` with `M` diagonal positive and `S` symmetric
+(the string's strain energy, the body's modal stiffness, and the spring's rank-1 block), so its
+spectrum is real and equals that of the symmetric `M^-1/2 S M^-1/2`. `dgeev` becomes a symmetric
+eigensolver plus §25.3's margin measurement on the raise/no-raise decision — a few hundred lines
+rather than a research problem.
+
+The general form, and it is the third instrument this migration has needed: **ask what a client is
+polymorphic over, not only what names it reads.** §0 predicted `connection` would be blocked by
+*private* names; it is blocked by *types*, and the two searches look nothing alike.
+
+### 29.2 The finding: the first Group D model that factors on the hot path
+
+Every earlier Group D model — `beam`, `plate`, `operators2d`'s Airy solve, `airbox` — factors
+**once** at construction and back-substitutes per step. This one builds a fresh Newton Jacobian and
+factors it *inside* the iteration. So §24's decision to leave `sparse_lu` in the natural column
+order stops being free, and §24 wrote its own escape clause: *"every Group D matrix in this project
+is a banded FDTD operator whose natural order already has none [no fill] to speak of ... if a later
+model makes fill the constraint, an ordering goes in front of this, not inside it."*
+
+This is that model, and not by a little. Its `3(N-1)` unknowns are stacked **by field** — all of `u`,
+then all of `w`, then all of `v` — while the discrete-gradient force couples the three fields *at the
+same cell*. In that order every coupling sits `N-1` columns off the diagonal and a left-looking
+elimination fills the entire envelope between:
+
+| | `nnz(L) + nnz(U)` at N = 32 / 64 / 128 | factor at N = 128 |
+|---|---|---|
+| SciPy (SuperLU + COLAMD) | 676 / 1,380 / 2,788 | 156 us |
+| this crate, natural order | **2,311 / 8,743 / 33,895** | **2,068 us** |
+| this crate, reordered by node | 629 / 1,301 / 2,645 | 58 us |
+
+The reordering is `(u_i, w_i, v_i)` taken together — `string_geometric::interleave_perm` — and it is
+a **closed form in `N`**, so no ordering heuristic was needed or wanted. That is §24's finding about
+the beam's permutation being a closed form arriving from the other side of the ledger: there it meant
+the reference's choice could be *predicted*, here it means ours does not have to be *searched for*.
+It also beats COLAMD by about 5 % at every size, which the test asserts loosely (`<= 1.5x`) and on
+purpose — SuperLU's ordering heuristic is a SciPy internal that a point release may change, and
+§18.3 and §26.2 both say not to pin one.
+
+**The reordering costs nothing, and that is a property of this model rather than a general one.**
+Every operator on the update path is block diagonal by field (`A3`, `Gp3`, `Gm3`) or diagonal per
+cell (the DG Jacobian), so each output entry is a reduction over one block's entries and the global
+index order never enters a single sum. The permutation therefore lives *inside*
+`SparseLu::factor_permuted`, and the residual, the state and the energy all stay in Python's
+`[u; w; v]` order. Had one reduction crossed a block, the reordering would have been a trade rather
+than a gift.
+
+### 29.3 The corollaries
+
+**a. The project's first Group D matrix that is not SPD, and a written justification that stopped
+covering it.** `sparse_lu`'s `DIAG_PIVOT_THRESH` prefers the diagonal, and the reason recorded in
+§24 is that "every one of them is symmetric positive definite ... for an SPD matrix elimination
+without any pivoting is unconditionally stable". A discrete gradient is not the gradient of anything,
+so this Jacobian is genuinely unsymmetric — which is exactly why the model uses a sparse LU and not
+the banded Cholesky the rest of the family uses — and that sentence no longer applies.
+
+What replaces it is measured, and the measurement had to be chosen carefully. Row-sum diagonal
+dominance is a *poor proxy*: it is set by the **time resolution** and by nothing else — 8.06 at
+`lam_long = 0.5`, 2.51 at 1.0, 1.10 at 4.0 and **0.285** at 8.0, where the matrix is not diagonally
+dominant at all — while amplitude (10x) moves it only from 8.06 to 7.34 and the grid does not move it
+at all. The observable that matters is `is_natural`, because the threshold compares the diagonal
+against the largest candidate in its own *column*: over **854 Jacobians** spanning grid, amplitude,
+mode and `lam_long` from 0.5 to 8, **no pivot fires at any of them**. That is what the native test
+asserts.
+
+**b. §19.2's branch rule, answered more gently than model #9 answered it — because a `max` is not a
+sum.** The tension string's iteration count differed on 1,400 of 5,000 steps because a BLAS reduction
+fed a `brentq` bracket. Here the convergence test is `max|r| <= newton_tol * max|Y_seed|`, and a
+maximum is order-independent, so the reduction feeding the branch is reproducible by construction.
+What still varies is *which side of the bar* one Newton step lands on, and the rate is set by
+something new: **where the mean iteration count sits between two integers.** Measured over 20,000
+steps —
+
+| fixture | mean iters | flips |
+|---|---|---|
+| mode 1, amp 1e-3 | 1.00 | **0** |
+| mode 4, amp 1e-3 | 1.97 | 36 |
+| mode 1, amp 1e-2 | 1.70 | 293 |
+| `lam_long = 2` | 1.50 | 475 |
+
+— zero when the count is pinned at an integer, hundreds when it sits mid-way. And a flip costs about
+two orders of *trajectory* agreement (2.5e-10 against 1.4e-12 at 20,000 steps) and **nothing at all**
+on the energy (2.0e-12 either way), because *any* root of the discrete-gradient equation conserves
+exactly — which is precisely why the model declines to gate uniqueness. §27.5's "a conserved quantity
+is not a trajectory comparison", reached from the other direction: there the trajectory decorrelated
+and the energy held; here the trajectory holds and the *branch* differs.
+
+**c. The Armijo line search is dormant, and the measurement is the test.** Swept over grid, amplitude
+and mode across 1,600 steps, the backtracking loop fires **zero** times: the discrete gradient is
+smooth (no kink, unlike the barrier's `[eta]+`), so the seed is already inside the basin and a full
+Newton step always decreases the residual norm. That is §16.6's hazard again — a safety net nothing
+in the suite exercises is a safety net nothing has ever checked — so it is driven directly in
+`crates/physsynth-core/tests/string_geometric.rs`. It is also what disposes of the one branch here
+that *is* on a sum: `0.5 r.r` is `np.dot` on the Python side and not reproducible, and a branch that
+never fires cannot flip.
+
+**d. `portable.py` was not needed at all, and that is a first.** Every matrix on this model's update
+path — `D2`, the three `L`s, the three `A`s, `A3`, `Gp`, `Gm`, `Gp3`, `Gm3` and the DG Jacobian —
+arrives from SciPy already canonically ordered, measured at four grid sizes and asserted in the
+parity file rather than assumed. So this is the only one of the four theta-scheme strings whose port
+required **no Python-side edit** beyond the swap block. §18.2's biharmonic problem was specific to
+`D2 @ D2`, and the module already applies `canonical` to that one itself.
+
+**e. A fixture can be wrong in the *physics* rather than in the coverage.** §16.4 says a fixture may
+fail to exercise what is being ported. This batch found the other failure: the first draft of the
+native tests fixed `fs = 48 kHz`, which at `EA/T = 500` puts `lam_long` at **4.6** and **9.2** — past
+the model's own documented cliff, where the Newton solve stops converging and the drift explodes by
+fourteen orders. Three native bars went red and **all three were correct**; the port was not
+involved. `c_long/c = sqrt(EA/T) ~ 22`, so the familiar transverse `lam = 0.5` silently means
+`lam_long ~ 11`, and `LAM_LONG_WARN` exists to say so. The rule: **a fixture for a model with two
+wave speeds must be built at the fast one**, and a red physics bar on a new fixture is a question
+about the fixture before it is a question about the port.
+
+**f. §19.7's YAML line continuation, a fourth time and from a fourth tool — and it never reached
+CI.** Editing the workflow through a heredoc collapsed every backslash-newline pair in one `run:`
+block into a single 376-character line, and a second edit left a literal backslash-n in another. Both
+were caught locally and immediately by `tests/test_ci_workflow.py`, which §20.7 wrote *because* the
+paragraph version of this scar kept failing to prevent it. Four occurrences, four different tools,
+zero red CI runs since the test exists. That is the trade §20.7 proposed, now with a sample size.
+(The same tooling then ate the heredoc that was writing *this section*, which is the joke telling
+itself: the fix is to write a long document with a file-writing tool and not through a shell.)
+
+**g. A shape is part of the interface.** `_chol_u` came back as the flat `3n` buffer the core stores,
+with every value correct, where `scipy.linalg.cholesky_banded` returns `(3, n)`. §25.7's finding
+(`ascontiguousarray` promoting a 0-d array) in a different disguise, and `np.array_equal` was the
+only thing in the suite that would have noticed.
+
+**h. §24.7's inverted `boundary` arms, and they are still counter-intuitive.** PyO3 wraps the
+*default* expression, so `Some(None)` is "argument omitted" and a bare `None` is the caller's literal
+`None`. Written the obvious way round, the constructor rejected every call that omitted `boundary` —
+which at least fails loudly, unlike §24.7's original, which silently accepted `boundary=None`.
+
+**i. A rejection's type is part of it.** `displacement_at` out of range must raise `IndexError` —
+what `float(self.u[index])` raises — and not `ValueError`. Caught in review rather than by a test,
+and now pinned by one.
+
+**j. The derived CI list returned nothing new, and the step was added anyway.** §28.10's convention
+is to derive the flagged file list by grepping the clients and subtracting what an earlier step
+covers. Here that returns the empty set: Phase 3's batch 1 already flagged all six geometric test
+files when it ported the banded **solver** these four models share. What changed is the *claim*, not
+the files — there the six ran a Python model on a Rust banded solve, here they run a Rust model whose
+Newton solve factors a sparse LU per iteration — so a red run means a different thing in the two
+steps. Dropping the step because "the files are already covered" would be §28.12's empty-CI-job shape
+through a fourth door.
+
+### 29.4 The measured comparison
+
+| | |
+|---|---|
+| every derived scalar, 10 fixtures | **bit-identical** (34 of them) |
+| `x` | **bit-identical** |
+| `D2`, `L_u`, `L_w`, `L_v`, `A_u`, `A_w`, `A_v`, `A3`, `Gp`, `Gm`, `Gp3`, `Gm3` | **bit-identical** — values, `nnz` **and stored order** |
+| the three banded factors, shared solver | **bit-identical**, shape included |
+| the second-order start, all six arrays | **bit-identical** |
+| `_stretch_ratio`, `_stretch_terms`, `_dg_force`, `_dg_jacobian` | **bit-identical**, physical strains and the inverted-element arm alike |
+| `_nl_density` | < 1e-14 relative — `np.sum`'s pairwise blocking, declined |
+| the trajectory, both solvers shared, 2,000 steps | **bit-identical** — state, energy, `newton_iters`, `total_newton_iters` |
+| `EA = T` vs `DampedStiffString`, 300 steps | **bit-identical** within each implementation, and across them |
+| the trajectory, own solvers, 2,000 steps | 2.6e-13 ... 7.0e-13 of the running peak |
+| ... at 20,000 steps | 1.4e-12, or 2.5e-10 where the iteration count flips |
+| `energy()`, own solvers | <= 1.4e-13 relative |
+| the lossless drift, both implementations | < 1e-10, the shipped bar, on every fixture |
+| the refusals — 19 of them, plus softening | identical, message for message |
+| `apply_Ainv`, `displacement_at` out of range | same exception **type** and text |
+| the two `RuntimeWarning`s | raised by both, matched by `pytest.warns` |
+
+### 29.5 Speed
+
+| | Python | Rust | |
+|---|---|---|---|
+| `step`, N = 48, nonlinear | 1,902 us | 122 us | **15.5x** |
+
+That is by a wide margin the largest per-step win the migration has measured — against 2.99x for the
+von Karman plate, which held the record, and 1.17-1.32x for linear field models. §11.6's regime taken
+to its limit: a Newton step is a dozen small NumPy and SciPy calls per iteration (three matvecs, nine
+`sparse.diags`, a `bmat`, an `splu`, an Armijo trial) and every one of them is per-call overhead with
+almost no arithmetic inside it. **The models with an inner iteration are where the real-time port
+lives**, and this is the sharpest evidence yet.
+
+### 29.6 The success condition
+
+* `cargo test --workspace` green, **debug and release** — 14 new native bars.
+* `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` and
+  `ruff check .` green.
+* `pip install ./crates/physsynth-py` **before** any parity number is believed — §25.8a.
+* `pytest tests/test_rust_parity_geometric.py` green with the flag and without it — **151** tests.
+* The whole-suite count reconciles exactly: **4,037** before (§28.10's 4,036 plus the one test the
+  commit after it added), **4,189** after — 151 for the parity file and 1 for
+  `test_xdist_groups.py`, which is parametrised over the *glob* of test modules. A count that did
+  not reconcile would falsify the claim that nothing on the default path moved, which is why it is
+  written down rather than eyeballed (§25.8a).
+* `PHYSSYNTH_RS=1 pytest` green on the **whole suite**.
+* The whole suite green on the default path, with **no shipped number moving**: the only Python edits
+  are the swap block, `tests/test_stability.py`'s guard table, and the new parity file.
+
+### 29.7 What the next batch inherits
+
+* **Left in the core: `airbox`, then `connection`, then `analysis/`** — in that order, and the
+  reordering is §29.1's finding rather than a preference. `connection` is polymorphic over its
+  collaborators' *types* and three airbox tests pin an exact equality across that boundary, so it
+  cannot move before its collaborators do.
+* **Ask what a client is polymorphic over.** §29.1. The migration has now needed three different
+  searches to find a blocking dependency: private names (§0), re-derivation (§28.2) and duck-typed
+  collaborators (§29.1). None of the three finds the others.
+* **A cost regression is invisible to every bar this project owns.** §29.2. The answers stayed right.
+  If a port introduces an algorithmic choice — an ordering, a factorization strategy, a caching
+  decision — the assertion has to be about the *work*, because nothing else will notice.
+* **Ask whether the branch is on a sum or on a max.** §29.3b. §19.2 said to ask whether anything
+  downstream branches on a reduction; the sharper question is what *kind* of reduction, because a
+  maximum is order-independent and reproducible by construction where a sum is neither.
+* **Read the mean iteration count, not the amplitude** — §28.11's rule, refined: what predicts a
+  branch flip is not how large the count is but how far it sits from an integer.
+* **Build a two-speed model's fixture at the fast speed.** §29.3e.
+* **`airbox` is already half-swapped** (§28.2 gave it `splu`) and it is the largest file in the
+  project: 3,976 lines and six factorizations, of which §11.2.1 predicts most of the arithmetic is
+  not a solve at all. Expect it to port in halves.

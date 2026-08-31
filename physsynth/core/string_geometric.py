@@ -148,6 +148,7 @@ See ``docs/dev/geometrically-exact-string-plan.md``.
 
 from __future__ import annotations
 
+import os
 import warnings
 from typing import Literal, NamedTuple
 
@@ -1058,3 +1059,37 @@ TensionModulatedString.stretch`, this is a **field** -- which is the whole point
         ab[1, 1:] = M.diagonal(1)
         ab[0, 2:] = M.diagonal(2)
         return ab
+
+
+# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 5 batch 5) ---------------------------
+#
+# `GeometricStringPy` above is the reference implementation. Below it, `GeometricString` is bound
+# to whichever implementation this process is meant to exercise.
+#
+# This model is the LAST of the four theta-scheme strings, so flipping it closes the chain
+# `portable.py` was written to protect: `sigma1 = 0` makes model #3 the stiff string, `EA = 0`
+# makes model #9 the damped one, and `EA = T` makes THIS model the damped one -- three
+# `array_equal` anchors across four classes (plan section 15.2). All four are now Rust, and the
+# `EA = T` anchor holds because `a = EA - T0` is exactly zero there and `step` takes a branch with
+# no Newton solve in it: three banded back-substitutions, model #3's expressions in model #3's
+# order.
+#
+# What is NOT bit-identical, and it is one thing: with `EA != T` the Newton solve factors a sparse
+# LU per iteration, and plan section 24.2 settled that SuperLU's digits are not reproducible.
+# Measured over 2,000 steps the two trajectories agree to ~8e-14 of the running peak and the
+# energies to ~1.5e-13, with the Newton iteration COUNT differing on about one step in two
+# thousand; put both models on one factorization and they are bit-identical, energy and iteration
+# count included, which is what says the residue is the solver and not the port
+# (`tests/test_rust_parity_geometric.py`).
+#
+# Nothing in `portable.py` had to change for this model: every matrix on the update path already
+# arrives from SciPy canonically ordered.
+#
+# Off by default. The Python model is still the reference oracle for every model not yet ported.
+GeometricStringPy = GeometricString
+"""The pure-Python reference implementation, under a name the swap below never rebinds."""
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    from physsynth_rs import GeometricString  # type: ignore[assignment]  # noqa: F811

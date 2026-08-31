@@ -802,6 +802,35 @@ jobs:
             tests/test_airbox_port.py \
             tests/test_web_backend.py \
             tests/test_stability.py
+      # Phase 5, batch 5: `string_geometric.py` -- model #10, the LAST of the four theta-scheme
+      # strings and the last model in `physsynth/core/` outside `connection`, `airbox` and
+      # `analysis/`. Flipping it closes the bit-identity chain `portable.py` was written to
+      # protect: `EA = T` makes this model `array_equal` to `DampedStiffString`, and with this
+      # batch both ends of that anchor are Rust.
+      #
+      # The file list below is IDENTICAL to the six geometric files the banded step already runs,
+      # and that is worth a sentence rather than a shrug. Deriving the list -- grep the clients,
+      # subtract what an earlier step covers (plan section 28.10) -- returns nothing new here,
+      # because Phase 3's batch 1 already flagged every client when it ported the SOLVER these
+      # models share. What changed is the CLAIM, not the files: there the six ran a Python model on
+      # a Rust banded solve, here they run a Rust model whose Newton solve factors a sparse LU per
+      # iteration. A red run means a different thing in the two steps, which is the whole reason
+      # they are separate steps, and dropping this one because "the files are already covered"
+      # would be the empty-CI-job shape of section 28.12 reached through a fourth door.
+      - name: The geometrically exact string, unmodified, against Rust
+        env:
+          PHYSSYNTH_RS: "1"
+        run: |
+          pytest --durations=10 \
+            tests/test_geometric_energy.py \
+            tests/test_geometric_limits.py \
+            tests/test_geometric_phantom.py \
+            tests/test_geometric_polarization.py \
+            tests/test_geometric_rotating_wave.py \
+            tests/test_geometric_whirl.py \
+            tests/test_web_backend.py \
+            tests/test_stability.py
+
       - name: The nonlinear plate's bracket and Airy solve, unmodified, against Rust
         env:
           PHYSSYNTH_RS: "1"
@@ -850,7 +879,8 @@ jobs:
             tests/test_rust_parity_tension.py \
             tests/test_rust_parity_bow.py \
             tests/test_rust_parity_beam.py \
-            tests/test_rust_parity_plate.py
+            tests/test_rust_parity_plate.py \
+            tests/test_rust_parity_geometric.py
 
   # Lint, plus the OUTER half of the shard guard.
   #

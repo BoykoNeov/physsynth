@@ -55,6 +55,7 @@ mod reed;
 mod shape;
 mod sparse_lu;
 mod string_damped;
+mod string_geometric;
 mod string_nonlinear;
 mod string_stiff;
 
@@ -671,6 +672,7 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<beam::PyFreeBeam>()?;
     m.add_class::<sparse_lu::PySparseLu>()?;
     m.add_class::<string_damped::PyDampedStiffString>()?;
+    m.add_class::<string_geometric::PyGeometricString>()?;
     m.add_class::<string_nonlinear::PyTensionModulatedString>()?;
     m.add_class::<membrane::PyMembrane>()?;
     m.add_class::<body::PyModalBody>()?;

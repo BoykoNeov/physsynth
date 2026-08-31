@@ -22,8 +22,8 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
    **PHASES 2, 3 AND 4 ARE ALL COMPLETE** and **PHASE 5 IS UNDER WAY**; phases 0, 1, all five
-   batches of 2, all six of 3, phase 4 and the first four batches of 5 are
-   built (plan §9-§28): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
+   batches of 2, all six of 3, phase 4 and the first five batches of 5 are
+   built (plan §9-§29): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
    of `operators`, `membrane`, `exciter`, `body`, `bore`, `reed`, **`mallet`**, **`string_stiff`**,
    **`string_damped`**, **`string_nonlinear`**, **`bow`**, **all of `collision`** — the contact
    primitives, both contact solves, the project's one **dense LU** and `BarrierString` itself —
@@ -35,8 +35,17 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    one Bessel helper, the **banded Cholesky** the four theta-scheme strings share and the
    **sparse LU** the whole of Group D shares — and, as of batch 4, **all of `plate`**: both
    classes at once, the linear plate on every one of its four branches (supported, free,
-   circle, guitar) with both grains, and the **von Karman plate** with them — ported. What is left
-   of the core is `connection` and `string_geometric` (Phase 5), then `airbox` and `analysis/`.
+   circle, guitar) with both grains, and the **von Karman plate** with them — and, as of batch 5,
+   **`string_geometric`** (model #10, the geometrically exact string), which is the **last of the
+   four theta-scheme strings**, so the whole string family is Rust and the three bit-identity
+   anchors that chain it now compare one Rust class against another — ported. What is left of the
+   core is **`airbox`, then `connection`, then `analysis/`**, and that order is a finding rather
+   than a preference: §28.11 called `connection` the cheapest remaining file because it touches no
+   private names, and §29.1 found that the instrument was wrong. `connection` is **polymorphic over
+   its collaborators' types** — its three bridges are handed Rust bodies and plates *and*
+   `airbox`'s duck-typed Python wrappers, with three `test_airbox_*` files pinning
+   `bridge.stability_margin == bare.stability_margin` **exactly** across that boundary — so it
+   cannot move before `airbox` does. Do not re-open that ordering without reading §29.1.
    `cargo test --workspace` runs the native bars and the Cargo dependency allowlist;
    `pip install ./crates/physsynth-py` then
    `PHYSSYNTH_RS=1 pytest` runs the **existing, unmodified** Python tests against the Rust code. The
@@ -475,6 +484,43 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    nonlinear step is **2.99x** faster in Rust against 1.17-1.32x for a linear one, because a Picard
    loop is per-call overhead and nothing else — the largest per-step win the migration has measured
    for a field model, and the one the real-time port is about.
+
+   And a **twenty-second**, from the geometrically exact string — Phase 5's fifth batch, which
+   finishes the string family — which is about a **kind of divergence the migration had not met**:
+   every finding since §14 has been about *which digits* two implementations produce, and this one
+   changes no digit at all. It is the first Group D model that factors **inside** its solve loop (a
+   fresh Newton Jacobian per iteration per step, where `beam`, `plate` and the Airy solve all factor
+   once at construction), so §24's decision to leave the Rust sparse LU in the natural column order
+   stops being free — and §24 had written its own escape clause, *if a later model makes fill the
+   constraint, an ordering goes in front of this*. It does, by thirteen times: the unknowns are
+   stacked **by field** while the nonlinearity couples the three fields at the same **cell**, so
+   every coupling sits `N-1` columns off the diagonal and the elimination fills the whole envelope
+   between. At N = 128 the natural order stores **33,895** nonzeros against SuperLU's 2,788 and
+   costs 2,068 µs against 156; reordered by node — `(u_i, w_i, v_i)` together, a **closed form in
+   N**, so nothing had to be searched for — it stores 2,645 and costs 58. **No bar in this project
+   could have caught that**, because the answers stay right and the model merely gets slow: if a
+   port introduces an algorithmic choice, the assertion has to be about the *work*. The reordering
+   is free here only because every update-path operator is block diagonal by field, so no reduction
+   crosses a block and the permutation can live inside the factorization. Six corollaries. **The
+   first Group D matrix that is not SPD**, which retires `DIAG_PIVOT_THRESH`'s written
+   justification; what replaces it is measured, and the *proxy matters* — row dominance is set by
+   `lam_long` alone (8.06 at 0.5, **0.285** at 8.0, where the matrix is not dominant at all) while
+   the observable that decides it, `is_natural`, holds over **854 Jacobians** with no pivot
+   anywhere. **§19.2's branch question needs one more word: is it a sum or a max?** The convergence
+   test here is `max|r| <= tol`, order-independent by construction, where model #9's was a sum
+   feeding a `brentq` bracket — so what varies is only which side of the bar one step lands on, and
+   the flip rate is set by **how far the mean iteration count sits from an integer** (0 flips in
+   20,000 at 1.00, 475 at 1.50), while the *energy* does not move at all, because any root of the
+   discrete-gradient equation conserves exactly. **`portable.py` was not needed at all** — a first
+   for this family; every matrix already arrives canonical. **A fixture can be wrong in the
+   physics rather than in the coverage**: the first native fixtures fixed `fs = 48 kHz`, landing at
+   `lam_long = 4.6` and 9.2, past the model's own documented cliff — three bars went red and all
+   three were *correct*, so build a two-speed model's fixture at the **fast** speed. **§19.7's YAML
+   continuation happened a fourth time from a fourth tool and never reached CI**, because §20.7's
+   test catches it locally in seconds — four occurrences, zero red runs since it exists. And the
+   speed: the nonlinear step is **15.5x** faster in Rust, which retires §28's 2.99x as the record by
+   a wide margin — a Newton step is a dozen tiny NumPy/SciPy calls per iteration and every one of
+   them is per-call overhead. **Models with an inner iteration are where the real-time port lives.**
 
 4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
    never the reverse. Keeps the physics portable to C++/Rust later.

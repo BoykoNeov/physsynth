@@ -446,6 +446,60 @@ impl Csr {
     pub fn is_symmetric(&self) -> bool {
         self.nrows == self.ncols && *self == self.transpose()
     }
+
+    /// Block-diagonal stacking — `scipy.sparse.block_diag`.
+    ///
+    /// `string_geometric` builds three of these (`A3`, `Gp3`, `Gm3`), and each is the same block
+    /// repeated or three siblings side by side. The blocks keep their own row order, so a matvec
+    /// against the result sums each output row over that block's entries alone and no reduction
+    /// crosses a block — which is why permuting the *global* unknown order (see
+    /// [`Csr::permute_symmetric`]) cannot move a single sum.
+    pub fn block_diag(blocks: &[&Csr]) -> Self {
+        let nrows: usize = blocks.iter().map(|b| b.nrows()).sum();
+        let ncols: usize = blocks.iter().map(|b| b.ncols()).sum();
+        let mut rows: Vec<Vec<(usize, f64)>> = Vec::with_capacity(nrows);
+        let mut col_off = 0usize;
+        for b in blocks {
+            for i in 0..b.nrows() {
+                rows.push(
+                    (b.indptr()[i]..b.indptr()[i + 1])
+                        .map(|p| (b.indices()[p] + col_off, b.data()[p]))
+                        .collect(),
+                );
+            }
+            col_off += b.ncols();
+        }
+        Self::from_rows(nrows, ncols, rows)
+    }
+
+    /// The symmetric permutation `A[q][:, q]`, where `q[new] = old`.
+    ///
+    /// Used only as a **fill-reducing reordering in front of the sparse LU** (§29.2): the diagonal
+    /// stays the diagonal, so the solver's diagonal-preferring pivot means the same thing on the
+    /// permuted matrix as on the original.
+    ///
+    /// # Panics
+    /// If `q` is not a permutation of `0..n` on a square matrix.
+    pub fn permute_symmetric(&self, q: &[usize]) -> Self {
+        let n = self.nrows;
+        assert_eq!(self.ncols, n, "permute_symmetric needs a square matrix");
+        assert_eq!(q.len(), n, "the permutation must have one entry per row");
+        let mut qinv = vec![usize::MAX; n];
+        for (new, &old) in q.iter().enumerate() {
+            assert!(old < n, "permutation entry {old} out of range for {n} rows");
+            assert!(qinv[old] == usize::MAX, "permutation entry {old} repeated");
+            qinv[old] = new;
+        }
+        let rows = q
+            .iter()
+            .map(|&old| {
+                (self.indptr[old]..self.indptr[old + 1])
+                    .map(|p| (qinv[self.indices[p]], self.data[p]))
+                    .collect()
+            })
+            .collect();
+        Self::from_rows(n, n, rows)
+    }
 }
 
 #[cfg(test)]

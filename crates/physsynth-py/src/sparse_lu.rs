@@ -47,12 +47,22 @@ impl PySparseLu {
 #[pymethods]
 impl PySparseLu {
     /// Factor a square matrix given as CSR triplets (`data`, `indices`, `indptr`).
+    ///
+    /// `perm` is the optional fill-reducing symmetric reordering of
+    /// [`physsynth_core::sparse_lu::SparseLu::factor_permuted`] — `perm[factored] = caller`. It is
+    /// exposed rather than chosen here because it is a property of the *model's* unknown layout,
+    /// not of the matrix: `string_geometric` stacks three fields and needs the node-interleaved
+    /// order (§29.2), and `tests/test_rust_parity_geometric.py` has to be able to hand the Python
+    /// model the *same* factorization the Rust one uses, or §24.4's shared-solver comparison would
+    /// be measuring the ordering rather than the port.
     #[new]
+    #[pyo3(signature = (data, indices, indptr, n, perm=None))]
     fn new(
         data: PyReadonlyArray1<'_, f64>,
         indices: PyReadonlyArray1<'_, i32>,
         indptr: PyReadonlyArray1<'_, i32>,
         n: usize,
+        perm: Option<PyReadonlyArray1<'_, i64>>,
     ) -> PyResult<Self> {
         let data = data
             .as_slice()
@@ -77,7 +87,24 @@ impl PySparseLu {
                     .collect()
             })
             .collect();
-        let lu = SparseLu::factor(&Csr::from_rows(n, n, rows)).map_err(lu_err)?;
+        let a = Csr::from_rows(n, n, rows);
+        let lu = match perm {
+            None => SparseLu::factor(&a),
+            Some(q) => {
+                let q = q.as_slice().map_err(|_| {
+                    PyValueError::new_err("perm must be a contiguous 1-D int64 array.")
+                })?;
+                if q.len() != n {
+                    return Err(PyValueError::new_err(format!(
+                        "perm must have {n} entries for an order-{n} matrix, got {}.",
+                        q.len()
+                    )));
+                }
+                let q: Vec<usize> = q.iter().map(|&i| i as usize).collect();
+                SparseLu::factor_permuted(&a, &q, physsynth_core::sparse_lu::DIAG_PIVOT_THRESH)
+            }
+        }
+        .map_err(lu_err)?;
         Ok(PySparseLu { lu })
     }
 
@@ -104,5 +131,11 @@ impl PySparseLu {
     #[getter]
     fn nnz(&self) -> (usize, usize) {
         self.lu.nnz()
+    }
+
+    /// Whether a fill-reducing reordering was supplied — so a test can tell the two apart.
+    #[getter]
+    fn is_reordered(&self) -> bool {
+        self.lu.is_reordered()
     }
 }

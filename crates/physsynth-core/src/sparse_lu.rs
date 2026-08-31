@@ -140,6 +140,10 @@ pub struct SparseLu {
     u: CscBuilder,
     /// `pinv[original_row] = permuted_row`.
     pinv: Vec<usize>,
+    /// The fill-reducing reordering the matrix was factored in, `q[factored] = caller`, or `None`
+    /// for the natural order. See [`SparseLu::factor_permuted`].
+    q: Vec<usize>,
+    reordered: bool,
 }
 
 /// The column-compressed form of a [`Csr`], which is what the elimination walks.
@@ -289,7 +293,53 @@ impl SparseLu {
             *i = pinv[*i];
         }
 
-        Ok(Self { n, l, u, pinv })
+        Ok(Self {
+            n,
+            l,
+            u,
+            pinv,
+            q: (0..n).collect(),
+            reordered: false,
+        })
+    }
+
+    /// Factor `a` after the symmetric reordering `q` (`q[factored_index] = caller_index`), which
+    /// the caller chooses to reduce fill. [`SparseLu::solve`] takes and returns vectors in the
+    /// **caller's** numbering, so the reordering is invisible from the outside.
+    ///
+    /// # Why this exists — §29.2, and it is the first Group D matrix that needs it
+    ///
+    /// §24 wrote that the column order here is natural because "every Group D matrix in this
+    /// project is a banded FDTD operator whose natural order already has none [no fill] to speak
+    /// of", and added: *if a later model makes fill the constraint, an ordering goes in front of
+    /// this, not inside it.* `string_geometric` is that model, and it is not a near miss.
+    ///
+    /// Its Newton Jacobian is `3(N-1)` unknowns stacked **by field** — all of `u`, then all of
+    /// `w`, then all of `v` — while the discrete-gradient force couples the three fields *at the
+    /// same cell*. So in the natural order every coupling sits `N-1` columns off the diagonal, and
+    /// the elimination fills the whole envelope between. Measured at `N = 128` (`n = 381`):
+    /// SuperLU's COLAMD stores 2,788 nonzeros in `L + U`, this module in the natural order stores
+    /// **33,895**, and factoring costs 2,068 µs against SciPy's 156. Reordered by *node* —
+    /// `(u_i, w_i, v_i)` together — it stores **2,645**, fewer than COLAMD's, and costs 58 µs.
+    /// The reordering is a closed form in `N`, so no ordering heuristic is needed or wanted; that
+    /// is §24's own finding about the beam's permutation being a closed form, arriving on the
+    /// other side of the ledger.
+    ///
+    /// The permutation is applied to rows and columns alike, so the diagonal is still the
+    /// diagonal and [`DIAG_PIVOT_THRESH`]'s preference means what it meant before.
+    pub fn factor_permuted(a: &Csr, q: &[usize], thresh: f64) -> Result<Self, SparseLuError> {
+        if a.nrows() != a.ncols() || q.len() != a.nrows() {
+            return Err(SparseLuError::BadShape);
+        }
+        let mut lu = Self::factor_with_thresh(&a.permute_symmetric(q), thresh)?;
+        lu.q = q.to_vec();
+        lu.reordered = true;
+        Ok(lu)
+    }
+
+    /// Whether a fill-reducing reordering was supplied to [`SparseLu::factor_permuted`].
+    pub fn is_reordered(&self) -> bool {
+        self.reordered
     }
 
     /// Solve `A x = b` by back-substitution through the stored factors.
@@ -304,8 +354,11 @@ impl SparseLu {
         }
         let n = self.n;
         let mut x = vec![0.0f64; n];
+        // Two permutations compose here and they are different things: `q` is the caller's
+        // fill-reducing reordering, fixed before any arithmetic, and `pinv` is the pivoting the
+        // elimination chose inside it.
         for i in 0..n {
-            x[self.pinv[i]] = b[i];
+            x[self.pinv[i]] = b[self.q[i]];
         }
 
         // Forward: L is unit lower triangular, its diagonal implicit and absent from storage.
@@ -327,6 +380,13 @@ impl SparseLu {
                     x[self.u.indices[p]] -= self.u.data[p] * xj;
                 }
             }
+        }
+        if self.reordered {
+            let mut out = vec![0.0f64; n];
+            for i in 0..n {
+                out[self.q[i]] = x[i];
+            }
+            return Ok(out);
         }
         Ok(x)
     }
