@@ -22,8 +22,8 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
    **PHASES 2, 3 AND 4 ARE ALL COMPLETE** and **PHASE 5 IS UNDER WAY**; phases 0, 1, all five
-   batches of 2, all six of 3, phase 4 and the first eight batches of 5 are
-   built (plan §9-§31): `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
+   batches of 2, all six of 3, phase 4 and the first ten batches of 5 are built (plan §9-§34) —
+   **`physsynth/core/` IS FINISHED; only `analysis/` is left**: `crates/physsynth-core` + `crates/physsynth-py`, with `string_ideal`, all
    of `operators`, `membrane`, `exciter`, `body`, `bore`, `reed`, **`mallet`**, **`string_stiff`**,
    **`string_damped`**, **`string_nonlinear`**, **`bow`**, **all of `collision`** — the contact
    primitives, both contact solves, the project's one **dense LU** and `BarrierString` itself —
@@ -52,9 +52,10 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    is finished**: every class it exposes and every function any outside client reaches is Rust.
    (Two things are deliberately not swapped, checked rather than assumed: the module's constants,
    which are values and not implementations, and `_require_same_rate`, which has a Rust twin but no
-   caller outside the file — it stays live for the same reason `AirBoxPy` does.) What is left
-   of the core is **`connection`, then `analysis/`**, and
-   that order was a finding rather than a preference: §28.11 called `connection` the cheapest
+   caller outside the file — it stays live for the same reason `AirBoxPy` does.) And as of **batch
+   10 `connection.py` — all four bridges — is Rust, which finishes `physsynth/core/`**; the only
+   thing left in the whole migration is **`analysis/`**. The order that got here was a finding
+   rather than a preference: §28.11 called `connection` the cheapest
    remaining file because it touches no private names, and §29.1 found that the instrument was
    wrong. `connection` is **polymorphic over its collaborators' types** — its three bridges are
    handed Rust bodies and plates *and* `airbox`'s duck-typed wrappers, with three `test_airbox_*`
@@ -65,7 +66,10 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    `connection` needs no membrane wrapper. §31.11 also corrects §29.1 on one point worth keeping:
    `connection.py` contains no `isinstance`, `hasattr`, `getattr` or `type(` at all, so it is *pure
    duck typing*, and what blocked it was only that the wrapper objects must exist and answer —
-   to which §33.2 adds one clause: **and answer to a write**.
+   to which §33.2 adds one clause: **and answer to a write**. (§33.11's *other* claim, that the
+   file reaches no private name, is **wrong**: it reaches `string._bc_right` four times and
+   `string._second_diff` twice, and it cost nothing only because Phase 0 exposed both deliberately
+   three phases early — §34.4.)
    `cargo test --workspace` runs the native bars and the Cargo dependency allowlist;
    `pip install ./crates/physsynth-py` then
    `PHYSSYNTH_RS=1 pytest` runs the **existing, unmodified** Python tests against the Rust code. The
@@ -719,6 +723,45 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    out of the count** — `_face_axes` and `impedance_from_zeta` had Rust twins with native tests
    since §31 and were simply never bound; the swap guard cannot catch that, because a function that
    is neither aliased nor swapped is absent from both sides of its comparison.
+
+   And a **twenty-seventh**, from the bridges — Phase 5's tenth batch, which **finishes
+   `physsynth/core/`** — which gives the migration's oldest rule a sign: **a ported caller that
+   computes nothing is SLOWER than the Python it replaced.** §11.6 said the win is per-call
+   overhead; §32.4 said an inner iteration wins only if its body ports with it and measured
+   "indistinguishable from neutral". Here the neutral point is crossed, and the reason is that
+   **Rust pays that overhead too when it is the one making the call** — a `getattr` + `get_item` +
+   `extract` from Rust is not cheaper than CPython's `LOAD_ATTR`/`BINARY_SUBSCR`, which have inline
+   caches. What Rust wins is the *work between* the calls, and one file contains both cases:
+   `StringBodyBridge.step` is five attribute touches and two float multiplies and comes out
+   **0.96-0.97x**, while `SympatheticStrings.step` allocates a per-string force array, loops over
+   `J` and reduces, and comes out **1.51-1.83x**; the two plate bridges sit at exactly 1.00x
+   because a sparse solve dominates and neither side touches it. So before scoping a batch, ask
+   how much work sits between the collaborator calls — if the answer is "none", the port buys
+   fidelity and costs a few per cent, and that is a decision to take deliberately rather than
+   discover (§34.2). Six corollaries. **All four bridges are one batch and it was not a choice**:
+   §15.2's anchors bind a one-string `SympatheticStrings` to `StringBodyBridge` by `array_equal`
+   and a `nonlinear=False` `StringVKPlateBridge` to `StringPlateBridge` by an exact stability
+   margin — and the parity file re-asserts both in all **four** language combinations, which is the
+   cell no existing test can reach. **This is the second module with no core half, reached by a
+   different road from §32.2's**: there the tier below had promised its clients replaceable
+   matrices; here the class is **polymorphic over its collaborators' types** and always was — eight
+   kinds of body and plate, no `isinstance` anywhere — so a downcast would pass the entire airbox
+   and radiation family and fail only on an object nobody in the tree builds, which is why the
+   parity file builds one. **§33.11's claim that this file reaches no private name is wrong** — it
+   reaches `string._bc_right` four times and `string._second_diff` twice — and the cheerful half is
+   the general form: **a dependency written down at the start survives being forgotten in the
+   middle**, because Phase 0 exposed both names deliberately three phases early and the port worked
+   on the first build (§34.4). **Both reductions and both dot products are invisible to every
+   shipped fixture**: §30.2's cutoff makes the sum question decidable by counting, and every body
+   here has four or five modes and every sympathetic rig two or three strings (measured: 0/5,000
+   disagreements at M = 4, 5, 7 against **2,022/5,000** at M = 8), while §14.3's `phi = 1.0` blinds
+   the suite to the fused multiply-add — so the parity file **searches** for its fixtures at M = 12
+   and J = 8 rather than picking them. **A cached keyword dict is §32.2's hazard inside the batch
+   that cites it**: reusing the `plate.step(f_ext=)` dict is worth ~3% of the step, but caching the
+   *array* in it would ignore a caller who replaced `_f_ext` — the dict is cached, the entry is
+   re-set every step. And **§19.7's line continuation happened a sixth time from a sixth tool and
+   never reached CI**; the general remedy, rather than "be careful", is to build the backslash as
+   `chr(92)` so no layer can unescape it.
 
 4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
    never the reverse. Keeps the physics portable to C++/Rust later.

@@ -35,6 +35,8 @@ Headless: NumPy only.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 from numpy.typing import NDArray
 from scipy import sparse
@@ -926,3 +928,46 @@ class SympatheticStrings:
     def pressure(self) -> float:
         """Radiated pressure from the shared body, ``sum_i a_i q_i''`` (∝ volume acceleration)."""
         return self.body.pressure()
+
+
+# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 5 batch 10) --------------------------
+#
+# All four bridges move together, and that was not a judgement call. Two exact anchors bind them
+# (plan section 15.2): `tests/test_sympathetic.py` asserts a one-string `SympatheticStrings` is
+# `array_equal` to a `StringBodyBridge`, and
+# `tests/test_airbox_vk.py::test_the_nonlinear_false_chain_is_the_linear_bridge_bit_identical`
+# asserts `StringVKPlateBridge.stability_margin == StringPlateBridge.stability_margin` to the last
+# digit. Port either half of either pair alone and the anchor breaks for a reason having nothing
+# to do with the physics.
+#
+# The ported classes compute their stability guards through the module globals `sparse`, `spsolve`
+# and `splu` **above** -- read at call time, not captured -- so the two implementations share one
+# factorization by construction (plan section 24.4) and a parity file can replace any of the three
+# for both arms at once. Nothing else in this module is swapped: `_CFL_TOL` is a value rather than
+# an implementation, and `ModalBody`, `Plate`, `VKPlate` and `IdealString` are imported here purely
+# as the collaborators (and type names) the bridges are handed, which `tests/test_stability.py`
+# already pins for ordering.
+#
+# Off by default. The Python bridges stay the reference oracle.
+
+StringBodyBridgePy = StringBodyBridge
+"""The pure-Python modal bridge, under a name the swap below never rebinds."""
+
+StringPlateBridgePy = StringPlateBridge
+"""The pure-Python grid-plate bridge, under a name the swap below never rebinds."""
+
+StringVKPlateBridgePy = StringVKPlateBridge
+"""The pure-Python von Karman bridge, under a name the swap below never rebinds."""
+
+SympatheticStringsPy = SympatheticStrings
+"""The pure-Python shared-bridge coupler, under a name the swap below never rebinds."""
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
+    import physsynth_rs as _rs
+
+    StringBodyBridge = _rs.StringBodyBridge  # type: ignore[assignment,misc]  # noqa: F811
+    StringPlateBridge = _rs.StringPlateBridge  # type: ignore[assignment,misc]  # noqa: F811
+    StringVKPlateBridge = _rs.StringVKPlateBridge  # type: ignore[assignment,misc]  # noqa: F811
+    SympatheticStrings = _rs.SympatheticStrings  # type: ignore[assignment,misc]  # noqa: F811

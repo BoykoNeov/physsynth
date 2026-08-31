@@ -48,6 +48,7 @@ mod body;
 mod bore;
 mod bow;
 mod collision;
+mod connection;
 mod exciter;
 mod mallet;
 mod membrane;
@@ -701,6 +702,10 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<reed::PyReedBore>()?;
     m.add_class::<bow::PyBowedString>()?;
     m.add_class::<collision::PyBarrierString>()?;
+    m.add_class::<connection::PyStringBodyBridge>()?;
+    m.add_class::<connection::PyStringPlateBridge>()?;
+    m.add_class::<connection::PyStringVKPlateBridge>()?;
+    m.add_class::<connection::PySympatheticStrings>()?;
     m.add_class::<mallet::PyMalletMembrane>()?;
     m.add_class::<mallet::PyMalletWall>()?;
     m.add_class::<radiation::PyAirRadiation>()?;

@@ -890,6 +890,49 @@ jobs:
             tests/test_web_backend.py \
             tests/test_stability.py
 
+      # Phase 5, batch 10: `connection.py` -- the four bridges, and the LAST file of the core
+      # before `analysis/`. All four move together because two exact anchors bind them
+      # (plan section 15.2): `test_sympathetic.py` asserts a one-string `SympatheticStrings` is
+      # `array_equal` to a `StringBodyBridge`, and
+      # `test_airbox_vk.py::test_the_nonlinear_false_chain_is_the_linear_bridge_bit_identical`
+      # asserts `StringVKPlateBridge.stability_margin == StringPlateBridge.stability_margin` to
+      # the last digit. Port either half of either pair alone and the anchor breaks for a reason
+      # having nothing to do with the physics.
+      #
+      # The file list is the whole coupled leg rather than the bridges' own tests, and the reason
+      # is what makes this batch different from every other: `connection.py` is **polymorphic over
+      # its collaborators' types** and always was. It contains no `isinstance`, `hasattr`,
+      # `getattr` or `type(` at all -- pure duck typing -- and the `body=` slot takes a
+      # `ModalBody`, a `RadiatedBody`, a `ReactiveRadiatedBody` and a `RoomLoadedBody`, while the
+      # `plate=` slot takes a `Plate`, a `VKPlate` and four room wrappers. A port that downcast a
+      # collaborator to a concrete `#[pyclass]` would pass the bridges' own tests and fail here.
+      # That is also why this file could not move until section 32 had ported the wrappers: what
+      # a bridge needs from a collaborator is that it ANSWER, and section 33.2 adds that it answer
+      # to a write.
+      #
+      # Three `test_airbox_*` files pin `bridge.stability_margin == bare.stability_margin`
+      # EXACTLY across that boundary -- a bridge over a room-loaded plate against a bridge over a
+      # bare one -- so the Sherman-Morrison guard's bracketing is asserted rather than assumed.
+      # The guard itself computes through `connection`'s own module-global `sparse`, `spsolve` and
+      # `splu`, read at call time, which is the faithful transcription and keeps section 24.4's
+      # shared-factorization manoeuvre available on this file.
+      - name: The bridges, unmodified, against Rust
+        env:
+          PHYSSYNTH_RS: "1"
+        run: |
+          pytest --durations=10 \
+            tests/test_connection.py \
+            tests/test_sympathetic.py \
+            tests/test_plate_connection.py \
+            tests/test_free_plate_connection.py \
+            tests/test_vk_connection.py \
+            tests/test_radiation.py \
+            tests/test_airbox_surface.py \
+            tests/test_airbox_dipole.py \
+            tests/test_airbox_vk.py \
+            tests/test_web_backend.py \
+            tests/test_stability.py
+
       - name: The nonlinear plate's bracket and Airy solve, unmodified, against Rust
         env:
           PHYSSYNTH_RS: "1"
@@ -943,7 +986,8 @@ jobs:
             tests/test_rust_parity_airbox.py \
             tests/test_rust_parity_airbox_port.py \
             tests/test_rust_parity_airbox_wrap.py \
-            tests/test_rust_parity_airbox_memb.py
+            tests/test_rust_parity_airbox_memb.py \
+            tests/test_rust_parity_connection.py
 
   # Lint, plus the OUTER half of the shard guard.
   #

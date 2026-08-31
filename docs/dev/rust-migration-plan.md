@@ -6907,3 +6907,261 @@ transcription rather than about the dynamics. The two implementations are not tw
   `dissipated`/`injected` books could be exact with `reduce::sum` (§31.11's half of it survives;
   the `powf` half is discharged by §33.6). It changes numbers in a ledger, so it wants its own
   measurement and its own batch.
+
+## §34 Phase 5, batch 10, as built (2026-08-31) — the bridges, and a port that is slower on purpose
+
+`connection.py` — `StringBodyBridge`, `StringPlateBridge`, `StringVKPlateBridge` and
+`SympatheticStrings`, all four in one batch. **This is the last file of `physsynth/core/`.** What
+remains of the whole migration after it is `analysis/`.
+
+All four move together and that was not a judgement call. Two exact anchors bind them (§15.2):
+`tests/test_sympathetic.py::test_single_string_bit_identical_to_string_body_bridge` asserts a
+one-string `SympatheticStrings` is `array_equal` to a `StringBodyBridge`, and
+`tests/test_airbox_vk.py::test_the_nonlinear_false_chain_is_the_linear_bridge_bit_identical`
+asserts `StringVKPlateBridge.stability_margin == StringPlateBridge.stability_margin` to the last
+digit. Port either half of either pair alone and the anchor breaks for a reason having nothing to
+do with the physics.
+
+**Everything is bit-identical**, the von Kármán bridge's trajectory included, over every fixture
+tried. That is §32.5's shape again — the two arms are not two discretizations, they are one Picard
+loop through one factorization — and it makes the exactness a sharp test of the transcription
+rather than a claim about the dynamics.
+
+Not one line of the eleven existing test files that drive a bridge was touched — the four
+`*connection*.py`, `test_sympathetic.py`, `test_radiation.py`, four `test_airbox_*.py` and
+`test_web_backend.py`.
+
+### 34.1 The shape on disk
+
+* `crates/physsynth-py/src/connection.rs` — **new**, 1,415 lines. Four `#[pyclass]`es and one
+  shared `PlateBridge` the two plate classes delegate to.
+* `crates/physsynth-py/src/lib.rs` — the module and four `add_class` lines.
+* `physsynth/core/connection.py` — `import os`, four `*Py` aliases and four names under the flag.
+  **No edit to the reference implementation.**
+* `tests/test_rust_parity_connection.py` — **new**, 36 tests.
+* `tests/test_stability.py` — `connection` into the class-swap derive's tuple and its
+  `_USE_RUST` tuple, four entries into the expected-class table.
+* `.github/workflows/ci.yml` — a new flagged step, and the parity file.
+
+No `physsynth-core` code and no new native tests. This is the **second module with no core half**,
+for §32.2's reason arrived at by a different road — §34.3.
+
+### 34.2 The finding: a ported caller that computes nothing is *slower* than the Python it replaced
+
+Every batch since §11.6 has said the win is per-call overhead rather than arithmetic. The clause
+that was missing, and that this batch supplies with a sign rather than a magnitude, is that **Rust
+pays that overhead too when it is the one making the call.** A `getattr` + `get_item` + `extract`
+issued from Rust is not cheaper than CPython's `LOAD_ATTR` / `BINARY_SUBSCR`, which have inline
+caches and a specialising interpreter behind them; what Rust wins is the *work between* the calls,
+and a pure delegator has none.
+
+`connection.py` contains both cases in one file, which is what makes the measurement a finding
+rather than a disappointment. Measured on this machine, best of five runs of 2,000–5,000 steps
+each, with the flag **on** so every collaborator is already Rust:
+
+| class | Python µs/step | Rust µs/step | ratio |
+| --- | --- | --- | --- |
+| `StringBodyBridge` (M=4, N=100) | 1.61 | 1.66 | **0.97x** |
+| `StringBodyBridge` (M=32, N=100) | 1.65 | 1.72 | **0.96x** |
+| `StringPlateBridge` (N=16) | 12.54 | 12.56 | 1.00x |
+| `StringPlateBridge` (N=40) | 166.94 | 166.15 | 1.00x |
+| `SympatheticStrings` (J=2) | 4.77 | 2.61 | **1.83x** |
+| `SympatheticStrings` (J=8) | 10.23 | 6.77 | **1.51x** |
+
+Those numbers are within-run, best-of-five, and directionally confirmed by an intervention (the
+keyword-dict change below moved `StringBodyBridge` from 0.93x to 0.97x, in the predicted direction),
+which is what makes a 0.05 µs effect on a 1.7 µs step reportable at all. The first, less careful
+sweep read `StringPlateBridge (N=40)` at **1.62x** where the careful one reads 1.00x — same binary,
+same fixture — so the machine's own drift is comfortably larger than the effect being reported, and
+only the three properties above separate them. Do not read 0.96x as precise; read it as "a few per
+cent behind, reproducibly".
+
+The discriminator is not the class, the model or the grid. It is **how much work sits between the
+collaborator calls.** `StringBodyBridge.step` is five attribute touches and two float multiplies —
+the pure delegator, and it comes out a consistent few per cent *behind*. `SympatheticStrings.step`
+allocates a NumPy array of per-string forces every step in Python and a `Vec` in Rust, loops over
+`J`, and reduces; that is real per-step work, and it is 1.5–1.8x. The plate bridges sit at exactly
+1.00x because a sparse solve dominates and neither implementation touches it.
+
+This sharpens §32.4 rather than contradicting it. §32.4 measured the wrapper tier at
+"indistinguishable from neutral" and concluded that an inner iteration is where the real-time win
+lives *only if the iteration's body ports with it*. Here the neutral point is crossed and the
+answer goes negative, so the rule gets its general form: **porting a caller buys nothing when the
+callees are separate Python objects, because the boundary crossings do not go away — they are
+merely initiated from the other side.** Removing them would mean the bridge holding its string as
+a native `physsynth_core::IdealString` rather than as a `Py<PyAny>`, and §34.3 is why it cannot.
+
+One mitigation was worth taking and is the only optimisation in the file: both `body.step(force=)`
+and `plate.step(f_ext=)` are keyword calls, and building a fresh `PyDict` for the keyword every
+step is measurable at this altitude — it was ~0.05 µs of a 1.78 µs step, and moving to a
+per-instance dict whose one entry is re-set each step took `StringBodyBridge` from 0.93x to 0.97x.
+The dict caches the *dict*, never the array: `_f_ext` is writable (§34.6) and a cached array object
+would ignore a caller who replaced it, which is §32.2's hazard inside the batch that cites it.
+`tests/test_rust_parity_connection.py::test_a_replaced_force_vector_reaches_the_plate` asserts the
+object identity, and the first draft of that test asserted the *contents* and failed for a third
+reason — the bridge writes the force into the vector before the call and zeroes it after, so a copy
+taken during the call is never all-zero.
+
+### 34.3 Why there is no core half: the class is polymorphic over its collaborators' types
+
+§32's tier could not own its arithmetic because the tier *below* had promised its clients they
+could replace a port's matrices. This one cannot own its arithmetic for a reason that was true
+before the migration started: `connection.py` is **pure duck typing**. §31.11 established that it
+contains no `isinstance`, `hasattr`, `getattr` or `type(` at all, and the slots are wide:
+
+* `body=` takes a `ModalBody` of either language, a `RadiatedBody`, a `ReactiveRadiatedBody` and a
+  `RoomLoadedBody`.
+* `plate=` takes a `Plate`, a `VKPlate`, `RoomLoadedPlate`, `RoomSuspendedPlate`,
+  `RoomLoadedVKPlate`, `RoomSuspendedVKPlate` — and, through `airbox`'s seams, objects that are
+  none of those.
+
+So every collaborator attribute is read by name and every collaborator method called by name. A
+downcast to a concrete `#[pyclass]` would turn a class that handles eight kinds of body into one
+that handles two — and would pass the entire airbox and radiation family, because those hand the
+bridge real models. `test_the_bridge_never_looks_at_its_collaborator_s_type` therefore builds a
+hand-written delegating stand-in that is not a `ModalBody` in either language and asserts the
+bridge drives it, reads its `phi`/`m`/`omega`/`M`/`q_prev`, and reproduces the Python arm's
+trajectory bit for bit.
+
+The line drawn is §32's verbatim:
+
+* **Through Python:** `sparse.diags`/`sparse.identity`, the sparse products, `spsolve`,
+  `splu(...).solve`, `np.linalg.eigvals`, both `np.dot`s, the string's `_second_diff`, and every
+  `step`/`energy`/`pressure` on a collaborator.
+* **In Rust:** the four validation chains, the `beta` precomputes, `_apply_A`'s elementwise
+  arithmetic, the stretch/force/energy ledgers and `step`'s sequencing.
+
+§32.3's correction applies unchanged and is worth restating because this file *looks* like Group D:
+it calls `splu` and `spsolve` twice at construction and owns neither, so a solver group is a
+property of **ownership, not of the file a factorization appears in**. Both are read as
+`connection`'s own module globals at call time — the faithful transcription (§32.7), and what keeps
+§24.4's shared-factorization manoeuvre available here. `test_the_guard_reads_its_solver_from_the_module_at_call_time` counts the calls through a monkeypatched name.
+
+### 34.4 §33.11's claim that this file reaches no private name is wrong
+
+The plan has said three times, most recently in §33.11, that `connection.py` "touches no private
+name on any collaborator". It reaches two: `string._bc_right` in **four** constructors, and
+`string._second_diff` in **two** `_apply_A`s. §31.11's actual finding — that the file contains no
+`isinstance`/`hasattr`/`getattr`/`type(` — is correct and is about a different question; the
+private-name claim was drift, restated until it read as measured.
+
+It cost nothing, and the reason is the most cheerful thing in this batch: **Phase 0 predicted
+exactly these two names three phases early.** `crates/physsynth-py/src/lib.rs` has carried a
+section headed *"Private names are part of the surface"* since the first commit of the binding,
+exposing `_bc_left`, `_bc_right` and `_second_diff` on the ground that "connection is a Phase 5
+model — so for the whole migration a Python module is a client of this binding's *private* names."
+The general form is worth keeping because it is the opposite of the usual scar: **a dependency
+written down at the start survives being forgotten in the middle.** Nothing re-derived it, three
+sections asserted its negation, and the port still worked on the first build.
+
+### 34.5 Which reductions transcribe, which do not — and the fixture that can see neither
+
+Two reductions and two `np.dot`s, and §14.2's question ("does it reach the next timestep?") gets
+three different answers:
+
+* `body.step(force=float(np.sum(forces)))` in `SympatheticStrings.step` — **yes**, directly.
+* `np.dot(phi, q_prev)` in `_stretch(prev=True)` — **yes**: it is on the hot path and feeds
+  `energy()`. `np.dot(phi, q)` in `_apply_A` is construction-time but feeds the guard that decides
+  whether the object exists at all.
+* `beta_b = k^2 * np.sum(phi*phi/m)` — **no**, and this is worth stating precisely because the
+  obvious reading is wrong. `beta_b`'s only consumer is `cfl_2dof`, which the reference's own
+  comment calls a cheap diagnostic and *not the real guard*; `step` uses `beta_s`, and `_apply_A`
+  reaches `K`, `phi`, `m`, `rho` and `h` and never `beta_b`. So this is the migration's **second**
+  reduction where §14.2 is answered "no" (§30's room ledgers were the first) — and the first where
+  exactness was taken anyway, because here it costs one `reduce::sum` where there it would have
+  cost a refusal.
+
+The sums are transcribed with `reduce::sum` (§31.2); the dot products are not (§14.2 — `ddot`
+fuses its multiply-add and admits no scalar recipe). Both choices are right and **neither is
+exercised by a single fixture the suite ships**, which is §16.4 arriving in the *reductions* rather
+than in a solver:
+
+* §30.2's cutoff makes the sum question decidable by counting terms, and every body in this repo
+  has **four or five** modes while every sympathetic rig has **two or three** strings. Measured
+  here: `np.sum` and a left-to-right loop agree in 5,000/5,000 draws at M = 4, 5 and 7, and differ
+  in **2,022/5,000** at M = 8. So `reduce::sum`'s blocking is dead code in every existing test.
+* §14.3's finding governs the dot products: every body fixture in `tests/helpers.py` has
+  `phi = 1.0`, and a fused multiply-add differs from a rounded one only when the **product** rounds.
+
+The parity file therefore *searches* for its fixtures rather than picking them (§26.6). At M = 12 it
+finds a witness where the Rust `beta_b` reproduces `np.sum` exactly (1.1926596366525052e-05) and a
+left-to-right loop would have given 1.1926596366525054e-05; at J = 8 the shared bridge force differs
+from a left-to-right sum on **296/600** steps while the trajectory stays bit-identical; and with
+non-power-of-two `phi`, BLAS and a left-to-right multiply-add differ on **247/800** steps, which is
+what makes "the dot products were not transcribed" an assertion rather than a comment.
+
+### 34.6 §33.2's write question, aimed at the class being ported
+
+§33.2's rule is that the port of a Python class starts from *every attribute is writable* and
+justifies each refusal. Run against these four classes, the reference's own `self.X = ...` list is
+nine names each (`string`/`strings`, `body`/`plate`, `K`, `k`, `beta_s`, `beta_b`, `cfl_2dof`,
+`drive_index`, `_f_ext`, `_offsets`, `J`, `spectral_radius`, `stability_margin`, `n`), and every one
+of them has a `#[setter]`. No refusal was needed and none was taken. The classes carry `dict`, so a
+name the reference never used can be set on an instance exactly as on a Python class.
+
+No test in the tree writes to a bridge — the grep §33.11 asked for was run and came back empty —
+so unlike §33 this is a precaution rather than a repair. It is cheap and the alternative is a
+failure mode that is silent in one direction: an attribute a client writes and then reads back
+through a getter would swallow the write.
+
+### 34.7 §19.7's line continuation, a **sixth** time, from a sixth tool
+
+Adding the flagged CI step reintroduced it again: a `run:` block whose continuations arrived as
+neither a backslash nor a newline, joining eleven `pytest` arguments into one 464-character line.
+The tool this time was a shell heredoc that collapsed a doubled backslash before Python saw it.
+§20.7's test caught it in under a second, for the third time in a row that the scar has been a test
+rather than a paragraph, and for the sixth occurrence with **zero red CI runs** since it exists.
+The fix — build the backslash as `chr(92)` so no layer can unescape it — is worth writing down as
+the general remedy rather than "be careful".
+
+### 34.8 The measured comparison
+
+Default path (Python collaborators on both arms), Python bridge against Rust bridge:
+
+| rig | steps | max\|du\| | max\|dE\| |
+| --- | --- | --- | --- |
+| `StringBodyBridge` | 2,000 | 0.0 | 0.0 |
+| `SympatheticStrings` (J=3) | 2,000 | 0.0 | 0.0 |
+| `StringPlateBridge` supported / free | 600 | 0.0 | 0.0 |
+| `StringVKPlateBridge` supported / free, nonlinear on and off | 400 | 0.0 | 0.0 |
+
+Plus, exactly: `beta_s`, `beta_b`, `cfl_2dof`, `spectral_radius` (the dense leapfrog eigenvalue),
+`drive_index`, `stability_margin`, `n_iters`, `converged`, `last_residual`, `pressure()`, and the
+`_offsets` array. Both cross-class anchors hold in all four language combinations
+(`py/py`, `rs/rs`, `rs/py`, `py/rs`), which is the cell no existing test can reach.
+
+The three `test_airbox_*` exact-margin anchors — a bridge over a room-loaded plate against a bridge
+over a bare one — pass under the flag with a Rust bridge on both sides, which is what pins the
+guard's bracketing across a boundary the parity file cannot construct.
+
+### 34.9 The success condition
+
+1. `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+   `cargo test --workspace`, `ruff check .` — all green. (§25.8: the linters are part of the bar,
+   not an afterthought.)
+2. `pip install ./crates/physsynth-py` **before** believing any parity number (§25.8a).
+3. `pytest tests/test_rust_parity_connection.py` — 36 tests, default path.
+4. `PHYSSYNTH_RS=1 pytest` over the coupled leg — the four bridge files, `test_radiation.py`,
+   `test_airbox_surface.py`, `test_airbox_dipole.py`, `test_airbox_vk.py`, `test_web_backend.py`
+   and `test_stability.py` — unmodified, green.
+5. The swap guard's class table gains exactly four entries and `connection` joins both of the
+   derive's tuples (§17.6/§23.7/§26.7: verify the count moved, do not assume).
+
+### 34.10 What the next batch inherits
+
+* **`physsynth/core/` is finished.** Every model, operator, solver, room, port, wrapper and bridge
+  has a Rust implementation behind the flag. What is left of the migration is **`analysis/`**, and
+  it is a different kind of module: it consumes trajectories rather than producing them, so §14.2's
+  question ("does the reduction reach the next timestep?") is answered *no* everywhere and the
+  interesting question becomes which of its read-outs a test compares exactly.
+* **The speed rule now has a sign.** §11.6 said the win is per-call overhead; §32.4 said an inner
+  iteration only wins if its body ports with it; §34.2 says a ported caller with no arithmetic of
+  its own is **slower**. Before scoping a batch, ask how much work sits between the collaborator
+  calls — if the answer is "none", the port buys fidelity and costs a few per cent, and that is a
+  decision to make deliberately rather than discover.
+* **The deletions are what is left after `analysis/`.** §1.2 says a Python model dies when its
+  clients do, not when its own phase ends. `connection.py` was the last *client* blocking anything,
+  so the remaining question is `web/serialize.py` and the `*Py` reference oracles — a batch about
+  scope, not about arithmetic.
+* **The parked room-energy tightening is still parked**, and is now five batches old (§31.11,
+  §33.11).

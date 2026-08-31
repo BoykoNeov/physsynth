@@ -178,6 +178,7 @@ def test_the_rust_swap_matches_the_environment():
         bore,
         bow,
         collision,
+        connection,
         exciter,
         mallet,
         membrane,
@@ -217,6 +218,7 @@ def test_the_rust_swap_matches_the_environment():
         plate,
         bow,
         beam,
+        connection,
     ):
         assert module._USE_RUST is expected_rust, (
             f"{module.__name__}'s reading of PHYSSYNTH_RS disagrees with this test's -- one of "
@@ -248,6 +250,7 @@ def test_the_rust_swap_matches_the_environment():
         beam,
         operators2d,
         plate,
+        connection,
     ):
         # `collision` joined this tuple in Phase 3's last batch, and it was ABSENT before -- so for
         # the whole of §16's batch and after, a `BarrierStringPy` alias could have been added with
@@ -295,6 +298,10 @@ def test_the_rust_swap_matches_the_environment():
         ("physsynth.core.beam", "FreeBeam"),
         ("physsynth.core.plate", "Plate"),
         ("physsynth.core.plate", "VKPlate"),
+        ("physsynth.core.connection", "StringBodyBridge"),
+        ("physsynth.core.connection", "StringPlateBridge"),
+        ("physsynth.core.connection", "StringVKPlateBridge"),
+        ("physsynth.core.connection", "SympatheticStrings"),
     }
     assert set(swapped_classes) == expected_classes, (
         f"the swapped classes are {sorted(swapped_classes)}, but this guard expects "
@@ -459,7 +466,6 @@ def test_the_rust_swap_matches_the_environment():
     if expected_rust:
         from physsynth.core import (
             beam,
-            connection,
             mallet,
             plate,
             radiation,
