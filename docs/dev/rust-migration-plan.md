@@ -6052,3 +6052,17 @@ See §30.5's table. 13.1x at 27 nodes, 4.2x at 560, ~1.1-1.5x from 4,641 nodes u
   arrays for the whole step; the cost of not doing so is a cliff, not a constant.
 * **`Bound::clone` is a reference clone.** §30.4. Two struct fields built from one `PyList::new` are
   one object, and the symptom is a wrong *count*, not a wrong number.
+* **Two things this batch found and deliberately did not fix, both in already-shipped code.**
+  * `crates/physsynth-core/src/lib.rs`'s module header still narrates the crate as far as Phase 3's
+    fifth batch. It omits Phase 4 and all six Phase 5 batches, and it now declares `pub mod airbox;`
+    with no prose behind it. That is §17.6/§23.7/§26.7/§30.7's shape — a hand-maintained list that
+    has fallen behind — with one difference that makes it worse: there is no derive and no test
+    watching it, so nothing will ever fire. Rewriting it is a batch's worth of prose; knowing it is
+    stale is one line, which is this one.
+  * `bore.rs:262` spells the compliance denominator `c0.powf(2.0)` with a **literal** exponent, and
+    `reed.rs:229` and `:505` do the same. §17.2 established that LLVM folds exactly that into
+    `c0 * c0` in `--release`, where CPython's `float.__pow__` calls libm's `pow` — so those three are
+    a last bit on the state of every step at any `c0` where the two spellings differ. §30.7 measured
+    that at **99 in 200,000** plausible sound speeds; it is invisible at the ambient 343 m/s because
+    `343^2 = 117649` is exact. The fix is `pyfloat::scalar_pow`, which did not exist when `bore` was
+    written. It is a re-tolerancing of two shipped models, so it belongs to a batch of its own.
