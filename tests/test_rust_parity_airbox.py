@@ -12,17 +12,20 @@ stay Python, so this file has two jobs rather than one:
   a wrapper that silently stopped seeing a room's ``_pending_ports`` would not fail loudly — it
   would inject nothing, and every energy ledger would stay perfectly green.
 
-**What is not bit-identical, and why it is refused rather than missed.** Four reductions:
-``acoustic_energy``'s volume and three kinetic sums, ``step``'s per-face wall book, and the port
-injection's ``pbar``. All are ``np.sum``, which is pairwise-blocked above **eight** elements and a
-plain left-to-right loop below it. Reproducing that blocking would be a claim about a NumPy
-internal, and after §22.1 about a CPU as well — the bargain §18.2 refused for SciPy's sparse
-product. It can be refused here for a reason the earlier refusals did not have: ``dissipated`` and
-``injected`` are pure bookkeeping, so nothing in the update path reads them and the reduction
-reaches no timestep (§14.2's question, answered "no").
+**What was not bit-identical, and is now.** Four reductions: ``acoustic_energy``'s volume and
+three kinetic sums, ``step``'s per-face wall book, and the port injection's ``pbar``. All are
+``np.sum``, which is pairwise-blocked above **eight** elements and a plain left-to-right loop below
+it. §30 declined to reproduce that blocking as a claim about a NumPy internal, affordably, because
+``dissipated`` and ``injected`` are pure bookkeeping that no timestep reads (§14.2's question,
+answered "no"); §31 then found the blocking is one fixed algorithm rather than a kernel and
+transcribed it (``crate::reduce``) for the ports, whose sums *do* reach the update. The parked
+tightening (§31.11) is taken as of 2026-09-02: the room's books go through the same reduction, so
+the energy ledgers are asserted **equal** below, not within ``1e-13`` — a sharper detector of a
+mis-transcribed booking, at no run-time cost.
 
-The eight-element cutoff is what makes that statement precise rather than a hope, and it is
-measured in :func:`test_the_reduction_cutoff_is_eight_and_the_room_is_always_past_it`.
+The eight-element cutoff is still what decides where exactness is *structural* (free, whatever the
+spelling) and where it has to be bought with ``reduce``; it is measured in
+:func:`test_the_reduction_cutoff_is_eight_and_the_room_is_always_past_it`.
 """
 
 from __future__ import annotations
@@ -337,7 +340,8 @@ def test_the_reduction_cutoff_is_eight_and_the_room_is_always_past_it():
 
     That number is what turns "does this agree?" into a question that costs no measurement, the way
     §23.2 turned it into "how long is the sum?" for a two-term one. The consequence for this model
-    is sharp and is the reason the energy bar is a tolerance:
+    is sharp and is the reason the energy books had to be *bought* with ``reduce`` rather than
+    being exact for free:
 
     * the smallest room the class can build is one cell per axis, i.e. **eight** pressure nodes, so
       ``acoustic_energy``'s volume sum is *never* below the cutoff. There is no room for which it is
@@ -370,12 +374,15 @@ def test_the_reduction_cutoff_is_eight_and_the_room_is_always_past_it():
 
 
 @pytest.mark.parametrize("wall_name", ["one lossy face", "two lossy faces", "all lossy"])
-def test_the_energy_books_agree_to_a_last_bit_and_no_better(wall_name):
-    """The four ``np.sum`` reductions are the whole of the difference between the two rooms.
+def test_the_energy_books_are_bit_identical(wall_name):
+    """The four ``np.sum`` reductions were the whole of the difference between the two rooms.
 
-    The bar is relative and is asserted to be a *last bit* rather than merely small: the field is
-    bit-identical (asserted above), so any gap larger than a few ulps of accumulated rounding would
-    mean the port had changed the arithmetic rather than the summation order.
+    Until 2026-09-02 this asserted ``<= 1e-13`` relative and its name said "and no better". The
+    room now books ``acoustic_energy``, the per-face wall flux and the port injection through
+    ``crate::reduce`` — NumPy's pairwise blocking, transcribed — so the three ledgers are asserted
+    *equal*. The field is bit-identical (asserted above), so a gap here now means a booking was
+    transcribed wrongly, not that a sum was ordered differently: the test became a sharper
+    detector, which is what the parked tightening was for.
     """
     a, b = _seed(*_pair(**_kwargs(walls=WALLS[wall_name])))
     for _ in range(2000):
@@ -385,7 +392,7 @@ def test_the_energy_books_agree_to_a_last_bit_and_no_better(wall_name):
     for name in ("acoustic_energy", "dissipated_energy", "energy"):
         x = getattr(a, name)()
         y = getattr(b, name)()
-        assert abs(x - y) <= 1e-13 * abs(x), f"{name}: {x!r} vs {y!r}"
+        assert x == y, f"{name}: {x!r} vs {y!r}"
     assert a.dissipated_energy() > 0.0
 
 

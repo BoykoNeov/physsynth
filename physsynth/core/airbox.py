@@ -873,9 +873,14 @@ class AirBox:
         rather than growing — the ceiling is reached by the corner mode, and reached *exactly* at
         ``lambda = 1/sqrt(3)``, where that mode turns defective (see the module docstring).
         """
-        mu = np.sqrt(self._mu_squared(l, m, n))
-        omega = (2.0 / self.k) * np.arcsin(np.clip(self.c0 * self.k * mu / 2.0, -1.0, 1.0))
-        return float(omega / (2.0 * np.pi))
+        # ``math.asin``, not ``np.arcsin``: the parity file asserts this frequency **exactly**
+        # against the Rust room, and NumPy's ``arcsin`` is its own CPU-dispatched routine (plan
+        # §22.1) where ``math.asin`` and Rust's ``f64::asin`` are one libm call. Measured one ulp
+        # apart at mode (3, 2, 2) on a Linux x86-64 runner, 2026-09-02, with ``sin`` agreeing —
+        # §22.6's "the exposure is per-function and per-CPU". ``sqrt`` is IEEE-exact either way.
+        mu = math.sqrt(self._mu_squared(l, m, n))
+        omega = (2.0 / self.k) * math.asin(min(1.0, max(-1.0, self.c0 * self.k * mu / 2.0)))
+        return float(omega / (2.0 * math.pi))
 
     def continuum_mode_frequency(self, l: int, m: int, n: int) -> float:
         """The **textbook** rigid rectangular-room frequency (Hz),
@@ -912,8 +917,13 @@ class AirBox:
         return idx
 
     def _mu_squared(self, l: int, m: int, n: int) -> float:
+        # ``math.sin``, not ``np.sin``: the mode frequency is a read-out the parity file asserts
+        # *exactly* (``set_mode`` returns it), and NumPy's transcendentals are CPU-dispatched
+        # (``docs/dev/rust-migration-plan.md`` §22.1) where ``math.sin`` and Rust's ``f64::sin``
+        # are the same libm call — §22.3's portable spelling, the manoeuvre ``mode_shape`` already
+        # takes for its cosines. Measured: one ulp apart on a Linux x86-64 runner, 2026-09-02.
         idx = self._mode_indices(l, m, n)
-        s = sum(np.sin(q * np.pi / (2 * N)) ** 2 for q, N in zip(idx, self.N, strict=True))
+        s = sum(math.sin(q * math.pi / (2 * N)) ** 2 for q, N in zip(idx, self.N, strict=True))
         return float(4.0 * s / (self.h * self.h))
 
 

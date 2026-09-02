@@ -362,6 +362,12 @@ possible surface.
 **Phase 6 — `airbox` (3,925 lines, six factorizations).** Last and largest, on machinery that six
 phases have already proven.
 
+> **Folded into Phase 5, 2026-08-31.** The room went as Phase 5's batches 6–9 (§30–§33) and the
+> bridges as batch 10 (§34), so there was never a Phase 6 as such; `physsynth/core/` finished at
+> §34. What is left of this list — `analysis/`, the viewer backend, the test-suite port and the
+> deletions — is re-planned in **§35**, which supersedes the two entries below on order and
+> scope.
+
 **Phase 7 — `analysis/` (1,930 lines).** The analytic oracles: Bessel roots, closed-form
 eigenfrequencies, the spectrum detector. Pure math, no state. Deliberately late — while Python still
 holds these, the Rust models are being checked against an oracle that hasn't moved.
@@ -7165,3 +7171,143 @@ guard's bracketing across a boundary the parity file cannot construct.
   scope, not about arithmetic.
 * **The parked room-energy tightening is still parked**, and is now five batches old (§31.11,
   §33.11).
+
+---
+
+## §35 Where the migration stands, and the plan for what is left (2026-09-02)
+
+### 35.1 The state, in one paragraph
+
+Every module under `physsynth/core/` has a Rust implementation behind the one flag: twenty-three
+files, four solver groups, both halves of `airbox.py`, all four bridges. Nothing has been deleted,
+by design (§1.2): the Python side is still the oracle every parity file compares against, the
+viewer's live dependency, and the thing `PHYSSYNTH_RS=1 pytest` proves the Rust side reproduces.
+What remains is the *other* three-quarters of the original brief — `analysis/` (1,930 lines), the
+viewer backend (9,915 lines), the test suite (26k lines) and the deletions — and none of it is a
+model. This section is the plan for that, and it corrects §5's Phase 7/8 ordering with what
+twenty-seven findings have taught about where a batch boundary goes.
+
+### 35.2 What changed on 2026-09-02, and why it is here rather than in a batch section
+
+Three things landed together, none of them a port:
+
+* **The two parked items were taken.** The room's energy books go through `reduce::sum_by`
+  (a closure-reading form of `reduce::sum`, so no term array is allocated) and the parity
+  assertions on `acoustic_energy`, `dissipated`, `injected` and the port book moved from
+  `<= 1e-13` / `< 1e-15` to `==` — equal on all five wall types over 2,000 steps and at every port
+  size. And the geometric string's DG Jacobian `(v,v)` block, recorded "not fixed" in §29's
+  memory note, is assembled cancellation-free on both sides: measured against a 60-digit
+  reference the old spelling was wrong by 5.8e-5 relative at strain 1e-4 (growing like
+  `1/strain²`), the new one by 1e-15, and the rotating-wave cross-check's bar moved from 1e-8 to
+  1e-12. Both are in `docs/dev/scientific-hurdles.md` §1–§2 with the numbers.
+* **The parity step had been red on `main` for four runs**, and both failures were *negative
+  controls* — tests asserting that a difference exists — not ports. `test_rust_parity_connection`
+  required BLAS `ddot` to disagree with a scalar loop and GitHub's AMD EPYC kernel agreed;
+  `test_rust_parity_airbox_memb` took a scalar witness and asserted its last bit survived into a
+  vector it is 3.5e-3 of, which on this SciPy it never did. The first now reports rather than
+  requires (the precedent is §14's `part_company` test, which made the same correction a phase
+  earlier); the second searches at the whole expression (927 of 5,000 neighbours survive, the
+  first at step 4). A third failure of the same class surfaced on the Linux dev box only:
+  `np.arcsin` and `math.asin` one ulp apart at the room's mode `(3,2,2)`, so `mode_frequency`
+  and `_mu_squared` took §22.3's portable spelling. The general form, worth a line in the
+  findings ledger as its **twenty-eighth** entry: **a negative control whose predicate is a
+  per-CPU kernel is a claim about the runner**, and the searching form must search the whole
+  expression it will assert on.
+* **`CLAUDE.md` is lean again.** The findings narrative under non-negotiable #3 had reached 70 KB
+  in a file whose first line says "lean, always-loaded"; it moved verbatim to
+  `docs/dev/rust-migration-findings.md` with an index and the eight questions to ask before an
+  exact assertion. Nothing was cut.
+
+### 35.3 `analysis/` — the next batch, and why it is not one batch
+
+`analysis/` is six files: `modal.py` (742 lines, the closed-form oracles), `rotating_wave.py`
+(602, the geometric string's BVP oracle), `duffing.py` (190), `damping.py` (185), `spectrum.py`
+(133, the partial detector) and `dispersion.py` (77). §34.10 already said what makes it a
+different kind of module — it *consumes* trajectories, so §14.2's question is answered "no"
+everywhere — and the useful question is which of its outputs a test compares **exactly**. Measured
+by reading the suite rather than guessing (the discipline §5's two corrections insisted on):
+
+* **`spectrum.py` is the one file whose output is a decision** (§25.2): `measure_partials_near`
+  returns *which* peak, and the spectrum-detector guard (`docs/memory/spectrum-detector-guard.md`)
+  records that fifteen test files leaned on it without testing it. It goes first, alone, with the
+  guard's two witnesses as its parity fixture, and its FFT is the batch's whole risk — an FFT is a
+  library kernel in NumPy (pocketfft) and there is no dependency to take in Rust, so a hand-rolled
+  radix-2 is Group-A-over-a-short-window arithmetic and the *peak index* is the exact claim, never
+  the bin values.
+* **`modal.py`, `damping.py`, `dispersion.py`, `duffing.py` are numbers, not decisions**, and
+  every consumer compares them by a cents or a relative bar — so the Rust twins are tolerance
+  ports and the only exact anchors are the ones the *tests* own: `cents` on identical inputs, and
+  the discrete eigenfrequencies that feed `set_state` (§24.9's ARPACK pins). Two library facts set
+  the risk: Bessel zeros (`scipy.special.jn_zeros`) and `brentq` have no crate behind them, and
+  `radiation`'s one unported Bessel helper (§14) is the same debt — so the batch that writes a
+  Bessel routine pays it twice and should be one batch. The complete elliptic integrals in
+  `duffing.py` are the same shape (AGM, ~30 lines, exact to an ulp).
+* **`rotating_wave.py` is a nonlinear BVP solved by Newton on a sparse Jacobian** — the only
+  Group D member of the package, and §29's fill lesson applies unchanged. It goes last, after the
+  §1 Jacobian fix has had its `λ_long` sweep re-run (hurdles §6), because its `_jacobian` is
+  asserted equal to `2 · _dg_jacobian(q, q)` and that identity has just changed spelling.
+
+Order: `spectrum` → (`modal` + `damping` + `dispersion` + `duffing` + the radiation Bessel) →
+`rotating_wave`. Three batches, and the first is the one with a discrete output.
+
+### 35.4 The test suite — port the *bars*, not the files
+
+§1's ritual says each model's tests port at step 4 and never ahead of the model. Twenty-three
+models are now at step 3, so the suite is the migration's largest remaining chunk and the one
+whose order matters most. Three rules, from the findings:
+
+1. **Port by criterion, not by file.** The suite is laid out by claim — energy, modal,
+   convergence, dispersion, stability, signature — and a model's tests are not in a file named
+   after it (§5's Phase 0 correction). The native `crates/physsynth-core/tests/` already mirrors
+   that shape; each Rust test file should keep it.
+2. **The parity files do not port.** Every `test_rust_parity_*.py` compares Python against Rust;
+   when the Python side is deleted they have nothing to compare and they are deleted *with* it,
+   in the same commit (§1.2's "together"). Until then they are the acceptance gate for every
+   change to a ported module, which is what they were for today.
+3. **A test that pins a NumPy-specific spelling does not port — it is retired with a note.** The
+   `portable.py` pins, the ufunc-ladder witness searches, the `np.sum` cutoff measurement: each
+   asserts something about NumPy, and a Rust suite has no NumPy to assert it about. Their
+   *findings* are in the ledger; the tests themselves die with the Python.
+
+The success condition for the suite is not "the Rust tests pass" — §1 says why that means
+nothing on its own — it is that for every Python test retired, a native test asserts the same
+physics bar at the same fixture, and the retirement commit names both.
+
+### 35.5 The viewer backend — a scope question, not an arithmetic one
+
+`web/serialize.py` imports `physsynth` 21 times and reaches inside 47 call sites (§3.1). Two
+routes, and the choice is the human's: (a) a Rust HTTP server (§5's Phase 8 as written, ~10k
+lines to move); (b) keep the thin Python serializer and have it import only the binding, which
+is what `PHYSSYNTH_RS=1` already makes it do. Route (b) contradicts "Python goes, all of it"
+and is named only because it is the cheapest way to make every *model* deletion safe now; route
+(a) is the plan. Either way the browser side is untouched.
+
+### 35.6 The deletions — one model, one commit, in dependency order
+
+The order a Python model can die in is the reverse of the order its clients ported, and it is
+now computable rather than argued: `string_ideal` waits on nothing (its last client,
+`connection`, is Rust), the theta-scheme strings wait on the bow and barrier (both Rust), the
+plates wait on `airbox`'s wrappers (Rust) and the bridges (Rust), the room waits on the viewer.
+So every model but the ones the viewer builds can go **today**, and the viewer decides the rest.
+Each deletion is its own commit carrying the model, its parity file, and the Python-only tests
+§35.4 retires, so a bisect lands on one model.
+
+### 35.7 CI — collapse the twenty-one steps into one flagged run
+
+The `rust` job runs twenty-one per-batch "unmodified, against Rust" steps, each a hand-listed
+subset of the suite that was a *claim* when the batch landed. With the core finished the claim is
+the whole suite: one `PHYSSYNTH_RS=1` run of the same three shards the `validate` job uses, plus
+the parity files. That is a workflow edit that cannot be verified from this environment (the
+runner's log blobs are outside the proxy), so it is written here and not done: do it as the first
+step of the `spectrum` batch, and keep `tests/test_ci_workflow.py`'s two guards — they are the
+reason §19.7's continuation bug has reached CI zero times in six occurrences.
+
+### 35.8 What the next batch inherits
+
+* The parked list is **empty** for the first time since §31.
+* The findings ledger has an index and eight questions; add the twenty-eighth entry (§35.2) when
+  the next batch confirms the CI runner is green on the corrected controls.
+* `docs/dev/scientific-hurdles.md` is the register of open *physics*; the two costed proposals in
+  it (θ-loss compensation, Newton–Krylov for the von Kármán step) are Rust-first under §6 and
+  wait on the human's priority call.
+* `spectrum.py` is next, alone, and its exact claim is a peak index.

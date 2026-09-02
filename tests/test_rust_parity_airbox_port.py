@@ -309,28 +309,20 @@ def test_the_free_pressure_read_is_bit_identical_step_for_step():
 
 
 @pytest.mark.parametrize("radius", [None, 0.09])
-def test_the_rooms_port_book_is_exact_at_one_node_and_a_tolerance_above_the_cutoff(radius):
-    """The one quantity in this batch that is **not** bit-identical, and it belongs to the room.
+def test_the_rooms_port_book_is_exact_at_every_size(radius):
+    """The one quantity in this batch that was **not** bit-identical, and it belonged to the room.
 
     ``AirBox.step`` books a port injection as ``np.sum(w * 0.5 * (p_next + p_old))`` over the port's
     nodes. At one node that is a sum of length one and exact on any spelling. At 123 it is above
     §30.2's eight-element cutoff, and ``airbox.rs`` — written one batch before ``reduce`` existed —
-    still books it with a plain left-to-right loop, so above the cutoff this is a **tolerance**.
+    booked it with a plain left-to-right loop, so above the cutoff this was a **tolerance**: the
+    two books wandered in and out of agreement at a last bit (1.6e-16 relative under an open-loop
+    drive, exactly 0.0 under the closed loop this file uses — a bound, never a difference).
 
-    How wide is measured and how it behaves is worth stating, because a one-shot equality check
-    misleads here exactly as §30.2 warned it does for ``dissipated``: the two books **wander in and
-    out of agreement at a last bit**. The same port over 300 steps reads 1.6e-16 relative under an
-    open-loop drive and **exactly 0.0** under the closed loop this file uses. So the bar is a
-    bound, not a difference — asserting that they *disagree* would be asserting a coincidence, and
-    the first draft of this test did.
-
-    Nothing about the port is wrong here and the field is bit-identical throughout: the book is
-    bookkeeping, which is exactly why §30.2 refused it. It is now a *parked tightening* rather than
-    a refusal (plan §31.11), and taking it would make this exact at every size.
-
-    Written as a real branch rather than ``assert a == b if cond else True``, which parses as
-    ``assert (a == b if cond else True)`` and asserts nothing on the other arm — the first draft of
-    this file did that too, and it was hiding the open-loop disagreement.
+    The parked tightening (plan §31.11) is taken as of 2026-09-02: the book goes through
+    ``reduce::sum_by`` and both arms assert equality. Kept as two arms rather than one assertion so
+    the *structural* case (below the cutoff, exact whatever the spelling) and the *bought* case
+    (above it, exact because of the transcription) stay distinguishable in a failure.
     """
     py_room, rs_room = _rooms(**_kwargs(walls=WALLS["all lossy"]))
     py = RoomPortPy(room=py_room, at=(4 * H, 3 * H, 3 * H), radius=radius)
@@ -339,10 +331,9 @@ def test_the_rooms_port_book_is_exact_at_one_node_and_a_tolerance_above_the_cuto
     got = _drive(rs_room, rs, 300)
     assert np.max(np.abs(want - got)) == 0.0
     if py.node_count < 8:
-        assert py_room.injected == rs_room.injected
+        assert py_room.injected == rs_room.injected, "below the cutoff: structural, any spelling"
     else:
-        rel = abs(py_room.injected - rs_room.injected) / abs(py_room.injected)
-        assert rel < 1e-15, f"relative gap {rel:.2e}"
+        assert py_room.injected == rs_room.injected, "above the cutoff: reduce::sum_by transcribes"
 
 
 # -- the distributed tier ------------------------------------------------------------------------

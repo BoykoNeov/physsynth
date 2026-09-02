@@ -352,7 +352,9 @@ Complete and validated:
   `docs/dev/web-viewer-plan.md`.
 
 The deliverable for each model is the resonator *and the rig that measures its deviation from
-theory*. See `docs/dev/` for the live plans.
+theory*. See `docs/dev/` for the live plans — `rust-migration-plan.md` §35 for where the Rust
+migration stands (the core is finished), `rust-migration-findings.md` for what it learned, and
+`scientific-hurdles.md` for the open physics problems and the costed proposals against them.
 
 ## License
 

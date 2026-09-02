@@ -425,14 +425,14 @@ def test_planar_hessian_matches_the_core_discrete_gradient_jacobian():
     ``d(qbar)/d(q+) = 1/2`` — evaluating the core's DG Jacobian at ``q+ == q-`` collapses it to half
     the continuum Hessian.
 
-    **The (v,v) block is the loose one, and the core is the inaccurate side.** This oracle uses the
-    exact identity ``(1+z)^2 - Lambda^2 = -p^2``, giving ``H_zz = -a p^2 / Lambda^3`` with no
-    cancellation at all; the core assembles ``a(chi - 1) + ...``, which cancels two ``O(1)`` terms
-    at musical strain (measured: 7e-11 relative at strain 1e-3, 7e-15 at strain 0.1 — *worse the
-    more realistic the string*, the same pathology :meth:`_stretch_terms` was written to cure).
-    Harmless where it lives: a Newton Jacobian only steers the iteration, and the **residual**
-    defines the root. Recorded rather than fixed — but if the core's DG Jacobian is ever reused
-    somewhere the accuracy matters, this is the note.
+    **The (v,v) block used to be the loose one, and the core was the inaccurate side.** This
+    oracle uses the exact identity ``(1+z)^2 - Lambda^2 = -p^2``, giving ``H_zz = -a p^2 /
+    Lambda^3`` with no cancellation at all; the core once assembled ``a(chi - 1) + ...``, which
+    cancels two ``O(1)`` terms at musical strain (measured: 7e-11 relative at strain 1e-3, 7e-15 at
+    strain 0.1 — *worse the more realistic the string*, the same pathology :meth:`_stretch_terms`
+    was written to cure), and this test blocked at 1e-8 with a note. The core now assembles that
+    entry through the same stable ``d = Lambda - (1 + v_x)`` the residual uses (see
+    :meth:`GeometricString._dg_jacobian`), so the bar is the one the other three blocks always had.
     """
     s = _string()
     a = s.EA - s.T
@@ -451,10 +451,10 @@ def test_planar_hessian_matches_the_core_discrete_gradient_jacobian():
         assert (
             np.max(np.abs(h_pz - 2 * np.diag(core[2 * n :, :n]))) / np.max(np.abs(h_pz)) < 1e-12
         )
-        # The core's own cancellation sets this bar, not the identity.
+        # Once 1e-8, set by the core's own cancellation; now the same bar as the other blocks.
         assert (
             np.max(np.abs(h_zz - 2 * np.diag(core[2 * n :, 2 * n :]))) / np.max(np.abs(h_zz))
-            < 1e-8
+            < 1e-12
         )
 
 

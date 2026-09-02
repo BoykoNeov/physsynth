@@ -252,6 +252,16 @@ def test_the_seams_two_associations_are_pinned_by_a_witness():
     that a walk of a few hundred neighbouring values finds a witness. If it does not, this test
     fails saying so, which is the only way to tell "no difference exists" from "I did not look"
     (§23.5).
+
+    **The second search is at the vector, not the scalar** — corrected 2026-09-02, after this test
+    was red on ``main`` for four CI runs *and* on a Linux dev box. The first draft took the first
+    ``t`` whose two scalar folds differed and then asserted the difference "survives into the
+    vector"; it does not have to. The coefficient multiplies ``L @ u``, which is ~3.5e-3 of the
+    rest of the right-hand side here, so a last bit of the coefficient is absorbed by the addition
+    in most rows (§23.2's mechanism) and, on this SciPy, in *every* row for the first scalar
+    witness. Measured over 5,000 neighbours of ``T``: 3,293 scalar witnesses, **927** of which
+    survive into the vector, the first at step 4. So the predicate is the whole expression — §23.5
+    and §33.5 said exactly this and the first draft still tested the sub-expression.
     """
     h = AIRBOX_MEMBRANE_L / N_MEMBRANE
     rho = next(
@@ -271,21 +281,26 @@ def test_the_seams_two_associations_are_pinned_by_a_witness():
         c = float(np.sqrt(t / AIRBOX_MEMBRANE_RHO))
         return ((c * c) * k) * k, (c * k) * (c * k)
 
-    tension = next(
-        (t for t in _walk(AIRBOX_MEMBRANE_T, 500) if _folds(t)[0] != _folds(t)[1]), None
+    def _vector_witness(t):
+        """The seam's rhs against the tidier association, at the whole-expression level."""
+        if _folds(t)[0] == _folds(t)[1]:
+            return None
+        m = _membrane(T=t)
+        assert m.k == k
+        m.set_state(membrane_bulge(m))
+        m.step()
+        rhs = _MembraneSurfacePy(m).rhs(None)
+        sk = m.sigma * m.k
+        alt = 2.0 * m.u - (1.0 - sk) * m.u_prev + _folds(t)[1] * (m.L @ m.u)
+        return None if np.array_equal(rhs, alt) else (m, rhs)
+
+    found = next((w for w in map(_vector_witness, _walk(AIRBOX_MEMBRANE_T, 500)) if w), None)
+    assert found is not None, (
+        "no witness for c^2 k^2's association survives into the rhs vector -- search wider"
     )
-    assert tension is not None, "no witness for c^2 k^2's association -- search wider"
-    m = _membrane(T=tension)
-    assert m.k == k
-    m.set_state(membrane_bulge(m))
-    m.step()
-    rhs = physsynth_rs._MembraneSurface(m).rhs(None)
-    assert np.array_equal(rhs, _MembraneSurfacePy(m).rhs(None))
-    # The alternative association, spelled the way a tidy-up would spell it. The scalars differ by
-    # construction above; what this asserts is that the difference survives into the vector.
-    sk = m.sigma * m.k
-    alt = 2.0 * m.u - (1.0 - sk) * m.u_prev + _folds(tension)[1] * (m.L @ m.u)
-    assert not np.array_equal(rhs, alt), "the associations agree here -- the pin asserts nothing"
+    m, rhs = found
+    # The parity claim, at a fixture where the pin is known to assert something.
+    assert np.array_equal(rhs, physsynth_rs._MembraneSurface(m).rhs(None))
 
 
 def _walk(x, n):

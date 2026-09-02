@@ -32,14 +32,17 @@
 //! bit, because every update is elementwise and every kernel below reproduces NumPy's evaluation
 //! order rather than merely its algebra.
 //!
-//! The **energy books** are not, and it is §14.2's rule with the roles reversed. `acoustic_energy`
-//! sums a whole volume with `np.sum` — pairwise blocking above 128 elements — and `step` books the
-//! wall flux and the port injection the same way. Matching that would mean transcribing NumPy's
-//! blocking, which is the bargain §18.2 refused for SciPy's sparse product and `ops2d::guitar_area`
-//! refused for a quadrature: a claim about a library internal, and after §22.1 a claim about the
-//! CPU as well. It can be refused *here* for a reason the earlier refusals did not have: the two
-//! accumulators `dissipated` and `injected` are pure bookkeeping. Nothing in the update path reads
-//! them, so the reduction reaches no timestep — §14.2's question asked and answered "no".
+//! The **energy books** are too, as of the tightening §31.11 parked. `acoustic_energy` sums a
+//! whole volume with `np.sum` — pairwise blocking above 128 elements — and `step` books the wall
+//! flux and the port injection the same way. This module was first written declining to match
+//! that, on the grounds that transcribing NumPy's blocking would be a claim about a library
+//! internal, and that it was affordable to decline because `dissipated` and `injected` are pure
+//! bookkeeping that no timestep reads (§14.2's question answered "no"). §31.2 then found the
+//! blocking is one fixed algorithm rather than a dispatched kernel — [`crate::reduce`] — and the
+//! ports went through it because *their* sums do reach the update. The books now go through
+//! [`reduce::sum_by`] as well: it costs no allocation, and a parity file that asserts `==` on the
+//! energy ledgers is a sharper detector of a mis-transcribed booking than one that asserts
+//! `1e-13`. What stays a tolerance is nothing in this file.
 //!
 //! # Two discrete outputs, and one transcendental
 //!
@@ -56,6 +59,7 @@
 
 use crate::fmt::py_float;
 use crate::pyfloat::scalar_pow;
+use crate::reduce;
 
 /// Ambient air density (kg/m^3) — matches `crate::radiation` and `crate::bore`.
 pub const RHO0_AIR: f64 = 1.2041;
@@ -256,6 +260,9 @@ pub struct LossyFace {
     pub end: usize,
     /// Per-node area on the slab, in `(t0, t1)` C order: `w[t0][a] * w[t1][b]`.
     pub area: Vec<f64>,
+    /// Flat pressure index of every node on the slab, in the same `(t0, t1)` C order — the order
+    /// `np.sum(area * pbar[index] ** 2)` reduces in, which the wall book reproduces exactly.
+    pub nodes: Vec<usize>,
     /// The face's specific acoustic impedance.
     pub z: f64,
 }
@@ -519,7 +526,15 @@ fn wall_closure(
                 area.push(a * b);
             }
         }
-        lossy.push(LossyFace { axis, end, area, z });
+        let mut nodes = Vec::with_capacity(area.len());
+        for_slab(shape, axis, plane, |idx| nodes.push(idx));
+        lossy.push(LossyFace {
+            axis,
+            end,
+            area,
+            nodes,
+            z,
+        });
     }
     let has_walls = beta.iter().any(|&b| b != 0.0) || open.iter().any(|&o| o);
     (beta, open, lossy, has_walls)
@@ -697,8 +712,9 @@ pub fn inject_port(p: &Params, p_next: &mut [f64], nodes: &[usize], w: &[f64], q
 /// every lossy face it belongs to, which is what summing admittances into `beta` already charged
 /// it.
 ///
-/// The per-face sum is `np.sum` in the reference — pairwise above eight elements — and is summed
-/// left to right here. It reaches no timestep; see the module header.
+/// The per-face sum is `np.sum` over the contiguous `area * pbar[index] ** 2` — a `(t0, t1)`
+/// C-order slab — and goes through [`reduce::sum_by`] in that order, so the book is bit-identical
+/// (it reaches no timestep, so this is a sharper parity claim rather than a trajectory one).
 ///
 /// `dissipated` is accumulated **per face**, not per step, because that is what the reference
 /// does: with two lossy walls it forms `(D + f0) + f1`, and adding a per-step subtotal instead
@@ -713,19 +729,11 @@ pub fn apply_walls(p: &Params, p_next: &mut [f64], p_old: &[f64], dissipated: &m
             p_next[i] = 0.0;
         }
     }
-    let shape = p.p_shape();
     for face in &p.lossy {
-        let plane = if face.end == 0 {
-            0
-        } else {
-            shape[face.axis] - 1
-        };
-        let mut s = 0.0;
-        let mut a = 0usize;
-        for_slab(shape, face.axis, plane, |idx| {
+        let s = reduce::sum_by(face.nodes.len(), |a| {
+            let idx = face.nodes[a];
             let pbar = 0.5 * (p_next[idx] + p_old[idx]);
-            s += face.area[a] * (pbar * pbar);
-            a += 1;
+            face.area[a] * (pbar * pbar)
         });
         *dissipated += (p.k * s) / face.z;
     }
@@ -740,8 +748,9 @@ pub fn booked_scalar(p: &Params, p_next: &[f64], p_old: &[f64], node: [usize; 3]
 
 /// Work done by one port injection, booked from the room's **own** post-closure pressure.
 ///
-/// `pbar_port` is `np.sum(w * 0.5 * (p_next[nodes] + p_old[nodes]))`, summed left to right here;
-/// it reaches no timestep. See the module header.
+/// `pbar_port` is `np.sum(w * 0.5 * (p_next[nodes] + p_old[nodes]))` over a contiguous gathered
+/// vector, reproduced through [`reduce::sum_by`]. (`w * 0.5` first and `0.5 * (...)` first are
+/// the same double: a multiply by one half is exact.)
 pub fn booked_port(
     p: &Params,
     p_next: &[f64],
@@ -750,31 +759,27 @@ pub fn booked_port(
     w: &[f64],
     q: f64,
 ) -> f64 {
-    let mut s = 0.0;
-    for (n, &idx) in nodes.iter().enumerate() {
-        s += w[n] * (0.5 * (p_next[idx] + p_old[idx]));
-    }
+    let s = reduce::sum_by(nodes.len(), |n| {
+        let idx = nodes[n];
+        w[n] * (0.5 * (p_next[idx] + p_old[idx]))
+    });
     p.k * s * q
 }
 
 /// Energy **stored in the air**: compliance `p^2` plus the **cross-time** inductive
 /// `u^{n+1/2} u^{n-1/2}` term.
 ///
-/// The four `np.sum`s are pairwise in the reference and left to right here; see the module header.
-/// The compliance denominator is `rho0 * c0**2`, the scalar power again.
+/// The four `np.sum`s are whole-array reductions of contiguous 3-D products, which NumPy
+/// coalesces into one pairwise pass in C order; [`reduce::sum_by`] over the flat arrays is that
+/// pass. The compliance denominator is `rho0 * c0**2`, the scalar power again.
 pub fn acoustic_energy(p: &Params, pressure: &[f64], u: [&[f64]; 3], u_prev: [&[f64]; 3]) -> f64 {
-    let mut spot = 0.0;
-    for (i, &pv) in pressure.iter().enumerate() {
-        spot += p.wv[i] * pv * pv;
-    }
+    let spot = reduce::sum_by(pressure.len(), |i| p.wv[i] * pressure[i] * pressure[i]);
     let pot = 0.5 * spot / (p.rho0 * scalar_pow(p.c0, 2.0));
     let mut parts = [0.0; 3];
     for axis in 0..3 {
-        let mut s = 0.0;
-        for i in 0..u[axis].len() {
-            s += p.wf[axis][i] * u[axis][i] * u_prev[axis][i];
-        }
-        parts[axis] = s;
+        parts[axis] = reduce::sum_by(u[axis].len(), |i| {
+            p.wf[axis][i] * u[axis][i] * u_prev[axis][i]
+        });
     }
     let kin = 0.5 * p.rho0 * (parts[0] + parts[1] + parts[2]);
     pot + kin

@@ -52,8 +52,10 @@
 //! port weights `w = W / W.sum()` and the port resistance `R_room` in [`crate::airbox_port`] both
 //! do, and a last bit there is a different trajectory — use [`sum`]. If it does not, a tolerance is
 //! honest and the cheaper spelling is fine. [`crate::airbox`] was written before this module
-//! existed and still books its two energy ledgers with a plain loop; those are pure bookkeeping
-//! (§30.2), so that is a tightening left undone on purpose rather than a disagreement.
+//! existed and booked its two energy ledgers and `acoustic_energy` with a plain loop for five
+//! batches (plan §31.11, "parked"); they now go through [`sum_by`], so the room's books are
+//! bit-identical too. The cost is nothing — [`sum_by`] reads through a closure and allocates no
+//! term array — and what it buys is that the parity file asserts `==` where it asserted `1e-13`.
 
 /// NumPy's pairwise block size — the length above which `np.sum` recurses.
 const PW_BLOCKSIZE: usize = 128;
@@ -71,37 +73,60 @@ pub fn sum(a: &[f64]) -> f64 {
 /// the recursion splits on the element count and never on the slice. Exposed because a wall face
 /// and a node plane are both strided views of a room's arrays.
 pub fn sum_strided(a: &[f64], off: usize, n: usize, stride: usize) -> f64 {
-    let at = |i: usize| a[off + i * stride];
+    sum_by(n, |i| a[off + i * stride])
+}
+
+/// `np.sum` over the `n` terms `at(0), at(1), ..., at(n-1)`, bit-identical, with no term array.
+///
+/// The same blocking as [`sum`] read through a closure, so a caller whose terms are *computed*
+/// — `w * p * p` over a volume, `area * pbar^2` over a wall face — pays no allocation to get the
+/// reference's order. The recursion offsets the closure rather than the data.
+pub fn sum_by<F: Fn(usize) -> f64>(n: usize, at: F) -> f64 {
+    sum_off(0, n, &at)
+}
+
+/// The recursion behind [`sum_by`]: `n` terms starting at `at(off)`. The offset is a parameter
+/// rather than a wrapping closure so the function monomorphizes once instead of once per depth.
+fn sum_off<F: Fn(usize) -> f64>(off: usize, n: usize, at: &F) -> f64 {
     if n < 8 {
         // The one case that is free: below the cutoff `np.sum` IS a left-to-right loop (§30.2).
         let mut res = 0.0;
         for i in 0..n {
-            res += at(i);
+            res += at(off + i);
         }
         return res;
     }
     if n <= PW_BLOCKSIZE {
         // Seeded from the first eight, NOT started at zero: at n = 8 nothing is added to a zero.
-        let mut r = [at(0), at(1), at(2), at(3), at(4), at(5), at(6), at(7)];
+        let mut r = [
+            at(off),
+            at(off + 1),
+            at(off + 2),
+            at(off + 3),
+            at(off + 4),
+            at(off + 5),
+            at(off + 6),
+            at(off + 7),
+        ];
         let mut i = 8;
         let whole = n - (n % 8);
         while i < whole {
             for (j, acc) in r.iter_mut().enumerate() {
-                *acc += at(i + j);
+                *acc += at(off + i + j);
             }
             i += 8;
         }
         let mut res = ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]));
         // The ragged tail folds into the COMBINED result, not back into the accumulators.
         while i < n {
-            res += at(i);
+            res += at(off + i);
             i += 1;
         }
         return res;
     }
     let mut n2 = n / 2;
     n2 -= n2 % 8; // rounded DOWN to a multiple of eight, so the left half stays block-aligned
-    sum_strided(a, off, n2, stride) + sum_strided(a, off + n2 * stride, n - n2, stride)
+    sum_off(off, n2, at) + sum_off(off + n2, n - n2, at)
 }
 
 #[cfg(test)]

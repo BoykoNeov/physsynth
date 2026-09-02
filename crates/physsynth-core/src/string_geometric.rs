@@ -609,7 +609,12 @@ pub fn dg_force(q_plus: &[f64], q_minus: &[f64], a: f64) -> Vec<f64> {
 
 /// `d(gradbar V_nl)/d q+` as a `3N x 3N` matrix of diagonal blocks — `_dg_jacobian`.
 ///
-/// Per cell `a [ (chi/2) I3 - (1/2) e_v e_v^T + (1/(2 Lambdabar^2)) mbar (n+)^T ]`. **It is not
+/// Per cell `a [ (chi/2) I3 - (1/2) e_v e_v^T + (1/(2 Lambdabar^2)) mbar (n+)^T ]`, except that
+/// the `(v,v)` entry is assembled cancellation-free as
+/// `-a (d+ (1 + vbar_x) + dbar Lambda+) / (2 Lambda+ Lambdabar^2)` with `d = Lambda - (1 + v_x)`
+/// from [`stretch_terms`] — the literal spelling cancels two `O(1)` terms to an `O(strain^2)`
+/// remainder and loses accuracy like `1/strain^2` (5.8e-5 relative at strain 1e-4). See the
+/// Python docstring for the derivation; both sides spell it identically. **It is not
 /// symmetric**, which is why the Newton solve uses a sparse LU and not the banded Cholesky the
 /// rest of this family uses — and why this is the first Group D matrix in the project that is not
 /// SPD, so [`DIAG_PIVOT_THRESH`]'s justification ("every Group D matrix is SPD") no longer covers
@@ -628,10 +633,16 @@ pub fn dg_jacobian(q_plus: &[f64], q_minus: &[f64], a: f64) -> Csr {
     // array; the two spellings are the same double because `q_bar[2] = 0.5 (v_x+ + v_x-)` is
     // formed first in both.
     let mut m_bar = vec![0.0; 3 * n];
+    // The cancellation-free `(v,v)` entry, `-(d+ m_v + dbar Lambda+) / (2 Lambda+ Lambdabar^2)`,
+    // in the Python's evaluation order: `lam_bar**2` is NumPy's `x*x` shortcut (§16.2).
+    let mut vv = vec![0.0; n];
     for i in 0..n {
         let lam_bar = 0.5 * (sp.lam[i] + sm.lam[i]);
         chi[i] = 0.5 * (sp.lam_m1[i] + sm.lam_m1[i]) / lam_bar;
         coef[i] = 0.5 / (lam_bar * lam_bar);
+        let d_bar = 0.5 * (sp.d[i] + sm.d[i]);
+        let m_v = 1.0 + 0.5 * (q_plus[2 * n + i] + q_minus[2 * n + i]);
+        vv[i] = -(sp.d[i] * m_v + d_bar * sp.lam[i]) / ((2.0 * sp.lam[i]) * (lam_bar * lam_bar));
         n_p[i] = q_plus[i] / sp.lam[i];
         n_p[n + i] = q_plus[n + i] / sp.lam[i];
         n_p[2 * n + i] = (1.0 + q_plus[2 * n + i]) / sp.lam[i];
@@ -645,13 +656,15 @@ pub fn dg_jacobian(q_plus: &[f64], q_minus: &[f64], a: f64) -> Csr {
         for i in 0..n {
             let mut row = Vec::with_capacity(3);
             for bi in 0..3 {
-                let mut d = coef[i] * m_bar[ai * n + i] * n_p[bi * n + i];
-                if ai == bi {
-                    d += 0.5 * chi[i];
-                }
-                if ai == 2 && bi == 2 {
-                    d -= 0.5;
-                }
+                let d = if ai == 2 && bi == 2 {
+                    vv[i]
+                } else {
+                    let mut d = coef[i] * m_bar[ai * n + i] * n_p[bi * n + i];
+                    if ai == bi {
+                        d += 0.5 * chi[i];
+                    }
+                    d
+                };
                 row.push((bi * n + i, a * d));
             }
             rows.push(row);

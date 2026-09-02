@@ -417,6 +417,16 @@ def test_the_two_dot_products_are_not_transcribed():
     ``phi = 1.0``, and a fused multiply-add differs from a rounded one only when the *product*
     rounds — so with unit weights the suite is systematically blind to this whole class. The
     weights below are deliberately not powers of two.
+
+    **Whether BLAS separates them is reported, never required** — corrected 2026-09-02, the
+    precedent being ``test_rust_parity_radiation.py``'s ``part_company`` test, which went through
+    the same correction a phase earlier. The first draft asserted ``differing > 0`` and was red on
+    ``main`` for four CI runs: on GitHub's AMD EPYC 7763 OpenBLAS's ``ddot`` kernel agreed with a
+    left-to-right multiply-add on all 800 steps, while it disagreed on the Windows box this was
+    written on. That is §14.2's own finding — OpenBLAS picks its kernel by CPU — turned against
+    the test written to illustrate it: a negative control whose predicate is a per-CPU kernel is a
+    claim about the runner, so it prints its verdict and asserts only what the port promises,
+    which is that ``py`` and ``rs`` agree to the bit *whatever* the BLAS did.
     """
     rng = np.random.default_rng(4711)
     phi = rng.uniform(0.4, 1.8, len(BODY_FREQS))
@@ -429,11 +439,8 @@ def test_the_two_dot_products_are_not_transcribed():
             differing += 1
         py.step()
         rs.step()
-    assert differing > 0, (
-        "BLAS and a left-to-right multiply-add never disagreed on this fixture -- the negative "
-        "control asserts nothing"
-    )
-    print(f"np.dot vs a left-to-right multiply-add: differ on {differing}/800 steps")
+    verdict = f"differ on {differing}/800 steps" if differing else "agree on this BLAS"
+    print(f"np.dot vs a left-to-right multiply-add: {verdict}")
     assert np.array_equal(py.string.u, rs.string.u)
     assert py.energy() == rs.energy()
 
