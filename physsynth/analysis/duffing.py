@@ -40,6 +40,8 @@ See ``docs/dev/tension-modulated-string-plan.md``.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 from numpy.typing import NDArray
 from scipy.special import ellipj, ellipk
@@ -188,3 +190,62 @@ def duffing_frequency_expansion(amplitude: float, omega0_sq: float, eps: float) 
         raise ValueError(f"omega0_sq must be positive, got {omega0_sq}.")
     omega0 = np.sqrt(omega0_sq)
     return float(omega0 * (1.0 + 3.0 * eps * amplitude**2 / (8.0 * omega0_sq)))
+
+
+# -- Rust swap (docs/dev/rust-migration-plan.md) ----------------------------------------------
+#
+# Phase 7 batch 2, behind `PHYSSYNTH_RS_ANALYSIS`.
+#
+# `ellipk` and `ellipj` are transcribed in `crates/physsynth-analysis/src/elliptic.rs` -- AGM for
+# the complete integral, the descending Landen transformation for the Jacobian ones. Measured
+# against SciPy before the port: `ellipk` to 3.5e-16 relative, and `ellipj` **bit-identical** at the
+# small arguments, drifting to 1.7e-14 absolute at |u| = 18 and 1.6e-12 at |u| = 2000.
+#
+# That drift is inherent rather than a defect, and the parity bar is written as `1e-15*(1 + |u|)`
+# absolute because of it: `sn`, `cn` and `dn` are unit-amplitude oscillations in `u`, so one ulp of
+# error in the *argument* -- all that `2^n a_n u` can promise -- is an absolute error of `|u|*1e-16`
+# in the result. Cephes descends the same sequence and pays the same price. The consumers clear it
+# by orders: `duffing_displacement` is a convergence oracle whose own `O(h^2)` errors are around
+# 1e-6 at the finest grid its tests build.
+#
+# One case is exact rather than close, and both a native bar and the parity file pin it: at
+# `eps = 0` the parameter `m` is zero, the Landen sequence terminates before its first step, and
+# `cn(u, 0)` is `cos(u)` on the nose -- so `duffing_displacement` reduces to `A cos(omega0 t)`,
+# which is what `tests/test_tension_string.py` compares against at `atol = 1e-14`.
+kc_mode_coefficients_py = kc_mode_coefficients
+kc_mode_stretch_py = kc_mode_stretch
+duffing_elliptic_parameter_py = duffing_elliptic_parameter
+duffing_frequency_py = duffing_frequency
+duffing_frequency_shift_py = duffing_frequency_shift
+duffing_displacement_py = duffing_displacement
+duffing_frequency_expansion_py = duffing_frequency_expansion
+"""The pure-Python reference implementations, under names the swap below never rebinds."""
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS_ANALYSIS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI step, not the default gate
+    import physsynth_rs as _rs
+
+    def kc_mode_coefficients(*, c, kappa, EA, rho, p2, L):  # type: ignore[misc]  # noqa: F811
+        return _rs.duffing_kc_mode_coefficients(c, kappa, EA, rho, p2, L)
+
+    def kc_mode_stretch(amplitude, *, p2, L):  # type: ignore[misc]  # noqa: F811
+        return _rs.duffing_kc_mode_stretch(amplitude, p2, L)
+
+    def duffing_elliptic_parameter(amplitude, omega0_sq, eps):  # type: ignore[misc]  # noqa: F811
+        return _rs.duffing_elliptic_parameter(amplitude, omega0_sq, eps)
+
+    def duffing_frequency(amplitude, omega0_sq, eps):  # type: ignore[misc]  # noqa: F811
+        return _rs.duffing_frequency(amplitude, omega0_sq, eps)
+
+    def duffing_frequency_shift(amplitude, omega0_sq, eps):  # type: ignore[misc]  # noqa: F811
+        return _rs.duffing_frequency_shift(amplitude, omega0_sq, eps)
+
+    def duffing_displacement(t, amplitude, omega0_sq, eps):  # type: ignore[misc]  # noqa: F811
+        arr = np.asarray(t, dtype=float)
+        flat = np.ascontiguousarray(arr.ravel())
+        out = _rs.duffing_displacement(flat, amplitude, omega0_sq, eps)
+        return out.reshape(arr.shape) if arr.ndim else out[0]
+
+    def duffing_frequency_expansion(amplitude, omega0_sq, eps):  # type: ignore[misc]  # noqa: F811
+        return _rs.duffing_frequency_expansion(amplitude, omega0_sq, eps)

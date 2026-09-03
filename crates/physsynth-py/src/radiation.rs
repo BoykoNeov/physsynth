@@ -36,6 +36,8 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyComplex;
 
+use physsynth_analysis::radiation as analysis;
+
 use crate::body::PyModalBody;
 
 /// Free-space acoustic radiation resistance of a compact monopole (Pa·s/m³).
@@ -43,6 +45,26 @@ use crate::body::PyModalBody;
 #[pyo3(name = "monopole_radiation_resistance", signature = (omega, *, rho0=core::RHO0_AIR, c0=core::C0_AIR))]
 pub fn py_monopole_radiation_resistance(omega: f64, rho0: f64, c0: f64) -> f64 {
     core::monopole_radiation_resistance(omega, rho0, c0)
+}
+
+/// Baffled circular-piston (half-space) acoustic radiation resistance (Pa·s/m³).
+///
+/// Plan §14 parked this name in Phase 2 batch 4 — it is the only one in `radiation.py` needing a
+/// Bessel `J1`, and reproducing Cephes was a special-function problem rather than a load-batch one.
+/// Phase 7 batch 2 wrote the Bessel routine, so the hole closes here.
+///
+/// **It comes from `physsynth-analysis`, not `physsynth-core`, and it still swaps on
+/// `PHYSSYNTH_RS`.** Those are not in tension: the core crate's dependency list must stay empty so
+/// it cannot reach a Bessel function, while `CLAUDE.md` forbids any `core/` *module* from going
+/// behind the analysis flag. This crate depends on both, so the binding can hand a core-flagged
+/// Python name an analysis-crate implementation without either crate depending on the other.
+/// `physsynth_analysis::radiation`'s header carries the full argument, including why swapping a
+/// measurement-shaped helper under the model flag is safe here (the same flagged run checks it
+/// against `scipy.special.j1` inside a test body).
+#[pyfunction]
+#[pyo3(name = "piston_radiation_resistance", signature = (omega, radius, *, rho0=analysis::RHO0_AIR, c0=analysis::C0_AIR))]
+pub fn py_piston_radiation_resistance(omega: f64, radius: f64, rho0: f64, c0: f64) -> f64 {
+    analysis::piston_radiation_resistance(omega, radius, rho0, c0)
 }
 
 /// Extract the Rust modal body, refusing a Python one loudly. See the module header.

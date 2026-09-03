@@ -17,6 +17,7 @@ use physsynth_analysis::duffing::{
     duffing_frequency_expansion, duffing_frequency_shift, kc_mode_coefficients, kc_mode_stretch,
 };
 use physsynth_analysis::modal::{discrete_mode_frequency, discrete_stiff_mode_frequency};
+use physsynth_analysis::radiation::{piston_radiation_resistance, C0_AIR, RHO0_AIR};
 
 // -- damping ---------------------------------------------------------------------------------
 
@@ -247,4 +248,80 @@ fn the_kirchhoff_carrier_coefficients_are_the_linear_and_cubic_halves() {
         kc_mode_stretch(0.02, p2, l),
         4.0 * kc_mode_stretch(0.01, p2, l)
     );
+}
+
+// -- radiation (the piston oracle) -------------------------------------------------------------
+
+#[test]
+fn the_piston_reaches_twice_the_free_space_monopole_in_the_rayleigh_limit() {
+    // As ka -> 0 the bracket tends to (ka)^2/2 and R_a -> rho0 omega^2 / (2 pi c0) -- exactly twice
+    // the free-space monopole, because a baffle radiates into 2 pi steradians rather than 4 pi.
+    // The factor of two is the physics; getting it wrong would still give a smooth bounded curve.
+    let (omega, a) = (2.0 * std::f64::consts::PI * 5.0, 1e-3);
+    let r = piston_radiation_resistance(omega, a, RHO0_AIR, C0_AIR);
+    let want = RHO0_AIR * omega * omega / (2.0 * std::f64::consts::PI * C0_AIR);
+    assert!(
+        (r / want - 1.0).abs() < 1e-6,
+        "Rayleigh limit: {r} vs {want}"
+    );
+}
+
+#[test]
+fn the_pistons_two_branches_do_not_meet_at_their_threshold_and_that_is_the_originals_bug() {
+    // This asserts a DEFECT rather than a property, deliberately, and the defect is inherited
+    // rather than introduced: `piston_radiation_resistance` switches to the series `(ka)²/2` below
+    // `ka = 1e-8`, and just above that threshold the direct form `1 - J1(2ka)/ka` is subtracting
+    // two numbers that agree to sixteen digits. Measured against the exact series with SciPy's own
+    // `j1` doing the work: the shipped Python is **544% wrong at ka = 1e-8**, 2.3% at 1e-7, 3.1e-4
+    // at 1e-6, and only reaches 1e-6 accuracy around ka = 1e-5. The threshold is roughly three
+    // decades too small.
+    //
+    // The port reproduces it, because reproducing is the job (plan §1) and a branch choice is part
+    // of the trajectory (§17). It is registered as a physics defect in
+    // `docs/dev/scientific-hurdles.md` §14 with the proposed threshold, for the human's call —
+    // moving it here would be changing a shipped number inside a porting batch.
+    //
+    // No caller is in the band: the suite's two real call sites are at ka = 9.2e-5 and ka = 1.83.
+    let (radius, c0) = (0.05, C0_AIR);
+    let ka = 1e-8_f64;
+    let omega = ka * c0 / radius;
+    let series = RHO0_AIR * c0 / (std::f64::consts::PI * radius * radius) * 0.5 * ka * ka;
+    let below = piston_radiation_resistance(omega * 0.99, radius, RHO0_AIR, c0);
+    let above = piston_radiation_resistance(omega * 1.01, radius, RHO0_AIR, c0);
+    assert!(
+        (below / (series * 0.99 * 0.99) - 1.0).abs() < 1e-12,
+        "the series side of the threshold is exact and must stay so"
+    );
+    assert!(
+        (above / series - 1.0).abs() > 0.5,
+        "the direct side should be badly wrong here; if this passes, the cancellation went away and scientific-hurdles.md section 14 can be closed"
+    );
+}
+
+#[test]
+fn the_piston_resistance_rises_and_saturates() {
+    // R_a is monotone in ka up to the first maximum and tends to rho0 c0 / S as ka -> infinity,
+    // because J1(2ka)/ka -> 0. That plateau is the plane-wave limit and is what makes the piston a
+    // sensible reference resistance for a bore's bell.
+    let (radius, c0) = (0.05, C0_AIR);
+    let plane = RHO0_AIR * c0 / (std::f64::consts::PI * radius * radius);
+    let big = piston_radiation_resistance(400.0 * c0 / radius, radius, RHO0_AIR, c0);
+    assert!(
+        (big / plane - 1.0).abs() < 5e-3,
+        "far above the cutoff R_a should be the plane-wave value: {big} vs {plane}"
+    );
+    let small = piston_radiation_resistance(0.1 * c0 / radius, radius, RHO0_AIR, c0);
+    assert!(
+        small < 0.02 * plane,
+        "well below the cutoff it should be tiny"
+    );
+}
+
+#[test]
+fn the_air_constants_match_the_cores() {
+    // This crate cannot depend on `physsynth-core`, so the two numbers are literals in two files.
+    // The values are checked here against the same digits `physsynth/core/radiation.py` defines, so
+    // a change to one without the other is a red test rather than a silent physics shift.
+    assert_eq!(RHO0_AIR, 1.2041);
+    assert_eq!(C0_AIR, 343.0);
 }

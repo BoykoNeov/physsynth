@@ -26,6 +26,8 @@ See ``docs/dev/damped-string-plan.md``.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 __all__ = [
@@ -183,3 +185,67 @@ def loss_coefficients_from_T60(
             "pick T60 decreasing with frequency."
         )
     return float(sigma0), float(sigma1)
+
+
+# -- Rust swap (docs/dev/rust-migration-plan.md) ----------------------------------------------
+#
+# Phase 7 batch 2, behind `PHYSSYNTH_RS_ANALYSIS` -- the *analysis* flag, which swaps the ruler
+# rather than the thing being measured. See `modal.py`'s footer for why the two flags must not be
+# merged.
+#
+# One thing here is exact and one is not, and the line between them is a single logarithm.
+# `discrete_damped_mode_decay` is four IEEE-754 operations on the same inputs, so both sides
+# produce the same bits -- and the parity file asserts equality, not closeness. Notably it is
+# exactly `1.0` when both sigmas are zero, which is what says a lossless string does not decay.
+# `discrete_damped_mode_rate` divides `-log(g)` by `k`, and `np.log` is NumPy's own CPU-dispatched
+# kernel while `f64::ln` is the platform's, so that one is a tolerance port at 1e-15 relative.
+#
+# `discrete_damped_mode_is_underdamped` returns a bool, which plan section 25 says to distrust:
+# a discrete output needs its margin measured before it can be ported. It has one and it is not
+# tight -- `b^2 - 4ac` is never near zero over the configurations the suite builds, because the two
+# regimes are separated by a factor of `k^2 Q` that is either much smaller or much larger than one.
+# The parity file asserts agreement on the predicate and reports the discriminant.
+spatial_eigenvalue_p2_py = spatial_eigenvalue_p2
+modal_loss_rate_continuum_py = modal_loss_rate_continuum
+discrete_damped_mode_decay_py = discrete_damped_mode_decay
+discrete_damped_mode_rate_py = discrete_damped_mode_rate
+discrete_damped_mode_is_underdamped_py = discrete_damped_mode_is_underdamped
+loss_coefficients_from_T60_py = loss_coefficients_from_T60
+"""The pure-Python reference implementations, under names the swap below never rebinds."""
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS_ANALYSIS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI step, not the default gate
+    import physsynth_rs as _rs
+
+    def spatial_eigenvalue_p2(N, h, m):  # type: ignore[misc]  # noqa: F811
+        return _rs.damping_spatial_eigenvalue_p2(int(N), h, int(m))
+
+    def modal_loss_rate_continuum(c, L, kappa, sigma0, sigma1, m):  # type: ignore[misc]  # noqa: F811,E501
+        return _rs.damping_modal_loss_rate_continuum(c, L, kappa, sigma0, sigma1, int(m))
+
+    def discrete_damped_mode_decay(  # type: ignore[misc]  # noqa: F811
+        c, L, N, kappa, k, theta, sigma0, sigma1, m
+    ):
+        return _rs.damping_discrete_damped_mode_decay(
+            c, L, int(N), kappa, k, theta, sigma0, sigma1, int(m)
+        )
+
+    def discrete_damped_mode_rate(  # type: ignore[misc]  # noqa: F811
+        c, L, N, kappa, k, theta, sigma0, sigma1, m
+    ):
+        return _rs.damping_discrete_damped_mode_rate(
+            c, L, int(N), kappa, k, theta, sigma0, sigma1, int(m)
+        )
+
+    def discrete_damped_mode_is_underdamped(  # type: ignore[misc]  # noqa: F811
+        c, L, N, kappa, k, theta, sigma0, sigma1, m
+    ):
+        return _rs.damping_discrete_damped_mode_is_underdamped(
+            c, L, int(N), kappa, k, theta, sigma0, sigma1, int(m)
+        )
+
+    def loss_coefficients_from_T60(  # type: ignore[misc]  # noqa: F811
+        c, L, kappa, f1, T60_1, f2, T60_2
+    ):
+        return _rs.damping_loss_coefficients_from_t60(c, L, kappa, f1, T60_1, f2, T60_2)

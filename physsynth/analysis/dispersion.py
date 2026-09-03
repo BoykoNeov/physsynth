@@ -24,6 +24,8 @@ Pure NumPy; independent of the core (an oracle must not depend on the code it va
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -75,3 +77,42 @@ def phase_velocity(
     f = np.asarray(f, dtype=float)
     m = np.asarray(modes, dtype=float)
     return 2.0 * L * f / m
+
+
+# -- Rust swap (docs/dev/rust-migration-plan.md) ----------------------------------------------
+#
+# Phase 7 batch 2, behind `PHYSSYNTH_RS_ANALYSIS`.
+#
+# **The import-time hazard this module looks like it has, and does not.** Line 30 above is
+# `from .modal import discrete_mode_frequency, discrete_stiff_mode_frequency` -- an early binding,
+# and early bindings are exactly what defeats a swap performed by rebinding module globals. It is
+# safe here for a reason worth writing down rather than re-deriving: `modal.py`'s swap footer runs
+# inside `modal`'s own module body, so by the time this `from` statement executes the names it
+# copies are already the Rust ones. The hazard would be live only if the swap were a monkeypatch
+# applied *after* import -- which is why plan section 32.7 says collaborators are looked up as
+# module globals deliberately. `tests/test_rust_parity_analysis.py` pins it directly rather than
+# leaving it as an argument, and the same pin covers the eight test files that import an analysis
+# name early.
+dispersion_frequencies_py = dispersion_frequencies
+stiff_dispersion_frequencies_py = stiff_dispersion_frequencies
+phase_velocity_py = phase_velocity
+"""The pure-Python reference implementations, under names the swap below never rebinds."""
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS_ANALYSIS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI step, not the default gate
+    import physsynth_rs as _rs
+
+    def _ints(modes):
+        """`np.atleast_1d(modes)` as the list of Python ints the binding extracts."""
+        return [int(m) for m in np.atleast_1d(modes)]
+
+    def dispersion_frequencies(c, L, N, lam, modes):  # type: ignore[misc]  # noqa: F811
+        return _rs.dispersion_frequencies(c, L, int(N), lam, _ints(modes))
+
+    def stiff_dispersion_frequencies(c, L, N, kappa, k, theta, modes):  # type: ignore[misc]  # noqa: F811,E501
+        return _rs.dispersion_stiff_frequencies(c, L, int(N), kappa, k, theta, _ints(modes))
+
+    def phase_velocity(f, L, modes):  # type: ignore[misc]  # noqa: F811
+        arr = np.ascontiguousarray(np.asarray(f, dtype=float).ravel())
+        return _rs.dispersion_phase_velocity(arr, L, _ints(modes))

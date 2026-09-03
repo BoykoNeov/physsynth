@@ -229,9 +229,10 @@ jobs:
             tests/test_rust_parity_airbox_wrap.py \
             tests/test_rust_parity_airbox_memb.py \
             tests/test_rust_parity_connection.py \
-            tests/test_rust_parity_spectrum.py
+            tests/test_rust_parity_spectrum.py \
+            tests/test_rust_parity_analysis.py
 
-      # Phase 7 batch 1's success condition, and the ONE step that survives the collapse above as
+      # Phase 7's success condition, and the ONE step that survives the collapse above as
       # something other than the whole suite -- because it is not a per-batch file list. `analysis/`
       # reads its OWN flag, `PHYSSYNTH_RS_ANALYSIS`, for the reason
       # `physsynth/analysis/spectrum.py` gives at length: under `PHYSSYNTH_RS` alone the models are
@@ -250,18 +251,25 @@ jobs:
       # the pipeline and it arrived here with the backslash AND the newline swallowed -- §24's
       # failure, caught by `tests/test_ci_workflow.py` rather than by review, six occurrences in.
       # Short lines cannot have that bug.
-      - name: The detector's clients, unmodified, against a Rust detector
+      #
+      # Widened in Phase 7 batch 2 from the detector's three names to the whole package. Batch 1
+      # grepped for `measure_partials_near\|detect_peaks\|magnitude_spectrum` because `spectrum.py`
+      # was the only ported module; now `modal`, `damping`, `dispersion` and `duffing` are behind
+      # the same flag, and the question the grep is asking is "which test files read the
+      # instrument", whose answer is "the ones that import `physsynth.analysis`". Keeping the old
+      # pattern would have silently left the oracles' clients unexercised while the step still went
+      # green -- the shape §36.7 warned about one batch ago, in a different place.
+      - name: The instrument's clients, unmodified, against a Rust instrument
         env:
           PHYSSYNTH_RS: "1"
           PHYSSYNTH_RS_ANALYSIS: "1"
         run: |
           set -euo pipefail
-          pat='measure_partials_near\|detect_peaks\|magnitude_spectrum'
-          files=$(grep -l "$pat" tests/test_*.py | grep -v test_rust_parity || true)
+          files=$(grep -l 'physsynth.analysis' tests/test_*.py | grep -v test_rust_parity || true)
           test -n "$files"
           n=$(echo $files | wc -w)
-          echo "files reaching the detector: $n"
-          test "$n" -ge 15
+          echo "files reaching the instrument: $n"
+          test "$n" -ge 25
           pytest -n auto --dist loadgroup $files --durations=10
 
   # The migration's success condition, as one claim instead of twenty-one (plan §35.7).

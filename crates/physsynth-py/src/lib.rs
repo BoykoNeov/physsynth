@@ -42,6 +42,7 @@
 mod airbox;
 mod airbox_port;
 mod airbox_wrap;
+mod analysis;
 mod banded;
 mod beam;
 mod body;
@@ -790,6 +791,118 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Phase 7's first batch: the partial detector, out of the OTHER package. It is behind its
     // own flag (`PHYSSYNTH_RS_ANALYSIS`) rather than `PHYSSYNTH_RS`, so that the acceptance run
     // keeps measuring Rust models with an unmoved Python instrument.
+    m.add_function(wrap_pyfunction!(
+        radiation::py_piston_radiation_resistance,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_harmonic_frequencies, m)?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_mode_shape, m)?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_discrete_mode_frequency, m)?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_inharmonicity_b, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_stiff_harmonic_frequencies,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_discrete_stiff_mode_frequency,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_cents, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_rectangular_membrane_freqs,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_rectangular_mode_field, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_rectangular_discrete_eigenvalues,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_circular_membrane_freqs, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_discrete_membrane_eigenfrequency,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_rectangular_plate_freqs, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_discrete_plate_eigenfrequency,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_orthotropic_plate_freqs, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_discrete_orthotropic_plate_eigenfrequency,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_dirichlet_axis_eigenvalue, m)?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_free_free_beam_beta_l, m)?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_free_free_beam_freqs, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_free_plate_ffff_square_lambdas,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_free_plate_freq_from_lambda,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_free_plate_twist_bound, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_free_circular_plate_lambda_roots,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_free_circular_plate_lambdas,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_free_circular_plate_saddle_bound,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_free_plate_coupling_form, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_bore_resonance_frequencies,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_discrete_bore_eigenfrequency,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_discrete_beam_eigenfrequency,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_spatial_eigenvalue_p2, m)?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_modal_loss_rate_continuum, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_discrete_damped_mode_decay,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_discrete_damped_mode_rate, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_discrete_damped_mode_is_underdamped,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_loss_coefficients_from_t60,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_dispersion_frequencies, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_stiff_dispersion_frequencies,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_phase_velocity, m)?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_kc_mode_coefficients, m)?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_kc_mode_stretch, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_duffing_elliptic_parameter,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_duffing_frequency, m)?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_duffing_frequency_shift, m)?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_duffing_displacement, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        analysis::py_duffing_frequency_expansion,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(spectrum::py_magnitude_spectrum, m)?)?;
     m.add_function(wrap_pyfunction!(spectrum::py_parabolic_refine, m)?)?;
     m.add_function(wrap_pyfunction!(spectrum::py_measure_partials_near, m)?)?;

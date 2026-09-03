@@ -63,4 +63,5 @@ pub mod dispersion;
 pub mod duffing;
 pub mod elliptic;
 pub mod modal;
+pub mod radiation;
 pub mod spectrum;

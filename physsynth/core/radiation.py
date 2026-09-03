@@ -825,12 +825,38 @@ class ReactiveRadiatedBody:
 #
 # Two things to know before editing either side.
 #
-# **`piston_radiation_resistance` is NOT swapped, and that is deliberate.** It is the only name
-# here that needs a Bessel J1, `scipy.special.j1` is Cephes, and reproducing it is a special-
-# function problem rather than a load-batch one -- the plan already has a phase for it (Phase 7,
-# the analytic oracles). So this module ports in halves, exactly as `operators2d` did for a
-# solver the membrane never called. The Python function below stays the implementation under the
-# flag as well as without it.
+# **`piston_radiation_resistance` was NOT swapped for four phases, and now is (2026-09-03).**
+# It is the only name here that needs a Bessel J1, `scipy.special.j1` is Cephes, and reproducing it
+# was a special-function problem rather than a load-batch one -- so the module ported in halves,
+# exactly as `operators2d` did for a solver the membrane never called. Phase 7 batch 2 wrote the
+# Bessel routine and the half closes here.
+#
+# Three things about that swap, because the arrangement reads oddly until they are said:
+#
+# * **The implementation comes from `physsynth-analysis`, not `physsynth-core`.** The core crate's
+#   dependency list must stay empty (plan section 2.2), so it cannot reach a Bessel function; and
+#   `modal.rs` reaches core's Brent transcription in the other direction, so a core->analysis edge
+#   would also be a cycle. `physsynth-py` depends on both, which is what lets a core-flagged name
+#   have an analysis-crate implementation.
+# * **It still swaps on `PHYSSYNTH_RS`, not `PHYSSYNTH_RS_ANALYSIS`.** `CLAUDE.md`'s rule is that
+#   no `core/` module ever reads the analysis flag, and this is a `core/` module. The crate a
+#   function lives in and the flag its name is swapped by are separate questions.
+# * **What makes that safe is a measurement, not the rule.** `test_bore_radiation.py` uses this
+#   resistance to check a bore, so under the model flag a Rust bore would be checked against a
+#   Rust-computed R -- the shared-misreading shape. But the same flagged run executes
+#   `test_radiation.py::test_piston_resistance_matches_bessel_formula_away_from_the_limit`, which
+#   builds its expectation from `scipy.special.j1` inside the test body at `rel = 1e-12`. The ruler
+#   is checked against an unmoved reference in the run that uses it. Observed there: 7.9e-16.
+#
+# **A defect this function has always had, found while porting and deliberately reproduced.** The
+# `ka < 1e-8` branch below switches to the series because `1 - J1(2ka)/ka` is a 0/0 -- but just
+# *above* that threshold the direct form subtracts two numbers agreeing to sixteen digits, and with
+# SciPy's own `j1` doing the work it is 544% wrong at ka = 1e-8, 2.3% at 1e-7, and only reaches
+# 1e-6 accuracy around ka = 1e-5. The threshold is about three decades too small. The port
+# reproduces it rather than fixing it, because changing a shipped physics number inside a porting
+# batch is not a port; it is registered in `docs/dev/scientific-hurdles.md` section 14 with the
+# proposed threshold, for the human's call. No caller is in the band -- the suite's two real call
+# sites are at ka = 9.2e-5 and ka = 1.83, where the two implementations agree to 5.3e-8 and 0.0.
 #
 # **The state is NOT bit-identical under the flag, and that is the first time in this migration.**
 # `RadiatedBody.step` reads `np.dot(b.a, b.q - q_nm1)`, and unlike `body.pressure()` -- the same
@@ -846,6 +872,7 @@ RadiatedBodyPy = RadiatedBody
 RationalAirLoadPy = RationalAirLoad
 ReactiveRadiatedBodyPy = ReactiveRadiatedBody
 monopole_radiation_resistance_py = monopole_radiation_resistance
+piston_radiation_resistance_py = piston_radiation_resistance
 """The pure-Python reference implementations, under names the swap below never rebinds."""
 
 _USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
@@ -857,4 +884,5 @@ if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the d
         RationalAirLoad,
         ReactiveRadiatedBody,
         monopole_radiation_resistance,
+        piston_radiation_resistance,
     )

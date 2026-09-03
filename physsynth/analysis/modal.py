@@ -13,6 +13,7 @@ Pure NumPy. No dependency on the core (oracles are independent of the implementa
 from __future__ import annotations
 
 import math
+import os
 
 import numpy as np
 from numpy.typing import NDArray
@@ -740,3 +741,207 @@ def discrete_beam_eigenfrequency(
     Q = kappa * kappa * mu
     s = Q * k * k / (4.0 + 4.0 * theta * Q * k * k)
     return np.arcsin(np.sqrt(s)) / (np.pi * k)
+
+
+# -- Rust swap (docs/dev/rust-migration-plan.md) ----------------------------------------------
+#
+# Phase 7 batch 2. `PHYSSYNTH_RS_ANALYSIS=1` replaces every public name above with its
+# `physsynth_rs` twin, and every test in the fourteen files that import this module runs
+# unmodified against them.
+#
+# **This is the ANALYSIS flag, not the model flag, and the distinction is load-bearing.**
+# `PHYSSYNTH_RS` swaps the things being measured; this swaps the ruler. Setting only the first
+# leaves a Rust string measured by a Python detector against an unmoved oracle, which is what
+# makes the acceptance run mean anything -- merge the two and a shared misreading would cancel.
+# Plan section 36.4 has the argument; the rule is that no `core/` module ever reads this variable
+# and every `analysis/` module does.
+#
+# **What agreement is claimed.** Three tiers, and the parity file asserts each at its own bar:
+#
+# * *Exact.* `harmonic_frequencies`, `inharmonicity_B`, `free_plate_freq_from_lambda`,
+#   `free_plate_coupling_form`, `bore_resonance_frequencies`, `free_plate_ffff_square_lambdas`,
+#   `rectangular_discrete_eigenvalues`, `stiff_harmonic_frequencies` -- `+ - * / sqrt` only, which
+#   IEEE-754 pins on any machine.
+# * *Tolerance, 1e-15 relative.* Everything with an `arcsin`, `arccos` or `log2` in it. NumPy
+#   computes transcendentals with its own CPU-dispatched kernels rather than the platform libm
+#   (plan section 22.1), so a bit-identity assertion here would be a claim about which machine ran
+#   CI -- the mistake that turned one CI failure into eighteen on unchanged code.
+# * *The two root-finds.* `free_free_beam_betaL` has one root per bracket by construction and
+#   agrees to `brentq`'s own tolerance. `free_circular_plate_lambda_roots` scans 20,000 points and
+#   *decides* which brackets to keep, so its margin was measured before the port: worst |det|
+#   against the cancellation that produced it, away from a genuine crossing, is 4.6e-6, versus the
+#   ~1e-15 a Bessel routine can move it. A margin of ~5e9x, and not a knife edge -- unlike section
+#   36's separation test, whose margin was exactly zero.
+#
+# **The Bessel and elliptic functions are transcriptions, not a crate.** `scipy.special.jn_zeros`,
+# `jvp`, `ivp`, `ellipk` and `ellipj` have no Rust dependency behind them, and taking one would
+# have fixed this project's oracles to a third party's algorithm -- these numbers are the
+# acceptance contract. `crates/physsynth-analysis/src/bessel.rs` carries the measured agreement
+# (J_n to 6.7e-16 **absolute**; the relative figure is 2.1e-12 and sits where J itself is 1e-4,
+# near one of its own zeros, which is why the bar is absolute).
+#
+# **The shape dispatch stays here rather than in Rust.** Fourteen of these are "whatever you give
+# me, elementwise", and reproducing NumPy's broadcasting in Rust would get the 0-d case wrong in
+# the way plan section 28 recorded: `ascontiguousarray` promotes a 0-d array to shape `(1,)`, so a
+# function that owes the caller a scalar would hand back a one-element array and everything
+# downstream would keep working, silently, with a different type. So the binding takes flat slices
+# and `_elemwise` below ravels and reshapes -- three lines, once, for all fourteen.
+harmonic_frequencies_py = harmonic_frequencies
+mode_shape_py = mode_shape
+discrete_mode_frequency_py = discrete_mode_frequency
+inharmonicity_B_py = inharmonicity_B
+stiff_harmonic_frequencies_py = stiff_harmonic_frequencies
+discrete_stiff_mode_frequency_py = discrete_stiff_mode_frequency
+cents_py = cents
+rectangular_membrane_freqs_py = rectangular_membrane_freqs
+rectangular_mode_field_py = rectangular_mode_field
+rectangular_discrete_eigenvalues_py = rectangular_discrete_eigenvalues
+circular_membrane_freqs_py = circular_membrane_freqs
+discrete_membrane_eigenfrequency_py = discrete_membrane_eigenfrequency
+rectangular_plate_freqs_py = rectangular_plate_freqs
+discrete_plate_eigenfrequency_py = discrete_plate_eigenfrequency
+orthotropic_plate_freqs_py = orthotropic_plate_freqs
+discrete_orthotropic_plate_eigenfrequency_py = discrete_orthotropic_plate_eigenfrequency
+dirichlet_axis_eigenvalue_py = dirichlet_axis_eigenvalue
+free_free_beam_betaL_py = free_free_beam_betaL
+free_free_beam_freqs_py = free_free_beam_freqs
+free_plate_ffff_square_lambdas_py = free_plate_ffff_square_lambdas
+free_plate_freq_from_lambda_py = free_plate_freq_from_lambda
+free_plate_twist_bound_py = free_plate_twist_bound
+free_circular_plate_lambda_roots_py = free_circular_plate_lambda_roots
+free_circular_plate_lambdas_py = free_circular_plate_lambdas
+free_circular_plate_saddle_bound_py = free_circular_plate_saddle_bound
+free_plate_coupling_form_py = free_plate_coupling_form
+bore_resonance_frequencies_py = bore_resonance_frequencies
+discrete_bore_eigenfrequency_py = discrete_bore_eigenfrequency
+discrete_beam_eigenfrequency_py = discrete_beam_eigenfrequency
+"""The pure-Python reference implementations, under names the swap below never rebinds."""
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS_ANALYSIS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI step, not the default gate
+    import physsynth_rs as _rs
+
+    def _flat(a) -> NDArray[np.float64]:
+        """Whatever the caller passed, as the contiguous flat float64 array the binding wants."""
+        return np.ascontiguousarray(np.asarray(a, dtype=float).ravel())
+
+    def _elemwise(fn, a, *args):
+        """Call a flat-in/flat-out binding and restore NumPy's own shape convention.
+
+        A 0-d input must come back as a scalar, not a one-element array -- see the note above.
+        """
+        arr = np.asarray(a, dtype=float)
+        out = fn(_flat(arr), *args)
+        return out.reshape(arr.shape) if arr.ndim else out[0]
+
+    def _modes(modes):
+        """A mode list as the ``[(m, n), ...]`` of Python ints the binding extracts."""
+        return [(int(m), int(n)) for m, n in np.asarray(modes).reshape(-1, 2)]
+
+    def harmonic_frequencies(c, L, n_partials):  # type: ignore[misc]  # noqa: F811
+        return _rs.modal_harmonic_frequencies(c, L, int(n_partials))
+
+    def mode_shape(x, L, m):  # type: ignore[misc]  # noqa: F811
+        arr = np.asarray(x, dtype=float)
+        out = _rs.modal_mode_shape(_flat(arr), L, int(m))
+        return out.reshape(arr.shape) if arr.ndim else out[0]
+
+    def discrete_mode_frequency(c, L, N, lam, m):  # type: ignore[misc]  # noqa: F811
+        return _rs.modal_discrete_mode_frequency(c, L, int(N), lam, int(m))
+
+    def inharmonicity_B(c, L, kappa):  # type: ignore[misc]  # noqa: F811
+        return _rs.modal_inharmonicity_b(c, L, kappa)
+
+    def stiff_harmonic_frequencies(c, L, kappa, n_partials):  # type: ignore[misc]  # noqa: F811
+        return _rs.modal_stiff_harmonic_frequencies(c, L, kappa, int(n_partials))
+
+    def discrete_stiff_mode_frequency(c, L, N, kappa, k, m, theta):  # type: ignore[misc]  # noqa: F811,E501
+        return _rs.modal_discrete_stiff_mode_frequency(c, L, int(N), kappa, k, int(m), theta)
+
+    def cents(f, f_ref):  # type: ignore[misc]  # noqa: F811
+        # Broadcast first, exactly as the ufunc would, then hand over one flat pair -- so the whole
+        # expression 1200*log2(f/f_ref) lives on the Rust side rather than half of it.
+        a, b = np.broadcast_arrays(np.asarray(f, dtype=float), np.asarray(f_ref, dtype=float))
+        out = _rs.modal_cents(_flat(a), _flat(b))
+        return out.reshape(a.shape) if a.ndim else out[0]
+
+    def rectangular_membrane_freqs(c, Lx, Ly, modes):  # type: ignore[misc]  # noqa: F811
+        return _rs.modal_rectangular_membrane_freqs(c, Lx, Ly, _modes(modes))
+
+    def rectangular_mode_field(X, Y, Lx, Ly, m, n):  # type: ignore[misc]  # noqa: F811
+        arr = np.asarray(X, dtype=float)
+        out = _rs.modal_rectangular_mode_field(_flat(X), _flat(Y), Lx, Ly, int(m), int(n))
+        return out.reshape(arr.shape) if arr.ndim else out[0]
+
+    def rectangular_discrete_eigenvalues(h, Nx, Ny, modes):  # type: ignore[misc]  # noqa: F811
+        return _rs.modal_rectangular_discrete_eigenvalues(h, int(Nx), int(Ny), _modes(modes))
+
+    def circular_membrane_freqs(c, a, n_modes, m_max=12, n_max=12):  # type: ignore[misc]  # noqa: F811,E501
+        return _rs.modal_circular_membrane_freqs(c, a, int(n_modes), int(m_max), int(n_max))
+
+    def discrete_membrane_eigenfrequency(Lambda, c, k):  # type: ignore[misc]  # noqa: F811
+        return _elemwise(_rs.modal_discrete_membrane_eigenfrequency, Lambda, c, k)
+
+    def rectangular_plate_freqs(kappa, Lx, Ly, modes):  # type: ignore[misc]  # noqa: F811
+        return _rs.modal_rectangular_plate_freqs(kappa, Lx, Ly, _modes(modes))
+
+    def discrete_plate_eigenfrequency(Lambda_lap, kappa, k, theta):  # type: ignore[misc]  # noqa: F811,E501
+        return _elemwise(_rs.modal_discrete_plate_eigenfrequency, Lambda_lap, kappa, k, theta)
+
+    def orthotropic_plate_freqs(  # type: ignore[misc]  # noqa: F811
+        kappa, Lx, Ly, modes, grain_x=1.0, grain_cross=1.0, grain_y=1.0
+    ):
+        return _rs.modal_orthotropic_plate_freqs(
+            kappa, Lx, Ly, _modes(modes), grain_x, grain_cross, grain_y
+        )
+
+    def discrete_orthotropic_plate_eigenfrequency(  # type: ignore[misc]  # noqa: F811
+        lam_x, lam_y, kappa, k, theta, grain_x=1.0, grain_cross=1.0, grain_y=1.0
+    ):
+        x, y = np.broadcast_arrays(
+            np.asarray(lam_x, dtype=float), np.asarray(lam_y, dtype=float)
+        )
+        out = _rs.modal_discrete_orthotropic_plate_eigenfrequency(
+            _flat(x), _flat(y), kappa, k, theta, grain_x, grain_cross, grain_y
+        )
+        return out.reshape(x.shape) if x.ndim else out[0]
+
+    def dirichlet_axis_eigenvalue(m, L, h):  # type: ignore[misc]  # noqa: F811
+        return _elemwise(_rs.modal_dirichlet_axis_eigenvalue, m, L, h)
+
+    def free_free_beam_betaL(n_modes):  # type: ignore[misc]  # noqa: F811
+        return _rs.modal_free_free_beam_beta_l(int(n_modes))
+
+    def free_free_beam_freqs(kappa, L, n_modes):  # type: ignore[misc]  # noqa: F811
+        return _rs.modal_free_free_beam_freqs(kappa, L, int(n_modes))
+
+    def free_plate_ffff_square_lambdas():  # type: ignore[misc]  # noqa: F811
+        return _rs.modal_free_plate_ffff_square_lambdas()
+
+    def free_plate_freq_from_lambda(lam, kappa, a):  # type: ignore[misc]  # noqa: F811
+        return _elemwise(_rs.modal_free_plate_freq_from_lambda, lam, kappa, a)
+
+    def free_plate_twist_bound(kappa, a, b, grain_torsion=0.5):  # type: ignore[misc]  # noqa: F811
+        return _rs.modal_free_plate_twist_bound(kappa, a, b, grain_torsion)
+
+    def free_circular_plate_lambda_roots(nu, n, lam_max=14.0, scan=20000):  # type: ignore[misc]  # noqa: F811,E501
+        return _rs.modal_free_circular_plate_lambda_roots(nu, int(n), float(lam_max), int(scan))
+
+    def free_circular_plate_lambdas(nu=0.3, n_modes=7, n_max=8):  # type: ignore[misc]  # noqa: F811
+        return _rs.modal_free_circular_plate_lambdas(nu, int(n_modes), int(n_max))
+
+    def free_circular_plate_saddle_bound(nu):  # type: ignore[misc]  # noqa: F811
+        return _rs.modal_free_circular_plate_saddle_bound(nu)
+
+    def free_plate_coupling_form(grain_coupling, h, Nx, Ny):  # type: ignore[misc]  # noqa: F811
+        return _rs.modal_free_plate_coupling_form(grain_coupling, h, int(Nx), int(Ny))
+
+    def bore_resonance_frequencies(c0, L, n_partials, boundary="closed-open"):  # type: ignore[misc]  # noqa: F811,E501
+        return _rs.modal_bore_resonance_frequencies(c0, L, int(n_partials), boundary)
+
+    def discrete_bore_eigenfrequency(omega2, k):  # type: ignore[misc]  # noqa: F811
+        return _elemwise(_rs.modal_discrete_bore_eigenfrequency, omega2, k)
+
+    def discrete_beam_eigenfrequency(mu, kappa, k, theta):  # type: ignore[misc]  # noqa: F811
+        return _elemwise(_rs.modal_discrete_beam_eigenfrequency, mu, kappa, k, theta)

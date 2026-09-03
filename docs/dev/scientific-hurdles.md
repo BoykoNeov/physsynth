@@ -31,6 +31,7 @@
 | 11 | Twenty ARPACK oracles were not bit-reproducible run to run | `analysis/modal.py` | Fixed in §24.9 — kept here as the pattern (§11) |
 | 12 | Raw physics is not a musician's interface (parameter mapping) | none yet | Deferred (§12) |
 | 13 | Which models can ever run in real time | engine, room | Deferred, and now decoupled from the language (§13) |
+| 14 | `piston_radiation_resistance`'s `ka < 1e-8` series threshold is about three decades too small: just above it the direct form cancels catastrophically and is 544% wrong | `core/radiation.py` | **Live** — no caller is in the band; fix proposed, not applied (§14) |
 
 ---
 
@@ -308,3 +309,64 @@ not be real-time in any language. The migration decoupled this from the language
 string's step, §28's 2.99× on the VK step, the room's ~1.1–1.5× above 4,000 nodes (§30.11). The
 answer is a table of per-model per-step costs at their shipped fixtures, which the parity files
 already print and nothing collects.
+
+---
+
+## 14. The baffled piston's series threshold is three decades too small — live, uncalled
+
+**What it is.** `physsynth/core/radiation.py`'s `piston_radiation_resistance` computes Rayleigh's
+result
+
+    R_a(ka) = (rho0 c0 / S) [1 - J1(2ka)/(ka)],    S = pi a^2,   k = omega/c0
+
+and the bracket is a genuine `0/0` as `ka -> 0`, since `J1(2ka)/ka -> 1`. The function guards it
+with a series branch:
+
+```python
+bracket = 0.5 * ka * ka if ka < 1e-8 else 1.0 - j1(2.0 * ka) / ka
+```
+
+The guard is in the right place and the threshold is in the wrong one. The bracket's true value is
+`(ka)²/2`, so the subtraction `1 - J1(2ka)/ka` is removing two numbers that agree to about
+`-log10((ka)²/2)` digits. At `ka = 1e-8` that is sixteen digits — the entire mantissa — and the
+answer is noise.
+
+**Measured (2026-09-03), with SciPy's own `j1` doing the work, against the exact series:**
+
+| `ka` | relative error of the shipped direct branch |
+|---|---|
+| 1e-8 (just above the threshold) | **5.4** — i.e. 544% |
+| 1e-7 | 2.3e-2 |
+| 1e-6 | 3.1e-4 |
+| 1e-5 | 8.3e-8 |
+| 1e-4 | 6.1e-9 |
+
+So the function returns a number with no correct digits for `ka` just above its own cutoff, and
+does not reach `1e-6` accuracy until about `ka = 1e-5`.
+
+**Why it has never shown.** Nothing calls it in the band. The two call sites the suite makes are at
+`ka = 9.2e-5` (`test_radiation.py`'s Rayleigh-limit test, which asks for `rel = 1e-6` and gets
+6e-9) and `ka = 1.83` (its Bessel-formula test at `rel = 1e-12`). The bore's bell sits around
+`ka = 2e-2`. A caller *would* land in the band for a small radiator at a low frequency — a 1 mm
+source below 1 Hz, say — which is not a musical configuration, and that is the whole reason this is
+a register entry rather than a bug report.
+
+**How it was found.** Phase 7 batch 2 wrote a Rust `J1` and a native bar asserted that the two
+branches meet at the threshold. They do not, by a factor of six, and the disagreement was in the
+*Python* all along: two implementations of `J1` differing in their last bits disagree by 300% after
+the cancellation eats sixteen digits. The port reproduces the threshold rather than moving it,
+because changing a shipped physics number inside a porting batch is not a port
+(`crates/physsynth-analysis/src/radiation.rs` and the Python footer both say so), and
+`tests/test_rust_parity_analysis.py::test_the_pistons_cancellation_band_is_reported_and_no_caller_is_in_it`
+measures the band so a future caller arriving in it fails there.
+
+**The fix, costed.** One line on each side. Move the threshold to where the series and the direct
+form actually cross in accuracy. The series `(ka)²/2` is the first term of
+`(ka)²/2 - (ka)⁴/12 + ...`, so its own relative error is `(ka)²/6`; the direct form's is about
+`eps / ((ka)²/2) = 4.4e-16/(ka)²`. They meet at `(ka)⁴ = 2.7e-15`, i.e. `ka ≈ 7.2e-4`, where both
+are around 8.6e-8. Taking `ka < 1e-3` for the series — or better, keeping two terms,
+`(ka)²/2 - (ka)⁴/12`, and switching at `ka = 1e-2` — puts the worst error anywhere below 1e-11.
+
+This is **not applied**, and applying it needs the human's call, because it changes a shipped number
+for `ka` in `(1e-8, 1e-3)` — a band nothing currently reads, but a band the acceptance contract
+nominally covers. It must land on both sides in one commit, as §1 and §2 did on 2026-09-02.
