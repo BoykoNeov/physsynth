@@ -35,11 +35,14 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    **Twenty-two of twenty-three Python model bodies are GONE** — 18,630 lines, nine of eleven
    deletion units, and not one physics bar retired. Plan **§39** is the audit that made the order
    computable (eleven units, from the reference-alias graph) and **§40–§45** are the deletions. Read
-   §39's tables before scoping the next one. **Two units are left**: `airbox` needs native Rust bars
-   for `AirBox` that do not exist (the blocker §45 just cleared for `FreeBeam`, fourteen times the
-   size); `connection` and the airbox wrapper tier are blocked permanently, because they exist only
-   in the binding crate and a `physsynth-core` test cannot reach them. Four things about the new
-   state:
+   §39's tables before scoping the next one — but **§39.3's "zero native bars" for `airbox` was
+   measured wrong** and §46 corrects it: the module carried nineteen `#[test]`s in `mod tests`
+   blocks *inside* `src/`, which `cargo test --workspace` runs exactly like the files under
+   `tests/`, and the audit had run `ls crates/physsynth-core/tests/`. §46 closed the remaining gap
+   with eighteen more, so **unit 6's blocker is cleared and the only work left in the port is the
+   deletion itself**. `connection` and the airbox wrapper tier stay blocked permanently, because
+   they exist only in the binding crate and a `physsynth-core` test cannot reach them. Four things
+   about the new state:
 
    - **The wheel is now REQUIRED**, everywhere. A deleted model's module is an unconditional
      `from physsynth_rs import X`, so `pip install ./crates/physsynth-py` is a precondition for
@@ -93,7 +96,7 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    list must stay empty, so it cannot reach a Bessel function) while its Python name lives in a
    `core/` module. **The crate a function is implemented in and the module its name lives in are
    separate questions** (§37.7).
-   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **fifty-six**
+   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **fifty-nine**
    findings about when two implementations agree to the bit, when they cannot, and what a
    *deletion* breaks that a port does not (fed-back reductions, libm vs NumPy's own
    transcendentals, LLVM's constant fold, `np.sum`'s pairwise cutoff, descriptors that take a

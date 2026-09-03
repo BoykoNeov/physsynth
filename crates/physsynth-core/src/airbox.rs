@@ -1548,4 +1548,171 @@ mod tests {
             / scale;
         assert!(err < 1e-6, "a 1e12 wall is not nearly rigid: {err:e}");
     }
+
+    // -- the cross-tier oracle: the distributed air contains the lumped air -------------------
+    //
+    // `crate::radiation` is an independent implementation of the same physics in a lower-
+    // dimensional disguise. If the box is right it must reproduce it: put the walls far away,
+    // drive a point source, and inside the window before the first reflection arrives the room
+    // must obey `p = rho0 Qdd(t - r/c0) / (4 pi r)` — with `radiation`'s **own** gain constant, so
+    // a fitted gain of 1 says the two tiers agree rather than "something proportional to 1/r".
+    //
+    // Two traps govern the measurement, and both were found by measuring rather than by reasoning:
+    //
+    // 1. **The reflection-free window is per-probe and hard-edged.** With pressure *on* the walls a
+    //    rigid wall is a pressure antinode, so the first reflection arrives at full amplitude with
+    //    no forgiving roll-off. At radius `r` in a box of side `L` with the source centred the clean
+    //    window is `t in [r/c0, (L - r)/c0]`, which collapses to zero as `r -> L/2`. Running every
+    //    probe to one global stop time truncates the far probes' pulses and turns the measured
+    //    slope into -2.5.
+    // 2. **The arrival time is fitted, not asserted.** `radiation`'s delay line is integer-sample
+    //    and dispersionless; the FDTD arrival is dispersive with an O(h) effective source origin,
+    //    so the two cannot agree on timing to better than a sample and it would be dishonest to
+    //    demand it. Assert the gain, *report* the lag — and let the lag search run negative, or it
+    //    pins at its boundary and inflates the residual.
+
+    /// A Gaussian volume-velocity pulse `q(t)`, its derivative, and the duration that sizes the
+    /// reflection-free window. `sigma = 1/(2 pi f0)` puts the spectral peak near `f0`; the centre
+    /// is four standard deviations in so it starts and ends at numerical zero.
+    fn gaussian_pulse(f0: f64) -> (impl Fn(f64) -> f64, impl Fn(f64) -> f64, f64) {
+        let amplitude = 1e-3;
+        let sigma = 1.0 / (2.0 * std::f64::consts::PI * f0);
+        let t0 = 4.0 * sigma;
+        let q = move |t: f64| amplitude * (-((t - t0) * (t - t0)) / (2.0 * sigma * sigma)).exp();
+        let qdot = move |t: f64| {
+            -amplitude * (t - t0) / (sigma * sigma)
+                * (-((t - t0) * (t - t0)) / (2.0 * sigma * sigma)).exp()
+        };
+        (q, qdot, 8.0 * sigma)
+    }
+
+    /// Drive a centred point source in a big rigid room and fit `(gain, lag, residual)` per radius.
+    ///
+    /// The reference is `radiation`'s own monopole gain `rho0 / (4 pi r)`, evaluated at the
+    /// **snapped** radius — exact here by construction, because the probes are placed on nodes.
+    #[allow(clippy::type_complexity)]
+    fn free_field_fit(cells_per_side: usize) -> (Vec<f64>, Vec<(f64, f64, f64)>) {
+        let side = 1.0;
+        let h = side / cells_per_side as f64;
+        let p = params_at([side, side, side], h, 0.9, rigid());
+        let (q, qdot, pulse_seconds) = gaussian_pulse(1400.0);
+        let (fs, k) = (p.fs, p.k);
+        let src = p.source_index;
+
+        // Trap 1: size the radii so every probe gets a full pulse inside its own window.
+        let r_max = 0.5 * (side - C0_AIR * pulse_seconds);
+        let r_min = (6.0 * h).max(0.3 * r_max);
+        let first = (r_min / h).ceil() as usize;
+        let last = (r_max / h).floor() as usize;
+        let stride = ((last - first + 1) / 6).max(1);
+        let cells: Vec<usize> = (first..=last).step_by(stride).collect();
+        let radii: Vec<f64> = cells.iter().map(|&c| c as f64 * h).collect();
+        let shape = p.p_shape();
+        let probes: Vec<usize> = cells
+            .iter()
+            .map(|&c| flat(shape, src[0] + c, src[1], src[2]))
+            .collect();
+
+        let steps = ((side - radii[0]) / C0_AIR / k).floor() as usize;
+        let mut b = AirBox::new(p);
+        b.set_state(&vec![0.0; b.p.n_nodes()], None);
+        let mut rec = vec![vec![0.0f64; probes.len()]; steps];
+        for (n, row) in rec.iter_mut().enumerate() {
+            b.inject(q(n as f64 * k), None);
+            b.step();
+            for (j, &idx) in probes.iter().enumerate() {
+                row[j] = b.pressure[idx];
+            }
+        }
+
+        let fits = radii
+            .iter()
+            .enumerate()
+            .map(|(j, &r)| {
+                let gain_far = crate::radiation::AirParams::new(fs, r, RHO0_AIR, C0_AIR, true)
+                    .unwrap()
+                    .gain;
+                // Trap 1 again: the window is this probe's, not the run's.
+                let n_win = (((side - r) / C0_AIR / k).ceil() as usize).min(steps);
+                let mut best: Option<(f64, f64, f64)> = None;
+                for i in 0..121 {
+                    // Trap 2: the lag search must be allowed to go negative.
+                    let d = (-3.0 + 6.0 * i as f64 / 120.0) * k;
+                    let refv: Vec<f64> = (0..n_win)
+                        .map(|n| gain_far * qdot(n as f64 * k - r / C0_AIR - d))
+                        .collect();
+                    let (mut num, mut den) = (0.0, 0.0);
+                    for n in 0..n_win {
+                        num += rec[n][j] * refv[n];
+                        den += refv[n] * refv[n];
+                    }
+                    let g = num / den;
+                    let (mut worst, mut scale) = (0.0f64, 0.0f64);
+                    for n in 0..n_win {
+                        worst = worst.max((rec[n][j] - g * refv[n]).abs());
+                        scale = scale.max((g * refv[n]).abs());
+                    }
+                    let err = worst / scale;
+                    if best.is_none() || err < best.unwrap().2 {
+                        best = Some((g, d / k, err));
+                    }
+                }
+                best.unwrap()
+            })
+            .collect();
+        (radii, fits)
+    }
+
+    #[test]
+    fn the_free_field_reproduces_the_lumped_monopole_law() {
+        // `gain == 1` at every radius **is** the 1/r law, because the reference already carries
+        // `rho0 / (4 pi r)`. The lag is reported, never asserted as a physical claim — but it is
+        // pinned as sub-sample, because a *whole* sample of offset would mean the source or the
+        // read-out sits at the wrong instant.
+        //
+        // Measured over eleven probes from 12 to 33 cm: gain 0.9803 to 0.9968 (the bar is 3e-2,
+        // carried across from the Python bar rather than fitted to this run), residual 0.077 to
+        // 0.175, lag -0.25 to +0.25 samples. The gain drifts *down* with radius because the
+        // dispersion accumulates over the path, which is the same trend the Python reports.
+        let (radii, fits) = free_field_fit(48);
+        assert!(radii.len() >= 5, "too few probes: {radii:?}");
+        let report: Vec<String> = radii
+            .iter()
+            .zip(fits.iter())
+            .map(|(r, (g, l, e))| format!("r={:.0}cm g={g:.4} lag={l:+.2}sa res={e:.3}", r * 100.0))
+            .collect();
+        for &(g, l, e) in &fits {
+            assert!((g - 1.0).abs() < 3e-2, "{report:?}");
+            assert!(e < 0.25, "{report:?}");
+            assert!(
+                l.abs() < 1.0,
+                "the arrival is off by a whole sample or more: {report:?}"
+            );
+        }
+        let (lo, hi) = fits
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), &(_, l, _)| {
+                (a.min(l), b.max(l))
+            });
+        assert!(
+            hi - lo < 1.0,
+            "the lag should barely move with r: {report:?}"
+        );
+    }
+
+    #[test]
+    fn the_free_field_gain_improves_with_refinement() {
+        // Falls with refinement — and deliberately **not** stated as a convergence order. The radii
+        // themselves move with the grid (trap 1 ties the usable range to `h` and to the pulse), so
+        // the implied rate is not a property of the scheme; a fixed-radius study gives a different
+        // number.
+        let worst = |n| {
+            free_field_fit(n)
+                .1
+                .iter()
+                .fold(0.0f64, |m, &(g, _, _)| m.max((g - 1.0).abs()))
+        };
+        let (coarse, fine) = (worst(32), worst(48));
+        assert!(fine < coarse, "coarse {coarse:e} -> fine {fine:e}");
+    }
 }

@@ -774,4 +774,173 @@ mod tests {
             assert_eq!((i[0] * shape[1] + i[1]) * shape[2] + i[2], flat);
         }
     }
+
+    // -- the lumped port, measured against the room rather than against its own formula --------
+    //
+    // `r_room` is a *predicted constant*: the incremental centered pressure the room presents per
+    // unit of injected volume velocity. The bars below measure it by driving the room and never
+    // consult the formula except in the final comparison — §45.3's two-routes-to-one-number, and
+    // the shape that found the piston defect. They need no port object at all, which is the point:
+    // `RoomPort` itself lives in the binding crate (§39.3's permanent blocker), but the arithmetic
+    // it is a wrapper around is here, and so is the room it makes a claim about.
+
+    use crate::airbox::{self, AirBox, Params, Wall, C0_AIR, RHO0_AIR};
+
+    /// The port fixtures' room — `AIRBOX_PORT_ROOM_DEFAULT` at `AIRBOX_PORT_H_DEFAULT`,
+    /// `N = (10, 8, 6)` at 0.9 of the CFL ceiling.
+    fn port_room(walls: [Wall; 6]) -> Params {
+        let h = 0.05;
+        let fs = C0_AIR * 3.0_f64.sqrt() / (0.9 * h);
+        Params::new([0.5, 0.4, 0.3], fs, h, walls, None, RHO0_AIR, C0_AIR).unwrap()
+    }
+
+    /// A `RoomView` borrowed off a native room — what the binding fills in from Python attributes.
+    fn view_of(b: &AirBox) -> RoomView<'_> {
+        RoomView {
+            n: b.p.n,
+            h: b.p.h,
+            k: b.p.k,
+            rho0: b.p.rho0,
+            c0: b.p.c0,
+            p: &b.pressure,
+            u: [&b.u[0], &b.u[1], &b.u[2]],
+            w: [&b.p.w[0], &b.p.w[1], &b.p.w[2]],
+            node_w: &b.p.wv,
+            beta: &b.p.beta,
+            has_walls: b.p.has_walls,
+        }
+    }
+
+    /// A cheap deterministic field, matching `airbox`'s own test seed.
+    fn noise(n: usize) -> Vec<f64> {
+        let mut s: u64 = 0x2545_F491_4F6C_DD1D;
+        (0..n)
+            .map(|_| {
+                s ^= s << 13;
+                s ^= s >> 7;
+                s ^= s << 17;
+                ((s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
+            })
+            .collect()
+    }
+
+    /// The port-weighted centered pressure one step on from `b`'s current state, injecting `q`.
+    ///
+    /// Takes the room by shared reference and mutates nothing, so the two calls the differential
+    /// needs start from an identical state by construction — where the Python bar has to snapshot
+    /// and restore ten fields, because it drives the room's own `step`.
+    fn pbar_after(b: &AirBox, flat: &[usize], w: &[f64], q: f64) -> f64 {
+        let div = airbox::divergence(&b.p, &b.u[0], &b.u[1], &b.u[2]);
+        let mut p_next = airbox::pressure_step(&b.p, &b.pressure, &div);
+        airbox::inject_port(&b.p, &mut p_next, flat, w, q);
+        if b.p.has_walls {
+            let mut booked = 0.0;
+            airbox::apply_walls(&b.p, &mut p_next, &b.pressure, &mut booked);
+        }
+        reduce::sum_by(flat.len(), |m| {
+            w[m] * (0.5 * (p_next[flat[m]] + b.pressure[flat[m]]))
+        })
+    }
+
+    #[test]
+    fn r_room_is_what_the_room_actually_does() {
+        // Four mounting points, each summing a different number of wall admittances into beta,
+        // times rigid and matched walls. The three non-interior sites with lossy walls are where
+        // the 1/(1 + beta) factor lives; without it the interior case still passes.
+        let matched = airbox::impedance_from_zeta(1.0, RHO0_AIR, C0_AIR);
+        for walls in [[Wall::Rigid; 6], [Wall::Impedance(matched); 6]] {
+            for at in [[3usize, 3, 3], [0, 3, 3], [0, 0, 3], [0, 0, 0]] {
+                let mut b = AirBox::new(port_room(walls));
+                let seed = noise(b.p.n_nodes());
+                b.set_state(&seed, None);
+                for _ in 0..23 {
+                    b.step();
+                }
+                // A point port: one node, weight 1.
+                let nodes: Nodes = [vec![at[0]], vec![at[1]], vec![at[2]]];
+                let refs = [&nodes[0][..], &nodes[1][..], &nodes[2][..]];
+                let v = view_of(&b);
+                let (w, big_w) = port_weights(&v, &refs);
+                let predicted = r_room(&v, &refs, &w, &big_w);
+                let flat = ravel(&refs, v.node_shape());
+
+                let u = 3.7e-4;
+                let measured = (pbar_after(&b, &flat, &w, u) - pbar_after(&b, &flat, &w, 0.0)) / u;
+                assert!(
+                    (measured - predicted).abs() <= 1e-12 * predicted,
+                    "at {at:?}: measured {measured:e} vs predicted {predicted:e}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_spread_port_is_the_same_claim_over_many_nodes() {
+        // Many nodes with differing W and beta, so the weighted sums are exercised rather than
+        // collapsing to one term — and the ball straddles a lossy wall, where the per-node beta
+        // differs across the port.
+        let matched = airbox::impedance_from_zeta(1.0, RHO0_AIR, C0_AIR);
+        let mut walls = [Wall::Rigid; 6];
+        walls[0] = Wall::Impedance(matched);
+        let mut b = AirBox::new(port_room(walls));
+        let seed = noise(b.p.n_nodes());
+        b.set_state(&seed, None);
+        for _ in 0..23 {
+            b.step();
+        }
+        let nodes = ball_nodes(b.p.n, b.p.h, [1, 3, 3], 0.12);
+        let refs = [&nodes[0][..], &nodes[1][..], &nodes[2][..]];
+        assert!(
+            refs[0].len() > 20,
+            "the ball collapsed to {} nodes",
+            refs[0].len()
+        );
+        let v = view_of(&b);
+        let (w, big_w) = port_weights(&v, &refs);
+        assert!((reduce::sum(&w) - 1.0).abs() < 1e-15);
+        // The weights are genuinely uneven: a wall node carries half an interior one.
+        let (lo, hi) = w
+            .iter()
+            .fold((f64::MAX, 0.0f64), |(l, h), &x| (l.min(x), h.max(x)));
+        assert!(
+            hi / lo > 1.9,
+            "the port's node weights are uniform: {lo:e}..{hi:e}"
+        );
+        let predicted = r_room(&v, &refs, &w, &big_w);
+        let flat = ravel(&refs, v.node_shape());
+        let u = 3.7e-4;
+        let measured = (pbar_after(&b, &flat, &w, u) - pbar_after(&b, &flat, &w, 0.0)) / u;
+        assert!(
+            (measured - predicted).abs() <= 1e-12 * predicted,
+            "measured {measured:e} vs predicted {predicted:e}"
+        );
+    }
+
+    #[test]
+    fn the_wall_factor_in_r_room_is_not_free() {
+        // Pin the trap: on a lossy wall the naive `k rho c^2 / (2 W)` differs from the truth by
+        // exactly `1 + beta`, so this is not a factor that "cancels anyway". A corner sums three
+        // admittances, which makes it a big one.
+        let matched = airbox::impedance_from_zeta(1.0, RHO0_AIR, C0_AIR);
+        let b = AirBox::new(port_room([Wall::Impedance(matched); 6]));
+        let nodes: Nodes = [vec![0usize], vec![0], vec![0]];
+        let refs = [&nodes[0][..], &nodes[1][..], &nodes[2][..]];
+        let v = view_of(&b);
+        let (w, big_w) = port_weights(&v, &refs);
+        let beta = v.beta[v.flat([0, 0, 0])];
+        assert!(
+            beta > 0.5,
+            "a corner should sum three admittances, got beta = {beta}"
+        );
+        let naive = reduce::sum_by(w.len(), |m| {
+            (((w[m] * w[m]) * v.k) * v.rho0) * crate::pyfloat::scalar_pow(v.c0, 2.0)
+                / (2.0 * big_w[m])
+        });
+        let ratio = naive / r_room(&v, &refs, &w, &big_w);
+        assert!(
+            (ratio - (1.0 + beta)).abs() < 1e-13 * (1.0 + beta),
+            "ratio {ratio} is not 1 + beta = {}",
+            1.0 + beta
+        );
+    }
 }

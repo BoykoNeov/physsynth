@@ -9501,3 +9501,175 @@ it, which is why it belongs in that file and is permanent.
 * **The parity family is eight files**, all of them either outside the deletion graph
   (`operators`, `ops2d`, `banded` — they build both sides themselves) or belonging to units 6 and 9.
 * The findings ledger gains **#52–#56**.
+
+---
+
+## §46 Native bars for the room (2026-09-03) — the audit's detector was a directory listing, and two exactness claims that are not the same claim
+
+§45.8 handed the next batch a single blocker: unit 6 (`airbox`) "still needs native bars for
+`AirBox` — the same blocker this batch just cleared for `FreeBeam`, at fourteen times the size".
+The first thing this batch did was check that, and it is wrong.
+
+### 46.1 Unit 6 was never at zero, and the detector is the finding
+
+`crates/physsynth-core/src/airbox.rs` and `airbox_port.rs` carry **nineteen** `#[test]`s between
+them, in `mod tests` blocks inside the source files. §39.3's table reports "zero. `AirBox` has a
+core half (`airbox.rs`, `airbox_port.rs`) and no test file names it", and the measurement behind
+that sentence was `ls crates/physsynth-core/tests/`.
+
+That is a directory listing standing in for a question about the test runner. `cargo test
+--workspace` runs `mod tests` inside `src/` and the files under `tests/` identically — the
+difference is unit versus integration test, i.e. whether the test can see private items, not
+whether it runs. Six core modules use the inline form (`sparse`, `airbox`, `airbox_port`, `fmt`,
+`reduce`, `ops`) and the rest use `tests/`, and the split is roughly "modules whose bars need
+private access" against "models". Re-checked against unit 8: `beam.rs` really does have zero
+`#[test]`s, so §45's blocker was real and its 685 lines were not duplicating anything. **The
+mistake is unit 6's alone**, and it is worth recording as a shape rather than as a typo: a
+capability inventory has to ask what the *runner* runs, not what a directory holds. §44.4's
+finding — a header is a claim and nothing checks it — one level up, at an audit table.
+
+So the batch's scope is not "write the bars" but "close the gap", which is a different and much
+smaller piece of work. Measured against the Python bars that **survive** the deletion (§39.5's
+frame: `tests/test_airbox_*.py` is 429 tests that never name the reference alias, and the
+pre-flight `PHYSSYNTH_RS=1 pytest tests/test_airbox_*.py` is green, so they run against Rust
+unchanged), the native side was missing the modal tier entirely, the ceiling's two claims, the
+conservation sweeps, the wall closure's two reductions, `R_room`, and the cross-tier monopole
+oracle. Eighteen tests, not six hundred lines.
+
+### 46.2 The ceiling's reward is exact in exact arithmetic, and *which* exact case decides whether `==` is available
+
+At `lambda = 1/sqrt(3)` exactly, a mode along the grid diagonal runs at the **exact continuum**
+frequency: the arcsine and the sine cancel identically. It is the only exactness available anywhere
+in 3-D and it is why anyone would sit on the ceiling at all, so it is the sharpest bar in the
+family.
+
+It is not exact in doubles. Measured on a cube at the ceiling, the four modes `(q,q,q)` for
+`q = 1, 2, 3, 8` come out at **1.1e-16, 3.3e-16, 2.2e-16 and 1.1e-16** — a few ulps, because the
+cancellation runs through `scalar_pow`, a square root, an arcsine and a sine. The bar is therefore
+1e-14 (thirty times the worst measured, and eleven orders below the axial modes at the same
+`lambda`, which run 4.3e-3 to 3.2e-1). That is the free-plate batch's scar — "exact in exact
+arithmetic" is not exact in doubles — arriving somewhere it was not expected, in a cancellation
+with no `h` powers in it at all.
+
+And the *other* exact case is exact. On a non-cube the exact direction is the **grid** diagonal
+`l/Nx = m/Ny = n/Nz`, so the room `(0.9, 0.7, 0.6)` at `h = 0.1` has it at the corner mode
+`(9, 7, 6)` — and there the error is **exactly 0.0**, because every axis reaches `sin(pi/2)`, the
+one argument the sine returns without rounding. Two statements of one algebraic identity, one of
+which admits `==` and one of which does not, differing only in where on the unit circle the
+arithmetic lands. The assertions are written accordingly — `assert_eq!(dispersion(&p, corner),
+0.0)` for the corner and `< 1e-14` for the cube — because writing the weaker one twice would have
+thrown away a real exactness, and writing the stronger one twice would have been a tolerance
+failure waiting for a different CPU (#14).
+
+### 46.3 "Linear growth" is a claim about differences, not about the sequence 1, 2, 3, 4
+
+*At* the ceiling the corner mode is defective, so broadband content grows **linearly** while the
+energy identity stays flat — the discrete energy is only positive *semi*-definite there, and this
+is the one place in the repo where a flat energy is not a stability certificate. The Python bar
+asserts the windowed peaks, normalized by the seed's peak, are close to `[1, 2, 3, 4]`.
+
+Transcribed, that assertion passed at **60–80% of its threshold**, which is the tell. The measured
+peaks are 1.00, 1.88, 2.79, 3.68: systematically below the integers, and for a reason that is not
+about the scheme. Secular growth is `peak(i) = a + b i`; normalized by the first window it is
+`(a + b i)/(a + b)`, which is below `i` by exactly the amount of growth window 1 already contains.
+So the integers are a statement about `a` — a property of the initial condition — and the bar was
+spending most of its room on the fixture.
+
+The native bar asserts the **differences** are equal instead: 0.880, 0.907, 0.897, held to 10%,
+plus a separate "and it did grow" (last peak above 3x the first) so a flat field cannot pass a
+constant-difference test with all differences zero. That is the growth law rather than the seed,
+and it is #54 in a second place — a threshold carried across from another bar was measuring the
+fixture it was carried onto.
+
+### 46.4 `R_room` measured off the room instead of off its own formula
+
+The port tier's constant is `R_room = sum_n w_n^2 k rho0 c0^2 / (2 W_n (1 + beta_n))`: the
+incremental centered pressure the room presents per unit injected volume velocity. The Python bar
+measures it **differentially** — step the room twice from an identical saved state, once with
+`q = 0` and once with `q = U` — so nothing consults the formula except the final comparison, which
+catches a wrong constant directly instead of waiting for a drift to build.
+
+That transfers to the crate whole, and comes out *simpler* there. The Python has to snapshot and
+restore ten room fields around each probe because it drives the room's own `step`; the native
+version calls the kernels (`divergence`, `pressure_step`, `inject_port`, `apply_walls`) on a room
+held by **shared** reference and mutates nothing, so the two calls start from an identical state by
+construction. Four mounting points against two wall settings, plus a 52-node spread port straddling
+a lossy face. Measured: **0 to 2.2e-16 relative**, against a 1e-12 bar.
+
+The `1/(1 + beta)` factor is the thing that bar exists to protect, and it is genuinely loaded
+rather than nominally present: across the four sites with matched walls `beta` runs
+**0, 0.52, 1.04, 1.56**, so at the corner the naive formula is off by a factor of 2.56. A separate
+bar states that directly — `naive / R_room == 1 + beta` to 1e-13 — which is the pair §45.3 calls
+two routes to one number, and it means the interior-only case (where `beta = 0` and the factor is
+invisible) cannot be the whole test.
+
+Worth naming: **none of these three bars needs a `RoomPort`**, and `RoomPort` is exactly what a
+`physsynth-core` test cannot reach (§39.3's permanent blocker, the class lives in the binding
+crate). The wrapper is not the claim; the arithmetic it wraps is, and that is here. The same is
+true one tier up and is why the airbox wrapper tier still owes nothing native.
+
+### 46.5 The cross-tier oracle, and two traps that transfer intact
+
+`crate::radiation` is an independent implementation of the same physics in a lower-dimensional
+disguise, so the distributed air must *contain* the lumped air: drive a point source in a big rigid
+room and, inside the window before the first reflection, the field must obey
+`p = rho0 Q''(t - r/c0) / (4 pi r)` with `radiation`'s **own** gain constant. Because that closed
+form already carries `rho0/(4 pi r)`, a least-squares fit of one gain per radius makes `gain == 1`
+*be* the inverse-distance law — a far better estimator than a log-log slope on dispersive pulse
+peaks.
+
+Both of the Python bar's traps transfer without modification, which is itself the finding: they are
+properties of the measurement, not of the language. The reflection-free window is **per-probe and
+hard-edged** (a rigid wall is a pressure antinode, so the first reflection arrives at full
+amplitude; one global stop time truncates the far probes and turns the measured slope into −2.5),
+and the lag search **must be allowed to go negative** or it pins at its boundary. Measured over
+eleven probes from 12 to 33 cm at `N = 48`: gain 0.9803 to 0.9968, residual 0.077 to 0.175, lag
+−0.25 to +0.25 samples. The gain drifts down with radius as dispersion accumulates, which is the
+trend the Python reports; the thresholds are the Python's, carried across rather than fitted.
+
+### 46.6 The measured state
+
+| run | tests | wall |
+|---|---:|---:|
+| `cargo test -p physsynth-core --lib`, debug | 53 -> **71** passed | 2.1 s |
+| the same, release | **71** passed | 0.1 s |
+| `cargo test --workspace` | green | — |
+| `cargo fmt --check` · `clippy --all-targets -D warnings` | clean | — |
+| pre-flight `PHYSSYNTH_RS=1 pytest tests/test_airbox_*.py -n 6` | 429 passed | 18 s |
+
+Eighteen tests: fifteen in `airbox.rs` (the modal tier, the ceiling's reward and its price, the
+conservation sweeps, the wall closure's two reductions, and the two free-field bars) and three in
+`airbox_port.rs`. No Python was touched and no Python was deleted; this is §44's order — bars
+first, while the reference is still alive to have been read.
+
+Both profiles are run because §16.2's finding makes that mandatory for anything asserting an exact
+cancellation: LLVM folds constants in `--release` that it does not in debug, and the diagonal bar
+above is precisely a cancellation. It is 1e-14 in both.
+
+### 46.7 What the next batch inherits
+
+The blocker on unit 6 is **cleared**, and what is left of the port is the deletion itself. Its
+scope, measured rather than estimated:
+
+* **`physsynth/core/airbox.py` is 4,111 lines and four tiers.** `AirBox` and the port tier have
+  core halves; the thirteen `RoomLoaded*` / `RoomSuspended*` wrappers and the three `_*Surface`
+  seams exist only in `crates/physsynth-py/src/airbox_wrap.rs`.
+* **The guard surface is ~20 names, not one.** `deleted_bodies` gains a 14-name entry;
+  `expected_classes` loses the same 14; `airbox` must come **out** of the `_USE_RUST` reader tuple
+  (the `deleted_bodies` loop asserts a deleted body reads no flag); `REMAINING_PARITY_FAMILY` loses
+  four entries, leaving four; the `rust` job's file list loses the same four. A miss anywhere in
+  that is green-and-covering-nothing.
+* **The binding reads this module's namespace at call time, and that survives the deletion by
+  design.** `airbox_wrap.rs` looks up `splu`, `RoomPort`, and the seam and port class names as
+  module globals on `physsynth.core.airbox` — ledger #39, Rust calling back into Python. Every one
+  of those names must still resolve after the body goes, which they do, because the shim's job is
+  to bind them to the extension.
+* **`splu` must stay importable from `airbox`.** Three surviving physics files
+  (`test_airbox_dipole.py`, `test_airbox_surface.py`, `test_airbox_vk.py`) import it *from this
+  module* on purpose — they re-derive the wrapper's factorization and must use the same factorizer
+  — and §43 made the `_RustSuperLU` rebinding unconditional for a reason that has nothing to do
+  with this unit.
+* Unit 9 (`connection`) and the airbox **wrapper** tier stay blocked permanently, unchanged from
+  §39.3.
+
+The findings ledger gains **#57–#59**.
