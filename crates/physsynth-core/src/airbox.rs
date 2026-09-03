@@ -1023,11 +1023,28 @@ impl AirBox {
 mod tests {
     use super::*;
 
+    /// A room at a given **fraction of the CFL ceiling**, which is how `tests/helpers.py`'s
+    /// `make_airbox` is parameterized: `h` fixes the grid and the sample rate is solved for, so
+    /// `cfl = 1.0` sits exactly on `lambda = 1/sqrt(3)`. Spelling the fixtures this way rather
+    /// than in sample rates is what lets the bars below use the Python bars' own fixtures.
+    fn params_at(l: [f64; 3], h: f64, cfl: f64, walls: [Wall; 6]) -> Params {
+        let fs = C0_AIR * 3.0_f64.sqrt() / (cfl * h);
+        Params::new(l, fs, h, walls, None, RHO0_AIR, C0_AIR).unwrap()
+    }
+
     fn params(walls: [Wall; 6]) -> Params {
         // 0.30 x 0.24 x 0.18 m at h = 3 cm -> N = (10, 8, 6), lambda = 0.9/sqrt(3).
-        let h = 0.03;
-        let fs = C0_AIR * 3.0_f64.sqrt() / (0.9 * h);
-        Params::new([0.30, 0.24, 0.18], fs, h, walls, None, RHO0_AIR, C0_AIR).unwrap()
+        params_at([0.30, 0.24, 0.18], 0.03, 0.9, walls)
+    }
+
+    /// The modal fixtures' room — `AIRBOX_ROOM_DEFAULT` at `AIRBOX_H_DEFAULT`, `N = (9, 7, 6)`.
+    ///
+    /// Three different, mutually incommensurate cell counts on purpose: a mode index cannot be
+    /// confused with an axis, and the tensor-trapezoid weights only cancel in the energy pairing
+    /// if each axis is weighted independently — a slip that shares one axis' weights survives a
+    /// cube and dies here.
+    fn modal_room(cfl: f64) -> Params {
+        params_at([0.9, 0.7, 0.6], 0.1, cfl, rigid())
     }
 
     fn rigid() -> [Wall; 6] {
@@ -1195,5 +1212,340 @@ mod tests {
         let h = 0.2;
         let p = Params::new([0.5, 0.5, 0.5], 5000.0, h, rigid(), None, RHO0_AIR, C0_AIR).unwrap();
         assert_eq!(p.n, [2, 2, 2]);
+    }
+
+    // -- the modal tier ---------------------------------------------------------------------
+    //
+    // A rigid rectangular room is the rare case whose eigenmodes are known in closed form **on
+    // the grid** rather than only in the continuum: the tensor cosine is an exact eigenvector of
+    // the discrete Neumann Laplacian including at the h/2 wall nodes. So these are machine-
+    // precision assertions, not convergence rates — the tier above the membrane's Bessel bar.
+
+    /// Seed the room in mode `idx` and return the frequency it is predicted to run at.
+    fn set_mode(b: &mut AirBox, idx: [usize; 3]) -> f64 {
+        let shape = mode_shape(&b.p, idx);
+        let u0 = mode_velocity(&b.p, &shape);
+        b.set_state(&shape, Some([&u0[0], &u0[1], &u0[2]]));
+        mode_frequency(&b.p, idx)
+    }
+
+    /// Max deviation of the field from `amp * mode_shape`, relative to the mode's own scale.
+    fn mode_error(b: &AirBox, idx: [usize; 3], amp: f64) -> f64 {
+        let mode = mode_shape(&b.p, idx);
+        let scale = mode.iter().fold(0.0f64, |m, &v| m.max(v.abs()));
+        let worst = b
+            .pressure
+            .iter()
+            .zip(mode.iter())
+            .fold(0.0f64, |m, (&p, &v)| m.max((p - amp * v).abs()));
+        worst / scale
+    }
+
+    /// `sum(W a b)` — the node-weight inner product the tensor cosines are orthogonal under.
+    fn weighted_dot(p: &Params, a: &[f64], b: &[f64]) -> f64 {
+        reduce::sum_by(a.len(), |i| p.wv[i] * a[i] * b[i])
+    }
+
+    /// The relative distance between the scheme's frequency and the textbook room's.
+    fn dispersion(p: &Params, idx: [usize; 3]) -> f64 {
+        (mode_frequency(p, idx) / continuum_mode_frequency(p, idx) - 1.0).abs()
+    }
+
+    #[test]
+    fn the_dc_mode_is_stationary() {
+        // mu = 0, so a uniform pressure in a sealed rigid room never moves: the discrete
+        // statement that the scheme conserves mass.
+        let p = modal_room(0.9);
+        assert_eq!(mode_frequency(&p, [0, 0, 0]), 0.0);
+        let mut b = AirBox::new(p);
+        set_mode(&mut b, [0, 0, 0]);
+        for _ in 0..200 {
+            b.step();
+        }
+        assert!(mode_error(&b, [0, 0, 0], 1.0) < 1e-12);
+    }
+
+    #[test]
+    fn two_modes_superpose_without_talking() {
+        // A linear room: start in a sum of two modes and each keeps its own frequency. A coupling
+        // bug — a weight applied on the wrong axis, say — shows up as one mode bleeding into the
+        // other long before it shows up in the energy, which sees only the total.
+        let p = modal_room(0.9);
+        let (a, c) = ([1usize, 0, 0], [0usize, 1, 2]);
+        let (fa, fc) = (mode_frequency(&p, a), mode_frequency(&p, c));
+        let (ma, mc) = (mode_shape(&p, a), mode_shape(&p, c));
+        let p0: Vec<f64> = ma.iter().zip(mc.iter()).map(|(x, y)| x + y).collect();
+        let u0 = mode_velocity(&p, &p0);
+        let (na, nc) = (weighted_dot(&p, &ma, &ma), weighted_dot(&p, &mc, &mc));
+
+        let mut b = AirBox::new(p);
+        b.set_state(&p0, Some([&u0[0], &u0[1], &u0[2]]));
+        let mut worst = 0.0f64;
+        for t in 1..=300 {
+            b.step();
+            let phase = 2.0 * std::f64::consts::PI * (t as f64) * b.p.k;
+            let ca = weighted_dot(&b.p, &b.pressure, &ma) / na;
+            let cc = weighted_dot(&b.p, &b.pressure, &mc) / nc;
+            worst = worst
+                .max((ca - (phase * fa).cos()).abs())
+                .max((cc - (phase * fc).cos()).abs());
+        }
+        assert!(worst < 1e-12, "modes talked: {worst:e}");
+    }
+
+    #[test]
+    fn the_discrete_frequency_runs_flat_of_the_continuum_one() {
+        // Yee dispersion is *negative* on this stencil — the grid always runs a mode slightly
+        // flat. Worth its own assertion because a sign slip in the arcsin still converges at
+        // order 2 and so survives the convergence bar below.
+        let p = modal_room(0.9);
+        for idx in [[1, 0, 0], [2, 1, 1], [3, 2, 1]] {
+            let (fd, fc) = (mode_frequency(&p, idx), continuum_mode_frequency(&p, idx));
+            assert!(fd < fc, "mode {idx:?}: {fd} is not below {fc}");
+        }
+    }
+
+    #[test]
+    fn the_frequency_converges_to_the_continuum_room_at_order_two() {
+        // A pure closed-form comparison, no stepping: the modal bars above already proved the
+        // scheme *runs* at `mode_frequency`, so what is left is that `mode_frequency` is the
+        // room's. The oracle is the textbook rigid rectangular-room formula, evaluated here on
+        // `l_actual` rather than on `l` because the grid spans the former.
+        let l = [0.96, 0.72, 0.6];
+        for idx in [[1usize, 0, 0], [1, 1, 0], [2, 1, 1]] {
+            let errs: Vec<f64> = [8usize, 16, 32, 64]
+                .iter()
+                .map(|&n| {
+                    let p = params_at(l, l[0] / n as f64, 0.9, rigid());
+                    dispersion(&p, idx)
+                })
+                .collect();
+            let rates: Vec<f64> = errs.windows(2).map(|w| (w[0] / w[1]).log2()).collect();
+            for &rate in &rates {
+                assert!(
+                    (1.9..2.1).contains(&rate),
+                    "mode {idx:?}: rates {rates:?} (errs {errs:?})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn axial_modes_are_dispersive_at_every_courant_number() {
+        // No lambda makes an axis-aligned mode exact — the membrane's 2-D lesson one dimension
+        // worse. Note the error does not simply worsen toward the ceiling (the spatial and
+        // temporal errors partly cancel), so "smaller lambda is more accurate" is not the rule it
+        // is in 1-D. It never reaches zero, and that is the claim.
+        for cfl in [0.1, 0.3, 0.5, 0.7, 0.9, 1.0] {
+            let err = dispersion(&modal_room(cfl), [2, 0, 0]);
+            assert!(
+                err > 1e-3,
+                "cfl {cfl}: an axial mode came out dispersionless ({err:e})"
+            );
+        }
+    }
+
+    #[test]
+    fn diagonal_modes_are_exact_at_the_ceiling() {
+        // **The reward for sitting on the ceiling.** At lambda = 1/sqrt(3) exactly, a mode along
+        // the grid diagonal runs at the *exact continuum* frequency: the arcsin and the sine
+        // cancel identically. It is the only exactness available anywhere in 3-D.
+        //
+        // Exact **in exact arithmetic**: measured, the four modes come out at 1.1e-16, 3.3e-16,
+        // 2.2e-16 and 1.1e-16 — a few ulps, not zero, because the cancellation runs through
+        // `scalar_pow`, a square root, an arcsine and a sine. So the bar is 1e-14 (30x the worst
+        // measured) and not `==`, while the axial modes at the same lambda are 4.3e-3 to 3.2e-1,
+        // eleven orders away. The free-plate batch's scar, in a place it was not expected.
+        let p = params_at([0.8, 0.8, 0.8], 0.1, 1.0, rigid());
+        for q in [1usize, 2, 3, 8] {
+            let err = dispersion(&p, [q, q, q]);
+            assert!(err < 1e-14, "diagonal mode ({q},{q},{q}) off by {err:e}");
+            let axial = dispersion(&p, [q, 0, 0]);
+            assert!(
+                axial > 1e-3,
+                "only the diagonal should be exact, not ({q},0,0)"
+            );
+        }
+    }
+
+    #[test]
+    fn the_exact_direction_is_the_grid_diagonal_not_l_equals_m() {
+        // On a non-cube the exact direction is `l/Nx = m/Ny = n/Nz`, so `(0.9, 0.7, 0.6)` at
+        // h = 0.1 has it at the **corner** mode (9, 7, 6) — and (1, 1, 1) is not it.
+        //
+        // The corner is the *sharper* of the two exact cases and comes out at exactly `0.0`,
+        // where the cube's (q, q, q) above needs a 1e-14 bar: at the corner every axis reaches
+        // `sin(pi/2)`, which is the one argument the sine returns without rounding, so the
+        // cancellation is exact in doubles as well as in algebra.
+        let p = modal_room(1.0);
+        let corner = p.n;
+        assert_eq!(corner, [9, 7, 6]);
+        assert_eq!(dispersion(&p, corner), 0.0);
+        assert!(dispersion(&p, [1, 1, 1]) > 1e-4);
+    }
+
+    // -- the ceiling's price, and the conservation identity away from it ---------------------
+
+    /// Peak `|p|` within each of `windows` consecutive time windows, relative to the **first
+    /// window's** peak.
+    ///
+    /// A *running* max only ever rises, so it cannot tell a bounded oscillation from a slowly
+    /// growing one; windowed peaks can. Normalized by the first window rather than by the seed,
+    /// so the ratios are a claim about the growth law rather than about the initial condition.
+    fn window_peaks(b: &mut AirBox, windows: usize, steps: usize) -> Vec<f64> {
+        let mut peaks = Vec::with_capacity(windows);
+        for _ in 0..windows {
+            let mut peak = 0.0f64;
+            for _ in 0..steps {
+                b.step();
+                peak = b.pressure.iter().fold(peak, |m, &v| m.max(v.abs()));
+            }
+            peaks.push(peak);
+        }
+        let first = peaks[0];
+        peaks.iter().map(|p| p / first).collect()
+    }
+
+    #[test]
+    fn the_ceiling_is_marginally_stable_and_the_energy_does_not_notice() {
+        // **The price.** At lambda = 1/sqrt(3) the corner mode is defective, so broadband content
+        // grows **linearly** — and the energy identity stays flat right through it, because the
+        // discrete energy is only positive *semi*-definite there. A flat energy is not a
+        // stability certificate at the ceiling; this is the one place in the repo where that
+        // holds, so it is pinned rather than hidden.
+        let mut b = AirBox::new(modal_room(1.0));
+        let p0 = noise(b.p.n_nodes());
+        b.set_state(&p0, None);
+        let e0 = b.energy();
+        let ratios = window_peaks(&mut b, 4, 2000);
+        // Linear (secular) growth, asserted as **constant differences** rather than as the
+        // sequence 1, 2, 3, 4. Measured the peaks are 1.00, 1.88, 2.79, 3.68 — the ratios sit
+        // systematically below the integers because the first window's peak already contains some
+        // growth, so `peak(i) = a + b i` normalized by `peak(1)` is `(a + b i)/(a + b)`, not `i`.
+        // Asserting the integers would have been asserting `a` (a property of the seed) at a
+        // threshold with 60-80% of it used up; the differences are 0.880, 0.907, 0.897 and are the
+        // growth *law*, which is the claim.
+        let diffs: Vec<f64> = ratios.windows(2).map(|w| w[1] - w[0]).collect();
+        let (lo, hi) = diffs
+            .iter()
+            .fold((f64::MAX, 0.0f64), |(l, h), &d| (l.min(d), h.max(d)));
+        assert!(hi / lo < 1.1, "growth is not linear: peaks {ratios:?}");
+        assert!(ratios[3] > 3.0, "the field did not grow at all: {ratios:?}");
+        let drift = (b.energy() - e0).abs() / e0.abs();
+        assert!(
+            drift < 1e-9,
+            "the energy identity should survive it: {drift:e}"
+        );
+    }
+
+    #[test]
+    fn just_below_the_ceiling_the_field_is_bounded() {
+        // The safe operating point: at 0.999 of the ceiling the defect is gone and the same
+        // broadband run is flat across every window, where *at* the ceiling it is 4x by the last.
+        let mut b = AirBox::new(modal_room(0.999));
+        let p0 = noise(b.p.n_nodes());
+        b.set_state(&p0, None);
+        let ratios = window_peaks(&mut b, 4, 2000);
+        assert!(ratios[3] < 1.4, "windowed peaks trend upward: {ratios:?}");
+    }
+
+    #[test]
+    fn energy_is_conserved_at_every_courant_number() {
+        // Conservation is an algebraic identity, not a special value of lambda. Stops just short
+        // of the ceiling on purpose: *at* the ceiling the identity still holds but the field
+        // grows linearly, so the relative drift loses digits to a growing field rather than to
+        // the scheme — which is the test above, where it belongs.
+        for cfl in [0.3, 0.6, 0.9, 0.999] {
+            let mut b = AirBox::new(modal_room(cfl));
+            let p0 = noise(b.p.n_nodes());
+            b.set_state(&p0, None);
+            let e0 = b.energy();
+            for _ in 0..400 {
+                b.step();
+            }
+            let drift = (b.energy() - e0).abs() / e0.abs();
+            assert!(drift < 1e-12, "cfl {cfl}: drift {drift:e}");
+        }
+    }
+
+    #[test]
+    fn energy_is_conserved_at_every_aspect_ratio() {
+        // The tensor-trapezoid weights only cancel in the energy pairing if every axis is
+        // weighted independently; a slip that shares one axis' weights survives a cube.
+        for l in [
+            [0.9, 0.7, 0.6],
+            [1.2, 0.3, 0.5],
+            [0.6, 0.6, 0.6],
+            [1.5, 0.2, 0.2],
+        ] {
+            let mut b = AirBox::new(params_at(l, 0.1, 0.9, rigid()));
+            let p0 = noise(b.p.n_nodes());
+            b.set_state(&p0, None);
+            let e0 = b.energy();
+            for _ in 0..400 {
+                b.step();
+            }
+            let drift = (b.energy() - e0).abs() / e0.abs();
+            assert!(drift < 1e-12, "room {l:?}: drift {drift:e}");
+        }
+    }
+
+    // -- the wall closure's two reductions ---------------------------------------------------
+
+    #[test]
+    fn rigid_is_bit_identical_to_an_infinite_impedance() {
+        // `walls="rigid"` and `Z = inf` are the same wall, and the equality is exact rather than
+        // close — the family's standing bar for a reduction. The classification is the first half
+        // of the claim and the trajectory is the second: `from_z` deciding correctly would still
+        // leave a `has_walls` branch free to take the lossy path on an infinite impedance.
+        assert_eq!(Wall::from_z(f64::INFINITY), Wall::Rigid);
+        let mut a = AirBox::new(modal_room(0.9));
+        let mut b = AirBox::new(params_at(
+            [0.9, 0.7, 0.6],
+            0.1,
+            0.9,
+            [Wall::from_z(f64::INFINITY); 6],
+        ));
+        let p0 = noise(a.p.n_nodes());
+        a.set_state(&p0, None);
+        b.set_state(&p0, None);
+        for _ in 0..200 {
+            a.step();
+            b.step();
+        }
+        assert_eq!(a.pressure, b.pressure);
+        assert_eq!(a.energy(), b.energy());
+    }
+
+    #[test]
+    fn a_large_impedance_approaches_rigid() {
+        // The *numerical* limit, as opposed to the classification above: a very stiff but finite
+        // wall goes through the whole beta arithmetic and still tracks the rigid room. This is
+        // the one that would catch a wrong power of `h` in `beta`.
+        let mut stiff = AirBox::new(params_at(
+            [0.9, 0.7, 0.6],
+            0.1,
+            0.9,
+            [Wall::Impedance(1e12); 6],
+        ));
+        let mut rigid_box = AirBox::new(modal_room(0.9));
+        let p0 = noise(stiff.p.n_nodes());
+        stiff.set_state(&p0, None);
+        rigid_box.set_state(&p0, None);
+        for _ in 0..200 {
+            stiff.step();
+            rigid_box.step();
+        }
+        let scale = rigid_box
+            .pressure
+            .iter()
+            .fold(0.0f64, |m, &v| m.max(v.abs()));
+        let err = stiff
+            .pressure
+            .iter()
+            .zip(rigid_box.pressure.iter())
+            .fold(0.0f64, |m, (&x, &y)| m.max((x - y).abs()))
+            / scale;
+        assert!(err < 1e-6, "a 1e12 wall is not nearly rigid: {err:e}");
     }
 }
