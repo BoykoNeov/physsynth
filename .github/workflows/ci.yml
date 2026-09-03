@@ -252,24 +252,33 @@ jobs:
       # failure, caught by `tests/test_ci_workflow.py` rather than by review, six occurrences in.
       # Short lines cannot have that bug.
       #
-      # Widened in Phase 7 batch 2 from the detector's three names to the whole package. Batch 1
-      # grepped for `measure_partials_near\|detect_peaks\|magnitude_spectrum` because `spectrum.py`
-      # was the only ported module; now `modal`, `damping`, `dispersion` and `duffing` are behind
-      # the same flag, and the question the grep is asking is "which test files read the
-      # instrument", whose answer is "the ones that import `physsynth.analysis`". Keeping the old
-      # pattern would have silently left the oracles' clients unexercised while the step still went
-      # green -- the shape §36.7 warned about one batch ago, in a different place.
+      # Widened TWICE in Phase 7 batch 2, and the second widening is the one worth reading.
+      #
+      # Batch 1 grepped for `measure_partials_near|detect_peaks|magnitude_spectrum` because
+      # `spectrum.py` was the only ported module. With `modal`, `damping`, `dispersion` and
+      # `duffing` behind the same flag the question became "which test files read the instrument",
+      # and the obvious answer -- the ones importing `physsynth.analysis` -- is WRONG BY 43 FILES.
+      # `tests/helpers.py` does `from physsynth.analysis import modal, spectrum` and then measures
+      # on its callers' behalf, so a file can be a heavy client of the instrument while never
+      # naming it. `test_radiation.py` is one, and it carries the only check in the suite that
+      # holds the ported Bessel J1 against `scipy.special.j1`.
+      #
+      # A derived list is only as honest as the reachability it models, and one hop of indirection
+      # was enough to make it dishonest: 27 files matched, 65 actually reach. That is exactly the
+      # shape §36.7 warned about -- a step that stays green while covering less than it claims --
+      # arriving one batch later through a different door.
       - name: The instrument's clients, unmodified, against a Rust instrument
         env:
           PHYSSYNTH_RS: "1"
           PHYSSYNTH_RS_ANALYSIS: "1"
         run: |
           set -euo pipefail
-          files=$(grep -l 'physsynth.analysis' tests/test_*.py | grep -v test_rust_parity || true)
+          pat='physsynth\.analysis|import helpers|from helpers'
+          files=$(grep -lE "$pat" tests/test_*.py | grep -v test_rust_parity || true)
           test -n "$files"
           n=$(echo $files | wc -w)
           echo "files reaching the instrument: $n"
-          test "$n" -ge 25
+          test "$n" -ge 60
           pytest -n auto --dist loadgroup $files --durations=10
 
   # The migration's success condition, as one claim instead of twenty-one (plan §35.7).

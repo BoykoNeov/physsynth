@@ -47,6 +47,7 @@
 | 29 | A decision's **margin** and the **axis** it is decided on are separate questions; a decision-valued module ports safely when the tight decisions sit on the exact axis | §36.2, §36.3, §36.5, §36.6, §36.8 |
 | 30 | The **denominator** of an agreement bar is a modelling choice: for anything oscillatory the honest one is the amplitude, not the sample — a relative bar on a function that crosses zero is a claim about where the fixture landed | §37.3, §37.4 |
 | 31 | When two crates that must not depend on each other both need one transcription, ask which direction is **real** — a helper no `step()` calls is not a core dependency however core a file it sits in, and checking that is a grep | §37.2 |
+| 32 | A **derived** file list is only as honest as the reachability it models: one hop through `tests/helpers.py` made a CI grep wrong by 43 of 65 files, and a floor cannot catch a grep asking a narrower question than its name claims | §37.8 |
 
 ## The questions to ask before writing an exact assertion
 
@@ -906,7 +907,18 @@ about the runner; equality is required only where IEEE-754 requires it, plus one
 (a lossless string's decay factor is exactly `1.0`). **A search's *count* is a claim a tolerance
 cannot make**: the disk scan asserts the number of roots as well as their values, because a missing
 root is the dangerous direction and all three of the function's self-checks catch a spurious one
-instead. And **#14's early-binding hazard was not live here**: `dispersion.py`'s
+instead. **#14's early-binding hazard was not live here**: `dispersion.py`'s
 `from .modal import ...` copies the *post-swap* names, because a footer runs inside its own module
 body — pinned by a subprocess probe rather than argued, along with #17's 0-d-returns-a-scalar
 convention and the fact that the analysis flag moves no model.
+
+**And a derived list is only as honest as the reachability it models** (§37.8, ledger #32). The CI
+step that runs "the instrument's clients" was widened from the detector's three names to files
+importing `physsynth.analysis` — 27 of them — and that was **wrong by 43 files**. `tests/helpers.py`
+imports the instrument and measures on its callers' behalf, so sixty-five test files reach it and
+twenty-seven say so. Among the silent ones was `test_radiation.py`, which carries the only check
+holding the ported Bessel `J₁` against `scipy.special.j1` — i.e. the batch's own safety argument was
+outside its own coverage, and a floor would never have said so, because the grep was not broken, it
+was asking a narrower question than its name claimed. Run separately it is green (93 passed, and the
+composed resistance is bit-identical to the Cephes-built expectation), which is the difference
+between a verified argument and an asserted one.

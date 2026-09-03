@@ -7605,7 +7605,7 @@ gate on each deletion.
 | `crates/physsynth-analysis/src/duffing.rs` | 130 | the exact nonlinear-oscillator solution |
 | `crates/physsynth-analysis/src/radiation.rs` | 75 | `piston_radiation_resistance` — §14's parked call |
 | `crates/physsynth-py/src/analysis.rs` | 590 | forty-five free functions, no state anywhere |
-| native tests | 44 bars | `bessel.rs`, `elliptic.rs`, `modal.rs`, `oracles.rs` |
+| native tests | 47 bars | `bessel.rs`, `elliptic.rs`, `modal.rs`, `oracles.rs` |
 | `tests/test_rust_parity_analysis.py` | 48 tests | both sides built in the same process |
 
 `physsynth-analysis`'s dependency list is still **empty**.
@@ -7754,6 +7754,16 @@ for the one-term series, or `ka = 1e-2` keeping two terms, either putting the wo
 `ka = 9.2e-5` and `ka = 1.83`, where the two sides agree to 5.3e-8 and exactly, and
 `test_radiation.py` requires 1e-6 of the first — a 19× margin, measured rather than hoped.
 
+**And the safety argument is verified, not asserted.** `test_radiation.py` does not import
+`physsynth.analysis`, so it was outside the derived list the CI step used and outside every run
+this batch made — which meant the *entire* justification for swapping this helper under the model
+flag rested on a prototype measurement rather than on the shipped binding. Run separately:
+`PHYSSYNTH_RS=1 pytest tests/test_radiation.py tests/test_bore_radiation.py` gives **93 passed**,
+and the composed resistance at `ka = 1.83` comes back **bit-identical** to the
+`scipy.special.j1`-built expectation — `rel = 0.0`, against that test's `1e-12` bar. (The 7.9e-16
+figure quoted elsewhere is `J₁(3.66)` itself; the resistance rounds to the same double.) The gap
+that hid it is §37.8's subject.
+
 Worth naming the mechanism, because it is how the batch found it at all: **a native bar that asserts
 two independent routes to one number agree will find a defect a parity test cannot, because a parity
 test compares two implementations of the same mistake.**
@@ -7782,27 +7792,46 @@ questions, and what makes swapping a measurement-shaped helper under the model f
 measurement, not the rule — the same flagged run checks it against `scipy.special.j1` built inside a
 test body at `rel = 1e-12`.
 
-### 37.8 CI, and §36.7's trap in a different place
+### 37.8 CI, and a derived list that was wrong by forty-three files
 
-The batch-1 step grepped for `measure_partials_near\|detect_peaks\|magnitude_spectrum`, which was
-the right question when `spectrum.py` was the only ported module and the wrong one the moment four
-more went behind the same flag. Left alone it would have run 18 files instead of 27 and stayed
-green while the oracles' clients went unexercised. Widened to `physsynth.analysis`, floor raised to
-25, still derived rather than typed.
+Batch 1's step grepped for `measure_partials_near\|detect_peaks\|magnitude_spectrum` — the right
+question when `spectrum.py` was the only ported module. The obvious widening, to files that import
+`physsynth.analysis`, matched 27 files and **is wrong by 43 of them**.
+
+`tests/helpers.py` opens with `from physsynth.analysis import modal, spectrum` and then measures on
+its callers' behalf, so a file can be a heavy client of the instrument while never naming it. Sixty-
+five test files reach it; twenty-seven say so. Among the thirty-eight silent ones is
+`test_radiation.py`, which carries the only check in the suite holding the ported Bessel `J₁`
+against `scipy.special.j1` — the check §37.6's safety argument is built on. The step would have run,
+gone green, and covered neither the oracles' real clients nor the one test that validates the
+batch's most delicate swap.
+
+**The finding, and it is the ledger's thirty-second:** *a derived file list is only as honest as the
+reachability it models, and one hop of indirection is enough to make it dishonest. A floor catches a
+grep that stopped matching; it cannot catch a grep that was asking a narrower question than its name
+claims.* The pattern is now `physsynth\.analysis|import helpers|from helpers` and the floor is 60.
+That this is §36.7's shape — a step staying green while covering less than it claims — arriving one
+batch later through a different door is the reason it is written here rather than fixed quietly.
 
 **§19.7's line continuation, a seventh time, from a seventh tool.** Adding the new parity file to
-the flagged list produced a literal `\n` in the YAML. `tests/test_ci_workflow.py` caught it before
+the flagged list produced a literal `
+` in the YAML. `tests/test_ci_workflow.py` caught it before
 CI did — seven occurrences, zero of them reaching a runner.
 
 ### 37.9 The success condition
 
-* `cargo test --workspace` — 44 new native bars, all green, plus both allowlists still empty.
+* `cargo test --workspace` — 33 test binaries, all green; **47** of the bars are new this
+  batch (12 Bessel, 7 elliptic, 13 modal, 15 oracles), and both allowlists are still empty.
 * `cargo fmt --check` and `cargo clippy --workspace --all-targets` — clean.
 * `tests/test_rust_parity_analysis.py` — 48 tests, green, unflagged.
 * `tests/test_rust_parity_analysis.py` unflagged — 48 tests, green.
-* The instrument's **27** dependent test files (the derived list the CI step now uses) with **both**
-  flags set — Rust models *and* a Rust instrument, the only run in which this port meets its real
-  clients: **510 passed**.
+* The instrument's dependent test files with **both** flags set — Rust models *and* a Rust
+  instrument, the only run in which this port meets its real clients. Twenty-seven files by the
+  first (wrong) derived list: **510 passed**. Sixty-five by the corrected one: **1,417 passed in
+  101 s** — so the honest list costs 2.8× the tests and about 1.7× the wall clock, which is a
+  cheaper correction than it looked.
+* `PHYSSYNTH_RS=1 pytest tests/test_radiation.py tests/test_bore_radiation.py` — **93 passed**,
+  which is where §37.6's argument stops being an assertion.
 * The same five representative files unflagged, to confirm the footers changed nothing on the
   Python path: 154 passed.
 
@@ -7812,8 +7841,9 @@ CI did — seven occurrences, zero of them reaching a runner.
   sparse Jacobian, the package's only Group D member, and §35.3 says it goes after §1's Jacobian fix
   has had its `λ_long` sweep re-run (hurdles §6).
 * Then the test-suite port (§35.4), the viewer's import audit (§37.0), and the deletions (§35.6).
-* The findings ledger gains **#30** (the absolute-versus-relative bar) and **#31** (the direction of
-  a shared-transcription dependency is a grep, not a design question).
+* The findings ledger gains **#30** (the absolute-versus-relative bar), **#31** (the direction of a
+  shared-transcription dependency is a grep, not a design question) and **#32** (a derived file list
+  is only as honest as the reachability it models).
 * `docs/dev/scientific-hurdles.md` gains **§14**, the piston's threshold — live, uncalled, fix
   derived and costed, awaiting the human.
 * The parked list is **empty**.

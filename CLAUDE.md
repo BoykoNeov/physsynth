@@ -48,7 +48,7 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    (the core crate's dependency list must stay empty, so it cannot reach a Bessel function) while
    its Python name swaps on `PHYSSYNTH_RS`, because it lives in a `core/` module. The crate a
    function is implemented in and the flag its name is swapped by are separate questions (§37.7).
-   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the thirty-one
+   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the thirty-two
    findings about when two implementations agree to the bit and when they cannot (fed-back
    reductions, libm vs NumPy's own transcendentals, LLVM's constant fold, `np.sum`'s pairwise
    cutoff, descriptors that take a write away, anchors that bind two classes into one batch).
