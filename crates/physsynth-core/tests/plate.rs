@@ -544,7 +544,6 @@ fn the_energy_form_is_the_updates_own_matrix() {
     }
 }
 
-
 /// `Ny = max(int(round(Ly / h)), 1)`, and `round` there is **CPython's**, not Rust's.
 ///
 /// Python rounds a tie to even and `f64::round` rounds a tie away from zero, so the two disagree
@@ -594,5 +593,8 @@ fn the_side_length_snaps_with_pythons_half_to_even_round() {
             ties += 1;
         }
     }
-    assert_eq!(ties, 8, "these geometries no longer land on a tie and the test is vacuous");
+    assert_eq!(
+        ties, 8,
+        "these geometries no longer land on a tie and the test is vacuous"
+    );
 }
