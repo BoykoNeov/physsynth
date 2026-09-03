@@ -234,10 +234,14 @@ CASES: dict[str, tuple[str, str, tuple, dict]] = {
         (200.0, 0.65, 128, 0.7, 1e-5, 0.5, 1.2, 5e-5, 4),
         {},
     ),
+    # ... and one that really is OVERDAMPED. The first draft of this row used
+    # `sigma1 = 5e-2, m = 60` and came back `True` like its sibling, so the pair covered one branch
+    # twice. A frozen bool is a *decision*: a case that never takes the other arm asserts nothing
+    # about the arm it is there for.
     "damping.discrete_damped_mode_is_underdamped#over": (
         "damping",
         "discrete_damped_mode_is_underdamped",
-        (200.0, 0.65, 128, 0.7, 1e-5, 0.5, 1.2, 5e-2, 60),
+        (200.0, 0.65, 128, 0.7, 1e-5, 0.5, 5000.0, 0.5, 1),
         {},
     ),
     "damping.loss_coefficients_from_T60": (
@@ -408,13 +412,36 @@ HISTORY_FS = 4000.0
 KEYS = [*CASES, HISTORY_KEY]
 
 
+# The `RotatingWave` field this freeze must NOT record, and why it takes a deliberate line of code
+# to avoid it.
+#
+# `flatten` collects every integer in a returned tuple and `test_analysis_frozen.py` compares them
+# EXACTLY -- which is right for a mode label, a multiplicity, an FFT length or a root count, and
+# wrong for exactly one field here. `iterations` is how many Newton steps the continuation took,
+# and ledger #33 settled that it is **not a comparable quantity**: when only the root survives, two
+# implementations may take visibly different paths to the same answer, and 17 of 108 fixtures did.
+# `tests/test_rust_parity_rotating_wave.py` carried a test whose whole job was to say so --
+# `test_the_iteration_count_is_not_compared_and_this_is_the_witness`, "kept as an executable
+# statement of what this file declines to assert" -- and that file was deleted in the same batch
+# that created this one. Freezing the count would quietly reinstate the assertion its witness
+# existed to forbid, and it would have gone green, because neither fixture here happens to be one
+# of the ones that differ.
+#
+# Blanked in `call` rather than in the test, so the generator and the test see the same object and
+# a future regeneration cannot reintroduce it.
+NOT_COMPARABLE = "iterations"
+
+
 def call(key, resolve):
     """Run one case. ``resolve(module, name)`` hands back the implementation to use."""
     if key == HISTORY_KEY:
         wave = resolve("rotating_wave", "solve_rotating_wave")(**HISTORY_WAVE_KWARGS)
         return resolve("rotating_wave", "rotating_wave_history")(wave, fs=HISTORY_FS)
     module, func, args, kwargs = CASES[key]
-    return resolve(module, func)(*args, **kwargs)
+    out = resolve(module, func)(*args, **kwargs)
+    if func == "solve_rotating_wave":
+        out = out._replace(**{NOT_COMPARABLE: 0})
+    return out
 
 
 def flatten(value):

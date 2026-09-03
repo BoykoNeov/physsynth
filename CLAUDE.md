@@ -89,10 +89,12 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    list must stay empty, so it cannot reach a Bessel function) while its Python name lives in a
    `core/` module. **The crate a function is implemented in and the module its name lives in are
    separate questions** (§37.7).
-   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the thirty-two
-   findings about when two implementations agree to the bit and when they cannot (fed-back
-   reductions, libm vs NumPy's own transcendentals, LLVM's constant fold, `np.sum`'s pairwise
-   cutoff, descriptors that take a write away, anchors that bind two classes into one batch).
+   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **fifty** findings
+   about when two implementations agree to the bit, when they cannot, and what a *deletion* breaks
+   that a port does not (fed-back reductions, libm vs NumPy's own transcendentals, LLVM's constant
+   fold, `np.sum`'s pairwise cutoff, descriptors that take a write away, anchors that bind two
+   classes into one batch, clients that re-derive a model's arithmetic, and reflective tests that
+   are really claims about how a model stores its attributes).
    They lived here verbatim until 2026-09-02 and moved so this file could be what its first line
    says it is; the questions to ask before writing an exact assertion are listed at its top.
    The open *scientific* problems — as opposed to porting ones — are in

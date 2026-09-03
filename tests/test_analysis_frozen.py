@@ -126,3 +126,47 @@ def test_the_frozen_file_covers_exactly_the_cases_module():
         f"only in the values file: {sorted(set(FROZEN) - set(cases.KEYS))}; "
         f"only in the cases file: {sorted(set(cases.KEYS) - set(FROZEN))}"
     )
+
+
+# -- a frozen BOOL is only as safe as its margin --------------------------------------------------
+
+
+def test_the_underdamped_predicate_has_room_to_spare():
+    """A bool is a discrete output, so freezing one is a claim about how far it is from flipping.
+
+    Inherited from ``test_rust_parity_analysis.py``'s
+    ``test_the_underdamped_predicate_agrees_and_its_margin_is_reported``, which was deleted with
+    unit 10. There the two implementations' verdicts were compared and the margin reported; here
+    there is one implementation and a *recorded* verdict, so the margin is the whole of what makes
+    the record trustworthy — a frozen `True` next to a discriminant one ulp from zero would be a
+    coin toss written down as a fact.
+
+    Observed over these five configurations and modes 1..40: the discriminant ``b² - 4ac`` is never
+    within eleven orders of magnitude of zero relative to ``|b²| + |4ac|``, so no rounding can flip
+    it. The bar is that measurement, and a future fixture that narrows it fails here rather than
+    silently answering differently.
+    """
+    c, ell, n, kappa, k, theta = 200.0, 0.65, 128, 0.7, 1e-5, 0.5
+    worst = float("inf")
+    saw_both = set()
+    for sigma0, sigma1 in ((0.0, 0.0), (0.5, 1e-5), (50.0, 1e-3), (1e6, 0.0), (1e5, 1.0)):
+        for m in range(1, 41):
+            saw_both.add(
+                _public("damping", "discrete_damped_mode_is_underdamped")(
+                    c, ell, n, kappa, k, theta, sigma0, sigma1, m
+                )
+            )
+            p2 = _public("damping", "spatial_eigenvalue_p2")(n, ell / n, m)
+            q_mode = c * c * p2 + kappa * kappa * p2 * p2
+            base = 1.0 + theta * k * k * q_mode
+            aa = base + (sigma0 + sigma1 * p2) * k
+            bb = -2.0 + (1.0 - 2.0 * theta) * k * k * q_mode
+            cc = base - (sigma0 + sigma1 * p2) * k
+            disc = bb * bb - 4.0 * aa * cc
+            scale = abs(bb * bb) + abs(4.0 * aa * cc)
+            worst = min(worst, abs(disc) / scale)
+    assert worst > 1e-11, f"the underdamped margin has narrowed to {worst:.3e}"
+    assert saw_both == {True, False}, (
+        f"this sweep only ever answers {saw_both} -- it no longer exercises both arms of the "
+        "predicate, so the margin it measures is a margin on one of them"
+    )
