@@ -50,6 +50,8 @@
 | 32 | A **derived** file list is only as honest as the reachability it models: one hop through `tests/helpers.py` made a CI grep wrong by 43 of 65 files, and a floor cannot catch a grep asking a narrower question than its name claims | §37.8 |
 | 33 | A differing solver **iteration count** is a defect only when the iterate is fed forward; when only the root survives, two implementations may take visibly different paths to the same answer. And the general form: **a margin measured at one fixture is a claim about one fixture** — the fix is a grid, not a better probe | §38.1, §38.2 |
 | 34 | What may cross a deliberate crate boundary is decided by **what the shared text is**: a numerical method with no physics in it may be included; the discretisation under test may not, or the oracle would agree with a divergent core by construction | §38.4 |
+| 35 | A swap that **delegates** keeps its Python `__module__`, so "is this object Rust?" is the wrong detector for an import audit — ask whether the name's **definition site moves** when the flag moves, which is a two-process fingerprint diff and not a reading of the source | §39.1 |
+| 36 | An anchor's blast radius is a property of **one test**, not of a file: a single six-class spelling assertion welded ten modules into one deletion unit, and reading that one test dissolved the blob into nine. Corollary: sort a mixed file by reading each body — a `for cls in (...)` loop is a property test wearing a comparison's clothes | §39.2, §39.5 |
 
 ## The questions to ask before writing an exact assertion
 

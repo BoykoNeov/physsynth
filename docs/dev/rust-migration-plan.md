@@ -8092,3 +8092,183 @@ The `analysis` CI step needed no widening: its list is derived by the §37.8 gre
   covers three models rather than two.
 * Hurdle **§3**'s CI question is closed: green on five consecutive runs, no sibling.
 * The parked list is **empty**.
+
+---
+
+## §39 The deletion audit (2026-09-03) — the order made computable, and three different blockers
+
+§35.6 said the order a Python model can die in is "computable rather than argued". It was neither:
+what existed was a paragraph of dependency reasoning and no enumeration behind it. This section is
+the enumeration. **No code moved.** It is the table §35.6 promised, plus §37.0's import audit run to
+completion, plus one gap that nothing in the plan had named.
+
+### 39.1 The viewer's seam is closed except for two floats and one file
+
+§37.0 made the gate on every deletion "the set of names `web/serialize.py` reaches that the binding
+does not expose". Measured by fingerprinting every imported name's definition site with the flags off
+and again with both flags on, and calling a name **swapped** when the two differ:
+
+| | count |
+|---|---:|
+| names `serialize.py` imports from `physsynth` | 42 |
+| swapped under the flags | **33** |
+| not swapped | 9 |
+
+The nine break down further, and only one group is a seam:
+
+* **Five are module objects** — `damping`, `dispersion`, `duffing`, `modal`, `spectrum`, imported as
+  modules rather than as names. A module never swaps; the question is its attributes. `serialize.py`
+  calls **20** functions across the five and **all 20 swap**. Closed.
+* **Two are `float` constants** — `bore.C0_AIR` and `bore.RHO0_AIR`. Nothing to port; they stay
+  wherever they are written and cost two lines.
+* **Two are `engine.SimResult` and `engine.simulate`**, and they are the seam. See 39.4.
+
+A methodological note that cost an hour and is the reason the number above is 33 and not 27. The
+first detector asked whether the object's `__module__` was `physsynth_rs`, and reported
+`raised_cosine_2d`, `guitar_mask` and `prune_to_area_carrying` as unswapped. They are swapped. The
+swap block defines a **Python wrapper that delegates in one line**, so `__module__` stays
+`physsynth.core.exciter` while the arithmetic is entirely Rust — and a delegating wrapper is not a
+failure to swap, it *is* the end state route (b) asks for. **The right question is not "is this
+object Rust", it is "does this name's definition move when the flag moves."**
+
+### 39.2 Nine deletion units, and the ten-module blob was one test
+
+A model's Python body cannot be deleted alone if any *other* file names its `*Py` reference alias.
+Taking the alias-to-file map as a bipartite graph and closing it under connected components gives the
+real unit of deletion. Run naively it gives **six** units and the first has **ten** modules in it —
+`beam`, `bore`, `bow`, `collision`, `reed`, and all five strings, welded together.
+
+The weld is a **single test**. `test_rust_parity.py::test_an_explicit_none_boundary_is_refused_by_both`
+holds a dict of six Python classes and asserts each refuses `boundary=None` the way its Rust twin
+does. It is a *spelling* check across six models, not a physics one, and its Rust half stands alone.
+Excluding that one file, the graph falls apart into **nine** units:
+
+| unit | modules | parity files that die with them |
+|---|---|---|
+| 1 | `bow` · `collision` · `string_damped` · `string_geometric` · `string_nonlinear` · `string_stiff` | bow, collision, geometric, strings, tension |
+| 2 | `body` · `radiation` | body, radiation |
+| 3 | `bore` · `reed` | bore, reed |
+| 4 | `mallet` · `membrane` | mallet, membrane |
+| 5 | `operators2d` · `plate` | ops2d, plate |
+| 6 | `airbox` | airbox, airbox_memb, airbox_port, airbox_wrap |
+| 7 | `string_ideal` | (analysis — one guard line) |
+| 8 | `beam` | beam |
+| 9 | `connection` | connection |
+
+Three edges in that graph are worth naming because no obvious grep finds them:
+
+* **`physsynth/core/reed.py` imports `BorePy`.** A core-to-core edge between two *reference*
+  implementations. Every previous hunt for anchors searched `tests/`; this one is in the package.
+* **`tests/test_stability.py` names `BarrierStringPy`** and **`tests/test_plate_modal.py` names
+  `PlatePy`** — non-parity, physics-bar files reaching a reference alias. §35.4 rule 2 ("the parity
+  files do not port") assumed the aliases live only in the parity family. They do not.
+* **Four parity files name no alias at all** — `banded`, `operators`, `rotating_wave`, `spectrum`.
+  They build both sides some other way, so they are free of this graph entirely.
+
+### 39.3 The blocker is not the same blocker three times
+
+The sharpest result of the audit, and the one that changes the order rather than merely recording it.
+A unit is deletable only if the physics its Python tests assert survives the deletion. Crossing the
+nine units against `crates/physsynth-core/tests/`:
+
+| unit | native bars | blocker |
+|---|---|---|
+| 1, 2, 3, 4, 5, 7 | present (9–41 `#[test]` per module) | **none** — gated only on 39.6 |
+| 6 `airbox` | **zero**. `AirBox` has a core half (`airbox.rs`, `airbox_port.rs`) and no test file names it | write native bars |
+| 8 `beam` | **zero**. `FreeBeam` has a core half and no test file names it | write native bars |
+| 9 `connection` | **cannot exist** | see below |
+
+**Unit 9's blocker is a different kind, and it is permanent.** `connection` lives only in
+`crates/physsynth-py` — §34.3 established that the bridges are polymorphic over their collaborators'
+Python types and therefore have no core half at all. A `physsynth-core` test cannot reach a class
+that is not in `physsynth-core`. The same is true of the airbox **wrapper** tier (`airbox_wrap.rs`,
+py-only, §32.2's finding that a tier below can decide what porting this tier means). So for these
+two tiers the bar is a Python test **for the life of the binding**, and that is not a shortfall to be
+closed — it is what §32.2 and §34.3 already implied and neither section drew out.
+
+So "the deletion order" is really three lists: six units gated on one decision, two units gated on
+writing tests that do not exist, and one tier whose Python tests are load-bearing permanently.
+
+### 39.4 `engine.py` is the one `core/` file that never ported, and under route (b) it may not need to
+
+`physsynth/core/engine.py` — 84 lines: a `Resonator` `Protocol`, a `SimResult` dataclass, and the
+`simulate` driver loop — has **no `if _USE_RUST` block, no `engine.rs` in either crate, and no
+`simulate` in the binding's 152 exports.** It is imported by 29 test files and by `web/serialize.py`.
+
+`CLAUDE.md`'s claim that "every model, operator, solver, room, port, wrapper and bridge has a Rust
+implementation" is intact on its own terms — `engine` is none of those seven things. It is the
+*driver*, and every native test rolls its own loop rather than calling a shared one. Under §35.5's
+route (b) the viewer is Python and drives Rust models from Python, so `simulate` sits on the Python
+side of the seam by the same argument that keeps `serialize.py` there. Whether that is the decision
+or whether the eventual native suite wants a shared driver is left open here rather than assumed;
+what is settled is that it is **not** an oversight to be repaired before a deletion, because no
+deletion touches it.
+
+### 39.5 What a body-deletion actually retires — a correction to §35.4
+
+§35.4's success condition reads "for every Python test retired, a native test asserts the same
+physics bar at the same fixture". Applied to a body-deletion that is the wrong frame, and the
+distinction matters because reading it literally would block units that are not blocked.
+
+Deleting `IdealStringPy` retires **no physics bar**. The ideal string's bars live in `test_energy.py`,
+`test_convergence.py`, `test_modal.py`, `test_dispersion.py` and `test_stability.py`; not one of them
+names `IdealStringPy`, they all reach the swappable name `IdealString`, and after the deletion they
+keep running — against Rust, which is the whole point. What is retired is the **diagnostic**: the
+bit-identity comparison that the parity file's own docstring calls "not its acceptance".
+
+And rule 2's "the parity files are deleted with the Python side" is too blunt, because
+`test_rust_parity.py` is not homogeneous. Sorting its 19 tests:
+
+* **Fourteen are two-sided comparisons** and die with the body.
+* **Four are property tests that happen to run over both classes** — `state_is_a_copy_not_a_view`,
+  and the three buffer-lifetime tests (`.u` rebinds rather than being overwritten; a write *through*
+  `.u` reaches the string; the state arrays can be replaced wholesale). These assert a property of
+  **the binding**, not of the Rust core, so they can never become native bars — a `physsynth-core`
+  test has no Python object whose buffer lifetime it could check. They survive, Rust-only, and they
+  join unit 9's tests as permanent Python residue.
+* **One is the cross-model spelling table** of 39.2, which loses one row per deletion.
+
+The `the_boundary_spec_round_trips` / `set_state_accepts_a_plain_list` / `state_is_a_copy_not_a_view`
+trio was sorted wrongly on a first pass — read from the function list, the first two are comparisons
+and the third looks like one because it is not parametrized. It is a `for cls in (…)` loop, which is
+a property test wearing a comparison's clothes. **Read the body, not the decorator.**
+
+### 39.6 The one decision this audit cannot take
+
+Every unit in 39.3's first row is gated on the same thing, and it is not a porting task.
+
+`physsynth/core/string_ideal.py` currently defines the Python class and rebinds the name to Rust only
+when `PHYSSYNTH_RS` is set. Deleting the body means the module becomes an **unconditional** import
+from `physsynth_rs`. The `validate` CI job installs `pip install -e ".[dev]"` and **not** the wheel —
+line 102's comment says in as many words that it exists to "run 1,808 tests against the pure-Python
+core". After the first deletion that job either installs the wheel and stops being what it says it
+is, or it collection-errors.
+
+This changes what the project's acceptance gate *means*, so it is the human's call and not a
+detail to be settled by whoever writes the deletion. Three routes, and the middle one is a trap:
+
+1. **`validate` installs the wheel** and becomes "the suite against whatever the package currently
+   is". Honest, and it is the migration's end state arriving early for one model at a time.
+2. **Guard the ideal-string tests with an `importorskip`** so they skip without the wheel. This is
+   the worst option and is recorded so nobody proposes it twice: it silently removes the string's
+   physics from the default gate while the log still reads green.
+3. **Defer every deletion** until the whole core is deletable, then flip `validate` once.
+
+### 39.7 Two stale numbers, corrected while they were in front of me
+
+The whole suite, unmodified, under **both** flags: **2,011 passed in 80 s** locally (parity family
+excluded, `-n auto --dist loadgroup`). The figures carried since 2026-08-17 — 1,808 tests, 5,027.9
+core-seconds — are stale in both columns and should not be quoted again.
+
+### 39.8 What the next batch inherits
+
+* The deletion order is a table rather than an argument, and it says three different things: six
+  units are gated only on 39.6's decision, `airbox` and `beam` are gated on native bars that do not
+  exist, and `connection` plus the airbox wrapper tier are gated on nothing because their bar can
+  never be native.
+* The viewer's seam is **two floats and `engine.py`**, and neither is a porting task.
+* The findings ledger gains **#35** (a swap that delegates keeps its Python `__module__`, so "is
+  this object Rust" is the wrong detector — ask whether the definition site *moves*) and **#36** (an
+  anchor's blast radius is a property of one test, not of a file: ten modules were welded into one
+  unit by a single six-class spelling assertion, and reading it dissolved the blob).
+* Nothing is parked. 39.6 is a question, not a park.
