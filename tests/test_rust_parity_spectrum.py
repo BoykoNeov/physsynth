@@ -75,6 +75,14 @@ def _bin_of(freq: float, fs: float, nfft: int) -> int:
     This is how the *decision* is compared exactly while the *value* is compared on a tolerance.
     Without it the two would be one assertion, and a tolerance loose enough for the magnitudes
     would also be loose enough to hide a different peak.
+
+    What makes it trustworthy is a property asserted somewhere else, and the coupling is worth
+    naming here because it is invisible from this file: recovering the bin by rounding only works
+    while ``|delta| <= 1/2``, and that bound is precisely what the refiner's local-max guard exists
+    to give. It is asserted directly in the native suite
+    (``the_refiner_moves_a_genuine_peak_by_less_than_half_a_bin``) and again below on a swept
+    sub-bin offset. Were the bound ever to fail on both sides in the same direction, this helper
+    would quietly turn a disagreement about *which bin* into a pass.
     """
     return int(round(freq * nfft / fs))
 

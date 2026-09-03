@@ -7506,8 +7506,19 @@ Exact, asserted: `nfft`; the whole `freqs` array (`array_equal`); which bin won 
 where exactness is fair because the guard returns *before* touching a logarithm.
 
 Tolerance, asserted: magnitudes within 1e-12 of the peak (observed 3.2e-16); refined frequencies
-within 1e-6 of a bin (observed 0.0 on every fixture tried — a structural consequence of `i`
-dominating `delta`, not luck, but not something to assert).
+within 1e-6 of a bin — observed **0.0**, on every fixture tried, despite the magnitudes around each
+peak *not* being bit-identical.
+
+That last one deserves its argument written down rather than left as a happy number, because a
+reader will otherwise have to re-derive it or take it on faith. The refined frequency is
+`(i + delta) * fs / nfft`. The magnitudes perturb by ~1e-16 relative, so the three logarithms move
+by ~1e-16 *absolute*, and since `a - c` and `a - 2b + c` are both O(1) for a real peak, `delta`
+moves by ~1e-16 relative — about 1e-17 absolute, `delta` being under a half. But `delta` is added to
+`i`, which is 41 at the first partial of the shortest fixture and larger everywhere else, so the
+perturbation is ~1e-18 of the sum: **below the ulp of the result**, which therefore rounds to the
+same double. It is structural rather than lucky. It is also not guaranteed — at a small `i` with
+`delta` sitting on a rounding boundary the two could differ in the last bit — which is exactly why
+it is observed and reported rather than asserted.
 
 **Reported and never required:** the observed agreement itself. Requiring the magnitudes to differ,
 or to match, would be §35.2's mistake one batch after it was written down — a predicate that is
