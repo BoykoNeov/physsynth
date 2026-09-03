@@ -48,6 +48,8 @@
 | 30 | The **denominator** of an agreement bar is a modelling choice: for anything oscillatory the honest one is the amplitude, not the sample — a relative bar on a function that crosses zero is a claim about where the fixture landed | §37.3, §37.4 |
 | 31 | When two crates that must not depend on each other both need one transcription, ask which direction is **real** — a helper no `step()` calls is not a core dependency however core a file it sits in, and checking that is a grep | §37.2 |
 | 32 | A **derived** file list is only as honest as the reachability it models: one hop through `tests/helpers.py` made a CI grep wrong by 43 of 65 files, and a floor cannot catch a grep asking a narrower question than its name claims | §37.8 |
+| 33 | A differing solver **iteration count** is a defect only when the iterate is fed forward; when only the root survives, two implementations may take visibly different paths to the same answer. And the general form: **a margin measured at one fixture is a claim about one fixture** — the fix is a grid, not a better probe | §38.1, §38.2 |
+| 34 | What may cross a deliberate crate boundary is decided by **what the shared text is**: a numerical method with no physics in it may be included; the discretisation under test may not, or the oracle would agree with a divergent core by construction | §38.4 |
 
 ## The questions to ask before writing an exact assertion
 
@@ -62,6 +64,7 @@
 9. Which *axis* is each decision made on — one built from `+ - * /`, or one running through a library kernel — and how much margin does it have? Measure the margins over the suite's real calls before claiming any of them is exact. (#29)
 10. Does the assertion require a *difference*? That is as machine-dependent as requiring equality. (#28)
 11. What is the bar *divided by*? If the quantity oscillates through zero, or is a difference of two close numbers, a relative bar reports the fixture rather than the port. (#30)
+12. Was the margin measured at **one fixture or over a grid**? A probe that holds `N`, the mode and the amplitude fixed answers for that cell only — and for a solver, ask separately whether the thing that moved is *returned* or merely *traversed*. (#33)
 
 ---
 

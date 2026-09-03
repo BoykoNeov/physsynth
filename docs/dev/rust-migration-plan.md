@@ -7887,3 +7887,192 @@ bracket's Taylor expansion term by term, against the expansion written out flat 
 Horner form, so a transposed coefficient shows and a re-association does not. Writing that bar
 surfaced §27 one more time: `(scale * ka2) * rest` and `scale * (ka2 * rest)` are different doubles,
 and the first draft compared the function against the wrong association and went red.
+
+---
+
+## §38 Phase 7, batch 3, as built (2026-09-03) — the BVP, and **`physsynth/analysis/` is finished**
+
+`analysis/rotating_wave.py` was the last Python file in the package and the only one that solves a
+nonlinear system: Newton on a sparse Jacobian inside an eight-step amplitude continuation, so the
+only member of §4's **Group D** outside `core/`. §35.3 scheduled it last and named one prerequisite
+that was not a porting task at all — re-running the geometric string's `λ_long` sweep, because §1's
+Jacobian fix had changed the spelling of an identity this module asserts. That was done first and is
+written up in `docs/dev/scientific-hurdles.md` §6; the short version is that the edge did not move,
+in 9 of 9 cells, and the reason it could not have is the first of two facts that shaped this batch.
+
+### 38.0 Two measurements before a line of Rust, and both changed the port
+
+§36.2's rule — measure the margin before claiming it — applied twice, and this time to a *solver*
+rather than to a detector.
+
+**The margin on the converged root is enormous.** §24 put Group D on measured tolerance because
+SuperLU is supernodal and its blocking is a property of how SciPy was *built*. What that leaves open
+is how much a different elimination costs here, and the answer is nothing worth naming. Perturbing
+the Python solve's Newton step and re-reading the root, at the test file's own fixture:
+
+| perturbation of the Newton step | `ΔΩ/Ω` | `Δψ` (rel) | iterations |
+|---|---|---|---|
+| `permc_spec="NATURAL"` | 1.8e-16 | 1.0e-15 | 24 |
+| relative 1e-16 noise | 3.6e-16 | 4.5e-15 | 24 |
+| relative 1e-12 noise | 1.8e-16 | 1.7e-15 | 24 |
+| relative 1e-10 noise | 1.8e-16 | 2.4e-15 | 24 |
+
+A nudge **six orders larger** than two LU implementations can differ by moves `Ω` by one ulp, and
+the reason is structural: Newton's step is a *means*, the residual defines the root, and the
+convergence bar is a relative bar on the step. So the port is a tolerance port with a very wide
+budget — and it landed far inside it, at 8.4e-15 worst over 126 fixtures.
+
+**The natural column order fills this matrix completely**, and that is §29.2 arriving a second time.
+The unknowns are `[φ; ψ; s]` — two `(N-1)` blocks stacked *by field*, bordered by the amplitude row
+and the `∂F/∂s` column — while the coupling between the fields is *cell-local*. So in the natural
+order every coupling sits `N-1` columns off the diagonal and the elimination fills the envelope:
+
+| `N` | dim | COLAMD | natural | interleaved by node |
+|---|---|---|---|---|
+| 32 | 63 | 1,128 | 2,278 | **593** |
+| 128 | 255 | 10,956 | 33,722 | **2,460** |
+| 256 | 511 | 4,959 | 132,992 | **4,954** |
+| 512 | 1,023 | 9,949 | 528,139 | **9,944** |
+
+The natural column is `≈ dim²/2` — dense triangular factors. Interleaving `(φ_i, ψ_i)` and leaving
+`s` last is linear in `dim`, beats COLAMD outright at small `N`, matches it at large `N`, and is a
+**closed form in `N`**, so `SparseLu::factor_permuted` — which §29.2 built for exactly this shape on
+the core's own Jacobian — takes it and no ordering heuristic is ported. Nothing in this project could
+have caught the natural version by a physics bar: it computes the identical root through a dense
+factorization. It is a cost cliff, and §29 already said that class is invisible here.
+
+### 38.1 The finding: a margin measured at one fixture is a claim about one fixture
+
+The first draft of the Rust module's header read the table above and wrote that the branch hazard of
+§19.2 and §20.3 "does not exist here", because the iteration count had not moved under any
+perturbation. **That was wrong, and the parity file caught it within the hour.**
+
+Compared against the Python over 126 fixtures (`N` 16…128, modes 1–3, `κ ∈ {0, 2}`, three
+amplitudes), the Newton iteration count differs in **17 of the 108 that converge**, by as much as 13.
+The perturbation probe had held `N = 32`, mode 1, `κ = 0` fixed — and reported, correctly, a property
+of that fixture.
+
+What makes it a finding rather than an error is that the hazard is **real but harmless**, and the
+reason separates two things §19.2 had bundled. There, a reduction the root-find branched on changed
+both the iteration count *and* the trajectory, because in a timestepping model the iterate **is** the
+state that gets fed forward. Here the iterate is discarded and only the root survives, so the two
+implementations take demonstrably different paths to the same answer: the widest gap, 28 iterations
+against 41, still agrees on `Ω` to **9.0e-16**. So:
+
+> A differing iteration count is a defect when the iterate is fed forward, and merely a fact when it
+> is not. Ask what the solver *returns*, not how it got there.
+
+The general form is the cheaper lesson and it is the one to carry: **a margin measured at one fixture
+is a claim about one fixture**, and the fix is not a better probe but a *grid*. The parity file now
+asserts the root and reports the count, keeping one fixture as an executable witness that the counts
+differ.
+
+### 38.2 Where the BVP does not converge, only the flag is compared — and that is §6's shape again
+
+Eighteen of the 126 fixtures fail to converge. They are **the same eighteen on both sides**, which is
+the one thing that has to agree, because `converged is False` is the flag a caller branches on and
+the only thing between a non-equilibrium helix and a test that treats it as physics. Past that point
+the two answers diverge freely — `Δφ/φ` reaches 0.5 — and the parity file asserts nothing about them.
+
+That is not a convenience. It is the same statement `scientific-hurdles.md` §6 arrived at on the same
+day from the opposite direction: **a margin measured in the converged regime says nothing about the
+failing one.** In the converged regime the iteration path is a means and the root is the answer; in
+the failing regime the path *is* the answer, and nothing constrains two implementations to take the
+same one. Two batches, one morning apart, both landing on the same boundary.
+
+### 38.3 Two last-bit divergences, reported and deliberately not chased
+
+Both are ledger #8/#10's power ufunc, and neither is worth the remedy:
+
+* `planar_hessian_cells` divides by `lam**3`. NumPy's `**3` calls `pow`; measured, it disagrees with
+  `lam*lam*lam` on 2 of 5 ordinary values, and 191 of 768 entries differ — by at most **5.8e-16**.
+* `kc_circular_frequency` squares a Python *scalar*, which goes through libm's `pow` rather than a
+  multiply. One value in 200 differs, by **1.4e-16**.
+
+Matching either means writing `powf(3.0)` or `powf(2.0)` in Rust, which is **exactly** the spelling
+§17.2 records turning CI red: LLVM folds a constant exponent back into a multiply in **release**, so
+the assertion tests nothing in the profile that ships, and §33.6 records a parked `powf(2.0)` that
+was a shipped divergence for six batches. One ulp on a tolerance-ported limit oracle does not buy
+re-entering a trap this ledger has recorded twice. Both are bounded at a few ulps and their cause is
+named in the parity file.
+
+`rotating_wave_history` came out **bit-identical on this machine** and is asserted only to a
+tolerance, because it runs through `cos` and `sin` and §14 / hurdles §3 is the standing rule.
+
+### 38.4 The shared numerics: two more `#[path]` includes, and the line that stops them
+
+`rotating_wave.rs` needs a sparse matrix and a sparse LU. `physsynth-core` has both, transcribed and
+measured against SuperLU, and §37.2's three options apply unchanged — a Cargo edge inverts the crate
+split and goes red in `tests/deps.rs`; a copy is two transcriptions free to drift; an include is one
+text compiled twice. So `sparse.rs` and `sparse_lu.rs` join `root.rs`.
+
+The line worth stating is *which* things may cross, because "include what you need" would dissolve
+the crate split it is written under. A sparse LU and a root-find are **numerical methods with no
+physics in them**. The second difference and the SBP gradient pair are **the discretisation under
+test**, and `rotating_wave.rs` rebuilds those locally — as the Python does, and for the reason its
+docstring gives: an oracle assembled out of the operators it validates would agree with a divergent
+core by construction. The include list is a claim that nothing physical crossed, and it is checkable
+by reading four `#[path]` lines.
+
+### 38.5 The cross-crate identity test stays in Python, decided rather than discovered
+
+`planar_hessian_cells == 2 × GeometricString._dg_jacobian(q, q)` spans both crates, and a native test
+of it in `physsynth-analysis` needs the dependency edge `tests/deps.rs` exists to refuse. The
+alternatives were `physsynth-py`'s test directory, which sees both, or leaving it where it is. **It
+stays the Python test it has always been.** That is a cheap decision to state and an expensive one to
+discover at the end of a batch, which is why it is here.
+
+One thing that did *not* need doing: §1's fix already tightened that test's `(v,v)` bar from 1e-8 to
+1e-12 when it landed, so there was no cleanup owed. Checked rather than assumed.
+
+### 38.6 The binding returns a tuple, and the reason is not the trap it looks like
+
+`RotatingWave` is a fourteen-field `NamedTuple`, so §33.2's read-only-getter trap is the thing to
+check first, by the §34.6 grep — *assignment*, against the class being ported. Nothing in `tests/`,
+`scripts/` or `web/serialize.py` assigns to a field or calls `_replace`, which a NamedTuple's
+immutability would have forced anyway. So a `#[pyclass]` would have been safe, and it is still the
+wrong shape: the consumers read the result **as a tuple**, and a `#[pyclass]` is not one. The binding
+returns the fields and the Python wrapper builds the genuine NamedTuple, so every consumer keeps the
+type it already had.
+
+Two mechanical notes. PyO3 implements `IntoPyObject` for tuples up to **twelve** elements and this
+carries fifteen, so it is split — along the arrays/scalars line, which means something, rather than
+at the twelfth field, which would not. And the non-convergence *warning* is raised on the Python side
+from two extra returned values, because the binding has no business owning a Python warning category
+and `test_geometric_rotating_wave.py` matches on the message text.
+
+### 38.7 §19.7's line continuation, a **seventh** time
+
+Adding the parity file to the workflow's parity list, the edit arrived with the backslash and the
+newline collapsed into a literal `\n` — the same bug, from a seventh tool. `tests/test_ci_workflow.py`
+caught it before the commit, as it has every time. Seven occurrences, zero reaching CI. The guard that
+has never once been redundant is the cheapest thing in this repository.
+
+The `analysis` CI step needed no widening: its list is derived by the §37.8 grep, and
+`test_geometric_rotating_wave.py` already imports `physsynth.analysis`.
+
+### 38.8 The success condition
+
+* **29 unmodified Python tests** pass against the Rust module under `PHYSSYNTH_RS_ANALYSIS=1` —
+  §1's ritual, step 3.
+* **100** across the whole geometric family with **both** flags set; **408** in the web backend; and
+  **1,418** in the derived "instrument's clients" set with both flags, which is §37.8's CI step run
+  locally.
+* **22** new parity tests, **11** new native bars, `cargo test --workspace` green in **debug and
+  release** (§17.2's rule), `clippy -- -D warnings` clean.
+* `Ω` agrees to **8.4e-15** worst over 126 fixtures; `converged` agrees **126 of 126**.
+
+### 38.9 What the next batch inherits
+
+* **`physsynth/analysis/` is finished.** Every module in `core/` and `analysis/` now has a Rust
+  implementation behind one of the two flags. What is left of the migration is §35.4's test-suite
+  port, §37.0's viewer *import audit*, and §35.6's deletions — no more translation of models.
+* The findings ledger gains **#33** (a differing iteration count is a defect only when the iterate is
+  fed forward; the general form is that a margin measured at one fixture is a claim about one
+  fixture) and **#34** (what may cross a deliberate crate boundary is decided by whether the shared
+  text is a numerical method or the thing under test).
+* `docs/dev/scientific-hurdles.md` **§6** is answered in its causal half and stays open in its
+  mechanism half — §1 is eliminated, so §5's Newton–Krylov is the remaining proposal, and it now
+  covers three models rather than two.
+* Hurdle **§3**'s CI question is closed: green on five consecutive runs, no sibling.
+* The parked list is **empty**.

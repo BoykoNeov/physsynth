@@ -26,14 +26,14 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    is the gate on deleting the Python model behind it.
    See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
-   **State (2026-09-03): `physsynth/core/` is finished, and `analysis/` is all but finished.** Every
-   model, operator, solver, room, port, wrapper and bridge has a Rust implementation behind the one
-   flag (`crates/physsynth-core` + `crates/physsynth-py`), and five of `analysis/`'s six modules —
-   `spectrum`, `modal`, `damping`, `dispersion`, `duffing`, plus the Bessel and elliptic functions
-   they stand on — are in a **third crate**, `crates/physsynth-analysis`. Only
-   `analysis/rotating_wave.py` is left. What remains after it is the test-suite port, the viewer's
-   *import audit* (not its port — see the exception above) and the deletions — plan **§35** is the
-   roadmap and the order, **§37** the last batch. `cargo test --workspace` runs the native bars and
+   **State (2026-09-03): `physsynth/core/` and `physsynth/analysis/` are BOTH finished — the
+   translation of models is over.** Every model, operator, solver, room, port, wrapper and bridge has
+   a Rust implementation behind the one flag (`crates/physsynth-core` + `crates/physsynth-py`), and
+   all six of `analysis/`'s modules — `spectrum`, `modal`, `damping`, `dispersion`, `duffing`,
+   `rotating_wave`, plus the Bessel and elliptic functions they stand on — are in a **third crate**,
+   `crates/physsynth-analysis`. What remains is the test-suite port, the viewer's *import audit*
+   (not its port — see the exception above) and the deletions — plan **§35** is the roadmap and the
+   order, **§38** the last batch. `cargo test --workspace` runs the native bars and
    the Cargo dependency allowlists; `pip install ./crates/physsynth-py` then `PHYSSYNTH_RS=1 pytest`
    runs the **existing, unmodified** Python tests against the Rust code (reinstall before believing
    any parity number — nothing can tell a stale wheel from a fresh one). Both implementations stay
