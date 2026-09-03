@@ -104,15 +104,28 @@ jobs:
   # compile. Keeping the two apart also keeps the answer legible when they disagree: a red shard
   # is a physics regression, a red `rust` job is a port regression.
   #
-  # Three things are checked here, in increasing order of what they cost to discover:
+  # Three things are checked, in increasing order of what they cost to discover:
   #   1. the crates compile, are formatted, and pass clippy;
   #   2. `cargo test` — the native physics bars, plus the Cargo dependency allowlist that is the
   #      Rust half of the portability contract (plan §2.2);
   #   3. the EXISTING Python tests, unmodified, run against the Rust model via `PHYSSYNTH_RS`.
-  #      That third one is the phase's actual success condition. The first two only make its
+  #      That third one is the migration's actual success condition. The first two only make its
   #      failures cheap to read.
+  #
+  # (3) is the `rust-harness` job below rather than a step here. It used to be TWENTY-ONE steps in
+  # this job, one per batch, each naming by hand the files that batch's port could reach -- and
+  # each of those lists was a *claim* at the time it was written: "these are the tests that touch
+  # what I just ported, and they stay green with it underneath". With `physsynth/core/` finished
+  # (plan §34) every one of those claims is subsumed by a single larger one -- the whole suite runs
+  # green under the flag -- and twenty-one hand-maintained file lists are then twenty-one chances
+  # to name a file that no longer exists while proving nothing the one run does not.
+  #
+  # Measured before the collapse, on 2026-09-03 and on this repo's dev box rather than a runner:
+  # the whole suite minus the parity family, with `PHYSSYNTH_RS=1`, is 2,001 passed. That number is
+  # what licenses the deletion. The union of the twenty-one subset lists was never the suite, so
+  # until it was actually run, "the flagged suite is green" was an assumption and not a result.
   rust:
-    name: Rust core (compile, native bars, Python harness against it)
+    name: Rust core (compile, native bars, parity)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -168,519 +181,6 @@ jobs:
           pip install -e ".[dev]"
           pip install ./crates/physsynth-py
 
-      # Phase 0's success condition, stated as the plan states it: not "a string works" but *the
-      # existing tests passing unmodified against Rust*. Not one line of `tests/` mentions Rust --
-      # the substitution happens inside `physsynth/core/string_ideal.py`, gated on this variable.
-      #
-      # The file list is spelled out because it is a CLAIM, not a partition: these are the files
-      # that exercise `IdealString` directly, and the claim is that all of them stay green with the
-      # Rust model underneath. It is not the shard machinery and must not be confused for it --
-      # `scripts/shard_tests.py` still owns covering the suite, over in the `validate` job.
-      - name: The ideal string's own tests, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_energy.py \
-            tests/test_modal.py \
-            tests/test_convergence.py \
-            tests/test_dispersion.py \
-            tests/test_stability.py
-
-      # Phase 1's success condition, and it is a WIDER claim than Phase 0's for a structural
-      # reason: `operators` is not a model, it is what five models are built out of. Flipping
-      # PHYSSYNTH_RS swings `string_stiff`, `string_damped`, `string_nonlinear`,
-      # `string_geometric` and `beam` onto Rust-built matrices while all five are still Python --
-      # the plan's §1.2 lever, doing what it is for.
-      #
-      # So this list is not "the operator tests". `tests/test_operators.py` is four tests and
-      # touches none of `delta_xxxx`, `second_difference_matrix`, `biharmonic_matrix` or
-      # `free_beam_stiffness` -- naming it alone would be the vacuously-green trap the plan's §5
-      # correction warns about, one phase later. The files below are the ones that actually reach
-      # the ported code, directly or through a model built on it. The whole-suite run is the real
-      # bar and is measured in the plan's §10; this step exists to make a failure cheap to read.
-      - name: The operators' clients, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_operators.py \
-            tests/test_stiff_string.py \
-            tests/test_damped_string.py \
-            tests/test_tension_string.py \
-            tests/test_geometric_energy.py \
-            tests/test_beam_modal.py \
-            tests/test_beam_stability.py \
-            tests/test_bow_stability.py \
-            tests/test_free_plate_modal.py \
-            tests/test_free_plate_orthotropic.py
-
-      # Phase 2's success condition. Two claims in one step, because the swap makes them
-      # inseparable: `membrane` is a model with clients of its own, and `operators2d`'s builder
-      # half is what the WHOLE plate family assembles its geometry from.
-      #
-      # * The membrane's own bars are in four files (energy, modal, dispersion, stability) -- the
-      #   by-criterion layout the plan's §5 correction describes, not a file named after the model.
-      # * `mallet` and `airbox` each hold a Membrane and drive it: the mallet strikes one, and
-      #   `airbox._MembraneSurface` reaches into `.u`, `.u_prev`, `.n` and `.L` directly, once per
-      #   timestep. Those are the calls that decide whether the binding's buffer contract is right,
-      #   and no membrane test can see them.
-      # * `plate.py` imports `rectangle_mask`, `disk_mask`, `laplacian_from_mask` and `embed` from
-      #   `operators2d`, so flipping the flag puts every plate -- supported, free, orthotropic,
-      #   guitar-shaped -- and the von Karman bracket on Rust-built geometry while all of them are
-      #   still Python models. Same lever as Phase 1's, one dimension up. Since Phase 5's first
-      #   batch it also imports the OUTLINE (`guitar_mask` and friends), which is a sharper lever
-      #   again -- see the plate-outline step further down.
-      #
-      # `exciter` gets no list of its own on purpose: nearly every model's tests call
-      # `triangular_pluck` or a raised cosine, so a list would be the suite. The whole-suite run
-      # under the flag is the real bar and is measured in the plan's §11.
-      - name: The membrane, its clients and the 2-D builders, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_membrane_energy.py \
-            tests/test_membrane_modal.py \
-            tests/test_membrane_dispersion.py \
-            tests/test_membrane_stability.py \
-            tests/test_mallet_energy.py \
-            tests/test_mallet_signature.py \
-            tests/test_mallet_wall.py \
-            tests/test_airbox_membrane.py \
-            tests/test_airbox_surface.py \
-            tests/test_plate_modal.py \
-            tests/test_plate_stability.py \
-            tests/test_plate_orthotropic.py \
-            tests/test_free_plate_modal.py \
-            tests/test_guitar_plate.py \
-            tests/test_vk_airy.py \
-            tests/test_vk_bracket.py
-
-      # Phase 2 batch 2's success condition. `body` is 203 lines and the smallest model in the
-      # project; its client list is the longest of anything ported so far, and that asymmetry IS
-      # the claim.
-      #
-      # * `test_body.py` is nine tests and establishes the physics in isolation.
-      # * `connection` and `radiation` both do `from .body import ModalBody` at module scope, so
-      #   the flag swings the string-on-a-body bridge, the sympathetic-string bank, the plate and
-      #   free-plate bridges, the von Karman bridge, and all three radiation tiers.
-      # * `radiation.RadiatedBody`, the rational air load and `airbox.RoomLoadedBody` each
-      #   correct `q` after `step()` returns and then ASSIGN to `_accel`, once per timestep.
-      #   Those writes are what decide whether the binding's buffer contract is right for a
-      #   third, underscore-named state array, and no body test makes one.
-      - name: The modal body and its clients, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_body.py \
-            tests/test_connection.py \
-            tests/test_radiation.py \
-            tests/test_sympathetic.py \
-            tests/test_airbox_port.py \
-            tests/test_airbox_modal.py \
-            tests/test_airbox_scene.py \
-            tests/test_plate_connection.py \
-            tests/test_free_plate_connection.py \
-            tests/test_vk_connection.py
-
-      # Phase 2 batch 3's success condition, and the batch is the wind leg entire: the air column
-      # and the reed that blows it, ported together because the EXCITER SEAM between them was the
-      # thing that had to be decided (plan §12.5).
-      #
-      # `test_reed_signature.py` is in this list and that is not padding. The reed's step ordering
-      # -- open-end pin, then the source hook, then the radiating drain, then momentum -- is
-      # load-bearing and NO energy test can see it: get it wrong and the reed still oscillates and
-      # the books still roughly balance. The project's own reed work established that balance is
-      # not a sufficient detector there and the signature is, so the signature runs here.
-      #
-      # `test_bore_radiation.py` and `web/serialize.py` also read `_open_left`/`_open_right`, and
-      # `reed.py` reads `_bc_left` -- three more private names that are part of the surface, for
-      # the same reason `_accel` was (plan §12.2).
-      - name: The bore, the reed and their tests, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_bore_energy.py \
-            tests/test_bore_modal.py \
-            tests/test_bore_radiation.py \
-            tests/test_bore_stability.py \
-            tests/test_reed_energy.py \
-            tests/test_reed_signature.py \
-            tests/test_reed_stability.py
-
-      # Phase 2 batch 4's success condition -- the air node, and the first batch whose claim is
-      # NOT bit-identity.
-      #
-      # `radiation.RadiatedBody.step` reads `np.dot(b.a, b.q - q_nm1)` and feeds that number into
-      # the next state rather than reading it out, so OpenBLAS's fused multiply-add reaches the
-      # trajectory. Which kernel OpenBLAS picks is a property of the runner's CPU, so the bar is
-      # the plan's Group A target and not zero (plan section 14).
-      #
-      # The subtlety that decides what this step actually proves: every multi-mode body the suite
-      # hands these classes uses `phi=1.0` and no `radiation` weight, so `a_i = 1`, every product
-      # inside that `np.dot` is exact, and the fused and rounded forms are indistinguishable.
-      # Under this flag the divergence is therefore exactly zero -- a real property of these
-      # tests, not a measurement of the port. The measurement is in
-      # `test_rust_parity_radiation.py`, which builds a body whose weights are NOT powers of two
-      # on purpose. (Checked, not assumed: the largest ModalBody anywhere in the repo is five
-      # modes, below OpenBLAS's 16-term vectorisation threshold -- above which the summation ORDER
-      # diverges even when every product is exact.)
-      #
-      # `test_web_backend.py` is in the list because `web/serialize.py` hands a `RadiatedBody` to
-      # `StringBodyBridge` as the body -- so the flag puts a Rust wrapper inside a Python bridge,
-      # which is the `__getattr__` delegation surface and nothing in `tests/test_radiation.py`
-      # exercises it. It costs this job ~13 minutes on its own, and that is deliberate: section
-      # 13.7 measured that file by hand instead, and by-hand is not a gate.
-      #
-      # Four of the six files also appear in the batch-2 and batch-3 steps above. That redundancy
-      # is the convention this job already follows -- each step's list is a CLAIM about one
-      # batch's swap, not a partition of the suite.
-      - name: The air node and its clients, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_radiation.py \
-            tests/test_bore_radiation.py \
-            tests/test_airbox_freefield.py \
-            tests/test_airbox_scene.py \
-            tests/test_connection.py \
-            tests/test_web_backend.py
-
-      # Phase 3 batch 1's success condition -- the shared banded Cholesky, and the FIRST swap in
-      # this migration that deliberately changes the numbers.
-      #
-      # `physsynth/core/banded.py` is not a model. Four models factor a pentadiagonal SPD matrix
-      # and back-substitute every step -- `string_stiff`, `string_damped`, `string_nonlinear`,
-      # `string_geometric` -- and until this batch each imported the solver straight from SciPy.
-      # They had to move together, not one at a time, because they are chained by BIT-IDENTITY
-      # reduction anchors: sigma1 = 0 makes the damped string `array_equal` to the stiff one,
-      # EA = 0 makes the tension-modulated string `array_equal` to the damped one, EA = T does the
-      # same for the geometrically exact one. Port one model and those anchors become
-      # cross-language comparisons that the banded solve cannot carry -- OpenBLAS's triangular band
-      # kernel is blocked and no scalar transcription reproduces it (plan section 15).
-      #
-      # So the claim of this step is deliberately two-sided. The four models no longer agree with
-      # LAPACK to the bit -- they agree to the plan's Group A target over a short run, and their
-      # energy and modal bars are untouched, which is exactly the hand-off section 4 describes.
-      # What they DO still do is agree with each OTHER exactly, and that is what the three anchor
-      # tests inside this list check.
-      #
-      # The list is wide because `DampedStiffString` is the most-reused resonator in the project:
-      # the bow, the barrier, the bridges and the sympathetic strings all vibrate one, so all of
-      # them are now solving with Rust. `test_beam_*` is here for the opposite reason -- beam does
-      # NOT use the banded solver, so it is the control that says a failure below is about this
-      # batch rather than about the operators underneath it.
-      - name: The banded solver's four models and their clients, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_stiff_string.py \
-            tests/test_damped_string.py \
-            tests/test_tension_string.py \
-            tests/test_geometric_energy.py \
-            tests/test_geometric_limits.py \
-            tests/test_geometric_phantom.py \
-            tests/test_geometric_polarization.py \
-            tests/test_geometric_rotating_wave.py \
-            tests/test_geometric_whirl.py \
-            tests/test_bow_energy.py \
-            tests/test_bow_modal.py \
-            tests/test_bow_stability.py \
-            tests/test_collision_energy.py \
-            tests/test_collision_modal.py \
-            tests/test_collision_signature.py \
-            tests/test_jawari.py \
-            tests/test_connection.py \
-            tests/test_sympathetic.py \
-            tests/test_beam_modal.py \
-            tests/test_beam_stability.py
-
-      # Phase 3 batch 2's success condition -- the contact leg, and the batch that finally makes
-      # the mallet run on Rust arithmetic without the mallet itself having been ported.
-      #
-      # `physsynth/core/collision.py` holds the contact primitives and BOTH contact solves: the
-      # scalar one the mallet uses and the vector one the barrier string uses. `mallet.py`
-      # re-exports the five primitives and calls the scalar solve, so this one swap swings two
-      # models. `BarrierString` and `MalletMembrane` themselves were still Python when this step
-      # was written -- they wrap a `DampedStiffString` and a `Membrane`, and a model is not ported
-      # ahead of what it is built from (plan section 16).
-      #
-      # BOTH OF THOSE SHELLS HAVE SINCE PORTED (the mallet in section 17, the barrier in section
-      # 23), so the four files below no longer exercise a Python model over a Rust solve -- they
-      # exercise a Rust model. The step is kept because its CLAIM is still worth making and still
-      # true; the sentence above is corrected rather than deleted because a step whose meaning
-      # changed under it is exactly what section 20.11 caught in the prose, and leaving the
-      # original wording would repeat that.
-      #
-      # The claim was two-sided in a different way from the banded one above. The SCALAR half
-      # contains no reduction anywhere and is bit-identical, brentq bracket fallback included --
-      # that half is now asserted by the mallet's own step further down. The VECTOR half is driven
-      # by `G @ F(eta)`, a dense BLAS matvec feeding back into the next Newton iterate, which is
-      # section 14.2's construction -- so the barrier files below are a Group A claim.
-      #
-      # And the barrier's default fixture cannot see the difference, which is worth stating here
-      # rather than leaving as a pleasant surprise: its Newton Jacobian is within 1e-2 of the
-      # identity, so the new dense LU is effectively a no-op and 79 nodes in contact still come out
-      # bit-identical. That is not evidence the solvers agree, it is evidence the solver was barely
-      # used -- the fixture that actually exercises it lives in `test_rust_parity_collision.py`,
-      # which is why that file is not optional coverage for this batch (plan section 16.4).
-      #
-      # The mallet's three files moved to their own step when the mallet itself was ported one
-      # batch later (section 17); what is left here is the barrier, which is what this batch
-      # was about. The two steps are kept apart on purpose -- a batch's success condition
-      # should stay readable as the thing that batch claimed, not accrete its successors.
-      - name: The barrier string and its buzzing bridge, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_collision_energy.py \
-            tests/test_collision_modal.py \
-            tests/test_collision_signature.py \
-            tests/test_jawari.py
-
-      # PHASE 2'S LAST BATCH, and therefore the end of Phase 2 (plan section 17). The mallet's
-      # two model shells are now Rust as well: `MalletMembrane`, which holds the caller's own
-      # Rust `Membrane` and corrects one node of it per step, and `MalletWall`, the standalone
-      # rig where model #7's closed-form oracle lives.
-      #
-      # Section 16.11 pre-declared that any divergence here would be the shell's, since the
-      # drumhead and the contact solve had both already been ported. It is not: measured
-      # 2026-08-27, the whole trajectory -- mallet position, penetration, force, contact flag,
-      # fallback count and the drumhead's ENTIRE field -- is bit-identical over 2,000 steps
-      # across seven fixtures. `MalletWall` is bit-identical in every observable INCLUDING its
-      # energy, and that is what makes the attribution: the coupled model's `energy()` is the
-      # single exception, at 2e-16, and it differs because `Membrane.energy()` is a REDUCTION
-      # (section 14.2) rather than because anything in this batch moved.
-      #
-      # The one thing a shell this small could get wrong is `** 2`. Both admittances are built
-      # from one -- `k**2 / (rho h**2 (1 + sigma k))` and `k**2 / M` -- and on Python floats
-      # `**` is the C library's `pow`, NOT `x * x`. They are different doubles, they multiply
-      # the contact force at every timestep, and getting it wrong would conserve energy
-      # perfectly, so no physics bar in this repo could have caught it.
-      #
-      # The swap guard itself -- which this batch gave `collision` and `mallet` entries in --
-      # is NOT re-listed here: `tests/test_stability.py` already runs under the flag in the
-      # first step of this job, and once is enough.
-      - name: The mallet's two models, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_mallet_energy.py \
-            tests/test_mallet_signature.py \
-            tests/test_mallet_wall.py \
-            tests/test_membrane_energy.py
-
-      # Phase 3 batch 3's success condition -- the first two MODELS out of the four-string chain.
-      #
-      # `string_stiff.py` and `string_damped.py` are now Rust, and this step is wide for the same
-      # reason the banded one above is: `DampedStiffString` is the most-reused resonator in the
-      # project, so a Rust string is now under the bow, under the fret barrier, under the sitar
-      # bridge, under every sympathetic-string rig and under the body/plate bridges. Those clients
-      # are all still Python, which is the ordinary shape of a migration (plan section 1.2) -- and
-      # it is precisely why they are listed: this step is where a Python client that reached for
-      # something the binding does not expose would fail.
-      #
-      # WHAT HAD TO MOVE FIRST, AND IT IS NOT IN RUST. Two evaluation orders were pushed to a
-      # spelling both languages can express, unconditionally, in `physsynth/core/portable.py`:
-      #
-      #   * the energy REDUCTION -- `np.dot` is BLAS `ddot`, which is not a left-to-right sum and
-      #     differs from one in ~84% of the vectors this family uses;
-      #   * the operator's COLUMN ORDER -- SciPy's SMMP kernel returns the biharmonic block with
-      #     DESCENDING indices, and a CSR matvec sums each row in stored order, so `L @ u` differs
-      #     between the two spellings in 2000 of 2000 random vectors. That one is on the UPDATE
-      #     path, so it is a different trajectory rather than a different reported number.
-      #
-      # Both edits apply to ALL FOUR theta-scheme strings at once, because the suite chains them
-      # with bit-identity anchors across model classes -- the same reason the solver was ported
-      # before any of its callers one batch ago. `test_tension_string.py` and the
-      # `test_geometric_*` files are here as the anchors' other end: they are still Python, and
-      # they must still be `array_equal` to a Rust string.
-      #
-      # The claim: under the flag -- where both sides also share the Rust banded solver -- the two
-      # implementations agree to the BIT in every observable including `energy()`, over 2,000 steps
-      # and over 20,000. Without the flag they do not, and that gap is section 15.3's solver, not
-      # this port; `test_rust_parity_strings.py` separates the two causes by holding the solver
-      # fixed, which is why it is not optional coverage for this batch.
-      - name: The two theta-scheme strings and their clients, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_stiff_string.py \
-            tests/test_damped_string.py \
-            tests/test_tension_string.py \
-            tests/test_geometric_energy.py \
-            tests/test_geometric_limits.py \
-            tests/test_bow_energy.py \
-            tests/test_bow_stability.py \
-            tests/test_collision_energy.py \
-            tests/test_jawari.py \
-            tests/test_connection.py \
-            tests/test_sympathetic.py \
-            tests/test_free_plate_connection.py \
-            tests/test_beam_modal.py
-
-      # Phase 3 batch 4's success condition -- the tension-modulated string, model #9, and the
-      # first model in the project whose UPDATE MATRIX MOVES EVERY STEP. The banded factor is
-      # inside a scalar root-find rather than at construction, so `banded` and `root` meet here for
-      # the first time.
-      #
-      # `test_tension_string.py` carries the model's own bars, the `EA = 0` anchor -- now between a
-      # Rust model #9 and a Rust model #3 -- and the parametric-instability signature test, which
-      # is the one a last-bit perturbation could plausibly move.
-      #
-      # `test_web_backend.py` is here because `web/serialize.py` builds a `TensionModulatedString`
-      # for its `tension` model, so the viewer is this port's only other client (plan section 1.1)
-      # and the flag now puts a Rust string under it.
-      #
-      # NOT re-listed: the geometric string's files. Their flagged configuration did NOT move this
-      # batch -- `string_geometric` does not import `string_nonlinear`, and the two evaluation
-      # orders the family shares were already in place. Section 18.8's rule is to re-run every step
-      # whose configuration CHANGED, which is not the same as re-running everything nearby.
-      - name: The tension-modulated string and the viewer, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_tension_string.py \
-            tests/test_damped_string.py \
-            tests/test_web_backend.py
-
-      # Phase 3 batch 5's success condition, and the END OF PHASE 3 -- the bowed string, the
-      # project's first continuous nonlinear EXCITER and the last model of the phase.
-      #
-      # `bow.py` holds a `DampedStiffString` and corrects one node of it per step through a
-      # precomputed driving-point admittance, so almost everything hard about it was ported before
-      # this batch: the banded solve in batch 1, the string in batch 3, the Brent fallback in Phase
-      # 2 batch 3, the scan-and-bracket idiom in batch 2. What is new is one line of arithmetic and
-      # one question.
-      #
-      # THE ARITHMETIC. The friction residual is spelled TWICE in the original and the two
-      # spellings are different doubles: `_residual` multiplies by `g` last, `_bracketed_root`
-      # hoists `g * force * sqrt(2a)` into one scalar so NumPy can apply it to the whole scan array.
-      # Measured 2026-08-27, they disagree in 306 of 20,000 samples from this model's range. The
-      # port carries both, because the scan's values decide WHICH BRACKETS EXIST -- one flipped
-      # sign is one `brentq` call that does not happen, and at a slip event that is a different
-      # branch. Both `tests/test_rust_parity_bow.py` and `crates/physsynth-core/tests/bow.rs` pin
-      # that they stay apart; nothing else in either suite could notice them being merged.
-      #
-      # THE QUESTION was section 19.11's: a Newton ITERATION COUNT and a fallback BRANCH are
-      # compared by nothing in this repo, and the tension string's batch showed a last bit reaching
-      # one (a different count on 1,400 of 5,000 steps). Answered here rather than assumed --
-      # `test_rust_parity_bow.py` compares both step for step. Under a shared solver they are
-      # identical; with independent solvers the branch never differs and the count differs at most
-      # once in 20,000 steps, because the perturbation is ~1e-14 relative against a Newton
-      # tolerance that is 1e-13 absolute in velocity units of order 0.1.
-      #
-      # `test_web_backend.py` is here because `web/serialize.py` builds a `BowedString` for its
-      # `bow` model, so the viewer is this port's only other client (plan section 1.1).
-      - name: The bowed string and the viewer, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_bow_energy.py \
-            tests/test_bow_modal.py \
-            tests/test_bow_stability.py \
-            tests/test_damped_string.py \
-            tests/test_web_backend.py
-
-      # Phase 3 batch 6's success condition, and the ACTUAL END OF PHASE 3 -- the distributed
-      # barrier, model #8. The previous step called itself the end of the phase and was wrong:
-      # `collision.BarrierString` had been described in batch 2 as waiting on its host
-      # `DampedStiffString`, that host landed in batch 3, and the sentence was never revisited
-      # (plan section 20.11). This step is what finishes the phase.
-      #
-      # Almost nothing here is new machinery -- the contact primitives, the vector solve and the
-      # dense LU all landed in batch 2, the string in batch 3, the banded solve in batch 1. What is
-      # new is the SHELL: construction (broadcast the profile, pick the support, solve `m`
-      # admittance columns), the two penetration gathers, the rank-`m` force injection, and the
-      # barrier's two-time-averaged potential energy.
-      #
-      # THE ARITHMETIC, and it is one line. `force_pref = string.k ** 2 / string.rho` is
-      # `float.__pow__`, i.e. the C library's `pow` -- NOT `k * k`, which is a different double for
-      # a small fraction of sample rates. `bow.py` writes `self.k * self.k` at the same spot, so the
-      # two models' ports must spell their prefactor differently to stay faithful to their own
-      # originals. Both suites pin it, and both go and FIND a witness sample rate at runtime rather
-      # than hardcoding one, because which arguments `pow` rounds differently is a property of the
-      # runner (plan section 22.1) and a hardcoded witness would be a bar decided by the machine.
-      #
-      # THE SECOND MATVEC. Injecting the force is `u[1:-1] += force_pref * (cols_mat @ f)`, a dense
-      # BLAS matvec on the update path that nothing compared across the languages until the model
-      # itself ported. At two contact nodes it differs in 1,291 of 158,000 rows and the trajectory
-      # stays bit-identical -- because a TWO-term sum can only be reordered into a different double
-      # if its terms cancel, and a cancelled correction is 9.3e-13 of the field, far below its last
-      # bit. At 79 terms that correlation is gone and 7 differences in 2,000 steps reach the state.
-      # So the exactness at two nodes is a claim about the LENGTH OF THE SUM, and
-      # `tests/test_rust_parity_collision.py` asserts both halves.
-      #
-      # `test_web_backend.py` is here because `web/serialize.py` builds a `BarrierString` for THREE
-      # of its models -- the jawari bridge, the juari thread and the fret rail -- so the viewer is
-      # this port's largest client (plan section 1.1).
-      #
-      # The four barrier files overlap with batch 2's step above, and that is deliberate rather
-      # than an oversight: there they are a claim about the vector SOLVE with a Python shell over
-      # it, here they are a claim about the shell. The overlap costs about fifteen seconds and
-      # keeps each batch's success condition readable as the thing that batch claimed.
-      #
-      # `test_damped_string.py` is the third copy of that file in this job (batch 3's step and the
-      # bow's both run it) and is here for the reason the bow's step gives: it is the CONTROL. If
-      # this step goes red and that file is green in it, the failure is the barrier's shell; if
-      # they go red together, it is the string underneath and belongs to section 18.
-      - name: The distributed barrier and the viewer, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_collision_energy.py \
-            tests/test_collision_modal.py \
-            tests/test_collision_signature.py \
-            tests/test_jawari.py \
-            tests/test_damped_string.py \
-            tests/test_web_backend.py
-
-      # PHASE 4 -- `beam`, and the batch was sent to answer a question rather than to add a model.
-      #
-      # `beam` is the smallest member of the sparse-LU group (254 lines, one `splu`) and plan
-      # section 4.1 chose it as the place to find out whether Rust could link SuperLU and hold that
-      # whole group to the bit-identity Groups A-C get. It cannot. Of section 4.1's three named
-      # obstacles, two are non-issues (COLAMD's order is a closed form in `n`; SciPy calls `gstrf`
-      # rather than the driver, so equilibration never runs) and the third is real only above
-      # N = 48, where the matrix stops being diagonally largest and SuperLU begins swapping rows.
-      # What decides it is a fourth nobody listed: SuperLU is SUPERNODAL, and handed its own
-      # factors a longhand triangular solve still disagrees with `lu.solve` in ~20% of entries at
-      # ~4e-16 -- a property of how SciPy BUILT its copy, i.e. section 22.1 one layer down. Group D
-      # therefore runs on the fallback section 4.1 already named: tolerance-level agreement.
-      #
-      # WHAT THE TOLERANCE IS, and it is the batch's finding. `K`'s nullspace is exactly `{1, x}`,
-      # so along the rigid-body directions a free-free beam is a FREE PARTICLE and a per-step
-      # solver difference is integrated twice: the rigid component grows like t^2 (3.7e-17 at one
-      # step, 3.3e-9 of amplitude at 20,000) while the elastic component random-walks to ~1.4e-12
-      # and the energy stays inside 7e-12. That is a sixth agreement regime and the first set by a
-      # BOUNDARY CONDITION -- inherited by every free-edge model in Phases 5 and 6, which is why it
-      # is written here and not only in the test.
-      #
-      # These four files are the unmodified Python beam tests. They pass because they assert the
-      # PHYSICS -- the closed-form `cos(bL)cosh(bL) = 1` oracle through a generalized `eigsh` on
-      # `K` and `W`, the energy identity, the rejections -- and none of that moves at 1e-9. The
-      # comparison that the physics cannot make is in the parity step below.
-      - name: The free-free beam, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_beam_energy.py \
-            tests/test_beam_modal.py \
-            tests/test_beam_stability.py \
-            tests/test_stability.py
-
       - name: Record what decides the last bit
         # NumPy carries its own vectorised transcendentals, dispatched by CPU feature, while
         # the Rust port calls libm -- so which agreement claims below can hold is a property
@@ -689,265 +189,6 @@ jobs:
         run: |
           grep -m1 'model name' /proc/cpuinfo || true
           python -c "import numpy; numpy.show_runtime()"
-
-      # Phase 5 batch 1's success condition, and it is a different KIND of claim from every step
-      # above it. What ported here is the guitar outline -- `guitar_mask` and the six functions
-      # around it -- and its output is not a number, it is a SET OF NODES. `|x| < half(y)` with
-      # `half` built from `sin` and `cos`, so section 22.1's finding (NumPy computes
-      # transcendentals with its own CPU-dispatched routines, not the platform libm) lands
-      # directly on a live/dead decision. A plate with one node too few conserves energy
-      # beautifully, keeps a 3-dimensional nullspace and reports a plausible spectrum: every
-      # detector in this repo passes it. So the mask is compared node for node in the parity step,
-      # and these files are here to prove that a Rust-built outline drives the real models.
-      #
-      # Why the exact comparison is safe at all was measured before the port: over 130 shipped
-      # configurations every REAL guitar clears its own rim by at least 1.9e7 ulps of `half`, so a
-      # last bit cannot move a node. The degenerate lens (waist = 0, asym = 0) does not clear it --
-      # four nodes sit ONE ulp out at N = 32 and two sit exactly on the rim -- which is why
-      # `operators2d.py` now evaluates the profile through the scalar libm, where CPython and Rust
-      # meet, and keeps NumPy's vectorised spelling only for the area quadrature (plan 25.3-25.5).
-      #
-      # Phase 5 batch 2 widens this step from the outline to the OPERATORS. The five matrix
-      # builders are ported, so with the flag set every plate here steps on a Rust-built `B`
-      # or `K`. Their agreement is exact -- but only after one edit to the REFERENCE, and it
-      # is the one section 18.4 wrote down in advance: SciPy's sparse product hands each row
-      # back in whatever order its kernel touched the columns (measured NEITHER ascending nor
-      # descending, in 600 of 610 rows), a CSR matvec sums a row in stored order, and
-      # `Plate.step` forms `B @ u` twice per timestep -- so `portable.canonical` sorts the
-      # Python side. The free branch needed nothing: SciPy returns a Gram product already
-      # sorted, so only the supported plate's last bits moved (1.2e-13 of amplitude over
-      # 2,000 steps, drift unmoved against the 1e-10 bar). `test_plate_modal.py` holds the
-      # pre-port spelling and asserts both halves.
-      - name: The plate family's outline and operators, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_guitar_plate.py \
-            tests/test_free_plate_energy.py \
-            tests/test_free_plate_modal.py \
-            tests/test_free_plate_orthotropic.py \
-            tests/test_plate_energy.py \
-            tests/test_plate_modal.py \
-            tests/test_plate_orthotropic.py \
-            tests/test_vk_free.py \
-            tests/test_vk_energy.py \
-            tests/test_vk_airy.py \
-            tests/test_vk_bracket.py \
-            tests/test_membrane_modal.py \
-            tests/test_stability.py
-
-      # Phase 5 batch 3's success condition -- the NONLINEAR plate, and with it the last of
-      # `operators2d`. The five private 1-D differences, `VonKarmanBracket` and `AiryStressSolver`
-      # are ported, so with the flag set every von Karman model here sources its Airy stress
-      # function from a Rust factorization and forms its coupling force with a Rust bracket.
-      #
-      # Three different claims live in this one step and the files are chosen to separate them:
-      #
-      # * the bracket is EXACT -- every matvec in it is a canonical row gather and the elementwise
-      #   algebra is spelled the same way on both sides, so `l(a, b)` is bit-identical. That is the
-      #   nonlinear plate's update path, so `test_vk_bracket.py` is the load-bearing file.
-      # * the Airy SOLVE is not, and cannot be: SuperLU is supernodal (plan 24.2). The gap is the
-      #   condition number times epsilon -- 3e-16 at 4x4, 1.3e-13 at 24x19, 5.2e-10 at the 160x128
-      #   the airbox tests build -- and both sides are backward stable, which the parity step
-      #   asserts so that the growing tolerance cannot be mistaken for the port getting worse.
-      # * so the bar for a von Karman TRAJECTORY is the ENERGY, not `max|du|/amp`. Measured at
-      #   N = 12, the two regimes are separated by the PICARD SWEEP COUNT and not by the fixture:
-      #   two to six sweeps a step is a random walk (1.2e-13 at 1,000 steps even at ten times the
-      #   plate thickness), eleven or more is chaotic and e-folds every ~57 steps -- 4e-14 at step
-      #   100, 3e-7 at 1,000, fully decorrelated by 2,000 -- with the energy at 5e-14 relative and
-      #   the drift at 2.6e-14 on BOTH sides throughout. That is section 24.5's conclusion reached
-      #   by a different mechanism: there a rigid-body nullspace integrated the gap twice, here a
-      #   Lyapunov exponent multiplies it.
-      #
-      # `test_airbox_vk.py` is in the list because it is the only client that builds the largest
-      # Airy grids (160x128), where the solve gap is 5.2e-10 of amplitude. It is green for a
-      # reason and not by luck: nothing in this suite compares a DISPLACEMENT across the two
-      # implementations. `DRIFT_TOL` and `LEDGER_TOL` are both 1e-12 relative on an ENERGY, and
-      # every `array_equal` in that file compares two configurations of the same implementation.
-      #
-      # The Rust factorization is 16x slower than SuperLU's at that grid (2.5 s against 0.16 s) and
-      # it does not show: the same 24 files run 350.9 s on the default path and 291.6 s with the
-      # flag set, back to back on one machine. The per-step overhead the rest of the tree wins back
-      # is larger than the factorization this step pays for.
-      # Phase 5, batch 4: `plate.py` -- BOTH classes, because the suite binds them into one.
-      # `test_vk_energy.py` and `test_vk_free.py` assert that a linear `VKPlate` is
-      # `array_equal` to a `Plate` over 150 steps, and this port moves the solve, so swapping
-      # one class and not the other would break that anchor for a reason having nothing to do
-      # with either model (plan section 15.2, reaching two classes in one file).
-      #
-      # This step is much wider than the previous four because the plate has more clients than
-      # any other model in the tree: the bridges, the sympathetic strings, the whole airbox
-      # leg and the viewer's plate models all step one. `airbox.py` is NOT ported and it
-      # reassembles the plate's own system matrix; the batch gives it the same `splu` swap
-      # every module gets, so its four zero-load reduction tests stay bit-identical.
-      - name: The plate, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_plate_energy.py \
-            tests/test_plate_modal.py \
-            tests/test_plate_stability.py \
-            tests/test_plate_orthotropic.py \
-            tests/test_plate_connection.py \
-            tests/test_free_plate_energy.py \
-            tests/test_free_plate_modal.py \
-            tests/test_free_plate_connection.py \
-            tests/test_guitar_plate.py \
-            tests/test_airbox_surface.py \
-            tests/test_airbox_dipole.py \
-            tests/test_airbox_scene.py \
-            tests/test_airbox_membrane.py \
-            tests/test_airbox_port.py \
-            tests/test_web_backend.py \
-            tests/test_stability.py
-      # Phase 5, batch 5: `string_geometric.py` -- model #10, the LAST of the four theta-scheme
-      # strings and the last model in `physsynth/core/` outside `connection`, `airbox` and
-      # `analysis/`. Flipping it closes the bit-identity chain `portable.py` was written to
-      # protect: `EA = T` makes this model `array_equal` to `DampedStiffString`, and with this
-      # batch both ends of that anchor are Rust.
-      #
-      # The file list below is IDENTICAL to the six geometric files the banded step already runs,
-      # and that is worth a sentence rather than a shrug. Deriving the list -- grep the clients,
-      # subtract what an earlier step covers (plan section 28.10) -- returns nothing new here,
-      # because Phase 3's batch 1 already flagged every client when it ported the SOLVER these
-      # models share. What changed is the CLAIM, not the files: there the six ran a Python model on
-      # a Rust banded solve, here they run a Rust model whose Newton solve factors a sparse LU per
-      # iteration. A red run means a different thing in the two steps, which is the whole reason
-      # they are separate steps, and dropping this one because "the files are already covered"
-      # would be the empty-CI-job shape of section 28.12 reached through a fourth door.
-      - name: The geometrically exact string, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_geometric_energy.py \
-            tests/test_geometric_limits.py \
-            tests/test_geometric_phantom.py \
-            tests/test_geometric_polarization.py \
-            tests/test_geometric_rotating_wave.py \
-            tests/test_geometric_whirl.py \
-            tests/test_web_backend.py \
-            tests/test_stability.py
-
-      # Phase 5, batch 6: `AirBox` -- the 3-D room, and the first HALF of a file rather than a
-      # file. `airbox.py` is 3,976 lines and the three tiers above the class (the ports and the six
-      # `RoomLoaded*` / `RoomSuspended*` wrappers) stay Python, so this step asks a question no
-      # earlier one had to: does the SEAM hold? Everything above `AirBox` reaches into it through
-      # fifteen names -- fourteen private plus `source_index`, which is PUBLIC and which the
-      # private-name grep that found the other fourteen could not see -- and SIX of them are
-      # containers a client WRITES. A wrapper that silently stopped seeing a room's
-      # `_pending_ports` would inject nothing and every energy ledger in these files would stay
-      # green, so the list below is the whole airbox family rather than the room's own tests.
-      #
-      # The field is bit-identical on every boundary type, with cuts, with injections and from an
-      # exact discrete mode; the four `np.sum` energy books are not, and cannot be (NumPy's
-      # pairwise blocking above eight elements, plan section 30.2). That is affordable here for a
-      # reason no earlier refusal had: `dissipated` and `injected` are pure bookkeeping, so the
-      # reduction reaches no timestep -- section 14.2's question asked and answered "no".
-      #
-      # `test_airbox_modal.py` is load-bearing in a way it does not look. `mode_shape` is a tensor
-      # cosine, and section 22.1 makes `np.cos` a claim about the runner's CPU; `set_mode` seeds an
-      # initial CONDITION rather than a read-out, so `airbox.py` now builds those cosines with
-      # `math.cos` -- section 22.3's portable spelling a sixth time, and free at ~60 calls a room.
-      # A Linux runner is the only place that change can be observed at all (section 22.2).
-      # Section 30 ported the room; section 31 ported the PORT TIER above it (`RoomPort`,
-      # `SurfacePort`, `InteriorSurfacePort` and the `_free_pressure_nodes` helper they share);
-      # section 32 ported the WRAPPER TIER above that -- `RoomLoadedBody`, both plate wrappers,
-      # both von Karman wrappers and the two seams they drive; and section 33 the MEMBRANE PAIR
-      # and its seam, which finishes the file. The file list has not changed once across the four,
-      # which is the point of plan section 1's design: four tiers moved and not one of these tests
-      # was touched. `airbox.py` is now Rust end to end.
-      #
-      # Section 32's own hazard is what this step covers and a parity file cannot: ten of these
-      # tests REPLACE a collaborator on the instance -- `port.T`, `port.load_matrix`, `port.R`,
-      # the port's own methods, and `inst._lu_loaded` -- to switch a coupling off, halve it or
-      # invert its sign. A wrapper that cached any of them would keep loading the plate and every
-      # one of those tests would pass having compared a loaded plate with itself.
-      #
-      # `test_airbox_membrane.py` carries section 33's variant of that hazard, and it is a
-      # different SHAPE: its lagged-velocity negative control does not replace a collaborator, it
-      # bypasses `step` entirely -- driving the seam, the port and the books by hand and advancing
-      # the wrapper's own `inst.n += 1`. A `#[getter]` with no `#[setter]` is a data descriptor
-      # whose `__set__` raises, so that assignment is the one thing in this list that turns a
-      # correct port RED rather than quietly green, and it is the only client of it in the tree.
-      - name: The room, its ports and the resonators they load, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_airbox_energy.py \
-            tests/test_airbox_modal.py \
-            tests/test_airbox_cut.py \
-            tests/test_airbox_port.py \
-            tests/test_airbox_freefield.py \
-            tests/test_airbox_scene.py \
-            tests/test_airbox_surface.py \
-            tests/test_airbox_membrane.py \
-            tests/test_airbox_dipole.py \
-            tests/test_airbox_vk.py \
-            tests/test_web_backend.py \
-            tests/test_stability.py
-
-      # Phase 5, batch 10: `connection.py` -- the four bridges, and the LAST file of the core
-      # before `analysis/`. All four move together because two exact anchors bind them
-      # (plan section 15.2): `test_sympathetic.py` asserts a one-string `SympatheticStrings` is
-      # `array_equal` to a `StringBodyBridge`, and
-      # `test_airbox_vk.py::test_the_nonlinear_false_chain_is_the_linear_bridge_bit_identical`
-      # asserts `StringVKPlateBridge.stability_margin == StringPlateBridge.stability_margin` to
-      # the last digit. Port either half of either pair alone and the anchor breaks for a reason
-      # having nothing to do with the physics.
-      #
-      # The file list is the whole coupled leg rather than the bridges' own tests, and the reason
-      # is what makes this batch different from every other: `connection.py` is **polymorphic over
-      # its collaborators' types** and always was. It contains no `isinstance`, `hasattr`,
-      # `getattr` or `type(` at all -- pure duck typing -- and the `body=` slot takes a
-      # `ModalBody`, a `RadiatedBody`, a `ReactiveRadiatedBody` and a `RoomLoadedBody`, while the
-      # `plate=` slot takes a `Plate`, a `VKPlate` and four room wrappers. A port that downcast a
-      # collaborator to a concrete `#[pyclass]` would pass the bridges' own tests and fail here.
-      # That is also why this file could not move until section 32 had ported the wrappers: what
-      # a bridge needs from a collaborator is that it ANSWER, and section 33.2 adds that it answer
-      # to a write.
-      #
-      # Three `test_airbox_*` files pin `bridge.stability_margin == bare.stability_margin`
-      # EXACTLY across that boundary -- a bridge over a room-loaded plate against a bridge over a
-      # bare one -- so the Sherman-Morrison guard's bracketing is asserted rather than assumed.
-      # The guard itself computes through `connection`'s own module-global `sparse`, `spsolve` and
-      # `splu`, read at call time, which is the faithful transcription and keeps section 24.4's
-      # shared-factorization manoeuvre available on this file.
-      - name: The bridges, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_connection.py \
-            tests/test_sympathetic.py \
-            tests/test_plate_connection.py \
-            tests/test_free_plate_connection.py \
-            tests/test_vk_connection.py \
-            tests/test_radiation.py \
-            tests/test_airbox_surface.py \
-            tests/test_airbox_dipole.py \
-            tests/test_airbox_vk.py \
-            tests/test_web_backend.py \
-            tests/test_stability.py
-
-      - name: The nonlinear plate's bracket and Airy solve, unmodified, against Rust
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          pytest --durations=10 \
-            tests/test_vk_bracket.py \
-            tests/test_vk_airy.py \
-            tests/test_vk_energy.py \
-            tests/test_vk_modal.py \
-            tests/test_vk_free.py \
-            tests/test_vk_stability.py \
-            tests/test_vk_connection.py \
-            tests/test_airbox_vk.py \
-            tests/test_free_plate_orthotropic.py \
-            tests/test_stability.py
 
       # The comparison the physics bars are too loose to make: state arrays bit-for-bit, energy to
       # the plan's Group A target, and the buffer-lifetime properties that no physics test can see.
@@ -988,6 +229,82 @@ jobs:
             tests/test_rust_parity_airbox_wrap.py \
             tests/test_rust_parity_airbox_memb.py \
             tests/test_rust_parity_connection.py
+
+  # The migration's success condition, as one claim instead of twenty-one (plan §35.7).
+  #
+  # The whole validation suite, unmodified, with `PHYSSYNTH_RS=1` -- so every ported model, solver,
+  # operator, room, port, wrapper and bridge is exercised through its real clients rather than
+  # through a hand-picked list of the files someone thought it could reach. Not one line of
+  # `tests/` mentions Rust; the substitution happens inside `physsynth/core/*.py`, gated on this
+  # variable, which is what makes running the suite unmodified mean anything at all.
+  #
+  # THE PARITY FAMILY IS EXCLUDED, and that is not an optimisation. `test_rust_parity_*.py` build
+  # BOTH sides themselves and assert something about the pair; with the flag set, the side they
+  # take to be Python is Rust too, so the file compares Rust against Rust. Most assertions then
+  # pass vacuously and at least one -- a negative control, which asserts that a difference *exists*
+  # -- fails outright. Neither is information. They run once, unflagged, in the `rust` job above.
+  # `scripts/shard_tests.py --exclude-parity` owns the removal, and it removes them AFTER the
+  # split so these shards are provably the `validate` job's shards minus a known list; see that
+  # script's `PARITY_PREFIX` and `tests/test_shard_partition.py` for why the order is the hazard.
+  #
+  # Sharded over the same three runners as `validate`, for the same reason: the suite is
+  # bulk-bound, so the only lever is cores. The cost stated plainly -- three matrix jobs each build
+  # the wheel, so the Rust compile is paid three times, in parallel. That is the trade this file
+  # already makes everywhere else (one runner per job is free on a public repo, wall clock is not).
+  rust-harness:
+    name: The suite, unmodified, against Rust (shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    needs: setup
+    strategy:
+      # Same reasoning as `validate`: when two shards disagree, the disagreement is the finding.
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.setup.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install both sides
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install ./crates/physsynth-py
+
+      # The import is checked before the suite runs, and it is load-bearing. Every `physsynth/core`
+      # module reads `PHYSSYNTH_RS` at import and swaps in `physsynth_rs` when it is set -- but a
+      # failed wheel install would make that import raise inside a module the suite imports, which
+      # reports as a collection error rather than as "the extension is missing". Asking here means
+      # the answer is one line at the top of the log instead of 2,000 identical tracebacks.
+      - name: Record what decides the last bit
+        run: |
+          grep -m1 'model name' /proc/cpuinfo || true
+          python -c "import physsynth_rs; print(physsynth_rs.__file__)"
+          python -c "import numpy; numpy.show_runtime()"
+
+      # The collected count is echoed for the same reason the `checks` job echoes its own: a shard
+      # that collected nothing runs nothing and exits 0, and the number is the only thing that
+      # tells that apart from a shard that passed.
+      - name: Run the suite against Rust (shard ${{ matrix.shard }}/${{ needs.setup.outputs.count }})
+        env:
+          PHYSSYNTH_RS: "1"
+        run: |
+          set -euo pipefail
+          echo "cores: $(nproc)"
+          files=$(python scripts/shard_tests.py --shard ${{ matrix.shard }} \
+                    --of ${{ needs.setup.outputs.count }} --exclude-parity)
+          test -n "$files"
+          echo "files in this flagged shard: $(echo $files | wc -w)"
+          pytest -n auto --dist loadgroup $files --durations=25
 
   # Lint, plus the OUTER half of the shard guard.
   #

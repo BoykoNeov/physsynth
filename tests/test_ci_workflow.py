@@ -53,6 +53,16 @@ def test_every_test_file_the_workflow_names_exists(workflow_lines):
     The count is asserted as well as the membership. A scan that silently matched nothing would
     pass this test forever while checking nothing -- §16.8's shape, and the reason the number is
     written down rather than assumed to be large.
+
+    **The threshold dropped from 50 to 20 on 2026-09-03, and that is a real weakening.** It used to
+    be met several times over by twenty-one per-batch steps that each named the files that batch's
+    port could reach; plan §35.7 collapsed those into one flagged run of the whole suite, computed
+    from the glob, and a computed list has no tokens to check. What is left is the parity family,
+    which stays spelled out literally in the `rust` job precisely so this canary keeps something to
+    count -- folding *that* list into a script too would take the number to zero and leave this
+    test green forever while asserting nothing. The floor is set just under the family's size so
+    that deleting a parity file (which §35.4 says happens, one per model, when its Python side
+    goes) reads as a threshold to lower deliberately rather than as a failure to explain.
     """
     named = [
         token
@@ -60,7 +70,7 @@ def test_every_test_file_the_workflow_names_exists(workflow_lines):
         for token in line.split()
         if token.startswith("tests/") and token.endswith(".py")
     ]
-    assert len(named) > 50, (
+    assert len(named) >= 20, (
         f"only {len(named)} test-file tokens found in the workflow -- the scan has stopped "
         "matching, so this guard is checking nothing"
     )

@@ -85,6 +85,46 @@ def test_more_shards_than_files_is_rejected_rather_than_silently_emptied():
         shard_tests.partition(["test_one.py", "test_two.py"], 3)
 
 
+@pytest.mark.parametrize("k", SHARD_COUNTS)
+def test_dropping_the_parity_family_does_not_move_anything_between_shards(k):
+    """``--exclude-parity`` filters *after* the split, and this is what says so.
+
+    The flagged CI run is the same three shards as the unflagged one with the two-sided comparison
+    files removed. If the removal happened before the partition instead, LPT would see a different
+    file set and place every remaining file differently -- the two runs would be different
+    partitions that happen to cover the same files, and both would be green while a file sat in
+    shard 2 of one and shard 3 of the other. Harmless until the two disagree about what exists.
+
+    So the property is *not* "the flagged shards cover the non-parity files", which a
+    filter-then-split would also satisfy. It is that each flagged shard is exactly its own
+    unflagged shard minus the parity files in it.
+    """
+    files = shard_tests.test_files()
+    shards = shard_tests.partition(files, k)
+    # The parity set spelled independently of the script -- by the same glob the CI step names,
+    # so this compares two derivations rather than the script against itself.
+    parity = {p.name for p in (REPO_ROOT / "tests").glob("test_rust_parity*.py")}
+    for shard in shards:
+        assert shard_tests.drop_parity(shard) == [f for f in shard if f not in parity]
+    covered = sorted(f for shard in shards for f in shard_tests.drop_parity(shard))
+    assert covered == sorted(f for f in files if f not in parity)
+
+
+def test_the_parity_family_is_found_at_all():
+    """The canary. A scan that silently stopped matching would pass every test above forever.
+
+    Same shape as ``tests/test_ci_workflow.py``'s asserted token count and the ``checks`` job's
+    emptiness checks: an exclusion that excludes nothing is indistinguishable from no exclusion,
+    and it fails in the direction that stays green -- the flagged run would quietly include the
+    parity files again and start comparing Rust against Rust. The number is written down rather
+    than assumed to be nonzero.
+    """
+    files = shard_tests.test_files()
+    dropped = sorted(set(files) - set(shard_tests.drop_parity(files)))
+    assert len(dropped) >= 20, f"only {len(dropped)} parity files found -- the prefix has drifted"
+    assert all(f.startswith("test_rust_parity") for f in dropped)
+
+
 def test_the_heaviest_files_are_spread_and_not_stacked():
     """LPT's one real job: the expensive files must not pile onto the same shard.
 

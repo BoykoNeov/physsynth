@@ -48,6 +48,29 @@ Three, because the split is worth making only until a shard's wall meets the lon
 inside it, and past that point more runners buy nothing.
 """
 
+PARITY_PREFIX = "test_rust_parity"
+"""Prefix of the files that compare the two implementations against each other.
+
+These are the one family that must **not** run with ``PHYSSYNTH_RS`` set. Each of them builds both
+sides itself -- the Python reference and the Rust port -- and asserts something about the pair; with
+the flag on, the "Python" half is Rust too, so the file compares Rust against Rust. Most of its
+assertions then pass vacuously and at least one fails outright (a negative control, asserting that
+a difference *exists*, is the shape that goes red). Neither outcome is information.
+
+So the flagged whole-suite run in CI is the shards **minus this family**, and the family runs once,
+unflagged, in its own step. The exclusion lives here rather than as a ``grep -v`` in the workflow
+for the same reason the partition does: it is then a function this repo's tests can assert about,
+and ``tests/test_shard_partition.py`` asserts both halves of it -- that it removes exactly the
+files the glob finds, and that it removes them *after* the split rather than before.
+
+That ordering is the whole hazard and it is worth stating in full. Filtering before partitioning
+changes which shard every remaining file lands on, because LPT is a function of the file set; the
+flagged shards would then be a different partition from the unflagged ones, and a file could sit in
+shard 2 of one and shard 3 of the other. Nothing would notice -- both runs are green, both are
+complete -- until the day the two partitions disagree about a file that exists in only one of them.
+Split first, drop second, and the flagged run is provably the unflagged run minus a known list.
+"""
+
 DEFAULT_COST = 20.0
 """Cost assumed for a file the table has never seen -- i.e. every file added after the last profile.
 
@@ -68,6 +91,16 @@ def _load_costs() -> dict[str, float]:
 def test_files(tests_dir: Path = TESTS_DIR) -> list[str]:
     """Every collectable test file, sorted -- the set the partition is required to cover exactly."""
     return sorted(p.name for p in tests_dir.glob("test_*.py"))
+
+
+def is_parity(name: str) -> bool:
+    """Is this file one of the two-sided comparisons that must run unflagged? See PARITY_PREFIX."""
+    return name.startswith(PARITY_PREFIX)
+
+
+def drop_parity(files: list[str]) -> list[str]:
+    """``files`` without the parity family, order preserved."""
+    return [f for f in files if not is_parity(f)]
 
 
 def partition(files: list[str], k: int, costs: dict[str, float] | None = None) -> list[list[str]]:
@@ -106,6 +139,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--list", action="store_true", help="print every shard with its cost")
     ap.add_argument("--count", action="store_true", help="print the shard count and exit")
     ap.add_argument("--matrix", action="store_true", help="print the shard indices as JSON")
+    ap.add_argument(
+        "--exclude-parity",
+        action="store_true",
+        help="drop the test_rust_parity_* family from the printed shard (for the PHYSSYNTH_RS run)",
+    )
     args = ap.parse_args(argv)
 
     # Both of these exist for the workflow's `setup` job, which turns SHARDS into a matrix so the
@@ -140,7 +178,12 @@ def main(argv: list[str] | None = None) -> int:
     # absolute path here would carry this checkout's directory -- which on the dev box contains a
     # space and word-splits into nonsense that pytest reports as "no tests collected", i.e. a green
     # empty run. Relative paths are also what the logs are readable as.
-    print(" ".join(f"tests/{f}" for f in shards[args.shard - 1]))
+    # Note the order: the shard is selected out of the full partition and only then filtered, so
+    # `--exclude-parity` cannot move a file between shards. See PARITY_PREFIX for why that matters.
+    shard = shards[args.shard - 1]
+    if args.exclude_parity:
+        shard = drop_parity(shard)
+    print(" ".join(f"tests/{f}" for f in shard))
     return 0
 
 
