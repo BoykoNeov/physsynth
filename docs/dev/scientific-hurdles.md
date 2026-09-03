@@ -23,9 +23,9 @@
 | 3 | NumPy's own transcendentals disagree with libm by an ulp on some CPUs — a read-out asserted exactly across languages fails on a runner and passes on another | `airbox.mode_frequency`, four `pow`s, one `tan`, `exp`, `cos`/`sin` | **Live** — the parity step has been red on `main` for four runs (§3) |
 | 4 | The θ-scheme suppresses every discrete decay rate by `1/(1+θk²Q)`; "highs die faster" turns over past mode ~32 | `string_damped`, `string_stiff`, both plates | Accounted for; **fix derived, not built** (§4) |
 | 5 | The von Kármán Picard iteration stops contracting at large amplitude / small `h` / high `fs` — the gong-on-a-string, the gong in a room and grid coarsening all die there | `plate.VKPlate`, `connection`, `airbox` | Open; **Newton proposed** (§5) |
-| 6 | The geometrically exact string's Newton solve stops converging past `λ_long ≈ 4`, and `h`-refinement makes it worse | `string_geometric` | Warned at 1, unresolved regime (§6) |
+| 6 | The geometrically exact string's Newton solve stops converging past `λ_long ≈ 4`, and `h`-refinement makes it worse | `string_geometric` | Warned at 1, unresolved regime; **§1 eliminated as the cause 2026-09-03** (edge identical in 9/9 cells) and the threshold split into a **convergence** edge at 4 and an **energy** edge at 5–10 (§6) |
 | 7 | A point port's added mass is a grid quantity: refinement makes it *worse* | `airbox.RoomPort` | Refused, measured — `radius` has no default (§7) |
-| 8 | At `λ = 1/√3` the room's corner mode is defective: broadband content grows linearly while the energy stays flat | `airbox` | Accounted for — the one place a flat energy is not a stability certificate (§8) |
+| 8 | At `λ = 1/√3` the room's corner mode is defective: broadband content grows linearly while the energy stays flat | `airbox` | Accounted for — a flat energy is not a stability certificate here (nor in §6's under-resolved band, found 2026-09-03) (§8) |
 | 9 | The conserved total is blind to a wrong coupling constant; `radiated == injected` is blind to half of them | every coupled scene | Accounted for — three detectors, jointly (§9) |
 | 10 | Aliasing around every nonlinearity | bow, reed, mallet, VK plate, both nonlinear strings | Mitigated by oversampling; no anti-aliased scheme (§10) |
 | 11 | Twenty ARPACK oracles were not bit-reproducible run to run | `analysis/modal.py` | Fixed in §24.9 — kept here as the pattern (§11) |
@@ -229,13 +229,51 @@ nothing refuses it; what happens instead is that Newton stops converging past `�
 warns at `LAM_LONG_WARN = 1.0`; `λ_long = 2` conserves to 1e-12, so a hard bar would forbid
 working configurations (`docs/memory/geometric-string-state.md`, the human's call).
 
-**Status.** Warned, not understood. The §1 fix removes one candidate cause (a Jacobian wrong in
-its fifth digit steers Newton badly exactly when the longitudinal stiffness dominates); whether
-the convergent window moves is a measurement to take — re-run the `λ_long` sweep the memory note
-describes and record the new edge beside the old one. If the edge does not move, the mechanism
-is the fixed point's, and §5's Newton–Krylov applies here too (the same discrete-gradient
-structure). Either way the number belongs in `test_geometric_limits.py`, which today asserts the
-warning and not the edge.
+**Status.** Warned, not understood — and as of 2026-09-03 the §1 candidate cause is **eliminated
+by measurement**, so the mechanism is the fixed point's and §5's Newton–Krylov applies here too.
+
+**The measurement (2026-09-03).** `scripts/sweep_geometric_lam_long.py` runs both Jacobian
+spellings — the current one and the pre-§1 expression, carried verbatim in the script as
+`OldJacobianString` — on identical fixtures in one process, over nine `(N, amplitude, IC)` cells.
+Comparing against the old table instead would have attributed to the Jacobian whatever else drifted
+in the rig over the intervening months.
+
+**The edge did not move: 9 cells of 9, identical.** Not "close" — the same grid point.
+
+**Why it could not have moved, which is the useful half.** The old Jacobian's relative error grows
+like `1/strain²` (§1's table: 3.9e-11 at strain 0.1, 5.8e-5 at 1e-4), so it is worst where the
+string is *quietest*. The Newton solve's difficulty grows with the nonlinearity, so it is worst
+where the string is *loudest*. The amplitude sweep shows the two regions are disjoint: at strain
+1.9e-4 — where the old spelling was ~5e-5 wrong — both spellings converge in 1–2 iterations with
+zero stalls at every `λ_long` up to 10; at strain 3.8e-2 — where the stalls and the blow-up live —
+the old spelling was already ~1e-11 right. In the narrow overlap (strain ~9e-3) the corrected
+Jacobian does trim cap-hits, 14–16 against 18–20 per 300 steps, but the sign is not systematic:
+across the nine cells the first-stall `λ_long` differs in two, once in each direction. **A fix to
+an accuracy that is worst at small amplitude cannot rescue a convergence failure that only exists
+at large amplitude.**
+
+**What the measurement did find — there are two edges, and the old table conflated them.** Reading
+the Newton iteration counter beside the drift (§1's own argument says drift alone cannot see a
+Jacobian change) separates:
+
+| | `λ_long` | what happens |
+|---|---|---|
+| **Convergence edge** | **4** (7 of 9 cells) | steps begin to exhaust `newton_maxiter` |
+| **Energy edge** | **5–10**, case-dependent | drift breaks the 1e-10 gate, runs to 1e+5 |
+
+The old table's `λ_long = 4` row was right about *convergence* and its `1e+3 … 1e+5` drift belonged
+to a different, higher threshold. Between the two the solve stalls on up to a fifth of its steps
+and the energy still conserves to ~1e-15 — better, in fact, than a well-resolved long run, because
+there are fewer steps to accumulate round-off over. **This is the second place in the project where
+a flat energy is not a stability certificate** (§8 is the first), and unlike §8 it is blind in the
+safe-looking direction. `LAM_LONG_WARN` stays at 1.0 — the human's call, and its 4× margin is now
+explicitly margin against the *convergence* edge.
+
+Pinned by `tests/test_geometric_energy.py::test_a_flat_energy_is_not_a_convergence_certificate_in_the_under_resolved_band`,
+which asserts both halves at `λ_long = 6` (stalls fire, gate passes) against a `λ_long = 2` control,
+and names the sweep script as the thing to re-run if the edge ever moves. The expensive nine-cell
+sweep stays in the script: the suite is bulk-bound and a run that blows up on purpose is not a cheap
+test.
 
 ## 7. The point port does not converge — refused, measured
 

@@ -586,6 +586,67 @@ def test_under_resolved_longitudinal_field_warns_because_nothing_else_will():
     assert good.lam_long <= LAM_LONG_WARN
 
 
+@pytest.mark.slow
+def test_a_flat_energy_is_not_a_convergence_certificate_in_the_under_resolved_band():
+    """There are **two** ``lam_long`` edges, they are far apart, and only one of them is visible.
+
+    The warning above says "past ``lam_long ~ 4`` the Newton solve stops converging and energy
+    drift explodes", which reads as one threshold. It is two, and the sweep that separated them
+    (``scripts/sweep_geometric_lam_long.py``, 2026-09-03, nine ``(N, amplitude, IC)`` cells) puts
+    them a factor of two apart:
+
+    * **The convergence edge** -- the first ``lam_long`` at which any step exhausts
+      ``newton_maxiter`` -- is at **4** in seven of the nine cells. That is exactly the number the
+      old table reported, so the old table was right about *convergence*.
+    * **The energy edge** -- the first ``lam_long`` whose lossless drift breaks
+      :data:`DRIFT_GATE` -- is at **5 to 10**, case-dependent. So the old table's ``1e+3 .. 1e+5``
+      drift belongs to a *different, higher* threshold than its non-convergence claim, and the two
+      were conflated into one row.
+
+    In the band between them the solve warns on a fifth of its steps and the energy still conserves
+    to ~1e-15 -- **better**, in fact, than a well-resolved long run, because there are fewer steps
+    to accumulate round-off over. So the model's primary bug detector is blind here, and it is
+    blind in the *safe-looking* direction. That is the second place in this project where a flat
+    energy is not a stability certificate (``docs/dev/scientific-hurdles.md`` section 8 has the
+    first, the room's defective corner mode at the 3-D CFL ceiling) and it is why the sweep reports
+    the iteration counter beside the drift rather than the drift alone.
+
+    The consequence for a caller is the one the warning already gives -- resolve ``lam_long`` -- but
+    the consequence for a *test* is sharper: a run that conserves has not thereby shown its Newton
+    solve converged, so anything asserting convergence must read
+    :attr:`~physsynth.core.string_geometric.GeometricString.n_not_converged` and not the energy.
+    """
+    N, amp, duration = 32, 4e-3, 0.004
+
+    def trajectory(lam_long):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # the construction bar; not the point
+            s = make_geometric_string(N=N, lam_long=lam_long, EA=EA_DEFAULT)
+        s.set_state(geometric_mode_ic(s.N, 3, amp))
+        e0 = s.energy()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # counted via n_not_converged instead
+            for _ in range(int(round(duration * s.fs))):
+                s.step()
+        return abs(s.energy() - e0) / abs(e0), s.n_not_converged
+
+    # Resolved: the solve converges on every step and the energy is flat. The control.
+    drift_ok, stalled_ok = trajectory(2.0)
+    assert stalled_ok == 0, "lam_long = 2 should converge on every step"
+    assert drift_ok < DRIFT_GATE
+
+    # In the band: the solve is failing and the energy gate cannot tell.
+    drift_band, stalled_band = trajectory(6.0)
+    assert stalled_band > 0, (
+        "lam_long = 6 sits above the convergence edge — if nothing stalls here the edge has "
+        "moved, and scripts/sweep_geometric_lam_long.py is the thing to re-run"
+    )
+    assert drift_band < DRIFT_GATE, (
+        f"the point of this test is that the energy gate passes ({drift_band:.2e}) while "
+        f"{stalled_band} steps failed to converge"
+    )
+
+
 def test_the_linear_anchor_never_warns_however_coarse_the_longitudinal_field():
     """``EA = T`` is exempt from the ``lam_long`` bar — and the exemption is load-bearing.
 

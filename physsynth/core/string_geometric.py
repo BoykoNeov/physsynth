@@ -184,14 +184,26 @@ LAM_LONG_WARN = 1.0
 Every other explicit scheme in this package rejects ``lam > 1`` because the scheme is *unstable*
 above it. This one is an **accuracy** bar on an unconditionally stable scheme, which is exactly what
 makes it dangerous: nothing throws, nothing violates, and the model quietly returns nonsense.
-Measured, over plucked and mode-3 ICs at amplitudes up to 1e-2::
 
-    lam_long <= 2    drift ~1e-12 .. 1e-13   conserves, every case tried
-    lam_long  = 4    drift 1e-13 .. 2e+3     case-dependent
-    lam_long >= 8    drift 1e+3 .. 1e+5      Newton stops converging; blow-up
+**There are two edges here, not one, and they are a factor of two apart.** Re-measured 2026-09-03
+by ``scripts/sweep_geometric_lam_long.py`` over nine ``(N, amplitude, IC)`` cells -- plucked and
+mode-3, ``N`` 16 to 32, amplitudes to 1e-2 -- with the Newton iteration counter read beside the
+drift rather than the drift alone::
+
+    lam_long <= 2    conserves ~1e-13 .. 1e-15, no step exhausts newton_maxiter
+    lam_long  = 4    the CONVERGENCE edge: steps begin to exhaust newton_maxiter (7 of 9 cells)
+    lam_long  5-10   the ENERGY edge, case-dependent: drift breaks 1e-10 and runs to 1e+5
+
+Between the two the solve stalls on up to a fifth of its steps and the energy *still* conserves to
+~1e-15 -- so in that band the model's primary bug detector is blind, and blind in the safe-looking
+direction (``docs/dev/scientific-hurdles.md`` section 8 is the other place in this project where a
+flat energy is not a stability certificate). An earlier version of this table gave a single row per
+``lam_long`` and so read as one threshold; its ``= 4`` was the convergence edge and its ``1e+3``
+drift was the energy edge, two cells apart.
 
 The bar sits at 1 rather than the measured-safe 2 to mirror this project's "tune toward lambda = 1"
-rule, and to keep 4x of margin on a *sharp* cliff. It **warns rather than rejects**:
+rule, and to keep 4x of margin on the *convergence* edge -- which, now that the two are separated,
+is what the 4x is margin against. It **warns rather than rejects**:
 ``lam_long = 2`` demonstrably conserves, so a hard bar would forbid working configurations -- and
 the regime above is worth being able to *study*, just not to trust. Because
 ``c_long/c = sqrt(EA/T0) ~ 22`` at realistic stiffness, the familiar transverse ``lam = 0.5`` lands

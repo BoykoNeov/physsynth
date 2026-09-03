@@ -277,6 +277,30 @@ Jacobian vs FD 1e-10, `EA=T₀` bit-identical to #3, `max|w| == 0.0` exact. Less
    stable; `λ_long=2` conserves 1e-12 ⇒ a hard bar would forbid working configs; unresolved regime
    worth studying, not trusting). Bar=1 not 2 → mirrors "tune toward λ=1", 4× margin. **It fires on
    `lam=0.5` — the params a reader of #1–#9 reaches for first. That is its purpose.**
+
+   **RE-MEASURED 2026-09-03 (`scripts/sweep_geometric_lam_long.py`), and the row above is TWO rows.**
+   Hurdles §1 fixed the DG Jacobian's `(v,v)` block (it cancelled two `O(1)` terms and was wrong in
+   its 5th digit at musical strain); §6 asked whether the convergent window moves. **It does not —
+   9 cells of 9, the same grid point**, old spelling against new on identical fixtures in one
+   process (the script carries `OldJacobianString` verbatim so the A/B is re-runnable). **Why it
+   could not:** the old Jacobian's error grows like `1/strain²` so it is worst where the string is
+   QUIETEST; Newton's trouble grows with the nonlinearity so it is worst where it is LOUDEST — the
+   two regions are **disjoint** (measured: at strain 1.9e-4 both spellings take 1–2 iters with zero
+   stalls to `λ_long=10`; at 3.8e-2, where the blow-up lives, the old spelling was already ~1e-11
+   right). *A fix whose benefit is largest at small amplitude cannot rescue a failure that only
+   exists at large amplitude* — generalizable, and it is why the null result is strong rather than
+   weak. **The real find: reading the ITERATION COUNTER beside the drift splits the threshold** —
+   **convergence edge `λ_long≈4`** (steps start exhausting `newton_maxiter`, 7/9 cells = the old
+   table's number, so the old table was right about *convergence*) vs **energy edge `λ_long≈5–10`**
+   case-dependent (drift breaks 1e-10). Between them the solve stalls on **a fifth of its steps and
+   the energy still conserves to 1e-15** — better than a resolved long run, because fewer steps
+   accumulate less round-off. So **a flat energy is NOT a convergence certificate here** (2nd such
+   place in the project; hurdles §8's defective corner mode is the 1st) and it is blind in the
+   *safe-looking* direction. Pinned by
+   `test_geometric_energy.py::test_a_flat_energy_is_not_a_convergence_certificate_in_the_under_resolved_band`.
+   `LAM_LONG_WARN` **stays at 1.0** — the 4× margin is now explicitly margin against the
+   *convergence* edge. §6 stays open; §1 is eliminated as its cause, so the mechanism is the fixed
+   point's and hurdles §5's Newton–Krylov applies here too.
 2. **Energy floor is `0`, NOT `−L·T₀²/(2EA)`** — I got this wrong in *both* directions. `−T₀v_x` is a
    null Lagrangian (telescopes to 0 at fixed ends) but the pre-stress `T₀²/(2EA)` survives per cell,
    which tempts the negative bound = a string **relaxed everywhere**. That state is **inadmissible**:
