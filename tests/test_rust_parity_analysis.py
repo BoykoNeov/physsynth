@@ -451,9 +451,14 @@ assert many.shape == (2,), many.shape
 mesh = np.array([[1.0, 2.0], [3.0, 4.0]])
 assert M.dirichlet_axis_eigenvalue(mesh, 0.65, 0.005).shape == (2, 2)
 
-# 3. The other flag must not have moved: a core model is Python here.
-import physsynth.core.string_ideal as S
-assert S.IdealString is S.IdealStringPy, "PHYSSYNTH_RS_ANALYSIS swapped a MODEL"
+# 3. The other flag must not have moved: a core model is Python here. This probe used to reach
+#    for `string_ideal`, whose Python body was deleted with unit 7 (plan 39). It reaches for a
+#    BRIDGE instead, and that choice is durable rather than convenient: plan 39.3 shows
+#    `connection` lives only in the binding crate, so its Python reference implementation is the
+#    one thing that cannot be deleted while the binding exists. Any model would do today; this one
+#    will still be here after the rest are gone.
+import physsynth.core.connection as C
+assert C.StringBodyBridge is C.StringBodyBridgePy, "PHYSSYNTH_RS_ANALYSIS swapped a MODEL"
 
 # 4. The same early binding through a FIFTH door, and the first one that is not a package module.
 #    `tests/helpers.py` does `from physsynth.analysis.rotating_wave import solve_rotating_wave` --

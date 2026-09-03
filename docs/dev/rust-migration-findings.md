@@ -52,6 +52,8 @@
 | 34 | What may cross a deliberate crate boundary is decided by **what the shared text is**: a numerical method with no physics in it may be included; the discretisation under test may not, or the oracle would agree with a divergent core by construction | §38.4 |
 | 35 | A swap that **delegates** keeps its Python `__module__`, so "is this object Rust?" is the wrong detector for an import audit — ask whether the name's **definition site moves** when the flag moves, which is a two-process fingerprint diff and not a reading of the source | §39.1 |
 | 36 | An anchor's blast radius is a property of **one test**, not of a file: a single six-class spelling assertion welded ten modules into one deletion unit, and reading that one test dissolved the blob into nine. Corollary: sort a mixed file by reading each body — a `for cls in (...)` loop is a property test wearing a comparison's clothes | §39.2, §39.5 |
+| 37 | An enumeration built from a **naming convention** is a claim about the convention, not about the code: `core/` marks its reference implementations `<Name>Py` and `analysis/` marks its own `<name>_py`, so a graph built from the first covered six modules and 2,458 lines in no unit at all. Catch it by checking the counts against the files on disk | §40.4 |
+| 38 | #25's read-only getter comes back at **deletion** time and is a different blocker: a test reaches for the reference implementation *because* it permits a write the binding forbids (`plate.B = ...`), so a test that injects state blocks a deletion rather than a port, and no porting bar could have seen it | §40.5 |
 
 ## The questions to ask before writing an exact assertion
 

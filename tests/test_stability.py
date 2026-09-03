@@ -194,8 +194,29 @@ def test_the_rust_swap_matches_the_environment():
     )
 
     expected_rust = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
+
+    # The DELETED half of the guard, added with unit 7 (plan 39). A module whose Python reference
+    # implementation has been deleted has no second implementation to choose between, so it has no
+    # `_USE_RUST`, no `<Name>Py` alias, and its public name is the Rust class on BOTH paths. Each
+    # of those three is asserted rather than assumed, and the module is named here by hand for the
+    # same reason the tuples below are: a deletion has to be a reviewed edit. Without this, a
+    # module that quietly lost its swap block would simply fall out of the derive and nothing would
+    # notice -- which is section 17.6's finding for a third time, now on the way *out*.
+    import physsynth_rs
+
+    for module, name in ((string_ideal, "IdealString"),):
+        assert not hasattr(module, "_USE_RUST"), (
+            f"{module.__name__} has a deleted Python body but still reads PHYSSYNTH_RS -- the "
+            "flag chooses between two implementations and there is one"
+        )
+        assert not [a for a in dir(module) if a.endswith("Py") and not a.endswith("_py")], (
+            f"{module.__name__} has a deleted Python body but still defines a `<Name>Py` alias"
+        )
+        assert getattr(module, name) is getattr(physsynth_rs, name), (
+            f"{module.__name__}.{name} must be the Rust class on both paths, flag or no flag"
+        )
+
     for module in (
-        string_ideal,
         operators,
         # `airbox` has read PHYSSYNTH_RS since Phase 5's fourth batch (it takes the `splu` swap),
         # and it was NOT in this tuple until the fifth ported `AirBox` itself -- a whole batch in
@@ -235,7 +256,6 @@ def test_the_rust_swap_matches_the_environment():
     swapped_classes = {}
     for module in (
         airbox,
-        string_ideal,
         membrane,
         body,
         bore,
@@ -280,7 +300,6 @@ def test_the_rust_swap_matches_the_environment():
         ("physsynth.core.airbox", "RoomSuspendedVKPlate"),
         ("physsynth.core.airbox", "RoomLoadedMembrane"),
         ("physsynth.core.airbox", "RoomSuspendedMembrane"),
-        ("physsynth.core.string_ideal", "IdealString"),
         ("physsynth.core.membrane", "Membrane"),
         ("physsynth.core.body", "ModalBody"),
         ("physsynth.core.bore", "Bore"),

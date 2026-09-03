@@ -64,6 +64,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
@@ -71,10 +76,22 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
+      # THE WHEEL IS INSTALLED HERE, and this job stopped being the pure-Python baseline on
+      # 2026-09-03. That is a decision (the human's, plan 39.6 route 1), not a convenience: with
+      # `physsynth/core/string_ideal.py` reduced to a re-export of `physsynth_rs`, there is no
+      # pure-Python path left to run, and a job that skipped what it could not import would report
+      # green while asserting nothing about the model. See plan 39.6 for the two rejected routes.
+      #
+      # What this job still is, and it is not nothing: the suite with NO flag set. Every model whose
+      # Python body survives runs its Python implementation here and its Rust one in
+      # `rust-harness`, so the pair of jobs still splits a physics regression from a port
+      # regression. That distinction narrows by one model per deletion and ends when the last body
+      # goes -- at which point these two jobs are the same run and one of them should be removed.
       - name: Install
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
+          pip install ./crates/physsynth-py
 
       # `-n auto` = one worker per available core (4 on a standard runner; `nproc` is echoed so the
       # divisor is on the record next to the numbers it divides).
@@ -98,11 +115,14 @@ jobs:
 
   # The Rust migration's gate (docs/dev/rust-migration-plan.md).
   #
-  # A SEPARATE job, deliberately not a step inside the three shards. Those shards install the
-  # project with `pip install -e ".[dev]"` and run 1,808 tests against the pure-Python core; that
-  # run is the baseline every ported model is measured against, and it must not grow a Rust
-  # compile. Keeping the two apart also keeps the answer legible when they disagree: a red shard
-  # is a physics regression, a red `rust` job is a port regression.
+  # A SEPARATE job, deliberately not a step inside the three shards. Those shards run the suite
+  # with no flag set -- so every model that still HAS a Python body runs it there, and that is the
+  # baseline a ported model is measured against. Keeping the two apart keeps the answer legible
+  # when they disagree: a red shard is a physics regression, a red `rust` job is a port regression.
+  #
+  # The shards install the wheel as of 2026-09-03 (plan 39.6) because deleted models have no
+  # Python left to run; they are no longer the "pure-Python core" run this comment used to
+  # describe, and the count it quoted (1,808) was stale by 200 tests besides.
   #
   # Three things are checked, in increasing order of what they cost to discover:
   #   1. the crates compile, are formatted, and pass clippy;

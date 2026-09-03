@@ -8256,9 +8256,11 @@ detail to be settled by whoever writes the deletion. Three routes, and the middl
 
 ### 39.7 Two stale numbers, corrected while they were in front of me
 
-The whole suite, unmodified, under **both** flags: **2,011 passed in 80 s** locally (parity family
-excluded, `-n auto --dist loadgroup`). The figures carried since 2026-08-17 — 1,808 tests, 5,027.9
-core-seconds — are stale in both columns and should not be quoted again.
+Two different counts, and they were being quoted as one. **The suite minus the parity family,
+under both flags: 2,011 passed in 80 s.** **The whole suite, unflagged, parity family included:
+4,566 passed in 480 s.** The gap is the parity family — over half the collected tests, which is
+worth knowing before deleting it. Both measured locally, `-n auto --dist loadgroup`. The figures
+carried since 2026-08-17 — 1,808 tests, 5,027.9 core-seconds — are stale in both columns.
 
 ### 39.8 What the next batch inherits
 
@@ -8272,3 +8274,147 @@ core-seconds — are stale in both columns and should not be quoted again.
   anchor's blast radius is a property of one test, not of a file: ten modules were welded into one
   unit by a single six-class spelling assertion, and reading it dissolved the blob).
 * Nothing is parked. 39.6 is a question, not a park.
+
+---
+
+## §40 The first deletion (2026-09-03) — unit 7, and two blockers the audit could not see
+
+§39 turned the deletion order into a table and ended on a question. The question was answered
+(**route 1**: the `validate` job installs the wheel and stops being the pure-Python baseline), and
+this section is the first deletion executed under that answer, plus the two things that only showed
+up once a deletion was actually attempted.
+
+### 40.1 What came out, and what the module is now
+
+`physsynth/core/string_ideal.py` went from **231 lines to 45**. What is left is the module docstring,
+the `Boundary` / `BoundarySpec` type aliases (`tests/helpers.py` imports the first), and
+`from physsynth_rs import IdealString`. There is no `_USE_RUST`, no `IdealStringPy`, and no
+`if` — the file names one implementation because there is one.
+
+The physics documentation did **not** move into a docstring nobody reads: it was already duplicated
+in `crates/physsynth-core/src/string_ideal.rs`'s header, which is now the only copy of HANDOFF
+§4.2–§4.3, the explicit scheme and the cross-time potential term. The Python docstring points there
+and says what it is.
+
+One thing worth recording because it is now unenforceable. `string_ideal.rs`'s header explains at
+length that its elementwise kernels reproduce NumPy's *evaluation order* so the two implementations
+agree bit-for-bit. **The oracle for that claim no longer exists.** The ordering stays because it is
+correct and free, but nothing measures it any more, and a later refactor that re-associated one of
+those expressions would now be caught by no test in the repository. That is the price of the
+deletion, it is paid knowingly, and it is the general shape of what every subsequent deletion costs.
+
+### 40.2 The parity file was three files wearing one name
+
+§39.5 predicted this and executing it confirmed the split, with one correction to §39.5's own count.
+
+* **Fourteen two-sided comparisons deleted.** No physics bar went with them: the ideal string's bars
+  are in `test_energy.py`, `test_convergence.py`, `test_modal.py`, `test_dispersion.py` and
+  `test_stability.py`, none of which ever named `IdealStringPy`, and all of which now run against
+  Rust unchanged — 4,566 passed unflagged.
+* **Six moved to `tests/test_binding_surface.py`**, not the four §39.5 counted. The two extra are
+  the boundary-default table and the explicit-`None` refusal: both are statements about **PyO3's
+  argument mapping** (`Option<Option<_>>`, and the arm order that makes `Some(None)` mean "omitted"),
+  which is as much a binding property as a buffer lifetime. They were left behind by the first sort
+  because they *look* like a cross-model table rather than a property.
+* **`test_rust_parity.py` survives holding one thing**: the claim that each *remaining* Python
+  reference implementation refuses `boundary=None` the way its Rust twin does. Five rows, written
+  out by hand, and **the file is deleted when the list empties**. Written out rather than derived on
+  purpose: a derived list would shrink to nothing and keep passing, which is §37.8's finding one
+  level down.
+
+The new file is deliberately **not** named `test_rust_parity_*`. That prefix means "must run
+unflagged because it builds both sides itself" (`scripts/shard_tests.py`'s `PARITY_PREFIX`), and
+nothing in `test_binding_surface.py` builds a Python side, so it should run in every shard of every
+job. This is the destination for every future deletion's binding residue.
+
+### 40.3 The swap guard needed a deletion half, and it is the same finding a third time
+
+`tests/test_stability.py::test_the_rust_swap_matches_the_environment` is the guard without which the
+whole flagged CI job can be green and mean nothing. It has two halves: a hand-written tuple of
+modules whose `_USE_RUST` must agree with the environment, and a **derived** set of `<Name>Py`
+aliases checked against a written-down expectation. §17.6's finding — that a derive is only as wide
+as the tuple it derives over — is recorded twice inside its own comments, both times about a module
+that was missing from a tuple.
+
+A deletion breaks it in a **new direction**: `string_ideal` has no `_USE_RUST` to read and no alias
+to derive, so the first half raises and the second silently gets smaller. Silently getting smaller is
+the dangerous one — a module that quietly lost its swap block for the wrong reason would fall out of
+the derive and nothing would notice. So the guard gained a third clause, and it asserts the *absence*
+of the mechanism rather than its presence:
+
+* the module has **no** `_USE_RUST` (the flag chooses between two implementations and there is one);
+* the module defines **no** `<Name>Py` alias;
+* the public name **is** the Rust class on both paths, flag or no flag.
+
+Named by hand, one line per deleted module, for the same reason the tuples are: a deletion has to be
+a reviewed edit. It runs green on both paths.
+
+### 40.4 The first blocker the audit missed: `analysis/` uses a different naming convention
+
+§39.2 built its graph from `<Name>Py` class aliases, which is `core/`'s convention. **`analysis/`
+does not use it.** Its reference implementations are functions carrying a `_py` *suffix* —
+`discrete_mode_frequency_py`, `measure_partials_near_py`, and fifty-one more across the six modules.
+The `*Py` regex found none of them, so §39's nine units silently covered `core/` only, and the
+2,458 lines of `analysis/` appeared in no unit at all.
+
+Run with the right convention, `analysis/` adds two units:
+
+| unit | modules | glued by | native bars | blocker |
+|---|---|---|---|---|
+| 10 | `damping` · `dispersion` · `duffing` · `modal` · `rotating_wave` | `test_rust_parity_analysis.py` | `oracles.rs`, `modal.rs`, `elliptic.rs`, `rotating_wave.rs` | none |
+| 11 | `spectrum` | `test_rust_parity_spectrum.py` | `spectrum.rs` | none |
+
+Both are deletable. The finding under it generalises past this repository: **an enumeration built
+from a naming convention is a claim about the convention, not about the code**, and the way to catch
+it is to check that the counts add up to the files on disk — six `analysis/` modules, zero units, was
+visible arithmetic that nobody did.
+
+### 40.5 The second blocker: a read-only getter makes one test inexpressible
+
+`tests/test_plate_modal.py` carries the pin on the 2026-08-28 sparse-assembly finding (§26): it
+builds two plates, replaces one's biharmonic with the pre-fix assembly, and asserts the old operator
+drifts where the new one does not. It reaches for `PlatePy` **by name and on purpose** — the file's
+own docstring explains that under the flag both plates would carry the same operator and the
+comparison would assert nothing while staying green.
+
+Measured: `physsynth_rs.Plate.B` is a `#[getter]` with **no `#[setter]`**, so
+`plate.B = <other matrix>` raises `AttributeError: attribute 'B' ... is not writable`. That is §33.2
+exactly — a getter that silently takes a write away — arriving at the *deletion* stage rather than
+the porting stage, and it means **unit 5 cannot be deleted as scoped.** Three routes, none free:
+
+1. add a `#[setter]` for `B`, which is a decision about whether the binding should let a caller
+   inject an arbitrary stiffness operator into a plate;
+2. retire the test with a note, which loses the only pin on §26's ordering finding;
+3. re-express the claim without injection — the squared-Laplacian spectrum check next to it already
+   asserts the *correct* operator is correct, but the *drift* claim needs the wrong one in a plate.
+
+Left open here rather than chosen. `operators2d` is in the same unit and inherits the block.
+
+### 40.6 The measured state
+
+| run | tests | wall |
+|---|---:|---:|
+| unflagged, whole suite (`validate`'s content) | **4,566** passed | 480 s |
+| `PHYSSYNTH_RS=1`, parity family excluded (`rust-harness`) | **2,029** passed | 129 s |
+| the two guards (`test_ci_workflow`, `test_shard_partition`, `test_xdist_groups`) | 126 passed | 0.4 s |
+| `ruff check .` | clean | — |
+
+No Rust changed, so `cargo test --workspace` was not re-run for this batch; the deletion touches
+Python only.
+
+### 40.7 What the next batch inherits
+
+* **Units 2, 3, 4, 10 and 11 are unblocked and unattempted** — `body`+`radiation`,
+  `bore`+`reed`, `mallet`+`membrane`, the four analysis oracles, and `spectrum`. Together with
+  unit 1 (the six strings) that is roughly **11,200 lines** of Python model code and **8,600** of
+  parity tests.
+* **Unit 5 is blocked on 40.5's question** and **units 6 and 8 on native bars that do not exist**
+  (`AirBox`, `FreeBeam`). **Unit 9 is blocked permanently** by §39.3.
+* Every deletion from here must update three things or it will not be green: the `_USE_RUST` /
+  alias-absence clause in `test_stability.py`'s swap guard, the row list in `test_rust_parity.py`,
+  and any non-parity test naming the reference alias (§39.2 lists two, and 40.5 is one of them).
+* The findings ledger gains **#37** (an enumeration built from a naming convention is a claim about
+  the convention — check the counts against the files on disk) and **#38** (§33.2's read-only getter
+  comes back at deletion time: the reference implementation can be reached for *because* it permits
+  a write the binding forbids, so a test that injects state is a deletion blocker, not a port one).
+* Nothing is parked. 40.5 is a question.
