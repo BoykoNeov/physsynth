@@ -4,6 +4,7 @@
 //! oracle must return *no decay* for a lossless string, the dispersion curve must be flat when the
 //! scheme is exact, and the Duffing solution must actually solve the Duffing equation.
 
+use physsynth_analysis::bessel::j1;
 use physsynth_analysis::damping::{
     discrete_damped_mode_decay, discrete_damped_mode_is_underdamped, discrete_damped_mode_rate,
     loss_coefficients_from_t60, modal_loss_rate_continuum, spatial_eigenvalue_p2,
@@ -17,7 +18,9 @@ use physsynth_analysis::duffing::{
     duffing_frequency_expansion, duffing_frequency_shift, kc_mode_coefficients, kc_mode_stretch,
 };
 use physsynth_analysis::modal::{discrete_mode_frequency, discrete_stiff_mode_frequency};
-use physsynth_analysis::radiation::{piston_radiation_resistance, C0_AIR, RHO0_AIR};
+use physsynth_analysis::radiation::{
+    piston_radiation_resistance, C0_AIR, PISTON_SERIES_CUTOFF_KA, RHO0_AIR,
+};
 
 // -- damping ---------------------------------------------------------------------------------
 
@@ -267,35 +270,61 @@ fn the_piston_reaches_twice_the_free_space_monopole_in_the_rayleigh_limit() {
 }
 
 #[test]
-fn the_pistons_two_branches_do_not_meet_at_their_threshold_and_that_is_the_originals_bug() {
-    // This asserts a DEFECT rather than a property, deliberately, and the defect is inherited
-    // rather than introduced: `piston_radiation_resistance` switches to the series `(ka)²/2` below
-    // `ka = 1e-8`, and just above that threshold the direct form `1 - J1(2ka)/ka` is subtracting
-    // two numbers that agree to sixteen digits. Measured against the exact series with SciPy's own
-    // `j1` doing the work: the shipped Python is **544% wrong at ka = 1e-8**, 2.3% at 1e-7, 3.1e-4
-    // at 1e-6, and only reaches 1e-6 accuracy around ka = 1e-5. The threshold is roughly three
-    // decades too small.
+fn the_pistons_two_branches_meet_at_their_threshold() {
+    // This test asserted the OPPOSITE until 2026-09-03, deliberately: the shipped Python's series
+    // cutoff sat at `ka = 1e-8`, three decades below where `1 - J1(2ka)/ka` becomes computable, and
+    // just above it the function was 544% wrong. That bar is what found the defect (hurdles §14),
+    // and this is what replaces it now the threshold has moved to 3e-2 with three series terms.
     //
-    // The port reproduces it, because reproducing is the job (plan §1) and a branch choice is part
-    // of the trajectory (§17). It is registered as a physics defect in
-    // `docs/dev/scientific-hurdles.md` §14 with the proposed threshold, for the human's call —
-    // moving it here would be changing a shipped number inside a porting batch.
-    //
-    // No caller is in the band: the suite's two real call sites are at ka = 9.2e-5 and ka = 1.83.
+    // Continuity across the seam is the property to assert rather than accuracy on either side: a
+    // future threshold edit that lands back inside the cancellation would show up here as a step,
+    // and nothing else in the suite would notice — every physics bar downstream is percentage-level
+    // and the two branches differ by parts in 1e13.
     let (radius, c0) = (0.05, C0_AIR);
-    let ka = 1e-8_f64;
-    let omega = ka * c0 / radius;
-    let series = RHO0_AIR * c0 / (std::f64::consts::PI * radius * radius) * 0.5 * ka * ka;
-    let below = piston_radiation_resistance(omega * 0.99, radius, RHO0_AIR, c0);
-    let above = piston_radiation_resistance(omega * 1.01, radius, RHO0_AIR, c0);
-    assert!(
-        (below / (series * 0.99 * 0.99) - 1.0).abs() < 1e-12,
-        "the series side of the threshold is exact and must stay so"
-    );
-    assert!(
-        (above / series - 1.0).abs() > 0.5,
-        "the direct side should be badly wrong here; if this passes, the cancellation went away and scientific-hurdles.md section 14 can be closed"
-    );
+    let cut = PISTON_SERIES_CUTOFF_KA;
+    for d in [0.999, 0.9999, 1.0, 1.0001, 1.001] {
+        let ka = cut * d;
+        let omega = ka * c0 / radius;
+        let r = piston_radiation_resistance(omega, radius, RHO0_AIR, c0);
+        // Evaluate both brackets directly, so this compares the two formulas rather than the
+        // function against itself. `ka` is recomputed from `omega` the way the function does it,
+        // because `omega * radius / c0` does not round-trip `ka * c0 / radius` exactly -- and the
+        // scale is applied in the function's own association, since `(scale * ka2) * rest` and
+        // `scale * (ka2 * rest)` are different doubles (§27).
+        let ka = omega * radius / c0;
+        let ka2 = ka * ka;
+        let scale = RHO0_AIR * c0 / (std::f64::consts::PI * radius * radius);
+        let series = scale * (ka2 * (0.5 - ka2 * (1.0 / 12.0 - ka2 / 144.0)));
+        let direct = scale * (1.0 - j1(2.0 * ka) / ka);
+        assert!(
+            (series / direct - 1.0).abs() < 1e-11,
+            "the branches disagree by {:.3e} at ka = {ka}; the threshold has moved back into the              cancellation",
+            (series / direct - 1.0).abs()
+        );
+        assert!(
+            r == series || r == direct,
+            "the function took neither branch at ka = {ka}"
+        );
+    }
+}
+
+#[test]
+fn the_pistons_series_is_the_brackets_own_taylor_expansion() {
+    // The three terms are (ka)^2/2 - (ka)^4/12 + (ka)^6/144, and getting a coefficient wrong would
+    // still give a smooth, monotone, plausibly-sized curve. Check them against the expansion
+    // written out term by term rather than in Horner form -- a different arrangement of the same
+    // series, so a transposed coefficient shows and a re-association does not.
+    for &ka in &[1e-6, 1e-4, 1e-3, 1e-2, 2.9e-2] {
+        let radius = 0.05;
+        let scale = RHO0_AIR * C0_AIR / (std::f64::consts::PI * radius * radius);
+        let omega = ka * C0_AIR / radius;
+        let got = piston_radiation_resistance(omega, radius, RHO0_AIR, C0_AIR) / scale;
+        let want = ka * ka / 2.0 - ka * ka * ka * ka / 12.0 + ka * ka * ka * ka * ka * ka / 144.0;
+        assert!(
+            (got / want - 1.0).abs() < 1e-14,
+            "series mismatch at ka = {ka}: {got} vs {want}"
+        );
+    }
 }
 
 #[test]

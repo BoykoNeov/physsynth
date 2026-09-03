@@ -35,19 +35,45 @@
 //! the very run that uses it. Observed agreement there: the transcription and Cephes differ by
 //! 7.9e-16 relative at that argument, four orders inside the bar.
 
-//! # A defect this function has always had, reproduced rather than fixed
+//! # A defect the port found, and the fix that followed — hurdles §14, closed 2026-09-03
 //!
-//! The `ka < 1e-8` branch below exists because `1 - J1(2ka)/ka` is a genuine `0/0` as `ka → 0`. The
-//! guard is in the right place and its threshold is about three decades too small: just *above* it,
-//! the direct form subtracts two numbers agreeing to sixteen digits, and with SciPy's own `j1`
-//! doing the work the shipped Python is **544% wrong at `ka = 1e-8`**, 2.3% at 1e-7, and does not
-//! reach 1e-6 accuracy until around `ka = 1e-5`.
+//! The small-`ka` branch exists because `1 - J1(2ka)/ka` is a genuine `0/0` as `ka -> 0`. It is
+//! *also* catastrophic cancellation long before that, and the original threshold of `1e-8` sat
+//! three decades below where the direct form becomes usable: just above it the subtraction removes
+//! sixteen digits, and with SciPy's own `j1` doing the work the shipped Python was **544% wrong at
+//! `ka = 1e-8`**, 2.3% at 1e-7, and did not reach 1e-6 accuracy until around `ka = 1e-5`.
 //!
-//! This transcription reproduces it, threshold and all, because changing a shipped physics number
-//! inside a porting batch is not a port. It is registered in `docs/dev/scientific-hurdles.md` §14
-//! with the two-term series and the crossover that would fix it, for the human's call. No caller is
-//! in the band — the suite's two real call sites are at `ka = 9.2e-5` and `ka = 1.83`, where the two
-//! implementations agree to 5.3e-8 and exactly.
+//! **How it was found is the reusable part.** A native bar asserted that the two branches meet at
+//! the threshold. They did not, by a factor of six — and the disagreement was in the *Python* all
+//! along. No parity test could have found it: a parity test compares two implementations of the
+//! same mistake, and both sides were computing the same cancellation faithfully.
+//!
+//! The port shipped it unchanged first, because changing a physics number inside a porting batch is
+//! not a port; the fix landed separately, on both sides in one commit, once the human had called it.
+//!
+//! **The fix.** Three terms of the bracket's own Taylor series, `(ka)^2/2 - (ka)^4/12 +
+//! (ka)^6/144`, in Horner form, below `ka = 3e-2`. Measured against a 60-digit reference over
+//! `ka` in `[1e-10, 10]`, the worst relative error of the whole function goes from **5.24** to
+//! **6.7e-13**, and the branches agree to 7e-13 across the seam so there is no step.
+//!
+//! The threshold was measured rather than derived, and the two answers differ: an algebraic
+//! crossover estimate for the *one-term* series said `ka ~ 7.2e-4` giving 8.6e-8, and the measured
+//! optimum was `2e-4` giving 1.3e-8 — off by 3.6x in the threshold. Plan §36.2's "measure the
+//! margin first" turns out to apply to fixes and not only to ports.
+//!
+//! **What the fix does and does not make exact, measured rather than assumed.** The series is
+//! `+ - * /` only — no `powi`, no library call — so IEEE-754 pins it: over 3,000 values below the
+//! cutoff the two languages are **bit-identical, 0 differing**, and the parity file asserts that as
+//! equality. The *direct* branch is not and cannot be, because it runs through two different `J1`
+//! implementations (Cephes on one side, Miller recurrence on the other): 1,444 of 3,000 values
+//! above the cutoff differ, worst 9.8e-13 relative.
+//!
+//! That figure is larger than the ~1e-16 the two `J1`s themselves differ by, and the factor is the
+//! point of the threshold. At `ka = 3e-2` the bracket is `4.5e-4`, so the subtraction still
+//! amplifies a last bit by about 2,200x. Moving the cutoff *down* would hand more of the domain to
+//! a branch that magnifies disagreement; moving it up would hand more to a truncated series. 3e-2
+//! is where those two costs cross, and the first draft of this comment claimed the whole function
+//! was bit-identical — it is not, and the measurement is what said so.
 
 use crate::bessel::j1;
 use std::f64::consts::PI;
@@ -61,17 +87,34 @@ pub const RHO0_AIR: f64 = 1.2041;
 /// Speed of sound in air (m/s).
 pub const C0_AIR: f64 = 343.0;
 
-/// Baffled circular-piston (half-space) **acoustic** radiation resistance, Pa·s/m³.
+/// Below this `ka`, [`piston_radiation_resistance`] uses its series rather than `J1`.
 ///
-/// `R_a(ka) = (ρ₀c₀/S)[1 - J₁(2ka)/(ka)]` with `S = πa²` and `k = ω/c₀`. As `ka → 0` the bracket
-/// tends to `(ka)²/2`, which is a genuine `0/0` in the direct form, so the series is used below
-/// `ka = 1e-8` — the same branch and the same threshold as the original, because a branch choice is
-/// part of the trajectory (plan §17) even when both sides of it are smooth.
+/// Chosen by measurement against a 60-digit reference (hurdles §14): with the three-term series the
+/// whole function's worst relative error over `ka` in `[1e-10, 10]` is 6.7e-13 here, against
+/// 7.9e-13 at `2e-2`, 2.8e-12 at `4e-2` and 5.0e-12 at `1e-2`. It sits deliberately *past* the
+/// direct form's own noisy region (~5e-12 around `ka = 3e-3 .. 1e-2`) rather than at the crossover,
+/// which is what buys the last order of magnitude.
+///
+/// Must equal `PISTON_SERIES_CUTOFF_KA` in `physsynth/core/radiation.py`; a parity test compares
+/// the two functions across the seam and would go red if they drifted apart.
+pub const PISTON_SERIES_CUTOFF_KA: f64 = 3e-2;
+
+/// Baffled circular-piston (half-space) **acoustic** radiation resistance, Pa*s/m^3.
+///
+/// `R_a(ka) = (rho0*c0/S)[1 - J1(2ka)/(ka)]` with `S = pi*a^2` and `k = omega/c0`. Below
+/// [`PISTON_SERIES_CUTOFF_KA`] the bracket is evaluated as three terms of its own Taylor series in
+/// Horner form, `(ka)^2 * (1/2 - (ka)^2 * (1/12 - (ka)^2/144))`, because the direct form is a `0/0`
+/// at the origin and catastrophic cancellation for three decades above it — see the module header.
+///
+/// The spelling is deliberate: `+ - * /` and nothing else. `ka.powi(4)` would be repeated
+/// multiplication here and `ka ** 4` a `pow` call in Python, and plan §12 measured those
+/// disagreeing in 1,400 of 3,998 cases. Written this way, both languages round identically.
 pub fn piston_radiation_resistance(omega: f64, radius: f64, rho0: f64, c0: f64) -> f64 {
     let ka = omega * radius / c0;
     let s = PI * radius * radius;
-    let bracket = if ka < 1e-8 {
-        0.5 * ka * ka
+    let ka2 = ka * ka;
+    let bracket = if ka < PISTON_SERIES_CUTOFF_KA {
+        ka2 * (0.5 - ka2 * (1.0 / 12.0 - ka2 / 144.0))
     } else {
         1.0 - j1(2.0 * ka) / ka
     };

@@ -7746,11 +7746,10 @@ So the shipped function returns a number with no correct digits just above its o
 implementations of `J₁` differing in their last bits therefore disagree by 300% in that band — which
 is the cancellation talking, not the transcription.
 
-**The port reproduces it, threshold and all.** Changing a shipped physics number inside a porting
-batch is not a port; §35.2's two fixes were their own commit, and this gets the same treatment. It
-is registered as `docs/dev/scientific-hurdles.md` **§14** with the crossover derived (`ka ≈ 7.2e-4`
-for the one-term series, or `ka = 1e-2` keeping two terms, either putting the worst error below
-1e-11) and awaits the human's call. No caller is in the band: the suite's two real call sites are at
+**The port reproduced it, threshold and all.** Changing a shipped physics number inside a porting
+batch is not a port; §35.2's two fixes were their own commit, and this got the same treatment — it
+shipped unchanged, was registered as `docs/dev/scientific-hurdles.md` **§14**, and **the human
+called it the same day**. The fix is §37.11. No caller is in the band: the suite's two real call sites are at
 `ka = 9.2e-5` and `ka = 1.83`, where the two sides agree to 5.3e-8 and exactly, and
 `test_radiation.py` requires 1e-6 of the first — a 19× margin, measured rather than hoped.
 
@@ -7844,6 +7843,47 @@ CI did — seven occurrences, zero of them reaching a runner.
 * The findings ledger gains **#30** (the absolute-versus-relative bar), **#31** (the direction of a
   shared-transcription dependency is a grep, not a design question) and **#32** (a derived file list
   is only as honest as the reachability it models).
-* `docs/dev/scientific-hurdles.md` gains **§14**, the piston's threshold — live, uncalled, fix
-  derived and costed, awaiting the human.
+* `docs/dev/scientific-hurdles.md`'s **§14** opened and closed on the same day: the piston's
+  threshold, found by a native bar, reproduced by the port, then fixed on the human's call (§37.11).
 * The parked list is **empty**.
+
+### 37.11 The piston fix, applied the same day (2026-09-03)
+
+§37.6 found the defect and, correctly, did not fix it. The human called it within the hour, so this
+is the follow-up: one expression on each side, in one commit, as §35.2's two fixes were.
+
+Three terms of the bracket's own Taylor series in Horner form below `ka = 3e-2`. Measured against a
+60-digit reference over `ka ∈ [1e-10, 10]`, the worst relative error of the whole function goes from
+**5.24 to 6.7e-13** — a factor of 7.8e12 — and the branches agree to 7e-13 across the seam, so there
+is no step. Nothing a bar can see moves: the bore's bell shifts by 4.1e-14, the Rayleigh fixture by
+6.9e-9 *toward* truth against a 1e-6 bar, the Bessel fixture not at all.
+
+Three things worth carrying forward, none of them the fix itself.
+
+**An algebraic crossover estimate was off by 3.6×, and the shipped answer is not at a crossover.**
+§37.6's write-up derived the one-term switch point as `ka ≈ 7.2e-4` giving 8.6e-8; measured, the
+optimum is `2e-4` giving 1.3e-8. And the value shipped is neither, because three terms let the
+threshold sit *past* the direct form's own noisy region (~5e-12 around `ka = 3e-3 .. 1e-2`) instead
+of at the point where the two error curves cross — which is what buys the last order of magnitude
+over the two-term option's 9.2e-12. **§36.2's "measure the margin before you claim it" applies to
+fixes, not only to ports**, and the estimate that went into a shipped document is the evidence.
+
+**The first draft of the fix claimed bit-identity for the whole function, and that was wrong.**
+Measured per branch: below the cutoff, **0 of 3,000** values differ — the series is `+ - * /` only,
+so IEEE-754 pins it and the parity file asserts equality. Above it, **1,444 of 3,000 differ, worst
+9.8e-13**, because the direct form runs through two different `J1` implementations and never can be
+exact. That 9.8e-13 against the ~1e-16 the two `J1`s themselves differ by is a 2,200× amplification,
+and it *is* the threshold's justification rather than a wart: at `ka = 3e-2` the bracket is 4.5e-4,
+so the subtraction is still eating three digits. Lower the cutoff and more of the domain goes to the
+branch that magnifies disagreement; raise it and more goes to a truncated series.
+
+**A test that asserts a defect has to be replaced by one that asserts the property the fix
+established**, not deleted. `oracles.rs`'s bar said the branches do *not* meet and carried its own
+retirement note ("if this passes, the cancellation went away and §14 can be closed"); it now asserts
+that they *do*, at the seam, on both branches evaluated independently — which is the one thing a
+future threshold edit would break and which no physics bar in this project could see, since they are
+all percentage-level and the branches differ by parts in 1e13. A second bar checks the series is the
+bracket's Taylor expansion term by term, against the expansion written out flat rather than in
+Horner form, so a transposed coefficient shows and a re-association does not. Writing that bar
+surfaced §27 one more time: `(scale * ka2) * rest` and `scale * (ka2 * rest)` are different doubles,
+and the first draft compared the function against the wrong association and went red.

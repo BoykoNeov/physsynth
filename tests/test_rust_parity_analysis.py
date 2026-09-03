@@ -370,30 +370,63 @@ def test_the_piston_resistance_agrees_at_the_call_sites_the_suite_reaches():
         )
 
 
-def test_the_pistons_cancellation_band_is_reported_and_no_caller_is_in_it():
-    """A defect inherited from the Python original, reproduced deliberately and measured here.
+def test_the_pistons_series_branch_is_bit_identical_and_the_direct_one_is_not():
+    """The two branches have different agreement stories, and the split is the whole design.
 
-    Below ``ka = 1e-8`` the function uses the series ``(ka)^2/2``; above it, ``1 - J1(2ka)/ka``,
-    which at that threshold subtracts two numbers agreeing to sixteen digits. With SciPy's own
-    ``j1`` doing the work the shipped Python is 544% wrong there against the exact series. So the
-    two implementations disagree in the band too -- 300% at ka=1e-8, 2.2e-2 at 1e-7 -- and that is
-    the cancellation talking, not the transcription.
+    This test asserted the *cancellation band* until 2026-09-03 — the shipped `ka < 1e-8` cutoff sat
+    three decades below where `1 - J1(2ka)/ka` becomes computable, so the two sides disagreed by
+    300% just above it and the test's job was to record that no caller was in the band. Hurdles §14
+    is now fixed: three Taylor terms below `ka = 3e-2`.
 
-    What makes the port safe is that no caller is in the band, and this test is what would notice if
-    one arrived. ``docs/dev/scientific-hurdles.md`` §14 carries the proposed fix.
+    What replaces it is the *reason* the fix works. Measured over 3,000 values per branch:
+
+    * **below the cutoff: 0 differ.** The series is `+ - * /` only, which IEEE-754 pins, so this is
+      required as equality rather than as a tolerance.
+    * **above it: 1,444 of 3,000 differ, worst 9.8e-13.** The direct form runs through two different
+      `J1` implementations — Cephes on the Python side, a Miller recurrence on the Rust one — and
+      that can never be exact. The bar is a tolerance and the count is reported, not required.
+
+    The 9.8e-13 is much larger than the ~1e-16 the two `J1`s differ by, and that factor is why the
+    threshold is where it is: at `ka = 3e-2` the bracket is 4.5e-4, so the subtraction still
+    amplifies a last bit about 2,200 times. A lower cutoff hands more of the domain to a branch that
+    magnifies disagreement; a higher one hands more to a truncated series.
     """
     radius, c0 = 0.05, 343.0
-    for ka, bar in ((1e-8, 10.0), (1e-7, 1e-1), (1e-6, 1e-2), (1e-5, 1e-4), (1e-4, 1e-6)):
+    below = np.logspace(-10, np.log10(R.PISTON_SERIES_CUTOFF_KA * 0.999), 400)
+    for ka in below:
         omega = ka * c0 / radius
-        py = R.piston_radiation_resistance_py(omega, radius)
-        assert rs.piston_radiation_resistance(omega, radius) == pytest.approx(py, rel=bar)
-    # The two call sites the suite actually makes are far above the band, and agree to 5.3e-8 and
-    # exactly. `test_radiation.py` requires 1e-6 of the first, so the margin there is ~19x.
-    ka_low = 2 * np.pi * 5.0 * 1e-3 / c0
-    assert 5e-5 < ka_low < 2e-4, "the Rayleigh-limit fixture moved; re-measure the band"
-    assert rs.piston_radiation_resistance(2 * np.pi * 5.0, 1e-3) == pytest.approx(
-        R.piston_radiation_resistance_py(2 * np.pi * 5.0, 1e-3), rel=1e-6
-    )
+        assert rs.piston_radiation_resistance(omega, radius) == R.piston_radiation_resistance_py(
+            omega, radius
+        ), f"the series branch must be bit-identical, and is not at ka = {ka}"
+    above = np.logspace(np.log10(R.PISTON_SERIES_CUTOFF_KA * 1.001), 1.0, 400)
+    worst = 0.0
+    for ka in above:
+        omega = ka * c0 / radius
+        a = rs.piston_radiation_resistance(omega, radius)
+        b = R.piston_radiation_resistance_py(omega, radius)
+        assert a == pytest.approx(b, rel=1e-11)
+        worst = max(worst, abs(a / b - 1.0))
+    assert worst < 1e-11, f"the direct branch has drifted to {worst:.3e}"
+
+
+def test_the_pistons_two_branches_meet_so_the_function_has_no_step():
+    """The property the threshold has to keep, on the Python side as well as the Rust one.
+
+    A future edit that moved the cutoff back into the cancellation would not break any physics bar
+    in this project — they are all percentage-level and the branches differ by parts in 1e13 — so
+    it is asserted directly, on both implementations, at the seam.
+    """
+    radius, c0 = 0.05, 343.0
+    cut = R.PISTON_SERIES_CUTOFF_KA
+    for d in (0.999, 0.9999, 1.0001, 1.001):
+        ka = cut * d
+        omega = ka * c0 / radius
+        for f in (R.piston_radiation_resistance_py, rs.piston_radiation_resistance):
+            here = f(omega, radius)
+            across = f(omega * (1.002 if d < 1.0 else 0.998), radius)
+            assert here == pytest.approx(across, rel=5e-3), (
+                f"a step at the seam: {here} vs {across} at ka = {ka}"
+            )
 
 
 # -- the seam: what the flag actually swaps -----------------------------------------------------

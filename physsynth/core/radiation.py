@@ -50,6 +50,16 @@ from .body import ModalBody
 RHO0_AIR = 1.2041  # kg/m^3, ambient air density
 C0_AIR = 343.0     # m/s, speed of sound in air
 
+PISTON_SERIES_CUTOFF_KA = 3e-2
+"""Below this ``ka``, :func:`piston_radiation_resistance` uses its series rather than ``J1``.
+
+Chosen by measurement against a 60-digit reference (hurdles §14): with the three-term series the
+whole function's worst relative error over ``ka`` in ``[1e-10, 10]`` is 6.7e-13 at this cutoff,
+against 7.9e-13 at ``2e-2``, 2.8e-12 at ``4e-2`` and 5.0e-12 at ``1e-2``. It sits deliberately
+*past* the direct form's own noisy region (~5e-12 around ``ka = 3e-3 .. 1e-2``) rather than at the
+crossover, which is what buys the last order of magnitude.
+"""
+
 
 # -- radiation resistance (the closed-form load oracle) ---------------------------------------
 
@@ -82,11 +92,37 @@ def piston_radiation_resistance(
     not ``4 pi``). Offered as the closed-form ``R_a(ka)`` modeling oracle; the default load uses the
     free-space monopole to stay consistent with batch 1. Divided by ``S^2`` from the more commonly
     tabulated *mechanical* piston resistance ``rho0 c S [1 - J1(2ka)/(ka)]``.
+
+    **The small-``ka`` branch, and why its threshold is where it is** (fixed 2026-09-03,
+    ``docs/dev/scientific-hurdles.md`` §14). The bracket is a genuine ``0/0`` as ``ka -> 0``, and it
+    is *also* catastrophic cancellation well before that: the true value is ``(ka)^2/2``, so the
+    subtraction removes about ``-log10((ka)^2/2)`` digits. The original threshold of ``1e-8`` put
+    the switch three decades below where the direct form becomes usable, and just above it the
+    function returned a number with **no correct digits** — 544% wrong at ``ka = 1e-8``, 2.3% at
+    ``1e-7``, reaching 1e-6 accuracy only around ``ka = 1e-5``.
+
+    The series below is the bracket's own Taylor expansion to three terms,
+    ``(ka)^2/2 - (ka)^4/12 + (ka)^6/144``, in Horner form. Measured against a 60-digit reference
+    over ``ka`` in ``[1e-10, 10]``, the worst relative error of the *whole* function drops from
+    **5.24** to **6.7e-13**, and the two branches agree to 7e-13 across the seam so there is no
+    step. The threshold was chosen by measurement, not algebra: an estimate of where the one-term
+    series and the direct form cross said ``ka ~ 7.2e-4`` and the measured optimum was ``2e-4``.
+
+    The series uses ``+ - * /`` only — no ``**``, no library call — so IEEE-754 pins it and the Rust
+    twin in ``crates/physsynth-analysis/src/radiation.rs`` reproduces it **bit for bit** (0 of 3,000
+    sampled values differ). The *direct* branch cannot be exact across languages, because it runs
+    through two different ``J1`` implementations: 1,444 of 3,000 values above the cutoff differ, by
+    at most 9.8e-13 relative — larger than the ~1e-16 the two ``J1``s differ by, because at
+    ``ka = 3e-2`` the bracket is 4.5e-4 and the subtraction still amplifies a last bit ~2,200x.
     """
     ka = omega * radius / c0
     S = np.pi * radius * radius
-    # 1 - J1(2ka)/(ka) -> (ka)^2/2 as ka -> 0 (a 0/0 in the direct form); use the series there.
-    bracket = 0.5 * ka * ka if ka < 1e-8 else 1.0 - j1(2.0 * ka) / ka
+    ka2 = ka * ka
+    bracket = (
+        ka2 * (0.5 - ka2 * (1.0 / 12.0 - ka2 / 144.0))
+        if ka < PISTON_SERIES_CUTOFF_KA
+        else 1.0 - j1(2.0 * ka) / ka
+    )
     return rho0 * c0 / S * bracket
 
 
@@ -848,15 +884,17 @@ class ReactiveRadiatedBody:
 #   builds its expectation from `scipy.special.j1` inside the test body at `rel = 1e-12`. The ruler
 #   is checked against an unmoved reference in the run that uses it. Observed there: 7.9e-16.
 #
-# **A defect this function has always had, found while porting and deliberately reproduced.** The
-# `ka < 1e-8` branch below switches to the series because `1 - J1(2ka)/ka` is a 0/0 -- but just
-# *above* that threshold the direct form subtracts two numbers agreeing to sixteen digits, and with
-# SciPy's own `j1` doing the work it is 544% wrong at ka = 1e-8, 2.3% at 1e-7, and only reaches
-# 1e-6 accuracy around ka = 1e-5. The threshold is about three decades too small. The port
-# reproduces it rather than fixing it, because changing a shipped physics number inside a porting
-# batch is not a port; it is registered in `docs/dev/scientific-hurdles.md` section 14 with the
-# proposed threshold, for the human's call. No caller is in the band -- the suite's two real call
-# sites are at ka = 9.2e-5 and ka = 1.83, where the two implementations agree to 5.3e-8 and 0.0.
+# **A defect this function had always had, found while porting -- reproduced, then fixed.** The
+# `ka < 1e-8` branch switched to the series because `1 - J1(2ka)/ka` is a 0/0, but the threshold sat
+# three decades below where the direct form becomes computable: just above it, with SciPy's own `j1`
+# doing the work, the function was 544% wrong. Found by a *native* bar asserting the two branches
+# meet at the threshold -- which no parity test could have found, since a parity test compares two
+# implementations of the same mistake.
+#
+# The port shipped it unchanged (changing a physics number inside a porting batch is not a port);
+# the fix landed on both sides in one commit, 2026-09-03, on the human's call. Three Taylor terms
+# below `ka = 3e-2`, worst relative error over the whole domain 5.24 -> 6.7e-13. The threshold and
+# the exactness split are in the docstring above and in `docs/dev/scientific-hurdles.md` section 14.
 #
 # **The state is NOT bit-identical under the flag, and that is the first time in this migration.**
 # `RadiatedBody.step` reads `np.dot(b.a, b.q - q_nm1)`, and unlike `body.pressure()` -- the same

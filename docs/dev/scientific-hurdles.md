@@ -31,7 +31,7 @@
 | 11 | Twenty ARPACK oracles were not bit-reproducible run to run | `analysis/modal.py` | Fixed in §24.9 — kept here as the pattern (§11) |
 | 12 | Raw physics is not a musician's interface (parameter mapping) | none yet | Deferred (§12) |
 | 13 | Which models can ever run in real time | engine, room | Deferred, and now decoupled from the language (§13) |
-| 14 | `piston_radiation_resistance`'s `ka < 1e-8` series threshold is about three decades too small: just above it the direct form cancels catastrophically and is 544% wrong | `core/radiation.py` | **Live** — no caller is in the band; fix proposed, not applied (§14) |
+| 14 | `piston_radiation_resistance`'s `ka < 1e-8` series threshold was about three decades too small: just above it the direct form cancelled catastrophically and was 544% wrong | `core/radiation.py` | **Fixed 2026-09-03** — three Taylor terms below `ka = 3e-2`; worst error 5.24 → 6.7e-13 (§14) |
 
 ---
 
@@ -312,7 +312,7 @@ already print and nothing collects.
 
 ---
 
-## 14. The baffled piston's series threshold is three decades too small — live, uncalled
+## 14. The baffled piston's series threshold was three decades too small — fixed
 
 **What it is.** `physsynth/core/radiation.py`'s `piston_radiation_resistance` computes Rayleigh's
 result
@@ -360,13 +360,58 @@ because changing a shipped physics number inside a porting batch is not a port
 `tests/test_rust_parity_analysis.py::test_the_pistons_cancellation_band_is_reported_and_no_caller_is_in_it`
 measures the band so a future caller arriving in it fails there.
 
-**The fix, costed.** One line on each side. Move the threshold to where the series and the direct
-form actually cross in accuracy. The series `(ka)²/2` is the first term of
-`(ka)²/2 - (ka)⁴/12 + ...`, so its own relative error is `(ka)²/6`; the direct form's is about
-`eps / ((ka)²/2) = 4.4e-16/(ka)²`. They meet at `(ka)⁴ = 2.7e-15`, i.e. `ka ≈ 7.2e-4`, where both
-are around 8.6e-8. Taking `ka < 1e-3` for the series — or better, keeping two terms,
-`(ka)²/2 - (ka)⁴/12`, and switching at `ka = 1e-2` — puts the worst error anywhere below 1e-11.
+**The fix, as applied 2026-09-03 (the human's call).** One expression on each side, in one commit,
+as §1 and §2 got. Three terms of the bracket's own Taylor series in Horner form, below `ka = 3e-2`:
 
-This is **not applied**, and applying it needs the human's call, because it changes a shipped number
-for `ka` in `(1e-8, 1e-3)` — a band nothing currently reads, but a band the acceptance contract
-nominally covers. It must land on both sides in one commit, as §1 and §2 did on 2026-09-02.
+```python
+ka2 = ka * ka
+bracket = (ka2 * (0.5 - ka2 * (1.0 / 12.0 - ka2 / 144.0))
+           if ka < PISTON_SERIES_CUTOFF_KA else 1.0 - j1(2.0 * ka) / ka)
+```
+
+**Measured against a 60-digit `mpmath` reference over `ka ∈ [1e-10, 10]`**, worst relative error of
+the whole function:
+
+| variant | worst |
+|---|---|
+| shipped (one term, `ka < 1e-8`) | **5.24** |
+| one term, `ka < 2e-4` (its optimum) | 1.3e-8 |
+| two terms, `ka < 5e-3` | 9.2e-12 |
+| **three terms, `ka < 3e-2` (shipped)** | **6.7e-13** |
+
+An improvement of **7.8e12×**, and the branches agree to 7e-13 across the seam, so the function has
+no step in it.
+
+**The correction worth keeping, and it is why this section is longer than the fix.** The threshold
+above was *measured*; the estimate written into the first draft of this section was **wrong**. That
+draft derived the one-term crossover algebraically as `ka ≈ 7.2e-4` giving 8.6e-8; the measured
+optimum is `2e-4` giving 1.3e-8 — off by 3.6× in the threshold and 6.6× in the error. And the
+shipped choice is not at a crossover at all: `3e-2` sits deliberately *past* the direct form's own
+noisy region (~5e-12 around `ka = 3e-3 .. 1e-2`), which is what buys the last order of magnitude
+over the two-term option. Plan §36.2's "measure the margin before you claim it" applies to fixes,
+not only to ports.
+
+**What the fix does and does not make exact across the two languages**, also measured rather than
+assumed — the first draft of the code comment claimed the whole function was now bit-identical, and
+it is not:
+
+* **Below the cutoff: bit-identical, 0 of 3,000 sampled values differ.** The series is `+ - * /`
+  only, so IEEE-754 pins it, and `tests/test_rust_parity_analysis.py` asserts equality there.
+* **Above it: 1,444 of 3,000 differ, worst 9.8e-13.** The direct form runs through two different
+  `J1` implementations (Cephes vs a Miller recurrence) and never can be exact. That 9.8e-13 is far
+  larger than the ~1e-16 the two `J1`s differ by, and the factor is the threshold's whole
+  justification: at `ka = 3e-2` the bracket is 4.5e-4, so the subtraction still amplifies a last bit
+  about 2,200×. Lower the cutoff and more of the domain goes to a branch that magnifies
+  disagreement; raise it and more goes to a truncated series.
+
+**What moved for existing callers.** Nothing that any bar can see. The bore's bell (`ka = 2.5e-2`)
+moves by 4.1e-14; `test_radiation.py`'s Rayleigh-limit fixture (`ka = 9.2e-5`) moves by 6.9e-9,
+which is the error it was previously carrying, *toward* the truth and against a `rel = 1e-6` bar;
+the Bessel-formula fixture (`ka = 1.83`) is on the direct branch and does not move at all.
+
+**The two tests that asserted the defect are replaced, not deleted.**
+`crates/physsynth-analysis/tests/oracles.rs` now asserts that the branches *meet* at the seam (the
+property a future threshold edit would break, and which no physics bar in this project could see),
+plus that the series really is the bracket's Taylor expansion term by term — checked against the
+expansion written out flat rather than in Horner form, so a transposed coefficient shows and a
+re-association does not. The parity file asserts the exact/tolerant split above.
