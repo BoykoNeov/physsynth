@@ -13,6 +13,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 physsynth-core = { path = "../physsynth-core" }
+# The measurement half, ported from Phase 7 on. A separate crate for the same reason the
+# Python packages are separate: the oracle must not live inside the thing it checks.
+physsynth-analysis = { path = "../physsynth-analysis" }
 # `abi3-py311` matches `requires-python = ">=3.11"` in the root pyproject.toml. One wheel serves
 # every interpreter in that range, so the local machine (3.14) and CI (3.12, plus 3.11 nightly)
 # exercise the *same binary* — which removes an axis nobody wants to be debugging at Phase 6.

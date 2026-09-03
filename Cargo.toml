@@ -1,19 +1,26 @@
 # Rust workspace — see `docs/dev/rust-migration-plan.md`.
 #
-# Two crates, and the split is the portability contract expressed as a crate graph (plan §2.2):
+# Three crates, and the split is the portability contract expressed as a crate graph (plan §2.2).
+# It mirrors the Python package layout one-for-one, deliberately: `physsynth/core`,
+# `physsynth/analysis` and the binding that exposes them.
 #
-#   physsynth-core  the headless DSP core. Depends on NOTHING of ours and (per the allowlist in
-#                   `crates/physsynth-core/tests/deps.rs`) on essentially nothing of anyone's.
-#                   No I/O, no logging, no Python, no plugin framework.
-#   physsynth-py    the PyO3 binding. Depends on the core; the core never depends on it. Temporary
-#                   by construction — deleted when the last model finishes the §1 ritual.
+#   physsynth-core      the headless DSP core. Depends on NOTHING of ours and (per the allowlist in
+#                       `crates/physsynth-core/tests/deps.rs`) on essentially nothing of anyone's.
+#                       No I/O, no logging, no Python, no plugin framework.
+#   physsynth-analysis  measurement of what the core produces. Depends on nothing — not even on the
+#                       core, because it consumes trajectories as slices and knows no model. Its
+#                       own `tests/deps.rs` holds its own allowlist empty; a new crate inheriting
+#                       the contract by proximity rather than by a test would be a silent gap,
+#                       since that test is scoped to one package by name.
+#   physsynth-py        the PyO3 binding. Depends on both; neither depends on it. Temporary by
+#                       construction — deleted when the last model finishes the §1 ritual.
 #
 # `Cargo.lock` IS committed. This repo's acceptance bars are numeric and its CI compares runs
 # across machines; a floating dependency resolution is exactly the kind of invisible variable the
 # harness exists to exclude.
 [workspace]
 resolver = "2"
-members = ["crates/physsynth-core", "crates/physsynth-py"]
+members = ["crates/physsynth-core", "crates/physsynth-analysis", "crates/physsynth-py"]
 
 [workspace.package]
 version = "0.1.0"

@@ -1,0 +1,17 @@
+[package]
+name = "physsynth-analysis"
+description = "Measurement of what the core produces — spectra, oracles, convergence. No I/O, no Python."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Empty, and held empty by `tests/deps.rs` exactly as `physsynth-core`'s is. The two crates keep
+# separate allowlists rather than sharing one because they are separate arguments: the core's
+# emptiness is the portability contract (plan §2.2), and this one's is the weaker claim that
+# measuring a trajectory needs no more than arithmetic. An FFT is the obvious thing to reach for a
+# crate over, and this file is where that argument would have to be had.
+[dependencies]
+
+[dev-dependencies]
+serde_json = "1"

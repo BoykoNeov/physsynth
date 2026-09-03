@@ -58,6 +58,7 @@ mod radiation;
 mod reed;
 mod shape;
 mod sparse_lu;
+mod spectrum;
 mod string_damped;
 mod string_geometric;
 mod string_nonlinear;
@@ -786,6 +787,13 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ops2d::py_inner2d, m)?)?;
     m.add_function(wrap_pyfunction!(ops2d::py_norm2_2d, m)?)?;
     m.add_function(wrap_pyfunction!(airbox::py_impedance_from_zeta, m)?)?;
+    // Phase 7's first batch: the partial detector, out of the OTHER package. It is behind its
+    // own flag (`PHYSSYNTH_RS_ANALYSIS`) rather than `PHYSSYNTH_RS`, so that the acceptance run
+    // keeps measuring Rust models with an unmoved Python instrument.
+    m.add_function(wrap_pyfunction!(spectrum::py_magnitude_spectrum, m)?)?;
+    m.add_function(wrap_pyfunction!(spectrum::py_parabolic_refine, m)?)?;
+    m.add_function(wrap_pyfunction!(spectrum::py_measure_partials_near, m)?)?;
+    m.add_function(wrap_pyfunction!(spectrum::py_detect_peaks, m)?)?;
     m.add_function(wrap_pyfunction!(exciter::py_triangular_pluck, m)?)?;
     m.add_function(wrap_pyfunction!(exciter::py_raised_cosine, m)?)?;
     m.add_function(wrap_pyfunction!(exciter::py_raised_cosine_2d, m)?)?;

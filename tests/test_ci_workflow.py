@@ -68,7 +68,12 @@ def test_every_test_file_the_workflow_names_exists(workflow_lines):
         token
         for line in workflow_lines
         for token in line.split()
-        if token.startswith("tests/") and token.endswith(".py")
+        # A token containing a glob metacharacter is not a file name, it is a *query* -- the
+        # detector's step passes `tests/test_*.py` to grep on purpose, so that the list of files
+        # reaching the detector is derived at job time rather than typed and left to rot. Asking
+        # whether that path "exists" is a category error, and the check that matters for it is the
+        # `-ge 15` floor inside the step itself. Only literal names are the business of this test.
+        if token.startswith("tests/") and token.endswith(".py") and "*" not in token
     ]
     assert len(named) >= 20, (
         f"only {len(named)} test-file tokens found in the workflow -- the scan has stopped "

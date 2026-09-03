@@ -9,6 +9,8 @@ Pure NumPy. No plotting (this is analysis, not viz).
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -131,3 +133,70 @@ def detect_peaks(
             break
     refined = np.array([_parabolic_refine(mag, int(i), fs, nfft) for i in chosen])
     return np.sort(refined)
+
+
+# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 7) ------------------------------------
+#
+# **This module reads a DIFFERENT environment variable from every other swap in the project, and
+# that is the point rather than an accident.** `PHYSSYNTH_RS=1` replaces the models in
+# `physsynth/core` and runs the existing suite against them; what makes that run worth anything is
+# that the *instrument* does not move -- a Rust string is measured by the same Python detector,
+# against the same analytic oracle, that the Python string was. Put this module behind the same
+# flag and both the model and the ruler become Rust at once, so a shared misreading would cancel
+# and the acceptance gate would quietly stop asserting what it says it asserts. Plan Sec 7
+# scheduled `analysis/` late for exactly that reason and Sec 35.3 re-planned the order without
+# re-taking the argument; this is where it is re-taken.
+#
+# So:  PHYSSYNTH_RS=1                         Rust models, Python instrument -- the acceptance run.
+#      PHYSSYNTH_RS=1 + PHYSSYNTH_RS_ANALYSIS both Rust -- exercises this port through its real
+#                                             clients, which is the extra CI step.
+#      PHYSSYNTH_RS_ANALYSIS=1 alone          Python models, Rust instrument -- the sharpest test
+#                                             of this module alone, and what the parity file uses.
+#
+# Nothing in `physsynth/core` imports `physsynth/analysis`, checked rather than assumed, so the two
+# flags are genuinely independent and not merely written that way.
+#
+# **What is and is not claimed about agreement.** The frequency axis is exact: `freqs`, `df`, the
+# window bounds and `min_separation_hz` are built from `+ - * /`, which IEEE-754 pins, so both sides
+# compute them bit for bit. That is load-bearing rather than tidy -- the greedy separation test in
+# `detect_peaks` compares a gap of exactly four bins against a threshold of exactly four bins, so
+# its margin is ZERO and its answer is decided by rounding alone. It does not always clear (at
+# 100 kHz with nfft=16 it does not), so the claim is that both sides agree on whatever it decides,
+# which holds only because the `1.0/(nfft*(1.0/fs))` chain is transcribed and not tidied.
+#
+# The magnitudes are NOT exact and no attempt is made to pretend
+# otherwise -- three library kernels sit on that path (NumPy's own CPU-dispatched `cos` inside the
+# Hann window, pocketfft, and `hypot`), none of which a transcription reaches. The port is safe
+# because every decision with a tight margin lives on the exact axis and every decision on the
+# inexact one clears by ten orders of magnitude more than a rounding can move it; the six margins
+# were measured over the dependent suite's real calls before this was written, and they are in plan
+# Sec 36.2 and in the Rust module's header.
+magnitude_spectrum_py = magnitude_spectrum
+_parabolic_refine_py = _parabolic_refine
+measure_partials_near_py = measure_partials_near
+detect_peaks_py = detect_peaks
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS_ANALYSIS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI step, not the default gate
+    import physsynth_rs as _rs
+
+    def _asarray(a: object) -> NDArray[np.float64]:
+        """Whatever the caller passed, as the contiguous float64 array the binding requires."""
+        return np.ascontiguousarray(np.asarray(a, dtype=np.float64))
+
+    def magnitude_spectrum(signal, fs, zero_pad_factor=2):  # type: ignore[misc]  # noqa: F811
+        return _rs.spectrum_magnitude_spectrum(_asarray(signal), fs, zero_pad_factor)
+
+    def _parabolic_refine(mag, i, fs, nfft):  # type: ignore[misc]  # noqa: F811
+        return _rs.spectrum_parabolic_refine(_asarray(mag), int(i), fs, nfft)
+
+    def measure_partials_near(signal, fs, expected, search_hz=None):  # type: ignore[misc]  # noqa: F811,E501
+        return _rs.spectrum_measure_partials_near(
+            _asarray(signal), fs, _asarray(expected), search_hz
+        )
+
+    def detect_peaks(signal, fs, n_peaks, f_min=1.0, min_separation_hz=None):  # type: ignore[misc]  # noqa: F811,E501
+        return _rs.spectrum_detect_peaks(
+            _asarray(signal), fs, int(n_peaks), f_min, min_separation_hz
+        )
