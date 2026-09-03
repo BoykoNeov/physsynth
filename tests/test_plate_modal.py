@@ -23,7 +23,7 @@ from physsynth.analysis import modal, spectrum
 from physsynth.core.engine import simulate
 from physsynth.core.exciter import raised_cosine_2d
 from physsynth.core.operators2d import biharmonic_from_mask, laplacian_from_mask
-from physsynth.core.plate import PlatePy
+from physsynth.core.plate import Plate
 
 KAPPA = KAPPA_PLATE_DEFAULT
 THETA = 0.28
@@ -161,20 +161,33 @@ def test_the_canonical_sort_changed_an_order_and_not_a_value():
 def test_the_canonical_sort_left_the_shipped_plate_where_it_was():
     """... and the trajectory it produces is unmoved at 1e-11 of its amplitude, drift unmoved.
 
-    **Pinned to the Python plate, and that is the claim rather than a workaround.** This test's
-    subject is a *stored column order*: it steps one plate on the canonical operator and another
-    on the kernel-order one and asserts the trajectory did not move. The Rust `Csr` cannot hold a
-    non-canonical row -- `from_rows` sorts, which is exactly why plan section 27.2's remedy had to
-    be applied on the Python side -- so with the flag set both plates would carry the *same*
-    operator and the comparison would assert nothing while staying green. That is section 23.6's
-    emptied-comparison shape reached through a fourth door: not a rebound name, but an
-    implementation in which the difference being measured is inexpressible.
+    **Runs on whichever plate the flag selects, and that took a change to the Rust side.** This
+    test's subject is a *stored column order*: it steps one plate on the canonical operator and
+    another on the kernel-order one and asserts the trajectory did not move. For a year of this
+    port that made it inexpressible in Rust twice over -- `Csr` sorted every row it was handed, so
+    both plates would have carried the *same* operator and the comparison would have asserted
+    nothing while staying green (section 23.6's emptied comparison, reached through a fourth
+    door), and `Plate.B` was a getter with no setter, so there was nowhere to put the other order
+    anyway (section 40.5).
+
+    Both are now answered, on the human's call of 2026-09-03: `Csr::from_arrays_preserving_order`
+    is the one constructor in the crate that does not sort, and `Plate.B` has a setter that uses
+    it. Neither is a convenience -- they exist for this test, they say so in their own doc
+    comments, and the three merge kernels `debug_assert` the invariant they relax so a
+    non-canonical operator cannot leak into an assembly.
+
+    The `has_sorted_indices` assertion below is what keeps all of that honest: it fails if the
+    matrix being injected has become the shipped one by another route.
     """
     rng = np.random.default_rng(20260828)
     for N in (12, 16):
-        p_new = PlatePy(**plate_kwargs(N=N, mu=1.0))
-        p_old = PlatePy(**plate_kwargs(N=N, mu=1.0))
+        p_new = Plate(**plate_kwargs(N=N, mu=1.0))
+        p_old = Plate(**plate_kwargs(N=N, mu=1.0))
         p_old.B = _biharmonic_before_2026_08_28(p_old.mask, p_old.h)
+        assert not p_old.B.has_sorted_indices, (
+            f"N={N}: the injected operator is canonically sorted, so both plates now carry the "
+            "shipped B and this test compares one plate against a copy of itself"
+        )
         u0 = 1e-4 * rng.standard_normal(p_new.n_live)
         v0 = np.zeros(p_new.n_live)
         drifts = []

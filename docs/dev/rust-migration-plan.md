@@ -8760,3 +8760,248 @@ named native bar. The unflagged run is also now *faster* than it was before the 
   retired only when *both* sides of the capture are Rust; while either is Python it still catches a
   mis-ordered swap, and retiring it early leaves a vacuous pass).
 * Nothing is parked. §40.5 and unit 10's flag question are the two open questions.
+
+---
+
+## §43 Deletion 6 (2026-09-03) — unit 5, the blocker removed rather than routed around, and a deletion that reached three modules it did not contain
+
+Unit **5** is deleted: `operators2d` and `plate`. **2,631 lines down to 289**, and with them the
+last of the plate family's Python — models #5, #5b, #5o, #5of, #5g and #6 now exist once, in Rust.
+
+The interesting part of this batch is not the deletion. It is that unit 5 had been *blocked* since
+§40.5 on something that looked small, that removing the block required widening the core crate in a
+way that breaks an invariant the rest of that type documents, and that the deletion then broke
+fifteen tests in three modules **that are not in unit 5** — for three unrelated reasons, none of
+which any reference-alias graph could have predicted.
+
+### 43.1 The blocker, and the human's call
+
+`tests/test_plate_modal.py` carries the only pin on the 2026-08-28 sparse-assembly finding (§26).
+It builds two plates, replaces one's biharmonic with the **pre-fix assembly** — the same numbers in
+the order SciPy's sparse product emits them — steps both 2,000 steps, and asserts the trajectory did
+not move and neither drifts. It is a claim about a *summation order*, because a CSR matvec sums a
+row in stored order and `Plate.step` forms `B @ u` twice per timestep.
+
+Two things made that inexpressible in Rust, and §40.5 only named one of them:
+
+1. `physsynth_rs.Plate.B` was a `#[getter]` with no `#[setter]`, so there was nowhere to put the
+   other operator (ledger #25's read-only getter, arriving at deletion time as #38);
+2. **and it would not have been enough.** `Csr` sorts every row it is handed — `from_rows` and
+   `from_rows_keeping_zeros` both — so a setter written the obvious way would have accepted the
+   pre-fix operator, canonicalised it, and handed back a plate carrying the *shipped* `B`. The
+   comparison would have compared a plate against a copy of itself and passed. That is §23.6's
+   emptied comparison reached through a fifth door: not a rebound name, not a replaced method, but
+   **a data structure that cannot represent the difference being measured**.
+
+Three routes were costed in §40.5 (add a setter · retire the test · re-express the claim without
+injection) and the human chose the first on 2026-09-03, so both halves had to be built.
+
+### 43.2 What it cost: one constructor that does not sort, and three `debug_assert`s
+
+`Csr::from_arrays_preserving_order(nrows, ncols, indptr, indices, data)` takes raw CSR arrays
+verbatim, including a row that does not ascend. It is the only constructor in the crate that does
+not sort and the only one that returns a `Result` rather than asserting — because it is the only one
+whose input comes from *outside*: a caller's malformed matrix must be a raise and not an abort.
+
+**It breaks the invariant `Csr`'s own doc comment states**, and the honest thing was to say where
+that matters rather than hope. `matvec`, `get`, `scaled`, `nnz` and the accessors do not care about
+row order. The three merge kernels do — `add` and `sub` walk both operands in ascending column
+order, `matmul` accumulates in ascending order of the contracted index — so all three now
+`debug_assert!(self.has_sorted_indices() && other.has_sorted_indices())`. Compiled out of the
+release wheel, live in `cargo test`, and self-documenting either way: the assertion names the
+property the kernel needs, which is better than the doc comment that used to imply it.
+
+`Plate.B`'s setter replaces `p.stiffness` and **deliberately does not refactor**. That is fidelity
+rather than laziness: the Python original factored `A = (1 + σk) I + θ k² κ² B` in `__init__`, and
+`plate.B = X` there rebound one attribute and left `_lu` alone. Assigning a reordering of the same
+operator — the only use — leaves the factorization correct, because the sort moved no value.
+
+Five native bars in `sparse.rs` cover the new constructor, and the one worth naming is
+`stored_order_is_the_summation_order_and_it_is_visible_in_the_last_bit`: two matrices holding the
+same three numbers whose `matvec` differs by exactly `f64::EPSILON`, because `1.0 + t + t` loses
+both small terms and `t + t + 1.0` keeps them. Without that, the constructor's whole reason for
+existing would be an argument rather than a measurement.
+
+Measured after the fix, on the Rust plate: injecting the pre-2026-08-28 operator moves the
+trajectory by **3.5e-13** of its amplitude over 2,000 steps (bar: 1e-11), and injecting `1.01 * B`
+moves it by **9.6e3** — the control that proves the injection reaches the step at all.
+
+### 43.3 What each of the two modules keeps
+
+| module | lines | what stayed |
+|---|---:|---|
+| `plate` | 100 | `Boundary` / `Domain` (type aliases), `THETA_DEFAULT` with its reasoning, and **`GrainSpec`, which the Rust side constructs** (§41.2); the two classes and the material helper are re-exports |
+| `operators2d` | 189 | **every builder, as a delegating Python wrapper** — see below |
+
+`operators2d` is the **second module in the project with no core half**, after `airbox.py`'s
+wrapper tier (§31.11), and for a reason that is structural rather than incidental: the binding
+returns each matrix as CSR *triplets*, because a `physsynth-core` that learned what SciPy is would
+stop being headless. So something has to put a `csr_matrix` back around the result, and that
+something is Python. Twenty-four functions, each two lines, lifted **verbatim** out of the
+`if _USE_RUST:` block rather than retyped — that block is the code the flagged CI job has been
+running for a phase, and re-spelling it would be the one way to introduce a difference the suite
+cannot see.
+
+The five 1-D difference primitives stay, underscore and all, though only two of them have a caller
+left. They are one set — the differences the free plate's stiffness is built from — and the two with
+callers prove the set is test-facing; dropping three of five leaves an arbitrary hole in a family.
+That is a different judgement from `collision`'s three private helpers, deleted with unit 1 because
+nothing anywhere named them **and** they had no Rust twin.
+
+### 43.4 The finding: a deletion reaches the clients that RE-DERIVE the model, and the swap they need may be a *solver*
+
+Fifteen tests failed on the first full run, in `test_airbox_dipole.py`, `test_airbox_surface.py`,
+`test_airbox_vk.py` and `test_rust_parity_airbox_wrap.py` — none of them in unit 5, none of them
+naming a reference alias, and all of them failing `np.array_equal` at ~1e-16.
+
+The cause was written down in `airbox.py` itself, eleven months of batches ago, and it came true
+exactly as predicted:
+
+> Every room-loaded class **reassembles** the plate's system matrix and factors it here, rather than
+> reaching into `plate.py` — and four of the family's reduction tests turn that into a bit-identity
+> claim: with the load switched off, `a_loaded` IS the plate's own `A`, so a loaded plate must
+> reproduce a bare one byte for byte. […] Porting `plate.py` moved the model's solver to Rust, so
+> this module's has to move with it or the anchor breaks for a reason having nothing to do with
+> `airbox.py`.
+
+That shim existed and was **behind the flag**, because unflagged the model still factored with
+SuperLU and so did the wrapper. Unit 5 ended that: `plate.Plate` is the Rust class on every path
+now, so `airbox.splu` had to become the crate's LU on every path too. The rebinding is unconditional
+as of this batch; what stays behind the flag is the swapping of `airbox`'s own classes, which is a
+separate question and unit 6's.
+
+**The generalisation is the sixth entry in §39.3's list of searches for a blocking dependency, and
+it does not look like the other five.** Those ask *what names does this module reach for*.
+This one asks *what modules re-derive this module's arithmetic and compare the result exactly* —
+a dependency with no import, no attribute access and no name in common. The tell is an
+`array_equal` in a test on a module that is not the one being deleted, and the remedy may be a
+**solver** rather than a name: nothing about `airbox.py` mentions `Plate`, and the fix was one
+rebinding of `splu`.
+
+### 43.5 Two reflective tests broke, and both were reading how the model STORES its attributes
+
+`tests/test_rust_parity_airbox_wrap.py` walks `dir(plate)` and asserts every public name answers
+through the wrapper with the plate's own value. It broke twice, in two different ways, and both are
+the same underlying fact: **`dir()` of a `#[pyclass]` and `dir()` of a Python instance are
+different kinds of set.**
+
+* `dir()` on the pyclass lists every `#[getter]`, including the branch-only ones that **raise** —
+  a supported plate has no `K`, `W` or `w`. The Python plate simply never assigned them, so they
+  were never listed and the loop never saw them. The repair is to ask the *instance*
+  (`if not hasattr(plate, name): continue`): the claim is about names that answer.
+* a getter may build a **fresh object per access**. `Plate._lu` hands back a new `SparseLu` wrapper
+  every time, so `plate._lu is plate._lu` is already `False` and there is no value for the wrapper
+  to agree with. The Python plate stored one object and that branch never fired.
+
+A reflective test over `dir(model)` is therefore a claim about the model's *storage*, which is
+exactly what a port changes. Neither failure is a defect in the port and neither could have been
+found by any parity comparison — both sides of the comparison were the wrapper.
+
+### 43.6 A third module broke for a reason that had nothing to do with any of this
+
+`tests/test_rust_parity_rotating_wave.py::test_planar_hessian_agrees_to_a_few_ulps...` failed on
+about one full-suite run in two, at a **different `strain` each time**, and passed when the file was
+run alone. Two latent defects, neither new, both surfaced because deleting 717 collected tests
+reshuffled which tests share an xdist worker:
+
+* the fixture was seeded `np.random.default_rng(hash(str(strain)) % 2**32)`, and Python randomises
+  string hashing **per process**. So the data was different on every run and every worker;
+* the gap was measured **pointwise** — `|x - y| / |x|`, entry by entry — so an entry near a
+  cancellation divides a last bit by an arbitrarily small number.
+
+Measured over 1,600 fixtures: the worst pointwise ratio is **1.1e-13**, the worst gap normalised by
+the field's own scale is **6.0e-16**. One ulp, which is what the test's own docstring has always
+claimed. The seeds are now written down and swept, and the bar is on the scaled quantity — ledger
+#30 (*normalise by the amplitude, never pointwise*) arriving in an analysis parity test, having
+been learnt on a decaying trajectory.
+
+Worth stating plainly because it will recur for every remaining unit: **a deletion changes which
+tests share a process.** It will surface order- and process-dependent defects that have nothing to
+do with the deletion, and the first instinct — "my change broke this" — is wrong about half the
+time. The discriminator is cheap: run the file alone, and run the suite on the stashed tree.
+
+### 43.7 The two parity files, sorted per test
+
+`tests/test_rust_parity_ops2d.py` **survives at 159 tests of 699**, and `tests/test_rust_parity_plate.py`
+is **deleted outright** — every one of its 31 tests was a two-sided comparison. The sort followed
+§42.5's three outcomes and added nothing new to them, but two of the survivors are worth naming
+because their claim got *stronger*:
+
+* `test_the_gram_association_is_a_different_sum_and_this_finds_the_witness` builds the Airy
+  operator's right-associated Gram product **out of SciPy** on every shipped grid and asserts the
+  crate's `Bf` equals it entry for entry — having first searched for a grid where the two
+  associations disagree, so it cannot go vacuous. It replaces
+  `test_the_airy_operator_is_bit_identical`, which compared the crate against a Python
+  transcription of the same recipe. Comparing against SciPy's kernels doing the arithmetic
+  themselves is the stronger statement.
+* `test_the_airy_solve_is_the_measured_superlu_tolerance` and its backward-stability sibling are
+  **still two-sided**, and unaffected: their two sides are two *solvers* (the crate's LU and
+  SuperLU), not two implementations of this project's code. Both are now handed `rs.Bf`. This is
+  the shape to look for when sorting a parity file — a comparison whose comparand is a library
+  survives a deletion untouched.
+
+Four claims moved to `tests/test_binding_surface.py` rather than dying: the branch-only attribute
+set, `domain=None` (§24.7's second argument on the one class that has two), the settable state
+buffers, and two new tests for the `B` setter — one asserting it keeps the order it is handed (with
+a *positive* lower bound on the movement, `0.0 < moved < 1e-9`, so a setter that silently sorted
+would fail), one asserting a malformed matrix raises rather than panics.
+
+One claim moved into the **crate**: `the_side_length_snaps_with_pythons_half_to_even_round`, which
+was `test_rust_parity_plate.py`'s pin that `Ny = max(int(round(Ly / h)), 1)` uses CPython's
+half-to-even rounding and not `f64::round`. There the claim was "the two implementations snap
+alike"; natively it is stated against the arithmetic, with the row counts written out — and the
+witnesses (2.5 → 2, 4.5 → 4) are the geometries where away-from-zero would give a **different
+plate**, not a rounding.
+
+### 43.8 One divergence accepted rather than fixed, and it is the human's to overturn
+
+`test_an_explicit_none_velocity_is_not_the_default` asserted that `set_state(u0, None)` is refused —
+§24.7's rule applied to `v0`. It passed because the *Python* plate refused: its default was the
+float `0.0`, so `None` reached `np.asarray(None, float)` and NumPy raised. The Rust class does
+**not** refuse, and neither does any other model in the crate (measured: `Plate`, `VKPlate`,
+`IdealString`, `StiffString`, `FreeBeam` all accept it as zero velocity).
+
+That divergence was not created here and it is the kind `plate.rs`'s header already lists and
+declines to hide — a NumPy accident rather than a designed refusal, unlike `boundary=None`, which
+the original rejected in its own words and where `Option<Option<_>>` is genuinely load-bearing. So
+the test was re-pointed at the claim that is actually worth making: **whatever the model does with
+an explicit `None`, the wrapper does the same thing**, because a wrapper that quietly disagreed with
+the object it wraps would be a second convention for callers to learn. Making the crate refuse
+`v0=None` everywhere is a six-class change and a defensible one; it is recorded here rather than
+taken.
+
+### 43.9 The measured state
+
+| run | tests | wall |
+|---|---:|---:|
+| unflagged, whole suite (`-n 6`) | **2,773** passed, 1 skipped | 119 s |
+| flagged, three shards, parity excluded | 608 + 887 + 529 = **2,024** | 52 + 61 + 32 s |
+| `cargo test --workspace`, debug **and** release | green | — |
+| `cargo fmt --all` · `cargo clippy --workspace --all-targets -- -D warnings` | clean | — |
+| `ruff check .` | clean | — |
+
+`physsynth/core/` + `physsynth/analysis/` are **11,855 → 9,540 lines** and `tests/` is
+**35,147 → 33,750** — **3,712 lines gone this batch, 16,146 across the six deletions.** Fifteen of
+twenty-three model bodies have no Python left. The unflagged suite went 3,490 → 2,773 collected
+tests and, again, **not one physics bar was retired**: `test_plate_modal.py`, `test_plate_energy.py`,
+`test_free_plate_modal.py`, `test_guitar_plate.py`, `test_vk_energy.py` and the rest are untouched
+and now run against Rust on the default path.
+
+### 43.10 What the next batch inherits
+
+* **Units 7, 4, 3, 2, 1 and 5 are complete.** Five units left.
+* **Units 10 and 11** (`analysis/`, 2,458 lines) are the human's next call, and it was **taken on
+  2026-09-03**: delete, but *freeze the numbers first* — record what the Python detector measures
+  across a spread of fixtures as written-down constants, so the Rust instrument stays checked
+  against numbers a second implementation produced even after that implementation is gone. That is
+  the next batch. §36.4's configuration (a Rust model measured by a Python instrument) ends with
+  it; what replaces it is a Rust instrument measured against a Python instrument's *recorded*
+  output, which is weaker in one specific way — it cannot be re-derived — and should be said so in
+  the file that holds the numbers.
+* **Units 6 (`airbox`, 4,091 lines) and 8 (`beam`, 288 lines)** are still blocked on native bars
+  that do not exist for `AirBox` and `FreeBeam`. Unit 6 gained a constraint this batch: its `splu`
+  is now unconditional, so whatever deletes it must keep the crate's LU reachable under
+  `airbox.splu` as a module global — three test files patch that name.
+* **Unit 9 (`connection`)** is blocked permanently.
+* `tests/test_rust_parity.py` still holds **one** row, `FreeBeam`, and dies with unit 8.
+* The findings ledger gains **#43–#46**.

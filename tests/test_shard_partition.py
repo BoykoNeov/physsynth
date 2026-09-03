@@ -133,7 +133,6 @@ REMAINING_PARITY_FAMILY = {
     "test_rust_parity_connection.py",
     "test_rust_parity_operators.py",
     "test_rust_parity_ops2d.py",
-    "test_rust_parity_plate.py",
     "test_rust_parity_rotating_wave.py",
     "test_rust_parity_spectrum.py",
 }

@@ -543,3 +543,56 @@ fn the_energy_form_is_the_updates_own_matrix() {
         assert!(e > 0.0, "a displaced plate stores energy");
     }
 }
+
+
+/// `Ny = max(int(round(Ly / h)), 1)`, and `round` there is **CPython's**, not Rust's.
+///
+/// Python rounds a tie to even and `f64::round` rounds a tie away from zero, so the two disagree
+/// on exactly the geometries where `Ly / h` lands on a half — and that is a plate with a different
+/// number of rows, not a rounding: a different mask, a different operator, a different spectrum
+/// (§25.2, a discrete output). `py_round` transcribes CPython and is asserted on its own in
+/// `tests/radiation.rs`; this asserts that the plate's snap actually goes through it, which is the
+/// half a test of the primitive cannot see.
+///
+/// Moved here from `tests/test_rust_parity_plate.py` when unit 5's Python body was deleted (plan
+/// §43). There the claim was "the two implementations snap alike"; here it is stated against the
+/// arithmetic itself, so the expected row counts are written out rather than compared.
+#[test]
+fn the_side_length_snaps_with_pythons_half_to_even_round() {
+    let lx = 0.4;
+    // (segments along x, the multiple of `h` asked for, the row count half-to-even gives).
+    // 2.5 -> 2 and 3.5 -> 4: away-from-zero would give 3 and 4, so the first of each pair is the
+    // witness and the second is the control that keeps this from passing on a constant.
+    let cases: [(i64, f64, usize); 8] = [
+        (8, 2.5, 2),
+        (8, 3.5, 4),
+        (10, 4.5, 4),
+        (10, 5.5, 6),
+        (12, 2.5, 2),
+        (16, 6.5, 6),
+        (20, 3.5, 4),
+        (20, 4.5, 4),
+    ];
+    let mut ties = 0;
+    for (n, mult, want_ny) in cases {
+        let h = lx / n as f64;
+        let ly = h * mult;
+        let p = Params::new(&PlateSpec {
+            ly,
+            n,
+            ..spec(Boundary::Supported, Domain::Rectangle, n)
+        })
+        .expect("a legal plate");
+        assert_eq!(
+            p.ny, want_ny,
+            "N={n} Ly={mult}h: snapped to {} rows, want {want_ny}",
+            p.ny
+        );
+        // The grid really is that many rows, so the claim is about the plate and not a field.
+        assert_eq!(p.mask.nrows(), want_ny + 1);
+        if (ly / h % 1.0 - 0.5).abs() < 1e-9 {
+            ties += 1;
+        }
+    }
+    assert_eq!(ties, 8, "these geometries no longer land on a tie and the test is vacuous");
+}

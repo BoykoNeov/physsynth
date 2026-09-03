@@ -242,7 +242,42 @@ def test_the_rust_swap_matches_the_environment():
             "contact_force_total",
             "solve_contact",
         },
+        # `plate` is unit 5. Both classes and the material helper are plain re-exports; what the
+        # module keeps is `GrainSpec` -- which the Rust helper CONSTRUCTS, reaching back through
+        # `py.import("physsynth.core.plate")` -- plus two type aliases and `THETA_DEFAULT`.
+        plate: {"Plate", "VKPlate", "grain_ratios_from_material"},
+        # `operators2d` is unit 5's other half and only these two names can be checked this way:
+        # everything else in it is a *delegating wrapper* rather than a re-export, and is asserted
+        # below in the shape that fits.
+        operators2d: {"VonKarmanBracket", "AiryStressSolver"},
     }
+
+    # `operators2d` is the second module in the project with no core half (`airbox.py`'s wrapper
+    # tier was the first). The binding returns every matrix as CSR *triplets* -- a Rust crate
+    # cannot construct a `scipy.sparse.csr_matrix` -- so each builder here stays a Python function
+    # that puts a matrix back around the result. Asserting `is physsynth_rs.<name>` on one of them
+    # would therefore be asserting that the shim had been bypassed and a caller was being handed a
+    # four-tuple. The claim that fits is the inverse, and it is the same shape as
+    # `collision.solve_contact_vector`'s above.
+    for name in sorted(
+        {
+            "grid_coords", "rectangle_mask", "disk_mask", "guitar_half_width", "guitar_scale",
+            "guitar_mask", "guitar_area", "live_cells", "cells_per_node", "prune_to_area_carrying",
+            "laplacian_from_mask", "biharmonic_from_mask", "_dirichlet_interior_d2_1d",
+            "orthotropic_biharmonic", "free_plate_stiffness", "free_plate_stiffness_from_mask",
+            "_collocated_d2_1d", "_forward_d1_1d", "_centered_d2_1d", "_clamped_d2_1d",
+            "_avg_d1_1d", "embed", "inner2d", "norm2_2d",
+        }
+    ):
+        fn = getattr(operators2d, name)
+        assert fn is not getattr(physsynth_rs, name.lstrip("_"), None), (
+            f"`operators2d.{name}` is the Rust function itself -- the shim that rebuilds a "
+            "`csr_matrix` from the binding's triplets has been bypassed"
+        )
+        assert getattr(fn, "__module__", None) == "physsynth.core.operators2d", (
+            f"`operators2d.{name}` is no longer defined in this module ({fn!r}) -- the delegating "
+            "wrapper is the module's whole remaining body and cannot be re-exported away"
+        )
     # `collision`'s underscored names, and the one that must NOT be a bare re-export.
     for name in ("_contact_force_total_deriv", "_force_total_vec", "_deriv_total_vec"):
         assert getattr(collision, name) is getattr(physsynth_rs, name[1:]), (
@@ -276,10 +311,8 @@ def test_the_rust_swap_matches_the_environment():
         # which its reading of the flag could have diverged with nothing noticing. The derive is
         # only as wide as the tuple it derives over, for the fourth time.
         airbox,
-        operators2d,
         exciter,
         banded,
-        plate,
         beam,
         connection,
     ):
@@ -299,8 +332,6 @@ def test_the_rust_swap_matches_the_environment():
     for module in (
         airbox,
         beam,
-        operators2d,
-        plate,
         connection,
     ):
         # `collision` joined this tuple in Phase 3's last batch, and it was ABSENT before -- so for
@@ -331,11 +362,7 @@ def test_the_rust_swap_matches_the_environment():
         ("physsynth.core.airbox", "RoomSuspendedVKPlate"),
         ("physsynth.core.airbox", "RoomLoadedMembrane"),
         ("physsynth.core.airbox", "RoomSuspendedMembrane"),
-        ("physsynth.core.operators2d", "VonKarmanBracket"),
-        ("physsynth.core.operators2d", "AiryStressSolver"),
         ("physsynth.core.beam", "FreeBeam"),
-        ("physsynth.core.plate", "Plate"),
-        ("physsynth.core.plate", "VKPlate"),
         ("physsynth.core.connection", "StringBodyBridge"),
         ("physsynth.core.connection", "StringPlateBridge"),
         ("physsynth.core.connection", "StringVKPlateBridge"),
@@ -387,50 +414,8 @@ def test_the_rust_swap_matches_the_environment():
         # skips aliases beginning with an underscore -- `collision`'s spelling, for `collision`'s
         # reason.
         airbox: {"free_pressure_nodes", "face_axes", "impedance_from_zeta"},
-        # `plate` is ported in full as of Phase 5's fourth batch. Both CLASSES are checked by
-        # identity above; the only free FUNCTION in the module is the material helper. Its private
-        # `_count_components` is deliberately NOT aliased: it is not swapped either, and an alias
-        # with no swap behind it is exactly what this derive is built to catch.
-        plate: {"grain_ratios_from_material"},
         # `operators` is ported in full (plan Phase 1).
         operators: set(operators.__all__),
-        # `operators2d` is ported in FULL as of Phase 5's third batch, and it took four of them:
-        # the builders the membrane needs (plan Phase 2), the guitar outline's geometry (Phase 5
-        # batch 1), the plate's matrices (batch 2) and the nonlinear plate -- the five private 1-D
-        # differences, `VonKarmanBracket` and `AiryStressSolver` -- in batch 3. The two classes are
-        # checked by identity above rather than here, and `operators2d` had to be ADDED to that
-        # derive's tuple to be seen at all, which is section 23.7's finding coming due on schedule.
-        #
-        # The five 1-D differences are here under their unprefixed spellings for the reason
-        # `collision`'s entry records: the module names it `_dirichlet_interior_d2_1d` and the
-        # alias namespace is flat, so `_public` below tries the underscored form too. That
-        # mismatch is exactly what dropped a whole module out of this table for a batch.
-        operators2d: {
-            "grid_coords",
-            "rectangle_mask",
-            "disk_mask",
-            "guitar_half_width",
-            "guitar_scale",
-            "guitar_mask",
-            "guitar_area",
-            "live_cells",
-            "cells_per_node",
-            "prune_to_area_carrying",
-            "laplacian_from_mask",
-            "biharmonic_from_mask",
-            "dirichlet_interior_d2_1d",
-            "orthotropic_biharmonic",
-            "free_plate_stiffness",
-            "free_plate_stiffness_from_mask",
-            "collocated_d2_1d",
-            "forward_d1_1d",
-            "centered_d2_1d",
-            "clamped_d2_1d",
-            "avg_d1_1d",
-            "embed",
-            "inner2d",
-            "norm2_2d",
-        },
         exciter: set(exciter.__all__),
         # `banded` is ported in full (plan Phase 3), and it is the odd one out in this table: its
         # `_py` aliases are SciPy's functions, not a Python transcription, because what this
@@ -455,6 +440,12 @@ def test_the_rust_swap_matches_the_environment():
         # same shape as the empty parity job section 16.8 found, reached through a third door --
         # so the lookup now tries the underscored spelling too, which keeps the set DERIVED rather
         # than listed.
+        # `plate` and `operators2d` were here until unit 5's deletion, and they left in two
+        # different directions -- which is the batch's own finding. `plate`'s three names are
+        # re-exports and moved to `deleted_bodies` with everything else. `operators2d`'s could
+        # not: its functions are still Python, because the binding hands back CSR triplets and
+        # something has to rebuild the matrix, so the claim about them is the *inverted* one
+        # written above the loop over `deleted_bodies`.
         # `bow` and `collision` were here until unit 1's deletion. Their functions still have to
         # resolve to Rust -- `tests/test_bow_stability.py` imports the friction curve by name and
         # asserts its oddness, peak and derivative directly -- but with no Python function left to
@@ -528,52 +519,29 @@ def test_the_rust_swap_matches_the_environment():
         assert membrane.laplacian_from_mask is operators2d.laplacian_from_mask, (
             "`membrane` captured a different `laplacian_from_mask` than `operators2d` now exposes"
         )
-        # The plate's version, added with Phase 5's first batch. `plate` is not ported, but it
-        # does `from .operators2d import guitar_mask, ...` at module scope, so it is a CLIENT of
-        # names that are -- and the geometry is the half of the module where a mis-ordered swap
-        # would be worst. A Python `guitar_mask` under a run that claims Rust is a plate with a
-        # possibly different set of nodes, which every physics bar in the suite would pass.
-        # The second batch widens it from the outline to the OPERATORS: `plate` also captures the
-        # three matrix builders, and `Plate.step` multiplies by two of them every timestep. A
-        # mis-ordered swap there is subtler than a wrong outline and not much better -- the plate
-        # would step on a SciPy-ordered operator while the run reported Rust, which is a different
-        # trajectory in its last bits and nothing in the suite says so.
-        for name in (
-            "guitar_half_width",
-            "guitar_scale",
-            "guitar_mask",
-            "guitar_area",
-            "prune_to_area_carrying",
-            "biharmonic_from_mask",
-            "orthotropic_biharmonic",
-            "free_plate_stiffness",
-            "free_plate_stiffness_from_mask",
-        ):
-            assert getattr(plate, name) is getattr(operators2d, name), (
-                f"`plate` captured a different `{name}` than `operators2d` now exposes -- the "
-                "swap landed after that module was imported, so this plate's outline is being "
-                "built by the Python code while the run reports Rust"
-            )
-
-        # The same assertion one level out, added with Phase 5's fourth batch, which is what
-        # creates the exposure: `connection.py` does `from .plate import Plate, VKPlate` at module
-        # SCOPE, so it holds whatever those names were bound to when it was imported. That is
-        # section 0's named failure mode verbatim -- a lazy import or a reordered
-        # `physsynth.core.__init__` and the bridges would build Python plates while the run
-        # reported Rust, which is a different trajectory in its last bits and nothing else in the
-        # suite would say so.
+        # TWO plate captures stood here and unit 5's deletion retires both, for the two different
+        # reasons §42.4 separates.
         #
-        # `airbox.py` needs no entry here and that is worth stating rather than leaving to a
-        # reader: its `from physsynth.core.plate import Plate, VKPlate` sits under
-        # `if TYPE_CHECKING:`, so it captures nothing at runtime. What airbox DOES capture is
-        # `splu`, which it re-binds itself (plan section 28.2) and which the bare-vs-loaded
-        # reduction tests already pin exactly.
-        for name in ("Plate", "VKPlate"):
-            assert getattr(connection, name) is getattr(plate, name), (
-                f"`connection` captured a different `{name}` than `plate` now exposes -- the swap "
-                "landed after that module was imported, so a bridge is driving a Python plate "
-                "while the run reports Rust"
-            )
+        # The first was `plate` against `operators2d`: `plate.py` did `from .operators2d import
+        # guitar_mask, biharmonic_from_mask, ...` at module scope, so it was a CLIENT of nine
+        # swapped names and a swap landing after its import would have built the plate's outline
+        # -- or, worse, the operator `Plate.step` multiplies by twice a timestep -- out of the
+        # Python code while the run reported Rust. It is retired because `plate.py` has no body
+        # left to capture anything with: the module imports two classes from the extension and
+        # nothing from `operators2d` at all. Not "both sides are Rust" but "there is no capture".
+        #
+        # The second was `connection` against `plate` -- `connection.py` still does
+        # `from .plate import Plate, VKPlate` at module scope, and that import is still live. But
+        # `plate.Plate` is now an unconditional `from physsynth_rs import Plate`: there is no swap
+        # to land late, so the assertion has become `x is x`. That is §42.4's rule exactly, and a
+        # captured-binding check kept past it is a guard that passes vacuously.
+        #
+        # `airbox.py` needed no entry in either and that is worth keeping on the record: its
+        # `from physsynth.core.plate import Plate, VKPlate` sits under `if TYPE_CHECKING:`, so it
+        # captures nothing at runtime. What airbox DOES capture is `splu` -- and that is no longer
+        # a swap either, because unit 5 made the crate's LU unconditional there (plan §43.4): the
+        # plate factors with the crate on every path now, so the wrapper tier has to as well or
+        # the four bare-versus-loaded reduction anchors compare two solvers.
 
         # The body's version, and it has TWO importers rather than one. `connection` and
         # `radiation` both do `from .body import ModalBody` at module scope, so a swap that

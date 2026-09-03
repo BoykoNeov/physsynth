@@ -128,9 +128,9 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
+import physsynth_rs as _rs
 from numpy.typing import NDArray
 from scipy import sparse
-from scipy.sparse.linalg import splu
 
 if TYPE_CHECKING:  # type-only: the room stays free of any dependency on the resonator modules
     from scipy.sparse.linalg import SuperLU
@@ -4041,37 +4041,57 @@ parity file compares them to each other.
 
 _USE_RUST = os.environ.get("PHYSSYNTH_RS", "").strip() not in ("", "0", "false", "False")
 
+# -- the factorization, and why it is NOT behind the flag (plan §43) -----------------------------
+#
+# Every room-loaded class in the wrapper tier **reassembles** the plate's (or the membrane's, or
+# the body's) system matrix and factors it here rather than reaching into the model, and four of
+# the family's reduction tests turn that into a bit-identity claim: with the load switched off,
+# `a_loaded` IS the model's own `A`, so a loaded plate must reproduce a bare one byte for byte.
+# That claim pins this module's transcription of the theta-scheme right-hand side, and it holds
+# only while both sides factor with the same solver.
+#
+# This shim was written for that reason when the plate was ported (§28) and it sat behind
+# `PHYSSYNTH_RS`, because *unflagged* the model still factored with SuperLU and so did this. Unit
+# 5's deletion ended that: `plate.Plate` is the Rust class on every path now, so a SuperLU
+# factorization here would break all four anchors on the DEFAULT path, for a reason having nothing
+# to do with `airbox.py`. Measured before the fix: 15 tests, `array_equal` failing at ~1e-16 —
+# §24.2's SuperLU-versus-crate gap, arriving through a client that re-derives the matrix.
+#
+# So the rebinding is unconditional. `splu` is looked up as a module global at call time, so this
+# is the whole of it and nothing else in the file knows. What stays behind the flag below is the
+# swapping of this module's own classes, which is a separate question and unit 6's.
+
+class _Fill:
+    """Just enough of a SuperLU factor for `lu_nnz` to read `.nnz` off it."""
+
+    __slots__ = ("nnz",)
+
+    def __init__(self, nnz: int) -> None:
+        self.nnz = nnz
+
+
+class _RustSuperLU:
+    """`splu(A)`'s object, from the crate: `solve`, and the two fill counts."""
+
+    __slots__ = ("_lu", "L", "U")
+
+    def __init__(self, a) -> None:
+        m = sparse.csr_matrix(a, copy=True)
+        m.sort_indices()
+        self._lu = _rs.SparseLu(
+            m.data, m.indices.astype(np.int32), m.indptr.astype(np.int32), m.shape[0]
+        )
+        l_nnz, u_nnz = self._lu.nnz
+        self.L = _Fill(l_nnz)
+        self.U = _Fill(u_nnz)
+
+    def solve(self, b):
+        return np.asarray(self._lu.solve(np.ascontiguousarray(b, dtype=float)))
+
+
+splu = _RustSuperLU
+
 if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI job, not the default gate
-    import physsynth_rs as _rs
-
-    class _Fill:
-        """Just enough of a SuperLU factor for `lu_nnz` to read `.nnz` off it."""
-
-        __slots__ = ("nnz",)
-
-        def __init__(self, nnz: int) -> None:
-            self.nnz = nnz
-
-    class _RustSuperLU:
-        """`splu(A)`'s object, from the crate: `solve`, and the two fill counts."""
-
-        __slots__ = ("_lu", "L", "U")
-
-        def __init__(self, a) -> None:
-            m = sparse.csr_matrix(a, copy=True)
-            m.sort_indices()
-            self._lu = _rs.SparseLu(
-                m.data, m.indices.astype(np.int32), m.indptr.astype(np.int32), m.shape[0]
-            )
-            l_nnz, u_nnz = self._lu.nnz
-            self.L = _Fill(l_nnz)
-            self.U = _Fill(u_nnz)
-
-        def solve(self, b):
-            return np.asarray(self._lu.solve(np.ascontiguousarray(b, dtype=float)))
-
-    splu = _RustSuperLU  # type: ignore[assignment,misc]  # noqa: F811
-
     AirBox = _rs.AirBox  # type: ignore[assignment,misc]  # noqa: F811
     RoomPort = _rs.RoomPort  # type: ignore[assignment,misc]  # noqa: F811
     SurfacePort = _rs.SurfacePort  # type: ignore[assignment,misc]  # noqa: F811

@@ -108,6 +108,77 @@ fn resolve_domain<'py>(
     (obj, parsed)
 }
 
+/// Read a SciPy sparse matrix into a core `Csr` **keeping its stored row order**.
+///
+/// The mirror of `csr_object`, and the direction that only exists because of one test. Every
+/// matrix this binding hands *out* was assembled in canonical order; a matrix handed *in* through
+/// `Plate.B`'s setter may deliberately not be, because the order is what that test is about
+/// (`Csr::from_arrays_preserving_order` carries the argument at length).
+///
+/// `indptr`/`indices` are read as `int64` whatever width SciPy chose — it picks `int32` or
+/// `int64` by the matrix's size, and both are the same integers.
+fn csr_from_scipy(
+    py: Python<'_>,
+    obj: &Bound<'_, PyAny>,
+    name: &str,
+    n: usize,
+) -> PyResult<physsynth_core::sparse::Csr> {
+    let np = py.import("numpy")?;
+    let shape = obj
+        .getattr("shape")
+        .and_then(|s| s.extract::<(usize, usize)>())
+        .map_err(|_| {
+            PyValueError::new_err(format!(
+                "{name} must be a sparse matrix of shape ({n}, {n}); got {}.",
+                shown(obj)
+            ))
+        })?;
+    if shape != (n, n) {
+        return Err(PyValueError::new_err(format!(
+            "{name} must have shape ({n}, {n}), got {:?}.",
+            shape
+        )));
+    }
+    let ints = |attr: &str| -> PyResult<Vec<usize>> {
+        let a = obj.getattr(attr).map_err(|_| {
+            PyValueError::new_err(format!(
+                "{name} must be in CSR format (no `{attr}`); call `.tocsr()` on it first."
+            ))
+        })?;
+        let a = np.call_method1("asarray", (a, np.getattr("int64")?))?;
+        let a = np.call_method1("ascontiguousarray", (a,))?;
+        let a: Bound<'_, numpy::PyArray1<i64>> = a.cast_into().map_err(|_| {
+            PyValueError::new_err(format!("{name}.{attr} must be a 1-D integer array."))
+        })?;
+        let ro = a.readonly();
+        let s = ro
+            .as_slice()
+            .map_err(|_| PyValueError::new_err(format!("{name}.{attr} must be contiguous.")))?;
+        if let Some(&bad) = s.iter().find(|&&v| v < 0) {
+            return Err(PyValueError::new_err(format!(
+                "{name}.{attr} holds a negative entry ({bad})."
+            )));
+        }
+        Ok(s.iter().map(|&v| v as usize).collect())
+    };
+    let indptr = ints("indptr")?;
+    let indices = ints("indices")?;
+    let data = {
+        let a = obj.getattr("data")?;
+        let a = np.call_method1("asarray", (a, np.getattr("float64")?))?;
+        let a = np.call_method1("ascontiguousarray", (a,))?;
+        let a: Bound<'_, PyArray1<f64>> = a.cast_into().map_err(|_| {
+            PyValueError::new_err(format!("{name}.data must be a 1-D float array."))
+        })?;
+        let ro = a.readonly();
+        ro.as_slice()
+            .map_err(|_| PyValueError::new_err(format!("{name}.data must be contiguous.")))?
+            .to_vec()
+    };
+    physsynth_core::sparse::Csr::from_arrays_preserving_order(n, n, indptr, indices, data)
+        .map_err(|e| PyValueError::new_err(format!("{name} is not a well-formed CSR matrix: {e}")))
+}
+
 /// `u0` as a live vector, accepting either the full 2-D field or the live vector itself.
 fn live_arg(
     py: Python<'_>,
@@ -482,6 +553,39 @@ impl PyPlate {
             ));
         }
         Ok(self.stiffness.clone_ref(py))
+    }
+
+    /// Replace the biharmonic the step applies — and **only** that.
+    ///
+    /// The one door in this binding that lets a caller put an operator of their own into a model,
+    /// and it is here for one test. `tests/test_plate_modal.py` holds the pin on the
+    /// 2026-08-28 sparse-assembly finding: it steps one plate on the shipped, canonically sorted
+    /// `B` and another on the pre-fix assembly — the same numbers in the order SciPy's sparse
+    /// product emits them — and asserts the trajectory did not move and neither drifts. That is a
+    /// claim about a *summation order*, so it needs the other order in a plate, and a read-only
+    /// getter made it inexpressible once the Python plate was deleted (plan §40.5, the human's
+    /// call on 2026-09-03).
+    ///
+    /// **The factorization is deliberately not rebuilt**, because the Python original does not
+    /// rebuild it either: `A = (1 + σk) I + θ k² κ² B` is factored in `__init__` and
+    /// `plate.B = X` there rebinds one attribute, leaving `_lu` as it was. Assigning a *different*
+    /// operator therefore gives an inconsistent plate on both sides equally, which is the fidelity
+    /// this setter is for; assigning a reordering of the same operator — the only use — leaves the
+    /// factorization correct, since the sort moved no value.
+    ///
+    /// Refused on the free branch, where `Plate` has no `B` at all. That is a divergence and it is
+    /// deliberate: Python would happily attach an unused attribute to the instance, and silently
+    /// accepting a stiffness the free step never reads is worse than a raise.
+    #[setter]
+    fn set_B(&mut self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        if self.p.boundary != core::Boundary::Supported {
+            return Err(pyo3::exceptions::PyAttributeError::new_err(
+                "'Plate' object has no attribute 'B'",
+            ));
+        }
+        self.p.stiffness = csr_from_scipy(py, value, "B", self.p.n_live)?;
+        self.stiffness = value.clone().unbind();
+        Ok(())
     }
 
     /// The energy-first stiffness `K` — free branch only.

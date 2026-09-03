@@ -488,7 +488,11 @@ def test_a_zeroed_operator_reaches_the_rust_wrapper(tier):
     inst.port.T = sparse.csr_matrix(inst.port.T.shape)
     inst.port.load_matrix = sparse.csr_matrix(inst.port.load_matrix.shape)
     a_bare = inst._surface.a_bare()
-    inst._lu_loaded = scipy_splu(sparse.csc_matrix(a_bare))
+    # `airbox.splu` and not SciPy's: unit 5's deletion made `Plate` the Rust class on every path,
+    # and the bare plate below factors with the crate's LU. Refactoring this one with SuperLU
+    # would compare two solvers and fail at ~1e-16 for a reason that is not this test's subject
+    # (plan §43, §24.2). `airbox.py`'s own `splu` is the crate's for exactly the same reason.
+    inst._lu_loaded = airbox.splu(sparse.csc_matrix(a_bare))
     u0 = plate_bump(plate)
     inst.set_state(u0)
     bare.set_state(u0)
@@ -540,7 +544,7 @@ def test_a_halved_load_matrix_reaches_the_rust_wrapper():
     scaled.port.R = 0.5 * scaled.port.R
     scaled.port.load_matrix = 0.5 * scaled.port.load_matrix
     a = scaled._surface.a_bare() + scaled._load_scale * scaled.port.load_matrix
-    scaled._lu_loaded = scipy_splu(sparse.csc_matrix(a))
+    scaled._lu_loaded = airbox.splu(sparse.csc_matrix(a))
     u0 = plate_bump(plate)
     scaled.set_state(u0)
     full.set_state(u0)
@@ -664,6 +668,12 @@ def test_no_model_name_is_unreachable_through_the_wrapper(kind, tier):
     for name in dir(plate):
         if name.startswith("__"):
             continue
+        # `dir()` of a `#[pyclass]` lists every getter, including the branch-only ones that raise
+        # `AttributeError` -- a supported plate has no `K`, `W` or `w`. The Python plate simply
+        # never assigned them, so `dir()` did not list them and this loop never saw them. Ask the
+        # plate rather than its class: the claim is about names that ANSWER.
+        if not hasattr(plate, name):
+            continue
         assert hasattr(rs_inst, name), f"{name} is unreachable through the wrapper"
         if name in own:
             continue  # a deliberate override -- the test above pins that set
@@ -676,6 +686,13 @@ def test_no_model_name_is_unreachable_through_the_wrapper(kind, tier):
             assert np.array_equal(mine, theirs), name
         elif sparse.issparse(theirs):
             assert _csr_equal(mine, theirs), name
+        elif theirs is not getattr(plate, name):
+            # A `#[pyclass]` getter may build a fresh object per access: `Plate._lu` hands back a
+            # new `SparseLu` wrapper every time, so `plate._lu is plate._lu` is already False and
+            # there is no value here for the wrapper to agree with. The Python plate stored one
+            # object and this branch never fired. Delegation is still asserted -- the `hasattr`
+            # above is the claim that the name answers at all.
+            continue
         else:
             assert mine == theirs, name
 
@@ -873,21 +890,40 @@ def test_an_omitted_spreading_and_an_explicit_none_are_different_arguments():
             )
 
 
-def test_an_explicit_none_velocity_is_not_the_default():
-    """``set_state(u0)`` seeds a consistent second-order start with ``v0 = 0``; ``set_state(u0,
-    None)`` is a different call and the model refuses it. PyO3 collapses the two unless the
-    signature is written to keep them apart (§24.7)."""
-    plate = _plate()
+def test_an_explicit_none_velocity_does_whatever_the_model_does():
+    """The wrapper must not add an argument convention of its own — and this test had one wrong.
+
+    It was written as "``set_state(u0, None)`` is a different call and the model refuses it",
+    §24.7's rule applied to ``v0``. It passed because the *Python* plate refused: its default was
+    the float ``0.0``, so ``None`` reached ``np.asarray(None, float)`` and NumPy raised. Unit 5's
+    deletion made ``_plate()`` build the Rust class and showed that the model does **not** refuse
+    — ``velocity_arg`` maps an explicit ``None`` onto the same zero vector as an omitted argument,
+    and so does every other model in the crate.
+
+    That is a divergence from the deleted Python, and it is the kind ``plate.rs``'s header already
+    lists and declines to hide: the Python refusal was NumPy's accident rather than a designed
+    one, unlike ``boundary=None``, which the original rejected in its own words and where §24.7's
+    ``Option<Option<_>>`` is therefore load-bearing. So the claim that is actually worth making
+    here is the wrapper's, not the model's: whatever the model does with an explicit ``None``, the
+    wrapper does the same thing, because a wrapper that quietly disagreed with the object it wraps
+    would be a second convention for callers to learn.
+    """
+    plate, twin = _plate(), _plate()
     with _rust_collaborators():
         inst = physsynth_rs.RoomLoadedPlate(
             plate=plate, room=make_surface_room(), face="z0"
         )
     u0 = plate_bump(plate)
-    py_plate = _plate()
-    with pytest.raises(Exception) as py_err:  # noqa: PT011 -- the model's own refusal, whatever it is
-        py_plate.set_state(u0, None)
-    with pytest.raises(type(py_err.value)):
-        inst.set_state(u0, None)
+    twin.set_state(u0, None)
+    inst.set_state(u0, None)
+    assert np.array_equal(plate.state, twin.state), (
+        "the wrapper's `set_state` disagrees with the model's about an explicit `None` velocity"
+    )
+    # ... and it is the same thing an omitted argument does, which is what makes it one convention
+    # rather than two.
+    third = _plate()
+    third.set_state(u0)
+    assert np.array_equal(twin.state, third.state)
 
 
 @pytest.mark.parametrize("tier", ["baffled", "suspended"])

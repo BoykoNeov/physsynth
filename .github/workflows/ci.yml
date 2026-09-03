@@ -242,7 +242,6 @@ jobs:
             tests/test_rust_parity_ops2d.py \
             tests/test_rust_parity_banded.py \
             tests/test_rust_parity_beam.py \
-            tests/test_rust_parity_plate.py \
             tests/test_rust_parity_airbox.py \
             tests/test_rust_parity_airbox_port.py \
             tests/test_rust_parity_airbox_wrap.py \

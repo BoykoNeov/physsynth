@@ -32,10 +32,10 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    `dispersion`, `duffing`, `rotating_wave`, plus the Bessel and elliptic functions they stand on —
    are in a **third crate**, `crates/physsynth-analysis`.
 
-   **Thirteen of twenty-three Python model bodies are GONE** — 12,434 lines, five of eleven deletion
+   **Fifteen of twenty-three Python model bodies are GONE** — 16,146 lines, six of eleven deletion
    units, and not one physics bar retired. Plan **§39** is the audit that made the order computable
-   (eleven units, from the reference-alias graph) and **§40–§42** are the deletions. Read §39's
-   tables before scoping the next one. Three things about the new state:
+   (eleven units, from the reference-alias graph) and **§40–§43** are the deletions. Read §39's
+   tables before scoping the next one. Four things about the new state:
 
    - **The wheel is now REQUIRED**, everywhere. A deleted model's module is an unconditional
      `from physsynth_rs import X`, so `pip install ./crates/physsynth-py` is a precondition for
@@ -53,6 +53,13 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
      `STILL_HAVE_A_PYTHON_TWIN` in `tests/test_rust_parity.py` (one row left), and the `rust` job's
      file list. `tests/test_binding_surface.py` is the permanent home for residue that can never be
      a native bar (buffer lifetime, PyO3 argument mapping).
+   - **A deletion reaches modules it does not contain.** §43 is the case: `airbox.py` *re-derives*
+     the plate's system matrix and factors it, and four of its reduction anchors are `array_equal`,
+     so moving the plate's solver to Rust on the default path broke 15 tests in three modules
+     outside the unit. That dependency has no import and no shared name — the tell is an
+     `array_equal` in a test on a module you are not deleting, and the fix was one rebinding of
+     `splu`. A deletion also **changes which tests share a process**, so it surfaces order- and
+     process-dependent defects that are not yours (ledger #44, #46).
 
    `cargo test --workspace` runs the native bars and the Cargo dependency allowlists; `PHYSSYNTH_RS=1
    pytest` runs the **existing, unmodified** Python tests against the Rust code for the models whose
@@ -68,10 +75,13 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    (the core crate's dependency list must stay empty, so it cannot reach a Bessel function) while
    its Python name swaps on `PHYSSYNTH_RS`, because it lives in a `core/` module. The crate a
    function is implemented in and the flag its name is swapped by are separate questions (§37.7).
-   **Open question, not yet the human's answer:** deleting `analysis/`'s Python bodies (units 10 and
-   11) would make `PHYSSYNTH_RS_ANALYSIS` a no-op and remove the configuration this rule exists to
-   protect — a Rust model measured by a Python instrument. The past check is not invalidated; the
-   ability to repeat it is. Do not delete those two units without asking.
+   **Answered 2026-09-03 (the human's call):** `analysis/`'s Python bodies (units 10 and 11) *are*
+   to be deleted, but **the numbers get frozen first** — what the Python detector measures across a
+   spread of fixtures is recorded as written-down constants, so the Rust instrument stays checked
+   against numbers a second implementation produced. `PHYSSYNTH_RS_ANALYSIS` becomes a no-op at
+   that point and the two-flag separation goes with it; what replaces it is weaker in one specific
+   way (the check can be repeated but not re-derived) and the file holding the constants must say
+   so. Until that batch lands, the rule above stands as written.
    **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the thirty-two
    findings about when two implementations agree to the bit and when they cannot (fed-back
    reductions, libm vs NumPy's own transcendentals, LLVM's constant fold, `np.sum`'s pairwise

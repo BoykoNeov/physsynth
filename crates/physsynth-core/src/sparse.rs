@@ -33,6 +33,50 @@
 //! contracted index, which is what SciPy's kernel does, and the resulting `data` is asserted equal
 //! to SciPy's bit-for-bit.
 
+/// Why a raw CSR triple could not be taken verbatim — see
+/// [`Csr::from_arrays_preserving_order`].
+///
+/// A `Result` rather than the panicking asserts the other constructors use, because this is the
+/// one constructor whose input comes from *outside* the crate: the binding hands it a SciPy
+/// matrix a caller assigned, and a caller's malformed matrix must be a raise and not an abort.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RawCsrError {
+    /// `indptr` was not `nrows + 1` long.
+    IndptrLength { expected: usize, got: usize },
+    /// `indptr` is not a run of row starts: it decreased here, started above zero, or its last
+    /// entry disagreed with `data.len()`.
+    IndptrNotRowStarts { row: usize },
+    /// `indices` and `data` disagreed on how many values are stored.
+    LengthMismatch { indices: usize, data: usize },
+    /// A column index was at least `ncols`.
+    ColumnOutOfRange { column: usize, ncols: usize },
+    /// A row stored the same column twice — [`Csr::from_rows`] rejects that too, and for the
+    /// same reason: a stencil written twice is a bug, not a matrix to sum.
+    DuplicateColumn { row: usize, column: usize },
+}
+
+impl std::fmt::Display for RawCsrError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RawCsrError::IndptrLength { expected, got } => {
+                write!(f, "indptr must have {expected} entries, got {got}.")
+            }
+            RawCsrError::IndptrNotRowStarts { row } => {
+                write!(f, "indptr is not a run of row starts (at row {row}).")
+            }
+            RawCsrError::LengthMismatch { indices, data } => {
+                write!(f, "indices has {indices} entries and data has {data}.")
+            }
+            RawCsrError::ColumnOutOfRange { column, ncols } => {
+                write!(f, "column {column} out of range for {ncols} columns.")
+            }
+            RawCsrError::DuplicateColumn { row, column } => {
+                write!(f, "row {row} stores column {column} twice.")
+            }
+        }
+    }
+}
+
 /// A sparse matrix in canonical compressed-sparse-row form.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Csr {
@@ -127,6 +171,83 @@ impl Csr {
         }
     }
 
+    /// Build from raw CSR arrays, keeping each row **exactly as the caller stored it** —
+    /// including a column order that does not ascend.
+    ///
+    /// Every other constructor here sorts, and that is the point of them: this crate's whole
+    /// ordering story is that a canonical row is the one order both languages can express, so an
+    /// assembled operator is canonical by construction and a matvec over it is a reproducible
+    /// sum. This constructor exists for the single case where the *non*-canonical order is the
+    /// subject rather than an accident. `tests/test_plate_modal.py` steps a plate on the
+    /// pre-2026-08-28 biharmonic — the same numbers, in the order SciPy's sparse product happens
+    /// to emit them — to assert that the canonical sort moved a summation order and not a value.
+    /// Sorting here would hand that test the shipped operator twice and it would pass while
+    /// comparing nothing.
+    ///
+    /// **The result may therefore break the invariant the rest of this type documents.**
+    /// [`Csr::matvec`], [`Csr::get`], [`Csr::scaled`], [`Csr::nnz`] and the accessors do not care
+    /// about row order; the three merge kernels ([`Csr::add`], [`Csr::sub`], [`Csr::matmul`]) do,
+    /// and `debug_assert` it rather than trusting their callers. Ask
+    /// [`Csr::has_sorted_indices`] of any matrix you did not assemble yourself.
+    ///
+    /// # Errors
+    /// Any of [`RawCsrError`]. Structural zeros are **kept** — a caller handing over an existing
+    /// matrix is handing over its `nnz` too.
+    pub fn from_arrays_preserving_order(
+        nrows: usize,
+        ncols: usize,
+        indptr: Vec<usize>,
+        indices: Vec<usize>,
+        data: Vec<f64>,
+    ) -> Result<Self, RawCsrError> {
+        if indptr.len() != nrows + 1 {
+            return Err(RawCsrError::IndptrLength {
+                expected: nrows + 1,
+                got: indptr.len(),
+            });
+        }
+        if indices.len() != data.len() {
+            return Err(RawCsrError::LengthMismatch {
+                indices: indices.len(),
+                data: data.len(),
+            });
+        }
+        if indptr[0] != 0 {
+            return Err(RawCsrError::IndptrNotRowStarts { row: 0 });
+        }
+        for i in 0..nrows {
+            if indptr[i + 1] < indptr[i] || indptr[i + 1] > data.len() {
+                return Err(RawCsrError::IndptrNotRowStarts { row: i });
+            }
+        }
+        if indptr[nrows] != data.len() {
+            return Err(RawCsrError::IndptrNotRowStarts { row: nrows });
+        }
+        for i in 0..nrows {
+            let row = &indices[indptr[i]..indptr[i + 1]];
+            for &j in row {
+                if j >= ncols {
+                    return Err(RawCsrError::ColumnOutOfRange { column: j, ncols });
+                }
+            }
+            let mut seen = row.to_vec();
+            seen.sort_unstable();
+            if let Some(w) = seen.windows(2).find(|w| w[0] == w[1]) {
+                return Err(RawCsrError::DuplicateColumn {
+                    row: i,
+                    column: w[0],
+                });
+            }
+        }
+        Ok(Self {
+            nrows,
+            ncols,
+            indptr,
+            indices,
+            data,
+        })
+    }
+
     /// Square diagonal matrix with the given entries.
     pub fn diagonal(d: &[f64]) -> Self {
         let n = d.len();
@@ -166,6 +287,19 @@ impl Csr {
         &self.data
     }
 
+    /// True if every row's columns ascend — SciPy's attribute of the same name, computed.
+    ///
+    /// Always true of a matrix this crate assembled, so asking it of one is a way of saying where
+    /// the matrix came from. The one source of a `false` is
+    /// [`Csr::from_arrays_preserving_order`].
+    pub fn has_sorted_indices(&self) -> bool {
+        (0..self.nrows).all(|i| {
+            self.indices[self.indptr[i]..self.indptr[i + 1]]
+                .windows(2)
+                .all(|w| w[0] < w[1])
+        })
+    }
+
     /// `self * s`, elementwise on the stored values.
     ///
     /// Structure is preserved even if a product underflows to zero, matching SciPy's
@@ -196,6 +330,10 @@ impl Csr {
     /// # Panics
     /// If the shapes disagree.
     pub fn sub(&self, other: &Csr) -> Self {
+        debug_assert!(
+            self.has_sorted_indices() && other.has_sorted_indices(),
+            "sub merges two rows by walking both in ascending column order, so neither operand may be stored out of order"
+        );
         assert_eq!(
             (self.nrows, self.ncols),
             (other.nrows, other.ncols),
@@ -258,6 +396,10 @@ impl Csr {
     /// # Panics
     /// If the shapes disagree.
     pub fn add(&self, other: &Csr) -> Self {
+        debug_assert!(
+            self.has_sorted_indices() && other.has_sorted_indices(),
+            "add merges two rows by walking both in ascending column order, so neither operand may be stored out of order"
+        );
         assert_eq!(
             (self.nrows, self.ncols),
             (other.nrows, other.ncols),
@@ -420,6 +562,10 @@ impl Csr {
     /// # Panics
     /// If the inner dimensions disagree.
     pub fn matmul(&self, other: &Csr) -> Self {
+        debug_assert!(
+            self.has_sorted_indices() && other.has_sorted_indices(),
+            "matmul accumulates in ascending order of the contracted index, which is a claim about the STORED order of the left operand's rows"
+        );
         assert_eq!(
             self.ncols, other.nrows,
             "matmul shape mismatch: ({}x{}) @ ({}x{})",
@@ -687,5 +833,131 @@ mod tests {
             let expect: f64 = (0..5).map(|j| m.get(i, j) * v[j]).sum();
             assert_eq!(*yi, expect);
         }
+    }
+
+    // -- from_arrays_preserving_order: the one constructor that does not sort ------------------
+
+    #[test]
+    fn a_row_stored_out_of_order_comes_back_out_of_order() {
+        let m =
+            Csr::from_arrays_preserving_order(1, 3, vec![0, 3], vec![2, 0, 1], vec![1.0, 2.0, 3.0])
+                .expect("a well-formed triple");
+        assert_eq!(
+            m.indices(),
+            &[2, 0, 1],
+            "the constructor sorted, which is its one job not to"
+        );
+        assert_eq!(m.data(), &[1.0, 2.0, 3.0]);
+        assert!(!m.has_sorted_indices());
+        // Same operator either way: `get` finds a column wherever it is stored.
+        assert_eq!((m.get(0, 0), m.get(0, 1), m.get(0, 2)), (2.0, 3.0, 1.0));
+    }
+
+    #[test]
+    fn stored_order_is_the_summation_order_and_it_is_visible_in_the_last_bit() {
+        // The whole reason the constructor exists: two matrices holding the SAME numbers whose
+        // matvec differs, because 1.0 + t + t loses both small terms while t + t + 1.0 keeps them.
+        let t = 1e-16;
+        let unsorted =
+            Csr::from_arrays_preserving_order(1, 3, vec![0, 3], vec![2, 0, 1], vec![1.0, t, t])
+                .expect("a well-formed triple");
+        let sorted = Csr::from_rows(1, 3, vec![vec![(0, t), (1, t), (2, 1.0)]]);
+        assert!(sorted.has_sorted_indices() && !unsorted.has_sorted_indices());
+        let v = [1.0, 1.0, 1.0];
+        assert_eq!(unsorted.matvec(&v)[0], 1.0);
+        assert_ne!(
+            sorted.matvec(&v)[0],
+            unsorted.matvec(&v)[0],
+            "the two orders agree, so this fixture no longer exercises what it is here for"
+        );
+        // ... and the difference is exactly the last bit, not a value.
+        assert_eq!(sorted.matvec(&v)[0], 1.0 + f64::EPSILON);
+    }
+
+    #[test]
+    fn structural_zeros_are_kept_where_from_rows_would_drop_them() {
+        // A caller handing over an existing matrix is handing over its `nnz`, so a stored 0.0
+        // stays stored — the opposite of `from_rows`, and `nnz` is compared against SciPy's.
+        let m = Csr::from_arrays_preserving_order(1, 2, vec![0, 2], vec![0, 1], vec![0.0, 1.0])
+            .expect("a well-formed triple");
+        assert_eq!(m.nnz(), 2);
+        assert_eq!(
+            Csr::from_rows(1, 2, vec![vec![(0, 0.0), (1, 1.0)]]).nnz(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_malformed_triple_is_an_error_and_not_a_panic() {
+        use RawCsrError::*;
+        /// The rejection, then the `indptr`, `indices` and `data` that earn it.
+        type Malformed = (RawCsrError, Vec<usize>, Vec<usize>, Vec<f64>);
+        let cases: Vec<Malformed> = vec![
+            (
+                IndptrLength {
+                    expected: 2,
+                    got: 3,
+                },
+                vec![0, 1, 1],
+                vec![0],
+                vec![1.0],
+            ),
+            (
+                LengthMismatch {
+                    indices: 2,
+                    data: 1,
+                },
+                vec![0, 1],
+                vec![0, 1],
+                vec![1.0],
+            ),
+            (
+                IndptrNotRowStarts { row: 0 },
+                vec![0, 2],
+                vec![0],
+                vec![1.0],
+            ),
+            (
+                ColumnOutOfRange {
+                    column: 7,
+                    ncols: 3,
+                },
+                vec![0, 1],
+                vec![7],
+                vec![1.0],
+            ),
+            (
+                DuplicateColumn { row: 0, column: 1 },
+                vec![0, 2],
+                vec![1, 1],
+                vec![1.0, 2.0],
+            ),
+        ];
+        for (want, indptr, indices, data) in cases {
+            let got = Csr::from_arrays_preserving_order(1, 3, indptr, indices, data);
+            assert_eq!(got.err(), Some(want), "wrong rejection for {want}");
+        }
+    }
+
+    #[test]
+    fn an_unsorted_row_is_still_a_matrix_the_accessors_agree_about() {
+        // The order-agnostic half of the surface, asserted so the doc comment's list is checked
+        // rather than believed: everything here must read the same as the sorted twin.
+        let t = 1e-16;
+        let unsorted =
+            Csr::from_arrays_preserving_order(1, 3, vec![0, 3], vec![2, 0, 1], vec![1.0, t, t])
+                .expect("a well-formed triple");
+        let sorted = Csr::from_rows(1, 3, vec![vec![(0, t), (1, t), (2, 1.0)]]);
+        assert_eq!(unsorted.nnz(), sorted.nnz());
+        assert_eq!(
+            (unsorted.nrows(), unsorted.ncols()),
+            (sorted.nrows(), sorted.ncols())
+        );
+        for j in 0..3 {
+            assert_eq!(unsorted.get(0, j), sorted.get(0, j));
+        }
+        let s = unsorted.scaled(2.0);
+        assert_eq!(s.indices(), unsorted.indices(), "scaling reordered a row");
+        assert!(!s.has_sorted_indices());
     }
 }

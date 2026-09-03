@@ -206,17 +206,37 @@ def test_planar_hessian_agrees_to_a_few_ulps_and_the_gap_is_a_numpy_power(strain
     divides by ``lam**3``, whose NumPy power ufunc calls ``pow`` rather than multiplying, and it
     disagrees with ``lam*lam*lam`` on 2 of 5 ordinary values. See the module docstring for why the
     Rust is not respelled to match.
+
+    **Two things about this test were wrong until 2026-09-03** (plan §43), and both were latent
+    rather than new -- unit 5's deletion only reshuffled which tests share a worker process and
+    made them show:
+
+    * the fixture was seeded with ``hash(str(strain))``, and Python randomises string hashing per
+      *process*. So the data was different on every run and on every xdist worker, which is why
+      this file passed alone and failed about one full-suite run in two, at a different ``strain``
+      each time. The seeds are now written down and swept.
+    * the gap was measured **pointwise** -- ``|x - y| / |x|`` entry by entry -- so an entry that
+      happens to sit near a cancellation divides a last bit by an arbitrarily small number.
+      Measured over 1,600 fixtures the worst pointwise ratio is 1.1e-13 and the worst gap
+      normalised by the field's own scale is **6.0e-16**, i.e. one ulp, which is what the docstring
+      above has always claimed. Normalise by the amplitude, never pointwise -- this project's own
+      finding from the radiation batch, arriving in an analysis parity test.
     """
-    rng = np.random.default_rng(hash(str(strain)) % (2**32))
-    p = strain * rng.standard_normal(64)
-    z = 0.1 * strain * rng.standard_normal(64)
     a = EA - T
-    want = RW.planar_hessian_cells_py(p, z, a)
-    got = rs.rotating_wave_planar_hessian_cells(p, z, a)
-    for name, x, y in zip(("H_pp", "H_pz", "H_zz"), want, got, strict=True):
-        nz = np.abs(x) > 0
-        worst = float(np.max(np.abs((x[nz] - y[nz]) / x[nz]))) if nz.any() else 0.0
-        assert worst < 1e-14, f"{name} at strain {strain}: worst relative gap {worst:.3e}"
+    for seed in range(8):
+        rng = np.random.default_rng(seed)
+        p = strain * rng.standard_normal(64)
+        z = 0.1 * strain * rng.standard_normal(64)
+        want = RW.planar_hessian_cells_py(p, z, a)
+        got = rs.rotating_wave_planar_hessian_cells(p, z, a)
+        for name, x, y in zip(("H_pp", "H_pz", "H_zz"), want, got, strict=True):
+            x, y = np.asarray(x), np.asarray(y)
+            scale = float(np.max(np.abs(x)))
+            worst = float(np.max(np.abs(x - y))) / scale if scale > 0.0 else 0.0
+            assert worst < 1e-14, (
+                f"{name} at strain {strain}, seed {seed}: worst gap {worst:.3e} of the field's "
+                "own scale (the measured maximum over 1,600 fixtures is 6.0e-16)"
+            )
 
     # `H_zz = -a p^2 / Lambda^3` is EXACTLY zero at rest on both sides -- the identity, not the
     # value. The literal spelling this rearrangement replaced cannot produce it.
