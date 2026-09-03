@@ -9829,7 +9829,14 @@ surviving physics files that re-derive a wrapper's factorization and must use th
 The three seams (`_PlateSurface`, `_VKPlateSurface`, `_MembraneSurface`) are imported with a
 `noqa: F401` and it is not cosmetic. They are in neither `__all__` nor any Python caller; the only
 thing that reads them is `airbox_wrap.rs`, by name, off this module's namespace. Ruff cannot see
-that use, and a linter's autofix would silently break the binding.
+that use, so `ruff check --fix` would delete three lines the binding needs.
+
+That hazard is **covered**, and by the guard this batch was already editing rather than by a new
+one: `deleted_bodies` lists all fifteen airbox names, the seams included, and its loop asserts
+`airbox._PlateSurface is physsynth_rs._PlateSurface` on every run. Verified reached, not assumed.
+It is worth stating explicitly because the surviving physics tests would *also* fail — they
+construct wrappers — and that would be a diagnosis three layers from the cause; the identity
+assertion names it.
 
 ### 48.2 The half-table is deleted, not emptied — #52 through a second door
 
