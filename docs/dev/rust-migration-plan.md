@@ -9673,3 +9673,128 @@ scope, measured rather than estimated:
   §39.3.
 
 The findings ledger gains **#57–#59**.
+
+---
+
+## §47 Deletion 9, first half (2026-09-03) — the room and the ports, and the guard a *split* deletion empties
+
+Unit 6 in halves, the human's call: the room and the three ports first, the thirteen wrappers and
+three seams second (§48). `physsynth/core/airbox.py` goes **4,112 -> 2,169 lines**, and the four
+`test_rust_parity_airbox*.py` files — **2,990 lines** — go with them.
+
+### 47.1 The parity family does not split, whichever half goes first
+
+The obvious way to divide a two-tier deletion is to divide its tests the same way, and here that is
+not available. All four parity files name a **port** alias: `_airbox` and `_airbox_port` obviously,
+but `_wrap` and `_memb` both hold `SurfacePortPy` too, because §28.4's manoeuvre is to build a Rust
+wrapper over a *Python* port and seam and that needs the Python port to exist. So deleting the port
+bodies retires the whole family in one commit whichever tier goes first, and the second half of the
+deletion retires no test file at all.
+
+### 47.2 A correction to the order's stated reason
+
+The order was argued to the human on the grounds that the in-between state — **Python wrappers
+driving Rust ports** — is what the flagged run already exercises. That is wrong, and the mistake is
+worth writing down because it is a specific confusion about which mixture a parity file builds.
+`PHYSSYNTH_RS=1` swaps *both* tiers, so the flagged run is Rust-over-Rust; the mixed configuration
+anybody had ever run is `airbox_wrap.rs`'s, which is Rust wrapper over **Python** port — the
+opposite mixture from the one this commit creates. On that axis the reverse order had the better
+support, and it would also have split the parity family 2/2 instead of 4/0.
+
+What is true, and is the order's actual justification: this half deletes the tier that **has a core
+half** and leaves for last the tier whose bar can only ever be a Python test (§39.3). And the
+untested mixture is no longer untested — 429 physics tests pass against it on the default path,
+which is the whole of the check that matters.
+
+### 47.3 The seventh guard, and the one a split deletion leaves asserting nothing
+
+§46.7 scoped five guards. There were seven.
+
+**The one that was missed** is `ported_expected` in `tests/test_stability.py` — the derived table of
+`<name>_py` **function** aliases, which carried `airbox: {"free_pressure_nodes", "face_axes",
+"impedance_from_zeta"}`. Its three names left in the two directions unit 5 established:
+`impedance_from_zeta` is public and is a re-export now, so its claim moves; `_face_axes` and
+`_free_pressure_nodes` were private helpers whose only readers *through this module* were the
+parity tests being deleted, so they are **not re-exported at all** — they fail §41.2's third
+category ("reached through this module") rather than satisfying it. This guard fails loudly rather
+than silently (a derived set compared against a written one), which is why it was caught by running
+rather than by reading.
+
+**The one a split creates** is sharper, and it is a new shape. `deleted_bodies`' loop asserts three
+things at once about a module: it reads no `PHYSSYNTH_RS`, it defines no `<Name>Py` aliases, and
+each named object *is* the Rust one on both paths. A half-deleted module satisfies only the third.
+Adding `airbox` to that table would fail; leaving it out means that **for the whole interval between
+the two commits, nothing asserts that `airbox.AirBox` is the Rust class** — the swap could come
+undone and every physics test would still pass, because there is only one implementation for them to
+run. That is §16.8's empty job arriving through the door a *split* opens, and the cure is a second
+table, `half_deleted_bodies`, whose loop asserts the identity third and explicitly asserts the
+module *still* reads the flag, so the entry cannot be left behind after §48 merges it back.
+
+The other five moved as scoped: four names out of `expected_classes`, four files out of
+`REMAINING_PARITY_FAMILY` (eight -> four), four lines out of the `rust` job's list, and `airbox`
+stays in the `_USE_RUST` reader tuple because its other half still has two implementations.
+
+### 47.4 A floor on a "growing" population that was not growing
+
+`tests/test_ci_workflow.py::test_every_test_file_guards_its_extension_import` failed at **7 >= 10**,
+and its own docstring explains why it should not have been able to: the population was widened from
+`test_rust_parity*.py` (which drains) to *every* test file mentioning the extension, described in as
+many words as "a population that grows as the migration proceeds rather than shrinking to nothing".
+
+It does not. The parity files mention the extension too, so the widened population is **mixed** — it
+gains a file when a binding-surface test is written and loses one for every parity file a deletion
+retires. Unit 6 took four at once. This is #41 for the fourth time and #49 alongside it: the
+sentence claiming the population grows was a claim, and nothing checked it.
+
+The floor is replaced by a **named positive control** rather than a lower number, which is §41.5's
+other cure and the one that never needs re-tuning: `tests/test_binding_surface.py` is in the scanned
+set by construction (it is where every deletion's binding residue lands, §40.2), so requiring it to
+be *found* proves the scan fires while making no claim about how many files exist. A count was never
+the subject — the subject is that each file found guards its import.
+
+### 47.5 What the module is now, and what the binding still reads out of it
+
+2,169 lines: the module docstring (the physics, unchanged, and still the only prose statement of the
+Yee cell in three dimensions), `__all__`, the ambient constants `RHO0_AIR` / `C0_AIR` / `FACES` /
+`PLANES`, the `Spreading` `Literal` that seven wrapper signatures annotate with, the unconditional
+`splu` rebinding (§43, untouched — three surviving physics files import it *from here* on purpose),
+the wrapper tier, and one import:
+
+```python
+from physsynth_rs import AirBox, InteriorSurfacePort, RoomPort, SurfacePort, impedance_from_zeta
+```
+
+Those five names are imported into this namespace rather than reached through `physsynth_rs` at each
+use site, and the reason is ledger #39: `crates/physsynth-py/src/airbox_wrap.rs` calls
+`py.import("physsynth.core.airbox")` and reads `RoomPort`, `splu` and the seam and port class names
+**off this module's namespace at call time**. The shim is what keeps that resolution working. Four
+constants went with the bodies (`_AXES`, `_LAMBDA_MAX`, `_LAMBDA_TOL`, `_SPREADINGS`) because nothing
+outside the deleted classes read them; `_LAMBDA_MAX` in particular is not a measured constant in
+§41.2's sense — the ceiling it names is in the module docstring and in `airbox.rs`.
+
+### 47.6 The measured state
+
+| run | tests | wall |
+|---|---:|---:|
+| whole suite, unflagged (`-n 6`) | 2,690 -> **2,399** passed, 1 skipped | 105 s |
+| whole suite, flagged, parity family excluded | **2,089** passed | 106 s |
+| `tests/test_airbox_*.py`, default path | **429** passed | 6.1 s (18.4 s flagged, before) |
+| the seven guard files | 157 passed | 1.6 s |
+| `ruff check .` | clean | — |
+
+**The -291 reconciles exactly**, measured in a worktree at `8fb8448` rather than reasoned about
+(§45.7's precedent): the four parity files collect **35 + 83 + 58 + 111 = 287** tests, and
+`tests/test_xdist_groups.py` parametrizes one case per file in `tests/`, so four deleted files take
+four more. 287 + 4 = 291, and nothing else moved.
+
+The 3x on the airbox files is not a speed claim about anything new: it is the same Rust room the
+flagged run was already using, now reached without the Python model also being constructed.
+
+### 47.7 What the second half inherits
+
+* **The wrapper tier retires no test file.** §48 deletes thirteen classes and three seams (~2,000
+  lines) and the parity family is already gone, so its whole verification is the surviving physics
+  files running against Rust — which is §39.3's permanent condition arriving as the normal case.
+* `half_deleted_bodies` merges back into `deleted_bodies` and `airbox` leaves the `_USE_RUST` tuple;
+  `expected_classes` loses its remaining ten airbox entries.
+* `splu`, `Spreading` and the four public constants stay. So does the module docstring.

@@ -122,10 +122,6 @@ def test_dropping_the_parity_family_does_not_move_anything_between_shards(k):
 # empty set honestly. The canary's actual job -- proving the predicate still fires -- moves to the
 # two synthetic probes at the bottom, which keep working after the family is gone.
 REMAINING_PARITY_FAMILY = {
-    "test_rust_parity_airbox.py",
-    "test_rust_parity_airbox_memb.py",
-    "test_rust_parity_airbox_port.py",
-    "test_rust_parity_airbox_wrap.py",
     "test_rust_parity_banded.py",
     "test_rust_parity_connection.py",
     "test_rust_parity_operators.py",

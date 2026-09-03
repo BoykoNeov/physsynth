@@ -292,6 +292,34 @@ def test_the_rust_swap_matches_the_environment():
         "non-convergence warning cannot mean the same thing from inside an extension module"
     )
 
+    # A module whose deletion has landed in HALVES: the names below have no Python body left
+    # and must resolve to Rust on both paths, but the module still reads `PHYSSYNTH_RS` and still
+    # defines `<Name>Py` aliases, because its OTHER half does still have two implementations. So
+    # only the identity third of the `deleted_bodies` contract applies, and it is asserted here
+    # rather than skipped -- the alternative is an interval in which nothing checks that the room
+    # is the Rust room, which is exactly the shape of guard this project keeps finding empty.
+    #
+    # This table merges into `deleted_bodies` when `airbox`'s wrapper tier goes (plan section 48);
+    # it is written down rather than derived so that emptying it is a reviewed edit.
+    half_deleted_bodies = {
+        airbox: {
+            "AirBox",
+            "RoomPort",
+            "SurfacePort",
+            "InteriorSurfacePort",
+            "impedance_from_zeta",
+        },
+    }
+    for module, names in half_deleted_bodies.items():
+        assert hasattr(module, "_USE_RUST"), (
+            f"{module.__name__} no longer reads PHYSSYNTH_RS -- if its last Python body has gone "
+            "this entry belongs in `deleted_bodies`, which checks strictly more"
+        )
+        for name in sorted(names):
+            assert getattr(module, name) is getattr(physsynth_rs, name), (
+                f"{module.__name__}.{name} must be the Rust object on both paths, flag or no flag"
+            )
+
     for module, names in deleted_bodies.items():
         assert not hasattr(module, "_USE_RUST"), (
             f"{module.__name__} has a deleted Python body but still reads PHYSSYNTH_RS -- the "
@@ -349,10 +377,8 @@ def test_the_rust_swap_matches_the_environment():
                 swapped_classes[(module.__name__, name)] = (module, name, reference)
 
     expected_classes = {
-        ("physsynth.core.airbox", "AirBox"),
-        ("physsynth.core.airbox", "RoomPort"),
-        ("physsynth.core.airbox", "SurfacePort"),
-        ("physsynth.core.airbox", "InteriorSurfacePort"),
+        # The room and the three ports left this table with unit 6's first deletion; they are in
+        # `half_deleted_bodies` above, where the claim is identity rather than a choice.
         ("physsynth.core.airbox", "_PlateSurface"),
         ("physsynth.core.airbox", "_VKPlateSurface"),
         ("physsynth.core.airbox", "_MembraneSurface"),
@@ -406,14 +432,12 @@ def test_the_rust_swap_matches_the_environment():
     # which is what makes adding a port a reviewed edit rather than a silent one (the same
     # reasoning as the hardcoded dependency allowlist below).
     ported_expected = {
-        # `airbox` is ported in THIRDS and is complete as of Phase 5's ninth batch: the room in
-        # the sixth, the port tier in the seventh, the plate and body wrappers in the eighth and
-        # the membrane pair in the ninth. Its eleven CLASSES are checked by identity above; the one
-        # free function that moved is the helper the ports share. The alias is
-        # `free_pressure_nodes_py` and not `_free_pressure_nodes_py`, because the collection below
-        # skips aliases beginning with an underscore -- `collision`'s spelling, for `collision`'s
-        # reason.
-        airbox: {"free_pressure_nodes", "face_axes", "impedance_from_zeta"},
+        # `airbox` was here until unit 6's first deletion, with three function aliases. They
+        # left in the two directions unit 5 established: `impedance_from_zeta` is public and is a
+        # re-export now, so its claim moved to `half_deleted_bodies` above; `face_axes` and
+        # `free_pressure_nodes` were private helpers whose only readers through this module were
+        # the parity tests deleted alongside them, so they are not re-exported at all and there is
+        # no claim left to move.
         # `operators` is ported in full (plan Phase 1).
         operators: set(operators.__all__),
         exciter: set(exciter.__all__),

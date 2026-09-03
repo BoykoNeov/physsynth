@@ -149,19 +149,31 @@ def test_every_test_file_guards_its_extension_import():
     all -- two jobs red for one line. Contributors, forks and a local ``pytest`` before
     ``pip install ./crates/physsynth-py`` are all such environments.
 
-    And the POPULATION changed. It used to be ``test_rust_parity*.py`` with a floor of fifteen --
-    which drains, one file per deletion, exactly like the canary in
-    ``tests/test_shard_partition.py`` (plan section 41.5, findings #40). It is now every test file
-    that mentions the extension at all, a population that grows as the migration proceeds rather
-    than shrinking to nothing: ``tests/test_binding_surface.py`` is in it and is permanent.
+    And the POPULATION changed -- twice, because the first change was reasoned about wrongly and
+    the correction is the point. It used to be ``test_rust_parity*.py`` with a floor of fifteen,
+    which drains one file per deletion (plan section 41.5, findings #40). Widening it to *every*
+    test file mentioning the extension was called "a population that grows as the migration
+    proceeds rather than shrinking to nothing" -- and that is false. The parity files mention the
+    extension too, so the widened population is **mixed**: it gains a file when a binding-surface
+    test is written and loses one for every parity file a deletion retires. Unit 6's first
+    deletion took four at once and the floor of ten failed at seven.
+
+    So the floor is gone and the positive control is **named** instead, which is section 41.5's
+    other cure and the one that never has to be re-tuned: ``tests/test_binding_surface.py`` is
+    permanent by construction -- it is where every deletion's binding residue lands (plan section
+    40.2) -- so requiring it to be *in* the scanned set proves the scan fires without making any
+    claim about how many files there are. A count was never the subject here; the subject is that
+    each file found guards its import.
     """
     root = Path(__file__).resolve().parent
     files = sorted(
         f for f in root.glob("test_*.py") if "physsynth_rs" in f.read_text(encoding="utf-8")
     )
-    assert len(files) >= 10, (
-        f"only {len(files)} test files mention the extension -- the scan is wrong. This floor is "
-        "on a GROWING population, unlike the one it replaced"
+    control = root / "test_binding_surface.py"
+    assert control in files, (
+        "the scan did not find `test_binding_surface.py` -- it is the permanent home for every "
+        "deletion's binding residue and mentions the extension by construction, so its absence "
+        "means the scan is broken rather than that the file changed"
     )
     for path in files:
         text = path.read_text(encoding="utf-8")

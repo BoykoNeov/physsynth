@@ -246,10 +246,6 @@ jobs:
             tests/test_rust_parity_operators.py \
             tests/test_rust_parity_ops2d.py \
             tests/test_rust_parity_banded.py \
-            tests/test_rust_parity_airbox.py \
-            tests/test_rust_parity_airbox_port.py \
-            tests/test_rust_parity_airbox_wrap.py \
-            tests/test_rust_parity_airbox_memb.py \
             tests/test_rust_parity_connection.py
 
       # PHASE 7'S SUCCESS CONDITION STOOD HERE and is retired with unit 10 and unit 11
