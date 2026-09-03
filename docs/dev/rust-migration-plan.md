@@ -9417,20 +9417,78 @@ the Python suite structurally could not make (45.1's derived oracle and 45.3's p
 
 | run | tests | wall |
 |---|---:|---:|
-| unflagged, whole suite (`-n 6`) | **2,684** passed, 1 skipped | 121 s |
-| flagged, three shards, parity excluded | 619 + 708 + 760 = **2,087** | 57 + 53 + 37 s |
+| unflagged, whole suite (`-n 6`) | **2,690** passed, 1 skipped | 115 s |
+| flagged, three shards, parity excluded | 619 + 708 + 766 = **2,093** | 51 + 54 + 37 s |
+| `tests/test_binding_surface.py`, with 45.9's theta guard | 24 -> **30** passed | 0.3 s |
 | `cargo test --workspace` · `fmt --check` · `clippy -D warnings` | green | — |
 | `cargo test -p physsynth-core --test beam`, debug **and** release | 17 passed | 1.6 s / 0.1 s |
 | `ruff check .` | clean | — |
 
-The per-shard split moved a long way (§44 read 635 · 760 · 693) because the LPT partition is
-recomputed whenever files leave the glob; the flagged *total* is not this batch's to move, since
-every file it touched is either deleted or already outside the parity family, and the one-test gap
-against §44.8's figure predates it.
+The flagged total is reconciled rather than hedged, because the first draft of this table said
+"the gap predates it" on reasoning alone and that is the shape §44.4 exists to warn about. Measured
+by collecting the same three shards in a worktree at `8804a07`:
+
+| | shard 1 | shard 2 | shard 3 | total |
+|---|---:|---:|---:|---:|
+| at `8804a07` | 635 | **761** | 693 | **2,089** |
+| now, deletion only | 619 | 708 | 760 | **2,087** |
+| now, with 45.9's guard | 619 | 708 | 766 | **2,093** |
+
+The second row is this section's own addition and is not part of the reconciliation; the deletion's
+delta is the first two rows. Two corrections fall out of them. **§44.8's middle figure is a transcription slip** — it reads 760, the
+shard collects 761, and its stated total of 2,088 was arithmetic on the typo. And the real delta is
+**−2, not −1**, which had a cause rather than a provenance: `tests/test_xdist_groups.py`
+parametrizes one test **per file in `tests/`** (`TEST_MODULES = sorted(p.name for p in
+TESTS_DIR.glob("test_*.py"))`), so deleting two test files removes two cases from a *non-parity*
+file. Nothing else moved — the per-file diff over all 77 collected files is that one line. That is
+a fourth population that tracks the file set, and unlike the three §41.5 collected it is **benign**:
+it is derived from the glob and is *supposed* to shrink, so it needs no cure, only naming, because
+the next batch will otherwise re-derive this same puzzle from a two-test discrepancy.
+
+The per-shard split moved a long way besides, because the LPT partition is recomputed whenever
+files leave the glob.
 
 `physsynth/core/` + `physsynth/analysis/` are **7,761 → 7,508 lines** and `tests/` is
 **33,687 → 33,298**. Cumulative across the eight deletions: **59,436 → 40,806 lines, 18,630 gone**,
 and **twenty-two of twenty-three model bodies**.
+
+### 45.9 The constant the shim copied, and a default nothing had ever exercised
+
+Caught in review after the batch was green and pushed, which is where §44.9 was caught too.
+
+The shim declared `THETA_DEFAULT = 0.28` in its own body, carrying the comment across from the
+deleted model. That looked like §41.2's "measured constants keep their docstrings" rule being
+applied. It is not: `string_stiff.py`'s header says in as many words that it is "the family's one
+source" for that number and names `beam` and `plate` among the modules that "import *from this
+module*" — and **neither of them did**. `string_damped`, `string_nonlinear` and `string_geometric`
+import it; `beam` declared its own copy before the deletion and `plate` declares one now with its
+own recorded reasoning (§42: it carries *why* the number is not 1/4 while the Rust carries the
+value). So the header was wrong about two of its five named importers, and had been for a while.
+
+Two edits and a guard, and the guard is the part worth keeping:
+
+* `beam.py` now **re-exports** `string_stiff.THETA_DEFAULT` — which is one of §41.2's three
+  survivor categories rather than a fourth thing, and it is the category the pre-deletion body was
+  never in;
+* `string_stiff.py`'s claim is corrected to name the four modules that actually import it and to
+  say that the plate is a deliberate exception with its reasons in its own header;
+* `tests/test_binding_surface.py` gains both halves as assertions, because §44.4's finding is that
+  a header is a claim and nothing checks it — and this particular claim was already false when it
+  was read.
+
+**And the sharper half, which the duplication was hiding.** Every θ-scheme model takes `theta` with
+a default, and that default exists in *two* places: the Rust constructor's signature and the Python
+module constant callers read. Nothing held them together — and `tests/helpers.py` passes `theta`
+explicitly on **every** construction in the suite, so the binding's own default is not exercised by
+a single physics test. It could have drifted to any value at all and the whole suite would have
+stayed green; the only thing that would have noticed is a user who omitted the argument.
+
+That is a general shape and it is not about porting: **a default that the test helpers always
+override is dead code as far as the suite is concerned.** The new parametrized test constructs each
+of the five classes twice, once with `theta` omitted and once with the module constant supplied, and
+asserts the two agree. It is a binding property in the same sense as the `Option<Option<_>>` arms —
+about what PyO3 fills in when an argument is absent — so no native bar and no physics bar can see
+it, which is why it belongs in that file and is permanent.
 
 ### 45.8 What the next batch inherits
 
@@ -9442,4 +9500,4 @@ and **twenty-two of twenty-three model bodies**.
   reach them, and their bar is a Python test for the life of the binding.
 * **The parity family is eight files**, all of them either outside the deletion graph
   (`operators`, `ops2d`, `banded` — they build both sides themselves) or belonging to units 6 and 9.
-* The findings ledger gains **#52–#55**.
+* The findings ledger gains **#52–#56**.

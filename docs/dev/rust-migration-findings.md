@@ -1,6 +1,6 @@
 # Rust migration — the findings ledger
 
-> **What this is.** The fifty-five findings the migration has made about when two
+> **What this is.** The fifty-six findings the migration has made about when two
 > implementations of the same arithmetic agree to the bit and when they cannot — and about the
 > ways a port can be silently wrong while every physics bar stays green. Until 2026-09-02 this
 > text lived verbatim inside `CLAUDE.md`'s non-negotiable #3, where it had grown to 70 KB in a
@@ -71,6 +71,7 @@
 | 53 | **The matrix a model already factored is factored for its timestep, not for its spectrum.** Inverse-iterating on the beam's own `A = W + theta k^2 kappa^2 K` is not slow but impossible — the coefficient is 4.4e-11, so consecutive modes sit one part in 1e7 apart (~1e8 sweeps) and reading the eigenvalue back subtracts 1 from 1.000000022. Factor a separately shifted `K + eps W` instead. Corollaries: project a known nullspace out **every** sweep (its shifted eigenvalue is the largest in the problem, so roundoff regrows it fastest), **fix** the sweep count rather than stopping on a tolerance (#33), read the eigenvalue back as a **Rayleigh quotient**, and pick a seed that is not orthogonal to the mode you are asking for | §45.2 |
 | 54 | **A threshold written for a single mode is a statement about the fixture's spectrum when a pluck is fed to it.** A lossy beam retains 29% of a broadband pluck where one low mode retains 2e-3, because this scheme's high modes underdamp — so "the loss did work" is fixture-tuning waiting to happen. Assert the **gap** to the single-mode rate instead: it is a claim about the model, and it makes the passivity bar and the caveat bar say the same thing from two directions | §45.4 |
 | 55 | **A native bar is not a translation of the Python one, and where it differs it is usually sharper.** Derive an oracle rather than importing it (an oracle that imports the implementation is not an oracle) and spell its residual so one tolerance means the same accuracy at every root — `cos - sech`, not `cos*cosh - 1`. And prefer an **algebraic identity of the update** to a measurement of its output: `u^{n+1} + u^{n-1} = 2 cos(omega k) u^n` holds pointwise at 1e-13 where the FFT bar it replaces could only reach five cents | §45.1, §45.3 |
+| 56 | **A default the test helpers always override is dead code as far as the suite is concerned.** Every θ-scheme model's `theta` default lives twice — in the Rust constructor's signature and in a Python module constant — and `tests/helpers.py` passes `theta` explicitly on every construction, so the binding's default could drift to any value with the whole suite green. Related: a **shim that re-declares** a constant instead of re-exporting it silently forks it, and the neighbouring module's header claiming to own the number is #49 again (it was already wrong about two of its five named importers) | §45.9 |
 
 ## The questions to ask before writing an exact assertion
 

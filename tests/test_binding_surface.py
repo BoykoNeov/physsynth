@@ -21,10 +21,14 @@ it builds both sides itself" (``scripts/shard_tests.py``'s ``PARITY_PREFIX``). N
 a Python side, so it should run in every shard of every job, flagged or not.
 """
 
+import importlib
+
 import numpy as np
 import pytest
 from scipy import sparse
 
+import physsynth.core
+from physsynth.core import plate, string_stiff
 from physsynth.core.exciter import triangular_pluck
 
 physsynth_rs = pytest.importorskip(
@@ -274,3 +278,95 @@ def test_the_biharmonic_setter_refuses_what_is_not_that_operator():
     free = _plate(boundary="free")
     with pytest.raises(AttributeError):
         free.B = sparse.identity(free.n_live, format="csr")
+
+
+# -- the theta-scheme default, which nothing compared until unit 8 ------------------------------
+#
+# Every θ-scheme model takes `theta` with a default, and the default lives in TWO places: the Rust
+# constructor's signature and a Python module constant that callers read. Nothing held them
+# together. `tests/helpers.py` passes `theta` explicitly on every construction, so the binding's own
+# default is never exercised by the physics suite at all -- it could drift to any value and the
+# whole suite would stay green.
+#
+# The Python side is now one constant for the strings and the beam (`string_stiff.THETA_DEFAULT`,
+# which `beam.py` re-exports rather than re-declaring as its pre-deletion body did) and a second,
+# deliberate one for the plate, which carries its own reasoning in its header. Both are asserted
+# here against the value the extension actually applies when the argument is omitted. This is a
+# binding property in the same sense as the `Option<Option<_>>` arms above: it is about what PyO3
+# fills in, so no native bar and no physics bar can see it.
+
+THETA_DEFAULT_CASES = [
+    ("StiffString", dict(L=1.0, T=200.0, rho=0.005, fs=48000.0, N=16), "string_stiff"),
+    ("DampedStiffString", dict(L=1.0, T=200.0, rho=0.005, fs=48000.0, N=16), "string_damped"),
+    (
+        "TensionModulatedString",
+        dict(L=1.0, T=200.0, rho=0.005, fs=48000.0, N=16),
+        "string_nonlinear",
+    ),
+    ("FreeBeam", dict(L=1.0, rho=0.005, fs=48000.0, N=16, kappa=20.0), "beam"),
+    ("Plate", dict(Lx=0.4, Ly=0.4, kappa=1.0, rho=2.0, fs=20000.0, N=12), "plate"),
+]
+
+
+@pytest.mark.parametrize("name,kwargs,module_name", THETA_DEFAULT_CASES)
+def test_the_binding_default_theta_is_the_constant_its_module_publishes(name, kwargs, module_name):
+    published = importlib.import_module(f"physsynth.core.{module_name}").THETA_DEFAULT
+    omitted = getattr(physsynth_rs, name)(**kwargs)
+    supplied = getattr(physsynth_rs, name)(**kwargs, theta=published)
+    assert omitted.theta == published, (
+        f"{name} built without `theta` uses {omitted.theta!r}, but "
+        f"physsynth.core.{module_name}.THETA_DEFAULT is {published!r} -- the extension's default "
+        "and the constant its callers read have drifted, and nothing else in the suite would "
+        "notice because every helper passes `theta` explicitly"
+    )
+    assert supplied.theta == omitted.theta
+
+
+def test_the_strings_and_the_beam_share_one_theta_and_the_plate_deliberately_does_not():
+    """`string_stiff` is the family's one source; `plate` is the documented exception.
+
+    Asserted rather than left to the docstrings, because §44.4's finding is that a header is a
+    claim and nothing checks it -- and this particular claim was already wrong for two modules
+    when it was read (`beam` and `plate` both declared their own copy while `string_stiff.py` said
+    they imported one).
+
+    The claim is about the **definition site**, so it is read off the source with `ast` rather than
+    by comparing float identity. `0.28` written in two modules happens to be two distinct objects
+    in CPython today, but that is an implementation detail of how code objects hold constants and
+    not something this test should depend on.
+    """
+    import ast
+    import pathlib
+
+    core = pathlib.Path(physsynth.core.__file__).parent
+
+    def declares_its_own(name):
+        tree = ast.parse((core / f"{name}.py").read_text(encoding="utf-8"))
+        return any(
+            isinstance(node, ast.Assign)
+            and any(getattr(t, "id", None) == "THETA_DEFAULT" for t in node.targets)
+            for node in tree.body
+        )
+
+    assert declares_its_own("string_stiff"), (
+        "`string_stiff` no longer defines THETA_DEFAULT -- it is the family's one source and its "
+        "header says so"
+    )
+    for name in ("string_damped", "string_nonlinear", "string_geometric", "beam"):
+        module = importlib.import_module(f"physsynth.core.{name}")
+        assert not declares_its_own(name), (
+            f"`{name}` declares its own THETA_DEFAULT instead of importing `string_stiff`'s. That "
+            "is the drift this test exists to forbid, and it is what the beam's shim did until "
+            "plan §45.9"
+        )
+        assert module.THETA_DEFAULT is string_stiff.THETA_DEFAULT
+
+    assert declares_its_own("plate"), (
+        "`plate` now imports the string family's constant. That may be an improvement, but its "
+        "header claims to own the number and `string_stiff`'s names it as the one exception -- "
+        "change all three together"
+    )
+    assert plate.THETA_DEFAULT == string_stiff.THETA_DEFAULT, (
+        f"the plate's independent theta default has drifted from the string family's: "
+        f"{plate.THETA_DEFAULT!r} against {string_stiff.THETA_DEFAULT!r}"
+    )

@@ -8,10 +8,11 @@ This is a *different, still-validated* scheme from the explicit ideal string's, 
 it.
 
 What stays here is ``Boundary`` (a `Literal`), ``THETA_DEFAULT`` — which the other three
-θ-scheme strings, the beam and the plate all import *from this module* — and the
-``biharmonic_matrix`` re-export, which ``tests/test_stability.py``'s captured-binding guard reaches
-as ``string_stiff.biharmonic_matrix`` to prove the operator swap landed before this module was
-imported.
+θ-scheme strings **and the beam** import *from this module*; the plate is the one exception and
+says why in its own header (it carries the reasoning for the number while the Rust carries the
+value) — and the ``biharmonic_matrix`` re-export, which ``tests/test_stability.py``'s
+captured-binding guard reaches as ``string_stiff.biharmonic_matrix`` to prove the operator swap
+landed before this module was imported.
 
 Headless: no I/O, no graphics.
 """
@@ -27,7 +28,8 @@ from .operators import biharmonic_matrix
 Boundary = Literal["supported"]
 
 # The θ-scheme's default weight. Defined here and imported by `string_damped`, `string_nonlinear`,
-# `string_geometric`, `beam` and `plate` — so this module is the family's one source for it.
+# `string_geometric` and `beam` — so this module is the family's one source for it. `plate` is not
+# in that list and never was: it declares its own copy, deliberately and with its reasoning.
 THETA_DEFAULT = 0.28
 
 __all__ = ["Boundary", "StiffString", "THETA_DEFAULT", "biharmonic_matrix"]

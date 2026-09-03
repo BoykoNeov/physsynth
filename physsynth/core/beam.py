@@ -14,7 +14,11 @@ bisection rather than importing it, and solves ``K φ = mu W φ`` with a shifted
 built on the crate's own sparse LU — and ``tests/test_beam_modal.py``, which is unchanged and now
 measures the Rust beam through SciPy.
 
-What stays here is ``Boundary`` (a `Literal`) and ``THETA_DEFAULT``.
+What stays here is ``Boundary`` (a `Literal`) and the ``THETA_DEFAULT`` **re-export**. That
+constant is defined once, in :mod:`physsynth.core.string_stiff`, and reached through this module by
+callers who have a beam rather than a string; the pre-deletion body declared its own copy of the
+number, which nothing compared against the original. The binding's own default is pinned against it
+in ``tests/test_binding_surface.py``.
 
 Headless: no I/O, no graphics.
 """
@@ -25,11 +29,8 @@ from typing import Literal
 
 from physsynth_rs import FreeBeam
 
-Boundary = Literal["free"]
+from .string_stiff import THETA_DEFAULT
 
-# theta below 1/4 is only conditionally stable; theta in (0, 1] keeps A SPD (genuinely implicit).
-# Default a hair above 1/4 (accuracy-first) -- the project-wide theta, inherited from the stiff
-# string.
-THETA_DEFAULT = 0.28
+Boundary = Literal["free"]
 
 __all__ = ["Boundary", "FreeBeam", "THETA_DEFAULT"]
