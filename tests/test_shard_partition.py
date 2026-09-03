@@ -110,19 +110,62 @@ def test_dropping_the_parity_family_does_not_move_anything_between_shards(k):
     assert covered == sorted(f for f in files if f not in parity)
 
 
-def test_the_parity_family_is_found_at_all():
+# The parity family as it stands, written out. Until 2026-09-03 the canary below asserted a
+# FLOOR (`len(dropped) >= 20`), which was the right shape while the family only ever grew and the
+# wrong one now that it drains: plan section 39's deletions take one file out per unit, so a floor
+# has to be lowered by hand on every deletion (which reads as a failure to explain rather than a
+# reviewed edit) and, at the end, becomes unsatisfiable -- the family reaches zero, at which point
+# "an exclusion that excludes nothing" stops being a bug and starts being the truth.
+#
+# A written-down set fixes both. It catches drift in BOTH directions (a file that stopped matching
+# and a file that started), it makes each deletion a one-line reviewed edit, and it can reach the
+# empty set honestly. The canary's actual job -- proving the predicate still fires -- moves to the
+# two synthetic probes at the bottom, which keep working after the family is gone.
+REMAINING_PARITY_FAMILY = {
+    "test_rust_parity.py",
+    "test_rust_parity_airbox.py",
+    "test_rust_parity_airbox_memb.py",
+    "test_rust_parity_airbox_port.py",
+    "test_rust_parity_airbox_wrap.py",
+    "test_rust_parity_analysis.py",
+    "test_rust_parity_banded.py",
+    "test_rust_parity_beam.py",
+    "test_rust_parity_bow.py",
+    "test_rust_parity_collision.py",
+    "test_rust_parity_connection.py",
+    "test_rust_parity_geometric.py",
+    "test_rust_parity_operators.py",
+    "test_rust_parity_ops2d.py",
+    "test_rust_parity_plate.py",
+    "test_rust_parity_rotating_wave.py",
+    "test_rust_parity_spectrum.py",
+    "test_rust_parity_strings.py",
+    "test_rust_parity_tension.py",
+}
+
+
+def test_the_parity_family_is_exactly_what_is_left():
     """The canary. A scan that silently stopped matching would pass every test above forever.
 
     Same shape as ``tests/test_ci_workflow.py``'s asserted token count and the ``checks`` job's
     emptiness checks: an exclusion that excludes nothing is indistinguishable from no exclusion,
     and it fails in the direction that stays green -- the flagged run would quietly include the
-    parity files again and start comparing Rust against Rust. The number is written down rather
-    than assumed to be nonzero.
+    parity files again and start comparing Rust against Rust.
     """
     files = shard_tests.test_files()
-    dropped = sorted(set(files) - set(shard_tests.drop_parity(files)))
-    assert len(dropped) >= 20, f"only {len(dropped)} parity files found -- the prefix has drifted"
+    dropped = set(files) - set(shard_tests.drop_parity(files))
+    assert dropped == REMAINING_PARITY_FAMILY, (
+        f"the parity family is {sorted(dropped)}, but this guard expects "
+        f"{sorted(REMAINING_PARITY_FAMILY)} -- either the prefix has drifted, or a file was "
+        "deleted (plan section 39) without draining this list"
+    )
     assert all(f.startswith("test_rust_parity") for f in dropped)
+
+    # The part that outlives the family. `drop_parity`'s predicate is asserted directly on names
+    # that are not in `tests/`, so this keeps saying something after the set above is empty --
+    # which is the whole reason the floor was replaced rather than lowered.
+    assert shard_tests.drop_parity(["test_rust_parity_synthetic.py"]) == []
+    assert shard_tests.drop_parity(["test_energy.py"]) == ["test_energy.py"]
 
 
 def test_the_heaviest_files_are_spread_and_not_stacked():

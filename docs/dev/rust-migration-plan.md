@@ -8418,3 +8418,167 @@ Python only.
   comes back at deletion time: the reference implementation can be reached for *because* it permits
   a write the binding forbids, so a test that injects state is a deletion blocker, not a port one).
 * Nothing is parked. 40.5 is a question.
+
+---
+
+## §41 Deletions 2–4 (2026-09-03) — six more bodies, and the dependency direction nobody measured
+
+Units **4** (`mallet` + `membrane`), **3** (`bore` + `reed`) and **2** (`body` + `radiation`) are
+deleted, on §39.6's route 1. Six modules, **2,787 lines** of Python model code, and six parity files
+(**~520 collected tests**, which is how much of the suite the parity family was for these models
+alone). The five clean-up sites §40.7 predicted were all real; two more were not predicted and are
+the substance of this section.
+
+### 41.1 What each module is now, and why none of them is empty
+
+None of the six became a bare `from physsynth_rs import X`. Every one keeps something, and what it
+keeps is worth tabulating because the pattern repeats for every unit left:
+
+| module | lines after | what stayed, and why |
+|---|---:|---|
+| `body` | 19 | nothing but the class — the only one that *is* a bare re-export |
+| `bore` | 41 | `SourceHook` (a `Callable` alias), `End` / `BoundarySpec` (`Literal`s), and `RHO0_AIR` / `C0_AIR` — §39.1's two floats, which are the whole of the viewer's remaining seam |
+| `reed` | 23 | the `Bore` re-export its callers reach through it |
+| `membrane` | 42 | `Domain` (a `Literal`) and the five mask/grid helpers re-exported from `operators2d`, which callers reach as `membrane.disk_mask` |
+| `mallet` | 45 | the six contact primitives re-exported from `collision` (they were promoted there when the barrier model became their second consumer) and `__all__` |
+| `radiation` | 79 | `RHO0_AIR` / `C0_AIR`, `PISTON_SERIES_CUTOFF_KA` **with its measurement docstring**, and `_VolumeAccelerationSource` (a `Protocol`) |
+
+Three kinds of thing survive a deletion, and it is the same three every time: **types with no runtime
+implementation** (`Literal`, `Callable`, `Protocol`, `NamedTuple`), **measured constants**, and
+**re-exports of names that live in another module but are reached through this one**. A `Protocol` in
+particular can never move to Rust — it is a structural type, and `AirRadiation.radiate` duck-types on
+it.
+
+`PISTON_SERIES_CUTOFF_KA` is the interesting one: after this batch it has **no Python reader at all**
+(the three tests that read it were the last, and they are retired below). It stays public anyway,
+because its docstring is the record of the measurement that chose it — 6.7e-13 worst over
+`ka ∈ [1e-10, 10]` against 7.9e-13 at `2e-2` and 2.8e-12 at `4e-2` — and the Rust side carries its
+own copy of the number, not the reasoning. A measured constant whose only consumer is a compiled twin
+is still worth being able to look up.
+
+### 41.2 The finding: the binding depends on Python, and *that* is what pins each module's floor
+
+§39.1 measured the seam in one direction — which names `web/serialize.py` reaches that the binding
+does not expose. **The other direction was never measured, and it is the one that decides what a
+deletion may remove.** Four places in `crates/physsynth-py` call `py.import("physsynth.core...")`
+and pull a Python object back out:
+
+| the binding reaches | for | consequence |
+|---|---|---|
+| `string_geometric.py` | `GeometricState` | the `NamedTuple` `GeometricString.state` returns — **the Rust class constructs a Python type** |
+| `plate.py` | `GrainSpec` | same shape: `grain_ratios_from_material` builds a Python object |
+| `airbox.py` | the module namespace | §32.7's module-global collaborator lookup |
+| `connection.py` | the module namespace | `sparse`, `spsolve`, `splu` — §34.3's polymorphism |
+
+Measured, not argued: `PHYSSYNTH_RS=1 python -c "type(GeometricString(...).state).__module__"`
+prints `physsynth.core.string_geometric`, and `physsynth_rs` has no `GeometricState` of its own.
+
+So this is a **fifth** distinct search for a blocking dependency, on top of the four §27 lists and
+the two §39.2 adds. It runs the wrong way — Rust → Python — which is why no audit of Python's imports
+could find it, and it sets a hard floor under two modules that would otherwise look like clean
+re-exports. It also explains, concretely rather than by appeal to §32.2 and §34.3, why `airbox` and
+`connection` keep Python bodies: the binding reads their namespaces at call time.
+
+The check is one grep — `grep -rn 'import("physsynth' crates/physsynth-py/src/` — and it should be
+run before scoping any remaining unit.
+
+### 41.3 The swap guard had a fifth hole, and the deletion found it
+
+`test_stability.py`'s swap guard has three halves: `_USE_RUST` agreement (a hand-written tuple), the
+swapped **classes** (derived from `<Name>Py` aliases, checked against a written-down set), and the
+swapped **functions** (derived from `<name>_py` aliases, checked against a written-down table). Its
+own comments record §17.6's finding — "a derive is only as wide as the tuple it derives over" —
+**four** times, each about a module missing from a tuple.
+
+Deleting `radiation` found a fifth. `radiation.py` defined `monopole_radiation_resistance_py` and
+`piston_radiation_resistance_py` and **was never a key in the function table**, so those two swaps
+were unguarded for their whole life — including across §37.11's piston fix, which changed one of
+them. Nothing was wrong; nothing would have said so if it had been.
+
+Both halves now live in one place. `deleted_bodies` maps each deleted module to the set of names it
+must resolve to Rust — classes and functions together, because a deletion removes both conventions
+and each of the other two halves knows about only one — and asserts three things per module: no
+`_USE_RUST`, **no alias of either spelling left over**, and each named object is the Rust one on both
+paths. The guard is what caught this batch's own mistake, immediately: it failed with
+"`physsynth.core.reed`'s `_py` aliases are [], but this guard expects ['bernoulli_flow']" within a
+second of the deletion.
+
+### 41.4 The three piston tests, retired against a named native bar
+
+§35.4's condition is that a retirement names the native test carrying the same claim. Here it can, and
+the sort is §40.2's again:
+
+* `test_the_piston_resistance_agrees_at_the_call_sites_the_suite_reaches` and
+  `..._series_branch_is_bit_identical_and_the_direct_one_is_not` are **two-sided comparisons**. They
+  asked nothing a single implementation can be asked. Their measurement is kept in §37.11 and in a
+  comment where they stood: 0 of 3,000 differ below the cutoff (the series is `+ - * /` only, so
+  IEEE-754 pins it), 1,444 of 3,000 differ above it at worst 9.8e-13 (two different `J1`s — Cephes
+  against a Miller recurrence — through a subtraction that amplifies a last bit ~2,200× at
+  `ka = 3e-2`).
+* `test_the_pistons_two_branches_meet_so_the_function_has_no_step` is a **property**, and it is
+  already asserted natively: `crates/physsynth-analysis/tests/oracles.rs`,
+  `the_pistons_two_branches_meet_at_their_threshold`. That is the bar that catches a future edit
+  moving the cutoff back into the cancellation band, which no physics test in this project could see
+  — they are all percentage-level and the branches differ by parts in 1e13.
+
+### 41.5 The parity canary needed a different shape, not a smaller number
+
+`tests/test_shard_partition.py`'s canary asserted `len(dropped) >= 20`: the parity family must not
+silently stop matching, because an exclusion that excludes nothing is indistinguishable from no
+exclusion and fails green (the flagged run would quietly compare Rust against Rust).
+
+A floor was the right shape while the family only grew. It is the wrong shape now that it **drains**:
+it has to be hand-lowered on every deletion, which reads as a failure to explain rather than a
+reviewed edit, and at the end it becomes unsatisfiable — the family reaches zero, at which point
+"excludes nothing" stops being a bug and becomes the truth.
+
+Replaced with a **written-down set** of the nineteen files that remain, plus two synthetic probes
+(`drop_parity(["test_rust_parity_synthetic.py"]) == []` and
+`drop_parity(["test_energy.py"]) == ["test_energy.py"]`) that assert the predicate itself still
+fires. The set catches drift in *both* directions, makes each deletion a one-line reviewed edit, and
+can reach the empty set honestly; the probes are the part that outlives the family. The general form:
+**a canary that counts a draining population needs to name it instead** — and the thing the canary
+was actually for (does the predicate fire?) usually has a subject that does not drain.
+
+`tests/test_ci_workflow.py`'s token-count floor has the same disease and was cured differently, in
+one line: `tests/test_binding_surface.py` was added to the `rust` job's spelled-out list. That file
+is not a comparison and never drains, so the count it feeds cannot reach zero.
+
+### 41.6 §19.7's line continuation, an **eighth** time — from the tool, not the workflow
+
+Editing the `rust` job's file list meant matching lines ending in a shell line-continuation. The edit
+script's `"...py \\\n"` arrived at Python as backslash-plus-literal-`n` rather than
+backslash-plus-newline, and the match failed. Same bug, eighth occurrence, and the first time it hit
+the *editing* of the workflow rather than the workflow itself. Fixed by building the character rather
+than escaping it — `BS = chr(92)` — which is the only spelling nothing in the toolchain can mangle.
+
+### 41.7 The measured state
+
+| run | tests | wall |
+|---|---:|---:|
+| unflagged, whole suite | **4,042** passed, 1 skipped | 516 s |
+| `PHYSSYNTH_RS=1` + `PHYSSYNTH_RS_ANALYSIS=1`, parity excluded | **2,023** passed | 133 s |
+| the four guards | 187 passed | 41 s |
+| `ruff check .` | clean | — |
+
+The unflagged count fell from 4,566 to 4,042: six parity files, ~524 tests, and **not one physics
+bar**. That ratio is the deletion's whole argument in one number.
+
+### 41.8 What the next batch inherits
+
+* **Seven modules are gone**, of the twenty-three that had a Python body: units 7, 4, 3 and 2 are
+  complete. **Unit 1** (`bow`, `collision`, `string_damped`, `string_geometric`,
+  `string_nonlinear`, `string_stiff` — 3,368 lines) is unblocked and next, and 41.2 already says
+  what pins it: `string_geometric.py` must keep `GeometricState`.
+* **Units 10 and 11** (`analysis/`) are unblocked but raise a question that is not a porting one:
+  deleting the Python detector makes `PHYSSYNTH_RS_ANALYSIS` a no-op, and with it goes the
+  configuration §36.4 built the two-flag separation *for* — a Rust model measured by a Python
+  instrument, so that a shared misreading cannot cancel. The past check is not invalidated; the
+  ability to repeat it is. That is a decision of the same class as §39.6 and is the human's.
+* **Unit 5** is blocked on §40.5 (`Plate.B` has no setter) and 41.2 adds a second constraint to it
+  (`plate.py` must keep `GrainSpec`). **Units 6 and 8** are blocked on native bars.
+* The findings ledger gains **#39** (the binding depends on Python — a fifth search for a blocking
+  dependency, running Rust → Python, found by one grep for `import("physsynth`) and **#40** (a canary
+  that counts a draining population must name it instead; and the property it was really testing
+  usually has a subject that does not drain).
+* Nothing is parked. §40.5 and unit 10's flag question are questions.

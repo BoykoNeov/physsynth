@@ -33,13 +33,13 @@ physsynth_rs = pytest.importorskip(
     "physsynth_rs", reason="the Rust extension is not built in this environment"
 )
 
-# One row per model whose Python reference implementation still exists. `IdealString` was removed
-# when unit 7 landed; `Bore` and `FreeBeam` go with units 3 and 8, and the three theta-scheme
-# strings with unit 1. The `exc` column is not uniform and that is deliberate: `Bore` unpacks its
-# boundary (`left, right = boundary`), so Python's refusal is an incidental `TypeError` from the
-# unpacking rather than a designed message, while the Rust side raises its own `ValueError` naming
-# what it wanted. Reproducing an accident is not worth a special case; silently *accepting* the
-# value was, and that half is pinned in `test_binding_surface.py` for all six.
+# One row per model whose Python reference implementation still exists. `IdealString` went with
+# unit 7 and `Bore` with unit 3; `FreeBeam` goes with unit 8 and the three theta-scheme strings
+# with unit 1, at which point this file is empty and is deleted. The `exc` column was not uniform
+# while `Bore` was here — it unpacked its boundary, so Python's refusal was an incidental
+# `TypeError` from the unpacking rather than a designed message — and the four rows left all raise
+# their own `ValueError`. Reproducing an accident was never worth a special case; silently
+# *accepting* the value was, and that half is pinned in `test_binding_surface.py` for all six.
 STILL_HAVE_A_PYTHON_TWIN = [
     ("string_stiff", "StiffStringPy", dict(L=1.0, T=200.0, rho=0.005, fs=48000.0, N=16),
      ValueError),
@@ -47,7 +47,6 @@ STILL_HAVE_A_PYTHON_TWIN = [
      ValueError),
     ("string_nonlinear", "TensionModulatedStringPy",
      dict(L=1.0, T=200.0, rho=0.005, fs=48000.0, N=16), ValueError),
-    ("bore", "BorePy", dict(L=0.5, fs=48000.0, N=64), Exception),
     ("beam", "FreeBeamPy", dict(L=1.0, rho=0.005, fs=48000.0, N=16, kappa=20.0), ValueError),
 ]
 

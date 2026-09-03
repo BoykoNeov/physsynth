@@ -185,6 +185,7 @@ def test_the_rust_swap_matches_the_environment():
         operators,
         operators2d,
         plate,
+        radiation,
         reed,
         string_damped,
         string_geometric,
@@ -204,17 +205,40 @@ def test_the_rust_swap_matches_the_environment():
     # notice -- which is section 17.6's finding for a third time, now on the way *out*.
     import physsynth_rs
 
-    for module, name in ((string_ideal, "IdealString"),):
+    # The names each deleted module must now resolve to Rust, listed BY HAND. Classes and
+    # functions together: both conventions are covered here because a deletion removes both
+    # (`<Name>Py` for a class, `<name>_py` for a function), and the two halves further down the
+    # file each only know about one of them.
+    deleted_bodies = {
+        string_ideal: {"IdealString"},
+        membrane: {"Membrane"},
+        mallet: {"MalletMembrane", "MalletWall"},
+        bore: {"Bore"},
+        reed: {"ReedBore", "bernoulli_flow"},
+        body: {"ModalBody"},
+        radiation: {
+            "AirRadiation",
+            "RadiatedBody",
+            "RationalAirLoad",
+            "ReactiveRadiatedBody",
+            "monopole_radiation_resistance",
+            "piston_radiation_resistance",
+        },
+    }
+    for module, names in deleted_bodies.items():
         assert not hasattr(module, "_USE_RUST"), (
             f"{module.__name__} has a deleted Python body but still reads PHYSSYNTH_RS -- the "
             "flag chooses between two implementations and there is one"
         )
-        assert not [a for a in dir(module) if a.endswith("Py") and not a.endswith("_py")], (
-            f"{module.__name__} has a deleted Python body but still defines a `<Name>Py` alias"
+        leftovers = [a for a in dir(module) if a.endswith("Py") or a.endswith("_py")]
+        assert not leftovers, (
+            f"{module.__name__} has a deleted Python body but still defines the reference "
+            f"alias(es) {sorted(leftovers)} -- there is nothing left for them to name"
         )
-        assert getattr(module, name) is getattr(physsynth_rs, name), (
-            f"{module.__name__}.{name} must be the Rust class on both paths, flag or no flag"
-        )
+        for name in sorted(names):
+            assert getattr(module, name) is getattr(physsynth_rs, name), (
+                f"{module.__name__}.{name} must be the Rust object on both paths, flag or no flag"
+            )
 
     for module in (
         operators,
@@ -223,15 +247,10 @@ def test_the_rust_swap_matches_the_environment():
         # which its reading of the flag could have diverged with nothing noticing. The derive is
         # only as wide as the tuple it derives over, for the fourth time.
         airbox,
-        membrane,
         operators2d,
         exciter,
-        body,
-        bore,
-        reed,
         banded,
         collision,
-        mallet,
         string_stiff,
         string_damped,
         string_nonlinear,
@@ -256,11 +275,6 @@ def test_the_rust_swap_matches_the_environment():
     swapped_classes = {}
     for module in (
         airbox,
-        membrane,
-        body,
-        bore,
-        reed,
-        mallet,
         string_stiff,
         string_damped,
         string_nonlinear,
@@ -300,12 +314,6 @@ def test_the_rust_swap_matches_the_environment():
         ("physsynth.core.airbox", "RoomSuspendedVKPlate"),
         ("physsynth.core.airbox", "RoomLoadedMembrane"),
         ("physsynth.core.airbox", "RoomSuspendedMembrane"),
-        ("physsynth.core.membrane", "Membrane"),
-        ("physsynth.core.body", "ModalBody"),
-        ("physsynth.core.bore", "Bore"),
-        ("physsynth.core.reed", "ReedBore"),
-        ("physsynth.core.mallet", "MalletMembrane"),
-        ("physsynth.core.mallet", "MalletWall"),
         ("physsynth.core.string_stiff", "StiffString"),
         ("physsynth.core.string_damped", "DampedStiffString"),
         ("physsynth.core.string_nonlinear", "TensionModulatedString"),
@@ -419,11 +427,13 @@ def test_the_rust_swap_matches_the_environment():
         # here. It is also the only swap so far that deliberately changes the numbers -- see the
         # module's own header for why that is safe and what it buys.
         banded: set(banded.__all__),
-        # `reed` is ported in full, but only ONE of its two public names is a function -- the
-        # class is checked by identity above. `bernoulli_flow` needs the swap because
-        # `tests/test_reed_stability.py` imports it by name and asserts its oddness and passivity
-        # directly, and that file is in the flagged CI step.
-        reed: {"bernoulli_flow"},
+        # `reed` was here until unit 3's deletion. `bernoulli_flow` still has to resolve to Rust
+        # -- `tests/test_reed_stability.py` imports it by name and asserts its oddness and
+        # passivity directly -- but there is no longer a Python function to compare it against, so
+        # the claim moved to `deleted_bodies` above. `radiation` was NEVER in this table even
+        # though it had two `_py` aliases, which is the "a derive is only as wide as the tuple it
+        # derives over" hole a FIFTH time: its swap could have come undone between section 37.11's
+        # piston fix and unit 2's deletion with nothing noticing. Both are covered above now.
         # `collision` is ported in full, `BarrierString` included since Phase 3's last batch --
         # the class half of that is checked by identity above. This entry was missing until the
         # mallet's batch, and the reason is worth writing down rather than quietly fixing: three
@@ -485,9 +495,7 @@ def test_the_rust_swap_matches_the_environment():
     if expected_rust:
         from physsynth.core import (
             beam,
-            mallet,
             plate,
-            radiation,
             string_damped,
             string_geometric,
             string_nonlinear,
