@@ -20,7 +20,7 @@
 |---|--------|----------------|--------|
 | 1 | DG Jacobian `(v,v)` block cancelled two `O(1)` terms at musical strain | `string_geometric` | **Fixed 2026-09-02** (§1) |
 | 2 | Room energy books were a tolerance rather than exact across the port | `airbox` (Rust) | **Fixed 2026-09-02** (§2) |
-| 3 | NumPy's own transcendentals disagree with libm by an ulp on some CPUs — a read-out asserted exactly across languages fails on a runner and passes on another | `airbox.mode_frequency`, four `pow`s, one `tan`, `exp`, `cos`/`sin` | **Live** — the parity step has been red on `main` for four runs (§3) |
+| 3 | NumPy's own transcendentals disagree with libm by an ulp on some CPUs — a read-out asserted exactly across languages fails on a runner and passes on another | `airbox.mode_frequency`, four `pow`s, one `tan`, `exp`, `cos`/`sin` | **Symptom cleared 2026-09-03** — the parity step is green on five consecutive runs; the **rule** stays live (§3) |
 | 4 | The θ-scheme suppresses every discrete decay rate by `1/(1+θk²Q)`; "highs die faster" turns over past mode ~32 | `string_damped`, `string_stiff`, both plates | Accounted for; **fix derived, not built** (§4) |
 | 5 | The von Kármán Picard iteration stops contracting at large amplitude / small `h` / high `fs` — the gong-on-a-string, the gong in a room and grid coarsening all die there | `plate.VKPlate`, `connection`, `airbox` | Open; **Newton proposed** (§5) |
 | 6 | The geometrically exact string's Newton solve stops converging past `λ_long ≈ 4`, and `h`-refinement makes it worse | `string_geometric` | Warned at 1, unresolved regime; **§1 eliminated as the cause 2026-09-03** (edge identical in 9/9 cells) and the threshold split into a **convergence** edge at 4 and an **energy** edge at 5–10 (§6) |
@@ -90,7 +90,7 @@ is equal at one node and at 123. The parity assertions moved from `<= 1e-13` to 
 buys is not a number but a detector: a mis-transcribed booking now fails by a bit instead of
 hiding inside a tolerance that was there for a different reason.
 
-## 3. NumPy's transcendentals are not libm — live on `main`
+## 3. NumPy's transcendentals are not libm — symptom cleared, rule live
 
 **What it is.** Plan §22.1: NumPy computes `sin`, `cos`, `tan`, `exp`, `arcsin` and non-shortcut
 `pow` with its own CPU-dispatched SIMD routines, chosen at import from the machine's feature set.
@@ -111,9 +111,17 @@ in one line: **a read-out asserted exactly across languages must not pass throug
 remaining exposed surface §22.6 enumerated (four `pow`s, one `tan`, one `exp`, three `cos`/`sin`)
 is bounded by ulp assertions rather than exact ones and stays as it is.
 
-**Still open.** The CI job's own two failures are on a runner this session cannot read the log of
-in full (the log blob is outside the proxy's allowlist); whether they are this test or a sibling
-in the same class is to be confirmed on the next push. If they are a sibling, apply the same rule.
+**Confirmed green 2026-09-03.** The question above — whether the runner's two failures were this
+test or a sibling in the same class — is answered by five consecutive green runs of the `rust`
+job's parity step (`33739866073`, `33740337663`, `33740757804`, `33747940441`, `33749384028`), and
+`tests/test_rust_parity_airbox.py` is in that step's file list. So it was this test, the portable
+spellings fixed it, and there is no sibling to chase.
+
+**The rule stands even though the symptom is gone**, and that is the reason this section is not
+marked fixed: nothing prevents the next batch from asserting a `np.<transcendental>` read-out
+exactly across languages, and the failure would again appear only on a runner with the wrong CPU,
+with no local repro (§22.2). The bounded exposure §22.6 enumerated — four `pow`s, one `tan`, one
+`exp`, three `cos`/`sin` — is still bounded by ulp assertions rather than exact ones, deliberately.
 
 ## 4. The θ-scheme's rate suppression — accounted for, fix derived
 
