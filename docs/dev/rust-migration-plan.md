@@ -8582,3 +8582,181 @@ bar**. That ratio is the deletion's whole argument in one number.
   that counts a draining population must name it instead; and the property it was really testing
   usually has a subject that does not drain).
 * Nothing is parked. §40.5 and unit 10's flag question are questions.
+
+---
+
+## §42 Deletion 5 (2026-09-03) — unit 1, the six-module block, and three guards that were counting a draining population
+
+Unit **1** is deleted: `string_stiff`, `string_damped`, `string_nonlinear`, `string_geometric`,
+`bow` and `collision`. **3,368 lines down to 410**, five parity files gone, and the θ-scheme string
+family — models #2, #3, #9, #10, the bow and the barrier — now exists once, in Rust.
+
+This was the batch where the pattern stopped being about the models and started being about the
+**guards**. Every physics bar passed first time. Three separate CI canaries did not, and all three
+for the same reason.
+
+### 42.1 What each of the six keeps, and the one that is not a re-export at all
+
+| module | lines | what stayed |
+|---|---:|---|
+| `bow` | 24 | the `DampedStiffString` re-export callers reach through it |
+| `string_damped` | 27 | `Boundary`, and `THETA_DEFAULT` re-exported from `string_stiff` |
+| `string_stiff` | 33 | `THETA_DEFAULT` — **the family's one source for it**, imported by the other three strings, the beam and the plate — plus the `biharmonic_matrix` re-export a guard reaches |
+| `collision` | 98 | **a real Python function** (see below), plus three underscored re-exports |
+| `string_nonlinear` | 108 | `StringCoefficients` / `string_coefficients_from_material` — a *modelling oracle* with no Rust twin — and two tolerances |
+| `string_geometric` | 120 | three **measured** constants with their docstrings, and `GeometricState`, which the Rust class constructs (§41.2) |
+
+`collision.solve_contact_vector` is the first deleted module's function that **could not** become a
+re-export, and the two reasons were both written down when the model was ported:
+`np.ascontiguousarray` is a no-op returning the *same object* for an already-contiguous float64
+array, so the wrapper is a type check rather than a second pass over the data; and the
+non-convergence warning must be raised **from this frame**, because `stacklevel=2` cannot keep
+meaning what it meant if it is issued from inside an extension module. The swap guard now asserts
+that this function is **not** the Rust one — an inverted assertion, and the only one of its kind.
+
+Three private helpers went with the body — `_contact_force_dg_deriv`, `_contact_force_hyst`,
+`_contact_force_hyst_deriv`. They had no Rust twin and, measured, no caller anywhere outside the
+class that is now gone. That is the honest reason to delete a function, and it is worth contrasting
+with `string_coefficients_from_material`, which also has no Rust twin and stays: it has three real
+callers and is a *modelling* helper rather than part of the model. "No Rust twin" is not a verdict.
+
+### 42.2 The finding: three guards were counting a population that now drains, and each needed a different cure
+
+`tests/test_shard_partition.py`'s parity canary was the first to fail this way (§41.5). Unit 1's
+five deletions made it happen twice more in one batch, so the pattern is the batch's finding rather
+than an incident.
+
+| guard | what it counted | why the count was right, then wrong | the cure |
+|---|---|---|---|
+| `test_shard_partition.py::test_the_parity_family_is_found_at_all` | `len(dropped) >= 20` | proves the exclusion still excludes; the family drains to zero, where "excludes nothing" becomes true | a **written-down set** of the remaining files, plus two synthetic probes on names not in `tests/` — the probes are what outlives the family |
+| `test_ci_workflow.py::test_every_test_file_the_workflow_names_exists` | `len(named) >= 20` | proves the token scan still matches; the only literal list in the workflow is the parity family | a **named positive control** — `tests/test_binding_surface.py` is spelled out in the `rust` job and is permanent, so finding *that one token* proves the scan works and cannot drain |
+| `test_ci_workflow.py::test_every_rust_parity_file_guards_its_extension_import` | `len(files) >= 15` over `test_rust_parity*.py` | the population itself was the parity family | **widen the population**: every test file that mentions the extension. That set *grows* as the migration proceeds |
+
+Three cures, and they are not interchangeable. Write down the set when the population is the
+subject; name a positive control when the count was only ever proving the scan fires; widen the
+population when a better one exists that grows. The general form of findings #40, and the question
+to ask of any threshold is **"what happens to this number at the end of the migration?"** — a floor
+whose answer is "it becomes unsatisfiable" is measuring the wrong thing today, not just tomorrow.
+
+### 42.3 Widening a population found a latent bug, and the fix was a *scope* rule
+
+The third cure paid immediately. Scanning every test file rather than the parity family found a
+bare module-scope `import physsynth_rs` in `tests/test_stability.py` — which had **never been in
+that rule's population**, so it had been sitting there unchecked.
+
+And the fix is not the obvious one. There were two occurrences: one at module scope (fixed, now
+`pytest.importorskip`) and one inside the `if expected_rust:` branch, where turning it into an
+`importorskip` would be **wrong**. In that branch the flag *is* set, so a missing wheel is an error
+and must not become a skip. The rule's own docstring names the hazard precisely — a *collection*
+error — and only a module-scope import can cause one. So the check is now on **indentation**: column
+zero is a violation, an indented import is left alone. A textual rule that was over-broad passed for
+its whole life because its population never contained a counterexample.
+
+### 42.4 Two captured-binding checks retired, and one deliberately kept
+
+`test_stability.py`'s widest check was the banded solver's captured-binding hazard: four string
+models did `from .banded import cho_solve_banded, cholesky_banded` at module scope, and they are
+chained by `array_equal` reduction anchors — `σ₁ = 0`, `EA = 0`, `EA = T` — that hold only while all
+four do the *same* arithmetic. A swap reaching three of them would have made those anchors compare
+LAPACK against a transcription and fail with a message about physics.
+
+It is retired, and the reason is stated in the file rather than left as an absence: **a Rust model
+does not capture a Python solver.** All four now factor inside the crate, so the hazard cannot
+arise. The anchors it protected are still asserted, in `test_geometric_limits.py` and its siblings,
+and now compare four Rust models against each other — the same claim with both sides moved. The
+membrane's version (`mallet.Membrane is membrane.Membrane`) is retired for the same reason, one unit
+earlier.
+
+`string_stiff.biharmonic_matrix is operators.biharmonic_matrix` is **kept**, and that is why
+`string_stiff.py` retains a re-export it would not otherwise need: `operators` still has a Python
+body, so a mis-ordered swap there is still possible, and this is the check that catches it.
+
+The distinction generalises: a captured-binding check is retired when **both** sides of the capture
+are Rust, and kept while **either** is still Python. Reading it off the module list is a two-second
+check and getting it wrong in the safe-looking direction leaves a guard that passes vacuously.
+
+### 42.5 A parity file can survive a deletion and lose only half of itself
+
+`tests/test_rust_parity_banded.py` is one of the four parity files that name no reference alias
+(§39.2) — it builds its two sides by patching the *captured solver name* in each of the four string
+models, which was "the only honest way to build one model on each solver in a single process". Unit
+1 removed the bodies that did the capturing, and five of its tests went red.
+
+The file does **not** die, and sorting it gives a case §35.4 rule 2 does not describe. It splits in
+three, not two:
+
+* **Its primitive half is untouched** — Rust's `cholesky_banded_upper` against `scipy.linalg`, the
+  error messages, the shape refusals. The comparand there is SciPy, and SciPy is not being deleted.
+  Thirty-odd tests, no change.
+* **Two model-level tests are retired.** `test_the_two_solvers_track_each_other_over_a_run` had no
+  second solver left; its measurement is kept as a comment because the *shape* was the finding —
+  1.1e-13 at 100 steps growing to 3.2e-12 at 20,000, roughly square-root, so the plan's Group A
+  target was a **hundred-step** claim for a fed-back solve and not a two-thousand-step one.
+  `test_neither_solver_moves_the_energy_bar` keeps its Rust half in every energy file in the suite,
+  all of which now run on the Rust solver by construction.
+* **One survives with a one-line change**, and it is the one the whole banded batch existed for:
+  `test_the_family_still_reduces_to_itself_exactly` asserts the three anchors (`σ₁ = 0`, `EA = 0`,
+  `EA = T`) in one place, so a change reaching three models and missing the fourth fails with a
+  message naming the pair. It needed only its `with rust_solver():` block removed, because building
+  those four models *is* building them on the Rust solver now. It was also renamed — the old name
+  ended `..._on_the_rust_solver`, a qualifier that claimed a distinction that no longer exists.
+
+So the sort is not "parity file, therefore delete". It is per *test*, and the three outcomes are
+**untouched** (the comparand is not Python), **retired** (both sides were the implementations), and
+**kept with the scaffolding removed** (the claim was about Rust all along and the patch was only
+ever how you got there).
+
+### 42.6 The `checks` job had to grow a Rust compile, and it was nearly a silent CI break
+
+Not predicted by §39.6, and it would have gone red in CI rather than locally. The `checks` job runs
+`pytest --collect-only` over the whole suite four times to prove the shard split covers it exactly
+once — and it installed only the Python package. With a deleted model's module now an unconditional
+`from physsynth_rs import X` at module scope, that collection is an **error**, not a skip: every
+count the job subtracts would be missing, and the guard that exists to catch "a piece never ran"
+would itself never run.
+
+So `checks` now installs the toolchain and the wheel. The lint half needs neither; the arithmetic
+half cannot do without them. **The general lesson is about route 1's blast radius**: §39.6 named
+`validate` because that is the job whose *comment* said "pure-Python core". Every job that imports
+the package is affected, and the way to find them is to grep the workflow for `pip install`, not to
+read the comments.
+
+### 42.7 The measured state
+
+| run | tests | wall |
+|---|---:|---:|
+| unflagged, whole suite | **3,490** passed, 1 skipped | 164 s |
+| both flags, parity excluded | **2,018** passed | 89 s |
+| the four guards | 136 + 21 passed | 5 s |
+| `ruff check .` | clean | — |
+
+Cumulative over the five deletions: `physsynth/core/` + `physsynth/analysis/` are **17,543 →
+11,855 lines** and `tests/` is **41,893 → 35,147** — **12,434 lines of Python gone**. The unflagged
+suite has gone 4,566 → 3,490 collected tests **without retiring one physics bar**. Every test that
+left was a two-sided comparison whose second side no longer exists, or a claim already carried by a
+named native bar. The unflagged run is also now *faster* than it was before the first deletion
+(164 s against 480 s), because what it used to spend its time on was stepping Python models.
+
+### 42.8 What the next batch inherits
+
+* **Thirteen of twenty-three modules have no Python body.** Units 7, 4, 3, 2 and 1 are complete.
+* **Units 10 and 11** (`analysis/`, 2,458 lines) are unblocked on porting grounds and blocked on a
+  *question*, restated here because it has not moved: deleting the Python detector makes
+  `PHYSSYNTH_RS_ANALYSIS` a no-op, and with it goes the configuration §36.4 built the two-flag
+  separation for — a Rust model measured by a Python instrument, so a shared misreading cannot
+  cancel. The past check stands; the ability to repeat it does not. Same class of decision as
+  §39.6, and the human's.
+* **Unit 5** is blocked on §40.5 (`Plate.B` has no setter, so `test_plate_modal.py`'s pin on §26's
+  ordering finding is inexpressible) and constrained by §41.2 (`plate.py` must keep `GrainSpec`,
+  which the Rust side constructs). **Units 6 and 8** are blocked on native bars that do not exist
+  for `AirBox` and `FreeBeam`. **Unit 9** is blocked permanently.
+* `tests/test_rust_parity.py` is down to **one** row: `FreeBeam`. When unit 8 lands the list is
+  empty and the file is deleted in the same commit. Draining it was forgotten in the first pass of
+  this batch and the file went red on three rows — which is the list doing exactly the job §40.2
+  wrote it out by hand for.
+* The findings ledger gains **#41** (three guards, one draining population, three different cures —
+  write down the set, name a positive control, or widen to a growing population; ask of any
+  threshold what it does at the end of the migration) and **#42** (a captured-binding check is
+  retired only when *both* sides of the capture are Rust; while either is Python it still catches a
+  mis-ordered swap, and retiring it early leaves a vacuous pass).
+* Nothing is parked. §40.5 and unit 10's flag question are the two open questions.

@@ -13,15 +13,23 @@ assertions rather than after:
   reverse} x {plain, fused} x {divide, reciprocal} left disjoint candidate sets on a single
   15-element system, and one element admitted nothing. OpenBLAS's ``DTBSV`` is a blocked kernel.
 
-So the interesting assertions here are not "Rust equals LAPACK". They are:
+So the interesting assertions here were not "Rust equals LAPACK". They were:
 
-1. the two solvers agree to the plan's Group A target over a short run, and the *physics* bars are
-   untouched at any length — the hand-off §4 describes;
-2. **the four models still agree with each other exactly.** That is the property this batch exists
-   to protect, and it is why the solver was ported before any of its callers.
+1. ~~the two solvers agree to the plan's Group A target over a short run, and the *physics* bars
+   are untouched at any length — the hand-off §4 describes;~~ **retired with unit 1's deletion,
+   2026-09-03** (plan §42). It compared one string built on LAPACK against the same string built on
+   Rust, by patching the captured solver name in each model — and the four models no longer capture
+   a solver name, because they no longer have a Python body to capture it in. There is one string
+   now and it factors inside the crate. The measurement the test carried is kept below rather than
+   lost, because its *shape* was the finding.
+2. **the four models still agree with each other exactly.** That is the property this batch existed
+   to protect, it is why the solver was ported before any of its callers, and it **survives the
+   deletion unchanged** — see the last test in this file, which needed only its patch removed.
+
+The **primitive** half of this file (Rust against `scipy.linalg`, its error messages and its shape
+refusals) is untouched by any of this and is not going anywhere: SciPy is the comparand there, and
+SciPy is not being deleted.
 """
-
-import contextlib
 
 import numpy as np
 import pytest
@@ -39,9 +47,10 @@ physsynth_rs = pytest.importorskip(
 # The plan's Group A agreement target, and — per §14.4 — a SHORT-run one. The banded solve feeds
 # straight back into the state, so the difference grows with the run rather than saturating.
 GROUP_A_TOL = 1e-13
-DRIFT_TOL = 1e-10  # CLAUDE.md's bar, which neither implementation may cross
 
-MODELS = (string_stiff, string_damped, string_nonlinear, string_geometric)
+# `DRIFT_TOL` and `MODELS` were here. Both went with the two retired tests below: the first was
+# CLAUDE.md's 1e-10 energy bar applied to LAPACK and Rust side by side, and the second was the
+# tuple `rust_solver()` patched. Neither has a subject any more.
 
 
 def rs_cholesky(ab, lower=False):
@@ -55,24 +64,12 @@ def rs_cho_solve(cb_and_lower, b):
     )
 
 
-@contextlib.contextmanager
-def rust_solver():
-    """Point all four models at the Rust banded solver for the duration of the block.
-
-    The models capture ``cholesky_banded`` / ``cho_solve_banded`` at import, which is exactly the
-    hazard ``tests/test_stability.py``'s swap guard exists to catch — so patching the captured
-    names is also the only honest way to build one model on each solver in a single process.
-    """
-    saved = [(m, m.cholesky_banded, m.cho_solve_banded) for m in MODELS]
-    for m in MODELS:
-        m.cholesky_banded = rs_cholesky
-        m.cho_solve_banded = rs_cho_solve
-    try:
-        yield
-    finally:
-        for m, chol, solve in saved:
-            m.cholesky_banded = chol
-            m.cho_solve_banded = solve
+# `rust_solver()` stood here: a context manager that patched `cholesky_banded` /
+# `cho_solve_banded` on all four models, because they captured those names at import and patching
+# the captured name was the only honest way to build one model on each solver in a single process.
+# It is gone with the bodies that did the capturing. `tests/test_stability.py`'s captured-binding
+# guard is retired for the same reason and says so at more length: a Rust model does not capture a
+# Python solver.
 
 
 def model_band(n, kappa, sigma=0.0):
@@ -204,95 +201,63 @@ def test_lower_storage_is_refused_rather_than_silently_transposed():
 
 
 # =====================================================================================
-# The models: the trajectory bar, and the anchors this batch exists to protect
+# The models: the anchors this batch exists to protect
 # =====================================================================================
+#
+# TWO TESTS WERE RETIRED HERE on 2026-09-03 with unit 1's deletion (plan section 42), and both were
+# two-sided comparisons that no longer have two sides:
+#
+#   * `test_the_two_solvers_track_each_other_over_a_run` measured how far a string on LAPACK and
+#     the same string on Rust separate. Its measurement is the part worth keeping, because the
+#     SHAPE was the finding -- roughly square-root growth, not saturation. On N = 128, kappa = 2.7,
+#     sigma = 3, worst state difference as a fraction of the run's amplitude:
+#
+#         100 steps 1.1e-13 | 500 2.9e-13 | 1000 4.1e-13 | 2000 9.7e-13 | 5000 2.0e-12 |
+#         20000 3.2e-12
+#
+#     So the plan's Group A target of ~1e-13 was a HUNDRED-step claim for a fed-back solve, not a
+#     two-thousand-step one: a fed-back reduction held 1e-13 out to 2,000 steps and a fed-back
+#     solve is an order of magnitude worse at the same length. Also recorded because it is easy to
+#     get wrong: the difference must be normalised by the run's AMPLITUDE, never pointwise, since a
+#     damped string decays by orders of magnitude.
+#
+#   * `test_neither_solver_moves_the_energy_bar` asserted that both solvers keep the lossless drift
+#     under CLAUDE.md's 1e-10. The Rust half of that claim is asserted by every energy bar in the
+#     suite -- `test_stiff_string.py`, `test_damped_string.py`, `test_tension_string.py`,
+#     `test_geometric_energy.py` -- all of which now run on the Rust solver by construction. The
+#     LAPACK half has no subject.
+#
+# What follows is the third test, which survives. It needed exactly one change: the `with
+# rust_solver():` block came off, because building these four models IS building them on the Rust
+# solver now.
 
 
-def _stiff(**kw):
-    base = dict(L=0.65, T=200.0, rho=0.005, N=128, kappa=2.7, sigma=0.0, theta=0.28)
-    base.update(kw)
-    c = float(np.sqrt(base["T"] / base["rho"]))
-    return string_stiff.StiffString(fs=c * base["N"] / base["L"], **base)
-
-
-@pytest.mark.parametrize("steps, tol", [(100, 3e-13), (2000, 3e-12), (20000, 1e-11)])
-def test_the_two_solvers_track_each_other_over_a_run(steps, tol):
-    """§14.4's shape, on a solve rather than on a reduction — and a WORSE case than §14.4's.
-
-    Measured 2026-08-27 on this string (N = 128, kappa = 2.7, sigma = 3), worst state difference so
-    far as a fraction of the run's amplitude:
-
-        100 steps 1.1e-13 | 500 2.9e-13 | 1000 4.1e-13 | 2000 9.7e-13 | 5000 2.0e-12 | 20000 3.2e-12
-
-    So the plan's Group A target of ~1e-13 is a **hundred-step** claim here, not a two-thousand-step
-    one: batch 4's fed-back reduction held 1e-13 out to 2,000 steps, and a fed-back *solve* is an
-    order of magnitude worse at the same length. The bars below are the measured curve with room
-    for a different LAPACK on a different runner, and the point of parametrising three lengths
-    rather than picking one is that the SHAPE — roughly a square-root growth, not a saturation —
-    is the finding.
-
-    Normalised by the run's amplitude, never pointwise — the same trap §14.4 names, and it bites
-    harder here because a damped string decays by orders of magnitude.
-    """
-    py = _stiff(sigma=3.0)
-    with rust_solver():
-        rs = _stiff(sigma=3.0)
-    u0 = triangular_pluck(py.x, py.L, 0.137 * py.L, amplitude=1e-3)
-    py.set_state(u0)
-    rs.set_state(u0)
-    amp = float(np.max(np.abs(u0)))
-    worst = 0.0
-    for _ in range(steps):
-        py.step()
-        rs.step()
-        worst = max(worst, float(np.max(np.abs(py.u - rs.u))))
-    assert worst / amp <= tol, f"{steps} steps: {worst / amp:.2e} of amplitude"
-
-
-def test_neither_solver_moves_the_energy_bar():
-    """The hand-off §4 describes: the trajectories separate, the physics does not."""
-    drifts = {}
-    for label, ctx in (("lapack", contextlib.nullcontext()), ("rust", rust_solver())):
-        with ctx:
-            s = _stiff(sigma=0.0)
-        s.set_state(triangular_pluck(s.x, s.L, 0.137 * s.L, amplitude=1e-3))
-        e0 = s.energy()
-        lo = hi = e0
-        for _ in range(4000):
-            s.step()
-            e = s.energy()
-            lo, hi = min(lo, e), max(hi, e)
-        drifts[label] = (hi - lo) / abs(e0)
-    print(f"\nlossless drift — lapack {drifts['lapack']:.2e}, rust {drifts['rust']:.2e}")
-    for label, d in drifts.items():
-        assert d < DRIFT_TOL, f"{label} drift {d:.2e}"
-
-
-def test_the_family_still_reduces_to_itself_exactly_on_the_rust_solver():
+def test_the_family_still_reduces_to_itself_exactly():
     """The batch's whole reason for existing, asserted directly.
 
     ``tests/test_damped_string.py``, ``tests/test_tension_string.py`` and
     ``tests/test_geometric_energy.py`` each carry one of these anchors and each would catch a
-    break — but only under ``PHYSSYNTH_RS=1``, and each in isolation. Here all three run on the
-    Rust solver in one place, so a batch that ported the solver for three models and missed the
-    fourth fails with a message that says which pair diverged.
+    break — but each in isolation. Here all three run in one place, so a change that reaches three
+    of the four models and misses the fourth fails with a message that says which pair diverged.
+
+    Renamed from ``..._on_the_rust_solver`` when unit 1 landed: there is no other solver to
+    contrast with, so the qualifier was claiming a distinction that no longer exists.
     """
     N, fs = 64, 12800.0
     kw = dict(L=0.65, T=200.0, rho=0.005, fs=fs, N=N, kappa=2.7, sigma0=1.0, sigma1=0.0)
     stiff_kw = {k: v for k, v in kw.items() if k not in ("sigma0", "sigma1")}
-    with rust_solver():
-        ds = string_damped.DampedStiffString(**kw)
-        ss = string_stiff.StiffString(sigma=1.0, **stiff_kw)
-        tn = string_nonlinear.TensionModulatedString(EA=0.0, **kw)
-        gm = string_geometric.GeometricString(EA=kw["T"], **kw)
+    ds = string_damped.DampedStiffString(**kw)
+    ss = string_stiff.StiffString(sigma=1.0, **stiff_kw)
+    tn = string_nonlinear.TensionModulatedString(EA=0.0, **kw)
+    gm = string_geometric.GeometricString(EA=kw["T"], **kw)
 
-        u0 = triangular_pluck(ds.x, ds.L, 0.137 * ds.L, amplitude=1e-3)
-        for m in (ds, ss, tn):
-            m.set_state(u0.copy())
-        gm.set_state(u0.copy())
-        for _ in range(300):
-            for m in (ds, ss, tn, gm):
-                m.step()
+    u0 = triangular_pluck(ds.x, ds.L, 0.137 * ds.L, amplitude=1e-3)
+    for m in (ds, ss, tn):
+        m.set_state(u0.copy())
+    gm.set_state(u0.copy())
+    for _ in range(300):
+        for m in (ds, ss, tn, gm):
+            m.step()
 
     assert np.array_equal(ds.u, ss.u), "sigma1 = 0 no longer reduces to the stiff string"
     assert np.array_equal(ds.state, tn.state), "EA = 0 no longer reduces to the damped string"

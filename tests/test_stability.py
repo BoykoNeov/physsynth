@@ -203,7 +203,7 @@ def test_the_rust_swap_matches_the_environment():
     # same reason the tuples below are: a deletion has to be a reviewed edit. Without this, a
     # module that quietly lost its swap block would simply fall out of the derive and nothing would
     # notice -- which is section 17.6's finding for a third time, now on the way *out*.
-    import physsynth_rs
+    physsynth_rs = pytest.importorskip("physsynth_rs")
 
     # The names each deleted module must now resolve to Rust, listed BY HAND. Classes and
     # functions together: both conventions are covered here because a deletion removes both
@@ -224,7 +224,36 @@ def test_the_rust_swap_matches_the_environment():
             "monopole_radiation_resistance",
             "piston_radiation_resistance",
         },
+        string_stiff: {"StiffString"},
+        string_damped: {"DampedStiffString"},
+        string_nonlinear: {"TensionModulatedString"},
+        string_geometric: {"GeometricString"},
+        bow: {"BowedString", "friction_smooth", "friction_smooth_deriv"},
+        # `collision`'s three private spellings are checked separately below: the alias namespace
+        # was flat and this module's is not, so `_force_total_vec` could only ever be aliased
+        # `force_total_vec_py`, and that mismatch is what once made the whole module fall out of
+        # the derived table.
+        collision: {
+            "BarrierString",
+            "contact_potential",
+            "contact_force_elastic",
+            "contact_stiffness",
+            "contact_force_dg",
+            "contact_force_total",
+            "solve_contact",
+        },
     }
+    # `collision`'s underscored names, and the one that must NOT be a bare re-export.
+    for name in ("_contact_force_total_deriv", "_force_total_vec", "_deriv_total_vec"):
+        assert getattr(collision, name) is getattr(physsynth_rs, name[1:]), (
+            f"`collision.{name}` must be the Rust function -- the underscored spelling is the one "
+            "the model and the mallet reach for"
+        )
+    assert collision.solve_contact_vector is not physsynth_rs.solve_contact_vector, (
+        "`collision.solve_contact_vector` must stay a Python wrapper: `stacklevel=2` on its "
+        "non-convergence warning cannot mean the same thing from inside an extension module"
+    )
+
     for module, names in deleted_bodies.items():
         assert not hasattr(module, "_USE_RUST"), (
             f"{module.__name__} has a deleted Python body but still reads PHYSSYNTH_RS -- the "
@@ -250,13 +279,7 @@ def test_the_rust_swap_matches_the_environment():
         operators2d,
         exciter,
         banded,
-        collision,
-        string_stiff,
-        string_damped,
-        string_nonlinear,
-        string_geometric,
         plate,
-        bow,
         beam,
         connection,
     ):
@@ -275,12 +298,6 @@ def test_the_rust_swap_matches_the_environment():
     swapped_classes = {}
     for module in (
         airbox,
-        string_stiff,
-        string_damped,
-        string_nonlinear,
-        string_geometric,
-        bow,
-        collision,
         beam,
         operators2d,
         plate,
@@ -314,14 +331,8 @@ def test_the_rust_swap_matches_the_environment():
         ("physsynth.core.airbox", "RoomSuspendedVKPlate"),
         ("physsynth.core.airbox", "RoomLoadedMembrane"),
         ("physsynth.core.airbox", "RoomSuspendedMembrane"),
-        ("physsynth.core.string_stiff", "StiffString"),
-        ("physsynth.core.string_damped", "DampedStiffString"),
-        ("physsynth.core.string_nonlinear", "TensionModulatedString"),
-        ("physsynth.core.string_geometric", "GeometricString"),
         ("physsynth.core.operators2d", "VonKarmanBracket"),
         ("physsynth.core.operators2d", "AiryStressSolver"),
-        ("physsynth.core.bow", "BowedString"),
-        ("physsynth.core.collision", "BarrierString"),
         ("physsynth.core.beam", "FreeBeam"),
         ("physsynth.core.plate", "Plate"),
         ("physsynth.core.plate", "VKPlate"),
@@ -444,22 +455,11 @@ def test_the_rust_swap_matches_the_environment():
         # same shape as the empty parity job section 16.8 found, reached through a third door --
         # so the lookup now tries the underscored spelling too, which keeps the set DERIVED rather
         # than listed.
-        # `bow` is ported in full. Both module-level functions are swapped because
-        # `tests/test_bow_stability.py` imports them BY NAME and asserts the friction curve's
-        # oddness, peak and derivative directly -- the same reason `reed.bernoulli_flow` is here.
-        bow: {"friction_smooth", "friction_smooth_deriv"},
-        collision: {
-            "contact_potential",
-            "contact_force_elastic",
-            "contact_stiffness",
-            "contact_force_dg",
-            "contact_force_total",
-            "contact_force_total_deriv",
-            "force_total_vec",
-            "deriv_total_vec",
-            "solve_contact",
-            "solve_contact_vector",
-        },
+        # `bow` and `collision` were here until unit 1's deletion. Their functions still have to
+        # resolve to Rust -- `tests/test_bow_stability.py` imports the friction curve by name and
+        # asserts its oddness, peak and derivative directly -- but with no Python function left to
+        # compare against, the claim moved to `deleted_bodies` above, together with `collision`'s
+        # three underscored spellings and the one wrapper that must stay Python.
     }
 
     def _public(module, name):
@@ -493,30 +493,24 @@ def test_the_rust_swap_matches_the_environment():
                 )
 
     if expected_rust:
-        from physsynth.core import (
-            beam,
-            plate,
-            string_damped,
-            string_geometric,
-            string_nonlinear,
-            string_stiff,
-        )
+        from physsynth.core import beam, plate, string_stiff
 
-        # The banded solver's version of the captured-binding hazard, and it is the widest one in
-        # this test. Four models do `from .banded import cho_solve_banded, cholesky_banded` at
-        # module scope, and unlike every other entry here the consequence of a mis-ordered swap is
-        # not merely "one model runs Python". These four are chained by `array_equal` reduction
-        # anchors -- sigma1 = 0, EA = 0, EA = T -- which hold only while all four do the SAME
-        # arithmetic. If the swap reached three of them and not the fourth, those anchors would
-        # start comparing LAPACK against a transcription and fail with a message about physics.
-        for model in (string_stiff, string_damped, string_nonlinear, string_geometric):
-            for name in ("cholesky_banded", "cho_solve_banded"):
-                assert getattr(model, name) is getattr(banded, name), (
-                    f"`{model.__name__}` captured a different `{name}` than `banded` now exposes "
-                    "-- the swap landed after that module was imported, so this model is solving "
-                    "with LAPACK while the rest of the family solves with Rust"
-                )
-
+        # The banded solver's captured-binding check stood here and was the widest one in this
+        # test: four models did `from .banded import cho_solve_banded, cholesky_banded` at module
+        # scope, and they are chained by `array_equal` reduction anchors -- sigma1 = 0, EA = 0,
+        # EA = T -- that hold only while all four do the SAME arithmetic, so a swap reaching three
+        # of them would have made those anchors compare LAPACK against a transcription and fail
+        # with a message about physics.
+        #
+        # Unit 1's deletion RETIRES it, and the reason is worth stating rather than leaving as an
+        # absence. A Rust model does not capture a Python solver; all four now factor inside the
+        # crate, so the hazard the check existed for cannot arise. The anchors it protected are
+        # still asserted, in `test_geometric_limits.py` and its siblings, and they now compare four
+        # Rust models against each other -- which is the same claim with both sides moved.
+        #
+        # `string_stiff.biharmonic_matrix` is NOT retired with it: that module keeps the re-export
+        # precisely so this check can still be made, because `operators` still has a Python body
+        # and a mis-ordered swap there is still possible.
         assert string_stiff.biharmonic_matrix is operators.biharmonic_matrix, (
             "`string_stiff` captured a different `biharmonic_matrix` than `operators` now "
             "exposes -- the swap landed after that module was imported, so the model is running "
@@ -525,13 +519,12 @@ def test_the_rust_swap_matches_the_environment():
         assert beam.free_beam_stiffness is operators.free_beam_stiffness, (
             "`beam` captured a different `free_beam_stiffness` than `operators` now exposes"
         )
-        # The membrane's version of the same hazard: `mallet` does `from .membrane import
-        # Membrane` at import time, so a swap that landed after it would leave the mallet striking
-        # a Python drumhead while this run reports Rust.
-        assert mallet.Membrane is membrane.Membrane, (
-            "`mallet` captured a different `Membrane` than `membrane` now exposes -- the swap "
-            "landed after that module was imported"
-        )
+        # The membrane's version of the same hazard stood here: `mallet` does
+        # `from .membrane import Membrane` at import time, so a swap landing after it would have
+        # left the mallet striking a Python drumhead while the run reported Rust. Unit 4's
+        # deletion retires it for the same reason as the banded block -- there is one `Membrane`
+        # now and no swap to mis-order. The import itself stays in `mallet.py`, because callers
+        # reach it as `mallet.Membrane`.
         assert membrane.laplacian_from_mask is operators2d.laplacian_from_mask, (
             "`membrane` captured a different `laplacian_from_mask` than `operators2d` now exposes"
         )

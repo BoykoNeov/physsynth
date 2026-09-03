@@ -34,19 +34,18 @@ physsynth_rs = pytest.importorskip(
 )
 
 # One row per model whose Python reference implementation still exists. `IdealString` went with
-# unit 7 and `Bore` with unit 3; `FreeBeam` goes with unit 8 and the three theta-scheme strings
-# with unit 1, at which point this file is empty and is deleted. The `exc` column was not uniform
-# while `Bore` was here — it unpacked its boundary, so Python's refusal was an incidental
-# `TypeError` from the unpacking rather than a designed message — and the four rows left all raise
-# their own `ValueError`. Reproducing an accident was never worth a special case; silently
-# *accepting* the value was, and that half is pinned in `test_binding_surface.py` for all six.
+# unit 7, `Bore` with unit 3, and the three theta-scheme strings with unit 1. **`FreeBeam` is the
+# last one**: when unit 8 lands, this list is empty and this file is deleted in the same commit.
+# Written out rather than derived, on purpose -- a derived list would shrink to nothing and keep
+# passing, which is section 37.8's finding one level down, and the whole point of this list is that
+# reaching zero has to be a visible event.
+#
+# The `exc` column was not uniform while `Bore` was here: it unpacked its boundary
+# (`left, right = boundary`), so Python's refusal was an incidental `TypeError` from the unpacking
+# rather than a designed message, while the Rust side raises its own `ValueError` naming what it
+# wanted. Reproducing an accident was never worth a special case; silently *accepting* the value
+# was, and that half is pinned in `test_binding_surface.py` for all six classes, permanently.
 STILL_HAVE_A_PYTHON_TWIN = [
-    ("string_stiff", "StiffStringPy", dict(L=1.0, T=200.0, rho=0.005, fs=48000.0, N=16),
-     ValueError),
-    ("string_damped", "DampedStiffStringPy", dict(L=1.0, T=200.0, rho=0.005, fs=48000.0, N=16),
-     ValueError),
-    ("string_nonlinear", "TensionModulatedStringPy",
-     dict(L=1.0, T=200.0, rho=0.005, fs=48000.0, N=16), ValueError),
     ("beam", "FreeBeamPy", dict(L=1.0, rho=0.005, fs=48000.0, N=16, kappa=20.0), ValueError),
 ]
 
