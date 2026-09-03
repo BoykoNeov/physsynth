@@ -53,9 +53,26 @@
 //! looking for why `analysis` compiles a core file will look here first.
 //!
 //! The module is `pub` so the native tests can reach it, and it carries its own header explaining
-//! why a Brent transcription and not a crate. Nothing else crosses the two crates.
+//! why a Brent transcription and not a crate.
 #[path = "../../physsynth-core/src/root.rs"]
 pub mod root;
+
+// `rotating_wave.rs` needs two more of the same kind, and for the same reason. It is the only
+// member of this crate that solves a nonlinear system, so it needs a sparse matrix and a sparse
+// LU; `physsynth-core/src/sparse.rs` and `sparse_lu.rs` already have both, transcribed and
+// measured against SuperLU. All three arguments above apply unchanged — a Cargo edge inverts the
+// crate split and goes red in `tests/deps.rs`, a copy is two transcriptions free to drift — so
+// these are included the same way.
+//
+// The line to hold is *which* things may cross. A sparse LU and a root-find are numerical methods
+// with no physics in them; the second difference and the SBP gradient pair are the discretisation
+// under test, and `rotating_wave.rs` rebuilds those locally rather than reaching for
+// `physsynth-core/src/ops.rs`. An oracle assembled out of the operators it validates would agree
+// with a divergent core by construction.
+#[path = "../../physsynth-core/src/sparse.rs"]
+pub mod sparse;
+#[path = "../../physsynth-core/src/sparse_lu.rs"]
+pub mod sparse_lu;
 
 pub mod bessel;
 pub mod damping;
@@ -64,4 +81,5 @@ pub mod duffing;
 pub mod elliptic;
 pub mod modal;
 pub mod radiation;
+pub mod rotating_wave;
 pub mod spectrum;

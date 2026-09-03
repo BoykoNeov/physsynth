@@ -57,6 +57,7 @@ mod ops2d;
 mod plate;
 mod radiation;
 mod reed;
+mod rotating_wave;
 mod shape;
 mod sparse_lu;
 mod spectrum;
@@ -907,6 +908,16 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(spectrum::py_parabolic_refine, m)?)?;
     m.add_function(wrap_pyfunction!(spectrum::py_measure_partials_near, m)?)?;
     m.add_function(wrap_pyfunction!(spectrum::py_detect_peaks, m)?)?;
+    m.add_function(wrap_pyfunction!(rotating_wave::py_solve_rotating_wave, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        rotating_wave::py_rotating_wave_history,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(rotating_wave::py_planar_hessian_cells, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        rotating_wave::py_kc_circular_frequency,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(exciter::py_triangular_pluck, m)?)?;
     m.add_function(wrap_pyfunction!(exciter::py_raised_cosine, m)?)?;
     m.add_function(wrap_pyfunction!(exciter::py_raised_cosine_2d, m)?)?;

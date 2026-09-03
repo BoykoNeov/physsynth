@@ -88,6 +88,7 @@ See ``docs/dev/geometrically-exact-string-plan.md`` (Tier B, decision #5).
 
 from __future__ import annotations
 
+import os
 import warnings
 from typing import NamedTuple
 
@@ -600,3 +601,88 @@ def _newton(
         if err <= tol:
             return phi, psi, s, it, True
     return phi, psi, s, maxiter, False
+
+
+# --- the Rust swap (docs/dev/rust-migration-plan.md, Phase 7) ------------------------------------
+#
+# The second flag again, and for the reason `physsynth/analysis/spectrum.py` gives at length:
+# `PHYSSYNTH_RS=1` swaps the *models* and leaves the instrument measuring them in Python, which is
+# what makes the acceptance run worth anything. `PHYSSYNTH_RS_ANALYSIS` swaps the instrument. Never
+# merge them.
+#
+# **What is claimed about agreement here, and what is not.** This is the package's only member that
+# solves a nonlinear system -- Newton on a sparse Jacobian, inside an eight-step amplitude
+# continuation -- so it is the only member of plan Sec 4's Group D, and Sec 24 put Group D on
+# measured tolerance rather than bit-identity because SuperLU is supernodal and its blocking is a
+# property of how SciPy was *built*. Two things were measured before the port was written:
+#
+#   * **The root barely moves.** Perturbing this function's Newton step by a relative 1e-10 -- six
+#     orders beyond anything two LU implementations differ by -- moves `Omega` by one ulp, `psi` by
+#     2.4e-15 relative, and leaves `iterations` at 24. Newton's step is a means; the residual
+#     defines the root. So the branch hazard that bit the *core's* timestepping solve (a reduction
+#     the root-find branched on, changing the iteration count on 1,400 steps in 5,000) does not
+#     exist here, and the measured agreement lands at ~1e-13 relative rather than at the 1e-8 a
+#     Group D budget would have allowed.
+#   * **The natural column order fills the factors densely.** The unknowns are stacked by field
+#     (`[phi; psi; s]`) while the coupling between them is cell-local, so in the natural order every
+#     coupling sits `N-1` columns off the diagonal. Interleaving `(phi_i, psi_i)` and leaving `s`
+#     last is a closed form in `N` that beats COLAMD outright; the Rust side applies it and the
+#     numbers are in that module's header. Nothing here needed changing -- SciPy's default already
+#     runs COLAMD -- but it is the reason the port is not simply "call the Rust LU".
+#
+# `arcsin` sits on the path from `s` to `Omega`, so an exact cross-language claim would be
+# forbidden by `docs/dev/scientific-hurdles.md` Sec 3 even if the solver allowed one.
+solve_rotating_wave_py = solve_rotating_wave
+rotating_wave_history_py = rotating_wave_history
+planar_hessian_cells_py = planar_hessian_cells
+kc_circular_frequency_py = kc_circular_frequency
+
+_USE_RUST = os.environ.get("PHYSSYNTH_RS_ANALYSIS", "").strip() not in ("", "0", "false", "False")
+
+if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI step, not the default gate
+    import physsynth_rs as _rs
+
+    def _asarray(a: object) -> NDArray[np.float64]:
+        """Whatever the caller passed, as the contiguous float64 array the binding requires."""
+        return np.ascontiguousarray(np.asarray(a, dtype=np.float64))
+
+    def solve_rotating_wave(  # type: ignore[misc]  # noqa: F811
+        *, L, T, rho, EA, fs, N, theta, amplitude, mode=1, kappa=0.0, time_discrete=True,
+        continuation_steps=CONTINUATION_STEPS_DEFAULT, tol=NEWTON_TOL_DEFAULT,
+        maxiter=NEWTON_MAXITER_DEFAULT,
+    ):
+        phi, psi, stretch_ratio, tension, scalars = _rs.rotating_wave_solve(
+            L, T, rho, EA, fs, int(N), theta, amplitude, int(mode), kappa,
+            bool(time_discrete), int(continuation_steps), tol, int(maxiter),
+        )
+        (omega, frequency, s, amp, mode_out, shape_residual, iterations, converged,
+         td, failed_step, failed_amplitude) = scalars
+        if not converged:
+            # Raised here rather than in Rust: the binding has no business owning a Python warning
+            # category, and the message has to match character for character because
+            # `test_geometric_rotating_wave.py` matches on it.
+            warnings.warn(
+                f"Rotating-wave BVP did not converge at continuation step {failed_step}/"
+                f"{continuation_steps} (amplitude {failed_amplitude:.3e} m) in {maxiter} Newton "
+                f"iterations. The helix is not a relative equilibrium; seeding a resonator with it "
+                f"will NOT rotate rigidly. Raise continuation_steps, or lower the amplitude.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        return RotatingWave(
+            phi=phi, psi=psi, Omega=omega, frequency=frequency, s=s, amplitude=amp,
+            mode=int(mode_out), stretch_ratio=stretch_ratio, tension=tension,
+            shape_residual=shape_residual, iterations=int(iterations),
+            converged=bool(converged), time_discrete=bool(td),
+        )
+
+    def rotating_wave_history(wave, *, fs):  # type: ignore[misc]  # noqa: F811
+        return _rs.rotating_wave_history(
+            _asarray(wave.phi), _asarray(wave.psi), wave.Omega, fs
+        )
+
+    def planar_hessian_cells(p, z, a):  # type: ignore[misc]  # noqa: F811
+        return _rs.rotating_wave_planar_hessian_cells(_asarray(p), _asarray(z), a)
+
+    def kc_circular_frequency(*, omega0_sq, eps, amplitude):  # type: ignore[misc]  # noqa: F811
+        return _rs.rotating_wave_kc_circular_frequency(omega0_sq, eps, amplitude)

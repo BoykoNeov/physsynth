@@ -230,7 +230,8 @@ jobs:
             tests/test_rust_parity_airbox_memb.py \
             tests/test_rust_parity_connection.py \
             tests/test_rust_parity_spectrum.py \
-            tests/test_rust_parity_analysis.py
+            tests/test_rust_parity_analysis.py \
+            tests/test_rust_parity_rotating_wave.py
 
       # Phase 7's success condition, and the ONE step that survives the collapse above as
       # something other than the whole suite -- because it is not a per-batch file list. `analysis/`
