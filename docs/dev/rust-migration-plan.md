@@ -7311,3 +7311,224 @@ reason §19.7's continuation bug has reached CI zero times in six occurrences.
   it (θ-loss compensation, Newton–Krylov for the von Kármán step) are Rust-first under §6 and
   wait on the human's priority call.
 * `spectrum.py` is next, alone, and its exact claim is a peak index.
+
+---
+
+## §36 Phase 7, batch 1, as built (2026-09-03) — the detector, and a decision whose margin is zero
+
+`analysis/spectrum.py` is in Rust, and with it the first crate outside `physsynth-core`. The batch
+also did §35.7's CI collapse, which is written up here because the two are one commit's worth of
+argument apart: the collapse is what makes "the suite is green under the flag" a *result*, and the
+port is the first thing that had to be measured against it.
+
+### 36.1 The shape on disk
+
+* `crates/physsynth-analysis/` — a **third crate**, mirroring the Python package split one for one.
+  `src/spectrum.rs` (the module), `src/lib.rs` (the flag argument), `tests/spectrum.rs` (11 native
+  bars), `tests/deps.rs` (its own allowlist, empty).
+* `crates/physsynth-py/src/spectrum.rs` — four free functions, no state, no buffer question.
+* `physsynth/analysis/spectrum.py` — four `_py` aliases and the swap, gated on
+  **`PHYSSYNTH_RS_ANALYSIS`**.
+* `tests/test_rust_parity_spectrum.py` — 30 tests, and the first parity file whose two halves
+  assert different *kinds* of thing.
+* `.github/workflows/ci.yml` — 21 per-batch steps deleted, one three-shard flagged job added, one
+  both-flags step added, the new parity file appended to the literal list.
+
+Why a separate crate rather than a module in the core: `physsynth-core/tests/deps.rs` walks the
+dependency graph rooted at *its own* package, by name. A new crate in the workspace therefore
+inherits the portability contract's convention and none of its enforcement — it could take a
+dependency and nothing in the repo would say a word. The gap opened the moment the workspace
+stopped being two crates, and the fix is one file per package, which is also what makes "adding a
+dependency is a reviewed edit in the package that takes it" true rather than aspirational.
+
+### 36.2 The measurement that came before the port, and what it licenses
+
+§35.3 said the exact claim for this module is a peak index. That is a hypothesis until someone
+counts, so the counting came first: a pytest plugin rebound the three public functions and recorded,
+for every call the dependent suite makes, how close each decision came to flipping. **384 real
+`measure_partials_near` calls and 92,261 candidate peaks**, over the 18 test files that reach the
+detector.
+
+| decision | decided by | margin |
+|---|---|---|
+| which bin wins a search window | magnitudes | **>= 1.4e12 ulps** (3.0e-4 relative) |
+| is that bin a genuine local max | magnitudes | **>= 1.6e10 ulps** |
+| ordering of candidates by strength | magnitudes | >= 7.6e7 ulps, **zero** exact ties in 92,261 |
+| does a candidate clear the separation | frequencies | **exactly zero** |
+| is a candidate above `f_min` | frequencies | 0.2 Hz |
+| the FFT length `nfft` | integers | exact by construction |
+
+Two things fell out that no amount of reading would have produced. The guard the module exists for
+is **live**: it fires on 14 of 384 real calls, and 17 take a window-edge argmax — it is not a
+defensive branch carried across for completeness, it is load-bearing in the shipped suite. And
+`detect_peaks`'s sort has **no ties to break**, which is what makes a stable Rust sort equivalent
+to NumPy's unstable `argsort` reversed — a *measured precondition over these fixtures*, not an
+identity, and the parity file says so.
+
+### 36.3 The finding: a decision's margin and its axis are separate questions, and here they run opposite
+
+Every previous batch asked one question — does the Rust arithmetic reproduce the Python arithmetic,
+and if not, over what window does the gap stay under a bar. This module splits, and not along any
+seam the earlier findings predict. It is not a reduction versus a step (#6), nor a solver's group
+(#16), nor values versus stored order (#18). It is **two axes of the same computation**:
+
+* **The frequency axis** — `freqs`, `df`, the window bounds, `min_separation_hz`, and every
+  comparison among them — is `+ - * /` and nothing else. IEEE-754 specifies those exactly, so a
+  transcription reproduces them bit for bit on any machine, with no claim about a CPU.
+* **The magnitude axis** cannot be matched at all. Three library kernels sit on it: NumPy's own
+  CPU-dispatched `cos` inside the Hann window (#14), `np.fft.rfft` (pocketfft, mixed-radix, whose
+  bit pattern is not a target a radix-2 transcription could hit), and `np.abs` on a complex array
+  (`hypot`). Measured, the magnitudes differ from NumPy's in 4,074 of 4,097 bins, at 3.2e-16 of
+  the peak.
+
+The port is safe because **the two orderings are opposite**: the only decision with zero margin is
+on the exact axis, and every decision on the inexact axis clears by ten orders of magnitude more
+than a rounding can move. That is a general question worth asking of any module whose output is a
+decision — not "is this exact?" but "which axis is each decision on, and are the tight ones on the
+exact one?" A module where they lined up the other way would not be portable at this fidelity at
+all, and no amount of care in the transcription would fix it.
+
+### 36.4 The second flag, and the argument §35.3 forgot to re-take
+
+`PHYSSYNTH_RS=1` makes every model Rust and runs the existing Python suite against it. What makes
+that gate worth anything is that the *instrument does not move*: a Rust string is measured by the
+same Python detector, against the same analytic oracle, that the Python string was.
+
+Put `analysis/` behind that same flag and the property is gone — the model and the ruler become
+Rust together, and a shared misreading cancels instead of showing up. **Phase 7 was scheduled late
+in §5 for exactly this reason** ("while Python still holds these, the Rust models are being checked
+against an oracle that hasn't moved"), and §35.3 re-planned the order without re-taking the
+argument. So this module reads `PHYSSYNTH_RS_ANALYSIS`, and the three combinations mean three
+different things:
+
+* `PHYSSYNTH_RS=1` — Rust models, Python instrument. The three-shard harness job, unchanged in
+  meaning by this batch, which is the point.
+* both — Rust models, Rust instrument. One CI step, over a **derived** file list.
+* `PHYSSYNTH_RS_ANALYSIS=1` alone — Python models, Rust instrument. The sharpest test of this port
+  by itself, and what was run locally: 677 passed.
+
+The general form, and it is the rule this batch adds to §1's ritual: **a flag's meaning is a
+property of what it does *not* swap.** Before widening one, ask what the existing runs were relying
+on staying still. Nothing in `physsynth/core` imports `physsynth/analysis` — checked with a grep,
+not assumed — so the two are genuinely independent.
+
+### 36.5 The knife edge that does not always clear
+
+`detect_peaks` suppresses a weaker peak closer than `min_separation_hz` to a stronger one, default
+four raw bins. Candidates live on the bin grid. So the comparison is `|i*val - c*val| >= 4.0*val`
+with `i - c == 4` — two spellings of the same real number, and a margin of **exactly zero**.
+
+The first draft of the parity test asserted that the gap clears. It does not: at **100 kHz with
+`nfft = 16` it comes out short and the candidate is rejected**. So this is not a theoretical hazard
+that happens to be benign; it is a live comparison whose answer changes with the sample rate. The
+claim a port can make is therefore not about the outcome but about *agreement* — both sides reach
+the same verdict, which follows from the frequency axis being bit-identical.
+
+And that only holds because the chain was transcribed rather than tidied. `val` is
+`1.0 / (n * d)` with `d = 1.0 / fs` — three roundings — and `fs / n` is one rounding and a
+**different number**. At the rates this project actually uses (8 k, 44.1 k, 48 k, 22.05 k, 96 k)
+the two agree at every power-of-two size, so a test built from those rates would "prove" the tidy
+form fine and leave the port accidentally correct. Searched over random rates they differ for about
+**one pair in eight**. The parity file searches, per the standing scar about a hand-picked spelling
+witness.
+
+### 36.6 A transcendental refused inside a discrete decision, and the measurement that made it free
+
+The original computes the FFT length as `int(2 ** np.ceil(np.log2(max(n, 2))))` — a `log2` sitting
+directly inside a discrete decision, which is #17's shape at its sharpest, since a last bit next to
+an integer is a *different spectrum*, not a different digit. The Rust side uses
+`n.max(2).next_power_of_two()`: integer arithmetic, which cannot round.
+
+That is a substitution, so it is measured rather than argued. The two spellings agree for **every**
+length from 1 to 2^20, and at each of `2^k - 1`, `2^k`, `2^k + 1` up to 2^31. The float path is safe
+on the range anyone can reach and the integer path is safe on every range, so the integer one runs
+and the equivalence is pinned in the parity file. Where a transcendental *can* be removed from a
+decision rather than portably spelled, removing it is strictly better than §22.3's manoeuvre — it
+retires the claim instead of relocating it.
+
+### 36.7 The CI collapse, and the trap §35.7 did not see
+
+Twenty-one hand-written per-batch steps became one flagged run of the whole suite, sharded over the
+same three runners as `validate`. Two things are worth carrying forward.
+
+**The claim was unmeasured.** The union of the 21 subset lists was never the suite, so "the flagged
+suite is green" was an assumption for as long as those steps existed. It was measured before
+anything was deleted: 2,001 passed. Deleting a check on the strength of a claim the check never
+made would have been the failure the checks exist to prevent.
+
+**§35.7's instruction, taken literally, goes red.** It says to run "the same three shards the
+`validate` job uses" with the flag set. But `shard_tests.py` covers `tests/` *exactly once*, so
+`test_rust_parity_*.py` are **inside** those shards — and a parity file run with the flag compares
+Rust against Rust, most assertions vacuous and the negative controls (which assert a difference
+*exists*) red. A section can be wrong about its own mechanism while being right about its
+intention, and the intention is what survived.
+
+The exclusion lives in `shard_tests.py --exclude-parity` rather than a `grep -v` in the YAML, so it
+is assertable — and it filters **after** the split, not before. Filtering first would hand LPT a
+different file set and silently produce a different partition: the flagged and unflagged runs would
+both be green, both complete, and a file could sit in shard 2 of one and shard 3 of the other,
+harmless until the day they disagree about what exists.
+
+Result: the `CI` run went from **49m46s to 9m21s**.
+
+Two smaller scars. `test_ci_workflow.py`'s "every named test file exists" floor dropped from 50 to
+20, which is a real weakening and is written down as one — the parity list stays literal precisely
+so that canary keeps something to count. And that guard had to learn that a token containing `*` is
+a *query*, not a file name, because the both-flags step derives its list with `grep -l` rather than
+typing one, one commit after twenty-one typed lists were deleted.
+
+### 36.8 Speed: three loop orders, and the instructive one is the middle
+
+| loop order | 2^10 | 2^18 |
+|---|---|---|
+| blocks outside, `sin_cos` inside | 0.60x | 0.21x |
+| k outside, blocks inside | 1.28x | 0.11x |
+| tabulate per stage, blocks outside | **1.25x** | **0.51x** |
+
+The middle row is the finding. Hoisting the twiddle out of the block loop cuts the transcendental
+count from `(n/2)*log2(n)` pairs to `n-1` — and made short transforms twice as fast and long ones
+**five times slower**, because what it actually hoisted was the memory access pattern: the inner
+loop then strides by `len` and leaves cache. Tabulating per stage buys both. The general form is
+older than this project but it bit here in a batch where every other number was about rounding: **a
+loop-order change is a cache change first and an arithmetic change second**, and the two can point
+opposite ways at different sizes, so one size is not a measurement.
+
+Where it lands is stated plainly: faster than NumPy on short records, about half its speed on long
+ones. pocketfft is mixed-radix and vectorised; this is a textbook radix-2. 2x is the honest price of
+`tests/deps.rs` staying empty, and it is paid by code that runs once per test rather than inside a
+timestep.
+
+### 36.9 What is claimed, and what is only reported
+
+Exact, asserted: `nfft`; the whole `freqs` array (`array_equal`); which bin won each search window
+(recovered from the returned frequency, since the correction is bounded by half a bin); the bins
+`detect_peaks` chose; the NaN pattern; and the guard's early return on both recorded witnesses,
+where exactness is fair because the guard returns *before* touching a logarithm.
+
+Tolerance, asserted: magnitudes within 1e-12 of the peak (observed 3.2e-16); refined frequencies
+within 1e-6 of a bin (observed 0.0 on every fixture tried — a structural consequence of `i`
+dominating `delta`, not luck, but not something to assert).
+
+**Reported and never required:** the observed agreement itself. Requiring the magnitudes to differ,
+or to match, would be §35.2's mistake one batch after it was written down — a predicate that is
+really a claim about which CPU ran CI.
+
+### 36.10 The success condition
+
+* `cargo test --workspace` — 11 new native bars, plus the new crate's own allowlist. Green.
+* `tests/test_rust_parity_spectrum.py` — 30 tests. Green.
+* The detector's 18 dependent test files with `PHYSSYNTH_RS_ANALYSIS=1` (Python models, Rust
+  instrument): **677 passed**. With both flags: **677 passed**.
+* The whole suite minus parity with `PHYSSYNTH_RS=1`: **2,001 passed** — the number the CI collapse
+  rests on.
+
+### 36.11 What the next batch inherits
+
+* **`modal` + `damping` + `dispersion` + `duffing` + the radiation Bessel helper**, as §35.3
+  ordered, and the Bessel debt is why they are one batch. Their outputs are numbers, not decisions,
+  so they are tolerance ports; the only exact anchors are the ones the *tests* own.
+* `rotating_wave` last, after §1's Jacobian fix has had its `λ_long` sweep re-run.
+* The findings ledger gains **#28** (§35.2's negative-control correction, now confirmed green on a
+  runner) and **#29** (this batch). The parked list is still empty.
+* `PHYSSYNTH_RS_ANALYSIS` now exists and its meaning is fixed: it swaps the *instrument*. Every
+  further `analysis/` module goes behind it, and no `core/` module ever does.

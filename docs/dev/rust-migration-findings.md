@@ -43,6 +43,8 @@
 | 25 | A `#[getter]` with no `#[setter]` makes a plain attribute read-only — start from "every attribute is writable" | §33.2, §33.3, §33.4, §33.6, §33.7 |
 | 26 | A ported caller that computes nothing is **slower** than the Python it replaced — ask how much work sits between collaborator calls | §34.2, §34.3, §34.4, §34.5 |
 | 27 | Six searches for a blocking dependency (private names, re-derivation, duck-typed types, written attributes, replaced methods, replaced collaborators) and none finds the others | §30.3, §31.6, §32.2, §33.2 |
+| 28 | A negative control whose predicate is a per-CPU kernel is a claim about the runner — report it, or search the whole expression for a witness that survives | §35.2 |
+| 29 | A decision's **margin** and the **axis** it is decided on are separate questions; a decision-valued module ports safely when the tight decisions sit on the exact axis | §36.2, §36.3, §36.5, §36.6, §36.8 |
 
 ## The questions to ask before writing an exact assertion
 
@@ -54,6 +56,8 @@
 6. Does the nonlinearity recur, and does it drive the system onto an attractor or off one? Read `n_iters`. (#9, #19)
 7. What did the tier below promise its clients it would let them replace, and what does a client *write*? (#24, #25, #27)
 8. How much work sits between the collaborator calls? (#3, #26)
+9. Which *axis* is each decision made on — one built from `+ - * /`, or one running through a library kernel — and how much margin does it have? Measure the margins over the suite's real calls before claiming any of them is exact. (#29)
+10. Does the assertion require a *difference*? That is as machine-dependent as requiring equality. (#28)
 
 ---
 
@@ -806,3 +810,57 @@ re-set every step. And **§19.7's line continuation happened a sixth time from a
 never reached CI**; the general remedy, rather than "be careful", is to build the backslash as
 `chr(92)` so no layer can unescape it.
 
+
+### §35 — the two parked defects, the red parity step, and the plan for what is left (2026-09-02)
+
+**A negative control whose predicate is a per-CPU kernel is a claim about the runner** (§35.2). The
+parity step had been red on `main` for four runs and neither failure was a port:
+`test_rust_parity_connection` *required* BLAS `ddot` to disagree with a scalar loop and GitHub's AMD
+EPYC kernel agreed; `test_rust_parity_airbox_memb` took a scalar witness and asserted its last bit
+survived into a vector it is 3.5e-3 of, which on that SciPy it never did. The first now **reports**
+rather than requires (the precedent is §14's `part_company`, which made the same correction a phase
+earlier); the second **searches at the whole expression** it will assert on — 927 of 5,000
+neighbours survive, the first at step 4 — rather than at a hand-picked witness. A third of the same
+class surfaced on Linux only: `np.arcsin` and `math.asin` one ulp apart at the room's mode (3,2,2),
+so `mode_frequency` and `_mu_squared` took §22.3's portable spelling. The general form is #14 with
+the sign flipped: a test that asserts a difference *exists* is exactly as machine-dependent as one
+that asserts equality, and the remedy is the same one — report it, or search for a witness that
+survives.
+
+### §36 — the partial detector, and a decision whose margin is zero (2026-09-03)
+
+**A decision's margin and the axis it is decided on are separate questions, and a port is safe when
+they run opposite** (§36.3). `spectrum.py` splits along a seam none of #6, #16 or #18 predicts: not
+reduction versus step, not solver group, not values versus stored order, but two *axes of one
+computation*. The **frequency axis** (`freqs`, `df`, window bounds, `min_separation_hz`, and every
+comparison among them) is `+ - * /` alone, which IEEE-754 pins, so it transcribes bit-exactly with
+no claim about a CPU. The **magnitude axis** cannot be matched at all — NumPy's own dispatched `cos`
+in the Hann window, pocketfft, and `hypot` — and differs in 4,074 of 4,097 bins at 3.2e-16 of the
+peak. The port is licensed because the tight decisions and the exact axis coincide, and that was
+**measured before writing anything**, over the dependent suite's 384 real `measure_partials_near`
+calls and 92,261 candidate peaks: winner-vs-runner-up **>= 1.4e12 ulps**, the local-max guard
+**>= 1.6e10** (and it **fires** on 14 of 384 real calls, so it is load-bearing, not defensive),
+candidate ordering >= 7.6e7 ulps with **zero** exact ties — against a separation test whose margin
+is **exactly zero**.
+
+Six corollaries. **A flag's meaning is a property of what it does *not* swap** (§36.4): `analysis/`
+reads `PHYSSYNTH_RS_ANALYSIS`, because under `PHYSSYNTH_RS` alone the acceptance run measures Rust
+models with an unmoved Python instrument, and widening the flag would let a shared misreading
+cancel — §5 scheduled Phase 7 late for that reason and §35.3 re-planned the order without re-taking
+the argument. **A zero-margin comparison does not always clear**: `|i*val - c*val| >= 4.0*val` at
+`i-c == 4` *rejects* at 100 kHz with `nfft = 16`, so the claim is agreement and never outcome — and
+it survives only because `1.0/(n*(1.0/fs))` was transcribed rather than tidied to `fs/n`, which is a
+different number for about **one random sample rate in eight** while agreeing at every rate this
+project uses (a hand-picked witness would have blessed the tidy form). **Where a transcendental can
+be removed from a decision it beats spelling it portably**: `2**ceil(log2(n))` became integer
+arithmetic, checked equal for every length 1..2^20 and every 2^k boundary to 2^31, which retires the
+§22.3 claim instead of relocating it. **A loop-order change is a cache change first**: hoisting the
+FFT twiddle out of the block loop cut transcendental calls from `(n/2)log2(n)` to `n-1` and made
+long transforms **five times slower**, so one size is not a measurement (§36.8). **A new crate
+inherits the portability contract's convention and none of its enforcement**, since `deps.rs` is
+rooted at its own package by name — hence `physsynth-analysis` carries its own allowlist. And
+**§35.7's own instruction went red**: the shards cover `tests/` exactly once, so the parity family
+is *inside* them, and a flagged shard makes those files compare Rust against Rust — the exclusion
+must also happen **after** the split, or LPT silently produces a different partition that is green
+either way. §19.7's escaping bug recurred **twice more** while writing the step, caught by
+`tests/test_ci_workflow.py` both times; the block now carries no continuation at all.

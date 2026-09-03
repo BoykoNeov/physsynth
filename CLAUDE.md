@@ -21,15 +21,22 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    analysis, viewer backend *and* the test suite — in favour of **Rust**, gradually and model by
    model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
-   **State (2026-09-02): `physsynth/core/` is finished.** Every model, operator, solver, room,
-   port, wrapper and bridge has a Rust implementation behind the one flag (`crates/physsynth-core`
-   + `crates/physsynth-py`). What is left is `analysis/`, the test-suite port, the viewer backend
-   and the deletions — plan **§35** is the roadmap and the order. `cargo test --workspace` runs the
-   native bars and the Cargo dependency allowlist; `pip install ./crates/physsynth-py` then
-   `PHYSSYNTH_RS=1 pytest` runs the **existing, unmodified** Python tests against the Rust code
-   (reinstall before believing any parity number — nothing can tell a stale wheel from a fresh
-   one). Both implementations stay alive for now — deleting a Python model waits on its clients,
-   not on its own phase (plan §1.2).
+   **State (2026-09-03): `physsynth/core/` is finished, and `analysis/` has started.** Every model,
+   operator, solver, room, port, wrapper and bridge has a Rust implementation behind the one flag
+   (`crates/physsynth-core` + `crates/physsynth-py`), and `analysis/spectrum.py` — the partial
+   detector — is in a **third crate**, `crates/physsynth-analysis`. What is left is the rest of
+   `analysis/`, the test-suite port, the viewer backend and the deletions — plan **§35** is the
+   roadmap and the order, **§36** the last batch. `cargo test --workspace` runs the native bars and
+   the Cargo dependency allowlists; `pip install ./crates/physsynth-py` then `PHYSSYNTH_RS=1 pytest`
+   runs the **existing, unmodified** Python tests against the Rust code (reinstall before believing
+   any parity number — nothing can tell a stale wheel from a fresh one). Both implementations stay
+   alive for now — deleting a Python model waits on its clients, not on its own phase (plan §1.2).
+
+   **There are TWO flags and they must not be merged.** `PHYSSYNTH_RS` swaps the *models*;
+   `PHYSSYNTH_RS_ANALYSIS` swaps the *instrument that measures them*. The acceptance run sets only
+   the first, so a Rust model is still checked by a Python detector against an unmoved oracle —
+   widen one flag over both and a shared misreading would cancel (plan §36.4). Every further
+   `analysis/` module goes behind the second; no `core/` module ever does.
    **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the twenty-seven
    findings about when two implementations agree to the bit and when they cannot (fed-back
    reductions, libm vs NumPy's own transcendentals, LLVM's constant fold, `np.sum`'s pairwise
