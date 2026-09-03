@@ -9798,3 +9798,87 @@ flagged run was already using, now reached without the Python model also being c
 * `half_deleted_bodies` merges back into `deleted_bodies` and `airbox` leaves the `_USE_RUST` tuple;
   `expected_classes` loses its remaining ten airbox entries.
 * `splu`, `Spreading` and the four public constants stay. So does the module docstring.
+
+---
+
+## §48 Deletion 9, second half (2026-09-03) — the wrapper tier, and a table deleted rather than emptied
+
+The thirteen items §47 left: seven `RoomLoaded*` / `RoomSuspended*` wrappers, two mixins, three
+seams and `_require_same_rate`. `physsynth/core/airbox.py` goes **2,170 -> 245 lines**, and across
+the two commits the project's largest file goes **4,112 -> 245** — **3,867 lines**, the single
+biggest deletion of the migration.
+
+**It retires no test file**, exactly as §47.1 predicted: the parity family went with the ports
+because all four of its files named a port alias. So this half's entire verification is the
+surviving physics running against Rust — §39.3's permanent condition arriving as the ordinary case
+rather than as a shortfall.
+
+### 48.1 What 245 lines are
+
+The module docstring (unchanged — it is still the only prose statement of the three-dimensional Yee
+cell, the wall closure and the ceiling's reward-and-price, and it is 121 of the 245 lines),
+`__all__`, the four ambient constants, the `Spreading` `Literal`, one import of fourteen classes and
+one function, and the `splu` shim.
+
+`Spreading` stays with no Python caller left, and that is §41.2's first category rather than an
+oversight: a `Literal` has no runtime implementation for `physsynth_rs` to export, so a caller
+annotating a `spreading=` argument has nowhere else to get it. The `splu` shim stays for the reason
+§43 gives and §47.5 restates — it is read as a module global by `airbox_wrap.rs` *and* by three
+surviving physics files that re-derive a wrapper's factorization and must use the same factorizer.
+
+The three seams (`_PlateSurface`, `_VKPlateSurface`, `_MembraneSurface`) are imported with a
+`noqa: F401` and it is not cosmetic. They are in neither `__all__` nor any Python caller; the only
+thing that reads them is `airbox_wrap.rs`, by name, off this module's namespace. Ruff cannot see
+that use, and a linter's autofix would silently break the binding.
+
+### 48.2 The half-table is deleted, not emptied — #52 through a second door
+
+`half_deleted_bodies` existed for exactly one commit. Merging its five names into `deleted_bodies`
+leaves an empty dict, and an empty dict **iterates zero times and asserts nothing** while still
+reading as a live guard. That is finding #52 — an empty `parametrize` collects as a skip — in a
+different mechanism, and it gets the same cure: the table and its loop are removed, with a comment
+saying where to find the shape if a future deletion has to land in halves again (§47.3).
+
+`deleted_bodies` gains **fifteen** names for `airbox`, the three seams included. They are worth
+listing rather than deriving because a wrong seam is not a crash: `airbox_wrap.rs` looks up
+`seam_name` as a string, so a name bound to the wrong class builds a working wrapper over the wrong
+surface. `expected_classes` is now `connection`'s four rows and nothing else, and `airbox` leaves
+both tuples that read `PHYSSYNTH_RS` — `deleted_bodies` asserts it reads no flag at all.
+
+### 48.3 What is left, and a question §39.3 answered too broadly
+
+`physsynth/core/connection.py` is the last Python model body in the project: **973 lines**, four
+classes, one parity file of 744 lines.
+
+§39.3 filed it under a blocker it called **permanent** — "a `physsynth-core` test cannot reach a
+class that is not in `physsynth-core`", the bridges being polymorphic over their collaborators'
+Python types (§34.3). That is true and it is not a reason the body cannot be deleted. The two
+questions were conflated, and this batch is the demonstration: the airbox **wrapper** tier was
+under the identical blocker, has no native bar and never will — and its Python body is now gone,
+with the physics asserted by Python tests running against Rust, which is what §39.5's frame says a
+body-deletion actually retires.
+
+So the honest statement of the remaining work is: `connection` cannot have a *native* bar, its
+physics bars are Python for the life of the binding, and neither of those facts blocks deleting its
+reference implementation. Whether to do so is the same question §39.6 asked and route 1 answered —
+what dies with it is the diagnostic (`test_rust_parity_connection.py`, the last file in the parity
+family that belongs to the deletion graph), not a physics claim.
+
+### 48.4 The measured state
+
+| run | tests | wall |
+|---|---:|---:|
+| whole suite, unflagged (`-n 6`) | **2,399** passed, 1 skipped | 105 s -> **70 s** |
+| whole suite, flagged, parity family excluded | **2,089** passed | 106 s -> **72 s** |
+| the guard files | 75 passed | 2.1 s |
+| `ruff check .` | clean | — |
+
+The counts do not move, because no test file went. That is the whole shape of this half: 1,924
+lines of Python deleted and the suite reports the same number it did before, which is either the
+strongest possible statement that the physics never depended on those lines or a warning that
+nothing was watching — and §47's own guard work is what makes it the first.
+
+The **wall clock** moves by a third in both columns, and the two are now within 2 s of each other,
+which is the deletion's real arithmetic: the flagged and unflagged runs were always going to
+converge as the last Python model went, and the 35 s is the wrapper tier's per-step Python being
+replaced rather than any kernel getting faster.

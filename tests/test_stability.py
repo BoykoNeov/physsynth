@@ -224,6 +224,27 @@ def test_the_rust_swap_matches_the_environment():
             "monopole_radiation_resistance",
             "piston_radiation_resistance",
         },
+        # Unit 6 landed in two commits (plan sections 47 and 48) and passed through
+        # `half_deleted_bodies` on the way. Fourteen names: the room, the three ports, the seven
+        # wrappers and the three seams -- the seams included, because `airbox_wrap.rs` reads them
+        # off this module's namespace by name and a wrong one there is a silently different seam.
+        airbox: {
+            "AirBox",
+            "InteriorSurfacePort",
+            "RoomLoadedBody",
+            "RoomLoadedMembrane",
+            "RoomLoadedPlate",
+            "RoomLoadedVKPlate",
+            "RoomPort",
+            "RoomSuspendedMembrane",
+            "RoomSuspendedPlate",
+            "RoomSuspendedVKPlate",
+            "SurfacePort",
+            "_MembraneSurface",
+            "_PlateSurface",
+            "_VKPlateSurface",
+            "impedance_from_zeta",
+        },
         string_stiff: {"StiffString"},
         string_damped: {"DampedStiffString"},
         string_nonlinear: {"TensionModulatedString"},
@@ -292,33 +313,12 @@ def test_the_rust_swap_matches_the_environment():
         "non-convergence warning cannot mean the same thing from inside an extension module"
     )
 
-    # A module whose deletion has landed in HALVES: the names below have no Python body left
-    # and must resolve to Rust on both paths, but the module still reads `PHYSSYNTH_RS` and still
-    # defines `<Name>Py` aliases, because its OTHER half does still have two implementations. So
-    # only the identity third of the `deleted_bodies` contract applies, and it is asserted here
-    # rather than skipped -- the alternative is an interval in which nothing checks that the room
-    # is the Rust room, which is exactly the shape of guard this project keeps finding empty.
-    #
-    # This table merges into `deleted_bodies` when `airbox`'s wrapper tier goes (plan section 48);
-    # it is written down rather than derived so that emptying it is a reviewed edit.
-    half_deleted_bodies = {
-        airbox: {
-            "AirBox",
-            "RoomPort",
-            "SurfacePort",
-            "InteriorSurfacePort",
-            "impedance_from_zeta",
-        },
-    }
-    for module, names in half_deleted_bodies.items():
-        assert hasattr(module, "_USE_RUST"), (
-            f"{module.__name__} no longer reads PHYSSYNTH_RS -- if its last Python body has gone "
-            "this entry belongs in `deleted_bodies`, which checks strictly more"
-        )
-        for name in sorted(names):
-            assert getattr(module, name) is getattr(physsynth_rs, name), (
-                f"{module.__name__}.{name} must be the Rust object on both paths, flag or no flag"
-            )
+    # `half_deleted_bodies` stood here for one commit, holding `airbox` between the two halves of
+    # its deletion (plan sections 47 and 48). Its five names merged into `deleted_bodies` above
+    # when the wrapper tier went, and the table is DELETED rather than left empty: an empty dict
+    # iterates zero times and asserts nothing while reading as a live guard, which is finding #52
+    # (an empty `parametrize` collects as a skip) through a second door. If a future deletion has
+    # to land in halves again, the shape to bring back is in section 47.3.
 
     for module, names in deleted_bodies.items():
         assert not hasattr(module, "_USE_RUST"), (
@@ -337,11 +337,10 @@ def test_the_rust_swap_matches_the_environment():
 
     for module in (
         operators,
-        # `airbox` has read PHYSSYNTH_RS since Phase 5's fourth batch (it takes the `splu` swap),
-        # and it was NOT in this tuple until the fifth ported `AirBox` itself -- a whole batch in
-        # which its reading of the flag could have diverged with nothing noticing. The derive is
-        # only as wide as the tuple it derives over, for the fourth time.
-        airbox,
+        # `airbox` was here until unit 6's deletion. It read PHYSSYNTH_RS from Phase 5's fourth
+        # batch (for the `splu` swap) and was not added to this tuple until the fifth ported
+        # `AirBox` itself -- a whole batch in which its reading of the flag could have diverged
+        # with nothing noticing. It reads no flag at all now: `deleted_bodies` asserts that.
         exciter,
         banded,
         connection,
@@ -359,10 +358,7 @@ def test_the_rust_swap_matches_the_environment():
     # aliases the modules actually define, and then checked against a written-down expectation --
     # which is what keeps adding a port a reviewed edit rather than a silent one.
     swapped_classes = {}
-    for module in (
-        airbox,
-        connection,
-    ):
+    for module in (connection,):
         # `collision` joined this tuple in Phase 3's last batch, and it was ABSENT before -- so for
         # the whole of §16's batch and after, a `BarrierStringPy` alias could have been added with
         # nothing noticing. That is §17.6's finding a second time, in the half of the guard §17.6's
@@ -377,18 +373,9 @@ def test_the_rust_swap_matches_the_environment():
                 swapped_classes[(module.__name__, name)] = (module, name, reference)
 
     expected_classes = {
-        # The room and the three ports left this table with unit 6's first deletion; they are in
-        # `half_deleted_bodies` above, where the claim is identity rather than a choice.
-        ("physsynth.core.airbox", "_PlateSurface"),
-        ("physsynth.core.airbox", "_VKPlateSurface"),
-        ("physsynth.core.airbox", "_MembraneSurface"),
-        ("physsynth.core.airbox", "RoomLoadedBody"),
-        ("physsynth.core.airbox", "RoomLoadedPlate"),
-        ("physsynth.core.airbox", "RoomSuspendedPlate"),
-        ("physsynth.core.airbox", "RoomLoadedVKPlate"),
-        ("physsynth.core.airbox", "RoomSuspendedVKPlate"),
-        ("physsynth.core.airbox", "RoomLoadedMembrane"),
-        ("physsynth.core.airbox", "RoomSuspendedMembrane"),
+        # `airbox` left this table over unit 6's two commits and its fourteen names are in
+        # `deleted_bodies` above, where the claim is identity rather than a choice. `connection`
+        # is the only module left with two implementations to choose between.
         ("physsynth.core.connection", "StringBodyBridge"),
         ("physsynth.core.connection", "StringPlateBridge"),
         ("physsynth.core.connection", "StringVKPlateBridge"),

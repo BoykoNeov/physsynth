@@ -32,20 +32,25 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    `dispersion`, `duffing`, `rotating_wave`, plus the Bessel and elliptic functions they stand on —
    are in a **third crate**, `crates/physsynth-analysis`.
 
-   **Twenty-two of twenty-three Python model bodies are GONE** — 20,573 lines, nine and a half of
-   eleven deletion units, and not one physics bar retired. Plan **§39** is the audit that made the order
+   **Twenty-two of twenty-three Python model bodies are GONE** — 22,497 lines, **ten of eleven**
+   deletion units, and not one physics bar retired. Plan **§39** is the audit that made the order
    computable (eleven units, from the reference-alias graph) and **§40–§45** are the deletions. Read
    §39's tables before scoping the next one — but **§39.3's "zero native bars" for `airbox` was
    measured wrong** and §46 corrects it: the module carried nineteen `#[test]`s in `mod tests`
    blocks *inside* `src/`, which `cargo test --workspace` runs exactly like the files under
    `tests/`, and the audit had run `ls crates/physsynth-core/tests/`. §46 closed the remaining gap
-   with eighteen more, so **unit 6's blocker is cleared**. §47 is the first half of its deletion
-   (the human's call to split it): the room and the three ports are gone, `airbox.py` is
-   4,112 -> 2,169 lines and the whole four-file parity family with it. **§48 is the last deletion
-   in the port** — the thirteen wrapper classes and three seams — and it retires no test file,
-   because §47 already took them all. `connection` and the airbox wrapper tier stay blocked
-   permanently from having *native* bars, because they exist only in the binding crate and a
-   `physsynth-core` test cannot reach them. Five things about the new state:
+   with eighteen more, so unit 6's blocker was cleared and **§47–§48 deleted it, in halves (the
+   human's call)**: the room and three ports first with the whole four-file parity family, then the
+   seven wrappers, two mixins and three seams. `airbox.py` is **4,112 -> 245 lines**, the largest
+   deletion of the migration, and the second half retired **no test file at all**.
+
+   **`physsynth/core/connection.py` is the only Python model body left** — 973 lines, four classes,
+   one parity file. §39.3 filed it under a blocker it called permanent, and that conflated two
+   questions: it is true that `connection` can never have a *native* bar (it lives only in the
+   binding crate, so a `physsynth-core` test cannot reach it), and that is **not** a reason its body
+   cannot be deleted. The airbox wrapper tier was under the identical blocker and §48 deleted it,
+   with the physics asserted by Python tests running against Rust — which is what §39.5 says a
+   body-deletion actually retires. Five things about the new state:
 
    - **The wheel is now REQUIRED**, everywhere. A deleted model's module is an unconditional
      `from physsynth_rs import X`, so `pip install ./crates/physsynth-py` is a precondition for
