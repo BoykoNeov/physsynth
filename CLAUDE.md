@@ -32,13 +32,14 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    `dispersion`, `duffing`, `rotating_wave`, plus the Bessel and elliptic functions they stand on —
    are in a **third crate**, `crates/physsynth-analysis`.
 
-   **Twenty-one of twenty-three Python model bodies are GONE** — 17,988 lines, eight of eleven
+   **Twenty-two of twenty-three Python model bodies are GONE** — 18,630 lines, nine of eleven
    deletion units, and not one physics bar retired. Plan **§39** is the audit that made the order
-   computable (eleven units, from the reference-alias graph) and **§40–§44** are the deletions. Read
-   §39's tables before scoping the next one. **Three units are left and none is blocked on a
-   question**: `airbox` and `beam` need native Rust bars written for `AirBox` and `FreeBeam`;
-   `connection` and the airbox wrapper tier are blocked permanently, because they exist only in the
-   binding crate and a `physsynth-core` test cannot reach them. Four things about the new state:
+   computable (eleven units, from the reference-alias graph) and **§40–§45** are the deletions. Read
+   §39's tables before scoping the next one. **Two units are left**: `airbox` needs native Rust bars
+   for `AirBox` that do not exist (the blocker §45 just cleared for `FreeBeam`, fourteen times the
+   size); `connection` and the airbox wrapper tier are blocked permanently, because they exist only
+   in the binding crate and a `physsynth-core` test cannot reach them. Four things about the new
+   state:
 
    - **The wheel is now REQUIRED**, everywhere. A deleted model's module is an unconditional
      `from physsynth_rs import X`, so `pip install ./crates/physsynth-py` is a precondition for
@@ -51,11 +52,14 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
      binding **depends on Python** in four places (`grep -rn 'import("physsynth' crates/physsynth-py/src/`):
      `GeometricState` and `GrainSpec` are constructed *by Rust*, and `airbox` / `connection` have
      their namespaces read at call time. Run that grep before deleting anything (§41.2).
-   - **Every deletion edits the guards**, or it is not green: `deleted_bodies` in
-     `tests/test_stability.py`, `REMAINING_PARITY_FAMILY` in `tests/test_shard_partition.py`,
-     `STILL_HAVE_A_PYTHON_TWIN` in `tests/test_rust_parity.py` (one row left), and the `rust` job's
-     file list. `tests/test_binding_surface.py` is the permanent home for residue that can never be
-     a native bar (buffer lifetime, PyO3 argument mapping).
+   - **Every deletion edits the guards**, or it is not green: `deleted_bodies`, the swapped-class
+     derive and the `_USE_RUST` reader tuple in `tests/test_stability.py`,
+     `REMAINING_PARITY_FAMILY` in `tests/test_shard_partition.py`, and the `rust` job's file list.
+     `tests/test_binding_surface.py` is the permanent home for residue that can never be a native
+     bar (buffer lifetime, PyO3 argument mapping). `tests/test_rust_parity.py` was the sixth guard
+     until §45: its `STILL_HAVE_A_PYTHON_TWIN` table reached zero rows and the **file was deleted
+     rather than emptied**, because an empty `parametrize` collects as a *skip* — green, and
+     asserting nothing (ledger #52).
    - **A deletion reaches modules it does not contain.** §43 is the case: `airbox.py` *re-derives*
      the plate's system matrix and factors it, and four of its reduction anchors are `array_equal`,
      so moving the plate's solver to Rust on the default path broke 15 tests in three modules
@@ -89,12 +93,13 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    list must stay empty, so it cannot reach a Bessel function) while its Python name lives in a
    `core/` module. **The crate a function is implemented in and the module its name lives in are
    separate questions** (§37.7).
-   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **fifty** findings
-   about when two implementations agree to the bit, when they cannot, and what a *deletion* breaks
-   that a port does not (fed-back reductions, libm vs NumPy's own transcendentals, LLVM's constant
-   fold, `np.sum`'s pairwise cutoff, descriptors that take a write away, anchors that bind two
-   classes into one batch, clients that re-derive a model's arithmetic, and reflective tests that
-   are really claims about how a model stores its attributes).
+   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **fifty-five**
+   findings about when two implementations agree to the bit, when they cannot, and what a
+   *deletion* breaks that a port does not (fed-back reductions, libm vs NumPy's own
+   transcendentals, LLVM's constant fold, `np.sum`'s pairwise cutoff, descriptors that take a
+   write away, anchors that bind two classes into one batch, clients that re-derive a model's
+   arithmetic, and reflective tests that are really claims about how a model stores its
+   attributes).
    They lived here verbatim until 2026-09-02 and moved so this file could be what its first line
    says it is; the questions to ask before writing an exact assertion are listed at its top.
    The open *scientific* problems — as opposed to porting ones — are in

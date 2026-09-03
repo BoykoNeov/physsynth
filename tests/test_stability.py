@@ -166,8 +166,8 @@ def test_the_rust_swap_matches_the_environment():
     # PYTHON and pass. Green, and asserting nothing about the port. That is verbatim the failure
     # mode `docs/dev/rust-migration-plan.md` §1 exists to prevent, one level up.
     #
-    # This cannot live in `tests/test_rust_parity.py`: that file imports both implementations by
-    # name and is immune to the swap by design. It belongs here, with the other three portability
+    # This could never live in the parity family: those files import both implementations by name
+    # and are immune to the swap by design. It belongs here, with the other three portability
     # guards, and it runs on BOTH paths -- the default one included, where it asserts the Rust
     # model is *not* silently in play.
     from physsynth.core import (
@@ -246,6 +246,9 @@ def test_the_rust_swap_matches_the_environment():
         # module keeps is `GrainSpec` -- which the Rust helper CONSTRUCTS, reaching back through
         # `py.import("physsynth.core.plate")` -- plus two type aliases and `THETA_DEFAULT`.
         plate: {"Plate", "VKPlate", "grain_ratios_from_material"},
+        # `beam` is unit 8, and it is the plainest deletion in this table: `FreeBeam` is a bare
+        # re-export and the module keeps nothing but `Boundary` and `THETA_DEFAULT`.
+        beam: {"FreeBeam"},
         # `operators2d` is unit 5's other half and only these two names can be checked this way:
         # everything else in it is a *delegating wrapper* rather than a re-export, and is asserted
         # below in the shape that fits.
@@ -313,7 +316,6 @@ def test_the_rust_swap_matches_the_environment():
         airbox,
         exciter,
         banded,
-        beam,
         connection,
     ):
         assert module._USE_RUST is expected_rust, (
@@ -331,7 +333,6 @@ def test_the_rust_swap_matches_the_environment():
     swapped_classes = {}
     for module in (
         airbox,
-        beam,
         connection,
     ):
         # `collision` joined this tuple in Phase 3's last batch, and it was ABSENT before -- so for
@@ -362,7 +363,6 @@ def test_the_rust_swap_matches_the_environment():
         ("physsynth.core.airbox", "RoomSuspendedVKPlate"),
         ("physsynth.core.airbox", "RoomLoadedMembrane"),
         ("physsynth.core.airbox", "RoomSuspendedMembrane"),
-        ("physsynth.core.beam", "FreeBeam"),
         ("physsynth.core.connection", "StringBodyBridge"),
         ("physsynth.core.connection", "StringPlateBridge"),
         ("physsynth.core.connection", "StringVKPlateBridge"),
@@ -484,7 +484,7 @@ def test_the_rust_swap_matches_the_environment():
                 )
 
     if expected_rust:
-        from physsynth.core import beam, plate, string_stiff
+        from physsynth.core import string_stiff
 
         # The banded solver's captured-binding check stood here and was the widest one in this
         # test: four models did `from .banded import cho_solve_banded, cholesky_banded` at module
@@ -507,9 +507,14 @@ def test_the_rust_swap_matches_the_environment():
             "exposes -- the swap landed after that module was imported, so the model is running "
             "on the Python operator while this run claims otherwise"
         )
-        assert beam.free_beam_stiffness is operators.free_beam_stiffness, (
-            "`beam` captured a different `free_beam_stiffness` than `operators` now exposes"
-        )
+        # The beam's capture stood here and unit 8's deletion retires it, in the first of §42.4's
+        # two directions: `beam.py` did `from .operators import free_beam_stiffness` at module
+        # scope, so a swap landing after its import would have built the free-edge operator out of
+        # the Python code while the run reported Rust. There is no capture left to check -- the
+        # module imports one class from the extension and nothing from `operators` at all. The
+        # claim itself has not gone anywhere: `crates/physsynth-core/tests/beam.rs` asserts the
+        # resonator's `K` against `ops::free_beam_stiffness` to the bit, on the side where both
+        # halves now live.
         # The membrane's version of the same hazard stood here: `mallet` does
         # `from .membrane import Membrane` at import time, so a swap landing after it would have
         # left the mallet striking a Python drumhead while the run reported Rust. Unit 4's

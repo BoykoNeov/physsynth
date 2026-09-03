@@ -1,6 +1,10 @@
 """Rust vs Python for the difference operators — the migration's comparison, not its acceptance.
 
-The sibling of ``test_rust_parity.py``, one phase on. The acceptance bar is still the physics
+The sibling of the ideal string's ``test_rust_parity.py``, one phase on — and it outlives that
+file, which went with unit 8 (plan §45). This one is not in the deletion graph at all: it builds
+both sides itself rather than naming a ``*Py`` reference alias, so no deletion retires it.
+
+The acceptance bar is still the physics
 harness (``docs/dev/rust-migration-plan.md`` §2.1); this file is the diagnostic that catches what
 the bars are too loose to see. For an operator that matters especially: a transcription slip in a
 boundary-adjacent row of ``biharmonic_matrix`` changes the stiff string's inharmonicity in the

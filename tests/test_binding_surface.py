@@ -1,8 +1,10 @@
 """Properties of the **binding**, which no physics bar and no native Rust bar can see.
 
 This file is the residue of ``test_rust_parity.py`` after the migration's first deletion
-(``docs/dev/rust-migration-plan.md`` §39.5). It exists because two kinds of test were mixed in
-there and only one of them dies when a Python reference implementation is deleted:
+(``docs/dev/rust-migration-plan.md`` §39.5), and it **outlived** that file — the original was
+deleted with unit 8, when the last Python twin it compared against went. It exists because two
+kinds of test were mixed in there and only one of them dies when a Python reference implementation
+is deleted:
 
 * a **comparison** ("Python and Rust agree") has nothing left to compare and goes;
 * a **property** ("a reference to ``.u`` held across a step is a snapshot") is a statement about
@@ -127,9 +129,10 @@ def test_the_state_arrays_can_be_replaced_wholesale():
 # both halves are pinned: the default still applies when the argument is absent, and an explicit
 # `None` is still refused.
 #
-# Both halves are binding properties and live here, for all six classes, permanently. What stayed
-# behind in `test_rust_parity.py` is only the claim that the *Python* twin refuses it the same way,
-# which drains one row per deletion.
+# Both halves are binding properties and live here, for all seven classes, permanently. What
+# stayed behind in `test_rust_parity.py` was only the claim that the *Python* twin refuses it the
+# same way, and it drained one row per deletion until unit 8 took the last of them (`FreeBeam`) and
+# the file with it. This is now the only place the `Option<Option<_>>` arms are pinned.
 
 BOUNDARY_CASES = [
     ("StiffString", dict(L=1.0, T=200.0, rho=0.005, fs=48000.0, N=16), "supported"),

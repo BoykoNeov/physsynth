@@ -223,11 +223,17 @@ jobs:
       # keeps `tests/test_ci_workflow.py`'s asserted token count from reaching zero and going green
       # forever.
       #
-      # The bare `import` first is not belt-and-braces. `test_rust_parity.py` opens with a
-      # module-level `pytest.importorskip`, so a failed or missing install SKIPS the file and the
-      # step exits 0 having asserted nothing at all -- the same shape as the empty-sum hazard the
-      # `checks` job below documents. The skip is right for the shard run, where the extension is
-      # genuinely absent; it is wrong here, where its absence is the failure.
+      # `tests/test_rust_parity.py` itself went with unit 8 (plan section 45). It had been down
+      # to a single row -- the cross-model spelling table, one class per surviving Python twin
+      # -- and `FreeBeam` was the last of the six. Emptying the list rather than deleting the
+      # file would have left a `parametrize` over nothing, which COLLECTS AS A SKIP: a green
+      # log asserting nothing, which is section 39.6's route 2 arriving by accident.
+      #
+      # The bare `import` first is not belt-and-braces. Every file below opens with a
+      # module-level `pytest.importorskip`, so a failed or missing install SKIPS them and the
+      # step exits 0 having asserted nothing at all -- the same shape as the empty-sum hazard
+      # the `checks` job below documents. The skip is right for the shard run, where the
+      # extension is genuinely absent; it is wrong here, where its absence is the failure.
       - name: Rust vs Python parity
         run: |
           python -c "import physsynth_rs; print(physsynth_rs.__file__)"
@@ -237,11 +243,9 @@ jobs:
           # discarded on exactly the runs where they are the news.
           pytest --durations=10 -rP \
             tests/test_binding_surface.py \
-            tests/test_rust_parity.py \
             tests/test_rust_parity_operators.py \
             tests/test_rust_parity_ops2d.py \
             tests/test_rust_parity_banded.py \
-            tests/test_rust_parity_beam.py \
             tests/test_rust_parity_airbox.py \
             tests/test_rust_parity_airbox_port.py \
             tests/test_rust_parity_airbox_wrap.py \

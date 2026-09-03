@@ -9250,3 +9250,196 @@ proof that the restore-and-delete was clean.
 * **Two flags became one.** `CLAUDE.md`'s "there are TWO flags and they must not be merged" rule is
   now history rather than instruction, and it says so. `PHYSSYNTH_RS_ANALYSIS` is read by nothing.
 * The findings ledger gains **#47–#51**.
+
+---
+
+## §45 Deletion 8 (2026-09-03) — unit 8, the bar that had to be built before the body could go, and a list that reached zero
+
+Unit **8** is deleted: `physsynth/core/beam.py`, **288 lines down to 35**. And with it
+`tests/test_rust_parity_beam.py` (411 lines) and **`tests/test_rust_parity.py` itself**, whose last
+row was `FreeBeam`.
+
+§39.3 filed this unit under a different blocker from the eight before it. Units 1–5, 7, 10 and 11
+were gated on a *decision*; this one was gated on **work**: `FreeBeam` had a core half and no native
+test file named it. So the batch is two commits and the order is §44's again — **bars first, while
+the Python is still alive**, then the deletion. Written the other way round the bars would have been
+authored against the only implementation left, which is not a check.
+
+### 45.1 What a native bar for this model has to build that the Python one imported
+
+`crates/physsynth-core/tests/beam.rs` is 685 lines for a 288-line model, and the ratio is the
+finding. The Python bars lean on two things this crate does not have and by policy will not get:
+`scipy.sparse.linalg.eigsh` for the generalized eigenproblem `K φ = mu W φ`, and
+`physsynth.analysis.modal` for the closed-form spectrum. Both had to be built inside the test file.
+
+**The oracle is derived, not imported.** `physsynth-analysis` carries `free_free_beam_freqs`, and
+reaching for it would have been wrong twice over: the core crate has no path dependency on it (and
+adding one inverts the argument the crate split exists to make, ledger #34), and an oracle that
+imports the implementation is not an oracle. So the roots of `cos(betaL) cosh(betaL) = 1` are
+bisected in the file. **Spelled `cos(x) - 1/cosh(x)`**, not `cos(x) cosh(x) - 1`: the second scales
+like `cosh`, so a single tolerance would mean a different accuracy at every root and the bracket
+would tighten on the wrong quantity. Bracketed on `[j pi, (j+1) pi]` rather than around the
+asymptotic `(j + 1/2) pi`, because on those intervals the cosine is monotone and `sech` is a small
+decreasing perturbation, so there is exactly one sign change per bracket and bisection cannot land
+on a neighbour.
+
+### 45.2 The eigensolver, and why reusing the model's own factorization is impossible rather than slow
+
+The beam already carries a factored matrix — `A = (1 + sigma k) W + theta k^2 kappa^2 K`, the thing
+`step()` back-substitutes through — and the obvious economy is to inverse-iterate on it. `A^-1 W`
+has eigenvalues `1/(1 + theta k^2 kappa^2 mu)`, so it is the right operator and its ordering is the
+right ordering.
+
+It cannot work, and the reason is worth stating as a number. At the modal fixture (`N = 200`,
+`mu = 0.5`, so `fs = 1.6 MHz`) the coefficient `theta k^2 kappa^2` is **4.4e-11**. With
+`mu_1 ~ 500` and `mu_2 ~ 3800`, the ratio of the two dominant eigenvalues is `1 - 1.5e-7` — about
+**1e8 sweeps** for the digits a cents-level bar needs. The same tiny coefficient also poisons the
+read-back: recovering `mu` as `(1/lambda - 1)/c` subtracts 1 from 1.000000022.
+
+**The matrix a model already factored is factored for its timestep, not for its spectrum**, and a
+timestep is exactly what compresses the eigenvalues together. So the test factors its own:
+`B = K + eps W` with `eps = 1e-3 mu_1`, SPD for any positive `eps` (`K` is only PSD — its nullspace
+is the rigid-body pair, which is what free-free *means*), which reopens the ratio to
+`(mu_1 + eps)/(mu_2 + eps) ~ 0.13`. The magnitude is not invented: it is the shift the Python
+helper's `eigsh(..., sigma=-1e-3 * mu1_est)` had already chosen, read across.
+
+Three decisions inside that, each of which would have produced a green test that measured something
+else:
+
+* **the rigid-body pair `{1, x}` is projected out in the `W` inner product every sweep, not once.**
+  The subspace is exactly invariant, so projecting once is correct in exact arithmetic — and its
+  shifted eigenvalue `1/eps` is the **largest in the problem**, three orders above the fundamental's,
+  so any component roundoff reintroduces grows faster than the answer;
+* **the sweep count is fixed, not a convergence tolerance.** Ledger #33: an iteration count is not a
+  comparable quantity, and a tolerance-stopped solver inside a bar makes the count a datum that
+  varies with the fixture, the profile and the machine. 80 sweeps, chosen to be obviously enough
+  (the slowest ratio asked for is ~0.45, mode 4 against mode 5) rather than to be tight;
+* **`mu` is read back as the Rayleigh quotient `(K phi . phi)/(W phi . phi)`**, never through the
+  shift. Rayleigh is accurate to the *square* of the eigenvector error, and the subtraction the
+  shift would require is the one that lost the digits in the paragraph above.
+
+The seed matters too, and is the kind of thing that fails silently: a symmetric start vector is
+`W`-orthogonal to every antisymmetric mode, so the iteration would converge to mode 3 while the test
+called it mode 2 and the cents bar would fail with a message about physics.
+
+### 45.3 The bar the Python could not write
+
+With a machine-precision eigenvector in hand the time discretization stops needing a spectrum. For
+an eigenvector the theta-scheme collapses to a scalar recurrence, and eliminating it gives
+
+```text
+    u^{n+1} + u^{n-1} = 2 cos(omega k) u^n,
+    cos(omega k) = (2 - c (1 - 2 theta)) / (2 (1 + theta c)),   c = kappa^2 mu k^2
+```
+
+which is an **algebraic identity of the update**, not an approximation.
+`tests/test_beam_modal.py` measured this through an FFT and asserted five cents; here it is asserted
+at **every node, over 2,000 steps, to 1e-13 of the amplitude**. The rearrangement is also
+cross-checked in the same test against `discrete_beam_eigenfrequency`'s spelling,
+`sin^2(omega k / 2) = c / (4 (1 + theta c))`, recomputed from its own formula — two routes to one
+number, which is ledger #31's corollary and the shape that found the 544% piston defect.
+
+### 45.4 Two fixtures that had to be searched for, and one bar that was measuring its own fixture
+
+**`7 * (0.7/7) == 0.7`.** The linspace-endpoint bar — `np.linspace` *overwrites* its last entry
+rather than computing it, a one-ulp difference that decides whether a node on a curved rim is alive
+(§28's plate finding) — was written at `L = 0.7` by analogy and asserted nothing, because that
+length happens to round back exactly. `L = 0.9` does not. The negative half of the test is now
+explicit: it asserts that the computed endpoint **differs**, so a future fixture that stops
+exercising the overwrite fails rather than passing vacuously. A witness has to be searched for, not
+chosen, and this is the third place that has come up.
+
+**A plucked lossy beam does not decay at `exp(-2 sigma t)`.** The passivity bar was written as
+"monotone, and the loss did work" with a threshold of half the initial energy, carried across from
+the plate's. It failed at 53% — and the reason is this model's own documented caveat rather than a
+defect. A raised-cosine pluck is broadband; the theta time-average makes a frequency-independent
+loss effectively frequency-*dependent* at rate `2 sigma (1 - theta Q k^2)` with `Q = kappa^2 mu`,
+which is fourth-power in the mode index, so the high content barely decays at all. Measured:
+**52.9% retained at 4k steps, 38.9% at 8k, 28.6% at 16k, 8.6% at 60k** — an asymptote, not an
+exponential.
+
+Lowering the threshold would have been tuning a bar to a fixture. What the test asserts instead is
+the **gap**: at 16k steps the beam retains 29% where a single low mode would retain 2e-3, so the
+assertion is `retained > 10 * exp(-2 sigma t)`. That is a claim about the model rather than about
+the pluck, and it makes the passivity test and the underdamping-caveat test state the same physics
+from two directions.
+
+### 45.5 The deletion, and the list that reached zero
+
+`beam.py` keeps `Boundary` (a `Literal`), `THETA_DEFAULT` with its comment, and one import —
+§41.2's shape with nothing unusual in it. `grep -rn 'import("physsynth' crates/physsynth-py/src/`
+finds no beam entry, so the binding does not depend on this module. §43.4's tell — an `array_equal`
+on a beam quantity in a test outside the unit — was searched for across the six files that mention
+the beam and is absent; the beam's clients reach it through `helpers.py`, which constructs and never
+compares.
+
+**`tests/test_rust_parity.py` is deleted, not emptied**, and that distinction is the batch's
+sharpest guard finding. The file was down to a single `parametrize` over
+`STILL_HAVE_A_PYTHON_TWIN`, one row per model whose Python twin still existed, and `FreeBeam` was
+the last of the six. **An empty `parametrize` list collects as a skip** — pytest reports it green,
+the suite total drops by one, and nothing says the claim has gone. That is §39.6's route 2 arriving
+by accident rather than by proposal, and it is ledger #40 one step further along: #40 is about a
+*floor* on a draining population becoming unsatisfiable at zero; this is the **population itself**
+reaching zero, where the mechanism converts silently to a pass. The file's own docstring had
+prescribed the cure a batch earlier ("when it is empty this file goes"), which is the argument for
+writing the exit condition down at the time.
+
+Five guards edited, and one retired for a documented reason:
+
+| guard | change |
+|---|---|
+| `deleted_bodies` (`test_stability.py`) | `beam: {"FreeBeam"}` added |
+| the swapped-class derive + `expected_classes` | `beam` removed from both |
+| the `_USE_RUST` reader tuple | `beam` removed — a deleted body reads no flag |
+| `REMAINING_PARITY_FAMILY` (`test_shard_partition.py`) | two entries out, eight left |
+| the `rust` job's file list | two entries out |
+| `beam.free_beam_stiffness is operators.free_beam_stiffness` | **retired** — §42.4's first direction: there is no capture left, because the module imports one class from the extension and nothing from `operators`. The claim itself moved rather than went: `tests/beam.rs` asserts the resonator's `K` against `ops::free_beam_stiffness` to the bit, on the side where both halves now live |
+
+`tests/test_binding_surface.py` **outlives the file it was extracted from**, which is worth noting
+because §40 framed it as the residue: the `Option<Option<_>>` boundary arms are pinned there for all
+seven classes and are now the only place that claim exists.
+
+### 45.6 What survives the deletion, and why the native bars are not redundant
+
+§39.5's frame, applied forward. `tests/test_beam_energy.py`, `tests/test_beam_modal.py` and
+`tests/test_beam_stability.py` — 32 tests — **do not die**. They never named `FreeBeamPy`; they
+reach the swappable name, and after the deletion they run against Rust unchanged, on the default
+path, through SciPy's `eigsh` and the Python analysis shims. That was verified before a line was
+written (this batch's pre-flight was `PHYSSYNTH_RS=1 pytest tests/test_beam_*.py`, green), and it is
+also the check that the binding hands back real `scipy.sparse` matrices rather than array-likes,
+because `_elastic_eigenvector` passes `beam.K` and `beam.W` straight to ARPACK.
+
+So the native bars are not a replacement for anything that died. They are the standard the other
+eight units already met — a physics claim assertable with no Python interpreter — plus two claims
+the Python suite structurally could not make (45.1's derived oracle and 45.3's pointwise identity).
+
+### 45.7 The measured state
+
+| run | tests | wall |
+|---|---:|---:|
+| unflagged, whole suite (`-n 6`) | **2,684** passed, 1 skipped | 121 s |
+| flagged, three shards, parity excluded | 619 + 708 + 760 = **2,087** | 57 + 53 + 37 s |
+| `cargo test --workspace` · `fmt --check` · `clippy -D warnings` | green | — |
+| `cargo test -p physsynth-core --test beam`, debug **and** release | 17 passed | 1.6 s / 0.1 s |
+| `ruff check .` | clean | — |
+
+The per-shard split moved a long way (§44 read 635 · 760 · 693) because the LPT partition is
+recomputed whenever files leave the glob; the flagged *total* is not this batch's to move, since
+every file it touched is either deleted or already outside the parity family, and the one-test gap
+against §44.8's figure predates it.
+
+`physsynth/core/` + `physsynth/analysis/` are **7,761 → 7,508 lines** and `tests/` is
+**33,687 → 33,298**. Cumulative across the eight deletions: **59,436 → 40,806 lines, 18,630 gone**,
+and **twenty-two of twenty-three model bodies**.
+
+### 45.8 What the next batch inherits
+
+* **Two units left, and both are `airbox` or below.** Unit 6 (`airbox`, 4,091 lines) still needs
+  native bars for `AirBox` — the same blocker this batch just cleared for `FreeBeam`, at fourteen
+  times the size — and inherits §43's constraint that `airbox.splu` must stay reachable, because
+  three test files patch that module global. Unit 9 (`connection`) and the airbox **wrapper** tier
+  are blocked permanently: they exist only in the binding crate, so a `physsynth-core` test cannot
+  reach them, and their bar is a Python test for the life of the binding.
+* **The parity family is eight files**, all of them either outside the deletion graph
+  (`operators`, `ops2d`, `banded` — they build both sides themselves) or belonging to units 6 and 9.
+* The findings ledger gains **#52–#55**.
