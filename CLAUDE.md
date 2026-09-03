@@ -26,18 +26,38 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    is the gate on deleting the Python model behind it.
    See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
-   **State (2026-09-03): `physsynth/core/` and `physsynth/analysis/` are BOTH finished — the
-   translation of models is over.** Every model, operator, solver, room, port, wrapper and bridge has
-   a Rust implementation behind the one flag (`crates/physsynth-core` + `crates/physsynth-py`), and
-   all six of `analysis/`'s modules — `spectrum`, `modal`, `damping`, `dispersion`, `duffing`,
-   `rotating_wave`, plus the Bessel and elliptic functions they stand on — are in a **third crate**,
-   `crates/physsynth-analysis`. What remains is the test-suite port, the viewer's *import audit*
-   (not its port — see the exception above) and the deletions — plan **§35** is the roadmap and the
-   order, **§38** the last batch. `cargo test --workspace` runs the native bars and
-   the Cargo dependency allowlists; `pip install ./crates/physsynth-py` then `PHYSSYNTH_RS=1 pytest`
-   runs the **existing, unmodified** Python tests against the Rust code (reinstall before believing
-   any parity number — nothing can tell a stale wheel from a fresh one). Both implementations stay
-   alive for now — deleting a Python model waits on its clients, not on its own phase (plan §1.2).
+   **State (2026-09-03): translation is over and DELETION has started.** Every model, operator,
+   solver, room, port, wrapper and bridge has a Rust implementation (`crates/physsynth-core` +
+   `crates/physsynth-py`), and all six of `analysis/`'s modules — `spectrum`, `modal`, `damping`,
+   `dispersion`, `duffing`, `rotating_wave`, plus the Bessel and elliptic functions they stand on —
+   are in a **third crate**, `crates/physsynth-analysis`.
+
+   **Thirteen of twenty-three Python model bodies are GONE** — 12,434 lines, five of eleven deletion
+   units, and not one physics bar retired. Plan **§39** is the audit that made the order computable
+   (eleven units, from the reference-alias graph) and **§40–§42** are the deletions. Read §39's
+   tables before scoping the next one. Three things about the new state:
+
+   - **The wheel is now REQUIRED**, everywhere. A deleted model's module is an unconditional
+     `from physsynth_rs import X`, so `pip install ./crates/physsynth-py` is a precondition for
+     `pytest` to *collect*, not just to pass. The `validate` and `checks` CI jobs install it (the
+     human's call, §39.6 route 1); `validate` is therefore no longer a pure-Python baseline, and
+     nothing is.
+   - **A deleted module is not empty.** Three things survive every time — types with no runtime
+     implementation (`Literal`, `Callable`, `Protocol`, `NamedTuple`), measured constants *with their
+     docstrings*, and re-exports of names defined elsewhere but reached through this module. And the
+     binding **depends on Python** in four places (`grep -rn 'import("physsynth' crates/physsynth-py/src/`):
+     `GeometricState` and `GrainSpec` are constructed *by Rust*, and `airbox` / `connection` have
+     their namespaces read at call time. Run that grep before deleting anything (§41.2).
+   - **Every deletion edits the guards**, or it is not green: `deleted_bodies` in
+     `tests/test_stability.py`, `REMAINING_PARITY_FAMILY` in `tests/test_shard_partition.py`,
+     `STILL_HAVE_A_PYTHON_TWIN` in `tests/test_rust_parity.py` (one row left), and the `rust` job's
+     file list. `tests/test_binding_surface.py` is the permanent home for residue that can never be
+     a native bar (buffer lifetime, PyO3 argument mapping).
+
+   `cargo test --workspace` runs the native bars and the Cargo dependency allowlists; `PHYSSYNTH_RS=1
+   pytest` runs the **existing, unmodified** Python tests against the Rust code for the models whose
+   Python side is still alive (reinstall the wheel before believing any parity number — nothing can
+   tell a stale wheel from a fresh one).
 
    **There are TWO flags and they must not be merged.** `PHYSSYNTH_RS` swaps the *models*;
    `PHYSSYNTH_RS_ANALYSIS` swaps the *instrument that measures them*. The acceptance run sets only
@@ -48,6 +68,10 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    (the core crate's dependency list must stay empty, so it cannot reach a Bessel function) while
    its Python name swaps on `PHYSSYNTH_RS`, because it lives in a `core/` module. The crate a
    function is implemented in and the flag its name is swapped by are separate questions (§37.7).
+   **Open question, not yet the human's answer:** deleting `analysis/`'s Python bodies (units 10 and
+   11) would make `PHYSSYNTH_RS_ANALYSIS` a no-op and remove the configuration this rule exists to
+   protect — a Rust model measured by a Python instrument. The past check is not invalidated; the
+   ability to repeat it is. Do not delete those two units without asking.
    **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the thirty-two
    findings about when two implementations agree to the bit and when they cannot (fed-back
    reductions, libm vs NumPy's own transcendentals, LLVM's constant fold, `np.sum`'s pairwise
