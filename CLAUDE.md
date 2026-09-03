@@ -18,15 +18,21 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    provable stability, measurable fidelity, and a path to nonlinear models (gongs/cymbals).
 3. ~~**Prototype in Python (NumPy/SciPy).** Julia acceptable if the human prefers. Not C++/JUCE
    yet.~~ **SUPERSEDED 2026-08-26 (the human's call):** Python is being retired entirely — core,
-   analysis, viewer backend *and* the test suite — in favour of **Rust**, gradually and model by
-   model. See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
+   analysis *and* the test suite — in favour of **Rust**, gradually and model by model.
+   **One exception, 2026-09-03 (the human's call):** the **viewer backend stays Python** and talks
+   to Rust through the binding — `web/serialize.py` is a serializer, not a model, and there is no
+   Rust HTTP server to write (plan §35.5 closes it, and strikes §5's Phase 8). What remains of the
+   viewer's port is an *import audit*: every place `serialize.py` reaches past a public constructor
+   is the gate on deleting the Python model behind it.
+   See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
    **State (2026-09-03): `physsynth/core/` is finished, and `analysis/` has started.** Every model,
    operator, solver, room, port, wrapper and bridge has a Rust implementation behind the one flag
    (`crates/physsynth-core` + `crates/physsynth-py`), and `analysis/spectrum.py` — the partial
    detector — is in a **third crate**, `crates/physsynth-analysis`. What is left is the rest of
-   `analysis/`, the test-suite port, the viewer backend and the deletions — plan **§35** is the
-   roadmap and the order, **§36** the last batch. `cargo test --workspace` runs the native bars and
+   `analysis/`, the test-suite port, the viewer's *import audit* (not its port — see the
+   exception above) and the deletions — plan **§35** is the roadmap and the order, **§36** the
+   last batch. `cargo test --workspace` runs the native bars and
    the Cargo dependency allowlists; `pip install ./crates/physsynth-py` then `PHYSSYNTH_RS=1 pytest`
    runs the **existing, unmodified** Python tests against the Rust code (reinstall before believing
    any parity number — nothing can tell a stale wheel from a fresh one). Both implementations stay

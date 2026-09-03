@@ -372,8 +372,12 @@ phases have already proven.
 eigenfrequencies, the spectrum detector. Pure math, no state. Deliberately late — while Python still
 holds these, the Rust models are being checked against an oracle that hasn't moved.
 
-**Phase 8 — the viewer backend (9,915 lines).** Becomes a Rust HTTP server. The browser side
-(`app.js`, 5,719 lines) is untouched by any of this — it speaks JSON and does not care.
+**Phase 8 — the viewer backend (9,915 lines).** ~~Becomes a Rust HTTP server.~~ **STRUCK
+2026-09-03 (the human's call, §35.5):** the viewer stays Python and talks to Rust through the
+binding. What is left of this phase is an import audit of `web/serialize.py`'s 47 reaches past
+the public constructors — the gate on each model's deletion — not a translation. The browser side
+(`app.js`, 5,719 lines) is untouched by any of this — it speaks JSON and does not care, and that
+was true under either route.
 
 **Throughout — the tests.** Each model's tests port in its own phase, at step 4 of §1's ritual.
 Never batched, never ahead of the model.
@@ -7273,24 +7277,50 @@ The success condition for the suite is not "the Rust tests pass" — §1 says wh
 nothing on its own — it is that for every Python test retired, a native test asserts the same
 physics bar at the same fixture, and the retirement commit names both.
 
-### 35.5 The viewer backend — a scope question, not an arithmetic one
+### 35.5 The viewer backend — **CLOSED 2026-09-03: route (b), the human's call**
 
 `web/serialize.py` imports `physsynth` 21 times and reaches inside 47 call sites (§3.1). Two
-routes, and the choice is the human's: (a) a Rust HTTP server (§5's Phase 8 as written, ~10k
-lines to move); (b) keep the thin Python serializer and have it import only the binding, which
-is what `PHYSSYNTH_RS=1` already makes it do. Route (b) contradicts "Python goes, all of it"
-and is named only because it is the cheapest way to make every *model* deletion safe now; route
-(a) is the plan. Either way the browser side is untouched.
+routes were named: (a) a Rust HTTP server (§5's Phase 8 as written, ~10k lines to move);
+(b) keep the thin Python serializer and have it import only the binding, which is what
+`PHYSSYNTH_RS=1` already makes it do.
+
+**Route (b) is the decision.** Python stays as the *visualizer*, talking to Rust — the browser
+side is untouched, `web/serialize.py` stays Python, and its job narrows to serialisation: build
+the binding's objects, step them, hand the browser JSON. Do not re-open this; it is one of the
+same class as HANDOFF §11's five.
+
+Three consequences, and the third is the one that changes another section:
+
+1. **Phase 8 is struck from §5.** There is no Rust HTTP server to write. What is left of the
+   viewer's port is a *narrowing* of `serialize.py`, not a translation of it: every place it
+   reaches past the public constructor into a model's private names is a seam that has to close
+   before the Python model behind it can be deleted, and that audit is the work.
+2. **"Python goes, all of it" now has an explicit exception, and it is written here rather than
+   left implied.** `CLAUDE.md`'s non-negotiable #3 lists "core, analysis, viewer backend *and*
+   the test suite"; the viewer backend leaves that list. Everything else on it stands.
+3. **The room's deletion is unblocked.** §35.6 said "the room waits on the viewer" because a
+   Rust viewer would have had to build the room itself. Under route (b) the viewer builds it
+   through the binding, so the room waits on nothing the other models do not — see the amended
+   §35.6 below.
+
+What route (b) does *not* buy: it is not a licence to leave `serialize.py` reaching into Python
+internals. §3.1's 47 call sites are still 47 places a deletion can break, and they are still the
+gate. It buys only this — the gate is an import audit, not a rewrite.
 
 ### 35.6 The deletions — one model, one commit, in dependency order
 
 The order a Python model can die in is the reverse of the order its clients ported, and it is
 now computable rather than argued: `string_ideal` waits on nothing (its last client,
 `connection`, is Rust), the theta-scheme strings wait on the bow and barrier (both Rust), the
-plates wait on `airbox`'s wrappers (Rust) and the bridges (Rust), the room waits on the viewer.
-So every model but the ones the viewer builds can go **today**, and the viewer decides the rest.
-Each deletion is its own commit carrying the model, its parity file, and the Python-only tests
-§35.4 retires, so a bisect lands on one model.
+plates wait on `airbox`'s wrappers (Rust) and the bridges (Rust), and — until 2026-09-03 — the
+room waited on the viewer.
+
+**Amended by §35.5's closure.** The viewer is staying Python and builds the room through the
+binding, so the room's Python implementation is not its dependency either: what every model now
+waits on is the *seam*, meaning the set of names `web/serialize.py` reaches that the binding does
+not expose. That is a per-model import audit and it is the gate. Each deletion is still its own
+commit carrying the model, its parity file, and the Python-only tests §35.4 retires, so a bisect
+lands on one model.
 
 ### 35.7 CI — collapse the twenty-one steps into one flagged run
 
