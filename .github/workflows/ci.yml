@@ -246,59 +246,30 @@ jobs:
             tests/test_rust_parity_airbox_port.py \
             tests/test_rust_parity_airbox_wrap.py \
             tests/test_rust_parity_airbox_memb.py \
-            tests/test_rust_parity_connection.py \
-            tests/test_rust_parity_spectrum.py \
-            tests/test_rust_parity_analysis.py \
-            tests/test_rust_parity_rotating_wave.py
+            tests/test_rust_parity_connection.py
 
-      # Phase 7's success condition, and the ONE step that survives the collapse above as
-      # something other than the whole suite -- because it is not a per-batch file list. `analysis/`
-      # reads its OWN flag, `PHYSSYNTH_RS_ANALYSIS`, for the reason
-      # `physsynth/analysis/spectrum.py` gives at length: under `PHYSSYNTH_RS` alone the models are
-      # Rust and the *instrument measuring them* is still Python, which is exactly what makes the
-      # three-shard harness job worth anything. Setting both is the only run in which a Rust
-      # detector measures a Rust model, so it is the only place this port meets its real clients.
+      # PHASE 7'S SUCCESS CONDITION STOOD HERE and is retired with unit 10 and unit 11
+      # (plan §44). It ran the instrument's 65 client files with BOTH flags set, because that was
+      # the only configuration in which a Rust detector measured a Rust model -- everywhere else,
+      # `PHYSSYNTH_RS` alone left the *instrument measuring the models* in Python, which is the
+      # separation §36.4 built the second flag for.
       #
-      # The file list is DERIVED, not typed. Twenty-one hand-written lists were deleted one commit
-      # ago and reintroducing one here would be the same mistake in a smaller font; `grep -l` asks
-      # the question those lists were trying to answer -- which test files reach the detector --
-      # and cannot go stale as files are added. The parity family is filtered out for the usual
-      # reason (it builds both sides itself and must run unflagged), and the count is echoed and
-      # floored, because a grep that stopped matching would run nothing and exit 0.
+      # `physsynth/analysis/` has no Python body any more, so `PHYSSYNTH_RS_ANALYSIS` selects
+      # between one implementation and itself. The step it gated is now a strict subset of the
+      # three-shard flagged job below, which runs the whole suite -- those 65 files included --
+      # with `PHYSSYNTH_RS=1` against exactly the same Rust detector. Keeping it would be running
+      # 65 files twice and calling the second run a different claim.
       #
-      # No line continuation anywhere in this block, deliberately. The first draft used one to wrap
-      # the pipeline and it arrived here with the backslash AND the newline swallowed -- §24's
-      # failure, caught by `tests/test_ci_workflow.py` rather than by review, six occurrences in.
-      # Short lines cannot have that bug.
+      # What replaces the *other* half of that claim -- a Rust instrument checked against a second
+      # implementation -- is `tests/test_analysis_frozen.py`, which holds 62 fixtures' worth of
+      # what the Python oracles said, recorded to the last digit before they were deleted. It runs
+      # in every shard of every job, flagged and unflagged, and needs no environment at all.
       #
-      # Widened TWICE in Phase 7 batch 2, and the second widening is the one worth reading.
-      #
-      # Batch 1 grepped for `measure_partials_near|detect_peaks|magnitude_spectrum` because
-      # `spectrum.py` was the only ported module. With `modal`, `damping`, `dispersion` and
-      # `duffing` behind the same flag the question became "which test files read the instrument",
-      # and the obvious answer -- the ones importing `physsynth.analysis` -- is WRONG BY 43 FILES.
-      # `tests/helpers.py` does `from physsynth.analysis import modal, spectrum` and then measures
-      # on its callers' behalf, so a file can be a heavy client of the instrument while never
-      # naming it. `test_radiation.py` is one, and it carries the only check in the suite that
-      # holds the ported Bessel J1 against `scipy.special.j1`.
-      #
-      # A derived list is only as honest as the reachability it models, and one hop of indirection
-      # was enough to make it dishonest: 27 files matched, 65 actually reach. That is exactly the
-      # shape §36.7 warned about -- a step that stays green while covering less than it claims --
-      # arriving one batch later through a different door.
-      - name: The instrument's clients, unmodified, against a Rust instrument
-        env:
-          PHYSSYNTH_RS: "1"
-          PHYSSYNTH_RS_ANALYSIS: "1"
-        run: |
-          set -euo pipefail
-          pat='physsynth\.analysis|import helpers|from helpers'
-          files=$(grep -lE "$pat" tests/test_*.py | grep -v test_rust_parity || true)
-          test -n "$files"
-          n=$(echo $files | wc -w)
-          echo "files reaching the instrument: $n"
-          test "$n" -ge 60
-          pytest -n auto --dist loadgroup $files --durations=10
+      # The derivation that built this step's file list is worth keeping on the record even though
+      # the step is gone, because the lesson outlived it: the obvious grep -- files importing
+      # `physsynth.analysis` -- was WRONG BY 43 FILES, since `tests/helpers.py` imports the
+      # instrument and measures on its callers' behalf. 27 files matched; 65 actually reached. A
+      # derived list is only as honest as the reachability it models (ledger #32).
 
   # The migration's success condition, as one claim instead of twenty-one (plan §35.7).
   #

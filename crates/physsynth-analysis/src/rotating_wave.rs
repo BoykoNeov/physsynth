@@ -716,3 +716,211 @@ fn newton(
     }
     Ok((maxiter, false))
 }
+
+#[cfg(test)]
+mod tests {
+    //! The two structural claims about the Jacobian, which live here rather than in
+    //! `tests/rotating_wave.rs` because `residual`, `jacobian` and `NewtonCtx` are private and
+    //! ought to stay so — an integration test cannot reach them.
+    //!
+    //! They were in `tests/test_geometric_rotating_wave.py` until unit 10's deletion (plan §44),
+    //! reaching for `rw._operators`, `rw._residual` and `rw._jacobian` on the Python module. That
+    //! module has no body any more, and this file's own header had been claiming these bars for a
+    //! phase without them existing — an overclaim the deletion is what found.
+    //!
+    //! The fixture is `tests/helpers.py`'s own string, evaluated: `L = 1`, `T = 200`,
+    //! `rho = 0.005`, `EA = 1e5`, `kappa = 0` (bending is irrelevant to the relative equilibrium),
+    //! `N = 32`, `theta = 0.28`, and the `fs` the helper derives from `lam_long = 0.5`.
+
+    use super::*;
+
+    const L: f64 = 1.0;
+    const T: f64 = 200.0;
+    const RHO: f64 = 0.005;
+    const EA: f64 = 1.0e5;
+    const N_CELLS: usize = 32;
+    const THETA: f64 = 0.28;
+    const FS: f64 = 286_216.701_119_973_1;
+    const AMP: f64 = 5e-3;
+
+    /// Everything `residual` and `jacobian` need, plus the state to evaluate them at.
+    struct Fixture {
+        op_u: Csr,
+        op_v: Csr,
+        gp: Csr,
+        gm: Csr,
+        ident: Csr,
+        proj: Vec<f64>,
+        perm: Vec<usize>,
+        phi: Vec<f64>,
+        psi: Vec<f64>,
+        s: f64,
+    }
+
+    fn fixture(perturb: bool) -> Fixture {
+        let n_int = N_CELLS - 1;
+        let h = L / N_CELLS as f64;
+        let (d2, gp, gm) = operators(N_CELLS, h);
+        let shape: Vec<f64> = (1..N_CELLS)
+            .map(|i| (std::f64::consts::PI * (L * i as f64 / N_CELLS as f64) / L).sin())
+            .collect();
+        // A deterministic stand-in for the Python test's seeded normals: a wobble that is
+        // incommensurate with the mode, so no symmetry of the operator can hide a wrong entry.
+        let wobble = |i: usize, scale: f64| scale * ((i as f64 * 1.7 + 0.3).sin());
+        let phi: Vec<f64> = shape
+            .iter()
+            .enumerate()
+            .map(|(i, v)| AMP * v + if perturb { wobble(i, 1e-4) } else { 0.0 })
+            .collect();
+        let psi: Vec<f64> = (0..n_int)
+            .map(|i| if perturb { wobble(i + 7, 1e-5) } else { 0.0 })
+            .collect();
+        Fixture {
+            op_u: d2.scaled(T / RHO),
+            op_v: d2.scaled(EA / RHO),
+            gp,
+            gm,
+            ident: Csr::identity(n_int),
+            proj: shape.iter().map(|v| (2.0 / L) * h * v).collect(),
+            perm: interleave_permutation(n_int),
+            phi,
+            psi,
+            s: (200.0 * std::f64::consts::PI) * (200.0 * std::f64::consts::PI),
+        }
+    }
+
+    fn ctx(f: &Fixture, time_discrete: bool) -> NewtonCtx<'_> {
+        NewtonCtx {
+            op_u: &f.op_u,
+            op_v: &f.op_v,
+            gp: &f.gp,
+            gm: &f.gm,
+            ident: &f.ident,
+            proj: &f.proj,
+            perm: &f.perm,
+            rho: RHO,
+            a: EA - T,
+            k: 1.0 / FS,
+            theta: THETA,
+            time_discrete,
+        }
+    }
+
+    /// The Jacobian against central differences of the residual — including the `d/ds` column.
+    ///
+    /// Newton converges to a root of the *residual*, so a wrong Jacobian shows up as slow
+    /// convergence rather than a wrong answer, which means it can be wrong for a long time without
+    /// anything failing. The `d/ds` column is the one to watch: it carries the derivative of
+    /// **both** time factors, and dropping either leaves a column that is merely *nearly* right.
+    #[test]
+    fn the_jacobian_matches_central_differences_of_the_residual() {
+        let f = fixture(true);
+        let n = N_CELLS - 1;
+        for time_discrete in [true, false] {
+            let c = ctx(&f, time_discrete);
+            let jac = jacobian(&f.phi, &f.psi, f.s, &c);
+            let mut worst_gap = 0.0f64;
+            let mut scale = 0.0f64;
+            for j in 0..2 * n + 1 {
+                // The step is 1e-6 of the entry and not smaller, and that is measured rather
+                // than guessed. Scanning it here gives 3.0e-9 at 1e-5, 4.9e-8 at 1e-6, 1.5e-6 at
+                // 1e-7 and 1.5e-5 at 1e-8 — the gap *grows* as the step shrinks, which is
+                // cancellation in the difference and not truncation in the Jacobian. A test that
+                // took the smallest step it could would be measuring its own subtraction.
+                let eps = if j < n {
+                    1e-6 * f.phi[j].abs().max(1e-6)
+                } else if j < 2 * n {
+                    1e-6 * f.psi[j - n].abs().max(1e-9)
+                } else {
+                    1e-6 * f.s
+                };
+                let mut cols: Vec<Vec<f64>> = Vec::with_capacity(2);
+                for sign in [1.0f64, -1.0] {
+                    let mut phi = f.phi.clone();
+                    let mut psi = f.psi.clone();
+                    let mut s = f.s;
+                    if j < n {
+                        phi[j] += sign * eps;
+                    } else if j < 2 * n {
+                        psi[j - n] += sign * eps;
+                    } else {
+                        s += sign * eps;
+                    }
+                    cols.push(residual(&phi, &psi, s, AMP, &c));
+                }
+                for (i, (plus, minus)) in cols[0].iter().zip(cols[1].iter()).enumerate() {
+                    let fd = (plus - minus) / (2.0 * eps);
+                    scale = scale.max(fd.abs());
+                    worst_gap = worst_gap.max((jac.get(i, j) - fd).abs());
+                }
+            }
+            assert!(
+                worst_gap / scale < 1e-6,
+                "time_discrete={time_discrete}: the Jacobian is {:.3e} of the finite-difference \
+                 scale away from it",
+                worst_gap / scale
+            );
+        }
+    }
+
+    /// `dF_phi/dpsi == cos(Omega k) dF_psi/dphi` — the structural signature of the 2k-wide DG.
+    ///
+    /// The reduced system *looks* variational: its cell blocks are the Hessian of `V_nl` on the
+    /// planar strain slice, which is symmetric. It is not, and the asymmetry is not roundoff — it
+    /// is the discrete gradient spanning `q^{n+1}` to `q^{n-1}`, which puts a `cos(Omega k)` on the
+    /// transverse row and nothing on the longitudinal one.
+    ///
+    /// Assuming the symmetry (and reaching for a Cholesky, as the family's *linear* models do)
+    /// would stall Newton against a Jacobian wrong by one part in 2e5 at these settings — small
+    /// enough to look like a conditioning problem rather than a bug. So: the exact relation, the
+    /// plain symmetry **failing**, and the symmetry restored as `k -> 0`.
+    #[test]
+    fn the_jacobian_asymmetry_is_exactly_the_discrete_gradient_time_factor() {
+        let f = fixture(false);
+        let n = N_CELLS - 1;
+        let k = 1.0 / FS;
+
+        let jac = jacobian(&f.phi, &f.psi, f.s, &ctx(&f, true));
+        let cos_k = 1.0 - 0.5 * k * k * f.s;
+        let mut scale = 0.0f64;
+        let mut worst_relation = 0.0f64;
+        let mut worst_symmetry = 0.0f64;
+        for i in 0..n {
+            for j in 0..n {
+                let pz = jac.get(i, n + j);
+                let zp = jac.get(n + i, j);
+                scale = scale.max(pz.abs());
+                worst_relation = worst_relation.max((pz - cos_k * zp).abs());
+                worst_symmetry = worst_symmetry.max((pz - zp).abs());
+            }
+        }
+        assert!(
+            worst_relation / scale < 1e-14,
+            "the cos(Omega k) relation is off by {:.3e}",
+            worst_relation / scale
+        );
+        assert!(
+            worst_symmetry / scale > 1e-9,
+            "the Jacobian came back symmetric ({:.3e}), so the discrete gradient's 2k span has \
+             gone missing and Newton is being handed a variational lie",
+            worst_symmetry / scale
+        );
+
+        // ... and at `k -> 0` (the semi-discrete branch) it IS symmetric.
+        let jac0 = jacobian(&f.phi, &f.psi, f.s, &ctx(&f, false));
+        let mut scale0 = 0.0f64;
+        let mut worst0 = 0.0f64;
+        for i in 0..n {
+            for j in 0..n {
+                let pz = jac0.get(i, n + j);
+                scale0 = scale0.max(pz.abs());
+                worst0 = worst0.max((pz - jac0.get(n + i, j)).abs());
+            }
+        }
+        assert!(
+            worst0 / scale0 < 1e-14,
+            "the semi-discrete Jacobian is not symmetric ({:.3e})",
+            worst0 / scale0
+        );
+    }
+}

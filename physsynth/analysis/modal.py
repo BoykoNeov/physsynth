@@ -1,24 +1,19 @@
-"""Analytic modal oracles for the ideal string.
+"""Analytic modal oracles — closed-form frequencies the numerical schemes are checked against.
 
-These are the closed-form references the FDTD output is validated against (HANDOFF §5, §6):
-
-- the continuous harmonic series ``f_n = n * c / (2L)`` (fixed–fixed string),
-- the spatial mode shapes ``sin(n pi x / L)``,
-- the *exact* oscillation frequency of the discrete explicit scheme (the numerical-dispersion
-  oracle), which lets convergence be predicted in closed form rather than only measured.
-
-Pure NumPy. No dependency on the core (oracles are independent of the implementation under test).
+**The implementation is Rust.** This module is what is left of the Python one after the
+migration's seventh deletion (``docs/dev/rust-migration-plan.md`` §44, unit 10): every oracle here
+lives in ``crates/physsynth-analysis/src/modal.rs``, is bound in ``crates/physsynth-py``, and is
+re-exported through the thin wrappers below. The derivations — the ideal and stiff string series,
+the rectangular and circular membrane, the supported and free plate (isotropic and orthotropic),
+the free-free beam, the free circular plate's root search, and the bore — are documented at length
+in that Rust module and in ``docs/dev/``'s plans.
 """
 
 from __future__ import annotations
 
-import math
-import os
-
 import numpy as np
+import physsynth_rs as _rs
 from numpy.typing import NDArray
-from scipy import special
-from scipy.optimize import brentq
 
 __all__ = [
     "harmonic_frequencies",
@@ -61,887 +56,170 @@ __all__ = [
 ]
 
 
-def harmonic_frequencies(c: float, L: float, n_partials: int) -> NDArray[np.float64]:
-    """Continuous fixed–fixed harmonic series ``f_n = n c / (2L)`` for ``n = 1 .. n_partials``."""
-    n = np.arange(1, n_partials + 1)
-    return n * c / (2.0 * L)
+# The Python bodies are gone and this module delegates. Three things follow, and they are the same
+# three that follow for every deleted module in this project:
+#
+#   * `physsynth_rs` is a hard requirement to import this module, and therefore to collect most of
+#     the suite. There is no `PHYSSYNTH_RS_ANALYSIS` switch any more: the flag chose between two
+#     implementations and there is one.
+#   * what these wrappers do beyond delegating is real work, not ceremony -- coercing whatever a
+#     caller passed into the contiguous float64 arrays and Python ints the binding requires. That
+#     is why this is a shim and not a row of re-exports, the way `airbox.py`'s wrapper tier and
+#     `operators2d.py` are shims for their own reasons.
+#   * what the Python implementation *said* is not lost. `tests/analysis_frozen_values.py` holds
+#     62 fixtures' worth of its answers, recorded to the last digit before it was deleted, and
+#     `tests/test_analysis_frozen.py` asserts them on every run. That is the human's condition on
+#     this deletion (plan §44) and it is the only remaining check of these oracles against a second
+#     implementation.
 
 
-def mode_shape(x: NDArray[np.float64], L: float, m: int) -> NDArray[np.float64]:
-    """The ``m``-th fixed–fixed spatial mode ``sin(m pi x / L)`` sampled on grid ``x``.
+def _flat(a) -> NDArray[np.float64]:
+    """Whatever the caller passed, as the contiguous flat float64 array the binding wants."""
+    return np.ascontiguousarray(np.asarray(a, dtype=float).ravel())
 
-    This is an exact eigenvector of the discrete second-difference operator, so initializing the
-    string with it yields a clean single-frequency oscillation — ideal for a convergence study.
+
+def _elemwise(fn, a, *args):
+    """Call a flat-in/flat-out binding and restore NumPy's own shape convention.
+
+    A 0-d input must come back as a scalar, not a one-element array -- see the note above.
     """
-    return np.sin(m * np.pi * x / L)
+    arr = np.asarray(a, dtype=float)
+    out = fn(_flat(arr), *args)
+    return out.reshape(arr.shape) if arr.ndim else out[0]
 
 
-def discrete_mode_frequency(c: float, L: float, N: int, lam: float, m: int) -> float:
-    """Exact oscillation frequency (Hz) of mode ``m`` for the explicit scheme.
-
-    Solving the scheme's amplification relation gives ``sin(omega k / 2) = lambda sin(m pi / 2N)``,
-    hence
-
-        f_m^discrete = (1 / (pi k)) * arcsin( lambda * sin(m pi / (2N)) ),    k = lambda L / (c N).
-
-    At ``lambda = 1`` this collapses to the exact ``m c / (2L)``; for ``lambda < 1`` it lies below
-    it (numerical dispersion), with the gap shrinking as O(h^2). Provided as an independent oracle
-    for the convergence test.
-    """
-    k = lam * L / (c * N)  # = 1/fs, from lambda = c k / h and h = L/N
-    return float(np.arcsin(lam * np.sin(m * np.pi / (2 * N))) / (np.pi * k))
+def _modes(modes):
+    """A mode list as the ``[(m, n), ...]`` of Python ints the binding extracts."""
+    return [(int(m), int(n)) for m, n in np.asarray(modes).reshape(-1, 2)]
 
 
-# -- stiff string (model #2): stretched partials ----------------------------------------------
+def harmonic_frequencies(c, L, n_partials):
+    return _rs.modal_harmonic_frequencies(c, L, int(n_partials))
 
 
-def inharmonicity_B(c: float, L: float, kappa: float) -> float:
-    """Inharmonicity coefficient ``B = pi^2 kappa^2 / (c^2 L^2)`` (simply-supported stiff string).
-
-    The single audible stiffness parameter; for a piano ``B ~ 1e-4 .. 1e-3``. Scales as
-    ``kappa^2`` -- the relationship the B-vs-kappa sweep test pins down quantitatively.
-    """
-    return float((np.pi ** 2) * kappa ** 2 / (c ** 2 * L ** 2))
+def mode_shape(x, L, m):
+    arr = np.asarray(x, dtype=float)
+    out = _rs.modal_mode_shape(_flat(arr), L, int(m))
+    return out.reshape(arr.shape) if arr.ndim else out[0]
 
 
-def stiff_harmonic_frequencies(
-    c: float, L: float, kappa: float, n_partials: int
-) -> NDArray[np.float64]:
-    """Continuum stretched partials ``f_n = n f0 sqrt(1 + B n^2)``, ``f0 = c/(2L)``.
-
-    The simply-supported stiff-string oracle (HANDOFF §5, Bilbao Ch. 7): bending stiffness pushes
-    every partial sharp, including the fundamental (``f_1 = f0 sqrt(1 + B)``, *not* ``f0``). This is
-    the "theory" the FDTD partials are measured against.
-    """
-    n = np.arange(1, n_partials + 1)
-    f0 = c / (2.0 * L)
-    B = inharmonicity_B(c, L, kappa)
-    return n * f0 * np.sqrt(1.0 + B * n * n)
+def discrete_mode_frequency(c, L, N, lam, m):
+    return _rs.modal_discrete_mode_frequency(c, L, int(N), lam, int(m))
 
 
-def discrete_stiff_mode_frequency(
-    c: float, L: float, N: int, kappa: float, k: float, m: int, theta: float
-) -> float:
-    """Exact oscillation frequency (Hz) of mode ``m`` for the implicit theta-scheme stiff string.
-
-    Inserting ``u^n = z^n sin(m pi x / L)`` (an exact discrete eigenvector) with the spatial
-    eigenvalue ``p^2 = (4/h^2) sin^2(m pi / 2N)`` (so ``delta_xx -> -p^2`` and ``delta_xxxx ->
-    +p^4``) and ``Q = c^2 p^2 + kappa^2 p^4`` gives
-
-        sin^2(omega k / 2) = s = Q k^2 / (4 + 4 theta Q k^2),
-        f_m = arcsin(sqrt(s)) / (pi k).
-
-    As ``h, k -> 0`` this tends to the continuum ``f_n = n f0 sqrt(1 + B n^2)`` for any ``theta``.
-    **The frequency depends on ``theta``** (the temporal scheme), so callers must pass the
-    resonator's own ``theta``. At ``kappa = 0`` it is the implicit wave scheme's oracle (which is
-    *not* the explicit one -- not exact even at ``lambda = 1``).
-    """
-    h = L / N
-    p2 = (4.0 / (h * h)) * np.sin(m * np.pi / (2 * N)) ** 2
-    Q = c * c * p2 + kappa * kappa * p2 * p2
-    s = Q * k * k / (4.0 + 4.0 * theta * Q * k * k)
-    return float(np.arcsin(np.sqrt(s)) / (np.pi * k))
+def inharmonicity_B(c, L, kappa):
+    return _rs.modal_inharmonicity_b(c, L, kappa)
 
 
-def cents(f: float | NDArray[np.float64], f_ref: float | NDArray[np.float64]):
-    """Pitch error in cents: ``1200 * log2(f / f_ref)``. Scalar or elementwise on arrays."""
-    return 1200.0 * np.log2(np.asarray(f, dtype=float) / np.asarray(f_ref, dtype=float))
+def stiff_harmonic_frequencies(c, L, kappa, n_partials):
+    return _rs.modal_stiff_harmonic_frequencies(c, L, kappa, int(n_partials))
 
 
-# -- 2D membrane (model #4) --------------------------------------------------------------------
+def discrete_stiff_mode_frequency(c, L, N, kappa, k, m, theta):
+    return _rs.modal_discrete_stiff_mode_frequency(c, L, int(N), kappa, k, int(m), theta)
 
 
-def rectangular_membrane_freqs(
-    c: float, Lx: float, Ly: float, modes: list[tuple[int, int]]
-) -> NDArray[np.float64]:
-    """Continuum rectangular-membrane frequencies ``f_{mn} = (c/2) sqrt((m/Lx)² + (n/Ly)²)``.
-
-    ``modes`` is a list of ``(m, n)`` mode indices (both >= 1). Fixed-rim modes are
-    ``sin(mπx/Lx) sin(nπy/Ly)``. This is the exact, O(h²)-clean oracle for the harness unit-test
-    geometry (the rectangle), used before the staircase error enters on the circle.
-    """
-    mn = np.asarray(modes, dtype=float)
-    return 0.5 * c * np.sqrt((mn[:, 0] / Lx) ** 2 + (mn[:, 1] / Ly) ** 2)
+def cents(f, f_ref):
+    # Broadcast first, exactly as the ufunc would, then hand over one flat pair -- so the whole
+    # expression 1200*log2(f/f_ref) lives on the Rust side rather than half of it.
+    a, b = np.broadcast_arrays(np.asarray(f, dtype=float), np.asarray(f_ref, dtype=float))
+    out = _rs.modal_cents(_flat(a), _flat(b))
+    return out.reshape(a.shape) if a.ndim else out[0]
 
 
-def rectangular_mode_field(
-    X: NDArray[np.float64], Y: NDArray[np.float64], Lx: float, Ly: float, m: int, n: int
-) -> NDArray[np.float64]:
-    """The ``(m, n)`` fixed-rim mode ``sin(mπx/Lx) sin(nπy/Ly)`` sampled on grid ``(X, Y)``.
-
-    An *exact* discrete eigenvector of the 5-point Laplacian (tensor product of the 1D
-    ``sin(mπl/N)`` eigenvector), so a single-mode initial condition stays one clean tone — the 2D
-    analogue of :func:`mode_shape`.
-    """
-    return np.sin(m * np.pi * X / Lx) * np.sin(n * np.pi * Y / Ly)
+def rectangular_membrane_freqs(c, Lx, Ly, modes):
+    return _rs.modal_rectangular_membrane_freqs(c, Lx, Ly, _modes(modes))
 
 
-def rectangular_discrete_eigenvalues(
-    h: float, Nx: int, Ny: int, modes: list[tuple[int, int]]
-) -> NDArray[np.float64]:
-    """Closed-form eigenvalues ``Λ_{mn}`` of ``-Δ_h`` on a rectangle (``-L`` is SPD, ``Λ > 0``).
-
-    ``Λ_{mn} = (4/h²)[sin²(mπ/(2Nx)) + sin²(nπ/(2Ny))]`` for ``m = 1..Nx-1``, ``n = 1..Ny-1`` — the
-    2D tensor product of the 1D second-difference spectrum (see
-    :func:`physsynth.core.operators.second_difference_matrix`). The assembled masked Laplacian must
-    reproduce these to machine precision, which is what proves the operator is wired correctly
-    before any continuum/Bessel comparison.
-    """
-    mn = np.asarray(modes, dtype=float)
-    sx = np.sin(mn[:, 0] * np.pi / (2 * Nx)) ** 2
-    sy = np.sin(mn[:, 1] * np.pi / (2 * Ny)) ** 2
-    return (4.0 / (h * h)) * (sx + sy)
+def rectangular_mode_field(X, Y, Lx, Ly, m, n):
+    arr = np.asarray(X, dtype=float)
+    out = _rs.modal_rectangular_mode_field(_flat(X), _flat(Y), Lx, Ly, int(m), int(n))
+    return out.reshape(arr.shape) if arr.ndim else out[0]
 
 
-def circular_membrane_freqs(
-    c: float, a: float, n_modes: int, m_max: int = 12, n_max: int = 12
-) -> list[tuple[int, int, float, int]]:
-    """Lowest ``n_modes`` circular-membrane frequencies, each tagged ``(m, n, freq, degeneracy)``.
-
-    ``f_{mn} = c · j_{m,n} / (2π a)`` where ``j_{m,n}`` is the n-th positive zero of the Bessel
-    function ``J_m`` (mode shape ``J_m(j_{m,n} r/a)·{cos,sin}(mθ)``). ``m = 0`` modes are
-    non-degenerate (``degeneracy = 1``); ``m >= 1`` come as a cos/sin pair (``degeneracy = 2``).
-    Returned sorted by frequency. ``m_max, n_max`` bound the search grid of zeros (raise if
-    ``n_modes`` is large). The drumhead oracle (HANDOFF §5 row 4).
-    """
-    entries: list[tuple[int, int, float, int]] = []
-    for m in range(0, m_max + 1):
-        zeros = special.jn_zeros(m, n_max)  # first n_max positive zeros of J_m
-        deg = 1 if m == 0 else 2
-        for n_i, z in enumerate(zeros, start=1):
-            entries.append((m, n_i, c * z / (2.0 * np.pi * a), deg))
-    entries.sort(key=lambda e: e[2])
-    return entries[:n_modes]
+def rectangular_discrete_eigenvalues(h, Nx, Ny, modes):
+    return _rs.modal_rectangular_discrete_eigenvalues(h, int(Nx), int(Ny), _modes(modes))
 
 
-def discrete_membrane_eigenfrequency(
-    Lambda: float | NDArray[np.float64], c: float, k: float
-) -> NDArray[np.float64]:
-    """Discrete temporal frequency (Hz) of an eigenmode with Laplacian eigenvalue ``Λ`` (of ``-L``).
-
-    Inserting ``u^n = z^n φ`` with ``L φ = -Λ φ`` into the explicit scheme gives
-    ``cos(ω k) = 1 − c²k²Λ/2``, hence ``f = arccos(1 − c²k²Λ/2) / (2π k)``. As ``k → 0`` this tends
-    to the continuum ``f = c sqrt(Λ_cont)/(2π)``. The temporal companion to the spatial eigenvalue
-    test: spectrum (``Λ`` of the masked Laplacian) → measurable frequency.
-    """
-    Lambda = np.asarray(Lambda, dtype=float)
-    arg = 1.0 - 0.5 * (c * k) ** 2 * Lambda
-    return np.arccos(np.clip(arg, -1.0, 1.0)) / (2.0 * np.pi * k)
+def circular_membrane_freqs(c, a, n_modes, m_max=12, n_max=12):
+    return _rs.modal_circular_membrane_freqs(c, a, int(n_modes), int(m_max), int(n_max))
 
 
-# -- 2D plate (model #5): simply-supported rectangle ------------------------------------------
+def discrete_membrane_eigenfrequency(Lambda, c, k):
+    return _elemwise(_rs.modal_discrete_membrane_eigenfrequency, Lambda, c, k)
 
 
-def rectangular_plate_freqs(
-    kappa: float, Lx: float, Ly: float, modes: list[tuple[int, int]]
-) -> NDArray[np.float64]:
-    """Continuum simply-supported rectangular-plate frequencies (HANDOFF §5 row 5).
-
-    With stiffness ``kappa = sqrt(D/rho_s)`` (D = flexural rigidity, rho_s = areal density), the
-    Navier modes are ``sin(mπx/Lx) sin(nπy/Ly)`` with ``ω_{mn} = kappa·γ_{mn}`` where
-    ``γ_{mn} = (mπ/Lx)² + (nπ/Ly)²`` is the Laplacian eigenvalue magnitude, hence
-
-        f_{mn} = kappa·γ_{mn} / (2π) = (π/2)·kappa·[(m/Lx)² + (n/Ly)²].
-
-    Pure 4th-power in the wavenumbers (no tension term — the plate is bending-only). ``modes`` is a
-    list of ``(m, n)`` indices (both >= 1). Poisson's ratio drops out for simply-supported edges, so
-    ``kappa`` is the single stiffness parameter.
-    """
-    mn = np.asarray(modes, dtype=float)
-    gamma = (mn[:, 0] * np.pi / Lx) ** 2 + (mn[:, 1] * np.pi / Ly) ** 2
-    return kappa * gamma / (2.0 * np.pi)
+def rectangular_plate_freqs(kappa, Lx, Ly, modes):
+    return _rs.modal_rectangular_plate_freqs(kappa, Lx, Ly, _modes(modes))
 
 
-def discrete_plate_eigenfrequency(
-    Lambda_lap: float | NDArray[np.float64], kappa: float, k: float, theta: float
-) -> NDArray[np.float64]:
-    """Discrete temporal frequency (Hz) of a plate eigenmode, implicit theta-scheme.
-
-    ``Lambda_lap`` is the **Laplacian** eigenvalue magnitude ``Λ`` (of ``-L``); the *biharmonic*
-    eigenvalue is ``Λ²``, so the plate's modal stiffness is ``Q = kappa²·Λ²`` (4th power — easy to
-    under-square or double-square, so it is pinned here). Inserting ``u^n = z^n φ`` with
-    ``B φ = Λ² φ`` into ``δ_tt u = -kappa² B (θ u^{n+1} + (1-2θ) u^n + θ u^{n-1})`` gives
-
-        sin²(ω k / 2) = s = Q k² / (4 + 4 θ Q k²),   f = arcsin(sqrt(s)) / (π k).
-
-    As ``k → 0`` this tends to the continuum ``f = kappa·Λ/(2π)``. Unconditionally stable for
-    ``θ >= 1/4`` (``s <= 1``); the frequency depends on ``θ`` (the temporal scheme), so callers must
-    pass the resonator's own ``theta``.
-    """
-    Lambda_lap = np.asarray(Lambda_lap, dtype=float)
-    Q = kappa * kappa * Lambda_lap * Lambda_lap
-    s = Q * k * k / (4.0 + 4.0 * theta * Q * k * k)
-    return np.arcsin(np.sqrt(s)) / (np.pi * k)
+def discrete_plate_eigenfrequency(Lambda_lap, kappa, k, theta):
+    return _elemwise(_rs.modal_discrete_plate_eigenfrequency, Lambda_lap, kappa, k, theta)
 
 
-# -- orthotropic (grain) simply-supported plate: model #5 with a direction --------------------
-
-
-def orthotropic_plate_freqs(
-    kappa: float,
-    Lx: float,
-    Ly: float,
-    modes: list[tuple[int, int]],
-    grain_x: float = 1.0,
-    grain_cross: float = 1.0,
-    grain_y: float = 1.0,
-) -> NDArray[np.float64]:
-    """Continuum simply-supported **orthotropic** rectangular-plate frequencies.
-
-    The plate of a material with a grain — stiffer along one axis than across. The Navier modes are
-    still exactly ``sin(mπx/Lx) sin(nπy/Ly)`` (orthotropy does not mix them on a rectangle whose
-    axes are the material axes), but the frequency is no longer a function of the Laplacian
-    eigenvalue alone:
-
-        f_mn = (π/2) sqrt( [D_x (m/Lx)⁴ + 2H (m/Lx)²(n/Ly)² + D_y (n/Ly)⁴] / rho_s )
-
-    written in this module's ratio convention (``g = D/D_ref``, ``kappa² = D_ref/rho_s``) as
-
-        f_mn = (kappa/2π) · π² · sqrt( g_x a² + 2 g_h a b + g_y b² ),   a = (m/Lx)², b = (n/Ly)²
-
-    **The factor of 2 is on the cross term, and ``H = D_1 + 2 D_xy``** — see
-    :func:`physsynth.core.plate.grain_ratios_from_material`. At ``g_x = g_h = g_y = 1`` this is
-    :func:`rectangular_plate_freqs` exactly (``a² + 2ab + b² = (a+b)²``), which the suite asserts
-    rather than assumes.
-
-    Unlike the isotropic case, Poisson's ratio does **not** drop out — it enters through ``H``.
-    """
-    mn = np.asarray(modes, dtype=float)
-    a = (mn[:, 0] / Lx) ** 2
-    b = (mn[:, 1] / Ly) ** 2
-    q = grain_x * a * a + 2.0 * grain_cross * a * b + grain_y * b * b
-    if np.any(q <= 0.0):
-        raise ValueError(
-            "orthotropic modal stiffness is non-positive for at least one mode; grain_cross must "
-            "exceed -sqrt(grain_x*grain_y)."
-        )
-    return 0.5 * np.pi * kappa * np.sqrt(q)
+def orthotropic_plate_freqs(kappa, Lx, Ly, modes, grain_x=1.0, grain_cross=1.0, grain_y=1.0):
+    return _rs.modal_orthotropic_plate_freqs(
+        kappa, Lx, Ly, _modes(modes), grain_x, grain_cross, grain_y
+    )
 
 
 def discrete_orthotropic_plate_eigenfrequency(
-    lam_x: float | NDArray[np.float64],
-    lam_y: float | NDArray[np.float64],
-    kappa: float,
-    k: float,
-    theta: float,
-    grain_x: float = 1.0,
-    grain_cross: float = 1.0,
-    grain_y: float = 1.0,
-) -> NDArray[np.float64]:
-    """Discrete temporal frequency (Hz) of an **orthotropic** plate eigenmode, theta-scheme.
-
-    A separate function from :func:`discrete_plate_eigenfrequency` rather than an optional argument
-    on it, because the isotropic one is parameterised by the single Laplacian eigenvalue ``Λ`` and
-    this one genuinely needs the two axes apart: ``lam_x = (4/h²)sin²(mπh/2Lx)`` and ``lam_y``
-    likewise, both **positive**. The modal stiffness is
-
-        Q_mn = kappa² ( g_x lam_x² + 2 g_h lam_x lam_y + g_y lam_y² )
-
-    and from there the algebra is the isotropic one verbatim:
-
-        sin²(ω k/2) = s = Q k² / (4 + 4 θ Q k²),   f = arcsin(sqrt(s)) / (π k).
-
-    Because ``lam_x + lam_y = Λ`` and ``Q`` collapses to ``kappa² Λ²`` at ``g = (1,1,1)``, this
-    agrees with :func:`discrete_plate_eigenfrequency` there to machine precision.
-    """
-    lam_x = np.asarray(lam_x, dtype=float)
-    lam_y = np.asarray(lam_y, dtype=float)
-    q = grain_x * lam_x * lam_x + 2.0 * grain_cross * lam_x * lam_y + grain_y * lam_y * lam_y
-    if np.any(q <= 0.0):
-        raise ValueError(
-            "orthotropic modal stiffness is non-positive for at least one mode; grain_cross must "
-            "exceed -sqrt(grain_x*grain_y)."
-        )
-    Q = kappa * kappa * q
-    s = Q * k * k / (4.0 + 4.0 * theta * Q * k * k)
-    return np.arcsin(np.sqrt(s)) / (np.pi * k)
-
-
-def dirichlet_axis_eigenvalue(
-    m: int | NDArray[np.int64], L: float, h: float
-) -> NDArray[np.float64]:
-    """Positive 1-D Dirichlet second-difference eigenvalue ``(4/h²) sin²(mπh/2L)``.
-
-    The per-axis factor the orthotropic oracle needs. ``-`` this is the eigenvalue of ``δ_xx`` on
-    ``sin(mπx/L)`` sampled at the interior nodes; the isotropic Laplacian eigenvalue is the *sum*
-    of the two axes' values, which is why the isotropic oracle can take one number and the
-    orthotropic one cannot. Tends to ``(mπ/L)²`` as ``h → 0`` (the O(h²) source in both).
-    """
-    m = np.asarray(m, dtype=float)
-    return (4.0 / (h * h)) * np.sin(m * np.pi * h / (2.0 * L)) ** 2
-
-
-# -- 1D free-free Euler-Bernoulli beam (model #5b-pre): the free-edge plate de-risk ------------
-
-
-def free_free_beam_betaL(n_modes: int) -> NDArray[np.float64]:
-    """First ``n_modes`` positive roots ``β_n L`` of the free-free frequency equation.
-
-    The elastic modes of a free-free Euler–Bernoulli beam satisfy ``cos(βL)·cosh(βL) = 1``. The
-    roots are found by ``brentq`` on the overflow-safe rearrangement ``cos(x) − sech(x) = 0``
-    (``sech`` underflows harmlessly for large ``x``); root ``i`` lives in ``(iπ, (i+1)π)`` and tends
-    to ``(2i+1)π/2`` from above. The first few are ``4.730041, 7.853205, 10.995608, 14.137165, …``.
-
-    The double root at ``x = 0`` (the two rigid-body modes ``u ≡ 1`` and ``u ≡ x``, ``ω = 0``) is
-    **not** returned — those are the operator's nullspace, checked separately.
-    """
-    if n_modes < 1:
-        raise ValueError("n_modes must be >= 1.")
-    f = lambda x: np.cos(x) - 1.0 / np.cosh(x)  # noqa: E731
-    return np.array([brentq(f, i * np.pi, (i + 1) * np.pi) for i in range(1, n_modes + 1)])
-
-
-def free_free_beam_freqs(kappa: float, L: float, n_modes: int) -> NDArray[np.float64]:
-    """Closed-form free-free Euler–Bernoulli bending frequencies (the Part-0 oracle).
-
-    With stiffness ``kappa = sqrt(E I / (rho A))`` (same convention as the stiff string), the
-    bending PDE ``u_tt = -kappa² u_xxxx`` on a *free-free* beam has ``ω_n = kappa·β_n²`` where
-    ``β_n L`` are the roots of ``cos(βL)·cosh(βL) = 1`` (:func:`free_free_beam_betaL`), hence
-
-        f_n = kappa · (β_n L)² / (2π L²).
-
-    This is a *genuine closed form* (unlike the 2D free plate), which is exactly why the beam is
-    built first: it gives a tight oracle for the free-edge stencil before the 2D corners and Poisson
-    term. Returns the lowest ``n_modes`` elastic frequencies (the two ``ω = 0`` rigid-body modes
-    excluded).
-    """
-    bl = free_free_beam_betaL(n_modes)
-    return kappa * bl * bl / (2.0 * np.pi * L * L)
-
-
-# -- 2D free-edge (FFFF) plate (model #5b): the curved-Chladni plate, no closed form -------------
-
-
-def free_plate_ffff_square_lambdas() -> NDArray[np.float64]:
-    """Tabulated dimensionless frequencies of the **completely free (FFFF) square** plate, ν = 0.3.
-
-    The free plate has **no closed-form** modal oracle (unlike the simply-supported plate or the
-    free-free beam), so this is the *absolute* percent-level anchor for the free-edge plate. The
-    values are the dimensionless frequency parameters
-
-        λ = ω a² √(ρ_s / D) = ω a² / κ        (a = square side length, κ = √(D/ρ_s)),
-
-    so the physical frequency is ``f = λ κ / (2π a²)`` (:func:`free_plate_freq_from_lambda`).
-
-    Returned are the **lowest 5 elastic modes** (the 3 rigid-body modes ``{1, x, y}`` are excluded):
-
-        λ = [13.468, 19.596, 24.270, 34.801, 34.801]
-
-    The **fundamental is the saddle/twist** (diagonal nodal lines, λ₁ ≈ 13.47) — *not* a drum-like
-    bulge; a bulge-shaped lowest mode signals a wrong (ν-dropped) operator. Modes 4 and 5 are a
-    degenerate pair (the square's symmetry), so the comparison must be by **sorted eigenvalue**, not
-    per-mode label.
-
-    Source (exact digits, not remembered): Y. Narita, "Natural Frequencies of Isotropic Rectangular
-    Plates in Improved Accuracy", *EPI International Journal of Engineering* **5**(1), 2022,
-    pp. 26–36 (DOI 10.25042/epi-ije.022022.05), Table 1, F-F-F-F, a/b = 1, 12×12 Ritz. These are
-    converged upper-bound Ritz values that *improve on* Leissa's classic 1969 monograph
-    (NASA SP-160), whose corresponding parameters (≈13.49, 19.79, 24.43, 35.02) are slightly higher.
-    """
-    return np.array([13.468, 19.596, 24.270, 34.801, 34.801])
-
-
-def free_plate_freq_from_lambda(
-    lam: float | NDArray[np.float64], kappa: float, a: float
-) -> NDArray[np.float64]:
-    """Convert a dimensionless free-plate frequency parameter ``λ`` to a physical frequency (Hz).
-
-    With ``λ = ω a² √(ρ_s/D) = ω a²/κ`` (``κ = √(D/ρ_s)``, ``a`` = square side length), the
-    frequency is
-
-        f = ω / (2π) = λ κ / (2π a²).
-
-    No areal-density or thickness factor to fumble — ``κ`` is the single stiffness parameter (as for
-    the simply-supported plate). Pairs with :func:`free_plate_ffff_square_lambdas`.
-    """
-    lam = np.asarray(lam, dtype=float)
-    return lam * kappa / (2.0 * np.pi * a * a)
-
-
-# -- 2D free-edge ORTHOTROPIC plate (model #5of): the free plate with a grain ---------------------
-#
-# The free orthotropic plate has no closed-form spectrum (neither does the isotropic one) and no
-# freely-citable table either, so its four bending constants are validated by four independent
-# probes instead. Two of them are closed-form and live here; the other two are exact reductions to
-# the shipped 1-D free beam (see docs/dev/orthotropic-free-plate-plan.md §1.1).
-
-
-def free_plate_twist_bound(
-    kappa: float, a: float, b: float, grain_torsion: float = 0.5
-) -> float:
-    """Rayleigh upper bound on the **first elastic frequency** of a free orthotropic plate (Hz).
-
-    The centred saddle ``w = x·y`` (coordinates from the plate's centroid) has ``w_xx = w_yy = 0``
-    and ``w_xy = 1``, so in the orthotropic bending energy every term dies except the torsional one
-    and the Rayleigh quotient closes in one line:
-
-        U = 2 D_xy a b,   ∫∫ w² dA = a³b³/144   =>   omega² <= 576 D_xy / (rho_s a² b²)
-        omega_1 <= 24 sqrt(D_xy / rho_s) / (a b),    f_1 <= 24 kappa sqrt(g_xy) / (2π a b)
-
-    written in this module's ratio convention (``g_xy = D_xy/D_ref``, ``kappa² = D_ref/rho_s``). The
-    saddle is odd about both centre lines, so on a symmetric grid it is exactly orthogonal to the
-    rigid-body space ``{1, x, y}`` and the bound is legitimate rather than contaminated by the
-    zero modes.
-
-    Three things this is and is not:
-
-    - **It depends on the torsional rigidity alone.** ``D_x``, ``D_y`` and the coupling rigidity
-      ``D_1`` cannot appear, which is what makes it a probe of ``g_xy`` in isolation — and is why
-      the wood literature reads ``G_xy`` off a tapped free plate (Caldersmith, *Acustica* **56**
-      (1984) 144–152). The default ``grain_torsion = 0.5`` is the isotropic ``ν = 0`` value; for
-      isotropic material pass ``(1 - nu)/2``.
-    - **It is informative, not vacuous.** Isotropic square at ``ν = 0.3``: the bound is
-      ``24 sqrt(0.35) = 14.20`` in ``λ = ω a²/κ`` units against the tabulated 13.468
-      (:func:`free_plate_ffff_square_lambdas`) — a 5.4% one-term overshoot.
-    - **It is ONE-SIDED.** A uniformly too-soft operator satisfies it comfortably. It must be used
-      alongside a two-sided check (the free-beam reduction) — see the plan's §7.
-    """
-    if kappa <= 0 or a <= 0 or b <= 0:
-        raise ValueError("kappa, a and b must all be positive.")
-    if grain_torsion <= 0:
-        raise ValueError(
-            f"grain_torsion (D_xy/D_ref) must be positive — at zero the saddle carries no energy "
-            f"and joins the rigid-body nullspace; got {grain_torsion}."
-        )
-    return 24.0 * kappa * math.sqrt(grain_torsion) / (2.0 * math.pi * a * b)
-
-
-def free_circular_plate_lambda_roots(
-    nu: float, n: int, lam_max: float = 14.0, scan: int = 20000
-) -> NDArray[np.float64]:
-    """Roots ``lambda = k a`` of the **free circular** Kirchhoff plate for ``n`` nodal diameters.
-
-    The oracle the guitar-shaped plate (#5g) is validated against, **derived rather than cited** —
-    the same policy #5of adopted when its orthotropic tables turned out to be paywalled. A disk
-    exercises the identical staircased-mask machinery as a guitar outline and, unlike a guitar, has
-    a real answer.
-
-    With ``w = W(r) cos(n theta)``, the regular solution is ``W(rho) = A J_n(lam rho) +
-    B I_n(lam rho)`` on ``rho = r/a``, and ``k⁴ = rho_s omega²/D`` gives ``omega = kappa lam²/a²``.
-    **Note the square:** the frequency parameter tabulated in the plate literature is
-    ``Lambda = omega a²/kappa = lam²``, not ``lam`` (:func:`free_circular_plate_lambdas`). Getting
-    that backwards makes a correct root look like a 2.3x error.
-
-    The two free-edge conditions at ``rho = 1``, with primes ``d/drho`` (the ``a``-powers cancel
-    after multiplying the second by ``a³``):
-
-        M_r = 0:   W'' + nu (W' - n² W) = 0
-        V_r = 0:   W''' + W'' - [1 + n²(2-nu)] W' + n²(3-nu) W = 0
-
-    the second assembled from the Kirchhoff shear ``V_r = Q_r + (1/r) dM_rtheta/dtheta``, whose
-    ``(1-nu) n²`` twisting contribution is what makes the ``W'`` and ``W`` coefficients depend on
-    ``nu`` at all.
-
-    **This derivation is self-checked three ways**, because a plausible sign error survives most
-    checks (the tests assert all three):
-
-    1. **Rigid-body roots.** ``W = 1`` at ``n = 0`` and ``W = rho`` at ``n = 1`` annihilate both
-       lines identically — a translation and a tilt cost a free plate nothing.
-    2. **The plate's own energy.** Build ``W`` from each root's nullvector and evaluate the bending
-       Rayleigh quotient in polar coordinates: a genuine mode returns ``lam⁴`` exactly. Every root
-       found here passes, so the equation has no spurious roots to filter.
-    3. **A closed-form bound containing no Bessel function.** The pure saddle ``w = xy`` is
-       orthogonal to ``{1, x, y}`` on a disk and has ``w_xx = w_yy = 0``, ``w_xy = 1``, giving
-       ``P = 2(1-nu) pi a²`` against ``∫w² = pi a⁶/24`` and hence
-
-           Lambda_1 <= sqrt(48 (1 - nu))
-
-       — 5.79655 at ``nu = 0.3`` against a derived fundamental of 5.35833, an **8.18%** one-term
-       overshoot, the same character as the free *rectangle*'s 5.4% (:func:`free_plate_twist_bound`,
-       which is this same probe on the other outline).
-
-    ``lam = 0`` is a root for ``n = 0, 1`` (those rigid-body modes) and is deliberately **not**
-    returned: the caller wants elastic modes.
-    """
-    if not (-1.0 < nu < 0.5):
-        raise ValueError(f"nu (Poisson's ratio) must be in (-1, 1/2), got {nu}.")
-    if n < 0:
-        raise ValueError(f"n (nodal diameters) must be >= 0, got {n}.")
-
-    def _det(lam: float) -> float:
-        m = np.empty((2, 2))
-        for col, f in enumerate((special.jvp, special.ivp)):
-            d0, d1 = f(n, lam, 0), f(n, lam, 1) * lam
-            d2, d3 = f(n, lam, 2) * lam**2, f(n, lam, 3) * lam**3
-            m[0, col] = d2 + nu * (d1 - n * n * d0)
-            m[1, col] = (
-                d3 + d2 - (1.0 + n * n * (2.0 - nu)) * d1 + n * n * (3.0 - nu) * d0
-            )
-        # I_n grows like e^lam; rescale its column so the determinant stays finite. A positive
-        # scalar column scaling moves no root.
-        if lam > 1.0:
-            m[:, 1] *= math.exp(-lam)
-        return float(m[0, 0] * m[1, 1] - m[0, 1] * m[1, 0])
-
-    xs = np.linspace(1e-6, float(lam_max), int(scan))
-    vs = np.array([_det(x) for x in xs])
-    out: list[float] = []
-    for i in range(xs.size - 1):
-        if np.isfinite(vs[i]) and np.isfinite(vs[i + 1]) and vs[i] * vs[i + 1] < 0.0:
-            out.append(brentq(_det, xs[i], xs[i + 1], xtol=1e-13))
-    return np.array([v for v in out if v > 1e-3], dtype=float)
-
-
-def free_circular_plate_lambdas(
-    nu: float = 0.3, n_modes: int = 7, n_max: int = 8
-) -> tuple[NDArray[np.float64], NDArray[np.int64]]:
-    """Lowest ``n_modes`` elastic frequency parameters ``Lambda = omega a² sqrt(rho_s/D)`` of a
-    completely free circular plate, **with multiplicity**, plus each mode's nodal-diameter count.
-
-    ``Lambda = lam²`` from :func:`free_circular_plate_lambda_roots`. At ``nu = 0.3`` the first
-    entries are 5.35833 (n=2), 9.00314 (n=0), 12.43899 (n=3), 20.47455 (n=1), 21.83516 (n=4).
-
-    **Multiplicity is not decoration and omitting it is a trap that looks like a physics bug.**
-    Every ``n >= 1`` mode is a *degenerate pair* — ``cos(n theta)`` and ``sin(n theta)`` are
-    independent and cost the same energy — while ``n = 0`` modes are single. A discrete spectrum
-    contains both members, so comparing it against a list that names each pair once misaligns
-    everything past the first entry and reads as 26–42% errors that grow worse under refinement.
-    That is a *comparison* failure with no bug behind it, and it is why the pairs are expanded here
-    rather than at the call site.
-
-    The degeneracy is also a **zero-valued detector** in its own right: a square grid relates a
-    pair's axis-aligned and 45° members by no symmetry, so it splits them, and the exact answer for
-    that split is zero. Measured on a staircased disk: 0.69%, 1.01%, 0.06%, 0.52%, 0.17%, 0.013% at
-    N = 24…128 — shrinking but **not monotone**, so assert a ceiling that shrinks with ``h``, never
-    monotonicity.
-    """
-    if n_modes < 1:
-        raise ValueError(f"n_modes must be >= 1, got {n_modes}.")
-    found: list[tuple[float, int]] = []
-    for n in range(int(n_max) + 1):
-        for lam in free_circular_plate_lambda_roots(nu, n):
-            found += [(lam * lam, n)] * (1 if n == 0 else 2)
-    found.sort()
-    if len(found) < n_modes:
-        raise ValueError(
-            f"only {len(found)} modes below the root-scan ceiling; raise lam_max or n_max."
-        )
-    head = found[:n_modes]
-    return (
-        np.array([v for v, _ in head], dtype=float),
-        np.array([n for _, n in head], dtype=np.int64),
+    lam_x, lam_y, kappa, k, theta, grain_x=1.0, grain_cross=1.0, grain_y=1.0
+):
+    x, y = np.broadcast_arrays(np.asarray(lam_x, dtype=float), np.asarray(lam_y, dtype=float))
+    out = _rs.modal_discrete_orthotropic_plate_eigenfrequency(
+        _flat(x), _flat(y), kappa, k, theta, grain_x, grain_cross, grain_y
     )
+    return out.reshape(x.shape) if x.ndim else out[0]
 
 
-def free_circular_plate_saddle_bound(nu: float) -> float:
-    """Closed-form Rayleigh bound ``Lambda_1 <= sqrt(48(1-nu))`` on the free circular plate.
+def dirichlet_axis_eigenvalue(m, L, h):
+    return _elemwise(_rs.modal_dirichlet_axis_eigenvalue, m, L, h)
 
-    The disk's version of :func:`free_plate_twist_bound` — same trial function ``w = xy``, same
-    one-term Rayleigh argument, different domain — and the one line of
-    :func:`free_circular_plate_lambda_roots`'s derivation a reader can check by hand. Contains no
-    Bessel function, so it cannot share a bug with the frequency equation it validates.
-    """
-    if not (-1.0 < nu < 0.5):
-        raise ValueError(f"nu (Poisson's ratio) must be in (-1, 1/2), got {nu}.")
-    return math.sqrt(48.0 * (1.0 - nu))
-
-
-def free_plate_coupling_form(
-    grain_coupling: float, h: float, Nx: int, Ny: int
-) -> float:
-    """Exact value of the free-plate bending form on the pair ``(x², y²)`` — the ``D_1`` probe.
-
-    On ``f = x²``, ``g = y²`` every term of the orthotropic bilinear form vanishes except the
-    coupling one (``f_yy = g_xx = 0``, ``f_xy = g_xy = 0``), leaving a closed form:
-
-        P(x², y²) = ∫∫ D_1 (f_xx g_yy + f_yy g_xx) dA = 4 D_1 a b        (continuum)
-
-    Discretely the collocated second differences return ``2`` at every interior node and ``0`` on
-    the respective free edges — where the *natural* boundary condition puts them — so the discrete
-    form is short of exactly one boundary strip and is itself **exact**:
-
-        fᵀ K g = 4 g_1 h² (Nx - 1) (Ny - 1)          (this function; machine precision)
-               -> 4 g_1 a b  as h -> 0               (the O(h) continuum statement)
-
-    Returned is the **discrete** value, in units of the reference rigidity (multiply by
-    ``rho_s kappa²`` for Joules). Measured to 5.9e-16 … 1.9e-14 relative across grids.
-
-    This is the **only** one of the free plate's four probes that responds to the coupling rigidity:
-    the twist bound is blind to it by construction, and the free-beam reduction is exact only *at*
-    ``g_1 = 0``. It is therefore load-bearing despite being the least glamorous of the three, and
-    is not to be dropped for looking like a unit test of an array sum.
-    """
-    if h <= 0:
-        raise ValueError("h must be positive.")
-    if Nx < 2 or Ny < 2:
-        raise ValueError(f"Nx and Ny must both be >= 2, got ({Nx}, {Ny}).")
-    return 4.0 * grain_coupling * h * h * (Nx - 1) * (Ny - 1)
-
-
-# -- 1D acoustic bore (wind leg): the air column of a clarinet / flute ------------------------
-
-
-def bore_resonance_frequencies(
-    c0: float, L: float, n_partials: int, boundary: str = "closed-open"
-) -> NDArray[np.float64]:
-    """Continuum acoustic-tube resonances (HANDOFF §12.A, the clarinet oracle).
-
-    A tube of length ``L`` in air of sound speed ``c0`` resonates at
-
-    - ``"closed-open"`` -> ``f_n = (2n - 1) c0 / (4 L)``  — the **odd** harmonics only (a quarter-
-      wave resonator: pressure antinode at the rigid wall, node at the open end). This is the
-      clarinet signature and the model-specific correctness test for the bore.
-    - ``"open-open"`` or ``"closed-closed"`` -> ``f_n = n c0 / (2 L)`` — the **full** harmonic
-      series (half-wave resonator; symmetric ends, matching boundary condition at both).
-
-    Returns the lowest ``n_partials`` resonances (Hz), ascending. The exact air constant ``c0`` is
-    the analogue of the string's wave speed here; unlike string tension it is a property of the
-    medium, not tunable.
-    """
-    n = np.arange(1, n_partials + 1)
-    if boundary == "closed-open":
-        return (2 * n - 1) * c0 / (4.0 * L)
-    if boundary in ("open-open", "closed-closed"):
-        return n * c0 / (2.0 * L)
-    raise ValueError(
-        f"boundary must be 'closed-open', 'open-open', or 'closed-closed', got {boundary!r}."
-    )
-
-
-def discrete_bore_eigenfrequency(
-    omega2: float | NDArray[np.float64], k: float
-) -> NDArray[np.float64]:
-    """Discrete temporal frequency (Hz) of a bore eigenmode from its angular-frequency-squared.
-
-    The staggered p/U leapfrog eliminates the velocity to ``C δ_tt p = -k² L p`` (``L = Gᵀ M⁻¹ G``,
-    ``C`` the compliance mass), so an eigenmode ``L φ = ω² C φ`` obeys the same simple-harmonic
-    leapfrog as every other second-order scheme here:
-
-        sin(Ω k / 2) = (k/2) ω = (k/2) sqrt(omega2),    f = arcsin((k/2) sqrt(omega2)) / (π k).
-
-    ``omega2`` is the **generalized eigenvalue** of ``(L, C)`` restricted to the free (non-open)
-    pressure nodes — already ``ω²`` (no extra wave-speed factor: ``c0`` is baked into ``L`` and
-    ``C``). As ``k → 0`` this tends to the continuum ``f = sqrt(omega2)/(2π)``, whose values are the
-    resonances of :func:`bore_resonance_frequencies`. Stable for all valid ``λ`` (the argument stays
-    ``<= 1`` when ``λ <= 1``).
-    """
-    omega2 = np.asarray(omega2, dtype=float)
-    arg = 0.5 * k * np.sqrt(np.clip(omega2, 0.0, None))
-    return np.arcsin(np.clip(arg, -1.0, 1.0)) / (np.pi * k)
-
-
-def discrete_beam_eigenfrequency(
-    mu: float | NDArray[np.float64], kappa: float, k: float, theta: float
-) -> NDArray[np.float64]:
-    """Discrete temporal frequency (Hz) of a beam eigenmode, implicit theta-scheme.
-
-    ``mu`` is the **4th-power spatial eigenvalue** ``ω²/κ²`` — the generalized eigenvalue of
-    ``K φ = mu W φ`` for the energy-first operator
-    (:func:`physsynth.core.operators.free_beam_stiffness`), ``mu → β⁴`` in the continuum. The modal
-    stiffness is ``Q = kappa²·mu = ω²``. Inserting ``u^n = z^n φ`` into
-    ``W δ_tt u = -kappa² K (θ u^{n+1} + (1-2θ) u^n + θ u^{n-1})`` gives the same
-    relation as the plate (with ``Q`` from the beam operator rather than ``kappa²Λ²``):
-
-        sin²(ω k / 2) = s = Q k² / (4 + 4 θ Q k²),    f = arcsin(sqrt(s)) / (π k).
-
-    As ``k → 0`` this tends to the spatial ``f = kappa·sqrt(mu)/(2π)``. Unconditionally stable for
-    ``θ >= 1/4``; depends on ``θ``, so callers pass the resonator's own ``theta``.
-    """
-    mu = np.asarray(mu, dtype=float)
-    Q = kappa * kappa * mu
-    s = Q * k * k / (4.0 + 4.0 * theta * Q * k * k)
-    return np.arcsin(np.sqrt(s)) / (np.pi * k)
-
-
-# -- Rust swap (docs/dev/rust-migration-plan.md) ----------------------------------------------
-#
-# Phase 7 batch 2. `PHYSSYNTH_RS_ANALYSIS=1` replaces every public name above with its
-# `physsynth_rs` twin, and every test in the fourteen files that import this module runs
-# unmodified against them.
-#
-# **This is the ANALYSIS flag, not the model flag, and the distinction is load-bearing.**
-# `PHYSSYNTH_RS` swaps the things being measured; this swaps the ruler. Setting only the first
-# leaves a Rust string measured by a Python detector against an unmoved oracle, which is what
-# makes the acceptance run mean anything -- merge the two and a shared misreading would cancel.
-# Plan section 36.4 has the argument; the rule is that no `core/` module ever reads this variable
-# and every `analysis/` module does.
-#
-# **What agreement is claimed.** Three tiers, and the parity file asserts each at its own bar:
-#
-# * *Exact.* `harmonic_frequencies`, `inharmonicity_B`, `free_plate_freq_from_lambda`,
-#   `free_plate_coupling_form`, `bore_resonance_frequencies`, `free_plate_ffff_square_lambdas`,
-#   `rectangular_discrete_eigenvalues`, `stiff_harmonic_frequencies` -- `+ - * / sqrt` only, which
-#   IEEE-754 pins on any machine.
-# * *Tolerance, 1e-15 relative.* Everything with an `arcsin`, `arccos` or `log2` in it. NumPy
-#   computes transcendentals with its own CPU-dispatched kernels rather than the platform libm
-#   (plan section 22.1), so a bit-identity assertion here would be a claim about which machine ran
-#   CI -- the mistake that turned one CI failure into eighteen on unchanged code.
-# * *The two root-finds.* `free_free_beam_betaL` has one root per bracket by construction and
-#   agrees to `brentq`'s own tolerance. `free_circular_plate_lambda_roots` scans 20,000 points and
-#   *decides* which brackets to keep, so its margin was measured before the port: worst |det|
-#   against the cancellation that produced it, away from a genuine crossing, is 4.6e-6, versus the
-#   ~1e-15 a Bessel routine can move it. A margin of ~5e9x, and not a knife edge -- unlike section
-#   36's separation test, whose margin was exactly zero.
-#
-# **The Bessel and elliptic functions are transcriptions, not a crate.** `scipy.special.jn_zeros`,
-# `jvp`, `ivp`, `ellipk` and `ellipj` have no Rust dependency behind them, and taking one would
-# have fixed this project's oracles to a third party's algorithm -- these numbers are the
-# acceptance contract. `crates/physsynth-analysis/src/bessel.rs` carries the measured agreement
-# (J_n to 6.7e-16 **absolute**; the relative figure is 2.1e-12 and sits where J itself is 1e-4,
-# near one of its own zeros, which is why the bar is absolute).
-#
-# **The shape dispatch stays here rather than in Rust.** Fourteen of these are "whatever you give
-# me, elementwise", and reproducing NumPy's broadcasting in Rust would get the 0-d case wrong in
-# the way plan section 28 recorded: `ascontiguousarray` promotes a 0-d array to shape `(1,)`, so a
-# function that owes the caller a scalar would hand back a one-element array and everything
-# downstream would keep working, silently, with a different type. So the binding takes flat slices
-# and `_elemwise` below ravels and reshapes -- three lines, once, for all fourteen.
-harmonic_frequencies_py = harmonic_frequencies
-mode_shape_py = mode_shape
-discrete_mode_frequency_py = discrete_mode_frequency
-inharmonicity_B_py = inharmonicity_B
-stiff_harmonic_frequencies_py = stiff_harmonic_frequencies
-discrete_stiff_mode_frequency_py = discrete_stiff_mode_frequency
-cents_py = cents
-rectangular_membrane_freqs_py = rectangular_membrane_freqs
-rectangular_mode_field_py = rectangular_mode_field
-rectangular_discrete_eigenvalues_py = rectangular_discrete_eigenvalues
-circular_membrane_freqs_py = circular_membrane_freqs
-discrete_membrane_eigenfrequency_py = discrete_membrane_eigenfrequency
-rectangular_plate_freqs_py = rectangular_plate_freqs
-discrete_plate_eigenfrequency_py = discrete_plate_eigenfrequency
-orthotropic_plate_freqs_py = orthotropic_plate_freqs
-discrete_orthotropic_plate_eigenfrequency_py = discrete_orthotropic_plate_eigenfrequency
-dirichlet_axis_eigenvalue_py = dirichlet_axis_eigenvalue
-free_free_beam_betaL_py = free_free_beam_betaL
-free_free_beam_freqs_py = free_free_beam_freqs
-free_plate_ffff_square_lambdas_py = free_plate_ffff_square_lambdas
-free_plate_freq_from_lambda_py = free_plate_freq_from_lambda
-free_plate_twist_bound_py = free_plate_twist_bound
-free_circular_plate_lambda_roots_py = free_circular_plate_lambda_roots
-free_circular_plate_lambdas_py = free_circular_plate_lambdas
-free_circular_plate_saddle_bound_py = free_circular_plate_saddle_bound
-free_plate_coupling_form_py = free_plate_coupling_form
-bore_resonance_frequencies_py = bore_resonance_frequencies
-discrete_bore_eigenfrequency_py = discrete_bore_eigenfrequency
-discrete_beam_eigenfrequency_py = discrete_beam_eigenfrequency
-"""The pure-Python reference implementations, under names the swap below never rebinds."""
-
-_USE_RUST = os.environ.get("PHYSSYNTH_RS_ANALYSIS", "").strip() not in ("", "0", "false", "False")
-
-if _USE_RUST:  # pragma: no cover - exercised by the dedicated CI step, not the default gate
-    import physsynth_rs as _rs
-
-    def _flat(a) -> NDArray[np.float64]:
-        """Whatever the caller passed, as the contiguous flat float64 array the binding wants."""
-        return np.ascontiguousarray(np.asarray(a, dtype=float).ravel())
-
-    def _elemwise(fn, a, *args):
-        """Call a flat-in/flat-out binding and restore NumPy's own shape convention.
-
-        A 0-d input must come back as a scalar, not a one-element array -- see the note above.
-        """
-        arr = np.asarray(a, dtype=float)
-        out = fn(_flat(arr), *args)
-        return out.reshape(arr.shape) if arr.ndim else out[0]
-
-    def _modes(modes):
-        """A mode list as the ``[(m, n), ...]`` of Python ints the binding extracts."""
-        return [(int(m), int(n)) for m, n in np.asarray(modes).reshape(-1, 2)]
-
-    def harmonic_frequencies(c, L, n_partials):  # type: ignore[misc]  # noqa: F811
-        return _rs.modal_harmonic_frequencies(c, L, int(n_partials))
-
-    def mode_shape(x, L, m):  # type: ignore[misc]  # noqa: F811
-        arr = np.asarray(x, dtype=float)
-        out = _rs.modal_mode_shape(_flat(arr), L, int(m))
-        return out.reshape(arr.shape) if arr.ndim else out[0]
-
-    def discrete_mode_frequency(c, L, N, lam, m):  # type: ignore[misc]  # noqa: F811
-        return _rs.modal_discrete_mode_frequency(c, L, int(N), lam, int(m))
-
-    def inharmonicity_B(c, L, kappa):  # type: ignore[misc]  # noqa: F811
-        return _rs.modal_inharmonicity_b(c, L, kappa)
-
-    def stiff_harmonic_frequencies(c, L, kappa, n_partials):  # type: ignore[misc]  # noqa: F811
-        return _rs.modal_stiff_harmonic_frequencies(c, L, kappa, int(n_partials))
-
-    def discrete_stiff_mode_frequency(c, L, N, kappa, k, m, theta):  # type: ignore[misc]  # noqa: F811,E501
-        return _rs.modal_discrete_stiff_mode_frequency(c, L, int(N), kappa, k, int(m), theta)
-
-    def cents(f, f_ref):  # type: ignore[misc]  # noqa: F811
-        # Broadcast first, exactly as the ufunc would, then hand over one flat pair -- so the whole
-        # expression 1200*log2(f/f_ref) lives on the Rust side rather than half of it.
-        a, b = np.broadcast_arrays(np.asarray(f, dtype=float), np.asarray(f_ref, dtype=float))
-        out = _rs.modal_cents(_flat(a), _flat(b))
-        return out.reshape(a.shape) if a.ndim else out[0]
-
-    def rectangular_membrane_freqs(c, Lx, Ly, modes):  # type: ignore[misc]  # noqa: F811
-        return _rs.modal_rectangular_membrane_freqs(c, Lx, Ly, _modes(modes))
-
-    def rectangular_mode_field(X, Y, Lx, Ly, m, n):  # type: ignore[misc]  # noqa: F811
-        arr = np.asarray(X, dtype=float)
-        out = _rs.modal_rectangular_mode_field(_flat(X), _flat(Y), Lx, Ly, int(m), int(n))
-        return out.reshape(arr.shape) if arr.ndim else out[0]
-
-    def rectangular_discrete_eigenvalues(h, Nx, Ny, modes):  # type: ignore[misc]  # noqa: F811
-        return _rs.modal_rectangular_discrete_eigenvalues(h, int(Nx), int(Ny), _modes(modes))
-
-    def circular_membrane_freqs(c, a, n_modes, m_max=12, n_max=12):  # type: ignore[misc]  # noqa: F811,E501
-        return _rs.modal_circular_membrane_freqs(c, a, int(n_modes), int(m_max), int(n_max))
-
-    def discrete_membrane_eigenfrequency(Lambda, c, k):  # type: ignore[misc]  # noqa: F811
-        return _elemwise(_rs.modal_discrete_membrane_eigenfrequency, Lambda, c, k)
-
-    def rectangular_plate_freqs(kappa, Lx, Ly, modes):  # type: ignore[misc]  # noqa: F811
-        return _rs.modal_rectangular_plate_freqs(kappa, Lx, Ly, _modes(modes))
-
-    def discrete_plate_eigenfrequency(Lambda_lap, kappa, k, theta):  # type: ignore[misc]  # noqa: F811,E501
-        return _elemwise(_rs.modal_discrete_plate_eigenfrequency, Lambda_lap, kappa, k, theta)
-
-    def orthotropic_plate_freqs(  # type: ignore[misc]  # noqa: F811
-        kappa, Lx, Ly, modes, grain_x=1.0, grain_cross=1.0, grain_y=1.0
-    ):
-        return _rs.modal_orthotropic_plate_freqs(
-            kappa, Lx, Ly, _modes(modes), grain_x, grain_cross, grain_y
-        )
-
-    def discrete_orthotropic_plate_eigenfrequency(  # type: ignore[misc]  # noqa: F811
-        lam_x, lam_y, kappa, k, theta, grain_x=1.0, grain_cross=1.0, grain_y=1.0
-    ):
-        x, y = np.broadcast_arrays(
-            np.asarray(lam_x, dtype=float), np.asarray(lam_y, dtype=float)
-        )
-        out = _rs.modal_discrete_orthotropic_plate_eigenfrequency(
-            _flat(x), _flat(y), kappa, k, theta, grain_x, grain_cross, grain_y
-        )
-        return out.reshape(x.shape) if x.ndim else out[0]
-
-    def dirichlet_axis_eigenvalue(m, L, h):  # type: ignore[misc]  # noqa: F811
-        return _elemwise(_rs.modal_dirichlet_axis_eigenvalue, m, L, h)
-
-    def free_free_beam_betaL(n_modes):  # type: ignore[misc]  # noqa: F811
-        return _rs.modal_free_free_beam_beta_l(int(n_modes))
-
-    def free_free_beam_freqs(kappa, L, n_modes):  # type: ignore[misc]  # noqa: F811
-        return _rs.modal_free_free_beam_freqs(kappa, L, int(n_modes))
-
-    def free_plate_ffff_square_lambdas():  # type: ignore[misc]  # noqa: F811
-        return _rs.modal_free_plate_ffff_square_lambdas()
-
-    def free_plate_freq_from_lambda(lam, kappa, a):  # type: ignore[misc]  # noqa: F811
-        return _elemwise(_rs.modal_free_plate_freq_from_lambda, lam, kappa, a)
-
-    def free_plate_twist_bound(kappa, a, b, grain_torsion=0.5):  # type: ignore[misc]  # noqa: F811
-        return _rs.modal_free_plate_twist_bound(kappa, a, b, grain_torsion)
-
-    def free_circular_plate_lambda_roots(nu, n, lam_max=14.0, scan=20000):  # type: ignore[misc]  # noqa: F811,E501
-        return _rs.modal_free_circular_plate_lambda_roots(nu, int(n), float(lam_max), int(scan))
-
-    def free_circular_plate_lambdas(nu=0.3, n_modes=7, n_max=8):  # type: ignore[misc]  # noqa: F811
-        return _rs.modal_free_circular_plate_lambdas(nu, int(n_modes), int(n_max))
-
-    def free_circular_plate_saddle_bound(nu):  # type: ignore[misc]  # noqa: F811
-        return _rs.modal_free_circular_plate_saddle_bound(nu)
-
-    def free_plate_coupling_form(grain_coupling, h, Nx, Ny):  # type: ignore[misc]  # noqa: F811
-        return _rs.modal_free_plate_coupling_form(grain_coupling, h, int(Nx), int(Ny))
-
-    def bore_resonance_frequencies(c0, L, n_partials, boundary="closed-open"):  # type: ignore[misc]  # noqa: F811,E501
-        return _rs.modal_bore_resonance_frequencies(c0, L, int(n_partials), boundary)
-
-    def discrete_bore_eigenfrequency(omega2, k):  # type: ignore[misc]  # noqa: F811
-        return _elemwise(_rs.modal_discrete_bore_eigenfrequency, omega2, k)
-
-    def discrete_beam_eigenfrequency(mu, kappa, k, theta):  # type: ignore[misc]  # noqa: F811
-        return _elemwise(_rs.modal_discrete_beam_eigenfrequency, mu, kappa, k, theta)
+
+def free_free_beam_betaL(n_modes):
+    return _rs.modal_free_free_beam_beta_l(int(n_modes))
+
+
+def free_free_beam_freqs(kappa, L, n_modes):
+    return _rs.modal_free_free_beam_freqs(kappa, L, int(n_modes))
+
+
+def free_plate_ffff_square_lambdas():
+    return _rs.modal_free_plate_ffff_square_lambdas()
+
+
+def free_plate_freq_from_lambda(lam, kappa, a):
+    return _elemwise(_rs.modal_free_plate_freq_from_lambda, lam, kappa, a)
+
+
+def free_plate_twist_bound(kappa, a, b, grain_torsion=0.5):
+    return _rs.modal_free_plate_twist_bound(kappa, a, b, grain_torsion)
+
+
+def free_circular_plate_lambda_roots(nu, n, lam_max=14.0, scan=20000):
+    return _rs.modal_free_circular_plate_lambda_roots(nu, int(n), float(lam_max), int(scan))
+
+
+def free_circular_plate_lambdas(nu=0.3, n_modes=7, n_max=8):
+    return _rs.modal_free_circular_plate_lambdas(nu, int(n_modes), int(n_max))
+
+
+def free_circular_plate_saddle_bound(nu):
+    return _rs.modal_free_circular_plate_saddle_bound(nu)
+
+
+def free_plate_coupling_form(grain_coupling, h, Nx, Ny):
+    return _rs.modal_free_plate_coupling_form(grain_coupling, h, int(Nx), int(Ny))
+
+
+def bore_resonance_frequencies(c0, L, n_partials, boundary="closed-open"):
+    return _rs.modal_bore_resonance_frequencies(c0, L, int(n_partials), boundary)
+
+
+def discrete_bore_eigenfrequency(omega2, k):
+    return _elemwise(_rs.modal_discrete_bore_eigenfrequency, omega2, k)
+
+
+def discrete_beam_eigenfrequency(mu, kappa, k, theta):
+    return _elemwise(_rs.modal_discrete_beam_eigenfrequency, mu, kappa, k, theta)

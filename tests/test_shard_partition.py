@@ -127,14 +127,11 @@ REMAINING_PARITY_FAMILY = {
     "test_rust_parity_airbox_memb.py",
     "test_rust_parity_airbox_port.py",
     "test_rust_parity_airbox_wrap.py",
-    "test_rust_parity_analysis.py",
     "test_rust_parity_banded.py",
     "test_rust_parity_beam.py",
     "test_rust_parity_connection.py",
     "test_rust_parity_operators.py",
     "test_rust_parity_ops2d.py",
-    "test_rust_parity_rotating_wave.py",
-    "test_rust_parity_spectrum.py",
 }
 
 

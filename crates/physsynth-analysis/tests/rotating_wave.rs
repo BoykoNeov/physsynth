@@ -12,7 +12,11 @@
 //!    written eight models before this one and knowing nothing about helices.
 //! 3. **The structural identities** — the Jacobian against finite differences of the residual, and
 //!    its asymmetry being exactly the discrete-gradient time factor. These are what a transcription
-//!    can silently get wrong while every number still looks plausible.
+//!    can silently get wrong while every number still looks plausible, and they are **not in this
+//!    file**: `residual`, `jacobian` and `NewtonCtx` are private, so they live in
+//!    `src/rotating_wave.rs`'s own `mod tests`. This header claimed them for a phase while they
+//!    existed only in `tests/test_geometric_rotating_wave.py`, in Python — an overclaim that unit
+//!    10's deletion is what found (plan §44).
 
 use physsynth_analysis::rotating_wave::{
     kc_circular_frequency, planar_hessian_cells, rotating_wave_history, solve_rotating_wave,

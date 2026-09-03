@@ -32,10 +32,13 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    `dispersion`, `duffing`, `rotating_wave`, plus the Bessel and elliptic functions they stand on —
    are in a **third crate**, `crates/physsynth-analysis`.
 
-   **Fifteen of twenty-three Python model bodies are GONE** — 16,146 lines, six of eleven deletion
-   units, and not one physics bar retired. Plan **§39** is the audit that made the order computable
-   (eleven units, from the reference-alias graph) and **§40–§43** are the deletions. Read §39's
-   tables before scoping the next one. Four things about the new state:
+   **Twenty-one of twenty-three Python model bodies are GONE** — 17,988 lines, eight of eleven
+   deletion units, and not one physics bar retired. Plan **§39** is the audit that made the order
+   computable (eleven units, from the reference-alias graph) and **§40–§44** are the deletions. Read
+   §39's tables before scoping the next one. **Three units are left and none is blocked on a
+   question**: `airbox` and `beam` need native Rust bars written for `AirBox` and `FreeBeam`;
+   `connection` and the airbox wrapper tier are blocked permanently, because they exist only in the
+   binding crate and a `physsynth-core` test cannot reach them. Four things about the new state:
 
    - **The wheel is now REQUIRED**, everywhere. A deleted model's module is an unconditional
      `from physsynth_rs import X`, so `pip install ./crates/physsynth-py` is a precondition for
@@ -66,22 +69,26 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    Python side is still alive (reinstall the wheel before believing any parity number — nothing can
    tell a stale wheel from a fresh one).
 
-   **There are TWO flags and they must not be merged.** `PHYSSYNTH_RS` swaps the *models*;
-   `PHYSSYNTH_RS_ANALYSIS` swaps the *instrument that measures them*. The acceptance run sets only
-   the first, so a Rust model is still checked by a Python detector against an unmoved oracle —
-   widen one flag over both and a shared misreading would cancel (plan §36.4). Every further
-   `analysis/` module goes behind the second; no `core/` module ever does. The one case that reads
-   like an exception is not: `piston_radiation_resistance` is *implemented* in the analysis crate
-   (the core crate's dependency list must stay empty, so it cannot reach a Bessel function) while
-   its Python name swaps on `PHYSSYNTH_RS`, because it lives in a `core/` module. The crate a
-   function is implemented in and the flag its name is swapped by are separate questions (§37.7).
-   **Answered 2026-09-03 (the human's call):** `analysis/`'s Python bodies (units 10 and 11) *are*
-   to be deleted, but **the numbers get frozen first** — what the Python detector measures across a
-   spread of fixtures is recorded as written-down constants, so the Rust instrument stays checked
-   against numbers a second implementation produced. `PHYSSYNTH_RS_ANALYSIS` becomes a no-op at
-   that point and the two-flag separation goes with it; what replaces it is weaker in one specific
-   way (the check can be repeated but not re-derived) and the file holding the constants must say
-   so. Until that batch lands, the rule above stands as written.
+   **There is ONE flag now, and the second one's job was handed to a file.** `PHYSSYNTH_RS` swaps
+   the *models*. `PHYSSYNTH_RS_ANALYSIS` swapped the *instrument that measures them* and is read by
+   nothing since units 10 and 11 were deleted (plan §44) — `physsynth/analysis/` has one
+   implementation. The separation it protected is worth understanding rather than forgetting,
+   because it is what makes the acceptance run mean anything: with only the model flag set, a Rust
+   model was read by a **Python ruler**, so a misreading shared by a model and its detector could
+   not cancel (§36.4). That check was made and passed; what the deletion removed is the ability to
+   *re-derive* it, and the human's condition for allowing it was that the numbers be frozen first.
+   **`tests/analysis_frozen_values.py` is where they live** — 62 fixtures, 3,708 floats, recorded
+   to the last digit from the Python implementation before it was deleted, asserted on every run by
+   `tests/test_analysis_frozen.py`, with the case list derived from each module's `__all__` so a new
+   oracle cannot be added unfrozen. It catches a transcription error, a wrong branch and a
+   regression; it cannot catch an error the Python made too — that is what
+   `crates/physsynth-analysis/tests/` is for, and §37.11 is the precedent (a native bar found a
+   544% defect the Python always had, which no parity test could).
+   The crate-versus-flag distinction that used to sit here is still true and still worth knowing:
+   `piston_radiation_resistance` is *implemented* in the analysis crate (the core crate's dependency
+   list must stay empty, so it cannot reach a Bessel function) while its Python name lives in a
+   `core/` module. **The crate a function is implemented in and the module its name lives in are
+   separate questions** (§37.7).
    **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the thirty-two
    findings about when two implementations agree to the bit and when they cannot (fed-back
    reductions, libm vs NumPy's own transcendentals, LLVM's constant fold, `np.sum`'s pairwise

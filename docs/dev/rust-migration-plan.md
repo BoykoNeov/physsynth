@@ -9005,3 +9005,201 @@ and now run against Rust on the default path.
 * **Unit 9 (`connection`)** is blocked permanently.
 * `tests/test_rust_parity.py` still holds **one** row, `FreeBeam`, and dies with unit 8.
 * The findings ledger gains **#43–#46**.
+
+---
+
+## §44 Deletion 7 (2026-09-03) — units 10 and 11, the instrument frozen before it was deleted, and a header that had been claiming a bar it did not have
+
+Units **10** and **11** are deleted: `modal`, `damping`, `dispersion`, `duffing`, `rotating_wave`
+and `spectrum`. **2,457 lines down to 678**, and `physsynth/analysis/` — the *instrument* every
+modal test in this project reads — now exists once, in Rust.
+
+This is the deletion §36.4 was written to make difficult, and it went ahead on a condition.
+
+### 44.1 The question, and the human's answer
+
+`physsynth/analysis/` is not a model. It is the thing that *measures* the models: the closed-form
+frequencies, the decay rates, the dispersion curves, the exact Duffing waveform, the rotating-wave
+BVP and the partial detector. §36.4 gave it its own flag for one reason, and the reason is a
+sentence: the acceptance run sets `PHYSSYNTH_RS` and **not** `PHYSSYNTH_RS_ANALYSIS`, so a Rust
+model is read by a Python ruler against an unmoved oracle — and a misreading shared by a model and
+its detector, which would cancel and look correct, cannot easily be shared by two implementations.
+
+Deleting the Python instrument ends that configuration. The check itself has been made and passed;
+what goes is the ability to **re-derive** it. Three routes were put to the human in plain terms
+(delete · keep · delete but freeze the numbers first), and the answer was the third.
+
+So this batch is in two commits and the order is the point: **freeze, then delete.**
+
+### 44.2 What "freeze the numbers" turned out to mean
+
+Four files, and the design decisions in them are worth more than the numbers:
+
+* **`tests/analysis_frozen_cases.py`** — 62 fixtures over all 53 public functions. Every input is
+  deterministic: seeded generators, written-down grids, no clock and no environment. Regenerating
+  on an unchanged tree must produce an unchanged file, and that is asserted by running it twice.
+* **`scripts/freeze_analysis.py`** — evaluates each case through the `*_py` reference names and
+  writes the answer as literals. `repr` of a float round-trips exactly in Python, so a literal is
+  as exact as a hex dump and can be read.
+* **`tests/analysis_frozen_values.py`** — generated. 3,708 floats, 55 ints, and per case the
+  Python-versus-Rust gap **as a record, not a bar**.
+* **`tests/test_analysis_frozen.py`** — the assertions, plus three guards on the freeze itself.
+
+**Structure and integers are compared exactly; floats get one tolerance.** That split is where the
+teeth are. A root search that returns a different *number* of roots, a spectrum with a different
+multiplicity, a solver that reports `converged=False`, a mode count that shifts — none is a small
+error and no tolerance describes one. The float bar is the plan's Group A target, 1e-13, on the gap
+normalised by the field's own scale; 51 of the 62 recorded gaps were exactly zero and the worst was
+3.5e-15 (`duffing_frequency_shift`, a difference of two nearly equal frequencies, a scar already on
+the record), so it carries about 28x headroom. It is deliberately **not** an equality: this
+compares a Rust answer computed now against a Python answer computed on another machine at another
+time, which is ledger #28's hazard with an extra axis added.
+
+**The generator's one real bug is a finding.** The first version resolved the Rust side by guessing
+its name from the Python one — `name` or `module_name` — and reported "no Rust twin" for **15 of 62
+cases that have one**. The binding's names are not a mechanical transform (`free_free_beam_betaL`
+is `modal_free_free_beam_beta_l`, `solve_rotating_wave` is `rotating_wave_solve`,
+`stiff_dispersion_frequencies` is `dispersion_stiff_frequencies`), and worse, several of the public
+names are Python wrappers that *adapt arguments* before calling the extension — so a gap measured
+against the raw binding would be measuring something nobody runs. The fix is to measure in a
+**subprocess with `PHYSSYNTH_RS_ANALYSIS=1`, calling the same public names the callers call**. That
+is exactly the configuration this deletion retires, so the recorded number is the last honest
+reading of it.
+
+Three guards keep the freeze from quietly covering less than it claims: every public function must
+have a case (**derived from `__all__`**, so a new oracle cannot be added unfrozen), every case must
+carry a real measured gap rather than a string saying why one could not be taken, and the two files
+must cover exactly the same keys.
+
+**What the freeze is and is not.** It catches a transcription error, a wrong branch, a changed
+convention and a regression, permanently and on every run. It cannot catch an error the Python made
+too — but neither could the flag. That job belongs to `crates/physsynth-analysis/tests/`, where the
+oracles are checked against their mathematical definitions rather than against a second spelling,
+and §37.11 is the precedent: a native bar found a **544% defect the Python always had**, which a
+parity test is structurally incapable of finding.
+
+### 44.3 The deletion, and a fourth module with no core half
+
+Each of the six becomes a delegating shim, the `if _USE_RUST:` block lifted **verbatim** and
+dedented. `spectrum.py` and `dispersion.py` are `operators2d.py`'s shape one more time: the
+wrappers do real work — coercing whatever a caller passed into the contiguous float64 arrays and
+Python ints the binding requires — so they are shims and not rows of re-exports.
+
+| module | lines | what stayed beyond the wrappers |
+|---|---:|---|
+| `modal` | 225 | nothing but `__all__` |
+| `rotating_wave` | 211 | `RotatingWave` (a `NamedTuple`), the three measured defaults with their reasoning, and the non-convergence `warnings.warn` — which must be raised **from this frame** |
+| `duffing` | 71 | nothing but `__all__` |
+| `damping` | 71 | `T60_SECONDS_PER_RATE` with its docstring |
+| `spectrum` | 53 | nothing but `__all__` |
+| `dispersion` | 47 | nothing but `__all__` |
+
+### 44.4 The finding: a module header had been claiming a bar that did not exist
+
+Two tests in `tests/test_geometric_rotating_wave.py` — **physics bars, not parity** — reached
+`rw._operators`, `rw._residual` and `rw._jacobian`, the BVP's private internals. They assert the
+Jacobian against central differences of the residual (including the `d/ds` column that carries the
+derivative of *both* time factors) and that its asymmetry is exactly `cos(Omega k)`, the signature
+of the 2k-wide discrete gradient. Newton converges to a root of the *residual*, so a wrong Jacobian
+shows up as slow convergence rather than a wrong answer — it can be wrong for a long time with
+nothing failing.
+
+They died with the deletion, and the first question was whether the crate already carried them.
+**Its header said yes and its tests said no.** `crates/physsynth-analysis/tests/rotating_wave.rs`
+opens by listing three kinds of claim, the third being "the structural identities — the Jacobian
+against finite differences of the residual, and its asymmetry being exactly the discrete-gradient
+time factor", and no test in the file implements either. They had lived in Python the whole time.
+
+That is worth generalising: **a deletion audits the documentation as well as the code.** A header
+listing what a file covers is a claim like any other, and nothing checks it. The tell here was
+cheap — the retiring test's name and the header's sentence were nearly the same words — and it only
+came up because something forced a comparison.
+
+The bars are now `src/rotating_wave.rs`'s own `mod tests`, **inside** the module, because
+`residual`, `jacobian` and `NewtonCtx` are private in Rust too and an integration test cannot reach
+them either. That is the general cure for #38's shape when it arrives on an internal rather than an
+attribute: not widening the API for a test, but testing from inside.
+
+### 44.5 The finite-difference step has to be scanned, not chosen
+
+Moving the Jacobian bar produced a failure at first — 1.5e-6 against a 1e-6 bar — and the instinct
+is to loosen the bar. Scanning the step says otherwise:
+
+| step (fraction of the entry) | 1e-5 | 1e-6 | 1e-7 | 1e-8 |
+|---|---|---|---|---|
+| relative gap to the Jacobian | 3.0e-9 | 4.9e-8 | **1.5e-6** | 1.5e-5 |
+
+The gap **grows as the step shrinks**, which is cancellation in the difference and not truncation
+in the derivative. The Python original used 1e-7 and passed, because SciPy's sparse arithmetic
+cancels differently; carrying that number across would have been carrying an accident. The step is
+now 1e-6 and the scan is in the comment, because a finite-difference check that takes the smallest
+step it can is measuring its own subtraction.
+
+### 44.6 The three parity files, and where their survivors went
+
+All three die. `tests/test_rust_parity_analysis.py` (12 tests) and
+`tests/test_rust_parity_rotating_wave.py` (9) were two-sided throughout, and their *values* are now
+in the freeze — which covers more of the surface than they did, because the freeze is derived from
+`__all__` and they were written by hand.
+
+`tests/test_rust_parity_spectrum.py` had three claims that were never comparisons, and they moved
+to `tests/test_spectrum_detector.py`:
+
+* **the integer FFT length against the float spelling**, over every length to 2^20 and the
+  `2^k ± 1` neighbourhood to 2^31. The claim is about the *substitution* — the original spelled
+  `int(2 ** np.ceil(np.log2(...)))`, a `log2` inside a discrete decision — and the float spelling,
+  the thing that might disagree, is still computable right there;
+* **the zero-margin separation comparison**, where `detect_peaks` compares quantities that are
+  exactly equal and the verdict is decided entirely by the spelling of the bin width. Two halves:
+  the comparison must stay *live* (it comes out short at 100 kHz with `nfft = 16`, so this is not a
+  benign hazard), and the tidy spelling `fs/nfft` must keep differing from the literal chain on a
+  random-rate search — about one pair in eight;
+* **the empty-window `nan` verdicts**, at both ends of the spectrum where the clamps rather than the
+  width empty the window.
+
+Its two *guard* tests — the recorded −502 Hz witnesses and the sub-bin refinement — were **not**
+copied down: they are already the first two tests in that file, put there by the guard's own batch.
+
+### 44.7 What the CI loses, and why nothing replaces it
+
+The `rust` job's "The instrument's clients, unmodified, against a Rust instrument" step is retired.
+It ran the 65 client files with both flags set, because that was the only configuration in which a
+Rust detector measured a Rust model. With one implementation of the instrument,
+`PHYSSYNTH_RS_ANALYSIS` selects between it and itself, and the step is a strict subset of the
+three-shard flagged job, which runs the whole suite — those 65 files included — against the same
+Rust detector. Keeping it would be running 65 files twice and calling the second run a different
+claim.
+
+Its *derivation* is kept in the workflow as a comment even though the step is gone, because the
+lesson outlived it: the obvious grep — files importing `physsynth.analysis` — was **wrong by 43
+files**, since `tests/helpers.py` imports the instrument and measures on its callers' behalf. 27
+matched; 65 reached (ledger #32).
+
+### 44.8 The measured state
+
+| run | tests | wall |
+|---|---:|---:|
+| unflagged, whole suite (`-n 6`) | **2,739** passed, 1 skipped | 102 s |
+| flagged, three shards, parity excluded | 635 + 760 + 693 = **2,088** | 52 + 54 + 33 s |
+| `tests/test_analysis_frozen.py` alone | 65 passed | 0.8 s |
+| `cargo test --workspace` · `fmt --check` · `clippy -D warnings` | green | — |
+| `ruff check .` | clean | — |
+
+`physsynth/core/` + `physsynth/analysis/` are **9,540 → 7,761 lines** and `tests/` is
+**33,750 → 33,687** (three parity files out, the freeze in). Cumulative across the seven deletions:
+**59,436 → 41,448 lines, 17,988 gone**, and **twenty-one of twenty-three model bodies**.
+
+### 44.9 What the next batch inherits
+
+* **Units 7, 4, 3, 2, 1, 5, 10 and 11 are complete.** Three left, and none is blocked on a
+  question any more — they are blocked on work.
+* **Unit 6 (`airbox`, 4,091 lines)** and **unit 8 (`beam`, 288 lines)** need native bars that do
+  not exist for `AirBox` and `FreeBeam`. Unit 6 also inherits §43's constraint: `airbox.splu` is
+  unconditionally the crate's LU and three test files patch that module global, so whatever deletes
+  it must keep the name reachable.
+* **Unit 9 (`connection`)** is blocked permanently — it exists only in the binding crate, so a
+  `physsynth-core` test cannot reach it. The airbox *wrapper* tier is the same.
+* `tests/test_rust_parity.py` still holds **one** row, `FreeBeam`, and dies with unit 8.
+* **Two flags became one.** `CLAUDE.md`'s "there are TWO flags and they must not be merged" rule is
+  now history rather than instruction, and it says so. `PHYSSYNTH_RS_ANALYSIS` is read by nothing.
+* The findings ledger gains **#47–#50**.

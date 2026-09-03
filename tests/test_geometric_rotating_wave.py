@@ -36,7 +36,6 @@ from helpers import (
     seed_rotating_wave,
 )
 
-from physsynth.analysis import rotating_wave as rw
 from physsynth.analysis.damping import spatial_eigenvalue_p2
 from physsynth.analysis.duffing import kc_mode_coefficients
 from physsynth.analysis.modal import discrete_stiff_mode_frequency
@@ -324,97 +323,31 @@ def test_helix_does_not_survive_on_a_non_degenerate_string():
     assert lk_det / E_det > 1e6 * (lk_deg / E_deg)
 
 
-# -- the solver's own internals ---------------------------------------------------------
+# -- the solver's own internals -----------------------------------------------------------
+#
+# TWO TESTS STOOD HERE and moved into the crate on 2026-09-03 with unit 10's deletion (plan §44):
+#
+#   * `test_jacobian_matches_finite_differences` -- the BVP Jacobian against central differences of
+#     the residual, including the `d/ds` column that carries the derivative of BOTH time factors;
+#   * `test_jacobian_asymmetry_is_exactly_the_dg_time_factor` -- `dF_phi/dpsi == cos(Omega k)
+#     dF_psi/dphi`, the structural signature of the 2k-wide discrete gradient, together with the
+#     plain symmetry FAILING and being restored as `k -> 0`.
+#
+# They reached `rw._operators`, `rw._residual` and `rw._jacobian`, which are the BVP's private
+# internals and have no Python body any more. They are now
+# `crates/physsynth-analysis/src/rotating_wave.rs`'s own `mod tests` -- inside the module, because
+# those three functions are private in Rust too and an integration test cannot reach them either.
+#
+# Worth recording rather than quietly moving: `crates/physsynth-analysis/tests/rotating_wave.rs`'s
+# header had been *claiming* these two bars for a phase ("the structural identities -- the Jacobian
+# against finite differences of the residual, and its asymmetry being exactly the discrete-gradient
+# time factor") while they lived only here, in Python. The deletion is what found the overclaim.
+#
+# One thing changed in the move and it is an improvement: the finite-difference step is 1e-6 of the
+# entry rather than 1e-7, chosen by scanning it. The gap GROWS as the step shrinks -- 3.0e-9 at
+# 1e-5, 4.9e-8 at 1e-6, 1.5e-6 at 1e-7, 1.5e-5 at 1e-8 -- so what the smaller step was measuring
+# was its own subtraction, not the Jacobian.
 
-
-def test_jacobian_matches_finite_differences():
-    """The BVP Jacobian against central differences — including the ``d/ds`` column.
-
-    Newton converges to a root of the *residual*, so a wrong Jacobian shows up as slow convergence
-    rather than a wrong answer — which means it can be wrong for a long time without anything
-    failing. The ``d/ds`` column is the one to watch: it carries the derivative of **both** time
-    factors, and dropping either leaves a column that is merely *nearly* right.
-    """
-    s = _string()
-    h, k = s.h, s.k
-    d2, gp, gm = rw._operators(s.N, h)
-    from scipy import sparse
-
-    ident = sparse.identity(s.N - 1, format="csr")
-    a = s.EA - s.T
-    x_int = np.linspace(0.0, s.L, s.N + 1)[1:-1]
-    shape = np.sin(np.pi * x_int / s.L)
-    kw = dict(
-        op_u=((s.T / s.rho) * d2).tocsr(), op_v=((s.EA / s.rho) * d2).tocsr(), gp=gp, gm=gm,
-        proj=(2.0 / s.L) * h * shape, rho=s.rho, a=a, k=k, theta=s.theta,
-    )
-    rng = np.random.default_rng(0)
-    phi = AMP * shape + 1e-4 * rng.standard_normal(s.N - 1)
-    psi = 1e-5 * rng.standard_normal(s.N - 1)
-    s_var = (s.c * np.pi) ** 2
-    n = s.N - 1
-
-    for time_discrete in (True, False):
-        jac = rw._jacobian(phi, psi, s_var, ident=ident, time_discrete=time_discrete,
-                           **kw).toarray()
-        fd = np.zeros_like(jac)
-        for j in range(2 * n + 1):
-            args = []
-            for sign in (+1, -1):
-                ph, ps, sv = phi.copy(), psi.copy(), s_var
-                if j < n:
-                    eps = 1e-7 * max(abs(phi[j]), 1e-6)
-                    ph[j] += sign * eps
-                elif j < 2 * n:
-                    eps = 1e-7 * max(abs(psi[j - n]), 1e-9)
-                    ps[j - n] += sign * eps
-                else:
-                    eps = 1e-7 * s_var
-                    sv = s_var + sign * eps
-                args.append(rw._residual(ph, ps, sv, AMP, time_discrete=time_discrete, **kw))
-            fd[:, j] = (args[0] - args[1]) / (2.0 * eps)
-        assert np.max(np.abs(jac - fd)) / np.max(np.abs(fd)) < 1e-6
-
-
-def test_jacobian_asymmetry_is_exactly_the_dg_time_factor():
-    """``dF_phi/dpsi == cos(Omega k) dF_psi/dphi`` — the structural signature of the 2k-wide DG.
-
-    The reduced system *looks* variational: its cell blocks are the Hessian of ``V_nl`` on the
-    planar strain slice, which is symmetric. It is not, and the asymmetry is not roundoff — it is
-    the discrete gradient spanning ``q^{n+1}`` to ``q^{n-1}``, which puts a ``cos(Omega k)`` on the
-    transverse row and nothing on the longitudinal one.
-
-    Assuming the symmetry (and reaching for a Cholesky, as the family's *linear* models do) would
-    stall Newton against a Jacobian that is wrong by one part in 2e5 at these settings — small
-    enough to look like a conditioning problem and not a bug. So: assert the exact relation, assert
-    the plain symmetry **fails**, and assert it is restored as ``k -> 0``.
-    """
-    s = _string()
-    from scipy import sparse
-
-    d2, gp, gm = rw._operators(s.N, s.h)
-    x_int = np.linspace(0.0, s.L, s.N + 1)[1:-1]
-    shape = np.sin(np.pi * x_int / s.L)
-    kw = dict(
-        op_u=((s.T / s.rho) * d2).tocsr(), op_v=((s.EA / s.rho) * d2).tocsr(), gp=gp, gm=gm,
-        ident=sparse.identity(s.N - 1, format="csr"), proj=(2.0 / s.L) * s.h * shape,
-        rho=s.rho, a=s.EA - s.T, k=s.k, theta=s.theta,
-    )
-    phi = AMP * shape
-    psi = np.zeros(s.N - 1)
-    s_var = (s.c * np.pi) ** 2
-    n = s.N - 1
-
-    jac = rw._jacobian(phi, psi, s_var, time_discrete=True, **kw).toarray()
-    j_pz, j_zp = jac[:n, n : 2 * n], jac[n : 2 * n, :n]
-    cos_k = 1.0 - 0.5 * s.k**2 * s_var
-    scale = np.max(np.abs(j_pz))
-    assert np.max(np.abs(j_pz - cos_k * j_zp)) / scale < 1e-14  # the exact relation
-    assert np.max(np.abs(j_pz - j_zp)) / scale > 1e-9  # ...and it is NOT symmetric
-
-    jac0 = rw._jacobian(phi, psi, s_var, time_discrete=False, **kw).toarray()
-    j_pz0, j_zp0 = jac0[:n, n : 2 * n], jac0[n : 2 * n, :n]
-    assert np.max(np.abs(j_pz0 - j_zp0)) / np.max(np.abs(j_pz0)) < 1e-14  # symmetric at k -> 0
 
 
 def test_planar_hessian_matches_the_core_discrete_gradient_jacobian():
