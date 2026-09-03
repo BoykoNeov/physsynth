@@ -8041,6 +8041,22 @@ at the twelfth field, which would not. And the non-convergence *warning* is rais
 from two extra returned values, because the binding has no business owning a Python warning category
 and `test_geometric_rotating_wave.py` matches on the message text.
 
+### 38.6a The early binding, pinned through a fifth door — and the first that is a *test* module
+
+§37 recorded that `dispersion.py`'s `from .modal import …` picks up post-swap names, and pinned it
+with a subprocess probe rather than an argument. This batch adds a door the first three do not
+model: `tests/helpers.py` does `from physsynth.analysis.rotating_wave import solve_rotating_wave` —
+a from-import of the **function**, out of a **test** module, copying whatever the name is bound to
+at helpers-import time.
+
+It is safe, for the same reason the others are (a footer runs inside its own module body, so the
+import that triggers it completes before the name is copied), and it is **asserted rather than
+argued** because a stale binding here is invisible to every bar in this suite: `helpers` is what
+`geometric_rotating_wave` and `seed_rotating_wave` go through, both implementations pass those
+tests, so the flagged run would stay green while swapping nothing. §37.8 found `helpers` making a
+derived CI list wrong by 43 files by measuring on its callers' behalf; this is the same
+invisibility one layer down. `test_rust_parity_analysis.py`'s probe now carries it.
+
 ### 38.7 §19.7's line continuation, a **seventh** time
 
 Adding the parity file to the workflow's parity list, the edit arrived with the backslash and the

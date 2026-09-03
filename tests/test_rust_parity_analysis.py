@@ -454,6 +454,23 @@ assert M.dirichlet_axis_eigenvalue(mesh, 0.65, 0.005).shape == (2, 2)
 # 3. The other flag must not have moved: a core model is Python here.
 import physsynth.core.string_ideal as S
 assert S.IdealString is S.IdealStringPy, "PHYSSYNTH_RS_ANALYSIS swapped a MODEL"
+
+# 4. The same early binding through a FIFTH door, and the first one that is not a package module.
+#    `tests/helpers.py` does `from physsynth.analysis.rotating_wave import solve_rotating_wave` --
+#    a from-import of the FUNCTION, so it copies whatever the name is bound to at helpers-import
+#    time. If that ran before the footer, every test reaching the BVP through `helpers` would run
+#    the Python original under the flag and pass anyway, because both implementations pass those
+#    tests. A stale binding is indistinguishable from a working swap by any bar in this suite,
+#    which is why it is asserted here rather than argued. Safe for the same reason as (1): the
+#    footer runs inside its own module body, so the import that triggers it completes first.
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.join(_os.path.dirname(P.__file__), "..", "..", "tests"))
+import helpers as H
+import physsynth.analysis.rotating_wave as RW
+assert RW.solve_rotating_wave is not RW.solve_rotating_wave_py, "rotating_wave did not swap"
+assert H.solve_rotating_wave is RW.solve_rotating_wave, "helpers bound the pre-swap function"
+assert H.rotating_wave_history is RW.rotating_wave_history, "helpers bound the pre-swap history"
 print("PROBE OK")
 """
 
@@ -461,10 +478,17 @@ print("PROBE OK")
 def test_the_analysis_flag_swaps_the_instrument_and_only_the_instrument():
     """Run the probe in a subprocess, because the flag is read at import time.
 
-    Three things it pins, none of which the unflagged tests above can reach: that the early
+    Four things it pins, none of which the unflagged tests above can reach: that the early
     ``from .modal import`` in ``dispersion.py`` picks up the swapped names, that a 0-d input still
-    comes back as a scalar rather than a one-element array, and that the analysis flag leaves the
-    *models* alone -- which is the whole point of there being two flags (§36.4).
+    comes back as a scalar rather than a one-element array, that the analysis flag leaves the
+    *models* alone -- which is the whole point of there being two flags (§36.4) -- and that
+    ``tests/helpers.py``'s from-import of the rotating-wave functions is post-swap too.
+
+    That fourth one is the same hazard through a door the first three do not model: a **test**
+    module, from-importing the *functions* rather than the module. §37.8 found `helpers` making a
+    derived CI list wrong by 43 files by measuring on its callers' behalf; this is the same
+    invisibility one layer down, and the reason it has to be asserted is that a stale binding here
+    would leave the flagged run green while swapping nothing.
     """
     env = dict(os.environ, PHYSSYNTH_RS_ANALYSIS="1")
     env.pop("PHYSSYNTH_RS", None)
