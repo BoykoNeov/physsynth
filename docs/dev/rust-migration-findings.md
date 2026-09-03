@@ -45,6 +45,8 @@
 | 27 | Six searches for a blocking dependency (private names, re-derivation, duck-typed types, written attributes, replaced methods, replaced collaborators) and none finds the others | §30.3, §31.6, §32.2, §33.2 |
 | 28 | A negative control whose predicate is a per-CPU kernel is a claim about the runner — report it, or search the whole expression for a witness that survives | §35.2 |
 | 29 | A decision's **margin** and the **axis** it is decided on are separate questions; a decision-valued module ports safely when the tight decisions sit on the exact axis | §36.2, §36.3, §36.5, §36.6, §36.8 |
+| 30 | The **denominator** of an agreement bar is a modelling choice: for anything oscillatory the honest one is the amplitude, not the sample — a relative bar on a function that crosses zero is a claim about where the fixture landed | §37.3, §37.4 |
+| 31 | When two crates that must not depend on each other both need one transcription, ask which direction is **real** — a helper no `step()` calls is not a core dependency however core a file it sits in, and checking that is a grep | §37.2 |
 
 ## The questions to ask before writing an exact assertion
 
@@ -58,6 +60,7 @@
 8. How much work sits between the collaborator calls? (#3, #26)
 9. Which *axis* is each decision made on — one built from `+ - * /`, or one running through a library kernel — and how much margin does it have? Measure the margins over the suite's real calls before claiming any of them is exact. (#29)
 10. Does the assertion require a *difference*? That is as machine-dependent as requiring equality. (#28)
+11. What is the bar *divided by*? If the quantity oscillates through zero, or is a difference of two close numbers, a relative bar reports the fixture rather than the port. (#30)
 
 ---
 
@@ -864,3 +867,46 @@ is *inside* them, and a flagged shard makes those files compare Rust against Rus
 must also happen **after** the split, or LPT silently produces a different partition that is green
 either way. §19.7's escaping bug recurred **twice more** while writing the step, caught by
 `tests/test_ci_workflow.py` both times; the block now carries no continuation at all.
+
+
+### §37 — the closed-form oracles, and a defect the port found rather than made (2026-09-03)
+
+**The denominator of an agreement bar is a modelling choice** (§37.3), and this batch produced three
+instances of it in one afternoon. The Rust `J_n` agrees with SciPy to **6.7e-16 absolute** and
+**2.1e-12 relative** — the same measurement, with the relative worst case sitting where `J_3` is
+`-9.8e-05`, near one of its own zeros, so it is the *denominator* that collapsed rather than the
+error that grew. `duffing_displacement` agrees to 1.4e-17 on an amplitude of 0.07 (484 of 501 samples
+bit-identical) and reads **2.7e-4 relative** at the sample nearest a zero crossing.
+`duffing_frequency_shift` is `ω(A) − ω₀`: 3.5e-15 of the shift, **1.6e-16 of the frequency**. And the
+first attempt at the disk-scan margin said 1e-35 because it divided by the scan's *global* maximum,
+when the determinant near `λ → 0` is legitimately 1e-187 and perfectly signed — the right
+denominator is the **local cancellation** `|m₀₀m₁₁| + |m₀₁m₁₀|`, which puts the true margin at
+4.6e-6 against a 1e-15 perturbation, i.e. **~5e9×**. This is #6's amplitude-not-pointwise scar from
+Phase 2 batch 4 arriving in a module with no trajectory in it, which is what makes it general.
+
+**Which direction of a shared dependency is real is a grep, not a design question** (§37.2). This
+batch looked like a cycle: `modal` needs core's Brent transcription, and `piston_radiation_resistance`
+in `core/radiation.py` needs a Bessel `J1`. But the piston helper is **never called inside a model's
+`step()`** — two tests, two scripts, three docstrings — so it is an oracle in a core file and the
+second edge does not exist. Only Brent was left, and it is reached by a `#[path]` **source include**
+rather than a Cargo edge: one copy of the code, no dependency for `deps.rs` to catch, and the
+argument written in `lib.rs` because the coupling is invisible in `Cargo.toml`. Taking
+`physsynth-core` as a real dependency was refused — it inverts the argument the crate split exists
+to make — and copying the file was refused because it duplicates a numerical method whose whole
+justification is reproducing SciPy exactly.
+
+Four corollaries. **A native bar that asserts two independent routes to one number agree finds what
+a parity test cannot**, because a parity test compares two implementations of the same mistake: a
+bar asserting `piston_radiation_resistance`'s two branches meet at their threshold failed, and the
+defect was in the *Python* — its `ka < 1e-8` series guard is three decades too small, so just above
+it the shipped function is **544% wrong** (hurdles §14, reproduced deliberately, fix costed, no
+caller in the band). **Almost everything in this batch is bit-identical and none of it is asserted**
+(§37.5) — including every `sin`, `arcsin`, `arccos` and `log2` — because #14 makes that a claim
+about the runner; equality is required only where IEEE-754 requires it, plus one physics equality
+(a lossless string's decay factor is exactly `1.0`). **A search's *count* is a claim a tolerance
+cannot make**: the disk scan asserts the number of roots as well as their values, because a missing
+root is the dangerous direction and all three of the function's self-checks catch a spurious one
+instead. And **#14's early-binding hazard was not live here**: `dispersion.py`'s
+`from .modal import ...` copies the *post-swap* names, because a footer runs inside its own module
+body — pinned by a subprocess probe rather than argued, along with #17's 0-d-returns-a-scalar
+convention and the fact that the analysis flag moves no model.

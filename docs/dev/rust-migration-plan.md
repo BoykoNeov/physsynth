@@ -7573,3 +7573,247 @@ really a claim about which CPU ran CI.
   runner) and **#29** (this batch). The parked list is still empty.
 * `PHYSSYNTH_RS_ANALYSIS` now exists and its meaning is fixed: it swaps the *instrument*. Every
   further `analysis/` module goes behind it, and no `core/` module ever does.
+
+---
+
+## §37 Phase 7, batch 2, as built (2026-09-03) — the oracles, and a defect the port found rather than made
+
+`analysis/modal.py`, `damping.py`, `dispersion.py` and `duffing.py` are in Rust, and with them the
+special functions all four stand on. Plan §14's parked Bessel call is paid. `analysis/` now has one
+file left — `rotating_wave.py` — and the batch also closed the viewer question, which is written up
+first because it changes another section.
+
+### 37.0 The viewer decision, taken before any code moved
+
+§35.5 offered two routes and said the choice was the human's. **Route (b): the viewer stays Python
+and talks to Rust through the binding.** §35.5 is rewritten as a decision record, §5's Phase 8 is
+struck, `CLAUDE.md`'s non-negotiable #3 loses "viewer backend" from its retirement list, and §35.6
+is amended — it said "the room waits on the viewer", which was true only because a Rust viewer would
+have had to build the room itself. What every model waits on now is the *seam*: the set of names
+`web/serialize.py` reaches that the binding does not expose. That is an import audit, and it is the
+gate on each deletion.
+
+### 37.1 The shape on disk
+
+| file | lines | what it is |
+|---|---:|---|
+| `crates/physsynth-analysis/src/bessel.rs` | 250 | `J_n`, `I_n`, their first three derivatives, `J_1`, the zeros |
+| `crates/physsynth-analysis/src/elliptic.rs` | 105 | `K(m)` by AGM, `(sn, cn, dn)` by the descending Landen |
+| `crates/physsynth-analysis/src/modal.rs` | 560 | the thirty-one closed-form oracles |
+| `crates/physsynth-analysis/src/damping.rs` | 185 | the decay oracles |
+| `crates/physsynth-analysis/src/dispersion.rs` | 55 | the two delegating loops and the phase velocity |
+| `crates/physsynth-analysis/src/duffing.rs` | 130 | the exact nonlinear-oscillator solution |
+| `crates/physsynth-analysis/src/radiation.rs` | 75 | `piston_radiation_resistance` — §14's parked call |
+| `crates/physsynth-py/src/analysis.rs` | 590 | forty-five free functions, no state anywhere |
+| native tests | 44 bars | `bessel.rs`, `elliptic.rs`, `modal.rs`, `oracles.rs` |
+| `tests/test_rust_parity_analysis.py` | 48 tests | both sides built in the same process |
+
+`physsynth-analysis`'s dependency list is still **empty**.
+
+### 37.2 The cycle this batch had waiting in it, and the three ways out
+
+The batch's first real decision was structural, not numerical, and it was not in the plan.
+
+* `modal.rs` needs Brent's method — the free-free beam's frequency equation and the free circular
+  plate's determinant are both `scipy.optimize.brentq` in the original — and Brent lives in
+  `physsynth-core/src/root.rs`, transcribed for the reed in Phase 2.
+* `piston_radiation_resistance` lives in `physsynth/core/radiation.py` and needs a Bessel `J1`.
+
+Read naively that is `analysis → core` and `core → analysis`, which Cargo refuses. The greppable
+fact that breaks it: **the piston helper is never called inside a model's `step()`** — the only
+call sites in the repo are two tests, two diagnostic scripts and three docstrings. So it is an
+oracle that happens to live in a core file, its Rust implementation belongs in the analysis crate,
+and the second edge does not exist. Only Brent is left, and there were three ways to reach it:
+
+1. **Take `physsynth-core` as a Cargo dependency.** Refused. It inverts the argument the crate split
+   exists to make, and it goes red in `tests/deps.rs`, which is name-based over the resolve graph
+   and does not care that the name is a workspace sibling — correctly, since the point of that list
+   is that *any* edge is a reviewed edit.
+2. **Copy the file.** Two transcriptions of one C function, free to drift. `deps.rs` opens by
+   defending a deliberate near-copy so the precedent exists, but that duplicates query plumbing;
+   this would duplicate a numerical method whose entire justification is reproducing SciPy exactly.
+3. **Include the source**: `#[path = "../../physsynth-core/src/root.rs"] pub mod root;`. One file,
+   one copy, compiled into both crates, and `cargo metadata` sees no edge because there is none.
+
+The third is what shipped. Its cost is that the coupling is invisible in `Cargo.toml`, which is why
+`lib.rs` carries the argument rather than a line.
+
+**The general form, worth the ledger's thirtieth entry alongside the accuracy one:** *when two
+crates that must not depend on each other both need one transcription, the question to ask is which
+direction is real. A helper that no `step()` calls is not a core dependency however core a file it
+sits in, and checking that is a grep rather than a design discussion.*
+
+### 37.3 The finding: a Bessel function's agreement bar is ABSOLUTE, and the two columns are one measurement
+
+Measured against SciPy over `x ∈ (0, 60]`, `n ∈ 0..13`, 800 × 14 points, before any Rust was
+written:
+
+| quantity | absolute | relative |
+|---|---|---|
+| `J_n(x)` | **6.7e-16** | 2.1e-12 |
+| `jvp(n, x, k)`, `k ≤ 3`, `x ≤ 14` | **4.1e-16** | 1.8e-12 |
+| `I_n(x)`, `x ≤ 14` | — | 2.0e-15 |
+| `jn_zeros(m, n)`, `m ≤ 12`, `n ≤ 12` | — | 3.2e-16 |
+
+The first row's four-order gap looks like a warning and is not. The relative worst case sits at
+`x = 32.0655, n = 3`, where `J_3` itself is `-9.8e-05` — a point near one of its own zeros. The
+absolute error there is the same 1e-16 it is everywhere; it is the *denominator* that collapsed.
+
+A Bessel function is a unit-amplitude oscillation that passes through zero infinitely often, so a
+relative bar on it is a bar that tightens without limit at points of no physical significance, and
+any test stating one is really stating a claim about how close a fixture landed to a root. Both
+consumers here want the absolute column anyway: the free plate's determinant **adds** `J` and `I`
+values, so an absolute error propagates additively; and Newton's step on a zero is `|ΔJ|/|J'|`, an
+absolute error over a bounded slope.
+
+The same shape turned up twice more in the same batch, on the Python-versus-Rust side rather than
+the Rust-versus-SciPy one, which is what makes it a rule rather than a coincidence:
+
+* `duffing_displacement` agrees to **1.4e-17 absolute** on a waveform of amplitude 0.07 — two parts
+  in 1e16, with 484 of 501 samples bit-identical. Pointwise the same data reads **2.7e-4 relative**,
+  entirely because the worst sample sits on a zero crossing where `|q|` is 1.7e-17.
+* `duffing_frequency_shift` is `ω(A) − ω₀`, a difference of two nearly equal frequencies: 3.5e-15
+  of the shift, **1.6e-16 of the frequency**.
+
+Both are the Phase 2 batch 4 scar — *normalise a decaying trajectory by amplitude, never pointwise*
+— arriving in a module that has nothing to do with trajectories. The generalisation the ledger takes
+as **#30**: **the denominator of an agreement bar is a modelling choice, and for anything
+oscillatory the honest one is the amplitude, not the sample.**
+
+### 37.4 The margin, measured before the port
+
+`free_circular_plate_lambda_roots` is the batch's one *decision*: it scans 20,000 points and keeps a
+bracket wherever the determinant changes sign, so a last-bit flip adds or drops a root. A missing
+root is the dangerous direction — all three of the docstring's self-checks (rigid-body annihilation,
+the Rayleigh quotient returning `λ⁴`, the saddle bound) catch a *spurious* root and none catches an
+absent one.
+
+Measured at `ν = 0.3`, `n = 0..8`, all 20,000 points, comparing each `|det|` against the
+cancellation `|m₀₀m₁₁| + |m₀₁m₁₀|` that produced it and excluding the two points either side of a
+genuine crossing: the worst ratio anywhere is **4.6e-6**, at `λ = 0.0105, n = 8`. A Bessel routine
+agreeing to 1e-15 can move the determinant by ~1e-15 of that scale, so the margin is **~5e9×**.
+
+That is the opposite answer from §36's, and stating both is the point: §36's separation test had a
+margin of *exactly zero* and was safe only because it lived on an exactly-reproduced axis; this one
+has nine orders of headroom and is safe on an axis that is merely close. **The measurement is what
+distinguishes them, and it costs one script either way.** The first naive attempt at it was wrong
+and is worth recording — measuring `|det|` against the *global* maximum over the scan said the
+margin was 1e-35, because the determinant near `λ → 0` is legitimately 1e-187 and perfectly signed.
+The right denominator is the local cancellation, not the global scale. A third instance of §37.3's
+rule, in the same afternoon.
+
+Structurally, the parity file asserts the **root count** as well as the values, over `ν ∈ {0, 0.3,
+0.45, −0.2} × n ∈ 0..6`. A tolerance cannot describe a search that returns a different number of
+answers.
+
+### 37.5 Almost everything is bit-identical, and none of it is required
+
+Measured across the whole batch's surface: every function agrees to the bit except six, and the six
+are `circular_membrane_freqs` (3.5e-16, from `jn_zeros`), the four disk-root outputs (~2e-16) and
+`duffing_frequency` (1.6e-16). That includes every function with a `sin`, `arcsin`, `arccos`, `log`
+or `log2` on the path — `discrete_mode_frequency`, `cents`, `spatial_eigenvalue_p2`,
+`discrete_damped_mode_rate`, all of them.
+
+**None of that is asserted**, and refusing to assert it is ledger #28 being applied one batch after
+it was written. NumPy computes transcendentals with its own CPU-dispatched kernels rather than the
+platform libm (§22.1), so "these agree to the bit" is a claim about which machine ran CI — and this
+project has already watched one such assertion become eighteen failures on unchanged code. So the
+parity file requires equality only where IEEE-754 requires it (`+ - * /` and `sqrt`: eighteen
+functions qualify) and gives everything else a tolerance with the observed exactness in a comment.
+
+One equality *is* required beyond that tier, and it is a physics claim rather than an arithmetic
+one: `discrete_damped_mode_decay` with both sigmas at zero must be exactly `1.0`. A string with no
+loss does not decay, and "1.0 within a tolerance" would not say that.
+
+### 37.6 The defect the port found, which was in the Python all along
+
+A native bar asserted that `piston_radiation_resistance`'s two branches meet at their threshold.
+They do not, by a factor of six, and the disagreement is not the port's.
+
+The function guards the `0/0` in `1 − J₁(2ka)/ka` with a series branch below `ka = 1e-8`. The guard
+is in the right place and its threshold is about **three decades too small**: just above it, the
+subtraction removes two numbers agreeing to sixteen digits. Measured with SciPy's own `j1` doing the
+work, against the exact `(ka)²/2`:
+
+| `ka` | relative error of the shipped Python |
+|---|---|
+| 1e-8 | **5.4** (544%) |
+| 1e-7 | 2.3e-2 |
+| 1e-6 | 3.1e-4 |
+| 1e-5 | 8.3e-8 |
+
+So the shipped function returns a number with no correct digits just above its own cutoff. Two
+implementations of `J₁` differing in their last bits therefore disagree by 300% in that band — which
+is the cancellation talking, not the transcription.
+
+**The port reproduces it, threshold and all.** Changing a shipped physics number inside a porting
+batch is not a port; §35.2's two fixes were their own commit, and this gets the same treatment. It
+is registered as `docs/dev/scientific-hurdles.md` **§14** with the crossover derived (`ka ≈ 7.2e-4`
+for the one-term series, or `ka = 1e-2` keeping two terms, either putting the worst error below
+1e-11) and awaits the human's call. No caller is in the band: the suite's two real call sites are at
+`ka = 9.2e-5` and `ka = 1.83`, where the two sides agree to 5.3e-8 and exactly, and
+`test_radiation.py` requires 1e-6 of the first — a 19× margin, measured rather than hoped.
+
+Worth naming the mechanism, because it is how the batch found it at all: **a native bar that asserts
+two independent routes to one number agree will find a defect a parity test cannot, because a parity
+test compares two implementations of the same mistake.**
+
+### 37.7 The flag, and the hazard that turned out not to be one
+
+`modal`, `damping`, `dispersion` and `duffing` all read `PHYSSYNTH_RS_ANALYSIS`. `dispersion.py`
+opens with `from .modal import discrete_mode_frequency, discrete_stiff_mode_frequency` — an early
+binding, and early bindings are exactly what defeats a swap performed by rebinding module globals.
+
+It is safe, for a reason worth writing down rather than re-deriving: `modal.py`'s swap footer runs
+inside `modal`'s own module body, so by the time `dispersion`'s `from` executes, the names it copies
+are already the Rust ones. The same covers the eight *test* files that import an analysis name
+directly. The hazard would be live only if the swap were a monkeypatch applied after import — which
+is why §32.7 says collaborators are looked up as module globals deliberately.
+
+It is **pinned rather than argued**: `test_rust_parity_analysis.py` runs a probe in a subprocess with
+the flag set, asserting that `dispersion`'s early-bound name is not the Python one, that a 0-d input
+still comes back as a scalar rather than a one-element array (§28's `ascontiguousarray` trap, which
+would keep working silently), and that `PHYSSYNTH_RS_ANALYSIS` leaves the *models* alone.
+
+`piston_radiation_resistance` is the one exception in the other direction: it lives in a `core/`
+module so it swaps on `PHYSSYNTH_RS`, while its implementation comes from the analysis crate. The
+crate a function is implemented in and the flag its Python name is swapped by are separate
+questions, and what makes swapping a measurement-shaped helper under the model flag safe here is a
+measurement, not the rule — the same flagged run checks it against `scipy.special.j1` built inside a
+test body at `rel = 1e-12`.
+
+### 37.8 CI, and §36.7's trap in a different place
+
+The batch-1 step grepped for `measure_partials_near\|detect_peaks\|magnitude_spectrum`, which was
+the right question when `spectrum.py` was the only ported module and the wrong one the moment four
+more went behind the same flag. Left alone it would have run 18 files instead of 27 and stayed
+green while the oracles' clients went unexercised. Widened to `physsynth.analysis`, floor raised to
+25, still derived rather than typed.
+
+**§19.7's line continuation, a seventh time, from a seventh tool.** Adding the new parity file to
+the flagged list produced a literal `\n` in the YAML. `tests/test_ci_workflow.py` caught it before
+CI did — seven occurrences, zero of them reaching a runner.
+
+### 37.9 The success condition
+
+* `cargo test --workspace` — 44 new native bars, all green, plus both allowlists still empty.
+* `cargo fmt --check` and `cargo clippy --workspace --all-targets` — clean.
+* `tests/test_rust_parity_analysis.py` — 48 tests, green, unflagged.
+* `tests/test_rust_parity_analysis.py` unflagged — 48 tests, green.
+* The instrument's **27** dependent test files (the derived list the CI step now uses) with **both**
+  flags set — Rust models *and* a Rust instrument, the only run in which this port meets its real
+  clients: **510 passed**.
+* The same five representative files unflagged, to confirm the footers changed nothing on the
+  Python path: 154 passed.
+
+### 37.10 What the next batch inherits
+
+* **`rotating_wave.py` is all that is left of `analysis/`** — a nonlinear BVP solved by Newton on a
+  sparse Jacobian, the package's only Group D member, and §35.3 says it goes after §1's Jacobian fix
+  has had its `λ_long` sweep re-run (hurdles §6).
+* Then the test-suite port (§35.4), the viewer's import audit (§37.0), and the deletions (§35.6).
+* The findings ledger gains **#30** (the absolute-versus-relative bar) and **#31** (the direction of
+  a shared-transcription dependency is a grep, not a design question).
+* `docs/dev/scientific-hurdles.md` gains **§14**, the piston's threshold — live, uncalled, fix
+  derived and costed, awaiting the human.
+* The parked list is **empty**.

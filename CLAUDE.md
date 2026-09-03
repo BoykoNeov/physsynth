@@ -26,13 +26,14 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    is the gate on deleting the Python model behind it.
    See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
-   **State (2026-09-03): `physsynth/core/` is finished, and `analysis/` has started.** Every model,
-   operator, solver, room, port, wrapper and bridge has a Rust implementation behind the one flag
-   (`crates/physsynth-core` + `crates/physsynth-py`), and `analysis/spectrum.py` — the partial
-   detector — is in a **third crate**, `crates/physsynth-analysis`. What is left is the rest of
-   `analysis/`, the test-suite port, the viewer's *import audit* (not its port — see the
-   exception above) and the deletions — plan **§35** is the roadmap and the order, **§36** the
-   last batch. `cargo test --workspace` runs the native bars and
+   **State (2026-09-03): `physsynth/core/` is finished, and `analysis/` is all but finished.** Every
+   model, operator, solver, room, port, wrapper and bridge has a Rust implementation behind the one
+   flag (`crates/physsynth-core` + `crates/physsynth-py`), and five of `analysis/`'s six modules —
+   `spectrum`, `modal`, `damping`, `dispersion`, `duffing`, plus the Bessel and elliptic functions
+   they stand on — are in a **third crate**, `crates/physsynth-analysis`. Only
+   `analysis/rotating_wave.py` is left. What remains after it is the test-suite port, the viewer's
+   *import audit* (not its port — see the exception above) and the deletions — plan **§35** is the
+   roadmap and the order, **§37** the last batch. `cargo test --workspace` runs the native bars and
    the Cargo dependency allowlists; `pip install ./crates/physsynth-py` then `PHYSSYNTH_RS=1 pytest`
    runs the **existing, unmodified** Python tests against the Rust code (reinstall before believing
    any parity number — nothing can tell a stale wheel from a fresh one). Both implementations stay
@@ -42,8 +43,12 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    `PHYSSYNTH_RS_ANALYSIS` swaps the *instrument that measures them*. The acceptance run sets only
    the first, so a Rust model is still checked by a Python detector against an unmoved oracle —
    widen one flag over both and a shared misreading would cancel (plan §36.4). Every further
-   `analysis/` module goes behind the second; no `core/` module ever does.
-   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the twenty-seven
+   `analysis/` module goes behind the second; no `core/` module ever does. The one case that reads
+   like an exception is not: `piston_radiation_resistance` is *implemented* in the analysis crate
+   (the core crate's dependency list must stay empty, so it cannot reach a Bessel function) while
+   its Python name swaps on `PHYSSYNTH_RS`, because it lives in a `core/` module. The crate a
+   function is implemented in and the flag its name is swapped by are separate questions (§37.7).
+   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the thirty-one
    findings about when two implementations agree to the bit and when they cannot (fed-back
    reductions, libm vs NumPy's own transcendentals, LLVM's constant fold, `np.sum`'s pairwise
    cutoff, descriptors that take a write away, anchors that bind two classes into one batch).
