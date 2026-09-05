@@ -869,8 +869,22 @@ def test_the_bridge_constructors_are_keyword_only():
 # numbers (plan §38). The old tests raised the same failure through both implementations and
 # compared the two strings; with one implementation left there is nothing to compare against
 # except what the reference actually said, so that is written down. The numbers inside them are
-# part of the message and are included deliberately: a refusal that stops reporting *which* bound
-# was exceeded is a worse refusal, and nothing else in the suite would notice.
+# part of the message and are kept deliberately: a refusal that stops reporting *which* bound was
+# exceeded is a worse refusal, and nothing else in the suite would notice.
+#
+# TWO of the eleven interpolate a number this suite may NOT freeze, and `{n}` marks them. The old
+# test compared the digits across languages *on one machine* and matched only a substring of the
+# prose; writing the digits down here would turn that into a claim about the CPU -- finding #14
+# through a new door. `k^2 * lambda_max(A)` comes out of LAPACK's `dgeev` on a 52x52 dense matrix,
+# and the margin out of `spsolve` PLUS `splu(...).solve(...)`, whose fill-reducing ordering this
+# project has already measured to be a claim about how SciPy was built (Phase 4, Phase 5 b5). So
+# the prose around them is frozen exactly and the number is required only to be *there* and to be a
+# finite positive float -- which is the part that was worth asserting. A refusal that stops naming
+# its bound stops being useful; a refusal that names it to eleven digits of somebody else's LAPACK
+# is not a bound, it is a fingerprint of the runner.
+#
+# The nine literals are safe by inspection: `k=9.375e-05 vs 8.523e-05` is one IEEE division printed
+# to four significant figures, `1000000` and `[0, 49)` are integers, and the rest is prose.
 FROZEN_REFUSALS = [
     (
         "StringBodyBridge",
@@ -902,7 +916,7 @@ FROZEN_REFUSALS = [
         lambda: physsynth_rs.StringBodyBridge(
             string=_conn_string(), body=_conn_body(), K=1e7
         ),
-        "connection unstable: k^2 * lambda_max(A) = 1706.682554 >= 4. Reduce K, raise fs, or "
+        "connection unstable: k^2 * lambda_max(A) = {n} >= 4. Reduce K, raise fs, or "
         "increase the body/string end mass.",
     ),
     (
@@ -925,7 +939,7 @@ FROZEN_REFUSALS = [
         lambda: physsynth_rs.StringPlateBridge(
             string=_conn_string(), plate=_conn_plate(), K=1e9
         ),
-        "connection unstable: stability margin = 96854.476427 >= 1. Reduce K, raise fs, or "
+        "connection unstable: stability margin = {n} >= 1. Reduce K, raise fs, or "
         "increase the string/plate node mass.",
     ),
     (
@@ -966,9 +980,24 @@ FROZEN_REFUSALS = [
 def test_the_bridge_refusals_reproduce_the_reference_verbatim(cls_name, build, message):
     with pytest.raises(ValueError) as err:
         build()
-    assert str(err.value) == message, (
-        f"{cls_name}'s refusal text drifted from the reference's:\n  now: {err.value}\n  was: "
+    text = str(err.value)
+    if "{n}" not in message:
+        assert text == message, (
+            f"{cls_name}'s refusal text drifted from the reference's:\n  now: {text}\n  was: "
+            f"{message}"
+        )
+        return
+
+    # The prose is frozen; the bound is only required to still be reported, and to be a number.
+    prefix, suffix = message.split("{n}")
+    assert text.startswith(prefix) and text.endswith(suffix), (
+        f"{cls_name}'s refusal PROSE drifted from the reference's:\n  now: {text}\n  was: "
         f"{message}"
+    )
+    reported = text[len(prefix) : len(text) - len(suffix)]
+    value = float(reported)  # raises if the bound stopped being reported as a number at all
+    assert np.isfinite(value) and value > 0.0, (
+        f"{cls_name} reported {reported!r} as the bound it refused on"
     )
 
 

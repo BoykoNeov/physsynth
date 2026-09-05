@@ -10005,6 +10005,26 @@ bodies were deleted. The numbers inside are part of the message and are kept del
 refusal that stops reporting *which* bound was exceeded is a worse refusal, and nothing else in the
 suite would notice.
 
+**Two of the eleven cannot be frozen to the digit, and the first draft of this section did it
+anyway.** The old test asserted `message in str(py_err.value)` — a substring of the *prose* — and
+then compared the two languages' full strings **on one machine**; replacing that with a full
+literal quietly promotes the digits to a claim about the CPU, which is finding #14 through a door
+nobody had used. `connection unstable: k^2 * lambda_max(A) = 1706.682554` comes out of LAPACK's
+`dgeev` on a 52x52 dense matrix, and `stability margin = 96854.476427` out of `spsolve` **plus**
+`splu(...).solve(...)` — whose fill-reducing ordering this project has already measured to be a
+claim about how SciPy was *built* (§31.11's Group D question, and Phase 5 b5's 13x fill). Printed
+to six decimals those are ~6e-10 and ~1e-11 relative, well inside where two LAPACKs may differ.
+
+So those two carry a `{n}` placeholder: the prose around it is frozen exactly, and the number is
+required only to **be there and to be a finite positive float**. That keeps the claim worth making
+— a refusal that stops naming its bound stops being useful — and drops the one that was never
+being made. The other nine are safe by inspection: `k=9.375e-05 vs 8.523e-05` is one IEEE division
+printed to four significant figures, `1000000` and `[0, 49)` are integers, and the rest is prose.
+The general form of the question is worth writing down, because a freeze is exactly the operation
+that turns a *comparison's* incidental digits into an *assertion's* load-bearing ones: **before
+freezing a string, ask which of its characters the old test actually compared, and on how many
+machines.**
+
 ### 49.4 The guards, and an expectation that reached zero
 
 Seven guard surfaces, as §39 says, and two of them needed more than a line removed.
@@ -10021,11 +10041,19 @@ them, and the assertion became
 assert swapped_classes == {}
 ```
 
-which is a live claim about all of them — *no module in `physsynth.core` chooses between two
-implementations of a class any more* — and the one that would fail if a Python reference
-implementation were ever reintroduced. Three separate findings in this file say the derive is only
-as wide as the tuple it derives over (§17.6, `collision` for a whole batch, `radiation` never in
-the table at all); widening it to everything retires that hole rather than restating it. The two
+which is a live claim — *no module in `physsynth.core` chooses between two implementations of a
+class any more* — and the one that would fail if a Python reference implementation were ever
+reintroduced.
+
+**The first draft widened the tuple by hand to twenty-one and called that retiring the hole. It is
+not.** Three separate findings in this file say a derive is only as wide as the tuple it derives
+over (§17.6, `collision` for a whole batch, `radiation` never in the function table at all), and a
+hand-written tuple of twenty-one restates that at a larger number — a module added to
+`physsynth/core/` tomorrow is outside it exactly as `collision` was. So the population is read off
+the **package**, with `pkgutil.iter_modules(physsynth.core.__path__)`. It finds **23**, `engine` and
+`portable` included, neither of which the hand-written tuple ever had, and it will find the
+twenty-fourth without anyone remembering. The scan proves it fired through four named modules
+rather than a floor, which is §41.5's cure (#61) rather than the thing #61 warns about. The two
 flag-dependent loops went with the expectation: `deleted_bodies` makes the **stronger** claim about
 every one of those names already — the public name is the Rust object on *both* paths.
 

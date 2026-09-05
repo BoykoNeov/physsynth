@@ -6,7 +6,9 @@
 - physsynth.core imports no plotting/audio library (CLAUDE.md non-negotiable #4).
 """
 
+import importlib
 import os
+import pkgutil
 import subprocess
 import sys
 
@@ -14,6 +16,7 @@ import numpy as np
 import pytest
 from helpers import make_string, wave_speed
 
+import physsynth.core
 from physsynth.core.engine import simulate
 from physsynth.core.exciter import triangular_pluck
 from physsynth.core.string_ideal import IdealString
@@ -369,39 +372,40 @@ def test_the_rust_swap_matches_the_environment():
     # hole, one forgotten paste wide. So the set of swapped CLASSES is read off the `<Name>Py`
     # aliases the modules actually define, and then checked against a written-down expectation --
     # which is what keeps adding a port a reviewed edit rather than a silent one.
-    # ALL of them, and the widening is unit 10's doing. This derive read a hand-written tuple
-    # for eight phases, and three separate findings in this file say the same thing about it: it
-    # is only as wide as the tuple, so a module absent from the tuple could grow a `<Name>Py`
-    # alias with nothing noticing (`collision` did, for a whole batch). With the last Python model
-    # body deleted the expectation is EMPTY, and an empty expectation checked against a
-    # zero-length tuple asserts nothing at all -- finding #52 through a fourth door. So the tuple
-    # becomes every core module this test already imports, and the claim becomes the migration's
-    # completion canary: no module in `physsynth.core` chooses between two implementations of a
-    # CLASS any more. That is a live statement about twenty-two modules, and it is the one that
-    # would fail if a Python reference implementation were ever reintroduced.
-    all_core_modules = (
-        airbox,
-        banded,
-        beam,
-        body,
-        bore,
-        bow,
-        collision,
-        connection,
-        exciter,
-        mallet,
-        membrane,
-        operators,
-        operators2d,
-        plate,
-        radiation,
-        reed,
-        string_damped,
-        string_geometric,
-        string_ideal,
-        string_nonlinear,
-        string_stiff,
-    )
+    # EVERY module in the package, and it is derived rather than listed -- unit 10's doing.
+    #
+    # This derive read a hand-written tuple for eight phases, and three separate findings in this
+    # file say the same thing about it: it is only as wide as the tuple, so a module absent from
+    # the tuple could grow a `<Name>Py` alias with nothing noticing (`collision` did, for a whole
+    # batch; `radiation` was never in the function table at all). With the last Python model body
+    # deleted the expectation is EMPTY, and an empty expectation checked against a hand-written
+    # tuple asserts nothing about anything outside it -- finding #52 through a fourth door, with
+    # the hole intact.
+    #
+    # So the population is read off the PACKAGE with `pkgutil`, not off a tuple. A module added to
+    # `physsynth/core/` tomorrow is in it without anyone remembering, which is the difference
+    # between retiring the hole and restating it at a larger number. The claim is then the
+    # migration's completion canary: no module in `physsynth.core` chooses between two
+    # implementations of a CLASS any more, and it is the one that would fail if a Python reference
+    # implementation were ever reintroduced anywhere in the package.
+    all_core_modules = [
+        importlib.import_module(f"physsynth.core.{info.name}")
+        for info in pkgutil.iter_modules(physsynth.core.__path__)
+        if not info.ispkg
+    ]
+    # The scan must actually find the package: an `iter_modules` over the wrong path yields nothing
+    # and the assertion below would then be `{} == {}` -- the exact failure this derive replaced.
+    # Named POSITIVE CONTROLS rather than a floor, which is finding #61's durable cure: a count has
+    # to be re-tuned every time the population moves and fails in the direction that stays green,
+    # while four modules that will exist for as long as this project does prove the scan fires and
+    # claim nothing about how many there are. It found 23 when this was written -- `engine` and
+    # `portable` included, neither of which the hand-written tuple ever had.
+    for named in (connection, plate, string_ideal, operators):
+        assert named in all_core_modules, (
+            f"`{named.__name__}` is not in the scanned set, so `pkgutil.iter_modules` is not "
+            "reaching `physsynth/core/` and this guard is checking nothing"
+        )
+
     swapped_classes = {}
     for module in all_core_modules:
         for alias in dir(module):

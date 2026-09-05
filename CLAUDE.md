@@ -78,10 +78,11 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
      empty.** Three tables hit zero and took three different exits. `tests/test_rust_parity.py`'s
      `STILL_HAVE_A_PYTHON_TWIN` and `half_deleted_bodies` were **deleted**, because an empty
      `parametrize` collects as a *skip* and an empty dict iterates zero times — green, and
-     asserting nothing (ledger #52, #60). `expected_classes` was **widened**: the tuple its derive
-     read went from one module to all twenty-one, and the claim became "no module in
-     `physsynth.core` chooses between two implementations of a class any more", which is worth
-     more at zero than it was at four (ledger #67). What is left to edit is `deleted_bodies` and
+     asserting nothing (ledger #52, #60). `expected_classes` was **widened**: its derive stopped
+     reading a hand-written tuple at all and now reads the package (`pkgutil.iter_modules`, 23
+     modules), so the claim became "no module in `physsynth.core` chooses between two
+     implementations of a class any more" — worth more at zero than it was at four. Widening the
+     tuple *by hand* would only have restated the hole at a larger number (ledger #67). What is left to edit is `deleted_bodies` and
      `ported_expected` (the `<name>_py` FUNCTION table — the one §46.7 missed) and the `_USE_RUST`
      reader tuple, all in `tests/test_stability.py`; `REMAINING_PARITY_FAMILY` in
      `tests/test_shard_partition.py` (now **stable at three** rather than draining — none of the
@@ -93,6 +94,10 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
      with Python about `np.sum`" became "Rust agrees with **NumPy**", and a trajectory comparison
      for the reduction that must *not* be transcribed became a **count of the binding's `np.dot`
      calls** (ledger #64, #65). Only a comparison with no referent outside the twin really dies.
+     But **freezing a message is not the same move**: a parity test compared full strings on ONE
+     machine while asserting only a substring of the prose, so writing the literal down promotes
+     every digit to a cross-machine claim. Freeze the prose, leave a placeholder where a LAPACK or
+     a sparse LU printed a number (ledger #68).
    - **Two `ruff --fix` hazards live in every shim**, both silent until something outside the file
      asks for a name. A re-export is an unused import, so **`__all__` is load-bearing** — without
      it `--fix` deletes the module's whole public surface (#66). And residue that is *not* a Rust
@@ -133,7 +138,7 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    list must stay empty, so it cannot reach a Bessel function) while its Python name lives in a
    `core/` module. **The crate a function is implemented in and the module its name lives in are
    separate questions** (§37.7).
-   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **sixty-seven**
+   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **sixty-eight**
    findings about when two implementations agree to the bit, when they cannot, and what a
    *deletion* breaks that a port does not (fed-back reductions, libm vs NumPy's own
    transcendentals, LLVM's constant fold, `np.sum`'s pairwise cutoff, descriptors that take a
