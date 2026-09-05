@@ -1791,6 +1791,31 @@ def test_bow_frames_decode_to_a_string_with_fixed_ends():
     assert r["field_amp"] > 1e-6, "the animation window must show the settled corner, not rest"
 
 
+def test_bow_short_render_animates_the_attack_from_rest():
+    """The settle window can be EMPTY, and then the capture starts at step 0 — the one bow path the
+    suite never ran (the viewer import audit, plan section 50).
+
+    ``n_settle = max(0, n_audio - n_anim)`` and ``n_anim = min(n_audio, ...)``, so asking for less
+    audio than the animation window collapses the settle window to nothing and the first frame is
+    the string *at rest* rather than the settled corner. The animation clock cannot tell the two
+    apart — ``frame_times`` is relative to the window start, so it begins at 0.0 either way — which
+    is why the discriminating claim is the FIELD: flat here, moving under the default.
+    """
+    short = {**BOW_P, "audio_duration": 0.05}  # < animation_window (0.06 s default)
+    r = _sim(short)
+    f = r["frames"]
+    field = _decode_f32(f["b64"]).reshape(f["n_frames"], f["width"])
+    assert r["frame_times"][0] == 0.0, "the animation clock starts at 0 whether or not it settled"
+    assert np.all(field[0] == 0.0), "with no settle window the first frame is the string at rest"
+    assert np.max(np.abs(field)) > 0.0, "the bow must still move the string during the window"
+    # ... and the default is the other branch, so the assertion above is a contrast, not a tautology
+    default = _sim(BOW_P)
+    d = default["frames"]
+    dfield = _decode_f32(d["b64"]).reshape(d["n_frames"], d["width"])
+    assert default["frame_times"][0] == 0.0
+    assert np.max(np.abs(dfield[0])) > 0.0, "the settled window must not start from rest"
+
+
 def test_bow_helmholtz_number_is_reported_never_asserted():
     """Above 1 the friction curve is multivalued — the regime of real sustained bowing — but it is
     NOT a stability limit (friction is bounded, the scheme stable and the balance exact for any

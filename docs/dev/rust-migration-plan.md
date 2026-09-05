@@ -10117,3 +10117,151 @@ Nothing that is a model. `physsynth/` is Python that constructs Rust: twenty-thr
 `analysis/` with one implementation, `engine.py`, and the viewer backend the human's 2026-09-03
 call kept in Python. The remaining Rust-migration work in the plan is §35.5's viewer import audit
 and whatever Phase 5's real-time port turns out to want — neither of which is a deletion.
+
+---
+
+## §50 The viewer import audit (2026-09-06) — the gate was already discharged, so the audit is a coverage question
+
+### 50.1 What §35.5 asked for, and why the question had changed under it
+
+§35.5 closed the viewer's *route* — route (b), the human's call: `web/serialize.py` stays Python and
+talks to Rust through the binding, there is no Rust HTTP server, and Phase 8 is struck. What it left
+open was named an **import audit**, with a specific job: "every place `serialize.py` reaches past the
+public constructor into a model's private names is a seam that has to close before the Python model
+behind it can be deleted, and that audit is the work." It was, in other words, **the gate on every
+deletion**, and §39–§49 repeat that framing.
+
+The deletions then happened anyway — eleven units, twenty-three bodies, and the suite green — which
+means **the discovery half of this audit is discharged by construction rather than by anyone doing
+it.** There is no Python body left behind any of those names. A name the binding does not expose is
+not a hazard waiting for a future deletion; it is an `AttributeError` in `web/serialize.py` *today*.
+So "find the reaches so we know what to expose" is a question that answered itself.
+
+What does **not** answer itself is the other half, and it is the half a grep cannot reach: **a reach
+only proves the binding exposes it if the line executes.** A grep proves the line exists in source.
+That distinction is this project's most repeated scar under different names — the swap guard that
+silently covered nothing for a batch (§17.7), the spectrum primitive fifteen test files leaned on
+without testing (`docs/memory/spectrum-detector-guard.md`), the derived CI list that was wrong by 43
+of 65 files (#32/§37.8). So the audit was run as a **coverage measurement**, not an inventory.
+
+### 50.2 The reach surface, measured by AST because grep counted prose
+
+A first pass grepped `\._[a-z]` and reported thirteen private reaches. **Three of the thirteen are
+prose**: line 5411 is the INDEXING TRAP comment, 6398 a docstring citing `tests/test_bore_modal._bump`,
+and 6875 a comment whose whole content is that the value is *not* read off `bore._bc_left`. A grep
+cannot tell a reach from a sentence about a reach, so everything below is `ast.walk` over
+`ast.Attribute` nodes, which cannot see a comment at all. The script is
+`M:\claud_projects\temp\viewer-audit\reaches.py`.
+
+| Surface | nodes | lines |
+|---|---:|---:|
+| private names (`_`-prefixed, non-dunder) | 20 | **12** |
+| raw state (`.u`, `.u_prev`, `.v`, `.w`, `.v_prev`, `.w_prev`) | 35 | **35** |
+| assembled operators (`.K`, `.W`, `.B`) | 11 | **9** |
+| attribute **writes** onto anything but `self` | 16 | 11 |
+| the factorization itself (`._lu`) | 0 | **0** |
+
+**These numbers are a new baseline and are not comparable to §3.1's.** §3.1 recorded 32 state and 15
+operator reaches and derived "47 call sites"; this measurement finds 35 and 9 by a different method
+over a file that has grown since. Reporting "six operator reaches closed" would be exactly the
+inference §45.7 and §47.6 forbid — reconcile a count or replace it, never split the difference. This
+one is replaced, and `._lu` being **zero** is the only row that carries forward intact: §3.1 called
+it the surface with "no clean binding", and the viewer never had one.
+
+### 50.3 The six private names, and how the binding exposes each
+
+Every one is exposed **deliberately**, and in five of six places the Rust source carries a doc
+comment naming the viewer as the client — `crates/physsynth-py/src/bore.rs:60` ("`_open_left` and
+`_open_right` are read by `tests/test_bore_radiation.py` and by `web/serialize.py`"),
+`collision.rs:32` and `:674` ("`_b`/`_support` are read by the viewer to draw the rail"). The seam
+was designed, not discovered.
+
+| Name | viewer lines | on | how it is exposed |
+|---|---|---|---|
+| `_stretch(prev=…)` | 3467, 3882, 4240, 4751, 9042 | the three 2-body bridges | `#[pyo3(signature = (*, prev=false))]` method, `connection.rs:354/820/971` |
+| `_stretch(j, prev=…)` | — | `SympatheticStrings` | same, plus the string index, `connection.rs:1244` |
+| `_bridge_displacement(prev=…)` | 2929 | `SympatheticStrings` | method, `connection.rs:1238` |
+| `_support` | 5418, 5419, 5978, 6311, 6312 | `BarrierString` | `#[getter]` → `PyArray1<i64>`, `collision.rs:681` |
+| `_b` | 5418, 6311 | `BarrierString` | `#[getter]` **and** `#[setter]`, `collision.rs:687/698` |
+| `_open_left` / `_open_right` | 6415 | `Bore` | `#[getter] -> bool`, `bore.rs:432/436` |
+
+Line 6312 is worth its own row because it is **two binding surfaces deep**: `bar.string.x[bar._support]`
+asks the barrier for its inner string and that string for its grid. It is covered (§50.5), so the
+chain works, but it is the reach with the most between it and a public constructor.
+
+### 50.4 The writes, which are the half a read-only getter would break silently
+
+Sixteen attribute writes are not on `self`; ten are on the serializer's own run records. **Six are on
+a Rust model**, all at `web/serialize.py:2698–2699`:
+
+```python
+res.u, res.w, res.v = u0, w0, v0
+res.u_prev, res.w_prev, res.v_prev = up, wp, vp
+```
+
+— the geometrically exact string seeded with an *exact* rotating-wave history rather than through
+`set_state`, whose second-order Taylor start would put O(k³) error straight into the longitudinal
+field (`long_kin` ~2e-26 exact vs ~1e-16 seeded, which still *looks* like machine precision while
+being ten orders worse). All six have `#[setter]`s (`string_geometric.rs:505–541`). This is the row
+§33's scar exists for — a `#[getter]` with no `#[setter]` makes an attribute silently read-only, and
+a *read* audit would have passed a file that could not write.
+
+### 50.5 The population is derived, not listed — and then intersected with coverage
+
+Measuring only the categories §3.1 happened to name would repeat #67's mistake at a smaller number:
+a hand-written surface is only as wide as whoever wrote it. So the reach set is derived over the
+package the same way `expected_classes` now is — `pkgutil.iter_modules(physsynth.core.__path__)`,
+then `dir()` of every class in every module: **23 modules, 408 distinct attribute names**, and every
+`ast.Attribute` node in `web/serialize.py` whose name is in that set is a **candidate reach**: 635
+lines. It over-counts on purpose (`.shape`, `.copy`, `.T`, `.state` collide with NumPy and with the
+serializer's own records), and over-counting is the safe direction — it can only add lines to the set
+that must be shown to run.
+
+Coverage: `pytest tests/test_web_backend.py --cov=web` → **`web/serialize.py` 94% (4,176 statements,
+233 missed), 408 tests, 85 s**. `web/server.py` is 0% covered and reaches nothing — a grep for
+`physsynth`, `.step(`, `.energy(` and `set_state` over it returns nothing at all, so it is HTTP glue
+over the serializer and outside this audit.
+
+Intersecting 635 candidate lines with the 233 missed ones leaves **three dark lines**, and the same
+three appear if you enumerate every attribute name occurring on a missed line and keep the model-ish
+ones. Both routes agree, which is the check on the derive.
+
+### 50.6 The three dark lines, and the fourth one that was live
+
+| line | reach | verdict |
+|---|---|---|
+| 6417 | `bore.c0`, `bore.L` | **unreachable.** The `n_open == 0` branch of `_bore_eigenfrequencies` handles a closed-closed tube's ω=0 mode; both call sites (6593, 6633) pass a bore with a `radiating` or `open` end, so no viewer path reaches it. Defensive, kept, unasserted. |
+| 9828 | `plate.state` | **unreachable.** The `run.plate_frames` empty fallback in `_build_payload_vkroom`, and `plate_until = min(n_steps, max(plate_stride, …)) >= 1` always, so the main run's frame list is never empty. Defensive, kept, unasserted. |
+| 9574 | `run.n_not_converged` | **not a reach.** A name collision — the serializer's own record has a field a core class also has. Dark because the von Kármán Picard sweep converged at every step of every covered run, which is the right outcome. |
+
+The fourth was **live, and the audit is worth having for it alone.** `web/serialize.py:1934`
+captures `bow.state` at step 0, and it had never executed. The bow animates its *settled* motion
+because it starts from rest, so `_run_bow` is given `snapshot_from=n_settle` with
+`n_settle = max(0, n_audio - n_anim)` — but `n_anim = min(n_audio, max(anim_stride, round(anim_win *
+fs)))`, so **asking for less audio than the animation window collapses the settle window to nothing**
+and the capture starts at the attack. That is a real parameter combination (`audio_duration` 0.05 s
+against the 0.06 s default window), it produces a valid render, and nothing had run it.
+
+`test_bow_short_render_animates_the_attack_from_rest` in
+`M:\claud_projects\physical synthesis\tests\test_web_backend.py` covers it. The discriminating
+assertion is **the field, not the clock**: `frame_times` is relative to the window start, so it
+begins at `0.0` in both branches and cannot tell them apart — while the first frame is exactly flat
+with no settle window (the string has not been touched) and moving with one. The test asserts both
+halves, so the flatness claim is a contrast rather than a tautology. With it, the reach set is
+**three dark lines, all accounted for**, and none of them a binding surface that has never run.
+
+### 50.7 §35.5 is closed, and what that changes elsewhere
+
+The audit is done and it did not find a seam that needed closing, because the deletions closed them
+all first. Two documents said otherwise and are corrected in the same commit: `CLAUDE.md`'s
+non-negotiable #3 ("what remains of the viewer's port is an *import audit* … the gate on deleting the
+Python model behind it") was wrong on both the role and the tense, and the memory note
+`viewer-stays-python.md` said "47 reaches, which is the gate on every deletion" — stale on the number
+and on the role.
+
+**The Rust migration has no remaining named work in this plan.** What is left in the project is not
+migration: the test suite's move to native bars (§35.4, elective — the physics is asserted either
+way), the two costed physics proposals in `docs/dev/scientific-hurdles.md` §4 and §5, and Phase 5's
+real-time port. The reproducible audit scripts are in `M:\claud_projects\temp\viewer-audit\`
+(`reaches.py`, `superset.py`, `intersect.py`); re-running `superset.py` after any viewer change
+re-derives the surface without a list to maintain.

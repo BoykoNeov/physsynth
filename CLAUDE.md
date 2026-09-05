@@ -21,9 +21,18 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    analysis *and* the test suite — in favour of **Rust**, gradually and model by model.
    **One exception, 2026-09-03 (the human's call):** the **viewer backend stays Python** and talks
    to Rust through the binding — `web/serialize.py` is a serializer, not a model, and there is no
-   Rust HTTP server to write (plan §35.5 closes it, and strikes §5's Phase 8). What remains of the
-   viewer's port is an *import audit*: every place `serialize.py` reaches past a public constructor
-   is the gate on deleting the Python model behind it.
+   Rust HTTP server to write (plan §35.5 closes it, and strikes §5's Phase 8). **The audit §35.5
+   left open is DONE (plan §50, 2026-09-06), and it closed as a coverage question rather than a
+   gate**: with every Python body already deleted, a name the binding does not expose is an
+   `AttributeError` in the viewer *today*, so the only thing left to prove was that each reach
+   actually **runs**. It does. `web/serialize.py` is 94% covered by `tests/test_web_backend.py`,
+   and a reach set derived over the package (23 modules, 408 attribute names, 635 candidate lines)
+   leaves three dark lines — two defensive branches unreachable from any call site, one a name
+   collision. The one *live* gap it found was the bow's empty settle window (a short render
+   captures `bow.state` at step 0), now tested. The viewer reaches six private names on Rust
+   objects — `_stretch`, `_bridge_displacement`, `_support`, `_b`, `_open_left`, `_open_right` —
+   and writes six state arrays on the geometric string; all are exposed on purpose, most with a
+   doc comment in the Rust source naming the viewer. **The migration has no remaining named work.**
    See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
    **State (2026-09-05): translation is over and DELETION is FINISHED.** Every model, operator,
@@ -138,7 +147,7 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    list must stay empty, so it cannot reach a Bessel function) while its Python name lives in a
    `core/` module. **The crate a function is implemented in and the module its name lives in are
    separate questions** (§37.7).
-   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **sixty-eight**
+   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **sixty-nine**
    findings about when two implementations agree to the bit, when they cannot, and what a
    *deletion* breaks that a port does not (fed-back reductions, libm vs NumPy's own
    transcendentals, LLVM's constant fold, `np.sum`'s pairwise cutoff, descriptors that take a
