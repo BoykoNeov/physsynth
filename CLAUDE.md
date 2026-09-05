@@ -26,9 +26,9 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    gate**: with every Python body already deleted, a name the binding does not expose is an
    `AttributeError` in the viewer *today*, so the only thing left to prove was that each reach
    actually **runs**. It does. `web/serialize.py` is 94% covered by `tests/test_web_backend.py`,
-   and a reach set derived over the package (23 modules, 408 attribute names, 635 candidate lines)
-   leaves three dark lines — two defensive branches unreachable from any call site, one a name
-   collision. The one *live* gap it found was the bow's empty settle window (a short render
+   and a reach set derived over both packages (29 modules, 633 attribute names, 680 candidate
+   lines) leaves three dark lines — two defensive branches unreachable from any call site, one a
+   name collision. The one *live* gap it found was the bow's empty settle window (a short render
    captures `bow.state` at step 0), now tested. The viewer reaches six private names on Rust
    objects — `_stretch`, `_bridge_displacement`, `_support`, `_b`, `_open_left`, `_open_right` —
    and writes six state arrays on the geometric string; all are exposed on purpose, most with a

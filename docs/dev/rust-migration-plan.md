@@ -10182,7 +10182,7 @@ was designed, not discovered.
 | `_stretch(j, prev=…)` | — | `SympatheticStrings` | same, plus the string index, `connection.rs:1244` |
 | `_bridge_displacement(prev=…)` | 2929 | `SympatheticStrings` | method, `connection.rs:1238` |
 | `_support` | 5418, 5419, 5978, 6311, 6312 | `BarrierString` | `#[getter]` → `PyArray1<i64>`, `collision.rs:681` |
-| `_b` | 5418, 6311 | `BarrierString` | `#[getter]` **and** `#[setter]`, `collision.rs:687/698` |
+| `_b` | 5418, 6311 | `BarrierString` | `#[getter]` **and** `#[setter] fn set__b`, `collision.rs:687/697` |
 | `_open_left` / `_open_right` | 6415 | `Bore` | `#[getter] -> bool`, `bore.rs:432/436` |
 
 Line 6312 is worth its own row because it is **two binding surfaces deep**: `bar.string.x[bar._support]`
@@ -10210,15 +10210,24 @@ a *read* audit would have passed a file that could not write.
 
 Measuring only the categories §3.1 happened to name would repeat #67's mistake at a smaller number:
 a hand-written surface is only as wide as whoever wrote it. So the reach set is derived over the
-package the same way `expected_classes` now is — `pkgutil.iter_modules(physsynth.core.__path__)`,
-then `dir()` of every class in every module: **23 modules, 408 distinct attribute names**, and every
-`ast.Attribute` node in `web/serialize.py` whose name is in that set is a **candidate reach**: 635
-lines. It over-counts on purpose (`.shape`, `.copy`, `.T`, `.state` collide with NumPy and with the
-serializer's own records), and over-counting is the safe direction — it can only add lines to the set
-that must be shown to run.
+packages the same way `expected_classes` now is — `pkgutil.iter_modules(...)` over **both**
+`physsynth.core` and `physsynth.analysis`, then every module-level name *and* `dir()` of every class
+in every module: **29 modules, 633 distinct attribute names**, and every `ast.Attribute` node in
+`web/serialize.py` whose name is in that set is a **candidate reach**: 680 lines. It over-counts on
+purpose (`.shape`, `.copy`, `.T`, `.state` collide with NumPy and with the serializer's own records),
+and over-counting is the safe direction — it can only add lines to the set that must be shown to run.
+
+**The first draft of this scan walked `physsynth.core` only, and only class `dir()`** — 23 modules,
+408 names, 635 lines. That is #69's own narrowing committed inside the measurement that produced
+#69: `web/serialize.py:37–38` imports five `analysis` modules plus the two rotating-wave functions,
+Rust-backed since §44, so every reach onto an oracle's *result* (`wave.frequency` at 2701, a
+`NamedTuple` field, `measure_partials_near`'s output) sat outside the population, as did every
+module-level name. Widening it moves the numbers and **not the conclusion** — the dark set is the
+same three lines either way — but the narrower claim was the one written down, and a derive is only
+as wide as the population it walks even when the population is a package.
 
 Coverage: `pytest tests/test_web_backend.py --cov=web` → **`web/serialize.py` 94% (4,176 statements,
-233 missed), 408 tests, 85 s**. `web/server.py` is 0% covered and reaches nothing — a grep for
+233 missed), 409 tests (408 before this section's own test), 85 s**. `web/server.py` is 0% covered and reaches nothing — a grep for
 `physsynth`, `.step(`, `.energy(` and `set_state` over it returns nothing at all, so it is HTTP glue
 over the serializer and outside this audit.
 
