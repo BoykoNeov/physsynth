@@ -245,8 +245,7 @@ jobs:
             tests/test_binding_surface.py \
             tests/test_rust_parity_operators.py \
             tests/test_rust_parity_ops2d.py \
-            tests/test_rust_parity_banded.py \
-            tests/test_rust_parity_connection.py
+            tests/test_rust_parity_banded.py
 
       # PHASE 7'S SUCCESS CONDITION STOOD HERE and is retired with unit 10 and unit 11
       # (plan §44). It ran the instrument's 65 client files with BOTH flags set, because that was

@@ -9889,3 +9889,203 @@ The **wall clock** moves by a third in both columns, and the two are now within 
 which is the deletion's real arithmetic: the flagged and unflagged runs were always going to
 converge as the last Python model went, and the 35 s is the wrapper tier's per-step Python being
 replaced rather than any kernel getting faster.
+
+---
+
+## §49 Deletion 10 (2026-09-05) — the last Python model body, and a parity file that was harvested rather than dropped
+
+`physsynth/core/connection.py` goes **973 -> 74 lines**. Four classes, and with them the eleventh
+and last unit of §39's graph: **there is no Python model body left in the project**.
+
+`PHYSSYNTH_RS` still exists and still swaps three modules — `operators`, `exciter`, `banded` — but
+none of them is a resonator. The flag chooses between two spellings of an operator or between two
+solvers; after this commit it cannot change which *model* a run exercises, because there is only
+one of each. That is the migration's actual finish line, and it is worth stating plainly rather
+than leaving to be inferred from a table: the flagged and unflagged runs now differ only in three
+parity files and 275 tests.
+
+### 49.1 What §39.3 got wrong about this file, restated as the thing that was true
+
+§48.3 already made the argument and this section is the execution of it. §39.3 filed `connection`
+under a **permanent** blocker — "a `physsynth-core` test cannot reach a class that is not in
+`physsynth-core`" — and that sentence conflates two questions:
+
+* **Can it have a native bar?** No, and never. The four bridges are polymorphic over their
+  collaborators' *Python* types (§34.3): the `body=` slot takes four kinds of object and the
+  `plate=` slot eight, none of which exists in the core crate. The classes live only in
+  `crates/physsynth-py`.
+* **Can its Python body be deleted?** Yes, and the airbox wrapper tier is the precedent — under the
+  identical blocker, deleted in §48, with its physics asserted by Python tests running against
+  Rust. That is what §39.5's frame says a body-deletion actually retires: not a physics claim, a
+  *diagnostic*.
+
+So what dies here is `tests/test_rust_parity_connection.py`, and it was the last file in the parity
+family that belonged to the deletion graph. The three that remain — `banded`, `operators`, `ops2d`
+— have no Python body to delete: `operators2d`'s functions stay Python because something has to
+rebuild a matrix from the binding's CSR triplets, and what `banded` ports is a *choice of solver*
+rather than a piece of arithmetic. `REMAINING_PARITY_FAMILY` is therefore expected to be **stable**
+from here rather than draining, which is a different claim from the one it has carried since §39
+and is written into the guard.
+
+### 49.2 The residue that no existing guard could speak about
+
+Every deletion so far left §41.2's three categories behind and `deleted_bodies` covered the third
+of them, because a re-export is a Rust object and the loop asserts `module.X is physsynth_rs.X`.
+This one leaves something that loop **cannot see**.
+
+`crates/physsynth-py/src/connection.rs` does `py.import("physsynth.core.connection")` and reads
+`sparse`, `spsolve` and `splu` **off this module's namespace at call time**. That is not incidental
+— it is the faithful transcription of a reference whose `_stability_margin` called its own module
+globals, and it is what makes §24.4's shared-factorization manoeuvre available on this file: patch
+the name here and both the sparse solve and the LU change with it. It is also the *only* Rust ->
+Python reach of the four (`grep -rn 'import("physsynth' crates/physsynth-py/src/`) that survives
+its module's deletion pointing at names the module keeps purely for the binding's benefit.
+
+Those three names now have **no Python caller in the file at all**. They are `noqa: F401`, and that
+is the entire distance between them and `ruff check --fix`, whose deletion would surface as an
+`AttributeError` raised from inside the extension three layers from the cause. So they get a guard
+of their own in `tests/test_binding_surface.py`, in two halves, because one assertion cannot make
+both claims:
+
+* `connection.sparse is scipy.sparse` and the same for `splu` and `spsolve` — they are present and
+  they are SciPy's;
+* a `monkeypatch` that replaces both solver names with counting wrappers and requires the Rust
+  guard to have called each exactly once — they are *reached*.
+
+This is the airbox seams' hazard (§48.1) one step further out. There, `deleted_bodies` happened to
+cover the `noqa` because the three seams are Rust classes; here it does not, and the difference is
+not visible from the shape of the two shims.
+
+### 49.3 The parity file was harvested, not dropped
+
+744 lines and 36 collected tests, and they were not one kind of test. This file's whole frame
+(§39.5, and `tests/test_binding_surface.py`'s own docstring) is that a **comparison** dies with its
+twin while a **property** does not — and the count here is roughly two-thirds property. So the file
+was read test by test and **26 of the 36 moved** into `tests/test_binding_surface.py`, which is
+where §40.2 says binding residue lives.
+
+What genuinely died: the four bit-identical trajectory tests and the two cross-language anchor
+tests. Both anchors survive *within* Rust and were already asserted there — `tests/test_sympathetic.py`
+holds a one-string `SympatheticStrings` `array_equal` to a `StringBodyBridge`, and
+`tests/test_airbox_vk.py` holds a `nonlinear=False` `StringVKPlateBridge`'s stability margin equal
+to `StringPlateBridge`'s to the last digit. Both run on the default path, which is now Rust.
+
+What moved unchanged: the write through the string's live buffer, the duck-typing stand-in (§31.11
+— an object that is not a `ModalBody` in either language, which every airbox and radiation test
+fails to probe because they hand the bridge a real model), the writable-attribute table (§33.2), the
+replaced force vector (§32.2 one tier up), the keyword-only constructors, and the explicit-`None`
+`drive_index` (§24.7's `Option<Option<_>>` arms).
+
+**And three got sharper on the way, which is the section's finding.** A test of the form "Rust
+agrees with Python about this reduction" only ever asserted that two transcriptions coincided. With
+no twin, each was re-aimed at the thing the transcription was *copying*:
+
+| was | is now |
+|---|---|
+| `py.beta_b == rs.beta_b` at a searched 12-mode witness | `rs.beta_b == rs.k**2 * float(np.sum(terms))`, and `!=` the left-to-right loop |
+| the coupler's and the twin's bodies agree at J=8 | two **bare** bodies driven alongside the coupler with `np.sum` and with a left-to-right loop; the first must track its `q`, the second must not |
+| `py.string.u == rs.string.u` after 800 steps, with the BLAS separation *reported* | `numpy.dot` replaced and the calls **counted** |
+
+The old `beta_b` test would have passed had the Python reference been wrong about NumPy's pairwise
+blocking. The new one cannot. The `np.dot` one is the clearest case: what §14.2 decided was *not to
+transcribe a reduction*, and a trajectory comparison can only observe that decision indirectly,
+whereas the binding looks `dot` up on the `numpy` module at call time — so the decision is directly
+countable, and the counts are three different statements about the scheme:
+
+* `step` -> **zero**. The reference's step takes the body's own `bridge_displacement`; a dot product
+  here would be a different scheme.
+* `energy` -> **exactly one**, the previous step's `phi . q_prev`.
+* `__init__` -> **exactly `N + M`**, because the exact stability guard assembles the coupled
+  leapfrog operator column by column and every column's `eta` needs the same product. Measured at
+  52 for `N=48, M=4`.
+
+The refusal messages were **frozen** rather than compared, on `tests/analysis_frozen_values.py`'s
+precedent (§38): eleven of them, recorded verbatim from the Python bodies immediately before those
+bodies were deleted. The numbers inside are part of the message and are kept deliberately — a
+refusal that stops reporting *which* bound was exceeded is a worse refusal, and nothing else in the
+suite would notice.
+
+### 49.4 The guards, and an expectation that reached zero
+
+Seven guard surfaces, as §39 says, and two of them needed more than a line removed.
+
+**`expected_classes` reached zero.** It held `connection`'s four rows and nothing else, and
+emptying it leaves a `set() == set()` comparison plus two `for` loops over an empty dict — finding
+#52's mechanism (an empty `parametrize` collects as a skip) through a fourth door, and the same
+shape §48.2 deleted `half_deleted_bodies` for. But the derive that feeds it is worth *more* now,
+not less, so it was **widened** instead of removed: the `for module in (connection,)` tuple that
+this guard has read since Phase 5 became every core module the test already imports, twenty-one of
+them, and the assertion became
+
+```python
+assert swapped_classes == {}
+```
+
+which is a live claim about all of them — *no module in `physsynth.core` chooses between two
+implementations of a class any more* — and the one that would fail if a Python reference
+implementation were ever reintroduced. Three separate findings in this file say the derive is only
+as wide as the tuple it derives over (§17.6, `collision` for a whole batch, `radiation` never in
+the table at all); widening it to everything retires that hole rather than restating it. The two
+flag-dependent loops went with the expectation: `deleted_bodies` makes the **stronger** claim about
+every one of those names already — the public name is the Rust object on *both* paths.
+
+**The `ModalBody` capture check loses its second client.** `connection` and `radiation` both did
+`from .body import ModalBody` at module scope, and the guard asserted neither had captured a
+pre-swap name. The shim imports no collaborator at all, so there is no capture left to check rather
+than a vacuous one — the same retirement the `plate` entry got in §42.4, reached from the other
+side (there the captured name stopped being a swap; here the capture stopped existing).
+
+The rest are one-liners: `deleted_bodies` gains four names, `connection` leaves the `_USE_RUST`
+reader tuple (it was the last *model* in it), `REMAINING_PARITY_FAMILY` drops to three, and the
+`rust` job's parity step loses its fifth file. `ported_expected` needed no edit and it is worth
+saying why rather than assuming: `connection`'s aliases were `<Name>Py` with a capital, and that
+table derives over `endswith("_py")`, so the module was never in it. §46.7 missed exactly this
+distinction once.
+
+**One thing `ruff` forced that is worth recording.** `connection.py` had no `__all__` and now needs
+one. A shim's re-exports are `F401` to ruff — unused imports — and `airbox.py` has been quietly
+relying on its `__all__` to mark them used since §47. Without it, `ruff check --fix` deletes the
+module's entire public surface. So `__all__` in a deleted module is load-bearing rather than
+documentation, and it is the second `ruff --fix` hazard this deletion turned up.
+
+### 49.5 What 74 lines are
+
+The module docstring, unchanged — 33 lines of it, and still the only prose statement of why the
+explicit spring is *exact* rather than a compromise (one linear leapfrog, `H^n` splitting cleanly
+into `E_string + E_body + E_conn`) and of why the 2-DOF CFL estimate is kept as a diagnostic while
+the actual guard assembles the coupled operator. Then `__all__`, the deletion note, the four Rust
+classes, and the three SciPy names.
+
+`_CFL_TOL` went with the bodies: private, no reader outside them, and `connection.rs` carries its
+own `const CFL_TOL`. So did `ModalBody`, `Plate`, `VKPlate` and `IdealString` — imported purely as
+the collaborators the bridges are handed, and a shim hands nothing to anyone.
+
+### 49.6 The measured state
+
+| run | tests | wall |
+|---|---:|---:|
+| whole suite, unflagged (`-n 6`) | 2,399 -> **2,388** passed, 1 skipped | 290 s |
+| whole suite, flagged, parity family excluded | 2,089 -> **2,114** passed | 173 s |
+| `tests/test_binding_surface.py` alone | 30 -> **56** passed | 3 s |
+| `ruff check .` | clean | — |
+
+**The counts reconcile exactly**, measured in a worktree at `24a9244` rather than reasoned about
+(§45.7, §47.6): the deleted parity file collected **36**, `tests/test_xdist_groups.py`
+parametrizes one case per file in `tests/` so it loses **1**, and the harvest adds **26**. 2,399 −
+36 − 1 + 26 = **2,388**, and nothing else moved.
+
+The flagged number going *up* by 25 is the same arithmetic seen from the other side and not a new
+claim: that run excludes the parity family, so deleting a member of the family removes 36 tests
+from the exclusion list and none from the run, while the 26 new binding-surface tests are inside
+it. Collected-minus-excluded: 2,389 − 275 = 2,114, and 275 is what the three remaining parity files
+collect — which also reproduces §48.4's 2,089 as 2,400 − (275 + 36). The wall clock is a Windows
+development box under a different load than §48's and is not comparable to it (#41 on runner
+variance); what is comparable is that the two columns are now 117 s apart for a reason that is
+entirely the three parity files building both sides of an operator.
+
+### 49.7 What is left of the port
+
+Nothing that is a model. `physsynth/` is Python that constructs Rust: twenty-three shim modules,
+`analysis/` with one implementation, `engine.py`, and the viewer backend the human's 2026-09-03
+call kept in Python. The remaining Rust-migration work in the plan is §35.5's viewer import audit
+and whatever Phase 5's real-time port turns out to want — neither of which is a deletion.

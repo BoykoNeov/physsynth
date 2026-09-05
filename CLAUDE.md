@@ -26,16 +26,16 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    is the gate on deleting the Python model behind it.
    See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
    "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
-   **State (2026-09-03): translation is over and DELETION has started.** Every model, operator,
+   **State (2026-09-05): translation is over and DELETION is FINISHED.** Every model, operator,
    solver, room, port, wrapper and bridge has a Rust implementation (`crates/physsynth-core` +
    `crates/physsynth-py`), and all six of `analysis/`'s modules — `spectrum`, `modal`, `damping`,
    `dispersion`, `duffing`, `rotating_wave`, plus the Bessel and elliptic functions they stand on —
    are in a **third crate**, `crates/physsynth-analysis`.
 
-   **Twenty-two of twenty-three Python model bodies are GONE** — 22,497 lines, **ten of eleven**
+   **All twenty-three Python model bodies are GONE** — 23,396 lines, **eleven of eleven**
    deletion units, and not one physics bar retired. Plan **§39** is the audit that made the order
-   computable (eleven units, from the reference-alias graph) and **§40–§45** are the deletions. Read
-   §39's tables before scoping the next one — but **§39.3's "zero native bars" for `airbox` was
+   computable (eleven units, from the reference-alias graph) and **§40–§49** are the deletions. Read
+   §39's tables before touching one again — but **§39.3's "zero native bars" for `airbox` was
    measured wrong** and §46 corrects it: the module carried nineteen `#[test]`s in `mod tests`
    blocks *inside* `src/`, which `cargo test --workspace` runs exactly like the files under
    `tests/`, and the audit had run `ls crates/physsynth-core/tests/`. §46 closed the remaining gap
@@ -44,13 +44,18 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    seven wrappers, two mixins and three seams. `airbox.py` is **4,112 -> 245 lines**, the largest
    deletion of the migration, and the second half retired **no test file at all**.
 
-   **`physsynth/core/connection.py` is the only Python model body left** — 973 lines, four classes,
-   one parity file. §39.3 filed it under a blocker it called permanent, and that conflated two
-   questions: it is true that `connection` can never have a *native* bar (it lives only in the
-   binding crate, so a `physsynth-core` test cannot reach it), and that is **not** a reason its body
-   cannot be deleted. The airbox wrapper tier was under the identical blocker and §48 deleted it,
-   with the physics asserted by Python tests running against Rust — which is what §39.5 says a
-   body-deletion actually retires. Five things about the new state:
+   **§49 deleted the last one**, `physsynth/core/connection.py`, **973 -> 74 lines**. §39.3 had
+   filed it under a blocker it called permanent, and that conflated two questions: it is true that
+   `connection` can never have a *native* bar (it lives only in the binding crate, so a
+   `physsynth-core` test cannot reach it), and that is **not** a reason its body cannot be deleted
+   — the airbox wrapper tier was under the identical blocker and §48 deleted it, with the physics
+   asserted by Python tests running against Rust, which is what §39.5 says a body-deletion actually
+   retires. **`PHYSSYNTH_RS` can no longer change which model a run exercises.** It still swaps
+   `operators`, `exciter` and `banded`, but none of those is a resonator: the flag now chooses
+   between two spellings of an operator or between two solvers, and that is the migration's real
+   finish line.
+
+   Seven things about the state this leaves:
 
    - **The wheel is now REQUIRED**, everywhere. A deleted model's module is an unconditional
      `from physsynth_rs import X`, so `pip install ./crates/physsynth-py` is a precondition for
@@ -69,16 +74,31 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
      would go unasserted for the whole interval between the two commits with every test still
      green. `half_deleted_bodies` in `tests/test_stability.py` is that table; it merges back into
      `deleted_bodies` at §48 (ledger #60).
-   - **Every deletion edits the guards**, and there are **seven**, not five: `deleted_bodies`,
-     `half_deleted_bodies`, the swapped-class derive with `expected_classes`, `ported_expected`
-     (the `<name>_py` FUNCTION table — the one §46.7 missed) and the `_USE_RUST` reader tuple, all
-     in `tests/test_stability.py`; `REMAINING_PARITY_FAMILY` in `tests/test_shard_partition.py`;
-     the extension-import scan in `tests/test_ci_workflow.py`; and the `rust` job's file list.
-     `tests/test_binding_surface.py` is the permanent home for residue that can never be a native
-     bar (buffer lifetime, PyO3 argument mapping). `tests/test_rust_parity.py` was the sixth guard
-     until §45: its `STILL_HAVE_A_PYTHON_TWIN` table reached zero rows and the **file was deleted
-     rather than emptied**, because an empty `parametrize` collects as a *skip* — green, and
-     asserting nothing (ledger #52).
+   - **A guard that reaches zero is deleted, or re-derived over a WIDER population — never left
+     empty.** Three tables hit zero and took three different exits. `tests/test_rust_parity.py`'s
+     `STILL_HAVE_A_PYTHON_TWIN` and `half_deleted_bodies` were **deleted**, because an empty
+     `parametrize` collects as a *skip* and an empty dict iterates zero times — green, and
+     asserting nothing (ledger #52, #60). `expected_classes` was **widened**: the tuple its derive
+     read went from one module to all twenty-one, and the claim became "no module in
+     `physsynth.core` chooses between two implementations of a class any more", which is worth
+     more at zero than it was at four (ledger #67). What is left to edit is `deleted_bodies` and
+     `ported_expected` (the `<name>_py` FUNCTION table — the one §46.7 missed) and the `_USE_RUST`
+     reader tuple, all in `tests/test_stability.py`; `REMAINING_PARITY_FAMILY` in
+     `tests/test_shard_partition.py` (now **stable at three** rather than draining — none of the
+     three has a Python body to delete); the extension-import scan in `tests/test_ci_workflow.py`;
+     and the `rust` job's file list.
+   - **`tests/test_binding_surface.py` is where a parity file's survivors go**, and a parity file
+     is **harvested, not dropped**: 26 of `connection`'s 36 tests outlived their twin, and three
+     got *sharper* by being re-aimed at what the transcription was actually copying — "Rust agrees
+     with Python about `np.sum`" became "Rust agrees with **NumPy**", and a trajectory comparison
+     for the reduction that must *not* be transcribed became a **count of the binding's `np.dot`
+     calls** (ledger #64, #65). Only a comparison with no referent outside the twin really dies.
+   - **Two `ruff --fix` hazards live in every shim**, both silent until something outside the file
+     asks for a name. A re-export is an unused import, so **`__all__` is load-bearing** — without
+     it `--fix` deletes the module's whole public surface (#66). And residue that is *not* a Rust
+     object falls straight through `deleted_bodies`' identity loop: `connection.py` keeps `sparse`,
+     `spsolve` and `splu` solely because `connection.rs` reads them off its namespace, and they
+     need their own guard for **presence and reachability separately** (#63, §49.2).
    - **A deletion reaches modules it does not contain.** §43 is the case: `airbox.py` *re-derives*
      the plate's system matrix and factors it, and four of its reduction anchors are `array_equal`,
      so moving the plate's solver to Rust on the default path broke 15 tests in three modules
@@ -87,9 +107,10 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
      `splu`. A deletion also **changes which tests share a process**, so it surfaces order- and
      process-dependent defects that are not yours (ledger #44, #46).
 
-   `cargo test --workspace` runs the native bars and the Cargo dependency allowlists; `PHYSSYNTH_RS=1
-   pytest` runs the **existing, unmodified** Python tests against the Rust code for the models whose
-   Python side is still alive (reinstall the wheel before believing any parity number — nothing can
+   `cargo test --workspace` runs the native bars and the Cargo dependency allowlists. `PHYSSYNTH_RS=1
+   pytest` no longer changes any **model** — it swaps `operators`, `exciter` and `banded` only — so
+   the default run and the flagged run now differ by three parity files and 275 tests, and *both*
+   exercise Rust physics end to end (reinstall the wheel before believing any number — nothing can
    tell a stale wheel from a fresh one).
 
    **There is ONE flag now, and the second one's job was handed to a file.** `PHYSSYNTH_RS` swaps
@@ -112,7 +133,7 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    list must stay empty, so it cannot reach a Bessel function) while its Python name lives in a
    `core/` module. **The crate a function is implemented in and the module its name lives in are
    separate questions** (§37.7).
-   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **sixty-two**
+   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **sixty-seven**
    findings about when two implementations agree to the bit, when they cannot, and what a
    *deletion* breaks that a port does not (fed-back reductions, libm vs NumPy's own
    transcendentals, LLVM's constant fold, `np.sum`'s pairwise cutoff, descriptors that take a

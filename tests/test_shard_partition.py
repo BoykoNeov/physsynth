@@ -121,9 +121,15 @@ def test_dropping_the_parity_family_does_not_move_anything_between_shards(k):
 # and a file that started), it makes each deletion a one-line reviewed edit, and it can reach the
 # empty set honestly. The canary's actual job -- proving the predicate still fires -- moves to the
 # two synthetic probes at the bottom, which keep working after the family is gone.
+# `test_rust_parity_connection.py` left with unit 10 (plan section 49), the last file in the
+# family that belonged to the deletion graph. The three that remain are not models: two operator
+# modules and a solver, none of which has a Python body to delete -- `operators2d` because
+# something has to rebuild a matrix from the binding's CSR triplets, `banded` because what it
+# ports is a choice of solver rather than a piece of arithmetic. So this set is expected to be
+# STABLE now rather than draining, which is a different claim from the one it has carried since
+# section 39 and the reason it is worth writing down.
 REMAINING_PARITY_FAMILY = {
     "test_rust_parity_banded.py",
-    "test_rust_parity_connection.py",
     "test_rust_parity_operators.py",
     "test_rust_parity_ops2d.py",
 }

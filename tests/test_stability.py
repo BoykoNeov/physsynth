@@ -224,6 +224,16 @@ def test_the_rust_swap_matches_the_environment():
             "monopole_radiation_resistance",
             "piston_radiation_resistance",
         },
+        # The LAST Python model body in the project, deleted by unit 10 (plan section 49). Four
+        # classes and no function aliases -- and the module keeps three SciPy names in its
+        # namespace that this loop cannot speak about, because they are not Rust objects. They get
+        # their own guard in `tests/test_binding_surface.py`; see section 49.2.
+        connection: {
+            "StringBodyBridge",
+            "StringPlateBridge",
+            "StringVKPlateBridge",
+            "SympatheticStrings",
+        },
         # Unit 6 landed in two commits (plan sections 47 and 48) and passed through
         # `half_deleted_bodies` on the way. Fourteen names: the room, the three ports, the seven
         # wrappers and the three seams -- the seams included, because `airbox_wrap.rs` reads them
@@ -343,7 +353,9 @@ def test_the_rust_swap_matches_the_environment():
         # with nothing noticing. It reads no flag at all now: `deleted_bodies` asserts that.
         exciter,
         banded,
-        connection,
+        # `connection` was here until unit 10's deletion, and it was the last MODEL in the tuple:
+        # what is left reads the flag to choose between two implementations of an operator or a
+        # solver, not of a resonator. `deleted_bodies` above asserts it reads no flag at all now.
     ):
         assert module._USE_RUST is expected_rust, (
             f"{module.__name__}'s reading of PHYSSYNTH_RS disagrees with this test's -- one of "
@@ -357,13 +369,41 @@ def test_the_rust_swap_matches_the_environment():
     # hole, one forgotten paste wide. So the set of swapped CLASSES is read off the `<Name>Py`
     # aliases the modules actually define, and then checked against a written-down expectation --
     # which is what keeps adding a port a reviewed edit rather than a silent one.
+    # ALL of them, and the widening is unit 10's doing. This derive read a hand-written tuple
+    # for eight phases, and three separate findings in this file say the same thing about it: it
+    # is only as wide as the tuple, so a module absent from the tuple could grow a `<Name>Py`
+    # alias with nothing noticing (`collision` did, for a whole batch). With the last Python model
+    # body deleted the expectation is EMPTY, and an empty expectation checked against a
+    # zero-length tuple asserts nothing at all -- finding #52 through a fourth door. So the tuple
+    # becomes every core module this test already imports, and the claim becomes the migration's
+    # completion canary: no module in `physsynth.core` chooses between two implementations of a
+    # CLASS any more. That is a live statement about twenty-two modules, and it is the one that
+    # would fail if a Python reference implementation were ever reintroduced.
+    all_core_modules = (
+        airbox,
+        banded,
+        beam,
+        body,
+        bore,
+        bow,
+        collision,
+        connection,
+        exciter,
+        mallet,
+        membrane,
+        operators,
+        operators2d,
+        plate,
+        radiation,
+        reed,
+        string_damped,
+        string_geometric,
+        string_ideal,
+        string_nonlinear,
+        string_stiff,
+    )
     swapped_classes = {}
-    for module in (connection,):
-        # `collision` joined this tuple in Phase 3's last batch, and it was ABSENT before -- so for
-        # the whole of §16's batch and after, a `BarrierStringPy` alias could have been added with
-        # nothing noticing. That is §17.6's finding a second time, in the half of the guard §17.6's
-        # own text says it was applying the lesson TO. The derive is only as wide as the tuple it
-        # is derived over, which is the one thing about it that still has to be written by hand.
+    for module in all_core_modules:
         for alias in dir(module):
             if not alias.endswith("Py") or alias.endswith("_py"):
                 continue
@@ -372,35 +412,19 @@ def test_the_rust_swap_matches_the_environment():
             if isinstance(reference, type) and isinstance(getattr(module, name, None), type):
                 swapped_classes[(module.__name__, name)] = (module, name, reference)
 
-    expected_classes = {
-        # `airbox` left this table over unit 6's two commits and its fourteen names are in
-        # `deleted_bodies` above, where the claim is identity rather than a choice. `connection`
-        # is the only module left with two implementations to choose between.
-        ("physsynth.core.connection", "StringBodyBridge"),
-        ("physsynth.core.connection", "StringPlateBridge"),
-        ("physsynth.core.connection", "StringVKPlateBridge"),
-        ("physsynth.core.connection", "SympatheticStrings"),
-    }
-    assert set(swapped_classes) == expected_classes, (
-        f"the swapped classes are {sorted(swapped_classes)}, but this guard expects "
-        f"{sorted(expected_classes)} -- a model was ported (or unported) without the guard "
-        "being updated"
+    assert swapped_classes == {}, (
+        f"the swapped classes are {sorted(swapped_classes)}, but every Python model body has "
+        "been deleted (plan section 49) -- either a reference implementation came back, or a "
+        "`<Name>Py` alias outlived the body it named"
     )
 
-    if expected_rust:
-        import physsynth_rs
-
-        for module, name, _reference in swapped_classes.values():
-            assert getattr(module, name) is getattr(physsynth_rs, name), (
-                f"PHYSSYNTH_RS is set but `{name}` is still the Python class: this run is NOT "
-                "exercising the Rust model, whatever it reports"
-            )
-    else:
-        for module, name, reference in swapped_classes.values():
-            assert getattr(module, name) is reference, (
-                f"PHYSSYNTH_RS is unset but `{name}` is not the Python class -- the default path "
-                "must stay the one the acceptance numbers came from"
-            )
+    # The two arms that stood here -- "with the flag set the public name must be Rust", "without
+    # it, Python" -- iterated over `swapped_classes` and are gone with it. They were the whole
+    # point of the derive for eight phases and they are now unreachable by construction: with no
+    # Python class left, `deleted_bodies` above makes the STRONGER claim (the public name is the
+    # Rust object on BOTH paths, flag or no flag) for every one of them. Keeping the loops would
+    # have been two `for` statements over an empty dict, which is the shape this batch removed
+    # three times.
 
     # The operators (plan Phase 1) need the same guard for the same reason, and it has to be
     # spelled differently: they are functions, so there is no class identity to compare. The
@@ -559,12 +583,17 @@ def test_the_rust_swap_matches_the_environment():
         # plate factors with the crate on every path now, so the wrapper tier has to as well or
         # the four bare-versus-loaded reduction anchors compare two solvers.
 
-        # The body's version, and it has TWO importers rather than one. `connection` and
-        # `radiation` both do `from .body import ModalBody` at module scope, so a swap that
-        # landed after either of them would leave the whole body/radiation leg on Python
-        # while this run reported Rust. (`airbox` imports the name only under TYPE_CHECKING
-        # and so captures nothing at runtime -- deliberately, and worth not un-doing.)
-        for client in (connection, radiation):
+        # The body's version. It had TWO importers -- `connection` and `radiation` both did
+        # `from .body import ModalBody` at module scope, so a swap landing after either would
+        # leave the whole body/radiation leg on Python while this run reported Rust. (`airbox`
+        # imports the name only under TYPE_CHECKING and so captures nothing at runtime --
+        # deliberately, and worth not un-doing.)
+        #
+        # `connection` left the tuple with unit 10: its shim imports no collaborator at all, so
+        # there is no capture to check rather than a vacuous one. That is the same retirement the
+        # `plate` entry above got, reached the other way -- there the captured name stopped being
+        # a swap, here the capture stopped existing.
+        for client in (radiation,):
             assert client.ModalBody is body.ModalBody, (
                 f"`{client.__name__}` captured a different `ModalBody` than `body` now "
                 "exposes -- the swap landed after that module was imported"
