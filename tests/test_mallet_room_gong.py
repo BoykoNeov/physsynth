@@ -178,12 +178,68 @@ def test_a_swapped_factorization_refreshes_the_frozen_column():
     before = mal._g_s
     assert before == loaded_column(inst, mal.node)[mal.node]
 
-    inst._lu_loaded = splu(inst._surface.a_bare().tocsc())
+    # The factorization the test installs is the one it compares against. Building a *second*
+    # `splu` of the same matrix to check the answer would make the exactness depend on SuperLU
+    # ordering two identical matrices identically, which is not a property this project relies on
+    # anywhere else (``docs/dev/rust-migration-findings.md`` on orderings in front of a sparse LU).
+    lu = splu(inst._surface.a_bare().tocsc())
+    inst._lu_loaded = lu
     mal.step()
 
-    assert mal._g_s == bare_column(inst, mal.node)[mal.node]
+    e = np.zeros(inst.plate.n_live)
+    e[mal.node] = 1.0
+    scale = inst.plate.k * inst.plate.k / inst.plate.force_denominator
+    assert np.array_equal(mal._influence, scale * lu.solve(e))
     assert mal._g_s != before
     assert mal._g == mal._g_s + mal._g_h
+
+
+def test_the_exact_tangent_is_taken_against_the_LOADED_operator():
+    """``_drive_point_tangent`` is an instrument, and in a room it was wrong in a specific way.
+
+    ``g_exact = [J^-1 influence]_node + g_h`` has two halves and they have to belong to the same
+    problem. ``influence`` is already the loaded column — the constructor retargets it — so leaving
+    the *operator* on the plate's own factorization would pair a loaded right-hand side with the
+    bare plate's Jacobian: a derivative of neither problem, reported as the truth the shipped chord
+    approximates. That is `air-box-vk-newton-plan.md` §3's hazard in a second place, and it is the
+    number any room cost claim would be cited from.
+
+    Asserted by difference against the identical mallet on the identical plate with no room. The
+    two must not agree: the columns differ by 414% at the far end of the grid (§2.1) and the
+    operators differ by the whole air load.
+    """
+    mal = make_mallet_room_gong()
+    inst = mal.plate
+    bare_plate = make_air_vk_plate()
+    twin = MalletVKPlate(
+        plate=bare_plate, mass=0.05, stiffness=5e4, alpha=2.3,
+        strike_x=0.3 * bare_plate.Lx, strike_y=0.4 * bare_plate.Ly,
+        strike_velocity=MALLET_ROOM_V0,
+    )
+    assert twin.node == mal.node
+
+    for _ in range(60):
+        mal.step()
+        inst.room.step()
+
+    u = inst.plate.u.copy()
+    u_prev = inst.plate.u_prev.copy()
+    f_prev = inst.plate.F_prev.copy()
+    force = max(mal.contact_force, 1.0)
+
+    kw = dict(u=u, u_prev=u_prev, F_prev=f_prev, force=force, w=u)
+    g_room, resp_room, _ = mal._drive_point_tangent(**kw)
+    g_bare, resp_bare, _ = twin._drive_point_tangent(**kw)
+
+    # Same mallet, so `g_h` is shared and the whole difference is the plate-only half.
+    assert mal._g_h == twin._g_h
+    assert g_room != g_bare
+    assert resp_room != resp_bare
+    assert abs(resp_room - resp_bare) / abs(resp_bare) > 1e-6
+
+    # And the instrument is about the same quantity the chord froze: the exact tangent must sit
+    # near `_g`, which is what makes `|1 - g_exact/_g|` the chord's contraction bound.
+    assert 0.0 < g_room < 10.0 * mal._g
 
 
 # -- the room is stepped exactly once ----------------------------------------------------------

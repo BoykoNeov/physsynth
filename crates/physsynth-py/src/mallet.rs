@@ -1225,8 +1225,36 @@ impl PyMalletVKPlate {
         let w = crate::as_1d_f64(py, w, "w", n_live)?;
         let mut f_ext = vec![0.0; n_live];
         f_ext[self.p.node] = -force;
-        core::vk_drive_point_tangent(&u, &u_prev, &f_prev, Some(&f_ext), &w, &self.p, vk)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+        // In a room the Jacobian this inverts is the LOADED one. Routing it is not a refinement:
+        // `self.p.influence` is already the loaded column, so an unrouted call would pair a loaded
+        // right-hand side with the bare plate's tangent -- the two halves of one derivative taken
+        // against two different operators, which is the hazard `air-box-vk-newton-plan.md` §3
+        // names and the reason `vk_drive_point_tangent_with` exists.
+        let lu = match &self.room {
+            None => None,
+            Some(room) => Some(room.lu_loaded(py)?),
+        };
+        let loaded = lu.as_ref().map(|l| LoadedLu::new(py, l.bind(py)));
+        let theta = loaded.as_ref().map(|t| t as &dyn core_plate::ThetaSolve);
+        core::vk_drive_point_tangent_with(
+            &u,
+            &u_prev,
+            &f_prev,
+            Some(&f_ext),
+            &w,
+            &self.p,
+            vk,
+            theta,
+            &self.p.influence,
+        )
+        .map_err(|e| {
+            // A failure the supplied factorization raised in Python comes back as a sentinel with
+            // the real exception parked on the adapter.
+            loaded
+                .as_ref()
+                .and_then(LoadedLu::take_err)
+                .unwrap_or_else(|| PyValueError::new_err(e.to_string()))
+        })
     }
 }
 

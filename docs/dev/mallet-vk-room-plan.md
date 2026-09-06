@@ -371,7 +371,28 @@ claim about that expression. Gate: 253 tests across `test_mallet_gong.py`, `test
 
 **Part 3** widened `MalletVKPlate`'s constructor to the three arms of §3.5 and added
 `step_in_room`: one `prepare`, a chord of solves against the loaded factorization, one commit, one
-`finish`. 20 tests in `tests/test_mallet_room_gong.py`.
+`finish`. 21 tests in `tests/test_mallet_room_gong.py`.
+
+### 6.0 The tangent was left half-routed, and half is worse than neither
+
+§3.3a said `vk_drive_point_tangent` is wrong in a room in two ways — wrong column, wrong operator —
+and Part 1 duly added the override. Part 3 then retargeted `p.influence` to the loaded column and
+**did not point the binding's `_drive_point_tangent` at the override**, which left the instrument in
+a state neither §3.3a described nor anyone would have chosen: a **loaded right-hand side inverted
+against the bare plate's Jacobian**. Not the bare problem's derivative and not the loaded problem's,
+reported as `g_exact` — the number `mallet-gong-plan.md` cites to falsify "there is no closed-form
+derivative", and the number a room cost claim would be built from.
+
+Nothing turned red, and nothing would have: the override compiled, the doc comment described the
+fix, `vk_drive_point_tangent` still delegated correctly on the bare path, and the room arm simply
+had no caller. A `pub` function with no caller draws no dead-code warning — the `pub(crate)` one
+this batch also left behind (`VkRoom::surface`) was deleted the moment the compiler mentioned it.
+
+Routed now, and asserted by difference against the identical mallet on the identical plate with no
+room: `g_exact` and its plate-only half must both differ, and they do. **The lesson is narrower
+than "test your code": an override added in one part and consumed in another is not finished when
+it compiles, and the half-routed state is worse than the unrouted one, because the unrouted one is
+at least self-consistent.**
 
 ### 6.1 The air load does not move the mallet's wall either — and the room is very nearly free
 
