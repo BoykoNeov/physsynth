@@ -296,22 +296,43 @@ passes through capped steps before it expands.
 | 40 cm, 8 cm strike, w=20e | 0 / 2 | dies at every cap | — | overflow | **wall** |
 | 40 cm, 8 cm, w=12e, 24 kHz | 0 / 1 | dies at every cap | — | overflow | **wall** |
 
-**The gate is met**: no cap-limited fixture reports `expansive` on any of its 300 steps, and no
-divergent one reports `capped` on any. The three cap-limited fixtures reproduce §2.3's sweep counts
+**The gate is met**, and the two halves rest on different amounts of evidence, which is worth
+saying rather than averaging: the cap-limited fixtures reported `capped` and **never** `expansive`
+across all 300 steps, while the divergent ones reported `expansive` on the one or two steps they got
+to run before the energy overflowed. §9.4 is where the second half is measured properly.
+The three cap-limited fixtures reproduce §2.3's sweep counts
 and drifts exactly (143 / 724 / 76 sweeps; 4.1e-13 / 4.3e-13 / 6.0e-13), and the wall-clock cost of
 the generous cap is 0.44 → 0.49 s, 0.83 → 1.07 s and 0.07 → 0.07 s over 300 steps — the expensive
 steps stay rare.
 
-### 9.4 One thing the per-step counting found that §2.3 could not
+### 9.4 The wall is decided on step zero — measured, not inferred
 
-**The three divergent fixtures fail on the very first step** (`DIED@0`, and `DIED@1` for the loud one
-at cap 50). The wall is not something a run drifts into over 300 steps; it is a property of the
-initial condition, decided immediately. Two consequences for the parts that follow:
+§9.3's run *suggests* this (`DIED@0`, and `DIED@1` for the loud one at cap 50) but does not show it:
+the step at which the energy overflows **moves with the cap**, so a death at step 0 is not by itself
+a verdict about step 0. `part0_first_step.py` asks the model directly, one step from rest:
+
+| fixture | cap 50 | cap 400 |
+|---|---|---|
+| 40 cm, 3 cm strike, w=6e | capped (50 sweeps, ratio 0.820) | **converged** (143 sweeps) |
+| 40 cm, 8 cm strike, w=16e | capped (50, 0.751) | **converged** (76) |
+| 16 cm, 3.2 cm strike, w=6e | capped (50, 0.690) | **converged** (76) |
+| 12 cm, 2.4 cm strike, w=6e | **expansive** | **expansive** |
+| 40 cm, 8 cm strike, w=20e | **expansive** (ratio 1.000) | **expansive** |
+| 40 cm, 8 cm, w=12e, 24 kHz | **expansive** | **expansive** |
+
+Every divergent fixture is already `expansive` on its **first** step, at both caps, and every
+cap-limited one is `capped` or `converged` there. The wall is a property of the initial condition,
+not something a run drifts into. Two consequences for the parts that follow:
 
 * Part 3's convergence map can be drawn from **one step per point** rather than a 300-step run,
-  which makes a fine grid over `(w/e, curvature, fs)` affordable.
+  which makes a fine grid over `(w/e, curvature, fs)` affordable. This is the claim that cost
+  estimate rests on, which is why it is measured here rather than read off §9.3.
 * A Newton root claimed in that territory is a root of the *first* step from a struck initial
   condition, and trap 3 applies to it in full.
+
+Note also that the contraction factor is essentially cap-independent on the converging fixtures
+(0.820 / 0.819, 0.751 / 0.750, 0.690 / 0.689) — consistent with §2.3's "ρ is a clean constant in
+every converging fixture", now visible from the model itself.
 
 ### 9.5 Deliberately not done here
 
@@ -322,3 +343,10 @@ initial condition, decided immediately. Two consequences for the parts that foll
 * **The viewer still counts `n_not_converged` without splitting it** (`web/serialize.py`). It could
   now report cap-versus-wall; that is a viewer change, not Part 0, and no part of this plan needs it.
 * §5's `k²/h⁴` and the same claim in `tests/helpers.py` are **Part 4**, untouched here.
+
+**One known fork, recorded now rather than discovered in Part 2.** `VkPlate::step` and
+`PyVKPlate::step` each copy the step's diagnostics into their own struct in a **hand-written block**
+— the binding does not delegate to the core model, it holds its own fields and calls `core::vk_step`
+directly. So `residual_ratio` is copied twice, and an edit to one block does not fail the other.
+That is the shape of the §45.9 `THETA_DEFAULT` fork already in this project's history. Part 2 adds
+`couple_method` to both structs, and this is where it will drift if it drifts.
