@@ -21,7 +21,7 @@
 | 1 | DG Jacobian `(v,v)` block cancelled two `O(1)` terms at musical strain | `string_geometric` | **Fixed 2026-09-02** (§1) |
 | 2 | Room energy books were a tolerance rather than exact across the port | `airbox` (Rust) | **Fixed 2026-09-02** (§2) |
 | 3 | NumPy's own transcendentals disagree with libm by an ulp on some CPUs — a read-out asserted exactly across languages fails on a runner and passes on another | `airbox.mode_frequency`, four `pow`s, one `tan`, `exp`, `cos`/`sin` | **Symptom cleared 2026-09-03** — the parity step is green on five consecutive runs; the **rule** stays live (§3) |
-| 4 | The θ-scheme suppresses every discrete decay rate by `1/(1+θk²Q)`; "highs die faster" turns over past mode ~32 | `string_damped`, `string_stiff`, both plates | Accounted for; **fix derived, not built** (§4) |
+| 4 | The θ-scheme suppresses every discrete decay rate by `1/(1+θk²Q)`; "highs die faster" turns over past mode ~32 | `string_damped`, `string_stiff`, both plates | Accounted for; fix derived, not built — and the **payoff claim is FALSIFIED 2026-09-06**: the rate suppression and the scheme's *pitch* flattening are one factor and its square root, so a mode's decay is never audibly wrong before that same mode is most of a semitone flat, and the turnover never lands closer than **330 cents** from in tune over 90 realistic configurations. The observations all stand; "an audible payoff in the whole register" does not (§4) |
 | 5 | The von Kármán Picard iteration stops contracting at large amplitude / high strain / high `fs` — the gong-on-a-string, the gong in a room and grid coarsening all die there | `plate.VKPlate`, `connection`, `airbox` | Open, **narrowed 2026-09-06** — the `1/h⁴` mechanism is falsified, a third of the wall was the sweep cap, and Newton is **built** behind `couple_method` (default still Picard), the boundary is **mapped** (2–4× in amplitude; a root is a resolved *plate* only where the **deflection** is smooth), and the **gong on a string is no longer iteration-bound** — two of this row's three scenes were misfiled (one was never built), and the **wrapper block is gone 2026-09-06** — the room seam drives the model's own kernel against the loaded factorization, so the gong in a room runs under Newton too, and its wall moves ~1.6-1.9x in amplitude depending on the grid (§5) |
 | 6 | The geometrically exact string's Newton solve stops converging past `λ_long ≈ 4`, and `h`-refinement makes it worse | `string_geometric` | Warned at 1, unresolved regime; **§1 eliminated as the cause 2026-09-03** (edge identical in 9/9 cells) and the threshold split into a **convergence** edge at 4 and an **energy** edge at 5–10 (§6) |
 | 7 | A point port's added mass is a grid quantity: refinement makes it *worse* | `airbox.RoomPort` | Refused, measured — `radius` has no default (§7) |
@@ -140,10 +140,32 @@ and the plate family inherits it with a fourth-power denominator. The oracle
 `analysis/damping.py` predicts `g_m` exactly, the tests assert the rise only over `[1..16]`, and
 the state is recorded as "symptom-cured, not fixed. No test asserts the artifact is gone."
 
-**Why it matters.** Frequency-dependent loss is the model's *audible* claim, and the scheme
-silently caps it in the band where a piano's or a plate's partials are densest. It is also the
-one artifact that a later calibration against recordings (HANDOFF §6.6, §12D) would fit *around*
-rather than through.
+**Why it matters — RETRACTED 2026-09-06, and the retraction is the useful part.** This paragraph
+used to read: "Frequency-dependent loss is the model's *audible* claim, and the scheme silently caps
+it in the band where a piano's or a plate's partials are densest. It is also the one artifact that a
+later calibration against recordings (HANDOFF §6.6, §12D) would fit *around* rather than through."
+
+Both sentences are wrong, for one reason. **The rate suppression and the θ-scheme's frequency
+suppression are the same factor.** The lossless amplification factor gives
+`sin²(ωk/2) = k²Q / (4(1 + θk²Q))`, so the discrete frequency carries `1/√(1 + θk²Q)` while the
+decay rate carries `1/(1 + θk²Q)` — and in the unit a listener uses,
+
+```
+pitch error (cents) = 600 · log₂(S)          S = the decay-rate suppression 1/(1 + θk²Q)
+```
+
+verified to 0.57 cents over 108 string configurations wherever `S > 0.99`
+(`docs/dev/theta-loss-compensation-plan.md` §2). A mode whose T60 comes out 10% long — about one
+decay-time JND — is **82 cents flat**, some fifteen pitch JNDs. There is no register in which the
+loss artifact is audible first, so it is not "the model's audible claim" and a calibration would be
+fitting around the *pitch* error, which the compensation does not touch. The turnover is worse still:
+swept over 90 configurations with `(σ₀, σ₁)` derived from real T60 targets, the closest it ever came
+to being in tune was mode 26 at **330 cents flat**, a minor third (§2.4 there). The one knob that
+fixes both halves is a smaller `k`.
+
+The *observations* in this section all stand — the turnover exists, the rates are suppressed, the
+plate inherits it worse. What was falsified is the payoff framing, the same distinction §5's probe
+drew when it kept that section's observations and threw out its mechanism.
 
 **The fix, derived (not built).** Pre-compensate the loss operator by the θ-denominator:
 
@@ -174,10 +196,20 @@ existing rig:
   *cannot* exist today — "the rate rises monotonically over the whole resolved band" — becomes
   writable.
 
-**Where it should be built.** Under plan §6 (the frontier flipped at the end of Phase 2), new
-physics is written in Rust first. This is a `Params` flag on `string_damped` and the two plates,
-a bandwidth change in `banded.rs`, and one new oracle branch. It is the smallest physics change
-with an audible payoff in the whole register and the human's call on whether to spend it.
+**Where it should be built, if it is.** Under plan §6 (the frontier flipped at the end of Phase 2),
+new physics is written in Rust first. This is a `Params` flag on `string_damped` and the two plates,
+a bandwidth change in `banded.rs` (`kd` 2 → 3, and `apply_ainv` has three external consumers), and
+one new oracle branch. `docs/dev/theta-loss-compensation-plan.md` §4 scopes it in five parts.
+
+**It is not "the smallest physics change with an audible payoff in the whole register"** — that
+sentence stood here until 2026-09-06 and is retracted above. What a build would still buy is stated
+honestly in that plan's §3: the rate's error constant improves by about seven orders of magnitude,
+`loss_coefficients_from_T60` starts delivering what it promises (today 2.75% long at its own second
+target mode, 19% by mode 40), the coarse-timestep plate's tail stops running 7.4× long, and the
+monotone-rate test this section says cannot exist becomes writable. **The human's call, made
+2026-09-06: record the finding and do not build it**, and open the wider thread the probe exposed —
+that the *pitch* error is what actually bounds every accuracy claim in this project, and no model has
+its resolution horizon written down.
 
 ## 5. Von Kármán Picard non-convergence — the deep end's wall
 
