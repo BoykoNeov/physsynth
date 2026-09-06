@@ -14,8 +14,8 @@
 use physsynth_core::ops2d::Mask;
 use physsynth_core::plate::{
     count_components, energy, grain_ratios_from_material, linspace0, pickup_index_at, Boundary,
-    CoupleOutcome, Domain, MaterialError, ParamError, Params, Plate, PlateSpec, VkParamError,
-    VkParams, VkPlate, VkSpec,
+    CoupleOutcome, Domain, MaterialError, ParamError, Params, Plate, PlateSpec, VkCoupledStep,
+    VkParamError, VkParams, VkPlate, VkSpec,
 };
 
 const FS: f64 = 20_000.0;
@@ -730,4 +730,343 @@ fn the_side_length_snaps_with_pythons_half_to_even_round() {
         ties, 8,
         "these geometries no longer land on a tie and the test is vacuous"
     );
+}
+
+// -- the Jacobian, asserted before Newton is allowed to use it (plan §5 Part 1) -----------------
+//
+// `VkCoupledStep::jacobian_vector` is the closed-form derivative of `VkCoupledStep::residual`,
+// and the loop in `vk_step` iterates `VkCoupledStep::sweep`, of which the residual is `w - sweep`.
+// So there are two independent things to establish and they are established separately:
+//
+// * the **derivative** is right -- a central finite difference of `residual` in the same
+//   direction, which is what these tests do;
+// * the **map** is right -- that `sweep` is what the shipped loop actually iterates, which is
+//   structural (`vk_step` calls it) and pinned end-to-end by
+//   `the_model_step_lands_on_a_root_of_the_residual_the_jacobian_differentiates`.
+//
+// A finite difference cannot see the second: it would happily verify the derivative of the wrong
+// map. Nor can it see `couple_factor`, which `sweep` and `jacobian_vector` **share by
+// construction** -- that is how the free edge's extra `h^2` (plan §7 trap 6) is made structural
+// rather than remembered in two places.
+//
+// What the four bars actually catch was measured, by mutating the Jacobian six ways and running
+// them (plan §10.3):
+//
+// * the **finite-difference** bar caught all six, and is the workhorse;
+// * the **margin** floor caught the two that pull `J` back toward `I` -- the stub, which makes it
+//   `I` exactly, and the flipped sign, which lets the two terms cancel -- i.e. exactly the two a
+//   badly chosen fixture lets through;
+// * the **linearity** identity caught nothing on its own merits. Its one hit is the `h^2` mutant,
+//   which it saw only because that map *diverges* and the point overflows. Every other mutant --
+//   including the one that scales the residual by 1.01 -- leaves `J` exactly linear in `d`, which
+//   is what a linear operator assembled from bilinear pieces does whichever piece you get wrong.
+//   It is a structural check against a `J` that is not an operator at all, not a transcription
+//   check, and it should be read that way;
+// * the **root** check has the same one hit, for the same reason. The 1.01 mutant *does* change
+//   the map and it stayed quiet, because 1% of a residual already at 7e-14 is under any bar this
+//   check could carry. What it guards is a context that does not match the model's -- an error of
+//   a factor, not of a percent.
+//
+// The `couple_factor` mutant is worth stating precisely rather than counting: removing the free
+// edge's `h^2` was caught by all four, but as **the physics blowing up** -- the map diverges and
+// the point overflows -- never as a derivative disagreement. A finite difference is structurally
+// blind to `couple_factor` because both sides read the same field. That sharing *is* the guard
+// for trap 6. The bar is not, and a Part 2 that believed otherwise would be relying on nothing.
+
+/// A struck plate: `amp` thicknesses tall, a Gaussian `width` wide, its centre `off` from the mid.
+fn jac_plate(side: f64, n: i64, amp: f64, width: f64, off: f64, boundary: Boundary) -> VkPlate {
+    let mut vk = VkPlate::new(
+        VkParams::new(&VkSpec {
+            lx: side,
+            ly: side,
+            young: 2.0e11,
+            thickness: 1e-3,
+            nu: 0.3,
+            rho: 7860.0,
+            fs: 48_000.0,
+            n,
+            boundary: Some(boundary),
+            couple_max_iter: 400,
+            ..VkSpec::default()
+        })
+        .expect("a valid plate"),
+    );
+    let p = &vk.p.lin;
+    let (cx, cy) = (0.5 * p.lx + off, 0.5 * p.ly + off);
+    let a = amp * vk.p.thickness;
+    let u0: Vec<f64> = p
+        .mask
+        .flags()
+        .iter()
+        .enumerate()
+        .filter(|(_, &alive)| alive)
+        .map(|(idx, _)| {
+            let (dx, dy) = (p.x[idx] - cx, p.y[idx] - cy);
+            a * (-((dx * dx + dy * dy) / (width * width))).exp()
+        })
+        .collect();
+    let zero = vec![0.0; p.n_live];
+    vk.set_state(&u0, &zero).expect("the Airy solve factors");
+    vk
+}
+
+fn l2(v: &[f64]) -> f64 {
+    v.iter().map(|x| x * x).sum::<f64>().sqrt()
+}
+
+/// A deterministic unit direction — xorshift64, so it is the same on every platform.
+///
+/// Rough on purpose: a direction shaped like the strike would excite only the modes the strike
+/// already excites, and the bracket's mixed derivatives are exactly what such a direction is
+/// blindest to.
+fn jac_direction(n: usize, salt: u64) -> Vec<f64> {
+    let mut s = 0x2545_f491_4f6c_dd1d ^ salt.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    let mut d: Vec<f64> = (0..n)
+        .map(|_| {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            ((s >> 11) as f64) / 9_007_199_254_740_992.0 - 0.5
+        })
+        .collect();
+    let norm = l2(&d);
+    for v in d.iter_mut() {
+        *v /= norm;
+    }
+    d
+}
+
+/// `(label, side, n, amp/thickness, strike width, strike offset, boundary, margin is asserted)`.
+///
+/// The first five are plan §9.4's converging fixtures and their free-edge counterparts: loud
+/// enough that `J` is a long way from `I`. The sixth is `w = e`, where it is **not** — kept and
+/// asserted from the other side, because that is the amplitude at which this whole family of
+/// checks starts to go vacuous, and a reader should be able to see where.
+///
+/// A **centred** strike on a 40 cm plate is numerically zero at the rim (`exp(-44)`), so the
+/// supported and free arithmetic coincide there to the last digit — measured, not assumed. The
+/// off-centre free case is the one that puts ~38% of the peak on a free edge and genuinely
+/// exercises those rows.
+type JacCase = (&'static str, f64, i64, f64, f64, f64, Boundary, bool);
+const JAC_CASES: [JacCase; 6] = [
+    (
+        "40cm supported, 3cm strike, 6e",
+        0.4,
+        20,
+        6.0,
+        0.03,
+        0.0,
+        Boundary::Supported,
+        true,
+    ),
+    (
+        "40cm supported, 8cm strike, 16e",
+        0.4,
+        20,
+        16.0,
+        0.08,
+        0.0,
+        Boundary::Supported,
+        true,
+    ),
+    (
+        "16cm supported, 3.2cm strike, 6e",
+        0.16,
+        8,
+        6.0,
+        0.032,
+        0.0,
+        Boundary::Supported,
+        true,
+    ),
+    (
+        "40cm free, 8cm strike, 16e",
+        0.4,
+        20,
+        16.0,
+        0.08,
+        0.0,
+        Boundary::Free,
+        true,
+    ),
+    (
+        "40cm free, 8cm strike off-centre, 16e",
+        0.4,
+        20,
+        16.0,
+        0.08,
+        0.12,
+        Boundary::Free,
+        true,
+    ),
+    (
+        "40cm supported, 10cm strike, 1e",
+        0.4,
+        16,
+        1.0,
+        0.1,
+        0.0,
+        Boundary::Supported,
+        false,
+    ),
+];
+
+/// The two points a Newton step would ever be taken from: the loop's seed and where Picard lands.
+fn jac_points(vk: &VkPlate, ctx: &VkCoupledStep) -> [(&'static str, Vec<f64>); 2] {
+    let seed = VkCoupledStep::seed(&vk.u, &vk.u_prev);
+    let mut w = seed.clone();
+    for _ in 0..400 {
+        let (next, _) = ctx.sweep(&w).expect("the solves succeed");
+        let d: Vec<f64> = (0..w.len()).map(|i| next[i] - w[i]).collect();
+        let r = l2(&d) / l2(&next).max(1e-30);
+        w = next;
+        if r <= vk.p.couple_tol {
+            break;
+        }
+    }
+    [("seed", seed), ("converged", w)]
+}
+
+/// The finite-difference step, **relative** to `||w||`.
+///
+/// Measured, not guessed. `G` is exactly cubic, so a central difference has a pure `eps^2`
+/// truncation term and the error curve is a clean V: at this fixture family it falls
+/// `2e-4 -> 2e-6 -> 2e-8 -> 2e-10` from `1e-1` to `1e-4` and bottoms at `~2e-11` here before
+/// rounding lifts it again. Two decades either side still sit three orders under the bar.
+const JAC_FD_STEP: f64 = 1e-5;
+
+/// Plan §5 Part 1's gate. Measured across the six fixtures and both linearisation points:
+/// **9.5e-12 to 1.1e-10**. The three orders of gap are deliberate headroom of the same kind as the
+/// `1e-10` energy bar -- this number has to survive a different machine, and a sparse
+/// back-substitution is exactly the kind of arithmetic that moves when it does.
+const JAC_FD_BAR: f64 = 1e-7;
+
+/// A floor on `||J d - d|| / ||d||`, without which the finite-difference bar asserts nothing.
+///
+/// At zero amplitude `J = I` **exactly** (plan §1), so a `jacobian_vector` that dropped the
+/// coupling term and returned `d` unchanged is a *good approximation* at small amplitude and
+/// passes a finite-difference check there. This is not hypothetical: taking `F'` at `w_bar`
+/// instead of the raw `W` -- a real and plausible transcription error -- was measured at 1e-4 to
+/// 1e-2 on the loud fixtures and at **6.3e-8 at margin 5.9e-3**, i.e. green under `JAC_FD_BAR`.
+///
+/// So the floor is placed between two measurements rather than chosen round: the gated fixtures
+/// sit at **0.024 to 0.124**, and the bar demonstrably goes soft by **0.0059**.
+const JAC_MARGIN_FLOOR: f64 = 1e-2;
+
+#[test]
+fn the_jacobian_matches_a_finite_difference_of_the_residual() {
+    for (label, side, n, amp, width, off, boundary, _) in JAC_CASES {
+        let vk = jac_plate(side, n, amp, width, off, boundary);
+        let ctx = VkCoupledStep::new(&vk.u, &vk.u_prev, &vk.f_prev, None, &vk.p);
+        for (point, w) in jac_points(&vk, &ctx) {
+            let av = ctx.averages(&w).expect("the solves succeed");
+            let d = jac_direction(w.len(), 1);
+            let jd = ctx.jacobian_vector(&av, &d).expect("the solves succeed");
+
+            // Central difference of the residual in the same direction, at the same frozen
+            // context: `rhs_lin`, `w_prev_full`, `f_prev` and `couple_factor` are functions of
+            // time-`n` state, not of `w`. Rebuilding the context from a perturbed `u` would
+            // differentiate a different function.
+            let eps = JAC_FD_STEP * l2(&w);
+            let plus: Vec<f64> = (0..w.len()).map(|i| w[i] + eps * d[i]).collect();
+            let minus: Vec<f64> = (0..w.len()).map(|i| w[i] - eps * d[i]).collect();
+            let (g_plus, _) = ctx.residual(&plus).expect("the solves succeed");
+            let (g_minus, _) = ctx.residual(&minus).expect("the solves succeed");
+            let fd: Vec<f64> = (0..w.len())
+                .map(|i| (g_plus[i] - g_minus[i]) / (2.0 * eps))
+                .collect();
+
+            let err: Vec<f64> = (0..w.len()).map(|i| fd[i] - jd[i]).collect();
+            let rel = l2(&err) / l2(&jd);
+            assert!(
+                rel < JAC_FD_BAR,
+                "{label} at the {point} point: relative disagreement {rel:.3e}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_jacobian_is_linear_in_its_direction_to_rounding() {
+    for (label, side, n, amp, width, off, boundary, _) in JAC_CASES {
+        let vk = jac_plate(side, n, amp, width, off, boundary);
+        let ctx = VkCoupledStep::new(&vk.u, &vk.u_prev, &vk.f_prev, None, &vk.p);
+        for (point, w) in jac_points(&vk, &ctx) {
+            let av = ctx.averages(&w).expect("the solves succeed");
+            let d1 = jac_direction(w.len(), 1);
+            let d2 = jac_direction(w.len(), 2);
+            let sum: Vec<f64> = (0..w.len()).map(|i| d1[i] + d2[i]).collect();
+            let j1 = ctx.jacobian_vector(&av, &d1).expect("the solves succeed");
+            let j2 = ctx.jacobian_vector(&av, &d2).expect("the solves succeed");
+            let js = ctx.jacobian_vector(&av, &sum).expect("the solves succeed");
+            let defect: Vec<f64> = (0..w.len()).map(|i| js[i] - j1[i] - j2[i]).collect();
+            let rel = l2(&defect) / l2(&js);
+            // Not bitwise: two sparse back-substitutions are floating-point evaluations of a
+            // linear map, and are not exactly additive. Measured ~1e-16 here.
+            assert!(
+                rel < 1e-13,
+                "{label} at the {point} point: defect {rel:.3e}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_jacobian_is_far_from_the_identity_where_it_is_asserted() {
+    for (label, side, n, amp, width, off, boundary, gated) in JAC_CASES {
+        let vk = jac_plate(side, n, amp, width, off, boundary);
+        let ctx = VkCoupledStep::new(&vk.u, &vk.u_prev, &vk.f_prev, None, &vk.p);
+        for (point, w) in jac_points(&vk, &ctx) {
+            let av = ctx.averages(&w).expect("the solves succeed");
+            let d = jac_direction(w.len(), 1);
+            let jd = ctx.jacobian_vector(&av, &d).expect("the solves succeed");
+            let dev: Vec<f64> = (0..w.len()).map(|i| jd[i] - d[i]).collect();
+            let margin = l2(&dev) / l2(&d);
+            if gated {
+                assert!(
+                    margin > JAC_MARGIN_FLOOR,
+                    "{label} at the {point} point: margin {margin:.3e} — the finite-difference \
+                     bar is nearly vacuous here"
+                );
+            } else {
+                // The other side of the same claim: at one thickness of amplitude the coupling
+                // is four orders down, `J` is the identity to within 2e-4, and no
+                // finite-difference check on this fixture would notice a Jacobian that said so.
+                assert!(
+                    margin < JAC_MARGIN_FLOOR,
+                    "{label} at the {point} point: margin {margin:.3e} — this fixture is meant \
+                     to be the one where the guard goes soft"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_model_step_lands_on_a_root_of_the_residual_the_jacobian_differentiates() {
+    // The claim a finite difference cannot make: that `VkCoupledStep` is the *same* map
+    // `VkPlate::step` iterates -- same `rhs_lin`, same `f_prev` slot, same `couple_factor`. Build
+    // the context from the pre-step state, let the model take its own step, and the displacement
+    // it returns must be a root of that context's residual.
+    for (label, side, n, amp, width, off, boundary, _) in JAC_CASES {
+        let mut vk = jac_plate(side, n, amp, width, off, boundary);
+        let ctx_u = vk.u.clone();
+        let ctx_u_prev = vk.u_prev.clone();
+        let ctx_f_prev = vk.f_prev.clone();
+        vk.step(None).expect("the solves succeed");
+        assert!(vk.converged, "{label}: the baseline step must converge");
+        let ctx = VkCoupledStep::new(&ctx_u, &ctx_u_prev, &ctx_f_prev, None, &vk.p);
+        let (g, _) = ctx.residual(&vk.u).expect("the solves succeed");
+        let rel = l2(&g) / l2(&vk.u);
+        // Ten times `couple_tol`, not `couple_tol` itself. Picard's exit test is on the
+        // *increment*, so `G` at the returned point is a contraction factor smaller and lands at
+        // 3.4e-14 to 7.5e-14 against a 1e-13 tolerance -- 1.3x of headroom, which is not enough
+        // for a quantity produced by two sparse back-substitutions on an unknown machine. It
+        // costs no discriminating power: a context that did not match the model's would be wrong
+        // by a factor, not by a percent.
+        assert!(
+            rel <= 10.0 * vk.p.couple_tol,
+            "{label}: the step's own answer leaves residual {rel:.3e}"
+        );
+    }
 }

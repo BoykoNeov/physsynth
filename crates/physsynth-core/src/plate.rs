@@ -1792,11 +1792,194 @@ impl VkStep {
     }
 }
 
+/// Everything a coupled step holds **fixed** while it iterates on `w`.
+///
+/// The Picard sweep, the residual whose root that sweep is chasing, and the Jacobian-vector
+/// product are three readings of one map, so they are three methods on one struct rather than
+/// three transcriptions of the same arithmetic. `rhs_lin`, `w_prev_full`, `f_prev` and
+/// `couple_factor` are functions of time-`n` state alone -- **not** of `w` -- which is why a
+/// finite difference of [`VkCoupledStep::residual`] differentiates the function Newton would
+/// solve. A check that rebuilt this context from a perturbed `u` would differentiate a different
+/// one.
+///
+/// `couple_factor` in particular is formed **once, here** (plan §7 trap 6): the free edge's extra
+/// `h^2` is then structural rather than something each of the three methods has to remember.
+pub struct VkCoupledStep<'a> {
+    /// The parameters, including both factorizations.
+    pub p: &'a VkParams,
+    /// The sweep-invariant right-hand side: the theta scheme's, plus `f_ext` added once.
+    pub rhs_lin: Vec<f64>,
+    /// `W^{n-1}` on the full grid.
+    pub w_prev_full: Vec<f64>,
+    /// `F^{n-1}` on the full grid.
+    pub f_prev: &'a [f64],
+    /// `k^2 / rho_s`, times `h^2` on a free edge.
+    pub couple_factor: f64,
+}
+
+/// The four full-grid fields a coupling force is built from, kept so the Jacobian can reuse them.
+///
+/// Both `w_full`/`f_full` (the **raw** iterate and its stress function) and `w_avg`/`f_avg` (the
+/// half-sums with the previous step) are held, because the derivative needs both and needs them in
+/// different slots: `F'(W)[D]` takes the raw `W`, `l(w_bar, .)` takes the average. One `airy_f`
+/// back-substitution builds them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VkAverages {
+    /// `W = P w`, the iterate embedded on the full grid.
+    pub w_full: Vec<f64>,
+    /// `F(W)`, the clamped Airy solve at the raw iterate.
+    pub f_full: Vec<f64>,
+    /// `w_bar = 1/2 (P w + W^{n-1})`.
+    pub w_avg: Vec<f64>,
+    /// `F_bar = 1/2 (F(P w) + F^{n-1})`.
+    pub f_avg: Vec<f64>,
+}
+
+impl<'a> VkCoupledStep<'a> {
+    /// Freeze one step's sweep-invariant parts.
+    ///
+    /// The `f_ext` term is added **once, here** rather than inside the loop, and that is a fact
+    /// about the force rather than a shortcut: a bridge spring's `F = K eta^n` depends only on
+    /// time-`n` state, so it is invariant across the sweeps.
+    pub fn new(
+        u: &[f64],
+        u_prev: &[f64],
+        f_prev: &'a [f64],
+        f_ext: Option<&[f64]>,
+        p: &'a VkParams,
+    ) -> VkCoupledStep<'a> {
+        let k2 = p.lin.k * p.lin.k;
+        let mut rhs_lin = step_rhs(u, u_prev, None, &p.lin);
+        if let Some(force) = f_ext {
+            for (r, &v) in rhs_lin.iter_mut().zip(force.iter()) {
+                *r += k2 * v / p.force_denominator;
+            }
+        }
+        // "supported": k^2 l / rho_s (scalar mass, no h^2). "free": the mass matrix A carries W's
+        // h^2, so the uniform-h^2 coupling force needs the matching h^2; the /W is the solve's,
+        // not ours. (`vk_initial_state` *does* divide by W -- it is not solving with A.)
+        let mut couple_factor = k2 / p.rho_s;
+        if p.lin.boundary == Boundary::Free {
+            couple_factor *= p.lin.h * p.lin.h;
+        }
+        VkCoupledStep {
+            p,
+            rhs_lin,
+            w_prev_full: p.to_full(u_prev),
+            f_prev,
+            couple_factor,
+        }
+    }
+
+    /// The Picard loop's seed, `2 w^n - w^{n-1}`.
+    pub fn seed(u: &[f64], u_prev: &[f64]) -> Vec<f64> {
+        (0..u.len()).map(|i| 2.0 * u[i] - u_prev[i]).collect()
+    }
+
+    /// The four fields at a live-node iterate -- one Airy back-substitution.
+    ///
+    /// # Errors
+    /// If the Airy factorization cannot back-substitute.
+    pub fn averages(&self, w: &[f64]) -> Result<VkAverages, SparseLuError> {
+        let w_full = self.p.to_full(w);
+        let f_full = self.p.airy_f(&w_full)?;
+        let n = self.p.n_nodes;
+        let w_avg: Vec<f64> = (0..n)
+            .map(|i| 0.5 * (w_full[i] + self.w_prev_full[i]))
+            .collect();
+        let f_avg: Vec<f64> = (0..n).map(|i| 0.5 * (f_full[i] + self.f_prev[i])).collect();
+        Ok(VkAverages {
+            w_full,
+            f_full,
+            w_avg,
+            f_avg,
+        })
+    }
+
+    /// One Picard sweep from precomputed averages: `A^-1 (rhs_lin + c l(w_bar, F_bar))`.
+    ///
+    /// # Errors
+    /// If the theta-scheme factorization cannot back-substitute.
+    pub fn sweep_from(&self, av: &VkAverages) -> Result<Vec<f64>, SparseLuError> {
+        let coupling = self.p.to_live(&self.p.bracket.eval(&av.w_avg, &av.f_avg));
+        let rhs: Vec<f64> = (0..self.p.lin.n_live)
+            .map(|i| self.rhs_lin[i] + self.couple_factor * coupling[i])
+            .collect();
+        self.p.lin.lu.solve(&rhs)
+    }
+
+    /// One Picard sweep, with the averages it went through -- this **is** the fixed-point map.
+    ///
+    /// # Errors
+    /// If either factorization cannot back-substitute.
+    pub fn sweep(&self, w: &[f64]) -> Result<(Vec<f64>, VkAverages), SparseLuError> {
+        let av = self.averages(w)?;
+        let next = self.sweep_from(&av)?;
+        Ok((next, av))
+    }
+
+    /// The residual `G(w) = w - sweep(w)`, whose root the loop is chasing.
+    ///
+    /// A **wrapper over** [`VkCoupledStep::sweep`], never the reverse: recovering the sweep from
+    /// the residual would be `w - G(w)`, and subtract-then-add is exact only under Sterbenz. The
+    /// loop keeps using `sweep`'s own output, so the shipped trajectory is untouched.
+    ///
+    /// `G` is exactly **cubic** in `w`: `w_bar` is affine, `F(P w)` is quadratic, and the bracket
+    /// is bilinear.
+    ///
+    /// # Errors
+    /// If either factorization cannot back-substitute.
+    pub fn residual(&self, w: &[f64]) -> Result<(Vec<f64>, VkAverages), SparseLuError> {
+        let (next, av) = self.sweep(w)?;
+        let g: Vec<f64> = (0..w.len()).map(|i| w[i] - next[i]).collect();
+        Ok((g, av))
+    }
+
+    /// `G'(w) d` in closed form -- no finite differences, no approximation.
+    ///
+    /// Both `l` and `F` are exactly bilinear/quadratic, so with `D = P d`:
+    ///
+    /// ```text
+    /// F'(W)[D] = Ainv( -Y l(W, D) )     the 2 from d/dw l(W,W) absorbs the -1/2
+    /// J d      = d - c A^-1 to_live( 1/2 l(D, F_bar) + 1/2 l(w_bar, F'(W)[D]) )
+    /// ```
+    ///
+    /// Note the two different first arguments: `F'` is taken at the **raw** `W = av.w_full`, while
+    /// the outer bracket pairs with the **average** `w_bar`. Substituting one for the other is the
+    /// plausible transcription error, and it is roughly a factor of two -- which is what the
+    /// finite-difference bar exists to catch.
+    ///
+    /// Cost: three bracket evaluations, one Airy back-substitution and one `A` back-substitution,
+    /// about 1.5x one Picard sweep. Both factorizations are already held by `p`.
+    ///
+    /// # Errors
+    /// If either factorization cannot back-substitute.
+    pub fn jacobian_vector(&self, av: &VkAverages, d: &[f64]) -> Result<Vec<f64>, SparseLuError> {
+        let d_full = self.p.to_full(d);
+        // dF/dw in direction D, taken at the raw iterate W -- not at w_bar.
+        let src = self.p.bracket.eval(&av.w_full, &d_full);
+        let neg_y = -self.p.y_mem;
+        let f_dir_src: Vec<f64> = src.iter().map(|&v| neg_y * v).collect();
+        let f_dir = self.p.airy.solve(&f_dir_src)?;
+
+        let a = self.p.bracket.eval(&d_full, &av.f_avg);
+        let b = self.p.bracket.eval(&av.w_avg, &f_dir);
+        let force: Vec<f64> = (0..self.p.n_nodes)
+            .map(|i| 0.5 * a[i] + 0.5 * b[i])
+            .collect();
+        let coupling = self.p.to_live(&force);
+        let correction = self.p.lin.lu.solve(&coupling)?;
+        Ok((0..d.len())
+            .map(|i| d[i] - self.couple_factor * correction[i])
+            .collect())
+    }
+}
+
 /// Advance one timestep: one prefactored solve when linear, a Picard loop when not.
 ///
-/// The `f_ext` term is added **once, outside** the loop, and that is a fact about the force rather
-/// than a shortcut: a bridge spring's `F = K eta^n` depends only on time-`n` state, so it is
-/// invariant across the sweeps.
+/// The sweep-invariant parts are frozen into a [`VkCoupledStep`] first, and the loop body **is**
+/// its [`VkCoupledStep::sweep`] -- so the Jacobian asserted in plan §5 Part 1 is the derivative of
+/// the map this loop iterates, structurally rather than by two transcriptions staying in step.
 ///
 /// # Errors
 /// If either factorization cannot back-substitute.
@@ -1809,16 +1992,10 @@ pub fn vk_step(
     p: &VkParams,
 ) -> Result<VkStep, SparseLuError> {
     let n_live = p.lin.n_live;
-    let k2 = p.lin.k * p.lin.k;
-    let mut rhs_lin = step_rhs(u, u_prev, None, &p.lin);
-    if let Some(force) = f_ext {
-        for (r, &v) in rhs_lin.iter_mut().zip(force.iter()) {
-            *r += k2 * v / p.force_denominator;
-        }
-    }
+    let ctx = VkCoupledStep::new(u, u_prev, f_prev, f_ext, p);
     if !p.nonlinear {
         return Ok(VkStep {
-            u: p.lin.lu.solve(&rhs_lin)?,
+            u: p.lin.lu.solve(&ctx.rhs_lin)?,
             f: None,
             n_iters: 1,
             converged: true,
@@ -1827,14 +2004,9 @@ pub fn vk_step(
         });
     }
 
-    // "supported": k^2 l / rho_s (scalar mass, no h^2). "free": the mass matrix A carries W's h^2,
-    // so the uniform-h^2 coupling force needs the matching h^2; the /W is the solve's, not ours.
-    let mut couple_factor = k2 / p.rho_s;
-    if p.lin.boundary == Boundary::Free {
-        couple_factor *= p.lin.h * p.lin.h;
-    }
-    let w_prev_full = p.to_full(u_prev);
-    let mut w_j: Vec<f64> = (0..n_live).map(|i| 2.0 * u[i] - u_prev[i]).collect();
+    let mut w_j = VkCoupledStep::seed(u, u_prev);
+    // `F` of the sweep's *incoming* iterate, which is what the step returns -- not `F` of `w_j`
+    // as it stands on exit. `f` seeds it only against a zero cap, which the spec forbids.
     let mut f_new_full = f.to_vec();
     let mut n_iters = 0usize;
     let mut converged = false;
@@ -1843,19 +2015,8 @@ pub fn vk_step(
     let mut prev_residual = f64::NAN;
     for sweep in 1..=p.couple_max_iter {
         n_iters = sweep;
-        let w_j_full = p.to_full(&w_j);
-        f_new_full = p.airy_f(&w_j_full)?;
-        let w_avg: Vec<f64> = (0..p.n_nodes)
-            .map(|i| 0.5 * (w_j_full[i] + w_prev_full[i]))
-            .collect();
-        let f_avg: Vec<f64> = (0..p.n_nodes)
-            .map(|i| 0.5 * (f_new_full[i] + f_prev[i]))
-            .collect();
-        let coupling = p.to_live(&p.bracket.eval(&w_avg, &f_avg));
-        let rhs: Vec<f64> = (0..n_live)
-            .map(|i| rhs_lin[i] + couple_factor * coupling[i])
-            .collect();
-        let w_next = p.lin.lu.solve(&rhs)?;
+        let (w_next, av) = ctx.sweep(&w_j)?;
+        f_new_full = av.f_full;
         let diff: Vec<f64> = (0..n_live).map(|i| w_next[i] - w_j[i]).collect();
         let incr = norm2(&diff);
         let scale = norm2(&w_next);

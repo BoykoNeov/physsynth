@@ -350,3 +350,150 @@ every converging fixture", now visible from the model itself.
 directly. So `residual_ratio` is copied twice, and an edit to one block does not fail the other.
 That is the shape of the §45.9 `THETA_DEFAULT` fork already in this project's history. Part 2 adds
 `couple_method` to both structs, and this is where it will drift if it drifts.
+
+---
+
+## 10. Part 1's result — the Jacobian, asserted before Newton is allowed to use it
+
+Landed 2026-09-06, on its own commit, ahead of any Newton code. No flag, no binding change, no
+solver: this part adds a derivative and four native bars, and changes no shipped number.
+
+### 10.1 The refactor, and the claim a finite difference cannot make
+
+§4 gives the Jacobian-vector product in closed form, and the obvious way to add it is to write it
+next to the Picard loop. That would have been the §9.5 fork shape again, and worse than a fork: if
+the sweep and the residual drift apart, `J` becomes the exact derivative of a function the loop is
+not iterating, and **every finite-difference check still passes**. A finite difference verifies a
+derivative; it cannot verify that the derivative is of the right map.
+
+So `vk_step`'s loop body was *moved*, not copied. `VkCoupledStep` holds one step's sweep-invariant
+parts — `rhs_lin`, `w_prev_full`, `f_prev`, `couple_factor` — and offers three readings of one map:
+
+| method | what it is |
+|---|---|
+| `sweep(w)` | the Picard map `A^-1(rhs_lin + c·to_live(l(w̄, F̄)))`, which is now literally the loop body |
+| `residual(w)` | `w − sweep(w)`, a **wrapper over** `sweep` |
+| `jacobian_vector(av, d)` | `G'(w)d` in closed form |
+
+The direction of that wrapping is load-bearing and is the reverse of what reads more naturally: the
+loop keeps using `sweep`'s own output, because recovering it as `w − G(w)` is exact only under
+Sterbenz and would have changed the shipped trajectory.
+
+**The refactor is bit-identical**, measured rather than argued: 6 fixtures (both boundaries × three
+amplitudes) × 50 steps = 300 rows of state hash, sweep count, `last_residual` and `residual_ratio`,
+`diff`-clean across the change. That is a separate claim from the derivative being right, and it
+was established separately, before the derivative existed.
+
+`couple_factor` is formed **once**, in the context, and read by both `sweep` and
+`jacobian_vector`. This is how §7's trap 6 — the free edge's extra `h²` — is disposed of, and §10.3
+shows why it had to be structural.
+
+### 10.2 The gate, and what it measured
+
+Two linearisation points per fixture (the loop's seed `2w^n − w^{n-1}`, and where Picard actually
+lands), one deterministic xorshift direction, central differences at `ε = 10⁻⁵‖w‖`.
+
+| claim | bar | measured |
+|---|---|---|
+| `‖FD − Jd‖ / ‖Jd‖` | `< 1e-7` (plan §5) | **9.5e-12 … 1.1e-10** |
+| `J(d₁+d₂) − Jd₁ − Jd₂`, relative | `< 1e-13` | **8.9e-17 … 1.4e-16** |
+| `‖G(w)‖/‖w‖` at the step's own answer | `≤ 10·couple_tol` | **3.4e-14 … 7.5e-14** (tol 1e-13) |
+| `‖Jd − d‖/‖d‖`, gated fixtures | `> 1e-2` | **0.024 … 0.124** |
+
+**The step is chosen, not guessed.** `G` is exactly cubic in `w` (the bracket is bilinear, `F` is
+quadratic, `w̄` is affine), so a central difference has a pure `ε²` truncation term and the error
+curve is a clean V. Sweeping `ε` from `1e-1` to `1e-14` on one fixture: `2.1e-4, 2.1e-6, 2.1e-8,
+2.1e-10, **2.1e-11**, 2.0e-10, 1.3e-9, 1.4e-8, 1.2e-7, …` — four decades of `ε²` descent, a floor
+at `1e-5`, then roundoff. Two decades either side of the chosen step still sit three orders under
+the bar, so this is not a number tuned to pass.
+
+The third row's bar was **loosened from `couple_tol` to `10·couple_tol` after measuring**. At the
+tolerance itself the headroom was 1.3×, which is not enough for a quantity produced by two sparse
+back-substitutions on a machine that is not this one — the same argument as CLAUDE.md's refusal to
+tighten the `1e-10` energy bar. It costs no discriminating power: a context that did not match the
+model's would be wrong by a factor, not by a percent.
+
+### 10.3 What the bars actually catch — six mutants, run
+
+A bar is worth what it detects, so `jacobian_vector` was deliberately broken six ways and the four
+tests re-run against each.
+
+| mutant | FD | margin | linearity | root |
+|---|---|---|---|---|
+| `F'` taken at `w̄` instead of the raw `W` | **caught** | — | — | — |
+| the whole coupling term dropped (`J d = d`) | **caught** | **caught** | — | — |
+| one of the two `½`s dropped | **caught** | — | — | — |
+| the sign of `−Y` flipped | **caught** | **caught** | — | — |
+| the residual scaled by 1.01 | **caught** | — | — | — |
+| the free edge's `h²` dropped | caught\* | caught\* | caught\* | caught\* |
+
+Four things this says that the passing numbers do not.
+
+**The margin floor is not decoration, and its position is measured.** At zero amplitude `J = I`
+exactly (§1), so a `jacobian_vector` that returns `d` unchanged is a *good approximation* at low
+amplitude and passes a finite-difference check there. This is not hypothetical. The first mutant —
+`F'` at `w̄` instead of `W`, a plausible transcription error and roughly a factor of two — measures
+`8.5e-3` on the loud fixtures and **`6.3e-8` at margin `5.9e-3`**: green, just under the bar, on a
+fixture nobody would have flagged as weak. So the floor sits between two measurements rather than
+at a round number: the gated fixtures run `0.024`–`0.124`, and the bar demonstrably goes soft by
+`0.0059`.
+
+**`couple_factor` is where the honest sentence differs from the tempting one.** The asterisked row
+was caught by all four bars — but as **the physics blowing up**, not as a derivative disagreement:
+removing the `h²` multiplies the coupling by 2500, the map diverges, and the point overflows to
+`NaN`. A finite difference is *structurally blind* to `couple_factor`, because `sweep` and
+`jacobian_vector` read the same field. **That sharing is the guard for trap 6; the bar is not**, and
+a Part 2 that believed otherwise would be relying on nothing.
+
+**The linearity identity caught nothing on its own merits, and that is worth saying plainly.** Its
+single hit is the `h²` row, and it saw that only because the map diverges and the point overflows —
+not because anything stopped being linear. Every other mutant, *including the one that scales the
+residual by 1.01*, leaves `J` exactly linear in `d`, which is what a linear operator assembled from
+bilinear pieces does whichever piece you get wrong. So it is a structural check against a `J` that
+is not an operator at all, and counting it as one-in-six would overstate it in both directions.
+
+**The root check has the same single hit, and its blind spot is instructive.** It exists to pin the
+claim no finite difference can make — that `VkCoupledStep` is the same map `VkPlate::step`
+iterates. The 1.01 mutant genuinely changes that map and the check stayed quiet, because 1% of a
+residual already at `7e-14` is under any bar this check could carry (tightening it back to
+`couple_tol` would not have caught it either). What it does guard is a context that is *wrong*
+rather than *slightly off* — an error of a factor, which is what a mismatched `rhs_lin`, `f_prev`
+slot or `couple_factor` produces, and which is exactly what the `h²` row demonstrates.
+
+### 10.4 A centred strike makes a free plate and a supported one the same arithmetic
+
+Trap 6 says "the cymbal fixture is the one that catches it". The free fixture nearly did not exist
+in any meaningful sense, and the tell was a coincidence: a free and a supported 40 cm plate,
+identical but for the boundary, with **different node counts** (441 vs 361) and `couple_factor`s
+differing by exactly `h²`, returned margins agreeing to **twelve digits**.
+
+The explanation is the strike. A 3 cm or 8 cm Gaussian centred on a 40 cm plate is `exp(−44)` at
+the rim — zero in doubles. The free plate's extra rows never move, and by construction
+`c_free·A_free⁻¹` reduces to `c_sup·A_sup⁻¹` on the interior (the extra `h²` is precisely the one
+the free mass matrix divides back out). So the two runs were the same interior problem, and the
+free boundary was untested.
+
+The fixture table now carries a free plate struck **off-centre** (`0.12 m` from the middle), which
+puts 35–38% of the peak on a free edge; its margin separates from its supported twin as it should.
+The rim reach was measured, not assumed. **Generalisable:** on this project a "free boundary
+fixture" is only a free-boundary fixture if the excitation reaches the boundary, and no detector in
+the suite says otherwise — the energy bar, the FD bar and the margin all pass identically either
+way.
+
+### 10.5 Deliberately not done here
+
+* **No `couple_method` flag, no binding change, no GMRES.** That is Part 2. `vk_step`'s signature
+  and `VkStep`'s fields are untouched, so §9.5's hand-written diagnostics fork in
+  `PyVKPlate::step` is exactly as it was, and Part 2 inherits it unchanged.
+* **The `f` argument of `vk_step` is dead on the nonlinear path** — `f_new_full` is unconditionally
+  overwritten on sweep 1, since the spec forbids a zero cap. Noticed while moving the loop; not
+  fixed, because changing that signature is a Part 2-sized ripple for no gain here.
+* **Nothing was measured about Newton's convergence.** Part 1 asserts a derivative, and that is
+  all it asserts. Whether a Newton step built on it moves the wall is Parts 2 and 3, and §2.3's
+  ordering hazard — that a cap-50 Picard baseline would flatter it — was already discharged by
+  Part 0.
+* **The probe scripts stay in `M:\claud_projects\temp\vk-newton\`** (`redteam.py`,
+  `redteam2.py`, and the two dump comparisons). They mutate `crates/physsynth-core/src/plate.rs`
+  in place and restore it from memory at exit, so a killed run leaves a **mutated core on disk** —
+  one of them changes the free plate's default path by a factor of 2500. Verify with `git diff`
+  after running one; do not trust the script's own "restored" line.
