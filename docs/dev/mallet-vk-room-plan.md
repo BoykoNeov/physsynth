@@ -343,3 +343,98 @@ it is.
   batch and is not folded into it.
 * **No two-mallet widening**, and no sub-grid strike interpolation — both already listed as
   not-blocked in `mallet-gong-plan.md` §11.
+* **`residual_ratio` is still `NaN` after a mallet step**, in a room exactly as on the bare gong.
+  `PyVKPlate::commit` writes it that way because a chord runs *many* inner solves and there is no
+  one ratio to report; the seam's `record_iteration` writes the real one because it runs one. So
+  `couple_outcome()` on a room-mallet step is subject to the same misreport
+  `air-box-vk-newton-plan.md` §2.4 fixed for the seam — it will file a non-converged step as
+  `expansive` whether or not a larger cap would fix it. It is pre-existing rather than introduced
+  here, and closing it means first deciding *which* of a chord's solves the ratio describes.
+
+---
+
+## 6. What was built, and what it measured
+
+Landed 2026-09-06 in three parts, each gated before the next as §4 says.
+
+**Part 1** put a trial-solver closure into `physsynth_core::mallet::vk_plate_step`; `vk_plate_step`
+is now that function closed over `plate::vk_step`, so the bare gong's arithmetic is the room's by
+construction. `vk_drive_point_tangent` gained the same two overrides (§3.3a). Gate: the native
+suite green (28 binaries, 0 failures) and `tests/test_mallet_gong.py` unchanged.
+
+**Part 2** split `Wrap::step` into `prepare` / `loaded_rhs` / `finish`, all `pub(crate)`. The two
+room load terms are carried as separate vectors rather than as their sum, so a client re-assembling
+the right-hand side once per trial gets the doubles `Wrap::step` gets assembling it once — `base +
+(−a + b)` and `(base − a) + b` are not the same double, and the miss path's byte-exactness is a
+claim about that expression. Gate: 253 tests across `test_mallet_gong.py`, `test_airbox_vk.py`,
+`test_airbox_surface.py` and `test_airbox_membrane.py`, unchanged and green.
+
+**Part 3** widened `MalletVKPlate`'s constructor to the three arms of §3.5 and added
+`step_in_room`: one `prepare`, a chord of solves against the loaded factorization, one commit, one
+`finish`. 20 tests in `tests/test_mallet_room_gong.py`.
+
+### 6.1 The air load does not move the mallet's wall either — and the room is very nearly free
+
+600 steps, 50 g on `K = 5e4`, `alpha = 2.3`, the shipped baffled fixture against the identical bare
+`VKPlate`:
+
+| `v0` | scene | peak `w/e` | max `n_outer` | `n_solves` | non-converged inner | scene drift |
+|---|---|---|---|---|---|---|
+| 3 | room | 0.9459 | 3 | 11,426 | 0 | 1.27e-12 |
+| 3 | bare | 0.9533 | 5 | 11,454 | 0 | 1.18e-12 |
+| 12 | room | 3.0919 | 4 | 18,032 | 0 | 1.13e-12 |
+| 12 | bare | 3.1028 | 4 | 18,014 | 0 | 1.06e-12 |
+| 30 | room | 5.4964 | 5 | 33,050 | 0 | 9.81e-13 |
+| 30 | bare | 5.5063 | 5 | 32,976 | 0 | 1.09e-12 |
+
+`n_solves` agrees within 0.5% at every amplitude, and where Picard eventually dies it dies at the
+**same strike velocity** on both sides with the same number of non-converged steps (14 at
+`v0 = 50`, 8 at 80, 7 at 120). This is `air-box-vk-newton-plan.md` §2.2's finding again, from a
+different direction: the previous batch found the air load does not move the *plate's* iteration
+wall, and it does not move the *mallet's* either. Attaching a room to a gong costs the chord
+nothing.
+
+The peak deflection is consistently about 1% *lower* in the room, which is the air taking energy
+and is the only place the load shows up in this table at all.
+
+### 6.2 The mallet's wall is far above the initial-condition strike's — 7.8e against 4.5e
+
+`w/e = 5.5` runs with zero non-converged inner solves on the same `N = 8`, 8 kHz grid where
+§2.3's displacement strike blew Picard up on step zero at `4.5e`. Picard's first non-converged
+step arrives at `v0 = 35` (`w/e = 6.0`, 18 steps of 400) and the run dies at `v0 = 50`. A mallet
+builds its amplitude over hundreds of steps; a displacement IC arrives with all of it at once, and
+the difference between the two is worth more than a factor of one and a half in amplitude.
+
+### 6.3 Newton is CHEAPER here below the wall, which contradicts the gong plan — for a good reason
+
+`mallet-gong-plan.md` §10 records that Newton "buys nothing here", costing 1.47x to 1.72x the
+back-substitutions, measured across three mallets at 48 kHz. On the room's fixture the ratio
+crosses one and keeps going:
+
+| `v0` | peak `w/e` | Picard `n_solves` | its non-converged steps | Newton `n_solves` | Newton / Picard |
+|---|---|---|---|---|---|
+| 3 | 0.946 | 9,886 | 0 | 14,066 | 1.42 |
+| 6 | 1.885 | 11,468 | 0 | 15,280 | 1.33 |
+| 12 | 3.092 | 15,466 | 0 | 18,878 | 1.22 |
+| 20 | 4.282 | 19,834 | 0 | 20,804 | **1.05** |
+| 30 | 5.496 | 28,690 | 0 | 21,930 | **0.76** |
+| 35 | 6.022 | 33,636 | **18** | 23,990 | 0.71 |
+| 45 | 6.943 | 39,986 | **34** | 28,502 | 0.71 |
+| 50 | 7.79 | **died** | 14 | 29,804 | — |
+
+The crossover is at `w/e ≈ 4.3`, and past it Newton settles at about 0.71x while Picard's cost
+climbs and its inner solves start failing. Newton has **zero** non-converged steps at every row,
+and reaches `w/e = 11.6` at `v0 = 120` where Picard is long dead.
+
+Both iterations land on the same root wherever both converge — the peak `w/e` agrees to four or
+five figures on every row, which is the check that makes the cost columns comparable at all.
+
+This does not overturn §10; it dates it. §10's measurement is at 48 kHz, where the `k²` in the
+coupling buys so much headroom that the mallet never approaches the wall, so the comparison was
+always between two iterations doing easy work — and there Picard's cheaper sweep wins. The room
+sets the sample rate at 8 kHz, the mallet *does* reach the wall, and the ranking inverts. It is the
+same lesson §2.3 of the previous plan learned about its own payoff figure: **a margin measured at
+one fixture is a claim about one fixture**, and sample rate is one of the axes it moves along.
+
+**The default does not move.** `couple_method` stays `"picard"` everywhere; what this section
+records is where a caller should reach for the other one.

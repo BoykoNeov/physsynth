@@ -39,11 +39,15 @@
 
 use numpy::PyArray1;
 use physsynth_core::mallet as core;
+use physsynth_core::plate as core_plate;
+use physsynth_core::sparse_lu::SparseLuError;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
+use std::cell::RefCell;
 use std::ffi::CString;
 
+use crate::airbox_wrap::{self, LoadedLu, VkRoom};
 use crate::membrane::PyMembrane;
 use crate::plate::{PyPlate, PyVKPlate};
 
@@ -637,8 +641,79 @@ impl PyMalletPlate {
 pub struct PyMalletVKPlate {
     p: core::VkPlateParams,
     s: core::State,
+    /// The object the caller passed: a `VKPlate`, or the room wrapper holding one. `mal.plate`
+    /// returns **this**, because a caller that handed in a wrapper must get its wrapper back --
+    /// the room, the port and the radiated ledger all hang off it.
+    handle: Py<PyAny>,
+    /// The `VKPlate` underneath. The same object as `handle` on the bare path.
     plate: Py<PyVKPlate>,
+    /// `Some` when the plate is loaded by a room: the wrapper owns the room half of every step.
+    room: Option<VkRoom>,
+    /// The `_lu_loaded` this mallet's influence column was built from, by identity.
+    ///
+    /// `_lu_loaded` has a **setter**, and three tests in the airbox family replace the
+    /// factorization wholesale. A column derived from the old one would then be frozen on an
+    /// operator nothing inverts any more -- and because the chord converges to the same root
+    /// either way (see `VkPlateParams::retarget_column`), the only symptom would be five times the
+    /// outer iterations, which no bar reads. Comparing the pointer each step costs nothing and
+    /// re-derives the column exactly when it has actually gone stale.
+    lu_id: usize,
     last: Option<core::VkContactStep>,
+}
+
+/// `(k^2 / force_den) A_loaded^-1 e_node` — the **room-loaded** drive-point influence column.
+///
+/// The same expression `VkPlateParams::new` builds from the plate's own factorization, with the
+/// room's in its place: `k * k` rather than `scalar_pow(k, 2.0)` because it must be the double the
+/// right-hand side is scaled by, and the plate's `force_denominator` field rather than
+/// `lin.force_denominator()` for the same reason it gives there.
+///
+/// The back-substitution runs in Python because `A_loaded` is assembled and factored by SciPy in
+/// the wrapper -- it has to be, since a test may replace it wholesale.
+fn loaded_influence(
+    py: Python<'_>,
+    lu: &Py<PyAny>,
+    plate: &Py<PyVKPlate>,
+    node: usize,
+) -> PyResult<Vec<f64>> {
+    let (n_live, scale) = {
+        let pl = plate.bind(py).borrow();
+        let vk = pl.vk_params();
+        (vk.lin.n_live, vk.lin.k * vk.lin.k / vk.force_denominator)
+    };
+    let mut e = vec![0.0; n_live];
+    e[node] = 1.0;
+    let column = lu
+        .bind(py)
+        .call_method1("solve", (PyArray1::from_slice(py, &e),))?;
+    let column = airbox_wrap::vec1(py, &column, "A_loaded^-1 e_node")?;
+    Ok(column.iter().map(|&c| scale * c).collect())
+}
+
+/// The gong-in-a-room step's own error channel.
+///
+/// The chord's trial solver has to hand a `SparseLuError` back to the core, and two of the things
+/// that can go wrong inside it are Python exceptions the crate's error type cannot carry: the
+/// factorization's `solve` raising, and the seam's `rhs` raising. Both park the real exception here
+/// and return [`core_plate::FOREIGN_THETA_FAILURE`]; the caller swaps it back before returning. Same
+/// shape `LoadedLu` uses, and the reason it is one cell rather than two is that only one of them
+/// can be the cause of any single failure.
+struct ParkedErr(RefCell<Option<PyErr>>);
+
+impl ParkedErr {
+    fn new() -> ParkedErr {
+        ParkedErr(RefCell::new(None))
+    }
+
+    /// Record `e` and hand back the sentinel the core will propagate.
+    fn park(&self, e: PyErr) -> SparseLuError {
+        *self.0.borrow_mut() = Some(e);
+        core_plate::FOREIGN_THETA_FAILURE
+    }
+
+    fn take(&self) -> Option<PyErr> {
+        self.0.borrow_mut().take()
+    }
 }
 
 /// Map a nested-solve failure to the Python exception each half would raise on its own.
@@ -684,22 +759,28 @@ impl PyMalletVKPlate {
     ) -> PyResult<Self> {
         core::check_common(mass, stiffness, alpha, hysteresis, gap).map_err(param_err)?;
 
-        let handle: Py<PyVKPlate> = plate
-            .clone()
-            .cast_into::<PyVKPlate>()
-            .map_err(|_| {
-                PyTypeError::new_err(
-                    "MalletVKPlate strikes a nonlinear VKPlate (physsynth_rs.VKPlate). Got \
-                     something else -- if it is a linear Plate, use MalletPlate instead: an \
-                     affine step has an exact drive-point influence column and needs no outer \
-                     iteration, so driving it through this model would pay for a nested solve \
-                     that converges on its first pass.",
-                )
-            })?
-            .unbind();
+        // Three arms, and the third one's message is load-bearing: it is what tells a caller
+        // holding a linear `Plate` to use `MalletPlate` instead.
+        let (handle, target, room) = if let Ok(bare) = plate.clone().cast_into::<PyVKPlate>() {
+            let bare = bare.unbind();
+            (bare.clone_ref(py).into_any(), bare, None)
+        } else if let Some(r) = VkRoom::of(plate) {
+            // A room-loaded gong. `mal.plate` is the WRAPPER, because that is the object the
+            // caller passed and the object that owns the room, the port and the radiated ledger.
+            let inner = r.plate(py)?;
+            (r.object(py), inner, Some(r))
+        } else {
+            return Err(PyTypeError::new_err(
+                "MalletVKPlate strikes a nonlinear VKPlate (physsynth_rs.VKPlate), or a \
+                 RoomLoadedVKPlate / RoomSuspendedVKPlate holding one. Got something else -- if \
+                 it is a linear Plate, use MalletPlate instead: an affine step has an exact \
+                 drive-point influence column and needs no outer iteration, so driving it through \
+                 this model would pay for a nested solve that converges on its first pass.",
+            ));
+        };
 
-        let params = {
-            let pl = handle.bind(py).borrow();
+        let mut params = {
+            let pl = target.bind(py).borrow();
             core::VkPlateParams::new(
                 pl.vk_params(),
                 mass,
@@ -723,12 +804,27 @@ impl PyMalletVKPlate {
             warn_under_resolved(py, params.steps_per_contact)?;
         }
 
-        let u_node = handle.bind(py).borrow().u_at(py, params.node)?;
+        // In a room the operator the coupled step inverts is `A_loaded`, so the chord's frozen
+        // tangent has to come off that factorization and not off the plate's own.
+        let lu_id = match &room {
+            None => 0,
+            Some(r) => {
+                let lu = r.lu_loaded(py)?;
+                let column = loaded_influence(py, &lu, &target, params.node)?;
+                params.retarget_column(&column);
+                lu.as_ptr() as usize
+            }
+        };
+
+        let u_node = target.bind(py).borrow().u_at(py, params.node)?;
         let s = core::State::at_strike(gap, strike_velocity, params.k, u_node);
         Ok(PyMalletVKPlate {
             p: params,
             s,
-            plate: handle,
+            handle,
+            plate: target,
+            room,
+            lu_id,
             last: None,
         })
     }
@@ -736,9 +832,19 @@ impl PyMalletVKPlate {
     // -- parameters --------------------------------------------------------------------------
 
     /// The gong — the very object the caller passed in.
+    ///
+    /// A `VKPlate` when one was handed in, and the **wrapper** when a room-loaded one was: the
+    /// room, the port and the radiated ledger live there, and the bare plate is one delegation
+    /// further in at `mal.plate.plate`. Same rule `StringVKPlateBridge` follows.
     #[getter]
-    fn plate(&self, py: Python<'_>) -> Py<PyVKPlate> {
-        self.plate.clone_ref(py)
+    fn plate(&self, py: Python<'_>) -> Py<PyAny> {
+        self.handle.clone_ref(py)
+    }
+
+    /// Whether this gong is loaded by a room — `mal.plate` is a wrapper exactly when this is true.
+    #[getter]
+    fn in_room(&self) -> bool {
+        self.room.is_some()
     }
     #[getter]
     fn k(&self) -> f64 {
@@ -928,6 +1034,9 @@ impl PyMalletVKPlate {
 
     /// Advance one step: force-free plate solve, outer chord, one commit.
     fn step(&mut self, py: Python<'_>) -> PyResult<()> {
+        if self.room.is_some() {
+            return self.step_in_room(py);
+        }
         let handle = self.plate.clone_ref(py);
         let mut pl = handle.bind(py).borrow_mut();
         let (u, u_prev, f_cache, f_prev) = pl.state_buffers(py)?;
@@ -957,13 +1066,23 @@ impl PyMalletVKPlate {
     // -- diagnostics -------------------------------------------------------------------------
 
     /// Total discrete energy `H^n` (J): gong + mallet KE + averaged contact PE.
+    ///
+    /// **In a room this is not the scene total.** The gong term is taken from the wrapper's
+    /// `energy()` when there is one, so the room's coupling channel (`radiated_energy`) is inside
+    /// it -- the same override the wrapper makes for the same reason, because the plate's own
+    /// `energy()` is the total *without* the channel it radiates through. What is still outside is
+    /// the air itself: the conserved statement is `mal.energy() + mal.plate.room.energy()`.
     fn energy(&self, py: Python<'_>) -> PyResult<f64> {
+        let plate_energy: f64 = match &self.room {
+            None => self.plate.bind(py).borrow().energy(py)?,
+            Some(_) => self.handle.bind(py).call_method0("energy")?.extract()?,
+        };
         let pl = self.plate.bind(py).borrow();
         let i = self.p.node;
         Ok(core::vk_plate_total_energy(
             pl.u_at(py, i)?,
             pl.u_prev_at(py, i)?,
-            pl.energy(py)?,
+            plate_energy,
             &self.p,
             &self.s,
         ))
@@ -977,6 +1096,98 @@ impl PyMalletVKPlate {
     /// Mallet velocity `delta_t- z_H` (m/s): negative into the gong, positive after rebound.
     fn mallet_velocity(&self) -> f64 {
         self.s.velocity(self.p.k)
+    }
+
+    /// The room-loaded gong's step: one room half, many plate solves, one injection.
+    ///
+    /// The whole design is in the ordering, so it is worth reading as five phases:
+    ///
+    /// 1. **the factorization**, and the column refreshed if it was swapped;
+    /// 2. **`prepare`, once** — `require_ready`, the open-circuit pressure read before the room
+    ///    advances, and the two load terms. None of it depends on `w^{n+1}`, so every trial below
+    ///    sees the same room;
+    /// 3. **the chord**, which solves the plate as many times as it needs against the *loaded*
+    ///    operator, varying only its own `f_ext`;
+    /// 4. **one commit**, of the accepted iterate;
+    /// 5. **`finish`, once**, from the committed field — one `port.inject`, one ledger entry.
+    ///
+    /// Driving the wrapper's own `step()` per trial instead would inject `n_outer` times and book
+    /// the radiated energy `n_outer` times, and the scene total that would catch it is the number
+    /// the miscount corrupts on both sides at once (`docs/dev/mallet-vk-room-plan.md` §1).
+    fn step_in_room(&mut self, py: Python<'_>) -> PyResult<()> {
+        // Detached from `self` so the borrow checker is free for the `&mut self` the chord needs.
+        let room = {
+            let r = self
+                .room
+                .as_ref()
+                .expect("the caller tested `room.is_some()`");
+            VkRoom::of(r.object(py).bind(py)).expect("a VkRoom's object is a VkRoom")
+        };
+        let lu = room.lu_loaded(py)?;
+        // Cheap, and it fires only when a test has actually replaced the factorization.
+        if lu.as_ptr() as usize != self.lu_id {
+            let column = loaded_influence(py, &lu, &self.plate, self.p.node)?;
+            self.p.retarget_column(&column);
+            self.lu_id = lu.as_ptr() as usize;
+        }
+        let half = room.prepare(py)?;
+
+        let handle = self.plate.clone_ref(py);
+        let (u, u_prev, f_cache, f_prev) = handle.bind(py).borrow().state_buffers(py)?;
+
+        // Two phases, and the split is the same one the surface seam makes: the plate is borrowed
+        // immutably while the chord runs (the context holds `&VkParams` through it) and the commit
+        // takes a fresh mutable borrow afterwards.
+        let parked = ParkedErr::new();
+        let outcome = {
+            let held = handle.bind(py).borrow();
+            let vk = held.vk_params();
+            let lu_bound = lu.bind(py);
+            let theta = LoadedLu::new(py, lu_bound);
+            core::vk_plate_step_with(&u_prev, &self.p, vk, &mut self.s, |f_ext| {
+                // The force reaches the right-hand side through the SEAM's `rhs`, which is where
+                // the wrapper has always put it -- so a miss (`f_ext = None`) assembles the very
+                // expression `RoomLoadedVKPlate.step()` would, byte for byte, and the trajectory
+                // of a mallet that never lands is the bare wrapper's.
+                let f_py = f_ext.map(|f| airbox_wrap::pyarr(py, f.to_vec()));
+                let rhs = room
+                    .loaded_rhs(py, &half, f_py)
+                    .map_err(|e| parked.park(e))?;
+                let rhs = airbox_wrap::vec1(py, rhs.bind(py), "the room-loaded rhs")
+                    .map_err(|e| parked.park(e))?;
+                let ctx = core_plate::VkCoupledStep::with_rhs(rhs, &u_prev, &f_prev, vk, &theta);
+                core_plate::vk_step_with(&ctx, &u, &u_prev, &f_cache)
+            })
+            .map_err(|e| match e {
+                // A `Solve` failure may be a Python exception in disguise -- the factorization's
+                // own, or the seam's. Both parked their real cause; swap it back before the
+                // crate's placeholder text reaches a caller.
+                core::VkContactError::Solve(_) => parked
+                    .take()
+                    .or_else(|| theta.take_err())
+                    .unwrap_or_else(|| gong_err(e)),
+                other => gong_err(other),
+            })
+        };
+        let out = outcome?;
+
+        handle.bind(py).borrow_mut().commit(
+            py,
+            out.u.clone(),
+            out.f_full.clone(),
+            out.inner_iters,
+            out.inner_converged,
+            out.outer_residual,
+            out.n_solves,
+        );
+        // Read back rather than passed through: `finish` must see the field that was COMMITTED,
+        // and taking it off the plate makes that structural instead of a promise. Handed a trial
+        // instead, the injection count is still one and the ledger still advances plausibly, and
+        // the room simply receives a volume velocity the gong never had.
+        let committed = handle.bind(py).getattr("u")?;
+        room.finish(py, &half, &committed)?;
+        self.last = Some(out);
+        Ok(())
     }
 
     /// The **exact** outer tangent `g_exact = [J^-1 influence]_node + g_h`, and the Krylov

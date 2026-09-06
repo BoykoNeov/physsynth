@@ -304,6 +304,14 @@ the bar asserts the attribution rather than just the failure.
   `vk-newton-plan.md` §14.2 measured. (The first version of this bullet was a single fixture from
   the first probe, before `outer_tol` moved to 1e-13 and before the stagnation exit existed — a
   margin measured at one fixture is a claim about one fixture.)
+  **And this bullet is itself such a claim — dated 2026-09-06 by `mallet-vk-room-plan.md` §6.3.**
+  Every number above is at **48 kHz**, where the `k²` in the coupling gives the mallet so much
+  headroom that it never approaches the iteration wall, so the comparison is between two solvers
+  doing easy work and Picard's cheaper sweep wins. Put the same mallet on the room's fixture at
+  **8 kHz** and the ratio crosses one at `w/e ≈ 4.3` and settles at **0.71x**, with Picard's inner
+  solves starting to fail at `w/e = 6.0` and the run dying at 7.8 while Newton reaches 11.6 with no
+  failures at all. Sample rate is the axis this bullet did not vary. The parenthesis above was
+  right and did not go far enough.
 * `force_scale = M v0 / k`, and the outer residual is normalised by it rather than by `|f_j|` on
   purpose: the contact force passes through zero at the start and end of every contact, so a
   residual relative to the current force would demand the most absolute accuracy exactly where there
@@ -324,5 +332,10 @@ the bar asserts the attribution rather than just the failure.
 * Sub-grid strike interpolation (snap-to-node, the bow and mallet precedent).
 * A viewer scene. Nothing here blocks one; `MalletVKPlate` exposes `state`, `displacement_at` and
   the full telemetry the viewer's other models use.
-* A gong **in a room** — `RoomLoadedVKPlate` and this model have never met. The airbox seam replaces
-  the plate's `solve`, and this model calls `vk_step` directly, so they do not compose as written.
+* ~~A gong **in a room** — `RoomLoadedVKPlate` and this model have never met. The airbox seam
+  replaces the plate's `solve`, and this model calls `vk_step` directly, so they do not compose as
+  written.~~ **Done 2026-09-06, `docs/dev/mallet-vk-room-plan.md`.** The diagnosis above was right
+  about the mechanism and wrong about the remedy: the fix was not to make one call the other but to
+  give `vk_plate_step` a **trial-solver closure**, so `vk_step` and the room's loaded step are two
+  closures ending in the same `vk_step_with`. `MalletVKPlate` now takes either a `VKPlate` or a room
+  wrapper. Two of this section's other bullets are dated by it — see §10's Newton note below.

@@ -284,6 +284,22 @@ transition cell for cell, so this was never the room's fault — and the amplitu
 rather than §5's 2-4x**, because the boundary moves with sample rate *and* with resolution. There is
 no single payoff number for this hurdle; there is a fixture and a measurement.
 
+**The mallet composes with it too (2026-09-06, `docs/dev/mallet-vk-room-plan.md`).** `MalletVKPlate`
+now takes a room wrapper, reaching the loaded operator through a trial-solver closure in
+`vk_plate_step`; the room half of the step is assembled once and the port is injected once however
+long the outer chord runs. Three measurements came out of it and two of them move this row:
+
+* **The air load does not move the mallet's wall either.** Room and bare die at the same strike
+  velocity with the same number of non-converged steps, and `n_solves` agrees within 0.5% at every
+  amplitude. That is the second independent confirmation of the same fact.
+* **A mallet reaches much further than a displacement strike on the same grid** — `w/e = 7.8`
+  against the initial-condition strike's 4.5, because a mallet builds its amplitude over hundreds
+  of steps while an IC arrives with all of it at once. The wall is a property of how the amplitude
+  is *delivered*, not only of how large it is.
+* **Newton is cheaper below the wall at 8 kHz**, crossing one at `w/e ≈ 4.3` and settling at
+  **0.71x** — which contradicts `mallet-gong-plan.md` §10's "Newton buys nothing here" and dates
+  rather than overturns it: that measurement is at 48 kHz, where the mallet never reaches the wall.
+
 What is left is the *scientific* half: Newton has its own wall (between `6e` and `9e` at N=20), and
 it arrives there by becoming unaffordable rather than by diverging. This remains the largest
 scientific unlock in the register and the one the human has to prioritise against §4.

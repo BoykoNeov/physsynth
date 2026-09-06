@@ -1243,6 +1243,38 @@ impl VkPlateParams {
         })
     }
 
+    /// Point the frozen chord at a **different** influence column — the room's.
+    ///
+    /// [`VkPlateParams::new`] builds the column from the plate's own factorization, which is the
+    /// operator the step inverts when the plate stands alone. Load the plate with a room and it is
+    /// not: `A_loaded = A + (k / 2 rho_s) T^T R T` is what the coupled step actually back-substitutes
+    /// against, and its drive-point column is a different vector.
+    ///
+    /// This exists as one method rather than three field writes because `influence`, `g_s` and `g`
+    /// are one fact spelled three ways, and a caller that set the column and forgot `g` would get a
+    /// chord whose tangent belongs to a different operator than its residual — convergent, correct,
+    /// and slower for a reason nothing measures.
+    ///
+    /// **What this does not change is the answer.** `solve_contact` solves `eta = eta_free - g f`
+    /// while the chord feeds it `eta_free = w_node(f) + g_s f - z_free`, so at the fixed point the
+    /// two `g_s` terms cancel and the committed force and field are whatever the plate and the
+    /// contact law say they are. What moves is the rate: measured on the shipped room fixture, a
+    /// chord frozen on the bare column contracts by 2.9e-04 a pass and takes about five iterations
+    /// where the loaded one takes one (`docs/dev/mallet-vk-room-plan.md` §2.2).
+    ///
+    /// # Panics
+    /// If `column` is not one entry per live node.
+    pub fn retarget_column(&mut self, column: &[f64]) {
+        assert_eq!(
+            column.len(),
+            self.influence.len(),
+            "the influence column must have one entry per live node"
+        );
+        self.influence = column.to_vec();
+        self.g_s = self.influence[self.node];
+        self.g = self.g_s + self.g_h;
+    }
+
     /// The bundle every evaluation inside a scalar contact solve takes.
     pub fn contact(&self) -> ContactParams {
         ContactParams {
@@ -1396,6 +1428,42 @@ pub fn vk_plate_step(
     vk: &plate::VkParams,
     s: &mut State,
 ) -> Result<VkContactStep, VkContactError> {
+    vk_plate_step_with(u_prev, p, vk, s, |f_ext| {
+        plate::vk_step(u, u_prev, f_cache, f_prev, f_ext, vk)
+    })
+}
+
+/// The same step, with the plate advance supplied by the caller — the air box's entry point.
+///
+/// [`vk_plate_step`] *is* this function with `trial` closed over [`plate::vk_step`], so the bare
+/// gong's arithmetic is this one's by construction rather than by transcription.
+///
+/// `trial(f_ext)` must advance the plate **one step from the same time-`n` state every time**: the
+/// chord below calls it once with `None` for the force-free advance and then once per outer
+/// iteration with a force vector, and a `trial` that rolled any history between calls would have
+/// every iteration after the first solving a different step. That is the same constraint the model
+/// itself is under, which is why `vk_plate_step` reaches the plate's four buffers directly.
+///
+/// The room's client closes over a [`plate::VkCoupledStep::with_rhs`] built on the loaded
+/// factorization, so the two live load terms — invariant across the chord — are assembled once
+/// outside and only the strike node's entry varies here.
+///
+/// `u` is not an argument: every use of the time-`n` field is inside `trial`, and the one thing
+/// this function still reads off the buffers itself is `u_prev[node]`, for the `eta^{n-1}` that
+/// must be taken before anything is rolled.
+///
+/// # Errors
+/// [`VkContactError`] from either solver.
+pub fn vk_plate_step_with<T>(
+    u_prev: &[f64],
+    p: &VkPlateParams,
+    vk: &plate::VkParams,
+    s: &mut State,
+    trial: T,
+) -> Result<VkContactStep, VkContactError>
+where
+    T: Fn(Option<&[f64]>) -> Result<plate::VkStep, SparseLuError>,
+{
     let i = p.node;
     // `eta^{n-1}` off the incoming buffers, before anything is rolled -- the same read every other
     // mallet makes on its first line, for the same reason.
@@ -1405,7 +1473,7 @@ pub fn vk_plate_step(
     // The force-free advance. It is the outer iteration's seed *and* the miss's answer, which is
     // why it is one solve rather than a continuation from the previous step's force: a seed taken
     // from history could not give the miss a bit-identical trajectory.
-    let free = plate::vk_step(u, u_prev, f_cache, f_prev, None, vk)?;
+    let free = trial(None)?;
     let mut n_solves = free.n_solves;
     let mut inner_iters = free.n_iters;
     let mut inner_converged = free.converged;
@@ -1458,21 +1526,21 @@ pub fn vk_plate_step(
         n_outer += 1;
         let force = sol.force;
         f_ext[i] = -force;
-        let trial = plate::vk_step(u, u_prev, f_cache, f_prev, Some(&f_ext), vk)?;
-        n_solves += trial.n_solves;
-        inner_iters += trial.n_iters;
-        inner_converged &= trial.converged;
+        let advanced = trial(Some(&f_ext))?;
+        n_solves += advanced.n_solves;
+        inner_iters += advanced.n_iters;
+        inner_converged &= advanced.converged;
 
         // Where a linear plate carrying the chord's tangent would have had to start to land on the
         // node the nonlinear one actually reached. With `nonlinear = false` the two terms cancel
         // exactly and this is `u_free`, whatever `force` was.
-        let u_eff = trial.u[i] + p.g_s * force;
+        let u_eff = advanced.u[i] + p.g_s * force;
         let next = solve(u_eff - z_free, s.penetration, inner_converged)?;
         outer_residual = (next.force - force).abs() / p.force_scale;
         // The pair committed is the field and the contact solution that DROVE it -- a fixed-point
         // iteration verifies its input by finding that the map barely moves it, and it is the
         // input that the plate, the mallet and the discrete gradient all shared.
-        accepted = Some((trial, sol));
+        accepted = Some((advanced, sol));
         sol = next;
         if outer_residual <= p.outer_tol {
             outer_converged = true;
@@ -1532,7 +1600,45 @@ pub fn vk_drive_point_tangent(
     p: &VkPlateParams,
     vk: &plate::VkParams,
 ) -> Result<(f64, f64, usize), SparseLuError> {
-    let ctx = plate::VkCoupledStep::new(u, u_prev, f_prev, f_ext, vk);
+    vk_drive_point_tangent_with(u, u_prev, f_prev, f_ext, w, p, vk, None, &p.influence)
+}
+
+/// The same tangent, against a **supplied** operator and influence column — the room's instrument.
+///
+/// Both overrides are needed and neither is optional in a room, which is the point of splitting
+/// this out rather than letting the bare version be used everywhere:
+///
+/// * the **operator**, because `jacobian_vector` inverts the theta-scheme matrix and in a room that
+///   is `A_loaded`, not `A`. A tangent taken against the bare operator while the residual belongs
+///   to the loaded one is the previous batch's §3 hazard exactly — convergent, correct, silently
+///   describing a different problem;
+/// * the **column**, because this is the only consumer that reads `influence` as a *vector*. The
+///   plan's §2.1 measures the loaded and bare columns as 2.9e-04 apart at the drive point and 414%
+///   apart at the far end, so the scalar `g_s` is nearly indifferent to the choice and this GMRES
+///   right-hand side is not.
+///
+/// `rhs_lin` is deliberately not overridable here: the tangent reads only the state (through
+/// `averages`) and the operator (through `jacobian_vector`), never the right-hand side, so the
+/// room's two load terms cannot reach this number and there is nothing for a `with_rhs` to carry.
+///
+/// # Errors
+/// If either factorization cannot back-substitute.
+#[allow(clippy::too_many_arguments)]
+pub fn vk_drive_point_tangent_with(
+    u: &[f64],
+    u_prev: &[f64],
+    f_prev: &[f64],
+    f_ext: Option<&[f64]>,
+    w: &[f64],
+    p: &VkPlateParams,
+    vk: &plate::VkParams,
+    theta: Option<&dyn plate::ThetaSolve>,
+    influence: &[f64],
+) -> Result<(f64, f64, usize), SparseLuError> {
+    let mut ctx = plate::VkCoupledStep::new(u, u_prev, f_prev, f_ext, vk);
+    if let Some(t) = theta {
+        ctx.theta = t;
+    }
     let av = ctx.averages(w)?;
     let mut products = 0usize;
     let sol = krylov::gmres(
@@ -1540,7 +1646,7 @@ pub fn vk_drive_point_tangent(
             products += 1;
             ctx.jacobian_vector(&av, d)
         },
-        &p.influence,
+        influence,
         plate::NEWTON_GMRES_RESTART,
         plate::NEWTON_GMRES_MAX_PRODUCTS,
         1e-12,

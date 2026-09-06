@@ -2249,6 +2249,59 @@ def make_room_loaded_vk_plate(
     )
 
 
+# The mallet the room's gong is struck with. Its mass and felt are the shipped gong's; only the
+# velocity is this fixture's own, because the room's plate is a third the area and fifteen times
+# the areal density of the 48 kHz rig, and 6 m/s puts it at w/e ~ 1.9 -- the nonlinearity awake and
+# comfortably inside the Picard wall on both the loaded and the bare side.
+MALLET_ROOM_MASS = 0.05        # kg
+MALLET_ROOM_K = 5.0e4          # N/m^alpha
+MALLET_ROOM_V0 = 6.0           # m/s, positive = into the plate
+
+
+def make_mallet_room_gong(
+    *,
+    tier: str = "baffled",
+    mass: float = MALLET_ROOM_MASS,
+    K: float = MALLET_ROOM_K,
+    alpha: float = MALLET_ALPHA_DEFAULT,
+    hysteresis: float = 0.0,
+    strike_x: float = 0.3,
+    strike_y: float = 0.4,
+    strike_velocity: float = MALLET_ROOM_V0,
+    gap: float = 0.0,
+    outer_tol: float = 1e-13,
+    outer_max_iter: int = 20,
+    walls="rigid",
+    room: AirBox | None = None,
+    **plate_kw,
+) -> MalletVKPlate:
+    """A mallet striking a von Karman plate that is itself loaded by a room.
+
+    ``tier="baffled"`` mounts the gong flush in a wall (:class:`RoomLoadedVKPlate`); ``"suspended"``
+    hangs it on an interior plane (:class:`RoomSuspendedVKPlate`). Reach the parts as
+    ``mal.plate`` (the **wrapper**), ``mal.plate.plate`` (the bare :class:`VKPlate`) and
+    ``mal.plate.room``.
+
+    **The conserved statement is ``mal.energy() + mal.plate.room.energy()``.** ``mal.energy()``
+    already routes the plate term through the wrapper's override, so the room's coupling channel is
+    booked; what it does not contain is the air itself. Using ``mal.plate.plate.energy()`` anywhere
+    in that sum is the trap — it is the gong's total *without* the channel it radiates through.
+
+    ``strike_x`` and ``strike_y`` are fractions of the span, as :func:`make_mallet_gong`'s are.
+    """
+    if tier not in ("baffled", "suspended"):
+        raise ValueError(f"tier must be 'baffled' or 'suspended', got {tier!r}.")
+    make = make_room_loaded_vk_plate if tier == "baffled" else make_suspended_vk_plate
+    inst = make(room=room, walls=walls, **plate_kw)
+    plate = inst.plate
+    return MalletVKPlate(
+        plate=inst, mass=mass, stiffness=K, alpha=alpha, hysteresis=hysteresis,
+        strike_x=strike_x * plate.Lx, strike_y=strike_y * plate.Ly,
+        strike_velocity=strike_velocity, gap=gap, outer_tol=outer_tol,
+        outer_max_iter=outer_max_iter,
+    )
+
+
 def make_suspended_vk_plate(
     *,
     room: AirBox | None = None,

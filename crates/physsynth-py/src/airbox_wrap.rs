@@ -71,7 +71,7 @@ fn airbox_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
 /// is worth its two lines: the reference reaches NumPy through operators that are already C, where
 /// a port reaches it through the interpreter, so an import and a call per extraction is seven
 /// import-and-calls per step and it is measurable (§32).
-fn vec1(py: Python<'_>, obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<f64>> {
+pub(crate) fn vec1(py: Python<'_>, obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<f64>> {
     if let Ok(arr) = obj.cast::<PyArray1<f64>>() {
         if let Ok(slice) = arr.readonly().as_slice() {
             return Ok(slice.to_vec());
@@ -87,7 +87,7 @@ fn vec1(py: Python<'_>, obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<f64>
 }
 
 /// A fresh NumPy array from a `Vec`, as the object the next Python call will take.
-fn pyarr(py: Python<'_>, v: Vec<f64>) -> Py<PyAny> {
+pub(crate) fn pyarr(py: Python<'_>, v: Vec<f64>) -> Py<PyAny> {
     PyArray1::from_vec(py, v).into_any().unbind()
 }
 
@@ -521,7 +521,7 @@ impl PyMembraneSurface {
 ///
 /// The GIL token is held for the life of this adapter because `solve` is called from inside the
 /// kernel, which has no `Python<'_>` of its own to hand down.
-struct LoadedLu<'py> {
+pub(crate) struct LoadedLu<'py> {
     py: Python<'py>,
     lu: &'py Bound<'py, PyAny>,
     /// A Python exception raised by `lu.solve`, parked until the caller can return it.
@@ -530,6 +530,26 @@ struct LoadedLu<'py> {
     /// a second error type through `vk_newton` and every one of its callers, a foreign failure
     /// records itself here and returns `FOREIGN_THETA_FAILURE`; `solve` below swaps it back.
     err: RefCell<Option<PyErr>>,
+}
+
+impl<'py> LoadedLu<'py> {
+    /// Point a coupled step at a factorization that lives in Python.
+    pub(crate) fn new(py: Python<'py>, lu: &'py Bound<'py, PyAny>) -> LoadedLu<'py> {
+        LoadedLu {
+            py,
+            lu,
+            err: RefCell::new(None),
+        }
+    }
+
+    /// The parked exception, if `solve` returned [`core::FOREIGN_THETA_FAILURE`].
+    ///
+    /// A caller that gets a `SparseLuError` back from a step driven through this adapter must ask
+    /// here **first**: the sentinel means the real cause is a Python exception and the crate's own
+    /// error type could not carry it.
+    pub(crate) fn take_err(&self) -> Option<PyErr> {
+        self.err.borrow_mut().take()
+    }
 }
 
 impl core::ThetaSolve for LoadedLu<'_> {
@@ -678,11 +698,7 @@ impl PyVKPlateSurface {
         let rhs = vec1(py, rhs_fixed.bind(py), "rhs_fixed")?;
 
         let (u, u_prev, f, f_prev) = plate.borrow().state_buffers(py)?;
-        let theta = LoadedLu {
-            py,
-            lu,
-            err: RefCell::new(None),
-        };
+        let theta = LoadedLu::new(py, lu);
         // Two phases, and the split is not stylistic: the plate is borrowed immutably while the
         // kernel runs (the context holds `&VkParams` through it) and the diagnostics are written
         // under a *fresh* mutable borrow afterwards. The only Python that runs in between is the
@@ -698,7 +714,7 @@ impl PyVKPlateSurface {
             Err(err) => {
                 // A failure the supplied operator raised in Python comes back as a sentinel with
                 // the real exception parked here; anything else is the plate's own factorization.
-                if let Some(raised) = theta.err.borrow_mut().take() {
+                if let Some(raised) = theta.take_err() {
                     return Err(raised);
                 }
                 return Err(PyValueError::new_err(format!(
@@ -849,12 +865,99 @@ fn build(
     })
 }
 
+/// What `Wrap::prepare` read that the rest of the step needs — one step's room half.
+///
+/// Every field is read **once per step**, before anything is mutated, and none depends on
+/// `w^{n+1}`. That is what lets a client solve the plate many times between the two phases: see
+/// `Wrap::prepare`.
+pub(crate) struct RoomStepHalf {
+    /// The tier's open-circuit pressure: one value per node baffled, the **jump** suspended.
+    free: Py<PyAny>,
+    /// `w^{n-1}`, taken before `commit` rolls it away.
+    u_prev: Py<PyAny>,
+    /// `T^T pbar_free` — the known open-circuit term.
+    load: Vec<f64>,
+    /// `load_matrix @ w^{n-1}` — the `w^{n-1}` half of the centred velocity, whose `w^{n+1}` half
+    /// is already inside the factorization.
+    carry: Vec<f64>,
+}
+
+impl RoomStepHalf {
+    /// The seam's own right-hand side plus the room's two load terms.
+    ///
+    /// Split out so that a client assembling this **once per outer trial** — the mallet's chord —
+    /// gets the same doubles as `Wrap::step` does assembling it once. That is why the two terms are
+    /// carried here rather than their sum: `base + (−a + b)` and `(base − a) + b` are not the same
+    /// double, and the miss path's byte-exactness against a bare `RoomLoadedVKPlate` is a claim
+    /// about this expression.
+    fn assemble(&self, base: &[f64], k2: f64, denominator: f64, load_scale: f64) -> Vec<f64> {
+        (0..base.len())
+            .map(|i| base[i] - k2 * self.load[i] / denominator + load_scale * self.carry[i])
+            .collect()
+    }
+}
+
 impl Wrap {
     /// Advance one step: read the port, solve the **loaded** system, queue the injection.
     ///
-    /// `nonlinear` picks the seam's solve: the linear seam returns `w^{n+1}` alone and commits it,
-    /// the von Karman seam Picard-iterates and returns `(w^{n+1}, F^{n+1})`.
+    /// `von_karman` picks the seam's solve: the linear seam returns `w^{n+1}` alone and commits it,
+    /// the von Karman seam iterates and returns `(w^{n+1}, F^{n+1})`.
+    ///
+    /// This is `prepare` -> one solve -> `finish`, and it is written that way rather than inline so
+    /// that a client which needs *many* solves between the two — the mallet's outer chord — can
+    /// have them without a second copy of the room's bookkeeping living somewhere else.
     fn step(&mut self, py: Python<'_>, f_ext: Option<Py<PyAny>>, von_karman: bool) -> PyResult<()> {
+        let half = self.prepare(py)?;
+        let rhs = self.loaded_rhs(py, &half, f_ext)?;
+        let surface = self.surface.bind(py);
+        let lu = self.lu_loaded.bind(py);
+        let u_next = if von_karman {
+            let pair = surface.call_method1("solve", (lu, rhs))?;
+            let u_next = pair.get_item(0)?;
+            let f_next = pair.get_item(1)?;
+            surface.call_method1("commit", (&u_next, f_next))?;
+            u_next
+        } else {
+            let u_next = lu.call_method1("solve", (rhs,))?;
+            // _accel already carries the load -- it was IN the solve, so no post-solve refresh.
+            surface.call_method1("commit", (&u_next,))?;
+            u_next
+        };
+        self.finish(py, &half, &u_next)
+    }
+
+    /// `surface.rhs(f_ext)` plus the room's two load terms — one outer trial's right-hand side.
+    ///
+    /// The force reaches this through the **seam's** `rhs`, which is where `Wrap::step` has always
+    /// put it, so `f_ext = None` and a zero `f_ext` differ only by the `+0.0` the seam's own
+    /// `Option` short-circuit avoids. That is what keeps a mallet that never lands byte-exact
+    /// against the bare wrapper.
+    pub(crate) fn loaded_rhs(
+        &self,
+        py: Python<'_>,
+        half: &RoomStepHalf,
+        f_ext: Option<Py<PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let base = self.surface.bind(py).call_method1("rhs", (f_ext,))?;
+        let base = vec1(py, &base, "rhs")?;
+        let k2 = self.k * self.k;
+        let rhs = half.assemble(&base, k2, self.denominator, self.load_scale);
+        Ok(pyarr(py, rhs))
+    }
+
+    /// The room half of one step, assembled **once**: the port read and the fixed right-hand side.
+    ///
+    /// Nothing here depends on `w^{n+1}`, and that is the property the whole mallet composition
+    /// rests on rather than a happy accident. `free_pressure()` is the *open-circuit* pressure —
+    /// what the room would do with the surface held still — so it is a function of time-`n` room
+    /// state; and the carry term is the `w^{n-1}` half of the centred velocity, whose `w^{n+1}`
+    /// half is already inside the factorization. So a caller may solve the plate as many times as
+    /// it likes against this right-hand side, varying only its own `f_ext`, and every trial sees
+    /// the same room.
+    ///
+    /// `require_ready` runs first and before anything is mutated, and `free_pressure()` is read
+    /// **before** `room.step()` — the caller's ordering, unchanged.
+    pub(crate) fn prepare(&self, py: Python<'_>) -> PyResult<RoomStepHalf> {
         let port = self.port.bind(py);
         port.call_method0("require_ready")?; // before mutating anything
         let free = port.call_method0("free_pressure")?; // read u^{n+1/2}, BEFORE room.step()
@@ -869,11 +972,8 @@ impl Wrap {
             }
         };
 
-        let k2 = self.k * self.k;
-        let surface = self.surface.bind(py);
         // ONCE, and before commit() -- see the seam's docstring.
-        let u_nm1 = surface.getattr("u_prev")?;
-        let rhs = surface.call_method1("rhs", (f_ext,))?;
+        let u_nm1 = self.surface.bind(py).getattr("u_prev")?;
 
         // The air load: the known open-circuit term, plus the u^{n-1} half of the centered
         // velocity (its u^{n+1} half is already inside the factorization).
@@ -882,35 +982,40 @@ impl Wrap {
         let load = vec1(py, &load, "T.T @ pbar_free")?;
         let carry = port.getattr("load_matrix")?.matmul(&u_nm1)?;
         let carry = vec1(py, &carry, "load_matrix @ u^{n-1}")?;
-        let base = vec1(py, &rhs, "rhs")?;
-        let rhs: Vec<f64> = (0..base.len())
-            .map(|i| base[i] - k2 * load[i] / self.denominator + self.load_scale * carry[i])
-            .collect();
-        let rhs = pyarr(py, rhs);
+        Ok(RoomStepHalf {
+            free: free.unbind(),
+            u_prev: u_nm1.unbind(),
+            load,
+            carry,
+        })
+    }
 
-        let lu = self.lu_loaded.bind(py);
-        let u_next = if von_karman {
-            let pair = surface.call_method1("solve", (lu, rhs))?;
-            let u_next = pair.get_item(0)?;
-            let f_next = pair.get_item(1)?;
-            surface.call_method1("commit", (&u_next, f_next))?;
-            u_next
-        } else {
-            let u_next = lu.call_method1("solve", (rhs,))?;
-            // _accel already carries the load -- it was IN the solve, so no post-solve refresh.
-            surface.call_method1("commit", (&u_next,))?;
-            u_next
-        };
-
-        let prev = vec1(py, &u_nm1, "u^{n-1}")?;
-        let next = vec1(py, &u_next, "u^{n+1}")?;
-        let half = 2.0 * self.k;
+    /// The rest of the step, from the **committed** field: the volume velocity, the injection and
+    /// the ledgers.
+    ///
+    /// `u_next` must be the field that was committed, not a trial. Handed a trial instead, every
+    /// bar around this function still passes — the port is injected exactly once, the radiated
+    /// energy advances by a plausible amount — and the room simply receives a volume velocity the
+    /// plate never had. `tests/test_mallet_room_gong.py` recomputes `nodal_volume_velocity` from
+    /// the plate's own buffers for that reason.
+    pub(crate) fn finish(
+        &mut self,
+        py: Python<'_>,
+        half: &RoomStepHalf,
+        u_next: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let port = self.port.bind(py);
+        let free = half.free.bind(py);
+        let t = port.getattr("T")?;
+        let prev = vec1(py, half.u_prev.bind(py), "u^{n-1}")?;
+        let next = vec1(py, u_next, "u^{n+1}")?;
+        let two_k = 2.0 * self.k;
         let vel: Vec<f64> = (0..next.len())
-            .map(|i| (next[i] - prev[i]) / half)
+            .map(|i| (next[i] - prev[i]) / two_k)
             .collect();
         let q = t.matmul(pyarr(py, vel).bind(py))?;
         let r = vec1(py, &port.getattr("R")?, "R")?;
-        let free_v = vec1(py, &free, "pbar_free")?;
+        let free_v = vec1(py, free, "pbar_free")?;
         let q_v = vec1(py, &q, "q")?;
         // Baffled: pbar = pbar_free + R q. Suspended: d_pbar = d_free + 2 R q, and the 2 is the
         // two loaded faces -- the operand order is the reference's, (2 R) q rather than 2 (R q).
@@ -1207,6 +1312,95 @@ grid_wrapper!(PyRoomSuspendedPlate, plate, pressure_jump, {
         self.w.model.bind(py).call_method0("pressure")?.extract()
     }
 });
+
+/// A room wrapper around a `VKPlate`, whichever tier — the mallet's handle on the room half.
+///
+/// The two tiers are two `#[pyclass]`es because the reference's six wrappers are, but every
+/// difference between them lives inside `Wrap` (two enum arms and a ledger name). A client that
+/// wants the room half of a step and does not care which face it is loaded through therefore needs
+/// exactly this: a downcast to either, and the same five calls on both.
+///
+/// Only the **von Kármán** wrappers are arms. A mallet on a room-loaded *linear* plate is a
+/// different model — `MalletPlate`'s influence column is exact for an affine step and its chord
+/// converges on its first pass — and folding it in here would offer a composition that has not been
+/// built. See `docs/dev/mallet-vk-room-plan.md` §5.
+pub(crate) enum VkRoom {
+    Baffled(Py<PyRoomLoadedVKPlate>),
+    Suspended(Py<PyRoomSuspendedVKPlate>),
+}
+
+impl VkRoom {
+    /// The wrapper behind `obj`, or `None` if it is not one.
+    pub(crate) fn of(obj: &Bound<'_, PyAny>) -> Option<VkRoom> {
+        if let Ok(b) = obj.clone().cast_into::<PyRoomLoadedVKPlate>() {
+            return Some(VkRoom::Baffled(b.unbind()));
+        }
+        obj.clone()
+            .cast_into::<PyRoomSuspendedVKPlate>()
+            .ok()
+            .map(|s| VkRoom::Suspended(s.unbind()))
+    }
+
+    /// The wrapper itself, as the object a caller handed in.
+    pub(crate) fn object(&self, py: Python<'_>) -> Py<PyAny> {
+        match self {
+            VkRoom::Baffled(b) => b.clone_ref(py).into_any(),
+            VkRoom::Suspended(s) => s.clone_ref(py).into_any(),
+        }
+    }
+
+    /// Run `f` against the wrapper's `Wrap` under an immutable borrow.
+    fn with<T>(&self, py: Python<'_>, f: impl FnOnce(&Wrap) -> PyResult<T>) -> PyResult<T> {
+        match self {
+            VkRoom::Baffled(b) => f(&b.bind(py).borrow().w),
+            VkRoom::Suspended(s) => f(&s.bind(py).borrow().w),
+        }
+    }
+
+    /// The `VKPlate` underneath — the model the wrapper holds, not the wrapper.
+    pub(crate) fn plate(&self, py: Python<'_>) -> PyResult<Py<PyVKPlate>> {
+        self.with(py, |w| {
+            Ok(w.model.bind(py).cast::<PyVKPlate>()?.clone().unbind())
+        })
+    }
+
+    /// The room-**loaded** factorization, read fresh each step so a swapped `_lu_loaded` is seen.
+    pub(crate) fn lu_loaded(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.with(py, |w| Ok(w.lu_loaded.clone_ref(py)))
+    }
+
+    /// The room half of one step — see `Wrap::prepare`.
+    pub(crate) fn prepare(&self, py: Python<'_>) -> PyResult<RoomStepHalf> {
+        self.with(py, |w| w.prepare(py))
+    }
+
+    /// One outer trial's right-hand side — see `Wrap::loaded_rhs`.
+    pub(crate) fn loaded_rhs(
+        &self,
+        py: Python<'_>,
+        half: &RoomStepHalf,
+        f_ext: Option<Py<PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        self.with(py, |w| w.loaded_rhs(py, half, f_ext))
+    }
+
+    /// The injection and the ledgers, from the **committed** field — see `Wrap::finish`.
+    ///
+    /// A fresh *mutable* borrow, taken after every other borrow above has been released: the
+    /// wrapper is a `#[pyclass]` and holding one of each at once is a runtime panic, not a compile
+    /// error.
+    pub(crate) fn finish(
+        &self,
+        py: Python<'_>,
+        half: &RoomStepHalf,
+        u_next: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        match self {
+            VkRoom::Baffled(b) => b.bind(py).borrow_mut().w.finish(py, half, u_next),
+            VkRoom::Suspended(s) => s.bind(py).borrow_mut().w.finish(py, half, u_next),
+        }
+    }
+}
 
 /// A `VKPlate` loaded through one face — the nonlinear plate on the baffled tier.
 ///
