@@ -12,11 +12,18 @@
 //! energy perfectly and simply is not the Python model any more. It is the one assertion in the
 //! file that would fail on a "harmless" cleanup, and the only one that has to be read in a release
 //! build to mean anything (plan §17.2).
+//!
+//! Everything from `the plate model` down is model #7p (2026-09-06) and has no Python counterpart
+//! at all — it was never transcribed, so these are its *only* bars outside the Python suite.
 
 use physsynth_core::mallet::{
-    scalar_pow, MalletMembrane, MalletWall, ParamError, Params, WallParams,
+    scalar_pow, MalletMembrane, MalletPlate, MalletWall, ParamError, Params, PlateParams,
+    WallParams,
 };
 use physsynth_core::membrane::{self, Domain, Membrane};
+// Qualified rather than glob-imported: `plate::Params` and `mallet::Params` are two different
+// things and this file names both.
+use physsynth_core::plate;
 use std::f64::consts::PI;
 
 const M: f64 = 0.02; // kg — the project's default mallet
@@ -406,4 +413,398 @@ fn the_refusal_messages_are_the_pythons() {
         ParamError::NegativeGap.to_string(),
         "initial gap must be >= 0."
     );
+}
+
+// == the plate model ==============================================================================
+//
+// Model #7p's acceptance contract, and the first part of this file with no Python twin to lean on.
+// Four things are asserted, in the order the design argues them:
+//
+// 1. the **superposition identity** — the whole reason a mallet can strike an implicit resonator at
+//    all — as a claim about every node and not just the struck one;
+// 2. **conservation** of plate + mallet KE + contact PE on both boundary branches;
+// 3. **passivity** once the plate is lossy or the felt is hysteretic;
+// 4. the **miss**, which is the one place the identity is exact rather than merely tight.
+
+const PLATE_L: f64 = 0.4; // m — square, the plate suite's own geometry
+const PLATE_FS: f64 = 20_000.0; // Hz — 39.7 steps per felt half-period, comfortably resolved
+
+fn plate_spec(boundary: plate::Boundary, n: i64, sigma: f64) -> plate::PlateSpec {
+    plate::PlateSpec {
+        lx: PLATE_L,
+        ly: PLATE_L,
+        kappa: 1.0,
+        rho: 2.0,
+        fs: PLATE_FS,
+        n,
+        sigma,
+        boundary: Some(boundary),
+        domain: Some(plate::Domain::Rectangle),
+        ..plate::PlateSpec::default()
+    }
+}
+
+fn plate_params(boundary: plate::Boundary, n: i64, sigma: f64) -> plate::Params {
+    plate::Params::new(&plate_spec(boundary, n, sigma)).expect("a valid plate")
+}
+
+/// A mallet's parameters against `pl`, struck a little off centre so no mode is nulled by accident.
+fn plate_mallet_params(pl: &plate::Params, alpha: f64, lam_h: f64) -> PlateParams {
+    PlateParams::new(
+        pl,
+        M,
+        K,
+        alpha,
+        lam_h,
+        0.3 * PLATE_L,
+        0.4 * PLATE_L,
+        0.0,
+        ETA_TOL,
+        NEWTON_TOL,
+        MAXITER,
+    )
+    .expect("valid plate mallet")
+}
+
+fn struck_plate(
+    boundary: plate::Boundary,
+    n: i64,
+    sigma: f64,
+    alpha: f64,
+    lam_h: f64,
+    v0: f64,
+) -> MalletPlate {
+    let pl = plate_params(boundary, n, sigma);
+    let p = plate_mallet_params(&pl, alpha, lam_h);
+    MalletPlate::new(p, plate::Plate::new(pl), 0.0, v0)
+}
+
+/// A centred Gaussian bump over the live nodes — a generic non-rest state to test an identity from.
+fn plate_bump(p: &plate::Params, amp: f64) -> Vec<f64> {
+    let (cx, cy) = (0.5 * p.lx, 0.5 * p.ly);
+    let s = 0.15 * p.lx;
+    p.mask
+        .flags()
+        .iter()
+        .enumerate()
+        .filter(|(_, &alive)| alive)
+        .map(|(idx, _)| {
+            let (dx, dy) = (p.x[idx] - cx, p.y[idx] - cy);
+            amp * (-(dx * dx + dy * dy) / (s * s)).exp()
+        })
+        .collect()
+}
+
+// -- the identity the whole model rests on --------------------------------------------------------
+
+#[test]
+fn the_influence_column_reproduces_a_forced_step_at_every_node() {
+    // The claim: stepping force-free and then adding the influence column is the same plate as
+    // stepping with the force in the right-hand side. It is asserted over the WHOLE field, because
+    // a column that is right at the strike node and wrong elsewhere would satisfy the drive-point
+    // check, pass every energy bar (the wrong field would simply be a different, self-consistent
+    // trajectory) and sound wrong.
+    //
+    // Not `assert_eq!`: a sparse LU back-substitution is not a linear map over doubles, so
+    // `solve(rhs) + c*solve(e)` and `solve(rhs + c*e)` round differently. The identity is exact in
+    // exact arithmetic and tight-but-not-bitwise in this one, and the tolerance below says which.
+    for boundary in [plate::Boundary::Supported, plate::Boundary::Free] {
+        let pl = plate_params(boundary, 14, 0.0);
+        let p = plate_mallet_params(&pl, 2.3, 0.0);
+        let force = 7.5; // N — an arbitrary nonzero, sign included by the injection convention
+
+        // A generic state: a bump, advanced a few steps so `u` and `u_prev` genuinely differ.
+        let mut forced = plate::Plate::new(pl.clone());
+        forced.set_state(&plate_bump(&pl, 1e-3), &vec![0.0; pl.n_live]);
+        for _ in 0..5 {
+            forced.step(None);
+        }
+        let mut split = forced.clone();
+
+        let mut f_ext = vec![0.0; pl.n_live];
+        f_ext[p.node] = -force;
+        forced.step(Some(&f_ext));
+
+        split.step(None);
+        physsynth_core::mallet::plate_inject(&mut split.u, &mut split.accel, &p, force);
+
+        let scale = forced.u.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        assert!(scale > 0.0, "the reference field is identically zero");
+        for i in 0..pl.n_live {
+            assert!(
+                (forced.u[i] - split.u[i]).abs() <= 1e-14 * scale,
+                "{boundary:?}: node {i} disagrees by {:.3e} (field scale {scale:.3e})",
+                forced.u[i] - split.u[i]
+            );
+            // The acceleration is `(u^{n+1} - 2u^n + u^{n-1}) / k^2`, and only the first term
+            // moved — so a displacement error `e` arrives here as `e / k^2`, while the
+            // acceleration's own scale is set by the *second* difference, which at audio
+            // frequencies is a factor `(omega k)^2` smaller than the displacement. Normalising by
+            // `max|accel|` would therefore demand that the accelerations agree three orders better
+            // than the displacements they are built from. The claim made instead is the honest
+            // one: multiplied back by `k^2`, these came from displacements agreeing to the same
+            // `1e-14`.
+            assert!(
+                (forced.accel[i] - split.accel[i]).abs() * pl.k * pl.k <= 1e-14 * scale,
+                "{boundary:?}: accel at node {i} disagrees by {:.3e} m/s^2",
+                forced.accel[i] - split.accel[i]
+            );
+        }
+    }
+}
+
+#[test]
+fn the_driving_point_admittance_is_the_columns_own_entry() {
+    // `g_s` is READ from the column rather than computed a second way, so this is a structural
+    // assertion and can be exact. The measurement beside it is the one that could fail: a unit
+    // force must move the struck node by `g_s` metres, one step later, from rest.
+    for boundary in [plate::Boundary::Supported, plate::Boundary::Free] {
+        let pl = plate_params(boundary, 14, 0.0);
+        let p = plate_mallet_params(&pl, 2.3, 0.0);
+        assert_eq!(p.g_s, p.influence[p.node]);
+        assert!(
+            p.g_s > 0.0,
+            "an SPD plate cannot have a negative admittance"
+        );
+
+        let mut pl_obj = plate::Plate::new(pl.clone());
+        let mut f_ext = vec![0.0; pl.n_live];
+        f_ext[p.node] = 1.0;
+        pl_obj.step(Some(&f_ext));
+        assert!(
+            (pl_obj.u[p.node] - p.g_s).abs() <= 1e-14 * p.g_s,
+            "{boundary:?}: one newton moved the strike node {:.6e}, admittance says {:.6e}",
+            pl_obj.u[p.node],
+            p.g_s
+        );
+    }
+}
+
+#[test]
+fn the_strike_snaps_to_a_live_node_and_reports_where() {
+    // The live/full-grid mixup this model's `live_coords` exists to prevent: `pickup_index_at`
+    // counts live nodes, `Params::x` is indexed by the full grid. A confusion between them reports
+    // a plausible-looking point, so the assertion is that the reported point is the one the plate
+    // itself would report for that live index.
+    let pl = plate_params(plate::Boundary::Supported, 14, 0.0);
+    let p = plate_mallet_params(&pl, 2.3, 0.0);
+    assert_eq!(
+        p.node,
+        physsynth_core::plate::pickup_index_at(p.x_strike, p.y_strike, &pl)
+    );
+    let h = PLATE_L / 14.0;
+    assert!(
+        (p.x_strike - 0.3 * PLATE_L).abs() <= h,
+        "x snapped further than one cell"
+    );
+    assert!(
+        (p.y_strike - 0.4 * PLATE_L).abs() <= h,
+        "y snapped further than one cell"
+    );
+}
+
+// -- conservation ---------------------------------------------------------------------------------
+
+#[test]
+fn a_struck_lossless_plate_conserves_the_total() {
+    // The money test, and the reason the plate needed the discrete-gradient force rather than
+    // `phi'` at a point: plate + mallet kinetic + averaged contact potential is a constant of the
+    // scheme, on both branches, at any felt exponent.
+    for boundary in [plate::Boundary::Supported, plate::Boundary::Free] {
+        for alpha in [1.0, 2.3] {
+            let mut m = struck_plate(boundary, 12, 0.0, alpha, 0.0, 3.0);
+            let e0 = m.energy();
+            let mut worst = 0.0f64;
+            for _ in 0..1500 {
+                m.step().expect("the contact solve converges");
+                worst = worst.max((m.energy() - e0).abs() / e0.abs());
+            }
+            assert!(
+                worst < 1e-10,
+                "{boundary:?} alpha={alpha}: relative drift {worst:.3e} over 1500 steps"
+            );
+            assert!(m.state().n == 1500);
+        }
+    }
+}
+
+#[test]
+fn the_felt_actually_engages() {
+    // Without this, every conservation bar above is satisfied by a mallet that sailed past: it
+    // conserves perfectly because nothing happened. The strike must store contact potential and the
+    // mallet must leave slower than it arrived in one direction and reversed in the other.
+    let mut m = struck_plate(plate::Boundary::Supported, 12, 0.0, 2.3, 0.0, 3.0);
+    let mut peak_force = 0.0f64;
+    let mut contacts = 0usize;
+    for _ in 0..1500 {
+        m.step().expect("the contact solve converges");
+        peak_force = peak_force.max(m.state().contact_force.abs());
+        contacts += usize::from(m.state().in_contact);
+    }
+    assert!(
+        peak_force > 1.0,
+        "peak contact force was only {peak_force:.3e} N"
+    );
+    assert!(
+        contacts > 10,
+        "the mallet was in contact for {contacts} steps"
+    );
+    assert!(
+        m.mallet_velocity() > 0.0,
+        "the mallet did not rebound: velocity {:.3e} m/s",
+        m.mallet_velocity()
+    );
+}
+
+// -- passivity -------------------------------------------------------------------------------------
+
+#[test]
+fn a_lossy_plate_or_a_hysteretic_felt_only_ever_loses_energy() {
+    // `lam_h = 5e3` is the Python suite's hysteretic felt. A smaller one is still passive and
+    // still monotone, but it removes so little (8 removes 0.03% over this window) that the closing
+    // assertion would be measuring the tolerance rather than the loss.
+    for (sigma, lam_h) in [(2.0, 0.0), (0.0, 5.0e3), (2.0, 5.0e3)] {
+        let mut m = struck_plate(plate::Boundary::Supported, 12, sigma, 2.3, lam_h, 3.0);
+        let e0 = m.energy();
+        let mut prev = e0;
+        for step in 0..1200 {
+            m.step().expect("the contact solve converges");
+            let now = m.energy();
+            assert!(
+                now <= prev + 1e-12 * prev.abs().max(1.0),
+                "sigma={sigma} lam_h={lam_h}: energy rose at step {step} ({prev:.9e} -> {now:.9e})"
+            );
+            prev = now;
+        }
+        assert!(
+            prev < 0.99 * e0,
+            "sigma={sigma} lam_h={lam_h}: the run lost nothing measurable ({e0:.6e} -> {prev:.6e})"
+        );
+    }
+}
+
+// -- the miss ---------------------------------------------------------------------------------------
+
+#[test]
+fn a_mallet_that_never_touches_leaves_the_plate_bit_identical() {
+    // `f == 0.0` makes every increment a signed zero and `x - (+-0.0) == x` for finite `x`, so the
+    // superposition correction is EXACTLY a no-op when there is no contact — which is what lets a
+    // plate carrying a mallet it never meets be compared to a bare one with `==` rather than a
+    // tolerance. This is the `K = 0` analog the membrane model asserts, and it is also the guard
+    // that the injection never touches a node it should not.
+    let pl = plate_params(plate::Boundary::Supported, 12, 0.0);
+    let seed = plate_bump(&pl, 1e-3);
+    let zeros = vec![0.0; pl.n_live];
+
+    let mut bare = plate::Plate::new(pl.clone());
+    bare.set_state(&seed, &zeros);
+
+    let p = PlateParams::new(
+        &pl,
+        M,
+        K,
+        2.3,
+        0.0,
+        0.3 * PLATE_L,
+        0.4 * PLATE_L,
+        1.0,
+        ETA_TOL,
+        NEWTON_TOL,
+        MAXITER,
+    )
+    .expect("valid plate mallet");
+    let mut held = MalletPlate::new(p, plate::Plate::new(pl.clone()), 1.0, -1.0);
+    held.plate.set_state(&seed, &zeros);
+
+    for _ in 0..400 {
+        bare.step(None);
+        held.step().expect("no contact to solve");
+    }
+    assert!(
+        !held.state().in_contact,
+        "the mallet was supposed to fly away"
+    );
+    assert_eq!(
+        bare.u, held.plate.u,
+        "the untouched plate must be bit-identical"
+    );
+    assert_eq!(bare.accel, held.plate.accel, "and so must its acceleration");
+}
+
+// -- the free plate recoils --------------------------------------------------------------------------
+
+#[test]
+fn a_struck_free_plate_carries_away_net_momentum() {
+    // Physics, asserted here so a reader watching a struck cymbal drift does not file it as a bug.
+    //
+    // The claim is exact, not qualitative. On the free branch `K 1 = 0`, so projecting the step
+    // onto `1^T W` kills the stiffness term entirely and leaves `m^{n+1} = 2 m^n - m^{n-1}` for
+    // `m = 1^T W u` — the mass-weighted mean is a **linear function of the step index** once the
+    // contact has ended, exactly. The supported plate has `1^T B != 0` and its mean therefore
+    // oscillates, which is what the boundary holding the plate means numerically.
+    let weighted_mean = |m: &MalletPlate| -> f64 {
+        let pl = &m.plate.p;
+        let w: Vec<f64> = if pl.w.is_empty() {
+            vec![1.0; pl.n_live]
+        } else {
+            pl.w.clone()
+        };
+        let total: f64 = w.iter().sum();
+        (0..pl.n_live).map(|i| w[i] * m.plate.u[i]).sum::<f64>() / total
+    };
+
+    let mut free = struck_plate(plate::Boundary::Free, 12, 0.0, 2.3, 0.0, 3.0);
+    let mut supported = struck_plate(plate::Boundary::Supported, 12, 0.0, 2.3, 0.0, 3.0);
+    let (mut free_marks, mut sup_marks) = (Vec::new(), Vec::new());
+    for step in 1..=2000 {
+        free.step().expect("the contact solve converges");
+        supported.step().expect("the contact solve converges");
+        // Three marks, evenly spaced and all well after the ~40-step contact.
+        if [1000, 1500, 2000].contains(&step) {
+            free_marks.push(weighted_mean(&free));
+            sup_marks.push(weighted_mean(&supported));
+        }
+    }
+
+    // Equal spacing in time, so a constant drift means equal spacing in displacement.
+    let free_first = free_marks[1] - free_marks[0];
+    let free_second = free_marks[2] - free_marks[1];
+    assert!(
+        free_first.abs() > 1e-6,
+        "the free plate took no net momentum: mean moved {free_first:.3e} m in 500 steps"
+    );
+    assert!(
+        (free_second - free_first).abs() <= 1e-9 * free_first.abs(),
+        "the free plate's drift is not constant: {free_first:.9e} then {free_second:.9e}"
+    );
+
+    // The supported plate's mean is an oscillation, so its two secants do not agree at all.
+    let (sup_first, sup_second) = (sup_marks[1] - sup_marks[0], sup_marks[2] - sup_marks[1]);
+    assert!(
+        (sup_second - sup_first).abs() > 1e-3 * sup_first.abs().max(sup_second.abs()),
+        "a supported plate has no rigid mode to drift along: {sup_first:.9e}, {sup_second:.9e}"
+    );
+}
+
+// -- refusals ----------------------------------------------------------------------------------------
+
+#[test]
+fn the_plate_mallet_refuses_what_the_membrane_mallet_refuses() {
+    let pl = plate_params(plate::Boundary::Supported, 10, 0.0);
+    let build = |mass, stiffness, alpha, lam_h, gap| {
+        PlateParams::new(
+            &pl, mass, stiffness, alpha, lam_h, 0.2, 0.2, gap, ETA_TOL, NEWTON_TOL, MAXITER,
+        )
+        .unwrap_err()
+    };
+    assert_eq!(build(0.0, K, 2.3, 0.0, 0.0), ParamError::NonPositiveMass);
+    assert_eq!(
+        build(M, 0.0, 2.3, 0.0, 0.0),
+        ParamError::NonPositiveStiffness
+    );
+    assert_eq!(build(M, K, 0.5, 0.0, 0.0), ParamError::AlphaTooSmall);
+    assert_eq!(build(M, K, 2.3, -1.0, 0.0), ParamError::NegativeHysteresis);
+    assert_eq!(build(M, K, 2.3, 0.0, -1e-3), ParamError::NegativeGap);
+    // Same order as the other two models: a call wrong in two ways reports the earlier check.
+    assert_eq!(build(0.0, 0.0, 2.3, 0.0, 0.0), ParamError::NonPositiveMass);
 }

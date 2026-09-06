@@ -321,6 +321,85 @@ impl PyPlate {
         let pro = pb.readonly();
         Ok(f(state_slice(&uro, "u")?, state_slice(&pro, "u_prev")?))
     }
+
+    // -- what a coupled model reaches for -------------------------------------------------------
+    //
+    // `PyMalletPlate` drives this class from Rust, the way `PyMalletMembrane` drives `PyMembrane`
+    // and `PyReedBore` drives `PyBore` (plan §13.2). It needs four things beyond the public
+    // interface: the parameter set (to build the influence column against the plate's own
+    // factorization), single-node reads on the strike node, and mutable access to `u` and `_accel`
+    // together. Those go through `readonly()`/`readwrite()`, which BORROW the NumPy buffers —
+    // copying the live field to move one double is §15.5's lesson, and the mallet is a per-timestep
+    // caller.
+    //
+    // `step`, `energy`, `pressure`, `displacement_at` and `state` are widened to `pub(crate)` for
+    // the same caller: a `#[pymethods]` fn stays an ordinary inherent method, so the mallet calls
+    // them directly instead of paying an attribute lookup and a Python call per timestep.
+
+    /// The validated parameters — `k`, `n_live`, `boundary`, the mask, and the factorization the
+    /// influence column has to be built against rather than beside.
+    pub(crate) fn params(&self) -> &core::Params {
+        &self.p
+    }
+
+    /// `u[i]` — one live node of the current field.
+    pub(crate) fn u_at(&self, py: Python<'_>, i: usize) -> PyResult<f64> {
+        let bound = self.u.bind(py);
+        let ro = bound.readonly();
+        Ok(crate::state_slice(&ro, "u")?[i])
+    }
+
+    /// `u_prev[i]` — one live node of the previous field.
+    ///
+    /// Only meaningful *before* `step()`, which rebinds `u_prev` to what `u` was. The mallet reads
+    /// it on its first line for exactly that reason.
+    pub(crate) fn u_prev_at(&self, py: Python<'_>, i: usize) -> PyResult<f64> {
+        let bound = self.u_prev.bind(py);
+        let ro = bound.readonly();
+        Ok(crate::state_slice(&ro, "u_prev")?[i])
+    }
+
+    /// Run `f` over `u` **in place**; and [`Self::with_accel_mut`] for `_accel`.
+    ///
+    /// In place, not a rebind: the mallet's correction happens *after* `step()` has installed a
+    /// fresh `u`, and a caller holding that array must see the struck field rather than the
+    /// force-free one.
+    ///
+    /// **Two methods rather than one that borrows both**, and that is not tidiness. `u` and
+    /// `_accel` both have public setters that adopt the array they are handed, so
+    /// `plate.u = a; plate._accel = a` makes them the same object; taking `readwrite()` on both at
+    /// once would then be two simultaneous mutable borrows of one NumPy buffer, which rust-numpy
+    /// answers with a panic across the FFI boundary. Sequential borrows make it not arise.
+    ///
+    /// On the mallet's own path it would not arise regardless, because `step()` rebinds both
+    /// buffers to fresh arrays before the injection runs — but that is a property of `step()`, not
+    /// of these two methods, and the next caller may not step first.
+    pub(crate) fn with_u_mut<T>(
+        &self,
+        py: Python<'_>,
+        f: impl FnOnce(&mut [f64]) -> T,
+    ) -> PyResult<T> {
+        let b = self.u.bind(py);
+        let mut rw = b.readwrite();
+        let s = rw
+            .as_slice_mut()
+            .map_err(|_| PyValueError::new_err("u must be a contiguous 1-D float64 array."))?;
+        Ok(f(s))
+    }
+
+    /// Run `f` over `_accel` in place. See [`Self::with_u_mut`] for why these are two methods.
+    pub(crate) fn with_accel_mut<T>(
+        &self,
+        py: Python<'_>,
+        f: impl FnOnce(&mut [f64]) -> T,
+    ) -> PyResult<T> {
+        let b = self.accel.bind(py);
+        let mut rw = b.readwrite();
+        let s = rw
+            .as_slice_mut()
+            .map_err(|_| PyValueError::new_err("_accel must be a contiguous 1-D float64 array."))?;
+        Ok(f(s))
+    }
 }
 
 #[pymethods]
@@ -695,7 +774,7 @@ impl PyPlate {
 
     /// Current displacement as a full 2-D field, dead nodes zero.
     #[getter]
-    fn state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+    pub(crate) fn state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let full = self.with_state(py, |u, _| {
             physsynth_core::ops2d::embed(u, &self.p.index_map)
         })?;
@@ -749,7 +828,11 @@ impl PyPlate {
 
     /// Advance one timestep via the prefactored sparse solve, rolling the history.
     #[pyo3(signature = (f_ext=None))]
-    fn step(&mut self, py: Python<'_>, f_ext: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+    pub(crate) fn step(
+        &mut self,
+        py: Python<'_>,
+        f_ext: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
         let force = match f_ext {
             Some(obj) => Some(crate::as_1d_f64(py, obj, "f_ext", self.p.n_live)?),
             None => None,
@@ -780,12 +863,12 @@ impl PyPlate {
     // -- diagnostics -----------------------------------------------------------------------
 
     /// Discrete energy `E^n` (Joules).
-    fn energy(&self, py: Python<'_>) -> PyResult<f64> {
+    pub(crate) fn energy(&self, py: Python<'_>) -> PyResult<f64> {
         self.with_state(py, |u, up| core::energy(u, up, &self.p))
     }
 
     /// Displacement at flat live-node `index` — a pickup for spectral analysis.
-    fn displacement_at(&self, py: Python<'_>, index: i64) -> PyResult<f64> {
+    pub(crate) fn displacement_at(&self, py: Python<'_>, index: i64) -> PyResult<f64> {
         let bound = self.u.bind(py);
         let ro = bound.readonly();
         node_value(state_slice(&ro, "u")?, index)
@@ -797,7 +880,7 @@ impl PyPlate {
     }
 
     /// Radiated pressure read-out — the monopole, proportional to volume acceleration.
-    fn pressure(&self, py: Python<'_>) -> PyResult<f64> {
+    pub(crate) fn pressure(&self, py: Python<'_>) -> PyResult<f64> {
         let bound = self.accel.bind(py);
         let ro = bound.readonly();
         Ok(core::pressure(state_slice(&ro, "_accel")?, &self.p))

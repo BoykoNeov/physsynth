@@ -197,6 +197,16 @@ branch covers the *in-contact* near-stationary case (`η^{n+1} ≈ η^{n-1} > 0`
 - **Target resonator: membrane** (human, 2026-07-10). Plate/bar follow-on reuses the same scalar
   collapse with `g_s` from the plate's driving-point admittance (`Plate.step(f_ext)` already exists
   from the StringPlateBridge work) instead of the local nodal mass.
+  **DONE 2026-09-06** — model #7p, `MalletPlate`, `docs/dev/mallet-plate-plan.md`. The prediction
+  held: everything in this document is reused unchanged and the only new object is the admittance,
+  which for an *implicit* resonator is a whole precomputed column `(k²/force_den) A⁻¹ e_node` rather
+  than a scalar (the bow's manoeuvre against the implicit stiff string, applied here). Two things
+  this bullet did not anticipate: the correction has to be applied **along the whole column**, since
+  a one-node post-solve correction — which is exactly what the membrane does — is the thing
+  `plate.py` correctly refuses; and a struck **free** plate recoils into its `{1, x, y}` rigid
+  nullspace, which costs the plate's *energy read-out* about seven digits at a rate quadratic in the
+  rigid displacement. The second is `Plate.energy()`'s, not the mallet's, and the mallet is only the
+  first thing in the project that ever gave a free plate net momentum.
 - **Hysteresis: included this batch** (human, 2026-07-10) — conservative core first inside the same
   file, hysteresis term added and passivity-tested alongside.
 - **Contact primitives live in `core/mallet.py`, written vector-ready**; promote to `core/collision.py`

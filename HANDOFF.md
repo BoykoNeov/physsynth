@@ -434,8 +434,10 @@ exist yet.
   superpose on a single state array and the DOF count does not grow with the note count. Striking a
   drum twice is not two voices, it is one drum with two strikes. Already wired this way: `AirBox`
   takes N disjoint ports (§12H batch 2) and `SurfacePort` couples an entire node *set* (batch 3).
-  Not yet wired: more than one simultaneous mallet on one membrane — `MalletMembrane` is a single
-  mallet. That is a gap in the *exciter* layer, not a limit of the model.
+  Not yet wired: more than one simultaneous mallet on one membrane or plate — `MalletMembrane` and
+  `MalletPlate` are each a single mallet. That is a gap in the *exciter* layer, not a limit of the
+  model, and on the plate it is a small one: two mallets' influence columns superpose, so the
+  extension is a 2x2 contact solve rather than a redesign (`docs/dev/mallet-plate-plan.md` §6).
 - **1-D string models are polyphonic *per voice*.** Each sounding note is its own instance with its
   own state, and cost grows linearly with the voice count. Already wired this way:
   `SympatheticStrings` is N `IdealString` objects sharing one bridge point on a common body.
@@ -772,8 +774,20 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   which puts von Kármán's moderate-rotation range, not the solver, in the way. The trilemma above
   is about the **audio band** and is untouched by any of that. `docs/dev/vk-newton-plan.md` §2.2,
   §2.3, §13.2, §14.2, §14.5.)* A batch wanting the gong *impression* still needs a mallet,
-  not a budget — and **there is no mallet-on-a-plate composition to reach for**: `MalletMembrane`
-  casts its collaborator to a `Membrane`, so that is a model batch someone has to build (§14.1).
+  not a budget. ~~And there is no mallet-on-a-plate composition to reach for.~~ **Half of that is
+  now on the shelf (2026-09-06, model #7p, `docs/dev/mallet-plate-plan.md`):** `MalletPlate` strikes
+  a **linear** `Plate` — supported soundboard or free-edge cymbal, on any of the three outlines —
+  with the membrane mallet's contact solve unchanged and the explicit resonator's local nodal mass
+  replaced by a precomputed **driving-point influence column** `(k²/force_den) A⁻¹ e_node`, which is
+  what an implicit resonator offers instead. It **refuses a `VKPlate`, and the refusal is the
+  remaining half of this bullet**: the von Kármán step is nonlinear, so it is not affine in `f_ext`
+  and the influence column does not exist. Superposition is the whole basis of the scalar collapse,
+  so the gong needs an **outer contact solve wrapped around a full Picard/Newton plate solve per
+  residual evaluation** — a different algorithm at ~10–100× the cost per step, with no closed-form
+  derivative for the outer iteration. `StringVKPlateBridge` is the precedent for what does *not*
+  transfer: its spring force `F = K η^n` is sweep-invariant and enters the RHS outside the Picard
+  loop, which is exactly the property a discrete-gradient contact force (implicit in `η^{n+1}`, and
+  implicit is what makes it conserve) does not have.
 - **The three-way chain — `string → bridge → room-loaded gong → room` — is SHIPPED**
   (`docs/dev/string-vk-plate-room-plan.md`). The thing the air-box family and the bridge batch each
   deferred to the other. Two of its results arrived before any claim did: it composes with **zero

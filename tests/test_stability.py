@@ -215,7 +215,11 @@ def test_the_rust_swap_matches_the_environment():
     deleted_bodies = {
         string_ideal: {"IdealString"},
         membrane: {"Membrane"},
-        mallet: {"MalletMembrane", "MalletWall"},
+        # `MalletPlate` (2026-09-06) is here for a different reason from its two neighbours:
+        # they were deleted, it was never written in Python at all. The claim the loop makes
+        # -- the public name IS the Rust object, on both paths -- is the same either way, and
+        # a model born in Rust must not be able to slip in without one.
+        mallet: {"MalletMembrane", "MalletPlate", "MalletWall"},
         bore: {"Bore"},
         reed: {"ReedBore", "bernoulli_flow"},
         body: {"ModalBody"},

@@ -34,7 +34,7 @@ from physsynth.core.connection import (
     SympatheticStrings,
 )
 from physsynth.core.engine import simulate
-from physsynth.core.mallet import MalletMembrane, MalletWall
+from physsynth.core.mallet import MalletMembrane, MalletPlate, MalletWall
 from physsynth.core.membrane import Domain, Membrane
 from physsynth.core.plate import THETA_DEFAULT as PLATE_THETA_DEFAULT
 from physsynth.core.plate import Plate, VKPlate, grain_ratios_from_material
@@ -1115,6 +1115,63 @@ def make_mallet_wall(
         strike_velocity=strike_velocity, gap=gap,
     )
 
+
+
+# Mallet on a PLATE (model #7p). The same felt and the same mallet as `make_mallet`, against an
+# *implicit* resonator instead of an explicit one -- which is the whole difference, and the reason
+# the default `mu` here is 1.0 rather than the plate suite's 2.0. `mu` sets the timestep
+# (`fs = kappa / (mu h^2)`), and the felt does not care about the plate's Courant number, it cares
+# about its own half-period `pi*sqrt(M/K)` ~ 1.99 ms: at `mu = 1, N = 24, Lx = 1` that is
+# `fs = 11520 Hz` and ~23 steps through the contact, against the 8 below which the model warns.
+# Raising `mu` or coarsening `N` lowers `fs` and will eventually under-resolve the strike, so
+# `test_mallet_plate.py` asserts `steps_per_contact` on the shipped defaults rather than trusting
+# this comment.
+MALLET_PLATE_MU_DEFAULT = 1.0
+MALLET_PLATE_N_DEFAULT = 24
+
+
+def make_mallet_plate(
+    *,
+    N: int = MALLET_PLATE_N_DEFAULT,
+    mu: float = MALLET_PLATE_MU_DEFAULT,
+    kappa: float = KAPPA_PLATE_DEFAULT,
+    K: float = MALLET_K_DEFAULT,
+    mass: float = MALLET_MASS_DEFAULT,
+    alpha: float = MALLET_ALPHA_DEFAULT,
+    hysteresis: float = 0.0,
+    strike_x: float = 0.3,
+    strike_y: float = 0.4,
+    strike_velocity: float = MALLET_VELOCITY_DEFAULT,
+    gap: float = 0.0,
+    sigma: float = 0.0,
+    boundary: str = "supported",
+    domain: str = "rectangle",
+    Lx: float = 1.0,
+    Ly: float = 1.0,
+    nu: float = 0.3,
+    theta: float = PLATE_THETA_DEFAULT,
+    rho: float = RHO_AREAL_DEFAULT,
+) -> MalletPlate:
+    """Build a mallet striking a Kirchhoff plate (model #7p).
+
+    ``boundary="supported"`` is a struck soundboard, ``boundary="free"`` a suspended cymbal --
+    which **recoils**, because a point strike feeds the free plate's ``{1, x, y}`` rigid nullspace
+    and nothing holds the mean. ``sigma = 0`` with ``hysteresis = 0`` gives the lossless
+    conservation money test, either one positive the passivity test.
+
+    The strike defaults to ``(0.3 Lx, 0.4 Ly)``: off every low mode's symmetry axis, so no partial
+    is nulled by accident. Move it to the centre deliberately when that is the point.
+    """
+    h = Lx / N
+    fs = kappa / (mu * h * h)
+    plate = Plate(
+        Lx=Lx, Ly=Ly, kappa=kappa, rho=rho, fs=fs, N=N, sigma=sigma, theta=theta,
+        boundary=boundary, domain=domain, nu=nu,
+    )
+    return MalletPlate(
+        plate=plate, mass=mass, stiffness=K, alpha=alpha, hysteresis=hysteresis,
+        strike_x=strike_x * Lx, strike_y=strike_y * Ly, strike_velocity=strike_velocity, gap=gap,
+    )
 
 # Barrier-string collision (model #8, first *distributed* contact model). A stiff/flexible string
 # vibrating against a one-sided nonlinear barrier below it (fret buzz / tanpura jawari). The default

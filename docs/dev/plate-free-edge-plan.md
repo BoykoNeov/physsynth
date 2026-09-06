@@ -3,7 +3,8 @@
 > **Status: Part 0 DONE (2026-06-23), Part 1 DONE (2026-06-30).** Follow-on to the simply-supported
 > plate
 > (`docs/dev/plate-plan.md`, model #5). This is the *visual showpiece* half of HANDOFF §5 row 5 — the
-> iconic curved Chladni nodal figures, which require **free** edges. Built **energy-first** per the Bilbao framework (CLAUDE.md #2);
+> iconic curved Chladni nodal figures, which require **free** edges.
+> Built **energy-first** per the Bilbao framework (CLAUDE.md #2);
 > validated against the free-free **closed-form 1D beam** oracle, the **rigid-body nullspace**, **O(h²)
 > self-convergence**, and **Leissa's tabulated free-square-plate frequency parameters**.
 >
@@ -25,6 +26,18 @@
 > Kirchhoff/effective shear, corner force), and the right rigid-body nullspace, **none hand-imposed**.
 > The alternative (ghost-point elimination on the 13-point biharmonic stencil) breaks symmetry unless
 > done very carefully — **avoid it**.
+>
+> **Added 2026-09-06 (model #7p, `docs/dev/mallet-plate-plan.md` §4), because it belongs to this
+> model rather than to the one that found it:** a free plate given **net momentum** — which every
+> test here avoids, since a zero-mean initial state is both the natural Chladni condition and what
+> `plate_bump` enforces on this branch — translates for ever along the `{1, x, y}` rigid nullspace,
+> and `energy()` loses precision to that drift at a rate **exactly quadratic in the rigid
+> displacement**. The potential form `kappa^2 (K f).g` annihilates the rigid part mathematically and
+> only to `eps` numerically, and it is a *quadratic* form. Measured on a bare plate with no exciter:
+> `error / drift^2` is constant to three digits (2.90e-10 → 3.01e-10) across a thirtyfold range of
+> drift, against `6.4e-16 J` at zero momentum. It is a **read-out** limit, not a leak — the scheme
+> conserves — but any batch that drives this plate with a point force has to know that its energy
+> bar decays as `t^2`.
 
 ## Why `B = L²` does NOT carry over (the whole reason this is a new model)
 

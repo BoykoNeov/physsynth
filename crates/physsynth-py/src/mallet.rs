@@ -37,6 +37,7 @@
 //! of Rust because a shim frame existed to host it, and this one stays in Rust because no such
 //! frame does.
 
+use numpy::PyArray1;
 use physsynth_core::mallet as core;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -44,6 +45,7 @@ use pyo3::types::PyAny;
 use std::ffi::CString;
 
 use crate::membrane::PyMembrane;
+use crate::plate::PyPlate;
 
 /// `newton_maxiter` as Python would use it: the original passes it straight to a `range()`, so a
 /// negative value means "no Newton iterations", not an error.
@@ -333,6 +335,284 @@ impl PyMalletMembrane {
     }
 
     /// Mallet velocity `delta_t- z_H` (m/s): negative into the head, positive after rebound.
+    fn mallet_velocity(&self) -> f64 {
+        self.s.velocity(self.p.k)
+    }
+}
+
+/// A plate struck by a lumped-mass mallet — the Rust implementation, wearing the Python interface.
+///
+/// The reference for the physics is the `physsynth_core::mallet` module header's plate section;
+/// `physsynth.core.mallet.MalletPlate` re-exports this name.
+///
+/// Holds a `Py<PyPlate>` handle rather than a copy, for the same reason `PyMalletMembrane` holds
+/// its drumhead: `mal.plate` has to **be** the object that was passed in, because every caller
+/// reads the field, the mask and the energy back through it.
+#[pyclass(name = "MalletPlate", module = "physsynth_rs")]
+pub struct PyMalletPlate {
+    p: core::PlateParams,
+    s: core::State,
+    plate: Py<PyPlate>,
+}
+
+#[pymethods]
+impl PyMalletPlate {
+    // Twelve keyword arguments plus the GIL token — `MalletMembrane`'s signature with `membrane`
+    // replaced by `plate`, deliberately, so that swapping which body is struck is a one-word edit
+    // at every call site.
+    #[allow(clippy::too_many_arguments)]
+    #[new]
+    #[pyo3(signature = (
+        *, plate, mass, stiffness, alpha=2.3, hysteresis=0.0, strike_x, strike_y,
+        strike_velocity, gap=0.0, eta_tol=1e-12, newton_tol=1e-14, newton_maxiter=60
+    ))]
+    fn new(
+        py: Python<'_>,
+        plate: &Bound<'_, PyAny>,
+        mass: f64,
+        stiffness: f64,
+        alpha: f64,
+        hysteresis: f64,
+        strike_x: f64,
+        strike_y: f64,
+        strike_velocity: f64,
+        gap: f64,
+        eta_tol: f64,
+        newton_tol: f64,
+        newton_maxiter: i64,
+    ) -> PyResult<Self> {
+        // The five scalar checks touch nothing on the plate, so they run before the cast: a call
+        // that is both massless and holding the wrong body reports the mass, the way the membrane
+        // model's does.
+        core::check_common(mass, stiffness, alpha, hysteresis, gap).map_err(param_err)?;
+
+        let handle: Py<PyPlate> = plate
+            .clone()
+            .cast_into::<PyPlate>()
+            .map_err(|_| {
+                PyTypeError::new_err(
+                    "MalletPlate strikes a linear Plate (physsynth_rs.Plate). Got something else \
+                     -- if it is a VKPlate, that is not a missing cast but a different model: the \
+                     von Karman step is nonlinear, so it is not affine in f_ext and the \
+                     drive-point influence column this mallet is built on does not exist. A gong \
+                     needs an outer contact solve wrapped around the plate's own iteration.",
+                )
+            })?
+            .unbind();
+
+        let params = {
+            let pl = handle.bind(py).borrow();
+            core::PlateParams::new(
+                pl.params(),
+                mass,
+                stiffness,
+                alpha,
+                hysteresis,
+                strike_x,
+                strike_y,
+                gap,
+                eta_tol,
+                newton_tol,
+                maxiter_of(newton_maxiter),
+            )
+            .map_err(param_err)?
+        };
+
+        if params.steps_per_contact < 8.0 {
+            warn_under_resolved(py, params.steps_per_contact)?;
+        }
+
+        let u_node = handle.bind(py).borrow().u_at(py, params.node)?;
+        let s = core::State::at_strike(gap, strike_velocity, params.k, u_node);
+        Ok(PyMalletPlate {
+            p: params,
+            s,
+            plate: handle,
+        })
+    }
+
+    // -- parameters --------------------------------------------------------------------------
+
+    /// The plate — the very object the caller passed in.
+    #[getter]
+    fn plate(&self, py: Python<'_>) -> Py<PyPlate> {
+        self.plate.clone_ref(py)
+    }
+    #[getter]
+    fn k(&self) -> f64 {
+        self.p.k
+    }
+    #[getter]
+    fn M(&self) -> f64 {
+        self.p.mass
+    }
+    #[getter]
+    fn K(&self) -> f64 {
+        self.p.stiffness
+    }
+    #[getter]
+    fn alpha(&self) -> f64 {
+        self.p.alpha
+    }
+    #[getter]
+    fn lam_h(&self) -> f64 {
+        self.p.lam_h
+    }
+    #[getter]
+    fn eta_tol(&self) -> f64 {
+        self.p.eta_tol
+    }
+    #[getter]
+    fn newton_tol(&self) -> f64 {
+        self.p.newton_tol
+    }
+    #[getter]
+    fn newton_maxiter(&self) -> usize {
+        self.p.newton_maxiter
+    }
+    #[getter]
+    fn node(&self) -> usize {
+        self.p.node
+    }
+    #[getter]
+    fn x_strike(&self) -> f64 {
+        self.p.x_strike
+    }
+    #[getter]
+    fn y_strike(&self) -> f64 {
+        self.p.y_strike
+    }
+    #[getter]
+    fn contact_frequency(&self) -> f64 {
+        self.p.contact_frequency
+    }
+    #[getter]
+    fn steps_per_contact(&self) -> f64 {
+        self.p.steps_per_contact
+    }
+    #[getter]
+    fn strike_velocity(&self) -> f64 {
+        self.s.strike_velocity
+    }
+
+    // The three admittances and the column they come from. Exposed rather than assumed private —
+    // §12.2's scar, and here the column is the batch's whole new idea, so a test that wants to
+    // check the superposition identity directly must be able to see it. A **copy** each call: the
+    // column is a construction-time constant and handing out a view of it would let a caller
+    // retune the mallet by writing into an array it happened to keep.
+    #[getter]
+    fn _influence<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f64>> {
+        PyArray1::from_slice(py, &self.p.influence)
+    }
+    #[getter]
+    fn _g_s(&self) -> f64 {
+        self.p.g_s
+    }
+    #[getter]
+    fn _g_h(&self) -> f64 {
+        self.p.g_h
+    }
+    #[getter]
+    fn _g(&self) -> f64 {
+        self.p.g
+    }
+
+    // -- state -------------------------------------------------------------------------------
+
+    /// Mallet position `z_H^n`. Settable, as the membrane model's is.
+    #[getter]
+    fn z_H(&self) -> f64 {
+        self.s.z_h
+    }
+    #[setter]
+    fn set_z_H(&mut self, value: f64) {
+        self.s.z_h = value;
+    }
+    #[getter]
+    fn z_H_prev(&self) -> f64 {
+        self.s.z_h_prev
+    }
+    #[setter]
+    fn set_z_H_prev(&mut self, value: f64) {
+        self.s.z_h_prev = value;
+    }
+
+    #[getter]
+    fn penetration(&self) -> f64 {
+        self.s.penetration
+    }
+    #[getter]
+    fn contact_force(&self) -> f64 {
+        self.s.contact_force
+    }
+    #[getter]
+    fn in_contact(&self) -> bool {
+        self.s.in_contact
+    }
+    #[getter]
+    fn fallbacks(&self) -> usize {
+        self.s.fallbacks
+    }
+    #[getter]
+    fn n(&self) -> usize {
+        self.s.n
+    }
+
+    /// The plate displacement field (full 2-D array, dead nodes zero) — for animation snapshots.
+    #[getter]
+    fn state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.plate.bind(py).borrow().state(py)
+    }
+
+    // -- time stepping -----------------------------------------------------------------------
+
+    /// Advance one step: force-free solve, scalar contact solve, force spread along the column.
+    fn step(&mut self, py: Python<'_>) -> PyResult<()> {
+        // Take the handle first so nothing borrows `self.plate` while the mutable borrow is live.
+        let handle = self.plate.clone_ref(py);
+        let mut pl = handle.bind(py).borrow_mut();
+        let i = self.p.node;
+
+        // `eta^{n-1}` must be read BEFORE the step: the plate's `step()` rebinds `u_prev` to what
+        // `u` was, so this quantity stops existing one line later.
+        let eta_prev = core::eta_prev(pl.u_prev_at(py, i)?, &self.s);
+        pl.step(py, None)?;
+        let u_free = pl.u_at(py, i)?;
+        let z_free = core::free_flight(&self.s);
+        let force = core::plate_resolve(u_free, eta_prev, z_free, &self.p, &mut self.s)
+            .map_err(solve_err)?;
+        // Two calls, two borrows, taken one after the other -- see `PyPlate::with_u_mut` for why
+        // holding both at once is not safe here even though the native path holds both.
+        pl.with_u_mut(py, |u| core::plate_inject_u(u, &self.p, force))?;
+        pl.with_accel_mut(py, |accel| core::plate_inject_accel(accel, &self.p, force))
+    }
+
+    // -- diagnostics -------------------------------------------------------------------------
+
+    /// Total discrete energy `H^n` (J): plate + mallet KE + averaged contact PE.
+    fn energy(&self, py: Python<'_>) -> PyResult<f64> {
+        let pl = self.plate.bind(py).borrow();
+        let i = self.p.node;
+        Ok(core::plate_total_energy(
+            pl.u_at(py, i)?,
+            pl.u_prev_at(py, i)?,
+            pl.energy(py)?,
+            &self.p,
+            &self.s,
+        ))
+    }
+
+    /// Plate pickup at flat live-node `index` — for spectral analysis of the tone.
+    fn displacement_at(&self, py: Python<'_>, index: i64) -> PyResult<f64> {
+        self.plate.bind(py).borrow().displacement_at(py, index)
+    }
+
+    /// The plate's radiated-pressure read-out, through the corrected acceleration.
+    fn pressure(&self, py: Python<'_>) -> PyResult<f64> {
+        self.plate.bind(py).borrow().pressure(py)
+    }
+
+    /// Mallet velocity `delta_t- z_H` (m/s): negative into the plate, positive after rebound.
     fn mallet_velocity(&self) -> f64 {
         self.s.velocity(self.p.k)
     }

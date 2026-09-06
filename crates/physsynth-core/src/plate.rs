@@ -639,6 +639,20 @@ pub struct Params {
 }
 
 impl Params {
+    /// Per-node mass an external nodal force divides by — `rho h^2` supported, `rho` free.
+    ///
+    /// The single spelling of the quantity [`step_rhs`] scales `f_ext` by, exposed because a
+    /// client that must scale a force *the way the step does* cannot be allowed to re-derive it:
+    /// `mallet::PlateParams` builds its drive-point influence column through this, and a column
+    /// scaled by the other branch's denominator is a silently mistuned mallet rather than a
+    /// refusal. [`VkParams`] stores the same quantity as a field for the same reason.
+    pub fn force_denominator(&self) -> f64 {
+        match self.boundary {
+            Boundary::Supported => self.rho * self.h * self.h,
+            Boundary::Free => self.rho,
+        }
+    }
+
     /// Validate, derive, assemble the operators and factor `A`.
     ///
     /// The checks run in the Python original's order, so a call that is wrong in more than one way
@@ -1060,10 +1074,7 @@ pub fn step_rhs(u: &[f64], u_prev: &[f64], f_ext: Option<&[f64]>, p: &Params) ->
     // because `float * float * ndarray` associates to the left.
     let c_now = (1.0 - 2.0 * p.theta) * k2;
     let c_prev = p.theta * k2;
-    let force_den = match p.boundary {
-        Boundary::Supported => p.rho * p.h * p.h,
-        Boundary::Free => p.rho,
-    };
+    let force_den = p.force_denominator();
     (0..p.n_live)
         .map(|i| {
             let lop_u = -kappa2 * su[i];
