@@ -711,7 +711,11 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   self-consistently). The finding a later batch most needs: **the air grid cannot be coarsened to
   buy affordability, because coarsening the ROOM breaks the PLATE's fixed point** — 72 Picard
   sweeps at 57.9 kHz, NaN at 33.0 kHz — a second, independent reason this family's cost runs the
-  wrong way on top of the 3-D CFL's `h⁻⁴`. **The viewer batch is SHIPPED** (`vkroom`, viewer batch 19,
+  wrong way on top of the 3-D CFL's `h⁻⁴`. **Newton does not reach this one**, and a reader who
+  has met `couple_method` elsewhere will assume it does: `_VKPlateSurface.solve` runs its *own*
+  Picard loop against the room-loaded factorization and never consults the flag, so the room
+  scene is wrapper-blocked rather than iteration-bound (`docs/dev/vk-newton-plan.md` §11.8,
+  §14.1). **The viewer batch is SHIPPED** (`vkroom`, viewer batch 19,
   2026-08-17), and it did not merely surface this one — it corrected it. The headline's
   **separation** survives everywhere (17-102x across every rig measured), but its
   **magnitude is not grid-converged**: refining the air cell 12% takes the struck arm's
@@ -745,7 +749,9 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   indefinite one — so it cannot subtract and a PD linear form stays coercive at any amplitude
   (verified at 95% of the ceiling under a strongly nonlinear run). But it is sufficient, **not
   tight**, and no longer the whole safety story: the failure mode **migrates** to Picard
-  non-convergence, which a statement about a quadratic form is structurally blind to. The headline
+  non-convergence, which a statement about a quadratic form is structurally blind to — on the
+  **default** path; under Newton this scene's pluck ceiling is ≥4.3× the best-effort Picard one
+  and the migration target is gone (`vk-newton-plan.md` §14.2). The headline
   is the string's departure from the *same plate's* linear self, which is identically `0.0` for a
   linear body — doubling the pluck doubles a leapfrog and an LU back-substitution *exactly* — and
   grows at second order in the pluck **once normalised by the linear response** (1.99/1.94
@@ -760,9 +766,14 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   `w = 9e`, 8 cm caps out by `w = 6e` at the default 50-sweep cap — which means audio-band,
   string-drivable and Picard-convergent do not all hold here. *(The `1/h⁴` this bullet used to name
   was **falsified 2026-09-06**: grid refinement is nearly free and the driver is curvature, not `h`;
-  a third of the wall was the sweep cap rather than divergence; and Newton, now built behind
-  `couple_method`, clears three fixtures Picard cannot. `docs/dev/vk-newton-plan.md` §2.2, §2.3,
-  §11.7.)* A batch wanting the gong *impression* still needs a mallet, not a budget.
+  a third of the wall was the sweep cap rather than divergence; and Newton, built behind
+  `couple_method`, moves the amplitude boundary 2–4× across a mapped grid and takes **this scene**
+  to a pluck ≥300 mm, deflecting the plate to 150–550× its thickness in four to six iterations —
+  which puts von Kármán's moderate-rotation range, not the solver, in the way. The trilemma above
+  is about the **audio band** and is untouched by any of that. `docs/dev/vk-newton-plan.md` §2.2,
+  §2.3, §13.2, §14.2, §14.5.)* A batch wanting the gong *impression* still needs a mallet,
+  not a budget — and **there is no mallet-on-a-plate composition to reach for**: `MalletMembrane`
+  casts its collaborator to a `Membrane`, so that is a model batch someone has to build (§14.1).
 - **The three-way chain — `string → bridge → room-loaded gong → room` — is SHIPPED**
   (`docs/dev/string-vk-plate-room-plan.md`). The thing the air-box family and the bridge batch each
   deferred to the other. Two of its results arrived before any claim did: it composes with **zero

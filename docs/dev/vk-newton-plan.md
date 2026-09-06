@@ -1112,7 +1112,9 @@ Ratio of successive differences; 4 is the scheme's claimed second order:
 | 50 mm | 4.34 | 3.84 | 5.73 | 1.06 |
 
 (The 5.73 is a ratio taken between two nearly decorrelated differences and is noise, not
-super-convergence; it is left in rather than smoothed.) The small pluck holds second order for the
+super-convergence; it is left in rather than smoothed. The same row's *differences* are non-monotone
+ in time — 5.2e-03 at 2.70 ms against 2.36e-02 at 1.35 ms, an error that shrank as the run advanced,
+which no convergence sequence does — and that is the same noise seen from the other side.) The small pluck holds second order for the
 whole run. The two large ones hold it out to about 5 ms and then decorrelate — the same horizon
 §13.6 found, and the same shape.
 
