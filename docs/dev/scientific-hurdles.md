@@ -32,6 +32,7 @@
 | 12 | Raw physics is not a musician's interface (parameter mapping) | none yet | Deferred (§12) |
 | 13 | Which models can ever run in real time | engine, room | Deferred, and now decoupled from the language (§13) |
 | 14 | `piston_radiation_resistance`'s `ka < 1e-8` series threshold was about three decades too small: just above it the direct form cancelled catastrophically and was 544% wrong | `core/radiation.py` | **Fixed 2026-09-03** — three Taylor terms below `ka = 3e-2`; worst error 5.24 → 6.7e-13 (§14) |
+| 15 | No model states where its own answer stops being in tune, and the boundary is much lower than anyone assumed | every resonator | **Measured 2026-09-06** — two families with opposite signs (implicit errors compound into a hard floor at ~8% of the grid; explicit errors cancel at the magic Courant number), the plate is space-limited at every `fs` the suite uses, and the membrane's ceiling cancellation is **diagonal-only** (§15) |
 
 ---
 
@@ -569,3 +570,42 @@ property a future threshold edit would break, and which no physics bar in this p
 plus that the series really is the bracket's Taylor expansion term by term — checked against the
 expansion written out flat rather than in Horner form, so a transposed coefficient shows and a
 re-association does not. The parity file asserts the exact/tolerant split above.
+
+## 15. The resolution horizon — measured 2026-09-06, and it is small
+
+**What it is.** Every accuracy claim this project makes about a mode is bounded by whether that
+mode's *frequency* is right, and until 2026-09-06 no model had that boundary written down. §4's
+probe forced the question: the θ-scheme's decay error is locked to its pitch error, so the pitch
+error is what actually binds. `docs/dev/resolution-horizon-plan.md` is the measurement,
+`tests/test_resolution_horizon.py` the 32 tests that keep it honest, and
+`tests/helpers.py::pitch_horizon` the primitive.
+
+**The structural finding, and the first draft of it was wrong.** The horizon is **not**
+`min(time floor, space floor)`. Whether the two errors add or cancel depends on their signs, and
+the two scheme families here have opposite answers. The implicit θ-scheme's time factor
+`1/√(1 + θk²Q)` and the spatial `sinc(u)` are **both flat**, so they compound and there is a hard
+floor no sample rate passes. The explicit leapfrog's time factor is **sharp**, so it cancels the
+spatial droop exactly at `λ = 1`. **"Refine the timestep" is correct advice for one family and
+actively wrong for the other.**
+
+**The numbers that should change what somebody does.**
+
+* The **space floor has a closed form** and no `k`, `c`, `L` or `fs` in it: `sin(u)/u =
+  2^(−cents/1200)`, `m*/N = 2u/π`. At 5 cents that is **8.38% of the grid** for a pure wave, and
+  stiffness lowers it (6.6% at `κ=2`, 5.9% at `κ=8`, and it keeps falling under refinement).
+* The canonical `λ = 1` damped string at `N = 256` resolves **eleven partials**. A 64× sample-rate
+  increase takes that to nineteen and then stops dead.
+* The **plate is space-limited at every sample rate the suite uses** — a 40× change of `fs` moves
+  its horizon by at most one mode. At the `N = 16` fixture the fundamental is **9.6 cents flat**
+  and the (2,2) mode is 83 cents flat.
+* The **membrane's CFL-ceiling cancellation is diagonal-only.** At `λ = 1/√2` the diagonal modes
+  are exact (127 of 127) and the axial modes are not (15 of 127). Reading only the diagonal would
+  have produced "the membrane is in tune at the ceiling", a claim about one mode family.
+
+**Status.** Measured and asserted for the string family, the rectangular membrane, the supported
+plate and the beam. Four rows of the plan's inventory are explicitly **not** done and say why: the
+staircased domains (circular membrane, guitar outline) fail a cents comparison because the reference
+is a different *shape*; the free plate's reference is a table rather than a formula; the nonlinear
+family has no linear modal oracle and needs a refinement horizon instead (one point already exists
+in `vk-newton-plan.md` §13); the bore's question is the area function's resolution. The named
+follow-on is converting the suites' hand-picked assertion bands into derived ones.

@@ -212,6 +212,79 @@ def measure_mode_decay_factor(
     return float(np.exp(slope))
 
 
+# =====================================================================================
+# The resolution horizon: where a scheme's answer stops being in tune
+# =====================================================================================
+
+
+def pitch_error_cents(
+    f_discrete: NDArray[np.float64] | list[float],
+    f_continuum: NDArray[np.float64] | list[float],
+) -> NDArray[np.float64]:
+    """Signed per-mode pitch error in cents — negative means the scheme is FLAT.
+
+    Cents rather than a relative frequency because every threshold worth arguing about is a
+    perceptual one, and because it makes the two mechanisms comparable: the theta-scheme's rate
+    suppression ``S`` and its pitch error are the *same* quantity through
+    ``cents = 600 log2(S)`` (``docs/dev/theta-loss-compensation-plan.md`` section 2).
+    """
+    fd = np.asarray(f_discrete, dtype=float)
+    fc = np.asarray(f_continuum, dtype=float)
+    if fd.shape != fc.shape:
+        raise ValueError(f"shape mismatch: discrete {fd.shape} against continuum {fc.shape}")
+    return 1200.0 * np.log2(fd / fc)
+
+
+def pitch_horizon(
+    f_discrete: NDArray[np.float64] | list[float],
+    f_continuum: NDArray[np.float64] | list[float],
+    cents: float = 5.0,
+) -> tuple[int, bool]:
+    """``(horizon, monotone)`` — how many leading modes are within ``cents`` of the continuum.
+
+    ``horizon`` counts the **leading prefix**: the number of modes from the first such that every
+    one of them is inside the bound. That is deliberately the conservative reading rather than
+    "the last mode that happens to be inside", and the two differ exactly when the error curve is
+    not monotone. So the predicate is returned alongside it: a caller that sees ``monotone=False``
+    knows the single number is hiding something, the same way ``VKPlate`` reports *which* failure
+    it had rather than only that it failed. Never collapse the pair back to the integer without
+    looking at the flag.
+
+    ``f_discrete`` is what the scheme's own dispersion relation says mode *m* will ring at;
+    ``f_continuum`` is the closed-form physical answer. Both must be ordered by mode index and
+    must be the same family — mixing an axial family into a diagonal one makes the prefix
+    meaningless, which matters because the membrane's two families have horizons a factor of nine
+    apart at the same Courant number (``docs/dev/resolution-horizon-plan.md`` section 4).
+    """
+    if not cents > 0.0:
+        raise ValueError(f"cents bound must be positive, got {cents}.")
+    err = np.abs(pitch_error_cents(f_discrete, f_continuum))
+    outside = np.nonzero(err > cents)[0]
+    horizon = int(outside[0]) if outside.size else int(err.size)
+    monotone = bool(np.all(np.diff(err) >= -1e-12))
+    return horizon, monotone
+
+
+def spatial_operator_horizon(N: int, kappa: float, cents: float = 5.0) -> tuple[int, bool]:
+    """The horizon of the *spatial* operator alone, with no timestep in it at all.
+
+    ``k`` appears nowhere here: this is the eigenvalue error of the second difference (and of the
+    biharmonic built from it), so it is what remains when the timestep is refined to nothing. For
+    the implicit theta-scheme family that makes it a genuine **floor** — the time error and the
+    space error both flatten the pitch, so they compound and no sample rate passes this line. For
+    the explicit family it is not a floor at all: there the time error is *sharp* and cancels the
+    space droop exactly at the magic Courant number.
+    """
+    h = L_DEFAULT / N
+    modes = np.arange(1, N)
+    p2_disc = np.array([modal.dirichlet_axis_eigenvalue(int(m), L_DEFAULT, h) for m in modes])
+    p2_cont = (modes * np.pi / L_DEFAULT) ** 2
+    c = wave_speed()
+    w_disc = np.sqrt(c * c * p2_disc + kappa * kappa * p2_disc * p2_disc)
+    w_cont = np.sqrt(c * c * p2_cont + kappa * kappa * p2_cont * p2_cont)
+    return pitch_horizon(w_disc, w_cont, cents)
+
+
 def make_membrane(
     *,
     domain: Domain,
