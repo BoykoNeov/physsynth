@@ -14,8 +14,8 @@
 use physsynth_core::ops2d::Mask;
 use physsynth_core::plate::{
     count_components, energy, grain_ratios_from_material, linspace0, pickup_index_at, Boundary,
-    Domain, MaterialError, ParamError, Params, Plate, PlateSpec, VkParamError, VkParams, VkPlate,
-    VkSpec,
+    CoupleOutcome, Domain, MaterialError, ParamError, Params, Plate, PlateSpec, VkParamError,
+    VkParams, VkPlate, VkSpec,
 };
 
 const FS: f64 = 20_000.0;
@@ -258,6 +258,139 @@ fn a_nonlinear_plate_conserves_its_total_energy() {
         }
         assert!(worst < 1e-10, "drift {worst:.3e}");
     }
+}
+
+// -- why the sweep loop stopped (plan §5 Part 0) ------------------------------------------------
+
+/// A 40 cm steel square struck in the middle, `amp` thicknesses tall, with a chosen sweep cap.
+fn struck_vk(amp: f64, cap: i64) -> VkPlate {
+    let mut vk = VkPlate::new(
+        VkParams::new(&VkSpec {
+            lx: 0.4,
+            ly: 0.4,
+            young: 2.0e11,
+            thickness: 1e-3,
+            nu: 0.3,
+            rho: 7860.0,
+            fs: 48_000.0,
+            n: 16,
+            couple_max_iter: cap,
+            ..VkSpec::default()
+        })
+        .expect("a valid plate"),
+    );
+    let u0 = bump(&vk.p.lin, amp * vk.p.thickness);
+    let zero = vec![0.0; vk.p.lin.n_live];
+    vk.set_state(&u0, &zero).expect("the Airy solve factors");
+    vk
+}
+
+/// The same strike reports `Converged` or `Capped` purely by how many sweeps it was allowed.
+///
+/// Half of Part 0's point: at this amplitude `converged == false` carries no information about the
+/// physics at all, only about the constructor argument.
+#[test]
+fn the_same_strike_is_converged_or_capped_by_its_cap_alone() {
+    let mut easy = struck_vk(3.0, 50);
+    easy.step(None).expect("the solves succeed");
+    assert!(easy.converged, "3e converges inside 50 sweeps");
+    assert_eq!(easy.outcome(), CoupleOutcome::Converged);
+
+    // The identical strike, starved of sweeps: still contracting when the cap ran out.
+    let mut starved = struck_vk(3.0, 3);
+    starved.step(None).expect("the solves succeed");
+    assert!(!starved.converged, "3 sweeps is not enough for 3e");
+    assert_eq!(starved.n_iters, 3);
+    assert!(
+        starved.residual_ratio < 1.0,
+        "ratio {:.3e} should be a contraction",
+        starved.residual_ratio
+    );
+    assert_eq!(starved.outcome(), CoupleOutcome::Capped);
+
+    // One sweep cannot form a ratio, and the outcome says so rather than guessing.
+    let mut blind = struck_vk(3.0, 1);
+    blind.step(None).expect("the solves succeed");
+    assert!(blind.residual_ratio.is_nan());
+    assert_eq!(blind.outcome(), CoupleOutcome::Unknown);
+}
+
+/// Hit hard enough, the sweeps *expand*, and no cap at any size would have converged that step.
+///
+/// The other half of Part 0's point, and the one a bigger `couple_max_iter` cannot buy back. The
+/// amplitude here is far past anything the model claims to resolve — it is chosen to make the
+/// verdict unambiguous, not to be a plate anyone would strike.
+#[test]
+fn a_plate_hit_far_too_hard_reports_the_wall_rather_than_the_cap() {
+    let mut vk = struck_vk(60.0, 50);
+    let mut seen = Vec::new();
+    for _ in 0..20 {
+        vk.step(None).expect("the solves succeed");
+        seen.push(vk.outcome());
+        if vk.outcome() == CoupleOutcome::Expansive {
+            break;
+        }
+    }
+    assert!(
+        seen.contains(&CoupleOutcome::Expansive),
+        "60 thicknesses should expand, saw {seen:?}"
+    );
+}
+
+/// The linear path forms no ratio at all, and is `Converged` by construction, not by measurement.
+#[test]
+fn the_linear_path_reports_a_converged_step_with_no_ratio() {
+    let mut vk = VkPlate::new(
+        VkParams::new(&VkSpec {
+            lx: 0.4,
+            ly: 0.4,
+            young: 2.0e11,
+            thickness: 1e-3,
+            nu: 0.3,
+            rho: 7860.0,
+            fs: 48_000.0,
+            n: 12,
+            nonlinear: false,
+            ..VkSpec::default()
+        })
+        .expect("a valid plate"),
+    );
+    let u0 = bump(&vk.p.lin, 3.0 * vk.p.thickness);
+    let zero = vec![0.0; vk.p.lin.n_live];
+    vk.set_state(&u0, &zero).expect("the Airy solve factors");
+    vk.step(None).expect("the solve succeeds");
+    assert_eq!(vk.n_iters, 1);
+    assert!(vk.residual_ratio.is_nan());
+    assert_eq!(vk.outcome(), CoupleOutcome::Converged);
+}
+
+/// A blown-up step carries a non-finite residual, and that must not read as "short of sweeps".
+///
+/// This is the reason the `Capped` test is positive: `NaN < 1.0` is `false`, but so is
+/// `NaN >= 1.0`, so a negative test would file an overflow under the outcome a bigger cap fixes.
+#[test]
+fn a_non_finite_residual_is_expansive_and_not_capped() {
+    assert_eq!(
+        physsynth_core::plate::couple_outcome(false, 50, f64::NAN, f64::NAN),
+        CoupleOutcome::Expansive
+    );
+    assert_eq!(
+        physsynth_core::plate::couple_outcome(false, 50, f64::INFINITY, 2.0),
+        CoupleOutcome::Expansive
+    );
+    assert_eq!(
+        physsynth_core::plate::couple_outcome(false, 50, 1e-3, 1.4),
+        CoupleOutcome::Expansive
+    );
+    assert_eq!(
+        physsynth_core::plate::couple_outcome(false, 50, 1e-3, 0.6),
+        CoupleOutcome::Capped
+    );
+    // `converged` wins over everything else — a root is a root.
+    assert_eq!(
+        physsynth_core::plate::couple_outcome(true, 1, 0.0, f64::NAN),
+        CoupleOutcome::Converged
+    );
 }
 
 // -- geometry --------------------------------------------------------------------------------

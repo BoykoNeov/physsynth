@@ -1542,6 +1542,8 @@ pub struct VkPlate {
     pub converged: bool,
     /// Its final relative increment.
     pub last_residual: f64,
+    /// The last step's exit ratio of consecutive increments — see [`VkStep::residual_ratio`].
+    pub residual_ratio: f64,
 }
 
 impl VkPlate {
@@ -1558,7 +1560,22 @@ impl VkPlate {
             n_iters: 0,
             converged: true,
             last_residual: 0.0,
+            residual_ratio: f64::NAN,
         }
+    }
+
+    /// Why the last step's iteration stopped — see [`couple_outcome`].
+    ///
+    /// Derived rather than stored, so that a caller who writes `converged` or `last_residual` by
+    /// hand (both are public, and the binding exposes setters for them) cannot leave a stale
+    /// verdict behind.
+    pub fn outcome(&self) -> CoupleOutcome {
+        couple_outcome(
+            self.converged,
+            self.n_iters,
+            self.last_residual,
+            self.residual_ratio,
+        )
     }
 
     /// Set the initial displacement and velocity, seeding both cached stress functions.
@@ -1594,6 +1611,7 @@ impl VkPlate {
         self.n_iters = out.n_iters;
         self.converged = out.converged;
         self.last_residual = out.last_residual;
+        self.residual_ratio = out.residual_ratio;
         Ok(())
     }
 
@@ -1684,6 +1702,60 @@ pub fn vk_initial_state(u0: &[f64], v0: &[f64], p: &VkParams) -> Result<VkStart,
     })
 }
 
+/// Why a coupled step stopped iterating — the distinction `converged` alone cannot draw.
+///
+/// A `false` `converged` conflates two different failures. If the sweeps were still *contracting*
+/// when the cap ran out, a larger `couple_max_iter` fixes the step and nothing else has to change;
+/// if they were *expanding*, no cap at any size converges. Plan §5 Part 0: the first is a number,
+/// the second is the wall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoupleOutcome {
+    /// The relative increment reached `couple_tol`.
+    Converged,
+    /// `couple_max_iter` ran out while the increment was still shrinking.
+    Capped,
+    /// The increment grew (or went non-finite) — more sweeps would not have helped.
+    Expansive,
+    /// Fewer than two sweeps ran, so there is no ratio to judge from.
+    Unknown,
+}
+
+impl CoupleOutcome {
+    /// The lowercase name, which is how the binding hands this to Python.
+    pub fn label(self) -> &'static str {
+        match self {
+            CoupleOutcome::Converged => "converged",
+            CoupleOutcome::Capped => "capped",
+            CoupleOutcome::Expansive => "expansive",
+            CoupleOutcome::Unknown => "unknown",
+        }
+    }
+}
+
+/// Classify a finished sweep loop from its own bookkeeping.
+///
+/// The `Capped` test is deliberately **positive** — the ratio must be finite *and* below one. An
+/// overflowed step carries a NaN residual, and `NaN >= 1.0` is `false`, so a negative test would
+/// file a plate that blew up as merely short of sweeps.
+pub fn couple_outcome(
+    converged: bool,
+    n_iters: usize,
+    last_residual: f64,
+    residual_ratio: f64,
+) -> CoupleOutcome {
+    if converged {
+        CoupleOutcome::Converged
+    } else if !last_residual.is_finite() {
+        CoupleOutcome::Expansive
+    } else if n_iters < 2 {
+        CoupleOutcome::Unknown
+    } else if residual_ratio.is_finite() && residual_ratio < 1.0 {
+        CoupleOutcome::Capped
+    } else {
+        CoupleOutcome::Expansive
+    }
+}
+
 /// One step's outputs: the new displacement, the new stress function, and the loop's diagnostics.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VkStep {
@@ -1698,6 +1770,26 @@ pub struct VkStep {
     pub converged: bool,
     /// Its final relative increment.
     pub last_residual: f64,
+    /// The last two relative increments' ratio — `NaN` when fewer than two sweeps ran.
+    ///
+    /// A **local** estimate of the contraction factor, and reported as one: it is measured at the
+    /// exit sweep, and §2.4 of the plan shows the true factor drifting *within* a single solve. It
+    /// is also a ratio of *relative* increments (`incr / ||w||`), whose denominator moves fast near
+    /// blow-up. The question it answers is the useful one for a cap: would more sweeps help
+    /// **from here**.
+    pub residual_ratio: f64,
+}
+
+impl VkStep {
+    /// Why the loop stopped — see [`couple_outcome`].
+    pub fn outcome(&self) -> CoupleOutcome {
+        couple_outcome(
+            self.converged,
+            self.n_iters,
+            self.last_residual,
+            self.residual_ratio,
+        )
+    }
 }
 
 /// Advance one timestep: one prefactored solve when linear, a Picard loop when not.
@@ -1731,6 +1823,7 @@ pub fn vk_step(
             n_iters: 1,
             converged: true,
             last_residual: 0.0,
+            residual_ratio: f64::NAN,
         });
     }
 
@@ -1746,6 +1839,8 @@ pub fn vk_step(
     let mut n_iters = 0usize;
     let mut converged = false;
     let mut last_residual = 0.0f64;
+    // The previous sweep's increment, kept solely so the exit ratio exists. Nothing branches on it.
+    let mut prev_residual = f64::NAN;
     for sweep in 1..=p.couple_max_iter {
         n_iters = sweep;
         let w_j_full = p.to_full(&w_j);
@@ -1765,17 +1860,24 @@ pub fn vk_step(
         let incr = norm2(&diff);
         let scale = norm2(&w_next);
         w_j = w_next;
+        prev_residual = last_residual;
         last_residual = incr / scale.max(1e-30);
         if last_residual <= p.couple_tol {
             converged = true;
             break;
         }
     }
+    let residual_ratio = if n_iters < 2 {
+        f64::NAN
+    } else {
+        last_residual / prev_residual
+    };
     Ok(VkStep {
         u: w_j,
         f: Some(f_new_full),
         n_iters,
         converged,
         last_residual,
+        residual_ratio,
     })
 }

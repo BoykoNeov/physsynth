@@ -841,6 +841,7 @@ pub struct PyVKPlate {
     n_iters: usize,
     converged: bool,
     last_residual: f64,
+    residual_ratio: f64,
 }
 
 impl PyVKPlate {
@@ -968,6 +969,7 @@ impl PyVKPlate {
             n_iters: 0,
             converged: true,
             last_residual: 0.0,
+            residual_ratio: f64::NAN,
         })
     }
 
@@ -1225,6 +1227,35 @@ impl PyVKPlate {
     fn set_last_residual(&mut self, value: f64) {
         self.last_residual = value;
     }
+    /// The last step's exit ratio of consecutive relative increments — `nan` under two sweeps.
+    ///
+    /// A **local** estimate of the contraction factor, measured at the sweep the loop stopped on.
+    /// The plan's §2.4 shows the true factor drifting within one solve, so this is a sample, not a
+    /// spectral radius; what it does answer is whether more sweeps would help *from here*.
+    #[getter]
+    fn residual_ratio(&self) -> f64 {
+        self.residual_ratio
+    }
+    #[setter]
+    fn set_residual_ratio(&mut self, value: f64) {
+        self.residual_ratio = value;
+    }
+    /// Why the last step's sweep loop stopped: `converged`, `capped`, `expansive` or `unknown`.
+    ///
+    /// Derived from the four fields above every time it is read, so writing any of them by hand
+    /// cannot leave a stale verdict behind. `capped` means the increments were still shrinking when
+    /// `couple_max_iter` ran out — a larger cap fixes that step. `expansive` means they were not,
+    /// and no cap does.
+    #[getter]
+    fn couple_outcome(&self) -> &'static str {
+        core::couple_outcome(
+            self.converged,
+            self.n_iters,
+            self.last_residual,
+            self.residual_ratio,
+        )
+        .label()
+    }
 
     /// Current displacement as a full 2-D field, rim zero.
     #[getter]
@@ -1341,6 +1372,7 @@ impl PyVKPlate {
         self.n_iters = out.n_iters;
         self.converged = out.converged;
         self.last_residual = out.last_residual;
+        self.residual_ratio = out.residual_ratio;
         Ok(())
     }
 

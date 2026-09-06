@@ -177,11 +177,13 @@ about a root — an under-relaxed iterate is not one, and the tests must not pre
 
 ## 5. Work breakdown — each part's gate green before the next
 
-**Part 0 — the diagnosis, and the honest baseline.** *Lands first, on its own commit.* Today
-`converged = false` conflates two different failures: "`ρ < 1` and the cap ran out" (fixable with a
-number) and "`ρ > 1`" (not fixable at any cap). Expose the distinction — the model already holds
-two consecutive residuals, so `ρ` is one division — and re-measure §2.1 / §2.3's tables against
-best-effort Picard. **Do not change `couple_max_iter`'s default:** it is a public constructor
+**Part 0 — the diagnosis, and the honest baseline.** *Lands first, on its own commit.* **DONE —
+see §9.** Today `converged = false` conflates two different failures: "ρ < 1 and the cap ran out"
+(fixable with a number) and "ρ > 1" (not fixable at any cap). Expose the distinction — ~~the model
+already holds two consecutive residuals, so ρ is one division~~ **wrong: `last_residual` is
+overwritten every sweep, so there is no second residual anywhere; it is one carried local and one
+new field** — and re-measure §2.1 / §2.3's tables against best-effort Picard.
+**Do not change `couple_max_iter`'s default:** it is a public constructor
 argument reached from `tests/helpers.py`, the airbox VK surfaces and the viewer payloads
 (`VK_COUPLE_MAX_ITER`, `VKROOM_SWEEP_CAP`), and moving it silently moves sweep counts in runs other
 machinery compares. *Gate:* the three cap-limited fixtures report "cap" and the three divergent ones
@@ -242,3 +244,81 @@ product is ~40 lines given the existing bracket and Airy solvers, GMRES with res
 search ~150 lines, and the flag plumbing through `VkSpec` / `VkParams` / the binding ~60. Parts 3–5
 are measurement and prose. No new dependency, no new factorization, and no change to the default
 path.
+
+---
+
+## 9. Part 0's result — the verdict the model now returns, and the honest baseline
+
+Landed 2026-09-06, on its own commit, ahead of any Newton code.
+
+### 9.1 What the model reports
+
+`VkPlate` (and `VKPlate` through the binding) carries one new number and one derived verdict
+alongside the existing `n_iters` / `converged` / `last_residual`:
+
+* **`residual_ratio`** — the last two relative increments' ratio, `NaN` when fewer than two sweeps
+  ran. Stored.
+* **`couple_outcome`** — `"converged"` / `"capped"` / `"expansive"` / `"unknown"`. **Derived on
+  every read** from the four fields above rather than stored, so a caller who writes `converged` or
+  `last_residual` by hand (both are public, and both have binding setters) cannot leave a stale
+  verdict behind.
+
+Two things about the classifier are deliberate:
+
+1. **The `capped` test is positive** — the ratio must be *finite and below one*. An overflowed step
+   carries a NaN residual, and `NaN >= 1.0` is `false` just as `NaN < 1.0` is, so a negative test
+   would have filed a plate that blew up under the one outcome a bigger cap fixes. There is a native
+   bar on exactly this.
+2. **`unknown` exists** because one sweep forms no ratio. `probe_rho.py` runs at `cap = 1`; without
+   this fourth value that run would have to be called something it is not.
+
+### 9.2 The ratio is not §2.4's ρ, and reporting it as such would be wrong
+
+§2.4 measures the ratio at **sweeps 1–8 of step 1**, from a fresh plate per cap. `residual_ratio` is
+measured at the **exit sweep of whatever step last ran**. Since §2.4's own finding is that the factor
+*climbs through 1 within a single solve*, these are different quantities by construction and the new
+field does not reproduce §2.4's table. That is correct behaviour, not a transcription error — and the
+exit ratio is the better estimator for the question a cap actually poses, which is whether more
+sweeps would help **from here**. Trap 5 stands: it is a sample, and the name says so.
+
+### 9.3 The baseline, drawn against best-effort Picard
+
+`M:\claud_projects\temp\vk-newton\part0_baseline.py`, the same six fixtures as §2.3, 300 steps,
+counting outcomes **per step** — the last step's verdict is not the run's, because a divergent run
+passes through capped steps before it expands.
+
+| fixture | cap 50: capped / expansive | best effort | max sweeps | drift | verdict |
+|---|---|---|---|---|---|
+| 40 cm, 3 cm strike, w=6e | 3 / 0 | cap 400 | 143 | 4.1e-13 | **cap** |
+| 40 cm, 8 cm strike, w=16e | 29 / 0 | cap 3000 | 724 | 4.3e-13 | **cap** |
+| 16 cm, 3.2 cm strike, w=6e | 2 / 0 | cap 400 | 76 | 6.0e-13 | **cap** |
+| 12 cm, 2.4 cm strike, w=6e | 0 / 1 | dies at every cap | — | overflow | **wall** |
+| 40 cm, 8 cm strike, w=20e | 0 / 2 | dies at every cap | — | overflow | **wall** |
+| 40 cm, 8 cm, w=12e, 24 kHz | 0 / 1 | dies at every cap | — | overflow | **wall** |
+
+**The gate is met**: no cap-limited fixture reports `expansive` on any of its 300 steps, and no
+divergent one reports `capped` on any. The three cap-limited fixtures reproduce §2.3's sweep counts
+and drifts exactly (143 / 724 / 76 sweeps; 4.1e-13 / 4.3e-13 / 6.0e-13), and the wall-clock cost of
+the generous cap is 0.44 → 0.49 s, 0.83 → 1.07 s and 0.07 → 0.07 s over 300 steps — the expensive
+steps stay rare.
+
+### 9.4 One thing the per-step counting found that §2.3 could not
+
+**The three divergent fixtures fail on the very first step** (`DIED@0`, and `DIED@1` for the loud one
+at cap 50). The wall is not something a run drifts into over 300 steps; it is a property of the
+initial condition, decided immediately. Two consequences for the parts that follow:
+
+* Part 3's convergence map can be drawn from **one step per point** rather than a 300-step run,
+  which makes a fine grid over `(w/e, curvature, fs)` affordable.
+* A Newton root claimed in that territory is a root of the *first* step from a struck initial
+  condition, and trap 3 applies to it in full.
+
+### 9.5 Deliberately not done here
+
+* **`couple_max_iter`'s default does not move** — it stays 50. It is a public constructor argument
+  reached from `tests/helpers.py`, the airbox VK surfaces and the viewer payloads, and moving it
+  would silently move sweep counts in runs other machinery compares. Every table above passes the
+  cap explicitly.
+* **The viewer still counts `n_not_converged` without splitting it** (`web/serialize.py`). It could
+  now report cap-versus-wall; that is a viewer change, not Part 0, and no part of this plan needs it.
+* §5's `k²/h⁴` and the same claim in `tests/helpers.py` are **Part 4**, untouched here.

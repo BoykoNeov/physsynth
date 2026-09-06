@@ -219,8 +219,18 @@ def test_the_plate_state_buffers_are_settable_because_airbox_writes_them():
     v.n_iters = 4
     v.converged = False
     v.last_residual = 1e-5
+    v.residual_ratio = 0.5
     assert np.array_equal(v.F, fresh)
     assert v.n_iters == 4 and v.converged is False and v.last_residual == 1e-5
+    assert v.residual_ratio == 0.5
+
+    # `couple_outcome` is DERIVED from the four above on every read, which is why it has no setter:
+    # a caller who writes `converged` by hand must not be able to leave a stale verdict behind.
+    assert v.couple_outcome == "capped"
+    v.residual_ratio = float("nan")
+    assert v.couple_outcome == "expansive"
+    v.converged = True
+    assert v.couple_outcome == "converged"
 
 
 # -- `Plate.B` is the one operator a caller may replace (plan §40.5, §43) -------------------------
