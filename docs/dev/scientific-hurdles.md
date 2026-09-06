@@ -22,7 +22,7 @@
 | 2 | Room energy books were a tolerance rather than exact across the port | `airbox` (Rust) | **Fixed 2026-09-02** (§2) |
 | 3 | NumPy's own transcendentals disagree with libm by an ulp on some CPUs — a read-out asserted exactly across languages fails on a runner and passes on another | `airbox.mode_frequency`, four `pow`s, one `tan`, `exp`, `cos`/`sin` | **Symptom cleared 2026-09-03** — the parity step is green on five consecutive runs; the **rule** stays live (§3) |
 | 4 | The θ-scheme suppresses every discrete decay rate by `1/(1+θk²Q)`; "highs die faster" turns over past mode ~32 | `string_damped`, `string_stiff`, both plates | Accounted for; **fix derived, not built** (§4) |
-| 5 | The von Kármán Picard iteration stops contracting at large amplitude / high strain / high `fs` — the gong-on-a-string, the gong in a room and grid coarsening all die there | `plate.VKPlate`, `connection`, `airbox` | Open, **narrowed 2026-09-06** — the `1/h⁴` mechanism is falsified, a third of the wall was the sweep cap, and Newton is **built** behind `couple_method` (default still Picard), the boundary is **mapped** (2–4× in amplitude; a root is a resolved *plate* only where the **deflection** is smooth), and the **gong on a string is no longer iteration-bound** — but two of this row's three scenes were misfiled: one is wrapper-blocked and one was never built (§5) |
+| 5 | The von Kármán Picard iteration stops contracting at large amplitude / high strain / high `fs` — the gong-on-a-string, the gong in a room and grid coarsening all die there | `plate.VKPlate`, `connection`, `airbox` | Open, **narrowed 2026-09-06** — the `1/h⁴` mechanism is falsified, a third of the wall was the sweep cap, and Newton is **built** behind `couple_method` (default still Picard), the boundary is **mapped** (2–4× in amplitude; a root is a resolved *plate* only where the **deflection** is smooth), and the **gong on a string is no longer iteration-bound** — two of this row's three scenes were misfiled (one was never built), and the **wrapper block is gone 2026-09-06** — the room seam drives the model's own kernel against the loaded factorization, so the gong in a room runs under Newton too, and its wall moves ~1.6-1.9x in amplitude depending on the grid (§5) |
 | 6 | The geometrically exact string's Newton solve stops converging past `λ_long ≈ 4`, and `h`-refinement makes it worse | `string_geometric` | Warned at 1, unresolved regime; **§1 eliminated as the cause 2026-09-03** (edge identical in 9/9 cells) and the threshold split into a **convergence** edge at 4 and an **energy** edge at 5–10 (§6) |
 | 7 | A point port's added mass is a grid quantity: refinement makes it *worse* | `airbox.RoomPort` | Refused, measured — `radius` has no default (§7) |
 | 8 | At `λ = 1/√3` the room's corner mode is defective: broadband content grows linearly while the energy stays flat | `airbox` | Accounted for — a flat energy is not a stability certificate here (nor in §6's under-resolved band, found 2026-09-03) (§8) |
@@ -273,10 +273,20 @@ curvature axis that sets Picard's wall also sets the resolution horizon, and New
 first**, which is why §3's refusal of an audio-band string-drivable gong stands — now with a
 mechanism behind it rather than an iteration failure.
 
-What is left is Part 5's re-run of the three bounded scenes — one of which, the gong in a room,
-needs wrapper-tier work first, because `_VKPlateSurface.solve` runs its own Picard loop against the
-room-loaded factorization and never consults `couple_method`. This remains the largest scientific
-unlock in the register and the one the human has to prioritise against §4.
+**The wrapper-tier work is done (2026-09-06, `docs/dev/air-box-vk-newton-plan.md`).**
+`_VKPlateSurface.solve` no longer carries its own transcription of the Picard sweep: the core's
+coupled step now reaches its theta-scheme operator through a trait, so the seam points that step at
+the loaded factorization and gets `couple_method`, `residual_ratio` and `n_solves` with it. Measured
+on the room scene, Picard blows up on step zero from `w = 4.5e` and Newton runs clean to `6e` at
+N=20 (to `10e` on the suite's own N=8 fixture) with an energy drift of 1e-13. Two things came out of
+that measurement and neither was predicted: the air load does **not** move the wall — room and bare
+transition cell for cell, so this was never the room's fault — and the amplitude gain is **1.6-1.9x
+rather than §5's 2-4x**, because the boundary moves with sample rate *and* with resolution. There is
+no single payoff number for this hurdle; there is a fixture and a measurement.
+
+What is left is the *scientific* half: Newton has its own wall (between `6e` and `9e` at N=20), and
+it arrives there by becoming unaffordable rather than by diverging. This remains the largest
+scientific unlock in the register and the one the human has to prioritise against §4.
 
 ## 6. `λ_long` — the geometric string's unresolved regime
 

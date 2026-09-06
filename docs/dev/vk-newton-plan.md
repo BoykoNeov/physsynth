@@ -696,6 +696,8 @@ claim an audio-band string-drivable gong stands untouched by this table.
 ### 11.8 Deliberately not done here
 
 * **The airbox VK scenes cannot run under Newton, and no amount of flag plumbing fixes that.**
+  *Superseded 2026-09-06 — the wrapper-tier work named here was done in `docs/dev/air-box-vk-newton-plan.md`, and the room scene runs under Newton now. Left as written because it was true of this batch.*
+
   `_VKPlateSurface.solve` (`crates/physsynth-py/src/airbox_wrap.rs`) runs its **own** Picard loop,
   in Python-object arithmetic, against the room-**loaded** factorization — which is the whole point
   of that seam, since the bare model's `lu` is the wrong operator once the air is attached.
@@ -1023,7 +1025,7 @@ counters.
   have doubled the grid to confirm something already measured.
 * **`n_line_search` is still not on `VkStep`.** §11.4's reasoning holds and §13.8 is the reason it
   can hold: the question it would answer is answerable in Rust.
-* **Part 5's wrapper-tier work is untouched.** The gong in a room still runs `_VKPlateSurface`'s own
+* **Part 5's wrapper-tier work is untouched.** *Superseded 2026-09-06 — the wrapper-tier work named here was done in `docs/dev/air-box-vk-newton-plan.md`, and the room scene runs under Newton now. Left as written because it was true of this batch.* The gong in a room still runs `_VKPlateSurface`'s own
   Picard loop against the room-loaded factorization and still never consults `couple_method`
   (§11.8). Nothing in this part changes that, and Part 5 should still scope it in.
 * **No default moves**, again: `couple_method` is `"picard"`, `couple_max_iter` is 50, and §13.3 is
@@ -1148,11 +1150,15 @@ room is still blocked (§11.8) and the mallet on the gong still does not exist (
 
 ### 14.6 Deliberately not done here
 
-* **No wrapper work**, by the human's call. `_VKPlateSurface.solve` still runs its own Picard loop
+* **No wrapper work**, by the human's call. *Superseded 2026-09-06 — the wrapper-tier work named here was done in `docs/dev/air-box-vk-newton-plan.md`, and the room scene runs under Newton now. Left as written because it was true of this batch.* `_VKPlateSurface.solve` still runs its own Picard loop
   against the room-loaded factorization; that is its own batch, and §11.8 is its statement.
 * **No mallet-on-a-plate composition.** Building one is a model-composition batch with its own
   energy bars, not a line in a measurement part. It is now on the list as *missing* rather than as
   *bounded*, which is the correction §14.1 makes.
+  *Built 2026-09-06 — model #7p (`docs/dev/mallet-plate-plan.md`) and #7g, the gong
+  (`docs/dev/mallet-gong-plan.md`). The mallet on a gong **in a room** is still missing, and is now
+  a composition question rather than a wrapper one: the chord freezes the linear plate's
+  drive-point column, which the loaded matrix changes.*
 * **The ceiling is still censored**, at 300 mm. 30% of the string's length is not a pluck, and
   extending the grid further would measure the arithmetic rather than the instrument.
 * **No default moves.** `couple_method` is `"picard"` everywhere, and every shipped number in the

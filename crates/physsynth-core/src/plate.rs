@@ -1854,6 +1854,44 @@ impl VkStep {
     }
 }
 
+/// One back-substitution against the theta-scheme operator of a coupled step.
+///
+/// The plate's own operator is `p.lin.lu` and that is what [`VkCoupledStep::new`] installs. It is a
+/// trait rather than that type directly because **the air box does not iterate against it**: once a
+/// surface is loaded, `A_loaded = A + (k / 2 rho_s) T^T R T` is the operator the step must invert,
+/// it is assembled and factored in SciPy by the wrapper, and the core cannot name that type. A
+/// trait lets the binding hand one in without the core growing a dependency or a second copy of
+/// the sweep — see `docs/dev/air-box-vk-newton-plan.md` §3, which measured the seam's hand-written
+/// loop as bit-identical to this one before deleting it.
+///
+/// Implementors may do anything, including calling back into another language. Both the residual
+/// and the Jacobian go through here (see [`VkCoupledStep::jacobian_vector`]), so a substituted
+/// operator changes the **whole** Newton system rather than only its preconditioner.
+pub trait ThetaSolve {
+    /// `A^-1 b`.
+    ///
+    /// # Errors
+    /// If the factorization cannot back-substitute. An implementor whose failure is not a
+    /// [`SparseLuError`] at all — a foreign solver raising in its own language — records the real
+    /// cause out of band and returns [`FOREIGN_THETA_FAILURE`], which its caller then swaps back
+    /// for the original. The alternative was a second error type threaded through `vk_newton` and
+    /// every one of its callers to describe a failure mode SciPy's `splu` has never taken here.
+    fn solve(&self, b: &[f64]) -> Result<Vec<f64>, SparseLuError>;
+}
+
+/// The sentinel a foreign [`ThetaSolve`] returns when its real error lives elsewhere.
+///
+/// `usize::MAX` is not a column index of any matrix that fits in memory, so this cannot collide
+/// with a genuine `Singular(k)`. It is meant to be intercepted by the caller that installed the
+/// operator and never to reach a user; grep for it to find both halves.
+pub const FOREIGN_THETA_FAILURE: SparseLuError = SparseLuError::Singular(usize::MAX);
+
+impl ThetaSolve for SparseLu {
+    fn solve(&self, b: &[f64]) -> Result<Vec<f64>, SparseLuError> {
+        SparseLu::solve(self, b)
+    }
+}
+
 /// Everything a coupled step holds **fixed** while it iterates on `w`.
 ///
 /// The Picard sweep, the residual whose root that sweep is chasing, and the Jacobian-vector
@@ -1877,6 +1915,13 @@ pub struct VkCoupledStep<'a> {
     pub f_prev: &'a [f64],
     /// `k^2 / rho_s`, times `h^2` on a free edge.
     pub couple_factor: f64,
+    /// The operator this step inverts — `p.lin.lu` unless a caller supplied another.
+    ///
+    /// Reached by [`VkCoupledStep::sweep_from`] **and** [`VkCoupledStep::jacobian_vector`], and
+    /// that pairing is the point. Routing only the sweep through a substituted operator would give
+    /// a Newton whose residual is one problem and whose tangent is another: still convergent, still
+    /// passing every energy bar, silently slower. `tests/plate_theta_solve.rs` asserts both.
+    pub theta: &'a dyn ThetaSolve,
 }
 
 /// The four full-grid fields a coupling force is built from, kept so the Jacobian can reuse them.
@@ -1930,6 +1975,41 @@ impl<'a> VkCoupledStep<'a> {
             w_prev_full: p.to_full(u_prev),
             f_prev,
             couple_factor,
+            theta: &p.lin.lu,
+        }
+    }
+
+    /// The same step, against a **supplied** operator and a right-hand side the caller assembled.
+    ///
+    /// Both substitutions exist for one client, the air box's surface seam, and each is forced:
+    ///
+    /// * the operator, because the loaded matrix is SciPy's and lives outside this crate
+    ///   ([`ThetaSolve`]);
+    /// * the right-hand side, because the seam's is not `step_rhs`'s. It carries `f_ext` *and* the
+    ///   room's two load terms — the open-circuit pressure `-k^2 T^T pbar_free / denom` and the
+    ///   `u^{n-1}` half of the centered velocity — so it cannot be rebuilt from the plate's state.
+    ///   It is still sweep-invariant, which is the only property this struct needs of it.
+    ///
+    /// Everything else is identical, `couple_factor`'s free-edge `h^2` included: the geometry stays
+    /// in one place whichever operator inverts it.
+    pub fn with_rhs(
+        rhs_lin: Vec<f64>,
+        u_prev: &[f64],
+        f_prev: &'a [f64],
+        p: &'a VkParams,
+        theta: &'a dyn ThetaSolve,
+    ) -> VkCoupledStep<'a> {
+        let mut couple_factor = p.lin.k * p.lin.k / p.rho_s;
+        if p.lin.boundary == Boundary::Free {
+            couple_factor *= p.lin.h * p.lin.h;
+        }
+        VkCoupledStep {
+            p,
+            rhs_lin,
+            w_prev_full: p.to_full(u_prev),
+            f_prev,
+            couple_factor,
+            theta,
         }
     }
 
@@ -1967,7 +2047,7 @@ impl<'a> VkCoupledStep<'a> {
         let rhs: Vec<f64> = (0..self.p.lin.n_live)
             .map(|i| self.rhs_lin[i] + self.couple_factor * coupling[i])
             .collect();
-        self.p.lin.lu.solve(&rhs)
+        self.theta.solve(&rhs)
     }
 
     /// One Picard sweep, with the averages it went through -- this **is** the fixed-point map.
@@ -2030,7 +2110,7 @@ impl<'a> VkCoupledStep<'a> {
             .map(|i| 0.5 * a[i] + 0.5 * b[i])
             .collect();
         let coupling = self.p.to_live(&force);
-        let correction = self.p.lin.lu.solve(&coupling)?;
+        let correction = self.theta.solve(&coupling)?;
         Ok((0..d.len())
             .map(|i| d[i] - self.couple_factor * correction[i])
             .collect())
@@ -2239,11 +2319,40 @@ pub fn vk_step(
     f_ext: Option<&[f64]>,
     p: &VkParams,
 ) -> Result<VkStep, SparseLuError> {
+    vk_step_with(
+        &VkCoupledStep::new(u, u_prev, f_prev, f_ext, p),
+        u,
+        u_prev,
+        f,
+    )
+}
+
+/// The same step, driven from a context the caller froze — the air box's entry point.
+///
+/// [`vk_step`] *is* this function with the context built the plate's own way. Split out rather
+/// than transcribed a second time because the surface seam needs every branch below — the linear
+/// early return, `couple_method`, the sweep loop, and all five diagnostics — against a different
+/// operator and a different right-hand side, and those are exactly the two things
+/// [`VkCoupledStep::with_rhs`] lets a caller replace. The seam used to carry its own copy of the
+/// loop; `docs/dev/air-box-vk-newton-plan.md` §2.1 measured that copy as bit-identical to this one
+/// on both boundary arms, which is what made deleting it safe.
+///
+/// `u` and `u_prev` are still arguments because the seed is `2 w^n - w^{n-1}` and the context
+/// deliberately holds only what is *invariant* across the sweeps.
+///
+/// # Errors
+/// If either factorization cannot back-substitute.
+pub fn vk_step_with(
+    ctx: &VkCoupledStep,
+    u: &[f64],
+    u_prev: &[f64],
+    f: &[f64],
+) -> Result<VkStep, SparseLuError> {
+    let p = ctx.p;
     let n_live = p.lin.n_live;
-    let ctx = VkCoupledStep::new(u, u_prev, f_prev, f_ext, p);
     if !p.nonlinear {
         return Ok(VkStep {
-            u: p.lin.lu.solve(&ctx.rhs_lin)?,
+            u: ctx.theta.solve(&ctx.rhs_lin)?,
             f: None,
             n_iters: 1,
             converged: true,
@@ -2257,7 +2366,7 @@ pub fn vk_step(
     // what makes "Picard stays the default and every existing number is unmoved" (plan §6) a
     // property of the diff rather than a claim about a refactor.
     if p.couple_method == CoupleMethod::Newton {
-        let r = vk_newton(&ctx, VkCoupledStep::seed(u, u_prev))?;
+        let r = vk_newton(ctx, VkCoupledStep::seed(u, u_prev))?;
         return Ok(VkStep {
             u: r.w,
             f: Some(r.f_full),

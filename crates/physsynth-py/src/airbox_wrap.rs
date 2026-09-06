@@ -46,10 +46,16 @@
 //! Rust wrapper over a **Python** port and seam (section 28.4's trap, queued a batch in advance by
 //! section 31.11) and to put both languages' wrappers on one factorization (section 24.4).
 
+use std::cell::RefCell;
+
 use numpy::{PyArray1, PyArrayMethods};
-use pyo3::exceptions::{PyAttributeError, PyValueError};
+use physsynth_core::plate as core;
+use physsynth_core::sparse_lu::SparseLuError;
+use pyo3::exceptions::{PyAttributeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString, PyTuple};
+
+use crate::plate::PyVKPlate;
 
 // -- small shared helpers -------------------------------------------------------------------
 
@@ -505,8 +511,46 @@ impl PyMembraneSurface {
     }
 }
 
+/// The room-loaded factorization, as something the core's coupled step can back-substitute with.
+///
+/// `A_loaded` is assembled and factored in SciPy by `build` below — it has to be, because a test
+/// may replace it wholesale (`inst._lu_loaded = splu(a)`) and because the port matrices it is built
+/// from are Python slots the suite reaches into. So the operator the von Karman step must invert
+/// lives outside Rust entirely, and `physsynth_core::plate::ThetaSolve` is the door it comes back
+/// through.
+///
+/// The GIL token is held for the life of this adapter because `solve` is called from inside the
+/// kernel, which has no `Python<'_>` of its own to hand down.
+struct LoadedLu<'py> {
+    py: Python<'py>,
+    lu: &'py Bound<'py, PyAny>,
+    /// A Python exception raised by `lu.solve`, parked until the caller can return it.
+    ///
+    /// `ThetaSolve` fails with a `SparseLuError`, which cannot carry a `PyErr`. Rather than thread
+    /// a second error type through `vk_newton` and every one of its callers, a foreign failure
+    /// records itself here and returns `FOREIGN_THETA_FAILURE`; `solve` below swaps it back.
+    err: RefCell<Option<PyErr>>,
+}
+
+impl core::ThetaSolve for LoadedLu<'_> {
+    fn solve(&self, b: &[f64]) -> Result<Vec<f64>, SparseLuError> {
+        let rhs = PyArray1::from_slice(self.py, b);
+        let out = self
+            .lu
+            .call_method1("solve", (rhs,))
+            .and_then(|got| vec1(self.py, &got, "lu.solve()"));
+        match out {
+            Ok(v) => Ok(v),
+            Err(raised) => {
+                *self.err.borrow_mut() = Some(raised);
+                Err(core::FOREIGN_THETA_FAILURE)
+            }
+        }
+    }
+}
+
 /// The seam on the `VKPlate` side — the linear half is the model's own `_linear_rhs`, and the
-/// Picard loop is `VKPlate.step`'s arithmetic with the room's terms held fixed.
+/// coupled half is the model's own kernel, pointed at the loaded factorization.
 #[pyclass(dict, name = "_VKPlateSurface", module = "physsynth_rs")]
 pub struct PyVKPlateSurface {
     model: Py<PyAny>,
@@ -594,85 +638,81 @@ impl PyVKPlateSurface {
         Ok(pyarr(py, out))
     }
 
-    /// One step's solve — `(w^{n+1}, F^{n+1})`, Picard-iterated on the **loaded** operator.
+    /// One step's solve — `(w^{n+1}, F^{n+1})`, iterated on the **loaded** operator.
     ///
     /// `lu` is an argument and is never assigned to the model; `F^{n+1}` comes back as a return
-    /// value; and the model's `n_iters` / `converged` / `last_residual` are written here exactly as
-    /// its own step writes them.
+    /// value; and the model's five iteration read-outs are written here exactly as its own step
+    /// writes them.
+    ///
+    /// # This used to be a second copy of the sweep, and it is now the model's own
+    ///
+    /// Until `docs/dev/air-box-vk-newton-plan.md` this method carried a hand transcription of
+    /// `VKPlate.step`'s Picard loop, written in Python-object arithmetic, because the loop it
+    /// needed had to invert the *loaded* matrix and the core could only reach the plate's own.
+    /// Three things came of that and all three are fixed here:
+    ///
+    /// * `couple_method` was unreachable — the copy had no branch for it, so **no airbox scene
+    ///   could run under Newton** whatever the flag said (§11.8 of the Newton plan);
+    /// * `residual_ratio` was never written, so `couple_outcome()`'s deliberately positive test saw
+    ///   a NaN and filed **every** non-converged room step as `expansive` — "no cap will help" about
+    ///   steps a larger cap does fix (§2.4);
+    /// * `n_solves` was never written either, and it is the only axis on which the two iterations
+    ///   may honestly be compared.
+    ///
+    /// What made the replacement safe rather than a re-derivation is that the copy was measured
+    /// first: driven with the plate's own factorization it reproduced `VKPlate.step` to the last
+    /// bit, on both boundary arms, in `w` and in `F` (§2.1). The tier is not a branch here at all —
+    /// this method never asks which one assembled the `rhs_fixed` it is handed.
     fn solve(&self, py: Python<'_>, lu: Py<PyAny>, rhs_fixed: Py<PyAny>) -> PyResult<Py<PyAny>> {
-        let p = self.model.bind(py);
+        let model = self.model.bind(py);
+        let plate = model.cast::<PyVKPlate>().map_err(|_| {
+            PyTypeError::new_err(format!(
+                "_VKPlateSurface drives the coupled step through the model's own kernel, so it                  needs a physsynth_rs.VKPlate and was given a {}.",
+                model
+                    .get_type()
+                    .name()
+                    .map_or_else(|_| "?".to_string(), |n| n.to_string())
+            ))
+        })?;
         let lu = lu.bind(py);
-        let rhs_fixed = rhs_fixed.bind(py);
+        let rhs = vec1(py, rhs_fixed.bind(py), "rhs_fixed")?;
 
-        if !p.getattr("nonlinear")?.extract::<bool>()? {
-            let w_next = lu.call_method1("solve", (rhs_fixed,))?;
-            p.setattr("n_iters", 1)?;
-            p.setattr("converged", true)?;
-            p.setattr("last_residual", 0.0)?;
-            // F and F_prev are both zeros on this path and nothing writes them, so handing F back
-            // makes commit()'s roll a structural no-op rather than a coincidental one.
-            let f = p.getattr("F")?;
-            return Ok(PyTuple::new(py, [w_next, f])?.into_any().unbind());
-        }
-
-        let k2 = self.k * self.k;
-        // Coupling force -> RHS factor, the model's own: "supported" k^2 l/rho_s (scalar mass);
-        // "free" k^2 h^2 l/rho_s (A carries W's h^2, and the /W is the solve's, not ours).
-        let mut couple_factor = k2 / f64_attr(p, "rho_s")?;
-        if !is_supported(p)? {
-            let h = f64_attr(p, "h")?;
-            couple_factor *= h * h;
-        }
-        let w_prev_full = p.call_method1("_to_full", (p.getattr("u_prev")?,))?;
-        let f_prev_full = p.getattr("F_prev")?;
-
-        let u = vec1(py, &p.getattr("u")?, "u")?;
-        let v = vec1(py, &p.getattr("u_prev")?, "u_prev")?;
-        // Predictor w^{n+1}_(0).
-        let mut w_j: Py<PyAny> = pyarr(
+        let (u, u_prev, f, f_prev) = plate.borrow().state_buffers(py)?;
+        let theta = LoadedLu {
             py,
-            (0..u.len())
-                .map(|i| 2.0 * u[i] - v[i])
-                .collect::<Vec<f64>>(),
-        );
-        let mut f_new_full: Py<PyAny> = p.getattr("F")?.unbind(); // fallback, unused once the loop runs
-
-        let tol = f64_attr(p, "couple_tol")?;
-        let max_iter: usize = p.getattr("couple_max_iter")?.extract()?;
-        p.setattr("n_iters", 0)?;
-        p.setattr("converged", false)?;
-        let np = py.import("numpy")?;
-        let norm = np.getattr("linalg")?.getattr("norm")?;
-
-        for sweep in 1..=max_iter {
-            p.setattr("n_iters", sweep)?;
-            let w_j_full = p.call_method1("_to_full", (w_j.clone_ref(py),))?;
-            let f_new = p.call_method1("_airy_F", (&w_j_full,))?; // F^{n+1}_(j)
-                                                                  // mu_{t.} w and mu_{t.} F. Kept as NumPy objects rather than folded in Rust: this loop
-                                                                  // crosses the language boundary once per sweep already, and a copy in and a copy out
-                                                                  // per average is what turned the von Karman wrapper from 1.09x into 0.91x (§32).
-            let w_avg = w_j_full.add(&w_prev_full)?.mul(0.5)?;
-            let f_avg = f_new.add(&f_prev_full)?.mul(0.5)?;
-            f_new_full = f_new.unbind();
-            let bracket = p.call_method1("bracket", (w_avg, f_avg))?;
-            let coupling = p.call_method1("_to_live", (bracket,))?;
-            let rhs = rhs_fixed.add(coupling.mul(couple_factor)?)?;
-            let w_next = lu.call_method1("solve", (rhs,))?;
-            let diff = w_next.sub(w_j.bind(py))?;
-            let incr: f64 = norm.call1((diff,))?.extract()?;
-            let scale: f64 = norm.call1((&w_next,))?.extract()?;
-            w_j = w_next.unbind();
-            // Python's `max` returns its first argument when the comparison is false, which is
-            // what a NaN scale would hit; f64::max would hand back the floor instead.
-            let denom = if 1e-30 > scale { 1e-30 } else { scale };
-            let residual = incr / denom;
-            p.setattr("last_residual", residual)?;
-            if residual <= tol {
-                p.setattr("converged", true)?;
-                break;
+            lu,
+            err: RefCell::new(None),
+        };
+        // Two phases, and the split is not stylistic: the plate is borrowed immutably while the
+        // kernel runs (the context holds `&VkParams` through it) and the diagnostics are written
+        // under a *fresh* mutable borrow afterwards. The only Python that runs in between is the
+        // factorization's own `solve`.
+        let outcome = {
+            let held = plate.borrow();
+            let ctx =
+                core::VkCoupledStep::with_rhs(rhs, &u_prev, &f_prev, held.vk_params(), &theta);
+            core::vk_step_with(&ctx, &u, &u_prev, &f)
+        };
+        let step = match outcome {
+            Ok(step) => step,
+            Err(err) => {
+                // A failure the supplied operator raised in Python comes back as a sentinel with
+                // the real exception parked here; anything else is the plate's own factorization.
+                if let Some(raised) = theta.err.borrow_mut().take() {
+                    return Err(raised);
+                }
+                return Err(PyValueError::new_err(format!(
+                    "the room-loaded coupled step could not be solved: {err}"
+                )));
             }
-        }
-        Ok(PyTuple::new(py, [w_j, f_new_full])?.into_any().unbind())
+        };
+        plate.borrow_mut().record_iteration(&step);
+        // The linear path returns no `F`, and handing back the model's own keeps `commit`'s roll a
+        // structural no-op rather than a coincidental one -- both levels are zeros there.
+        let f_next = step.f.unwrap_or_else(|| f.clone());
+        Ok(PyTuple::new(py, [pyarr(py, step.u), pyarr(py, f_next)])?
+            .into_any()
+            .unbind())
     }
 
     /// Roll **both** histories: `w^{n-1} <- w^n <- w^{n+1}` and `F^{n-1} <- F^n <- F^{n+1}`.

@@ -713,11 +713,16 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   self-consistently). The finding a later batch most needs: **the air grid cannot be coarsened to
   buy affordability, because coarsening the ROOM breaks the PLATE's fixed point** — 72 Picard
   sweeps at 57.9 kHz, NaN at 33.0 kHz — a second, independent reason this family's cost runs the
-  wrong way on top of the 3-D CFL's `h⁻⁴`. **Newton does not reach this one**, and a reader who
-  has met `couple_method` elsewhere will assume it does: `_VKPlateSurface.solve` runs its *own*
-  Picard loop against the room-loaded factorization and never consults the flag, so the room
-  scene is wrapper-blocked rather than iteration-bound (`docs/dev/vk-newton-plan.md` §11.8,
-  §14.1). **The viewer batch is SHIPPED** (`vkroom`, viewer batch 19,
+  wrong way on top of the 3-D CFL's `h⁻⁴`. **Newton reaches this one as of 2026-09-06**, and it did not
+  before: `_VKPlateSurface.solve` used to run its *own* Picard loop against the room-loaded
+  factorization and never consult the flag, so the scene was wrapper-blocked rather than
+  iteration-bound. It now drives the plate's own kernel against that factorization and honours
+  `couple_method`; the wall moves from `w = 4e` to `6e` at N=20 and from `4.5e` to
+  `10e` at N=8 — **both ends move with the grid**, so the gain is a fixture's number and not the
+  family's — at 1.0-1.5x the back-substitutions (`docs/dev/air-box-vk-newton-plan.md` §7). The default
+  is still Picard, so nothing here has moved unasked. What Newton does **not** fix is the
+  coarsening argument above: the fixed point it rescues is the plate's, and the reason coarsening
+  the room breaks it is the strain the coarser room lets through. **The viewer batch is SHIPPED** (`vkroom`, viewer batch 19,
   2026-08-17), and it did not merely surface this one — it corrected it. The headline's
   **separation** survives everywhere (17-102x across every rig measured), but its
   **magnitude is not grid-converged**: refining the air cell 12% takes the struck arm's

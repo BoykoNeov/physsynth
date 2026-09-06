@@ -15,14 +15,14 @@ every number below is reproducible today.
 
 `docs/dev/vk-newton-plan.md` §11.8 states it and §14.1 repeats it: the airbox von Kármán scenes
 cannot run under Newton. The reason is one method. `_VKPlateSurface.solve`
-(`crates/physsynth-py/src/airbox_wrap.rs:602`) runs its **own** Picard loop — a hand transcription
+(`crates/physsynth-py/src/airbox_wrap.rs`) ran its **own** Picard loop — a hand transcription
 of `VKPlate.step`'s sweep, written in Python-object arithmetic, iterating against the room-**loaded**
 factorization that the wrapper assembled and handed in as an argument. `couple_method` lives on
 `VkParams` and that loop never consults it.
 
 The seam exists for a good reason and it is not going away: once the air is attached, the bare
 plate's `lu` is the wrong operator. `A_loaded = A_bare + (k / 2 rho_s) T^T R T` is assembled in
-SciPy by `build` (`airbox_wrap.rs:747`), factored **once** by `splu`, and handed to `solve` as a
+SciPy by `build` in the same file, factored **once** by `splu`, and handed to `solve` as a
 Python object. The model's own factorization is untouched, and
 `test_the_loaded_factorization_is_never_assigned_to_the_model` exists to keep it that way.
 
@@ -37,14 +37,20 @@ the core cannot name.
 Drive `_VKPlateSurface` with the plate's own **unloaded** factorization (`splu(surface.a_bare())`)
 and it reproduces `VKPlate.step` exactly. 40 steps, `w/e = 3`, 8 kHz, N=20, σ=0:
 
-| boundary | `max abs dw` | `max abs dF` | `n_iters` mismatches |
-|---|---|---|---|
-| supported | **0.000e+00** | **0.000e+00** | 0 |
-| free | **0.000e+00** | **0.000e+00** | 0 |
+| boundary | drive | `max abs dw` | `max abs dF` | `n_iters` mismatches |
+|---|---|---|---|---|
+| supported | free run | **0.000e+00** | **0.000e+00** | 0 |
+| supported | `f_ext` | **0.000e+00** | **0.000e+00** | 0 |
+| free | free run | **0.000e+00** | **0.000e+00** | 0 |
+| free | `f_ext` | **0.000e+00** | **0.000e+00** | 0 |
 
 This is the fact the whole batch stands on. It means replacing the transcription with a call into
 the core's own coupled step — parameterised by which factorization to back-substitute against — is
 a **diff-free refactor**, not a re-derivation, and the existing suite is a sufficient guard for it.
+
+The `f_ext` rows are there because the external force is a **second code path on both sides** —
+the seam adds `k^2 f / denominator` inside its own `rhs`, the model adds it inside the context it
+builds — and a table of unforced runs would have claimed the whole seam while measuring half of it.
 
 Both boundary arms are measured because the seam branches on the boundary twice: `couple_factor`
 picks up an extra `h^2` on a free edge, and `areas` comes from `wdiag` (non-uniform, `5.625e-05` at
@@ -204,3 +210,105 @@ number it is.
 * **No Rust assembly or factorization of the loaded matrix** (design C above).
 * **No `f_ext` change.** `vk_step`'s `f` argument is still dead on the nonlinear path.
 * **No viewer scene.** The `vkroom` scene keeps the path it has.
+
+---
+
+## 6. Part 1's result — and a routing test that a smooth witness would have passed on nothing
+
+Landed 2026-09-06. `ThetaSolve`, `VkCoupledStep::with_rhs`, `vk_step_with`, and
+`crates/physsynth-core/tests/plate_theta_solve.rs`. The first bar is §2.1's claim moved into the
+crate: with the plate's own factorization supplied through the trait, `vk_step_with` reproduces
+`vk_step` **bit for bit** on both boundaries and under both iterations, and the free edge's extra
+`h^2` comes out of the new constructor equal to the old one's.
+
+The second bar is §3's hazard — that the Jacobian must go through the supplied operator too, not
+just the sweep — and getting it to assert anything took three tries, each of which is a way this
+test could have shipped green and empty.
+
+### 6.1 The correction is recovered by subtracting two nearly equal numbers
+
+`J d = d - c A^-1(...)`, so the only way to see the operator's effect through the public method is
+`d - J d`, which cancels away everything the correction is smaller than. A per-component *relative*
+bar therefore demands more precision of a small entry than the subtraction can carry: the first
+version failed at 2.0000000025 against a bar of 1e-9. The bar is now absolute against the **largest**
+correction, which is the scale the cancellation is actually set by.
+
+### 6.2 A quiet fixture cannot tell a routed Jacobian from an unrouted one
+
+At `w = 6e` with an 8 cm strike the free plate's correction fell *below the ulp of `d`* and both
+readings returned `d` unchanged — `J` is `I` to machine precision there, so no test through `Jd` can
+distinguish anything. The supported arm still resolved, which is the trap: **the same test passed on
+one boundary and was vacuous on the other**. The fix is `tests/plate.rs`'s own loud fixture, where
+`the_jacobian_is_far_from_the_identity_where_it_is_asserted` already measures that the margin exists
+— and that test's existence is the reminder that this project had already learned to ask.
+
+### 6.3 A direction linear in the index is nearly in the bracket's KERNEL
+
+The one worth carrying forward. The Monge-Ampère bracket differentiates twice, so a witness that is
+*smooth in the index* — `d[i] = 1e-6 * (i + 1)`, which looks like a perfectly innocent "something in
+every component" — has almost no second difference to offer, and the coupling it produces is
+numerically zero. On the free edge the reconstructed correction came out **exactly 0.0** and the
+guard's own "is there anything to compare" check was what caught it.
+
+Written down because the shape recurs: a **hand-picked witness is a hand-picked answer**, and it has
+now failed twice in this repo (the guitar plate's spelling pin went red for the same reason, from
+the other direction). The rule that comes out of it is narrower than "use random data": *a witness
+for an operator must not lie near that operator's kernel*, and for anything built out of a
+second-difference the smooth, monotone, obviously-nonzero vector is exactly the one that does. The
+direction here is `tests/plate.rs`'s normalised pseudo-random one, copied rather than shared because
+each file under `tests/` is its own crate — and copied from that file on purpose, so the two
+Jacobian tests probe the same directions.
+
+---
+
+## 7. Parts 2 and 3's result — the scene under Newton, and a wall that moves with the grid
+
+Landed 2026-09-06. `_VKPlateSurface.solve` is now nine lines of plumbing around
+`vk_step_with`; the transcribed loop, its NumPy averages and its three hand-written `setattr`s are
+gone. `tests/test_airbox_vk.py` is **108 passed**, including every guard that was already there —
+the byte-exact `nonlinear=False` regression against `RoomLoadedPlate` among them.
+
+### 7.1 The room scene, measured
+
+60 steps, `fs = 8 kHz`, N=20, σ=0, cap 50, drift on the **scene** total (`inst.energy() +
+room.energy()`), cost in back-substitutions. Baffled tier; the suspended tier agrees to within a
+handful of solves on every row.
+
+| w/e | Picard: non-conv / solves / drift | its outcomes | Newton: non-conv / solves / drift |
+|---|---|---|---|
+| 1 | 0 / 834 / 9.0e-14 | — | 0 / 1,244 / 2.1e-13 |
+| 2 | 0 / 1,166 / 1.1e-13 | — | 0 / 1,558 / 1.8e-13 |
+| 3 | 0 / 1,666 / 2.4e-13 | — | 0 / 1,972 / 2.5e-13 |
+| 4 | **2** / 2,386 / 3.0e-03 | `{'capped': 2}` | 0 / 2,412 / 2.2e-13 |
+| 4.5 | **blew up** / 100 | `{'expansive': 1}` | 0 / 2,696 / 1.2e-13 |
+| 5 | **blew up** / 100 | `{'expansive': 1}` | 0 / 3,166 / 2.0e-13 |
+| 6 | **blew up** / 100 | `{'expansive': 1}` | 0 / 4,018 / 1.2e-13 |
+| 9 | **blew up** / 100 | `{'expansive': 1}` | 12 / 298,024 / 4.4e-02 |
+
+§2.3's prediction from the bare plate holds on the actual scene, row for row. Two things this table
+shows that the bare one could not:
+
+* **The `outcomes` column is the §2.4 fix, visible.** `w/e = 4` now reports `capped` — the sweeps
+  were still contracting and a larger cap does fix those two steps. Before this batch that cell read
+  `expansive`, and the two rows below it, which are genuinely expansive, read the same. The
+  distinction had been collapsed for every room-driven plate since the seam was written.
+* **Newton's tax is 1.5x at small amplitude and 1.0x at the wall.** It costs most where it is least
+  needed, which is the honest way round.
+
+### 7.2 The wall moves with the GRID, so the payoff has no single number
+
+The suite's own von Kármán room fixture is `N = 8` (`make_air_vk_plate`'s default), not the `N = 20`
+every table above was measured on, and the two grids do not put the wall in the same place:
+
+| grid | Picard's last good `w/e` | Newton's | gain |
+|---|---|---|---|
+| N = 20 | 4 | 6 (12 bad steps at 9) | ~1.6x |
+| N = 8 | 4.5 | 10 (10-12 bad steps at 12) | ~1.9x |
+
+Both are below `vk-newton-plan.md` §13's 2-4x at 48 kHz, and neither is *the* number. Three axes are
+now known to move this boundary — amplitude, sample rate (§2.2, `k^2`) and now resolution — and the
+right way to quote the payoff is as a fixture-by-fixture measurement, which is what §13 did and what
+this section does. It cost a test failure to learn: the payoff test was first written at the plan's
+`4.5e` and went green-then-red, because `4.5e` is past the wall on the grid the plan measured and
+comfortably inside it on the grid the test file builds. The test now carries its own control — an
+assertion that Picard *does* fail on the fixture in front of it — and says so in its docstring.

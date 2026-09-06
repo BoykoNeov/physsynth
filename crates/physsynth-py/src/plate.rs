@@ -924,9 +924,10 @@ pub fn grain_ratios_from_material(
 /// Attribute-for-attribute and method-for-method compatible with `physsynth.core.plate.VKPlate`;
 /// the docstring on that class is the reference.
 ///
-/// The four `_`-prefixed methods below are `airbox.py`'s, not this class's own convenience:
-/// `_VKPlateSurface.solve` runs the Picard loop itself against the **loaded** factorization and
-/// calls every one of them per sweep.
+/// The four `_`-prefixed methods below are `airbox.py`'s, not this class's own convenience. They
+/// were the seam's per-sweep arithmetic until `docs/dev/air-box-vk-newton-plan.md` Part 2 pointed
+/// `_VKPlateSurface.solve` at this class's own kernel instead; they stay exposed because
+/// `tests/test_airbox_vk.py` reassembles a sweep out of them by hand to check the seam against.
 #[pyclass(name = "VKPlate", module = "physsynth_rs")]
 pub struct PyVKPlate {
     p: core::VkParams,
@@ -1044,6 +1045,24 @@ impl PyVKPlate {
         self.last_residual = last_residual;
         self.residual_ratio = f64::NAN;
         self.n_solves = n_solves;
+    }
+
+    /// Record a coupled solve's diagnostics **without** touching the state.
+    ///
+    /// The air box's surface seam splits what `step()` does in one: the solve happens in
+    /// `_VKPlateSurface.solve` (against the loaded factorization) and the state roll happens later,
+    /// in its `commit`, after the wrapper has read `u^{n-1}` for the port. So the five read-outs
+    /// have to be written on their own, and they are written *here* rather than through five
+    /// `setattr` calls so that a field added to `VkStep` cannot be forgotten by one caller — which
+    /// is exactly what happened to `residual_ratio` and `n_solves`
+    /// (`docs/dev/air-box-vk-newton-plan.md` §2.4: every non-converged room step was filed as
+    /// `expansive` because `couple_outcome` was reading a NaN nobody wrote).
+    pub(crate) fn record_iteration(&mut self, step: &core::VkStep) {
+        self.n_iters = step.n_iters;
+        self.converged = step.converged;
+        self.last_residual = step.last_residual;
+        self.residual_ratio = step.residual_ratio;
+        self.n_solves = step.n_solves;
     }
 
     /// `u[i]` at a live-node index the caller has already validated.
@@ -1450,9 +1469,11 @@ impl PyVKPlate {
     /// `n_iters` cannot be compared across the two: one Picard sweep is two solves, one Newton
     /// iteration is two plus two per Krylov product and two per line-search trial. This one can.
     ///
-    /// **Not written by `airbox`'s seam.** `_VKPlateSurface.solve` runs its own Picard loop against
-    /// the loaded factorization and writes `n_iters`, `converged` and `last_residual` by hand; it
-    /// does not write this or `residual_ratio`, so after a room step both are the last *bare* step's.
+    /// **Written by `airbox`'s seam too**, since `docs/dev/air-box-vk-newton-plan.md` Part 2.
+    /// `_VKPlateSurface.solve` used to run its own Picard loop and write three of the five
+    /// read-outs by hand, leaving this one and `residual_ratio` reading the last *bare* step's —
+    /// which made `couple_outcome` call every capped room step `expansive`. It now drives the
+    /// model's own kernel against the loaded factorization, so all five come from one `VkStep`.
     #[getter]
     fn n_solves(&self) -> usize {
         self.n_solves

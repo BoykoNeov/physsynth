@@ -552,6 +552,128 @@ def test_couple_tol_moves_the_total_and_not_the_money_test(boundary, tier):
     assert loose > 1e-5 and loose > middle > tight
 
 
+# -- the seam drives the model's own kernel: all five read-outs, and `couple_method` ----------
+#
+# `docs/dev/air-box-vk-newton-plan.md`. Until that batch this seam carried its own transcription of
+# the Picard sweep, because the loop it needed had to invert the *loaded* matrix and the core could
+# only reach the plate's own. Three consequences, and these are the tests for all three.
+
+
+@pytest.mark.parametrize("tier", TIERS)
+@pytest.mark.parametrize("boundary", BOUNDARIES)
+def test_the_room_seam_writes_every_read_out_the_bare_step_writes(boundary, tier):
+    """All five, not the three the transcription happened to set.
+
+    ``n_solves`` and ``residual_ratio`` were added to ``VkStep`` after the seam was written and the
+    hand-written loop never learned about them, so both sat at their construction values for the
+    life of a room-driven plate. The identity asserted here is the Picard one — a sweep is two
+    back-substitutions, one Airy and one theta-scheme — which is exactly why the count cannot be
+    inferred from ``n_iters`` once the method can change.
+    """
+    inst = _seeded(tier, boundary=boundary)
+    _run(inst, 5)
+    p = inst.plate
+    assert p.converged and p.n_iters >= 2
+    assert p.n_solves == 2 * p.n_iters, "the seam is not reporting the cost of its own solve"
+    assert np.isfinite(p.residual_ratio), "the exit ratio was never written"
+    assert p.couple_outcome == "converged"
+
+
+@pytest.mark.parametrize("tier", TIERS)
+@pytest.mark.parametrize("boundary", BOUNDARIES)
+def test_a_short_capped_room_step_reports_capped_and_not_expansive(boundary, tier):
+    """The misreport, gone. Section 2.4 of the plan is the measurement it comes from.
+
+    ``couple_outcome`` tests the exit ratio **positively** — finite *and* under one — so a
+    ``residual_ratio`` nobody wrote is a NaN that fails the test and lands in ``expansive``. Every
+    non-converged room step used to be filed that way: "no cap at any size helps" said about a step
+    that a bigger cap does fix. The cap of two here is the cheapest way to produce a step that is
+    genuinely short rather than genuinely diverging.
+    """
+    inst = _seeded(tier, boundary=boundary, couple_max_iter=2)
+    _run(inst, 3)
+    p = inst.plate
+    assert not p.converged, "a cap of two was not short enough to leave the loop unconverged"
+    # Pinned, because `couple_outcome` has no ratio to judge from below two sweeps and answers
+    # `unknown` there -- a different verdict that would read like this bug rather than like a
+    # changed default.
+    assert p.n_iters == 2
+    assert p.residual_ratio < 1.0, "the sweeps were not contracting, so this is not a capped step"
+    assert p.couple_outcome == "capped"
+
+
+@pytest.mark.parametrize("tier", TIERS)
+@pytest.mark.parametrize("boundary", BOUNDARIES)
+def test_the_loaded_step_honours_couple_method(boundary, tier):
+    """The flag reaches the loaded operator. It did not before: the seam had no branch for it.
+
+    Two claims, and the second is the one that makes the first mean something. The methods must
+    **differ** — a flag that changed nothing would pass a bare "it still runs" — and they must land
+    on the **same root**, since they are two iterations on one nonlinear equation. One step from one
+    seeded state, so the comparison is a solve rather than an accumulated trajectory.
+    """
+    picard = _seeded(tier, boundary=boundary)
+    newton = _seeded(tier, boundary=boundary, couple_method="newton")
+    assert picard.plate.couple_method == "picard" and newton.plate.couple_method == "newton"
+    _run(picard, 1)
+    _run(newton, 1)
+
+    assert newton.plate.n_solves != picard.plate.n_solves, "the flag changed nothing"
+    assert newton.plate.converged and picard.plate.converged
+    scale = np.max(np.abs(picard.plate.u))
+    gap = np.max(np.abs(newton.plate.u - picard.plate.u)) / scale
+    assert gap <= 1e-9, f"the two iterations landed on different roots ({gap:.2e})"
+
+
+@pytest.mark.parametrize("tier", TIERS)
+def test_newton_carries_a_strike_that_kills_the_loaded_picard_loop(tier):
+    """Part 3's payoff, and it is a claim about what RUNS rather than about how fast.
+
+    At ``w = 6e`` on this file's own fixture the loaded Picard loop does not merely run out of
+    sweeps: it fails to contract at all, reports ``expansive``, and the scene total is NaN from the
+    first step. Section 2.2 of the plan measured that the air load does not put it there — the bare
+    plate at the same sample rate dies at the same amplitude, cell for cell — so what this test
+    asserts is that a scene which was denied the fix now has it, not that the room was ever the
+    problem.
+
+    ``6e`` and not the plan's ``4.5e`` because **the wall moves with the grid**: that number is from
+    the ``N = 20`` measurement and this file's default plate is ``N = 8``, where Picard survives
+    4.5e and Newton runs clean to 10e. The amplitude here has to be read off the fixture it is used
+    on, which is the whole reason this test carries its own control.
+
+    The energy bar is the tier-1 one on the *scene* total, because a step that has stopped
+    converging shows up there long before it shows up as a NaN.
+    """
+    amp = 6.0
+
+    picard = _make_vk(tier)
+    picard.set_state(vk_strike(picard.plate, amp * picard.plate.e))
+    with np.errstate(over="ignore", invalid="ignore"):
+        _run(picard, 3)
+        picard_total = picard.energy() + picard.room.energy()
+    # What the probe measured is the *iteration* failing and the scene total going with it. The
+    # displacement's own arrival at NaN is a later, separate event, and asserting on it would make
+    # this test's control depend on how far past the wall the fixture happens to sit.
+    assert not picard.plate.converged, (
+        "the Picard fixture is supposed to be past the wall -- if it converges, this test is "
+        "asserting nothing and the amplitude has to move"
+    )
+    assert not np.isfinite(picard_total), "the wall is supposed to take the scene total with it"
+
+    newton = _make_vk(tier, couple_method="newton")
+    newton.set_state(vk_strike(newton.plate, amp * newton.plate.e))
+    total0 = newton.energy() + newton.room.energy()
+    lo = hi = total0
+    for _ in range(30):
+        newton.step()
+        newton.room.step()
+        assert newton.plate.converged, f"Newton hit its own cap at step {newton.n}"
+        total = newton.energy() + newton.room.energy()
+        lo, hi = min(lo, total), max(hi, total)
+    assert np.all(np.isfinite(newton.plate.u))
+    assert (hi - lo) / abs(total0) <= DRIFT_TOL
+
+
 # -- refusals -------------------------------------------------------------------------------
 
 

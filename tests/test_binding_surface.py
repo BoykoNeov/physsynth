@@ -198,9 +198,12 @@ def test_a_branch_only_attribute_is_absent_on_the_other_branch():
 
 def test_the_plate_state_buffers_are_settable_because_airbox_writes_them():
     """§12.2 for the two plates. ``airbox._PlateSurface.commit`` assigns ``_accel``, ``u``,
-    ``u_prev`` and ``n``; ``_VKPlateSurface`` adds ``F``, ``F_prev`` and the three Picard
-    diagnostics. None of that is optional — it is how the room puts its load inside the solve, and
-    a ``#[getter]`` with no ``#[setter]`` takes the write away *silently* (§33.2)."""
+    ``u_prev`` and ``n``; ``_VKPlateSurface`` adds ``F`` and ``F_prev``. It once wrote three
+    iteration diagnostics through this surface too; since
+    ``docs/dev/air-box-vk-newton-plan.md`` it drives the model's own kernel and all **five** come
+    back in one ``VkStep``, so the setters below are asserted for the state alone. None of that is
+    optional — it is how the room puts its load inside the solve, and a ``#[getter]`` with no
+    ``#[setter]`` takes the write away *silently* (§33.2)."""
     p = physsynth_rs.Plate(Lx=0.4, Ly=0.4, kappa=1.0, rho=2.0, fs=20000.0, N=12)
     fresh = np.arange(p.n_live, dtype=float)
     p._accel = fresh.copy()
