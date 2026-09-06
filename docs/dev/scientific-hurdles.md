@@ -22,7 +22,7 @@
 | 2 | Room energy books were a tolerance rather than exact across the port | `airbox` (Rust) | **Fixed 2026-09-02** (§2) |
 | 3 | NumPy's own transcendentals disagree with libm by an ulp on some CPUs — a read-out asserted exactly across languages fails on a runner and passes on another | `airbox.mode_frequency`, four `pow`s, one `tan`, `exp`, `cos`/`sin` | **Symptom cleared 2026-09-03** — the parity step is green on five consecutive runs; the **rule** stays live (§3) |
 | 4 | The θ-scheme suppresses every discrete decay rate by `1/(1+θk²Q)`; "highs die faster" turns over past mode ~32 | `string_damped`, `string_stiff`, both plates | Accounted for; **fix derived, not built** (§4) |
-| 5 | The von Kármán Picard iteration stops contracting at large amplitude / high strain / high `fs` — the gong-on-a-string, the gong in a room and grid coarsening all die there | `plate.VKPlate`, `connection`, `airbox` | Open, **narrowed 2026-09-06** — the `1/h⁴` mechanism is falsified, a third of the wall was the sweep cap, and Newton is **built** behind `couple_method` (default still Picard) with its boundary not yet mapped (§5) |
+| 5 | The von Kármán Picard iteration stops contracting at large amplitude / high strain / high `fs` — the gong-on-a-string, the gong in a room and grid coarsening all die there | `plate.VKPlate`, `connection`, `airbox` | Open, **narrowed 2026-09-06** — the `1/h⁴` mechanism is falsified, a third of the wall was the sweep cap, and Newton is **built** behind `couple_method` (default still Picard) and the boundary is **mapped** — it moves 2–4× in amplitude, but a Newton root is a resolved *plate* only at broad strikes (§5) |
 | 6 | The geometrically exact string's Newton solve stops converging past `λ_long ≈ 4`, and `h`-refinement makes it worse | `string_geometric` | Warned at 1, unresolved regime; **§1 eliminated as the cause 2026-09-03** (edge identical in 9/9 cells) and the threshold split into a **convergence** edge at 4 and an **energy** edge at 5–10 (§6) |
 | 7 | A point port's added mass is a grid quantity: refinement makes it *worse* | `airbox.RoomPort` | Refused, measured — `radius` has no default (§7) |
 | 8 | At `λ = 1/√3` the room's corner mode is defective: broadband content grows linearly while the energy stays flat | `airbox` | Accounted for — a flat energy is not a stability certificate here (nor in §6's under-resolved band, found 2026-09-03) (§8) |
@@ -252,11 +252,23 @@ converging where Picard's factor exceeds one. Three facts make it cheaper than i
    once for best-effort Picard and once for Newton.
 
 **Status.** The flag, the closed-form Jacobian-vector product, the matrix-free GMRES and the Armijo
-line search are built and asserted (Parts 0–2; no new dependency, the crate's allowlist is still
-empty). What is left is Part 3's map, Part 5's re-run of the three bounded scenes — one of which,
-the gong in a room, needs wrapper-tier work first, because `_VKPlateSurface.solve` runs its own
-Picard loop against the room-loaded factorization and never consults `couple_method`. This remains
-the largest scientific unlock in the register and the one the human has to prioritise against §4.
+line search are built and asserted, and the map is drawn (Parts 0–3; no new dependency, the crate's
+allowlist is still empty). **What the map says**, in `vk-newton-plan.md` §13: Newton's amplitude
+boundary is two to four times Picard's wherever the comparison is not censored at the top of the
+grid; Picard is *cheaper* at easy points (0.55–0.85×) and up to 68× more expensive at hard ones,
+which is the measured argument for leaving it the default; the boundary is **not monotone** in
+amplitude in at least one cell; a 300-step run holds a lower boundary than a single step does in
+five cells of fifteen; and trap 3's answer is **graded** — at a broad strike a Newton root refines
+at the scheme's claimed second order and is a plate, while at a 3 cm strike the 48 kHz solution is
+37% away from the 96 kHz one at 83 µs, so the root is real arithmetic and not a resolved plate. **The
+curvature axis that sets Picard's wall also sets the resolution horizon, and Newton moves only the
+first**, which is why §3's refusal of an audio-band string-drivable gong stands — now with a
+mechanism behind it rather than an iteration failure.
+
+What is left is Part 5's re-run of the three bounded scenes — one of which, the gong in a room,
+needs wrapper-tier work first, because `_VKPlateSurface.solve` runs its own Picard loop against the
+room-loaded factorization and never consults `couple_method`. This remains the largest scientific
+unlock in the register and the one the human has to prioritise against §4.
 
 ## 6. `λ_long` — the geometric string's unresolved regime
 

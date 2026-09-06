@@ -1541,3 +1541,157 @@ fn the_method_defaults_to_picard_and_a_bad_spelling_is_refused() {
     .expect_err("an unparseable method must be refused");
     assert_eq!(err, VkParamError::BadMethod);
 }
+
+// -- Part 3's population: the line search and the inner solve, over the territory Newton opened --
+
+/// A map point: `(fs, strike width, w/e)`, chosen from Part 3's grid so that Picard is `expansive`
+/// on step zero and Newton converges. `rho` is 7800 rather than [`jac_plate_m`]'s 7860 so these are
+/// the *same* plates the Python map measured (`M:\claud_projects\temp\vk-newton\part3_map.py`).
+const MAP_POINTS: [(f64, f64, f64); 14] = [
+    (24_000.0, 0.12, 18.0),
+    (24_000.0, 0.08, 16.0),
+    (24_000.0, 0.05, 12.0),
+    (24_000.0, 0.03, 6.0),
+    (24_000.0, 0.02, 3.0),
+    (48_000.0, 0.12, 32.0),
+    (48_000.0, 0.08, 24.0),
+    (48_000.0, 0.05, 16.0),
+    (48_000.0, 0.03, 10.0),
+    (48_000.0, 0.02, 8.0),
+    (96_000.0, 0.08, 40.0),
+    (96_000.0, 0.05, 28.0),
+    (96_000.0, 0.03, 16.0),
+    (96_000.0, 0.02, 12.0),
+];
+
+fn map_plate(fs: f64, width: f64, amp: f64, boundary: Boundary, off: f64) -> VkPlate {
+    let mut vk = VkPlate::new(
+        VkParams::new(&VkSpec {
+            lx: 0.4,
+            ly: 0.4,
+            young: 2.0e11,
+            thickness: 1e-3,
+            nu: 0.3,
+            rho: 7800.0,
+            fs,
+            n: 20,
+            boundary: Some(boundary),
+            couple_max_iter: 50,
+            couple_method: Some(CoupleMethod::Newton),
+            ..VkSpec::default()
+        })
+        .expect("a valid plate"),
+    );
+    let p = &vk.p.lin;
+    let (cx, cy) = (0.5 * p.lx + off, 0.5 * p.ly);
+    let a = amp * vk.p.thickness;
+    let u0: Vec<f64> = p
+        .mask
+        .flags()
+        .iter()
+        .enumerate()
+        .filter(|(_, &alive)| alive)
+        .map(|(idx, _)| {
+            let (dx, dy) = (p.x[idx] - cx, p.y[idx] - cy);
+            a * (-((dx * dx + dy * dy) / (width * width))).exp()
+        })
+        .collect();
+    let zero = vec![0.0; p.n_live];
+    vk.set_state(&u0, &zero).expect("the Airy solve factors");
+    vk
+}
+
+/// The line search and the inner solve, over Part 3's population rather than the gate's six.
+///
+/// Plan §7 trap 2 asks whether the backtracking branch is live code, and
+/// `the_line_search_is_recorded_rather_than_assumed` answered it on the *gate* fixtures: zero
+/// halvings, with the search first firing only from a seed 200× the physical one. That is a
+/// statement about six comfortable points. This one asks the same question where the map says
+/// Newton is doing work Picard cannot — fourteen points spanning three sample rates and five strike
+/// widths, every one of them `expansive` under best-effort Picard.
+///
+/// The three counters this reads (`n_line_search`, `gmres_products`, `gmres_stalls`) live on
+/// [`VkNewtonReport`] and are deliberately **not** on `VkStep`, so no Python client can see them
+/// (plan §11.4 — a field there costs two hand-copies). A native bar is the only place the question
+/// can be asked over a population, which is why it is asked here.
+#[test]
+fn the_line_search_over_part_threes_population() {
+    let mut halvings = 0usize;
+    let mut stalls = 0usize;
+    let mut worst_products = 0usize;
+    let mut worst_iters = 0usize;
+    for (fs, width, amp) in MAP_POINTS {
+        let vk = map_plate(fs, width, amp, Boundary::Supported, 0.0);
+        let ctx = VkCoupledStep::new(&vk.u, &vk.u_prev, &vk.f_prev, None, &vk.p);
+        let r =
+            vk_newton(&ctx, VkCoupledStep::seed(&vk.u, &vk.u_prev)).expect("the solves succeed");
+        assert!(
+            r.converged,
+            "{fs} Hz, {width} m strike, {amp}e: Newton did not converge (residual {:.3e}) -- \
+             the Python map says this point is Newton's, so either the map or this fixture moved",
+            r.last_residual
+        );
+        halvings += r.n_line_search;
+        stalls += r.gmres_stalls;
+        worst_products = worst_products.max(r.gmres_products);
+        worst_iters = worst_iters.max(r.n_iters);
+    }
+
+    // Measured, and the shape of the claim matters: this is a *finding*, so a change here is a new
+    // measurement to write down rather than a number to raise. The full Newton step is accepted at
+    // every one of these points, which says the residual stays convex enough for an undamped step
+    // right up to the boundary the map draws -- and it is why the boundary is a cost ramp (the
+    // Krylov work climbs) rather than a place the globalisation starts earning its keep.
+    assert_eq!(
+        halvings, 0,
+        "the line search now fires somewhere in Part 3's population; that is a finding, not a \
+         failure -- record where, and rewrite this claim rather than raising a number"
+    );
+    assert_eq!(
+        stalls, 0,
+        "the inner solve now hits NEWTON_GMRES_MAX_PRODUCTS in Part 3's population; the inexact \
+         correction is then handed to the line search by design, but the population's cost claim \
+         needs re-measuring"
+    );
+    // Bounds, not equalities: these are the cost ramp the map reports, and a tighter grid or a
+    // different CPU may move the last digit of neither, but a factor here is a real change.
+    assert!(
+        worst_products <= 60,
+        "worst GMRES products over the population is {worst_products}, was 38"
+    );
+    assert!(
+        worst_iters <= 12,
+        "worst Newton iterations over the population is {worst_iters}, was 7"
+    );
+}
+
+/// The same population's free-edge twin, struck **off-centre** because a centred one is not a
+/// free-boundary fixture at all (plan §10.4: a 3 cm Gaussian centred on a 40 cm plate is `exp(-44)`
+/// at the rim, so free and supported are the same interior problem).
+///
+/// Part 3's Python slice measured the free edge as slightly *harder* than supported — Newton's
+/// step-zero boundary at a 3 cm off-centre strike is `16e` free against `20e` supported. This bar
+/// asserts the direction rather than the number: the free plate still converges where the map says
+/// it does, and it still does it without damping.
+#[test]
+fn the_free_edge_holds_the_same_way_off_centre() {
+    for (fs, width, amp) in [
+        (48_000.0, 0.08, 16.0),
+        (48_000.0, 0.03, 12.0),
+        (96_000.0, 0.05, 20.0),
+    ] {
+        let vk = map_plate(fs, width, amp, Boundary::Free, 0.12);
+        let ctx = VkCoupledStep::new(&vk.u, &vk.u_prev, &vk.f_prev, None, &vk.p);
+        let r =
+            vk_newton(&ctx, VkCoupledStep::seed(&vk.u, &vk.u_prev)).expect("the solves succeed");
+        assert!(
+            r.converged,
+            "free edge, {fs} Hz, {width} m, {amp}e: residual {:.3e}",
+            r.last_residual
+        );
+        assert_eq!(
+            r.n_line_search, 0,
+            "the free edge now needs damping at {fs} Hz, {width} m, {amp}e -- a finding"
+        );
+    }
+}

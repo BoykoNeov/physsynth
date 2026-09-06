@@ -203,8 +203,12 @@ converged path. **Met**, and the gate had to be sharpened first: "the same root"
 
 **Part 3 — the convergence map.** Both methods over `(w/e, curvature, fs)`, as a diagnostic script
 under `M:\claud_projects\temp\vk-newton\`, with the resulting numbers written into this document.
-*Gate:* the boundary moves, quantified; and where it does not move, that is reported in the same
-table.
+**DONE — see §13.** *Gate:* the boundary moves, quantified; and where it does not move, that is
+reported in the same table. **Met** — the boundary moves in fourteen of fifteen cells and the
+fifteenth is censored rather than flat. The gate turned out to be the smaller half of the result:
+the map has **two** boundaries (a step-zero one and a 300-step one, and they differ in five cells),
+the outcome is **not monotone** in amplitude, and trap 3's answer is **graded along curvature**
+rather than yes or no.
 
 **Part 4 — the documents the probe falsified.** `scientific-hurdles.md` §5's `k²/h⁴` and the same
 claim in `tests/helpers.py:729-733`. §5's "the measurement exists" line is *right* and stays —
@@ -778,3 +782,247 @@ out to settle it.
   reader to re-litigate the constant, and the cheapest defence is one sentence.
 * **`docs/memory/MEMORY.md`** needed no edit. Its only `1/h⁴` is the orthotropic free plate's
   roundoff scar (`h²` × `1/h⁴`), an unrelated and correct use.
+
+---
+
+## 13. Part 3's result — the map, its second boundary, and where a root stops being a plate
+
+Landed 2026-09-06. Three scripts under `M:\claud_projects\temp\vk-newton\` (`part3_map.py`,
+`part3_runmap.py`, `part3_refine.py` / `part3_refine2.py`) and two native bars in
+`crates/physsynth-core/tests/plate.rs`. No default moves and no shipped number changes.
+
+### 13.1 What was drawn, and the one thing a reader cannot infer from the numbers
+
+A 40 cm steel square, 1 mm thick, `N = 20`, supported, struck from rest with a centred Gaussian —
+the probe's plate, so §2.1–§2.4 continue here rather than restarting. Axes: `w/e` over sixteen
+values from 1 to 40, strike width over 12 / 8 / 5 / 3 / 2 cm, `fs` over 24 / 48 / 96 kHz. Both
+methods at every point: Picard at a **cap of 2000** (best effort, because §2.3's whole point is that
+a cap-50 baseline would credit Newton with territory a constant recovers) and Newton at 50.
+480 points, one step each, 77 seconds.
+
+**The width sweep holds the peak amplitude fixed**, so the injected energy falls as the strike
+narrows. That is §2.2's knob — "narrowing the strike alone, at fixed plate, fixed grid and fixed
+peak amplitude" — and it is stated because a fixed-*energy* sweep is an equally defensible
+experiment that would draw a different boundary, and no column below reveals which was run.
+
+**One step per point**, per §9.4. **No bisection**, per §2.4: the 7 cm plate's `ρ` wandered between
+0.6 and 1.5 at `w = 2e` while converging cleanly at `w = e`, which is exactly the shape that breaks
+a bisection invariant — and §13.5 shows the invariant does in fact fail somewhere on this grid. The
+boundary is therefore reported as **two columns**, largest converged and smallest failed, so that a
+cell where they are not adjacent shows up as a finding instead of being averaged into a midpoint.
+
+**Newton's four pins are reported, not tuned** (`crates/physsynth-core/src/plate.rs`: "Part 3
+reports what they gave"): GMRES restart **30**, at most **200** Krylov products per iteration, a
+constant forcing term of **1e-4**, and an Armijo constant of **1e-4** with at most 40 halvings. One
+value per fixture would have turned this map into a map of the choices.
+
+### 13.2 The boundary moves in every cell that is not censored
+
+`w/e` at which each method last converged on step zero, and where it first did not:
+
+| fs | strike | Picard: last ok | first bad | Newton: last ok | first bad | moved |
+|---|---|---|---|---|---|---|
+| 24 kHz | 12 cm | 16 | 18 | **40** | — | +24 |
+| 24 kHz | 8 cm | 10 | 12 | 32 | 40 | +22 |
+| 24 kHz | 5 cm | 6 | 8 | 18 | 20 | +12 |
+| 24 kHz | 3 cm | 3 | 4 | 8 | 10 | +5 |
+| 24 kHz | 2 cm | 2 | 3 | 4 | 6 | +2 |
+| 48 kHz | 12 cm | 28 | 32 | **40** | — | +12 |
+| 48 kHz | 8 cm | 18 | 20 | **40** | — | +22 |
+| 48 kHz | 5 cm | 10 | 12 | 32 | 40 | +22 |
+| 48 kHz | 3 cm | 6 | 8 | 18 | 20 | +12 |
+| 48 kHz | 2 cm | 4 | 6 | 10 | 12 | +6 |
+| 96 kHz | 12 cm | **40** | — | **40** | — | 0 (both censored) |
+| 96 kHz | 8 cm | 32 | 40 | **40** | — | +8 |
+| 96 kHz | 5 cm | 20 | 24 | **40** | — | +20 |
+| 96 kHz | 3 cm | 12 | 14 | 32 | 40 | +20 |
+| 96 kHz | 2 cm | 8 | 10 | 20 | 24 | +12 |
+
+Bold entries are **censored at the top of the grid**: the method never failed up to `w = 40e`, so
+the number is a floor and the true boundary is somewhere above it. Six of Newton's fifteen cells are
+censored, which is why "moved" is a floor too; the one cell reading 0 is the one where *both* are
+censored, and it is not a cell where Newton gained nothing. Everywhere the comparison is uncensored,
+Newton's boundary is **two to four times** Picard's amplitude.
+
+The axes behave as §2.2 predicted: at fixed `fs`, halving the strike width roughly halves the
+boundary for both methods, and doubling `fs` roughly doubles it. Curvature and `k` are the two
+knobs, and the map shows Newton *shifting* that surface rather than changing its shape.
+
+### 13.3 Newton is not free, and this is the argument for Picard staying the default
+
+Back-substitutions per step (`n_solves` — the cost axis the binding says is the comparable one;
+`n_iters` is not, because one Picard sweep is two solves and one Newton iteration is two plus two
+per Krylov product and two per line-search trial):
+
+| fs | strike | at `w = 6e`: Picard / Newton | at `w = 16e`: Picard / Newton |
+|---|---|---|---|
+| 24 kHz | 12 cm | 20 / 26 (**0.77×**) | 3834 / 56 (**68.5×**) |
+| 24 kHz | 8 cm | 44 / 32 (1.38×) | expansive / 86 |
+| 24 kHz | 5 cm | 382 / 60 (6.37×) | expansive / 138 |
+| 48 kHz | 12 cm | 12 / 22 (**0.55×**) | 30 / 28 (1.07×) |
+| 48 kHz | 8 cm | 22 / 26 (**0.85×**) | 152 / 50 (3.04×) |
+| 48 kHz | 5 cm | 44 / 40 (1.10×) | expansive / 66 |
+| 48 kHz | 3 cm | 286 / 48 (5.96×) | expansive / 186 |
+| 96 kHz | 12 cm | 10 / 14 (**0.71×**) | 16 / 24 (**0.67×**) |
+| 96 kHz | 8 cm | 14 / 20 (**0.70×**) | 28 / 28 (1.00×) |
+| 96 kHz | 5 cm | 22 / 26 (**0.85×**) | 82 / 42 (1.95×) |
+| 96 kHz | 2 cm | 94 / 32 (2.94×) | expansive / 66 |
+
+A ratio below 1 means **Picard is cheaper**, and that is most of the easy half of the map: a Newton
+iteration carries its Krylov products, and where Picard converges in five sweeps there is nothing to
+amortise them against. The 68× at the other end is the same solver on the same plate. So
+`couple_method` is a real choice rather than a strictly better setting, and §11.8's "no default
+moves" is now backed by a measurement instead of by caution.
+
+### 13.4 The map has a second boundary, and §9.4's affordability claim does not transfer
+
+§9.4 established that the wall is decided on step zero, and that is what made a 480-point grid
+affordable. It is a claim about **Picard's divergence from a struck rest state**, and it is true.
+It does not say that a Newton run which converges on step zero keeps converging, and it does not:
+
+| fs | strike | step-0 edge | 300-step edge | lost | drift at the run edge | first bad step |
+|---|---|---|---|---|---|---|
+| 24 kHz | 12 cm | 40 | **32** | 8 | 2.83e-13 | 2 |
+| 24 kHz | 8 cm | 32 | **20** | 12 | 3.54e-13 | 24 |
+| 24 kHz | 5 cm | 18 | **16** | 2 | 1.04e-13 | 16 |
+| 24 kHz | 3 cm | 8 | 8 | 0 | 2.29e-13 | — |
+| 24 kHz | 2 cm | 4 | 4 | 0 | 1.65e-13 | — |
+| 48 kHz | 12 cm | 40 | 40 | 0 | 4.17e-13 | — |
+| 48 kHz | 8 cm | 40 | 40 | 0 | 2.32e-13 | — |
+| 48 kHz | 5 cm | 32 | 32 | 0 | 1.42e-13 | — |
+| 48 kHz | 3 cm | 18 | **16** | 2 | 1.31e-13 | 50 |
+| 48 kHz | 2 cm | 10 | 10 | 0 | 1.61e-13 | — |
+| 96 kHz | 12 cm | 40 | 40 | 0 | 4.06e-13 | — |
+| 96 kHz | 8 cm | 40 | 40 | 0 | 5.61e-13 | — |
+| 96 kHz | 5 cm | 40 | 40 | 0 | 1.63e-13 | — |
+| 96 kHz | 3 cm | 32 | **28** | 4 | 1.59e-13 | 24 |
+| 96 kHz | 2 cm | 20 | 20 | 0 | 1.19e-13 | — |
+
+The 300-step edge is the largest `w/e` for which **every** step converged *and* the energy drift met
+the project's `1e-10` bar. Ten cells hold; five lose between 2 and 12 in `w/e`, and the step at which
+they lose it is 2, 16, 24, 24 and 50 — nowhere near step zero. The failures are loud (drift ~1e-1,
+`n_iters` pinned at the cap), so nothing here is silent, but the honest boundary for a *sound* is
+the second column and not the first.
+
+**Generalisable, and it is the reason A2 was run at all:** "step zero has a root" and "three hundred
+steps have roots" are different claims, and a one-step map answers only the first. §9.4's result
+licenses the *cheap scan*; it does not license reading the scan as a statement about a run. When a
+map is drawn from one step per point because a prior section made that affordable, check what that
+section actually measured — here it was the other method's failure mode.
+
+### 13.5 The outcome is not monotone in amplitude
+
+Found in the free-edge slice and then walked out fully: a supported plate, 3 cm strike, struck
+**0.12 m off-centre**, 48 kHz. One step from rest, Newton:
+
+| `w/e` | Picard | Newton | Newton iters | Newton solves | Newton residual |
+|---|---|---|---|---|---|
+| 6 | converged | converged | 5 | 50 | 2.85e-16 |
+| 8–14 | expansive | converged | 5–6 | 56–108 | ≤ 9.6e-14 |
+| 16 | expansive | converged | 13 | 466 | 8.57e-16 |
+| **18** | expansive | **expansive** | 50 | 17510 | 5.76e-02 |
+| **20** | expansive | **converged** | 19 | 7266 | 6.75e-15 |
+| 24–40 | expansive | capped / expansive | 50 | ~20000 | ≥ 2.2e-03 |
+
+Newton fails at `w = 18e` and succeeds at `w = 20e`, to a residual of 7e-15. **A bisection on this
+cell would have returned a boundary of 18 and been wrong, and it would have looked clean.** This is
+the concrete instance of the hazard §2.4 predicted from `ρ`'s wandering, and it is the entire reason
+the scan is a grid and the boundary is reported as two columns.
+
+The same table carries the map's other quiet result: **the boundary is a cost ramp, not a cliff.**
+Fifty solves at `w = 6e`, 466 at 16, 7266 at 20 — two orders of magnitude of Krylov work spent
+before the verdict changes at all. A cost budget hits this ramp long before the convergence boundary
+does, which matters more for a real instrument than the boundary's position does.
+
+### 13.6 Trap 3, answered — and the answer is graded along curvature, not yes or no
+
+Energy cannot settle this: *any* root of the discrete-gradient equation conserves exactly, so a run
+at 1e-13 is what a root must do and is not evidence that the root resolves the physics. The other
+half is a refined-`k` reference — `N = 20` fixed so only `k` moves, the same initial condition in
+physical units, and all four rates compared at the same physical time.
+
+Relative `L²` difference between successive rates, and their ratio (**4 is the second order the
+scheme claims** — `plate.rs` derives `u^{-1} = u^0 - k v^0 + ½k²a^0`, "the consistent second-order
+start"):
+
+| fixture | 83 µs | 333 µs | 667 µs | 1.33 ms | 2 ms |
+|---|---|---|---|---|---|
+| **control** 12 cm, `w=6e` | 4.62 / 4.35 | 4.16 / 4.09 | 4.08 / 4.05 | 4.07 / 4.03 | 3.98 / 4.01 |
+| **control** 8 cm, `w=6e` | 4.52 / 4.31 | 4.20 / 4.11 | 4.16 / 4.10 | 4.09 / 4.06 | 4.06 / 4.04 |
+| 8 cm, `w=20e` (Newton-only) | 4.33 / 4.29 | 3.91 / 4.07 | 3.58 / 3.95 | 2.47 / 3.37 | 1.70 / 2.23 |
+| 5 cm, `w=16e` (Newton-only) | 3.81 / 4.21 | 2.88 / 3.70 | 2.73 / 2.98 | 1.49 / 3.69 | 1.53 / 1.51 |
+| 3 cm, `w=12e` (Newton-only) | 3.65 / 2.62 | 3.86 / 2.11 | 1.70 / 2.19 | 4.04 / 1.26 | 1.98 / 1.08 |
+
+**The controls hold 4.0 at every checkpoint**, which is what makes the rest of the table readable:
+the rig, the matched-time comparison and the fixed-`h` refinement are sound, and the degradation
+below is not an artefact of any of them. (The spatial twin,
+`tests/test_vk_stability.py::test_richardson_second_order`, warns that a narrow strike sits
+pre-asymptotic at ratio ~3 — that warning is about refining `h` into a doubled wavenumber content,
+and it does not bite a temporal refinement at fixed `h`.)
+
+**And the answer is three different answers.** The 8 cm plate at `w = 20e` — territory Picard cannot
+reach at all — converges at a clean second order out to 667 µs. That is trap 3 answered
+affirmatively: there is a root, it is a plate, and Newton found it where Picard's map is expansive.
+The 5 cm plate at `w = 16e` holds second order only at the first checkpoint. The 3 cm plate at
+`w = 12e` never does, and its 48 kHz-to-96 kHz difference is already **37%** at 83 µs — that root
+exists and both iterations agree on it to twelve digits, but 48 kHz is not resolving that plate, and
+calling it audible would be exactly the error trap 3 names.
+
+So: **the same curvature axis that sets Picard's wall also sets the resolution horizon, and Newton
+moves only the first of them.** Newton buys real, physical territory at broad strikes and buys
+*arithmetic* territory at narrow ones. A scene that wants a narrow strike still needs `fs`, and no
+iteration substitutes for it. §3's refusal to claim an audio-band string-drivable gong is
+untouched — and now it has a mechanism rather than a Picard failure behind it.
+
+The independent half of the check: **Newton and Picard, both at 384 kHz, land on the same
+trajectory** — 8.7e-15 to 7.9e-10 relative across all five fixtures and all six checkpoints, growing
+with time exactly as two decorrelating trajectories should. The root is not an artefact of the
+iteration that found it.
+
+### 13.7 The free edge moves the same way, and is slightly harder
+
+Struck 0.12 m off-centre, because §10.4 established that a centred Gaussian on a 40 cm plate is
+`exp(−44)` at the rim and makes a free plate and a supported one the same interior problem. At
+48 kHz: with an 8 cm strike both boundaries are identical to the supported case (Picard 20, Newton
+censored at 40); with a 3 cm strike Picard is identical (6) and **Newton's edge is 16 free against
+20 supported** — and the free plate shows no non-monotone recovery, failing from 18 upward without
+the hole §13.5 found. The direction is the same and the free edge is marginally harder, which is
+what trap 6's extra `h²` predicts and what Part 1's Jacobian already had to carry.
+
+### 13.8 The line search still never fires — now over a population, and necessarily in Rust
+
+`the_line_search_over_part_threes_population` in `crates/physsynth-core/tests/plate.rs` runs
+fourteen points drawn from the map's Newton-only territory — three sample rates, five strike widths,
+every one `expansive` under best-effort Picard — and records what the driver spent:
+
+* **zero** Armijo halvings, across all fourteen;
+* **zero** GMRES stalls (nothing reached `NEWTON_GMRES_MAX_PRODUCTS`);
+* worst inner cost **38** Krylov products, worst **7** Newton iterations.
+
+§11.6 answered trap 2 on the six *gate* fixtures and found the search first firing only from a seed
+200× the physical one. This widens that from six comfortable points to fourteen hard ones and the
+answer does not change: **the full Newton step is accepted everywhere the map says Newton works.**
+The globalisation is insurance, and this is the population that says so.
+
+**It had to be a native bar, and that is a structural fact rather than a preference.**
+`n_line_search`, `gmres_products` and `gmres_stalls` live on `VkNewtonReport` and deliberately not
+on `VkStep` — §11.4's "a field here costs two edits" — so no Python client can see them. A question
+about a solver's internal accounting over a population can only be asked where the accounting lives.
+A second bar, `the_free_edge_holds_the_same_way_off_centre`, asserts §13.7's direction with the same
+counters.
+
+### 13.9 Deliberately not done here
+
+* **The boundary is censored above `w = 40e`** in six cells and the grid was not extended. At those
+  amplitudes the strike is 4 cm of deflection on a 1 mm plate; the map's job was to locate the
+  boundary in the musical range, and a floor is the honest report.
+* **No second material and no second plate size.** The map is one 40 cm steel square. §2.2's
+  side-shrinking leg is what says the curvature axis carries over, and re-deriving it here would
+  have doubled the grid to confirm something already measured.
+* **`n_line_search` is still not on `VkStep`.** §11.4's reasoning holds and §13.8 is the reason it
+  can hold: the question it would answer is answerable in Rust.
+* **Part 5's wrapper-tier work is untouched.** The gong in a room still runs `_VKPlateSurface`'s own
+  Picard loop against the room-loaded factorization and still never consults `couple_method`
+  (§11.8). Nothing in this part changes that, and Part 5 should still scope it in.
+* **No default moves**, again: `couple_method` is `"picard"`, `couple_max_iter` is 50, and §13.3 is
+  now the measured argument for the first of those rather than a precaution.
