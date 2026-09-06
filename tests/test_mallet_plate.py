@@ -350,15 +350,21 @@ def test_a_curved_free_plate_is_struck_too(domain):
 # -- What the model refuses, and what it is -------------------------------------------------------
 
 
-def test_a_nonlinear_plate_is_refused_with_the_reason():
+def test_a_nonlinear_plate_is_refused_and_the_message_names_the_model_that_takes_one():
     # Not a missing cast. The von Karman step is nonlinear, so it is not affine in `f_ext` and the
     # influence column -- the whole basis of the scalar collapse -- does not exist. The message has
     # to say that, because the obvious reading of the refusal is that someone forgot a branch.
+    #
+    # Since 2026-09-06 it also has to name `MalletVKPlate` (model #7g), which is the nested solve
+    # this refusal used to describe as future work. A refusal that explains a gap is a different
+    # thing from a refusal that routes you to the model built in it, and only the second stays
+    # useful once the gap is closed -- so the name is asserted, not just the reason.
     vk = VKPlate(Lx=0.4, Ly=0.4, E=2.0e11, e=1.0e-3, nu=0.3, rho=7800.0, fs=48000.0, N=12)
-    with pytest.raises(TypeError, match="nonlinear"):
+    with pytest.raises(TypeError, match="nonlinear") as excinfo:
         MalletPlate(
             plate=vk, mass=0.02, stiffness=5.0e4, strike_x=0.3, strike_y=0.4, strike_velocity=3.0,
         )
+    assert "MalletVKPlate" in str(excinfo.value)
 
 
 @pytest.mark.parametrize("kwargs,message", [

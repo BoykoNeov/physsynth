@@ -45,7 +45,7 @@ use pyo3::types::PyAny;
 use std::ffi::CString;
 
 use crate::membrane::PyMembrane;
-use crate::plate::PyPlate;
+use crate::plate::{PyPlate, PyVKPlate};
 
 /// `newton_maxiter` as Python would use it: the original passes it straight to a `range()`, so a
 /// negative value means "no Newton iterations", not an error.
@@ -392,10 +392,11 @@ impl PyMalletPlate {
             .map_err(|_| {
                 PyTypeError::new_err(
                     "MalletPlate strikes a linear Plate (physsynth_rs.Plate). Got something else \
-                     -- if it is a VKPlate, that is not a missing cast but a different model: the \
-                     von Karman step is nonlinear, so it is not affine in f_ext and the \
-                     drive-point influence column this mallet is built on does not exist. A gong \
-                     needs an outer contact solve wrapped around the plate's own iteration.",
+                     -- if it is a VKPlate, use MalletVKPlate. That is not a missing cast but a \
+                     different model: the von Karman step is nonlinear, so it is not affine in \
+                     f_ext and the drive-point influence column this mallet is built on does not \
+                     exist. A gong needs an outer contact solve wrapped around the plate's own \
+                     iteration, and MalletVKPlate is that model.",
                 )
             })?
             .unbind();
@@ -615,6 +616,406 @@ impl PyMalletPlate {
     /// Mallet velocity `delta_t- z_H` (m/s): negative into the plate, positive after rebound.
     fn mallet_velocity(&self) -> f64 {
         self.s.velocity(self.p.k)
+    }
+}
+
+/// A mallet striking a **von Karman** plate — model #7g, the gong.
+///
+/// The reference for the algorithm is the gong section of `physsynth_core::mallet`'s module
+/// header; `physsynth.core.mallet.MalletVKPlate` re-exports this name.
+///
+/// Holds a `Py<PyVKPlate>` handle rather than a copy, for the same reason both other coupled
+/// mallets do: `mal.plate` has to **be** the object that was passed in.
+///
+/// # Why this cannot drive the plate through `VKPlate.step`
+///
+/// The outer iteration steps the plate several times from the *same* time-`n` state and commits
+/// exactly one of those, so it reaches the four buffers directly and writes back once. Calling
+/// `step()` per trial would roll `u_prev` on the first one and every trial after it would be
+/// solving a different step.
+#[pyclass(name = "MalletVKPlate", module = "physsynth_rs")]
+pub struct PyMalletVKPlate {
+    p: core::VkPlateParams,
+    s: core::State,
+    plate: Py<PyVKPlate>,
+    last: Option<core::VkContactStep>,
+}
+
+/// Map a nested-solve failure to the Python exception each half would raise on its own.
+///
+/// A contact failure is a `RuntimeError` because that is what the scalar solve has always raised;
+/// a factorization failure is a `ValueError` because that is what `VKPlate.step` raises. The
+/// **message** is where the attribution lives — see `VkContactError`.
+fn gong_err(e: core::VkContactError) -> PyErr {
+    match e {
+        core::VkContactError::Contact { .. } => PyRuntimeError::new_err(e.to_string()),
+        core::VkContactError::Solve(_) => PyValueError::new_err(e.to_string()),
+    }
+}
+
+#[pymethods]
+impl PyMalletVKPlate {
+    // `MalletPlate`'s signature with `plate` taking a `VKPlate` and two arguments added for the
+    // outer loop, deliberately in that shape: swapping a linear soundboard for a gong is then a
+    // one-word edit at the call site plus whatever the outer loop needs.
+    #[allow(clippy::too_many_arguments)]
+    #[new]
+    #[pyo3(signature = (
+        *, plate, mass, stiffness, alpha=2.3, hysteresis=0.0, strike_x, strike_y,
+        strike_velocity, gap=0.0, eta_tol=1e-12, newton_tol=1e-14, newton_maxiter=60,
+        outer_tol=1e-13, outer_max_iter=20
+    ))]
+    fn new(
+        py: Python<'_>,
+        plate: &Bound<'_, PyAny>,
+        mass: f64,
+        stiffness: f64,
+        alpha: f64,
+        hysteresis: f64,
+        strike_x: f64,
+        strike_y: f64,
+        strike_velocity: f64,
+        gap: f64,
+        eta_tol: f64,
+        newton_tol: f64,
+        newton_maxiter: i64,
+        outer_tol: f64,
+        outer_max_iter: i64,
+    ) -> PyResult<Self> {
+        core::check_common(mass, stiffness, alpha, hysteresis, gap).map_err(param_err)?;
+
+        let handle: Py<PyVKPlate> = plate
+            .clone()
+            .cast_into::<PyVKPlate>()
+            .map_err(|_| {
+                PyTypeError::new_err(
+                    "MalletVKPlate strikes a nonlinear VKPlate (physsynth_rs.VKPlate). Got \
+                     something else -- if it is a linear Plate, use MalletPlate instead: an \
+                     affine step has an exact drive-point influence column and needs no outer \
+                     iteration, so driving it through this model would pay for a nested solve \
+                     that converges on its first pass.",
+                )
+            })?
+            .unbind();
+
+        let params = {
+            let pl = handle.bind(py).borrow();
+            core::VkPlateParams::new(
+                pl.vk_params(),
+                mass,
+                stiffness,
+                alpha,
+                hysteresis,
+                strike_x,
+                strike_y,
+                strike_velocity,
+                gap,
+                eta_tol,
+                newton_tol,
+                maxiter_of(newton_maxiter),
+                outer_tol,
+                maxiter_of(outer_max_iter),
+            )
+            .map_err(param_err)?
+        };
+
+        if params.steps_per_contact < 8.0 {
+            warn_under_resolved(py, params.steps_per_contact)?;
+        }
+
+        let u_node = handle.bind(py).borrow().u_at(py, params.node)?;
+        let s = core::State::at_strike(gap, strike_velocity, params.k, u_node);
+        Ok(PyMalletVKPlate {
+            p: params,
+            s,
+            plate: handle,
+            last: None,
+        })
+    }
+
+    // -- parameters --------------------------------------------------------------------------
+
+    /// The gong — the very object the caller passed in.
+    #[getter]
+    fn plate(&self, py: Python<'_>) -> Py<PyVKPlate> {
+        self.plate.clone_ref(py)
+    }
+    #[getter]
+    fn k(&self) -> f64 {
+        self.p.k
+    }
+    #[getter]
+    fn M(&self) -> f64 {
+        self.p.mass
+    }
+    #[getter]
+    fn K(&self) -> f64 {
+        self.p.stiffness
+    }
+    #[getter]
+    fn alpha(&self) -> f64 {
+        self.p.alpha
+    }
+    #[getter]
+    fn lam_h(&self) -> f64 {
+        self.p.lam_h
+    }
+    #[getter]
+    fn eta_tol(&self) -> f64 {
+        self.p.eta_tol
+    }
+    #[getter]
+    fn newton_tol(&self) -> f64 {
+        self.p.newton_tol
+    }
+    #[getter]
+    fn newton_maxiter(&self) -> usize {
+        self.p.newton_maxiter
+    }
+    #[getter]
+    fn outer_tol(&self) -> f64 {
+        self.p.outer_tol
+    }
+    #[getter]
+    fn outer_max_iter(&self) -> usize {
+        self.p.outer_max_iter
+    }
+    /// `M v0 / k` — the force the outer residual is measured against, never `|f|`.
+    #[getter]
+    fn force_scale(&self) -> f64 {
+        self.p.force_scale
+    }
+    #[getter]
+    fn node(&self) -> usize {
+        self.p.node
+    }
+    #[getter]
+    fn x_strike(&self) -> f64 {
+        self.p.x_strike
+    }
+    #[getter]
+    fn y_strike(&self) -> f64 {
+        self.p.y_strike
+    }
+    #[getter]
+    fn contact_frequency(&self) -> f64 {
+        self.p.contact_frequency
+    }
+    #[getter]
+    fn steps_per_contact(&self) -> f64 {
+        self.p.steps_per_contact
+    }
+    #[getter]
+    fn strike_velocity(&self) -> f64 {
+        self.s.strike_velocity
+    }
+
+    /// The **linear** plate's influence column, and the three admittances read off it.
+    ///
+    /// `_g_s` is the chord's *frozen tangent*, not this plate's drive-point admittance — the true
+    /// one is `_drive_point_tangent`'s `g_exact`, which is a function of the plate's deflection.
+    /// A copy each call, as `MalletPlate`'s is.
+    #[getter]
+    fn _influence<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f64>> {
+        PyArray1::from_slice(py, &self.p.influence)
+    }
+    #[getter]
+    fn _g_s(&self) -> f64 {
+        self.p.g_s
+    }
+    #[getter]
+    fn _g_h(&self) -> f64 {
+        self.p.g_h
+    }
+    #[getter]
+    fn _g(&self) -> f64 {
+        self.p.g
+    }
+
+    // -- state -------------------------------------------------------------------------------
+
+    #[getter]
+    fn z_H(&self) -> f64 {
+        self.s.z_h
+    }
+    #[setter]
+    fn set_z_H(&mut self, value: f64) {
+        self.s.z_h = value;
+    }
+    #[getter]
+    fn z_H_prev(&self) -> f64 {
+        self.s.z_h_prev
+    }
+    #[setter]
+    fn set_z_H_prev(&mut self, value: f64) {
+        self.s.z_h_prev = value;
+    }
+    #[getter]
+    fn penetration(&self) -> f64 {
+        self.s.penetration
+    }
+    #[getter]
+    fn contact_force(&self) -> f64 {
+        self.s.contact_force
+    }
+    #[getter]
+    fn in_contact(&self) -> bool {
+        self.s.in_contact
+    }
+    #[getter]
+    fn fallbacks(&self) -> usize {
+        self.s.fallbacks
+    }
+    #[getter]
+    fn n(&self) -> usize {
+        self.s.n
+    }
+
+    /// The gong's displacement field (full 2-D array, rim zero) — for animation snapshots.
+    #[getter]
+    fn state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.plate.bind(py).borrow().state(py)
+    }
+
+    // -- the nested solve's own telemetry ------------------------------------------------------
+    //
+    // Everything below is `nan`/`0` before the first step. These are the numbers the batch's cost
+    // claim is made of, so they are shipped attributes rather than something a test recomputes.
+
+    /// Outer chord iterations the last step took. **Zero on a miss.**
+    #[getter]
+    fn n_outer(&self) -> usize {
+        self.last.as_ref().map_or(0, |l| l.n_outer)
+    }
+    /// Did the outer force increment fall below `outer_tol * force_scale`?
+    #[getter]
+    fn outer_converged(&self) -> bool {
+        self.last.as_ref().is_none_or(|l| l.outer_converged)
+    }
+    /// Did the outer loop stop because the increment stopped shrinking, short of `outer_tol`?
+    ///
+    /// Its floor is the plate's own `couple_tol`, so asking for more than the inner solve supplies
+    /// buys nothing — see the core module's `vk_plate_step`. Recorded, never fatal.
+    #[getter]
+    fn outer_stalled(&self) -> bool {
+        self.last.as_ref().is_some_and(|l| l.outer_stalled)
+    }
+    /// That relative increment at exit — `nan` before the first step.
+    #[getter]
+    fn outer_residual(&self) -> f64 {
+        self.last.as_ref().map_or(f64::NAN, |l| l.outer_residual)
+    }
+    /// Did **every** plate solve of the last step reach the plate's own `couple_tol`?
+    #[getter]
+    fn inner_converged(&self) -> bool {
+        self.last.as_ref().is_none_or(|l| l.inner_converged)
+    }
+    /// Plate iterations summed over the last step's solves, the force-free one included.
+    #[getter]
+    fn inner_iters(&self) -> usize {
+        self.last.as_ref().map_or(0, |l| l.inner_iters)
+    }
+    /// Back-substitutions the last step spent, summed the same way.
+    ///
+    /// The portable cost number. Its denominator is a **bare** `VKPlate` step from the same state,
+    /// whose own `n_solves` the plate reports.
+    #[getter]
+    fn n_solves(&self) -> usize {
+        self.last.as_ref().map_or(0, |l| l.n_solves)
+    }
+
+    // -- time stepping -----------------------------------------------------------------------
+
+    /// Advance one step: force-free plate solve, outer chord, one commit.
+    fn step(&mut self, py: Python<'_>) -> PyResult<()> {
+        let handle = self.plate.clone_ref(py);
+        let mut pl = handle.bind(py).borrow_mut();
+        let (u, u_prev, f_cache, f_prev) = pl.state_buffers(py)?;
+        let out = core::vk_plate_step(
+            &u,
+            &u_prev,
+            &f_cache,
+            &f_prev,
+            &self.p,
+            pl.vk_params(),
+            &mut self.s,
+        )
+        .map_err(gong_err)?;
+        pl.commit(
+            py,
+            out.u.clone(),
+            out.f_full.clone(),
+            out.inner_iters,
+            out.inner_converged,
+            out.outer_residual,
+            out.n_solves,
+        );
+        self.last = Some(out);
+        Ok(())
+    }
+
+    // -- diagnostics -------------------------------------------------------------------------
+
+    /// Total discrete energy `H^n` (J): gong + mallet KE + averaged contact PE.
+    fn energy(&self, py: Python<'_>) -> PyResult<f64> {
+        let pl = self.plate.bind(py).borrow();
+        let i = self.p.node;
+        Ok(core::vk_plate_total_energy(
+            pl.u_at(py, i)?,
+            pl.u_prev_at(py, i)?,
+            pl.energy(py)?,
+            &self.p,
+            &self.s,
+        ))
+    }
+
+    /// Gong pickup at flat live-node `index` — for spectral analysis of the tone.
+    fn displacement_at(&self, py: Python<'_>, index: i64) -> PyResult<f64> {
+        self.plate.bind(py).borrow().displacement_at(py, index)
+    }
+
+    /// Mallet velocity `delta_t- z_H` (m/s): negative into the gong, positive after rebound.
+    fn mallet_velocity(&self) -> f64 {
+        self.s.velocity(self.p.k)
+    }
+
+    /// The **exact** outer tangent `g_exact = [J^-1 influence]_node + g_h`, and the Krylov
+    /// products it cost. Returns `(g_exact, products)`.
+    ///
+    /// Returns `(g_exact, response, products)`: `response` is `[J^-1 influence]_node` alone, the
+    /// **plate-only** half that carries no mallet quantity, and `g_exact = response + _g_h`.
+    ///
+    /// An instrument, not a step: `-g_exact` is the derivative `d eta / df` that the shipped chord
+    /// approximates by `-_g`, and `|1 - g_exact/_g|` bounds the outer contraction factor. It costs
+    /// a GMRES solve, which is why the chord ships instead of a Newton that would use it.
+    ///
+    /// Every argument is the caller's, because `J` has to be evaluated in the context of a
+    /// specific step: `u`, `u_prev` and `F_prev` as they stood at time `n`, `force` the contact
+    /// force that step was driven by, and `w` the displacement it accepted. Read the first three
+    /// off `mal.plate` **before** stepping and `w` off it after.
+    #[pyo3(signature = (*, u, u_prev, F_prev, force, w))]
+    #[allow(non_snake_case)]
+    fn _drive_point_tangent(
+        &self,
+        py: Python<'_>,
+        u: &Bound<'_, PyAny>,
+        u_prev: &Bound<'_, PyAny>,
+        F_prev: &Bound<'_, PyAny>,
+        force: f64,
+        w: &Bound<'_, PyAny>,
+    ) -> PyResult<(f64, f64, usize)> {
+        let pl = self.plate.bind(py).borrow();
+        let vk = pl.vk_params();
+        let n_live = self.p.influence.len();
+        let n_nodes = vk.n_nodes;
+        let u = crate::as_1d_f64(py, u, "u", n_live)?;
+        let u_prev = crate::as_1d_f64(py, u_prev, "u_prev", n_live)?;
+        let f_prev = crate::as_1d_f64(py, F_prev, "F_prev", n_nodes)?;
+        let w = crate::as_1d_f64(py, w, "w", n_live)?;
+        let mut f_ext = vec![0.0; n_live];
+        f_ext[self.p.node] = -force;
+        core::vk_drive_point_tangent(&u, &u_prev, &f_prev, Some(&f_ext), &w, &self.p, vk)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 }
 

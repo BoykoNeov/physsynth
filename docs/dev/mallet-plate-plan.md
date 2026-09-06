@@ -14,7 +14,9 @@
 > mostly about the two things it did not say.
 >
 > **It is not the gong.** `MalletPlate` takes a linear `Plate` and refuses a `VKPlate`, with the
-> reason in the `TypeError`. See §6.
+> reason in the `TypeError`. See §6 — where the gong is now built (`MalletVKPlate`, model #7g,
+> `docs/dev/mallet-gong-plan.md`), and where two of this document's predictions about it are
+> struck through.
 
 ---
 
@@ -179,22 +181,41 @@ Three things follow, and they are the ones a later batch needs:
   consistent with each other. Assigning a different operator to a plate a mallet is already holding
   gives an inconsistent plate exactly as it does without one.
 
-## 6. What is deferred, and why it is a different algorithm
+## 6. What was deferred, and why it is a different algorithm
+
+> **BUILT, 2026-09-06 — model #7g, `MalletVKPlate`, `docs/dev/mallet-gong-plan.md`.** This section
+> is kept as it was written, because two of its numbers were wrong and which two is the next
+> batch's subject. Corrections are inline.
 
 **The gong.** `MalletPlate` refuses a `VKPlate`, and the refusal message says why, because the
 obvious reading is that someone forgot a branch. The von Kármán step is a **nonlinear** solve
 (Picard or Newton), so it is not affine in `f_ext` and the influence column *does not exist*.
 Superposition is the entire basis of the scalar collapse, so a mallet on a gong is not this model
 with a different collaborator — it needs an **outer** contact solve wrapped around a full plate
-solve per residual evaluation, at roughly ten to a hundred plate solves per timestep, with no
-closed-form derivative for the outer Newton (a secant or a bracket instead). That is a batch.
+solve per residual evaluation, at ~~roughly ten to a hundred plate solves per timestep~~ **1.9 to
+2.3 bare plate steps, measured**, with ~~no closed-form derivative for the outer Newton (a secant
+or a bracket instead)~~ **a closed-form derivative after all: `dη/df = −([J⁻¹ influence]_node +
+g_h)`, one GMRES against the Jacobian-vector product the Newton batch had already asserted against
+a finite difference.** That is a batch.
+
+Both errors have the same shape, and it is worth naming. This section reasoned about the
+*algorithm* — a nonlinear solve inside a root-find, correctly — and then priced it as though the
+outer loop would have to work as hard as the inner one. It does not, and the reason was already
+available in the arithmetic on this page. Superposition fails, so the influence column is not the
+answer; but it fails *by a little*, because the von Kármán coupling reaches the one-step response
+scaled by `k²`. The linear column is therefore an excellent **frozen tangent** exactly where it is a
+useless exact solution, and a chord built on it converges in one or two iterations. "Not exact" was
+read as "not useful", and the distance between those two readings is two orders of magnitude of
+cost.
 
 It is also the batch HANDOFF §14.1 actually wants: *"a batch wanting the gong impression still needs
 a mallet, not a budget."* Half of that is now on the shelf. The other half is the nested solve, and
 `StringVKPlateBridge` is the precedent for what *doesn't* work — its spring force `F = K eta^n` is
 **sweep-invariant** and enters the right-hand side outside the Picard loop, which is exactly the
 property the mallet's discrete-gradient force does not have (it is implicit in `eta^{n+1}`, and that
-implicitness is what makes it conserve).
+implicitness is what makes it conserve). That prediction **held**: the contact force is what the
+outer loop has to iterate on, precisely because it cannot be frozen into `rhs_fixed` the way the
+bridge's spring can.
 
 **Not attempted, and not blocked by anything here:** more than one simultaneous mallet on one plate
 (a gap in the *exciter* layer, as HANDOFF §11.3a says of the membrane — note the influence columns

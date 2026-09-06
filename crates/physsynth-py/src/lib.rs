@@ -711,6 +711,7 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<connection::PySympatheticStrings>()?;
     m.add_class::<mallet::PyMalletMembrane>()?;
     m.add_class::<mallet::PyMalletPlate>()?;
+    m.add_class::<mallet::PyMalletVKPlate>()?;
     m.add_class::<mallet::PyMalletWall>()?;
     m.add_class::<radiation::PyAirRadiation>()?;
     m.add_class::<radiation::PyRadiatedBody>()?;

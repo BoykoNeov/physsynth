@@ -954,6 +954,13 @@ pub struct PyVKPlate {
     n_solves: usize,
 }
 
+/// A `VKPlate`'s four state buffers, owned: `(u, u_prev, F, F_prev)`.
+///
+/// Named because the gong reads all four at once and hands them straight to the core kernel --
+/// `MalletVKPlate` steps this plate several times from one time-`n` state, so it cannot go through
+/// `step()`.
+pub(crate) type VkStateBuffers = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
+
 impl PyVKPlate {
     /// Validate an array being assigned to a state attribute and take ownership of it.
     fn adopt(
@@ -981,6 +988,76 @@ impl PyVKPlate {
         let bound = which.bind(py);
         let ro = bound.readonly();
         Ok(state_slice(&ro, name)?.to_vec())
+    }
+
+    // -- the seam `MalletVKPlate` reaches through (model #7g) ---------------------------------
+    //
+    // The gong holds a `Py<PyVKPlate>` handle, exactly as `PyMalletPlate` holds its linear plate,
+    // so `mal.plate` **is** the object the caller passed. What it needs from it is the four
+    // buffers going in and the accepted step coming back -- `step()` cannot serve, because the
+    // gong's outer iteration steps this plate several times from the *same* state and commits
+    // only once.
+
+    /// Everything constant in time, for the mallet's own derivations.
+    pub(crate) fn vk_params(&self) -> &core::VkParams {
+        &self.p
+    }
+
+    /// The four state buffers as owned `Vec`s: `(u, u_prev, F, F_prev)`.
+    pub(crate) fn state_buffers(&self, py: Python<'_>) -> PyResult<VkStateBuffers> {
+        Ok((
+            self.buffer(py, &self.u, "u")?,
+            self.buffer(py, &self.u_prev, "u_prev")?,
+            self.buffer(py, &self.f, "F")?,
+            self.buffer(py, &self.f_prev, "F_prev")?,
+        ))
+    }
+
+    /// Commit an accepted step: roll the buffers and record the telemetry.
+    ///
+    /// Seven arguments plus the GIL token, because it writes every field `step()` writes and the
+    /// grouping clippy would prefer would be a struct that exists only to be destructured here.
+    ///
+    /// Spelled exactly as [`PyVKPlate::step`] spells it, `residual_ratio` aside: the gong runs
+    /// several inner solves per step and there is no single exit ratio to report, so it is left
+    /// `NaN` rather than set to whichever solve happened to be last.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn commit(
+        &mut self,
+        py: Python<'_>,
+        u: Vec<f64>,
+        f_new: Option<Vec<f64>>,
+        n_iters: usize,
+        converged: bool,
+        last_residual: f64,
+        n_solves: usize,
+    ) {
+        let fresh = PyArray1::from_vec(py, u).unbind();
+        self.u_prev = std::mem::replace(&mut self.u, fresh);
+        if let Some(f) = f_new {
+            let fresh_f = PyArray1::from_vec(py, f).unbind();
+            self.f_prev = std::mem::replace(&mut self.f, fresh_f);
+        }
+        self.n += 1;
+        self.n_iters = n_iters;
+        self.converged = converged;
+        self.last_residual = last_residual;
+        self.residual_ratio = f64::NAN;
+        self.n_solves = n_solves;
+    }
+
+    /// `u[i]` at a live-node index the caller has already validated.
+    pub(crate) fn u_at(&self, py: Python<'_>, i: usize) -> PyResult<f64> {
+        let bound = self.u.bind(py);
+        let ro = bound.readonly();
+        Ok(state_slice(&ro, "u")?[i])
+    }
+
+    /// `u_prev[i]`, likewise.
+    pub(crate) fn u_prev_at(&self, py: Python<'_>, i: usize) -> PyResult<f64> {
+        let bound = self.u_prev.bind(py);
+        let ro = bound.readonly();
+        Ok(state_slice(&ro, "u_prev")?[i])
     }
 }
 
@@ -1400,7 +1477,7 @@ impl PyVKPlate {
 
     /// Current displacement as a full 2-D field, rim zero.
     #[getter]
-    fn state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+    pub(crate) fn state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let u = self.buffer(py, &self.u, "u")?;
         let full = physsynth_core::ops2d::embed(&u, &self.p.lin.index_map);
         to_2d_f64(py, full, self.p.lin.mask.nrows(), self.p.lin.mask.ncols())
@@ -1538,12 +1615,16 @@ impl PyVKPlate {
     }
 
     /// Total discrete energy.
-    fn energy(&self, py: Python<'_>) -> PyResult<f64> {
+    ///
+    /// `pub(crate)` so `MalletVKPlate` can add its own two terms to it -- the gong's total is this
+    /// number plus mallet kinetic plus the averaged contact potential, and reading it back through
+    /// the interpreter would be a second spelling of the same call.
+    pub(crate) fn energy(&self, py: Python<'_>) -> PyResult<f64> {
         Ok(self.linear_energy(py)? + self.membrane_energy(py)?)
     }
 
     /// Displacement at flat live-node `index`.
-    fn displacement_at(&self, py: Python<'_>, index: i64) -> PyResult<f64> {
+    pub(crate) fn displacement_at(&self, py: Python<'_>, index: i64) -> PyResult<f64> {
         let bound = self.u.bind(py);
         let ro = bound.readonly();
         node_value(state_slice(&ro, "u")?, index)

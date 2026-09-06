@@ -20,15 +20,25 @@ derivation, it is the only one. It strikes a linear :class:`~physsynth.core.plat
 (simply-supported soundboard or free-edge cymbal, on any of the three outlines) and refuses a
 ``VKPlate``: the plate's implicit step is affine in an external force, which is what lets one
 precomputed drive-point column stand in for the local nodal mass the *explicit* membrane hands over
-for free — and the von Kármán step is not affine, so the gong needs a nested solve and a batch of
-its own.
+for free — and the von Kármán step is not affine, so the gong needs a nested solve.
+
+``MalletVKPlate`` (2026-09-06) **is** that nested solve — model #7g, the gong, and the fourth model
+here. An outer iteration on the contact force wraps a full von Kármán plate solve per evaluation,
+and its frozen tangent is the *linear* plate's drive-point admittance, which makes it degenerate
+exactly to ``MalletPlate`` when the coupling is switched off. Two things the batch measured are
+worth carrying at the import site, because both contradict what this module used to say:
+the nested solve costs **1.8–2.3×** a bare gong step and not the ten to a hundred that was
+predicted, and the outer iteration **does** have a closed-form derivative — it is the plate's own
+Jacobian-vector product, and ``_drive_point_tangent`` returns it.
+Rectangles only, and no ``pressure()``: ``VKPlate`` carries no acceleration field.
+See ``docs/dev/mallet-gong-plan.md``.
 
 Headless: no I/O, no graphics.
 """
 
 from __future__ import annotations
 
-from physsynth_rs import MalletMembrane, MalletPlate, MalletWall
+from physsynth_rs import MalletMembrane, MalletPlate, MalletVKPlate, MalletWall
 
 from .collision import (
     contact_force_dg,
@@ -43,6 +53,7 @@ from .membrane import Membrane
 __all__ = [
     "MalletMembrane",
     "MalletPlate",
+    "MalletVKPlate",
     "MalletWall",
     "Membrane",
     "contact_potential",

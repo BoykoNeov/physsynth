@@ -779,15 +779,48 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   a **linear** `Plate` — supported soundboard or free-edge cymbal, on any of the three outlines —
   with the membrane mallet's contact solve unchanged and the explicit resonator's local nodal mass
   replaced by a precomputed **driving-point influence column** `(k²/force_den) A⁻¹ e_node`, which is
-  what an implicit resonator offers instead. It **refuses a `VKPlate`, and the refusal is the
-  remaining half of this bullet**: the von Kármán step is nonlinear, so it is not affine in `f_ext`
-  and the influence column does not exist. Superposition is the whole basis of the scalar collapse,
-  so the gong needs an **outer contact solve wrapped around a full Picard/Newton plate solve per
-  residual evaluation** — a different algorithm at ~10–100× the cost per step, with no closed-form
-  derivative for the outer iteration. `StringVKPlateBridge` is the precedent for what does *not*
+  what an implicit resonator offers instead. It **refuses a `VKPlate`**, and the other half of
+  this bullet is now shipped too — **model #7g, `MalletVKPlate` (2026-09-06,
+  `docs/dev/mallet-gong-plan.md`)**, the gong. The premise still holds: the von Kármán step is
+  nonlinear, so it is not affine in `f_ext`, the influence column does not exist, and superposition
+  — the whole basis of the scalar collapse — is unavailable. What replaces it is an **outer
+  iteration on the contact force wrapped around a full plate solve per evaluation**, whose frozen
+  tangent is the *linear* plate's own drive-point admittance `g_s`. That choice is what makes the
+  model degenerate **exactly** to #7p when the coupling is off — the outer loop then exits at one
+  iteration, always, which is the anchor a sign error cannot survive — and it lets model #7's
+  contact root-find be reused unchanged rather than re-derived inside a nonlinear solver.
+  **Two of this bullet's own numbers were wrong, and the batch is mostly about why.** It priced the
+  gong at *"~10–100× the cost per step"*: measured against a bare `VKPlate` step taken from the
+  identical state, it is **1.9–2.3×** over a whole strike-and-ring run and 2.4–2.9× during contact,
+  because the outer loop converges in a mean of **1.9 iterations and a maximum of 2**. And it said
+  there is *"no closed-form derivative for the outer iteration"*: there is one, and it is this
+  project's own Jacobian-vector product — differentiating the fixed point gives
+  `dη/df = −([J⁻¹ influence]_node + g_h)` for exactly the `J` the Newton batch asserted against a
+  finite difference. It is not used to step (a GMRES per iteration would cost more than the chord
+  it replaces) but it is what *explains* the iteration count: the contraction is bounded by
+  `|1 − g_exact/g|`, measured at 2e-6 to 1e-2. Within that bound the mallet appears **only in the
+  denominator** — `|g − g_exact|` is bitwise identical across a 200× mass range — so a heavier
+  mallet does converge more slowly, by a bounded factor (1.6× across that range) rather than by an
+  amount that grows. `StringVKPlateBridge` is still the precedent for what does *not*
   transfer: its spring force `F = K η^n` is sweep-invariant and enters the RHS outside the Picard
   loop, which is exactly the property a discrete-gradient contact force (implicit in `η^{n+1}`, and
-  implicit is what makes it conserve) does not have.
+  implicit is what makes it conserve) does not have — which is why the force here has to sit in an
+  outer loop rather than in `rhs_fixed`.
+  The physics payoff is one measurement with a bit-exact control. At `alpha = 1` every part of the
+  exciter is homogeneous of degree one, so on a **linear** plate a four-times-harder strike gives a
+  four-times-larger response and nothing else — measured at **exactly 0.0** departure, an identity
+  rather than a tolerance. On the gong, with the felt thus contributing nothing by construction,
+  the departure is **2.12**. Model #7p's *"the felt exponent is the only source of dynamic timbre"*
+  is a statement about a linear resonator; on a gong the felt can be removed from the question and
+  the timbre still moves. A power-weighted spectral centroid splits the same pair of causes very
+  differently — 0.16% for the felt against 74% for the plate across a 16× dynamic range, a factor
+  of 450 — which is the air-box family's "no single detector is sufficient" rule arriving on a
+  contact model.
+  Three things do *not* carry over from #7p: **rectangles only** (`VkParams` hardcodes the outline,
+  so "the outline is free" was a property of the linear mallet), **no `pressure()`** (`VKPlate`
+  carries no acceleration field), and the free branch's read-out error — which is still quadratic
+  in the rigid drift, but was **invisible until the outer tolerance was tightened**, because the
+  nested solve's own error was larger than the cancellation error it was supposed to expose.
 - **The three-way chain — `string → bridge → room-loaded gong → room` — is SHIPPED**
   (`docs/dev/string-vk-plate-room-plan.md`). The thing the air-box family and the bridge batch each
   deferred to the other. Two of its results arrived before any claim did: it composes with **zero

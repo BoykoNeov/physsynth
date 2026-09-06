@@ -34,7 +34,7 @@ from physsynth.core.connection import (
     SympatheticStrings,
 )
 from physsynth.core.engine import simulate
-from physsynth.core.mallet import MalletMembrane, MalletPlate, MalletWall
+from physsynth.core.mallet import MalletMembrane, MalletPlate, MalletVKPlate, MalletWall
 from physsynth.core.membrane import Domain, Membrane
 from physsynth.core.plate import THETA_DEFAULT as PLATE_THETA_DEFAULT
 from physsynth.core.plate import Plate, VKPlate, grain_ratios_from_material
@@ -1172,6 +1172,103 @@ def make_mallet_plate(
         plate=plate, mass=mass, stiffness=K, alpha=alpha, hysteresis=hysteresis,
         strike_x=strike_x * Lx, strike_y=strike_y * Ly, strike_velocity=strike_velocity, gap=gap,
     )
+
+# Mallet on a GONG (model #7g) -- the nested solve. The same felt again, now against a *nonlinear*
+# resonator, so there is no drive-point influence column and the contact force is found by an outer
+# iteration wrapped around a full von Karman plate solve. See docs/dev/mallet-gong-plan.md.
+#
+# The plate is `tests/test_vk_energy.py`'s: a 0.4 m square of 1 mm steel, whose fundamental is near
+# 30 Hz and whose thickness is the amplitude scale the nonlinearity switches on at. `fs` is a free
+# parameter here and NOT derived from a Courant number, because the theta-scheme is unconditionally
+# stable -- 48 kHz gives 151 steps through the felt's half-period, well clear of the 8 below which
+# the model warns.
+#
+# `strike_velocity` is the knob that matters: 1 m/s stays essentially linear (`w/e ~ 0.5`), 6 m/s
+# reaches `w/e ~ 2.8` with the membrane term at 3% of the total, and 12 m/s reaches 4.4. A test
+# whose subject is the nonlinearity must check the membrane share rather than trusting the velocity.
+GONG_MATERIAL = dict(E=2.0e11, e=1.0e-3, nu=0.3, rho=7800.0)  # rho is VOLUMETRIC (kg/m^3)
+GONG_SIDE = 0.4                # m
+GONG_FS = 48000.0              # Hz -- free, not a CFL
+GONG_N = 20                    # 361 live nodes on the supported branch
+GONG_VELOCITY_DEFAULT = 6.0    # m/s -- w/e ~ 2.8, membrane energy ~3% of the total
+# A HEAVIER head than the membrane and linear-plate models' 20 g, and it is not a style choice: a
+# 20 g head at 3 m/s leaves the membrane term at 0.6% of the total, which is a test of the linear
+# theta-scheme wearing a nonlinear plate's name. 50 g at the same speed reaches 1.8%. The native
+# fixture in `crates/physsynth-core/tests/mallet_gong.rs` is the same 50 g for the same reason.
+GONG_MASS_DEFAULT = 0.05       # kg
+
+
+def make_mallet_gong(
+    *,
+    N: int = GONG_N,
+    fs: float = GONG_FS,
+    a: float = GONG_SIDE,
+    mass: float = GONG_MASS_DEFAULT,
+    K: float = MALLET_K_DEFAULT,
+    alpha: float = MALLET_ALPHA_DEFAULT,
+    hysteresis: float = 0.0,
+    strike_x: float = 0.3,
+    strike_y: float = 0.4,
+    strike_velocity: float = GONG_VELOCITY_DEFAULT,
+    gap: float = 0.0,
+    sigma: float = 0.0,
+    boundary: str = "supported",
+    nonlinear: bool = True,
+    couple_tol: float = 1e-13,
+    couple_max_iter: int = 50,
+    couple_method: str = "picard",
+    outer_tol: float = 1e-13,
+    outer_max_iter: int = 20,
+    material: dict | None = None,
+) -> MalletVKPlate:
+    """Build a mallet striking a von Karman plate (model #7g, the gong).
+
+    ``boundary="supported"`` is a gong and ``"free"`` a suspended cymbal -- which **recoils**, and
+    whose energy read-out is therefore a read-out bar rather than an energy bar, exactly as it is
+    for the linear :func:`make_mallet_plate`. ``nonlinear=False`` is the regression path: the plate
+    is then affine in the contact force, the outer loop exits at one iteration, and the whole model
+    reduces to :func:`make_mallet_plate` on :func:`gong_linear_twin`.
+
+    ``rho`` inside ``material`` is the plate's **volumetric** density, as :class:`VKPlate` spells
+    it. Rectangles only: :class:`VKPlate` has no outline argument, so #7p's "the outline is free"
+    does not carry over.
+    """
+    mat = dict(GONG_MATERIAL)
+    if material:
+        mat.update(material)
+    plate = VKPlate(
+        Lx=a, Ly=a, fs=fs, N=N, sigma=sigma, boundary=boundary, nonlinear=nonlinear,
+        couple_tol=couple_tol, couple_max_iter=couple_max_iter, couple_method=couple_method,
+        **mat,
+    )
+    return MalletVKPlate(
+        plate=plate, mass=mass, stiffness=K, alpha=alpha, hysteresis=hysteresis,
+        strike_x=strike_x * a, strike_y=strike_y * plate.Ly,
+        strike_velocity=strike_velocity, gap=gap,
+        outer_tol=outer_tol, outer_max_iter=outer_max_iter,
+    )
+
+
+def gong_linear_twin(gong: MalletVKPlate) -> MalletPlate:
+    """The :class:`MalletPlate` that ``make_mallet_gong(nonlinear=False)`` must reduce to.
+
+    Every number is read back off the gong itself rather than off the arguments that built it --
+    :func:`vk_linear_twin`'s four traps apply unchanged (areal density, the *snapped* ``Ly``,
+    ``kappa``, and ``nu``), and to them this adds the mallet's own five plus the strike point,
+    which is taken as the **snapped** ``(x_strike, y_strike)`` the gong reports. Re-deriving the
+    strike from the fractions would let a snapping difference masquerade as a coupling bug.
+    """
+    vk = gong.plate
+    twin = Plate(
+        Lx=vk.Lx, Ly=vk.Ly, kappa=vk.kappa, rho=vk.rho_s, fs=vk.fs, N=vk.N,
+        sigma=vk.sigma, theta=vk.theta, boundary=vk.boundary, nu=vk.nu,
+    )
+    return MalletPlate(
+        plate=twin, mass=gong.M, stiffness=gong.K, alpha=gong.alpha, hysteresis=gong.lam_h,
+        strike_x=gong.x_strike, strike_y=gong.y_strike,
+        strike_velocity=gong.strike_velocity, gap=gong.z_H,
+    )
+
 
 # Barrier-string collision (model #8, first *distributed* contact model). A stiff/flexible string
 # vibrating against a one-sided nonlinear barrier below it (fret buzz / tanpura jawari). The default
