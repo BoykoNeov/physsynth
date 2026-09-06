@@ -22,7 +22,7 @@
 | 2 | Room energy books were a tolerance rather than exact across the port | `airbox` (Rust) | **Fixed 2026-09-02** (§2) |
 | 3 | NumPy's own transcendentals disagree with libm by an ulp on some CPUs — a read-out asserted exactly across languages fails on a runner and passes on another | `airbox.mode_frequency`, four `pow`s, one `tan`, `exp`, `cos`/`sin` | **Symptom cleared 2026-09-03** — the parity step is green on five consecutive runs; the **rule** stays live (§3) |
 | 4 | The θ-scheme suppresses every discrete decay rate by `1/(1+θk²Q)`; "highs die faster" turns over past mode ~32 | `string_damped`, `string_stiff`, both plates | Accounted for; **fix derived, not built** (§4) |
-| 5 | The von Kármán Picard iteration stops contracting at large amplitude / high strain / high `fs` — the gong-on-a-string, the gong in a room and grid coarsening all die there | `plate.VKPlate`, `connection`, `airbox` | Open, **narrowed 2026-09-06** — the `1/h⁴` mechanism is falsified, a third of the wall was the sweep cap, and Newton is **built** behind `couple_method` (default still Picard) and the boundary is **mapped** — it moves 2–4× in amplitude, but a Newton root is a resolved *plate* only at broad strikes (§5) |
+| 5 | The von Kármán Picard iteration stops contracting at large amplitude / high strain / high `fs` — the gong-on-a-string, the gong in a room and grid coarsening all die there | `plate.VKPlate`, `connection`, `airbox` | Open, **narrowed 2026-09-06** — the `1/h⁴` mechanism is falsified, a third of the wall was the sweep cap, and Newton is **built** behind `couple_method` (default still Picard), the boundary is **mapped** (2–4× in amplitude; a root is a resolved *plate* only where the **deflection** is smooth), and the **gong on a string is no longer iteration-bound** — but two of this row's three scenes were misfiled: one is wrapper-blocked and one was never built (§5) |
 | 6 | The geometrically exact string's Newton solve stops converging past `λ_long ≈ 4`, and `h`-refinement makes it worse | `string_geometric` | Warned at 1, unresolved regime; **§1 eliminated as the cause 2026-09-03** (edge identical in 9/9 cells) and the threshold split into a **convergence** edge at 4 and an **energy** edge at 5–10 (§6) |
 | 7 | A point port's added mass is a grid quantity: refinement makes it *worse* | `airbox.RoomPort` | Refused, measured — `radius` has no default (§7) |
 | 8 | At `λ = 1/√3` the room's corner mode is defective: broadband content grows linearly while the energy stays flat | `airbox` | Accounted for — a flat energy is not a stability certificate here (nor in §6's under-resolved band, found 2026-09-03) (§8) |
@@ -220,8 +220,16 @@ non-convergence, "which a quadratic form can't see". §27.5 and §28.6 then foun
 sweep count is the discriminator between the random-walk and the chaotic parity regimes.
 
 **Why it is the deep end.** Gongs and cymbals are the payoff HANDOFF §2.2 chose the energy
-framework *for*, and every composition that reaches them — the gong on a string, the gong in the
-room, the mallet on the gong — is currently bounded by the iteration rather than by the physics.
+framework *for*. This section used to say that "every composition that reaches them — the gong on a
+string, the gong in the room, the mallet on the gong — is currently bounded by the iteration rather
+than by the physics", and **two thirds of that list was wrong** (`vk-newton-plan.md` §14.1): the
+gong in a room is blocked at the wrapper tier rather than by the iteration, and **the mallet on the
+gong was never built at all** — `MalletMembrane` casts its collaborator to a `Membrane`, and the
+phrase came from a plan that *recommended* a mallet for a future batch. The gong on a string was
+real, was bounded by the iteration, and **is not any more** (§14.5): under Newton it runs to a pluck
+4.3–15× past best-effort Picard's ceiling, deflecting the plate to 150–550× its thickness in four
+to six iterations — far outside von Kármán's moderate-rotation range, so the binding constraint on
+that scene is now the model rather than the solver.
 
 **The approach, now built: Newton on the discrete-gradient system, as model #10 already does.**
 `couple_method="newton"` ships behind a flag as of 2026-09-06 (`vk-newton-plan.md` Parts 1–2), with

@@ -219,10 +219,12 @@ batch record, none of which the part named.
 
 **Part 5 — the payoff, whatever it is.** Re-run the three scenes §5 names as bounded by the
 iteration — the gong on a string, the gong in a room, the mallet on the gong — under Newton, and
-report what changed. Including "nothing", if nothing. **One of the three is not runnable as
-scoped:** the gong in a room goes through `_VKPlateSurface.solve`, which runs its own Picard loop
-against the *loaded* factorization and never consults `couple_method` (§11.8). That is wrapper-tier
-work, and Part 5 should scope it in rather than discover it.
+report what changed. Including "nothing", if nothing. **DONE — see §14**, and **only one of the
+three is a scene at all.** The gong in a room is wrapper-tier work, stated once in §11.8 and not
+restated here. The mallet on the gong turned out never to have been built: `MalletMembrane` casts
+its collaborator to a `Membrane` and there is no mallet-on-a-plate composition anywhere in the repo
+(§14.1). Scoped by the human on 2026-09-06 to **measure the one and report the other two**; the
+wrapper work is deferred to its own batch.
 
 ## 6. Bars
 
@@ -1026,3 +1028,130 @@ counters.
   (§11.8). Nothing in this part changes that, and Part 5 should still scope it in.
 * **No default moves**, again: `couple_method` is `"picard"`, `couple_max_iter` is 50, and §13.3 is
   now the measured argument for the first of those rather than a precaution.
+
+---
+
+## 14. Part 5's result — the bound moved off the solver, and two of the three scenes were not scenes
+
+Landed 2026-09-06. `M:\claud_projects\temp\vk-newton\part5_scene.py` and `part5_scene2.py`.
+Measurement and prose; no code, no default moves.
+
+### 14.1 Only one of the three compositions exists
+
+§5 lists three scenes as "bounded by the iteration rather than by the physics", and
+`scientific-hurdles.md` §5 repeats the list. One of them is blocked at the wrapper tier and §11.8
+says why, once. **The other was never built.** `PyMalletMembrane`
+(`crates/physsynth-py/src/mallet.rs`) casts its collaborator to a `PyMembrane` and refuses anything
+else; there is no `MalletPlate`, no mallet-on-a-plate constructor and no test that composes the two.
+The phrase came from `string-vk-plate-bridge-plan.md` §10.4, which *recommends* a mallet as the
+exciter a future batch would need — a recommendation that became, by quotation, a list of existing
+compositions.
+
+That is Part 4's finding arriving twice in one batch: **a claim propagates by quotation, and a list
+of scenes is worth a grep before it is worth a plan.** The check is one `#[pyclass]` signature.
+
+The human's call, 2026-09-06: measure the one that runs, report the other two, and give the wrapper
+work its own batch rather than smuggling it into a measurement part.
+
+### 14.2 The ceiling — and the first grid read as a null result because it was censored
+
+The scene is `make_vk_plate_bridge`: a 1 m string at 22.2 kHz terminated on a 40 cm, 0.1 mm steel
+plate (`N = 16`), `K = 3000 N/m`, `boundary="supported"` the gong and `"free"` the cymbal. The
+ceiling is the largest triangular pluck that runs 300 steps with **every** step converged and the
+energy drift under the project's `1e-10` bar:
+
+| boundary | Picard, shipped cap 50 | Picard, best effort (cap 2000) | Newton |
+|---|---|---|---|
+| supported (gong) | 30 mm | 70 mm | **≥ 300 mm** |
+| free (cymbal) | 20 mm | 20 mm | **≥ 300 mm** |
+
+Newton is at least **4.3× the gong's** best-effort Picard ceiling and at least **15× the cymbal's**,
+and both Newton entries are censored — it never failed anywhere on the grid. Note the two Picard
+columns: on the gong the shipped cap costs a factor of 2.3 and a *generous* cap recovers it, exactly
+§2.3's point; on the cymbal both caps give 20 mm, so that half is genuine divergence and no constant
+touches it.
+
+**The first pass got this wrong, and the way it got it wrong is the lesson.** Its pluck grid stopped
+at 50 mm, which censored three of six rows — and because best-effort Picard and Newton were *both*
+censored on the gong, the table read as "the gong's entire gain is the sweep cap", a clean and
+completely false null result. §13.2 had already invented a "censored" column for exactly this, and
+the trap was walked into one section later anyway. **A censored grid is not a measurement, and a
+censored grid that makes two rows equal is worse than one that makes them differ** — the first
+invites a conclusion, the second invites another run.
+
+### 14.3 There is no Newton tax on this scene
+
+Worst back-substitutions in any step of a 300-step run:
+
+| boundary | pluck | Picard cap 50 | Picard cap 2000 | Newton |
+|---|---|---|---|---|
+| supported | 1 mm | 20 | 20 | 20 |
+| supported | 5 mm | 32 | 32 | 28 |
+| supported | 15 mm | 50 | 50 | **38** |
+| free | 15 mm | 52 | 52 | **40** |
+
+Level at the bottom, cheaper at the top. §13.3 found Picard cheaper by up to 1.8× across the map's
+easy half; that penalty does not appear here, because the plate's per-step work sits next to a
+string's and a few extra Krylov products are lost in it. **A cost result from a bare-model map does
+not transfer to a scene** — the model is one term in the budget there, not the whole of it.
+
+And at the top of the extended grid Newton takes **four to six iterations**: 4 at a 20 mm pluck, 5
+at 300 mm on the gong, 6 at 300 mm on the cymbal, where the plate is deflected to **154×** and
+**546×** its own thickness respectively.
+
+### 14.4 The new territory is resolved, and §13.6 would have predicted otherwise
+
+Plate field at a matched physical time under joint refinement — `N_string` doubles so `fs` doubles
+with it, while the plate's grid stays `N = 16` in all three runs so the fields compare directly.
+Ratio of successive differences; 4 is the scheme's claimed second order:
+
+| pluck | 1.35 ms | 2.70 ms | 5.40 ms | 13.50 ms |
+|---|---|---|---|---|
+| 1 mm | 4.05 | 4.03 | 3.85 | 3.96 |
+| 15 mm | 3.83 | 3.70 | 3.50 | 1.15 |
+| 50 mm | 4.34 | 3.84 | 5.73 | 1.06 |
+
+(The 5.73 is a ratio taken between two nearly decorrelated differences and is noise, not
+super-convergence; it is left in rather than smoothed.) The small pluck holds second order for the
+whole run. The two large ones hold it out to about 5 ms and then decorrelate — the same horizon
+§13.6 found, and the same shape.
+
+**§13.6 said the curvature axis that sets Picard's wall also sets the resolution horizon, and this
+scene has the narrowest drive in the project — a point force at a single bridge node.** It resolves
+anyway, and the reason is worth stating: §13.6's fixtures set the plate's *state* to a narrow
+Gaussian, so the **deflection** was narrow. Here the deflection is whatever the plate's modes make
+of a small per-step impulse, which is smooth. §2.2 said this in the first place — "the driver is the
+strain, i.e. the curvature of the deflection" — and the restatement is that **the curvature axis is
+about the deflection, not the drive.** That distinction matters because the drive is the thing a
+reader can see in the code and the deflection is not.
+
+A cross-check fell out unasked: the supported and free rows are **identical to four digits** at
+1.35 ms and 2.70 ms and separate at 5.40 ms. That is §10.4's phenomenon appearing in a scene rather
+than a fixture — until the response reaches the rim, a free plate and a supported one are the same
+interior problem — and it dates this plate's rim arrival at roughly 5 ms.
+
+### 14.5 What this scene is bounded by now
+
+Not the iteration. At the top of the extended grid the gong reaches 154× its thickness and the
+cymbal 546×, in four to six Newton iterations, conserving energy to the bar, with the trajectory
+resolved for the first several milliseconds. **Von Kármán is a moderate-rotation theory**; a plate
+deflected to five hundred times its thickness is far outside the range the model is derived for,
+and it is out of that range long before the solver is in trouble. So §5's "bounded by the iteration
+rather than by the physics" is **retired for this scene** — it is bounded by the physics now, which
+is what the sentence was asking for.
+
+Two things that does not say. The refinement check covers plucks to 50 mm, not to 300 — the
+resolution claim stops where the measurement does. And this is one scene on one plate: the gong in a
+room is still blocked (§11.8) and the mallet on the gong still does not exist (§14.1).
+
+### 14.6 Deliberately not done here
+
+* **No wrapper work**, by the human's call. `_VKPlateSurface.solve` still runs its own Picard loop
+  against the room-loaded factorization; that is its own batch, and §11.8 is its statement.
+* **No mallet-on-a-plate composition.** Building one is a model-composition batch with its own
+  energy bars, not a line in a measurement part. It is now on the list as *missing* rather than as
+  *bounded*, which is the correction §14.1 makes.
+* **The ceiling is still censored**, at 300 mm. 30% of the string's length is not a pluck, and
+  extending the grid further would measure the arithmetic rather than the instrument.
+* **No default moves.** `couple_method` is `"picard"` everywhere, and every shipped number in the
+  suite is the number it was.
