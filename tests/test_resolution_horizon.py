@@ -117,10 +117,21 @@ def test_the_wave_space_floor_matches_its_closed_form(n, cents):
 
 
 def test_the_wave_space_floor_is_a_fraction_of_the_GRID_and_not_a_frequency():
-    """Doubling ``N`` doubles the floor. Nothing about ``c``, ``L`` or ``fs`` enters it."""
-    fractions = [spatial_operator_horizon(n, kappa=0.0)[0] / n for n in (128, 256, 512, 1024)]
-    assert max(fractions) - min(fractions) < 0.005, (
-        f"the floor is not a constant fraction of the grid: {fractions}"
+    """Doubling ``N`` doubles the floor. Nothing about ``c``, ``L`` or ``fs`` enters it.
+
+    The bar is **derived rather than picked**: the horizon is an integer count, so on a grid of
+    ``N`` the fraction can only be read to ``1/N``, and the coarsest grid in the sweep sets how
+    much spread a genuinely constant fraction is still allowed to show. Anything tighter would be
+    a bar on the quantisation rather than on the claim, and would flip red the first time a
+    rounding boundary moved by one mode.
+    """
+    grids = (128, 256, 512, 1024)
+    fractions = [spatial_operator_horizon(n, kappa=0.0)[0] / n for n in grids]
+    quantisation = 1.0 / min(grids)
+    assert max(fractions) - min(fractions) <= quantisation, (
+        f"the floor is not a constant fraction of the grid: {fractions} spread "
+        f"{max(fractions) - min(fractions):.5f} against the coarsest grid's own quantisation "
+        f"{quantisation:.5f}"
     )
 
 
@@ -182,7 +193,7 @@ def test_the_theta_string_horizon_rises_with_the_sample_rate_and_then_STOPS(kapp
     )
 
 
-def test_the_theta_string_saturates_at_a_sample_rate_a_musician_would_never_reach():
+def test_the_canonical_theta_string_resolves_under_a_tenth_of_its_grid_and_stops_early():
     """The floor is not a theoretical limit reached at absurd rates — it arrives early.
 
     At the canonical ``lambda = 1`` the string is time-limited, and it is already within a couple
