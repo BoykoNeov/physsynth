@@ -13,9 +13,9 @@
 
 use physsynth_core::ops2d::Mask;
 use physsynth_core::plate::{
-    count_components, energy, grain_ratios_from_material, linspace0, pickup_index_at, Boundary,
-    CoupleOutcome, Domain, MaterialError, ParamError, Params, Plate, PlateSpec, VkCoupledStep,
-    VkParamError, VkParams, VkPlate, VkSpec,
+    count_components, energy, grain_ratios_from_material, linspace0, pickup_index_at, vk_newton,
+    Boundary, CoupleMethod, CoupleOutcome, Domain, MaterialError, ParamError, Params, Plate,
+    PlateSpec, VkCoupledStep, VkParamError, VkParams, VkPlate, VkSpec,
 };
 
 const FS: f64 = 20_000.0;
@@ -1069,4 +1069,475 @@ fn the_model_step_lands_on_a_root_of_the_residual_the_jacobian_differentiates() 
             "{label}: the step's own answer leaves residual {rel:.3e}"
         );
     }
+}
+
+// -- Newton behind `couple_method` (plan §5 Part 2) ----------------------------------------------
+//
+// The gate is that Newton reaches the *same root* on every fixture where Picard reaches one, and
+// meets the energy bar on the converged path. Both halves are asserted below, and the first is
+// stated as the plan's §5 says it must be -- as a claim about `w`, not about both methods
+// reporting `converged`. `G` is cubic, so "both converged" leaves open that they converged to
+// different roots, and only comparing the displacements closes it.
+//
+// What is deliberately *not* here: any claim that Newton moves the wall. That is Part 3, it is
+// measured over a grid rather than at six points, and Part 0 already drew the baseline it will be
+// measured against so that a cap-50 Picard cannot flatter it.
+
+/// [`jac_plate`] with the coupling iteration chosen -- the same plate, twice, is the whole gate.
+fn jac_plate_m(
+    side: f64,
+    n: i64,
+    amp: f64,
+    width: f64,
+    off: f64,
+    boundary: Boundary,
+    method: CoupleMethod,
+) -> VkPlate {
+    let mut vk = VkPlate::new(
+        VkParams::new(&VkSpec {
+            lx: side,
+            ly: side,
+            young: 2.0e11,
+            thickness: 1e-3,
+            nu: 0.3,
+            rho: 7860.0,
+            fs: 48_000.0,
+            n,
+            boundary: Some(boundary),
+            couple_max_iter: 400,
+            couple_method: Some(method),
+            ..VkSpec::default()
+        })
+        .expect("a valid plate"),
+    );
+    let p = &vk.p.lin;
+    let (cx, cy) = (0.5 * p.lx + off, 0.5 * p.ly + off);
+    let a = amp * vk.p.thickness;
+    let u0: Vec<f64> = p
+        .mask
+        .flags()
+        .iter()
+        .enumerate()
+        .filter(|(_, &alive)| alive)
+        .map(|(idx, _)| {
+            let (dx, dy) = (p.x[idx] - cx, p.y[idx] - cy);
+            a * (-((dx * dx + dy * dy) / (width * width))).exp()
+        })
+        .collect();
+    let zero = vec![0.0; p.n_live];
+    vk.set_state(&u0, &zero).expect("the Airy solve factors");
+    vk
+}
+
+/// Both methods converge to the same displacement, on the six fixtures Part 1 asserted `J` on.
+///
+/// The bar is not `couple_tol` itself. Each method stops when `||G||/||w||` is under `1e-13`, and
+/// near a root the *displacement* error is that residual divided by the smallest singular value of
+/// `J` -- so two solves that both meet a residual bar can sit further apart than the bar in `w`.
+/// The number below is measured; the claim it carries is that the two land on one root rather than
+/// on two, which at these amplitudes would be a gap of percent, not of parts in a trillion.
+#[test]
+fn newton_and_picard_land_on_the_same_root() {
+    for (label, side, n, amp, width, off, boundary, _) in JAC_CASES {
+        let mut pic = jac_plate_m(side, n, amp, width, off, boundary, CoupleMethod::Picard);
+        let mut new = jac_plate_m(side, n, amp, width, off, boundary, CoupleMethod::Newton);
+        // Identical initial conditions, so any difference downstream is the iteration's.
+        assert_eq!(pic.u, new.u, "{label}: the two plates start differently");
+        assert_eq!(
+            pic.f, new.f,
+            "{label}: the two stress caches start differently"
+        );
+
+        pic.step(None).expect("the solves succeed");
+        new.step(None).expect("the solves succeed");
+        assert!(
+            pic.converged,
+            "{label}: Picard must reach a root for this gate to mean anything"
+        );
+        assert!(new.converged, "{label}: Newton did not converge");
+
+        let gap: Vec<f64> = (0..pic.u.len()).map(|i| new.u[i] - pic.u[i]).collect();
+        let rel = l2(&gap) / l2(&pic.u);
+        assert!(
+            rel < NEWTON_ROOT_BAR,
+            "{label}: the two roots differ by {rel:.3e}"
+        );
+        // And the energy of the two states agrees, which is the reading that actually matters.
+        let de = (new.energy() / pic.energy() - 1.0).abs();
+        assert!(de < 1e-12, "{label}: energies differ by {de:.3e}");
+    }
+}
+
+/// Measured across the six fixtures and both linearisation points. See the test above on why this
+/// is not `couple_tol`.
+const NEWTON_ROOT_BAR: f64 = 1e-8;
+
+/// The project's acceptance contract, on the Newton path — plan §6's first bar.
+///
+/// A root of the discrete-gradient equation conserves exactly whichever iteration found it, so
+/// this asserts something the theory already promises. It is here because the theory promises it
+/// *of a root*, and the thing worth checking is that what Newton returns is one — including that
+/// the `F` it hands back (the stress function at the accepted iterate, not at the sweep's incoming
+/// one) leaves the energy bookkeeping consistent.
+#[test]
+fn a_newton_stepped_plate_conserves_its_total_energy() {
+    for boundary in [Boundary::Supported, Boundary::Free] {
+        let mut vk = VkPlate::new(
+            VkParams::new(&VkSpec {
+                lx: 0.4,
+                ly: 0.4,
+                young: 2.0e11,
+                thickness: 1e-3,
+                nu: 0.3,
+                rho: 7860.0,
+                fs: 48_000.0,
+                n: 16,
+                boundary: Some(boundary),
+                couple_method: Some(CoupleMethod::Newton),
+                ..VkSpec::default()
+            })
+            .expect("a valid plate"),
+        );
+        let u0 = bump(&vk.p.lin, 3.0 * vk.p.thickness);
+        let zero = vec![0.0; vk.p.lin.n_live];
+        vk.set_state(&u0, &zero).expect("the Airy solve factors");
+        assert!(
+            vk.membrane_energy() > 0.0,
+            "the coupling must be doing work"
+        );
+        let e0 = vk.energy();
+        let mut worst = 0.0f64;
+        for step in 0..300 {
+            vk.step(None).expect("the solves succeed");
+            // On the converged path only -- plan §4. An under-relaxed iterate is not a root and
+            // the identity says nothing about it, so a drift bar that quietly averaged over
+            // unconverged steps would be asserting a different claim than it reads as.
+            assert!(
+                vk.converged,
+                "{boundary:?} step {step}: Newton did not converge, so the bar below would be \
+                 measuring something else"
+            );
+            worst = worst.max((vk.energy() / e0 - 1.0).abs());
+        }
+        assert!(worst < 1e-10, "{boundary:?}: drift {worst:.3e}");
+    }
+}
+
+/// `nonlinear = false` never reaches the iteration at all, whichever one is selected.
+///
+/// Structural rather than measured: [`vk_step`]'s linear early return is *before* the method
+/// branch, so the two paths are the same line of code. Asserted anyway, because "before" is a
+/// property of the source that a later edit can quietly reverse — and plan §6's second bar is that
+/// the linear plate stays bit-identical to model #5.
+#[test]
+fn the_linear_path_is_bit_identical_whichever_method_is_selected() {
+    for boundary in [Boundary::Supported, Boundary::Free] {
+        let make = |method: CoupleMethod| {
+            VkPlate::new(
+                VkParams::new(&VkSpec {
+                    lx: 0.4,
+                    ly: 0.4,
+                    young: 2.0e11,
+                    thickness: 1e-3,
+                    nu: 0.3,
+                    rho: 7860.0,
+                    fs: 48_000.0,
+                    n: 12,
+                    boundary: Some(boundary),
+                    nonlinear: false,
+                    couple_method: Some(method),
+                    ..VkSpec::default()
+                })
+                .expect("a valid plate"),
+            )
+        };
+        let mut pic = make(CoupleMethod::Picard);
+        let mut new = make(CoupleMethod::Newton);
+        let u0 = bump(&pic.p.lin, 1e-3);
+        let zero = vec![0.0; pic.p.lin.n_live];
+        pic.set_state(&u0, &zero).expect("the Airy solve factors");
+        new.set_state(&u0, &zero).expect("the Airy solve factors");
+        for step in 0..40 {
+            pic.step(None).expect("the solves succeed");
+            new.step(None).expect("the solves succeed");
+            assert_eq!(
+                pic.u, new.u,
+                "{boundary:?} step {step}: the linear path forked"
+            );
+        }
+        // And the linear path's cost is one solve, on both -- it is one back-substitution, and
+        // `n_solves` is only worth having if it says so.
+        assert_eq!(pic.n_solves, 1);
+        assert_eq!(new.n_solves, 1);
+    }
+}
+
+/// The cost each method reports is its own arithmetic, and the two are on one scale.
+///
+/// `n_iters` is not comparable across the methods and `n_solves` is — one Picard sweep is two
+/// back-substitutions, one Newton iteration is two plus two per Krylov product and two per
+/// line-search trial. This checks the accounting adds up on both sides, which is what Part 3's
+/// convergence map will be drawn against.
+#[test]
+fn the_solve_count_is_the_cost_both_methods_can_be_read_on() {
+    for (label, side, n, amp, width, off, boundary, _) in JAC_CASES {
+        let mut pic = jac_plate_m(side, n, amp, width, off, boundary, CoupleMethod::Picard);
+        pic.step(None).expect("the solves succeed");
+        assert_eq!(
+            pic.n_solves,
+            2 * pic.n_iters,
+            "{label}: a Picard sweep is exactly one Airy solve and one theta-scheme solve"
+        );
+
+        // The Newton side, read off the report rather than the model, so the parts are visible.
+        let vk = jac_plate_m(side, n, amp, width, off, boundary, CoupleMethod::Newton);
+        let ctx = VkCoupledStep::new(&vk.u, &vk.u_prev, &vk.f_prev, None, &vk.p);
+        let r =
+            vk_newton(&ctx, VkCoupledStep::seed(&vk.u, &vk.u_prev)).expect("the solves succeed");
+        assert!(r.converged, "{label}: Newton did not converge");
+        // 2 for the seed's residual, 2 per Krylov product, 2 per line-search trial. Every
+        // iteration takes at least one trial, and `n_line_search` counts only the *rejected* ones.
+        let trials = r.n_iters + r.n_line_search;
+        assert_eq!(
+            r.n_solves,
+            2 + 2 * r.gmres_products + 2 * trials,
+            "{label}: {} solves does not decompose into 1 seed + {} products + {trials} trials",
+            r.n_solves,
+            r.gmres_products
+        );
+        assert_eq!(
+            r.gmres_stalls, 0,
+            "{label}: an inner solve hit its product cap"
+        );
+    }
+}
+
+/// Plan §7 trap 2: "a line search that never fires is untested code" — so record whether it does.
+///
+/// It does not, on any of Part 1's six fixtures, and this test says so rather than leaving the
+/// question open. That is not an argument for deleting it: those six are all fixtures where Picard
+/// itself converges, which is the region where the residual is smooth and a full Newton step is
+/// the right one. The second half of this test is a fixture where the seed is deliberately far
+/// from the root, and there the search *does* fire — which is what makes the code exercised rather
+/// than merely present.
+#[test]
+fn the_line_search_is_recorded_rather_than_assumed() {
+    let mut fired_on_a_gate_fixture = 0usize;
+    for (label, side, n, amp, width, off, boundary, _) in JAC_CASES {
+        let vk = jac_plate_m(side, n, amp, width, off, boundary, CoupleMethod::Newton);
+        let ctx = VkCoupledStep::new(&vk.u, &vk.u_prev, &vk.f_prev, None, &vk.p);
+        let r =
+            vk_newton(&ctx, VkCoupledStep::seed(&vk.u, &vk.u_prev)).expect("the solves succeed");
+        assert!(r.converged, "{label}: Newton did not converge");
+        fired_on_a_gate_fixture += r.n_line_search;
+    }
+    assert_eq!(
+        fired_on_a_gate_fixture, 0,
+        "the line search now fires on a gate fixture; that is a finding, not a failure -- \
+         re-measure and rewrite this test's claim rather than raising a number"
+    );
+
+    // The same plate, seeded a long way from its root. How far is *measured*, not assumed, and
+    // the answer is further than one would guess: at 1x, 10x and 40x the physical seed the full
+    // Newton step is accepted every single time (0 halvings), and the search first fires at 200x,
+    // where it takes 6. That is worth knowing on its own -- it says the residual stays convex
+    // enough for an undamped step across two orders of magnitude of nonsense, and it is why the
+    // first half of this test reads as a finding rather than as a gap.
+    let vk = jac_plate_m(
+        0.4,
+        20,
+        16.0,
+        0.08,
+        0.0,
+        Boundary::Supported,
+        CoupleMethod::Newton,
+    );
+    let ctx = VkCoupledStep::new(&vk.u, &vk.u_prev, &vk.f_prev, None, &vk.p);
+    let seed = VkCoupledStep::seed(&vk.u, &vk.u_prev);
+    let quiet: Vec<f64> = seed.iter().map(|v| 40.0 * v).collect();
+    let r = vk_newton(&ctx, quiet).expect("the solves succeed");
+    assert_eq!(
+        r.n_line_search, 0,
+        "40x the seed now needs damping; re-measure where the search starts firing"
+    );
+    let far: Vec<f64> = seed.iter().map(|v| 200.0 * v).collect();
+    let r = vk_newton(&ctx, far).expect("the solves succeed");
+    assert!(
+        r.n_line_search > 0,
+        "even from 200x the seed the full step was accepted every time, so the backtracking \
+         branch is unexercised"
+    );
+    // And it recovers: the point of a line search is not that it fires but that the step it
+    // salvages still reaches the root. (The inner GMRES *does* hit its product cap here -- 12
+    // stalls -- which is the other half of the same picture, and is recorded rather than fixed:
+    // an inexact correction handed to a line search is exactly the designed behaviour.)
+    assert!(
+        r.converged,
+        "damped Newton did not recover, residual {:.3e}",
+        r.last_residual
+    );
+    assert!(
+        r.gmres_stalls > 0,
+        "a 200x seed no longer stresses the inner solve -- if NEWTON_GMRES_MAX_PRODUCTS was          raised, this failing is the improvement showing up, and the fact to re-record is where          the cap now bites; the load-bearing claim on this run is the halving above"
+    );
+}
+
+/// Newton converges on all three fixtures where Picard cannot — the measurement, stated narrowly.
+///
+/// Plan §9.4 established that these three are decided on step **zero**: Picard is `expansive` (or,
+/// for the small plate, still at a relative residual of 0.57 after 400 sweeps) from the very first
+/// step, at every cap. Newton reaches `couple_tol` on each in four or five iterations.
+///
+/// **What this test claims, and what it does not.** It claims a property of the *iteration*: there
+/// is a root there, and Newton finds it while Picard's map is expansive. It does not claim the
+/// territory. Plan §7 trap 3 — "a root that is not a plate" — is answered here only as far as this
+/// project's primary detector goes: the run conserves energy to `1e-12` over 300 steps with every
+/// step converged, which is what a root of the discrete-gradient equation must do. The other half
+/// of trap 3, a comparison against a refined-`k` reference, is Part 3's, and until it is done the
+/// honest reading of this test is "the solver got there", not "the plate is now audible".
+///
+/// Part 3 draws this over a grid; six points is not a map, and the boundary's *position* is not
+/// what is asserted here.
+#[test]
+fn newton_converges_where_picard_does_not() {
+    // (label, side, N, amplitude/thickness, strike width, fs, Picard's measured verdict at cap 400)
+    let walls: [(&str, f64, i64, f64, f64, f64, CoupleOutcome); 3] = [
+        (
+            "12cm, 2.4cm strike, 6e",
+            0.12,
+            20,
+            6.0,
+            0.024,
+            48_000.0,
+            CoupleOutcome::Expansive,
+        ),
+        (
+            "40cm, 8cm strike, 20e",
+            0.4,
+            20,
+            20.0,
+            0.08,
+            48_000.0,
+            CoupleOutcome::Expansive,
+        ),
+        (
+            "40cm, 8cm strike, 12e, 24kHz",
+            0.4,
+            20,
+            12.0,
+            0.08,
+            24_000.0,
+            CoupleOutcome::Expansive,
+        ),
+    ];
+    for (label, side, n, amp, width, fs, want) in walls {
+        let make = |method: CoupleMethod| {
+            let mut vk = VkPlate::new(
+                VkParams::new(&VkSpec {
+                    lx: side,
+                    ly: side,
+                    young: 2.0e11,
+                    thickness: 1e-3,
+                    nu: 0.3,
+                    // 7800, not Part 1's 7860: these are plan §9.4's fixtures exactly, so that
+                    // the Picard column below is the same measurement Part 0 published.
+                    rho: 7800.0,
+                    fs,
+                    n,
+                    boundary: Some(Boundary::Supported),
+                    couple_max_iter: 400,
+                    couple_method: Some(method),
+                    ..VkSpec::default()
+                })
+                .expect("a valid plate"),
+            );
+            let p = &vk.p.lin;
+            let (cx, cy) = (0.5 * p.lx, 0.5 * p.ly);
+            let a = amp * vk.p.thickness;
+            let u0: Vec<f64> = p
+                .mask
+                .flags()
+                .iter()
+                .enumerate()
+                .filter(|(_, &alive)| alive)
+                .map(|(idx, _)| {
+                    let (dx, dy) = (p.x[idx] - cx, p.y[idx] - cy);
+                    a * (-((dx * dx + dy * dy) / (width * width))).exp()
+                })
+                .collect();
+            let zero = vec![0.0; p.n_live];
+            vk.set_state(&u0, &zero).expect("the Airy solve factors");
+            vk
+        };
+
+        // Picard, one step from rest, with a cap eight times the shipped default.
+        let mut pic = make(CoupleMethod::Picard);
+        pic.step(None).expect("the solves succeed");
+        assert!(
+            !pic.converged,
+            "{label}: Picard converged, so this is not a wall fixture"
+        );
+        assert_eq!(pic.outcome(), want, "{label}: Picard's verdict moved");
+
+        // Newton, the same step, and then a whole run to see whether the root behaves.
+        let mut new = make(CoupleMethod::Newton);
+        new.step(None).expect("the solves succeed");
+        assert!(new.converged, "{label}: Newton did not converge either");
+        assert!(
+            new.n_iters <= 8,
+            "{label}: {} Newton iterations",
+            new.n_iters
+        );
+
+        let e0 = new.energy();
+        let mut worst = 0.0f64;
+        for step in 1..300 {
+            new.step(None).expect("the solves succeed");
+            assert!(new.converged, "{label}: step {step} did not converge");
+            worst = worst.max((new.energy() / e0 - 1.0).abs());
+        }
+        // Measured 6.3e-13, 1.4e-12 and 9.1e-13. The bar is the project's own 1e-10.
+        assert!(worst < 1e-10, "{label}: drift {worst:.3e}");
+    }
+}
+
+/// The default is Picard, at both levels, and an unparseable spelling is refused.
+///
+/// The first half is plan §6's third bar — "Picard stays the default, so the whole existing suite
+/// exercises today's code unchanged" — stated against the struct rather than against the suite.
+#[test]
+fn the_method_defaults_to_picard_and_a_bad_spelling_is_refused() {
+    assert_eq!(VkSpec::default().couple_method, Some(CoupleMethod::Picard));
+    let p = VkParams::new(&VkSpec {
+        lx: 0.4,
+        ly: 0.4,
+        young: 2.0e11,
+        thickness: 1e-3,
+        nu: 0.3,
+        rho: 7860.0,
+        fs: 48_000.0,
+        n: 8,
+        ..VkSpec::default()
+    })
+    .expect("a valid plate");
+    assert_eq!(p.couple_method, CoupleMethod::Picard);
+    assert_eq!(CoupleMethod::Picard.label(), "picard");
+    assert_eq!(CoupleMethod::Newton.label(), "newton");
+
+    // `None` is how the binding says "the caller passed something that is not a method name" --
+    // the same shape as `boundary`, and refused the same way rather than defaulted.
+    let err = VkParams::new(&VkSpec {
+        lx: 0.4,
+        ly: 0.4,
+        young: 2.0e11,
+        thickness: 1e-3,
+        nu: 0.3,
+        rho: 7860.0,
+        fs: 48_000.0,
+        n: 8,
+        couple_method: None,
+        ..VkSpec::default()
+    })
+    .expect_err("an unparseable method must be refused");
+    assert_eq!(err, VkParamError::BadMethod);
 }

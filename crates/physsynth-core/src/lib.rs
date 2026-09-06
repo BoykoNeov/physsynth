@@ -86,6 +86,7 @@ pub mod collision;
 pub mod dense;
 pub mod exciter;
 pub mod fmt;
+pub mod krylov;
 pub mod mallet;
 pub mod membrane;
 pub mod ops;

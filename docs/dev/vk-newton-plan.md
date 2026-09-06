@@ -195,8 +195,11 @@ both boundaries. *Gate:* relative agreement at the finite-difference floor (~1e-
 well-chosen step), and the linearity identity `J(d1+d2) = J d1 + J d2` exact to rounding.
 
 **Part 2 — Newton–Krylov behind a flag.** `couple_method` on `VkSpec` / `VkParams`, default Picard.
-Matrix-free GMRES plus the line search. *Gate:* on every fixture where Picard converges, Newton
-reaches the same root to `couple_tol`, and the energy drift bar is met on the converged path.
+Matrix-free GMRES plus the line search. **DONE — see §11.** *Gate:* on every fixture where Picard
+converges, Newton reaches the same root to `couple_tol`, and the energy drift bar is met on the
+converged path. **Met**, and the gate had to be sharpened first: "the same root" is a claim about
+`w`, not about both methods reporting `converged`, and Newton's stopping test had to be the same
+*residual* Picard stops on rather than its own step norm — §11.1.
 
 **Part 3 — the convergence map.** Both methods over `(w/e, curvature, fs)`, as a diagnostic script
 under `M:\claud_projects\temp\vk-newton\`, with the resulting numbers written into this document.
@@ -210,7 +213,10 @@ claim in `tests/helpers.py:729-733`. §5's "the measurement exists" line is *rig
 
 **Part 5 — the payoff, whatever it is.** Re-run the three scenes §5 names as bounded by the
 iteration — the gong on a string, the gong in a room, the mallet on the gong — under Newton, and
-report what changed. Including "nothing", if nothing.
+report what changed. Including "nothing", if nothing. **One of the three is not runnable as
+scoped:** the gong in a room goes through `_VKPlateSurface.solve`, which runs its own Picard loop
+against the *loaded* factorization and never consults `couple_method` (§11.8). That is wrapper-tier
+work, and Part 5 should scope it in rather than discover it.
 
 ## 6. Bars
 
@@ -497,3 +503,207 @@ way.
   in place and restore it from memory at exit, so a killed run leaves a **mutated core on disk** —
   one of them changes the free plate's default path by a factor of 2500. Verify with `git diff`
   after running one; do not trust the script's own "restored" line.
+
+---
+
+## 11. Part 2's result — Newton behind the flag, and the wall it walks through
+
+Landed 2026-09-06, on its own commit. `couple_method` defaults to `"picard"`, so no shipped number
+moves; what is new is a second iteration, a linear solver asserted before the plate touches it, and
+one number on which the two methods can honestly be compared.
+
+### 11.1 The stopping test is a residual, and getting that wrong would have hollowed out the gate
+
+§4 said "Newton on `G(w) = 0`" and left the convergence test implicit, and the obvious reading —
+stop when the Newton step `Δ = −J⁻¹G` is small — is wrong here in a way that would not have shown
+up on any fixture in Part 1.
+
+Picard's `last_residual` *looks* like an increment and **is** a residual: the loop's
+`diff = sweep(w_j) − w_j` is exactly `−G(w_j)`, so the shipped loop already stops on
+`‖G‖ / ‖w‖`. Newton's step is a different quantity, and the two agree only while `J` is close to
+`I` — which is 2.4%–12.4% on Part 1's fixtures and **unbounded** in the `ρ > 1` region this batch
+exists for. Stopping Newton on its step norm there would mean stopping at an unknown residual
+level, and §5 Part 2's gate ("Newton reaches the same root to `couple_tol`") would have been
+uncheckable while reading as though it had been checked.
+
+So Newton stops on `‖G(w_new)‖ / max(‖w_new‖, 1e-30) ≤ couple_tol` — the same quantity Picard
+stops on. It is free (that residual is the next iteration's right-hand side anyway), it keeps
+Part 0's `couple_outcome` classifier meaning what it meant, and it is what lets Part 3 draw one
+picture instead of two.
+
+One convention still differs and is written down rather than smoothed over: Picard measures the
+residual at the *previous* iterate (`G(w_{j−1})`, normalised by `w_j`), because a sweep produces
+both at once; Newton measures it at the iterate it returns. Newton's is the honest one and the
+difference is one tolerance wide.
+
+### 11.2 GMRES is a module, and it is asserted against matrices, not against the plate
+
+`crates/physsynth-core/src/krylov.rs` — matrix-free restarted GMRES over a closure, modified
+Gram–Schmidt with Givens rotations, no preconditioner (§1: `A⁻¹` is already inside `J`). No new
+dependency; the core crate's Cargo allowlist is still empty.
+
+It is a sibling module rather than a private function in `plate.rs` for the reason `root` is not
+inside `string_nonlinear`: *"the plate converged"* is a weak bar for a linear solver, because a
+Newton iteration that overshoots and is caught by the line search still ends up at the root.
+`crates/physsynth-core/tests/krylov.rs` asserts it on systems whose answer is known in closed form
+— seven bars, of which three are worth naming:
+
+* **`b` is built as `A x_true`**, so the answer is known rather than compared against a second
+  solver that could share a mistake. Non-symmetric on purpose: `J = I − c A⁻¹ K` is a product of
+  two symmetric operators and is therefore not symmetric, so a solver asserted only on an SPD
+  system would be asserted on a case the caller never presents.
+* **Trap 4, in its exact form.** The restart length is allowed to move the *cost* and forbidden to
+  move the *answer*: restarts 3, 8 and 30 on a 25-dimensional system agree to `1e-10` while the
+  short one demonstrably pays for forgetting. That is what makes a pinned restart a pin rather
+  than a tuning knob.
+* **The recursion's residual is the true one.** Givens tracks `‖b − Ax‖` without forming it; if
+  that bookkeeping were wrong, the solver would stop early or late and *every other test would
+  still pass*, because they all check the answer at a tolerance the recursion itself chose. One
+  test forms the residual explicitly and closes the loop.
+
+The near-identity fixture measures what the unpreconditioned choice is worth: 8, 13 and 25 products
+at dimension 40 for spectra spread 0.018, 0.092 and 0.367 around 1. The *shape* is the claim — the
+cost tracks the distance from `I` and stays under the dimension.
+
+### 11.3 The driver, and the one thing that keeps trap 6 shut
+
+`vk_newton` takes a `&VkCoupledStep` and reads only `couple_tol` and `couple_max_iter` off the
+parameters. It forms no `h`, no `k` and no `rho_s`. That is deliberate and it is the whole of trap
+6's guard: §10.3 established that a finite difference is **structurally blind** to `couple_factor`,
+because `sweep` and `jacobian_vector` share the field — so a Newton driver that recomputed the free
+edge's extra `h²` for itself would have re-opened a hazard nothing in the suite can see. It does
+not compute it; it never sees it.
+
+Two smaller decisions, recorded because they are choices:
+
+* **The seed is Picard's**, `2wⁿ − wⁿ⁻¹`, with no Picard warm-up hybrid. A hybrid is a tuning knob
+  that would make Part 3's map a map of the knob.
+* **`F` is the stress function of the iterate that is returned.** Picard hands back `F` of the
+  sweep's *incoming* iterate — the Python original's convention, kept because changing it moves
+  every shipped number. Newton's final residual evaluation has already computed `F(w)` at the
+  accepted `w`, so that is what it returns. This makes Newton's energy bookkeeping consistent at
+  the returned state rather than to within a tolerance. It is a difference **between the methods**,
+  not evidence that one of them is better physics, and a drift comparison between the two should
+  not be read as one.
+
+### 11.4 `n_solves` — one field, because a field here costs two
+
+§9.5's fork is still there: `VkPlate::step` and `PyVKPlate::step` each copy the step's diagnostics
+in a hand-written block, and every field is somewhere the two can drift apart. So `VkStep` gains
+exactly **one**: `n_solves`, the count of back-substitutions the step spent.
+
+It is the cost axis, and `n_iters` cannot be. One Picard sweep is two solves (one Airy, one
+theta-scheme); one Newton iteration is two, plus two per Krylov product and two per line-search
+trial. Reporting `n_iters` for both would have shown Newton ahead by a factor of twenty on runs
+where the two are level. A count rather than a wall clock because a count does not move with the
+runner.
+
+Everything else a Newton step is worth knowing — line-search halvings, Krylov products, inner
+stalls — lives on `VkNewtonReport`, which native tests read directly and which nothing has to
+mirror. That is how trap 2 is answered without paying the fork twice.
+
+The binding's `n_solves` is read by `tests/test_binding_surface.py`, which is what exercises the
+second copy of the block at all. **`airbox`'s seam does not write it:** `_VKPlateSurface.solve`
+runs its own Picard loop against the loaded factorization and writes `n_iters`, `converged` and
+`last_residual` by hand — not `residual_ratio` (already true after Part 0) and not this. After a
+room step both are the last *bare* step's.
+
+### 11.5 The gate, met — and the claim stated as a claim about `w`
+
+`G` is cubic, so "both converged" leaves open that they converged to *different* roots. The gate is
+therefore stated on the displacement, over Part 1's six fixtures (both boundaries, three
+amplitudes, the off-centre free strike included):
+
+| claim | bar | measured |
+|---|---|---|
+| `‖w_newton − w_picard‖ / ‖w_picard‖`, one step | `< 1e-8` | passes on all six |
+| energies of the two states | `< 1e-12` relative | passes on all six |
+| Newton's energy drift, 300 steps, both boundaries | `< 1e-10` (project bar) | passes, every step converged |
+| `nonlinear=False`, 40 steps, either method | `array_equal` | exact, both boundaries |
+| Picard's solve count | `== 2 · n_iters` | exact |
+| Newton's solve count | `== 2 + 2·products + 2·trials` | exact |
+
+The linear bar is structural as well as measured: `vk_step`'s `!nonlinear` early return is *before*
+the method branch, so the two paths are the same line of code. It is asserted anyway, because
+"before" is a property of the source that a later edit can quietly reverse.
+
+### 11.6 The line search does not fire, and *where* it starts to is the interesting number
+
+Trap 2 says a line search that never fires is untested code, so it was measured rather than
+assumed. On all six gate fixtures and all three of §9.4's wall fixtures, the full Newton step is
+accepted **every single time**: zero halvings.
+
+The seed had to be pushed a long way before backtracking became necessary, and further than one
+would guess:
+
+| seed × | Newton iterations | halvings | Krylov products | inner stalls |
+|---|---|---|---|---|
+| 1 | 4 | 0 | 20 | 0 |
+| 10 | 8 | 0 | 115 | 0 |
+| 40 | 11 | 0 | 1039 | 5 |
+| 200 | 21 | **6** | 2524 | 12 |
+| 1000 | 32 | 14 | 4752 | 23 |
+| 10⁴ | 48 | 33 | 8103 | 40 |
+
+All of them converge. So the residual stays convex enough for an undamped step across two orders of
+magnitude of nonsense, and the search first earns its place at 200×. Both halves are asserted: that
+it does *not* fire at 40×, and that it does at 200× and still reaches the root. The test says
+explicitly that a future failure of the first half is a finding to re-measure, not a number to
+raise.
+
+Note the third column. GMRES starts hitting its 200-product cap well before the line search fires,
+and the inexact correction is then handed to the search — which is the designed behaviour, recorded
+rather than tuned away.
+
+### 11.7 Newton converges on all three walls — what that does and does not say
+
+This is Part 3's territory and Part 3 will draw it properly, over a grid. But the three fixtures
+§9.4 classified as `expansive`-on-step-zero were run under both methods, because it costs nothing
+and because a Part 2 that shipped without looking would have been odd. **These are §9.4's fixtures
+to the digit** — same geometry, same `N = 20`, same `rho = 7800` — which is the only thing that
+makes the Picard column below a cross-reference rather than a new measurement. (An earlier draft of
+this section ran the 12 cm plate at `N = 6` and got `capped` rather than `expansive`; the row was
+not §9.4's, and the discretisation was the whole difference.)
+
+| fixture | Picard, cap 400 | Newton, first step | solves | 300-step drift |
+|---|---|---|---|---|
+| 12 cm, 2.4 cm strike, 6e | `expansive`, NaN at 400 sweeps | **6 iterations** | 96 | 6.3e-13 |
+| 40 cm, 8 cm strike, 20e | `expansive`, NaN | **4 iterations** | 54 | 1.4e-12 |
+| 40 cm, 8 cm, 12e, 24 kHz | `expansive`, NaN | **4 iterations** | 60 | 9.1e-13 |
+
+Every step of all three 300-step runs converged, and the worst drift is two orders under the
+project's `1e-10` bar.
+
+**What this says:** there is a root there, and Newton finds it while Picard's map is expansive.
+That is a property of the *iteration*.
+
+**What it does not say:** that the territory is now a plate. Trap 3 — "a root that is not a plate"
+— is answered here only as far as this project's primary detector goes. Energy conservation is a
+property of *any* root of the discrete-gradient equation, so a converged run conserving to 1e-12 is
+exactly what a root must do and is not independent evidence that the root resolves the physics. The
+other half of trap 3, a comparison against a refined-`k` reference, is Part 3's, and until it is
+done the honest reading is "the solver got there", not "the plate is audible". §3's refusal to
+claim an audio-band string-drivable gong stands untouched by this table.
+
+### 11.8 Deliberately not done here
+
+* **The airbox VK scenes cannot run under Newton, and no amount of flag plumbing fixes that.**
+  `_VKPlateSurface.solve` (`crates/physsynth-py/src/airbox_wrap.rs`) runs its **own** Picard loop,
+  in Python-object arithmetic, against the room-**loaded** factorization — which is the whole point
+  of that seam, since the bare model's `lu` is the wrong operator once the air is attached.
+  `couple_method` lives on `VkParams` and that loop never consults it. So Part 5's "gong in a room"
+  is not runnable under Newton without wrapper-tier work, and Part 5 should scope that in rather
+  than discover it. The gong on a string and the mallet on the gong go through `VKPlate.step` and
+  are unaffected.
+* **The convergence map.** Part 3. §11.7 is six points and a footnote, not a map, and the
+  boundary's *position* is not asserted anywhere.
+* **No default moves.** `couple_method` defaults to `"picard"` at both levels (the core's
+  `VkSpec::default()` and PyO3's signature, asserted separately because they are separate facts),
+  `couple_max_iter` is still 50, and every existing test, frozen value and viewer payload runs the
+  path it ran yesterday.
+* **`tests/helpers.py`'s `make_vk_room_bare_twin` now copies `couple_method`** along with the tol
+  and the cap. Not a live bug — nothing sets the flag today — but that function exists precisely so
+  a defaulting difference cannot masquerade as the physics, and a new constructor argument it did
+  not copy would have been one.
+* **The `f` argument of `vk_step` is still dead on the nonlinear path** (§10.5). Newton does not
+  read it either.

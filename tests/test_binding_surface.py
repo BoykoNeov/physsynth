@@ -233,6 +233,103 @@ def test_the_plate_state_buffers_are_settable_because_airbox_writes_them():
     assert v.couple_outcome == "converged"
 
 
+# -- `couple_method`, the coupled step's iteration (plan §5 Part 2) -------------------------------
+#
+# The flag and the cost counter are the two things Part 2 adds to the binding, and both are here
+# for the reason the file header gives: a native bar cannot see a PyO3 signature or a keyword
+# argument's default. What the *physics* of Newton is worth is asserted natively, in
+# `crates/physsynth-core/tests/plate.rs`.
+#
+# `n_solves` in particular is a field on two structs — `VkPlate` in the core and `PyVKPlate` here —
+# each filled by its own hand-written block (plan §9.5's fork, which Part 2 inherits and feeds one
+# more field). Reading it through the binding is what makes the second block exercised at all.
+
+
+def _vk_struck(method="picard", *, amp=6.0, cap=400, N=12):
+    """A 40 cm steel square, struck `amp` thicknesses tall with a 3 cm Gaussian."""
+    v = physsynth_rs.VKPlate(
+        Lx=0.4, Ly=0.4, E=2.0e11, e=1.0e-3, nu=0.3, rho=7860.0, fs=48_000.0, N=N,
+        couple_max_iter=cap, couple_method=method,
+    )
+    x, y = v.X[v.mask], v.Y[v.mask]
+    r2 = (x - 0.2) ** 2 + (y - 0.2) ** 2
+    u0 = amp * v.e * np.exp(-r2 / 0.03 ** 2)
+    v.set_state(u0, np.zeros_like(u0))
+    return v
+
+
+def test_the_coupling_method_defaults_to_picard_and_echoes_the_spelling_back():
+    """Plan §6: Picard stays the default, so the whole existing suite runs today's code.
+
+    Stated here against the *keyword argument*, which is the half a native bar cannot reach — the
+    core's `VkSpec::default()` says one thing and PyO3's signature says another, and it is the
+    signature that decides what `physsynth/core/plate.py`'s re-export hands the suite.
+    """
+    assert _vk_struck().couple_method == "picard"
+    assert physsynth_rs.VKPlate(
+        Lx=0.4, Ly=0.4, E=2.0e11, e=1e-3, nu=0.3, rho=7860.0, fs=48_000.0, N=8
+    ).couple_method == "picard"
+    assert _vk_struck("newton").couple_method == "newton"
+
+    # An unparseable spelling is refused and quoted back, as `boundary` is — never defaulted.
+    with pytest.raises(ValueError, match="couple_method must be 'picard' or 'newton'"):
+        physsynth_rs.VKPlate(
+            Lx=0.4, Ly=0.4, E=2.0e11, e=1e-3, nu=0.3, rho=7860.0, fs=48_000.0, N=8,
+            couple_method="gmres",
+        )
+    with pytest.raises(ValueError, match="couple_method must be 'picard' or 'newton'"):
+        physsynth_rs.VKPlate(
+            Lx=0.4, Ly=0.4, E=2.0e11, e=1e-3, nu=0.3, rho=7860.0, fs=48_000.0, N=8,
+            couple_method=None,
+        )
+
+
+def test_both_coupling_methods_reach_the_same_root_through_the_binding():
+    """The gate, end to end: two `VKPlate`s differing only in the iteration, one step each.
+
+    The native bar asserts this against `VkPlate`; this asserts that the *binding's* own step —
+    which does not delegate to `VkPlate` at all, but calls `core::vk_step` and fills its own fields
+    by hand — dispatches on the flag and fills them from the same result.
+    """
+    pic, new = _vk_struck("picard"), _vk_struck("newton")
+    assert np.array_equal(pic.u, new.u), "the two plates were struck differently"
+
+    pic.step()
+    new.step()
+    assert pic.converged and new.converged
+    gap = np.linalg.norm(new.u - pic.u) / np.linalg.norm(pic.u)
+    assert gap < 1e-8, f"the two roots differ by {gap:.3e}"
+    assert abs(new.energy() / pic.energy() - 1.0) < 1e-12
+    assert pic.couple_outcome == new.couple_outcome == "converged"
+
+
+def test_the_solve_count_is_the_cost_axis_and_the_binding_reports_it():
+    """`n_solves`, the one field Part 2 adds to the step's diagnostics.
+
+    Picard's is exactly two back-substitutions per sweep — one Airy, one theta-scheme — so it can
+    be checked against `n_iters` outright. Newton's cannot, which is the whole point: its
+    iterations cost a Krylov subspace each, and comparing the two on `n_iters` would show Newton
+    winning by twenty when the two are level.
+    """
+    pic = _vk_struck("picard")
+    pic.step()
+    assert pic.n_solves == 2 * pic.n_iters
+
+    new = _vk_struck("newton")
+    new.step()
+    assert new.n_iters < pic.n_iters, "Newton should need far fewer iterations"
+    assert new.n_solves > 2 * new.n_iters, "a Newton iteration costs more than a sweep"
+
+    # A plate at rest has spent nothing, and the linear path spends exactly one solve.
+    assert _vk_struck("newton").n_solves == 0
+    lin = physsynth_rs.VKPlate(
+        Lx=0.4, Ly=0.4, E=2.0e11, e=1e-3, nu=0.3, rho=7860.0, fs=48_000.0, N=8, nonlinear=False,
+        couple_method="newton",
+    )
+    lin.step()
+    assert lin.n_solves == 1 and lin.n_iters == 1 and lin.converged
+
+
 # -- `Plate.B` is the one operator a caller may replace (plan §40.5, §43) -------------------------
 
 

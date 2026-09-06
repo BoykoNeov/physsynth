@@ -85,6 +85,31 @@ fn resolve_boundary<'py>(
     (obj, parsed)
 }
 
+/// The same for `couple_method`, which chooses the coupled step's iteration and not a model.
+///
+/// `Option<Option<_>>` for §24.7's reason, exactly as `boundary`: an omitted argument must build
+/// the default and an explicit `None` must be quoted back as the nonsense it is.
+fn resolve_method<'py>(
+    py: Python<'py>,
+    arg: Option<Option<Py<PyAny>>>,
+) -> (Bound<'py, PyAny>, Option<core::CoupleMethod>) {
+    let obj = match arg {
+        Some(None) => PyString::new(py, "picard").into_any(),
+        None => py.None().into_bound(py),
+        Some(Some(m)) => m.into_bound(py),
+    };
+    let parsed = obj
+        .cast::<PyString>()
+        .ok()
+        .and_then(|s| s.to_cow().ok())
+        .and_then(|c| match &*c {
+            "picard" => Some(core::CoupleMethod::Picard),
+            "newton" => Some(core::CoupleMethod::Newton),
+            _ => None,
+        });
+    (obj, parsed)
+}
+
 /// The same for `domain`, whose three spellings the original also quotes back.
 fn resolve_domain<'py>(
     py: Python<'py>,
@@ -823,6 +848,7 @@ pub fn grain_ratios_from_material(
 pub struct PyVKPlate {
     p: core::VkParams,
     boundary: Py<PyAny>,
+    couple_method: Py<PyAny>,
     grid_x: Py<PyAny>,
     grid_y: Py<PyAny>,
     mask: Py<PyAny>,
@@ -842,6 +868,7 @@ pub struct PyVKPlate {
     converged: bool,
     last_residual: f64,
     residual_ratio: f64,
+    n_solves: usize,
 }
 
 impl PyVKPlate {
@@ -880,7 +907,7 @@ impl PyVKPlate {
     #[new]
     #[pyo3(signature = (*, Lx, Ly, E, e, nu, rho, fs, N, sigma=0.0, theta=core::THETA_DEFAULT,
                         boundary=None::<Py<PyAny>>, nonlinear=true, couple_tol=1e-13,
-                        couple_max_iter=50))]
+                        couple_max_iter=50, couple_method=None::<Py<PyAny>>))]
     fn new(
         py: Python<'_>,
         Lx: f64,
@@ -897,8 +924,10 @@ impl PyVKPlate {
         nonlinear: bool,
         couple_tol: f64,
         couple_max_iter: i64,
+        couple_method: Option<Option<Py<PyAny>>>,
     ) -> PyResult<Self> {
         let (boundary_obj, parsed) = resolve_boundary(py, boundary, "supported");
+        let (method_obj, method) = resolve_method(py, couple_method);
         let spec = core::VkSpec {
             lx: Lx,
             ly: Ly,
@@ -914,11 +943,16 @@ impl PyVKPlate {
             nonlinear,
             couple_tol,
             couple_max_iter,
+            couple_method: method,
         };
         let p = core::VkParams::new(&spec).map_err(|err| match err {
             core::VkParamError::BadBoundary => PyValueError::new_err(format!(
                 "boundary must be 'supported' or 'free', got {}.",
                 shown(&boundary_obj)
+            )),
+            core::VkParamError::BadMethod => PyValueError::new_err(format!(
+                "couple_method must be 'picard' or 'newton', got {}.",
+                shown(&method_obj)
             )),
             other => PyValueError::new_err(other.to_string()),
         })?;
@@ -951,6 +985,7 @@ impl PyVKPlate {
         Ok(PyVKPlate {
             p,
             boundary: boundary_obj.unbind(),
+            couple_method: method_obj.unbind(),
             grid_x,
             grid_y,
             mask,
@@ -970,6 +1005,7 @@ impl PyVKPlate {
             converged: true,
             last_residual: 0.0,
             residual_ratio: f64::NAN,
+            n_solves: 0,
         })
     }
 
@@ -1046,6 +1082,15 @@ impl PyVKPlate {
     #[getter]
     fn couple_max_iter(&self) -> usize {
         self.p.couple_max_iter
+    }
+    /// Which iteration solves the coupled step: `'picard'` (the default) or `'newton'`.
+    ///
+    /// Both chase the same root of the same residual, so this chooses an iteration and never a
+    /// model — and `nonlinear=False` never reaches either. The string the caller passed, echoed
+    /// back as `boundary` is.
+    #[getter]
+    fn couple_method(&self, py: Python<'_>) -> Py<PyAny> {
+        self.couple_method.clone_ref(py)
     }
     #[getter]
     fn k(&self) -> f64 {
@@ -1240,6 +1285,19 @@ impl PyVKPlate {
     fn set_residual_ratio(&mut self, value: f64) {
         self.residual_ratio = value;
     }
+    /// Back-substitutions the last step spent — the cost axis both methods can be read on.
+    ///
+    /// `n_iters` cannot be compared across the two: one Picard sweep is two solves, one Newton
+    /// iteration is two plus two per Krylov product and two per line-search trial. This one can.
+    ///
+    /// **Not written by `airbox`'s seam.** `_VKPlateSurface.solve` runs its own Picard loop against
+    /// the loaded factorization and writes `n_iters`, `converged` and `last_residual` by hand; it
+    /// does not write this or `residual_ratio`, so after a room step both are the last *bare* step's.
+    #[getter]
+    fn n_solves(&self) -> usize {
+        self.n_solves
+    }
+
     /// Why the last step's sweep loop stopped: `converged`, `capped`, `expansive` or `unknown`.
     ///
     /// Derived from the four fields above every time it is read, so writing any of them by hand
@@ -1373,6 +1431,7 @@ impl PyVKPlate {
         self.converged = out.converged;
         self.last_residual = out.last_residual;
         self.residual_ratio = out.residual_ratio;
+        self.n_solves = out.n_solves;
         Ok(())
     }
 

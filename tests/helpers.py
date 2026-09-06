@@ -2216,6 +2216,7 @@ def make_vk_room_bare_twin(bridge: StringVKPlateBridge) -> StringVKPlateBridge:
         Lx=p.Lx, Ly=p.Ly, fs=p.fs, N=p.N, E=p.E, e=p.e, nu=p.nu, rho=p.rho_v,
         sigma=p.sigma, theta=p.theta, boundary=p.boundary, nonlinear=p.nonlinear,
         couple_max_iter=p.couple_max_iter, couple_tol=p.couple_tol,
+        couple_method=p.couple_method,
     )
     s = bridge.string
     twin_string = IdealString(

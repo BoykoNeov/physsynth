@@ -42,6 +42,7 @@
 //! *available* downstream of the solve, so buying it in the reduction would buy nothing.
 
 use crate::fmt::{py_float, py_general};
+use crate::krylov;
 use crate::ops2d::{
     biharmonic_from_mask, disk_mask, embed, free_plate_stiffness_from_mask, guitar_area,
     guitar_half_width, guitar_mask, guitar_scale, laplacian_from_mask, orthotropic_biharmonic,
@@ -1256,6 +1257,8 @@ pub enum VkParamError {
     NonPositiveTol,
     /// `couple_max_iter < 1`.
     TooFewSweeps,
+    /// The `couple_method` argument was neither spelling.
+    BadMethod,
     /// Whatever the linear half refused — the mask, or the factorization.
     Linear(ParamError),
     /// `B_F` had no admissible pivot.
@@ -1284,6 +1287,8 @@ impl std::fmt::Display for VkParamError {
             VkParamError::BadBoundary => Ok(()),
             VkParamError::NonPositiveTol => write!(f, "couple_tol must be positive."),
             VkParamError::TooFewSweeps => write!(f, "couple_max_iter must be >= 1."),
+            // Quoted back by the binding, which holds the object the caller actually passed.
+            VkParamError::BadMethod => Ok(()),
             VkParamError::Linear(e) => write!(f, "{e}"),
             VkParamError::AiryNotFactorable(e) => write!(f, "{e}"),
         }
@@ -1291,6 +1296,31 @@ impl std::fmt::Display for VkParamError {
 }
 
 impl std::error::Error for VkParamError {}
+
+/// How a coupled step solves its own nonlinear equation.
+///
+/// Both methods chase the **same** root of the **same** residual — [`VkCoupledStep::residual`] —
+/// so this chooses an iteration and never a model. Plan §5 Part 2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoupleMethod {
+    /// Fixed-point sweeps: `w <- sweep(w)`. The default, and every shipped number's path.
+    ///
+    /// Newton with the Jacobian approximated by the identity, which is why it contracts only when
+    /// the spectral radius of `c A^-1 K` is below one — the wall Part 0 measured.
+    Picard,
+    /// Newton on `G(w) = 0`, the closed-form Jacobian applied matrix-free through GMRES.
+    Newton,
+}
+
+impl CoupleMethod {
+    /// The lowercase name, which is how the binding hands this to Python.
+    pub fn label(self) -> &'static str {
+        match self {
+            CoupleMethod::Picard => "picard",
+            CoupleMethod::Newton => "newton",
+        }
+    }
+}
 
 /// The nonlinear plate's constructor arguments, in the Python signature's shape.
 #[derive(Debug, Clone, PartialEq)]
@@ -1323,6 +1353,8 @@ pub struct VkSpec {
     pub couple_tol: f64,
     /// Picard sweep cap.
     pub couple_max_iter: i64,
+    /// Which iteration solves the coupled step; `None` when the caller's spelling made no sense.
+    pub couple_method: Option<CoupleMethod>,
 }
 
 impl Default for VkSpec {
@@ -1343,6 +1375,7 @@ impl Default for VkSpec {
             nonlinear: true,
             couple_tol: 1e-13,
             couple_max_iter: 50,
+            couple_method: Some(CoupleMethod::Picard),
         }
     }
 }
@@ -1375,8 +1408,10 @@ pub struct VkParams {
     pub nonlinear: bool,
     /// Picard convergence threshold.
     pub couple_tol: f64,
-    /// Picard sweep cap.
+    /// Picard sweep cap — on the Newton path, the cap on Newton iterations.
     pub couple_max_iter: usize,
+    /// Which iteration solves the coupled step. `Picard` is the default and the shipped path.
+    pub couple_method: CoupleMethod,
     /// Per-node mass an external force divides by — `rho_s h^2` supported, `rho_s` free.
     pub force_denominator: f64,
     /// The Monge-Ampere bracket, shared by the `F`-source and the coupling force.
@@ -1426,6 +1461,9 @@ impl VkParams {
         if spec.couple_max_iter < 1 {
             return Err(VkParamError::TooFewSweeps);
         }
+        let Some(couple_method) = spec.couple_method else {
+            return Err(VkParamError::BadMethod);
+        };
 
         let rho_v = spec.rho;
         let rho_s = rho_v * spec.thickness;
@@ -1470,6 +1508,7 @@ impl VkParams {
             nonlinear: spec.nonlinear,
             couple_tol: spec.couple_tol,
             couple_max_iter: spec.couple_max_iter as usize,
+            couple_method,
             force_denominator,
             bracket,
             airy,
@@ -1544,6 +1583,8 @@ pub struct VkPlate {
     pub last_residual: f64,
     /// The last step's exit ratio of consecutive increments — see [`VkStep::residual_ratio`].
     pub residual_ratio: f64,
+    /// Back-substitutions the last step spent — see [`VkStep::n_solves`].
+    pub n_solves: usize,
 }
 
 impl VkPlate {
@@ -1561,6 +1602,7 @@ impl VkPlate {
             converged: true,
             last_residual: 0.0,
             residual_ratio: f64::NAN,
+            n_solves: 0,
         }
     }
 
@@ -1612,6 +1654,7 @@ impl VkPlate {
         self.converged = out.converged;
         self.last_residual = out.last_residual;
         self.residual_ratio = out.residual_ratio;
+        self.n_solves = out.n_solves;
         Ok(())
     }
 
@@ -1778,6 +1821,14 @@ pub struct VkStep {
     /// blow-up. The question it answers is the useful one for a cap: would more sweeps help
     /// **from here**.
     pub residual_ratio: f64,
+    /// Back-substitutions this step spent — the **machine-independent** cost, and the only axis
+    /// on which Picard and Newton can honestly be compared.
+    ///
+    /// `n_iters` cannot do that job: one Picard sweep is two solves (one Airy, one theta-scheme)
+    /// while one Newton iteration is two, plus two per Krylov product and two per line-search
+    /// trial. Counting iterations would show Newton ahead by twenty when the two are level. A
+    /// count rather than a wall clock because a count does not move with the machine.
+    pub n_solves: usize,
 }
 
 impl VkStep {
@@ -1975,6 +2026,192 @@ impl<'a> VkCoupledStep<'a> {
     }
 }
 
+// -- Newton, behind `couple_method` (plan §5 Part 2) ---------------------------------------------
+//
+// Every number below is a **pin**, not a knob. Plan §7 trap 4 says the restart length is part of
+// the trajectory exactly as the reed's branch choice was, and the same is true of the forcing term
+// and the Armijo constant: a value chosen per fixture would turn Part 3's convergence map into a
+// map of the choices. They are written here once, and Part 3 reports what they gave.
+
+/// GMRES restart length.
+///
+/// Thirty because the Krylov space the plate presents is clustered at 1 (`J = I` at zero
+/// amplitude, 2.4%-12.4% away on Part 1's fixtures), so a restart is a cap on memory the solver is
+/// not expected to reach. `tests/krylov.rs` asserts the restart moves the cost and not the
+/// converged answer.
+pub const NEWTON_GMRES_RESTART: usize = 30;
+
+/// Cap on Krylov products inside one Newton iteration.
+///
+/// A stall here is recorded, never mistaken for convergence: [`krylov::gmres`] returns the residual
+/// it actually reached, the driver counts the stall, and the inexact correction is then handed to
+/// the line search, which is the piece that decides whether it was any good.
+pub const NEWTON_GMRES_MAX_PRODUCTS: usize = 200;
+
+/// The inner solve's relative tolerance — a **constant** forcing term.
+///
+/// Inexact Newton: the correction only has to point well enough for the line search to accept it,
+/// and solving the Jacobian system to machine precision far from the root buys nothing. Constant
+/// rather than Eisenstat-Walker on purpose — an adaptive forcing term is a second
+/// trajectory-shaping rule, and this batch's job is to measure one iteration rather than tune two.
+pub const NEWTON_FORCING: f64 = 1e-4;
+
+/// Armijo's sufficient-decrease constant, and the cap on backtracking halvings.
+///
+/// The same shape and the same values as `string_geometric::solve_newton`, which is this project's
+/// precedent for a damped Newton step.
+const NEWTON_ARMIJO_C: f64 = 1e-4;
+const NEWTON_ARMIJO_MAXITER: usize = 40;
+
+/// One Newton solve's full accounting — richer than [`VkStep`] carries.
+///
+/// [`VkStep`] gains exactly one new field (`n_solves`), because every field there is copied by hand
+/// in two places (plan §9.5's fork) and each one is somewhere two structs can drift apart. The rest
+/// of what a Newton step is worth knowing lives here, where native tests can read it and nothing
+/// has to be mirrored. Plan §7 trap 2 — "record whether the line search fires" — is answered by
+/// `n_line_search` on this struct rather than by a shipped attribute.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VkNewtonReport {
+    /// The accepted iterate.
+    pub w: Vec<f64>,
+    /// `F(w)` at that iterate — see [`vk_newton`] on why this is *not* Picard's convention.
+    pub f_full: Vec<f64>,
+    /// Newton iterations taken. Zero is legal: the seed can already be a root.
+    pub n_iters: usize,
+    /// Did `||G(w)|| / ||w||` reach `couple_tol`?
+    pub converged: bool,
+    /// That ratio at exit.
+    pub last_residual: f64,
+    /// The last two such ratios' ratio — `NaN` when fewer than two iterations ran.
+    pub residual_ratio: f64,
+    /// Back-substitutions spent, counting both factorizations.
+    pub n_solves: usize,
+    /// Backtracking halvings across the whole step — **zero when the line search never fired**.
+    pub n_line_search: usize,
+    /// Krylov products across the whole step.
+    pub gmres_products: usize,
+    /// Inner solves that hit [`NEWTON_GMRES_MAX_PRODUCTS`] without reaching [`NEWTON_FORCING`].
+    pub gmres_stalls: usize,
+}
+
+/// Newton-Krylov on `G(w) = 0`, with an Armijo line search — plan §5 Part 2.
+///
+/// # The stopping test is a residual, and that is why this reads the way it does
+///
+/// Picard's `last_residual` looks like an increment and **is** a residual: its `diff` is
+/// `sweep(w_j) - w_j = -G(w_j)`, so that loop already stops on `||G|| / ||w||`. Newton's step
+/// `-J^-1 G` is a different quantity, and the two agree only while `J` is near `I` — which is
+/// exactly the region this batch is *not* about. So Newton stops on the same ratio Picard does,
+/// `||G(w_new)|| / max(||w_new||, 1e-30)`. It costs nothing (that residual is the next iteration's
+/// right-hand side anyway) and it keeps [`couple_outcome`] meaning what it means.
+///
+/// One convention does differ. Picard's residual is measured at the *previous* iterate
+/// (`G(w_{j-1})`, normalised by `w_j`), because a sweep produces both at once; Newton's is measured
+/// at the iterate it returns. Newton's is the honest one, the difference is one tolerance wide, and
+/// it is written down here rather than smoothed over.
+///
+/// # `F` is the stress function of the iterate that is returned
+///
+/// Picard hands back `F` of the sweep's *incoming* iterate — the Python original's convention, kept
+/// because changing it would move every shipped number. Newton hands back `F(w)` at the accepted
+/// `w`, because the final residual evaluation has already computed it. That makes Newton's energy
+/// bookkeeping consistent at the returned state rather than to within a tolerance, and it is a
+/// difference **between the methods**, not evidence that one of them is better physics.
+///
+/// # Nothing here touches the geometry
+///
+/// The whole driver goes through `ctx` and reads only `couple_tol` and `couple_max_iter` off the
+/// parameters. It forms no `h`, no `k` and no `rho_s`, so the free edge's extra `h^2` stays where
+/// Part 1 put it — in the one `couple_factor` that `sweep` and `jacobian_vector` share (plan §7
+/// trap 6, and §10.3 on why a finite difference is structurally blind to it).
+///
+/// # Errors
+/// If either factorization cannot back-substitute.
+pub fn vk_newton(ctx: &VkCoupledStep, w0: Vec<f64>) -> Result<VkNewtonReport, SparseLuError> {
+    let p = ctx.p;
+    let n = w0.len();
+    let mut w = w0;
+    let (mut g, mut av) = ctx.residual(&w)?;
+    let mut n_solves = 2usize;
+    let mut n_iters = 0usize;
+    let mut n_line_search = 0usize;
+    let mut gmres_products = 0usize;
+    let mut gmres_stalls = 0usize;
+    let mut last_residual = norm2(&g) / norm2(&w).max(1e-30);
+    let mut prev_residual = f64::NAN;
+    let mut converged = last_residual <= p.couple_tol;
+
+    while !converged && n_iters < p.couple_max_iter {
+        n_iters += 1;
+        let neg_g: Vec<f64> = g.iter().map(|v| -v).collect();
+        let mut products = 0usize;
+        let sol = krylov::gmres(
+            |d| {
+                products += 1;
+                ctx.jacobian_vector(&av, d)
+            },
+            &neg_g,
+            NEWTON_GMRES_RESTART,
+            NEWTON_GMRES_MAX_PRODUCTS,
+            NEWTON_FORCING,
+        )?;
+        // One product is one Airy back-substitution plus one theta-scheme one. Counted from the
+        // closure rather than off the report, so the number is the driver's own arithmetic and not
+        // a claim about what the solver said it did.
+        n_solves += 2 * products;
+        gmres_products += products;
+        if !sol.converged {
+            gmres_stalls += 1;
+        }
+
+        // Armijo backtracking on `1/2 ||G||^2`. `f0` is strictly positive here: this loop only runs
+        // while `last_residual > couple_tol > 0`.
+        let f0 = 0.5 * dot(&g, &g);
+        let mut t = 1.0;
+        let mut taken: Option<(Vec<f64>, Vec<f64>, VkAverages)> = None;
+        for trial in 0..NEWTON_ARMIJO_MAXITER {
+            let w_try: Vec<f64> = (0..n).map(|i| w[i] + t * sol.x[i]).collect();
+            let (g_try, av_try) = ctx.residual(&w_try)?;
+            n_solves += 2;
+            let f_try = 0.5 * dot(&g_try, &g_try);
+            // The last trial is accepted whatever it measures. Refusing to move is not a
+            // safeguard — it is a step that reports success and does nothing; a trial that failed
+            // to decrease shows up where it should, in the residual this iteration then records.
+            if f_try < (1.0 - NEWTON_ARMIJO_C * t) * f0 || trial + 1 == NEWTON_ARMIJO_MAXITER {
+                taken = Some((w_try, g_try, av_try));
+                break;
+            }
+            n_line_search += 1;
+            t *= 0.5;
+        }
+        let (w_new, g_new, av_new) = taken.expect("the backtracking loop runs at least once");
+        w = w_new;
+        g = g_new;
+        av = av_new;
+
+        prev_residual = last_residual;
+        last_residual = norm2(&g) / norm2(&w).max(1e-30);
+        converged = last_residual <= p.couple_tol;
+    }
+
+    Ok(VkNewtonReport {
+        w,
+        f_full: av.f_full,
+        n_iters,
+        converged,
+        last_residual,
+        residual_ratio: if n_iters < 2 {
+            f64::NAN
+        } else {
+            last_residual / prev_residual
+        },
+        n_solves,
+        n_line_search,
+        gmres_products,
+        gmres_stalls,
+    })
+}
+
 /// Advance one timestep: one prefactored solve when linear, a Picard loop when not.
 ///
 /// The sweep-invariant parts are frozen into a [`VkCoupledStep`] first, and the loop body **is**
@@ -2001,6 +2238,23 @@ pub fn vk_step(
             converged: true,
             last_residual: 0.0,
             residual_ratio: f64::NAN,
+            n_solves: 1,
+        });
+    }
+
+    // Newton returns early so the Picard loop below is *textually* the code that shipped, which is
+    // what makes "Picard stays the default and every existing number is unmoved" (plan §6) a
+    // property of the diff rather than a claim about a refactor.
+    if p.couple_method == CoupleMethod::Newton {
+        let r = vk_newton(&ctx, VkCoupledStep::seed(u, u_prev))?;
+        return Ok(VkStep {
+            u: r.w,
+            f: Some(r.f_full),
+            n_iters: r.n_iters,
+            converged: r.converged,
+            last_residual: r.last_residual,
+            residual_ratio: r.residual_ratio,
+            n_solves: r.n_solves,
         });
     }
 
@@ -2039,6 +2293,9 @@ pub fn vk_step(
         n_iters,
         converged,
         last_residual,
+        // One Airy back-substitution and one theta-scheme one per sweep, which `VkCoupledStep`
+        // makes structural: `sweep` is `averages` then `sweep_from`, and that is all it is.
+        n_solves: 2 * n_iters,
         residual_ratio,
     })
 }
