@@ -756,9 +756,13 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   **sign** — its control half survives (a linear body's share is amplitude-invariant to machine
   precision) and neither its size nor its sign is claimed. And the batch's cost finding inverts §8's:
   wall-clock runs the right way (no room, no 3-D CFL), but the coupling's difficulty goes like
-  `k²/h⁴`, so **shrinking the plate breaks the fixed point** — 40 cm converges to `w = 9e`, 8 cm
-  caps out by `w = 6e` — which means audio-band, string-drivable and Picard-convergent **cannot all
-  hold** at this sample rate. A batch wanting the gong *impression* needs a mallet, not a budget.
+  `k²` times the **strain**, so **shrinking the plate breaks the fixed point** — 40 cm converges to
+  `w = 9e`, 8 cm caps out by `w = 6e` at the default 50-sweep cap — which means audio-band,
+  string-drivable and Picard-convergent do not all hold here. *(The `1/h⁴` this bullet used to name
+  was **falsified 2026-09-06**: grid refinement is nearly free and the driver is curvature, not `h`;
+  a third of the wall was the sweep cap rather than divergence; and Newton, now built behind
+  `couple_method`, clears three fixtures Picard cannot. `docs/dev/vk-newton-plan.md` §2.2, §2.3,
+  §11.7.)* A batch wanting the gong *impression* still needs a mallet, not a budget.
 - **The three-way chain — `string → bridge → room-loaded gong → room` — is SHIPPED**
   (`docs/dev/string-vk-plate-room-plan.md`). The thing the air-box family and the bridge batch each
   deferred to the other. Two of its results arrived before any claim did: it composes with **zero

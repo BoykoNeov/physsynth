@@ -22,7 +22,7 @@
 | 2 | Room energy books were a tolerance rather than exact across the port | `airbox` (Rust) | **Fixed 2026-09-02** (§2) |
 | 3 | NumPy's own transcendentals disagree with libm by an ulp on some CPUs — a read-out asserted exactly across languages fails on a runner and passes on another | `airbox.mode_frequency`, four `pow`s, one `tan`, `exp`, `cos`/`sin` | **Symptom cleared 2026-09-03** — the parity step is green on five consecutive runs; the **rule** stays live (§3) |
 | 4 | The θ-scheme suppresses every discrete decay rate by `1/(1+θk²Q)`; "highs die faster" turns over past mode ~32 | `string_damped`, `string_stiff`, both plates | Accounted for; **fix derived, not built** (§4) |
-| 5 | The von Kármán Picard iteration stops contracting at large amplitude / small `h` / high `fs` — the gong-on-a-string, the gong in a room and grid coarsening all die there | `plate.VKPlate`, `connection`, `airbox` | Open; **Newton proposed** (§5) |
+| 5 | The von Kármán Picard iteration stops contracting at large amplitude / high strain / high `fs` — the gong-on-a-string, the gong in a room and grid coarsening all die there | `plate.VKPlate`, `connection`, `airbox` | Open, **narrowed 2026-09-06** — the `1/h⁴` mechanism is falsified, a third of the wall was the sweep cap, and Newton is **built** behind `couple_method` (default still Picard) with its boundary not yet mapped (§5) |
 | 6 | The geometrically exact string's Newton solve stops converging past `λ_long ≈ 4`, and `h`-refinement makes it worse | `string_geometric` | Warned at 1, unresolved regime; **§1 eliminated as the cause 2026-09-03** (edge identical in 9/9 cells) and the threshold split into a **convergence** edge at 4 and an **energy** edge at 5–10 (§6) |
 | 7 | A point port's added mass is a grid quantity: refinement makes it *worse* | `airbox.RoomPort` | Refused, measured — `radius` has no default (§7) |
 | 8 | At `λ = 1/√3` the room's corner mode is defective: broadband content grows linearly while the energy stays flat | `airbox` | Accounted for — a flat energy is not a stability certificate here (nor in §6's under-resolved band, found 2026-09-03) (§8) |
@@ -185,16 +185,35 @@ with an audible payoff in the whole register and the human's call on whether to 
 iteration: predictor `2w^n − w^{n−1}`, then sweeps of "Airy solve → bracket → linear solve"
 until the relative increment is below `couple_tol` (default 1e-13) or `couple_max_iter` (50)
 runs out. Picard contracts only while the nonlinear coupling is small against the linear
-operator, and the contraction factor scales like `k² · (amplitude/thickness)² / h⁴`, so it dies
-three ways, all measured:
+operator, and the contraction factor grows with `k²` and with the **strain** — the curvature of the
+deflection, of which `(amplitude/thickness)²` is only one factor. It dies three ways, all measured:
 
 * **Amplitude.** `w ≈ 10e` at 96 kHz blows up (76k non-converged steps, overflow — "NOT a
   cascade", `docs/memory/von-karman-plate-state.md`) and converges only at 384 kHz.
-* **Geometry.** Shrinking the plate breaks it too (`k²/h⁴`); an audio-band string-drivable
+* **Geometry.** Shrinking the plate breaks it too; an audio-band string-drivable
   Picard-convergent gong "cannot all hold at this sample rate" (`string-vk-bridge-state.md`).
 * **The room.** Coarsening the air grid to buy affordability breaks the plate's fixed point,
   because the room sets `fs` and the plate's `k` with it (72 sweeps at 57.9 kHz, NaN at 33 kHz —
   `air-box-state.md` batch 6).
+
+**Corrected 2026-09-06 — this section said `k² · (amplitude/thickness)² / h⁴`, and the `h` half was
+wrong.** `docs/dev/vk-newton-plan.md` §2.2 measured all three legs separately. Refining the grid
+**4.3×** at fixed plate size *and fixed absolute strike width* costs two sweeps and then flattens
+(12 → 22 max sweeps from `N = 12` to `N = 52`). Shrinking the plate at **fixed `h`** hits the cap
+(11 → 50 sweeps from 40 cm to 16 cm). And narrowing the *strike* alone — fixed plate, fixed grid,
+fixed peak amplitude — does the same (7 → 11 → 22 → 50 for a 12 / 8 / 5 / 3 cm Gaussian). Grid
+refinement is therefore nearly free, and the two observations filed above under "geometry" are one
+observation about **curvature**. The observations stand; the attributed mechanism did not.
+
+**And two measurements narrow the wall itself.** A third of it is the 50-sweep **cap** rather than
+divergence: of the six failing fixtures, three come back green on the energy bar at a generous cap
+and at essentially no wall-clock cost, because the expensive steps are rare — 143, 724 and 76
+sweeps, drifts 4.1e-13, 4.3e-13, 6.0e-13 (§2.3, re-drawn as a per-step verdict in §9.3). Only three
+are genuine divergence, and in those `ρ` is not a constant: it climbs *through* 1 mid-solve, so the
+recoverable failures are the **stalling** ones, which is exactly what a quadratically convergent
+step is for. The wall is also decided on step **zero** — every divergent fixture is already
+expansive on its first step from rest, at both caps (§9.4) — which is what makes a convergence map
+affordable from one step per point rather than a 300-step run.
 
 The bridge's exact linear guard is provably sufficient and the failure mode *migrates* past it to
 non-convergence, "which a quadratic form can't see". §27.5 and §28.6 then found that the Picard
@@ -204,7 +223,13 @@ sweep count is the discriminator between the random-walk and the chaotic parity 
 framework *for*, and every composition that reaches them — the gong on a string, the gong in the
 room, the mallet on the gong — is currently bounded by the iteration rather than by the physics.
 
-**The approach: Newton on the discrete-gradient system, as model #10 already does.** The VK
+**The approach, now built: Newton on the discrete-gradient system, as model #10 already does.**
+`couple_method="newton"` ships behind a flag as of 2026-09-06 (`vk-newton-plan.md` Parts 1–2), with
+Picard still the default; on the three fixtures §9.4 classifies as expansive-on-step-zero it
+converges in 4–6 iterations with 300-step energy drifts of 6.3e-13 to 1.4e-12 (§11.7). That is a
+property of the *iteration*, not yet a claim about the territory: the convergence map and the
+refined-`k` reference are Part 3, and until they land the honest reading is "the solver got there",
+not "the plate is audible". The VK
 step is a nonlinear system `G(w^{n+1}) = 0` whose residual is exactly what the Picard loop
 evaluates; Newton on it converges quadratically wherever Picard converges linearly and keeps
 converging where Picard's factor exceeds one. Three facts make it cheaper than it looks:
@@ -219,14 +244,19 @@ converging where Picard's factor exceeds one. Three facts make it cheaper than i
    discrete-gradient equation conserves exactly (§29's corollary: "any root … conserves
    exactly"), so switching the iteration changes no bar, and the Picard loop can stay as the
    fallback and as the parity reference.
-3. **The measurement exists.** `n_iters`, `converged` and `last_residual` are public; the
-   claim to make is a **convergence map** over `(w/e, fs, h)` — the regime boundary moves from
-   Picard's to Newton's, and the plan document's job is to draw both.
+3. **The measurement exists.** `n_iters`, `converged` and `last_residual` are public — verified,
+   with getters and setters at `crates/physsynth-py/src/plate.rs`. Since 2026-09-06 the model also
+   reports *which* failure it had (`capped` versus `expansive`), because "did not converge"
+   conflated a number with a wall (§9.1). The claim to make is a **convergence map** over
+   `(w/e, strike curvature, fs)` — note `h` is not an axis, per the correction above — drawn twice,
+   once for best-effort Picard and once for Newton.
 
-**Costed.** A `couple_method="newton"` flag on `VkParams`, a matrix-free GMRES (~150 lines, no
-dependency — the crate's allowlist is empty by policy), and a diagnostic script that draws the
-two convergence maps. Rust-first under §6. This is the largest scientific unlock in the register
-and the one the human has to prioritise against §4.
+**Status.** The flag, the closed-form Jacobian-vector product, the matrix-free GMRES and the Armijo
+line search are built and asserted (Parts 0–2; no new dependency, the crate's allowlist is still
+empty). What is left is Part 3's map, Part 5's re-run of the three bounded scenes — one of which,
+the gong in a room, needs wrapper-tier work first, because `_VKPlateSurface.solve` runs its own
+Picard loop against the room-loaded factorization and never consults `couple_method`. This remains
+the largest scientific unlock in the register and the one the human has to prioritise against §4.
 
 ## 6. `λ_long` — the geometric string's unresolved regime
 

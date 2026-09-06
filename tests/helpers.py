@@ -727,17 +727,32 @@ def make_free_plate_bridge(
 # onset is at w ~ e and the thickness therefore has to be a real number.
 #
 # The default is a thin steel sheet, 40 cm square and 0.1 mm thick, and the SIZE is not free -- it
-# is picked by the Picard iteration, not by taste. The membrane coupling's difficulty scales like
-# k^2/h^4, so shrinking the plate at fixed grid makes the fixed point harder, fast: measured on this
-# rig, 40 cm converges in <= 13 sweeps out to w = 9 e, while 8 cm hits the 50-sweep cap by w = 6 e
-# and the energy drift goes with it (2.8e-2). That is batch 6's wall -- resolution against the fixed
-# point -- reached by geometry instead of by grid.
+# is picked by the Picard iteration, not by taste. At the default 50-sweep cap, 40 cm converges in
+# <= 13 sweeps out to w = 9 e, while 8 cm caps out by w = 6 e and takes the energy drift with it
+# (2.8e-2). VK_BRIDGE_SIDE = 0.4 stands on that measurement; only the REASON was misattributed.
+#
+# The mechanism is NOT k^2/h^4 -- this comment claimed it was until 2026-09-06. The k^2 half is
+# right, the h half is measured wrong (docs/dev/vk-newton-plan.md, §2.2). Refining the grid 4.3x at
+# fixed plate size and fixed absolute strike width costs two sweeps and then flattens, whereas
+# shrinking the plate at FIXED h caps out, and so does narrowing the strike alone at fixed plate,
+# fixed grid and fixed peak amplitude. The driver is the STRAIN -- the curvature of the deflection
+# -- not the grid spacing. A smaller plate is harder because it concentrates curvature, not because
+# h shrank with it, and grid refinement is nearly free.
+#
+# Two further corrections from the same probe. A third of the wall is the 50-sweep CAP rather than
+# divergence: at cap 400 a 16 cm plate at w = 6 e converges in 76 sweeps, drift 6.0e-13, at
+# essentially no wall-clock cost, because the expensive steps are rare (§2.3, §9.3). And at a given
+# size the ceiling is an AMPLITUDE, not the size: a 7 cm plate converges in 8 sweeps at w = e and
+# fails by w = 2 e -- measured at 1 mm thickness, which is not this rig's 0.1 mm (§2.4).
 #
 # The consequence is stated rather than hidden: f11 ~ 3 Hz here, so this plate's modes sit BELOW the
-# audio band. Audio-range modes at 0.1 mm need a ~7 cm plate (f ~ e/L^2), which is exactly the size
-# that will not converge; and thickening the plate instead costs ~e^5 in the energy needed to reach
-# w ~ e, which a string does not have. Audio-band, string-drivable and Picard-convergent cannot all
-# hold at this sample rate. This is a rig for the mechanism, not an impression of a gong.
+# audio band. Audio-range modes at 0.1 mm need a ~7 cm plate (f ~ e/L^2), and thickening the plate
+# instead costs ~e^5 in the energy needed to reach w ~ e, which a string does not have. Audio-band,
+# string-drivable and Picard-convergent are still not held together here -- but 7 cm AT 0.1 mm has
+# never been measured, so this is a standing refusal rather than a proven impossibility (§3). Newton
+# now exists behind couple_method="newton" and clears three fixtures Picard cannot (§11.7); its own
+# boundary is unmapped until Part 3, so this rig keeps the size and the default it has. A rig for
+# the mechanism, not an impression of a gong.
 VK_BRIDGE_MAT = dict(E=2.0e11, e=1.0e-4, nu=0.3, rho=7800.0)
 VK_BRIDGE_SIDE = 0.4           # m, square
 VK_BRIDGE_K_DEFAULT = 3000.0   # N/m -- well inside the exact guard for both boundaries

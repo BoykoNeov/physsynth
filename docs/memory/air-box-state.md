@@ -675,7 +675,9 @@ absence asserted by a test. The "linear 2-DOF guard" framing was stale (that foo
 `StringBodyBridge`'s): the **exact** margin stays sufficient because `H_mem` is a sum of squared
 norms with no cross-time term, but the failure mode **migrates** to Picard non-convergence.
 And this batch's fixed-point wall arrives there by *geometry* rather than grid: shrinking the PLATE
-breaks it too (`k²/h⁴`).
+breaks it too (`k²/h⁴` — **the mechanism named here was falsified 2026-09-06**; the observation
+stands, but the driver is the curvature a smaller plate concentrates, not `h`:
+`docs/dev/vk-newton-plan.md` §2.2).
 
 Because no bridge composes with these *room* wrappers yet, `RoomLoadedVKPlate.__getattr__` remains
 free of `RoomLoadedPlate`'s "NOTHING here may shadow a name the bridge reads" constraint — but a

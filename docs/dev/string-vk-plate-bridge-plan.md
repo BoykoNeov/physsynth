@@ -364,6 +364,14 @@ Picard-convergent cannot all hold at this sample rate.** This is a rig for the m
 impression of a gong, and a batch that wants the impression needs a different exciter (a mallet
 delivers the energy a pluck cannot) rather than a bigger budget.
 
+> **Correction, 2026-09-06 — the numbers above stand, the mechanism does not.** `k²/h⁴` is wrong in
+> its `h` half: refining the grid at fixed plate size is nearly free, and what makes a smaller plate
+> harder is the **curvature** it concentrates, not the spacing that shrank with it. Two of this
+> section's numbers are also cap-limited rather than divergent — a 16 cm plate at `w = 6 e` converges
+> in 76 sweeps at cap 400 — and at a fixed size the ceiling turns out to be an *amplitude*. The
+> section's conclusion (the rig's size is set by the fixed point, and it costs the audio band) is
+> unaffected. `docs/dev/vk-newton-plan.md` §2.2–§2.4.
+
 ### 10.5 A trap the plan did not have: two things called `rho`
 
 `make_vk_plate_bridge` first took a single `rho` passthrough. `VKPlate` calls its *volumetric*

@@ -209,7 +209,9 @@ table.
 **Part 4 — the documents the probe falsified.** `scientific-hurdles.md` §5's `k²/h⁴` and the same
 claim in `tests/helpers.py:729-733`. §5's "the measurement exists" line is *right* and stays —
 `n_iters`, `converged` and `last_residual` are exposed with getters and setters at
-`crates/physsynth-py/src/plate.rs:1205-1226`, verified.
+`crates/physsynth-py/src/plate.rs:1205-1226`, verified. **DONE — see §12**, and this scope was
+**two sites out of six**: the claim had propagated to `HANDOFF.md`, this plan's predecessor and a
+batch record, none of which the part named.
 
 **Part 5 — the payoff, whatever it is.** Re-run the three scenes §5 names as bounded by the
 iteration — the gong on a string, the gong in a room, the mallet on the gong — under Newton, and
@@ -707,3 +709,72 @@ claim an audio-band string-drivable gong stands untouched by this table.
   not copy would have been one.
 * **The `f` argument of `vk_step` is still dead on the nonlinear path** (§10.5). Newton does not
   read it either.
+
+---
+
+## 12. Part 4's result — six sites, two kinds of edit, and a second claim under the first
+
+Landed 2026-09-06, docs plus one comment block, no behaviour change and no new measurement:
+§2.2–§2.4 had already measured every leg, so this part is transcription.
+
+### 12.1 The part's own scope was wrong by four sites
+
+§5 named two places: `scientific-hurdles.md` §5 and `tests/helpers.py:729-733`. A repo-wide grep for
+the mechanism (`h^4`, `h⁴`, `k^2/h`, `k²/h`) found **six** — the two named, plus `HANDOFF.md:759`,
+`docs/dev/string-vk-plate-bridge-plan.md:355` and `docs/memory/air-box-state.md:678`, with
+`scientific-hurdles.md` carrying it twice (the summary table's row 5 said "small `h`" as well as the
+body's formula). The other twenty-odd `1/h⁴` hits in the repo are the biharmonic operator's own
+stencil and the explicit scheme's CFL, and are correct; the discriminator is `k²` next to it.
+
+This is the same shape as the migration's "a derived CI list was wrong by 43 of 65 files": **a claim
+propagates by quotation, and the part that retires it inherits whatever the plan author happened to
+remember.** Grep for the claim, not for the files.
+
+### 12.2 Two kinds of site, and only one of them gets rewritten
+
+A **live** claim is one a reader is told to consult before doing work — `HANDOFF.md`,
+`scientific-hurdles.md` and a comment sitting on the constructor argument it justifies. Those are
+rewritten in place, because a wrong mechanism there gets *acted on*.
+
+A **batch record** — `string-vk-plate-bridge-plan.md` §10.4, `air-box-state.md` batch 6 — is a report
+of what that batch concluded, and its measured numbers and its own conclusion are both still right
+(§10.4's title, "the rig's size is set by the fixed point", survives the correction untouched).
+Those get an annotation and a forward pointer, and keep their narrative. Erasing the trail would
+cost more than a stale mechanism that says where it was corrected.
+
+### 12.3 The mechanism was not the only falsified claim at those sites
+
+Every live site carried a second one underneath: the categorical *"audio-range modes at 0.1 mm need
+a ~7 cm plate, **which is exactly the size that will not converge**"*, echoed as "cannot all hold at
+this sample rate". §2.4 measured a 7 cm plate converging in 8 sweeps at `w = e` and failing by
+`w = 2e` — so at a fixed size the ceiling is an **amplitude**, and attributing the failure to the
+size is the same category error as attributing it to `h`.
+
+**But the trilemma itself survives, and checking that took one number.** `probe_rho.py` runs
+`e = 1.0e-3`; `VK_BRIDGE_MAT` is `e = 1.0e-4`. The 7 cm plate that converges is a **1 mm** plate —
+audio-band and Picard-convergent, but a decade too thick to be string-drivable, which is the
+trilemma's third leg. So the honest edit is not "the trilemma is false": it is that the *reason*
+given for it was wrong, that 7 cm **at 0.1 mm** has never been measured, and that the sentence is
+therefore a standing refusal rather than a proven impossibility. Had the probe run at 0.1 mm the
+edit would have been much stronger, and the difference is one constant in a scratch script.
+
+Two general things follow. **A falsified mechanism is worth re-reading the sentences around it**,
+because the wrong mechanism is usually load-bearing for a nearby conclusion. And **the thing that
+decides how strong a correction may be is often a parameter the correcting measurement did not
+restate** — §2.4's table names side, strike width and amplitude, and not the thickness that turns
+out to settle it.
+
+### 12.4 What was deliberately not written
+
+* **Part 3's answer.** §11.7 is three fixtures; the boundary's *position* is still unasserted, so
+  the edits downgrade "cannot converge" to "converges up to an amplitude" and leave the map as a
+  named gap rather than filling it with six points.
+* **A "fixed" status.** Row 5 of the summary table moves to "Open, narrowed", not to fixed: Picard
+  is still the default, three fixtures were genuine divergence, the refined-`k` half of trap 3 is
+  untouched, and one of the three bounded scenes cannot run under Newton at all (§11.8).
+* **`VK_BRIDGE_SIDE = 0.4` does not move**, and the comment now says so explicitly. The measurement
+  that picked it (40 cm converges to `w = 9e`, 8 cm caps out by `w = 6e`) is unaffected by the
+  correction; only its explanation was. A constant whose rationale is corrected invites the next
+  reader to re-litigate the constant, and the cheapest defence is one sentence.
+* **`docs/memory/MEMORY.md`** needed no edit. Its only `1/h⁴` is the orthotropic free plate's
+  roundoff scar (`h²` × `1/h⁴`), an unrelated and correct use.
