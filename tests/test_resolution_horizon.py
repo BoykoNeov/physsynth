@@ -427,6 +427,10 @@ def test_the_plate_space_floor_matches_its_closed_form(kind, n, cents):
     mode, the integer quantisation, and the second assertion fixes the **direction**: a timestep
     can only cost modes, never buy them, so the measurement may sit below the closed form and
     never above it.
+
+    Both bars have room. Measured 2026-09-07 over these 24 fixtures, ``predicted - horizon`` runs
+    from **0.168 to 0.948** modes — clear of zero, where the direction bar would fail, and clear
+    of one, where the quantisation bar would. Neither is resting on a near-integer coincidence.
     """
     modes = mode_family(kind, n - 1)
     horizon, monotone = pitch_horizon(*_plate_family_frequencies(n, 1e-5, modes), cents)
@@ -454,15 +458,38 @@ def test_the_plates_two_families_agree_in_INDEX_unlike_the_membranes(n, cents):
 
     They are not the same modes: at index ``m`` the diagonal sits at roughly twice the frequency
     of the axial one, which is what the pitch test below is about.
+
+    **The equality is a ``k -> 0`` claim, so it is asserted over four decades of ``mu`` rather
+    than at one convenient value** — an integer horizon can only agree if the residual time droop
+    fails to cross a bound, and one fixture's ``mu`` proving that would be a claim about the
+    fixture. The margin is measured too, for the reason commit ``aabe966`` names: a boolean whose
+    margin nobody looked at is not evidence. Worst over these 24 fixtures on 2026-09-07 is
+    **0.044 cents** at ``(1 cent, N = 256)``, 4% of the bound, against arithmetic whose only
+    variability is ``sin`` in the last bit.
     """
-    horizons = {
-        kind: pitch_horizon(
-            *_plate_family_frequencies(n, 1e-5, mode_family(kind, n - 1)), cents
-        )[0]
-        for kind in ("diagonal", "axial")
-    }
-    assert horizons["diagonal"] == horizons["axial"], (
-        f"N={n}, {cents:g} cents: the families should be identical at the floor, got {horizons}"
+    for mu in (1e-5, 1e-3, 1e-1):
+        horizons = {
+            kind: pitch_horizon(
+                *_plate_family_frequencies(n, mu, mode_family(kind, n - 1)), cents
+            )[0]
+            for kind in ("diagonal", "axial")
+        }
+        assert horizons["diagonal"] == horizons["axial"], (
+            f"N={n}, {cents:g} cents, mu={mu:g}: the families should be identical at the floor, "
+            f"got {horizons} — if this fails only at the largest mu it is the tie-break below, "
+            "not a broken floor"
+        )
+
+    # How far the two families' errors sit from the bound on either side of the shared horizon:
+    # the room the integer equality above actually has.
+    horizon = horizons["diagonal"]
+    margins = []
+    for kind in ("diagonal", "axial"):
+        err = np.abs(pitch_error_cents(*_plate_family_frequencies(n, 1e-5, mode_family(kind, n))))
+        margins += [cents - err[horizon - 1], err[horizon] - cents]
+    assert min(margins) > 0.02, (
+        f"N={n}, {cents:g} cents: the shared horizon sits {min(margins):.4f} cents from an "
+        "integer boundary — too close to call the two families equal rather than adjacent"
     )
 
 

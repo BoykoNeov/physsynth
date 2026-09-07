@@ -175,7 +175,7 @@ what distinguishes a family is only whether a Courant number exists that beats i
 | ideal string | explicit | **measured** | exact at `λ = 1`; collapses below it |
 | stiff / damped string | θ | **measured** | floor ≈ 8% of grid (κ=0), 6% (κ=8) |
 | rectangular membrane | explicit | **measured** | diagonal-only cancellation; axial ≈ 12% |
-| plate, simply supported | θ | **measured** | space-limited; **5.925% of grid** at 5 cents, closed form in §8; the two mode families agree in index and differ by exactly 2 in pitch |
+| plate, simply supported | θ | **measured** | space-limited; **5.925% of grid** at 5 cents, closed form in §8; as `k → 0` the two mode families agree in index (a finite timestep breaks the tie toward the axial one) and differ by exactly 2 in pitch |
 | free-free beam | θ | **measured** | same fourth-power story as the plate |
 | orthotropic plate | θ | *not measured* | same family and mechanism; a grain rotates the eigenvalues, so the horizon is per-direction like the membrane's — the shape of the answer is known, the numbers are not. §8's primitive is what it needs, but its two families are **not** the isotropic plate's: the grain reweights the axes, so `axial` splits in two |
 | circular membrane, guitar plate | — | **no horizon yet** | the error is the **staircased domain**, not dispersion: the continuum reference is a frequency for a *different shape*, so a cents comparison mixes two errors. Needs a geometry-convergence study, not this primitive |
