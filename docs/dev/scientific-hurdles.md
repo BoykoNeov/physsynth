@@ -20,7 +20,7 @@
 |---|--------|----------------|--------|
 | 1 | DG Jacobian `(v,v)` block cancelled two `O(1)` terms at musical strain | `string_geometric` | **Fixed 2026-09-02** (§1) |
 | 2 | Room energy books were a tolerance rather than exact across the port | `airbox` (Rust) | **Fixed 2026-09-02** (§2) |
-| 3 | NumPy's own transcendentals disagree with libm by an ulp on some CPUs — a read-out asserted exactly across languages fails on a runner and passes on another | `airbox.mode_frequency`, four `pow`s, one `tan`, `exp`, `cos`/`sin` | **Symptom cleared 2026-09-03** — the parity step is green on five consecutive runs; the **rule** stays live (§3) |
+| 3 | An exact-equality assertion is a claim about every rounding and threshold on its path. First instance: NumPy's own transcendentals disagree with libm by an ulp on some CPUs, so a read-out asserted exactly across languages fails on one runner and passes on another. **Second instance 2026-09-06, no transcendental and no language boundary**: a scale-invariance asserted `== 0.0` held on Windows and read `3.52e-13` on Linux, because the physics is homogeneous of degree one and the *solver* is not — a 0/0 Taylor-branch threshold and a bracketed root find carry absolute scales | `airbox.mode_frequency`, four `pow`s, one `tan`, `exp`, `cos`/`sin`; `mallet.VkPlate` + `collision`'s scalar solve | **Both symptoms cleared** (2026-09-03, 2026-09-07 — the second after nineteen red runs on one test); the **rule** stays live and got wider (§3) |
 | 4 | The θ-scheme suppresses every discrete decay rate by `1/(1+θk²Q)`; "highs die faster" turns over past mode ~32 | `string_damped`, `string_stiff`, both plates | Accounted for; fix derived, not built — and the **payoff claim is FALSIFIED 2026-09-06**: the rate suppression and the scheme's *pitch* flattening are one factor and its square root, so a mode's decay is never audibly wrong before that same mode is most of a semitone flat, and the turnover never lands closer than **330 cents** from in tune over 90 realistic configurations. The observations all stand; "an audible payoff in the whole register" does not (§4) |
 | 5 | The von Kármán Picard iteration stops contracting at large amplitude / high strain / high `fs` — the gong-on-a-string, the gong in a room and grid coarsening all die there | `plate.VKPlate`, `connection`, `airbox` | Open, **narrowed 2026-09-06** — the `1/h⁴` mechanism is falsified, a third of the wall was the sweep cap, and Newton is **built** behind `couple_method` (default still Picard), the boundary is **mapped** (2–4× in amplitude; a root is a resolved *plate* only where the **deflection** is smooth), and the **gong on a string is no longer iteration-bound** — two of this row's three scenes were misfiled (one was never built), and the **wrapper block is gone 2026-09-06** — the room seam drives the model's own kernel against the loaded factorization, so the gong in a room runs under Newton too, and its wall moves ~1.6-1.9x in amplitude depending on the grid. **The default moved 2026-09-07** and it is a *fallback*, not a flip: `couple_method="auto"` runs the sweeps and re-solves with Newton only where they fail, so a converging step is bit-identical to the old default and Part 0's canonical 60-thickness wall now converges (§5) |
 | 6 | The geometrically exact string's Newton solve stops converging past `λ_long ≈ 4`, and `h`-refinement makes it worse | `string_geometric` | Warned at 1, unresolved regime; **§1 eliminated as the cause 2026-09-03** (edge identical in 9/9 cells) and the threshold split into a **convergence** edge at 4 and an **energy** edge at 5–10 (§6) |
@@ -123,6 +123,28 @@ marked fixed: nothing prevents the next batch from asserting a `np.<transcendent
 exactly across languages, and the failure would again appear only on a runner with the wrong CPU,
 with no local repro (§22.2). The bounded exposure §22.6 enumerated — four `pow`s, one `tan`, one
 `exp`, three `cos`/`sin` — is still bounded by ulp assertions rather than exact ones, deliberately.
+
+**And the rule's second instance arrived 2026-09-06, by a different mechanism — the class is wider
+than "transcendentals".** `test_mallet_gong.py`'s headline asserted a linear plate's departure from
+an exactly scaled response `== 0.0`, on the argument that the exciter is homogeneous of degree one
+and the loud/quiet ratio is an exact power of two. It read `0.0` on Windows and a byte-identical
+`3.52e-13` on **every** Linux runner, so `main` was red for nineteen consecutive runs (2026-09-06
+to 2026-09-07) on one test while every other job stayed green. There is no transcendental in it and
+no cross-language comparison: the two trajectories were computed by the same code on the same
+machine. What broke the identity is that the *physics* is homogeneous and the *solver* is not — the
+discrete-gradient contact force's 0/0 Taylor-branch threshold and the bracketed scalar root find
+both carry **absolute** scales, which a four-times-larger trajectory meets at a different place.
+Exact power-of-two scaling is necessary and not sufficient, and the fixture-dependence is visible
+on the machine that reads zero: `ratio=8` and `strike_velocity=1.5` each read `4.30e-13`.
+
+So the generalised rule is **an exact-equality assertion is a claim about every rounding and every
+threshold on the path, not about the invariance being tested** — a `sin` on a different CPU and a
+tolerance on a different amplitude are two ways for the same assertion to be about the wrong thing.
+The remedy is the same one taken here: hold the invariance at the project's tier-1 `1e-10` bar and
+state the *separation* from the effect being measured (twelve orders, here) as what carries the
+attribution. Correcting the core's tolerance semantics to be scale-relative was considered and
+rejected: it would move numbers across the whole contact family, and the absolute Taylor threshold
+is model #7's deliberate 0/0 guard rather than an oversight.
 
 ## 4. The θ-scheme's rate suppression — accounted for, fix derived
 

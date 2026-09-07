@@ -816,11 +816,14 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   loop, which is exactly the property a discrete-gradient contact force (implicit in `η^{n+1}`, and
   implicit is what makes it conserve) does not have — which is why the force here has to sit in an
   outer loop rather than in `rhs_fixed`.
-  The physics payoff is one measurement with a bit-exact control. At `alpha = 1` every part of the
-  exciter is homogeneous of degree one, so on a **linear** plate a four-times-harder strike gives a
-  four-times-larger response and nothing else — measured at **exactly 0.0** departure, an identity
-  rather than a tolerance. On the gong, with the felt thus contributing nothing by construction,
-  the departure is **2.12**. Model #7p's *"the felt exponent is the only source of dynamic timbre"*
+  The physics payoff is one measurement against a control that is twelve orders of magnitude
+  quieter. At `alpha = 1` every part of the exciter's *physics* is homogeneous of degree one, so on
+  a **linear** plate a four-times-harder strike gives a four-times-larger response and nothing
+  else — departure **0.0** on Windows, **3.52e-13** on a Linux runner, held under the tier-1
+  `1e-10` bar. It was first asserted as an exact `0.0`; the *solver* is not homogeneous (a 0/0
+  Taylor-branch threshold and a bracketed root find both carry absolute scales), so that was a
+  claim about one fixture on one machine — see `docs/dev/mallet-gong-plan.md`. On the gong, with
+  the felt thus contributing nothing by construction, the departure is **2.12**. Model #7p's *"the felt exponent is the only source of dynamic timbre"*
   is a statement about a linear resonator; on a gong the felt can be removed from the question and
   the timbre still moves. A power-weighted spectral centroid splits the same pair of causes very
   differently — 0.16% for the felt against 74% for the plate across a 16× dynamic range, a factor

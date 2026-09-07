@@ -226,14 +226,26 @@ gives a four-times-larger response and nothing else.
 That is a statement about a **linear resonator**, and the gong is where it stops being true. The
 measurement isolates the two causes by removing one of them:
 
-* linear plate, `alpha = 1`: departure from an exactly scaled response = **0.000e+00**
+* linear plate, `alpha = 1`: departure from an exactly scaled response = **0.000e+00** here,
+  **3.52e-13** on a Linux runner
 * gong, `alpha = 1`: **2.12**
 
-The control is an **identity, not a tolerance**, and deliberately so — the loud/quiet ratio is 4,
-an exact power of two, so scaling a double by it is exact and a system homogeneous of degree one
-reproduces the loud trajectory from the quiet one *to the bit*. Any other ratio would put a rounding
-floor under the control and turn the identity into a bound. With the felt thus contributing exactly
-nothing, the gong's 2.12 is the plate's and nothing else's.
+**This section first called the control an "identity, not a tolerance" and that was wrong — the
+correction is 2026-09-07 and it cost nineteen red CI runs.** The reasoning was that the loud/quiet
+ratio is 4, an exact power of two, so scaling a double by it is exact and a degree-one system
+reproduces the loud trajectory from the quiet one to the bit. Exact scaling is **necessary and not
+sufficient**: the *physics* is homogeneous of degree one, and the *solver* is not. Two absolute
+scales sit inside it that a four-times-larger trajectory meets at a different point — the
+discrete-gradient force's 0/0 Taylor-branch threshold (`ContactParams::tol`) and the bracketed
+scalar root find's exit. Neither is a defect, and making either relative would move numbers across
+the whole contact family, so the assertion moves rather than the core.
+
+The zero was a property of this one fixture on one machine, and that is measurable on that same
+machine: `ratio=8` — also a power of two — and `strike_velocity=1.5` each read **4.30e-13** where
+this pair reads 0.0. The bar is now the project's tier-1 number, `1e-10` (§6.1), which is 232×
+above the worst departure seen either way. **The attribution is unaffected**: what makes the gong's
+2.12 the plate's and nothing else's is the *separation* between the two readings, and that is
+twelve orders of magnitude on the runner that produced a nonzero control at all.
 
 *How* the tone changes is the crash: energy cascades up the spectrum as the strike hardens. A
 power-weighted spectral centroid across a **16× dynamic range** (0.75 → 12 m/s):

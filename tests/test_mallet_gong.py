@@ -267,10 +267,11 @@ def test_the_free_branch_is_a_read_out_bar_with_the_supported_one_as_its_control
 def _scaled_departure(nonlinear, alpha, ratio=4.0, steps=6000):
     """Departure from an exactly proportional response between a loud and a quiet strike.
 
-    ``ratio`` is a power of two on purpose: scaling a double by 4 is exact, so a system that is
-    homogeneous of degree one reproduces the loud trajectory from the quiet one **to the bit**.
-    Any other ratio would put a rounding floor under the control and turn an identity into a
-    tolerance.
+    ``ratio`` is a power of two on purpose: scaling a double by 4 is exact, so nothing in the
+    *arithmetic* of a degree-one system need round differently between the two runs. That is
+    necessary and it is **not sufficient**, which is what the first version of this file got
+    wrong — the caller names the two absolute scales that break it, and ``ratio=8`` is a power of
+    two that reads 4.30e-13 on the machine where ``ratio=4`` reads 0.0.
     """
     pickup = None
     sig = []
@@ -286,17 +287,39 @@ def _scaled_departure(nonlinear, alpha, ratio=4.0, steps=6000):
 def test_on_a_linear_plate_an_alpha_one_felt_scales_exactly_and_a_gong_does_not():
     """**The batch's headline.**
 
-    At ``alpha = 1`` every part of the exciter is homogeneous of degree one — the head is a mass,
-    the felt a linear spring, and the one-sided switching is scale-invariant — so on a *linear*
-    plate a four-times-harder strike gives a four-times-larger response and nothing else. Measured
-    at **exactly 0.0**: the control is an identity, not a tolerance, which is what lets the gong's
-    number be attributed to the plate and to nothing else.
+    At ``alpha = 1`` every part of the exciter's *physics* is homogeneous of degree one — the head
+    is a mass, the felt a linear spring, and the one-sided switching is scale-invariant — so on a
+    *linear* plate a four-times-harder strike gives a four-times-larger response and nothing else.
+
+    **The solver is not homogeneous, and this assertion used to say it was.** It was written
+    ``== 0.0``, which is what this one fixture reads on Windows, and it failed on every Linux CI
+    runner at a byte-identical ``3.52e-13`` — nineteen runs, two job families, a dozen unrelated
+    commits, the same digits, so a last-bits difference in that machine's arithmetic rather than
+    anything wandering. The physics is degree one; the *numerics* carries two *absolute* scales
+    that a four-times-larger trajectory meets at a different place — the discrete-gradient force's
+    0/0 Taylor-branch threshold (``ContactParams::tol``) and the bracketed scalar root find's own
+    exit. Neither is a defect: the Taylor branch is model #7's deliberate 0/0 guard, and making
+    either scale relative would move numbers across the whole contact family. An exactly
+    proportional response is a property of the continuous scheme, not of the code.
+
+    That the zero was a **fixture** and not an identity is measurable here as well as on the
+    runner. Holding everything else fixed, ``ratio=8`` and ``strike_velocity=1.5`` both read
+    4.30e-13 on the same machine that reads 0.0 for this pair — two innocuous, exactly
+    representable changes.
+
+    So the bar is the project's tier-1 acceptance number rather than one chosen to clear what was
+    observed (``HANDOFF.md`` §6.1, and ``CLAUDE.md`` says not to tighten it): 232× above the worst
+    departure measured either way, and ten orders of magnitude below the gong's 2.12. **What the
+    exact zero was protecting is untouched** — the gong's number is attributable to the plate
+    because the two readings are separated, and on the runner that produced the nonzero one they
+    are separated by twelve orders.
 
     Model #7p's finding was "the felt exponent is the only source of dynamic timbre". That is a
     statement about a linear resonator. On a gong the felt can be removed from the question
     entirely and the timbre still moves — by twice the loud strike's own peak.
     """
-    assert _scaled_departure(nonlinear=False, alpha=1.0) == 0.0
+    control = _scaled_departure(nonlinear=False, alpha=1.0)
+    assert control < 1e-10, control  # 0.0 here, 3.52e-13 on the Linux runner, 4.30e-13 worst seen
     gong = _scaled_departure(nonlinear=True, alpha=1.0)
     assert gong > 1.0, gong  # measured 2.12
 
