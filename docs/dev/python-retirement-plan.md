@@ -68,8 +68,13 @@ The 2,713 Python tests are not 2,713 physics bars. Sorted by what happens to eac
 | the analysis freeze (`test_analysis_frozen.py`) | 78 | **ports as data** — the 3,708 recorded floats are literals; they become a Rust fixture file and the enforcement moves with them |
 | everything else | ~1,744 | **the physics bars.** These are the work |
 
-So the real question is not "rewrite 34,562 lines" — it is "give roughly 1,744 physics bars a native
+So the real question is not "rewrite 34,562 lines" — it is "give the physics bars a native
 equivalent, against 550 that already exist", plus one viewer port, and then delete.
+
+**Every number in this section is a `pytest` case count, and §9 revises them down.** A case is a
+row of a `@parametrize`, not a claim; measured as test *functions* — the unit a Rust `#[test]`
+actually corresponds to — the 1,744 is **899**, and the 212 of those that sit in a model with no
+native test at all are the irreducible core of the job. Read §9 for the numbers that matter.
 
 **The rule that makes this safe is `rust-migration-plan.md` §35.4's, unchanged**: port by
 *criterion*, not by file; and for every Python test retired, a native test asserts the same bar at
@@ -264,7 +269,113 @@ LPT partitioner and the two tests that check the partitioner all disappear as a 
 
 ---
 
-## 9. Not started
+## 9. Phase B, done — the coverage map
 
-Nothing in this document is built. It is the plan; the first batch is **phase B, the coverage map**,
-because it is what tells phases A and C how much is actually missing.
+Derived 2026-09-07. Reproducible from `W:\temp\claude\coverage-map\` (`build_map.py` plus the two
+input dumps); the model mapping is hand-written in that script and every one of the 88 Python files
+and 41 Rust files is mapped, so nothing falls through unclassified.
+
+### 9.1 The counting unit is a test FUNCTION, and that halves the job
+
+`pytest` reports **2,713** tests. That is cases, not claims: 1,389 of them are further rows of a
+`@parametrize`, and the same suite is **1,324 test functions**. One function accounts for 85 of
+those cases and another for 80. Rust has no `parametrize` — a native test loops over an array of
+cases inside one `#[test]` — so comparing 2,713 against 550 compares two different units and
+inflates the Python side by about 2×.
+
+Everything below counts **functions**. Both numbers are worth keeping: the case count is what a CI
+log prints, the function count is what has to be written.
+
+| unit | Python | Rust |
+|---|---|---|
+| cases as reported | 2,713 | 550 |
+| test functions | 1,324 | 550 |
+| of those, **physics** | **899** | **475** |
+
+### 9.2 The map
+
+Cells are `python/rust`; `.` means neither side says anything under that heading. The model axis is
+hand-mapped and reliable. The claim axis is derived from test names by keyword and is **indicative
+only** — a third of both sides lands in `other`, which is a fact about naming, not about coverage.
+
+| model | energy | dispersion | convergence | modal | stability | signature | reduction | surface | other | py | rs |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `airbox` | 27/6 | 2/1 | 4/2 | 11/5 | 43/3 | 2/0 | 13/2 | 4/1 | 82/17 | **188** | **37** |
+| `analysis_freeze` | . | . | . | . | . | . | . | . | 5/0 | **5** | **0** |
+| `analysis_horizon` | 1/0 | . | 2/0 | 14/8 | 5/8 | . | 2/1 | 1/1 | 23/9 | **48** | **27** |
+| `analysis_modal` | . | . | . | 0/5 | 0/4 | . | . | . | 0/4 | **0** | **13** |
+| `analysis_oracles` | 0/1 | 0/2 | 0/1 | 0/2 | . | . | 0/1 | . | 0/9 | **0** | **16** |
+| `analysis_rotating_wave` | . | 0/1 | . | 0/2 | 0/2 | . | 0/1 | 0/1 | 0/6 | **0** | **13** |
+| `analysis_special` | . | . | . | 0/2 | . | . | 0/1 | 0/1 | 0/15 | **0** | **19** |
+| `analysis_spectrum` | . | . | 2/2 | 1/3 | . | . | 1/1 | . | 2/5 | **6** | **11** |
+| `beam` | 5/3 | . | 1/1 | 3/5 | 3/2 | . | 0/1 | . | 4/5 | **16** | **17** |
+| `body` | 4/4 | . | . | 3/2 | 1/2 | . | . | 0/1 | 1/5 | **9** | **14** |
+| `bore` | 8/4 | . | 1/0 | 4/2 | 9/3 | . | 1/1 | . | 8/14 | **31** | **24** |
+| `bow` | 4/3 | . | 1/0 | 2/0 | 5/2 | 5/1 | 1/1 | 1/1 | 3/3 | **22** | **11** |
+| `collision` | 4/0 | . | 0/1 | . | . | 3/2 | 1/0 | . | 7/6 | **15** | **9** |
+| `collision_barrier` | 1/3 | . | . | . | 0/2 | 2/1 | 0/1 | . | 6/5 | **9** | **12** |
+| **`connection`** | 6/0 | . | . | . | 4/0 | . | 1/0 | . | 1/0 | **12** | **0** |
+| `exciter` | . | . | . | . | 0/3 | 0/2 | . | 0/1 | 0/2 | **0** | **8** |
+| **`free_plate`** | 13/0 | . | 1/0 | 4/0 | 7/0 | 1/0 | 2/0 | . | 9/0 | **37** | **0** |
+| **`free_plate_orthotropic`** | 4/0 | . | 2/0 | 2/0 | 4/0 | . | 2/0 | . | 15/0 | **29** | **0** |
+| **`guitar_plate`** | 3/0 | . | 2/0 | 2/0 | 2/0 | . | 1/0 | . | 9/0 | **19** | **0** |
+| `mallet` | 15/8 | . | . | 7/0 | 2/3 | 10/5 | 6/2 | 3/2 | 26/13 | **69** | **33** |
+| `membrane` | 5/5 | . | 2/0 | 3/1 | 6/2 | . | . | . | 3/4 | **19** | **12** |
+| `operators` | 0/5 | . | . | 1/9 | . | . | 0/1 | . | 3/45 | **4** | **60** |
+| `plate` | 11/5 | . | 1/4 | 5/2 | 13/5 | 1/0 | 1/2 | . | 7/24 | **39** | **42** |
+| **`plate_orthotropic`** | 3/0 | . | 1/0 | 5/0 | 3/0 | . | . | 1/0 | 6/0 | **19** | **0** |
+| `radiation` | 11/4 | . | 2/0 | 9/3 | 6/5 | . | 4/4 | . | 20/8 | **52** | **24** |
+| `reed` | 7/5 | . | . | 3/0 | 6/6 | . | 2/0 | . | 7/8 | **25** | **19** |
+| **`string_damped`** | 4/0 | . | 1/0 | 3/0 | 4/0 | . | 1/0 | . | 3/0 | **16** | **0** |
+| `string_geometric` | 9/3 | 1/0 | 3/0 | 9/0 | 9/1 | 4/1 | 6/1 | 2/0 | 26/8 | **69** | **14** |
+| `string_ideal` | 5/3 | 4/1 | 1/0 | 5/2 | 0/4 | . | . | . | 1/3 | **16** | **13** |
+| `string_nonlinear` | 6/3 | . | 1/0 | 10/3 | 4/1 | . | . | 1/0 | 8/6 | **30** | **13** |
+| `string_stiff` | 4/2 | 2/0 | 3/0 | 6/3 | 3/3 | . | . | . | 2/6 | **20** | **14** |
+| **`sympathetic`** | 4/0 | . | . | 2/0 | 5/0 | 1/0 | 2/0 | . | 1/0 | **15** | **0** |
+| **`vk_plate`** | 15/0 | . | 8/0 | 8/0 | 8/0 | 1/0 | 2/0 | 1/0 | 17/0 | **60** | **0** |
+| **total** | 179/67 | 9/5 | 39/11 | 122/59 | 152/61 | 30/12 | 49/21 | 14/9 | 305/230 | **899** | **475** |
+
+Not physics, and already accounted for in §2 (function counts, so lower than that table's cases):
+`!viewer` 338, `!binding` 31, `!parity` 32, `!package` 10, `!runner` 10 and `!ci` 4 on the Python
+side; `!numerics` 69 and `!deps` 6 native-only on the Rust side.
+
+### 9.3 What the map found: nine models at zero
+
+The headline is not a ratio, it is a list. **Nine models have no native test at all** — bolded above:
+
+| model | py functions | why it is at zero |
+|---|---|---|
+| von Kármán plate | 60 | the biggest hole and the hardest: a nonlinear model with an iteration wall (`scientific-hurdles.md` §5) and no linear modal oracle |
+| free plate (FFFF) | 37 | never had a native file |
+| orthotropic free plate | 29 | ditto, and its validation is four derived probes rather than one oracle |
+| orthotropic plate | 19 | ditto |
+| guitar plate | 19 | ditto; its 19 functions expand to 113 cases, the widest parametrization in the suite |
+| damped string | 16 | **surprising.** Models #2 and #4 have native files (`string_stiff.rs`, `string_nonlinear.rs`) and #3, which sits between them in the same bit-identity chain, does not |
+| sympathetic strings | 15 | never had one |
+| the bridge connection | 12 | never had one |
+| the analysis freeze | 5 | ports as *data* rather than as tests (§2) |
+
+**212 test functions sit in models with no native coverage whatsoever.** That is the irreducible
+core of phase C, and it is a far smaller number than "34,562 lines" or even "1,744 tests".
+
+The tenth entry is not a zero but is the largest single gap by volume: **`airbox` is 188 to 37**.
+Its native bars are the nineteen `mod tests` blocks inside `src/` plus the eighteen added by
+migration §46, and they were never meant to be the room's whole validation.
+
+### 9.4 The one thing this map does NOT say
+
+A cell with numbers on both sides is **not** proof of coverage. It says both suites assert something
+about that model under that claim heading. Whether the native test asserts the *same bar at the same
+fixture* — §35.4's actual condition — is a per-claim reading that belongs to each phase-C batch's
+opening move, not to this map. The map's job was to say where to look and how big the job is, and on
+that it is answered: **212 functions with nothing on the far side, one 151-function shortfall in the
+room, and everything else a verification rather than a write.**
+
+---
+
+## 10. Not started
+
+Phase B is done (§9). Nothing else here is built. The next batch is either **C** on one of the nine
+zero-coverage models — `string_damped` is the cheapest and de-risks the pattern, since both its
+chain neighbours already have native files to copy the shape from — or **D**, the viewer, which is
+independent of everything and is the longest pole.
