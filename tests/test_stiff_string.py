@@ -27,11 +27,11 @@ from helpers import (
     convergence_orders,
     make_stiff_string,
     measure_stiff_mode_frequencies,
-    pitch_horizon,
     wave_speed,
 )
 
 from physsynth.analysis import dispersion, modal, spectrum
+from physsynth.analysis.horizon import pitch_horizon
 from physsynth.core.engine import simulate
 from physsynth.core.exciter import triangular_pluck
 from physsynth.core.operators import biharmonic_matrix, delta_xxxx, second_difference_matrix

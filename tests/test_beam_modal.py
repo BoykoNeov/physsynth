@@ -17,10 +17,10 @@ from helpers import (
     beam_low_eigenfrequencies,
     convergence_orders,
     make_beam,
-    pitch_horizon,
 )
 
 from physsynth.analysis import modal, spectrum
+from physsynth.analysis.horizon import pitch_horizon
 from physsynth.core.engine import simulate
 from physsynth.core.exciter import raised_cosine
 

@@ -155,9 +155,16 @@ def mode_block(m_max: int) -> list[tuple[int, int]]:
     A *block* is the 2-D shape a "the first few modes are in tune" claim actually asserts, and it
     is not a family: the error is not monotone along it (section 8 of the plan), so a prefix over
     it is not a horizon. What makes a block readable is that its worst mode is a **corner** — the
-    error weight ``w(m, n) = (m^4 + n^4) / (m^2 + n^2)`` has an interior minimum in ``n``, so the
-    maximum over a block never sits inside it. A block's horizon is then some corner family's
-    horizon, and a family does have a prefix.
+    error weight ``w(m, n) = (m^4 + n^4) / (m^2 + n^2)`` dips at ``n* = m sqrt(sqrt(2) - 1)``, about
+    ``0.6436 m`` and so strictly inside ``(0, m)``, and the maximum over a block therefore never
+    sits inside it. A block's horizon is then some corner family's horizon, and a family does have
+    a prefix.
+
+    On the **integer** grid that interior minimum is only reachable from ``m = 3`` up: at ``m = 2``
+    the minimiser is 1.287 and the nearest index below it is ``n = 1``, the block's own edge. The
+    corner argument survives untouched, because it is a statement about the maximum — but a reader
+    checking "interior minimum" against ``m = 2`` will find the edge, and
+    ``crates/physsynth-analysis/tests/horizon.rs`` is where that is asserted rather than assumed.
 
     **Which corner is not a property of the block — it is a property of the scheme**, and getting
     this backwards is a real hazard because the two answers are opposite:

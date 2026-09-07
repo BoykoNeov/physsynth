@@ -34,7 +34,10 @@ fn an_exact_scheme_has_no_pitch_error_at_all() {
     // not a rounding.
     let f = [110.0, 220.5, 331.0, 447.25];
     for e in pitch_error_cents(&f, &f).unwrap() {
-        assert_eq!(e, 0.0, "an exact scheme reported a pitch error of {e} cents");
+        assert_eq!(
+            e, 0.0,
+            "an exact scheme reported a pitch error of {e} cents"
+        );
     }
 }
 
@@ -74,8 +77,14 @@ fn the_horizon_is_a_leading_prefix_and_not_the_last_mode_inside() {
         100.0 * one_cent.powi(2), // back inside
     ];
     let (horizon, monotone) = pitch_horizon(&disc, &cont, 5.0).unwrap();
-    assert_eq!(horizon, 2, "the prefix stops at the first mode outside the bound");
-    assert!(!monotone, "this curve is not monotone and the flag must say so");
+    assert_eq!(
+        horizon, 2,
+        "the prefix stops at the first mode outside the bound"
+    );
+    assert!(
+        !monotone,
+        "this curve is not monotone and the flag must say so"
+    );
 }
 
 #[test]
@@ -93,7 +102,10 @@ fn a_flat_error_curve_is_monotone_despite_the_last_bit() {
     let cont = [100.0, 100.0, 100.0];
     let disc = [100.5, 100.5 * (1.0 + 1e-16), 100.5];
     let (_, monotone) = pitch_horizon(&disc, &cont, 500.0).unwrap();
-    assert!(monotone, "a last-bit wobble is not a non-monotone error curve");
+    assert!(
+        monotone,
+        "a last-bit wobble is not a non-monotone error curve"
+    );
 }
 
 #[test]
@@ -141,7 +153,10 @@ fn a_plate_resolves_the_same_share_of_its_grid_as_a_string_at_half_the_cents() {
             "cents={cents}: plate {plate} vs string-at-half {string_half}"
         );
         let string = sinc_horizon_fraction(cents, 1).unwrap();
-        assert!(plate < string, "cents={cents}: the plate must resolve less of its grid");
+        assert!(
+            plate < string,
+            "cents={cents}: the plate must resolve less of its grid"
+        );
     }
 }
 
@@ -170,18 +185,33 @@ fn a_tighter_bound_resolves_less_of_the_grid() {
 
 #[test]
 fn the_sinc_fraction_refuses_a_nonpositive_bound_and_a_zeroth_power() {
-    assert!(sinc_horizon_fraction(0.0, 1).unwrap_err().contains("must be positive"));
-    assert!(sinc_horizon_fraction(-5.0, 1).unwrap_err().contains("must be positive"));
-    assert!(sinc_horizon_fraction(5.0, 0).unwrap_err().contains("positive number of sinc"));
+    assert!(sinc_horizon_fraction(0.0, 1)
+        .unwrap_err()
+        .contains("must be positive"));
+    assert!(sinc_horizon_fraction(-5.0, 1)
+        .unwrap_err()
+        .contains("must be positive"));
+    assert!(sinc_horizon_fraction(5.0, 0)
+        .unwrap_err()
+        .contains("positive number of sinc"));
 }
 
 // -- mode_family and mode_block ------------------------------------------------------------------
 
 #[test]
 fn the_three_families_are_the_index_sequences_they_are_named_for() {
-    assert_eq!(mode_family("axial", 4).unwrap(), vec![(1, 1), (2, 1), (3, 1), (4, 1)]);
-    assert_eq!(mode_family("axial_y", 4).unwrap(), vec![(1, 1), (1, 2), (1, 3), (1, 4)]);
-    assert_eq!(mode_family("diagonal", 4).unwrap(), vec![(1, 1), (2, 2), (3, 3), (4, 4)]);
+    assert_eq!(
+        mode_family("axial", 4).unwrap(),
+        vec![(1, 1), (2, 1), (3, 1), (4, 1)]
+    );
+    assert_eq!(
+        mode_family("axial_y", 4).unwrap(),
+        vec![(1, 1), (1, 2), (1, 3), (1, 4)]
+    );
+    assert_eq!(
+        mode_family("diagonal", 4).unwrap(),
+        vec![(1, 1), (2, 2), (3, 3), (4, 4)]
+    );
 }
 
 #[test]
@@ -197,9 +227,15 @@ fn the_two_axial_families_are_transposes_of_one_another() {
 
 #[test]
 fn an_unknown_family_and_an_empty_one_are_both_refused() {
-    assert!(mode_family("axial_x", 4).unwrap_err().contains("unknown mode family"));
-    assert!(mode_family("axial", 0).unwrap_err().contains("at least one mode"));
-    assert!(mode_block(0).unwrap_err().contains("at least one mode per axis"));
+    assert!(mode_family("axial_x", 4)
+        .unwrap_err()
+        .contains("unknown mode family"));
+    assert!(mode_family("axial", 0)
+        .unwrap_err()
+        .contains("at least one mode"));
+    assert!(mode_block(0)
+        .unwrap_err()
+        .contains("at least one mode per axis"));
 }
 
 #[test]
@@ -214,9 +250,16 @@ fn a_block_is_the_whole_square_of_indices_ordered_by_continuum_frequency() {
             k.sort();
             k
         };
-        assert_eq!(keys, sorted, "m_max={m_max}: the block came back out of order");
+        assert_eq!(
+            keys, sorted,
+            "m_max={m_max}: the block came back out of order"
+        );
         keys.dedup();
-        assert_eq!(keys.len() as i64, m_max * m_max, "m_max={m_max}: a repeated index pair");
+        assert_eq!(
+            keys.len() as i64,
+            m_max * m_max,
+            "m_max={m_max}: a repeated index pair"
+        );
     }
 }
 
@@ -331,7 +374,10 @@ fn the_diagonal_sits_on_the_two_dimensional_cfl_ceiling_for_every_mode() {
     // where the diagonal family cancels, at every mode number rather than at one.
     for m in 1..=64i64 {
         let lam = cancellation_courant(m, m).unwrap();
-        assert!((lam - CFL_2D).abs() < 1e-15, "m={m}: {lam} against the ceiling {CFL_2D}");
+        assert!(
+            (lam - CFL_2D).abs() < 1e-15,
+            "m={m}: {lam} against the ceiling {CFL_2D}"
+        );
     }
 }
 
@@ -362,7 +408,10 @@ fn the_ceiling_is_the_minimum_of_this_function_over_the_whole_spectrum() {
             best = best.min(cancellation_courant(m, n).unwrap());
         }
     }
-    assert!((best - CFL_2D).abs() < 1e-15, "the spectrum's minimum is {best}, not {CFL_2D}");
+    assert!(
+        (best - CFL_2D).abs() < 1e-15,
+        "the spectrum's minimum is {best}, not {CFL_2D}"
+    );
 }
 
 #[test]
@@ -372,15 +421,28 @@ fn the_axial_family_climbs_toward_an_unreachable_one() {
     let mut prev = 0.0;
     for m in 1..=64i64 {
         let lam = cancellation_courant(m, 1).unwrap();
-        assert!(lam >= prev, "m={m}: the axial family stopped climbing at {lam}");
-        assert!(lam < 1.0, "m={m}: the axial family reached {lam}, which is the 1-D limit");
+        assert!(
+            lam >= prev,
+            "m={m}: the axial family stopped climbing at {lam}"
+        );
+        assert!(
+            lam < 1.0,
+            "m={m}: the axial family reached {lam}, which is the 1-D limit"
+        );
         prev = lam;
     }
-    assert!(prev > 0.999, "the axial family should approach 1; it reached {prev}");
+    assert!(
+        prev > 0.999,
+        "the axial family should approach 1; it reached {prev}"
+    );
 }
 
 #[test]
 fn the_courant_number_refuses_a_zero_first_index_and_a_negative_second() {
-    assert!(cancellation_courant(0, 1).unwrap_err().contains("starts at 1"));
-    assert!(cancellation_courant(1, -1).unwrap_err().contains("use n = 0"));
+    assert!(cancellation_courant(0, 1)
+        .unwrap_err()
+        .contains("starts at 1"));
+    assert!(cancellation_courant(1, -1)
+        .unwrap_err()
+        .contains("use n = 0"));
 }

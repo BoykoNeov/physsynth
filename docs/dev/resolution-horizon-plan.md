@@ -5,9 +5,11 @@ That probe was supposed to justify a loss fix; what it actually found was that *
 bounds every accuracy claim this project makes about a mode**, and that no model had that boundary
 written down. This is the boundary, measured, per family.
 
-Code: `tests/helpers.py` (`pitch_error_cents`, `pitch_horizon`, `spatial_operator_horizon`, and
-from §8 `sinc_horizon_fraction`, `mode_family`, `mode_block`) and
-`tests/test_resolution_horizon.py` (79 tests). Probe scripts:
+Code: `physsynth/analysis/horizon.py` over `crates/physsynth-analysis/src/horizon.rs`
+(`pitch_error_cents`, `pitch_horizon`, `sinc_horizon_fraction`, `mode_family`, `mode_block`,
+`cancellation_courant`, `block_weight`), with 27 native bars in
+`crates/physsynth-analysis/tests/horizon.rs`; `spatial_operator_horizon` alone stays in
+`tests/helpers.py` (§11). Tests: `tests/test_resolution_horizon.py` (48 functions, 188 collected). Probe scripts:
 `M:\claud_projects\temp\theta-loss\probe_horizon2.py`, `probe_inventory.py`, `probe_checks.py`.
 
 ---
@@ -196,16 +198,18 @@ what distinguishes a family is only whether a Courant number exists that beats i
   batch and it is the obvious next one.
   **Done 2026-09-07 — and this bullet was wrong twice.** It was not mechanical, it was not
   "several suites", and the example it names is not a pitch band at all. §7 is the audit.
-* **The primitive stayed in `tests/helpers.py` and did not go into `physsynth/analysis/`.** A new
-  public analysis name trips `test_analysis_frozen.py`'s derived guard, and satisfying it is
-  impossible — there is no Python implementation left to freeze against. Widening that guard to
-  accommodate the first thing that does not fit would change the enforcement contract for 62
-  fixtures in order to add one function. Promotion is a deliberate follow-on that has to answer the
-  freeze question on its own terms: a native bar in `crates/physsynth-analysis/tests/` plus a stated
-  guard amendment. Note that it would also make `scipy.optimize.brentq` a question — fine in a test,
-  a dependency decision in the analysis crate, whose allowlist is deliberately narrow.
+* **The primitive stayed in `tests/helpers.py` and did not go into `physsynth/analysis/`.**
+  **Done 2026-09-07 — §11**, and *both* of this bullet's reasons were wrong.
+  `scipy.optimize.brentq` is not a dependency decision: the analysis crate already
+  `#[path]`-includes `physsynth-core/src/root.rs`, a transcription of SciPy's `brentq.c`, and its
+  allowlist stayed empty. And freezing was not impossible — that generalised from the modules
+  *deleted* in rust-migration §44, where no Python survived, whereas these seven were *promoted*
+  and their Python bodies were live until the commit that replaced them. They were recorded first,
+  so no guard amendment was needed and the contract over the other 62 fixtures is untouched. What
+  this bullet got right is that a native bar is wanted as well, and there are 27 of them.
 * **No user-facing surface.** A viewer read-out saying "this configuration is trustworthy to 2 kHz"
-  is the obvious product of this, and it needs the promotion above first.
+  is the obvious product of this. The promotion it was waiting on is done (§11), so this is now the
+  next thing in the sequence rather than a thing behind another thing.
 * **The four "no horizon yet" rows were not attempted.** Each is a refinement or geometry study in
   its own right; the inventory names the reason rather than leaving a blank.
 
@@ -473,7 +477,9 @@ before it could happen.
   *same* function for both models and a monotone square root cannot reorder a block, so in space the
   plate's rule transfers unchanged. What breaks it is the explicit scheme's *sharp* time error, and
   it inverts the rule rather than weakening it.
-* **Promotion out of `tests/`.** Unchanged from §6: `sinc_horizon_fraction` now brings a `brentq`
+* **Promotion out of `tests/`. Done 2026-09-07 — §11**, and the `brentq` worry in this bullet was
+  unfounded: the analysis crate already compiles a transcription of SciPy's own. Original text:
+  `sinc_horizon_fraction` now brings a `brentq`
   with it, which is free in a test and a dependency decision in the analysis crate.
 
 
@@ -628,7 +634,7 @@ the collapse and not the number.
   and the grain does not change that.
 * **The membrane's block. Done 2026-09-07 — §10**, and this bullet repeated §8.9's wrong reason:
   the weight is not "the plate's, not a membrane's", it is one function both models read.
-* **Promotion out of `tests/`**, unchanged from §6 and §8.9. Note that the continuous crossing
+* **Promotion out of `tests/`. Done 2026-09-07 — §11.** Note that the continuous crossing
   introduced here brings a second `brentq` with it, so the dependency question §6 raises now has
   two call sites rather than one.
 
@@ -673,7 +679,7 @@ flatten — and that single structural difference is everything below.
 
 The plate's own weight is the same `w`, entering as `1 − a²w/3` where the membrane has
 `1 − a²w/6`, because a plate's frequency carries the operator's eigenvalue and a membrane's
-carries its square root. `block_weight` in `tests/helpers.py` is that one shared function.
+carries its square root. `block_weight` in `physsynth/analysis/horizon.py` is that one shared function (§11).
 
 ### 10.2 The membrane's space floor is the STRING's, not half of it
 
@@ -816,6 +822,143 @@ it is amended in the same commit: the general claim is that the worst mode is *a
   that row already gives — its reference is a frequency for a different shape.
 * **Damping is not in any of this.** Every statement here is `σ = 0`; a lossy membrane's modes are
   shifted by the loss as well, and §4 never separated the two either.
-* **Promotion out of `tests/`**, unchanged from §6, §8.9 and §9.8. This batch adds two more
+* **Promotion out of `tests/`. Done 2026-09-07 — §11**, and both of the added helpers went with
+  the rest. This batch adds two more
   closed-form helpers (`cancellation_courant`, `block_weight`) to the pile that would move, and
   neither of them brings a new dependency — they are arithmetic.
+
+---
+
+## 11. The promotion — 2026-09-07
+
+The horizon primitives stop being test-folder fixtures and become part of the instrument. §6, §8.9,
+§9.8 and §10.10 all named this as the follow-on and §6 gave two reasons it would be hard. Neither
+was a reason, and that is the useful content of this section.
+
+### 11.1 The dependency question was already answered, three inches from the call site
+
+§6 says `scipy.optimize.brentq` "would be a dependency decision in the analysis crate, whose
+allowlist is deliberately narrow". It is not one, and the answer was written down months earlier in
+a place a keyword search for `brentq` finds immediately: `crates/physsynth-analysis/src/lib.rs`
+opens with a header arguing out three ways to reach Brent's method from this crate, rejects taking
+`physsynth-core` as a Cargo dependency (it inverts the crate split and goes red in `deps.rs`) and
+rejects copying the file (two transcriptions free to drift), and settles on `#[path]`-including
+`physsynth-core/src/root.rs` — a line-for-line transcription of SciPy's `brentq.c`, already
+compiled into this crate for `modal.rs`'s two root finds.
+
+So `sinc_horizon_fraction` calls `crate::root::brentq` and `ALLOWED: &[&str] = &[]` in
+`crates/physsynth-analysis/tests/deps.rs` stays empty. Not one line of `Cargo.toml` moved.
+
+**The transferable point is about how the obstacle was stated.** "Would be a dependency decision"
+described a *function name*, and dependencies are not properties of function names — they are
+properties of what a crate already compiles. The question that would have dissolved this in one
+grep is "does this crate already have a root finder?", and it does.
+
+### 11.2 The freeze question was answered by not generalising
+
+§6 says satisfying `tests/test_analysis_frozen.py`'s derived guard "is impossible — there is no
+Python implementation left to freeze against", and calls widening that guard for one function a bad
+trade for the 62 fixtures it protects. Both halves of that are sound *reasoning* over a false
+premise.
+
+The premise came from `docs/dev/rust-migration-plan.md` §44, where six analysis modules were
+**deleted**: their Python bodies went, so nothing can ever recompute what they said, and
+`tests/analysis_frozen_values.py` exists because that was the last chance to record it. These seven
+functions are not in that situation. They were **promoted**, and a promotion has a live Python body
+on one side of it — `tests/helpers.py`'s, right up to the commit that replaced it with the shim.
+
+`scripts/freeze_horizon.py` is what walked through that window. Twelve cases, recorded from the
+Python and compared against the Rust in the same pass, in the batch that had both. The guard was
+widened afterwards for an unrelated and better reason (§11.5), not to accommodate this.
+
+**The transferable point:** a constraint inherited from a *deletion* does not automatically hold
+for a *move*. "There is no second implementation" was a fact about §44's subject, not a property of
+this repository, and it stopped being true of anything the moment the question was about a function
+that still existed.
+
+### 11.3 What the measurement said
+
+Every float case recorded a gap of **exactly 0.0** against the Python — including
+`sinc_horizon_fraction`, where two hazards stack and neither could be reasoned away in advance: the
+Python called `brentq` with SciPy's *implicit* defaults (`xtol=2e-12`, `rtol≈8.88e-16`), so the
+Rust had to be handed them explicitly or the two would be different root finds; and the objective
+evaluates `sin`, which NumPy computes with its own CPU-dispatched routine rather than the platform
+libm (rust-migration ledger #28). Both were measured rather than assumed, and both came back clean.
+
+That is a statement about *this machine*, which is exactly why the frozen bar stays a `1e-13`
+tolerance and not an equality. Ledger #28 is the standing reminder, and 2026-09-07's mallet-gong CI
+failure — nineteen red runs on an `== 0.0` that held on Windows and read 3.5e-13 on Linux — is the
+recent one.
+
+### 11.4 Five rows record a string, and it is the strong arm rather than a hole
+
+`pitch_horizon` returns `(int, bool)`; `mode_family` and `mode_block` return lists of integer
+pairs. There is no float in any of those answers, so the tolerance arm of the frozen test compares
+nothing and the entire comparison is the exact one on `ints` and `structure`.
+
+`test_every_case_carries_a_measured_gap_rather_than_a_reason_it_could_not_be_measured` used to
+reject *any* non-float in that slot, which was right when every string there meant "the two sides
+could not be compared". It now separates the two meanings, and adds a check the original did not
+have: a row claiming "no floats" must really have none **and** must carry integers, so the
+exemption cannot become a way to freeze a row that asserts nothing at all.
+
+Do not read those five rows as bit-identity between two float computations. Nothing float was
+compared.
+
+### 11.5 The guard stopped being a hand-written list
+
+`ANALYSIS_MODULES` was a tuple of six module names. Adding `"horizon"` to it by hand would have
+restated the hole one number higher — the *eighth* module would arrive unfrozen and unnoticed for
+exactly the same reason the seventh nearly did. It now reads the package with
+`pkgutil.iter_modules`, so the claim is "no module in `physsynth.analysis` has a public function
+without a frozen case".
+
+Same move, and the same reasoning, as rust-migration ledger #67: a guard that would be *edited* to
+stay correct should be *derived* instead. Widening the list by hand is how a derived-looking guard
+quietly becomes a maintained one.
+
+### 11.6 A native bar caught a docstring overclaim
+
+27 bars in `crates/physsynth-analysis/tests/horizon.rs`, all identities out of the docstrings rather
+than fixtures, because a frozen record cannot catch an error the Python made too (rust-migration
+§37.11 is the precedent: a native bar found a 544% defect in the free circular plate's oracle that
+both implementations had always shared).
+
+One of them failed on the first run, and it was the docstring that was wrong. `mode_block` says the
+error weight "has an interior minimum in `n`", which is what makes the corner argument work.
+Minimising `(m⁴ + t²)/(m² + t)` over `t = n²` gives `t* = m²(√2 − 1)`, so the minimum sits at
+`n* = m·√(√2 − 1) ≈ 0.6436 m` — strictly inside `(0, m)`, as claimed, **for the continuous
+function**. On the integer grid it is only reachable from `m = 3` up: at `m = 2` the minimiser is
+1.287 and the nearest index below it is `n = 1`, which is the block's own edge.
+
+The corner argument is untouched, because it is a statement about the **maximum** and the maximum is
+still always a corner (asserted separately, `m_max = 2..12`). But the bar now pins the closed-form
+position rather than merely "somewhere inside", which is a stronger claim than the one that failed,
+and it records the `m = 2` exception where a reader checking the docstring will hit it.
+
+### 11.7 What did NOT move, and why that is the whole design
+
+`spatial_operator_horizon` stayed in `tests/helpers.py`. §7.7 already said why and this batch is the
+first time it cost anything to act on: it takes `(N, kappa)` and returns "the horizon", which reads
+like a general answer and is not one — it hardcodes `L_DEFAULT`, `wave_speed()` and a 1-D Dirichlet
+second difference, so it silently answers about the canonical string whatever the caller had in
+mind. In the test folder that is a fixture and it is honest. In the library it would be a lie with a
+general-sounding name.
+
+The contrast with `mode_family` is the design rule this module is built on: `mode_family` returns
+*index pairs only* and makes the caller build its own frequencies from its own geometry, which is
+why it can live in a library at all. A promoted helper must not carry a fixture inside it.
+
+There are **no re-exports** in `tests/helpers.py`. The four caller files import from
+`physsynth.analysis.horizon` directly. A re-export would be an unused import kept alive only by
+`__all__` — the `ruff --fix` hazard of rust-migration ledger #66 — and, worse, would leave two
+routes to one name with nothing saying which is canonical.
+
+### 11.8 Not done
+
+* **The viewer read-out.** "This configuration is trustworthy to 2 kHz" is what all of this was for,
+  and it is now unblocked: `web/serialize.py` can import `physsynth.analysis.horizon` like any other
+  oracle. It is a separate batch and needs a decision about *which* horizon a mixed model reports.
+* **The four "no horizon yet" rows** of §5 are still not attempted, unchanged from §6.
+* **Nothing was promoted that did not already exist.** This batch moved seven functions and wrote no
+  new physics; §11.6's finding is a correction to prose, not to a formula.

@@ -35,16 +35,9 @@ from helpers import (
     PLATE_THETA_DEFAULT,
     RHO_AREAL_DEFAULT,
     T_DEFAULT,
-    block_weight,
-    cancellation_courant,
     make_damped_string,
     make_membrane,
     make_plate,
-    mode_block,
-    mode_family,
-    pitch_error_cents,
-    pitch_horizon,
-    sinc_horizon_fraction,
     spatial_operator_horizon,
     wave_speed,
 )
@@ -52,6 +45,15 @@ from numpy.typing import NDArray
 from scipy.optimize import brentq
 
 from physsynth.analysis import modal
+from physsynth.analysis.horizon import (
+    block_weight,
+    cancellation_courant,
+    mode_block,
+    mode_family,
+    pitch_error_cents,
+    pitch_horizon,
+    sinc_horizon_fraction,
+)
 
 CENTS = 5.0  # a sustained tone's pitch JND is around this; the bound is an argument, not a law
 
@@ -89,6 +91,26 @@ def test_a_non_positive_bound_is_refused(bad):
 def test_mismatched_families_are_refused_rather_than_broadcast():
     with pytest.raises(ValueError):
         pitch_horizon([100.0, 200.0], [100.0], CENTS)
+
+
+def test_the_error_keeps_the_shape_it_was_given_including_a_mesh():
+    """The one thing the promotion could silently have changed, and no other caller reaches it.
+
+    The pre-promotion Python was a NumPy expression, so it was elementwise over whatever it was
+    handed and gave a mesh back for a mesh by construction. The Rust takes a flat slice, so the
+    shape logic now lives in `physsynth/analysis/horizon.py` -- it ravels on the way in and
+    reshapes on the way out, which is the same three lines every other analysis shim carries
+    (`crates/physsynth-py/src/analysis.rs` explains why that stays in Python). Every caller in this
+    repo passes a 1-D family, so without this test the reshape is written and never run.
+    """
+    ratio = np.array([[1.0, 1.001], [0.999, 1.0]])
+    got = pitch_error_cents(100.0 * ratio, np.full((2, 2), 100.0))
+    assert got.shape == (2, 2), f"a 2x2 mesh came back as {got.shape}"
+    flat = pitch_error_cents(100.0 * ratio.ravel(), np.full(4, 100.0))
+    assert np.array_equal(got.ravel(), flat), "the mesh answer is not the flat answer, reshaped"
+
+    scalar = pitch_error_cents(np.float64(110.0), np.float64(100.0))
+    assert scalar.shape == (), f"a pair of scalars came back as {scalar.shape}"
 
 
 # =====================================================================================

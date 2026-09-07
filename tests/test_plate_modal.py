@@ -14,16 +14,18 @@ from helpers import (
     arpack_v0,
     convergence_orders,
     make_plate,
-    mode_block,
-    mode_family,
-    pitch_horizon,
     plate_kwargs,
     plate_low_eigenfrequencies,
-    sinc_horizon_fraction,
 )
 from scipy.sparse.linalg import eigsh
 
 from physsynth.analysis import modal, spectrum
+from physsynth.analysis.horizon import (
+    mode_block,
+    mode_family,
+    pitch_horizon,
+    sinc_horizon_fraction,
+)
 from physsynth.core.engine import simulate
 from physsynth.core.exciter import raised_cosine_2d
 from physsynth.core.operators2d import biharmonic_from_mask, laplacian_from_mask

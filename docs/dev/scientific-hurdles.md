@@ -628,8 +628,9 @@ re-association does not. The parity file asserts the exact/tolerant split above.
 mode's *frequency* is right, and until 2026-09-06 no model had that boundary written down. §4's
 probe forced the question: the θ-scheme's decay error is locked to its pitch error, so the pitch
 error is what actually binds. `docs/dev/resolution-horizon-plan.md` is the measurement,
-`tests/test_resolution_horizon.py` the 32 tests that keep it honest, and
-`tests/helpers.py::pitch_horizon` the primitive.
+`tests/test_resolution_horizon.py` the 188 tests that keep it honest, and
+`physsynth.analysis.horizon.pitch_horizon` the primitive — promoted out of the test folder into
+the library on 2026-09-07 (plan §11), where a viewer read-out can reach it.
 
 **The structural finding, and the first draft of it was wrong.** The horizon is **not**
 `min(time floor, space floor)`. Whether the two errors add or cancel depends on their signs, and

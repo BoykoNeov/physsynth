@@ -69,7 +69,10 @@ pub fn pitch_horizon(
     f_continuum: &[f64],
     cents: f64,
 ) -> Result<(usize, bool), String> {
-    if !(cents > 0.0) {
+    // `cents <= 0.0 || is_nan()` rather than `!(cents > 0.0)`: the same predicate over every
+    // double, and the negation clippy objects to. NaN is refused rather than accepted, which
+    // is the whole reason the test is written around the positive comparison.
+    if cents <= 0.0 || cents.is_nan() {
         return Err(format!("cents bound must be positive, got {cents}."));
     }
     let err: Vec<f64> = pitch_error_cents(f_discrete, f_continuum)?
@@ -94,7 +97,10 @@ pub fn pitch_horizon(
 ///
 /// Independent of `c`, `L`, `N`, `k` and `fs`, which is the claim.
 pub fn sinc_horizon_fraction(cents: f64, power: i64) -> Result<f64, String> {
-    if !(cents > 0.0) {
+    // `cents <= 0.0 || is_nan()` rather than `!(cents > 0.0)`: the same predicate over every
+    // double, and the negation clippy objects to. NaN is refused rather than accepted, which
+    // is the whole reason the test is written around the positive comparison.
+    if cents <= 0.0 || cents.is_nan() {
         return Err(format!("cents bound must be positive, got {cents}."));
     }
     if power < 1 {
@@ -121,7 +127,9 @@ pub fn sinc_horizon_fraction(cents: f64, power: i64) -> Result<f64, String> {
 /// from its own fixture. Assumes a square domain.
 pub fn mode_family(kind: &str, count: i64) -> Result<Vec<(i64, i64)>, String> {
     if count < 1 {
-        return Err(format!("a family needs at least one mode, got count={count}."));
+        return Err(format!(
+            "a family needs at least one mode, got count={count}."
+        ));
     }
     match kind {
         "axial" => Ok((1..=count).map(|m| (m, 1)).collect()),
@@ -137,9 +145,12 @@ pub fn mode_family(kind: &str, count: i64) -> Result<Vec<(i64, i64)>, String> {
 ///
 /// A block is the 2-D shape a "the first few modes are in tune" claim actually asserts, and it is
 /// not a family: the error is not monotone along it, so a prefix over it is not a horizon. What
-/// makes it readable is that its worst mode is a *corner* — [`block_weight`] has an interior
-/// minimum in `n`, so the maximum over a block never sits inside it. *Which* corner is a property
-/// of the scheme and not of the block; ask [`cancellation_courant`].
+/// makes it readable is that its worst mode is a *corner* — [`block_weight`] dips at
+/// `n* = m·√(√2 − 1) ≈ 0.6436 m`, strictly inside `(0, m)`, so the maximum over a block never sits
+/// inside it. (On the *integer* grid that minimum is only reachable from `m = 3` up: at `m = 2` the
+/// minimiser is 1.287 and the nearest index below it is the edge. The corner argument is about the
+/// maximum and is untouched by that.) *Which* corner is a property of the scheme and not of the
+/// block; ask [`cancellation_courant`].
 ///
 /// The ordering key is isotropic. A grained plate orders by `g_x a² + 2 g_h a b + g_y b²`, so
 /// there the returned *set* is still the block and the order is no longer its spectrum.
