@@ -597,7 +597,8 @@ actively wrong for the other.**
   increase takes that to nineteen and then stops dead.
 * The **plate is space-limited at every sample rate the suite uses** — a 40× change of `fs` moves
   its horizon by at most one mode. At the `N = 16` fixture the fundamental is **9.6 cents flat**
-  and the (2,2) mode is 83 cents flat.
+  and the (2,2) mode is 83 cents flat. Its floor has the **same closed form as the string's, at
+  half the cents budget** (`sinc(u)² = 2^(−c/1200)`): **5.925% of the grid** at 5 cents.
 * The **membrane's CFL-ceiling cancellation is diagonal-only.** At `λ = 1/√2` the diagonal modes
   are exact (127 of 127) and the axial modes are not (15 of 127). Reading only the diagonal would
   have produced "the membrane is in tune at the ceiling", a claim about one mode family.
@@ -619,3 +620,16 @@ which is a **decay-rate** band limited by a turnover at `~m=32`; deriving it wou
 range from 16 to 5. And **one** — the 2-D plate's — is a genuine pitch band that could not be
 derived, blocked on splitting a mixed mode family. Every literal turned out conservative, none
 over-claiming (`resolution-horizon-plan.md` §7).
+
+**The blocked one was built 2026-09-07** (§8), and the prediction inside the refusal was
+backwards. The plate's two mode families are **identical** in mode index at every grid and every
+bound — the membrane's factor-of-nine gap is the *explicit* scheme's cancellation at its Courant
+ceiling, and the implicit plate has no ceiling to cancel at. What actually made the mixed list
+unreadable is that it is **not monotone**: sorted by frequency, `(3,1)` is lower in pitch than
+`(2,3)` and further out of tune, because the droop weight `(m⁴+n⁴)/(m²+n²)` orders differently
+from `m²+n²`. Where the families *do* differ is **pitch**: at the same frequency an axial mode is
+**exactly twice** as flat, so a horizon quoted as a mode index is family-independent and one
+quoted in hertz is not. The band was derivable after all — through the block's **diagonal
+corner**, which is always its worst mode — and it came out **exactly saturated** (horizon 2,
+band 2, the `3×3` block 1.41 cents out), the one place the audit's "every literal was
+conservative" needed amending.

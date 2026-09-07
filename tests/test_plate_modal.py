@@ -14,8 +14,12 @@ from helpers import (
     arpack_v0,
     convergence_orders,
     make_plate,
+    mode_block,
+    mode_family,
+    pitch_horizon,
     plate_kwargs,
     plate_low_eigenfrequencies,
+    sinc_horizon_fraction,
 )
 from scipy.sparse.linalg import eigsh
 
@@ -76,21 +80,67 @@ def test_rectangle_continuum_convergence_order():
 
 # -- Tight bar: low modes within ~1 cent at a fine grid + fine timestep (NOT a loosened bound). --
 def test_low_modes_within_one_cent():
-    N, mu, Lx = 96, 0.5, 1.0
+    """The band is *derived* from the plate's own pitch horizon, and it is exactly saturated.
+
+    This is the genuine discrete-vs-continuum pitch band that ``resolution-horizon-plan.md``
+    section 7.4 could not derive on 2026-09-07: ``pitch_horizon`` reads a leading prefix of one
+    mode family, and these four modes are a 2x2 index *block*, which is not a family. Section 8
+    unblocked it. A block's error is not monotone -- ``(3,1)`` is 1.27 cents flat while the
+    higher-pitched ``(2,3)`` is only 1.16 -- but its worst mode is always its **diagonal corner**,
+    so the block's horizon is the diagonal family's horizon, and that is a prefix.
+
+    Measured 2026-09-07 at this fixture, not frozen: both families' horizons are **2** at one
+    cent, the block ``{1,2}^2`` is in tune and ``{1,2,3}^2`` is not, ``(3,3)`` being 1.41 cents
+    flat. So unlike section 7.3's other two derived bands, **this literal was exactly saturated
+    rather than conservative** -- the floor below has zero headroom by construction, and one more
+    mode in either direction breaks the bar.
+    """
+    N, mu, Lx, BOUND = 96, 0.5, 1.0, 1.0
     h = Lx / N
     k = mu * h * h / KAPPA
-    # This IS a genuine discrete-vs-continuum pitch band, and it is the one place a derived band
-    # was wanted on 2026-09-07 and could not be built. pitch_horizon counts a leading PREFIX of one
-    # mode family, and these four are two families at once -- (2,1)/(1,2) are axial, (2,2) is
-    # diagonal, and the membrane's two families sit a factor of nine apart at the same Courant
-    # number (docs/dev/resolution-horizon-plan.md section 4). Splitting the 2-D spectrum by family
-    # first is its own piece of work; until then the four modes stay a literal.
-    modes = [(1, 1), (2, 1), (1, 2), (2, 2)]
-    Lam = modal.rectangular_discrete_eigenvalues(h, N, N, modes)
-    f_disc = modal.discrete_plate_eigenfrequency(Lam, KAPPA, k, THETA)
-    f_cont = modal.rectangular_plate_freqs(KAPPA, Lx, Lx, modes)
+
+    def frequencies(modes):
+        Lam = modal.rectangular_discrete_eigenvalues(h, N, N, modes)
+        f_disc = np.asarray(modal.discrete_plate_eigenfrequency(Lam, KAPPA, k, THETA))
+        f_cont = np.asarray(modal.rectangular_plate_freqs(KAPPA, Lx, Lx, modes))
+        return f_disc, f_cont
+
+    # The assertion itself is unchanged: the same four modes, the same tight bound.
+    f_disc, f_cont = frequencies(mode_block(2))
     err_cents = np.abs(modal.cents(f_disc, f_cont))
     assert np.max(err_cents) < 1.0, f"max error {np.max(err_cents):.3f} cents > 1 (tight bar)"
+
+    # -- and now the number 2 as a measurement rather than a literal (plan section 7.5). --
+    # The window comes from the closed-form space floor rather than a hand-picked count, so
+    # `horizon < window` cannot quietly become `horizon == window` on a finer grid.
+    window = int(np.ceil(2.0 * sinc_horizon_fraction(BOUND, power=2) * N))
+    horizons = {}
+    for kind in ("diagonal", "axial"):
+        horizon, monotone = pitch_horizon(*frequencies(mode_family(kind, window)), BOUND)
+        assert monotone, f"the {kind} error curve is not monotone; the prefix is hiding a mode"
+        assert horizon < window, (
+            f"the {kind} horizon {horizon} filled the whole window {window} -- that is a lower "
+            "bound wearing a measurement's clothes, not a horizon"
+        )
+        horizons[kind] = horizon
+    assert horizons["diagonal"] == horizons["axial"], (
+        f"the plate's two families should agree in their own index: {horizons} -- the membrane's "
+        "factor-of-nine gap is a cancellation at its Courant ceiling, which this family has not"
+    )
+    # The only line that can fail on a regression: a dispersion oracle broken toward flatness
+    # would shorten the band and hide inside it, staying green on fewer modes.
+    assert horizons["diagonal"] >= 2, (
+        f"the plate's one-cent horizon fell to {horizons['diagonal']}; this fixture claimed 2"
+    )
+
+    # The band is the block, and the block is decided by its diagonal corner: one more index in
+    # each direction must break the bound, or the four modes above were not the whole story.
+    inside = np.abs(modal.cents(*frequencies(mode_block(horizons["diagonal"]))))
+    outside = np.abs(modal.cents(*frequencies(mode_block(horizons["diagonal"] + 1))))
+    assert np.max(inside) < BOUND <= np.max(outside), (
+        f"the block is not saturated: {np.max(inside):.3f} inside, {np.max(outside):.3f} one "
+        "index wider"
+    )
 
 
 # -- eigsh on the actual assembled L, mapped through the scheme oracle, tracks the analytic

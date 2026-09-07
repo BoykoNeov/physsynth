@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.optimize import brentq
 from scipy.sparse.linalg import eigsh
 
 from physsynth.analysis import modal, spectrum
@@ -283,6 +284,77 @@ def spatial_operator_horizon(N: int, kappa: float, cents: float = 5.0) -> tuple[
     w_disc = np.sqrt(c * c * p2_disc + kappa * kappa * p2_disc * p2_disc)
     w_cont = np.sqrt(c * c * p2_cont + kappa * kappa * p2_cont * p2_cont)
     return pitch_horizon(w_disc, w_cont, cents)
+
+
+def sinc_horizon_fraction(cents: float, power: int = 1) -> float:
+    """``m*/N`` — the closed-form space floor, as a fraction of the grid, with no fixture in it.
+
+    The discrete axis eigenvalue is ``(2/h) sin(m pi h / 2L)`` against the continuum ``m pi / L``,
+    so ``p_disc / p_cont = sinc(u)`` with ``u = m pi / 2N``. ``power`` is how many factors of that
+    the model's *frequency* carries, and it is read off the dispersion relation rather than chosen:
+
+    * ``power = 1`` — a wave or a string, ``omega ~ c p``, so the frequency ratio is ``sinc(u)``.
+    * ``power = 2`` — a plate or a beam, ``omega ~ kappa p^2``, so it is ``sinc(u)^2``.
+
+    Hence the exact identity ``sinc_horizon_fraction(c, 2) == sinc_horizon_fraction(c / 2, 1)``:
+    **a plate resolves the same share of its grid as a string given half the cents budget.** That
+    is what ``docs/dev/resolution-horizon-plan.md`` section 3.2's "twice the droop" means as a
+    number — 5.925% of the grid at 5 cents against a string's 8.378%.
+
+    Independent of ``c``, ``L``, ``N``, ``k`` and ``fs``, which is the claim; the caller supplies
+    only the bound and the power.
+    """
+    if not cents > 0.0:
+        raise ValueError(f"cents bound must be positive, got {cents}.")
+    if power < 1:
+        raise ValueError(f"power must be a positive number of sinc factors, got {power}.")
+    target = 2.0 ** (-cents / 1200.0)
+    u = brentq(lambda z: (np.sin(z) / z) ** power - target, 1e-12, np.pi / 2.0)
+    return 2.0 * u / np.pi
+
+
+def mode_family(kind: str, count: int) -> list[tuple[int, int]]:
+    """The leading ``count`` ``(m, n)`` index pairs of one 2-D mode family.
+
+    A *family* here is a sequence of index pairs along which the pitch error is monotone, so that
+    ``pitch_horizon``'s leading-prefix reading means something. The two canonical ones:
+
+    * ``"axial"`` — ``(m, 1)``, one half-wave across the other axis.
+    * ``"diagonal"`` — ``(m, m)``.
+
+    This is deliberately **index-side only**: it returns mode numbers and nothing else, so the
+    caller still builds its own discrete and continuum frequencies from its own fixture. That is
+    the shape ``spatial_operator_horizon`` got wrong (section 7.7 of the plan) — a helper that
+    takes ``(N, mu)`` and hands back "the horizon" hides the geometry and the boundary condition
+    in its body, and answers about the wrong model without saying so.
+
+    Assumes a **square** domain: on ``Lx != Ly`` the ``(m, 1)`` and ``(1, n)`` families stop being
+    degenerate and are two different measurements, so ask for each separately.
+    """
+    if count < 1:
+        raise ValueError(f"a family needs at least one mode, got count={count}.")
+    if kind == "axial":
+        return [(m, 1) for m in range(1, count + 1)]
+    if kind == "diagonal":
+        return [(m, m) for m in range(1, count + 1)]
+    raise ValueError(f"unknown mode family {kind!r}; expected 'axial' or 'diagonal'.")
+
+
+def mode_block(m_max: int) -> list[tuple[int, int]]:
+    """Every ``(m, n)`` with ``1 <= m, n <= m_max``, ordered by continuum frequency (``m^2 + n^2``).
+
+    A *block* is the 2-D shape a "the first few modes are in tune" claim actually asserts, and it
+    is not a family: the error is not monotone along it (section 8 of the plan), so a prefix over
+    it is not a horizon. What makes a block readable is that its worst mode is its **diagonal
+    corner** ``(m_max, m_max)`` — the plate's error weight ``(m^4 + n^4) / (m^2 + n^2)`` has an
+    interior minimum in ``n``, so the maximum over a block sits at a corner, and the diagonal
+    corner beats the axial one for every ``m_max >= 2``. So a block's horizon is its diagonal
+    family's horizon, which is a family and does have a prefix.
+    """
+    if m_max < 1:
+        raise ValueError(f"a block needs at least one mode per axis, got m_max={m_max}.")
+    modes = [(m, n) for m in range(1, m_max + 1) for n in range(1, m_max + 1)]
+    return sorted(modes, key=lambda mn: (mn[0] ** 2 + mn[1] ** 2, mn[0], mn[1]))
 
 
 def make_membrane(

@@ -30,16 +30,20 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from helpers import (
+    KAPPA_PLATE_DEFAULT,
     L_DEFAULT,
+    PLATE_THETA_DEFAULT,
     make_damped_string,
     make_membrane,
     make_plate,
+    mode_block,
+    mode_family,
     pitch_error_cents,
     pitch_horizon,
+    sinc_horizon_fraction,
     spatial_operator_horizon,
     wave_speed,
 )
-from scipy.optimize import brentq
 
 from physsynth.analysis import modal
 
@@ -86,18 +90,6 @@ def test_mismatched_families_are_refused_rather_than_broadcast():
 # =====================================================================================
 
 
-def _sinc_horizon_fraction(cents: float) -> float:
-    """``m*/N`` for a pure wave, from the second difference's own eigenvalue error.
-
-    The discrete eigenvalue is ``(2/h) sin(m pi h / 2L)`` against the continuum ``m pi / L``, so
-    the frequency ratio is ``sinc(u)`` with ``u = m pi / 2N`` and the horizon solves
-    ``sin(u)/u = 2^(-cents/1200)``. Independent of ``c``, ``L`` and ``N`` — which is the claim.
-    """
-    target = 2.0 ** (-cents / 1200.0)
-    u = brentq(lambda z: np.sin(z) / z - target, 1e-12, np.pi / 2.0)
-    return 2.0 * u / np.pi
-
-
 @pytest.mark.parametrize("cents", [5.0, 25.0, 100.0])
 @pytest.mark.parametrize("n", [64, 128, 256, 512, 1024])
 def test_the_wave_space_floor_matches_its_closed_form(n, cents):
@@ -109,7 +101,7 @@ def test_the_wave_space_floor_matches_its_closed_form(n, cents):
     """
     horizon, monotone = spatial_operator_horizon(n, kappa=0.0, cents=cents)
     assert monotone, "a pure wave's sinc droop is monotone in the mode index"
-    predicted = _sinc_horizon_fraction(cents) * n
+    predicted = sinc_horizon_fraction(cents) * n
     assert abs(horizon - predicted) <= 1.0, (
         f"N={n}, {cents:g} cents: measured floor {horizon} against the closed form "
         f"{predicted:.2f} — more than the integer quantisation apart"
@@ -295,9 +287,9 @@ def test_refining_the_explicit_timestep_makes_the_string_WORSE():
     )
 
 
-def _membrane_family_horizon(n: int, lam: float, second) -> tuple[int, bool]:
+def _membrane_family_horizon(n: int, lam: float, kind: str) -> tuple[int, bool]:
     mem = make_membrane(domain="rectangle", N=n, lam=lam)
-    modes = [(int(m), int(second(int(m)))) for m in range(1, n)]
+    modes = mode_family(kind, n - 1)
     lam_disc = np.asarray(modal.rectangular_discrete_eigenvalues(mem.h, n, n, modes))
     f_disc = np.asarray(modal.discrete_membrane_eigenfrequency(lam_disc, mem.c, mem.k))
     f_cont = np.asarray(modal.rectangular_membrane_freqs(mem.c, 1.0, 1.0, modes))
@@ -314,8 +306,8 @@ def test_the_membranes_cancellation_is_DIAGONAL_ONLY(n):
     a claim about that family, which is this project's oldest recurring scar in a new place.
     """
     lam_ceiling = 1.0 / np.sqrt(2.0)
-    diagonal, _ = _membrane_family_horizon(n, lam_ceiling, lambda m: m)
-    axial, _ = _membrane_family_horizon(n, lam_ceiling, lambda m: 1)
+    diagonal, _ = _membrane_family_horizon(n, lam_ceiling, "diagonal")
+    axial, _ = _membrane_family_horizon(n, lam_ceiling, "axial")
     assert diagonal >= 0.9 * (n - 1), (
         f"the diagonal family should be essentially exact at the ceiling, got {diagonal}/{n - 1}"
     )
@@ -335,8 +327,8 @@ def test_both_membrane_families_converge_to_the_same_space_floor():
     """
     n = 128
     tiny = 0.125
-    diagonal, _ = _membrane_family_horizon(n, tiny, lambda m: m)
-    axial, _ = _membrane_family_horizon(n, tiny, lambda m: 1)
+    diagonal, _ = _membrane_family_horizon(n, tiny, "diagonal")
+    axial, _ = _membrane_family_horizon(n, tiny, "axial")
     floor = spatial_operator_horizon(n, kappa=0.0)[0]
     assert abs(diagonal - axial) <= 1, (
         f"far below the ceiling the two families should agree: {diagonal} against {axial}"
@@ -344,3 +336,230 @@ def test_both_membrane_families_converge_to_the_same_space_floor():
     assert abs(diagonal - floor) <= 2, (
         f"and both should sit on the 1-D space floor {floor}, got {diagonal}"
     )
+
+
+# =====================================================================================
+# The 2-D spectrum split by mode family — the plate, and the case section 7.4 could not derive
+# =====================================================================================
+#
+# `pitch_horizon` reads a leading prefix, so it needs a sequence along which the error is
+# monotone. A 2-D spectrum sorted by frequency is not one. The membrane showed that at its Courant
+# ceiling, where the two families sit a factor of nine apart; the plate is the same question with
+# the opposite answer, and that answer is why `test_plate_modal.py`'s band could finally be
+# derived.
+
+
+def _plate_family_frequencies(n: int, mu: float, modes, kappa: float = KAPPA_PLATE_DEFAULT):
+    """``(f_discrete, f_continuum)`` for a square plate, analytically — no time-stepping.
+
+    ``h = Lx/N`` and ``k = mu h^2 / kappa`` is ``make_plate``'s sample rate inverted, the same
+    arithmetic ``test_plate_modal.py``'s convergence test does. Building an actual ``Plate`` at
+    ``N = 512`` would assemble a quarter-million-unknown biharmonic to answer a question about
+    its eigenvalues, which are closed-form.
+    """
+    h = L_DEFAULT / n
+    k = mu * h * h / kappa
+    lam = np.asarray(modal.rectangular_discrete_eigenvalues(h, n, n, modes))
+    f_disc = np.asarray(modal.discrete_plate_eigenfrequency(lam, kappa, k, PLATE_THETA_DEFAULT))
+    f_cont = np.asarray(modal.rectangular_plate_freqs(kappa, L_DEFAULT, L_DEFAULT, modes))
+    return f_disc, f_cont
+
+
+@pytest.mark.parametrize("n", [64, 256])
+def test_the_plate_diagonal_family_IS_the_strings_spatial_droop_SQUARED(n):
+    """The mechanism, as an exact identity with no timestep in it.
+
+    A plate's frequency is proportional to the Laplacian eigenvalue rather than its square root,
+    so where a string's spatial droop is ``sinc(u)`` the plate's is ``sinc(u)^2``. Along the
+    **diagonal** that is exact rather than asymptotic: both axes carry the same ``u``, so
+    ``Lambda_disc / Lambda_cont`` is ``sinc(u)^2`` to the last bit.
+
+    The **axial** family only approaches it — ``(m, 1)`` carries an undrooped ``p_1^2`` in the
+    numerator — and the gap closes like ``1/N^2``, which is why the two families end up sharing a
+    floor anyway.
+    """
+    h = L_DEFAULT / n
+    m = np.arange(1, n)
+    u = m * np.pi / (2.0 * n)
+    sinc_sq = (np.sin(u) / u) ** 2
+
+    diagonal = np.asarray(
+        modal.rectangular_discrete_eigenvalues(h, n, n, mode_family("diagonal", n - 1))
+    ) / (2.0 * (m * np.pi / L_DEFAULT) ** 2)
+    assert np.max(np.abs(diagonal - sinc_sq)) < 1e-14, (
+        "the diagonal family's eigenvalue ratio is sinc(u)^2 exactly, not approximately"
+    )
+
+    axial = np.asarray(
+        modal.rectangular_discrete_eigenvalues(h, n, n, mode_family("axial", n - 1))
+    ) / ((m * m + 1) * (np.pi / L_DEFAULT) ** 2)
+    gap = float(np.max(np.abs(axial - sinc_sq)))
+    assert 0.0 < gap < 1e-3, f"the axial family should be near sinc^2, not equal to it: {gap:.2e}"
+
+
+def test_the_plates_space_floor_is_the_strings_at_HALF_the_cents_bound():
+    """The closed form, and it is an identity rather than a fit.
+
+    ``sinc(u)^2 = 2^(-c/1200)`` is ``sinc(u) = 2^(-(c/2)/1200)``, so **a plate resolves the same
+    share of its grid as a string given half the cents budget** — 5.925% against 8.378% at five
+    cents, a factor of ``sqrt(2)`` in the small-``u`` limit. That is section 3.2's "twice the
+    droop" written as a number, and it is checkable from outside any measurement.
+    """
+    for cents in (0.5, 1.0, 5.0, 25.0, 100.0):
+        plate = sinc_horizon_fraction(cents, power=2)
+        string_half = sinc_horizon_fraction(cents / 2.0, power=1)
+        assert abs(plate - string_half) < 1e-12, (
+            f"{cents:g} cents: plate fraction {plate:.15f} against the string's at half the "
+            f"bound {string_half:.15f} — these are the same equation"
+        )
+        assert plate < sinc_horizon_fraction(cents, power=1), "the plate must resolve less"
+    assert abs(sinc_horizon_fraction(5.0, power=2) - 0.059250) < 1e-5
+
+
+@pytest.mark.parametrize("cents", [1.0, 5.0, 25.0])
+@pytest.mark.parametrize("n", [64, 128, 256, 512])
+@pytest.mark.parametrize("kind", ["diagonal", "axial"])
+def test_the_plate_space_floor_matches_its_closed_form(kind, n, cents):
+    """The plate's analogue of the string's section 3.1 bar: measured against ``sinc(u)^2``.
+
+    ``mu`` is taken to nothing so this is the *floor* — what remains when the timestep is refined
+    away — which for the implicit family is a floor no sample rate passes. The tolerance is one
+    mode, the integer quantisation, and the second assertion fixes the **direction**: a timestep
+    can only cost modes, never buy them, so the measurement may sit below the closed form and
+    never above it.
+    """
+    modes = mode_family(kind, n - 1)
+    horizon, monotone = pitch_horizon(*_plate_family_frequencies(n, 1e-5, modes), cents)
+    assert monotone, f"the {kind} family's droop is monotone in the mode index"
+    predicted = sinc_horizon_fraction(cents, power=2) * n
+    assert abs(horizon - predicted) <= 1.0, (
+        f"{kind}, N={n}, {cents:g} cents: measured floor {horizon} against the closed form "
+        f"{predicted:.2f} — more than the integer quantisation apart"
+    )
+    assert horizon <= predicted, (
+        f"{kind}, N={n}: measured {horizon} ABOVE the space floor {predicted:.2f}, which a "
+        "timestep cannot buy"
+    )
+
+
+@pytest.mark.parametrize("cents", [1.0, 5.0, 25.0])
+@pytest.mark.parametrize("n", [64, 128, 256, 512])
+def test_the_plates_two_families_agree_in_INDEX_unlike_the_membranes(n, cents):
+    """Section 7.4 predicted a factor of nine here by analogy with the membrane. There is none.
+
+    The membrane's gap is a *cancellation*: the explicit scheme's sharp time error wipes out the
+    spatial droop, and only along the diagonal at ``lambda = 1/sqrt(2)``. The implicit plate has
+    no magic Courant number to cancel at, so both families sit on the same ``sinc^2`` floor and
+    have the **same horizon in their own mode index** — at every grid and every bound.
+
+    They are not the same modes: at index ``m`` the diagonal sits at roughly twice the frequency
+    of the axial one, which is what the pitch test below is about.
+    """
+    horizons = {
+        kind: pitch_horizon(
+            *_plate_family_frequencies(n, 1e-5, mode_family(kind, n - 1)), cents
+        )[0]
+        for kind in ("diagonal", "axial")
+    }
+    assert horizons["diagonal"] == horizons["axial"], (
+        f"N={n}, {cents:g} cents: the families should be identical at the floor, got {horizons}"
+    )
+
+
+def test_a_finite_timestep_breaks_the_family_tie_toward_the_AXIAL_one():
+    """And the tie-break has a direction, which is why the agreement above is a ``k -> 0`` claim.
+
+    At index ``m`` the axial mode sits at about half the diagonal's frequency, so it takes about
+    half the time droop. Refine ``k`` away and the two coincide; raise it and the axial family
+    reaches further. Anyone quoting "the plate's horizon" from one family at a working sample
+    rate is therefore quoting the wrong one by a few modes.
+    """
+    n, cents = 512, 25.0
+    coarse = {
+        kind: pitch_horizon(
+            *_plate_family_frequencies(n, 2.0, mode_family(kind, n - 1)), cents
+        )[0]
+        for kind in ("diagonal", "axial")
+    }
+    assert coarse["axial"] > coarse["diagonal"], (
+        f"the time droop should cost the diagonal family more, got {coarse}"
+    )
+    floor = pitch_horizon(
+        *_plate_family_frequencies(n, 1e-5, mode_family("diagonal", n - 1)), cents
+    )[0]
+    assert coarse["axial"] < floor, f"neither family may pass the space floor {floor}: {coarse}"
+
+
+@pytest.mark.parametrize("m", [8, 16, 32])
+def test_the_plates_families_differ_by_a_factor_of_two_in_PITCH(m):
+    """Where the two families *do* differ: at the same frequency, an axial mode is twice as flat.
+
+    The droop weight is ``(m^4 + n^4) / (m^2 + n^2)``, and at a fixed continuum frequency
+    ``rho^2 = m^2 + n^2`` that is maximal on the axis (``rho^4``) and minimal on the diagonal
+    (``rho^4 / 2``). So "the plate is in tune to 5 cents up to 2 kHz" is a claim about a
+    *direction*: on the axis the same 5 cents is reached at ``1/sqrt(2)`` of that frequency.
+
+    The ratio approaches two from below because the axial mode carries an undrooped ``n = 1``.
+    Measured at ``k -> 0``; a finite timestep adds a family-independent droop at equal pitch and
+    pulls the ratio toward one, which the second half asserts.
+    """
+    n = 512
+    axial_m = int(round(m * np.sqrt(2.0)))  # about the same continuum frequency as (m, m)
+
+    def pitch_normalised_ratio(mu):
+        f_disc, f_cont = _plate_family_frequencies(n, mu, [(m, m), (axial_m, 1)])
+        err = np.abs(pitch_error_cents(f_disc, f_cont))
+        return float(err[1] / err[0] * (f_cont[0] / f_cont[1]))
+
+    floor_ratio = pitch_normalised_ratio(1e-5)
+    assert abs(floor_ratio - 2.0) < 0.05, (
+        f"(m,m)=({m},{m}) against ({axial_m},1): the axial mode should be twice as flat at equal "
+        f"pitch, got {floor_ratio:.4f}"
+    )
+    assert pitch_normalised_ratio(2.0) < floor_ratio, (
+        "a finite timestep must pull the ratio toward one — it droops both families equally at "
+        "equal pitch"
+    )
+
+
+@pytest.mark.parametrize("n", [96, 256])
+def test_the_sorted_2d_spectrum_is_not_monotone_so_its_prefix_is_not_a_horizon(n):
+    """The reason a 2-D band must be split at all, with its witness named.
+
+    Sorted by frequency, the plate's spectrum interleaves the families and the error does not
+    rise with pitch: ``(3,1)`` is *lower* in frequency than ``(2,3)`` and *worse* in error,
+    because the weight ``(m^4 + n^4)/(m^2 + n^2)`` orders differently from ``m^2 + n^2``.
+    ``pitch_horizon`` still returns an integer over such a list, and its ``monotone`` flag is the
+    only thing saying that integer is meaningless — which is what the flag exists for.
+    """
+    modes = mode_block(8)
+    f_disc, f_cont = _plate_family_frequencies(n, 0.5, modes)
+    _, monotone = pitch_horizon(f_disc, f_cont, CENTS)
+    assert not monotone, (
+        "a frequency-sorted 2-D spectrum is not monotone in pitch error; if this passes, the "
+        "block reading in test_plate_modal.py is resting on the wrong reason"
+    )
+    err = np.abs(pitch_error_cents(f_disc, f_cont))
+    fall = int(np.nonzero(np.diff(err) < 0)[0][0])
+    assert modes[fall] == (3, 1) and modes[fall + 1] == (2, 3), (
+        f"the first fall should be the named witness, got {modes[fall]} -> {modes[fall + 1]}"
+    )
+    assert err[fall] > err[fall + 1]
+
+
+@pytest.mark.parametrize("n", [96, 256])
+def test_a_2d_blocks_worst_mode_is_its_DIAGONAL_corner(n):
+    """What makes a block readable despite the test above: its horizon is a family's horizon.
+
+    A "the first few modes are in tune" claim asserts over an index **block**, not a family. The
+    weight ``(m^4 + n^4)/(m^2 + n^2)`` has an interior minimum in ``n``, so its maximum over a
+    block sits at a corner — and the diagonal corner ``(M, M)`` beats the axial ``(M, 1)`` for
+    every ``M >= 2``. So a block's horizon *is* its diagonal family's, and that has a prefix.
+    """
+    for m_max in range(2, 9):
+        modes = mode_block(m_max)
+        err = np.abs(pitch_error_cents(*_plate_family_frequencies(n, 0.5, modes)))
+        worst = modes[int(np.argmax(err))]
+        assert worst == (m_max, m_max), (
+            f"the {m_max}x{m_max} block's worst mode should be its diagonal corner, got {worst}"
+        )
