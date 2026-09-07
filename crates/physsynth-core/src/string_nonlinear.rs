@@ -28,8 +28,9 @@
 //!   ulp takes a different number of iterations. Measured on the Python side before this port was
 //!   written: swapping `_stretch`'s reduction from BLAS `ddot` to a left-to-right sum changed the
 //!   per-step evaluation count on **1,400 of 5,000 steps**. That is why `physsynth/core/portable.py`
-//!   now covers the stretch as well — §19.2 of the migration plan — and it is the reason this model
-//!   can be compared to the bit at all.
+//!   covered the stretch as well — §19.2 of the migration plan — and it is the reason this model
+//!   could be compared to the bit at all. (That module was deleted 2026-09-07 with the last
+//!   Python model that called it.)
 //!
 //! # The reduction that had to move, and why it is this batch's business
 //!

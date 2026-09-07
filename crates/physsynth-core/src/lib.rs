@@ -26,7 +26,9 @@
 //! and `string_damped` — and the thing that had to move before either could is not in this crate
 //! at all: two *evaluation orders* SciPy chose and no portable implementation reproduces, one in a
 //! reduction and one in a matrix's column order. Both were answered on the Python side, in
-//! `physsynth/core/portable.py`; `sparse::Csr::sub` and `pyfloat` are what this side needed. Its
+//! `physsynth/core/portable.py` (deleted 2026-09-07 with the last Python model that called it;
+//! the finding is `docs/dev/rust-migration-plan.md` §18.2); `sparse::Csr::sub` and `pyfloat` are
+//! what this side needed. Its
 //! fourth batch is `string_nonlinear`, the first model here whose matrix changes every step: the
 //! banded factor moves inside a scalar root-find, so `banded` and `root` meet for the first time
 //! and a last bit in a reduction becomes a different *iteration count* rather than a different

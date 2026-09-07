@@ -324,8 +324,8 @@ impl Csr {
     /// SciPy picks between two kernels here — a canonical merge when both operands have sorted,
     /// duplicate-free rows and a linked-list merge otherwise — and the two disagree on the *order*
     /// of the output row, not on its contents. This one always produces canonical order, which is
-    /// the whole point: see `physsynth/core/portable.py` for why the Python side is sorted to meet
-    /// it rather than the other way round.
+    /// the whole point: see `docs/dev/rust-migration-plan.md` §18.2 for why the Python side was
+    /// sorted to meet it rather than the other way round.
     ///
     /// # Panics
     /// If the shapes disagree.
@@ -385,8 +385,9 @@ impl Csr {
     ///
     /// Same contract, and for the same reason: SciPy computes `a + b` at every position either
     /// operand occupies, treats a missing entry as `0.0`, and drops a result that is exactly zero.
-    /// The output is canonical whatever order the operands arrived in, which is the property
-    /// `physsynth/core/portable.py` sorts the Python side to meet.
+    /// The output is canonical whatever order the operands arrived in, which is the property the
+    /// Python side was sorted to meet while it had an implementation to sort
+    /// (`docs/dev/rust-migration-plan.md` §18.2).
     ///
     /// A two-term sum needs no note about association — but the *chain* of them does. The plate's
     /// operators are three- and four-term sums, and Python evaluates `a + b + c` as `(a + b) + c`;

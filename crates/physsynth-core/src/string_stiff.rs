@@ -36,9 +36,10 @@
 //! - **The matvec.** `L` is built by subtracting SciPy's `biharmonic_matrix`, which comes back with
 //!   *descending* column indices; a CSR matvec sums each row in stored order, so the two spellings
 //!   differ in essentially every vector. [`crate::sparse::Csr`] is canonical, and
-//!   `physsynth/core/portable.py` sorts the Python side to meet it.
+//!   `physsynth/core/portable.py` sorted the Python side to meet it.
 //! - **The reduction.** [`energy`] sums left to right, which `np.dot` does not. The same module
-//!   supplies the Python spelling that does.
+//!   supplied the Python spelling that did. It was deleted 2026-09-07 with the last Python model
+//!   that called it; the finding is `docs/dev/rust-migration-plan.md` §18.2.
 //!
 //! Every expression below otherwise reproduces the NumPy original's *operation order*, not merely
 //! its algebra — see [`crate::string_ideal`]'s header for why the parenthesisation is not
@@ -336,7 +337,7 @@ pub fn potential_form(f: &[f64], g: &[f64], p: &Params) -> f64 {
     -p.h * dot(&p.op_l.matvec(f), g)
 }
 
-/// A left-to-right inner product — `physsynth.core.portable.dot`.
+/// A left-to-right inner product — not `np.dot`'s BLAS reduction; see this module's header.
 ///
 /// # Panics
 /// If the two slices differ in length.

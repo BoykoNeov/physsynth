@@ -444,9 +444,9 @@ pub fn laplacian_from_mask(mask: &Mask, h: f64) -> (Csr, Vec<i64>) {
 /// bit (measured at seven grids and two guitar outlines, 0 differing entries out of 2,629), so the
 /// disagreement is entirely about *order* — and a CSR matvec sums a row in stored order, which
 /// makes `B @ u` a different sum on the two sides. `plate.py` forms `B @ u` twice per timestep, so
-/// the fix is `physsynth.core.portable.canonical` on the Python side, exactly as §18.2 did for the
-/// string family: the sorted order is the one both languages can express, and the one SciPy itself
-/// calls canonical.
+/// the fix was `physsynth.core.portable.canonical` on the Python side, exactly as §18.2 did for
+/// the string family: the sorted order is the one both languages can express, and the one SciPy
+/// itself calls canonical. (That module went with the Python plate; the finding stands.)
 pub fn biharmonic_from_mask(mask: &Mask, h: f64) -> (Csr, Vec<i64>) {
     let (l, index_map) = laplacian_from_mask(mask, h);
     (l.matmul(&l), index_map)
