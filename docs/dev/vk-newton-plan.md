@@ -1259,6 +1259,14 @@ default), in back-substitutions:
 The bold cells are where the default is now the right answer at both ends: it keeps §13.3's cheap
 half intact (0.55×) and it converges the rows where the old default simply did not.
 
+**The two native `Auto` tests do not use these rows, and the distinction is easy to misread.**
+`auto_case` takes the strike *width* and the *offset* separately, so its 3 cm width is reachable
+both centred and off-centre. `auto_rescues_a_capped_sweep_and_that_trades_away_the_cost_ceiling`
+uses the **centred** 3 cm strike at `w = 6e` with a cap of 8 (Picard wants ~143 sweeps there);
+`auto_rescues_an_expansive_sweep_from_the_sweeps_own_seed` uses `off = 0.12` at `w = 10e`. Neither
+is a row above, and neither contradicts one — the table was re-measured row for row through the
+binding on 2026-09-07 and reproduces exactly.
+
 **The sweep cap is now a waste budget, and that is the number to reach for.** The wasted work on a
 rescued step is exactly `2 · couple_max_iter`, so the overhead above is 100 solves. At `cap = 400`
 the same rows read 854 against 54 — **15.8×** — because the sweeps are allowed to burn eight times
@@ -1338,3 +1346,22 @@ built to fail**, and the suite has no accidental ones.
   applies here: what a 300-step trajectory costs under `Auto` — how often the rescue fires once the
   plate is moving rather than struck — is not measured.
 * **No viewer surface.** `n_fallbacks` is a read-out on the model and nothing displays it.
+
+### 15.9 What was actually run, stated precisely
+
+The commit that landed this batch describes the Python run as "the vk/plate/mallet/airbox suite",
+and that is not what it was. Written out so the record is checkable rather than plausible:
+
+* `cargo test --workspace` — exit 0. `cargo fmt --all` applied (two spots), `cargo clippy
+  --workspace --all-targets -- -D warnings` — exit 0. `ruff check .` — clean.
+* The wheel rebuilt (`pip install ./crates/physsynth-py`) **before** any Python number was read.
+  Nothing can tell a stale wheel from a fresh one, and four of this batch's changes are on the
+  binding's surface — the spelling, the getter, the error string and the default.
+* `pytest tests/test_binding_surface.py tests/test_airbox_vk.py tests/test_vk_connection.py` —
+  **198 passed**, i.e. the three edited files in full.
+* `pytest tests/ -k "vk or plate or mallet or airbox"` — **1,123 passed, 1,557 deselected.** This
+  is a **name** filter over the whole directory, not a file list: it reaches every test whose
+  *function name* contains one of those words, in any file, and it misses tests in the plate files
+  whose names do not. Wider than a file list in one direction and narrower in another, and worth
+  saying so rather than rounding it to "the plate suite".
+* §15.5's table re-measured row for row through the binding, and the inheritance probe of §15.7.
