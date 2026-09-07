@@ -73,8 +73,9 @@ equivalent, against 550 that already exist", plus one viewer port, and then dele
 
 **Every number in this section is a `pytest` case count, and §9 revises them down.** A case is a
 row of a `@parametrize`, not a claim; measured as test *functions* — the unit a Rust `#[test]`
-actually corresponds to — the 1,744 is **899**, and the 212 of those that sit in a model with no
-native test at all are the irreducible core of the job. Read §9 for the numbers that matter.
+actually corresponds to — the 1,744 is **899** against 475 native ones. And the first
+reading of that map was itself wrong in a way §9.3 records: most of the job is *verifying* that an
+existing native bar asserts the same thing, not writing one. Read §9 for the numbers that matter.
 
 **The rule that makes this safe is `rust-migration-plan.md` §35.4's, unchanged**: port by
 *criterion*, not by file; and for every Python test retired, a native test asserts the same bar at
@@ -339,43 +340,84 @@ Not physics, and already accounted for in §2 (function counts, so lower than th
 `!viewer` 338, `!binding` 31, `!parity` 32, `!package` 10, `!runner` 10 and `!ci` 4 on the Python
 side; `!numerics` 69 and `!deps` 6 native-only on the Rust side.
 
-### 9.3 What the map found: nine models at zero
+### 9.3 The first reading said nine models were at zero. It was wrong
 
-The headline is not a ratio, it is a list. **Nine models have no native test at all** — bolded above:
+The file-level join above put nine models at zero native tests. **Eight of the nine were an
+artifact of the join, not a hole in the suite**, and the reason is structural:
 
-| model | py functions | why it is at zero |
+> **The two suites are indexed on different axes.** Python test files are named after a *model and
+> a claim* — `test_free_plate_modal.py`, `test_vk_energy.py`. Rust test files are named after the
+> *source module* they exercise. In Rust, the supported plate, the free plate, the orthotropic
+> plate, the guitar outline and the von Kármán plate are all `plate.rs`, because they are all one
+> module. So a join on filename reports five Python-facing models as absent while forty native
+> tests sit in the file that covers them.
+
+The tell was visible in the table and was read past: `plate` shows **39/42**, which is suspiciously
+balanced for a file that would have to carry five plate variants on the Python side alone. Read by
+hand, `crates/physsynth-core/tests/plate.rs` contains:
+
+| Python-facing model | native bars in the shared file | examples |
 |---|---|---|
-| von Kármán plate | 60 | the biggest hole and the hardest: a nonlinear model with an iteration wall (`scientific-hurdles.md` §5) and no linear modal oracle |
-| free plate (FFFF) | 37 | never had a native file |
-| orthotropic free plate | 29 | ditto, and its validation is four derived probes rather than one oracle |
-| orthotropic plate | 19 | ditto |
-| guitar plate | 19 | ditto; its 19 functions expand to 113 cases, the widest parametrization in the suite |
-| damped string | 16 | **surprising.** Models #2 and #4 have native files (`string_stiff.rs`, `string_nonlinear.rs`) and #3, which sits between them in the same bit-identity chain, does not |
-| sympathetic strings | 15 | never had one |
-| the bridge connection | 12 | never had one |
-| the analysis freeze | 5 | ports as *data* rather than as tests (§2) |
+| von Kármán plate | **~24** (`plate.rs` + `plate_theta_solve.rs`) | the four Jacobian bars, `newton_converges_where_picard_does_not`, `auto_is_bit_identical_to_picard_wherever_the_sweeps_converge`, `a_nonlinear_plate_conserves_its_total_energy`, the wall-versus-cap pair |
+| orthotropic plate | ~5 | `spruce_is_not_an_isotropic_plate_with_one_axis_stretched`, `isotropic_material_comes_back_at_exactly_one`, `the_split_contradiction_message_prints_the_effective_cross_term` |
+| guitar plate | ~4 | `a_guitar_reports_a_staircase_deficit_and_prunes_only_at_the_rim`, `components_are_counted_four_connected`, `a_curved_supported_plate_is_a_refusal_not_a_limitation` |
+| free plate | ~3 | `the_free_plate_stiffness_annihilates_its_rigid_body_nullspace`, `the_free_edge_holds_the_same_way_off_centre` |
 
-**212 test functions sit in models with no native coverage whatsoever.** That is the irreducible
-core of phase C, and it is a far smaller number than "34,562 lines" or even "1,744 tests".
+and the same mistake was made once more, one file over: the **damped string**'s bars are inside
+`string_stiff.rs`, which carries a `damped_params` helper and four tests using it, including
+`sigma1_zero_is_the_stiff_string_exactly` — the chain anchor whose whole point is that model #3
+reduces to model #2.
 
-The tenth entry is not a zero but is the largest single gap by volume: **`airbox` is 188 to 37**.
-Its native bars are the nineteen `mod tests` blocks inside `src/` plus the eighteen added by
-migration §46, and they were never meant to be the room's whole validation.
+### 9.4 What is actually at zero, after the correction
 
-### 9.4 The one thing this map does NOT say
+| model | py functions | native | what is really true |
+|---|---|---|---|
+| **sympathetic strings** | 15 | **0** | genuinely absent — no native test anywhere mentions the model |
+| orthotropic **free** plate | 29 | **1** | the grained plate and the free plate each have bars; the combination has one |
+| the bridge **connection** | 12 | **partial** | `body.rs` has the bridge read-outs and the rank-one correction guard; the coupled-energy bars are still only Python's |
+| the analysis **freeze** | 5 | n/a | ports as *data* regardless (§2) |
+| von Kármán plate | 60 | ~24 | **not a zero** |
+| free plate | 37 | ~3 | **not a zero**, but thin |
+| orthotropic plate | 19 | ~5 | **not a zero** |
+| guitar plate | 19 | ~4 | **not a zero** |
+| damped string | 16 | 4 | **not a zero** |
 
-A cell with numbers on both sides is **not** proof of coverage. It says both suites assert something
-about that model under that claim heading. Whether the native test asserts the *same bar at the same
-fixture* — §35.4's actual condition — is a per-claim reading that belongs to each phase-C batch's
-opening move, not to this map. The map's job was to say where to look and how big the job is, and on
-that it is answered: **212 functions with nothing on the far side, one 151-function shortfall in the
-room, and everything else a verification rather than a write.**
+**So the job is mostly verification, not authorship.** The earlier "212 functions with nothing on
+the far side" was wrong by an order of magnitude: what is genuinely unwritten is the sympathetic
+strings (15 functions) and most of the orthotropic free plate (29), with the connection's coupled
+energy a partial. Everything else is a claim-by-claim reading of whether a native bar that *exists*
+asserts the same thing at the same fixture — slower per test than writing from scratch, but a
+different and much smaller kind of work.
+
+The one number the correction does not move is the room: **`airbox` is 188 to 37**, and its native
+bars are the nineteen `mod tests` blocks inside `src/` plus the eighteen added by migration §46.
+That is a real shortfall by volume and it is now the largest single one.
+
+### 9.5 The methodological lesson, because it will recur
+
+**A join between two test suites indexed on different axes measures the indexing, not the
+coverage.** This map's model axis was hand-written and complete on both sides — every one of the
+88 Python and 41 Rust files is mapped, nothing fell through — and it was still wrong, because
+"complete" and "correct" are different properties of a mapping. A file whose name says `plate` is
+mapped honestly to `plate`; the error was assuming the Python-facing model taxonomy and the Rust
+source-module taxonomy are the same taxonomy. They are not, and the mismatch is exactly where a
+Python model was a *configuration* of a Rust type rather than a type of its own.
+
+The cure is cheap and it is what phase C's per-batch reading already has to do: before believing a
+zero, read the test *names* in the file that would plausibly hold the bar. Two greps overturned
+eight of nine.
 
 ---
 
 ## 10. Not started
 
-Phase B is done (§9). Nothing else here is built. The next batch is either **C** on one of the nine
-zero-coverage models — `string_damped` is the cheapest and de-risks the pattern, since both its
-chain neighbours already have native files to copy the shape from — or **D**, the viewer, which is
-independent of everything and is the longest pole.
+Phase B is done (§9) including its own correction. Nothing else here is built.
+
+The map's revised recommendation for the next batch: **not** `string_damped`, which the first
+reading suggested and which turns out to have four native bars already. The genuinely unwritten
+model is **sympathetic strings** — 15 functions, zero native, and structurally simple (N linear
+strings sharing one bridge point on a modal body, no nonlinearity and no solver of its own). It is
+the smallest complete phase-C batch available and it exercises the whole retirement ritual once:
+write the native bars, name them in the commit that retires the Python ones, delete.
+
+**D**, the viewer, remains independent of all of this and is still the longest pole.
