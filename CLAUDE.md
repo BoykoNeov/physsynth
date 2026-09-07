@@ -19,7 +19,21 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
 3. ~~**Prototype in Python (NumPy/SciPy).** Julia acceptable if the human prefers. Not C++/JUCE
    yet.~~ **SUPERSEDED 2026-08-26 (the human's call):** Python is being retired entirely — core,
    analysis *and* the test suite — in favour of **Rust**, gradually and model by model.
-   **One exception, 2026-09-03 (the human's call):** the **viewer backend stays Python** and talks
+
+   **AMENDED 2026-09-07 (the human's call): Python goes to ZERO, and both carve-outs below are
+   REVERSED.** The test suite is no longer "elective" (plan §35.4) and the viewer backend no
+   longer stays Python (plan §35.5's route (b)). Both were the human's calls and both are now
+   unset by the human — do not quote either back as a constraint. The plan is
+   `docs/dev/python-retirement-plan.md`: ~58,300 lines of Python go, and with them
+   `crates/physsynth-py` — 19,024 lines of **Rust** that exist only to talk to Python. A Python
+   **plotting island** was chosen and withdrawn the same day: there is none, the plotting
+   capability leaves, and where a diagnostic drew a figure Rust emits the data instead. The
+   JavaScript front-end (`web/static/`) is not Python and is not in scope. **The rest of this
+   item is now HISTORY** — accurate about how the port was done, no longer a statement of where
+   the project is going.
+
+   **REVERSED 2026-09-07, see above.** ~~One exception, 2026-09-03 (the human's call):~~ the
+   **viewer backend stays Python** and talks
    to Rust through the binding — `web/serialize.py` is a serializer, not a model, and there is no
    Rust HTTP server to write (plan §35.5 closes it, and strikes §5's Phase 8). **The audit §35.5
    left open is DONE (plan §50, 2026-09-06), and it closed as a coverage question rather than a
