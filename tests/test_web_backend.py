@@ -14,11 +14,14 @@ import base64
 import copy
 import json
 import math
+import pathlib
+import re
 
 import numpy as np
 import pytest
 
 import web.serialize as web_serialize
+from physsynth.analysis.horizon import sinc_horizon_fraction
 from web.serialize import (
     AIRBOX_AUDIO_MAX,
     AIRBOX_CFL_MAX,
@@ -5160,3 +5163,334 @@ def test_vkroom_ignores_params_that_belong_to_other_models():
     d = _vr(kappa=8.0, T=500.0, bridge_stiffness=1e6, air_cfl=0.45, radius=0.9)
     assert "error" not in d
     assert d["meta"]["room"]["cfl"] == 0.9      # air_cfl is a CONSTANT here and must not be read
+
+
+# ======================================================================================
+# The resolution horizon read-out — "how far up can this configuration be trusted?"
+# ======================================================================================
+#
+# The user-facing surface of `docs/dev/resolution-horizon-plan.md` (section 12), and the wrapper
+# half of it: the physics is asserted in `tests/test_resolution_horizon.py` against the primitives,
+# and what is asserted *here* is that the viewer asks them the right question about the right
+# scene. Three of these tests exist because a wrong answer would have looked entirely reasonable —
+# a horizon read off a display array, a number quoted for a scene whose reference is a different
+# shape, and a corner named where three families merely tie.
+
+
+def _horizon(params: dict) -> dict:
+    """The read-out block of a successful payload."""
+    payload = _sim(params)
+    assert "error" not in payload, payload.get("error")
+    assert "horizon" in payload, sorted(payload)
+    return payload["horizon"]
+
+
+def _band(block: dict, cents: float = 5.0) -> dict:
+    assert block["kind"] == "prefix", block
+    return next(b for b in block["bands"] if b["cents"] == cents)
+
+
+# The models whose *builders* compute a read-out. Together with `HORIZON_ABSENT` this must partition
+# the model list the viewer offers — see the test below, which derives that list rather than
+# repeating it.
+HORIZON_MEASURED = {
+    "ideal", "stiff", "damped", "bow", "jawari", "juari", "fret",
+    "membrane", "mallet", "plate", "vk",
+}
+
+
+def test_horizon_every_model_the_viewer_OFFERS_is_classified():
+    """The population comes from the ``<select>``, so a new model cannot ship unclassified.
+
+    The read-out is a two-value union and every payload carries one arm or the other. What makes
+    that hold is not a default: it is that each model key either builds a block in its own payload
+    builder (it has a continuum reference) or has an entry in :data:`HORIZON_ABSENT` saying why it
+    does not. A model added to the viewer and to neither table would silently take the generic
+    fallback sentence, which says nothing about *that* model — so the tables are asserted to
+    partition the list the frontend actually offers, read out of the markup.
+    """
+    html = (pathlib.Path(__file__).resolve().parents[1] / "web" / "static" / "index.html")
+    text = html.read_text(encoding="utf-8")
+    select = re.search(r'<select id="model">(.*?)</select>', text, re.S)
+    assert select, "the model <select> moved; this guard derives its population from it"
+    offered = set(re.findall(r'<option value="([^"]+)"', select.group(1)))
+    assert len(offered) >= 20, offered
+    absent = set(web_serialize.HORIZON_ABSENT)
+    assert HORIZON_MEASURED & absent == set(), HORIZON_MEASURED & absent
+    assert HORIZON_MEASURED | absent == offered, {
+        "unclassified": offered - (HORIZON_MEASURED | absent),
+        "not offered": (HORIZON_MEASURED | absent) - offered,
+    }
+
+
+def test_horizon_a_prefix_block_carries_every_field_the_frontend_reads():
+    """The contract `drawHorizon` renders, pinned — including the bounds it can retune between."""
+    block = _horizon(_base_params())
+    assert block["kind"] == "prefix"
+    assert set(block) == {"kind", "scheme", "dims", "of", "n_modes", "f_max", "nyquist",
+                          "default_cents", "bands"}
+    assert block["default_cents"] == web_serialize.HORIZON_CENTS_DEFAULT
+    assert [b["cents"] for b in block["bands"]] == list(web_serialize.HORIZON_BANDS)
+    for band in block["bands"]:
+        assert set(band) == {"cents", "modes", "hz", "saturated", "limited_by", "limit_hz",
+                             "limit_cents", "index", "family", "family_tied", "families",
+                             "monotone"}
+        assert band["hz"] is None or band["hz"] > 0.0
+        assert band["families"] and all(
+            set(f) == {"name", "index", "monotone"} for f in band["families"])
+
+
+def test_horizon_is_absent_from_an_error_payload():
+    """A refused configuration has no scene to quote a horizon for, and says only that."""
+    payload = _sim(_base_params(N=1))
+    assert "error" in payload and "horizon" not in payload, sorted(payload)
+
+
+def test_horizon_the_explicit_string_at_lambda_one_is_in_tune_across_the_WHOLE_grid():
+    """Family 2's headline, in the viewer: at ``lambda = 1`` the two errors cancel identically.
+
+    ``saturated`` is the flag that says the *grid* ended the claim rather than the pitch error, and
+    it is the only case where quoting the top of the spectrum is honest.
+    """
+    block = _horizon(_base_params(model="ideal", **{"lambda": 1.0}))
+    band = _band(block)
+    assert band["saturated"] is True
+    assert band["modes"] == block["n_modes"] == 63      # N - 1, the whole resolvable spectrum
+    assert band["limited_by"] is None and band["limit_hz"] is None
+    assert band["hz"] == block["f_max"]
+
+
+def test_horizon_refining_the_explicit_timestep_makes_the_read_out_WORSE():
+    """The finding most likely to change what someone does, shown where they would act on it.
+
+    Lowering the Courant number "for safety" costs an explicit scheme most of its band — the
+    opposite of the implicit family, where the same move buys modes. A read-out that did not move
+    this way would be reporting the space floor and calling it a horizon.
+    """
+    modes = [_band(_horizon(_base_params(model="ideal", **{"lambda": lam})))["modes"]
+             for lam in (1.0, 0.9, 0.75, 0.5)]
+    assert modes == sorted(modes, reverse=True), modes
+    assert modes[-1] < modes[0] / 5, modes
+
+
+def test_horizon_the_theta_string_cannot_pass_its_own_space_floor():
+    """Family 1's headline: refining ``k`` buys modes and then buys nothing, at a computable line.
+
+    The bar is the closed form (``sinc_horizon_fraction``), not a recorded integer — the one thing
+    in this batch checkable from outside the measurement. One mode of slack because the horizon is
+    an integer and the floor is not.
+    """
+    floor = sinc_horizon_fraction(5.0, 1) * 128
+    got = [_band(_horizon(_base_params(model="damped", N=128, kappa=0.0, sigma0=0.0, sigma1=0.0,
+                                       **{"lambda": lam})))["modes"]
+           for lam in (1.0, 0.5, 0.125)]
+    assert got == sorted(got), got                       # more sample rate never costs modes
+    assert max(got) <= floor + 1, (got, floor)           # and never passes the floor
+    assert max(got) >= floor - 3, (got, floor)           # a floor nothing approaches is not a floor
+
+
+def test_horizon_is_built_from_the_SCHEME_and_not_from_the_display_arrays():
+    """The trap that would have produced a plausible wrong number in every panel.
+
+    The spectrum panels ship :data:`N_PARTIALS` (12) and :data:`N_PLATE_MODES` (6) frequencies.
+    Reading a horizon off one of those returns at most 12 or 6 — a fact about the list length, not
+    about the scheme. The mode set is the whole resolvable spectrum instead, so it tracks ``N``.
+    """
+    for n in (64, 128, 256):
+        block = _horizon(_base_params(model="damped", N=n, **{"lambda": 1.0}))
+        assert block["n_modes"] == n - 1, (n, block["n_modes"])
+    plate = _horizon(_plate_params())
+    assert plate["n_modes"] == 39 * 39, plate["n_modes"]
+    assert plate["n_modes"] > web_serialize.N_PLATE_MODES * 100
+
+
+def test_horizon_a_tighter_bound_can_only_shorten_the_claim():
+    """Monotonicity in the bound, over one model of each family and dimension.
+
+    It is an invariant of the definition rather than of any fixture: a mode inside 1 cent is inside
+    5. It is worth a test because the three bands are computed independently, so a wiring error
+    that paired a band's count with another band's frequency would show up here and nowhere else.
+    """
+    for params in (_base_params(model="ideal", **{"lambda": 0.8}),
+                   _base_params(model="stiff", N=96, kappa=4.0),
+                   _membrane_params(domain="rectangle", N=24, audio_duration=0.05),
+                   _plate_params()):
+        bands = _horizon(params)["bands"]
+        for tight, loose in zip(bands, bands[1:], strict=False):   # a sliding pair, not a match
+            assert tight["cents"] < loose["cents"]
+            assert tight["modes"] <= loose["modes"], (params["model"], tight, loose)
+            assert tight["index"] <= loose["index"], (params["model"], tight, loose)
+            if tight["hz"] is not None:
+                assert tight["hz"] <= loose["hz"], (params["model"], tight, loose)
+
+
+def test_horizon_the_hertz_ceiling_stops_BELOW_the_first_mode_that_is_out_of_tune():
+    """What "trustworthy to X" means, asserted rather than assumed.
+
+    ``hz`` is the highest continuum frequency with nothing out of tune at or below it, so the mode
+    that ends the claim must sit strictly above it. This is the one reading that stays true when
+    the error curve is not monotone, which is why it is computed as a first failure rather than
+    with ``pitch_horizon`` (plan section 8.6).
+    """
+    for params in (_base_params(model="damped", N=96), _membrane_params(domain="rectangle", N=24,
+                                                                        audio_duration=0.05)):
+        band = _band(_horizon(params))
+        assert band["saturated"] is False and band["hz"] is not None
+        assert band["limit_hz"] > band["hz"], band
+        assert abs(band["limit_cents"]) > band["cents"], band
+
+
+def test_horizon_the_1d_prefix_and_index_readings_are_the_SAME_list():
+    """In 1-D the spectrum *is* the family, so the two readings must agree exactly.
+
+    They are computed by two different routes on purpose — the frequency ceiling by first failure
+    over the sorted spectrum, the index by ``pitch_horizon``'s leading prefix over the family — and
+    in one dimension there is only one family, so any disagreement is a wiring error rather than a
+    fact about the model. In 2-D they legitimately differ (the next test).
+    """
+    for params in (_base_params(model="ideal", **{"lambda": 0.8}),
+                   _base_params(model="stiff", kappa=3.0),
+                   _base_params(model="damped", N=96)):
+        block = _horizon(params)
+        assert block["dims"] == 1
+        for band in block["bands"]:
+            assert band["modes"] == band["index"], (params["model"], band)
+            assert [f["name"] for f in band["families"]] == ["harmonic"]
+
+
+def test_horizon_the_2d_readings_differ_and_the_index_one_is_the_conservative_one():
+    """Why a 2-D scene ships two numbers instead of one.
+
+    A block is not a family: the modes below a frequency come from every family at once, and the
+    index reading only counts the square block all of whose corners are in tune. So the index is
+    the smaller claim, and quoting the frequency ceiling as though it licensed "the first N modes"
+    would overstate a membrane by a factor of four at 25 cents.
+    """
+    block = _horizon(_membrane_params(domain="rectangle", N=24, audio_duration=0.05))
+    assert block["dims"] == 2
+    for band in block["bands"]:
+        assert band["index"] <= band["modes"], band
+    loose = _band(block, 25.0)
+    assert loose["modes"] > loose["index"], loose
+
+
+def test_horizon_a_membranes_worst_corner_is_AXIAL_at_the_courant_ceiling():
+    """Section 10.6, surfaced: the plate's diagonal-corner rule is *inverted* on a membrane.
+
+    At the 2-D CFL ceiling the diagonal family is exact and the axial ones are not, so the corner
+    that limits a block is axial — the opposite of the implicit plate. Naming the wrong corner is
+    the failure this reports, and it is only visible at a Courant number high enough for the
+    families to separate; below it all three land on the same small integer and the payload says
+    they *tie* rather than claiming a winner.
+    """
+    ceiling = _band(_horizon(_membrane_params(domain="rectangle", N=32, audio_duration=0.05,
+                                              **{"lambda": MEMBRANE_LAMBDA_MAX})))
+    assert "axial" in ceiling["family"] and "diagonal" not in ceiling["family"], ceiling
+    by_name = {f["name"]: f["index"] for f in ceiling["families"]}
+    assert by_name["diagonal (m, m)"] > max(v for k, v in by_name.items() if k != "diagonal (m, m)")
+    low = _band(_horizon(_membrane_params(domain="rectangle", N=32, audio_duration=0.05,
+                                          **{"lambda": 0.3})))
+    assert low["family_tied"] is True, low
+
+
+def test_horizon_a_zero_horizon_ships_None_rather_than_a_NUMBER():
+    """Live, not defensive — and the same payload shows both arms as the bound loosens.
+
+    A coarse plate's *fundamental* is already out of tune, so the honest ceiling is "there isn't
+    one". ``hz`` is then ``None``: 0.0 would read as a measurement, and NaN would be refused by the
+    server's strict JSON on the way out.
+    """
+    bands = {b["cents"]: b for b in _horizon(_vk_params(nonlinear=False))["bands"]}
+    assert bands[5.0]["modes"] == 0 and bands[5.0]["hz"] is None, bands[5.0]
+    assert bands[5.0]["limited_by"] == "mode (1, 1)", bands[5.0]
+    assert abs(bands[5.0]["limit_cents"]) > 5.0
+    assert bands[25.0]["modes"] >= 1 and bands[25.0]["hz"] > 0.0, bands[25.0]
+
+
+# The mechanism each refusal must name. The keys are asserted equal to the shipped table, so a
+# refusal added without a stated mechanism fails here rather than shipping a shrug.
+ABSENT_KEYWORDS = {
+    "tension": "nonlinear", "geometric": "nonlinear",
+    "bore": "Webster", "reed": "Webster",
+    "sympathetic": "spring-coupled bridge", "body": "spring-coupled bridge",
+    "radbody": "spring-coupled bridge", "airload": "spring-coupled bridge",
+    "platebody": "spring-coupled bridge",
+    "airbox": "direction-dependent", "vkroom": "direction-dependent",
+}
+
+
+def test_horizon_every_refusal_names_its_MECHANISM_not_just_its_absence():
+    """The half of the read-out that is easy to get wrong by being helpful.
+
+    A staircased disk, a free plate, a nonlinear resonator and a bridge-coupled string all *have* a
+    spectrum, and a cents comparison against the nearest closed form returns a number for any of
+    them — a number about two errors at once. So the refusal has to carry the reason it is a
+    refusal, and "no horizon" on its own would be indistinguishable from a missing feature.
+    """
+    assert set(web_serialize.HORIZON_ABSENT) == set(ABSENT_KEYWORDS)
+    for model, needle in ABSENT_KEYWORDS.items():
+        reason = web_serialize.HORIZON_ABSENT[model]
+        assert needle in reason, (model, reason)
+        assert reason.endswith(".") and len(reason) > 100, (model, reason)
+
+
+def test_horizon_a_bridge_coupled_string_is_REFUSED_rather_than_quoted():
+    """The fallback path, through a real payload rather than the table it reads.
+
+    This string is a fixed-free one terminating on a spring, and the coupling *is* the scene: its
+    partials are shifted by the bridge, so a cents comparison against the uncoupled harmonic series
+    would report that shift as a discretisation error. The refusal is checked here on the payload
+    because the table alone cannot show that the fallback is wired.
+    """
+    block = _body()["horizon"]
+    assert block["kind"] == "none" and "spring-coupled bridge" in block["reason"]
+    assert "of" not in block                 # the table has no member to name; the builders do
+
+
+def test_horizon_the_plate_key_covers_three_plates_and_only_one_has_a_horizon():
+    """Gating on the model alone would quote the rectangle's number for the guitar and the cymbal.
+
+    One select carries three different plates. The rectangle is the measured row of the plan's
+    inventory; the free one's reference is a table of tabulated values rather than a formula, and
+    the guitar's error is its staircase. Same key, three answers.
+    """
+    assert _horizon(_plate_params(domain="supported"))["kind"] == "prefix"
+    for domain, needle in (("free", "tabulated"), ("guitar", "staircased")):
+        block = _horizon(_plate_params(domain=domain, N=24, audio_duration=0.05))
+        assert block["kind"] == "none" and needle in block["reason"], block
+
+
+def test_horizon_the_nonlinear_plate_is_refused_and_its_LINEAR_twin_is_not():
+    """The flag, not the model key, is what decides — ``VKPlate(nonlinear=False)`` *is* a plate.
+
+    A nonlinear resonator's partials move with amplitude, so there is nothing fixed to compare
+    against and the honest answer is the refusal. Turning the coupling off makes the same object a
+    simply-supported Kirchhoff plate again, which has the plan's measured horizon; a read-out
+    keyed on the model would give one answer to both.
+    """
+    on = _horizon(_vk_params(nonlinear=True))
+    off = _horizon(_vk_params(nonlinear=False))
+    assert on["kind"] == "none" and "nonlinear" in on["reason"]
+    assert off["kind"] == "prefix" and off["scheme"] == "implicit theta-scheme"
+
+
+def test_horizon_an_exciter_inherits_the_horizon_of_what_it_DRIVES():
+    """The plan's inventory row for the bow, the mallet and the contact family, in the payload.
+
+    They are exciters rather than resonators: a bowed string's dispersion is its string's, and a
+    mallet's is the membrane's it strikes. So the read-out follows the resonator underneath and
+    names it — and a struck rectangle must therefore read exactly like the membrane on its own.
+    """
+    bowed = _horizon(_base_params(model="bow", N=64, audio_duration=0.1))
+    plain = _horizon(_base_params(model="damped", N=64, kappa=0.0))
+    assert bowed["scheme"] == plain["scheme"] == "implicit theta-scheme"
+    assert _band(bowed)["modes"] == _band(plain)["modes"]
+    assert "string" in bowed["of"]
+
+
+def test_horizon_survives_the_servers_strict_json():
+    """``server.py`` dumps with ``allow_nan=False``: one NaN in the block is a 500 for the page."""
+    for params in (_base_params(), _plate_params(), _vk_params(nonlinear=False),
+                   _membrane_params(domain="rectangle", N=24, audio_duration=0.05),
+                   _membrane_params()):
+        json.dumps(_horizon(params), allow_nan=False)

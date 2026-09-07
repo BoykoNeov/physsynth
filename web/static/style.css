@@ -118,6 +118,39 @@ canvas#string { width: 100%; height: auto; display: block; border-radius: 10px; 
 .badge { font-size: 11px; padding: 1px 7px; border-radius: 10px; font-weight: 600; }
 .badge.good { background: rgba(90,209,122,.15); color: var(--good); }
 .badge.bad { background: rgba(255,107,107,.15); color: var(--bad); }
+.badge.warn { background: rgba(255,207,92,.15); color: var(--accent-2); }
+.badge.muted { background: rgba(139,152,168,.13); color: var(--muted); }
+
+/* ── the resolution horizon strip ── */
+.horizon {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  flex-wrap: wrap;
+  margin: 12px 0 0;
+  padding: 9px 12px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.horizon-line { flex: 1 1 340px; }
+.horizon-line b { color: var(--ink); font-weight: 600; }
+.horizon-bands { display: inline-flex; margin-left: auto; }
+.horizon-bands button {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font: inherit;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.horizon-bands button:first-child { border-radius: 6px 0 0 6px; }
+.horizon-bands button:last-child { border-radius: 0 6px 6px 0; }
+.horizon-bands button + button { border-left: none; }
+.horizon-bands button.on { background: rgba(76,194,255,.15); color: var(--accent); }
+#horizon-detail { margin-top: 6px; }
 
 @media (max-width: 860px) {
   main { grid-template-columns: 1fr; }

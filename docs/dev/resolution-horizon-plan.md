@@ -210,6 +210,9 @@ what distinguishes a family is only whether a Courant number exists that beats i
 * **No user-facing surface.** A viewer read-out saying "this configuration is trustworthy to 2 kHz"
   is the obvious product of this. The promotion it was waiting on is done (§11), so this is now the
   next thing in the sequence rather than a thing behind another thing.
+  **Done 2026-09-07 — §12.** Two things this bullet did not see: the claim needs *two* readings
+  because hertz is family-dependent and a mode index is not, and most of the viewer's models have
+  to refuse rather than answer.
 * **The four "no horizon yet" rows were not attempted.** Each is a refinement or geometry study in
   its own right; the inventory names the reason rather than leaving a blank.
 
@@ -959,6 +962,182 @@ routes to one name with nothing saying which is canonical.
 * **The viewer read-out.** "This configuration is trustworthy to 2 kHz" is what all of this was for,
   and it is now unblocked: `web/serialize.py` can import `physsynth.analysis.horizon` like any other
   oracle. It is a separate batch and needs a decision about *which* horizon a mixed model reports.
+  **Done 2026-09-07 — §12**, and the decision is the worst member of the chain, with any member
+  that has no horizon refusing for the whole scene.
 * **The four "no horizon yet" rows** of §5 are still not attempted, unchanged from §6.
 * **Nothing was promoted that did not already exist.** This batch moved seven functions and wrote no
   new physics; §11.6's finding is a correction to prose, not to a formula.
+
+---
+
+## 12. The viewer read-out — 2026-09-07
+
+"This configuration is trustworthy to 2 kHz" is what §6, §11.8 and the batch before them all said
+this was for. It exists now: every payload `web/serialize.py` returns carries a `horizon` block, and
+the viewer draws it as a strip under the transport — a headline frequency, the mode that ends the
+claim, and a 1 / 5 / 25 cent selector that retunes the sentence with no round trip.
+
+Code: `web/serialize.py` (`_horizon_report`, `_horizon_string_block`, `_horizon_grid2d`, the two
+gates and `HORIZON_ABSENT`), `web/static/app.js` (`drawHorizon`), `web/static/index.html`,
+`web/static/style.css`. Tests: 19 functions in `tests/test_web_backend.py`. The headless dev harness
+`scripts/verify_web_headless.py` now reads the strip and fails a case whose strip is hidden or
+empty. No physics was written: every number comes from `physsynth.analysis.horizon` and
+`physsynth.analysis.modal`, which is what §11 was for.
+
+### 12.1 The open decision: a mixed scene reports its WORST member, and refuses if any member has none
+
+§11.8 left this open — "which horizon a mixed model reports". The answer is the worst member of the
+chain, named, with two consequences that do most of the work:
+
+* a **modal** component has no spatial discretisation error at all, so it never limits anything;
+  only grid resonators can;
+* a scene containing **any** member with no horizon is a refusal *as a whole*. Quoting the string's
+  number for a string-plus-nonlinear-plate scene and hoping a caveat carries is how a read-out
+  becomes a lie.
+
+In practice the second rule is what decides most of the viewer, because the coupled scenes are
+coupled *to* the things that have no reference.
+
+### 12.2 The block is a two-value union, and both arms ship
+
+```
+{"kind": "prefix", "scheme": …, "dims": 1|2, "of": "the damped string", "n_modes": 127,
+ "f_max": …, "nyquist": …, "default_cents": 5.0,
+ "bands": [{"cents": 5.0, "modes": 5, "hz": 502.1, "limited_by": "partial 6",
+            "limit_hz": 603.1, "limit_cents": -5.34, "saturated": false,
+            "index": 5, "family": "harmonic", "family_tied": false, "families": [...],
+            "monotone": true}, …]}
+
+{"kind": "none", "reason": "this domain is staircased onto the grid, so the error being measured
+                            is the SHAPE, not the scheme: …"}
+```
+
+Every model key produces one arm or the other. A builder that can compute a horizon sets the key
+itself; everything else falls through `simulate_to_payload` to `HORIZON_ABSENT`, whose entries are
+the plan's own §5 refusals in prose. A model in neither table would get a generic sentence, so
+`test_horizon_every_model_the_viewer_OFFERS_is_classified` derives the population **from the
+`<select>` in `index.html`** and asserts the two tables partition it — the same move §11.5 made on
+`ANALYSIS_MODULES`, for the same reason: a hand-written tuple restates the hole one number higher.
+
+### 12.3 Two readings, because §8.5 and §9.5 each end with a sentence about this read-out
+
+Those sections say a horizon **in hertz is family-dependent and in mode index is not** — √2 between
+a plate's two families, 3.7× between spruce's two axes. A user asks the question in hertz, so both
+are shipped:
+
+* **the frequency ceiling** — the highest continuum frequency with nothing out of tune at or below
+  it, computed as a *first failure* over the exhaustive sorted spectrum. Deliberately **not**
+  `pitch_horizon`: §8.6 says a prefix over the sorted 2-D union is meaningless, and this reading
+  does not need one — "no mode below 361 Hz is out by more than 5 cents" is true whether or not the
+  error curve is monotone;
+* **the block index** — `pitch_horizon`'s leading prefix along the corner families, which are the
+  sequences a prefix *does* mean something along. Reported with `monotone` rather than collapsed to
+  the integer (§1).
+
+They differ by a lot and that is the point: the same membrane is "8 modes below 361 Hz" and "every
+mode with m, n ≤ 3", and at 25 cents the two are 22 and 5. Quoting the first as though it licensed
+"the first 22 modes" would overstate the block by a factor of four.
+
+### 12.4 All three corner families are read, and a tie is reported as a tie
+
+`mode_block`'s docstring says the worst mode of a block is *a* corner and **which** corner is a
+property of the scheme — diagonal for an implicit plate (§8.7), axial for an explicit membrane at
+any runnable Courant number (§10.5). Rather than branch on the regime, the read-out asks all three
+families (`axial`, `axial_y`, `diagonal`) and takes the minimum, which is right in both regimes and
+in the one the plan has not characterised.
+
+Ties are then unavoidable and are shipped as ties. §10.6 warns that `(M,1)` and `(1,M)` are
+degenerate to the bit on a square, so naming one is reporting a sort's tiebreak as a result — and in
+the viewer's range there is a coarser tie as well: three families whose prefixes land on the same
+small integer, which is what a plate at `N = 40` does at every bound. So the payload carries every
+family's own index and a `family_tied` flag, and the page says "no single worst corner at this
+index — axial (1, n) and axial (m, 1) end together" instead of picking one. On a **non-square**
+rectangle the tie breaks for a real reason and the strip names the loser: `Ly = 0.8` puts the
+`(1, n)` family two modes short of `(m, 1)`, which is §9.5's index-versus-hertz point arriving
+through geometry rather than through a grain.
+
+### 12.5 The trap: a horizon read off a display array is a fact about the array
+
+The spectrum panels ship `N_PARTIALS = 12` and `N_PLATE_MODES = 6` frequencies, and they were
+already sitting in every payload builder. Handing either to `pitch_horizon` returns at most 12 or 6
+— a number that moves with `N` in exactly the wrong way, plateauing at the panel's length. Every
+mode set here is built from the scheme's own dispersion relation over the **whole** resolvable
+range instead (`1..N-1`, or the full `(m, n)` grid), the way `tests/test_resolution_horizon.py`
+builds its own. It costs nothing: these are closed forms, no eigensolve, 1.1 ms for a 1999-mode
+string and 16.7 ms for a 98×98 grid against renders of seconds.
+
+`test_horizon_is_built_from_the_SCHEME_and_not_from_the_display_arrays` is the guard, and it asserts
+`n_modes == N - 1` over three grids rather than a single literal.
+
+The read-out was also checked once against a number recorded **outside** it: §3's table says the
+canonical damped string at `N = 256`, `λ = 1`, `κ = 0` resolves **11** partials at 5 cents, and the
+viewer's block for `{"model": "damped", "N": 256, "lambda": 1.0}` says 11 — with the viewer's loss
+defaults on, which is the second half of the check, since this read-out ignores the damping shift
+(second order in `σ/ω`, ~1e-4 against a 5-cent bound of 2.9e-3). That agreement is recorded here
+rather than asserted in a test on purpose: §5's "nothing is a frozen integer" applies to the viewer
+too, and the tests pin family behaviour instead. Anyone doubting it can reproduce it in one call.
+
+### 12.6 `horizon == 0` is live, and `hz` is `None` rather than a number
+
+The plan already recorded a plate whose *fundamental* is 9.6 cents flat, so a viewer that assumed a
+non-empty prefix would have been wrong on a shipped default: `_vk_params(nonlinear=False)`, the
+viewer's own linear von Kármán fixture, is 7.4 cents out at `(1,1)` and has **no** horizon at 1 or 5
+cents — and one mode at 25. `hz` is `None` there: `0.0` would read as a measurement and NaN would be
+refused by `server.py`'s `allow_nan=False` on the way out. The page has its own sentence for it
+("Nothing here is in tune to 5¢ — even the lowest mode …"), and the index line is suppressed rather
+than printing "every mode with m, n ≤ 0", which is a sentence about the empty set.
+
+### 12.7 The gate keys on `(model, domain)`, and one model key covers three plates
+
+`plate` is a rectangle, a free plate and a guitar outline; `membrane` is a rectangle and a disk;
+`vk` is a nonlinear plate and — with the checkbox off — a simply-supported Kirchhoff one. A block
+keyed on the model alone would confidently quote the rectangle's number for the staircased guitar,
+which is §5's staircase refusal happening inside a single select. So the gates read the resonator:
+`domain`, `boundary`, `grain_is_isotropic` and the `nonlinear` flag each route to a refusal with its
+own reason, and only the rectangle reaches `_horizon_grid2d`.
+
+The 1-D gate is the same shape and its discriminator was a surprise: the θ-family strings report
+`boundary == "supported"` and the ideal string reports `"fixed"`, both of which are the sine series
+the modal oracles are derived for, while every bridge-coupled scene builds
+`IdealString(boundary=("fixed", "free"))`. **The refusal that matters is not the spelling, it is the
+free end** — and it is a physics refusal rather than a missing-oracle one: that string's continuum
+partials are shifted by the bridge the scene exists to show, so a cents comparison against the
+uncoupled harmonic series would report the coupling as a discretisation error. Two errors in one
+number, the same reason §5 refuses a staircase.
+
+### 12.8 What the viewer now says, by model
+
+| models | read-out |
+|---|---|
+| ideal / stiff / damped string, bow, jawari, juari, fret | measured; the exciters and contacts inherit the string they drive (§5's "inherited" row) |
+| membrane and mallet on a **rectangle** | measured, both readings — the mallet inherits the membrane's *gate* as well as its horizon, so a struck **disk** routes to the staircase refusal by the same call |
+| plate, **supported rectangle** | measured, both readings |
+| von Kármán plate with the nonlinearity **off** | measured — it is a Kirchhoff plate again |
+| membrane/mallet on a **disk**, plate on the **guitar outline** | staircase refusal |
+| plate, **free** | tabulated-reference refusal |
+| von Kármán (on), tension string, geometric string | nonlinear refusal — the horizon they have is a *refinement* horizon |
+| bore, reed | Webster-area refusal |
+| sympathetic, body, platebody, radbody, airload | bridge-coupled refusal (§12.7) |
+| airbox, vkroom | 3-D room: direction-dependent, recorded elsewhere as a light cone |
+
+### 12.9 What it costs the suite
+
+19 tests, **6.57 s** standalone against the file's 152.6 s locally (`--durations` puts none of them
+in its slowest 25; the heaviest is 1.97 s, the three plate renders in the display-array guard). That
+is ~4% of the slowest file in the suite, well inside the runner variance the three-shard gate
+already tolerates, and `tests/test_shard_partition.py` passes unchanged —
+`scripts/shard_costs.json` is built from **CI** durations rather than a local run, so it is
+deliberately not regenerated here.
+
+### 12.10 Not done
+
+* **The four "no horizon yet" rows** of §5 are still not attempted, unchanged from §6 and §11.8 —
+  and this batch is the first time their absence is *visible to a user*, which is an argument for
+  doing them rather than against.
+* **A bridge-coupled string has no horizon of its own here.** The refusal is honest but it is not
+  the last word: the coupled system has modes, and a horizon against *them* is a real measurement
+  that would need a coupled modal oracle. It is a physics batch, not a viewer one.
+* **The cents bound is not in the deep link.** It is a display control, so a link cannot carry it;
+  three bounds ship in every payload and the fourth someone wants would need a round trip.
+* **The strip is not on the canvas.** Nothing marks the horizon *on* the spectrum panel, where a
+  vertical line at `hz` would say the same thing in the place the partials are already drawn.

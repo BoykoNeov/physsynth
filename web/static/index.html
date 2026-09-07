@@ -449,6 +449,21 @@
         <span class="hint" id="audio-note" hidden></span>
       </div>
 
+      <!-- The resolution horizon: how far up the spectrum THIS configuration is still in tune.
+           Two readings, because a horizon in hertz is family-dependent and the same horizon in
+           mode index is not (docs/dev/resolution-horizon-plan.md 8.5). The cents buttons retune
+           the claim with no round trip - every bound is already in the payload. -->
+      <div class="horizon" id="horizon" hidden>
+        <span class="badge" id="horizon-badge"></span>
+        <span class="horizon-line" id="horizon-line"></span>
+        <span class="horizon-bands" id="horizon-bands">
+          <button type="button" data-cents="1">1&cent;</button
+          ><button type="button" data-cents="5">5&cent;</button
+          ><button type="button" data-cents="25">25&cent;</button>
+        </span>
+      </div>
+      <p class="readout" id="horizon-detail"></p>
+
       <div class="diagnostics">
         <div class="diag-card">
           <h3>Energy <span id="energy-verdict" class="badge"></span></h3>

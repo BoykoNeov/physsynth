@@ -3473,6 +3473,24 @@ part of the batch, and it ships as a **slice set**, not as volumetric rendering,
 payload reason. With it the built-but-unshown gap closes a second time and the fork's arms reduce
 to **Phase 5 (the real-time port)** and **a §12 thread**.*
 
+### Cross-cutting (2026-09-07) — the resolution read-out
+
+Not a batch and not a model: a strip under the transport, on **every** model, saying how far up the
+spectrum the current configuration is still in tune. It is the third cross-cutting capability of
+Phase D (after the energy-balance panel and the multi-field viz) and the first one that is a *claim*
+rather than a picture, so it is built as a two-value union — a number, or the reason there cannot be
+one — and both arms render.
+
+The physics and the decisions are recorded in `docs/dev/resolution-horizon-plan.md` **§12**, not
+here; what belongs in this document is the frontend contract: `payload.horizon` is present on every
+successful payload, `drawHorizon()` renders it beside `drawEnergy()`/`drawDiagnostics()`, the cents
+selector is a **display** control that re-renders from the payload with no round trip (all three
+bounds ship), and `scripts/verify_web_headless.py` reads the strip and fails a case whose strip is
+hidden or empty. Most of the viewer's models refuse rather than answer — every scene built on a
+bridge-coupled string, every nonlinear resonator, both staircased outlines and the free plate — and
+the refusal carries its mechanism, because "no horizon" alone is indistinguishable from a missing
+feature.
+
 ## Tests — `tests/test_web_backend.py` (web wrapper, not core; keep core count stable)
 
 Drive the pure `simulate_to_payload` with short durations:

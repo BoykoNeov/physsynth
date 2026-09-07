@@ -34,7 +34,7 @@ from scipy.ndimage import uniform_filter1d
 from scipy.signal import resample_poly
 from scipy.sparse.linalg import eigsh
 
-from physsynth.analysis import damping, dispersion, duffing, modal, spectrum
+from physsynth.analysis import damping, dispersion, duffing, horizon, modal, spectrum
 from physsynth.analysis.rotating_wave import rotating_wave_history, solve_rotating_wave
 from physsynth.core.airbox import (
     AirBox,
@@ -859,17 +859,356 @@ def _partials_block(
     }
 
 
+# -- the resolution horizon read-out ---------------------------------------------------------------
+#
+# "How far up the frequency range can this configuration be trusted?" — the user-facing surface of
+# ``docs/dev/resolution-horizon-plan.md``, and the one thing its section 11.8 left open. None of the
+# physics is here: every number below comes out of ``physsynth.analysis.horizon`` and
+# ``physsynth.analysis.modal``, which is the point of the promotion that unblocked this. What this
+# section decides is *which* horizon a viewer scene reports, and when it must refuse to report one.
+#
+# Five rules, each of them a trap the plan already paid for once:
+#
+#   1. **Never read a horizon off a display array.** The spectrum panels ship 6 or 12 partials, and
+#      handing a 12-long list to ``pitch_horizon`` returns at most 12 — a fact about the list, not
+#      about the scheme. Every mode set below is built from the scheme's own dispersion relation
+#      over the *whole* resolvable range (``1..N-1``, or the full ``(m, n)`` grid), the way
+#      ``tests/test_resolution_horizon.py`` builds its own. It costs no eigensolve: these are
+#      closed forms.
+#   2. **A horizon in hertz is family-dependent; the same horizon in mode index is not** (plan
+#      sections 8.5 and 9.5, each of which ends "that is the sentence a viewer read-out would have
+#      to get right"). So a 2-D scene reports *two* readings: a frequency ceiling read off the
+#      exhaustive mode set, and an index read along the corner families — which are the only
+#      sequences a leading prefix means anything along (sections 8.6, 10.7).
+#   3. **A prefix over the sorted 2-D spectrum is not a horizon** (section 8.6), so the frequency
+#      ceiling is deliberately *not* computed with ``pitch_horizon``: it is "the lowest frequency at
+#      which some mode is out of tune", which stays true whether or not the error curve is monotone.
+#      The index reading, which does use ``pitch_horizon``, carries that function's ``monotone``
+#      flag through to the payload rather than collapsing the pair (section 1).
+#   4. **A horizon of zero is live, not defensive.** The plan's ``N = 16`` plate has its
+#      *fundamental* 9.6 cents flat. ``hz`` is then ``None`` — never NaN, which ``server.py``'s
+#      ``allow_nan=False`` would refuse anyway, and never 0.0, which would read as a measurement.
+#   5. **A scene with no reference refuses, with the reason.** A staircased outline, a nonlinear
+#      resonator, a bridge-coupled terminus and a bore each get a sentence instead of a number
+#      (plan section 5). Quoting one member's number and hoping a caveat carries is how a read-out
+#      becomes a lie, so ``kind`` is a two-value union and the frontend renders both arms.
+#
+# What it measures is *dispersion*: the scheme's modal frequency against the continuum's. It ignores
+# the pitch shift damping adds, which is second order in ``sigma/omega`` — about 1e-4 on the
+# viewer's loss defaults against a 5-cent bound of 2.9e-3, three orders below the bar.
+
+HORIZON_BANDS = (1.0, 5.0, 25.0)   # cents; the middle one is the plan's default bound (section 1)
+HORIZON_CENTS_DEFAULT = 5.0
+HORIZON_MAX_MODES = 12_000         # mode-set ceiling; the n_live guards keep every scene under it
+
+
+def _horizon_none(reason: str, *, of: str | None = None) -> dict[str, Any]:
+    """The refusing arm of the read-out: a reason, never a number."""
+    block: dict[str, Any] = {"kind": "none", "reason": reason}
+    if of is not None:
+        block["of"] = of
+    return block
+
+
+def _horizon_report(
+    f_disc: NDArray[np.float64],
+    f_cont: NDArray[np.float64],
+    labels: list[str],
+    families: dict[str, tuple[NDArray[np.float64], NDArray[np.float64]]],
+    *,
+    scheme: str,
+    dims: int,
+    of: str,
+    nyquist: float,
+) -> dict[str, Any]:
+    """Assemble the read-out from one exhaustive mode set plus the families to read an index along.
+
+    ``f_disc``/``f_cont`` are the *whole* resolvable spectrum in any order (sorted here by continuum
+    frequency); ``families`` are the sequences along which a leading prefix is meaningful — the
+    harmonic series in 1-D, the corner families in 2-D. Both readings are reported at every bound in
+    :data:`HORIZON_BANDS`, so the frontend can retune the claim with no round trip.
+    """
+    order = np.argsort(f_cont, kind="stable")
+    fd, fc = np.asarray(f_disc)[order], np.asarray(f_cont)[order]
+    lab = [labels[int(i)] for i in order]
+    err = horizon.pitch_error_cents(fd, fc)
+
+    bands: list[dict[str, Any]] = []
+    for cents in HORIZON_BANDS:
+        # `<=` rather than `not >`: a non-finite error is a mode the scheme cannot represent, and
+        # NaN fails every comparison, so writing the test this way counts it OUT of tune. The
+        # negation would silently count it in.
+        outside = np.flatnonzero(~(np.abs(err) <= cents))
+        if outside.size:
+            first = int(outside[0])
+            hz = float(fc[first - 1]) if first else None
+            band = {
+                "modes": first,
+                "hz": None if hz is None else round(hz, 1),
+                "saturated": False,
+                "limited_by": lab[first],
+                "limit_hz": round(float(fc[first]), 1),
+                "limit_cents": round(float(err[first]), 2) if np.isfinite(err[first]) else None,
+            }
+        else:
+            band = {
+                "modes": int(fc.size),
+                "hz": round(float(fc[-1]), 1),
+                "saturated": True,      # nothing in the resolvable spectrum is out of tune: the
+                "limited_by": None,     # grid, not the pitch error, is what ends this claim
+                "limit_hz": None,
+                "limit_cents": None,
+            }
+        rows = []
+        for name, (ffd, ffc) in families.items():
+            index, monotone = horizon.pitch_horizon(ffd, ffc, cents)
+            rows.append({"name": name, "index": int(index), "monotone": bool(monotone)})
+        rows.sort(key=lambda r: (r["index"], r["name"]))
+        index = rows[0]["index"]
+        tied = [r for r in rows if r["index"] == index]
+        # Every family is shipped and the *minimisers* are named as a group, because naming one of
+        # them would report a sort's tiebreak as a result (plan section 10.6, where the two axial
+        # families of a square are degenerate to the bit). A tie here is usually coarser than that
+        # — three families whose prefixes land on the same small integer — which is why the payload
+        # says they tie rather than saying they are equal. ``monotone`` is AND-ed over the
+        # minimisers: a prefix is only as meaningful as its least monotone member.
+        band.update({
+            "cents": cents,
+            "index": index,
+            "family": ", ".join(r["name"] for r in tied),
+            "family_tied": len(tied) > 1,
+            "families": rows,
+            "monotone": all(r["monotone"] for r in tied),
+        })
+        bands.append(band)
+
+    return {
+        "kind": "prefix",
+        "scheme": scheme,
+        "dims": dims,
+        "of": of,
+        "n_modes": int(fc.size),
+        "f_max": round(float(fc[-1]), 1),
+        "nyquist": round(float(nyquist), 1),
+        "default_cents": HORIZON_CENTS_DEFAULT,
+        "bands": bands,
+    }
+
+
+# The two spellings of a *pinned* end. Both give the sine series the modal oracles assume — the
+# ideal string says ``fixed`` (u = 0) and the theta family says ``supported`` (u = 0 and u_xx = 0,
+# which is the boundary ``discrete_stiff_mode_frequency`` is derived for). Anything else, and in
+# practice that means the ``("fixed", "free")`` terminus every bridge-coupled scene uses, is not a
+# sine series and gets the refusal instead.
+_HORIZON_PINNED_ENDS = ("fixed", "supported")
+
+
+def _horizon_pinned_both_ends(res: Any) -> bool:
+    """Is every terminus of this string pinned? (``boundary`` is a string or a 2-tuple.)"""
+    b = getattr(res, "boundary", "fixed")
+    ends = b if isinstance(b, (tuple, list)) else (b, b)
+    return all(str(e) in _HORIZON_PINNED_ENDS for e in ends)
+
+
+def _horizon_string_block(res: Any, *, of: str) -> dict[str, Any]:
+    """The 1-D string family — explicit ideal (``lam``) or implicit theta (``kappa``, ``theta``)."""
+    if not _horizon_pinned_both_ends(res):
+        return _horizon_none(
+            "this string does not terminate on two pinned ends: one end is the spring-coupled "
+            "bridge the scene is about, so its continuum partials are shifted by the coupling "
+            "itself. Comparing them with the uncoupled harmonic series in cents would report that "
+            "shift as a discretisation error — two mechanisms in one number, which is the same "
+            "reason a staircased outline is refused below.", of=of)
+    n = int(res.N)
+    if n < 2:
+        return _horizon_none("this grid carries no interior modes.", of=of)
+    if n - 1 > HORIZON_MAX_MODES:
+        return _horizon_none(
+            f"this grid carries {n - 1} modes, past the {HORIZON_MAX_MODES} the read-out examines; "
+            "no horizon is reported rather than one read off a truncated spectrum.", of=of)
+    c, length = float(res.c), float(res.L)
+    modes = np.arange(1, n)
+    labels = [f"partial {int(m)}" for m in modes]
+    kappa = float(getattr(res, "kappa", 0.0))
+    if hasattr(res, "theta"):
+        theta, k = float(res.theta), float(res.k)
+        f_disc = np.array([
+            modal.discrete_stiff_mode_frequency(c, length, n, kappa, k, int(m), theta)
+            for m in modes
+        ])
+        f_cont = np.asarray(modal.stiff_harmonic_frequencies(c, length, kappa, n - 1), dtype=float)
+        scheme = "implicit theta-scheme"
+    else:
+        lam = float(res.lam)
+        f_disc = np.array([modal.discrete_mode_frequency(c, length, n, lam, int(m)) for m in modes])
+        f_cont = np.asarray(modal.harmonic_frequencies(c, length, n - 1), dtype=float)
+        scheme = "explicit leapfrog"
+    return _horizon_report(
+        f_disc, f_cont, labels, {"harmonic": (f_disc, f_cont)},
+        scheme=scheme, dims=1, of=of, nyquist=float(res.fs) / 2.0,
+    )
+
+
+def _horizon_grid2d(res: Any, *, of: str, plate: bool) -> dict[str, Any]:
+    """A rectangular 2-D grid — the membrane (explicit) or the simply-supported plate (theta).
+
+    The caller has already ruled out the shapes and boundaries that have no continuum reference;
+    what is left is the one comparison the plan calls measured. The corner families come from
+    :func:`physsynth.analysis.horizon.mode_family` and the worst of them sets the index reading:
+    a block's worst mode is a *corner*, and **which** corner is a property of the scheme rather
+    than of the block (plan sections 8.7 and 10.5), so all three are read and the minimum taken
+    instead of picking one and hoping the regime holds.
+    """
+    h, k = float(res.h), float(res.k)
+    lx, ly = float(res.Lx), float(res.Ly)
+    nx, ny = int(round(lx / h)), int(round(ly / h))
+    if min(nx, ny) < 2:
+        return _horizon_none("this grid carries no interior modes.", of=of)
+    if (nx - 1) * (ny - 1) > HORIZON_MAX_MODES:
+        return _horizon_none(
+            f"this grid carries {(nx - 1) * (ny - 1)} modes, past the {HORIZON_MAX_MODES} the "
+            "read-out examines; no horizon is reported rather than one read off a truncated "
+            "spectrum.", of=of)
+
+    def _freqs(pairs: list[tuple[int, int]]) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        lam_disc = np.asarray(modal.rectangular_discrete_eigenvalues(h, nx, ny, pairs), dtype=float)
+        if plate:
+            kappa, theta = float(res.kappa), float(res.theta)
+            disc = np.asarray(
+                modal.discrete_plate_eigenfrequency(lam_disc, kappa, k, theta), dtype=float)
+            cont = np.asarray(modal.rectangular_plate_freqs(kappa, lx, ly, pairs), dtype=float)
+        else:
+            c = float(res.c)
+            disc = np.asarray(modal.discrete_membrane_eigenfrequency(lam_disc, c, k), dtype=float)
+            cont = np.asarray(modal.rectangular_membrane_freqs(c, lx, ly, pairs), dtype=float)
+        return disc, cont
+
+    pairs = [(m, n) for m in range(1, nx) for n in range(1, ny)]
+    f_disc, f_cont = _freqs(pairs)
+    labels = [f"mode ({m}, {n})" for m, n in pairs]
+    corner = min(nx, ny) - 1
+    families = {}
+    for kind, name in (("axial", "axial (m, 1)"), ("axial_y", "axial (1, n)"),
+                       ("diagonal", "diagonal (m, m)")):
+        families[name] = _freqs(horizon.mode_family(kind, corner))
+    return _horizon_report(
+        f_disc, f_cont, labels, families,
+        scheme="implicit theta-scheme" if plate else "explicit leapfrog",
+        dims=2, of=of, nyquist=float(res.fs) / 2.0,
+    )
+
+
+# The refusals, in the plan's own words (section 5). Kept as named constants because three of them
+# are quoted from more than one call site and a drifting copy would be a second claim.
+HORIZON_STAIRCASE = (
+    "this domain is staircased onto the grid, so the error being measured is the SHAPE, not the "
+    "scheme: the continuum reference is a frequency for a different outline, and a cents "
+    "comparison would mix a geometry error into a dispersion one. That needs a "
+    "geometry-convergence study rather than this primitive (plan section 5)."
+)
+HORIZON_FREE_PLATE = (
+    "a free plate's continuum reference is a table of tabulated values (Narita/Leissa), not a "
+    "formula over all modes, so a horizon exists only over the tabulated set (plan section 5)."
+)
+HORIZON_NONLINEAR = (
+    "this resonator is nonlinear: its partials move with amplitude, so there is no linear modal "
+    "oracle to compare against. What it has instead is a *refinement* horizon — one point of which "
+    "is measured in docs/dev/vk-newton-plan.md section 13 — and that is a different measurement "
+    "from this one (plan section 5)."
+)
+HORIZON_COUPLED = (
+    "the string in this scene terminates on a spring-coupled bridge rather than a fixed end, so "
+    "its continuum partials are shifted by the coupling the scene exists to show. A cents "
+    "comparison against the uncoupled series would report that shift as a discretisation error."
+)
+HORIZON_BORE = (
+    "the bore's resolution question is the Webster area function's, not a modal dispersion one: a "
+    "reflection oracle exists but it is a different comparison, so no horizon is quoted (plan "
+    "section 5)."
+)
+HORIZON_ROOM = (
+    "a 3-D room's dispersion is direction-dependent, like the membrane's but with more directions, "
+    "and what is recorded for it is the lattice light cone and the defective corner mode at the "
+    "CFL ceiling rather than a pitch horizon (plan section 5). The string in the same scene is "
+    "bridge-coupled, so it has none to quote either."
+)
+
+# Every model key that does not build its own block gets one from here, so the read-out is present
+# on every payload and a missing entry is a visible refusal rather than a silent absence.
+HORIZON_ABSENT: dict[str, str] = {
+    "tension": HORIZON_NONLINEAR,
+    "geometric": HORIZON_NONLINEAR,
+    "bore": HORIZON_BORE,
+    "reed": HORIZON_BORE,
+    "sympathetic": HORIZON_COUPLED,
+    "body": HORIZON_COUPLED,
+    "radbody": HORIZON_COUPLED,
+    "airload": HORIZON_COUPLED,
+    "platebody": HORIZON_COUPLED,
+    "airbox": HORIZON_ROOM,
+    "vkroom": HORIZON_ROOM,
+}
+
+
+def _horizon_membrane_block(res: Any, *, of: str) -> dict[str, Any]:
+    """The membrane's gate: a rectangle is measured, a staircased disk is refused."""
+    if str(getattr(res, "domain", "rectangle")) != "rectangle":
+        return _horizon_none(HORIZON_STAIRCASE, of=of)
+    return _horizon_grid2d(res, of=of, plate=False)
+
+
+def _horizon_plate_block(res: Any, *, of: str, nonlinear: bool = False) -> dict[str, Any]:
+    """The plate's gate — and it is the reason the read-out keys on ``(model, domain)``.
+
+    One model key covers three plates: the simply-supported rectangle the plan calls measured, the
+    free one whose reference is a table rather than a formula, and the guitar outline whose error is
+    its staircase. A block keyed on the model alone would quote the first one's number for all
+    three.
+    """
+    if nonlinear:
+        return _horizon_none(HORIZON_NONLINEAR, of=of)
+    if str(getattr(res, "domain", "rectangle")) != "rectangle":
+        return _horizon_none(HORIZON_STAIRCASE, of=of)
+    if str(getattr(res, "boundary", "supported")) != "supported":
+        return _horizon_none(HORIZON_FREE_PLATE, of=of)
+    if not bool(getattr(res, "grain_is_isotropic", True)):
+        return _horizon_none(
+            "this plate has a grain, so both its continuum oracle and the order its spectrum comes "
+            "in are the orthotropic ones (plan section 9) rather than the isotropic forms this "
+            "read-out builds. In mode index the floor is the same; in hertz it is per-direction.",
+            of=of)
+    return _horizon_grid2d(res, of=of, plate=True)
+
+
 # -- main entry point ------------------------------------------------------------------------------
 
 
 def simulate_to_payload(params: dict[str, Any]) -> dict[str, Any]:
-    """params dict -> JSON-able payload. Never raises: bad input -> ``{"error": {...}}``."""
+    """params dict -> JSON-able payload. Never raises: bad input -> ``{"error": {...}}``.
+
+    The resolution read-out is attached *here* rather than in each builder so that it is present on
+    every successful payload: a builder that can compute one sets ``horizon`` itself, and everything
+    else falls through to :data:`HORIZON_ABSENT`, whose entries say why there is no number. A model
+    key missing from both is a refusal with a generic reason — never a missing key, which the
+    frontend would have to guess about.
+    """
+    p = params or {}
     try:
-        return _build_payload(params or {})
+        payload = _build_payload(p)
     except ParamError as exc:
         return {"error": {"kind": "param", "message": str(exc)}}
     except ValueError as exc:  # core construction guards (CFL violated, non-physical params)
         return {"error": {"kind": "construction", "message": str(exc)}}
+    if "horizon" not in payload:
+        payload["horizon"] = _horizon_none(
+            HORIZON_ABSENT.get(
+                str(p.get("model", "ideal")),
+                "this scene has no closed-form modal reference to compare against, so no "
+                "resolution horizon is quoted for it (docs/dev/resolution-horizon-plan.md "
+                "section 5).",
+            )
+        )
+    return payload
 
 
 def _build_payload(p: dict[str, Any]) -> dict[str, Any]:
@@ -989,6 +1328,7 @@ def _build_payload_string(p: dict[str, Any]) -> dict[str, Any]:
         "field_amp": field_amp,
         "audio": {"b64": _b64f32(audio48), "fs": AUDIO_FS, "peak": peak, "n": int(audio48.size)},
         "energy": _energy_block(audio_res, b.sigma_zero, b.oracle_2sigma),
+        "horizon": _horizon_string_block(b.res, of=f"the {model} string"),
         "meta": {
             "c": round(c, 3),
             "f1": round(f1_base, 3),
@@ -2106,6 +2446,7 @@ def _build_payload_bow(p: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "model": "bow",
+        "horizon": _horizon_string_block(bow.string, of="the bowed string"),
         "fs_sim": round(fs, 3),
         "lambda": round(float(bow.string.lam), 6),
         "grid": {"x": _finite_list(bow.string.x, 6)},
@@ -5422,6 +5763,7 @@ def _build_payload_jawari(p: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "model": "jawari",
+        "horizon": _horizon_string_block(jaw.string, of="the string under the jawari"),
         "fs_sim": round(fs, 3),
         "lambda": round(info["lam"], 6),
         "grid": {"x": _finite_list(jaw.string.x, 6), "barrier": _finite_list(barrier)},
@@ -5691,6 +6033,7 @@ def _build_payload_juari(p: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "model": "juari",
+        "horizon": _horizon_string_block(main_bar.string, of="the string under the thread"),
         "fs_sim": round(fs, 3),
         "lambda": round(info["lam"], 6),
         "grid": {"x": _finite_list(main_bar.string.x, 6), "thread_node": int(sel_node),
@@ -6320,6 +6663,7 @@ def _build_payload_fret(p: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "model": "fret",
+        "horizon": _horizon_string_block(bar.string, of="the fretted string"),
         "fs_sim": round(fs, 3),
         "lambda": round(info["lam"], 6),
         "grid": {"x": _finite_list(bar.string.x, 6), "barrier": _finite_list(rail)},
@@ -7660,6 +8004,7 @@ def _build_payload_membrane(p: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "model": "membrane",
+        "horizon": _horizon_membrane_block(res, of="the membrane"),
         "domain": domain,
         "fs_sim": round(fs, 3),
         "lambda": round(float(getattr(res, "lam", float("nan"))), 6),
@@ -7951,6 +8296,7 @@ def _build_payload_mallet(p: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "model": "mallet",
+        "horizon": _horizon_membrane_block(mem, of="the struck membrane"),
         "domain": domain,
         "fs_sim": round(fs, 3),
         "lambda": round(float(getattr(mem, "lam", float("nan"))), 6),
@@ -8218,6 +8564,7 @@ def _build_payload_plate(p: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "model": "plate",
+        "horizon": _horizon_plate_block(res, of="the plate"),
         "boundary": boundary,
         "outline": res.domain,
         "fs_sim": round(fs, 3),
@@ -8753,6 +9100,7 @@ def _build_payload_vk(p: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "model": "vk",
+        "horizon": _horizon_plate_block(res, of="the von Karman plate", nonlinear=nonlinear),
         "boundary": boundary,
         "nonlinear": nonlinear,
         "fs_sim": round(fs, 3),

@@ -1556,6 +1556,7 @@ function applyPayload(data) {
   hideOverlay();
   drawEnergy();
   drawDiagnostics();
+  drawHorizon();
   updateGuitarHint();
 }
 
@@ -1570,6 +1571,94 @@ function updateAudioTransport(data) {
     note.hidden = has;
     note.textContent = data.audio_note || "";
   }
+}
+
+// ── the resolution horizon read-out ─────────────────────────────────────────────────────────
+// "How far up the frequency range can this configuration be trusted?" — the payload's `horizon`
+// block, rendered. It is a two-value union and BOTH arms are drawn: a scene with no continuum
+// reference (a staircased outline, a nonlinear resonator, a bridge-coupled terminus, the bore)
+// ships a reason instead of a number, and printing nothing there would read as "fine" rather than
+// as "not measurable". See docs/dev/resolution-horizon-plan.md section 12.
+let horizonCents = 5;
+
+function fmtHz(hz) {
+  if (hz === null || hz === undefined) return "—";
+  if (hz >= 1000) return (hz / 1000).toFixed(2) + " kHz";
+  return (hz < 100 ? hz.toFixed(1) : Math.round(hz).toString()) + " Hz";
+}
+
+function drawHorizon() {
+  const box = $("horizon"), badge = $("horizon-badge"), line = $("horizon-line");
+  const detail = $("horizon-detail"), bandsEl = $("horizon-bands");
+  const h = payload && payload.horizon;
+  if (!box || !h) { if (box) box.hidden = true; if (detail) detail.textContent = ""; return; }
+  box.hidden = false;
+  bandsEl.hidden = h.kind !== "prefix";
+
+  if (h.kind === "none") {
+    badge.className = "badge muted";
+    badge.textContent = "not quoted";
+    line.innerHTML = "<b>No resolution horizon for this scene.</b>";
+    detail.textContent = h.reason;
+    return;
+  }
+
+  const b = h.bands.find((x) => x.cents === horizonCents) || h.bands[0];
+  [...bandsEl.querySelectorAll("button")].forEach((btn) => {
+    btn.classList.toggle("on", +btn.dataset.cents === b.cents);
+  });
+  const flat = (c) => `${Math.abs(c).toFixed(1)}¢ ${c < 0 ? "flat" : "sharp"}`;
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+  if (b.saturated) {
+    // Nothing in the resolvable spectrum is out of tune, so the GRID is the limit, not the pitch
+    // error — the ideal string at λ = 1, where the two errors cancel identically.
+    badge.className = "badge good";
+    badge.textContent = "whole grid";
+    line.innerHTML = `<b>In tune all the way up.</b> Every one of the ${h.n_modes} modes of `
+      + `${h.of} is within ${b.cents}¢ of the continuum, to the top of the grid at `
+      + `${fmtHz(h.f_max)}. The grid, not the pitch error, is what ends this claim.`;
+  } else if (b.modes === 0) {
+    // Live, not defensive: the plan's N = 16 plate has its FUNDAMENTAL 9.6 cents flat.
+    badge.className = "badge bad";
+    badge.textContent = "—";
+    line.innerHTML = `<b>Nothing here is in tune to ${b.cents}¢.</b> Even the lowest mode of `
+      + `${h.of} — ${b.limited_by} — is ${flat(b.limit_cents)}.`;
+  } else {
+    badge.className = "badge good";
+    badge.textContent = fmtHz(b.hz);
+    line.innerHTML = `<b>Trustworthy to ${fmtHz(b.hz)}</b> — ${plural(b.modes, "mode")} of `
+      + `${h.of} below that, all within ${b.cents}¢ of the continuum. The next one up, `
+      + `${b.limited_by} at ${fmtHz(b.limit_hz)}, is ${flat(b.limit_cents)}.`;
+  }
+
+  const lines = [];
+  if (h.dims === 2 && b.index > 0) {
+    // The index reading, and it is the one that survives being quoted: a horizon in hertz is
+    // family-dependent (the axial and diagonal families of one plate are √2 apart at the same
+    // cents), a horizon in mode index is not. The corner rule is what licenses reading a BLOCK off
+    // a family's prefix, and which corner is worst is a property of the scheme. Suppressed at
+    // index 0, where "every mode with m, n <= 0" is a sentence about the empty set and the
+    // headline has already said it.
+    //
+    // The tied names come from the per-family rows and never from splitting `family`: the names
+    // contain commas of their own ("axial (m, 1)"), and splitting one printed "axial (m and 1)".
+    const names = b.families.filter((f) => f.index === b.index).map((f) => f.name);
+    const joined = names.length < 2 ? b.family
+      : names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+    const corner = b.family_tied
+      ? `no single worst corner at this index — ${joined} end together`
+      : `worst corner: ${b.family}`;
+    lines.push(`in mode index: every mode with m, n ≤ ${b.index} is inside ${b.cents}¢ `
+      + `(${corner}). A ceiling in hertz is family-dependent; a mode index is not.`);
+  }
+  lines.push(`${h.scheme} · ${h.n_modes} modes on the grid · spectrum reaches `
+    + `${fmtHz(h.f_max)} · Nyquist ${fmtHz(h.nyquist)}`);
+  if (!b.monotone) {
+    lines.push("⚠ the error is not monotone along the limiting family, so this count is a "
+      + "conservative leading prefix — not the highest mode that happens to be in tune.");
+  }
+  detail.textContent = lines.join("\n");
 }
 
 // ── string animation ────────────────────────────────────────────────────────────────────────
@@ -5649,6 +5738,14 @@ speedInput.addEventListener("input", () => {
 });
 scrub.addEventListener("input", () => { scrubbing = true; currentFrame = +scrub.value; });
 scrub.addEventListener("change", () => { scrubbing = false; animStart = 0; });
+// The cents bound is a DISPLAY control, not a simulation parameter: every bound is already in the
+// payload, so retuning the claim costs no round trip and never re-runs the physics.
+$("horizon-bands").addEventListener("click", (ev) => {
+  const btn = ev.target.closest("button[data-cents]");
+  if (!btn) return;
+  horizonCents = +btn.dataset.cents;
+  drawHorizon();
+});
 playAudioBtn.addEventListener("click", playAudio);
 renderBtn.addEventListener("click", render);
 

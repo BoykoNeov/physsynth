@@ -63,6 +63,9 @@ PROBE = r"""
     status: document.getElementById('status').textContent,
     energy: document.getElementById('energy-readout').textContent,
     diag2: document.getElementById('partials-readout').textContent,
+    horizon: (document.getElementById('horizon').hidden ? '(hidden)'
+              : document.getElementById('horizon-badge').textContent + ' — '
+                + document.getElementById('horizon-line').textContent),
     urlNotes: (window.__urlParamNotes || []).join(' | '),
     warm: warm, cool: cool, bg: bg, other: other, total: d.length / 4,
   });
@@ -156,11 +159,18 @@ def run_case(cdp: CDP, name: str, query: str) -> bool:
     # exercised the short run. `__urlParamNotes` is the page's own record of every name it did not
     # know and every value it clamped or snapped; empty is the pass, and it is part of the verdict.
     notes = probe.get("urlNotes", "")
-    ok = probe["status"].startswith("ok") and painted > 2000 and not notes
+    # The resolution read-out is part of the verdict, in the one way that is true of EVERY case:
+    # the strip must be visible and say something. Its *content* is a two-value union — most of
+    # these scenes legitimately have no horizon to quote — so a case cannot be asked for a number,
+    # only for an answer. A hidden strip means drawHorizon never ran or the payload lost the key.
+    horizon = probe.get("horizon", "(hidden)")
+    ok = (probe["status"].startswith("ok") and painted > 2000 and not notes
+          and horizon != "(hidden)" and len(horizon) > 20)
     print(f"\n=== {name} ({query}) ===")
     print(f"  status   : {probe['status']}")
     print(f"  energy   : {probe['energy'].splitlines()[0] if probe['energy'] else '(none)'}")
     print(f"  diag2    : {probe['diag2'].splitlines()[0] if probe['diag2'] else '(none)'}")
+    print(f"  horizon  : {horizon}")
     print(f"  url      : {notes if notes else 'every parameter applied as given'}")
     print(f"  painted  : warm={probe['warm']} cool={probe['cool']} other={probe['other']} "
           f"bg={probe['bg']} / {probe['total']}  -> {'PASS' if ok else 'FAIL'}")
