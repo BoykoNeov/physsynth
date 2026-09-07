@@ -85,17 +85,18 @@ The binding can only be deleted when its last caller is gone, and it has exactly
 caller: the **tests**, the **viewer**, and the **scripts**. Everything else follows from that.
 
 ```
-  A. resolve the three dual modules ──┐
-                                      │
-  B. derive the coverage map ─────────┼─► C. port the physics bars ──┐
-                                      │                              │
-  D. the viewer becomes a Rust crate ─┤                              ├─► F. delete the binding,
-                                      │                              │      the shims, the
-  E. triage the scripts ──────────────┘──────────────────────────────┘      packaging, the CI
+                      ┌─► A. resolve the three dual modules ─┐
+  B. derive the map ──┤                                      ├─► F. delete the binding,
+                      └─► C. port the physics bars ──────────┤      the shims, the
+                                                             │      packaging, the CI
+  D. the viewer becomes a Rust crate ────────────────────────┤
+                                                             │
+  E. triage the scripts ─────────────────────────────────────┘
 ```
 
-B, D and E are independent of each other. C depends on B; A should follow B for the reason in §8.2.
-F depends on all of them.
+B comes first and **both A and C hang off it**: C because it needs to know what is missing, A for
+the reason in §8.2 — the parity files are the last cross-language check there will ever be, and
+they should not go before what they were protecting is known. D and E depend on nothing but F.
 
 ### 3.1 The four Rust-to-Python reaches unwind for free
 
@@ -185,7 +186,19 @@ phase must not repeat.
 **No plotting.** The withdrawn island decision means the ~20 matplotlib scripts and
 `physsynth/viz/plots.py` (609 lines) are deleted rather than translated. Where a figure was the
 point, the Rust survivor writes the numbers and the figure is drawn outside this repository. The
-browser viewer already covers twenty models interactively and is the project's actual visualization.
+browser viewer already covers twenty models interactively and is the project's actual
+visualization.
+
+**But triage is two questions, not one, and the second is the hard one.** Survival is the first; the
+second is *what data shape replaces the figure*, and a figure and a data file are not the same
+artifact. A convergence study is a table and ports directly. A Chladni pattern, an airbox field
+slice, a whirl orbit are not tables — "emit the array as CSV" is not a substitute for the thing
+those scripts existed to show. **A survivor whose output was inherently visual must have its claim
+restated as a number before it can be ported at all**, and if the claim cannot be stated as a
+number, that is an argument the script was always a *look at this* rather than a measurement —
+which makes it a delete, not a port. `diagnose_free_plate.py`, `diagnose_orthotropic_free_plate.py`
+and the airbox field-slice scripts are where this bites; decide it in the triage rather than
+mid-batch.
 
 ### 6.1 The browser harness is the one script that is load-bearing
 
