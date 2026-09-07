@@ -196,7 +196,12 @@ map's. Plus the `capped`-versus-`expansive` misreport of §2.4, now fixed, asser
 than a table.
 
 **No default moves.** `couple_method` stays `"picard"` everywhere and every shipped number stays the
-number it is.
+number it is. *(Superseded 2026-09-07 — `vk-newton-plan.md` §15 moved the default to `"auto"`,
+which sweeps first and re-solves with Newton only where the sweeps fail. The room builders here
+pass no `couple_method` and therefore inherit it; the second half of the sentence still holds,
+because a converging step under `"auto"` is bit-identical to the sweeps' own. Three tests in
+`tests/test_airbox_vk.py` are now pinned back to `"picard"` — the ones whose subject is a sweep
+loop failing.)*
 
 ## 5. Deliberately not done here — and one of these is half of what was asked
 

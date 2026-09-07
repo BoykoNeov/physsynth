@@ -263,6 +263,11 @@ fn a_nonlinear_plate_conserves_its_total_energy() {
 // -- why the sweep loop stopped (plan §5 Part 0) ------------------------------------------------
 
 /// A 40 cm steel square struck in the middle, `amp` thicknesses tall, with a chosen sweep cap.
+///
+/// **Pinned to `Picard` rather than left on the default.** Everything below is a claim about why
+/// the *sweep loop* stopped, and under `Auto` there is no such claim to make: the rescue converges
+/// these fixtures, `outcome()` reads `Converged`, and every assertion here passes on nothing. The
+/// sixty-thickness strike is the sharpest case -- it reported `Converged` on all twenty steps.
 fn struck_vk(amp: f64, cap: i64) -> VkPlate {
     let mut vk = VkPlate::new(
         VkParams::new(&VkSpec {
@@ -275,6 +280,7 @@ fn struck_vk(amp: f64, cap: i64) -> VkPlate {
             fs: 48_000.0,
             n: 16,
             couple_max_iter: cap,
+            couple_method: Some(CoupleMethod::Picard),
             ..VkSpec::default()
         })
         .expect("a valid plate"),
@@ -1253,22 +1259,32 @@ fn the_linear_path_is_bit_identical_whichever_method_is_selected() {
         };
         let mut pic = make(CoupleMethod::Picard);
         let mut new = make(CoupleMethod::Newton);
+        let mut aut = make(CoupleMethod::Auto);
         let u0 = bump(&pic.p.lin, 1e-3);
         let zero = vec![0.0; pic.p.lin.n_live];
         pic.set_state(&u0, &zero).expect("the Airy solve factors");
         new.set_state(&u0, &zero).expect("the Airy solve factors");
+        aut.set_state(&u0, &zero).expect("the Airy solve factors");
         for step in 0..40 {
             pic.step(None).expect("the solves succeed");
             new.step(None).expect("the solves succeed");
+            aut.step(None).expect("the solves succeed");
             assert_eq!(
                 pic.u, new.u,
                 "{boundary:?} step {step}: the linear path forked"
             );
+            assert_eq!(
+                pic.u, aut.u,
+                "{boundary:?} step {step}: the linear path forked under `auto`"
+            );
         }
-        // And the linear path's cost is one solve, on both -- it is one back-substitution, and
-        // `n_solves` is only worth having if it says so.
+        // And the linear path's cost is one solve, on all three -- it is one back-substitution,
+        // and `n_solves` is only worth having if it says so. `auto` never reaches its fallback
+        // here, which is the same statement made on the counter.
         assert_eq!(pic.n_solves, 1);
         assert_eq!(new.n_solves, 1);
+        assert_eq!(aut.n_solves, 1);
+        assert_eq!(aut.n_fallbacks, 0);
     }
 }
 
@@ -1501,13 +1517,15 @@ fn newton_converges_where_picard_does_not() {
     }
 }
 
-/// The default is Picard, at both levels, and an unparseable spelling is refused.
+/// The default is `Auto`, at both levels, and an unparseable spelling is refused.
 ///
-/// The first half is plan §6's third bar — "Picard stays the default, so the whole existing suite
-/// exercises today's code unchanged" — stated against the struct rather than against the suite.
+/// Plan §6's third bar said Picard, and §15 moved it: what that bar was protecting — "the whole
+/// existing suite exercises today's code unchanged" — is now protected by
+/// [`auto_is_bit_identical_to_picard_wherever_the_sweeps_converge`] instead, which is a stronger
+/// statement than a default's name because it is about the numbers rather than about the spelling.
 #[test]
-fn the_method_defaults_to_picard_and_a_bad_spelling_is_refused() {
-    assert_eq!(VkSpec::default().couple_method, Some(CoupleMethod::Picard));
+fn the_method_defaults_to_auto_and_a_bad_spelling_is_refused() {
+    assert_eq!(VkSpec::default().couple_method, Some(CoupleMethod::Auto));
     let p = VkParams::new(&VkSpec {
         lx: 0.4,
         ly: 0.4,
@@ -1520,9 +1538,10 @@ fn the_method_defaults_to_picard_and_a_bad_spelling_is_refused() {
         ..VkSpec::default()
     })
     .expect("a valid plate");
-    assert_eq!(p.couple_method, CoupleMethod::Picard);
+    assert_eq!(p.couple_method, CoupleMethod::Auto);
     assert_eq!(CoupleMethod::Picard.label(), "picard");
     assert_eq!(CoupleMethod::Newton.label(), "newton");
+    assert_eq!(CoupleMethod::Auto.label(), "auto");
 
     // `None` is how the binding says "the caller passed something that is not a method name" --
     // the same shape as `boundary`, and refused the same way rather than defaulted.
@@ -1540,6 +1559,201 @@ fn the_method_defaults_to_picard_and_a_bad_spelling_is_refused() {
     })
     .expect_err("an unparseable method must be refused");
     assert_eq!(err, VkParamError::BadMethod);
+}
+
+// -- `Auto`: the sweeps first, Newton only where they fail (plan §5 Part 6) -----------------------
+//
+// §13.3 is why this exists rather than a flipped default: neither method dominates. Picard is
+// cheaper than Newton in six of that table's eleven cells at musical amplitude, and Newton is up
+// to 68× cheaper at the wall, so the default has to be able to be both. Three things make that
+// safe, and all three are asserted below:
+//
+// 1. where the sweeps converge, `Auto` *is* Picard — bit for bit, not merely to a tolerance;
+// 2. where they do not, the answer is Newton's own — bit for bit, which is the only way to show
+//    the rescue re-seeded from `2 w^n - w^{n-1}` and not from the sweeps' exit iterate, where an
+//    expansive run parks its overflow;
+// 3. the abandoned sweeps are still counted, so `n_solves` does not flatter the new default.
+
+/// A supported 40 cm steel square struck off-centre — plan §13.5's cell, where the outcome is
+/// *not* monotone in amplitude and Picard's failures are therefore found rather than arranged.
+fn auto_case(amp: f64, off: f64, cap: i64, method: CoupleMethod) -> VkPlate {
+    let mut vk = VkPlate::new(
+        VkParams::new(&VkSpec {
+            lx: 0.4,
+            ly: 0.4,
+            young: 2.0e11,
+            thickness: 1e-3,
+            nu: 0.3,
+            rho: 7860.0,
+            fs: 48_000.0,
+            n: 20,
+            boundary: Some(Boundary::Supported),
+            couple_max_iter: cap,
+            couple_method: Some(method),
+            ..VkSpec::default()
+        })
+        .expect("a valid plate"),
+    );
+    let p = &vk.p.lin;
+    let (cx, cy) = (0.5 * p.lx + off, 0.5 * p.ly + off);
+    let a = amp * vk.p.thickness;
+    let u0: Vec<f64> = p
+        .mask
+        .flags()
+        .iter()
+        .enumerate()
+        .filter(|(_, &alive)| alive)
+        .map(|(idx, _)| {
+            let (dx, dy) = (p.x[idx] - cx, p.y[idx] - cy);
+            a * (-((dx * dx + dy * dy) / (0.03 * 0.03))).exp()
+        })
+        .collect();
+    let zero = vec![0.0; p.n_live];
+    vk.set_state(&u0, &zero).expect("the Airy solve factors");
+    vk
+}
+
+/// Every number the suite recorded under the old default is the number it still gets.
+///
+/// The claim the moved default stands on, and it is stated on the *state* rather than on the
+/// verdict: `u` and the stress cache compared with `assert_eq!` on every one of twenty steps,
+/// across the six fixtures Part 1 asserted `J` on. A tolerance here would let a rescue that fired
+/// where it should not have hide inside it — which is exactly the regression this guards.
+///
+/// The diagnostics are compared too, because they are what the suite's other bars read: a step
+/// that agreed in `w` while reporting a different sweep count would still have moved a number.
+#[test]
+fn auto_is_bit_identical_to_picard_wherever_the_sweeps_converge() {
+    for (label, side, n, amp, width, off, boundary, _) in JAC_CASES {
+        let mut pic = jac_plate_m(side, n, amp, width, off, boundary, CoupleMethod::Picard);
+        let mut aut = jac_plate_m(side, n, amp, width, off, boundary, CoupleMethod::Auto);
+        assert_eq!(pic.u, aut.u, "{label}: the two plates start differently");
+
+        for step in 0..20 {
+            pic.step(None).expect("the solves succeed");
+            aut.step(None).expect("the solves succeed");
+            assert!(
+                pic.converged,
+                "{label} step {step}: Picard must converge for this bar to say anything"
+            );
+            assert_eq!(pic.u, aut.u, "{label} step {step}: `auto` moved the state");
+            assert_eq!(pic.f, aut.f, "{label} step {step}: `auto` moved the cache");
+            assert_eq!(
+                (pic.n_iters, pic.converged, pic.n_solves),
+                (aut.n_iters, aut.converged, aut.n_solves),
+                "{label} step {step}: `auto` moved a read-out"
+            );
+            assert_eq!(pic.last_residual, aut.last_residual);
+            assert_eq!(
+                aut.n_fallbacks, 0,
+                "{label} step {step}: nothing to rescue, so nothing may be spent on Newton"
+            );
+        }
+    }
+}
+
+/// Where the sweeps blow up, `auto` returns Newton's own root — and the seed is what proves it.
+///
+/// **The bar is `assert_eq!` on `u`, deliberately.** Picard's expansive exit leaves an iterate that
+/// is enormous or non-finite; a Newton seeded from *that* returns a NaN and reports
+/// `converged: false`, which would make `auto` strictly worse than either method alone with
+/// nothing in the read-outs to say so. Equality with a solo Newton run is the statement that the
+/// rescue started from `2 w^n - w^{n-1}` instead. A relative tolerance could not make it: two
+/// Newton runs from *different* seeds land on the same root to about `1e-13`, so any bar loose
+/// enough to be safe against that would also pass on the bug.
+#[test]
+fn auto_rescues_an_expansive_sweep_from_the_sweeps_own_seed() {
+    let (amp, off, cap) = (10.0, 0.12, 400);
+    let mut pic = auto_case(amp, off, cap, CoupleMethod::Picard);
+    let mut new = auto_case(amp, off, cap, CoupleMethod::Newton);
+    let mut aut = auto_case(amp, off, cap, CoupleMethod::Auto);
+
+    pic.step(None).expect("the solves succeed");
+    assert_eq!(
+        pic.outcome(),
+        CoupleOutcome::Expansive,
+        "the fixture must be one the sweeps genuinely fail on, or this test is vacuous"
+    );
+
+    new.step(None).expect("the solves succeed");
+    assert!(
+        new.converged,
+        "Newton must reach a root for the rescue to have one to reach"
+    );
+
+    aut.step(None).expect("the solves succeed");
+    assert!(
+        aut.converged,
+        "`auto` did not converge where solo Newton did"
+    );
+    assert_eq!(aut.n_fallbacks, 1, "the rescue did not fire");
+    assert_eq!(
+        aut.u, new.u,
+        "the rescue did not re-seed from `2 w^n - w^{{n-1}}`"
+    );
+    assert_eq!(aut.f, new.f, "the rescued stress cache is not Newton's");
+    assert_eq!(
+        (aut.n_iters, aut.last_residual),
+        (new.n_iters, new.last_residual),
+        "the rescued read-outs must be Newton's, since Newton produced the answer"
+    );
+
+    // And the abandoned sweeps are still paid for. This is the number a cost budget has to see:
+    // the default is not free where it rescues, and `n_solves` is where that shows up.
+    assert_eq!(
+        aut.n_solves,
+        pic.n_solves + new.n_solves,
+        "a rescued step costs the abandoned sweeps plus Newton"
+    );
+    assert!(
+        aut.n_solves > new.n_solves,
+        "a rescue that cost no more than solo Newton did not run the sweeps at all"
+    );
+}
+
+/// A sweep budget that merely runs out is rescued too — and that is a trade, not a free win.
+///
+/// `Capped` and `Expansive` are different failures (the first says more sweeps would have worked)
+/// but they are the same thing to a caller: a step whose answer is not converged. So the fallback
+/// fires on both.
+///
+/// **What it costs, stated because it is easy to meet by surprise:** a small `couple_max_iter` was
+/// a cost *ceiling* under Picard — the step could never spend more than `2 · cap` back-substitutions.
+/// Under `auto` it is not one any more; the step pays the capped sweeps and then Newton. `picard`
+/// stays reachable precisely so that ceiling stays available to a caller who wants it.
+#[test]
+fn auto_rescues_a_capped_sweep_and_that_trades_away_the_cost_ceiling() {
+    // `couple_max_iter` caps Newton's iterations as well as Picard's sweeps, so the fixture has
+    // to be one where the budget is short for the sweeps and sufficient for Newton -- the whole
+    // point being that they are not the same currency. At this strike Picard wants ~143 sweeps.
+    let (amp, off, cap) = (6.0, 0.0, 8);
+    let mut pic = auto_case(amp, off, cap, CoupleMethod::Picard);
+    let mut new = auto_case(amp, off, cap, CoupleMethod::Newton);
+    let mut aut = auto_case(amp, off, cap, CoupleMethod::Auto);
+
+    pic.step(None).expect("the solves succeed");
+    assert_eq!(
+        pic.outcome(),
+        CoupleOutcome::Capped,
+        "the fixture must be one the sweeps run out on while still contracting"
+    );
+    assert_eq!(
+        pic.n_solves,
+        2 * cap as usize,
+        "Picard's ceiling is `2 · cap` back-substitutions"
+    );
+
+    new.step(None).expect("the solves succeed");
+    assert!(new.converged, "Newton must reach a root under the same cap");
+
+    aut.step(None).expect("the solves succeed");
+    assert!(aut.converged, "a capped sweep was not rescued");
+    assert_eq!(aut.n_fallbacks, 1);
+    assert_eq!(aut.u, new.u, "the rescued root is not Newton's");
+    assert!(
+        aut.n_solves > 2 * cap as usize,
+        "the ceiling the cap used to impose is gone, and the trade must be visible in the cost"
+    );
 }
 
 // -- Part 3's population: the line search and the inner solve, over the territory Newton opened --

@@ -331,7 +331,14 @@ def test_the_failure_mode_migrates_to_non_convergence():
     """
     probe = make_vk_plate_bridge(K=1000.0)
     ceiling = 1000.0 / probe.stability_margin
-    bridge = _pluck(make_vk_plate_bridge(K=0.9 * ceiling, couple_max_iter=12), amplitude=3e-2)
+    # ``couple_method="picard"`` rather than the ``"auto"`` default: the subject here is the
+    # sweep loop reaching its cap, and under the default that step is rescued and converges (plan
+    # section 15.7). The blindness this documents is unchanged -- the guard is a statement about a
+    # quadratic form either way -- but the fixture that exhibits it has to be the sweeps.
+    bridge = _pluck(
+        make_vk_plate_bridge(K=0.9 * ceiling, couple_max_iter=12, couple_method="picard"),
+        amplitude=3e-2,
+    )
     assert bridge.stability_margin < 1.0  # the guard passed it
 
     failed_at = None

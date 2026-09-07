@@ -22,7 +22,7 @@
 | 2 | Room energy books were a tolerance rather than exact across the port | `airbox` (Rust) | **Fixed 2026-09-02** (§2) |
 | 3 | NumPy's own transcendentals disagree with libm by an ulp on some CPUs — a read-out asserted exactly across languages fails on a runner and passes on another | `airbox.mode_frequency`, four `pow`s, one `tan`, `exp`, `cos`/`sin` | **Symptom cleared 2026-09-03** — the parity step is green on five consecutive runs; the **rule** stays live (§3) |
 | 4 | The θ-scheme suppresses every discrete decay rate by `1/(1+θk²Q)`; "highs die faster" turns over past mode ~32 | `string_damped`, `string_stiff`, both plates | Accounted for; fix derived, not built — and the **payoff claim is FALSIFIED 2026-09-06**: the rate suppression and the scheme's *pitch* flattening are one factor and its square root, so a mode's decay is never audibly wrong before that same mode is most of a semitone flat, and the turnover never lands closer than **330 cents** from in tune over 90 realistic configurations. The observations all stand; "an audible payoff in the whole register" does not (§4) |
-| 5 | The von Kármán Picard iteration stops contracting at large amplitude / high strain / high `fs` — the gong-on-a-string, the gong in a room and grid coarsening all die there | `plate.VKPlate`, `connection`, `airbox` | Open, **narrowed 2026-09-06** — the `1/h⁴` mechanism is falsified, a third of the wall was the sweep cap, and Newton is **built** behind `couple_method` (default still Picard), the boundary is **mapped** (2–4× in amplitude; a root is a resolved *plate* only where the **deflection** is smooth), and the **gong on a string is no longer iteration-bound** — two of this row's three scenes were misfiled (one was never built), and the **wrapper block is gone 2026-09-06** — the room seam drives the model's own kernel against the loaded factorization, so the gong in a room runs under Newton too, and its wall moves ~1.6-1.9x in amplitude depending on the grid (§5) |
+| 5 | The von Kármán Picard iteration stops contracting at large amplitude / high strain / high `fs` — the gong-on-a-string, the gong in a room and grid coarsening all die there | `plate.VKPlate`, `connection`, `airbox` | Open, **narrowed 2026-09-06** — the `1/h⁴` mechanism is falsified, a third of the wall was the sweep cap, and Newton is **built** behind `couple_method` (default still Picard), the boundary is **mapped** (2–4× in amplitude; a root is a resolved *plate* only where the **deflection** is smooth), and the **gong on a string is no longer iteration-bound** — two of this row's three scenes were misfiled (one was never built), and the **wrapper block is gone 2026-09-06** — the room seam drives the model's own kernel against the loaded factorization, so the gong in a room runs under Newton too, and its wall moves ~1.6-1.9x in amplitude depending on the grid. **The default moved 2026-09-07** and it is a *fallback*, not a flip: `couple_method="auto"` runs the sweeps and re-solves with Newton only where they fail, so a converging step is bit-identical to the old default and Part 0's canonical 60-thickness wall now converges (§5) |
 | 6 | The geometrically exact string's Newton solve stops converging past `λ_long ≈ 4`, and `h`-refinement makes it worse | `string_geometric` | Warned at 1, unresolved regime; **§1 eliminated as the cause 2026-09-03** (edge identical in 9/9 cells) and the threshold split into a **convergence** edge at 4 and an **energy** edge at 5–10 (§6) |
 | 7 | A point port's added mass is a grid quantity: refinement makes it *worse* | `airbox.RoomPort` | Refused, measured — `radius` has no default (§7) |
 | 8 | At `λ = 1/√3` the room's corner mode is defective: broadband content grows linearly while the energy stays flat | `airbox` | Accounted for — a flat energy is not a stability certificate here (nor in §6's under-resolved band, found 2026-09-03) (§8) |
@@ -265,8 +265,10 @@ to six iterations — far outside von Kármán's moderate-rotation range, so the
 that scene is now the model rather than the solver.
 
 **The approach, now built: Newton on the discrete-gradient system, as model #10 already does.**
-`couple_method="newton"` ships behind a flag as of 2026-09-06 (`vk-newton-plan.md` Parts 1–2), with
-Picard still the default; on the three fixtures §9.4 classifies as expansive-on-step-zero it
+`couple_method="newton"` ships behind a flag as of 2026-09-06 (`vk-newton-plan.md` Parts 1–2), and
+since 2026-09-07 the **default** is `"auto"` — the sweeps first, Newton only where they fail
+(§15 there, and the four bullets at the end of this section); on the three fixtures §9.4 classifies
+as expansive-on-step-zero it
 converges in 4–6 iterations with 300-step energy drifts of 6.3e-13 to 1.4e-12 (§11.7). That is a
 property of the *iteration*, not yet a claim about the territory: the convergence map and the
 refined-`k` reference are Part 3, and until they land the honest reading is "the solver got there",
@@ -332,6 +334,33 @@ long the outer chord runs. Three measurements came out of it and two of them mov
 * **Newton is cheaper below the wall at 8 kHz**, crossing one at `w/e ≈ 4.3` and settling at
   **0.71x** — which contradicts `mallet-gong-plan.md` §10's "Newton buys nothing here" and dates
   rather than overturns it: that measurement is at 48 kHz, where the mallet never reaches the wall.
+
+**The default moved on 2026-09-07 (`docs/dev/vk-newton-plan.md` §15), and it is a fallback rather
+than a flip.** The obvious move — make Newton the default — is the one the measurement forbids:
+§13.3 has Picard cheaper in six of eleven mapped cells at musical amplitude. So `couple_method`
+gained a third spelling, `"auto"`, now the default: it runs the sweeps, returns their result
+untouched when they converge, and re-solves the step with Newton when they do not. Four things are
+worth carrying out of it.
+
+* **A converging step is bit-identical to the old default** — `assert_eq!` on `w`, on the stress
+  cache and on all five diagnostics, twenty steps across six fixtures. That is what makes moving
+  the default a change to what *fails* rather than to what the suite has recorded.
+* **The rescue re-seeds from `2 w^n - w^{n-1}`**, never from the sweeps' exit iterate. On an
+  expansive exit that iterate is where the overflow is parked, and a Newton seeded from a NaN
+  returns a NaN while reporting `converged: false` — an `"auto"` step strictly worse than either
+  method alone, with nothing in the read-outs to say so. The bar for it is bit equality with a solo
+  Newton run, because two Newton solves from *different* seeds still agree to ~1e-13 and any
+  tolerance loose enough to be safe against that would pass on the bug.
+* **The sweep cap is now a waste budget.** A rescued step spends `2 · couple_max_iter` on the
+  abandoned sweeps before Newton starts: 1.4-3.0x solo Newton at the default cap of 50, and 15.8x
+  at a cap of 400. Raising the cap to help Picard now also raises the price of every rescue.
+* **It rescues failure, not slowness.** Where the sweeps converge expensively and Newton would have
+  been cheaper, `"auto"` still pays the sweeps. A cost-aware rule would have to *predict* the
+  outcome, and §13.5 is the standing reason not to: the boundary is not monotone in amplitude, so
+  a cheap prediction returns a clean wrong answer.
+
+Part 0's canonical wall — the sixty-thickness strike whose whole point was that no cap at any size
+converges it — converges under the default on all twenty steps.
 
 What is left is the *scientific* half: Newton has its own wall (between `6e` and `9e` at N=20), and
 it arrives there by becoming unaffordable rather than by diverging. This remains the largest

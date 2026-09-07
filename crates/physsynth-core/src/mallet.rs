@@ -1376,6 +1376,14 @@ pub struct VkContactStep {
     /// `vk_step` reports. That ratio, not wall-clock, is what "ten to a hundred times dearer"
     /// has to be checked against.
     pub n_solves: usize,
+    /// Inner plate solves this step abandoned to Newton, summed the same way -- see
+    /// [`plate::VkStep::n_fallbacks`].
+    ///
+    /// Summed rather than named because a contact step contains *several* coupled solves and a
+    /// method label would have no referent across them, while "how many needed rescuing" still
+    /// does. Non-zero only under [`plate::CoupleMethod::Auto`], and its ceiling is
+    /// `n_outer + 1` -- one per plate solve, the force-free advance included.
+    pub n_fallbacks: usize,
 }
 
 /// Advance the gong one step: force-free solve, then the chord, then commit.
@@ -1477,6 +1485,7 @@ where
     let mut n_solves = free.n_solves;
     let mut inner_iters = free.n_iters;
     let mut inner_converged = free.converged;
+    let mut n_fallbacks = free.n_fallbacks;
 
     // `inner_converged` is threaded through the closure because a contact failure has to be able
     // to say whether the plate solve that produced its input had finished -- see `VkContactError`.
@@ -1511,6 +1520,7 @@ where
             inner_converged,
             inner_iters,
             n_solves,
+            n_fallbacks,
         });
     }
 
@@ -1530,6 +1540,7 @@ where
         n_solves += advanced.n_solves;
         inner_iters += advanced.n_iters;
         inner_converged &= advanced.converged;
+        n_fallbacks += advanced.n_fallbacks;
 
         // Where a linear plate carrying the chord's tangent would have had to start to land on the
         // node the nonlinear one actually reached. With `nonlinear = false` the two terms cancel
@@ -1568,6 +1579,7 @@ where
         inner_converged,
         inner_iters,
         n_solves,
+        n_fallbacks,
     })
 }
 

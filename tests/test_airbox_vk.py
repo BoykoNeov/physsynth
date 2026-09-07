@@ -590,7 +590,7 @@ def test_a_short_capped_room_step_reports_capped_and_not_expansive(boundary, tie
     that a bigger cap does fix. The cap of two here is the cheapest way to produce a step that is
     genuinely short rather than genuinely diverging.
     """
-    inst = _seeded(tier, boundary=boundary, couple_max_iter=2)
+    inst = _seeded(tier, boundary=boundary, couple_max_iter=2, couple_method="picard")
     _run(inst, 3)
     p = inst.plate
     assert not p.converged, "a cap of two was not short enough to leave the loop unconverged"
@@ -612,7 +612,7 @@ def test_the_loaded_step_honours_couple_method(boundary, tier):
     on the **same root**, since they are two iterations on one nonlinear equation. One step from one
     seeded state, so the comparison is a solve rather than an accumulated trajectory.
     """
-    picard = _seeded(tier, boundary=boundary)
+    picard = _seeded(tier, boundary=boundary, couple_method="picard")
     newton = _seeded(tier, boundary=boundary, couple_method="newton")
     assert picard.plate.couple_method == "picard" and newton.plate.couple_method == "newton"
     _run(picard, 1)
@@ -646,7 +646,7 @@ def test_newton_carries_a_strike_that_kills_the_loaded_picard_loop(tier):
     """
     amp = 6.0
 
-    picard = _make_vk(tier)
+    picard = _make_vk(tier, couple_method="picard")
     picard.set_state(vk_strike(picard.plate, amp * picard.plate.e))
     with np.errstate(over="ignore", invalid="ignore"):
         _run(picard, 3)

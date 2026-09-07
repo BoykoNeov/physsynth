@@ -143,7 +143,10 @@ Picard-convergent "cannot all hold at this sample rate"; this batch may narrow t
 the plan does not promise to retire it. Whether it does is an outcome, reported either way.
 
 **Not claimed either:** any change to a shipped number. Picard stays the default; every existing
-test, frozen value and parity anchor runs the path it runs today.
+test, frozen value and parity anchor runs the path it runs today. *(Superseded 2026-09-07 by §15:
+the default is `"auto"`. The claim it was making survives the move — a converging step under
+`"auto"` is bit-identical to the sweeps' own, asserted in §15.3 — but the mechanism is no longer
+"the default is spelled Picard".)*
 
 ## 4. The scheme
 
@@ -232,6 +235,9 @@ wrapper work is deferred to its own batch.
   Newton changes no energy bar — asserted, not assumed, on the converged path.
 * **`nonlinear=False` stays bit-identical** to model #5. Newton never touches the linear path.
 * **Picard stays the default**, so the whole existing suite exercises today's code unchanged.
+  *(Superseded 2026-09-07 by §15.3, which replaces this bar with a stronger one: `"auto"` is
+  bit-identical to Picard wherever the sweeps converge — a claim about the numbers rather than
+  about a spelling.)*
 * **The Jacobian is asserted independently** of whether Newton converges (Part 1's gate).
 * **Native bars in `crates/physsynth-core/tests/`**, per the migration plan §6 — new physics is
   Rust-first, and there is no Python body to port from.
@@ -1162,4 +1168,173 @@ room is still blocked (§11.8) and the mallet on the gong still does not exist (
 * **The ceiling is still censored**, at 300 mm. 30% of the string's length is not a pluck, and
   extending the grid further would measure the arithmetic rather than the instrument.
 * **No default moves.** `couple_method` is `"picard"` everywhere, and every shipped number in the
-  suite is the number it was.
+  suite is the number it was. *(Superseded 2026-09-07 by §15: the default is `"auto"` now. The
+  second half of the sentence still holds, and §15.3 is what holds it — a converging step under
+  `"auto"` is bit-identical to the sweeps' own.)*
+
+---
+
+## 15. Part 6's result — the default moves, and it is a fallback rather than a flip
+
+Landed 2026-09-07, on the human's call, from a menu on which this was described as "built but not
+switched on". **It was not.** §13.9 and §14.6 both end "no default moves", and §13.3 is a *measured*
+argument for that: Picard is cheaper than Newton in six of eleven mapped cells at musical
+amplitude. A flip would have made the ordinary case dearer and moved every nonlinear number the
+suite holds. So what shipped is a third spelling — `couple_method="auto"`, now the default — that
+runs the sweeps and pays for Newton only where the sweeps fail.
+
+`crates/physsynth-core/src/plate.rs` (`CoupleMethod::Auto`, `vk_step_with` split into
+`vk_picard_step` and `vk_newton_step`), `crates/physsynth-core/src/mallet.rs` (the aggregate),
+`crates/physsynth-py/src/plate.rs` and `mallet.rs` (the keyword, the getter, both writers).
+Three native bars in `crates/physsynth-core/tests/plate.rs`, two through the binding in
+`tests/test_binding_surface.py`.
+
+### 15.1 The rule, in one paragraph
+
+Under `Auto` a nonlinear step runs the sweep loop first. If it reaches `couple_tol`, its result is
+returned **untouched**. If it does not — `Capped`, `Expansive` or `Unknown`, i.e. any outcome that
+is not `Converged` — the step is re-solved with Newton, and the sweeps' back-substitutions are
+added to the Newton solve's own so `n_solves` still says what the step cost.
+
+Two details are the whole safety argument:
+
+* **The sweeps run first under both `Picard` and `Auto`, through the same call**, and the early
+  return that hands their result back is a single `if`. That is why "`Auto` is `Picard` wherever
+  `Picard` worked" is a property of the control flow rather than a claim about two transcriptions.
+* **Newton re-seeds from `2 w^n − w^{n−1}`** — the seed the sweeps themselves started from, never
+  their exit iterate. `vk_newton_step` takes `(ctx, u, u_prev)` and has *no parameter* through
+  which a failed iterate could be passed, which is the cheapest available way to make that
+  structural.
+
+### 15.2 The seed is the line that could have made `Auto` worse than either method
+
+An expansive Picard exit leaves `w_j` enormous or non-finite. Newton seeded from a NaN returns a
+NaN, reports `converged: false`, and reports it through the *same* five read-outs a genuine Newton
+failure uses. An `Auto` step built that way would be strictly worse than either method alone and
+would say nothing about it.
+
+**So the fallback bar is `assert_eq!` on `u` against a solo Newton run, not a tolerance.** Two
+Newton solves from *different* seeds still land on the same root to about `1e-13`, so any bar loose
+enough to be safe against that would also have passed on the bug. Bit equality is the only
+statement that pins which seed was used.
+
+### 15.3 The bit-identity claim, and it is what the moved default actually rests on
+
+`auto_is_bit_identical_to_picard_wherever_the_sweeps_converge` runs both spellings over the six
+fixtures Part 1 asserted `J` on, twenty steps each, and compares `u`, the stress cache, `n_iters`,
+`converged`, `last_residual` and `n_solves` with `assert_eq!` at every step. §6's old third bar was
+"Picard stays the default, so the whole existing suite runs today's code"; this replaces it and is
+stronger, because it is a claim about the numbers rather than about a spelling.
+
+The diagnostics are in the comparison deliberately. A step that agreed in `w` while reporting a
+different sweep count would still have moved a number the suite reads.
+
+### 15.4 `n_fallbacks` is a count and not a method name, and the gong is the reason
+
+One field is added to `VkStep`, and it took four writers to carry (§11.4's fork, plus
+`record_iteration`, plus `commit`). The obvious spelling was `method_used: CoupleMethod` — "which
+iteration produced this answer" — and it is wrong one level up. `mallet::VkContactStep` sums
+`n_iters` and `n_solves` over **every** plate solve in its outer chord, so a step there contains
+several coupled solves and a method *name* has no referent across them. "How many needed rescuing"
+still does, and it sums exactly the way the two existing cost counters already sum.
+
+It is also the only read-out that separates a cheap step from a rescued one: after a fallback the
+other five describe Newton, and `n_solves` cannot distinguish a dear Newton from a rescued Picard.
+
+### 15.5 What it costs, measured at the shipped cap
+
+One step from rest, 40 cm supported steel square, `N = 20`, 48 kHz, `couple_max_iter = 50` (the
+default), in back-substitutions:
+
+| fixture | `w/e` | picard | newton | auto | |
+|---|---|---|---|---|---|
+| centred, 12 cm strike | 2 | **8** `converged` | 14 | **8**, 0 fallbacks | 0.57× newton |
+| centred, 12 cm strike | 6 | **12** `converged` | 22 | **12**, 0 fallbacks | 0.55× newton |
+| centred, 12 cm strike | 16 | 30 `converged` | 28 | 30, 0 fallbacks | 1.07× newton |
+| off-centre, 3 cm strike | 4 | 60 `converged` | 36 | 60, 0 fallbacks | 1.67× newton |
+| off-centre, 3 cm strike | 6 | 100 `capped` | 50 | **150**, 1 fallback | 3.00× newton |
+| off-centre, 3 cm strike | 8 | 100 `expansive` | 54 | **154**, 1 fallback | 2.85× newton |
+| off-centre, 3 cm strike | 16 | 100 `expansive` | 280 | **380**, 1 fallback | 1.36× newton |
+
+The bold cells are where the default is now the right answer at both ends: it keeps §13.3's cheap
+half intact (0.55×) and it converges the rows where the old default simply did not.
+
+**The sweep cap is now a waste budget, and that is the number to reach for.** The wasted work on a
+rescued step is exactly `2 · couple_max_iter`, so the overhead above is 100 solves. At `cap = 400`
+the same rows read 854 against 54 — **15.8×** — because the sweeps are allowed to burn eight times
+as much before giving up. A caller who raises the cap to help Picard is now also raising the price
+of every rescue.
+
+And Part 0's canonical wall — the sixty-thickness strike whose whole point was that no cap at any
+size converges it — **converges under the default, on all twenty steps.** That is the single
+number this batch is for.
+
+### 15.6 `Auto` rescues failure, not slowness — and the difference shows up on one of these fixtures
+
+The off-centre 3 cm strike at `w = 4e` costs 60 solves under the sweeps and 36 under Newton. `Auto`
+pays 60. It converged, so there is nothing to rescue, and the rule never compares the two costs.
+
+This is not a defect to fix by tightening the rule; a rule that switched on *predicted* cost would
+have to predict it, and §13.5 is the reason nobody should: the outcome is not monotone in
+amplitude, so a cheap boundary test returns a clean wrong answer. But it does bound the claim.
+**`Auto` is not "the best of both methods". It is the sweeps, plus a floor under them.** Where
+Newton is merely faster and Picard still works, the default leaves that on the table, and a caller
+who has measured their own fixture should still say `"newton"`.
+
+### 15.7 Seven tests had to be pinned back to `picard`, and how they failed is the finding
+
+Moving a default breaks every test whose subject is the old default's *failure*. **Seven test
+functions** were — three native and four Python — and the useful part is that every one of them
+**failed loudly rather than quietly going vacuous**.
+
+The count is in test functions throughout, because that is the unit that failed. The table has five
+rows rather than seven: the first two natives share one `struck_vk` helper, and the three Python
+airbox tests share a row.
+
+| test | what it asserts | what `Auto` did to it |
+|---|---|---|
+| `the_same_strike_is_converged_or_capped_by_its_cap_alone` | a starved sweep loop reports `Capped` | rescued; reads `Converged` |
+| `a_plate_hit_far_too_hard_reports_the_wall_rather_than_the_cap` | 60 thicknesses `Expansive` | rescued; twenty `Converged` |
+| `a_failure_of_the_plates_own_iteration_is_not_reported_as_a_contact_bug` | an unfinished inner solve reaches the contact solve as `NoRoot` | rescued; 400 steps, no error |
+| three in `tests/test_airbox_vk.py` | the loaded seam's `capped` verdict, the flag's effect, Part 3's Picard control | rescued |
+| `test_the_failure_mode_migrates_to_non_convergence` | the exact guard is blind to a sweep cap being reached | rescued; 400 steps, all converged |
+
+They failed loudly **because each asserts its failure positively** — `assert !converged`,
+`assert_eq!(outcome, Expansive)`, `expect("this rig is chosen to break the inner solve")`. That is
+the same shape §9.5 chose `Capped` for and the same shape `couple_outcome`'s positive ratio test
+has: a test that says what it expects to see catches a changed default; one that merely runs a
+scene and checks an energy would have started exercising a different solver in silence. The pins
+are `couple_method: Some(CoupleMethod::Picard)` with a comment saying which claim needs it.
+
+`tests/helpers.py`'s `make_mallet_gong` also keeps `couple_method="picard"` explicitly, and that
+is now an opt-out rather than an inheritance: its fixtures reason about inner sweep counts. The
+room builders (`make_air_vk_plate` and the two wrappers) pass nothing and therefore **do** inherit
+the new default.
+
+**And the inheritance is inert on every shipped fixture, which had to be measured rather than
+assumed.** The seven pins above are the tests that failed *loudly*; the same argument that explains
+why they did says the silent ones cannot be found by running the suite — a test that steps a scene
+and checks an energy passes identically whether the sweeps or a rescue produced the field. So the
+inheriting fixtures were built the way their own tests build them and `n_fallbacks` was read off
+each: **zero, everywhere.** Both room wrapper tiers at both boundaries struck at `w = 2e` (six
+steps each), the bare `make_air_vk_plate` (ten), the gong on a string plucked at both `3e-4` and
+the hundred-times-harder `3e-2` (sixty each), and the three-way chain (forty). Nothing in the
+Python suite is quietly measuring Newton, and no existing docstring has gone stale in that way.
+The reason is `couple_max_iter`: these fixtures were all chosen to converge inside the default cap
+of 50, and it is exactly the tests that deliberately starve it — cap 2, cap 8, cap 12 — that
+changed behaviour and had to be pinned. **A fixture that fires the rescue is one that was
+built to fail**, and the suite has no accidental ones.
+
+### 15.8 Deliberately not done here
+
+* **No cost-aware rule.** `Auto` never chooses Newton up front, however expensive the sweeps look.
+  §15.6 is the price and §13.5 is the reason: a predicted boundary on this map is not monotone.
+* **`couple_max_iter` was not re-tuned.** It is now doing two jobs — the sweeps' budget and the
+  rescue's waste — and 50 is still the number Part 0 measured against, not a number re-derived for
+  the second job. Whether a smaller default cap is better *under `Auto`* is a measurement nobody
+  has made.
+* **Nothing measured over a run.** Every number in §15.5 is one step from rest. §13.4 is the
+  standing warning about reading a one-step map as a statement about three hundred steps, and it
+  applies here: what a 300-step trajectory costs under `Auto` — how often the rescue fires once the
+  plate is moving rather than struck — is not measured.
+* **No viewer surface.** `n_fallbacks` is a read-out on the model and nothing displays it.

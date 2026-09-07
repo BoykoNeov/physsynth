@@ -1030,6 +1030,15 @@ impl PyMalletVKPlate {
         self.last.as_ref().map_or(0, |l| l.n_solves)
     }
 
+    /// Inner plate solves the last step abandoned to Newton, summed the same way.
+    ///
+    /// Zero unless the plate was built with `couple_method="auto"`, and bounded by `n_outer + 1`
+    /// -- one per plate solve, the force-free advance included.
+    #[getter]
+    fn n_fallbacks(&self) -> usize {
+        self.last.as_ref().map_or(0, |l| l.n_fallbacks)
+    }
+
     // -- time stepping -----------------------------------------------------------------------
 
     /// Advance one step: force-free plate solve, outer chord, one commit.
@@ -1058,6 +1067,7 @@ impl PyMalletVKPlate {
             out.inner_converged,
             out.outer_residual,
             out.n_solves,
+            out.n_fallbacks,
         );
         self.last = Some(out);
         Ok(())
@@ -1179,6 +1189,7 @@ impl PyMalletVKPlate {
             out.inner_converged,
             out.outer_residual,
             out.n_solves,
+            out.n_fallbacks,
         );
         // Read back rather than passed through: `finish` must see the field that was COMMITTED,
         // and taking it off the plate makes that structural instead of a promise. Handed a trial

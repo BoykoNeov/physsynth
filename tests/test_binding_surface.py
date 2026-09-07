@@ -261,30 +261,66 @@ def _vk_struck(method="picard", *, amp=6.0, cap=400, N=12):
     return v
 
 
-def test_the_coupling_method_defaults_to_picard_and_echoes_the_spelling_back():
-    """Plan §6: Picard stays the default, so the whole existing suite runs today's code.
+def test_the_coupling_method_defaults_to_auto_and_echoes_the_spelling_back():
+    """Plan §15: the default is ``auto`` — the sweeps first, Newton only where they fail.
 
     Stated here against the *keyword argument*, which is the half a native bar cannot reach — the
     core's `VkSpec::default()` says one thing and PyO3's signature says another, and it is the
-    signature that decides what `physsynth/core/plate.py`'s re-export hands the suite.
+    signature that decides what `physsynth/core/plate.py`'s re-export hands the suite. §6's bar
+    used to be that this said ``picard``; what that was protecting is now protected by
+    ``auto_is_bit_identical_to_picard_wherever_the_sweeps_converge`` in
+    ``crates/physsynth-core/tests/plate.rs``, which is a claim about the numbers rather than about
+    a spelling.
     """
-    assert _vk_struck().couple_method == "picard"
     assert physsynth_rs.VKPlate(
         Lx=0.4, Ly=0.4, E=2.0e11, e=1e-3, nu=0.3, rho=7860.0, fs=48_000.0, N=8
-    ).couple_method == "picard"
+    ).couple_method == "auto"
+    assert _vk_struck("picard").couple_method == "picard"
     assert _vk_struck("newton").couple_method == "newton"
+    assert _vk_struck("auto").couple_method == "auto"
 
     # An unparseable spelling is refused and quoted back, as `boundary` is — never defaulted.
-    with pytest.raises(ValueError, match="couple_method must be 'picard' or 'newton'"):
+    with pytest.raises(ValueError, match="couple_method must be 'picard', 'newton' or 'auto'"):
         physsynth_rs.VKPlate(
             Lx=0.4, Ly=0.4, E=2.0e11, e=1e-3, nu=0.3, rho=7860.0, fs=48_000.0, N=8,
             couple_method="gmres",
         )
-    with pytest.raises(ValueError, match="couple_method must be 'picard' or 'newton'"):
+    with pytest.raises(ValueError, match="couple_method must be 'picard', 'newton' or 'auto'"):
         physsynth_rs.VKPlate(
             Lx=0.4, Ly=0.4, E=2.0e11, e=1e-3, nu=0.3, rho=7860.0, fs=48_000.0, N=8,
             couple_method=None,
         )
+
+
+def test_auto_spends_nothing_on_newton_until_the_sweeps_fail():
+    """``n_fallbacks``, the read-out that separates a cheap step from a rescued one.
+
+    The physics of the fallback is asserted natively; what is here is the half a native bar cannot
+    see — that the binding's own hand-written diagnostics block (plan §9.5's fork, third site)
+    carries the new field through, on both branches.
+
+    The hard fixture is starved of sweeps rather than driven past the wall, because a cap is
+    deterministic and an amplitude is a property of the grid: the wall moves with ``N``, and this
+    file's plate is ``N = 12``.
+    """
+    easy_p, easy_a = _vk_struck("picard", amp=2.0), _vk_struck("auto", amp=2.0)
+    easy_p.step()
+    easy_a.step()
+    assert easy_p.converged, "the easy fixture must converge, or it is testing the other branch"
+    assert easy_a.n_fallbacks == 0, "nothing failed, so nothing may be spent on Newton"
+    assert np.array_equal(easy_p.u, easy_a.u), "`auto` moved a converging step"
+    assert easy_a.n_solves == easy_p.n_solves
+
+    hard_p = _vk_struck("picard", amp=6.0, cap=8)
+    hard_n = _vk_struck("newton", amp=6.0, cap=8)
+    hard_a = _vk_struck("auto", amp=6.0, cap=8)
+    for v in (hard_p, hard_n, hard_a):
+        v.step()
+    assert not hard_p.converged, "eight sweeps must not be enough, or the rescue never fires"
+    assert hard_n.converged, "Newton must reach a root under the same budget"
+    assert hard_a.converged and hard_a.n_fallbacks == 1
+    assert np.array_equal(hard_a.u, hard_n.u), "the rescue did not re-seed from `2u - u_prev`"
+    assert hard_a.n_solves == hard_p.n_solves + hard_n.n_solves
 
 
 def test_both_coupling_methods_reach_the_same_root_through_the_binding():

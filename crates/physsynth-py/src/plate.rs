@@ -94,7 +94,7 @@ fn resolve_method<'py>(
     arg: Option<Option<Py<PyAny>>>,
 ) -> (Bound<'py, PyAny>, Option<core::CoupleMethod>) {
     let obj = match arg {
-        Some(None) => PyString::new(py, "picard").into_any(),
+        Some(None) => PyString::new(py, "auto").into_any(),
         None => py.None().into_bound(py),
         Some(Some(m)) => m.into_bound(py),
     };
@@ -105,6 +105,7 @@ fn resolve_method<'py>(
         .and_then(|c| match &*c {
             "picard" => Some(core::CoupleMethod::Picard),
             "newton" => Some(core::CoupleMethod::Newton),
+            "auto" => Some(core::CoupleMethod::Auto),
             _ => None,
         });
     (obj, parsed)
@@ -953,6 +954,7 @@ pub struct PyVKPlate {
     last_residual: f64,
     residual_ratio: f64,
     n_solves: usize,
+    n_fallbacks: usize,
 }
 
 /// A `VKPlate`'s four state buffers, owned: `(u, u_prev, F, F_prev)`.
@@ -1032,6 +1034,7 @@ impl PyVKPlate {
         converged: bool,
         last_residual: f64,
         n_solves: usize,
+        n_fallbacks: usize,
     ) {
         let fresh = PyArray1::from_vec(py, u).unbind();
         self.u_prev = std::mem::replace(&mut self.u, fresh);
@@ -1045,6 +1048,10 @@ impl PyVKPlate {
         self.last_residual = last_residual;
         self.residual_ratio = f64::NAN;
         self.n_solves = n_solves;
+        // Summed over the step's several plate solves, which is why the gong hands a count here
+        // and not a method: `record_iteration`'s caller has exactly one `VkStep` and this one
+        // has `n_outer + 1` of them.
+        self.n_fallbacks = n_fallbacks;
     }
 
     /// Record a coupled solve's diagnostics **without** touching the state.
@@ -1063,6 +1070,7 @@ impl PyVKPlate {
         self.last_residual = step.last_residual;
         self.residual_ratio = step.residual_ratio;
         self.n_solves = step.n_solves;
+        self.n_fallbacks = step.n_fallbacks;
     }
 
     /// `u[i]` at a live-node index the caller has already validated.
@@ -1130,7 +1138,7 @@ impl PyVKPlate {
                 shown(&boundary_obj)
             )),
             core::VkParamError::BadMethod => PyValueError::new_err(format!(
-                "couple_method must be 'picard' or 'newton', got {}.",
+                "couple_method must be 'picard', 'newton' or 'auto', got {}.",
                 shown(&method_obj)
             )),
             other => PyValueError::new_err(other.to_string()),
@@ -1185,6 +1193,7 @@ impl PyVKPlate {
             last_residual: 0.0,
             residual_ratio: f64::NAN,
             n_solves: 0,
+            n_fallbacks: 0,
         })
     }
 
@@ -1479,6 +1488,17 @@ impl PyVKPlate {
         self.n_solves
     }
 
+    /// Coupled solves the last step abandoned to Newton -- 0 or 1, and only under `"auto"`.
+    ///
+    /// The one read-out that separates a cheap step from a rescued one. After a fallback the other
+    /// five describe **Newton**: `n_iters` is Newton's, `converged` is Newton's verdict, and
+    /// `n_solves` is the wasted sweeps plus Newton's own, so nothing else in the set can tell a
+    /// step that cost a lot because it was hard from a step that cost a lot because it was retried.
+    #[getter]
+    fn n_fallbacks(&self) -> usize {
+        self.n_fallbacks
+    }
+
     /// Why the last step's sweep loop stopped: `converged`, `capped`, `expansive` or `unknown`.
     ///
     /// Derived from the four fields above every time it is read, so writing any of them by hand
@@ -1613,6 +1633,7 @@ impl PyVKPlate {
         self.last_residual = out.last_residual;
         self.residual_ratio = out.residual_ratio;
         self.n_solves = out.n_solves;
+        self.n_fallbacks = out.n_fallbacks;
         Ok(())
     }
 

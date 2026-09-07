@@ -331,7 +331,10 @@ found it does not move the plate's? What does the composed scene cost in back-su
 the bare gong? Picard versus Newton on it.
 
 **No default moves.** `couple_method` stays `"picard"`, and every shipped number stays the number
-it is.
+it is. *(Superseded 2026-09-07 by `vk-newton-plan.md` §15: the default is `"auto"`. Every shipped
+number does still stay the number it is — §15.3's bit-identity bar is what holds that — and
+`tests/helpers.py`'s `make_mallet_gong` pins `"picard"` explicitly, so this plan's own fixtures are
+unmoved either way.)*
 
 ## 5. Deliberately not done here
 
@@ -458,4 +461,8 @@ same lesson §2.3 of the previous plan learned about its own payoff figure: **a 
 one fixture is a claim about one fixture**, and sample rate is one of the axes it moves along.
 
 **The default does not move.** `couple_method` stays `"picard"` everywhere; what this section
-records is where a caller should reach for the other one.
+records is where a caller should reach for the other one. *(Superseded 2026-09-07 by
+`vk-newton-plan.md` §15 — the default is `"auto"`, and the reason this section's advice survives it
+is §15.6: `"auto"` rescues *failure*, not slowness, so where the sweeps converge expensively and
+Newton would have been cheaper — which is exactly what this section measures — a caller still has
+to say `"newton"` themselves.)*

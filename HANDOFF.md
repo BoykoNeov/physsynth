@@ -719,8 +719,10 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   iteration-bound. It now drives the plate's own kernel against that factorization and honours
   `couple_method`; the wall moves from `w = 4e` to `6e` at N=20 and from `4.5e` to
   `10e` at N=8 — **both ends move with the grid**, so the gain is a fixture's number and not the
-  family's — at 1.0-1.5x the back-substitutions (`docs/dev/air-box-vk-newton-plan.md` §7). The default
-  is still Picard, so nothing here has moved unasked. What Newton does **not** fix is the
+  family's — at 1.0-1.5x the back-substitutions (`docs/dev/air-box-vk-newton-plan.md` §7). **The
+  default moved 2026-09-07** and it is a fallback rather than a flip: `couple_method="auto"` runs
+  the sweeps and re-solves with Newton only where they fail, so a step that converged before is
+  bit-identical to what it was and only the failures changed (`docs/dev/vk-newton-plan.md` §15). What Newton does **not** fix is the
   coarsening argument above: the fixed point it rescues is the plate's, and the reason coarsening
   the room breaks it is the strain the coarser room lets through. **The viewer batch is SHIPPED** (`vkroom`, viewer batch 19,
   2026-08-17), and it did not merely surface this one — it corrected it. The headline's
@@ -756,9 +758,12 @@ threads from here as the project matures; each bullet is a seed, not a spec.
   indefinite one — so it cannot subtract and a PD linear form stays coercive at any amplitude
   (verified at 95% of the ceiling under a strongly nonlinear run). But it is sufficient, **not
   tight**, and no longer the whole safety story: the failure mode **migrates** to Picard
-  non-convergence, which a statement about a quadratic form is structurally blind to — on the
-  **default** path; under Newton this scene's pluck ceiling is ≥4.3× the best-effort Picard one
-  and the migration target is gone (`vk-newton-plan.md` §14.2). The headline
+  non-convergence, which a statement about a quadratic form is structurally blind to — under the
+  **sweeps**; under Newton this scene's pluck ceiling is ≥4.3× the best-effort Picard one
+  and the migration target is gone (`vk-newton-plan.md` §14.2). Since 2026-09-07 the default is
+  `"auto"`, which re-solves a failed sweep with Newton, so the migration target is gone on the
+  default path too — reaching it now takes an explicit `couple_method="picard"`, which is what the
+  test that documents this blindness had to be pinned to (§15.7). The headline
   is the string's departure from the *same plate's* linear self, which is identically `0.0` for a
   linear body — doubling the pluck doubles a leapfrog and an LU back-substitution *exactly* — and
   grows at second order in the pluck **once normalised by the linear response** (1.99/1.94

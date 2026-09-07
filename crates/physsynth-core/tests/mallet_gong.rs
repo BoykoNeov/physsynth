@@ -14,7 +14,7 @@ use physsynth_core::mallet::{
     VkPlateParams,
 };
 use physsynth_core::plate::{
-    vk_step, Boundary, Params, Plate, PlateSpec, VkParams, VkPlate, VkSpec,
+    vk_step, Boundary, CoupleMethod, Params, Plate, PlateSpec, VkParams, VkPlate, VkSpec,
 };
 
 /// The shipped gong: a 0.4 m square 1 mm steel plate, simply supported, 361 live nodes.
@@ -571,9 +571,14 @@ fn a_failure_of_the_plates_own_iteration_is_not_reported_as_a_contact_bug() {
     // bracket six times and finds no sign change. `ContactError::NoRoot`'s own text calls that
     // "impossible for the monotone convex-potential force" -- and it is. The force is fine; the
     // field the residual was built from is the output of an iteration that did not finish.
+    // Pinned to `Picard` rather than left on the `Auto` default: the whole rig is a plate whose
+    // own iteration does not finish, and `Auto` rescues it -- 400 steps, no error, and the test
+    // asserting nothing. The message it protects is still the one a caller under any method sees,
+    // because a rescue that itself fails to converge reaches the contact solve the same way.
     let spec = VkSpec {
         fs: 8_000.0,
         couple_max_iter: 6,
+        couple_method: Some(CoupleMethod::Picard),
         ..gong_spec()
     };
     let p = VkParams::new(&spec).expect("a gong");

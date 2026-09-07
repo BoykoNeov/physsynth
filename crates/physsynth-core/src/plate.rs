@@ -1314,13 +1314,33 @@ impl std::error::Error for VkParamError {}
 /// so this chooses an iteration and never a model. Plan §5 Part 2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoupleMethod {
-    /// Fixed-point sweeps: `w <- sweep(w)`. The default, and every shipped number's path.
+    /// Fixed-point sweeps: `w <- sweep(w)`. Every shipped number before Part 6's path.
     ///
     /// Newton with the Jacobian approximated by the identity, which is why it contracts only when
     /// the spectral radius of `c A^-1 K` is below one — the wall Part 0 measured.
     Picard,
     /// Newton on `G(w) = 0`, the closed-form Jacobian applied matrix-free through GMRES.
     Newton,
+    /// Sweep first; if the sweeps do not converge, re-solve the step with Newton. **The default.**
+    ///
+    /// Neither method dominates: §13.3 of the plan measures Picard cheaper than Newton in six of
+    /// eleven cells at musical amplitude (0.55×–0.85×) and Newton up to 68× cheaper at the wall.
+    /// So the default runs the cheap one and pays for the dear one only where the cheap one fails.
+    ///
+    /// Two properties this rests on, both asserted:
+    ///
+    /// * **A converging step is bit-identical to [`Picard`](CoupleMethod::Picard).** The sweep loop
+    ///   runs first and its result is returned untouched, so every number the suite ever recorded
+    ///   under the old default is the number it still gets.
+    /// * **Newton re-seeds from `2 w^n - w^{n-1}`**, the same seed the sweeps started from — never
+    ///   their exit iterate, which on the expansive path is where the overflow lives. A Newton
+    ///   seeded from a NaN returns NaN and reports `converged: false`, which would make the
+    ///   fallback strictly worse than either method alone, and silently.
+    ///
+    /// What it costs: a non-converging step pays the wasted sweeps **plus** Newton, and a caller
+    /// who was using a small `couple_max_iter` as a cost ceiling no longer has one. That is the
+    /// trade — a bounded cost for a converged answer — and it is why `Picard` stays reachable.
+    Auto,
 }
 
 impl CoupleMethod {
@@ -1329,6 +1349,7 @@ impl CoupleMethod {
         match self {
             CoupleMethod::Picard => "picard",
             CoupleMethod::Newton => "newton",
+            CoupleMethod::Auto => "auto",
         }
     }
 }
@@ -1386,7 +1407,7 @@ impl Default for VkSpec {
             nonlinear: true,
             couple_tol: 1e-13,
             couple_max_iter: 50,
-            couple_method: Some(CoupleMethod::Picard),
+            couple_method: Some(CoupleMethod::Auto),
         }
     }
 }
@@ -1596,6 +1617,8 @@ pub struct VkPlate {
     pub residual_ratio: f64,
     /// Back-substitutions the last step spent — see [`VkStep::n_solves`].
     pub n_solves: usize,
+    /// Coupled solves the last step abandoned to Newton — see [`VkStep::n_fallbacks`].
+    pub n_fallbacks: usize,
 }
 
 impl VkPlate {
@@ -1614,6 +1637,7 @@ impl VkPlate {
             last_residual: 0.0,
             residual_ratio: f64::NAN,
             n_solves: 0,
+            n_fallbacks: 0,
         }
     }
 
@@ -1650,7 +1674,7 @@ impl VkPlate {
         step_rhs(&self.u, &self.u_prev, None, &self.p.lin)
     }
 
-    /// Advance one timestep: one solve when linear, a Picard loop when not.
+    /// Advance one timestep: one solve when linear, the `couple_method`'s iteration when not.
     ///
     /// # Errors
     /// If either factorization cannot back-substitute.
@@ -1666,6 +1690,7 @@ impl VkPlate {
         self.last_residual = out.last_residual;
         self.residual_ratio = out.residual_ratio;
         self.n_solves = out.n_solves;
+        self.n_fallbacks = out.n_fallbacks;
         Ok(())
     }
 
@@ -1840,6 +1865,16 @@ pub struct VkStep {
     /// trial. Counting iterations would show Newton ahead by twenty when the two are level. A
     /// count rather than a wall clock because a count does not move with the machine.
     pub n_solves: usize,
+    /// Coupled solves this step abandoned to Newton — non-zero only under
+    /// [`CoupleMethod::Auto`], where it is 0 or 1.
+    ///
+    /// A **count**, not a label, because that is the shape the aggregating callers already use:
+    /// `mallet::VkContactStep` sums `n_iters` and `n_solves` over every plate solve in its outer
+    /// chord, and a method *name* has no meaning once a step contains several of them while
+    /// "how many needed rescuing" still does. Under `Auto` this is the only way to tell a cheap
+    /// step from an expensive one — after a fallback the other five read-outs describe Newton,
+    /// and `n_solves` alone cannot separate a dear Newton from a rescued Picard.
+    pub n_fallbacks: usize,
 }
 
 impl VkStep {
@@ -2331,7 +2366,8 @@ pub fn vk_step(
 ///
 /// [`vk_step`] *is* this function with the context built the plate's own way. Split out rather
 /// than transcribed a second time because the surface seam needs every branch below — the linear
-/// early return, `couple_method`, the sweep loop, and all five diagnostics — against a different
+/// early return, `couple_method` (all three spellings, `Auto`'s fallback included), the sweep loop,
+/// and all five diagnostics — against a different
 /// operator and a different right-hand side, and those are exactly the two things
 /// [`VkCoupledStep::with_rhs`] lets a caller replace. The seam used to carry its own copy of the
 /// loop; `docs/dev/air-box-vk-newton-plan.md` §2.1 measured that copy as bit-identical to this one
@@ -2349,7 +2385,6 @@ pub fn vk_step_with(
     f: &[f64],
 ) -> Result<VkStep, SparseLuError> {
     let p = ctx.p;
-    let n_live = p.lin.n_live;
     if !p.nonlinear {
         return Ok(VkStep {
             u: ctx.theta.solve(&ctx.rhs_lin)?,
@@ -2359,25 +2394,68 @@ pub fn vk_step_with(
             last_residual: 0.0,
             residual_ratio: f64::NAN,
             n_solves: 1,
+            n_fallbacks: 0,
         });
     }
 
-    // Newton returns early so the Picard loop below is *textually* the code that shipped, which is
-    // what makes "Picard stays the default and every existing number is unmoved" (plan §6) a
-    // property of the diff rather than a claim about a refactor.
     if p.couple_method == CoupleMethod::Newton {
-        let r = vk_newton(ctx, VkCoupledStep::seed(u, u_prev))?;
-        return Ok(VkStep {
-            u: r.w,
-            f: Some(r.f_full),
-            n_iters: r.n_iters,
-            converged: r.converged,
-            last_residual: r.last_residual,
-            residual_ratio: r.residual_ratio,
-            n_solves: r.n_solves,
-        });
+        return vk_newton_step(ctx, u, u_prev);
     }
 
+    // The sweeps run first under BOTH remaining spellings, and their result is returned untouched
+    // when they converge. That is what makes `Auto` bit-identical to `Picard` wherever `Picard`
+    // worked — a property of this control flow rather than a claim about two transcriptions.
+    let swept = vk_picard_step(ctx, u, u_prev, f)?;
+    if p.couple_method == CoupleMethod::Picard || swept.outcome() == CoupleOutcome::Converged {
+        return Ok(swept);
+    }
+
+    // `Auto`, and the sweeps did not reach `couple_tol`. Newton re-seeds from `2 w^n - w^{n-1}`,
+    // the seed the sweeps themselves started from — **never** `swept.u`, which is where an
+    // expansive exit parks its overflow. A Newton seeded from a NaN returns a NaN and reports
+    // `converged: false`, i.e. an `Auto` step strictly worse than either method alone and with
+    // nothing in the read-outs to say so.
+    //
+    // The fallback fires on any outcome that is not `Converged`, `Capped` included: a step short
+    // of tolerance because the cap ran out is still a step whose answer the caller cannot use.
+    let mut rescued = vk_newton_step(ctx, u, u_prev)?;
+    rescued.n_solves += swept.n_solves;
+    rescued.n_fallbacks = 1;
+    Ok(rescued)
+}
+
+/// Newton on the coupled step, packaged as a [`VkStep`] — the `newton` arm, and `Auto`'s rescue.
+///
+/// The seed is [`VkCoupledStep::seed`] and takes no iterate as an argument, which is how the
+/// rescue path is stopped from handing Newton a blown-up sweep result: there is no parameter to
+/// pass one through.
+fn vk_newton_step(ctx: &VkCoupledStep, u: &[f64], u_prev: &[f64]) -> Result<VkStep, SparseLuError> {
+    let r = vk_newton(ctx, VkCoupledStep::seed(u, u_prev))?;
+    Ok(VkStep {
+        u: r.w,
+        f: Some(r.f_full),
+        n_iters: r.n_iters,
+        converged: r.converged,
+        last_residual: r.last_residual,
+        residual_ratio: r.residual_ratio,
+        n_solves: r.n_solves,
+        n_fallbacks: 0,
+    })
+}
+
+/// The fixed-point sweep loop, textually the code that shipped before Newton existed.
+///
+/// Lifted out of [`vk_step_with`] unchanged when `Auto` arrived, because `Auto` has to be able to
+/// run it and then run Newton; the arithmetic, the exit test and all five diagnostics are the
+/// ones plan §6 froze.
+fn vk_picard_step(
+    ctx: &VkCoupledStep,
+    u: &[f64],
+    u_prev: &[f64],
+    f: &[f64],
+) -> Result<VkStep, SparseLuError> {
+    let p = ctx.p;
+    let n_live = p.lin.n_live;
     let mut w_j = VkCoupledStep::seed(u, u_prev);
     // `F` of the sweep's *incoming* iterate, which is what the step returns -- not `F` of `w_j`
     // as it stands on exit. `f` seeds it only against a zero cap, which the spec forbids.
@@ -2417,5 +2495,6 @@ pub fn vk_step_with(
         // makes structural: `sweep` is `averages` then `sweep_from`, and that is all it is.
         n_solves: 2 * n_iters,
         residual_ratio,
+        n_fallbacks: 0,
     })
 }
