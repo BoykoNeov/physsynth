@@ -529,9 +529,28 @@ by "`axial` becomes two measurements" — two deviations from one floor, not two
 
 ### 9.4 The floor is the isotropic closed form — which stops being an *upper* bound
 
-`sinc_horizon_fraction(cents, 2) · N` was derived with no grain in it and predicts all three
-families of all four grains to within the integer quantisation: over 48 fixtures
-(4 grains × 3 families × 4 grids × 3 bounds) `horizon - predicted` runs from **−0.948 to +0.304**.
+`sinc_horizon_fraction(cents, 2) · N` was derived with no grain in it, and it is the grained
+plate's floor too. The first version of this claim was "within one mode over 48 fixtures", which
+turned out to be two mistakes at once — a bar on an *integer*, and a fixture list private to the
+test that recorded it. Both are fixed and the claim is stronger for it:
+
+* the **diagonal** crossing, solved for as a real mode index rather than counted, **is** the closed
+  form — to `1e-12`, over 108 fixtures (4 grains × 3 bounds × 9 grids), for stiffness ratios
+  spanning 150×;
+* the **axial** crossings sit within **half a mode** of it everywhere (`−0.199` to `+0.399`), with
+  the sign of `g_h`, closing like `1/N`. That rate is asymptotic: `gap · N` reaches its per-grain
+  limit (18.9 isotropic, 39.7 spruce, 52.4 wild, −17.0 near-guard) only past `N ≈ 2000`, so it is
+  measured where it exists rather than over the shipped grids, where the wild plate is still 20%
+  short of its own limit.
+
+**The integer reading is `floor` of that crossing** — 324 of 324 fixtures, no exceptions — so its
+distance from the closed form is a real gap plus an artefact of where the prediction falls between
+integers, and the artefact can dominate. At `N = 80` and one cent the prediction is **2.120** and
+the near-guard plate's crossing is **1.926**: a 0.19-mode deficit reads as a whole mode lost, and
+`|horizon − predicted| = 1.12`. The original four grids passed a `≤ 1` bar only because none of
+them put a prediction that close above an integer. That hazard is now its own test rather than
+something the fixture list steps around, and it is available to **any** horizon test in this
+project that reads an integer.
 
 The positive end is new. §8's plate test also asserts `horizon ≤ predicted`, on the argument that
 a timestep can only cost modes and never buy them. That argument is sound and it is not the whole
@@ -539,16 +558,20 @@ story: by §9.3 an axial family's *space* floor is already a hair above `sinc²`
 wants to sit above the closed form with no timestep involved at all. On an isotropic plate the
 excess is under a third of a mode and the integer floor absorbs it — **the existing direction bar
 passes on quantisation, not on its stated mechanism.** A grain roughly doubles the excess on the
-soft axis and at coarse grids it clears the integer: six of the 48 cross, all of them the `(1,n)`
-family of a positively-grained plate, by up to 0.304 modes. So `horizon ≤ predicted` is a claim
-about an isotropic plate specifically, and the grained plate is asserted with the symmetric bar.
+soft axis and at coarse grids it clears the integer: **eight of the 108** cross, all of them the
+`(1,n)` family of a positively-grained plate, at `N = 48, 64, 128`, by up to 0.304 modes. All of
+them coarse, which is the mechanism — the gap closes like `1/N` while the prediction grows with
+`N`, so refining always eventually buries it. So `horizon ≤ predicted` is a claim about an
+isotropic plate specifically, and the grained plate is asserted with the symmetric bar.
 
 ### 9.5 Index versus hertz — where §5's "per-direction" is right
 
 Both axial families have the same horizon in their own mode index, and index `m` is not the same
 frequency on the two axes: `f(m,1)/f(1,m) → √(g_x/g_y)`, approached **from below** like `1/m²`
 because the cross term still contributes at low index (`gap·m²` is constant to 0.5% over
-`m = 10..80`). Spruce's is 3.709. So **a horizon quoted as a mode count is grain-independent and
+`m = 10..80`). Spruce's is 3.709, and the residual is worth stating perceptually rather than as a
+magnitude: the two axes are still 2.1 (spruce) and 2.8 (wild) cents from the limit at `m = 40`,
+and inside a cent by `m = 80`. So **a horizon quoted as a mode count is grain-independent and
 the same horizon quoted in hertz is not** — spruce's stiff axis is trustworthy 3.7× further up the
 spectrum than its soft one. That is the sentence a viewer read-out would have to get right.
 
@@ -603,4 +626,14 @@ the collapse and not the number.
   and the grain does not change that.
 * **The membrane's block**, unchanged from §8.9: §4 measured its families, nobody has asked a
   block question of it, and the corner argument here is the plate's weight, not a membrane's.
-* **Promotion out of `tests/`**, unchanged from §6 and §8.9.
+* **Promotion out of `tests/`**, unchanged from §6 and §8.9. Note that the continuous crossing
+  introduced here brings a second `brentq` with it, so the dependency question §6 raises now has
+  two call sites rather than one.
+
+**Amended the same day, before the section was a day old.** Two of its first assertions were
+fixture bars rather than claims — the `± 1` mode agreement (fixed above) and a magnitude bound on
+the hertz residual at a single `m`. Both had the shape §9.7 records being caught by, in the same
+batch that wrote §9.7. The general lesson is not "measure more fixtures": it is that a **sweep
+whose fixture list lives inside the test that records its results cannot notice when the list is
+the reason**. The lists are shared module constants now, and widening them from four grids to nine
+is what surfaced the `N = 80` case.

@@ -45,6 +45,7 @@ from helpers import (
     wave_speed,
 )
 from numpy.typing import NDArray
+from scipy.optimize import brentq
 
 from physsynth.analysis import modal
 
@@ -624,6 +625,13 @@ GRAINS = {
     "wild": GRAIN_WILD,
     "near-guard": GRAIN_NEAR_GUARD,
 }
+# Shared on purpose by every sweep below. The first draft of this section gave each test its own
+# copy, so each one's recorded literals ("six fixtures", "coarse grids") described a private list
+# and would have gone quietly out of date the moment a neighbour's list moved. Widening this one
+# from four grids to nine is what found the quantisation hazard at N = 80.
+GRAIN_GRIDS = (48, 64, 80, 96, 128, 160, 256, 384, 512)
+GRAIN_BOUNDS = (1.0, 5.0, 25.0)
+GRAIN_FAMILIES = ("diagonal", "axial", "axial_y")
 
 
 def _ortho_space_ratio(n: int, modes, grain: dict) -> NDArray[np.float64]:
@@ -644,6 +652,29 @@ def _ortho_space_ratio(n: int, modes, grain: dict) -> NDArray[np.float64]:
     q_disc = gx * lam_x**2 + 2.0 * gh * lam_x * lam_y + gy * lam_y**2
     q_cont = (np.pi**4) * (gx * a**2 + 2.0 * gh * a * b + gy * b**2)
     return np.sqrt(q_disc / q_cont)
+
+
+def _ortho_crossing(kind: str, n: int, grain: dict, cents: float) -> float:
+    """The mode index where this family's space droop reaches ``cents`` — as a **real number**.
+
+    ``pitch_horizon`` returns an integer, which is right for a claim about modes and wrong for a
+    claim about a *floor*: an integer reading can disagree with the closed form by more than a
+    mode purely because the prediction landed just above an integer, and that says nothing about
+    the plate. Everything in the eigenvalue formula extends to a real mode index, so the crossing
+    can be solved for directly and the quantisation taken out of the comparison.
+    """
+    def err(m: float) -> float:
+        mm, nn = {"diagonal": (m, m), "axial": (m, 1.0), "axial_y": (1.0, m)}[kind]
+        h = L_DEFAULT / n
+        lam_x = float(modal.dirichlet_axis_eigenvalue(mm, L_DEFAULT, h))
+        lam_y = float(modal.dirichlet_axis_eigenvalue(nn, L_DEFAULT, h))
+        a, b = (mm / L_DEFAULT) ** 2, (nn / L_DEFAULT) ** 2
+        gx, gh, gy = grain["grain_x"], grain["grain_cross"], grain["grain_y"]
+        q_disc = gx * lam_x**2 + 2.0 * gh * lam_x * lam_y + gy * lam_y**2
+        q_cont = (np.pi**4) * (gx * a**2 + 2.0 * gh * a * b + gy * b**2)
+        return abs(1200.0 * np.log2(np.sqrt(q_disc / q_cont))) - cents
+
+    return float(brentq(err, 1.0 + 1e-9, n - 1.0, xtol=1e-12))
 
 
 def _ortho_family_frequencies(n: int, mu: float, modes, grain: dict):
@@ -748,27 +779,114 @@ def test_the_axial_deviation_from_sinc_squared_takes_THE_SIGN_OF_THE_CROSS_TERM(
         )
 
 
-@pytest.mark.parametrize("cents", [1.0, 5.0, 25.0])
-@pytest.mark.parametrize("n", [64, 128, 256, 512])
 @pytest.mark.parametrize("name", list(GRAINS))
-def test_the_grained_space_floor_is_STILL_the_isotropic_closed_form(name, n, cents):
-    """The inventory said per-direction. In mode index it is one floor, and it is the plate's.
+def test_the_grained_DIAGONAL_crossing_IS_the_closed_form_with_nothing_left_over(name):
+    """The strongest form of "one floor": not within a mode, *equal*, with no quantisation in it.
 
-    ``sinc_horizon_fraction(cents, 2) * N`` was derived with no grain anywhere in it, and it
-    predicts all three families of all four grains to within the integer quantisation. Measured
-    2026-09-07 over these 48 fixtures, ``horizon - predicted`` runs from **-0.948 to +0.304** —
-    inside one mode on both sides, and the positive end is the subject of the next test.
+    Section 9.2 makes the diagonal droop ``sinc(u)^2`` for any grain, and
+    ``sinc_horizon_fraction(cents, 2) * N`` is the mode index where that reaches ``cents``. So the
+    diagonal family's crossing is the closed form exactly — measured to ``1e-12`` over all 108
+    fixtures here, for a plate whose stiffness ratios span 150x and include a cross term sitting
+    against the guard.
     """
     grain = GRAINS[name]
-    predicted = sinc_horizon_fraction(cents, power=2) * n
-    for kind in ("diagonal", "axial", "axial_y"):
-        modes = mode_family(kind, n - 1)
-        horizon, monotone = pitch_horizon(*_ortho_family_frequencies(n, 1e-5, modes, grain), cents)
-        assert monotone, f"{name}, {kind}: a family's droop must be monotone in the mode index"
-        assert abs(horizon - predicted) <= 1.0, (
-            f"{name}, {kind}, N={n}, {cents:g} cents: measured floor {horizon} against the "
-            f"isotropic closed form {predicted:.2f} — more than the quantisation apart"
-        )
+    for cents in GRAIN_BOUNDS:
+        for n in GRAIN_GRIDS:
+            predicted = sinc_horizon_fraction(cents, power=2) * n
+            crossing = _ortho_crossing("diagonal", n, grain, cents)
+            assert crossing == pytest.approx(predicted, rel=1e-12), (
+                f"{name}, N={n}, {cents:g} cents: the diagonal crossing {crossing:.9f} should BE "
+                f"the closed form {predicted:.9f}"
+            )
+
+
+@pytest.mark.parametrize("name", list(GRAINS))
+def test_the_grained_AXIAL_crossing_stays_within_half_a_mode_and_closes_like_one_over_N(name):
+    """And the axial families, which do not have the diagonal's cancellation, stay beside it.
+
+    ``(m,1)`` mixes a drooped axis with an undrooped one, so its crossing only approaches the
+    closed form. Over all 108 fixtures the gap runs from **-0.199 to +0.399 modes** — always under
+    half a mode, and its sign is the sign of ``grain_cross`` (section 9.3).
+
+    It closes like ``1/N``, but that is an **asymptotic** claim and the shipped grids are not in
+    the asymptote: ``gap * N`` reaches its per-grain limit (18.9 isotropic, 39.7 spruce, 52.4 wild,
+    -17.0 near-guard) only past ``N ~ 2000``, and at ``N = 128`` the wild plate's is still 20%
+    short of it. Asserting the rate over 128..512 would have been asserting the fixtures again, so
+    the rate is measured where it exists and the *bound* is what covers the shipped grids.
+
+    Stated in **modes** rather than as a fraction, deliberately. Relative to the prediction the
+    same gap is 27% at ``N = 48``, where the prediction is only 1.6 modes — a percentage there is
+    a statement about how small the prediction is, not about how wrong the floor is.
+    """
+    grain = GRAINS[name]
+    expected_sign = np.sign(grain["grain_cross"])
+    for cents in GRAIN_BOUNDS:
+        for n in GRAIN_GRIDS:
+            predicted = sinc_horizon_fraction(cents, power=2) * n
+            for kind in ("axial", "axial_y"):
+                gap = _ortho_crossing(kind, n, grain, cents) - predicted
+                assert abs(gap) < 0.5, (
+                    f"{name}, {kind}, N={n}, {cents:g} cents: the axial floor is {gap:+.4f} modes "
+                    f"from the isotropic closed form {predicted:.3f}"
+                )
+                assert np.sign(gap) == expected_sign, (
+                    f"{name}, {kind}, N={n}: the gap should take the sign of grain_cross"
+                )
+
+    tail = [
+        (_ortho_crossing("axial_y", n, grain, 1.0) - sinc_horizon_fraction(1.0, power=2) * n) * n
+        for n in (1024, 2048, 4096, 8192)
+    ]
+    assert max(tail) / min(tail) < 1.02, (
+        f"{name}: gap*N should have settled by N=1024, got {np.round(tail, 3)}"
+    )
+    coarse = (
+        _ortho_crossing("axial_y", 128, grain, 1.0) - sinc_horizon_fraction(1.0, power=2) * 128
+    ) * 128
+    assert abs(coarse) < abs(tail[-1]), (
+        f"{name}: and the shipped grids should sit BELOW that limit, not at it "
+        f"({coarse:.3f} against {tail[-1]:.3f})"
+    )
+
+
+def test_the_integer_horizon_is_the_FLOOR_of_that_crossing_which_is_where_a_one_mode_bar_BREAKS():
+    """Why this section stopped asserting ``|horizon - predicted| <= 1``, which is a fixture bar.
+
+    ``pitch_horizon`` counts leading modes, so it returns exactly ``floor(crossing)`` — 324 of 324
+    fixtures here, no exceptions. That makes the integer reading's distance from the closed form
+    the sum of a real quantity (the gap above, under half a mode) and an artefact (where the
+    prediction falls between integers), and the artefact can dominate: at ``N = 80`` and one cent
+    the prediction is **2.120** and the near-guard plate's crossing is **1.926**, so a 0.19-mode
+    deficit reads as a whole mode lost and ``|horizon - predicted| = 1.12``.
+
+    A ``<= 1`` bar over the original four grids passed only because none of them put a prediction
+    that close above an integer. It is recorded here as the hazard it is rather than parametrized
+    around: the same trap is available to any horizon test in this file that reads an integer.
+    """
+    exceptions = []
+    for name, grain in GRAINS.items():
+        for cents in GRAIN_BOUNDS:
+            for n in GRAIN_GRIDS:
+                predicted = sinc_horizon_fraction(cents, power=2) * n
+                for kind in GRAIN_FAMILIES:
+                    modes = mode_family(kind, n - 1)
+                    horizon, _ = pitch_horizon(
+                        *_ortho_family_frequencies(n, 1e-5, modes, grain), cents
+                    )
+                    crossing = _ortho_crossing(kind, n, grain, cents)
+                    assert horizon == int(np.floor(crossing)), (
+                        f"{name}, {kind}, N={n}, {cents:g} cents: the integer horizon {horizon} "
+                        f"should be floor({crossing:.4f})"
+                    )
+                    if abs(horizon - predicted) > 1.0:
+                        exceptions.append((name, kind, n, cents, horizon, round(predicted, 3)))
+
+    assert all(n == 80 and cents == 1.0 for _, _, n, cents, _, _ in exceptions), (
+        f"the quantisation hazard should be the recorded N=80 one-cent case, got {exceptions}"
+    )
+    assert len(exceptions) == 2, (
+        f"both near-guard axial families cross the integer at N=80; got {exceptions}"
+    )
 
 
 def test_the_closed_form_STOPS_BEING_AN_UPPER_BOUND_once_the_plate_has_a_grain():
@@ -781,17 +899,19 @@ def test_the_closed_form_STOPS_BEING_AN_UPPER_BOUND_once_the_plate_has_a_grain()
     On an isotropic plate the excess is under a third of a mode and the integer floor absorbs it.
     A grain roughly doubles it on the soft axis, and at coarse grids it clears the integer.
 
-    Six of the 48 fixtures above cross: the ``(1, n)`` family of both positively-grained plates,
-    at ``N = 64`` (1 and 5 cents) and ``N = 128`` (25 cents), by up to **0.304 modes**. So a
+    Eight of the 108 fixtures cross, on the shared grid list: the ``(1, n)`` family of both
+    positively-grained plates, at ``N = 48``, ``64`` and ``128``, by up to **0.304 modes**. Every
+    one is a coarse grid, which is the mechanism — the gap above closes like ``1/N`` while the
+    prediction grows with ``N``, so refining always eventually buries it. So a
     ``horizon <= predicted`` bar is a claim about an isotropic plate specifically, and a grained
     plate needs the symmetric one.
     """
     crossings = []
     for name, grain in GRAINS.items():
-        for cents in (1.0, 5.0, 25.0):
-            for n in (64, 128, 256, 512):
+        for cents in GRAIN_BOUNDS:
+            for n in GRAIN_GRIDS:
                 predicted = sinc_horizon_fraction(cents, power=2) * n
-                for kind in ("diagonal", "axial", "axial_y"):
+                for kind in GRAIN_FAMILIES:
                     modes = mode_family(kind, n - 1)
                     horizon, _ = pitch_horizon(
                         *_ortho_family_frequencies(n, 1e-5, modes, grain), cents
@@ -840,7 +960,13 @@ def test_the_two_axial_families_sit_a_ROOT_STIFFNESS_apart_in_HERTZ(name):
     assert np.max(orders) / np.min(orders) < 1.05, (
         f"{name}: the gap should close like 1/m^2, got gap*m^2 = {np.round(orders, 4)}"
     )
-    assert orders[-1] / (80.0**2) < 2e-3, f"{name}: and be essentially closed by m=80"
+    # The residual said perceptually rather than as a magnitude on one fixture, which is the shape
+    # section 9.7 records being caught by: at m = 40 the two axes are still 2.1 (spruce) and 2.8
+    # (wild) cents from the limit, and by m = 80 both are inside half a semitone's twelfth.
+    residual = 1200.0 * np.log2(target / (f_stiff / f_soft))
+    assert residual < 1.0, (
+        f"{name}: by m=80 the ratio should be within a cent of sqrt(g_x/g_y), got {residual:.3f}"
+    )
 
 
 @pytest.mark.parametrize("name", ["isotropic", "spruce", "wild"])
