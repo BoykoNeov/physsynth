@@ -32,7 +32,7 @@
 | 12 | Raw physics is not a musician's interface (parameter mapping) | none yet | Deferred (§12) |
 | 13 | Which models can ever run in real time | engine, room | Deferred, and now decoupled from the language (§13) |
 | 14 | `piston_radiation_resistance`'s `ka < 1e-8` series threshold was about three decades too small: just above it the direct form cancelled catastrophically and was 544% wrong | `core/radiation.py` | **Fixed 2026-09-03** — three Taylor terms below `ka = 3e-2`; worst error 5.24 → 6.7e-13 (§14) |
-| 15 | No model states where its own answer stops being in tune, and the boundary is much lower than anyone assumed | every resonator | **Measured 2026-09-06** — two families with opposite signs (implicit errors compound into a hard floor at ~8% of the grid; explicit errors cancel at the magic Courant number), the plate is space-limited at every `fs` the suite uses, and the membrane's ceiling cancellation is **diagonal-only**; the 2-D plate's band was **derived 2026-09-07** by splitting its spectrum by mode family, and the **orthotropic** plate measured the same day — one floor in mode index, per-direction only in hertz (§15) |
+| 15 | No model states where its own answer stops being in tune, and the boundary is much lower than anyone assumed | every resonator | **Measured 2026-09-06** — two families with opposite signs (implicit errors compound into a hard floor at ~8% of the grid; explicit errors cancel at the magic Courant number), the plate is space-limited at every `fs` the suite uses, and the membrane's ceiling cancellation is **diagonal-only**; the 2-D plate's band was **derived 2026-09-07** by splitting its spectrum by mode family, the **orthotropic** plate measured the same day — one floor in mode index, per-direction only in hertz — and the **membrane's block** the same day too: the 2-D CFL ceiling **is** the minimum over the spectrum of each mode's own cancellation Courant number, so no mode is ever sharp, and a block's worst corner **flips** below the ceiling for every block — the plate's corner rule is inverted on a membrane, not weakened (§15) |
 
 ---
 
@@ -646,3 +646,33 @@ axis of a grained plate it crosses. Two further conditions came out of it: readi
 its diagonal corner is exact for every real wood but fails below `g_h = −1/m_max²`, a bound that
 tightens as the block grows; and a block's worst error is grain-blind only as `k → 0`, the grain
 returning through the time droop in proportion to `(m_max/N)²`.
+
+**The membrane's block was built 2026-09-07** (`resolution-horizon-plan.md` §10), closing the
+last row of that plan that had been deferred twice — and, like §8 and §9, the reason
+inside the refusal was wrong. Both deferrals said a membrane needs its own corner argument
+"because its weight is `√`-ed". The weight is the *same function* for both models, and a
+monotone square root cannot reorder a block: in space the plate's rule transfers unchanged. What
+breaks it is the term the implicit plate does not have. An explicit scheme's time error is
+**sharp**, so every mode has a Courant number at which its two errors cancel exactly,
+`λ_cancel = √(m⁴+n⁴)/(m²+n²)`, and three things follow that were
+previously recorded as measurements with no mechanism under them:
+
+* **the 2-D CFL ceiling *is* the minimum of `λ_cancel` over the whole spectrum**, attained by
+  the diagonal family and by nothing else. The "magic Courant number" is not a coincidence that
+  lands on the stability bound — the stability bound and the best attainable tuning are the
+  same worst-case over the same spectrum. In 1-D the formula degenerates to exactly `1` for every
+  mode, which is why a string at `λ = 1` resolves its entire grid while a membrane at its own
+  ceiling resolves one family;
+* **no mode is ever sharp on a stable membrane**, since `λ ≤ 1/√2 ≤
+  λ_cancel` always. Every mode is flat or exact, so no "the errors average out" reading is
+  available;
+* **a block's worst corner flips** at `λ = 1/√(M²+1)`, which is *below* the ceiling
+  for every block and falls like `1/M`. So at every Courant number a membrane is actually run at,
+  the worst mode of a block is an **axial** corner — the plate's diagonal-corner rule is not
+  weakened here, it is **inverted**, and a caller applying it would name the exactly wrong mode.
+  `mode_block`'s docstring was stating the plate's answer as the general licence and is amended.
+
+§4.1's hand-measured "about 12% of the grid" is now a closed form: at the ceiling the axial
+family resolves exactly `√2` times the share the string's space floor allows (`0.1185 N`
+against `0.0838 N` at 5 cents), and the diagonal family's horizon is not approximately the family
+but *is* it, because its cancellation is an identity at every `N` rather than a limit.

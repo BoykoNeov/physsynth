@@ -353,11 +353,23 @@ def mode_block(m_max: int) -> list[tuple[int, int]]:
 
     A *block* is the 2-D shape a "the first few modes are in tune" claim actually asserts, and it
     is not a family: the error is not monotone along it (section 8 of the plan), so a prefix over
-    it is not a horizon. What makes a block readable is that its worst mode is its **diagonal
-    corner** ``(m_max, m_max)`` — the plate's error weight ``(m^4 + n^4) / (m^2 + n^2)`` has an
-    interior minimum in ``n``, so the maximum over a block sits at a corner, and the diagonal
-    corner beats the axial one for every ``m_max >= 2``. So a block's horizon is its diagonal
-    family's horizon, which is a family and does have a prefix.
+    it is not a horizon. What makes a block readable is that its worst mode is a **corner** — the
+    error weight ``w(m, n) = (m^4 + n^4) / (m^2 + n^2)`` has an interior minimum in ``n``, so the
+    maximum over a block never sits inside it. A block's horizon is then some corner family's
+    horizon, and a family does have a prefix.
+
+    **Which corner is not a property of the block — it is a property of the scheme**, and getting
+    this backwards is a real hazard because the two answers are opposite:
+
+    * on an **implicit** plate or beam, whose time error flattens like its space error, the worst
+      mode is the **diagonal** corner ``(m_max, m_max)`` for every ``m_max >= 2`` (section 8.7);
+    * on an **explicit** membrane, whose time error is *sharp*, the diagonal corner is worst only
+      below ``lambda = 1 / sqrt(m_max^2 + 1)``, which is beneath the 2-D CFL ceiling for every
+      ``m_max >= 2``. At every Courant number a membrane is actually run at, the worst mode is an
+      **axial** corner — ``(m_max, 1)`` and its exact degenerate twin ``(1, m_max)`` (section 10).
+
+    So ask :func:`cancellation_courant` which regime the caller is in rather than assuming the
+    plate's answer.
 
     **Two things here are isotropic and do not survive a grain** (section 9 of the plan):
 
@@ -375,6 +387,61 @@ def mode_block(m_max: int) -> list[tuple[int, int]]:
         raise ValueError(f"a block needs at least one mode per axis, got m_max={m_max}.")
     modes = [(m, n) for m in range(1, m_max + 1) for n in range(1, m_max + 1)]
     return sorted(modes, key=lambda mn: (mn[0] ** 2 + mn[1] ** 2, mn[0], mn[1]))
+
+
+def cancellation_courant(m: int, n: int) -> float:
+    """The Courant number at which an explicit scheme's mode ``(m, n)`` is exactly in tune.
+
+    An explicit leapfrog has two pitch errors of **opposite sign**: the spatial operator droops
+    the frequency by ``sinc(u)`` and the time discretisation sharpens it. To leading order in
+    ``1 / N`` the two combine as ``omega_disc / omega_cont = 1 + (a^2 / 6)(lambda^2 rho^2 - w)``
+    with ``a = pi / 2N``, ``rho^2 = m^2 + n^2`` and the block weight ``w = (m^4 + n^4) / rho^2``,
+    so they cancel at ``lambda^2 = (m^4 + n^4) / (m^2 + n^2)^2`` — which is what this returns.
+
+    Three consequences, and none of them is a fixture (section 10 of
+    ``docs/dev/resolution-horizon-plan.md``):
+
+    * it is ``1 / sqrt(2)`` on the **diagonal** ``m = n`` for every ``m``, and that is exactly the
+      2-D CFL ceiling. The membrane's "magic Courant number" is not a coincidence of the stability
+      bound: ``t^2 + (1 - t)^2`` with ``t = m^2 / rho^2`` is minimised at ``t = 1/2``, so the
+      ceiling **is** the minimum of this function over the whole spectrum;
+    * hence ``lambda <= 1 / sqrt(2) <= cancellation_courant(m, n)`` for every mode, so on a stable
+      membrane **no mode is ever sharp** — every one of them is flat, or (the diagonal, at the
+      ceiling) exact;
+    * it rises toward ``1`` along the **axial** family ``(m, 1)``, which is above the ceiling and
+      therefore unreachable. That is why the ceiling buys the diagonal family the entire grid and
+      the axial family nothing (section 4.1).
+
+    ``n = 0`` spells the **1-D degenerate case** — no second axis, so ``rho^2 = m^2`` and
+    ``w = m^2`` — and the formula returns exactly ``1.0`` for every ``m``. That is the 1-D CFL
+    limit, and it is the whole reason an ideal string at ``lambda = 1`` resolves its entire grid
+    while a membrane at its own ceiling resolves only one family: in 1-D *every* mode attains the
+    stability limit at once, in 2-D only the diagonal does.
+
+    Leading order in ``1 / N^2``, so a measured crossing approaches this rather than sitting on
+    it. The diagonal value is the exception and is exact at every ``N``: there
+    ``lambda sqrt(S) = sin(u)`` identically, and ``arcsin`` undoes it.
+    """
+    if m < 1:
+        raise ValueError(f"a mode index starts at 1, got m={m}.")
+    if n < 0:
+        raise ValueError(f"got n={n}; use n = 0 for the 1-D case with no second axis.")
+    rho2 = m * m + n * n
+    return float(np.sqrt(m**4 + n**4) / rho2)
+
+
+def block_weight(m: int, n: int) -> float:
+    """``w(m, n) = (m^4 + n^4) / (m^2 + n^2)`` — the space droop's weight, shared by both schemes.
+
+    This is the *only* thing a mode's spatial pitch error depends on, up to a factor set by the
+    grid: a plate's frequency ratio is ``1 - a^2 w / 3`` and a membrane's is its square root,
+    ``1 - a^2 w / 6``. Square root is monotone, so **the two models order a block identically**
+    and the plate's corner argument transfers to the membrane unchanged — in space. What breaks it
+    is the term the implicit plate does not have (:func:`cancellation_courant`).
+    """
+    if m < 1 or n < 1:
+        raise ValueError(f"a mode index starts at 1, got ({m}, {n}).")
+    return float((m**4 + n**4) / (m * m + n * n))
 
 
 def make_membrane(

@@ -33,6 +33,10 @@ from helpers import (
     KAPPA_PLATE_DEFAULT,
     L_DEFAULT,
     PLATE_THETA_DEFAULT,
+    RHO_AREAL_DEFAULT,
+    T_DEFAULT,
+    block_weight,
+    cancellation_courant,
     make_damped_string,
     make_membrane,
     make_plate,
@@ -306,6 +310,13 @@ def test_the_membranes_cancellation_is_DIAGONAL_ONLY(n):
     say "the membrane is in tune at ``lambda = 1/sqrt(2)``". The axial modes are not: they sit
     near the space floor, a factor of eight or nine below. A margin measured on one mode family is
     a claim about that family, which is this project's oldest recurring scar in a new place.
+
+    **Both bars are derived as of section 10**, and the original hand-picked three are kept
+    alongside them rather than replaced: a derived bar without a floor under it asserts *less*
+    than the literal it replaced (section 7.5). Both derived bars are **lossless** claims —
+    ``make_membrane``'s ``sigma`` defaults to zero and nothing here changes it. A lossy membrane
+    shifts its modes for a second reason, so parametrising ``sigma`` into this fixture would break
+    the identity below for nothing to do with the corner rule.
     """
     lam_ceiling = 1.0 / np.sqrt(2.0)
     diagonal, _ = _membrane_family_horizon(n, lam_ceiling, "diagonal")
@@ -318,6 +329,23 @@ def test_the_membranes_cancellation_is_DIAGONAL_ONLY(n):
         "not diagonal-only and the doc's section 4 is wrong"
     )
     assert diagonal > 5 * axial, f"diagonal {diagonal} against axial {axial}"
+    # Derived. "Essentially exact" is exact: the diagonal's cancellation at the ceiling is an
+    # identity at every N, so every mode of the family is in tune and the horizon is the family.
+    assert diagonal == n - 1, (
+        f"the diagonal horizon at the ceiling is not approximately the family, it IS the family; "
+        f"got {diagonal} of {n - 1}"
+    )
+    # And the axial family gets exactly sqrt(2) times the string's space floor, which is where
+    # section 4.1's hand-measured "about 12% of the grid" comes from. Leading order in 1/N, hence
+    # the one-mode tolerance; never above, because higher-order terms can only add droop.
+    predicted = np.sqrt(2.0) * sinc_horizon_fraction(CENTS, 1) * n
+    assert axial <= int(np.floor(predicted)), (
+        f"the axial horizon {axial} is above its closed form {predicted:.3f}; a leading-order "
+        "bound on a droop can only be over-generous"
+    )
+    assert axial >= int(np.floor(predicted)) - 1, (
+        f"the axial horizon {axial} is more than one mode below its closed form {predicted:.3f}"
+    )
 
 
 def test_both_membrane_families_converge_to_the_same_space_floor():
@@ -1096,3 +1124,365 @@ def test_the_corner_rule_breaks_at_EXACTLY_minus_one_over_m_max_squared(m_max):
         f"{m_max}x{m_max}: reading this block through its corner should understate its error, "
         f"got {err.max():.4f} against {corner_err:.4f} cents"
     )
+
+
+# =====================================================================================
+# The membrane's block — section 8.9 and 9.8's twice-deferred row, and its REASON was wrong
+# =====================================================================================
+#
+# Both of those bullets deferred this with the same sentence: "the corner argument in section 8.7
+# is the plate's weight `w`; a membrane's is `sqrt`-ed and needs its own." The square root is real
+# and it is **not** what needs its own argument. `w` is the same function for both models, and a
+# monotone square root cannot reorder a block, so in space the plate's rule transfers unchanged.
+#
+# What breaks it is the term the implicit plate does not have. The explicit scheme's time error is
+# *sharp*, so each mode has a Courant number at which its two errors cancel exactly, and the
+# diagonal's is the CFL ceiling itself. Above `lambda = 1 / sqrt(m_max^2 + 1)` — which is beneath
+# the ceiling for every block — the diagonal corner is no longer the worst mode; the axial one is.
+# So the plate's rule is not weakened on a membrane, it is **inverted**, throughout the entire
+# range of Courant numbers anyone runs a membrane at.
+
+MEM_GRIDS = (64, 128, 256, 512, 1024)
+MEM_CEILING = 1.0 / np.sqrt(2.0)  # the 2-D CFL bound, and section 10 says why it is also magic
+MEM_LAMS = (MEM_CEILING, 0.7, 0.6, 0.5, 0.45)  # every Courant number the suite runs a membrane at
+MEM_BLOCKS = tuple(range(2, 13))
+# Shared module constants rather than lists written inside each test: a sweep that owns its own
+# fixture list cannot notice when the list is the reason (section 9.7, and commit f3b486d).
+
+
+def _membrane_frequencies(n: int, lam: float, modes) -> tuple[NDArray, NDArray]:
+    """``(f_discrete, f_continuum)`` for a square membrane, analytically — no model built.
+
+    ``h = L/N`` and ``k = lam h / c`` is :func:`make_membrane`'s sample rate inverted. Building an
+    actual ``Membrane`` at ``N = 1024`` would assemble a million-unknown Laplacian to answer a
+    question about its eigenvalues, which are closed-form — the same argument
+    ``_plate_family_frequencies`` makes.
+
+    Not a refactor of ``_membrane_family_horizon`` above, deliberately. That one round-trips
+    through ``fs = c / (lam h)`` and back, which is a different sequence of roundings and moves the
+    answer in the last few bits; rewriting it would silently move numbers the existing tests were
+    written against. The seam between the two paths is asserted rather than assumed, in
+    ``test_the_analytic_membrane_path_agrees_with_a_BUILT_membrane``.
+    """
+    c = wave_speed(T_DEFAULT, RHO_AREAL_DEFAULT)
+    h = L_DEFAULT / n
+    k = lam * h / c
+    eig = np.asarray(modal.rectangular_discrete_eigenvalues(h, n, n, modes))
+    f_disc = np.asarray(modal.discrete_membrane_eigenfrequency(eig, c, k))
+    f_cont = np.asarray(modal.rectangular_membrane_freqs(c, L_DEFAULT, L_DEFAULT, modes))
+    return f_disc, f_cont
+
+
+def _membrane_cents(n: int, lam: float, modes) -> NDArray[np.float64]:
+    return pitch_error_cents(*_membrane_frequencies(n, lam, modes))
+
+
+def test_the_analytic_membrane_path_agrees_with_a_BUILT_membrane():
+    """The seam the rest of this section rests on, asserted rather than assumed."""
+    n, lam = 64, 0.6
+    modes = mode_block(6)
+    mem = make_membrane(domain="rectangle", N=n, lam=lam)
+    eig = np.asarray(modal.rectangular_discrete_eigenvalues(mem.h, n, n, modes))
+    built = pitch_error_cents(
+        np.asarray(modal.discrete_membrane_eigenfrequency(eig, mem.c, mem.k)),
+        np.asarray(modal.rectangular_membrane_freqs(mem.c, 1.0, 1.0, modes)),
+    )
+    assert np.max(np.abs(_membrane_cents(n, lam, modes) - built)) < 1e-9, (
+        "the analytic path and a built Membrane disagree by more than the round-trip through fs"
+    )
+
+
+def test_the_membranes_space_floor_is_the_STRINGS_and_not_the_plates_HALF():
+    """The square root, spent — and it buys the membrane the string's floor, not a new one.
+
+    The plate and the membrane share one spatial operator and differ only in the power its
+    eigenvalue carries into the frequency: ``omega ~ kappa p^2`` against ``omega ~ c p``. So on the
+    diagonal, where section 8.2's identity makes the plate's droop exactly ``sinc(u)^2``, the
+    membrane's is exactly ``sinc(u)`` — the *string's*. ``power = 1``, read off the dispersion
+    relation rather than chosen, which is what :func:`sinc_horizon_fraction`'s argument is for.
+    """
+    n = 128
+    modes = mode_family("diagonal", 40)
+    h = L_DEFAULT / n
+    eig = np.asarray(modal.rectangular_discrete_eigenvalues(h, n, n, modes))
+    cont = np.array([2.0 * (m * np.pi / L_DEFAULT) ** 2 for m, _ in modes])
+    u = np.array([m * np.pi / (2.0 * n) for m, _ in modes])
+    assert np.max(np.abs(np.sqrt(eig / cont) - np.sin(u) / u)) < 1e-14, (
+        "the membrane's diagonal space droop is not the string's sinc(u) as an identity"
+    )
+    plate_cents = 1200.0 * np.log2(eig / cont)
+    membrane_cents = 600.0 * np.log2(eig / cont)
+    assert np.max(np.abs(plate_cents - 2.0 * membrane_cents)) < 1e-12
+
+
+@pytest.mark.parametrize("m_max", [2, 3, 8, 24, 64])
+def test_the_space_only_corner_rule_TRANSFERS_from_the_plate_UNCHANGED(m_max):
+    """The corrected reason, as arithmetic: same weight, and a square root cannot reorder.
+
+    Sections 8.9 and 9.8 deferred this row because "a membrane's weight is ``sqrt``-ed". It is
+    not: :func:`block_weight` is one function and both models read it. The square root sits
+    *outside*, on the whole ratio, and is monotone — so with no timestep in the comparison the
+    membrane orders a block exactly as the plate does, and section 8.7's diagonal corner is still
+    its worst mode. No dispersion relation is evaluated here; this is integers.
+    """
+    modes = mode_block(m_max)
+    weights = np.array([block_weight(m, n) for m, n in modes])
+    assert modes[int(np.argmax(weights))] == (m_max, m_max), (
+        f"the {m_max}x{m_max} block's heaviest mode should be its diagonal corner"
+    )
+
+
+def _cancellation_residuals(mode, grids=(64, 128, 256, 512)) -> list[float]:
+    predicted = cancellation_courant(*mode)
+    lo, hi = 0.7 * predicted, min(1.3 * predicted, 0.9999)
+    out = []
+    for n in grids:
+
+        def signed(lam: float, n: int = n) -> float:
+            return float(_membrane_cents(n, lam, [mode])[0])
+
+        out.append(abs(brentq(signed, lo, hi) - predicted))
+    return out
+
+
+@pytest.mark.parametrize("mode", [(1, 1), (2, 2), (5, 5), (17, 17)])
+def test_the_DIAGONAL_cancellation_number_is_an_IDENTITY_at_EVERY_grid(mode):
+    """The one exact claim in this section, and it must not be asserted like the others.
+
+    On the diagonal both axes carry the same ``u``, so ``lambda sqrt(S)`` at the ceiling is
+    ``(1/sqrt(2)) sqrt(2 sin^2 u) = sin(u)`` and the scheme's own ``arcsin`` undoes it. That is an
+    **identity for every N**, not a limit — which is why the residual below does not fall with the
+    grid the way every other statement in this section does. It is already at the floor, and what
+    little it moves is ``brentq``'s tolerance against an increasingly flat function. Asserting a
+    convergence rate here would be asserting the root finder.
+    """
+    residuals = _cancellation_residuals(mode)
+    assert max(residuals) < 1e-6, (
+        f"{mode}: the diagonal should cancel at the ceiling on every grid, got {residuals}"
+    )
+
+
+@pytest.mark.parametrize("mode", [(2, 1), (3, 1), (8, 1), (3, 2), (5, 3), (7, 4)])
+def test_every_OFF_DIAGONAL_mode_has_its_OWN_cancellation_courant_number(mode):
+    """Where the membrane stops being the plate: the time error is sharp, so it can cancel.
+
+    The signed pitch error crosses zero at ``sqrt(m^4 + n^4) / (m^2 + n^2)`` — flat below it,
+    would be sharp above it. Off the diagonal this is leading order in ``1/N^2``, so what is
+    asserted is that the measured crossing *approaches* the closed form, with the residual falling
+    as the grid refines. The diagonal is the exception and has its own test above.
+    """
+    residuals = _cancellation_residuals(mode)
+    assert residuals[0] < 3e-3, f"{mode}: even the coarsest grid should be close, got {residuals}"
+    assert residuals[-1] < 3e-5, f"{mode}: the finest grid should be closer, got {residuals}"
+    assert residuals[0] > 40.0 * residuals[-1], (
+        f"{mode}: an 8x grid step shrinks a 1/N^2 residual by 64x — measured 64.1 for (7,4) — so "
+        f"a factor of 40 is the loose reading of that; got {residuals}"
+    )
+
+
+def test_the_2d_CFL_ceiling_IS_the_minimum_cancellation_number_over_the_SPECTRUM():
+    """Why ``1/sqrt(2)`` is the magic Courant number and not merely the stability bound.
+
+    ``cancellation_courant`` squared is ``t^2 + (1-t)^2`` with ``t = m^2 / (m^2 + n^2)``, which is
+    minimised at ``t = 1/2`` — the diagonal — where it equals ``1/2``. So the CFL ceiling *is* the
+    smallest cancellation number the spectrum has, and it is attained by the diagonal family and
+    by nothing else. Integers only: no grid, no timestep, no model.
+    """
+    worst = min((cancellation_courant(m, n), (m, n)) for m in range(1, 61) for n in range(1, 61))
+    assert abs(worst[0] - MEM_CEILING) < 1e-15, f"the minimum should be the ceiling, got {worst}"
+    for m in range(1, 61):
+        for n in range(1, 61):
+            lam_c = cancellation_courant(m, n)
+            assert lam_c >= MEM_CEILING - 1e-15, f"({m},{n}) cancels below the CFL bound: {lam_c}"
+            assert (abs(lam_c - MEM_CEILING) < 1e-15) == (m == n), (
+                f"({m},{n}) attains the ceiling without being diagonal, or fails to while being it"
+            )
+
+
+def test_no_mode_is_ever_SHARP_on_a_stable_membrane():
+    """The consequence of the test above, and the reason a membrane's errors never partly cancel.
+
+    Every mode's cancellation number is at or above the CFL ceiling, and a stable run is at or
+    below it — so every mode is flat, or exactly in tune. There is no configuration in which one
+    family is sharp and another flat, which is what would let a "the errors average out" claim be
+    true. The arithmetic is the assertion; the measurement is corroboration.
+    """
+    for m in range(1, 41):
+        for n in range(1, 41):
+            assert MEM_CEILING <= cancellation_courant(m, n)
+    for n_grid in (64, 128, 256):
+        cents = _membrane_cents(n_grid, MEM_CEILING, mode_block(16))
+        assert np.max(cents) < 1e-8, (
+            f"N={n_grid}: a mode came out sharp at the ceiling, max = {np.max(cents):+.3e} cents"
+        )
+
+
+def test_the_string_is_the_same_formula_with_the_SECOND_AXIS_DROPPED():
+    """One formula covers both, and the degenerate case explains section 4's headline number.
+
+    Drop the second axis (``n = 0``) and ``sqrt(m^4) / m^2`` is exactly ``1`` for **every** mode —
+    the 1-D CFL limit. So in 1-D the whole spectrum cancels at one Courant number and the string
+    resolves essentially its entire grid; in 2-D the minimum over the spectrum is attained by the
+    diagonal alone, and the axial family's cancellation number is out past the stability bound
+    where nobody can reach it. That is the mechanism behind section 4.1's table, which until now
+    was recorded as a measurement with no reason under it.
+    """
+    for m in range(1, 200):
+        assert cancellation_courant(m, 0) == 1.0, f"the 1-D case is not exactly 1 at m={m}"
+    horizon, _ = _ideal_horizon(256, 1.0)
+    assert horizon >= 254, f"the 1-D cancellation should take the whole grid, got {horizon}"
+    axial_at_ceiling, _ = _membrane_family_horizon(256, MEM_CEILING, "axial")
+    assert axial_at_ceiling < 0.2 * horizon, (
+        f"the 2-D axial family cannot reach its own cancellation number "
+        f"({cancellation_courant(64, 1):.4f} > {MEM_CEILING:.4f}), so it should get far less than "
+        f"the string's {horizon}; got {axial_at_ceiling}"
+    )
+
+
+@pytest.mark.parametrize("m_max", [2, 5, 13, 40, 120])
+def test_a_membrane_blocks_worst_mode_is_ALWAYS_a_CORNER(m_max):
+    """The licence for reading a block at all, and the edge case the two-corner algebra misses.
+
+    Subtracting the sharp time term ``lambda^2 rho^2`` from the weight leaves an error that is
+    still maximised on the block's boundary — but the two-corner derivation only compares
+    ``(M, M)`` against ``(M, 1)`` and never looks at ``(M, n)`` for ``1 < n < M``, where the time
+    term (monotone in ``n``) could in principle move the weight's interior minimum far enough to
+    win. It does not, for any block or any stable Courant number. Integers again.
+    """
+    modes = mode_block(m_max)
+    corners = {(m_max, m_max), (m_max, 1), (1, m_max)}
+    for lam in np.linspace(0.01, MEM_CEILING, 48):
+        err = np.array([block_weight(m, n) - lam * lam * (m * m + n * n) for m, n in modes])
+        worst = modes[int(np.argmax(np.abs(err)))]
+        assert worst in corners, (
+            f"the {m_max}x{m_max} block's worst mode at lambda={lam:.4f} is {worst}, which is not "
+            "a corner — the block reading has no licence at all if this fails"
+        )
+
+
+@pytest.mark.parametrize("m_max", MEM_BLOCKS)
+def test_the_corner_claim_ALSO_holds_when_the_model_is_asked_rather_than_the_expansion(m_max):
+    """The measured floor under the test above, because that one asks the leading order only.
+
+    Every other closed form in this section is either labelled leading-order and checked against a
+    convergence rate, or has a measured companion. The corner claim is the licence the whole block
+    reading rests on, so it gets one too — and the sweep deliberately runs *across* the flip rather
+    than only at the Courant numbers the suite uses, so it sees the diagonal corner win as well as
+    the axial one.
+    """
+    modes = mode_block(m_max)
+    corners = {(m_max, m_max), (m_max, 1), (1, m_max)}
+    for n in (64, 256):
+        for lam in np.linspace(0.05, MEM_CEILING, 24):
+            worst = modes[int(np.argmax(np.abs(_membrane_cents(n, lam, modes))))]
+            assert worst in corners, (
+                f"N={n}, lambda={lam:.4f}, M={m_max}: the model's worst mode is {worst}, which the "
+                "expansion says cannot happen"
+            )
+
+
+@pytest.mark.parametrize("m_max", MEM_BLOCKS)
+def test_the_membrane_blocks_worst_corner_FLIPS_at_one_over_root_M_squared_plus_one(m_max):
+    """The batch's headline, and it is a closed form rather than a measured threshold.
+
+    Setting the two corners' errors equal collapses to ``(M^2 - 1)(lambda^2 - 1/(M^2 + 1)) = 0``,
+    so below ``lambda = 1/sqrt(M^2 + 1)`` the diagonal corner is worst (the plate's answer) and
+    above it the axial one is. Leading order in ``1/N^2`` like every other statement here, so the
+    measured crossing approaches it as the grid refines.
+    """
+    predicted = 1.0 / np.sqrt(m_max * m_max + 1.0)
+
+    def gap(lam: float) -> float:
+        err = np.abs(_membrane_cents(512, lam, [(m_max, 1), (m_max, m_max)]))
+        return float(err[0] - err[1])
+
+    crossing = brentq(gap, 0.7 * predicted, min(1.3 * predicted, MEM_CEILING - 1e-9))
+    assert abs(crossing - predicted) < 2e-4, (
+        f"M={m_max}: the corner flip should sit at 1/sqrt(M^2+1) = {predicted:.6f}, "
+        f"measured {crossing:.6f}"
+    )
+    assert gap(0.9 * predicted) < 0.0, f"M={m_max}: below the flip the DIAGONAL corner is worst"
+    assert gap(1.1 * predicted) > 0.0, f"M={m_max}: above the flip the AXIAL corner is worst"
+
+
+def test_the_corner_flip_CONVERGES_to_the_closed_form_like_one_over_N_squared():
+    """Separated from the test above because it is a different kind of claim.
+
+    The flip is a leading-order result, so the honest bar is not a tolerance at one grid but the
+    rate: a 16x grid step should shrink the residual by about 256. Asserted loosely, because the
+    finest grid's residual is close enough to ``brentq``'s own tolerance to be noisy.
+    """
+    m_max = 8
+    predicted = 1.0 / np.sqrt(m_max * m_max + 1.0)
+    residuals = []
+    for n in MEM_GRIDS:
+
+        def gap(lam: float, n: int = n) -> float:
+            err = np.abs(_membrane_cents(n, lam, [(m_max, 1), (m_max, m_max)]))
+            return float(err[0] - err[1])
+
+        crossing = brentq(gap, 0.7 * predicted, min(1.3 * predicted, MEM_CEILING - 1e-9))
+        residuals.append(abs(crossing - predicted))
+    assert all(b < a for a, b in zip(residuals, residuals[1:], strict=False)), (
+        f"the residual did not fall monotonically with the grid: {residuals}"
+    )
+    assert residuals[0] > 50.0 * residuals[-1], (
+        f"a 16x grid step should shrink a 1/N^2 residual by ~256x, got {residuals}"
+    )
+
+
+@pytest.mark.parametrize("m_max", MEM_BLOCKS)
+def test_the_flip_is_BELOW_the_ceiling_for_every_block_so_the_worst_corner_is_AXIAL(m_max):
+    """What the flip means in practice, which is that the plate's rule is inverted, not weakened.
+
+    ``1/sqrt(M^2 + 1) < 1/sqrt(2)`` for every ``M >= 2``, and it *falls* as the block grows. So the
+    window in which a membrane's block behaves like a plate's shrinks like ``1/M`` and never
+    contains a Courant number anyone would choose. Measured across every Courant number the suite
+    runs a membrane at, on three grids.
+    """
+    assert 1.0 / np.sqrt(m_max * m_max + 1.0) < MEM_CEILING
+    modes = mode_block(m_max)
+    axial = {(m_max, 1), (1, m_max)}
+    for lam in MEM_LAMS:
+        for n in (64, 256, 512):
+            worst = modes[int(np.argmax(np.abs(_membrane_cents(n, lam, modes))))]
+            assert worst in axial, (
+                f"N={n}, lambda={lam:.4f}, M={m_max}: the worst mode is {worst}, not an axial "
+                "corner — a caller reading the plate's rule here would name the wrong mode"
+            )
+
+
+@pytest.mark.parametrize("m_max", [2, 5, 9, 12])
+def test_the_TWO_axial_corners_are_EXACTLY_degenerate(m_max):
+    """So the claim is "an axial corner", never a particular one.
+
+    ``mode_block`` sorts by ``(rho^2, m, n)``, so ``argmax`` returns ``(1, M)`` and never
+    ``(M, 1)`` — a tiebreak, not a result. On a square the two are the same mode to the bit.
+    """
+    for n in (64, 256):
+        for lam in MEM_LAMS:
+            err = _membrane_cents(n, lam, [(m_max, 1), (1, m_max)])
+            assert err[0] == err[1], (
+                f"the axial twins differ by {abs(err[0] - err[1]):.3e} cents at N={n}"
+            )
+
+
+@pytest.mark.parametrize("lam", MEM_LAMS)
+def test_the_membranes_axial_family_is_MONOTONE_so_a_block_horizon_MEANS_something(lam):
+    """The step that turns "which corner is worst" into a number, and it is easy to skip.
+
+    Knowing the worst mode is the axial corner licenses reading a block *only* if the axial family
+    has a leading prefix to read — the error must rise with ``M``. It does, at every Courant number
+    in the stable range: at the ceiling the axial error goes like ``(M^2-1)^2 / (2(M^2+1))``, which
+    is increasing. Without this the section proves which corner is worst and still cannot quote a
+    block horizon.
+    """
+    n = 256
+    modes = mode_family("axial", 40)
+    _, monotone = pitch_horizon(*_membrane_frequencies(n, lam, modes), CENTS)
+    assert monotone, (
+        f"the axial family is not monotone at lambda={lam:.4f}; a block horizon read through its "
+        "axial corner would be meaningless"
+    )
+    err = np.abs(_membrane_cents(n, lam, modes))
+    assert np.all(np.diff(err) > 0.0), "and strictly so, not merely within the flag's tolerance"

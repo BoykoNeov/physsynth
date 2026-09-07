@@ -174,7 +174,7 @@ what distinguishes a family is only whether a Courant number exists that beats i
 |---|---|---|---|
 | ideal string | explicit | **measured** | exact at `λ = 1`; collapses below it |
 | stiff / damped string | θ | **measured** | floor ≈ 8% of grid (κ=0), 6% (κ=8) |
-| rectangular membrane | explicit | **measured** | diagonal-only cancellation; axial ≈ 12% |
+| rectangular membrane | explicit | **measured** | §10. Every mode has a Courant number at which its two errors cancel, `√(m⁴+n⁴)/(m²+n²)`, and the 2-D CFL ceiling **is** the minimum of that over the spectrum — attained by the diagonal family and nothing else, which is why the cancellation is diagonal-only and why no mode is ever sharp. The axial family at the ceiling resolves exactly `√2` times the string's space floor (`0.1185 N` at 5 cents, §4.1's "about 12%" derived). A **block**'s worst mode is a corner, but *which* corner flips at `λ = 1/√(M²+1)` — below the ceiling for every block, so at every Courant number a membrane is run at the plate's diagonal-corner rule is **inverted**, not weakened |
 | plate, simply supported | θ | **measured** | space-limited; **5.925% of grid** at 5 cents, closed form in §8; as `k → 0` the two mode families agree in index (a finite timestep breaks the tie toward the axial one) and differ by exactly 2 in pitch |
 | free-free beam | θ | **measured** | same fourth-power story as the plate |
 | orthotropic plate | θ | **measured** | §9. In **mode index** there is one floor and it is the isotropic plate's — `sinc(u)²`, exactly on the diagonal for *any* grain, within a mode on both axial families for every grain tried. In **hertz** it is per-direction, because the same index is a different frequency on each axis (`√(g_x/g_y)` apart, 3.7× for spruce). `axial` did split in two, but into two *deviations from one floor* rather than two horizons — and the soft one crosses the closed form, so `horizon ≤ predicted` is an isotropic bar |
@@ -469,8 +469,10 @@ before it could happen.
   half right: `(m,1)` and `(1,n)` do stop being degenerate and `axial` did become two
   measurements. What they are two of is not two horizons. Both sit on the isotropic plate's
   `sinc²` floor, and what splits is how far each *deviates* from it.
-* **The membrane's block.** §4 measured its families; nobody has asked a block question of it.
-  The corner argument in §8.7 is the plate's weight `w`; a membrane's is `√`-ed and needs its own.
+* **The membrane's block. Done 2026-09-07 — §10**, and the reason in this bullet is wrong: `w` is the
+  *same* function for both models and a monotone square root cannot reorder a block, so in space the
+  plate's rule transfers unchanged. What breaks it is the explicit scheme's *sharp* time error, and
+  it inverts the rule rather than weakening it.
 * **Promotion out of `tests/`.** Unchanged from §6: `sinc_horizon_fraction` now brings a `brentq`
   with it, which is free in a test and a dependency decision in the analysis crate.
 
@@ -624,8 +626,8 @@ the collapse and not the number.
 * **The free orthotropic plate (#5of) is untouched.** It is in §5's "no horizon yet" group for the
   free plate's reason — its reference is a set of probes rather than a formula over all modes —
   and the grain does not change that.
-* **The membrane's block**, unchanged from §8.9: §4 measured its families, nobody has asked a
-  block question of it, and the corner argument here is the plate's weight, not a membrane's.
+* **The membrane's block. Done 2026-09-07 — §10**, and this bullet repeated §8.9's wrong reason:
+  the weight is not "the plate's, not a membrane's", it is one function both models read.
 * **Promotion out of `tests/`**, unchanged from §6 and §8.9. Note that the continuous crossing
   introduced here brings a second `brentq` with it, so the dependency question §6 raises now has
   two call sites rather than one.
@@ -637,3 +639,183 @@ batch that wrote §9.7. The general lesson is not "measure more fixtures": it is
 whose fixture list lives inside the test that records its results cannot notice when the list is
 the reason**. The lists are shared module constants now, and widening them from four grids to nine
 is what surfaced the `N = 80` case.
+
+---
+
+## 10. The membrane's block — 2026-09-07
+
+§8.9 and §9.8 deferred this row twice, with the same sentence both times:
+
+> **The membrane's block.** §4 measured its families; nobody has asked a block question of it.
+> The corner argument in §8.7 is the plate's weight `w`; a membrane's is `√`-ed and needs its own.
+
+The row is built, and **the reason it gives is wrong**. The square root is real and it is not what
+needs its own argument: `w` is the *same function* for both models, and a monotone square root
+cannot reorder a block, so in space the plate's corner rule transfers to the membrane unchanged.
+What breaks it is the term the implicit plate does not have — and it does not weaken the rule, it
+**inverts** it, across the entire range of Courant numbers anyone runs a membrane at.
+
+This is the third time a deferred prediction in this plan came out backwards (§8.4, §9.8's own
+amendment, now this), and the three have the same shape: a claim about a *2-D spectrum* was
+reasoned from the shape of the error rather than from which scheme produced it.
+
+### 10.1 The one expansion the whole section rests on
+
+For the explicit leapfrog, with `a = π/2N`, `ρ² = m² + n²` and `w = (m⁴+n⁴)/ρ²`:
+
+```
+ω_disc / ω_cont  =  1 + (a²/6)(λ²ρ² − w)  +  O(a⁴)
+```
+
+Two terms of **opposite sign**: `−w` is the spatial droop and `+λ²ρ²` is the time error, which on
+an explicit scheme is *sharp*. The implicit plate has no `+` term at all — both of its errors
+flatten — and that single structural difference is everything below.
+
+The plate's own weight is the same `w`, entering as `1 − a²w/3` where the membrane has
+`1 − a²w/6`, because a plate's frequency carries the operator's eigenvalue and a membrane's
+carries its square root. `block_weight` in `tests/helpers.py` is that one shared function.
+
+### 10.2 The membrane's space floor is the STRING's, not half of it
+
+On the diagonal, where §8.2 makes the plate's droop exactly `sinc(u)²`, the membrane's is exactly
+`sinc(u)` — the string's, asserted to `1e-14`. So `sinc_horizon_fraction(cents, power=1)`, and
+`power` is read off `ω ~ c p` rather than chosen. The two models' space-only cents are a factor of
+two apart, exactly, for the same reason §8.3's plate is the string at half the cents.
+
+**In space the plate's corner rule therefore transfers with nothing to prove.** The block's
+heaviest mode is `(M, M)` for every `M` (checked to `M = 64` on integers), because it is the same
+`argmax` of the same `w`.
+
+### 10.3 Every mode has its own cancellation Courant number
+
+Setting the bracket to zero gives a closed form with no grid in it:
+
+```
+λ_cancel(m, n) = √(m⁴ + n⁴) / (m² + n²)
+```
+
+Measured as the zero crossing of the signed pitch error, and it converges like `1/N²`: for `(7,4)`
+the residual runs `1.58e-4 → 3.94e-5 → 9.84e-6 → 2.46e-6` over `N = 64…512`, a factor of **64.1**
+across an 8× grid step.
+
+**The diagonal is the exception and is exact at every `N`.** There `λ√S = (1/√2)√(2sin²u) = sin u`
+and the scheme's own `arcsin` undoes it, so the residual is already at the floor and does not fall
+with the grid — it is `brentq`'s tolerance against an increasingly flat function. Asserting a
+convergence rate on the diagonal would be asserting the root finder, which is why it has its own
+test. This is the §8.2 distinction (identity versus limit) arriving in a second place.
+
+### 10.4 The CFL ceiling IS the spectrum's minimum cancellation number
+
+`λ_cancel²` is `t² + (1−t)²` with `t = m²/ρ²`, minimised at `t = 1/2` — the diagonal — where it is
+exactly `1/2`. So:
+
+* `λ_cancel ≥ 1/√2` for **every** mode, with equality **iff `m = n`**. Asserted over integers with
+  no dispersion relation evaluated at all;
+* therefore on a stable membrane (`λ ≤ 1/√2`) **no mode is ever sharp**. Every mode is flat, or —
+  the diagonal, at the ceiling — exact. There is no configuration in which one family runs sharp
+  and another flat, so no "the errors average out" reading is available;
+* and the "magic Courant number" is not a coincidence that happens to land on the stability bound.
+  The stability bound and the best attainable tuning are the same worst-case over the spectrum,
+  and they are the same number for that reason.
+
+**The string is the same formula with the second axis dropped.** `λ_cancel(m, 0) = √(m⁴)/m² = 1`
+for every `m` — the 1-D CFL limit — so in 1-D the entire spectrum cancels at one Courant number and
+the string resolves essentially its whole grid, while in 2-D only the diagonal attains the minimum.
+That is the mechanism under §4's headline, which until now was a measurement with no reason beneath
+it. `cancellation_courant(m, 0)` spells it, and returns exactly `1.0`.
+
+### 10.5 The block's corner FLIPS, at `1/√(M²+1)`
+
+Set the two corners' errors equal. With `λ² ≤ 1/2` both are flat, so absolute values compare
+directly, and:
+
+```
+(M⁴+1)/(M²+1) − λ²(M²+1)  =  M²(1 − 2λ²)
+        ⟺  (M² − 1)[λ² − 1/(M² + 1)]  =  0
+```
+
+So for every `M ≥ 2`:
+
+| | below `λ* = 1/√(M²+1)` | above it |
+|---|---|---|
+| worst mode of the `M×M` block | **diagonal** corner `(M,M)` — the plate's answer | **axial** corner `(M,1)` |
+
+Measured against the closed form at `N = 512`, `M = 2…12`, and it converges like `1/N²` (the `M=8`
+residual falls by ~250 over a 16× grid step). `M = 1` is the degenerate row the factor `(M²−1)`
+removes: a `1×1` block has one mode and both corners are it.
+
+### 10.6 Which is why the plate's rule is inverted, not weakened
+
+`1/√(M²+1) < 1/√2` for every `M ≥ 2`, and it **falls like `1/M`**. So the window in which a
+membrane's block behaves like a plate's shrinks as the block grows and never contains a Courant
+number anyone would choose: at the ceiling, at the suite's default `0.7`, and at `0.6`, `0.5` and
+`0.45`, the worst mode of every block from `2×2` to `12×12` is an **axial** corner, on every grid
+measured.
+
+Two things this section is careful about:
+
+* **"an axial corner", never a particular one.** `(M,1)` and `(1,M)` are degenerate to the bit on
+  a square (asserted as `==`, not a tolerance). `mode_block` sorts by `(ρ², m, n)`, so `argmax`
+  returns `(1,M)` — a tiebreak, not a result, and a test that pinned it would be asserting the
+  sort.
+* **the worst mode is always a corner**, never interior. The two-corner algebra above never looks
+  at `(M, n)` for `1 < n < M`, where the time term — monotone in `n` — could in principle move the
+  weight's interior minimum far enough to win. It does not, for any block to `M = 120` at 48
+  Courant numbers, asserted on integers — and with a measured companion that asks the model instead,
+  on two grids across a sweep that spans the flip so it sees both corners win. Every other closed
+  form here is either checked against a convergence rate or backed by a measurement, and this one is
+  the licence the whole block reading rests on.
+
+### 10.7 The step that turns a corner into a number
+
+Knowing which corner is worst licenses a block reading **only** if that corner's family has a
+leading prefix to read — `pitch_horizon` returns a prefix, and a prefix over a non-monotone list is
+meaningless (§8.6). The membrane's axial family is monotone at every Courant number in the stable
+range: at the ceiling its error goes like `(M²−1)²/(2(M²+1))`, which increases. Asserted through
+`pitch_horizon`'s own `monotone` flag *and* strictly, at five Courant numbers.
+
+Without this the section would prove which corner is worst and still be unable to quote a block
+horizon at all.
+
+### 10.8 §4.1's "about 12% of the grid", derived
+
+The two hand-picked bars in `test_the_membranes_cancellation_is_DIAGONAL_ONLY` are now closed
+forms, and the originals are kept beside them (§7.5 — a derived bar with no floor under it asserts
+less than the literal it replaced):
+
+* `diagonal >= 0.9 (N−1)` becomes `diagonal == N−1`. "Essentially exact" was exact: the
+  cancellation is an identity, so every mode of the family is in tune and the horizon *is* the
+  family. Measured `31/31, 63/63, 127/127, 255/255, 511/511`;
+* `axial < 0.25 (N−1)` becomes `√2 · sinc_horizon_fraction(cents, 1) · N`, within one mode and
+  never above. The axial family at the ceiling resolves **exactly `√2` times the share of the grid
+  the string's space floor allows** — leading-order in both, and the ratio `√(48/24)` is exact.
+  At 5 cents that is `0.1185 N` against the string's `0.0838 N`, which is where §4.1's
+  hand-measured "about 12%" comes from. Measured `4, 7, 15, 30, 60` at `N = 32…512` against floors
+  `4, 7, 15, 30, 60`.
+
+A second closed form exists and was not used: solving `K(M²−1)²/(2(M²+1)) = c` exactly for `M²`
+with `K = (1200/ln2)(π/2N)²/6` is a quadratic and tracks the measurement to a fraction of a mode at
+1 and 5 cents. It drifts one mode high at 25 cents, where the leading-order expansion is being
+asked about modes a quarter of the way up the grid. The `√2` form was preferred because it reuses
+the shipped primitive and states the relationship rather than a number.
+
+### 10.9 What this does to `mode_block`
+
+Its docstring stated the plate's rule as the general licence — "its worst mode is its **diagonal
+corner**". A membrane caller reading that at the CFL ceiling would name the exactly wrong mode, so
+it is amended in the same commit: the general claim is that the worst mode is *a corner*, and
+**which** corner is a property of the scheme, not of the block.
+
+### 10.10 Not done
+
+* **No band was derived here.** §7.3's audit lists no rectangular-membrane pitch band to derive:
+  its one membrane row is the circular drum head against Bessel, whose limiter is the staircased
+  domain rather than dispersion. The block rule is now available for the first such band that gets
+  written.
+* **The circular membrane is untouched**, and stays in §5's "no horizon yet" group for the reason
+  that row already gives — its reference is a frequency for a different shape.
+* **Damping is not in any of this.** Every statement here is `σ = 0`; a lossy membrane's modes are
+  shifted by the loss as well, and §4 never separated the two either.
+* **Promotion out of `tests/`**, unchanged from §6, §8.9 and §9.8. This batch adds two more
+  closed-form helpers (`cancellation_courant`, `block_weight`) to the pile that would move, and
+  neither of them brings a new dependency — they are arithmetic.
