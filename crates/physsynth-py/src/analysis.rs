@@ -26,7 +26,7 @@
 //! the port a port of half a function.
 
 use numpy::PyArray1;
-use physsynth_analysis::{damping, dispersion, duffing, modal};
+use physsynth_analysis::{damping, dispersion, duffing, horizon, modal};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -676,4 +676,72 @@ pub fn py_duffing_frequency_expansion(amplitude: f64, omega0_sq: f64, eps: f64) 
     val(duffing::duffing_frequency_expansion(
         amplitude, omega0_sq, eps,
     ))
+}
+
+// -- horizon: where a scheme's answer stops being in tune ------------------------------------
+//
+// The names stutter (`horizon_pitch_horizon`), and that is deliberate. Every function in this
+// binding is `<module>_<function>`, the shim in `physsynth/analysis/horizon.py` is the only caller,
+// and one grep for `horizon_` has to find the whole surface. A prettier one-off spelling would buy
+// nothing and would join the list `scripts/freeze_analysis.py` warns about — names that are not a
+// mechanical transform of the Python ones, so guessing them silently reports "no Rust twin".
+//
+// `pitch_error_cents` takes two flat arrays and the shim ravels; the rest are scalars and small
+// index lists, which pyo3 converts without help. `mode_family` and `mode_block` hand back a list of
+// `(int, int)` tuples exactly as the Python did — they are index-side only and there is no field to
+// own.
+
+#[pyfunction]
+#[pyo3(name = "horizon_pitch_error_cents")]
+pub fn py_pitch_error_cents(
+    py: Python<'_>,
+    f_discrete: &Bound<'_, PyAny>,
+    f_continuum: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let (_, fd) = as_f64_field(py, f_discrete, "f_discrete")?;
+    let (_, fc) = as_f64_field(py, f_continuum, "f_continuum")?;
+    Ok(arr(py, val(horizon::pitch_error_cents(&fd, &fc))?))
+}
+
+#[pyfunction]
+#[pyo3(name = "horizon_pitch_horizon")]
+pub fn py_pitch_horizon(
+    py: Python<'_>,
+    f_discrete: &Bound<'_, PyAny>,
+    f_continuum: &Bound<'_, PyAny>,
+    cents: f64,
+) -> PyResult<(usize, bool)> {
+    let (_, fd) = as_f64_field(py, f_discrete, "f_discrete")?;
+    let (_, fc) = as_f64_field(py, f_continuum, "f_continuum")?;
+    val(horizon::pitch_horizon(&fd, &fc, cents))
+}
+
+#[pyfunction]
+#[pyo3(name = "horizon_sinc_horizon_fraction")]
+pub fn py_sinc_horizon_fraction(cents: f64, power: i64) -> PyResult<f64> {
+    val(horizon::sinc_horizon_fraction(cents, power))
+}
+
+#[pyfunction]
+#[pyo3(name = "horizon_mode_family")]
+pub fn py_mode_family(kind: &str, count: i64) -> PyResult<Vec<(i64, i64)>> {
+    val(horizon::mode_family(kind, count))
+}
+
+#[pyfunction]
+#[pyo3(name = "horizon_mode_block")]
+pub fn py_mode_block(m_max: i64) -> PyResult<Vec<(i64, i64)>> {
+    val(horizon::mode_block(m_max))
+}
+
+#[pyfunction]
+#[pyo3(name = "horizon_cancellation_courant")]
+pub fn py_cancellation_courant(m: i64, n: i64) -> PyResult<f64> {
+    val(horizon::cancellation_courant(m, n))
+}
+
+#[pyfunction]
+#[pyo3(name = "horizon_block_weight")]
+pub fn py_block_weight(m: i64, n: i64) -> PyResult<f64> {
+    val(horizon::block_weight(m, n))
 }

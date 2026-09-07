@@ -33,21 +33,56 @@ Structure and integers **are** compared exactly, and that is where the sharp tee
 search that returns a different number of roots, a spectrum that comes back with a different
 multiplicity, a solver that reports ``converged=False``, a mode-count that shifts — none of those is
 a small error and no tolerance can describe one.
+
+**The horizon rows have a different provenance, and one thing about them reads wrong at a glance.**
+``physsynth/analysis/horizon.py`` was not one of the modules deleted in §44 — it was *promoted* out
+of ``tests/helpers.py`` by ``docs/dev/resolution-horizon-plan.md`` §6, whose own text says freezing
+it is impossible because no Python implementation is left. That was a generalisation from §44 and it
+is false here: the Python bodies were live in the test folder right up to the commit that replaced
+them, so ``scripts/freeze_horizon.py`` recorded them in the one batch where it could. The gap
+measured on the generating machine was **exactly zero on every float case**, including the root find
+inside ``sinc_horizon_fraction`` — which is a statement about that machine and not a promise about
+CI (ledger #28), and is exactly why the bar below is a tolerance rather than an equality.
+
+Five of those rows record a *string* where the others record a gap, and it does not mean the freeze
+covered less. ``pitch_horizon`` returns ``(int, bool)`` and the two index builders return lists of
+integer pairs: there is no float in the answer to measure, so the whole comparison is the exact one
+on ``ints`` and ``structure``. The canary below separates that from a real incomparability instead
+of accepting any string, and checks that a row claiming it really has no floats and does have
+integers — otherwise the exemption would be a way to freeze a row that asserts nothing.
 """
 
 from __future__ import annotations
 
 import importlib
+import pkgutil
 
 import analysis_frozen_cases as cases
 import pytest
 from analysis_frozen_values import FROZEN
 
+import physsynth.analysis
+
 # The plan's Group A agreement target. One bar, applied to every case, on the amplitude-normalised
 # gap -- see the module docstring for why it is not an equality and why it is not per-case.
 BAR = 1e-13
 
-ANALYSIS_MODULES = ("modal", "damping", "dispersion", "duffing", "spectrum", "rotating_wave")
+# The instrument, DERIVED rather than listed. This was a hand-written tuple of six names until
+# `horizon` was promoted into the package (`docs/dev/resolution-horizon-plan.md` §6), and adding a
+# seventh name to it by hand would have restated the hole at a larger number rather than closing it:
+# the eighth module would arrive unfrozen and unnoticed, exactly as the seventh nearly did. Reading
+# the package instead makes the claim "no module in `physsynth.analysis` has a public function
+# without a frozen case", which is the claim the guard was always trying to make. Same move, and the
+# same reasoning, as the swap guard's derived class set (rust-migration ledger #67).
+ANALYSIS_MODULES = tuple(
+    sorted(m.name for m in pkgutil.iter_modules(physsynth.analysis.__path__))
+)
+
+# The sentinel `scripts/freeze_horizon.py` writes where a case has no float in its answer at all.
+# It is NOT "the comparison failed" -- it is "the comparison was entirely the exact one", which is
+# the stronger arm. Spelled out here rather than matched loosely so that a *real* incomparability
+# (a differing structure, a missing binding) still fails the canary below.
+NO_FLOATS = "no floats in this answer -- the comparison is the exact int/structure one"
 
 
 def _public(module: str, name: str):
@@ -115,8 +150,21 @@ def test_every_case_carries_a_measured_gap_rather_than_a_reason_it_could_not_be_
     structure -- and the generator writes the reason rather than dropping the case. If any appear,
     the freeze covered less than it looks like it covers.
     """
-    unmeasured = {k: v[3] for k, v in FROZEN.items() if not isinstance(v[3], float)}
+    unmeasured = {
+        k: v[3] for k, v in FROZEN.items() if not isinstance(v[3], float) and v[3] != NO_FLOATS
+    }
     assert not unmeasured, f"cases frozen without a comparison behind them: {unmeasured}"
+
+    # And the exemption is not a loophole: a row may only claim `NO_FLOATS` if it really has none,
+    # and must still carry integers, or it would be a row that asserts nothing whatsoever.
+    for key, (shape, floats, ints, recorded) in FROZEN.items():
+        if recorded != NO_FLOATS:
+            continue
+        assert not floats, f"{key}: claims no floats were compared, but froze {len(floats)} of them"
+        assert ints, (
+            f"{key}: no floats and no integers either -- {shape!r} is a frozen row with nothing in "
+            "it to compare, which is a case that passes by being empty"
+        )
 
 
 def test_the_frozen_file_covers_exactly_the_cases_module():

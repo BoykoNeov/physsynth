@@ -79,6 +79,7 @@ pub mod damping;
 pub mod dispersion;
 pub mod duffing;
 pub mod elliptic;
+pub mod horizon;
 pub mod modal;
 pub mod radiation;
 pub mod rotating_wave;

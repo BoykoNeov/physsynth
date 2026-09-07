@@ -1,21 +1,31 @@
-"""Frozen output of the PYTHON analysis oracles — GENERATED, do not edit by hand.
+"""Frozen output of the analysis oracles — GENERATED, do not edit by hand.
 
-Regenerate with ``python scripts/freeze_analysis.py``, which only works while the Python
-implementations still exist. After units 10 and 11 are deleted they do not, and that is
-the whole point of this file: it is the last thing a second implementation of these
-oracles ever said, kept so the Rust one can go on being checked against it.
+**Two provenances, and the difference matters.**
 
-``gap`` on each row is ``max|python - rust| / max|python|`` as measured on the machine
-that generated the file, with the Rust side reached through ``PHYSSYNTH_RS_ANALYSIS=1``
-and the same public names the callers call. It is a **record, not a bar** — the bars live
-in ``tests/test_analysis_frozen.py`` and are chosen with these numbers in front of you,
-because a bar with no measurement behind it is a guess. A string there means the two
-sides could not be compared at all, and says why.
+* Rows whose key does **not** begin ``horizon.`` were written by ``scripts/freeze_analysis.py``
+  from the Python implementations in ``physsynth/analysis/`` before they were deleted
+  (``docs/dev/rust-migration-plan.md`` §44). That generator can no longer run — it reads ``*_py``
+  aliases and drives the Rust side with ``PHYSSYNTH_RS_ANALYSIS=1``, and neither survives — so
+  those rows are carried forward verbatim by whatever regenerates this file. Python's ``repr``
+  round-trips a float exactly, so carrying them forward is bit-for-bit.
+* Rows beginning ``horizon.`` were written by ``scripts/freeze_horizon.py`` from the Python bodies
+  in ``tests/helpers.py``, in the batch that promoted them into ``physsynth/analysis/horizon.py``
+  (``docs/dev/resolution-horizon-plan.md`` §6). That generator can no longer run either, and for
+  the same reason: its subject was replaced by the shim in the commit after it ran.
+
+``gap`` on each row is ``max|python - rust| / max|python|`` as measured on the machine that
+generated it. It is a **record, not a bar** — the bars live in ``tests/test_analysis_frozen.py``
+and are chosen with these numbers in front of you, because a bar with no measurement behind it is
+a guess. A string there means the two sides could not be compared as floats at all, and says why.
+Five of the horizon rows are that case by construction: `pitch_horizon` returns `(int, bool)` and
+the two index builders return lists of integer pairs, so there is nothing float to measure and the
+whole comparison is the exact one on `ints` and `structure`. Do NOT read those rows as bit-
+identity between two float computations.
 """
 
 # ruff: noqa: E501
 
-GENERATED = '2026-09-03'
+GENERATED = '2026-09-07'
 
 # key -> (structure, floats, ints, measured gap against Rust at generation time)
 FROZEN: dict[str, tuple[str, list[float], list[int], float | str]] = {
@@ -384,6 +394,78 @@ FROZEN: dict[str, tuple[str, list[float], list[int], float | str]] = {
         [0.0, 0.000776422320507367, 0.0014999507625795838, 0.002121285525170213, 0.002598076209495191, 0.0028978122962949023, 0.003000049240638783, 0.0028978122962949027, 0.0025980762094951924, 0.002121285525170214, 0.0014999507625795847, 0.0007764223205073682, 1.1741985971368448e-18, -0.0007764223205073659, -0.0014999507625795827, -0.002121285525170212, -0.0025980762094951907, -0.002897812296294902, -0.003000049240638783, -0.0028978122962949027, -0.0025980762094951924, -0.002121285525170214, -0.0014999507625795844, -0.0007764223205073674, 0.0, 0.0, -3.5466157992918578e-06, -6.143091813460108e-06, -7.0937044170936765e-06, -6.143564676578171e-06, -3.5470886624129854e-06, 7.551613878019095e-21, 3.547088662413002e-06, 6.143564676578193e-06, 7.093704417093691e-06, 6.143091813460121e-06, 3.546615799291874e-06, 1.5588559748687038e-20, -3.5466157992918447e-06, -6.143091813460094e-06, -7.093704417093666e-06, -6.1435646765781696e-06, -3.5470886624129832e-06, 8.775755522181639e-21, 3.5470886624130036e-06, 6.143564676578194e-06, 7.093704417093692e-06, 6.143091813460122e-06, 3.546615799291865e-06, 0.0, 1282.7013199759112, 204.14825558466518, 1645224.766029564, 0.003, 1.0000884964341081, 1.0000884487067476, 1.0000883660370044, 1.0000882705726397, 1.000088187893252, 1.000088140156247, 1.000088140156247, 1.000088187893252, 1.0000882705726397, 1.0000883660370044, 1.0000884487067476, 1.0000884964341081, 1.0000884964341081, 1.0000884487067476, 1.0000883660370044, 1.0000882705726397, 1.000088187893252, 1.000088140156247, 1.000088140156247, 1.000088187893252, 1.0000882705726397, 1.0000883660370044, 1.0000884487067476, 1.0000884964341081, 208.84964341080922, 208.84487067475857, 208.83660370043071, 208.82705726397398, 208.81878932518885, 208.81401562469546, 208.81401562469546, 208.81878932518885, 208.82705726397398, 208.83660370043071, 208.84487067475857, 208.84964341080922, 208.84964341080922, 208.84487067475857, 208.83660370043071, 208.82705726397398, 208.81878932518885, 208.81401562469546, 208.81401562469546, 208.81878932518885, 208.82705726397398, 208.83660370043071, 208.84487067475857, 208.84964341080922, 1.6413276860921345e-05],
         [2, 0, 1, 1],
         1.4151904861957674e-16,
+    ),
+    'horizon.pitch_error_cents': (
+        'af[40]',
+        [-0.17381732480759915, -0.6953111889243478, -1.5646073095225965, -2.7819153756294077, -4.347529289167112, -6.261827503266952, -8.525273458707499, -11.138416119601551, -14.1018906096934, -17.4164189508993, -21.082810905995384, -25.10196492763596, -29.474869216165423, -34.202602889005455, -39.28633726468693, -44.72733726494986, -50.5269629386536, -56.68667111161539, -63.208017166869574, -70.09265696023812, -77.34234887654127, -84.95895603220337, -92.94444863052613, -101.30090647636787, -110.03052165755729, -119.13560140092596, -128.61857111147162, -138.48197760385534, -148.72849253612785, -159.36091605637844, -170.3821806738293, -181.7953553667826, -193.60364994083506, -205.8104196517885, -218.41917010885248, -231.43356247495777, -244.85741898233488, -258.6947287829841, -272.9496541552252, -287.62653708925257],
+        [],
+        0.0,
+    ),
+    'horizon.pitch_horizon': (
+        '(i,b)',
+        [],
+        [5, 1],
+        'no floats in this answer -- the comparison is the exact int/structure one',
+    ),
+    'horizon.pitch_horizon#bent': (
+        '(i,b)',
+        [],
+        [2, 0],
+        'no floats in this answer -- the comparison is the exact int/structure one',
+    ),
+    'horizon.sinc_horizon_fraction': (
+        'f',
+        [0.08377942962578615],
+        [],
+        0.0,
+    ),
+    'horizon.sinc_horizon_fraction#plate': (
+        'f',
+        [0.05924956116685914],
+        [],
+        0.0,
+    ),
+    'horizon.mode_family': (
+        '((i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i))',
+        [],
+        [1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 10, 1, 11, 1, 12, 1],
+        'no floats in this answer -- the comparison is the exact int/structure one',
+    ),
+    'horizon.mode_family#diagonal': (
+        '((i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i))',
+        [],
+        [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12],
+        'no floats in this answer -- the comparison is the exact int/structure one',
+    ),
+    'horizon.mode_block': (
+        '((i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i),(i,i))',
+        [],
+        [1, 1, 1, 2, 2, 1, 2, 2, 1, 3, 3, 1, 2, 3, 3, 2, 1, 4, 4, 1, 3, 3, 2, 4, 4, 2, 3, 4, 4, 3, 1, 5, 5, 1, 2, 5, 5, 2, 4, 4, 3, 5, 5, 3, 1, 6, 6, 1, 2, 6, 6, 2, 4, 5, 5, 4, 3, 6, 6, 3, 5, 5, 4, 6, 6, 4, 5, 6, 6, 5, 6, 6],
+        'no floats in this answer -- the comparison is the exact int/structure one',
+    ),
+    'horizon.cancellation_courant': (
+        'f',
+        [0.8589599108331828],
+        [],
+        0.0,
+    ),
+    'horizon.cancellation_courant#diagonal': (
+        'f',
+        [0.7071067811865476],
+        [],
+        0.0,
+    ),
+    'horizon.cancellation_courant#one_d': (
+        'f',
+        [1.0],
+        [],
+        0.0,
+    ),
+    'horizon.block_weight': (
+        'f',
+        [42.793103448275865],
+        [],
+        0.0,
     ),
     'rotating_wave.rotating_wave_history': (
         '(af[25],af[25],af[25],af[25],af[25],af[25])',

@@ -906,6 +906,13 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
         analysis::py_duffing_frequency_expansion,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_pitch_error_cents, m)?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_pitch_horizon, m)?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_sinc_horizon_fraction, m)?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_mode_family, m)?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_mode_block, m)?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_cancellation_courant, m)?)?;
+    m.add_function(wrap_pyfunction!(analysis::py_block_weight, m)?)?;
     m.add_function(wrap_pyfunction!(spectrum::py_magnitude_spectrum, m)?)?;
     m.add_function(wrap_pyfunction!(spectrum::py_parabolic_refine, m)?)?;
     m.add_function(wrap_pyfunction!(spectrum::py_measure_partials_near, m)?)?;

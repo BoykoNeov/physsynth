@@ -33,6 +33,20 @@ def _tone(fs: float, n: int, partials, amps, seed: int) -> np.ndarray:
 SIGNAL_SHORT = _tone(8000.0, 512, (220.0, 441.0, 663.0), (1.0, 0.4, 0.15), 20260903)
 SIGNAL_LONG = _tone(16000.0, 4096, (110.0, 221.5, 333.0, 447.0), (1.0, 0.5, 0.2, 0.1), 7)
 
+# The resolution horizon's fixture pair: a 64-point grid's own sinc droop against the continuum.
+# Built here rather than passed as literals so that BOTH sides of the recording are handed the same
+# doubles -- the thing being frozen is what the two implementations do with an input, not whether
+# they can parse one. The droop is monotone by construction, which is what makes the leading-prefix
+# reading of `pitch_horizon` meaningful; `HORIZON_BENT` is the deliberate counterexample that steps
+# outside a five-cent bound and back in, so the `monotone=False` arm is frozen too.
+HORIZON_MODES = np.arange(1, 41)
+_HORIZON_U = HORIZON_MODES * np.pi / (2 * 64)
+HORIZON_CONTINUUM = 100.0 * HORIZON_MODES.astype(float)
+HORIZON_DISCRETE = HORIZON_CONTINUUM * np.sin(_HORIZON_U) / _HORIZON_U
+_CENT = 2.0 ** (1.0 / 1200.0)
+HORIZON_BENT = 100.0 * _CENT ** np.array([0.0, 1.0, 9.0, 9.0, 2.0, 1.0])
+HORIZON_FLAT = np.full(6, 100.0)
+
 HESS_P = 0.01 * np.random.default_rng(3).standard_normal(12)
 HESS_Z = 1e-3 * np.random.default_rng(4).standard_normal(12)
 
@@ -387,6 +401,51 @@ CASES: dict[str, tuple[str, str, tuple, dict]] = {
             kappa=2.0,
         ),
     ),
+    # ---- horizon: where a scheme's answer stops being in tune -----------------------------------
+    #
+    # Promoted out of `tests/helpers.py` by `docs/dev/resolution-horizon-plan.md` §6 and frozen in
+    # the SAME batch, which is the only window in which it could be: the Python bodies were live in
+    # the test folder right up to the commit that replaced them with the shim, and after that there
+    # is no second implementation to record. §6 called this impossible, having generalised from the
+    # modules deleted in `docs/dev/rust-migration-plan.md` §44, where it was true.
+    #
+    # Three of these have no floats in them at all -- `pitch_horizon` returns `(int, bool)` and the
+    # two index builders return lists of integer pairs -- so `flatten` puts everything in `ints` and
+    # the tolerance arm of the frozen test is vacuous for them. That is the strongest form the
+    # check takes, not the weakest: the ints are compared EXACTLY. But do not read those rows as
+    # bit-identity between two float computations; nothing float was compared at all.
+    "horizon.pitch_error_cents": (
+        "horizon",
+        "pitch_error_cents",
+        (HORIZON_DISCRETE, HORIZON_CONTINUUM),
+        {},
+    ),
+    "horizon.pitch_horizon": (
+        "horizon",
+        "pitch_horizon",
+        (HORIZON_DISCRETE, HORIZON_CONTINUUM, 5.0),
+        {},
+    ),
+    "horizon.pitch_horizon#bent": (
+        "horizon",
+        "pitch_horizon",
+        (HORIZON_BENT, HORIZON_FLAT, 5.0),
+        {},
+    ),
+    "horizon.sinc_horizon_fraction": ("horizon", "sinc_horizon_fraction", (5.0,), {}),
+    "horizon.sinc_horizon_fraction#plate": (
+        "horizon",
+        "sinc_horizon_fraction",
+        (5.0,),
+        {"power": 2},
+    ),
+    "horizon.mode_family": ("horizon", "mode_family", ("axial", 12), {}),
+    "horizon.mode_family#diagonal": ("horizon", "mode_family", ("diagonal", 12), {}),
+    "horizon.mode_block": ("horizon", "mode_block", (6,), {}),
+    "horizon.cancellation_courant": ("horizon", "cancellation_courant", (7, 3), {}),
+    "horizon.cancellation_courant#diagonal": ("horizon", "cancellation_courant", (5, 5), {}),
+    "horizon.cancellation_courant#one_d": ("horizon", "cancellation_courant", (5, 0), {}),
+    "horizon.block_weight": ("horizon", "block_weight", (7, 3), {}),
 }
 
 
