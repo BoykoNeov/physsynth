@@ -177,7 +177,7 @@ what distinguishes a family is only whether a Courant number exists that beats i
 | rectangular membrane | explicit | **measured** | diagonal-only cancellation; axial ≈ 12% |
 | plate, simply supported | θ | **measured** | space-limited; **5.925% of grid** at 5 cents, closed form in §8; as `k → 0` the two mode families agree in index (a finite timestep breaks the tie toward the axial one) and differ by exactly 2 in pitch |
 | free-free beam | θ | **measured** | same fourth-power story as the plate |
-| orthotropic plate | θ | *not measured* | same family and mechanism; a grain rotates the eigenvalues, so the horizon is per-direction like the membrane's — the shape of the answer is known, the numbers are not. §8's primitive is what it needs, but its two families are **not** the isotropic plate's: the grain reweights the axes, so `axial` splits in two |
+| orthotropic plate | θ | **measured** | §9. In **mode index** there is one floor and it is the isotropic plate's — `sinc(u)²`, exactly on the diagonal for *any* grain, within a mode on both axial families for every grain tried. In **hertz** it is per-direction, because the same index is a different frequency on each axis (`√(g_x/g_y)` apart, 3.7× for spruce). `axial` did split in two, but into two *deviations from one floor* rather than two horizons — and the soft one crosses the closed form, so `horizon ≤ predicted` is an isotropic bar |
 | circular membrane, guitar plate | — | **no horizon yet** | the error is the **staircased domain**, not dispersion: the continuum reference is a frequency for a *different shape*, so a cents comparison mixes two errors. Needs a geometry-convergence study, not this primitive |
 | free plate (FFFF) | θ | **no horizon yet** | the continuum reference is a table of tabulated λ values (Narita/Leissa), not a formula over all modes, so a horizon exists only over the tabulated set |
 | VK plate, tension string, geometric string | — | **no horizon yet** | no linear modal oracle; the horizon is a **refinement** horizon. One point is already measured: `vk-newton-plan.md` §13 finds a 3 cm strike's 48 kHz solution 37% away from its 96 kHz one at 83 µs, and that the curvature axis setting Picard's wall also sets this horizon |
@@ -465,11 +465,142 @@ before it could happen.
 
 ### 8.9 Not done
 
-* **The orthotropic plate.** §5's row now says what §8 changes for it: the primitive is what it
-  needs, but its families are not these. A grain reweights the two axes, so `(m,1)` and `(1,n)`
-  stop being degenerate and `axial` becomes two measurements — which is exactly the assumption
-  `mode_family`'s docstring names and refuses to hide.
+* **The orthotropic plate. Done 2026-09-07 — §9**, and the prediction inside this bullet was
+  half right: `(m,1)` and `(1,n)` do stop being degenerate and `axial` did become two
+  measurements. What they are two of is not two horizons. Both sit on the isotropic plate's
+  `sinc²` floor, and what splits is how far each *deviates* from it.
 * **The membrane's block.** §4 measured its families; nobody has asked a block question of it.
   The corner argument in §8.7 is the plate's weight `w`; a membrane's is `√`-ed and needs its own.
 * **Promotion out of `tests/`.** Unchanged from §6: `sinc_horizon_fraction` now brings a `brentq`
   with it, which is free in a test and a dependency decision in the analysis crate.
+
+
+---
+
+## 9. The plate with a grain — 2026-09-07
+
+§5's inventory row predicted "the horizon is per-direction like the membrane's", and §8.9 predicted
+that `axial` would become two measurements. The second is right and the first is right only about
+the *units*: in mode index the grained plate has **one** floor and it is the isotropic plate's,
+with no grain anywhere in the formula. What the grain actually costs is something §3 never had to
+state, because on an isotropic plate it hides under the integer quantisation.
+
+The model is `test_plate_orthotropic.py`'s: a square supported plate whose bending stiffness is
+three ratios rather than one, with a closed-form continuum oracle
+(`f ∝ √(g_x a² + 2 g_h ab + g_y b²)`, `a = (m/L_x)²`) and a matching discrete one built from the
+two per-axis Dirichlet eigenvalues. Four fixtures throughout: **isotropic** (all ratios 1),
+**spruce** (`1, 0.153, 0.0727`), **wild** (`11, 2.5, 0.9` — no material), and **near-guard**
+(`1, -0.9, 1`), which sits just inside the constraint `g_h > -√(g_x g_y)` and is the only fixture
+here that is not a plausible plate. It earns its place by being the only one that falsifies
+anything: it flips two signs, and both flips are findings.
+
+### 9.1 The primitive gained a family, and the missing name is deliberate
+
+`mode_family` could return `(m,1)` and `(m,m)` and had no way to ask for `(1,n)` at all — its
+docstring already told callers that on `Lx ≠ Ly` the two axial families are separate measurements
+and to "ask for each separately", which was not possible. It is now `"axial_y"`. There is no
+`"axial_x"` alias: one concept, one spelling, and every existing caller means the x-family.
+
+### 9.2 The diagonal droop is `sinc(u)²` for *any* grain — exactly
+
+On a square domain the diagonal mode `(m,m)` carries the same `u` on both axes, so every grain
+weight multiplies the discrete and the continuum modal stiffness by the same factor and divides
+straight back out. `q_disc/q_cont` is `sinc(u)⁴` whatever `(g_x, g_h, g_y)` are, so the frequency
+ratio is `sinc(u)²` — §8.2's isotropic identity, to the last bit, measured at `< 1e-14` over four
+grains and two grids.
+
+This is a **pin, not a discovery**: it is exactly what a grain wired into the wrong axis, or a
+cross term applied once instead of twice, would break. It survives even at `g_h = -0.9`, where the
+continuum stiffness has nearly cancelled itself and a `0/0` would be a fair worry.
+
+### 9.3 Where the grain does reach: the axial families, and the sign is the cross term's
+
+`(m,1)` carries a drooped `λ_x` against an **undrooped** `λ_y`, so the weights no longer cancel
+and the family only *approaches* `sinc²`. The sign of what is left is the sign of `g_h`, because
+the cross term is the only one mixing a drooped axis with an undrooped one:
+
+* `g_h > 0` — the family sits **above** `sinc²`: less flat, in tune slightly further than the
+  isotropic closed form predicts. This is every real wood, and the isotropic plate too.
+* `g_h < 0` — it sits **below**, and the closed form is conservative there.
+
+The magnitude splits the two axes by an order of magnitude under a real grain: at `N = 512` the
+deviation is `4.8e-7` along spruce's stiff axis against `6.7e-6` across it. That is what §8.9 meant
+by "`axial` becomes two measurements" — two deviations from one floor, not two floors.
+
+### 9.4 The floor is the isotropic closed form — which stops being an *upper* bound
+
+`sinc_horizon_fraction(cents, 2) · N` was derived with no grain in it and predicts all three
+families of all four grains to within the integer quantisation: over 48 fixtures
+(4 grains × 3 families × 4 grids × 3 bounds) `horizon - predicted` runs from **−0.948 to +0.304**.
+
+The positive end is new. §8's plate test also asserts `horizon ≤ predicted`, on the argument that
+a timestep can only cost modes and never buy them. That argument is sound and it is not the whole
+story: by §9.3 an axial family's *space* floor is already a hair above `sinc²`, so its horizon
+wants to sit above the closed form with no timestep involved at all. On an isotropic plate the
+excess is under a third of a mode and the integer floor absorbs it — **the existing direction bar
+passes on quantisation, not on its stated mechanism.** A grain roughly doubles the excess on the
+soft axis and at coarse grids it clears the integer: six of the 48 cross, all of them the `(1,n)`
+family of a positively-grained plate, by up to 0.304 modes. So `horizon ≤ predicted` is a claim
+about an isotropic plate specifically, and the grained plate is asserted with the symmetric bar.
+
+### 9.5 Index versus hertz — where §5's "per-direction" is right
+
+Both axial families have the same horizon in their own mode index, and index `m` is not the same
+frequency on the two axes: `f(m,1)/f(1,m) → √(g_x/g_y)`, approached **from below** like `1/m²`
+because the cross term still contributes at low index (`gap·m²` is constant to 0.5% over
+`m = 10..80`). Spruce's is 3.709. So **a horizon quoted as a mode count is grain-independent and
+the same horizon quoted in hertz is not** — spruce's stiff axis is trustworthy 3.7× further up the
+spectrum than its soft one. That is the sentence a viewer read-out would have to get right.
+
+### 9.6 The block: the corner rule holds for every wood, and breaks at exactly `−1/m_max²`
+
+§8.7 reads a block through its diagonal corner. With a grain the small-`u` error weight becomes
+
+    W(m,n) = [g_x m⁶ + g_h m²n²(m²+n²) + g_y n⁶] / [g_x m⁴ + 2 g_h m²n² + g_y n⁴]
+
+which collapses to §8.7's `(m⁴+n⁴)/(m²+n²)` at equal weights. `W(m,m) = m²` **exactly, for any
+grain** — the same cancellation as §9.2 — while the axial corner stays below it. The grain does
+narrow the margin: over a `3×3` block the stiff-axis corner climbs from 8.200 (isotropic) to 8.862
+(spruce) against the corner's 9.
+
+It fails for a **negative** cross term, and the threshold is not "negative": it is `−1/m_max²`,
+exact to bisection at every block size measured (`−0.25, −1/9, −0.0625, −1/36, −0.015625` for
+`m_max = 2,3,4,6,8`). It **tightens as the block grows**, so a large enough block breaks the rule
+for any negative cross term at all, while a `2×2` tolerates `−0.25`. At `g_h = −0.9` the worst
+mode of a `6×6` is `(4,6)`, 28% worse than the corner — reading that block through its corner
+would understate its error by a quarter. `mode_block`'s docstring carries the condition now, along
+with the warning that its **ordering key is the isotropic frequency** and is not a grained plate's
+spectrum: on a grained plate the returned *set* is right and the *order* is not.
+
+### 9.7 Grain-blind in space, not at a timestep — and the first bar was picked at one fixture
+
+Combining §9.2 and §9.6: where the corner rule holds, a block's worst mode is its diagonal corner
+and that corner's droop is grain-independent, so **a block's worst space error is the same number
+on a grained plate as on an isotropic one**, bit for bit. `test_plate_modal.py`'s derived `2×2`
+band therefore transfers to the orthotropic plate unchanged, including §8.8's exact saturation.
+
+Only as `k → 0`. The time droop is `1/√(1 + θk²Q)` and `Q` is the modal stiffness, which *is* the
+grain, so at a working timestep the grain returns through the other mechanism, ordered by
+stiffness: the wild plate flattest, spruce sharpest. The first version of that test bounded the
+return at 5%, measured at a `2×2` block where it is 2% — and it failed at `4×4`, where it is 7.8%.
+This is the same "a margin measured at one fixture is a claim about one fixture" the migration kept
+paying for, met again here. The honest form is a **collapse**: over 20 fixtures the relative spread
+divided by `(m_max/N)²` is **45.19 ± 2%**, rising toward that limit as the grid refines. The grain's
+share of a block's stepped error is set by how much of the *grid* the block occupies and by nothing
+else, and the constant belongs to the fixture set rather than to the physics, so the test asserts
+the collapse and not the number.
+
+### 9.8 Not done
+
+* **No band was derived here**, because the orthotropic module has none to derive: §7.3's audit
+  files its only pitch assertion as a single-mode FFT check, and its two block-shaped tests
+  (`test_the_cross_term_detunes_selectively_without_reordering_anything`,
+  `test_the_grain_is_in_the_partial_series_and_not_in_the_level`) compare a grained *discrete*
+  spectrum against an isotropic *discrete* one, so the limiter is detectability and not pitch —
+  the "own discrete oracle" row of that table.
+* **The free orthotropic plate (#5of) is untouched.** It is in §5's "no horizon yet" group for the
+  free plate's reason — its reference is a set of probes rather than a formula over all modes —
+  and the grain does not change that.
+* **The membrane's block**, unchanged from §8.9: §4 measured its families, nobody has asked a
+  block question of it, and the corner argument here is the plate's weight, not a membrane's.
+* **Promotion out of `tests/`**, unchanged from §6 and §8.9.

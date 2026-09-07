@@ -317,9 +317,15 @@ def mode_family(kind: str, count: int) -> list[tuple[int, int]]:
     """The leading ``count`` ``(m, n)`` index pairs of one 2-D mode family.
 
     A *family* here is a sequence of index pairs along which the pitch error is monotone, so that
-    ``pitch_horizon``'s leading-prefix reading means something. The two canonical ones:
+    ``pitch_horizon``'s leading-prefix reading means something. The canonical ones:
 
-    * ``"axial"`` — ``(m, 1)``, one half-wave across the other axis.
+    * ``"axial"`` — ``(m, 1)``, one half-wave across the other axis. On an isotropic square this
+      is the only axial family there is, because ``(1, n)`` is its exact degenerate twin.
+    * ``"axial_y"`` — ``(1, n)``, the transpose. A **grain destroys that degeneracy**: the
+      orthotropic plate weights the two axes differently, so the two stop being the same
+      measurement, and the soft axis is the one that leaves the isotropic closed form first
+      (``docs/dev/resolution-horizon-plan.md`` section 9). Deliberately not spelled ``"axial_x"``
+      alongside it: one concept, one spelling, and every existing caller means the x-family.
     * ``"diagonal"`` — ``(m, m)``.
 
     This is deliberately **index-side only**: it returns mode numbers and nothing else, so the
@@ -335,9 +341,11 @@ def mode_family(kind: str, count: int) -> list[tuple[int, int]]:
         raise ValueError(f"a family needs at least one mode, got count={count}.")
     if kind == "axial":
         return [(m, 1) for m in range(1, count + 1)]
+    if kind == "axial_y":
+        return [(1, n) for n in range(1, count + 1)]
     if kind == "diagonal":
         return [(m, m) for m in range(1, count + 1)]
-    raise ValueError(f"unknown mode family {kind!r}; expected 'axial' or 'diagonal'.")
+    raise ValueError(f"unknown mode family {kind!r}; expected 'axial', 'axial_y' or 'diagonal'.")
 
 
 def mode_block(m_max: int) -> list[tuple[int, int]]:
@@ -350,6 +358,18 @@ def mode_block(m_max: int) -> list[tuple[int, int]]:
     interior minimum in ``n``, so the maximum over a block sits at a corner, and the diagonal
     corner beats the axial one for every ``m_max >= 2``. So a block's horizon is its diagonal
     family's horizon, which is a family and does have a prefix.
+
+    **Two things here are isotropic and do not survive a grain** (section 9 of the plan):
+
+    * the **ordering key** is ``m^2 + n^2``, which is the continuum frequency of an *isotropic*
+      plate. An orthotropic plate orders its modes by ``g_x a^2 + 2 g_h a b + g_y b^2`` instead,
+      so on a grained plate the returned *set* is still the block and the *order* is no longer its
+      spectrum. Sort by ``modal.orthotropic_plate_freqs`` if the order matters, or use the set
+      alone;
+    * the **corner argument** holds exactly while ``grain_cross > -1 / m_max^2`` and fails below
+      it, where an off-diagonal mode becomes the block's worst. That bound is measured and exact,
+      and it *tightens* as the block grows, so a large enough block breaks it for any negative
+      cross term at all. Every real wood has a positive one.
     """
     if m_max < 1:
         raise ValueError(f"a block needs at least one mode per axis, got m_max={m_max}.")

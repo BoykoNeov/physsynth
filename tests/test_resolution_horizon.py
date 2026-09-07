@@ -44,6 +44,7 @@ from helpers import (
     spatial_operator_horizon,
     wave_speed,
 )
+from numpy.typing import NDArray
 
 from physsynth.analysis import modal
 
@@ -431,6 +432,14 @@ def test_the_plate_space_floor_matches_its_closed_form(kind, n, cents):
     Both bars have room. Measured 2026-09-07 over these 24 fixtures, ``predicted - horizon`` runs
     from **0.168 to 0.948** modes — clear of zero, where the direction bar would fail, and clear
     of one, where the quantisation bar would. Neither is resting on a near-integer coincidence.
+
+    **The direction bar's stated mechanism is not the whole reason it passes** (section 9.4, added
+    the same day). The timestep argument is sound, but the ``axial`` family's *space* floor is
+    itself a hair **above** ``sinc^2`` — its undrooped cross-axis term dilutes the droop — so with
+    ``mu`` at zero it still wants to sit above the closed form. On an isotropic plate that excess
+    is under a third of a mode and the integer floor absorbs it. It is not grain-independent: put
+    a grain on the plate and the soft axis crosses. So this bar belongs to this model, and the
+    orthotropic tests below use the symmetric one.
     """
     modes = mode_family(kind, n - 1)
     horizon, monotone = pitch_horizon(*_plate_family_frequencies(n, 1e-5, modes), cents)
@@ -590,3 +599,374 @@ def test_a_2d_blocks_worst_mode_is_its_DIAGONAL_corner(n):
         assert worst == (m_max, m_max), (
             f"the {m_max}x{m_max} block's worst mode should be its diagonal corner, got {worst}"
         )
+
+
+# =====================================================================================
+# The plate with a grain — section 5's inventory row, and its prediction was backwards too
+# =====================================================================================
+#
+# The inventory predicted "the horizon is per-direction like the membrane's". In **mode index** it
+# is not: all three families sit on the same `sinc^2` floor the isotropic plate has, and the
+# diagonal one sits on it exactly, for any grain. In **hertz** it is, because the same index is a
+# different frequency on each axis. What the grain really costs is the isotropic plate's
+# *direction* bar: `sinc_horizon_fraction(cents, 2) * N` stops being an upper bound.
+
+GRAIN_ISO = dict(grain_x=1.0, grain_cross=1.0, grain_y=1.0)
+GRAIN_SPRUCE = dict(grain_x=1.0, grain_cross=0.153, grain_y=0.0727)  # ~ the spruce ratios
+GRAIN_WILD = dict(grain_x=11.0, grain_cross=2.5, grain_y=0.9)  # nothing is made of this
+# `grain_cross` must exceed `-sqrt(gx*gy)` or the modal stiffness goes non-positive; this sits
+# just inside that guard, and it is the ONLY fixture here that is not a plausible material. It
+# earns its place by being the one that flips two signs — see the two tests that name it.
+GRAIN_NEAR_GUARD = dict(grain_x=1.0, grain_cross=-0.9, grain_y=1.0)
+GRAINS = {
+    "isotropic": GRAIN_ISO,
+    "spruce": GRAIN_SPRUCE,
+    "wild": GRAIN_WILD,
+    "near-guard": GRAIN_NEAR_GUARD,
+}
+
+
+def _ortho_space_ratio(n: int, modes, grain: dict) -> NDArray[np.float64]:
+    """``f_disc / f_cont`` in the ``k -> 0`` limit — the space floor, with no timestep in it.
+
+    Formed from the two per-axis eigenvalues rather than by stepping a plate, exactly as
+    :func:`_plate_family_frequencies` does and for the same reason. Taking ``k`` to zero
+    *analytically* rather than to ``mu = 1e-5`` matters here: the residual time droop at that
+    ``mu`` is around ``1e-10``, which is four orders of magnitude above the ``1e-15`` identity the
+    diagonal family actually satisfies, so a small-``mu`` measurement could not see it.
+    """
+    h = L_DEFAULT / n
+    lam_x = np.array([modal.dirichlet_axis_eigenvalue(m, L_DEFAULT, h) for m, _ in modes])
+    lam_y = np.array([modal.dirichlet_axis_eigenvalue(nn, L_DEFAULT, h) for _, nn in modes])
+    a = np.array([(m / L_DEFAULT) ** 2 for m, _ in modes])
+    b = np.array([(nn / L_DEFAULT) ** 2 for _, nn in modes])
+    gx, gh, gy = grain["grain_x"], grain["grain_cross"], grain["grain_y"]
+    q_disc = gx * lam_x**2 + 2.0 * gh * lam_x * lam_y + gy * lam_y**2
+    q_cont = (np.pi**4) * (gx * a**2 + 2.0 * gh * a * b + gy * b**2)
+    return np.sqrt(q_disc / q_cont)
+
+
+def _ortho_family_frequencies(n: int, mu: float, modes, grain: dict):
+    """``(f_discrete, f_continuum)`` for a square orthotropic plate, analytically."""
+    h = L_DEFAULT / n
+    k = mu * h * h / KAPPA_PLATE_DEFAULT
+    lam_x = np.array([modal.dirichlet_axis_eigenvalue(m, L_DEFAULT, h) for m, _ in modes])
+    lam_y = np.array([modal.dirichlet_axis_eigenvalue(nn, L_DEFAULT, h) for _, nn in modes])
+    f_disc = np.asarray(
+        modal.discrete_orthotropic_plate_eigenfrequency(
+            lam_x, lam_y, KAPPA_PLATE_DEFAULT, k, PLATE_THETA_DEFAULT, **grain
+        )
+    )
+    f_cont = np.asarray(
+        modal.orthotropic_plate_freqs(KAPPA_PLATE_DEFAULT, L_DEFAULT, L_DEFAULT, modes, **grain)
+    )
+    return f_disc, f_cont
+
+
+def _ortho_weight(m: int, n: int, grain: dict) -> float:
+    """The small-``u`` pitch-error weight of mode ``(m, n)``, grain and all.
+
+    Expanding ``sinc(u)`` to ``1 - u^2/6`` in both axes of ``q_disc / q_cont`` leaves the error
+    proportional to this ratio. The isotropic weights collapse it to section 8.7's
+    ``(m^4 + n^4)/(m^2 + n^2)``, and it is what the two block tests below reason with. It is a
+    *proxy*, so both of them check it against the measured error rather than trusting it.
+    """
+    gx, gh, gy = grain["grain_x"], grain["grain_cross"], grain["grain_y"]
+    num = gx * m**6 + gh * m * m * n * n * (m * m + n * n) + gy * n**6
+    den = gx * m**4 + 2.0 * gh * m * m * n * n + gy * n**4
+    return num / den
+
+
+@pytest.mark.parametrize("name", list(GRAINS))
+@pytest.mark.parametrize("n", [64, 512])
+def test_the_grained_diagonal_droop_is_sinc_SQUARED_FOR_ANY_GRAIN(n, name):
+    """The identity the whole section rests on, and the grain cancels out of it exactly.
+
+    On a **square** domain the diagonal mode ``(m, m)`` carries the same ``u`` on both axes, so
+    every grain weight multiplies the discrete and the continuum stiffness by the same factor and
+    divides straight back out: ``q_disc / q_cont`` is ``sinc(u)^4`` whatever ``(g_x, g_h, g_y)``
+    are, so the frequency ratio is ``sinc(u)^2`` — the isotropic plate's answer, to the last bit.
+
+    That makes this a pin rather than a discovery about orthotropy: it is exactly the identity a
+    grain wired into the wrong axis, or a cross term applied once instead of twice, would break.
+    It holds even at ``grain_cross = -0.9``, where the continuum stiffness has nearly cancelled
+    itself and a ``0/0`` would be a fair worry.
+    """
+    modes = mode_family("diagonal", n - 1)
+    m = np.arange(1, n)
+    u = m * np.pi / (2.0 * n)
+    sinc_sq = (np.sin(u) / u) ** 2
+    dev = float(np.max(np.abs(_ortho_space_ratio(n, modes, GRAINS[name]) - sinc_sq)))
+    assert dev < 1e-14, (
+        f"{name}, N={n}: the diagonal family's droop should be sinc(u)^2 independent of the "
+        f"grain, off by {dev:.3e} — a grain that reaches the diagonal is wired wrong"
+    )
+
+
+@pytest.mark.parametrize("name", list(GRAINS))
+@pytest.mark.parametrize("n", [128, 512])
+def test_the_axial_deviation_from_sinc_squared_takes_THE_SIGN_OF_THE_CROSS_TERM(n, name):
+    """Where the grain does reach: the axial families, and it can push them either way.
+
+    ``(m, 1)`` carries a drooped ``lam_x`` against an undrooped ``lam_y``, so the weights no
+    longer cancel and the family only *approaches* ``sinc^2``. The sign of what is left is the
+    sign of ``grain_cross``, because the cross term is the only one mixing a drooped axis with an
+    undrooped one:
+
+    * ``grain_cross > 0`` — the family sits **above** ``sinc^2``: less flat, in tune slightly
+      further than the isotropic closed form predicts. This is every real wood.
+    * ``grain_cross < 0`` — it sits **below**, and the closed form is then conservative.
+
+    The magnitude splits the two axes by an order of magnitude under a real grain (measured at
+    ``N = 512``: ``4.8e-7`` along spruce's stiff axis against ``6.7e-6`` across it), which is what
+    section 5's row meant by "axial splits in two" — not two horizons, two deviations from one.
+    """
+    grain = GRAINS[name]
+    m = np.arange(1, n)
+    u = m * np.pi / (2.0 * n)
+    sinc_sq = (np.sin(u) / u) ** 2
+    devs = {}
+    for kind in ("axial", "axial_y"):
+        dev = _ortho_space_ratio(n, mode_family(kind, n - 1), grain) - sinc_sq
+        assert dev[0] == pytest.approx(0.0, abs=1e-14), "mode (1,1) is on the floor by symmetry"
+        devs[kind] = dev[1:]
+
+    expected = np.sign(grain["grain_cross"])
+    for kind, dev in devs.items():
+        assert np.all(np.sign(dev) == expected), (
+            f"{name}, {kind}, N={n}: the axial deviation from sinc^2 should everywhere take the "
+            f"sign of grain_cross ({expected:+.0f})"
+        )
+
+    stiff, soft = np.max(np.abs(devs["axial"])), np.max(np.abs(devs["axial_y"]))
+    if grain["grain_x"] == grain["grain_y"]:
+        assert stiff == pytest.approx(soft, rel=1e-12), "equal axes must not split"
+    else:
+        assert soft > 5.0 * stiff, (
+            f"{name}, N={n}: the soft axis should deviate far more than the stiff one, got "
+            f"{soft:.3e} against {stiff:.3e}"
+        )
+
+
+@pytest.mark.parametrize("cents", [1.0, 5.0, 25.0])
+@pytest.mark.parametrize("n", [64, 128, 256, 512])
+@pytest.mark.parametrize("name", list(GRAINS))
+def test_the_grained_space_floor_is_STILL_the_isotropic_closed_form(name, n, cents):
+    """The inventory said per-direction. In mode index it is one floor, and it is the plate's.
+
+    ``sinc_horizon_fraction(cents, 2) * N`` was derived with no grain anywhere in it, and it
+    predicts all three families of all four grains to within the integer quantisation. Measured
+    2026-09-07 over these 48 fixtures, ``horizon - predicted`` runs from **-0.948 to +0.304** —
+    inside one mode on both sides, and the positive end is the subject of the next test.
+    """
+    grain = GRAINS[name]
+    predicted = sinc_horizon_fraction(cents, power=2) * n
+    for kind in ("diagonal", "axial", "axial_y"):
+        modes = mode_family(kind, n - 1)
+        horizon, monotone = pitch_horizon(*_ortho_family_frequencies(n, 1e-5, modes, grain), cents)
+        assert monotone, f"{name}, {kind}: a family's droop must be monotone in the mode index"
+        assert abs(horizon - predicted) <= 1.0, (
+            f"{name}, {kind}, N={n}, {cents:g} cents: measured floor {horizon} against the "
+            f"isotropic closed form {predicted:.2f} — more than the quantisation apart"
+        )
+
+
+def test_the_closed_form_STOPS_BEING_AN_UPPER_BOUND_once_the_plate_has_a_grain():
+    """The isotropic plate's direction bar does not survive a grain, and this is why.
+
+    ``test_the_plate_space_floor_matches_its_closed_form`` also asserts ``horizon <= predicted``,
+    on the argument that a timestep can only cost modes. That argument is sound and it is not the
+    whole story: an **axial** family's *space* floor is already a hair above ``sinc^2`` (the test
+    above), so its horizon wants to sit above the closed form with no timestep involved at all.
+    On an isotropic plate the excess is under a third of a mode and the integer floor absorbs it.
+    A grain roughly doubles it on the soft axis, and at coarse grids it clears the integer.
+
+    Six of the 48 fixtures above cross: the ``(1, n)`` family of both positively-grained plates,
+    at ``N = 64`` (1 and 5 cents) and ``N = 128`` (25 cents), by up to **0.304 modes**. So a
+    ``horizon <= predicted`` bar is a claim about an isotropic plate specifically, and a grained
+    plate needs the symmetric one.
+    """
+    crossings = []
+    for name, grain in GRAINS.items():
+        for cents in (1.0, 5.0, 25.0):
+            for n in (64, 128, 256, 512):
+                predicted = sinc_horizon_fraction(cents, power=2) * n
+                for kind in ("diagonal", "axial", "axial_y"):
+                    modes = mode_family(kind, n - 1)
+                    horizon, _ = pitch_horizon(
+                        *_ortho_family_frequencies(n, 1e-5, modes, grain), cents
+                    )
+                    if horizon > predicted:
+                        crossings.append((name, kind, n, cents, horizon - predicted))
+    assert crossings, (
+        "no fixture exceeded the isotropic closed form; if this is genuinely true the direction "
+        "bar can be reinstated for grained plates, but check the grain reaches the model first"
+    )
+    assert all(kind == "axial_y" for _, kind, _, _, _ in crossings), (
+        f"only the soft-axis family should cross the closed form, got {crossings}"
+    )
+    assert all(GRAINS[name]["grain_cross"] > 0.0 for name, *_ in crossings), (
+        f"a negative cross term sits below the closed form and cannot cross it, got {crossings}"
+    )
+    assert max(excess for *_, excess in crossings) < 1.0, "the excess is still under one mode"
+
+
+@pytest.mark.parametrize("name", ["spruce", "wild"])
+def test_the_two_axial_families_sit_a_ROOT_STIFFNESS_apart_in_HERTZ(name):
+    """Where the inventory's "per-direction" reading is right after all: not in index, in hertz.
+
+    Both axial families have the same horizon in their own mode index, and index ``m`` is not the
+    same frequency on the two axes: ``f(m,1)/f(1,m) -> sqrt(g_x/g_y)``, approached **from below**
+    like ``1/m^2`` because the cross term still contributes at low index. So a horizon quoted as
+    "the first 30 modes" is grain-independent, and the same horizon quoted in hertz is a
+    per-axis number — spruce's stiff axis reaches 3.7x further up the spectrum than its soft one.
+
+    Asserted as a limit with a measured rate rather than as a tight equality, because the
+    approach is what makes the two statements consistent.
+    """
+    grain = GRAINS[name]
+    target = np.sqrt(grain["grain_x"] / grain["grain_y"])
+    orders = []
+    for m in (10, 20, 40, 80):
+        f_stiff = modal.orthotropic_plate_freqs(
+            KAPPA_PLATE_DEFAULT, L_DEFAULT, L_DEFAULT, [(m, 1)], **grain
+        )[0]
+        f_soft = modal.orthotropic_plate_freqs(
+            KAPPA_PLATE_DEFAULT, L_DEFAULT, L_DEFAULT, [(1, m)], **grain
+        )[0]
+        gap = target - f_stiff / f_soft
+        assert gap > 0.0, f"{name}, m={m}: the ratio approaches sqrt(g_x/g_y) from below"
+        orders.append(gap * m * m)
+    assert np.max(orders) / np.min(orders) < 1.05, (
+        f"{name}: the gap should close like 1/m^2, got gap*m^2 = {np.round(orders, 4)}"
+    )
+    assert orders[-1] / (80.0**2) < 2e-3, f"{name}: and be essentially closed by m=80"
+
+
+@pytest.mark.parametrize("name", ["isotropic", "spruce", "wild"])
+@pytest.mark.parametrize("n", [96, 256])
+def test_a_grained_blocks_worst_mode_is_STILL_its_diagonal_corner(n, name):
+    """Section 8.7's corner argument survives every wood, and the grain narrows its margin.
+
+    ``_ortho_weight(m, m)`` is **exactly ``m^2`` for any grain** — the same cancellation the
+    diagonal droop identity rests on — while the axial corner stays below it. What the grain does
+    is close the gap: over a ``3x3`` block the stiff-axis corner's weight climbs from 8.200
+    (isotropic) to 8.862 (spruce) against the corner's 9, so the corner still wins and by less.
+
+    Checked against the *measured* error, not only the weight, because the weight is a small-``u``
+    proxy. The block's set comes from ``mode_block``, whose ordering is isotropic and therefore
+    wrong here; only the set is used, which is what its docstring says to do.
+    """
+    grain = GRAINS[name]
+    for m_max in range(2, 9):
+        modes = mode_block(m_max)
+        err = np.abs(pitch_error_cents(*_ortho_family_frequencies(n, 0.5, modes, grain)))
+        worst = modes[int(np.argmax(err))]
+        assert worst == (m_max, m_max), (
+            f"{name}: the {m_max}x{m_max} block's worst mode should be its diagonal corner, "
+            f"got {worst}"
+        )
+        assert _ortho_weight(m_max, m_max, grain) == pytest.approx(m_max**2, rel=1e-12), (
+            "the diagonal corner's weight is m^2 for any grain; if this moved, the cancellation "
+            "the whole section rests on is gone"
+        )
+        assert _ortho_weight(m_max, 1, grain) < m_max**2
+
+
+def test_a_blocks_worst_error_is_grain_blind_IN_SPACE_and_not_at_a_finite_TIMESTEP():
+    """The consequence for every band stated over a block — and it holds in the limit only.
+
+    A block's worst mode is its diagonal corner, and the diagonal droop is ``sinc^2`` whatever the
+    grain is. So the block's **worst space error is the same number** on a grained plate as on an
+    isotropic one, bit for bit. ``test_plate_modal.py``'s derived ``2x2`` band therefore transfers
+    to the orthotropic plate unchanged, including its being exactly saturated.
+
+    **But only as ``k -> 0``.** The time droop is ``1/sqrt(1 + theta k^2 Q)`` and ``Q`` is the
+    modal stiffness, which *is* the grain — so at a working timestep the grain returns through the
+    other mechanism, ordered by stiffness: the wild plate is flattest, spruce sharpest.
+
+    The size of that return is not a number to hand-pick, and the first draft of this test did
+    hand-pick one: measured at a ``2x2`` block it is 2%, and the same bound fails at ``4x4``,
+    where it is 7.8%. It **collapses** instead. Over 20 fixtures the relative spread divided by
+    ``(m_max / N)^2`` is 45.19 +- 2%, rising toward that limit as the grid refines, so the grain's
+    share of a block's error is set by how much of the *grid* the block occupies and by nothing
+    else. Asserted as the collapse rather than as the constant, whose value belongs to this
+    ``mu`` and this grain set.
+    """
+    constants = []
+    for n in (96, 128, 256, 512):
+        for m_max in range(2, 7):
+            modes = mode_block(m_max)
+            positive = {name: g for name, g in GRAINS.items() if g["grain_cross"] > 0.0}
+
+            floor = {
+                name: float(np.max(np.abs(1200.0 * np.log2(_ortho_space_ratio(n, modes, g)))))
+                for name, g in positive.items()
+            }
+            assert max(floor.values()) - min(floor.values()) < 1e-12, (
+                f"N={n}, {m_max}x{m_max}: a block's SPACE error must not depend on the grain at "
+                f"all, got {floor}"
+            )
+
+            stepped = {
+                name: float(
+                    np.max(np.abs(pitch_error_cents(*_ortho_family_frequencies(n, 0.5, modes, g))))
+                )
+                for name, g in positive.items()
+            }
+            assert stepped["wild"] > stepped["isotropic"] > stepped["spruce"], (
+                f"N={n}, {m_max}x{m_max}: the stepped error should order by modal stiffness, "
+                f"got {stepped}"
+            )
+            spread = (max(stepped.values()) - min(stepped.values())) / min(stepped.values())
+            constants.append(spread / (m_max / n) ** 2)
+
+    assert max(constants) / min(constants) < 1.05, (
+        "the grain's share of a block's stepped error should collapse onto (m_max/N)^2; got a "
+        f"{max(constants) / min(constants):.3f}x spread over {np.round(constants, 2)}"
+    )
+
+
+@pytest.mark.parametrize("m_max", [2, 3, 4, 6, 8])
+def test_the_corner_rule_breaks_at_EXACTLY_minus_one_over_m_max_squared(m_max):
+    """And here the corner argument does fail — the measurement that earns the near-guard fixture.
+
+    Push ``grain_cross`` negative and the cross term starts *subtracting* from the continuum
+    stiffness of the mixed modes faster than from their discrete one, until an off-diagonal mode
+    overtakes the corner. The threshold is not "negative": it is ``-1 / m_max^2``, exact to
+    bisection at every block size measured, and it **tightens as the block grows** — so a large
+    enough block breaks the rule for any negative cross term at all, while a ``2x2`` tolerates
+    ``-0.25``. At ``grain_cross = -0.9`` the worst mode of a ``6x6`` is ``(4, 6)``, 28% worse than
+    the corner, so reading that block through its corner would understate its error by a quarter.
+
+    This is why ``mode_block``'s corner sentence carries a condition now, and why the near-guard
+    fixture is in this file at all: it is the only one that falsifies anything.
+    """
+    threshold = -1.0 / (m_max * m_max)
+
+    def worst_by_weight(cross: float) -> tuple[int, int]:
+        grain = dict(grain_x=1.0, grain_cross=cross, grain_y=1.0)
+        modes = mode_block(m_max)
+        return max(modes, key=lambda mn: _ortho_weight(*mn, grain))
+
+    assert worst_by_weight(threshold * 0.99) == (m_max, m_max), (
+        f"just inside {threshold:.6f} the diagonal corner must still be the worst mode"
+    )
+    assert worst_by_weight(threshold * 1.01) != (m_max, m_max), (
+        f"just past {threshold:.6f} an off-diagonal mode must overtake it"
+    )
+
+    # ...and the proxy agrees with the measured error where the two are not degenerate.
+    grain = dict(grain_x=1.0, grain_cross=-0.9, grain_y=1.0)
+    modes = mode_block(m_max)
+    err = np.abs(pitch_error_cents(*_ortho_family_frequencies(256, 0.5, modes, grain)))
+    measured = modes[int(np.argmax(err))]
+    predicted = worst_by_weight(-0.9)
+    assert set(measured) == set(predicted), (  # (m,n) and (n,m) are degenerate at g_x == g_y
+        f"{m_max}x{m_max}: the measured worst mode {measured} and the weight's {predicted} differ"
+    )
+    corner_err = err[modes.index((m_max, m_max))]
+    assert err.max() > 1.15 * corner_err, (
+        f"{m_max}x{m_max}: reading this block through its corner should understate its error, "
+        f"got {err.max():.4f} against {corner_err:.4f} cents"
+    )

@@ -32,7 +32,7 @@
 | 12 | Raw physics is not a musician's interface (parameter mapping) | none yet | Deferred (§12) |
 | 13 | Which models can ever run in real time | engine, room | Deferred, and now decoupled from the language (§13) |
 | 14 | `piston_radiation_resistance`'s `ka < 1e-8` series threshold was about three decades too small: just above it the direct form cancelled catastrophically and was 544% wrong | `core/radiation.py` | **Fixed 2026-09-03** — three Taylor terms below `ka = 3e-2`; worst error 5.24 → 6.7e-13 (§14) |
-| 15 | No model states where its own answer stops being in tune, and the boundary is much lower than anyone assumed | every resonator | **Measured 2026-09-06** — two families with opposite signs (implicit errors compound into a hard floor at ~8% of the grid; explicit errors cancel at the magic Courant number), the plate is space-limited at every `fs` the suite uses, and the membrane's ceiling cancellation is **diagonal-only** (§15) |
+| 15 | No model states where its own answer stops being in tune, and the boundary is much lower than anyone assumed | every resonator | **Measured 2026-09-06** — two families with opposite signs (implicit errors compound into a hard floor at ~8% of the grid; explicit errors cancel at the magic Courant number), the plate is space-limited at every `fs` the suite uses, and the membrane's ceiling cancellation is **diagonal-only**; the 2-D plate's band was **derived 2026-09-07** by splitting its spectrum by mode family, and the **orthotropic** plate measured the same day — one floor in mode index, per-direction only in hertz (§15) |
 
 ---
 
@@ -633,3 +633,16 @@ quoted in hertz is not. The band was derivable after all — through the block's
 corner**, which is always its worst mode — and it came out **exactly saturated** (horizon 2,
 band 2, the `3×3` block 1.41 cents out), the one place the audit's "every literal was
 conservative" needed amending.
+
+**The orthotropic plate was measured 2026-09-07** (`resolution-horizon-plan.md` §9), closing
+the last row of that inventory that had a stated shape and no numbers. Its prediction was half
+wrong in the same direction as §8's: in **mode index** a grained plate has one floor and it is the
+isotropic plate's, exactly `sinc(u)²` along the diagonal for any grain at all; only in **hertz** is
+it per-direction, because the two axial families sit `√(g_x/g_y)` apart at the same index (3.7× for
+spruce). What the grain does cost is a **direction bar**: an axial family's space floor sits a hair
+*above* the closed form, which on an isotropic plate hides under the integer quantisation, so §8's
+`horizon ≤ predicted` was passing on rounding rather than on its stated mechanism — and on the soft
+axis of a grained plate it crosses. Two further conditions came out of it: reading a block through
+its diagonal corner is exact for every real wood but fails below `g_h = −1/m_max²`, a bound that
+tightens as the block grows; and a block's worst error is grain-blind only as `k → 0`, the grain
+returning through the time droop in proportion to `(m_max/N)²`.
