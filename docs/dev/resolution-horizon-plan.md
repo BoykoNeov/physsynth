@@ -1141,3 +1141,135 @@ deliberately not regenerated here.
   three bounds ship in every payload and the fourth someone wants would need a round trip.
 * **The strip is not on the canvas.** Nothing marks the horizon *on* the spectrum panel, where a
   vertical line at `hz` would say the same thing in the place the partials are already drawn.
+  **Done 2026-09-07 — §13**, and this bullet named the wrong mark on the wrong axis. A *line* says
+  "something happens here" where the claim is about a **region**, so what ships is a wash over
+  everything past the horizon. And `hz` is the right quantity on only one of the two panels this
+  reaches: the 1-D partials panel's axis **is** a mode index, so its mark is a partial count, which
+  is §12.3's own warning read in the other direction. The bullet also did not see that the panels
+  are display arrays with ends of their own — the honest answer when the horizon lies past the last
+  drawn mode is to draw **nothing** and say so, and at the default 5¢ bound that is what *both*
+  2-D panels do.
+
+---
+
+## 13. The horizon on the canvas — 2026-09-07
+
+§12 put the claim in a strip under the transport. This puts it where the partials are already
+drawn: the second diagnostic panel shades everything past the horizon and marks the cut. Same
+numbers, same `payload.horizon` block, no new payload field and no physics — what this batch is
+about is which of two arrays a mark is allowed to be a fact about.
+
+Code: `web/static/app.js` (`horizonBand`, `markHorizon`, `shadeBeyondHorizon`,
+`drawHorizonOnFreqAxis`, and the call sites in `drawPartials`, `drawSpectrum`, `drawVkSpectrum`),
+plus the reset in `drawDiagnostics` and the redraw in the cents-selector handler. Verification:
+`scripts/verify_web_headless.py` (`_horizon_mark_ok`) and one test in `tests/test_web_backend.py`.
+
+### 13.1 The one rule: position comes from the payload, extent comes from the panel
+
+§12.5's trap was a horizon **read off** a display array — hand `pitch_horizon` the 12 partials the
+panel ships and it returns at most 12, which is a fact about the list rather than about the scheme.
+This batch is that trap run backwards. The horizon is computed correctly, over the whole grid, and
+then *drawn onto* an array that stops at 12 partials or at 637 Hz. Clamping the mark to the panel's
+right-hand edge would be the same lie, drawn instead of computed.
+
+So a horizon outside the panel draws **nothing** and puts the number in the readout instead
+("horizon: 866 Hz at 5¢ — above this panel, which reaches 637 Hz"). Absence plus a sentence is the
+correct output here, not a degraded one — the alternative is a red edge the eye reads as a measured
+boundary at 637 Hz.
+
+### 13.2 Which panels, decided by the union arm and not by a model list
+
+The gate is `payload.horizon.kind === "prefix"`. Nothing in the drawing code names a model, which
+matters because §12.7's gates key on `(model, domain)` and one model key covers three plates: the
+von Kármán panel draws a mark with the nonlinearity **off** (it is a simply-supported Kirchhoff
+plate again) and refuses with it on, through the same call.
+
+Three panels can express a horizon at all — the 1-D partials bars, the 2-D mode spectrum, and the
+von Kármán spectrum. Everything else in `drawDiagnostics` is dispatched on a claim of its own with
+no frequency or index axis: the bow's stick-slip fraction, the jawari's shimmer contrast, the
+juari's tuning curve, the fret's raster, the bore's reflection oracle, the body's drain-speed map.
+**Four of those scenes have a measured horizon** — bow, jawari, juari and fret all inherit the
+string they drive, and the strip quotes a number for each — and drawing nothing on them is correct
+rather than an omission. `window.__horizonMark` is therefore reset to `null` at the top of
+`drawDiagnostics`, and a `null` mark is a pass in the harness: without the reset the previous
+render's decision would read as this panel's.
+
+### 13.3 Each panel in its own units, and the mirror image of §12.3
+
+§12.3 warns that the hertz reading does not license a mode count — the membrane is "8 modes below
+361 Hz" *and* "every mode with m, n ≤ 3", and quoting the first as though it licensed the first 22
+modes overstates the block fourfold. The mirror image is what this batch had to get right: the 1-D
+partials panel's axis **is** a mode index, so a frequency drawn on it would be the same
+overstatement pointing the other way. The frequency axes get `hz`; the index axis gets the partial
+count; neither panel carries both, and the strip above still does.
+
+### 13.4 The selector had to move the panel too
+
+The cents buttons retune the strip with no round trip (§12). Wiring them to `drawHorizon` alone
+would have left the strip's number moving while the shading stayed put — a read-out contradicting
+itself on screen, which is worse than never having drawn it. `drawDiagnostics` only reads state and
+paints (no assignment to `payload`, to `animStart` or to `currentFrame`), so it is safe to call
+again; the handler is guarded on `payload` because the buttons exist before the first render does.
+
+### 13.5 What is asserted is the DECISION, not the pixels
+
+No payload field changed, so `tests/test_web_backend.py` has nothing new to pin about the data —
+and a screenshot cannot tell a mark that agrees with the strip from one that does not. So each
+panel records what it concluded on `window.__horizonMark` (`{drawn, reason, at, units}`), which is
+the device `applyUrlSliders` already uses for `__urlParamNotes`, and for the reason that one exists:
+batch 19 shipped a deep link that dropped every parameter for a whole batch because nothing failed
+when it did.
+
+`_horizon_mark_ok` in the headless harness grades it, and the check that carries the weight is the
+**cross-check** — a strip quoting a number while the panel decided the scene was refused, or the
+reverse, is a failure. Five reasons are possible: `refused`, `whole-grid`, `off-panel`,
+`zero-modes`, `drawn`.
+
+That vocabulary lives in two files, which is its own hazard: rename a branch in `app.js` and the
+harness grades a word nothing emits — a harness that passes because it is looking at nothing. One
+test derives both sides (the `markHorizon("…")` literals out of `app.js`, the reason set out of the
+harness) and asserts they are the same five words. It is the same move §11.5 and §12.2 made on
+their populations, and for the same reason: a hand-written third copy would be one more thing to
+drift.
+
+### 13.6 Measured, at the viewer's defaults
+
+| scene | 1¢ | 5¢ (default) | 25¢ |
+|---|---|---|---|
+| ideal string, `λ = 1` | whole grid (127) | whole grid | whole grid |
+| damped stiff string | **drawn**, 2 partials | **drawn**, 5 partials | off-panel, 12 of 12 |
+| rectangular membrane | **drawn**, 480 Hz | off-panel, 866 Hz | off-panel, 1.88 kHz |
+| supported plate | **drawn**, 62.8 Hz | off-panel, 408 Hz | off-panel, 1.92 kHz |
+| von Kármán, nonlinearity off | **zero modes** | **drawn**, 53.5 Hz | **drawn**, 214 Hz |
+| von Kármán on / disk / guitar / free / bridge-coupled | refused | refused | refused |
+| bow, jawari, juari, fret | measured, no markable axis | — | — |
+
+Two of those rows are worth reading twice.
+
+**The default bound puts both 2-D panels off-panel.** The mode-spectrum panel's frequency range is
+set by the modes it draws (about 1.6× the top one), and the 5¢ horizon sits above it — 866 Hz
+against a 637 Hz panel for the membrane, 408 Hz against 392 Hz for the plate. Nothing is wrong with
+either number; the panel is simply scaled for a different job, showing the FFT peaks landing on the
+first few eigenmodes. The consequence is that **at the shipped default the drawn mark is a 1-D
+feature**, and the 2-D panels carry the claim as a sentence. That is the honest reading of §13.1
+and it is deliberately not fixed by rescaling the panel, which would change what the panel is for.
+
+**The zero-modes arm is live on a shipped default.** §12.6 records it as live in the payload; here
+it is on screen — the linear von Kármán plate at 1¢ has *nothing* in tune, so the whole panel is
+washed and labelled "nothing inside 1¢". Clicking 5¢ and 25¢ walks it back through `drawn` twice,
+which is also the cheapest manual check that §13.4 works.
+
+### 13.7 Not done
+
+* **The 2-D panels do not draw at the default bound** (§13.6). Making them would mean widening the
+  mode spectrum's frequency range to include the horizon, which changes what that panel shows. A
+  second axis, or a horizon-aware range, is a design question rather than a drawing one.
+* **Nothing marks the horizon on the main field canvas.** There is no frequency or index axis
+  there, and it is not clear what a mark on a heatmap would even claim.
+* **The mark is not in the deep link**, for the same reason the cents bound is not: both are
+  display state, and the link carries what the physics was run with.
+* **The von Kármán panel is still titled "Spectrum (nonlinear)" with the nonlinearity off.** Noticed
+  here rather than introduced here — the title keys on the payload's `kind`, which does not move
+  with the checkbox — and it now sits next to a mark that *does*.
+* **The four "no horizon yet" rows of §5 are still not attempted**, unchanged from §6, §11.8 and
+  §12.10. Two batches have now made their absence more visible without making any of them smaller.

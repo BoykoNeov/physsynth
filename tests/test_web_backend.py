@@ -5223,6 +5223,34 @@ def test_horizon_every_model_the_viewer_OFFERS_is_classified():
     }
 
 
+def test_horizon_the_canvas_MARK_vocabulary_is_the_same_word_in_both_files():
+    """The panel emits a decision word; the headless harness grades it. One typo and it is silent.
+
+    Batch 13 draws the horizon onto the diagnostic panel as well as into the strip, and the pixels
+    are not assertable from pytest — what is assertable is the *decision*. ``markHorizon`` in
+    ``app.js`` records one of five words on ``window.__horizonMark`` and
+    ``scripts/verify_web_headless.py`` cross-checks it against the strip. That vocabulary lives in
+    two files, so renaming a branch in one of them would leave the other grading a word that is
+    never emitted — a harness that passes because it is looking at nothing, which is the shape of
+    failure ``__urlParamNotes`` exists to prevent. Both sides are derived here rather than written
+    down: a literal third copy would be one more thing to drift.
+    """
+    root = pathlib.Path(__file__).resolve().parents[1]
+    app = (root / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    harness = (root / "scripts" / "verify_web_headless.py").read_text(encoding="utf-8")
+
+    emitted = set(re.findall(r'markHorizon\("([a-z-]+)"', app))
+    assert len(emitted) == 5, emitted          # one per branch; a lost branch is a silent hole
+    graded = re.search(r"HORIZON_MARK_REASONS = \{([^}]*)\}", harness)
+    assert graded, "the harness's reason set moved; this guard derives its population from it"
+    assert set(re.findall(r'"([a-z-]+)"', graded.group(1))) == emitted
+
+    # The two arms the panel actually PAINTS, as opposed to reporting in text. Named here because
+    # the harness's `drawn` flag is computed from them and nothing else asserts that pairing.
+    assert {"drawn", "zero-modes"} <= emitted
+    assert 'reason === "drawn" || reason === "zero-modes"' in app
+
+
 def test_horizon_a_prefix_block_carries_every_field_the_frontend_reads():
     """The contract `drawHorizon` renders, pinned — including the bounds it can retune between."""
     block = _horizon(_base_params())

@@ -67,10 +67,48 @@ PROBE = r"""
               : document.getElementById('horizon-badge').textContent + ' — '
                 + document.getElementById('horizon-line').textContent),
     urlNotes: (window.__urlParamNotes || []).join(' | '),
+    hzMark: window.__horizonMark || null,
     warm: warm, cool: cool, bg: bg, other: other, total: d.length / 4,
   });
 })()
 """
+
+
+# What the second diagnostic panel is allowed to have decided about the horizon. The vocabulary
+# lives in two files — `markHorizon` in `web/static/app.js` emits it, this reads it — so
+# `test_web_backend.py` asserts the two agree; a reason this set does not know fails LOUDLY below
+# rather than being skipped past.
+HORIZON_MARK_REASONS = {"refused", "whole-grid", "off-panel", "zero-modes", "drawn"}
+
+
+def _horizon_mark_ok(mark: object, horizon: str) -> tuple[bool, str]:
+    """Does what the PANEL drew agree with what the STRIP says?
+
+    The pixels are not asserted; the decision is. `window.__horizonMark` is the page's own record
+    of what the panel concluded, the same device as `__urlParamNotes` and for the same reason —
+    batch 19's deep link dropped every parameter for a whole batch because a silent wrong answer
+    is indistinguishable from a right one. The check that matters is the cross-check: a strip
+    quoting a number while the panel decided the scene was refused (or the reverse) is a read-out
+    contradicting itself on screen, and it is exactly the failure a screenshot would not catch.
+
+    A `None` mark is a PASS. Most panels have no frequency or index axis to draw a horizon on —
+    the stick-slip trace, the tuning curve, the bell reflection — and several of those scenes have
+    a measured horizon that simply cannot be expressed on the axis they use.
+    """
+    if mark is None:
+        return True, "no markable axis"
+    if not isinstance(mark, dict) or mark.get("reason") not in HORIZON_MARK_REASONS:
+        return False, f"malformed mark {mark!r}"
+    reason = str(mark["reason"])
+    strip_refused = horizon.startswith("not quoted")
+    if strip_refused != (reason == "refused"):
+        return False, (f"panel says {reason!r} but the strip quotes "
+                       f"{'no number' if strip_refused else 'a number'}")
+    at = mark.get("at")
+    if mark.get("drawn") and not isinstance(at, (int, float)):
+        return False, f"drawn with no position ({at!r})"
+    units = mark.get("units")
+    return True, reason + ("" if at is None else f" at {at} {units}")
 
 
 def _find_chrome() -> str | None:
@@ -164,13 +202,18 @@ def run_case(cdp: CDP, name: str, query: str) -> bool:
     # these scenes legitimately have no horizon to quote — so a case cannot be asked for a number,
     # only for an answer. A hidden strip means drawHorizon never ran or the payload lost the key.
     horizon = probe.get("horizon", "(hidden)")
+    # And the same claim drawn on the canvas has to agree with the strip's wording — see
+    # `_horizon_mark_ok`. Part of the verdict, not a note: the two surfaces disagreeing is a bug
+    # that looks like a working page.
+    mark_ok, mark_note = _horizon_mark_ok(probe.get("hzMark"), horizon)
     ok = (probe["status"].startswith("ok") and painted > 2000 and not notes
-          and horizon != "(hidden)" and len(horizon) > 20)
+          and horizon != "(hidden)" and len(horizon) > 20 and mark_ok)
     print(f"\n=== {name} ({query}) ===")
     print(f"  status   : {probe['status']}")
     print(f"  energy   : {probe['energy'].splitlines()[0] if probe['energy'] else '(none)'}")
     print(f"  diag2    : {probe['diag2'].splitlines()[0] if probe['diag2'] else '(none)'}")
     print(f"  horizon  : {horizon}")
+    print(f"  hz-mark  : {mark_note}{'' if mark_ok else '   <- MISMATCH'}")
     print(f"  url      : {notes if notes else 'every parameter applied as given'}")
     print(f"  painted  : warm={probe['warm']} cool={probe['cool']} other={probe['other']} "
           f"bg={probe['bg']} / {probe['total']}  -> {'PASS' if ok else 'FAIL'}")

@@ -1661,6 +1661,99 @@ function drawHorizon() {
   detail.textContent = lines.join("\n");
 }
 
+// ── the horizon, drawn ON the panel ─────────────────────────────────────────────────────────
+// The strip above says "trustworthy to 2 kHz"; these helpers say the same thing in the place the
+// partials are already drawn. One rule governs all of it: **where the mark goes comes from
+// `payload.horizon`, how far the panel reaches comes from the display array, and the two are
+// never mixed.** That is section 12.5's trap run backwards — there, a horizon read off a 12-long
+// display list was a fact about the list rather than about the scheme; here, a mark clamped to the
+// right-hand edge of a panel the horizon sits beyond would be the same lie drawn instead of
+// computed. So a horizon outside the panel draws NOTHING and says so in the readout: absence plus
+// a sentence is the correct output, not a degraded one.
+//
+// The gate is `kind === "prefix"`, never a list of model names. The payload's union arm already
+// knows which scenes have a number — including ones this file has never enumerated — and a scene
+// that refuses gets no mark at all rather than a mark at zero.
+function horizonBand() {
+  const h = payload && payload.horizon;
+  if (!h || h.kind !== "prefix") return null;
+  return h.bands.find((x) => x.cents === horizonCents) || h.bands[0];
+}
+
+// The page's own record of what a panel decided — the move `applyUrlSliders` already makes with
+// `window.__urlParamNotes`, and for the same reason it was needed there: a mark that silently
+// disagrees with the strip looks exactly like one that agrees with it, and batch 19 shipped a deep
+// link that dropped every parameter for a whole batch because nothing failed when it did. The
+// headless harness reads this and cross-checks it against the strip; the pixels are not asserted,
+// the DECISION is. `reason` is one of:
+//   refused    — this scene has no number (the union's other arm), so nothing is drawn;
+//   whole-grid — nothing in the resolvable spectrum is out of tune, so no region is beyond it;
+//   off-panel  — the horizon is past the last mode this panel draws (see the rule above);
+//   zero-modes — nothing is in tune, so the WHOLE panel is beyond the horizon;
+//   drawn      — a cut inside the panel, with the region past it shaded.
+function markHorizon(reason, at, units) {
+  window.__horizonMark = {
+    drawn: reason === "drawn" || reason === "zero-modes",
+    reason: reason,
+    at: at === undefined ? null : at,
+    units: units || null,
+  };
+}
+
+// Shade the part of a panel that lies beyond the horizon, with a rule at the boundary. Shading
+// rather than a bare rule because the claim is about a REGION: a line says "something happens
+// here", the wash says "everything to the right of this is unwarranted", which is the sentence the
+// strip is already making. Red (--bad) is the one colour not already spoken for in this panel's
+// vocabulary — grey dashed is the continuum oracle, blue the discrete eigenmodes, yellow a detected
+// peak, green the FFT — so the mark cannot be misread as a mode of any kind.
+function shadeBeyondHorizon(g, xcut, xRight, top, bottom, label) {
+  g.save();
+  g.fillStyle = "rgba(255,107,107,.09)";
+  g.fillRect(xcut, top, Math.max(0, xRight - xcut), bottom - top);
+  g.strokeStyle = "rgba(255,107,107,.55)"; g.lineWidth = 1.5;
+  g.beginPath(); g.moveTo(xcut, top); g.lineTo(xcut, bottom); g.stroke();
+  if (label) {
+    g.fillStyle = "rgba(255,107,107,.85)";
+    g.font = "10px ui-monospace, monospace";
+    // The label belongs to the shaded REGION, so when the region is too narrow to hold it the
+    // label slides left to stay on the canvas rather than being clipped off the right edge.
+    const w = g.measureText(label).width;
+    g.fillText(label, Math.max(2, Math.min(xcut + 5, xRight - w - 2)), top + 11);
+  }
+  g.restore();
+}
+
+// The hertz reading, on a frequency axis. Shared by the two 2-D spectrum panels — the membrane/
+// plate mode spectrum and the von Karman panel, which draws the SAME plate when its nonlinearity
+// is switched off (and refuses when it is on; the union arm decides that, not this function).
+// Returns the sentence for the readout, "" when there is nothing to say.
+//
+// This axis is in hertz, so the mark is a FREQUENCY and never a mode count. Section 12.3 warns
+// that the hertz ceiling does not license "the first N modes" — the membrane's two readings differ
+// by a factor of four — and printing a count here would make exactly that overstatement. The count
+// belongs to the index axis, which is the 1-D panel's.
+function drawHorizonOnFreqAxis(g, fx, fmax, x0, xRight, top, bottom) {
+  const hb = horizonBand();
+  if (!hb) { markHorizon("refused"); return ""; }
+  if (hb.saturated) {
+    markHorizon("whole-grid", hb.hz, "hz");
+    return `horizon: in tune to the top of the grid (${fmtHz(hb.hz)}) at ${hb.cents}¢`;
+  }
+  if (hb.modes === 0) {
+    markHorizon("zero-modes", 0, "hz");
+    shadeBeyondHorizon(g, x0, xRight, top, bottom, `nothing inside ${hb.cents}¢`);
+    return `horizon: none at ${hb.cents}¢ — even ${hb.limited_by} is out of tune`;
+  }
+  if (hb.hz == null || hb.hz > fmax) {
+    markHorizon("off-panel", hb.hz, "hz");
+    return `horizon: ${fmtHz(hb.hz)} at ${hb.cents}¢ — above this panel, which reaches `
+      + `${fmtHz(fmax)}`;
+  }
+  markHorizon("drawn", hb.hz, "hz");
+  shadeBeyondHorizon(g, fx(hb.hz), xRight, top, bottom, `beyond ${fmtHz(hb.hz)}`);
+  return `horizon: in tune to ${fmtHz(hb.hz)} at ${hb.cents}¢ — shaded beyond`;
+}
+
 // ── string animation ────────────────────────────────────────────────────────────────────────
 function drawString(idx) {
   const g = stringCv.getContext("2d");
@@ -3600,6 +3693,12 @@ function drawReedSignature() {
 }
 
 function drawDiagnostics() {
+  // Cleared before the dispatch below picks a panel. Most panels have no axis a horizon can be
+  // drawn on — the bow's stick-slip, the jawari's shimmer, the juari's tuning curve, the fret's
+  // raster, the bore's reflection oracle — and every one of those scenes has a MEASURED horizon
+  // that simply cannot be expressed on the axis it uses. A stale mark left over from the previous
+  // render would then read as this panel's decision.
+  window.__horizonMark = null;
   const spec = payload && payload.meta && payload.meta.spectrum;
   // Checked before the dims gate: the tension string is a 1-D model that still wants a spectrum
   // panel, not the linear per-partial cents bars (its peak moves tens of percent with amplitude).
@@ -3809,6 +3908,8 @@ function drawSpectrum() {
   const fx = (f) => x0 + (f / fmax) * plotW;
 
   g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(x0, top, plotW, plotH);
+  // Before the markers, so the wash sits behind every mode line rather than over them.
+  const horizonNote = drawHorizonOnFreqAxis(g, fx, fmax, x0, x0 + plotW, top, y0);
 
   // continuum (Bessel / rectangular) markers — faint, the geometry-tier reference
   g.strokeStyle = "rgba(139,152,168,.35)"; g.lineWidth = 1; g.setLineDash([3, 3]);
@@ -3845,7 +3946,8 @@ function drawSpectrum() {
   out.textContent =
     `f₁ = ${sp.f1_discrete.toFixed(2)} Hz (discrete)   peaks on blue lines = self-consistent\n` +
     `fundamental detected vs discrete: ${cf == null ? "—" : cf.toFixed(3) + " cents"}` +
-    `   ·   ${tierLabel}: ${cg == null ? "—" : cg.toFixed(2) + " cents"}`;
+    `   ·   ${tierLabel}: ${cg == null ? "—" : cg.toFixed(2) + " cents"}` +
+    (horizonNote ? `\n${horizonNote}` : "");
 }
 
 // ── radiation load: the t₅₀-vs-R map the slider walks ────────────────────────────────────────
@@ -4398,6 +4500,9 @@ function drawVkSpectrum() {
   const fx = (f) => x0 + (f / fmax) * plotW;
 
   g.strokeStyle = "#2a3340"; g.lineWidth = 1; g.strokeRect(x0, top, plotW, plotH);
+  // With the nonlinearity OFF this is a simply-supported Kirchhoff plate again and has a horizon;
+  // with it on the payload refuses, and this call then draws nothing. Same function, both arms.
+  const horizonNote = drawHorizonOnFreqAxis(g, fx, fmax, x0, x0 + plotW, top, y0);
 
   // linear (w→0) eigenmode markers — the peaks harden ABOVE these, so they are a reference floor
   g.strokeStyle = "rgba(139,152,168,.5)"; g.lineWidth = 1; g.setLineDash([3, 3]);
@@ -4425,16 +4530,17 @@ function drawVkSpectrum() {
   g.fillText("|X(f)|", 3, top + 10);
   g.fillText(`${Math.round(fmax)} Hz`, W - 54, H - 4);
 
+  const tail = horizonNote ? `\n${horizonNote}` : "";
   if (sp.shift_pct != null) {
     out.textContent =
       `linear f₁ = ${sp.f1_linear.toFixed(1)} Hz (grey)   ·   hardened f₀ = `
       + `${sp.f0_detected.toFixed(1)} Hz (yellow)\n`
       + `amplitude hardening: ${sp.shift_pct >= 0 ? "+" : ""}${sp.shift_pct.toFixed(1)}% — the peak `
-      + `rides ABOVE the linear mode (not a cents error)`;
+      + `rides ABOVE the linear mode (not a cents error)` + tail;
   } else {
     out.textContent =
       `linear modes (grey) at ${sp.f1_linear.toFixed(1)} Hz and up\n`
-      + `free-edge crash: a multi-mode wash — no single hardened fundamental to report`;
+      + `free-edge crash: a multi-mode wash — no single hardened fundamental to report` + tail;
   }
 }
 
@@ -5683,9 +5789,41 @@ function drawPartials() {
   cents.forEach((c) => { if (c != null && Math.abs(c) > worst) worst = Math.abs(c); });
   const scale = Math.max(worst, 1);
 
+  const n = cents.length, bw = (W - pad - 16) / n;
+
+  // The horizon, in this panel's own units. The axis here IS a mode index, so the mark is a
+  // partial COUNT and never a frequency — section 12.3's warning has a mirror image, and quoting
+  // the hertz ceiling on an index axis would be the same overstatement pointing the other way.
+  // Drawn before the bars so the wash sits behind them.
+  const hb = horizonBand();
+  let horizonNote = "";
+  if (!hb) {
+    markHorizon("refused");
+  } else if (hb.saturated) {
+    markHorizon("whole-grid", hb.modes, "partial");
+    horizonNote = `horizon: every one of the grid's ${hb.modes} modes is inside ${hb.cents}¢ — `
+      + `nothing on this panel is beyond it`;
+  } else if (hb.modes >= n) {
+    // Past the last partial DRAWN, which is a fact about this panel's length rather than about the
+    // scheme: shading nothing is the honest picture and the number goes in the text instead.
+    markHorizon("off-panel", hb.modes, "partial");
+    horizonNote = `horizon: ${hb.modes} partials at ${hb.cents}¢ — above this panel, which draws `
+      + `${n}`;
+  } else if (hb.modes === 0) {
+    markHorizon("zero-modes", 0, "partial");
+    shadeBeyondHorizon(g, pad, W - 8, 2, H - 2, `nothing inside ${hb.cents}¢`);
+    const off = hb.limit_cents == null ? "out of tune" : `${Math.abs(hb.limit_cents).toFixed(1)}¢ `
+      + `${hb.limit_cents < 0 ? "flat" : "sharp"}`;
+    horizonNote = `horizon: none at ${hb.cents}¢ — even ${hb.limited_by} is ${off}`;
+  } else {
+    markHorizon("drawn", hb.modes, "partial");
+    shadeBeyondHorizon(g, pad + hb.modes * bw, W - 8, 2, H - 2, `past the ${hb.cents}¢ horizon`);
+    horizonNote = `horizon: ${hb.modes} partial${hb.modes === 1 ? "" : "s"} inside ${hb.cents}¢ — `
+      + `shaded beyond`;
+  }
+
   g.strokeStyle = "#2a3340"; g.lineWidth = 1;
   g.beginPath(); g.moveTo(pad, mid); g.lineTo(W - 8, mid); g.stroke();   // 0-cent line
-  const n = cents.length, bw = (W - pad - 16) / n;
   for (let i = 0; i < n; i++) {
     const c = cents[i];
     if (c == null) continue;
@@ -5700,7 +5838,7 @@ function drawPartials() {
 
   out.textContent =
     `f₁ = ${payload.meta.f1.toFixed(2)} Hz   ·   partials shown: ${n}\n` +
-    `worst error = ${worst.toFixed(3)} cents`;
+    `worst error = ${worst.toFixed(3)} cents` + (horizonNote ? `\n${horizonNote}` : "");
 }
 
 // ── audio ───────────────────────────────────────────────────────────────────────────────────
@@ -5745,6 +5883,11 @@ $("horizon-bands").addEventListener("click", (ev) => {
   if (!btn) return;
   horizonCents = +btn.dataset.cents;
   drawHorizon();
+  // The panel carries the same claim, so it retunes with the strip. Without this the strip's
+  // number would move while the shading stayed put — the read-out contradicting itself on screen,
+  // which is worse than never having drawn it. `drawDiagnostics` only reads state and paints, so
+  // calling it again is safe; the guard is for the buttons existing before the first render does.
+  if (payload) drawDiagnostics();
 });
 playAudioBtn.addEventListener("click", playAudio);
 renderBtn.addEventListener("click", render);
