@@ -95,6 +95,10 @@ def test_circle_low_spectrum_tracks_bessel():
     oracle = np.sort(oracle)[:8]
     measured = membrane_low_eigenfrequencies(m, 8)
     # Every measured mode within the loose staircase band of its Bessel partner (in cents).
+    # The 20-cent bound is NOT a pitch horizon and must not be rewritten as one: the dominant
+    # error here is the staircased circular boundary, so this compares against the frequency of a
+    # slightly DIFFERENT shape and a cents reading mixes two errors. The circle needs a
+    # geometry-convergence study instead (docs/dev/resolution-horizon-plan.md section 5).
     worst = np.max(np.abs(1200.0 * np.log2(measured / oracle)))
     assert worst < 20.0, f"worst low-mode error {worst:.2f} cents (bound 20); measured={measured}"
 

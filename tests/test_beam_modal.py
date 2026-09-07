@@ -17,6 +17,7 @@ from helpers import (
     beam_low_eigenfrequencies,
     convergence_orders,
     make_beam,
+    pitch_horizon,
 )
 
 from physsynth.analysis import modal, spectrum
@@ -64,18 +65,35 @@ def test_rigid_body_nullspace():
 # -- Closed-form oracle: low spatial eigenfrequencies match cos(βL)cosh(βL)=1
 # (tight at fine N). --
 def test_modal_frequencies_match_closed_form():
+    # Both bands are MEASURED, not picked. Until 2026-09-07 this asserted "the fundamental under
+    # 0.5 cents" and "the low 4 modes under 2 cents", with no stated reason for either count.
+    # `pitch_horizon` counts how many leading modes are actually inside each bound; the old
+    # literals survive as FLOORS so a regression that shortens a band cannot hide inside it, which
+    # is the whole reason the rewrite is safe to make. Measured 2026-09-07: 2 modes at 0.5 cents
+    # and 6 at 2 cents, both monotone. `window` only has to be wide enough that neither horizon is
+    # truncated by it -- the beam is the implicit theta family, whose error only ever grows with
+    # mode index (docs/dev/resolution-horizon-plan.md section 3).
     beam = make_beam(N=200, mu=0.5)  # fine grid + fine timestep -> the tight (O(h²)) regime
-    measured, rigid = beam_low_eigenfrequencies(beam, 5, return_rigid=True)
-    oracle = modal.free_free_beam_freqs(beam.kappa, beam.L, 5)
+    window = 24
+    measured, rigid = beam_low_eigenfrequencies(beam, window, return_rigid=True)
+    oracle = modal.free_free_beam_freqs(beam.kappa, beam.L, window)
 
     # The 2 discarded eigenvalues are genuinely ~0 (a free cross-check that the nullspace is wired
     # right). Scale: mu_1 ~ (β_1/L)^4 ~ 500 for L=1, so 1e-6*mu1 is a generous "is zero" bar.
     mu1_est = (4.730041 / beam.L) ** 4
     assert np.max(np.abs(rigid)) < 1e-6 * mu1_est, f"rigid-body modes not ~0: {rigid}"
 
-    err_cents = np.abs(modal.cents(measured, oracle))
-    assert err_cents[0] < 0.5, f"fundamental off by {err_cents[0]:.3f} cents (want < 0.5)"
-    assert np.max(err_cents[:4]) < 2.0, f"low-4 modes off by {np.max(err_cents[:4]):.3f} cents"
+    for bound, floor in ((0.5, 1), (2.0, 4)):
+        horizon, monotone = pitch_horizon(measured, oracle, bound)
+        assert monotone, (
+            f"pitch error not monotone at {bound} cents, so this prefix count hides a mode inside "
+            f"the bound sitting above one outside it: {np.abs(modal.cents(measured, oracle))}"
+        )
+        assert horizon < window, f"horizon {horizon} truncated by the window; widen past {window}"
+        assert horizon >= floor, (
+            f"only the first {horizon} modes are within {bound} cents of cos(bL)cosh(bL)=1 "
+            f"(this fixture claimed {floor} until 2026-09-07)"
+        )
 
 
 # -- The operator eigenvalues converge at O(h²) (the real rigor; no external table needed). --

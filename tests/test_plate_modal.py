@@ -79,6 +79,12 @@ def test_low_modes_within_one_cent():
     N, mu, Lx = 96, 0.5, 1.0
     h = Lx / N
     k = mu * h * h / KAPPA
+    # This IS a genuine discrete-vs-continuum pitch band, and it is the one place a derived band
+    # was wanted on 2026-09-07 and could not be built. pitch_horizon counts a leading PREFIX of one
+    # mode family, and these four are two families at once -- (2,1)/(1,2) are axial, (2,2) is
+    # diagonal, and the membrane's two families sit a factor of nine apart at the same Courant
+    # number (docs/dev/resolution-horizon-plan.md section 4). Splitting the 2-D spectrum by family
+    # first is its own piece of work; until then the four modes stay a literal.
     modes = [(1, 1), (2, 1), (1, 2), (2, 2)]
     Lam = modal.rectangular_discrete_eigenvalues(h, N, N, modes)
     f_disc = modal.discrete_plate_eigenfrequency(Lam, KAPPA, k, THETA)

@@ -22,6 +22,12 @@ def test_partials_within_one_cent_at_lambda_one():
     string = make_string(N=100, lam=1.0)
     res = _pluck_and_run(string, secs=2.0)
 
+    # Why 10 and not a derived band: at lambda = 1 the explicit leapfrog's time error cancels the
+    # spatial droop EXACTLY, so this scheme has no resolution horizon to read -- every mode up to
+    # the grid is in tune (docs/dev/resolution-horizon-plan.md section 2). The limiter here is
+    # DETECTABILITY: a triangular pluck's partial amplitudes fall off like 1/n^2, so past a couple
+    # of dozen the peak is not reliably separable from the noise floor. That is a property of the
+    # excitation and the FFT, not of the scheme, and it is not what pitch_horizon measures.
     n_partials = 10
     analytic = modal.harmonic_frequencies(wave_speed(), string.L, n_partials)
     detected = spectrum.measure_partials_near(res.output, res.fs, analytic)

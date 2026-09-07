@@ -145,6 +145,14 @@ def test_sigma1_makes_high_partials_die_faster():
     #     across the whole spectrum: the rate turns over past ~m=32 (numerator ~p^2 vs the theta
     #     denominator ~p^4), so this checks only the in-band range.
     #   * simulation: measured rate at m=16 exceeds m=2 with sigma1 > 0 (ties the claim to a run).
+    # The [1..16] is a DECAY-RATE band and is NOT derivable from the pitch horizon, despite
+    # docs/dev/resolution-horizon-plan.md section 6 naming it as the example of one that is. Its
+    # limiter is the rate turnover at ~m=32 named above; the pitch horizon at this fixture is
+    # 5 modes at 5 cents (measured 2026-09-07 -- the 10 in that plan's N=128 row is the space
+    # FLOOR, which this lambda=1 fixture is nowhere near), so deriving the band would both
+    # misattribute the limiter and SHRINK it from 16 to 5. Mode 16 here is in fact 45 cents flat
+    # and mode 32 is 240 cents flat, which is fine: a claim about the ORDERING of decay rates
+    # does not need the modes to be at the right pitch. See that plan's section 7.
     c, L, N, kappa = wave_speed(), L_DEFAULT, 128, KAPPA_DEFAULT
     s = make_damped_string(N=N, lam=1.0, kappa=kappa, sigma0=2.0, sigma1=1e-4)
     k, theta = s.k, s.theta
@@ -257,6 +265,9 @@ def test_partials_unmoved_by_light_damping():
     c, L, N, kappa = wave_speed(), L_DEFAULT, 128, KAPPA_DEFAULT
     s = make_damped_string(N=N, lam=1.0, kappa=kappa, sigma0=0.5, sigma1=1e-5)
     res = _pluck_run(s, secs=2.0)
+    # Why 8 partials and not a derived band: as in the stiff string's own-oracle test, the
+    # reference is the scheme's discrete oracle rather than the continuum, so the pitch horizon
+    # does not bound it -- the limiter is detectability in the pluck spectrum.
     oracle = np.array(
         [modal.discrete_stiff_mode_frequency(c, L, N, kappa, s.k, m, s.theta) for m in range(1, 9)]
     )

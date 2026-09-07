@@ -59,6 +59,9 @@ def test_open_open_full_series_present():
     bore = make_bore(N=256, lam=1.0, boundary=("open", "open"))
     bore.set_state(_bump(bore, center_frac=0.23, width_frac=0.05))  # asymmetric -> excites all n
     res = simulate(bore, num_steps=int(0.5 * bore.fs), pickup_index=bore.N // 3)
+    # Why 4 and not a derived band: lambda = 1 makes this explicit scheme dispersionless, so as
+    # with the ideal string there is no horizon to read (docs/dev/resolution-horizon-plan.md
+    # section 2). The claim being made is presence of the even harmonics, not reach up the series.
     oracle = modal.bore_resonance_frequencies(bore.c0, bore.L, 4, "open-open")
     found = spectrum.measure_partials_near(res.output, res.fs, oracle)
     # The 2nd harmonic (an "even" one, absent for closed-open) must be present and on pitch.
@@ -68,6 +71,11 @@ def test_open_open_full_series_present():
 
 # -- Dispersionless at lambda = 1: the discrete oracle equals the continuum odd harmonics. -------
 def test_discrete_equals_continuum_at_lambda_one():
+    # Why 6 and not a derived band: this test's subject IS the exactness, so a horizon would be
+    # the whole grid and the count is only how many modes are worth spending eigsh on. A cylinder
+    # at lambda = 1 has no pitch horizon; what the bore does NOT have a horizon for is the Webster
+    # area function's resolution, which is a different comparison and is still unmeasured
+    # (docs/dev/resolution-horizon-plan.md section 5).
     bore = make_bore(N=200, lam=1.0, boundary=("closed", "open"))
     f_disc = bore_low_eigenfrequencies(bore, 6)
     f_cont = modal.bore_resonance_frequencies(bore.c0, bore.L, 6, "closed-open")
@@ -77,6 +85,8 @@ def test_discrete_equals_continuum_at_lambda_one():
 
 # -- The eigenvalue oracle tracks the measured FDTD spectrum to a small fraction of a cent. ------
 def test_oracle_tracks_measured_spectrum():
+    # Why 5: the reference is the bore's own discrete oracle, so the pitch horizon does not bound
+    # this one either -- the limiter is detectability of the 5th resonance in the bump's spectrum.
     bore = make_bore(N=150, lam=0.7, boundary=("closed", "open"))
     f_disc = bore_low_eigenfrequencies(bore, 5)
     bore.set_state(_bump(bore, center_frac=0.1, width_frac=0.06))

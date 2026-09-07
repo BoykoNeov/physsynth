@@ -27,6 +27,7 @@ from helpers import (
     convergence_orders,
     make_stiff_string,
     measure_stiff_mode_frequencies,
+    pitch_horizon,
     wave_speed,
 )
 
@@ -127,6 +128,10 @@ def test_partials_match_discrete_oracle():
     c, L = wave_speed(), L_DEFAULT
     s = make_stiff_string(N=128, lam=1.0, kappa=KAPPA_DEFAULT)
     res = _pluck_run(s, secs=2.0)
+    # Why 8 and not a derived band: the reference here is the scheme's OWN discrete oracle, which
+    # already contains the dispersion, so the resolution horizon is irrelevant by construction --
+    # there is no continuum in this comparison to be flat against. The limiter is detectability of
+    # the 8th partial in the pluck spectrum (docs/dev/resolution-horizon-plan.md section 6).
     n_partials = 8
     oracle = np.array(
         [modal.discrete_stiff_mode_frequency(c, L, s.N, s.kappa, s.k, m, s.theta)
@@ -140,17 +145,36 @@ def test_partials_match_discrete_oracle():
 
 def test_discrete_oracle_converges_to_continuum_stretched_law():
     # Physics anchor (no simulation): on a fine grid the discrete oracle sits on the continuum
-    # stretched law f_n = n f0 sqrt(1 + B n^2) to well under a cent for the first 10 partials, and
-    # the fundamental is itself stretched (f1 = f0 sqrt(1+B), NOT f0).
+    # stretched law f_n = n f0 sqrt(1 + B n^2), and the fundamental is itself stretched
+    # (f1 = f0 sqrt(1+B), NOT f0).
+    #
+    # The band is MEASURED, not picked. Until 2026-09-07 this asserted "the first 10 partials" with
+    # no stated reason for the 10. `pitch_horizon` counts the leading modes actually inside
+    # ONE_CENT, and the old literal survives as a FLOOR -- which is what keeps the rewrite honest:
+    # a wrong "fix" to the dispersion oracle would shorten the band, and with no floor the shorter
+    # band still passes green, on fewer modes. Measured 2026-09-07: 48 here, against a space floor
+    # of 108 (`k -> 0`, `spatial_operator_horizon`), so this grid is TIME-limited and refining fs
+    # buys more -- the theta family's behaviour (docs/dev/resolution-horizon-plan.md section 3).
     c, L, kappa = wave_speed(), L_DEFAULT, KAPPA_DEFAULT
     N, fs = 4000, 8.0e5
     k = 1.0 / fs
+    window = 200  # wide enough that the horizon lands strictly inside it and is not truncated
+    floor = 10  # the hand-picked band this test asserted over until 2026-09-07
     oracle = np.array(
         [modal.discrete_stiff_mode_frequency(c, L, N, kappa, k, m, THETA_DEFAULT)
-         for m in range(1, 11)]
+         for m in range(1, window + 1)]
     )
-    continuum = modal.stiff_harmonic_frequencies(c, L, kappa, 10)
-    assert np.max(np.abs(modal.cents(oracle, continuum))) < ONE_CENT
+    continuum = modal.stiff_harmonic_frequencies(c, L, kappa, window)
+    horizon, monotone = pitch_horizon(oracle, continuum, ONE_CENT)
+    assert monotone, (
+        "pitch error is not monotone in mode index, so this prefix count is hiding a mode inside "
+        "the bound sitting above one outside it -- read the per-mode curve, not the integer"
+    )
+    assert horizon < window, f"horizon {horizon} truncated by the window; widen it past {window}"
+    assert horizon >= floor, (
+        f"only the first {horizon} partials are within {ONE_CENT} cent of the stretched law "
+        f"(this fixture claimed {floor} until 2026-09-07 and measured 48 then)"
+    )
 
     f0 = c / (2.0 * L)
     B = modal.inharmonicity_B(c, L, kappa)

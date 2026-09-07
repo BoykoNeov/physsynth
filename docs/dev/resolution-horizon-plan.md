@@ -186,6 +186,8 @@ what distinguishes a family is only whether a Courant number exists that beats i
   are now *derivable* from the horizon. Rewriting them while introducing the primitive that computes
   them would make any failure ambiguous. That is a separate, mechanical, individually verifiable
   batch and it is the obvious next one.
+  **Done 2026-09-07 — and this bullet was wrong twice.** It was not mechanical, it was not
+  "several suites", and the example it names is not a pitch band at all. §7 is the audit.
 * **The primitive stayed in `tests/helpers.py` and did not go into `physsynth/analysis/`.** A new
   public analysis name trips `test_analysis_frozen.py`'s derived guard, and satisfying it is
   impossible — there is no Python implementation left to freeze against. Widening that guard to
@@ -198,3 +200,134 @@ what distinguishes a family is only whether a Courant number exists that beats i
   is the obvious product of this, and it needs the promotion above first.
 * **The four "no horizon yet" rows were not attempted.** Each is a refinement or geometry study in
   its own right; the inventory names the reason rather than leaving a blank.
+
+---
+
+## 7. The audit of the hand-picked bands — 2026-09-07
+
+§6 promised a mechanical sweep converting every hand-picked assertion band into a derived one.
+The sweep does not exist, because **most of those bands are not bounded by pitch**. What the batch
+actually produced is a limiter for each one, written into the test beside the number.
+
+### 7.1 §6 named the wrong example, and deriving it would have made the test worse
+
+`test_damped_string.py::test_sigma1_makes_high_partials_die_faster` asserts over `[1..16]`, and §6
+cited it as the exemplar. It is a **decay-rate** band: the claim is that the per-mode damping rate
+*rises* with `σ₁ > 0` and *falls* without it, and the test's own comment already names its limiter —
+"the rate turns over past ~m=32". That turnover is a numerator `~p²` against a θ denominator `~p⁴`;
+it is not the pitch horizon, which at that fixture (`N = 128`, `λ = 1`) is **5** modes at 5 cents
+and **2** at one cent. Deriving the band from `pitch_horizon` would have misattributed the limiter
+*and shrunk the range from 16 to 5* — a green test covering less, which is the failure mode §6 was
+itself worried about.
+
+The number is also a caution about reading the wrong row of §3: the **10** that looks like the
+answer here is that string's *space floor*, what it would resolve as `k → 0`. The fixture runs at
+`λ = 1`, well short of it. **A floor is not a horizon**, and confusing the two overstates a
+fixture by a factor of two.
+
+And the band is not merely un-derivable, it is *asserting past* where the scheme is in tune: mode
+16 of that fixture is **45 cents flat** and mode 32 — the turnover the test's comment names — is
+**240 cents flat**, two semitones. That is not a defect in the test, because a decay-rate
+monotonicity claim does not need the mode to be at the right pitch. It is the sharpest illustration
+of §7.2's point: what a band is allowed to reach depends entirely on what is being claimed about
+the modes inside it.
+
+The generalisable point: §4's finding that the θ-scheme's rate error and pitch error are **one
+factor and its square root** makes the two quantities easy to conflate. They are locked together
+*for a single mode*; they are not the same *band*, because a rate claim can be about monotonicity
+where a pitch claim is about absolute error.
+
+### 7.2 There are three kinds of reference, and only one of them has a horizon
+
+This is what collapses the sweep. A band's limiter follows from what the test compares against:
+
+* **The continuum**, with a scheme that is *not* exact — the discrete answer really is flat, and
+  the band is the pitch horizon. **Two tests in the whole suite.**
+* **The scheme's own discrete oracle** — the dispersion is already inside the reference, so there
+  is no continuum in the comparison to be flat against and the horizon is irrelevant *by
+  construction*. The limiter is detectability: whether the n-th partial is separable from the noise
+  floor of a pluck whose amplitudes fall like `1/n²`. Five tests.
+* **The continuum of a different shape** — the circular membrane and the guitar outline, where the
+  staircased boundary dominates and a cents reading mixes two errors. §5 already refused these.
+
+And a fourth exclusion that turns out to be the largest: **`λ = 1` disqualifies more tests than
+dispersion does.** §2's cancellation means the explicit family at the magic Courant number has *no
+horizon to read* — every mode up to the grid is in tune — so the ideal string's and the bore's
+continuum comparisons are exact by construction and their bands are about something else entirely.
+
+### 7.3 The table
+
+| test | band | reference | limiter | derived |
+|---|---|---|---|---|
+| `test_stiff_string.py::test_discrete_oracle_converges_to_continuum_stretched_law` | 10 -> **48** | continuum stretched law | **pitch horizon** | **yes** |
+| `test_beam_modal.py::test_modal_frequencies_match_closed_form` | 1 @ 0.5c -> **2**; 4 @ 2c -> **6** | `cos βL cosh βL = 1` | **pitch horizon** | **yes** |
+| `test_plate_modal.py::test_low_modes_within_one_cent` | 4 `(m,n)` pairs | continuum plate | pitch — but **two mode families in one list** | **blocked**, §7.4 |
+| `test_modal.py::test_partials_within_one_cent_at_lambda_one` | 10 | continuum harmonics | scheme **exact** at `λ=1`; detectability | no |
+| `test_bore_modal.py::test_open_open_full_series_present` | 4 | continuum | exact at `λ=1`; the claim is *presence* of the evens | no |
+| `test_bore_modal.py::test_discrete_equals_continuum_at_lambda_one` | 6 | continuum | exactness **is** the subject | no |
+| `test_stiff_string.py::test_partials_match_discrete_oracle` | 8 | own discrete oracle | detectability | no |
+| `test_damped_string.py::test_partials_unmoved_by_light_damping` | 8 | own discrete oracle | detectability | no |
+| `test_bore_modal.py::test_oracle_tracks_measured_spectrum` | 5 | own discrete oracle | detectability | no |
+| `test_plate_modal.py::test_low_spectrum_via_eigsh_matches_oracle` | 6 | own discrete oracle | detectability + `eigsh` cost | no |
+| `test_membrane_modal.py::test_circle_low_spectrum_tracks_bessel` | 8 @ 20c | Bessel continuum | **staircased domain**, not dispersion | no |
+| `test_damped_string.py::test_sigma1_makes_high_partials_die_faster` | `[1..16]` | — (decay rates) | rate turnover at `~m=32` | no, §7.1 |
+| four single-mode FFT sanity checks (beam, plate, free plate, orthotropic plate) | 1 | own oracle | one mode by design | no |
+
+**Every literal was conservative, never over-claiming.** 10 against a real 48, 4 against 6, 1
+against 2. The audit found no band asserting past where its scheme is in tune — which is the
+reassuring half of the answer, and worth stating because the batch was scoped on the suspicion
+that some band somewhere was.
+
+### 7.4 The 2-D plate is the one genuine candidate that could not be built
+
+`test_plate_modal.py::test_low_modes_within_one_cent` compares the discrete plate against the
+continuum over `[(1,1), (2,1), (1,2), (2,2)]` — a real pitch band. `pitch_horizon` counts a leading
+**prefix of one mode family**, and those four are two families at once: `(2,1)`/`(1,2)` are axial,
+`(2,2)` is diagonal. §4 measured those families **a factor of nine apart** on the membrane at the
+same Courant number, so a prefix over a mixed, sorted list is meaningless. Splitting the 2-D
+spectrum by family is its own piece of work and is the honest successor to this batch.
+
+### 7.5 A derived band without a floor asserts *less* than the literal it replaced
+
+The trap, and the reason both rewrites keep their old number. If the horizon is measured from the
+same two arrays the test then asserts over, `assert max(err[:horizon]) < bound` is a **tautology** —
+it passes for any horizon at all, including 1. The information lives entirely in the comparison
+against the old literal:
+
+```python
+horizon, monotone = pitch_horizon(measured, oracle, bound)
+assert monotone                      # the prefix is not hiding a mode
+assert horizon < window              # the number is measured, not truncated by the window
+assert horizon >= floor              # <- the only line that can fail on a regression
+```
+
+Without the floor, a wrong "fix" to a dispersion oracle would shorten the band and **hide inside
+it**, staying green on fewer modes. The floor is also what answers §6's own objection that
+rewriting a range while introducing the primitive makes a failure ambiguous: a failure is now
+either "the horizon shrank below what this fixture used to claim" or "the window truncated it",
+and those are different messages.
+
+`window < horizon` matters for the same reason from the other side: `pitch_horizon` returns the
+array length when nothing is outside the bound, so a horizon equal to the window is a **lower
+bound wearing a measurement's clothes**. Both rewrites assert it strictly inside.
+
+### 7.6 What the two rewrites measure
+
+* **Stiff string**, `N = 4000`, `fs = 800 kHz`: the discrete oracle tracks the continuum stretched
+  law to a cent for **48** partials. Its space floor at that grid is **108**, so this fixture is
+  **time**-limited and refining `fs` would buy more — the θ family behaving exactly as §3 says.
+* **Free-free beam**, `N = 200`, `μ = 0.5`: **2** modes inside 0.5 cents, **6** inside 2 cents,
+  both monotone. The fundamental is 0.18 cents flat and mode 6 is 1.95 cents flat.
+
+Neither number is frozen anywhere. They are in comments as *what was measured on 2026-09-07*, and
+the tests assert only the floors — the same discipline `test_resolution_horizon.py` states in its
+own module docstring: a horizon recorded for one fixture is a claim about that fixture.
+
+### 7.7 `spatial_operator_horizon` answers about one string, whatever you hand it
+
+A tooling hazard found while scoping. The helper takes `(N, kappa, cents)` and looks general, but
+it hardcodes `L_DEFAULT` and `wave_speed()` and builds a 1-D **Dirichlet-axis** second difference.
+Called for the beam it would have returned a number about the *string* — silently, since nothing
+in the signature carries a geometry or a boundary condition. Both rewrites therefore call
+`pitch_horizon` on the two arrays the test already builds, and `spatial_operator_horizon` is used
+only where the fixture genuinely is that string (the stiff string's floor of 108, §7.6).

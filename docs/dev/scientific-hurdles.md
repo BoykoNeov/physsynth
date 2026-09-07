@@ -608,4 +608,12 @@ staircased domains (circular membrane, guitar outline) fail a cents comparison b
 is a different *shape*; the free plate's reference is a table rather than a formula; the nonlinear
 family has no linear modal oracle and needs a refinement horizon instead (one point already exists
 in `vk-newton-plan.md` §13); the bore's question is the area function's resolution. The named
-follow-on is converting the suites' hand-picked assertion bands into derived ones.
+follow-on — converting the suites' hand-picked assertion bands into derived ones — was **done
+2026-09-07** and mostly answered *no*: of thirteen hand-picked bands, **two** are bounded by pitch
+and were derived (the stiff string's 10 became 48, the beam's 1 and 4 became 2 and 6); five compare
+against the scheme's **own** discrete oracle so the horizon is irrelevant by construction; three sit
+at `λ = 1` where the explicit family is **exact**; one is a staircased domain; and the band §6 named
+as the example is a **decay-rate** band whose limiter is a turnover at `~m=32`, where deriving it
+would have shrunk the range. Every literal turned out conservative, none over-claiming. The one
+genuine candidate left is the 2-D plate's, blocked on splitting a mixed mode family
+(`resolution-horizon-plan.md` §7).
