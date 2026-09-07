@@ -609,11 +609,13 @@ is a different *shape*; the free plate's reference is a table rather than a form
 family has no linear modal oracle and needs a refinement horizon instead (one point already exists
 in `vk-newton-plan.md` §13); the bore's question is the area function's resolution. The named
 follow-on — converting the suites' hand-picked assertion bands into derived ones — was **done
-2026-09-07** and mostly answered *no*: of thirteen hand-picked bands, **two** are bounded by pitch
-and were derived (the stiff string's 10 became 48, the beam's 1 and 4 became 2 and 6); five compare
-against the scheme's **own** discrete oracle so the horizon is irrelevant by construction; three sit
-at `λ = 1` where the explicit family is **exact**; one is a staircased domain; and the band §6 named
-as the example is a **decay-rate** band whose limiter is a turnover at `~m=32`, where deriving it
-would have shrunk the range. Every literal turned out conservative, none over-claiming. The one
-genuine candidate left is the 2-D plate's, blocked on splitting a mixed mode family
-(`resolution-horizon-plan.md` §7).
+2026-09-07** and mostly answered *no*. Of **sixteen** hand-picked bands (thirteen rows in that
+plan's table), **two** are bounded by pitch and were derived — the stiff string's 10 became 48 and
+the beam's 1 and 4 became 2 and 6. **Eight** compare against the scheme's **own** discrete oracle,
+so the horizon is irrelevant by construction and the limiter is detectability. **Three** sit at
+`λ = 1`, where the explicit family is **exact** and there is no horizon to read — a larger exclusion
+than dispersion itself. **One** is a staircased domain. **One** is the band §6 named as its example,
+which is a **decay-rate** band limited by a turnover at `~m=32`; deriving it would have shrunk the
+range from 16 to 5. And **one** — the 2-D plate's — is a genuine pitch band that could not be
+derived, blocked on splitting a mixed mode family. Every literal turned out conservative, none
+over-claiming (`resolution-horizon-plan.md` §7).

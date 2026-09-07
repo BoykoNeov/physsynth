@@ -246,7 +246,8 @@ This is what collapses the sweep. A band's limiter follows from what the test co
 * **The scheme's own discrete oracle** — the dispersion is already inside the reference, so there
   is no continuum in the comparison to be flat against and the horizon is irrelevant *by
   construction*. The limiter is detectability: whether the n-th partial is separable from the noise
-  floor of a pluck whose amplitudes fall like `1/n²`. Five tests.
+  floor of a pluck whose amplitudes fall like `1/n²`. **Four rows of §7.3's table, eight tests**
+  — the last row bundles four single-mode FFT sanity checks that share this limiter.
 * **The continuum of a different shape** — the circular membrane and the guitar outline, where the
   staircased boundary dominates and a cents reading mixes two errors. §5 already refused these.
 
@@ -256,6 +257,9 @@ horizon to read* — every mode up to the grid is in tune — so the ideal strin
 continuum comparisons are exact by construction and their bands are about something else entirely.
 
 ### 7.3 The table
+
+Thirteen rows covering **sixteen tests** — the last row bundles four single-mode FFT checks, and
+the beam's row carries two bounds.
 
 | test | band | reference | limiter | derived |
 |---|---|---|---|---|

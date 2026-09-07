@@ -73,6 +73,15 @@ def test_modal_frequencies_match_closed_form():
     # and 6 at 2 cents, both monotone. `window` only has to be wide enough that neither horizon is
     # truncated by it -- the beam is the implicit theta family, whose error only ever grows with
     # mode index (docs/dev/resolution-horizon-plan.md section 3).
+    #
+    # `monotone` is the exposed assertion here, because unlike the stiff string's closed form these
+    # frequencies come out of ARPACK (`eigsh`, k = window + 2) and hurdles section 11 records a run
+    # to run reproducibility defect in exactly that (fixed in the migration plan section 24.9).
+    # Measured 2026-09-07 before trusting it: bit-identical across five fresh processes, and the
+    # smallest gap between consecutive per-mode errors is 0.214 cents -- four orders of magnitude
+    # above anything an eigensolver perturbation moves, so the flag is not near a flip. The horizon
+    # also reads 6 at window = 12, 24 and 40, which is stronger than stability: the answer does not
+    # depend on the window at all.
     beam = make_beam(N=200, mu=0.5)  # fine grid + fine timestep -> the tight (O(h²)) regime
     window = 24
     measured, rigid = beam_low_eigenfrequencies(beam, window, return_rigid=True)
