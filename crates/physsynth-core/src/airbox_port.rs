@@ -65,7 +65,7 @@
 //! not merely commensurate, they are *the same number*.
 
 use crate::airbox::AirBox;
-use crate::fmt::py_float;
+use crate::fmt::{py_float, py_general};
 use crate::pyfloat::scalar_pow;
 use crate::reduce;
 use crate::sparse::Csr;
@@ -335,6 +335,107 @@ pub enum PortError {
         /// `room.n` at the moment of the refusal.
         n: usize,
     },
+    /// `areas` was not one value per surface node.
+    AreasLength {
+        /// How many surface nodes `coords` carries.
+        expected: usize,
+        /// How many areas were passed.
+        got: usize,
+    },
+    /// A surface node area was negative or not finite.
+    BadAreas,
+    /// The placed footprint reaches outside the plane it is mounted on.
+    FootprintOutside {
+        /// How the port names its mounting.
+        where_: String,
+        /// The footprint's low edge on the offending axis (m).
+        lo: f64,
+        /// Its high edge (m).
+        hi: f64,
+        /// The offending axis.
+        axis: usize,
+        /// How far the plane reaches on that axis (m).
+        extent: f64,
+        /// Where the footprint currently sits on that axis (m).
+        origin: f64,
+    },
+    /// The spread stencil reaches a node on the plane's own rim, which touches a second wall.
+    InPlaneRim {
+        /// How the port names its mounting.
+        where_: String,
+        /// The lowest in-plane node index reached.
+        lo: i64,
+        /// The highest.
+        hi: i64,
+        /// The offending in-plane axis.
+        axis: usize,
+        /// Cells on that axis.
+        n_axis: usize,
+    },
+    /// Air nodes under the footprint that no surface node feeds — the comb refusal.
+    TooCoarseFootprint {
+        /// How the port names its mounting.
+        where_: String,
+        /// How many footprint nodes are fed by nothing.
+        unfed: usize,
+        /// How big the footprint is.
+        foot: usize,
+        /// The grid spacing (m).
+        h: f64,
+        /// The spreading in force.
+        spreading: Spreading,
+    },
+    /// The surface touches a pressure-release face.
+    SurfaceOnOpenFace {
+        /// How the port names its mounting.
+        where_: String,
+        /// The offending face names, quoted, in [`FACES`] order.
+        faces: Vec<String>,
+    },
+    /// The surface shares air nodes with a port already on the room.
+    SurfaceOverlapping {
+        /// How the port names its mounting.
+        where_: String,
+        /// How many nodes this surface covers.
+        count: usize,
+        /// The first shared node, unravelled.
+        node: [usize; 3],
+        /// How the existing port names itself.
+        other: String,
+        /// How many nodes the two have in common.
+        shared: usize,
+    },
+    /// A second solve inside one room step, from a distributed port.
+    SurfaceNotReady {
+        /// How the port names its mounting.
+        where_: String,
+        /// `room.n` at the moment of the refusal.
+        n: usize,
+    },
+    /// The face name is not one of [`FACES`]. Carries it.
+    UnknownFace(String),
+    /// An interior surface's face index does not leave both straddling node planes interior.
+    InteriorIndexOutOfRange {
+        /// The plane name, as passed.
+        plane: String,
+        /// The index asked for.
+        index: i64,
+        /// How many faces the plane has there.
+        n_face: usize,
+    },
+    /// `inject` was handed a `q` of the wrong length.
+    QLength {
+        /// How long it should have been.
+        expected: usize,
+        /// How long it was.
+        got: usize,
+        /// Whether the vector is per-face (interior) rather than per-node (wall-mounted).
+        per_face: bool,
+        /// The port's node count, which the per-face message quotes.
+        node_count: usize,
+    },
+    /// The room refused this port's cut. Carries its refusal.
+    Cut(crate::airbox::CutError),
 }
 
 impl std::fmt::Display for PortError {
@@ -390,6 +491,135 @@ impl std::fmt::Display for PortError {
                  the room is frozen and the body is loaded by a stale field, silently.",
                 index_repr(*index),
             ),
+            PortError::AreasLength { expected, got } => write!(
+                f,
+                "areas must have shape ({expected},) (one per surface node), got ({got},)."
+            ),
+            PortError::BadAreas => write!(f, "surface node areas must be finite and >= 0 (m^2)."),
+            PortError::FootprintOutside {
+                where_,
+                lo,
+                hi,
+                axis,
+                extent,
+                origin,
+            } => write!(
+                f,
+                "the surface's footprint spans {}..{} m along {}, outside {where_}, which is \
+                 0..{} m there. Move it with origin= (it currently sits at {} m on that axis), or \
+                 enlarge the room.",
+                py_general(*lo, 6),
+                py_general(*hi, 6),
+                AXES[*axis],
+                py_general(*extent, 6),
+                py_general(*origin, 6),
+            ),
+            PortError::InPlaneRim {
+                where_,
+                lo,
+                hi,
+                axis,
+                n_axis,
+            } => write!(
+                f,
+                "the surface's spread stencil reaches air node index {lo}..{hi} along {} on \
+                 {where_}, but a node on the plane's own rim (0 or {n_axis}) touches a SECOND \
+                 wall: it carries half the node weight W and the sum of two wall admittances, so \
+                 R_j stops being uniform across the patch and the spreading operator's reflection \
+                 equivariance stops holding. Keep the footprint plus one air cell strictly inside \
+                 the plane -- move it with origin=, enlarge the room, or shrink the surface.",
+                AXES[*axis]
+            ),
+            PortError::TooCoarseFootprint {
+                where_,
+                unfed,
+                foot,
+                h,
+                spreading,
+            } => write!(
+                f,
+                "{unfed} of {foot} air node(s) under the surface's footprint on {where_} are fed \
+                 by no surface node, so the acoustic source would be a comb at the grid scale. \
+                 The footprint is measured span-wise (per row and per column of air nodes), so \
+                 this is about the surface's spacing and not its outline: too coarse for h_air = \
+                 {} m (spreading='{}'). Refine the surface, or coarsen the air grid.",
+                py_general(*h, 6),
+                spreading.name()
+            ),
+            PortError::SurfaceOnOpenFace { where_, faces } => write!(
+                f,
+                "the surface on {where_} touches the open (pressure-release) face(s) [{}], where \
+                 p is pinned to 0: pbar_free and every R_j are exactly zero, so the surface would \
+                 radiate into a short circuit -- perfectly conservative, perfectly silent, and \
+                 invisible to the energy report. Give that face a finite impedance, or mount the \
+                 surface elsewhere.",
+                faces.join(", ")
+            ),
+            PortError::SurfaceOverlapping {
+                where_,
+                count,
+                node,
+                other,
+                shared,
+            } => write!(
+                f,
+                "the surface on {where_} ({count} nodes) shares node {} with the existing port at \
+                 {other} ({shared} node(s) in common). Overlapping ports are not independent \
+                 within a step, so each one's solve uses a pressure that never occurred and the \
+                 energy ledgers stop matching. Note the acoustic source is up to one air cell \
+                 LARGER than the surface itself (bilinear spreads outboard), so footprints that \
+                 merely look separate can still collide.",
+                index_repr(*node)
+            ),
+            PortError::SurfaceNotReady { where_, n } => write!(
+                f,
+                "the surface port on {where_} was asked to solve twice within one room step \
+                 (room.n = {n}). A port does not step its room -- the caller does, once, after \
+                 every port has solved:  for inst in instruments: inst.step(...)  then  \
+                 room.step(). Without it the room is frozen and the surface is loaded by a stale \
+                 field, silently."
+            ),
+            PortError::UnknownFace(face) => write!(
+                f,
+                "unknown face '{face}'; expected one of ('x0', 'x1', 'y0', 'y1', 'z0', 'z1')."
+            ),
+            PortError::InteriorIndexOutOfRange {
+                plane,
+                index,
+                n_face,
+            } => write!(
+                f,
+                "interior surface index {index} on plane '{plane}' is out of range 1..{} (the \
+                 room has {n_face} face(s) there). The two node planes straddling the surface \
+                 must BOTH be strictly interior: a node plane on a wall carries half the node \
+                 weight W and the wall's admittance in beta, so R_j would differ between the two \
+                 sides and the load would stop being 2 T^T R T with a single R.",
+                *n_face as i64 - 2
+            ),
+            PortError::QLength {
+                expected,
+                got,
+                per_face,
+                node_count,
+            } => {
+                if *per_face {
+                    write!(
+                        f,
+                        "q must be the per-FACE volume-velocity vector, shape ({expected},), got \
+                         ({got},). Note this is HALF the node count ({node_count}): the two node \
+                         planes share one q, with opposite signs."
+                    )
+                } else {
+                    write!(
+                        f,
+                        "q must be the per-node volume-velocity vector, shape ({expected},), got \
+                         ({got},). (Pass q = port.T @ v, not the scalar sum -- the scalar is \
+                         exactly what the lumped tier would have coupled through, i.e. the \
+                         negative control.)"
+                    )
+                }
+            }
+            PortError::Cut(e) => write!(f, "{e}"),
         }
     }
 }
@@ -900,6 +1130,709 @@ pub fn unravel(flat: usize, shape: [usize; 3]) -> [usize; 3] {
 /// Format a float the way Python's `repr` does — re-exported so the binding's messages match.
 pub fn repr_float(x: f64) -> String {
     py_float(x)
+}
+
+// -- the distributed tier, as values --------------------------------------------------------------
+
+/// Everything `_PatchPort` holds, shared by the two distributed ports.
+///
+/// The reference's base class exists to hold code; here it holds state and the code is the free
+/// functions above plus the two `impl` blocks below. The four attributes the retired Python suite
+/// *wrote* on a port — `T`, `R`, `load_matrix` and `areas` — have setters, because the tests that
+/// switch a coupling off or halve it do it by replacing one of them, not by rebuilding the port.
+#[derive(Debug, Clone)]
+struct Patch {
+    spreading: Spreading,
+    in_plane_axes: (usize, usize),
+    coords: Vec<[f64; 2]>,
+    areas: Vec<f64>,
+    origin: (f64, f64),
+    face_coords: Vec<[f64; 2]>,
+    nodes: Nodes,
+    index: [usize; 3],
+    flat: Vec<usize>,
+    t: Csr,
+    r: Vec<f64>,
+    load: Csr,
+    footprint_empty: usize,
+    where_: String,
+    /// The room step this port last queued at, and the epoch it was queued in — see
+    /// [`RoomPort::require_ready`] for why the epoch is half of the mark.
+    queued: Option<(u64, usize)>,
+}
+
+/// The placed footprint and the origin it was placed at — what [`accept_surface`] hands back.
+type Placed = (Vec<[f64; 2]>, (f64, f64));
+
+/// Validate the surface, place its footprint in the plane, and return the placed coordinates.
+///
+/// The reference's `_accept_surface` also refuses a `coords` that is not `(n_surface, 2)` and an
+/// `origin` that is not a pair. Both are claims about the shape of a Python argument and neither
+/// has a variant here: `coords: &[[f64; 2]]` and `origin: Option<(f64, f64)>` are the same claims
+/// made by the compiler.
+fn accept_surface(
+    n: [usize; 3],
+    h: f64,
+    coords: &[[f64; 2]],
+    areas: &[f64],
+    origin: Option<(f64, f64)>,
+    in_plane_axes: (usize, usize),
+    where_: &str,
+) -> Result<Placed, PortError> {
+    if areas.len() != coords.len() {
+        return Err(PortError::AreasLength {
+            expected: coords.len(),
+            got: areas.len(),
+        });
+    }
+    if areas.iter().any(|&a| a < 0.0 || !a.is_finite()) {
+        return Err(PortError::BadAreas);
+    }
+    let (t0, t1) = in_plane_axes;
+    let extent = [n[t0] as f64 * h, n[t1] as f64 * h];
+
+    let origin = match origin {
+        Some(o) => o,
+        None => {
+            // Centred: the footprint's midpoint lands on the plane's midpoint, so the grid's own
+            // mirror maps the surface to itself. Not an aesthetic default — it is what makes the
+            // load equivariant and what lets the scene be symmetric.
+            let mut out = [0.0f64; 2];
+            for (d, slot) in out.iter_mut().enumerate() {
+                let mut lo = f64::INFINITY;
+                let mut hi = f64::NEG_INFINITY;
+                for c in coords {
+                    lo = lo.min(c[d]);
+                    hi = hi.max(c[d]);
+                }
+                *slot = 0.5 * (extent[d] - (lo + hi));
+            }
+            (out[0], out[1])
+        }
+    };
+
+    let face_coords: Vec<[f64; 2]> = coords
+        .iter()
+        .map(|c| [c[0] + origin.0, c[1] + origin.1])
+        .collect();
+    let tol = 1e-9 * h;
+    let axes = [t0, t1];
+    for d in 0..2 {
+        let mut lo = f64::INFINITY;
+        let mut hi = f64::NEG_INFINITY;
+        for c in &face_coords {
+            lo = lo.min(c[d]);
+            hi = hi.max(c[d]);
+        }
+        if lo < -tol || hi > extent[d] + tol {
+            return Err(PortError::FootprintOutside {
+                where_: where_.to_owned(),
+                lo,
+                hi,
+                axis: axes[d],
+                extent: extent[d],
+                origin: if d == 0 { origin.0 } else { origin.1 },
+            });
+        }
+    }
+    Ok((face_coords, origin))
+}
+
+/// The shared parts of both distributed constructors, from the spread entries to the load matrix.
+struct Assembled {
+    nodes: Nodes,
+    index: [usize; 3],
+    flat: Vec<usize>,
+    t: Csr,
+    r: Vec<f64>,
+    load: Csr,
+    in_plane: (Vec<i64>, Vec<i64>),
+}
+
+#[allow(clippy::too_many_arguments)]
+fn assemble(
+    view: &RoomView<'_>,
+    face_coords: &[[f64; 2]],
+    areas: &[f64],
+    spreading: Spreading,
+    axes: (usize, usize),
+    where_: &str,
+    place: &dyn Fn(&[i64], &[i64]) -> Nodes,
+    r_from: &dyn Fn(&Nodes) -> Nodes,
+    scale: f64,
+) -> Result<Assembled, PortError> {
+    let (t0, t1) = axes;
+    let (rows, cols, vals) = spread(
+        face_coords,
+        areas,
+        view.h,
+        [view.n[t0], view.n[t1]],
+        spreading,
+    );
+    let (i0, i1, plane) = plane_nodes(&rows, view.n[t1]);
+    // The rim refusal runs before anything indexes an array with these, which is what keeps the
+    // `-1` a floor can produce from ever escaping into a node index.
+    for (idx, ax) in [(&i0, t0), (&i1, t1)] {
+        let lo = *idx.iter().min().unwrap_or(&0);
+        let hi = *idx.iter().max().unwrap_or(&0);
+        if lo < 1 || hi > view.n[ax] as i64 - 1 {
+            return Err(PortError::InPlaneRim {
+                where_: where_.to_owned(),
+                lo,
+                hi,
+                axis: ax,
+                n_axis: view.n[ax],
+            });
+        }
+    }
+    let t = build_t(&rows, &cols, &vals, &plane, face_coords.len());
+
+    let nodes = place(&i0, &i1);
+    let index = [nodes[0][0], nodes[1][0], nodes[2][0]];
+    let flat = ravel(&[&nodes[0], &nodes[1], &nodes[2]], view.node_shape());
+    let r_nodes = r_from(&nodes);
+    let r = patch_resistance(view, &[&r_nodes[0], &r_nodes[1], &r_nodes[2]]);
+    let load = load_matrix(&t, &r, scale);
+    Ok(Assembled {
+        nodes,
+        index,
+        flat,
+        t,
+        r,
+        load,
+        in_plane: (i0, i1),
+    })
+}
+
+/// Every accessor the two distributed ports share, generated once against their `patch` field.
+macro_rules! patch_accessors {
+    ($ty:ty) => {
+        impl $ty {
+            /// How the surface's node areas are distributed over the air nodes under it.
+            pub fn spreading(&self) -> Spreading {
+                self.patch.spreading
+            }
+
+            /// The plane's two in-plane axes, in increasing order.
+            pub fn in_plane_axes(&self) -> (usize, usize) {
+                self.patch.in_plane_axes
+            }
+
+            /// The surface's own in-plane node positions (m), as passed.
+            pub fn coords(&self) -> &[[f64; 2]] {
+                &self.patch.coords
+            }
+
+            /// The per-node areas (m^2).
+            pub fn areas(&self) -> &[f64] {
+                &self.patch.areas
+            }
+
+            /// Replace the per-node areas — how a test switches a surface's coupling off.
+            pub fn set_areas(&mut self, areas: Vec<f64>) {
+                self.patch.areas = areas;
+            }
+
+            /// How many surface nodes the port carries.
+            pub fn n_surface(&self) -> usize {
+                self.patch.coords.len()
+            }
+
+            /// Where the footprint was placed in the plane's own axes (m).
+            pub fn origin(&self) -> (f64, f64) {
+                self.patch.origin
+            }
+
+            /// The air nodes the source covers, as three parallel index arrays.
+            pub fn nodes(&self) -> &Nodes {
+                &self.patch.nodes
+            }
+
+            /// The first node of the set, which is how the port names itself in a refusal.
+            pub fn index(&self) -> [usize; 3] {
+                self.patch.index
+            }
+
+            /// The node set as flat C-order pressure indices.
+            pub fn flat(&self) -> &[usize] {
+                &self.patch.flat
+            }
+
+            /// The footprint's placed coordinates (m) — `coords + origin`.
+            pub fn face_coords(&self) -> &[[f64; 2]] {
+                &self.patch.face_coords
+            }
+
+            /// How the port names its mounting in a refusal — the reference's `_where`.
+            pub fn where_(&self) -> &str {
+                &self.patch.where_
+            }
+
+            /// How many air nodes under the footprint no surface node reaches — reported, and zero
+            /// on any port that was accepted.
+            pub fn footprint_empty(&self) -> usize {
+                self.patch.footprint_empty
+            }
+
+            /// The spreading operator `T`: air nodes by surface nodes, carrying areas.
+            pub fn t(&self) -> &Csr {
+                &self.patch.t
+            }
+
+            /// Replace `T` — the reference allows it and one retired test rebuilt it rescaled.
+            pub fn set_t(&mut self, t: Csr) {
+                self.patch.t = t;
+            }
+
+            /// The per-air-node resistance `R_j` (Pa s / m^3).
+            pub fn r(&self) -> &[f64] {
+                &self.patch.r
+            }
+
+            /// Replace `R` — a wrong one is exactly what the conserved total cannot see.
+            pub fn set_r(&mut self, r: Vec<f64>) {
+                self.patch.r = r;
+            }
+
+            /// The surface-side load `scale * T^T diag(R) T` (Pa s / m^3 per node pair).
+            pub fn load_matrix(&self) -> &Csr {
+                &self.patch.load
+            }
+
+            /// Replace the load matrix.
+            pub fn set_load_matrix(&mut self, load: Csr) {
+                self.patch.load = load;
+            }
+
+            /// How many air nodes the surface's spread source actually covers.
+            pub fn node_count(&self) -> usize {
+                self.patch.nodes[0].len()
+            }
+
+            /// The **radiating** area `sum_n area_n` (m^2) — which is not the bounding rectangle.
+            ///
+            /// Reads `areas` live rather than from a cache, so zeroing it works.
+            pub fn net_area(&self) -> f64 {
+                reduce::sum(&self.patch.areas)
+            }
+
+            /// Refuse if this port's previous injection is still pending — i.e. no `room.step()`.
+            pub fn require_ready(&self, room: &AirBox) -> Result<(), PortError> {
+                if self.patch.queued == Some((room.epoch, room.n)) {
+                    return Err(PortError::SurfaceNotReady {
+                        where_: self.patch.where_.clone(),
+                        n: room.n,
+                    });
+                }
+                Ok(())
+            }
+
+            /// Forget any pending-injection mark — for reusing the port on a fresh run.
+            pub fn reset(&mut self) {
+                self.patch.queued = None;
+            }
+        }
+    };
+}
+
+/// A surface mounted flush in one of the room's walls, radiating from every node.
+///
+/// The distributed counterpart of [`RoomPort`]: where the lumped tier couples one scalar volume
+/// velocity through one internal resistance, this couples a **vector** of them through
+/// `T^T diag(R) T`, so a mode that moves the same net volume as another can still radiate a
+/// completely different field. Built as a value the caller owns, with the room passed at each
+/// call — the shape the retirement's second batch chose and this tier inherits.
+#[derive(Debug, Clone)]
+pub struct SurfacePort {
+    patch: Patch,
+    face: String,
+    axis: usize,
+}
+
+/// A surface hanging on an interior plane of faces, radiating from **both** sides.
+///
+/// The same patch, mounted on a velocity plane rather than a wall: it blocks the faces it occupies
+/// (a rigid, zero-thickness partition registered with the room) and injects `-q` on the low node
+/// plane and `+q` on the high one, so the two sides are one object and the dipole is exact.
+#[derive(Debug, Clone)]
+pub struct InteriorSurfacePort {
+    patch: Patch,
+    plane: String,
+    axis: usize,
+    face_index: usize,
+    nodes_lo: Nodes,
+    nodes_hi: Nodes,
+    in_plane: (Vec<i64>, Vec<i64>),
+}
+
+patch_accessors!(SurfacePort);
+patch_accessors!(InteriorSurfacePort);
+
+impl SurfacePort {
+    /// Mount a surface flush in `face`, with per-node positions `coords` (m) and areas `areas`.
+    ///
+    /// `origin` places the footprint in the plane's own two axes; `None` centres it, which is what
+    /// makes the load equivariant under the grid's own mirror. Every refusal runs before the port
+    /// claims its footprint on the room, so a rejected port leaves the room exactly as it was.
+    pub fn new(
+        room: &mut AirBox,
+        face: &str,
+        coords: &[[f64; 2]],
+        areas: &[f64],
+        origin: Option<(f64, f64)>,
+        spreading: Spreading,
+    ) -> Result<SurfacePort, PortError> {
+        let (axis, end, t0, t1) =
+            face_axes(face).ok_or_else(|| PortError::UnknownFace(face.to_owned()))?;
+        let where_ = format!("face '{face}'");
+        let (face_coords, origin) =
+            accept_surface(room.p.n, room.p.h, coords, areas, origin, (t0, t1), &where_)?;
+
+        let view = room.view();
+        let n_axis_end = if end == 0 { 0usize } else { view.n[axis] };
+        let asm = assemble(
+            &view,
+            &face_coords,
+            areas,
+            spreading,
+            (t0, t1),
+            &where_,
+            &|i0, i1| {
+                let mut out: Nodes = [Vec::new(), Vec::new(), Vec::new()];
+                out[axis] = vec![n_axis_end; i0.len()];
+                out[t0] = i0.iter().map(|&v| v as usize).collect();
+                out[t1] = i1.iter().map(|&v| v as usize).collect();
+                out
+            },
+            &|nodes| nodes.clone(),
+            1.0,
+        )?;
+
+        let (unfed, foot) = footprint_unfed(&asm.nodes[t0], &asm.nodes[t1], view.n[t1]);
+        if unfed != 0 {
+            return Err(PortError::TooCoarseFootprint {
+                where_,
+                unfed,
+                foot,
+                h: view.h,
+                spreading,
+            });
+        }
+        let touched = touched_open_faces(&room.p, &asm.nodes);
+        if !touched.is_empty() {
+            return Err(PortError::SurfaceOnOpenFace {
+                where_,
+                faces: touched,
+            });
+        }
+        let shape = view.node_shape();
+        check_disjoint(&room.claims, &asm.flat, shape, &where_, asm.nodes[0].len())?;
+
+        room.claims.push(crate::airbox::PortClaim {
+            nodes: asm.flat.clone(),
+            label: index_repr(asm.index),
+        });
+        Ok(SurfacePort {
+            patch: Patch {
+                spreading,
+                in_plane_axes: (t0, t1),
+                coords: coords.to_vec(),
+                areas: areas.to_vec(),
+                origin,
+                face_coords,
+                nodes: asm.nodes,
+                index: asm.index,
+                flat: asm.flat,
+                t: asm.t,
+                r: asm.r,
+                load: asm.load,
+                footprint_empty: unfed,
+                where_,
+                queued: None,
+            },
+            face: face.to_owned(),
+            axis,
+        })
+    }
+
+    /// The wall face the surface is mounted in.
+    pub fn face(&self) -> &str {
+        &self.face
+    }
+
+    /// The face's normal axis.
+    pub fn axis(&self) -> usize {
+        self.axis
+    }
+
+    /// The open-circuit centered pressure **vector** `pbar_free` over the patch, `O(patch)`.
+    pub fn free_pressure(&self, room: &AirBox) -> Vec<f64> {
+        let view = room.view();
+        let n = &self.patch.nodes;
+        free_pressure_nodes(&view, &[&n[0], &n[1], &n[2]])
+    }
+
+    /// Queue the **per-node** volume-velocity vector `q` (m^3/s) for the room's next step.
+    pub fn inject(&mut self, room: &mut AirBox, q: &[f64]) -> Result<(), PortError> {
+        let count = self.patch.nodes[0].len();
+        if q.len() != count {
+            return Err(PortError::QLength {
+                expected: count,
+                got: q.len(),
+                per_face: false,
+                node_count: count,
+            });
+        }
+        self.require_ready(room)?;
+        queue_vector(room, &self.patch.flat, q);
+        self.patch.queued = Some((room.epoch, room.n));
+        Ok(())
+    }
+}
+
+impl InteriorSurfacePort {
+    /// Hang a surface on the `index`-th velocity face plane normal to `plane`.
+    ///
+    /// The two node planes straddling the surface must both be strictly interior, which is what
+    /// makes one `R` correct for both sides. Every refusal — including the room's own shared-face
+    /// one — runs before the port claims its footprint, so a rejected port leaves `room.claims`
+    /// and `room.cuts` exactly as it found them.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        room: &mut AirBox,
+        plane: &str,
+        index: i64,
+        coords: &[[f64; 2]],
+        areas: &[f64],
+        origin: Option<(f64, f64)>,
+        spreading: Spreading,
+    ) -> Result<InteriorSurfacePort, PortError> {
+        let axis = AirBox::plane_axis(plane).map_err(PortError::Cut)?;
+        let n_face = room.p.n[axis];
+        if !(1..=n_face as i64 - 2).contains(&index) {
+            return Err(PortError::InteriorIndexOutOfRange {
+                plane: plane.to_owned(),
+                index,
+                n_face,
+            });
+        }
+        let face_index = index as usize;
+        let (t0, t1) = crate::airbox::other_axes(axis);
+        let where_ = format!("the plane '{plane}' cross-section at index {index}");
+        let (face_coords, origin) =
+            accept_surface(room.p.n, room.p.h, coords, areas, origin, (t0, t1), &where_)?;
+
+        let view = room.view();
+        // The combined node set is both straddling planes, low first — what the disjointness check
+        // and the room's bookkeeping see. `R` is built from the LOW plane alone: one resistance for
+        // both, which the rim refusal is exactly what makes true.
+        let asm = assemble(
+            &view,
+            &face_coords,
+            areas,
+            spreading,
+            (t0, t1),
+            &where_,
+            &|i0, i1| {
+                let mut out: Nodes = [Vec::new(), Vec::new(), Vec::new()];
+                for offset in 0..2usize {
+                    for m in 0..i0.len() {
+                        out[axis].push(face_index + offset);
+                        out[t0].push(i0[m] as usize);
+                        out[t1].push(i1[m] as usize);
+                    }
+                }
+                out
+            },
+            &|nodes| {
+                let half = nodes[0].len() / 2;
+                [
+                    nodes[0][..half].to_vec(),
+                    nodes[1][..half].to_vec(),
+                    nodes[2][..half].to_vec(),
+                ]
+            },
+            2.0,
+        )?;
+        let half = asm.nodes[0].len() / 2;
+        let total = asm.nodes[0].len();
+        let split = |range: std::ops::Range<usize>| -> Nodes {
+            [
+                asm.nodes[0][range.clone()].to_vec(),
+                asm.nodes[1][range.clone()].to_vec(),
+                asm.nodes[2][range].to_vec(),
+            ]
+        };
+        let nodes_lo = split(0..half);
+        let nodes_hi = split(half..total);
+        let index_triple = [nodes_lo[0][0], nodes_lo[1][0], nodes_lo[2][0]];
+
+        let (unfed, foot) = footprint_unfed(&nodes_lo[t0], &nodes_lo[t1], view.n[t1]);
+        if unfed != 0 {
+            return Err(PortError::TooCoarseFootprint {
+                where_,
+                unfed,
+                foot,
+                h: view.h,
+                spreading,
+            });
+        }
+        let shape = view.node_shape();
+        check_disjoint(&room.claims, &asm.flat, shape, &where_, total)?;
+
+        // The cut is the only registration that WRITES the room's state, so it goes last among the
+        // things that can fail — and it can fail: the room refuses a cut that shares a face with
+        // an existing port's. Its refusal fires before `claims` is touched, so a rejected interior
+        // port leaves both books as it found them.
+        let (i0, i1) = &asm.in_plane;
+        let cut_i0: Vec<usize> = i0.iter().map(|&v| v as usize).collect();
+        let cut_i1: Vec<usize> = i1.iter().map(|&v| v as usize).collect();
+        room.register_cut(
+            Some(index_repr(index_triple)),
+            axis,
+            face_index,
+            &cut_i0,
+            &cut_i1,
+        )
+        .map_err(PortError::Cut)?;
+        room.claims.push(crate::airbox::PortClaim {
+            nodes: asm.flat.clone(),
+            label: index_repr(index_triple),
+        });
+
+        Ok(InteriorSurfacePort {
+            patch: Patch {
+                spreading,
+                in_plane_axes: (t0, t1),
+                coords: coords.to_vec(),
+                areas: areas.to_vec(),
+                origin,
+                face_coords,
+                nodes: asm.nodes,
+                index: index_triple,
+                flat: asm.flat,
+                t: asm.t,
+                r: asm.r,
+                load: asm.load,
+                footprint_empty: unfed,
+                where_,
+                queued: None,
+            },
+            plane: plane.to_owned(),
+            axis,
+            face_index,
+            nodes_lo,
+            nodes_hi,
+            in_plane: (i0.clone(), i1.clone()),
+        })
+    }
+
+    /// The interior plane the surface hangs on.
+    pub fn plane(&self) -> &str {
+        &self.plane
+    }
+
+    /// The plane's normal axis.
+    pub fn axis(&self) -> usize {
+        self.axis
+    }
+
+    /// The velocity-face index the surface sits at.
+    pub fn face_index(&self) -> usize {
+        self.face_index
+    }
+
+    /// The low-side node plane.
+    pub fn nodes_lo(&self) -> &Nodes {
+        &self.nodes_lo
+    }
+
+    /// The high-side node plane.
+    pub fn nodes_hi(&self) -> &Nodes {
+        &self.nodes_hi
+    }
+
+    /// The in-plane node indices the surface reaches, on the plane's own two axes.
+    pub fn in_plane(&self) -> (&[i64], &[i64]) {
+        (&self.in_plane.0, &self.in_plane.1)
+    }
+
+    /// How many velocity faces the surface cuts — half of [`Self::node_count`].
+    pub fn face_count(&self) -> usize {
+        self.nodes_lo[0].len()
+    }
+
+    /// The **cut** area (m^2) — `face_count * h^2`, and not [`Self::net_area`].
+    pub fn blocked_area(&self, room: &AirBox) -> f64 {
+        self.nodes_lo[0].len() as f64 * scalar_pow(room.p.h, 2.0)
+    }
+
+    /// The open-circuit centered pressure on the **low** and **high** node planes, `O(patch)`.
+    pub fn free_pressure(&self, room: &AirBox) -> (Vec<f64>, Vec<f64>) {
+        let view = room.view();
+        let lo = &self.nodes_lo;
+        let hi = &self.nodes_hi;
+        (
+            free_pressure_nodes(&view, &[&lo[0], &lo[1], &lo[2]]),
+            free_pressure_nodes(&view, &[&hi[0], &hi[1], &hi[2]]),
+        )
+    }
+
+    /// Queue the **per-face** volume-velocity vector `q` (m^3/s) as a `-q` / `+q` pair.
+    pub fn inject(&mut self, room: &mut AirBox, q: &[f64]) -> Result<(), PortError> {
+        let faces = self.nodes_lo[0].len();
+        if q.len() != faces {
+            return Err(PortError::QLength {
+                expected: faces,
+                got: q.len(),
+                per_face: true,
+                node_count: self.patch.nodes[0].len(),
+            });
+        }
+        self.require_ready(room)?;
+        let neg: Vec<f64> = q.iter().map(|&v| -v).collect();
+        queue_vector(room, &self.patch.flat[..faces], &neg);
+        queue_vector(room, &self.patch.flat[faces..], q);
+        self.patch.queued = Some((room.epoch, room.n));
+        Ok(())
+    }
+}
+
+/// Append one distributed injection to the room's pending queue.
+///
+/// The reference queues `(nodes, q_vector, 1.0)` and the room's step multiplies the two, which is
+/// exactly [`crate::airbox::PortInjection`] with `q = 1.0` and the per-node vector in `w`. So the
+/// distributed tier needs no new room-side machinery at all — it reuses the lumped one's, with the
+/// roles of "share" and "magnitude" swapped.
+fn queue_vector(room: &mut AirBox, flat: &[usize], q: &[f64]) {
+    room.pending_ports.push(crate::airbox::PortInjection {
+        nodes: flat.to_vec(),
+        w: q.to_vec(),
+        q: 1.0,
+    });
+}
+
+/// The disjointness refusal, over whichever ports the room already holds.
+fn check_disjoint(
+    claims: &[crate::airbox::PortClaim],
+    flat: &[usize],
+    shape: [usize; 3],
+    where_: &str,
+    count: usize,
+) -> Result<(), PortError> {
+    for claim in claims {
+        let (first, shared) = shared_nodes(flat, &claim.nodes);
+        if let Some(first) = first {
+            return Err(PortError::SurfaceOverlapping {
+                where_: where_.to_owned(),
+                count,
+                node: unravel(first, shape),
+                other: claim.label.clone(),
+                shared,
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

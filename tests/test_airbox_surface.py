@@ -36,7 +36,16 @@ Two further traps get their own tests because nothing else would catch them:
   bit-identity of the **wrong** run: that is the point of it.
 * **The surface must be centred**, and for two independent reasons — it is what makes the load
   matrix mirror-equivariant at all, and what lets the scene be symmetric about a mode's own
-  antisymmetry plane. Both are measured here, and the second has *no tolerance band*.
+  antisymmetry plane. The second is measured here and has *no tolerance band*; the first is now
+  ``crates/physsynth-core/tests/airbox_surface.rs::bilinear_equivariance_needs_centring``.
+
+**This file has been split, and what is left is the WRAPPER tier.** The Python retirement's phase C
+re-homed :class:`SurfacePort` and :class:`InteriorSurfacePort` into ``physsynth-core``, and every
+test here whose referent was the *port* — the spreading operator, the span-wise footprint criterion,
+``net_area``, and the construction refusals — moved to the native bars above and was deleted (plan
+``docs/dev/python-retirement-plan.md`` §14). What stays is every test that **drives a wrapper**:
+the trajectory it asserts is :class:`RoomLoadedPlate`'s even where the claim is named after the
+port, and the wrappers have not been re-homed yet. This file retires with them.
 """
 
 import numpy as np
@@ -57,14 +66,11 @@ from scipy import sparse
 # it here keeps the reduction exact under the flag instead of measuring two solvers.
 from physsynth.core.airbox import (
     FACES,
-    InteriorSurfacePort,
     RoomLoadedPlate,
-    SurfacePort,
     impedance_from_zeta,
     splu,
 )
 from physsynth.core.connection import StringPlateBridge
-from physsynth.core.membrane import Membrane
 from physsynth.core.plate import Plate
 from physsynth.core.string_ideal import IdealString
 
@@ -235,29 +241,6 @@ def test_volume_is_conserved_exactly(boundary):
         want = float(np.sum(inst.port.areas * v))
         scale = float(np.sum(inst.port.areas * np.abs(v)))
         assert abs(net - want) <= 1e-13 * scale
-
-
-@pytest.mark.parametrize("boundary", BOUNDARIES)
-def test_T_distributes_every_node_area(boundary):
-    """``T^T 1 == areas``: every surface node's area is fully distributed, none created or lost."""
-    inst = make_room_loaded_plate(boundary=boundary)
-    distributed = np.asarray(inst.port.T.T @ np.ones(inst.port.node_count)).ravel()
-    assert np.allclose(distributed, inst.port.areas, rtol=0.0, atol=1e-18)
-
-
-@pytest.mark.parametrize("boundary", BOUNDARIES)
-def test_net_area_is_not_the_bounding_rectangle(boundary):
-    """The radiating area is ``((N-1)/N)^2 Lx Ly`` supported, exactly ``Lx Ly`` free.
-
-    A simply-supported plate's rim nodes are **dead** — they do not move, so they displace no
-    volume. The shortfall is physics, not a defect, but it means comparing against a closed form
-    for a piston of area ``Lx Ly`` is wrong by that factor at coarse ``N``. The free plate has no
-    dead rim, and that contrast is the test.
-    """
-    inst = make_room_loaded_plate(boundary=boundary)
-    plate = inst.plate
-    factor = ((plate.N - 1) / plate.N) ** 2 if boundary == "supported" else 1.0
-    assert inst.port.net_area == pytest.approx(factor * plate.Lx * plate.Ly, rel=1e-15)
 
 
 @pytest.mark.parametrize("boundary", BOUNDARIES)
@@ -496,118 +479,6 @@ def test_free_plate_piston_is_fully_radiated():
 # -- the spreading operator ---------------------------------------------------------------
 
 
-def _mirror_permutation(plate):
-    """The plate's own ``x -> Lx - x`` as a permutation of its live nodes."""
-    x, y = plate.X[plate.mask], plate.Y[plate.mask]
-    source = np.lexsort((np.round(x, 12), np.round(y, 12)))
-    target = np.lexsort((np.round(plate.Lx - x, 12), np.round(y, 12)))
-    perm = np.empty(plate.n_live, dtype=int)
-    perm[source] = target
-    assert np.allclose(x[perm], plate.Lx - x) and np.allclose(y[perm], y)
-    return perm
-
-
-def _mirror_defect(spreading, shift):
-    """Relative defect of ``T^T R T`` under the surface's mirror, at an in-plane offset of
-    ``shift`` air cells from centred."""
-    room = make_surface_room()
-    plate = Plate(Lx=0.30, Ly=0.30, kappa=20.0, rho=0.5, fs=room.fs, N=16)
-    origin = (
-        0.5 * (room.N[0] * room.h - plate.Lx) + shift * room.h,
-        0.5 * (room.N[1] * room.h - plate.Ly),
-    )
-    port = SurfacePort(
-        room=room,
-        face="z0",
-        coords=np.column_stack((plate.X[plate.mask], plate.Y[plate.mask])),
-        areas=np.full(plate.n_live, plate.h * plate.h),
-        origin=origin,
-        spreading=spreading,
-    )
-    perm = _mirror_permutation(plate)
-    matrix = port.load_matrix.toarray()
-    return np.linalg.norm(matrix[np.ix_(perm, perm)] - matrix) / np.linalg.norm(matrix)
-
-
-def test_bilinear_equivariance_needs_centring():
-    """Mirror-equivariance of the load holds **exactly when the surface is centred**, not near it.
-
-    The batch plan expected bilinear's equivariance to be offset-*independent*. Measured here it is
-    not: it holds when ``S = 2 (surface centre) / h_air`` is an **integer** (defect ~1e-15) and
-    fails at 1.6e-01 … 3.8e-01 otherwise. The algebra agrees: the mirror sends a node to a cell
-    fraction ``frac(S - t)``, which is the ``1 - f`` that reverses a bilinear weight pair only for
-    integral ``S``. This is why :attr:`SurfacePort.origin` defaults to centred for **two**
-    independent reasons rather than one: centring buys the load's equivariance as well as the
-    scene's symmetry.
-    """
-    for shift in (0.0, 0.5):  # integral S
-        assert _mirror_defect("bilinear", shift) < 1e-13
-    for shift in (0.125, 0.25, 0.375, 0.625):
-        assert _mirror_defect("bilinear", shift) > 1e-2
-
-
-def test_nearest_node_equivariance_is_an_accident():
-    """The negative control: nearest-node's symmetry rides on the rounding rule, not on geometry.
-
-    Exact at an **even** ``S`` and broken at an **odd** one, because there the surface's own centre
-    node lands on a rounding tie that round-half-to-even resolves the same way from both directions.
-    Bilinear is exact at both. ``spreading="nearest"`` exists only for this.
-    """
-    assert _mirror_defect("nearest", 0.0) < 1e-13     # even S -- exact by accident
-    assert _mirror_defect("nearest", 0.5) > 1e-2      # odd S -- the tie breaks it
-    assert _mirror_defect("bilinear", 0.5) < 1e-13    # ... where bilinear is still exact
-
-
-def _interior_area_spread(spreading, *, L, N):
-    """Spread of the assigned area over air nodes strictly inside the footprint, in ``h_air^2``."""
-    inst = make_room_loaded_plate(N=N, L=L, spreading=spreading)
-    room, port = inst.room, inst.port
-    assigned = np.asarray(port.T @ np.ones(inst.plate.n_live)).ravel()
-    t0, t1 = port.in_plane_axes
-    c = port._face_coords
-    inside = (
-        (port.nodes[t0] * room.h > c[:, 0].min() + room.h)
-        & (port.nodes[t0] * room.h < c[:, 0].max() - room.h)
-        & (port.nodes[t1] * room.h > c[:, 1].min() + room.h)
-        & (port.nodes[t1] * room.h < c[:, 1].max() - room.h)
-    )
-    assert inside.sum() > 4, "need a real interior to measure"
-    return (assigned[inside].max() - assigned[inside].min()) / (room.h * room.h)
-
-
-def test_bilinear_assignment_is_exact_at_an_integral_grid_ratio():
-    """``h_air^2`` per interior air node **exactly**, when ``h_air/h_surface`` is an integer.
-
-    "Partition of unity" promises more than it delivers, and the batch plan overclaimed here (it
-    reported exact flatness at every ratio). Poisson summation on the periodised hat gives Fourier
-    coefficients ``sinc^2(pi k h_air/h_surface)``, whose ``k``-th term vanishes exactly when
-    ``k h_air/h_surface`` is a nonzero integer — so *all* of them vanish only for an integral ratio.
-    This test builds that ratio deliberately and pins the exactness; the next one measures the
-    ripple that remains otherwise.
-    """
-    room = make_surface_room()
-    for divisions in (2, 3, 4):
-        N = int(round(0.45 / (room.h / divisions)))
-        spread = _interior_area_spread("bilinear", L=N * room.h / divisions, N=N)
-        assert spread < 1e-14, f"h_air/h_p = {divisions}: spread {spread:.3e}"
-
-
-def test_bilinear_beats_nearest_node_at_every_refinement():
-    """Off an integral ratio bilinear ripples — and nearest-node is 10x-100x worse and *diverges*.
-
-    This is the argument that actually decides the spreading operator (the symmetry one does not
-    survive — see above). Measured over ``N = 8, 16, 24, 32`` on a 0.60 m plate: bilinear gives
-    0.082, 0.062, 0.051, 0.031 ``h_air^2`` — decreasing — while nearest-node gives 0.83, 1.03,
-    0.64, 0.46, wandering with no convergence at all. A lumpy source at the grid scale, for
-    nothing.
-    """
-    bilinear = [_interior_area_spread("bilinear", L=0.60, N=N) for N in (8, 16, 24, 32)]
-    nearest = [_interior_area_spread("nearest", L=0.60, N=N) for N in (8, 16, 24, 32)]
-    assert all(b < 0.1 * n for b, n in zip(bilinear, nearest, strict=True))
-    assert bilinear[-1] < 0.5 * bilinear[0], "bilinear must improve with refinement"
-    assert nearest[-1] > 0.4, "nearest-node does not converge, and that is the point"
-
-
 def test_load_matrix_is_symmetric_and_the_cost_is_reported():
     """``T^T R T`` is symmetric to machine precision, and the factorization's real cost is exposed.
 
@@ -788,177 +659,12 @@ def test_refuses_a_sample_rate_mismatch():
         RoomLoadedPlate(plate=plate, room=room, face="z0")
 
 
-def test_refuses_a_footprint_reaching_the_face_rim():
-    """A face-rim node touches a **second** wall, so ``R_j`` would stop being uniform.
-
-    Clipping the stencil there would fold the outboard weight back onto the boundary node: volume
-    still conserved, every ledger still green, and the source geometry quietly wrong — the same
-    failure shape as the sign flip. ``AirBox.node_index`` already refuses to relocate an out-of-room
-    point rather than snapping it, and this matches.
-    """
-    with pytest.raises(ValueError, match="rim"):
-        make_room_loaded_plate(L=0.85, N=16)
-
-
-def test_refuses_a_footprint_outside_the_face():
-    with pytest.raises(ValueError, match="outside face"):
-        make_room_loaded_plate(origin=(0.9, 0.4))
-
-
-def test_refuses_a_surface_too_coarse_for_the_air_grid():
-    """Unfed air nodes under the footprint make the acoustic source a comb at the grid scale.
-
-    The condition is a **count of unfed nodes**, not an inequality on ``h_surface/h_air``: at ratio
-    0.909, comfortably inside the naive inequality, nearest-node still leaves half the footprint
-    unfed.
-    """
-    with pytest.raises(ValueError, match="fed by no surface node"):
-        make_room_loaded_plate(boundary="free", N=3, spreading="nearest")
-
-
-# -- the footprint is span-wise, not a bounding box (air-box batch 5) ---------------------
-# `_check_footprint` built its required set as a bounding BOX, which silently assumed every
-# surface is a rectangle. These pin the replacement: a staircased disk is accepted, a rectangle
-# is judged by the identical set, and the comb it exists to refuse is still refused.
-
-DISK_ROOM_FS = 40_000.0            # h_air = 16.5 mm: fine enough that a disk's bbox corners bite
-DISK_ROOM_N = (28, 28, 9)          # ~22 air nodes across the disk -- below ~10 the effect hides
-DISK_RADIUS = 0.18                 # m
-DISK_TIERS = ("baffled", "suspended")
-
-
-def _disk_port(*, tier: str, N: int, domain: str = "circle", **kw):
-    """A membrane's live nodes handed to a port — the shape that motivated the criterion."""
-    room = make_surface_room(fs=DISK_ROOM_FS, N=DISK_ROOM_N)
-    geometry = dict(radius=DISK_RADIUS) if domain == "circle" else kw
-    mem = Membrane(domain=domain, T=3000.0, rho=0.26, fs=DISK_ROOM_FS, N=N, **geometry)
-    coords = np.column_stack((mem.X[mem.mask], mem.Y[mem.mask]))
-    areas = np.full(mem.n_live, mem.h * mem.h)
-    if tier == "baffled":
-        return SurfacePort(room=room, face="z0", coords=coords, areas=areas), mem
-    return InteriorSurfacePort(room=room, plane="z", index=4, coords=coords, areas=areas), mem
-
-
-def _bounding_box_unfed(port) -> int:
-    """The **old** criterion, recomputed here so these tests can show they discriminate.
-
-    A test that only asserts the new code passes cannot tell a fix from a no-op. This is the
-    superseded required set — the outer product of the two per-axis coordinate ranges — and the
-    disk cases below assert it was *not* zero, i.e. that the shipped check really did refuse them.
-    """
-    room = port.room
-    t0, t1 = port.in_plane_axes
-    tol = 1e-9 * room.h
-    inside = []
-    for d, ax in enumerate((t0, t1)):
-        grid = np.arange(room.N[ax] + 1) * room.h
-        lo, hi = port._face_coords[:, d].min() - tol, port._face_coords[:, d].max() + tol
-        inside.append(np.nonzero((grid >= lo) & (grid <= hi))[0])
-    foot = (inside[0][:, None] * (room.N[t1] + 1) + inside[1][None, :]).ravel()
-    reached = np.ravel_multi_index(
-        (port.nodes[t0], port.nodes[t1]), (room.N[t0] + 1, room.N[t1] + 1)
-    )
-    return int(np.setdiff1d(foot, reached).size)
-
-
-@pytest.mark.parametrize("tier", DISK_TIERS)
-@pytest.mark.parametrize("N", (16, 24, 32, 48))
-def test_accepts_a_staircased_disk_the_bounding_box_refused(tier, N):
-    """A round drumhead is the interesting membrane, and the bounding box refused it — always.
-
-    The bbox corners of a disk sit ~``0.41 R`` outside it, so they are fed by no surface node *by
-    construction*: the refusal was structural and refining made it no better (16, 12, 48, 40 unfed
-    at ``N = 16, 24, 32, 48``, identically on both tiers). Span-wise the same disks leave zero.
-    """
-    port, _ = _disk_port(tier=tier, N=N)
-    assert port.footprint_empty == 0
-    assert _bounding_box_unfed(port) > 0, "this configuration no longer discriminates"
-
-
-@pytest.mark.parametrize("tier", DISK_TIERS)
-def test_a_rectangle_is_judged_by_the_identical_required_set(tier):
-    """The reduction that protects batches 3 and 4: for a rectangle, span-wise **is** the box.
-
-    Every row spans the same columns and every column the same rows, so the union of the spans is
-    the bounding box of the reached nodes — by construction, not by tolerance. Asserted as exact
-    set equality rather than as equal counts.
-    """
-    port, _ = _disk_port(tier=tier, N=12, domain="rectangle", Lx=0.24, Ly=0.16)
-    t0, t1 = port.in_plane_axes
-    i0, i1 = np.asarray(port.nodes[t0]), np.asarray(port.nodes[t1])
-    reached = {(int(a), int(b)) for a, b in zip(i0, i1, strict=True)}
-    box = {
-        (r, c)
-        for r in range(int(i0.min()), int(i0.max()) + 1)
-        for c in range(int(i1.min()), int(i1.max()) + 1)
-    }
-    assert reached == box
-    assert port.footprint_empty == 0
-    assert _bounding_box_unfed(port) == 0
-
-
-def test_the_comb_verdict_changes_where_it_always_did():
-    """Dropping the *shape* assumption must not weaken the check where it earns its keep.
-
-    The new required set contains the old one (the coordinate box is inset by up to one node per
-    side), so it counts a few more unfed nodes when it refuses — 20 against 17 at
-    ``h_surface/h_air = 2.02``. What must not move is the **verdict boundary**, and it does not:
-    swept over a rectangle, both criteria change their mind between the same two spacings.
-
-    Note this is *not* a fixed ratio. Where the boundary sits depends on how the patch lands on
-    the air grid — a differently-placed one put it in (2.02, 2.24] — which is exactly why the
-    condition is a count of unfed nodes and not an inequality on ``h_surface/h_air``.
-    """
-    ratios, verdicts = [], []
-    for N in (12, 10, 9, 8, 7, 6, 5, 4):
-        room = make_surface_room(fs=DISK_ROOM_FS, N=DISK_ROOM_N)
-        mem = Membrane(domain="rectangle", T=3000.0, rho=0.26, fs=DISK_ROOM_FS, N=N, Lx=0.20,
-                       Ly=0.20)
-        coords = np.column_stack((mem.X[mem.mask], mem.Y[mem.mask]))
-        areas = np.full(mem.n_live, mem.h * mem.h)
-        ratios.append(mem.h / room.h)
-        try:
-            port = SurfacePort(room=room, face="z0", coords=coords, areas=areas)
-        except ValueError as exc:
-            assert "fed by no surface node" in str(exc)
-            verdicts.append("refused")
-        else:
-            verdicts.append("accepted")
-            assert _bounding_box_unfed(port) == 0, "the old criterion must agree on an ACCEPT"
-    # Monotone: accepted while fine, refused once coarse, and it crosses exactly once.
-    assert verdicts == ["accepted"] * 5 + ["refused"] * 3, list(zip(ratios, verdicts, strict=True))
-    assert ratios[4] < 2.0 < ratios[5], "the crossing must bracket the two-air-cell ceiling"
-
-
-def test_refuses_a_surface_on_an_open_face():
-    """Perfectly conservative, completely silent — and the energy report is blind to it."""
-    with pytest.raises(ValueError, match="open"):
-        make_room_loaded_plate(walls={"z0": "open"})
-
-
-def test_refuses_overlapping_ports():
-    """Two ports sharing a node are not independent within a step, so each solves against a
-    pressure that never occurred. Disjointness is exactly what makes the cheap per-port solve
-    *exact* — and it is what lets N instruments share one room."""
-    room = make_surface_room()
-    make_room_loaded_plate(room=room)
-    with pytest.raises(ValueError, match="shares node"):
-        make_room_loaded_plate(room=room)
-
-
 def test_refuses_solving_twice_without_a_room_step():
     """A port does not step its room — the caller does, once, after every port has solved."""
     inst = make_room_loaded_plate()
     inst.step()
     with pytest.raises(RuntimeError, match="twice within one room step"):
         inst.step()
-
-
-def test_refuses_unknown_face_and_spreading():
-    with pytest.raises(ValueError, match="unknown face"):
-        make_room_loaded_plate(face="q0")
-    with pytest.raises(ValueError, match="unknown spreading"):
-        make_room_loaded_plate(spreading="cubic")
 
 
 def test_two_disjoint_surfaces_share_one_room():

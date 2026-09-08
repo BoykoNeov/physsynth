@@ -716,6 +716,115 @@ pub struct PortClaim {
     pub label: String,
 }
 
+/// One registered internal partition: the faces it blocks, on which plane, and who owns it.
+///
+/// The reference keeps this as `room._cuts`, a list of `(owner, axis, flat)` tuples, and the only
+/// thing that reads it is the shared-face refusal in `_register_cut`. Reduced to that.
+#[derive(Debug, Clone)]
+pub struct CutRecord {
+    /// The port that owns these faces, named the way its refusals name it, or `None` for a
+    /// hand-placed cut.
+    pub owner: Option<String>,
+    /// The normal axis of the plane the cut sits on.
+    pub axis: usize,
+    /// The flat face offsets it blocks, ascending.
+    pub faces: Vec<usize>,
+}
+
+/// A rejection from the internal-boundary machinery — `add_cut` and `_register_cut`.
+///
+/// The reference's third refusal, "extent must be a ((lo0, hi0), (lo1, hi1)) pair", has **no
+/// variant here**: it is a claim about the shape of a Python argument, and [`AirBox::add_cut`]
+/// takes `Option<[[i64; 2]; 2]>`, which the compiler enforces. See the retirement plan §14.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CutError {
+    /// The plane name is not one of `airbox_port::PLANES`. Carries it.
+    UnknownPlane(String),
+    /// The cut index is not a face index on that plane.
+    CutIndexOutOfRange {
+        /// The plane name, as passed.
+        plane: String,
+        /// The index asked for.
+        index: i64,
+        /// How many faces the plane has there.
+        n_face: usize,
+    },
+    /// An extent range is not an inclusive node-index range inside the axis.
+    BadExtent {
+        /// The offending in-plane axis.
+        axis: usize,
+        /// The range's low end.
+        lo: i64,
+        /// Its high end.
+        hi: i64,
+        /// Cells on that axis, so the node range is `0..n_node`.
+        n_node: usize,
+    },
+    /// This cut shares a velocity face with an existing one, and one of the two is a port's.
+    CutSharesFace {
+        /// The plane name.
+        plane: String,
+        /// The face index the cut sits at.
+        index: i64,
+        /// The first shared face, unravelled over the axis's face shape.
+        face: [usize; 3],
+        /// How many faces the two have in common.
+        count: usize,
+    },
+}
+
+impl std::fmt::Display for CutError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CutError::UnknownPlane(plane) => write!(
+                f,
+                "unknown plane '{plane}'; expected ('x', 'y', 'z'). An interior plane is named by \
+                 its normal axis alone \u{2014} it has no end, unlike a wall face ('x0', 'x1', \
+                 'y0', 'y1', 'z0', 'z1')."
+            ),
+            CutError::CutIndexOutOfRange {
+                plane,
+                index,
+                n_face,
+            } => write!(
+                f,
+                "cut index {index} is out of range for plane '{plane}': the room has {n_face} \
+                 face(s) there, so a cut sits at index 0..{} (face i lies between node planes i \
+                 and i+1). The room's own walls are at NODE planes 0 and {n_face} and are already \
+                 rigid \u{2014} they are not cut positions.",
+                *n_face as i64 - 1
+            ),
+            CutError::BadExtent {
+                axis,
+                lo,
+                hi,
+                n_node,
+            } => write!(
+                f,
+                "cut extent {lo}..{hi} on axis '{}' is not an inclusive node-index range inside \
+                 0..{n_node}.",
+                crate::airbox_port::AXES[*axis]
+            ),
+            CutError::CutSharesFace {
+                plane,
+                index,
+                face,
+                count,
+            } => write!(
+                f,
+                "the cut on plane '{plane}' at index {index} shares face ({}, {}, {}) with an \
+                 existing cut ({count} face(s) in common). A port's cut and its -q/+q pair are two \
+                 halves of one object, so sharing faces makes the pairing ambiguous: the blocked \
+                 path belongs to one plate and the injection to another, and every ledger stays \
+                 green while one of them silently stops blocking.",
+                face[0], face[1], face[2]
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CutError {}
+
 /// Apply the queued scalar injections to `p_next` — `p_next[i] += gain * q / W[i]`.
 pub fn inject_scalar(p: &Params, p_next: &mut [f64], pending: &[Injection]) {
     let shape = p.p_shape();
@@ -915,8 +1024,10 @@ pub struct AirBox {
     pub u: [Vec<f64>; 3],
     /// Velocity `u^{n-1/2}` per axis.
     pub u_prev: [Vec<f64>; 3],
-    /// Flat face indices cut on each axis.
+    /// Flat face indices cut on each axis — the union every kernel reads.
     pub cuts: [Vec<usize>; 3],
+    /// Every cut as registered, which is what the shared-face refusal needs and `cuts` has lost.
+    pub cut_records: Vec<CutRecord>,
     /// Cumulative energy absorbed by the walls (>= 0).
     pub dissipated: f64,
     /// Cumulative work done by the soft source.
@@ -952,6 +1063,7 @@ impl AirBox {
             u_prev: u.clone(),
             u,
             cuts: [Vec::new(), Vec::new(), Vec::new()],
+            cut_records: Vec::new(),
             dissipated: 0.0,
             injected: 0.0,
             n: 0,
@@ -1082,28 +1194,142 @@ impl AirBox {
         }
     }
 
-    /// Cut every face of the plane `axis == index`, the full cross-section.
+    /// The axis an interior plane name names — `AirBox._plane_axis`.
+    pub fn plane_axis(plane: &str) -> Result<usize, CutError> {
+        crate::airbox_port::plane_axis(plane)
+            .ok_or_else(|| CutError::UnknownPlane(plane.to_owned()))
+    }
+
+    /// Add a rigid, zero-thickness internal partition on a plane of velocity **faces**.
     ///
-    /// The native shell carries only the unrestricted cut, which is what its tests need; the
-    /// binding implements the full `add_cut` (extents, the shared-face refusal and the additive
-    /// bookkeeping) against Python objects a client can also write.
-    pub fn cut_plane(&mut self, axis: usize, index: usize) {
-        let us = self.p.u_shape(axis);
+    /// `extent` is `((lo0, hi0), (lo1, hi1))`, inclusive node-index ranges on the plane's two
+    /// in-plane axes in increasing axis order; `None` cuts the whole cross-section. Hand-placed
+    /// cuts are additive and may overlap each other — the mask is a boolean union — but not a
+    /// port's, which [`AirBox::register_cut`] refuses.
+    pub fn add_cut(
+        &mut self,
+        plane: &str,
+        index: i64,
+        extent: Option<[[i64; 2]; 2]>,
+    ) -> Result<(), CutError> {
+        let axis = AirBox::plane_axis(plane)?;
+        let n_face = self.p.n[axis];
+        if !(0..n_face as i64).contains(&index) {
+            return Err(CutError::CutIndexOutOfRange {
+                plane: plane.to_owned(),
+                index,
+                n_face,
+            });
+        }
         let (t0, t1) = other_axes(axis);
-        let mut idx = [0usize; 3];
-        idx[axis] = index;
-        for a in 0..us[t0] {
-            idx[t0] = a;
-            for b in 0..us[t1] {
-                idx[t1] = b;
-                self.cuts[axis].push(flat(us, idx[0], idx[1], idx[2]));
+        let mut sel: [Vec<usize>; 2] = [Vec::new(), Vec::new()];
+        for (d, ax) in [t0, t1].into_iter().enumerate() {
+            let n_node = self.p.n[ax];
+            match extent {
+                None => sel[d] = (0..=n_node).collect(),
+                Some(e) => {
+                    let (lo, hi) = (e[d][0], e[d][1]);
+                    if !(0 <= lo && lo <= hi && hi <= n_node as i64) {
+                        return Err(CutError::BadExtent {
+                            axis: ax,
+                            lo,
+                            hi,
+                            n_node,
+                        });
+                    }
+                    sel[d] = (lo as usize..=hi as usize).collect();
+                }
             }
         }
+        // `np.meshgrid(sel0, sel1, indexing="ij")` then ravel: sel0 repeats, sel1 tiles.
+        let mut i0 = Vec::with_capacity(sel[0].len() * sel[1].len());
+        let mut i1 = Vec::with_capacity(sel[0].len() * sel[1].len());
+        for &a in &sel[0] {
+            for &b in &sel[1] {
+                i0.push(a);
+                i1.push(b);
+            }
+        }
+        self.register_cut(None, axis, index as usize, &i0, &i1)
+    }
+
+    /// Cut the faces `(i0, i1)` on plane `axis` at `index`, additively — the one writer.
+    ///
+    /// `owner` names the port these faces belong to, or is `None` for a hand-placed cut. Two
+    /// hand-placed cuts may overlap; anything sharing faces with a **port**'s cut is refused,
+    /// because there the cut and the `-q`/`+q` pair are two halves of one object.
+    ///
+    /// The velocity fields are zeroed on the new faces here as well as inside `step`, so a cut
+    /// added to a room already holding a live velocity takes effect immediately rather than at the
+    /// next half-step.
+    pub fn register_cut(
+        &mut self,
+        owner: Option<String>,
+        axis: usize,
+        index: usize,
+        i0: &[usize],
+        i1: &[usize],
+    ) -> Result<(), CutError> {
+        let (t0, t1) = other_axes(axis);
+        let us = self.p.u_shape(axis);
+        let mut faces: Vec<usize> = Vec::with_capacity(i0.len());
+        for (&a, &b) in i0.iter().zip(i1.iter()) {
+            let mut node = [0usize; 3];
+            node[axis] = index;
+            node[t0] = a;
+            node[t1] = b;
+            faces.push(flat(us, node[0], node[1], node[2]));
+        }
+        for record in &self.cut_records {
+            if record.axis != axis || (owner.is_none() && record.owner.is_none()) {
+                continue;
+            }
+            let mut shared: Vec<usize> = faces
+                .iter()
+                .filter(|f| record.faces.contains(f))
+                .copied()
+                .collect();
+            shared.sort_unstable();
+            shared.dedup();
+            if let Some(&first) = shared.first() {
+                return Err(CutError::CutSharesFace {
+                    plane: crate::airbox_port::PLANES[axis].to_owned(),
+                    index: index as i64,
+                    face: crate::airbox_port::unravel(first, us),
+                    count: shared.len(),
+                });
+            }
+        }
+        let mut sorted = faces.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        self.cut_records.push(CutRecord {
+            owner,
+            axis,
+            faces: sorted.clone(),
+        });
+        self.cuts[axis].extend_from_slice(&sorted);
         self.cuts[axis].sort_unstable();
         self.cuts[axis].dedup();
         let cuts = self.cuts.clone();
         apply_cut(&mut self.u, &cuts);
         apply_cut(&mut self.u_prev, &cuts);
+        Ok(())
+    }
+
+    /// How many velocity faces are currently cut — **reported, not tuned**.
+    pub fn cut_faces(&self) -> usize {
+        self.cuts.iter().map(|c| c.len()).sum()
+    }
+
+    /// Cut every face of the plane `axis == index`, the full cross-section.
+    ///
+    /// The unrestricted case of [`AirBox::add_cut`], kept because it is what the room's own bars
+    /// use and it cannot fail: a hand-placed cut never collides with another hand-placed one.
+    pub fn cut_plane(&mut self, axis: usize, index: usize) {
+        let plane = crate::airbox_port::PLANES[axis];
+        self.add_cut(plane, index as i64, None)
+            .expect("a full-plane hand-placed cut at a valid index cannot be refused");
     }
 }
 

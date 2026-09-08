@@ -37,8 +37,15 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    positives) and it is **sixteen classes across three files**, not fourteen across two. The file
    §11 missed, `airbox_port.rs`, is the tier the other two stand on, so the porting order is
    **forced rather than chosen: ports, then wrappers, then bridges** — each tier's slots take the
-   tier below as arguments. §12 (`SympatheticStrings`) and §13 (`RoomPort` + `RoomLoadedBody`,
-   which also turned the native `AirBox` from a shell into a full room) are the two done. A Python
+   tier below as arguments. §12 (`SympatheticStrings`), §13 (`RoomPort` + `RoomLoadedBody`, which
+   also turned the native `AirBox` from a shell into a full room) and §14 (`SurfacePort` +
+   `InteriorSurfacePort`, which had to give the room a **partial cut** first — the callee again)
+   are the three done, and with §14 the **port tier is complete**: the hole is down to eleven
+   classes across two files, the six grid wrappers plus three surface adapters, and the three
+   bridges. §14 also sets two things that will recur: a refusal about the **shape of a Python
+   argument** has no native analogue (it becomes a type) while one about a **value** does, and a
+   test file can now retire in PART — a test goes when its referent is the ported class, and stays
+   when it drives a caller that has not been ported. A Python
    **plotting island** was chosen and withdrawn the same day: there is none, the plotting
    capability leaves, and where a diagnostic drew a figure Rust emits the data instead. The
    JavaScript front-end (`web/static/`) is not Python and is not in scope. **The rest of this

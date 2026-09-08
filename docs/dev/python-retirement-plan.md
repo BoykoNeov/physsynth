@@ -417,8 +417,9 @@ found the hole §11 records.
 The map's revised recommendation for the next batch was **sympathetic strings**, and §12 did it.
 **Batch 2 is done too** (§13), and it changes what "next" means: the ordering is no longer a choice
 between models with thin coverage, it is the dependency order §13.1 derives inside §11's hole —
-ports, then wrappers, then bridges. The next batch is `SurfacePort` and `InteriorSurfacePort`
-(§13.8).
+ports, then wrappers, then bridges. **Batch 3 is done** (§14) and finishes the port tier: the hole
+is down to **eleven classes across two files**, the six grid wrappers plus three surface adapters,
+and the three bridges. The next batch is the wrappers (§14.8).
 
 §11's table is **corrected by §13.1**: the hole is 16 classes across *three* binding files, not 14
 across two, and the file it missed is the one underneath the other two.
@@ -750,3 +751,231 @@ inner `ModalBody`. Handing a bridge the inner body instead — the shape Rust ma
 `inst.body` is right there and has the modal surface on it — compiles, conserves nothing, and is
 asserted against by exactly one test: the chain test §13.5 moved, which retires with the bridge
 itself.
+
+---
+
+## 14. Phase C batch 3, done — the distributed tier, and the room's cut primitive
+
+`SurfacePort` and `InteriorSurfacePort` now live in `crates/physsynth-core/src/airbox_port.rs`,
+with `crates/physsynth-core/tests/airbox_surface.rs` (28 bars) replacing the **port-tier half** of
+`tests/test_airbox_surface.py` — 15 test functions and five helpers, deleted in the same commit.
+The file itself survives; §14.3 is why, and it is a precedent this migration has not set before.
+
+Two of §13.1's three tiers are now home. The hole is down to **eleven classes across two files**:
+the six grid wrappers plus their three surface adapters in `airbox_wrap.rs`, and the three bridges
+in `connection.rs`.
+
+### 14.1 The cut is not an optional extra, it is inside the port
+
+`InteriorSurfacePort.__init__`'s last-but-one line is `room._register_cut(...)`, and the native
+`AirBox` had only `cut_plane(axis, index)` — a full cross-section, no extents, no refusals, no
+record of who owns the faces. So the batch could not port one of its two named classes without
+first giving the room a **partial** cut, and that is not scope creep: it is the callee, the same
+way §13 found the port tier underneath the wrappers.
+
+What landed on `AirBox`:
+
+* `cut_records: Vec<CutRecord>` — `room._cuts` reduced to what the refusal actually reads (the
+  owner, the axis, the face set). `cuts` is the union every kernel walks and has lost that.
+* `register_cut(owner, axis, index, i0, i1)` — the one writer, additive, with the shared-face
+  refusal. Two hand-placed cuts may overlap (the mask is a boolean union); anything sharing faces
+  with a **port**'s cut is refused.
+* `add_cut(plane, index, extent)` — the public entry with its range refusals. `cut_plane` is now
+  its unrestricted case rather than a separate implementation.
+* `cut_faces()`.
+
+`add_cut` is the part that was optional, and it is in because the next commit retires
+`tests/test_airbox_cut.py` against it.
+
+### 14.2 One refusal has NO analogue, and that is a third verdict
+
+`test_refuses_a_malformed_extent` asserts two things and they translate differently:
+
+| the reference refuses | in Rust |
+|---|---|
+| `add_cut("z", 3, ((0, 4), (3, 1)))` — `lo > hi` | `CutError::BadExtent`, carried over verbatim |
+| `add_cut("z", 3, (4, 4))` — not a pair of pairs | **no analogue**: `Option<[[i64; 2]; 2]>` is the claim, made by the compiler |
+
+The same thing happens three more times in this batch, and it is worth naming as a class rather
+than as four incidents. A refusal about the **shape of a Python argument** does not port — it
+becomes a type — while a refusal about a **value** does. The four:
+
+* `coords must be an (n_surface, 2) array` → `&[[f64; 2]]`
+* `origin must be an (o0, o1) pair` → `Option<(f64, f64)>`
+* `unknown spreading 'cubic'` → `Spreading` is an enum
+* `extent must be a ((lo0, hi0), (lo1, hi1)) pair` → `Option<[[i64; 2]; 2]>`
+
+So §13.4's retirement table needs a third verdict beside "replaced" and "moved, not replaced": **no
+analogue**. It is not a coverage hole, it is coverage that moved from a test to the type system —
+but it must be *written down*, because the alternative is a later reader finding a Python refusal
+with no native twin and concluding the port dropped it.
+
+The length refusals that remain are the ones about a value: `areas` must be one per surface node,
+and `q` must be the per-node (or per-face) vector, both of which a slice can get wrong.
+
+### 14.3 The first PARTIAL retirement of a test file, and the line it draws
+
+Every previous batch deleted a whole file. `tests/test_airbox_surface.py` cannot go: 19 of its 34
+test functions drive `RoomLoadedPlate`, and the six wrappers have not been re-homed. So the file was
+split, and the rule that split it is:
+
+> A test retires when its referent is the **port** — it constructs one directly, or its every
+> assertion reads a port attribute. A test that **drives a wrapper** stays, because the trajectory
+> it asserts is the wrapper's even where the claim is named after the port.
+
+That rule is sharper than "which class does it mention", and it had to be: `test_ledgers_agree` is
+named after the port's resistance and is a wrapper test; `test_refuses_a_footprint_outside_the_face`
+is built through `make_room_loaded_plate` and is a port test. The tell is `inst.step()`.
+
+Two consequences, both stated rather than discovered.
+
+**The core implementation is on no shipping path.** The binding's `PySurfacePort` and
+`PyInteriorSurfacePort` are left exactly as they are, per §12's and §13.7's precedent — the wrapper
+tier calls them, the viewer reaches them, and rewiring them to delegate would touch a shipping path
+to no end. So the 28 native bars are the *only* thing exercising `airbox_port::SurfacePort`, and
+their coverage has to be complete rather than representative; there is no Python test that might
+happen to hit a branch.
+
+**And the binding's own copies of the retired refusals are now untested.** `PySurfacePort` has its
+own `accept_surface`, `check_footprint` and `check_in_plane_rim`, and the fifteen deleted tests were
+what covered them. This is the same trade §13 made when it deleted `tests/test_airbox_port.py`
+whole, and the argument is the same: the binding is dead code walking, testing it is testing what
+phase F removes, and nobody edits a class that is being deleted. Recorded here so it is a decision
+rather than an oversight.
+
+One arm of it is worth naming rather than leaving inside that generality, because a later reader can
+act on the specific and not on the general. `parse_spreading` distinguishes an **omitted**
+`spreading` from an explicit `None`, and the binding's own comment records that the first draft had
+the two arms backwards — silently building the bilinear default where the reference raises — and
+that eleven tests in this very file caught it. The retired tests included every remaining
+construction that omitted the argument (`_disk_port` and the `the_comb_verdict` sweep), and every
+builder in `tests/helpers.py` passes `spreading="bilinear"` explicitly. **So the omitted-argument
+arm of `parse_spreading` is now unreached by the suite**, measured by grep rather than assumed. The
+*unknown*-spreading arm still is: `tests/test_airbox_dipole.py` asks for `spreading="cubic"` and
+expects the refusal.
+
+### 14.4 The one-time check: 392 quantities, 11 fixtures, zero differences
+
+Same scenes through both implementations, before the Python went, and deliberately not committed.
+Eleven fixtures — seven wall-mounted surfaces across four faces, three area patterns (uniform,
+lumped-cell, and one with explicit zeros), two spreadings and three wall sets; four interior
+surfaces on three planes. Per fixture, 34 to 42 quantities: `T`'s `indptr` / `indices` / `data`,
+`R`, the load matrix's three arrays, `nodes` / `_flat` / `face_coords` and their **ordering**,
+`origin`, `net_area`, `footprint_empty`, the interior tier's low/high split and `cut_faces` — then
+a **200-step driven trajectory** (`free_pressure` → `q = alpha p` by hand → `inject` →
+`room.step()`) compared over every pressure node, every velocity face, and all three room ledgers.
+
+Every one of the 392 keys agreed to the bit. Unlike §13.3, this batch found **no** divergence: the
+port tier contains no `np.dot`, so the fused multiply-add that §13.3 had to copy does not arise
+here. The reductions that do arise are `np.sum`, which `crate::reduce::sum` already reproduces at
+every length.
+
+**The check had to be shown to be sensitive, and was.** A green comparison proves nothing until a
+deliberate error turns it red, so two mutations were run against the same 392 keys:
+
+* **The association folded right** (`T_ki (R_k T_kj)` instead of `(T_ki R_k) T_kj`): nine of the
+  eleven fixtures went red, and the two that stayed green were exactly the two with
+  `spreading = "nearest"`. That is the module docs' blind-fixture warning, measured — under nearest
+  every stored entry in a row of `T` is the same uniform node area, and `(x d) x` and `x (d x)` are
+  then the same double identically.
+* **The divergence accumulated in reverse axis order**: all eleven went red, and the shape of the
+  failure is §13.3's. On three fixtures `free_pressure` at step 0 still agreed and only the
+  200-step field differed — a last bit at the terminal, amplified by the room. A check that
+  compared only the constructed matrices would have passed all three.
+
+The first mutation is now a permanent native bar
+(`the_diagonal_folds_left_and_only_nearest_cannot_tell`), because the association is the one
+decision here with no referent left after phase F: the bar recomputes the other association and
+pins *which fixtures could tell the difference*, so a future reader cannot mistake "the nearest
+fixture agrees" for "the association does not matter".
+
+**What the check does NOT cover, and it is the wrapper batch's to measure.** The driven trajectory
+never touches `load_matrix`: the solve that uses it belongs to the wrapper, which is not ported, so
+the load matrix is verified statically (values, `indptr`, `indices`) and dynamically not at all.
+Per §13.3's rule this is exactly the kind of thing that cannot be recovered later — see §14.7.
+
+### 14.5 The retirement rule, discharged
+
+| retired | native replacement |
+|---|---|
+| `test_T_distributes_every_node_area` | `t_distributes_every_surface_node_area` |
+| `test_net_area_is_not_the_bounding_rectangle` | `the_net_area_is_not_the_bounding_rectangle` |
+| `test_bilinear_equivariance_needs_centring` | `bilinear_equivariance_needs_centring` |
+| `test_nearest_node_equivariance_is_an_accident` | `nearest_node_equivariance_is_an_accident` |
+| `test_bilinear_assignment_is_exact_at_an_integral_grid_ratio` | `bilinear_assignment_is_exact_at_an_integral_grid_ratio` |
+| `test_bilinear_beats_nearest_node_at_every_refinement` | `bilinear_beats_nearest_node_at_every_refinement` |
+| `test_accepts_a_staircased_disk_the_bounding_box_refused` | `a_staircased_disk_the_bounding_box_refused_is_accepted` |
+| `test_a_rectangle_is_judged_by_the_identical_required_set` | `a_rectangle_is_judged_by_the_identical_required_set` |
+| `test_the_comb_verdict_changes_where_it_always_did` | `the_comb_verdict_changes_where_it_always_did` |
+| `test_refuses_a_footprint_reaching_the_face_rim` | `a_footprint_reaching_the_face_rim_is_rejected` |
+| `test_refuses_a_footprint_outside_the_face` | `a_footprint_outside_the_face_is_rejected` |
+| `test_refuses_a_surface_too_coarse_for_the_air_grid` | `a_surface_too_coarse_for_the_air_grid_is_rejected` |
+| `test_refuses_a_surface_on_an_open_face` | `a_surface_on_an_open_face_is_rejected` |
+| `test_refuses_overlapping_ports` | `overlapping_surfaces_are_rejected` |
+| `test_refuses_unknown_face_and_spreading` (face half) | `an_unknown_face_is_rejected` |
+| `test_refuses_unknown_face_and_spreading` (spreading half) | **no analogue** — §14.2 |
+| `test_load_matrix_is_symmetric_and_the_cost_is_reported` | **split**: the symmetry half is `the_load_matrix_is_symmetric_but_not_symmetrised`; the `lu_nnz` half is the wrapper's and the Python test **stays** |
+| `test_free_pressure_matches_full_array` | **stays** (wrapper-driven), and `the_local_free_pressure_read_is_the_full_array_update_exactly` asserts the same claim natively over six faces and both interior planes |
+| `test_two_disjoint_surfaces_share_one_room` | **stays** (wrapper-driven); its port-tier half is `two_disjoint_surfaces_share_one_room` |
+| `test_refuses_solving_twice_without_a_room_step` | **stays** (it calls `inst.step()` twice); `solving_twice_without_a_room_step_is_rejected` is the native bar |
+| — | `the_diagonal_folds_left_and_only_nearest_cannot_tell` (new — §14.4) |
+| — | `the_two_node_planes_carry_one_q_with_opposite_signs` (new) |
+| — | `the_interior_surface_cuts_exactly_the_faces_it_covers` (new) |
+| — | `a_refused_interior_port_leaves_the_room_untouched` (new — §14.6) |
+| — | `an_interior_surface_over_a_hand_placed_cut_is_rejected` (new) |
+| — | `an_interior_index_that_reaches_a_wall_is_rejected` (new) |
+| — | `a_q_of_the_wrong_length_is_rejected` (new) |
+| — | `malformed_areas_are_rejected` (new) |
+| — | `the_epoch_and_not_the_step_count_is_what_unsticks_a_surface_port` (new — §13.2's invariant, restated where it can regress independently) |
+
+### 14.6 Refusal ORDER is a bar, and the fixture has to be one that could fail
+
+`InteriorSurfacePort` is the only port that **writes** its room — it registers a cut — and the
+reference got the ordering for free: `_cut` and `_register` are the last two lines of `__init__`,
+which runs after everything that can raise. In the value-owned shape there is no such split, so
+every refusal has to be spelled out ahead of the two writes, and a happy-path test cannot see it
+being wrong.
+
+`a_refused_interior_port_leaves_the_room_untouched` is that bar, and per §13.6 its fixture is one
+where **the cut would otherwise have registered**: a second surface on the same faces is refused for
+disjointness — the last refusal before the cut — so if the cut ran first the room would be left
+carrying a partition belonging to an object that does not exist. The bar asserts `room.claims`,
+`room.cuts` and `room.cut_records` are all exactly as they were.
+
+The room's own shared-face refusal reaches the port too, and gets its own bar
+(`an_interior_surface_over_a_hand_placed_cut_is_rejected`) — it is the one rejection an interior
+surface inherits rather than raises, and it also arrives *after* every check the port makes itself,
+so it is the case that proves the cut is genuinely last.
+
+### 14.7 Cost, and the constraint this batch creates for the wrapper batch
+
+The Python file was 6.41 s of CI suite time (`scripts/shard_costs.json`) and the deletion **did not
+move it**: measured within one machine, the trimmed file runs at 1.04x the original, i.e. inside the
+noise. The retired tests were the cheap ones — the expensive tests in that file are the wrapper's
+200-step trajectories, and all of them stayed. So the cost entry is left as it is rather than
+scaled, and this is worth generalising: **a partial retirement does not reduce a file's cost in
+proportion to its test count**, because test count and test cost are uncorrelated within a file.
+The 28 native bars run in 0.4 s in the debug profile.
+
+**And one thing the wrapper batch cannot recover, written down now because §13.3 says that is when
+it has to be.** The six `splu` calls in `airbox_wrap.rs` are the only consumers of
+`port.load_matrix`, and they are plan §4's sparse-LU risk group. The load matrix's **values** and
+**stored order** are verified against SciPy by §14.4 and can be verified again as long as Python is
+installed, but *how they reach the factorization* — whether `a_loaded = a_bare + load` is formed by
+adding two CSR matrices or by assembling one, and in which order — is a decision only the wrapper
+batch makes, and the reference for it disappears with the wrapper. That comparison has to happen in
+the batch that ports the wrappers, on a scene that actually solves, and it cannot be deferred.
+
+### 14.8 The next batch
+
+The wrappers. §13.1's ordering has nothing left below them: the ports are home, so the six
+`RoomLoaded*` / `RoomSuspended*` classes and the three `_*Surface` adapters can take a
+`SurfacePort` or an `InteriorSurfacePort` by value. Two things about that tier are known in
+advance and neither is small — it owns all six factorizations (plan §4's risk group, and §14.7 is
+the measurement it must make), and §13.8's constraint stands: whatever trait or enum covers a
+wrapper's `plate=` / `body=` slot must dispatch `energy()` to the wrapper and the modal reads to
+the inner model.
+
+Before it, one short commit: `add_cut`'s validation layer is already in, so
+`tests/test_airbox_cut.py` (14 functions, 1.37 s) retires against native bars for the cut
+primitive — the room-tier file this batch's callee made portable.
