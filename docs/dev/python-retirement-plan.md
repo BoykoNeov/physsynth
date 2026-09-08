@@ -535,6 +535,16 @@ comparison of the kind phase A retires — but it is why the arithmetic in `core
 the binding's expression order and its `reduce::sum`, and it stays repeatable until the binding
 goes.
 
+**One number from it *is* frozen, and it is what stops the symmetry bar being self-consistent.**
+The symmetrized operator is built from `mass_diagonal()`, which is the new module's own derivation
+of the mass; a wrong derivation that still symmetrizes — a uniform scale, or the half cell on the
+wrong end of two *identical* strings — would satisfy the symmetry check while scaling the entire
+spectrum. So `the_coupled_operator_is_self_adjoint_in_the_energy_inner_product` also asserts
+`lambda_max = 1661856272.3158104` to 1e-12 relative, measured against LAPACK on that fixture
+through the binding. A value and a tolerance rather than a bit pattern, because 16 ulps of
+cross-implementation spread is the floor on what is portable (findings ledger #68). The mass
+derivation is load-bearing now rather than checked against itself.
+
 **Cost.** The Python file was 59.11 s of suite time; the 18 native bars run in **2.1 s** in the
 debug profile `cargo test` uses.
 

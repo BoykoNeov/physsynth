@@ -509,6 +509,16 @@ fn the_guard_holds_just_inside_its_boundary() {
 /// free end that carries the spring, `m_i` per mode). That is a property of the discretization,
 /// including the factor of two on the end node's spring term, and if it stopped holding the guard
 /// would be answering a different question rather than answering this one imprecisely.
+///
+/// **The frozen `lambda_max` at the end is what keeps this from being self-consistent.** The
+/// symmetry above is built from `mass_diagonal()`, which is *this module's* derivation of the
+/// mass; a wrong derivation that still symmetrizes — a uniform scale, or the half cell on the
+/// wrong end of two identical strings — would pass it while scaling the whole spectrum. The
+/// number below was measured against LAPACK's general `eigvals` on this exact fixture through the
+/// binding, before the Python went (plan §12): the two agree to 16 ulps, and any error in the mass
+/// diagonal would move it by far more than that. It is written as a value and a tolerance rather
+/// than a bit pattern, because 16 ulps of cross-implementation spread is the floor on what is
+/// portable here (findings ledger #68).
 #[test]
 fn the_coupled_operator_is_self_adjoint_in_the_energy_inner_product() {
     let symp = Fixture::default().strings(2).stiffness(8000.0).make();
@@ -536,6 +546,15 @@ fn the_coupled_operator_is_self_adjoint_in_the_energy_inner_product() {
         values[0]
     );
     assert_eq!(values[n - 1], symp.spectral_radius());
+
+    // LAPACK's `np.linalg.eigvals` on this fixture, through the binding, 2026-09-08.
+    const LAPACK_LAMBDA_MAX: f64 = 1661856272.3158104;
+    let measured = symp.spectral_radius();
+    assert!(
+        (measured / LAPACK_LAMBDA_MAX - 1.0).abs() < 1e-12,
+        "lambda_max {measured:.10e} has moved off the LAPACK-verified \
+         {LAPACK_LAMBDA_MAX:.10e}; suspect the mass diagonal before the eigensolver"
+    );
 }
 
 // -- construction guards -------------------------------------------------------------------------
