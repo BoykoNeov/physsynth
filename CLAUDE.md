@@ -45,7 +45,11 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    bridges. §14 also sets two things that will recur: a refusal about the **shape of a Python
    argument** has no native analogue (it becomes a type) while one about a **value** does, and a
    test file can now retire in PART — a test goes when its referent is the ported class, and stays
-   when it drives a caller that has not been ported. A Python
+   when it drives a caller that has not been ported. §15 then retired `tests/test_airbox_cut.py`
+   whole against the cut primitive §14 had to build, and recorded the one place this migration's
+   exactness discipline does **not** apply: a bar asserting a tolerance on a *broadband* field is a
+   claim about the class of fields, so replacing NumPy's PCG64 with any structureless hash is
+   correct rather than sloppy. A Python
    **plotting island** was chosen and withdrawn the same day: there is none, the plotting
    capability leaves, and where a diagnostic drew a figure Rust emits the data instead. The
    JavaScript front-end (`web/static/`) is not Python and is not in scope. **The rest of this

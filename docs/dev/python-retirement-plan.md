@@ -979,3 +979,76 @@ the inner model.
 Before it, one short commit: `add_cut`'s validation layer is already in, so
 `tests/test_airbox_cut.py` (14 functions, 1.37 s) retires against native bars for the cut
 primitive — the room-tier file this batch's callee made portable.
+
+---
+
+## 15. The cut's own file, retired against the primitive §14 had to build
+
+`tests/test_airbox_cut.py` (14 functions, 42 parametrized cases, 1.37 s) is gone, replaced by
+`crates/physsynth-core/tests/airbox_cut.rs` (11 bars, 0.6 s). It is the **room**-tier file that
+§14.1's callee made portable: the cut primitive landed in `physsynth-core` because
+`InteriorSurfacePort` could not be ported without it, and once it was there the file testing it had
+a native home.
+
+Nothing here is a port of a model — it is the same deletion §39–§49 did twenty-three times, one
+commit late, and it is short. Three things worth recording anyway.
+
+**The randomness had to be replaced, and that is fine.** The reference seeds the room from NumPy's
+PCG64 (`airbox_noise`) and drives it from another draw. Neither claim is about the *numbers* — both
+are about a field with no structure, so that an energy identity has no direction left to hide in —
+so the bars use a splitmix64 hash of the flat index instead. That is the opposite of the exactness
+discipline everywhere else in this migration and it is correct here: **a bar that asserts a
+tolerance on a broadband field is asserting a property of the class of fields, not of one field.**
+The tell is that nothing in the retired file compared two runs.
+
+**The modal oracle is the file's whole value, so its half-cell was mutation-tested.** The sub-rooms
+of a fully cut room are `(m + 1/2) h` and `(N - m - 1/2) h`, and the cut end is *face*-centered, so
+the exact eigenvector along the cut axis is `cos(n pi i / (m + 1/2))` — not the room's own
+`cos(n pi i / N)`. Getting that half wrong looks like scheme inaccuracy rather than like a bug,
+which is exactly why the reference asserted it at machine precision. Removing the `0.5` from both
+sides of the native bar takes the field error from below `1e-12` to **2.49** against an amplitude of
+1, so the half-cell is load-bearing and the bar is not passing on a technicality.
+
+**A negative about a floating-point result is not an assertion.** The reference checked that the
+sub-room lengths land half a cell off the grid by asserting `(lo / h) % 1 != 0.0` — which passes for
+*any* wrong value, not only for the right one, and needs no tolerance precisely because it is
+claiming nothing. The native bar asserts the positive instead, `|(lo/h).fract() - 0.5| <= 1e-12`,
+and that immediately needed the tolerance: the first fixture returns `5.500000000000002`, so an
+exact `== 0.5` would have been a claim about the round trip rather than about the geometry. Read
+every `!=` in a retiring file as a candidate for this.
+
+**A `continue` is silent where `pytest.skip` reports.** Two of the bars sweep a nested loop and skip
+combinations the fixture room is too small for. In pytest a skipped case is *printed*; in Rust it
+vanishes, so a future fixture change could empty the loop and leave the bar green having tested
+nothing. Both now count what ran and assert the count (`18` and `9`). Any loop-with-`continue`
+carried over from a parametrized test needs one.
+
+**Two helpers lost their only caller and went with the file.** `make_cut_room` and `sub_room_mode`
+in `tests/helpers.py` were used by nothing else (`airbox_noise` was, by two other files, and stays).
+§12's harvesting rule cuts both ways: a survivor moves to where its referent is, and a helper whose
+referent has gone is residue.
+
+The refusal that has **no analogue** is §14.2's: `extent must be a ((lo0, hi0), (lo1, hi1)) pair` is
+a claim about the shape of a Python argument and `Option<[[i64; 2]; 2]>` is the same claim made by
+the compiler. The half of that test about a *value* — a range running backwards, past the axis, or
+starting below zero — is carried over and widened from one case to three, with the room asserted
+unmarked afterwards.
+
+### 15.1 The retirement rule, discharged
+
+| retired | native replacement |
+|---|---|
+| `test_a_cut_room_still_conserves` | `a_cut_room_still_conserves` |
+| `test_a_cut_face_carries_no_velocity_at_any_half_step` | `a_cut_face_carries_no_velocity_at_any_half_step` |
+| `test_the_sub_rooms_have_exact_half_offset_modes` | `the_sub_rooms_have_exact_half_offset_modes` |
+| `test_the_sub_room_lengths_sum_to_the_room` | `the_sub_room_lengths_sum_to_the_room` |
+| `test_a_full_cut_isolates_exactly` | `a_full_cut_isolates_exactly` |
+| `test_cuts_are_additive_so_a_second_one_cannot_un_block_the_first` | `cuts_are_additive_so_a_second_one_cannot_un_block_the_first` |
+| `test_overlapping_hand_placed_cuts_are_idempotent` | `overlapping_hand_placed_cuts_are_idempotent` |
+| `test_cut_faces_counts_the_full_cross_section` | `cut_faces_counts_the_full_cross_section` |
+| `test_refuses_an_unknown_plane` | `an_unknown_plane_is_rejected` |
+| `test_refuses_a_cut_index_outside_the_faces` | `a_cut_index_outside_the_faces_is_rejected` |
+| `test_refuses_a_malformed_extent` (the value half) | `a_malformed_extent_is_rejected`, widened to three cases |
+| `test_refuses_a_malformed_extent` (the shape half) | **no analogue** — §14.2 |
+
+The next batch is still the wrappers (§14.8).

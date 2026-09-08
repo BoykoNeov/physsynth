@@ -2006,28 +2006,6 @@ def plate_mode_shape(plate: Plate, m: int, n: int) -> np.ndarray:
 AIRBOX_DIPOLE_INDEX = 4
 
 
-def make_cut_room(
-    *,
-    plane: str = "z",
-    index: int = AIRBOX_DIPOLE_INDEX,
-    extent=None,
-    fs: float = AIRBOX_SURFACE_FS,
-    N: tuple[int, int, int] = AIRBOX_SURFACE_N,
-    cfl: float = AIRBOX_CFL_FRACTION,
-    walls="rigid",
-) -> AirBox:
-    """A :func:`make_surface_room` with one hand-placed :meth:`AirBox.add_cut` already in it.
-
-    ``extent=None`` cuts the **full** cross-section, which splits the room into two independent
-    sub-rooms of length ``(index + 1/2) h`` and ``(N - index - 1/2) h`` — the configuration the
-    half-offset modal oracle needs, and one no *port* can produce (its rim refusal forbids spanning
-    a cross-section).
-    """
-    room = make_surface_room(fs=fs, N=N, cfl=cfl, walls=walls)
-    room.add_cut(plane, index, extent)
-    return room
-
-
 def make_suspended_plate(
     *,
     room: AirBox | None = None,
@@ -2062,46 +2040,6 @@ def make_suspended_plate(
     return RoomSuspendedPlate(
         plate=plate, room=room, plane=plane, index=index, origin=origin, spreading=spreading
     )
-
-
-def sub_room_mode(
-    room: AirBox, plane: str, index: int, side: str, n: int, transverse: tuple[int, int] = (0, 0)
-):
-    """The **exact** discrete mode of one sub-room of a fully cut ``room`` — ``(p0, u0, f)``.
-
-    The cut lies on a *face*, half a cell past the last node on each side, so the sub-rooms are
-    ``(index + 1/2) h`` and ``(N - index - 1/2) h`` long and the cut end is **face-centered**: the
-    mirror plane sits *between* nodes, ghost condition ``p_{m+1} = p_m``. The exact eigenvector
-    along the cut axis is therefore ``cos(n pi i / (index + 1/2))`` and **not** the room's own
-    ``cos(n pi i / N)`` — a different oracle, not a restriction of the batch-1 one. Tensored with
-    ordinary node-centered cosines in plane, and ``u0`` is :meth:`AirBox.set_mode`'s own
-    omega-free half-step-back so the evolution is exact rather than nearly so.
-    """
-    axis = "xyz".index(plane)
-    others = [a for a in range(3) if a != axis]
-    tr = dict(zip(others, transverse, strict=True))
-    shapes, mu2 = [], 0.0
-    for a in range(3):
-        n_cells = room.N[a]
-        v = np.zeros(n_cells + 1)
-        if a == axis:
-            if side == "lo":
-                theta = n * np.pi / (index + 0.5)
-                v[: index + 1] = np.cos(theta * np.arange(index + 1))
-            else:
-                theta = n * np.pi / (n_cells - index - 0.5)
-                v[index + 1 :] = np.cos(theta * np.arange(n_cells - index - 1, -1, -1))
-            mu2 += (4.0 / room.h**2) * np.sin(theta / 2.0) ** 2
-        else:
-            q = tr[a]
-            v = np.cos(q * np.pi * np.arange(n_cells + 1) / n_cells)
-            mu2 += (4.0 / room.h**2) * np.sin(q * np.pi / (2 * n_cells)) ** 2
-        shapes.append(v)
-    p0 = shapes[0][:, None, None] * shapes[1][None, :, None] * shapes[2][None, None, :]
-    s = room.k / (2.0 * room.rho0 * room.h)
-    u0 = tuple(s * np.diff(p0, axis=a) for a in range(3))
-    omega = (2.0 / room.k) * np.arcsin(np.clip(room.c0 * room.k * np.sqrt(mu2) / 2.0, -1.0, 1.0))
-    return p0, u0, float(omega / (2.0 * np.pi))
 
 
 def surface_scene_energy(*instruments) -> float:

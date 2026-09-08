@@ -60,7 +60,6 @@
   "test_reed_energy.py": 2.1,
   "test_collision_modal.py": 1.81,
   "test_membrane_modal.py": 1.58,
-  "test_airbox_cut.py": 1.37,
   "test_airbox_energy.py": 1.35,
   "test_vk_airy.py": 0.64,
   "test_mallet_wall.py": 0.21,
