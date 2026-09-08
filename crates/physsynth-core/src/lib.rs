@@ -58,6 +58,15 @@
 //! wrapper computes *through* SciPy and what is Rust is only the control flow and the elementwise
 //! arithmetic between those calls.
 //!
+//! **Python's retirement adds a phase the port did not have.** `docs/dev/python-retirement-plan.md`
+//! deletes the binding crate, and two of its files are the only implementation of models this
+//! project ships — they were written polymorphic over Python collaborators on purpose, so they
+//! have no half here (that plan's §11). They have to be re-homed before the binding can go, and
+//! `connection` is the first: `SympatheticStrings`, whose duck-typed slots collapse to concrete
+//! types because every call site in the repository passes the same two. It brings `eig` with it —
+//! a symmetric eigenvalue routine, because the model's stability guard needs `lambda_max` of a
+//! dense operator and this crate has no LAPACK to call and no dependency list to put one in.
+//!
 //! # The shape every resonator here shares
 //!
 //! Each model splits into three pieces, and the split is what lets the same physics serve both a
@@ -85,7 +94,9 @@ pub mod body;
 pub mod bore;
 pub mod bow;
 pub mod collision;
+pub mod connection;
 pub mod dense;
+pub mod eig;
 pub mod exciter;
 pub mod fmt;
 pub mod krylov;

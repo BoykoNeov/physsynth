@@ -25,7 +25,13 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    longer stays Python (plan §35.5's route (b)). Both were the human's calls and both are now
    unset by the human — do not quote either back as a constraint. The plan is
    `docs/dev/python-retirement-plan.md`: ~58,300 lines of Python go, and with them
-   `crates/physsynth-py` — 19,024 lines of **Rust** that exist only to talk to Python. A Python
+   `crates/physsynth-py` — 19,024 lines of **Rust** that exist only to talk to Python. **Not all of
+   that 19,024 is deletable, and the plan said it was** (§11, found on the first phase-C batch,
+   2026-09-08): `connection.rs` and `airbox_wrap.rs` — 3,231 lines, fourteen classes — are the ONLY
+   implementation of models this project ships, put there because they are polymorphic over their
+   collaborators through Python duck typing. They have to be **re-homed into a surviving crate
+   before the binding can go**, which is phase C work by another name and is not in the plan's
+   test-count estimate. §12 is the first one done. A Python
    **plotting island** was chosen and withdrawn the same day: there is none, the plotting
    capability leaves, and where a diagnostic drew a figure Rust emits the data instead. The
    JavaScript front-end (`web/static/`) is not Python and is not in scope. **The rest of this

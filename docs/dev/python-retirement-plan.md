@@ -409,9 +409,10 @@ eight of nine.
 
 ---
 
-## 10. Not started
+## 10. Where the work stands
 
-Phase B is done (§9) including its own correction. Nothing else here is built.
+Phase B is done (§9) including its own correction. Phase C's **first batch is done** (§12), and it
+found the hole §11 records.
 
 The map's revised recommendation for the next batch: **not** `string_damped`, which the first
 reading suggested and which turns out to have four native bars already. The genuinely unwritten
@@ -421,3 +422,124 @@ the smallest complete phase-C batch available and it exercises the whole retirem
 write the native bars, name them in the commit that retires the Python ones, delete.
 
 **D**, the viewer, remains independent of all of this and is still the longest pole.
+
+---
+
+## 11. The hole: fourteen model classes have no home outside the binding crate
+
+Found on the first phase-C batch, 2026-09-08, and it is a correction to §1 and §7 rather than a
+detail of that batch.
+
+§1's table counts `crates/physsynth-py` — 19,024 lines — as something that *goes away*, on the
+reasoning that a binding with nothing to bind is dead code. That is true of the binding **as
+glue**. It is not true of everything inside it. Two of its files are the only implementation of
+models this project ships, because the migration deliberately put them there:
+
+| file | lines | classes with no half in a surviving crate |
+|---|---|---|
+| `connection.rs` | 1,415 | `StringBodyBridge`, `StringPlateBridge`, `StringVKPlateBridge`, `SympatheticStrings` |
+| `airbox_wrap.rs` | 1,816 | `_PlateSurface`, `_MembraneSurface`, `_VKPlateSurface`, `RoomLoadedPlate`, `RoomSuspendedPlate`, `RoomLoadedVKPlate`, `RoomSuspendedVKPlate`, `RoomLoadedMembrane`, `RoomSuspendedMembrane`, `RoomLoadedBody` |
+
+Both were written that way on purpose and the reasons are in their headers: these classes are
+**polymorphic over their collaborators through Python duck typing** (`StringBodyBridge`'s `body=`
+slot takes eight different types; the airbox wrappers compute *through* SciPy objects the tier
+below stores as Python attributes). A downcast to a concrete `#[pyclass]` would have narrowed them,
+so `rust-migration-plan.md` §32.2 and §34 accepted "no core half" as the price. That price was
+correct while Python existed. With Python gone the classes go with the interpreter unless they are
+re-homed first, and §7's end state lists no crate that would hold them.
+
+**So phase F is gated on a phase that did not exist:** every class above has to be ported into
+`physsynth-core` (or the viewer crate, for anything only the viewer builds) before the binding can
+be deleted. The port is not a transcription — the duck typing has to become something Rust can
+express. §12 is the first instance and it is the cheap case: `SympatheticStrings` is *always* built
+from `IdealString`s and a `ModalBody` at every call site in the repository, so the general slot
+collapses to a concrete type and nothing is lost. `StringBodyBridge` is the expensive case, with
+eight body types behind one slot, and it will need an enum or a trait; the airbox wrappers are
+worse, because the tier below them stores its matrices as Python objects *by design*.
+
+Two things follow for sequencing. The re-homing is **phase C work by another name** — it lands with
+the bars, since a class with no test is not a port — and the estimate in §2 (899 physics functions
+against 475) does not include it, because it counted tests rather than implementations. And the
+count of what phase F deletes drops: 3,231 of the binding's 19,024 lines are moving, not going.
+
+---
+
+## 12. Phase C batch 1, done — sympathetic strings
+
+`SympatheticStrings` now lives in `crates/physsynth-core/src/connection.rs`, with
+`crates/physsynth-core/tests/connection.rs` (18 bars) replacing `tests/test_sympathetic.py`
+(15 functions, 59 s of suite time), deleted in the same commit.
+
+**What the port needed that the plan did not predict.** A whole new numerical routine. The model's
+constructor refuses an over-stiff bridge by the exact dense guard `k^2 lambda_max(A) < 4`, and the
+Python got `lambda_max` from `np.linalg.eigvals` — LAPACK on a general matrix. The core crate's
+dependency list is empty and stays empty, so there was nothing to call:
+`crates/physsynth-core/src/eig.rs` is Householder tridiagonalization plus implicit-shift QL,
+written for this guard, with 10 bars of its own in `crates/physsynth-core/tests/eig.rs`.
+
+It is the **symmetric** routine, and that is a measured claim about the operator rather than a
+convenience. `A = M^-1 K` is not symmetric, but `M^1/2 A M^-1/2` is — measured at 3.6e-18 relative
+on a two-string fixture, i.e. roundoff in the scaling multiply itself — with `M` the trapezoidal
+mass diagonal, halved at the free end that carries the spring. That is asserted as a bar in its own
+right (`the_coupled_operator_is_self_adjoint_in_the_energy_inner_product`), because if it stopped
+holding, the guard would be answering a different question rather than answering this one
+imprecisely. Power iteration was rejected on a measurement too: the top of this spectrum is
+clustered (`lambda_2 / lambda_1 = 0.9969`) and two identical strings make it exactly degenerate.
+
+**The one bar that changed shape, and why that is the rule rather than the exception.**
+`test_single_string_bit_identical_to_string_body_bridge` compared a one-string set against
+`StringBodyBridge` — a second implementation of the same spring, and one this batch does not port.
+In a one-implementation world that comparison is the code agreeing with itself, which is
+`rust-migration-findings.md`'s ledger #64/#65 exactly. What it was protecting is the *shape* of the
+coupling, and that is assertable against the free parts: one step of the coupled set is one step of
+each part alone plus exactly one spring force, at one node, weighted by `2 k^2 / (rho h)`, handed
+to the body unscaled — bit for bit, since every difference is elementwise arithmetic in the same
+order. `test_K0_bit_identical_to_uncoupled_parts` did **not** change, because both of its referents
+(a string alone, a body alone) exist natively.
+
+**The retirement rule, discharged.** Every retired Python test is named in the doc comment of the
+native bar that carries it, and the three new ones say they are new.
+
+| retired | native replacement |
+|---|---|
+| `test_total_energy_conserved_across_lambda` | `the_total_energy_is_conserved_across_lambda` |
+| `test_total_energy_conserved_across_count` | `the_total_energy_is_conserved_across_string_count` |
+| `test_passivity_with_body_damping` | `a_lossy_body_makes_the_total_decrease_monotonically` |
+| `test_passivity_with_string_damping` | `lossy_strings_make_the_total_decrease_monotonically` |
+| `test_single_string_bit_identical_to_string_body_bridge` | `one_step_is_the_free_parts_plus_exactly_one_spring_force` (**restated**) |
+| `test_K0_bit_identical_to_uncoupled_parts` | `at_zero_stiffness_the_set_is_bit_identical_to_the_uncoupled_parts` |
+| `test_antisymmetric_mode_keeps_bridge_still` | `the_antisymmetric_mode_keeps_the_bridge_exactly_still` |
+| `test_symmetric_mode_drives_bridge` | `the_symmetric_mode_drives_the_bridge` |
+| `test_sympathetic_transfer_tuned_beats_detuned` | `a_tuned_neighbour_rings_up_far_more_than_a_detuned_one` |
+| `test_unstable_stiffness_rejected` | `an_over_stiff_bridge_is_rejected` |
+| `test_guard_holds_at_its_boundary` | `the_guard_holds_just_inside_its_boundary` |
+| `test_mismatched_timestep_rejected` | `a_mismatched_timestep_is_rejected` |
+| `test_right_end_must_be_free` | `a_clamped_right_end_is_rejected` |
+| `test_ks_length_must_match` | `one_stiffness_per_string_is_required` |
+| `test_empty_strings_rejected` | `an_empty_set_is_rejected` |
+| — | `the_coupled_operator_is_self_adjoint_in_the_energy_inner_product` (new) |
+| — | `a_negative_stiffness_is_rejected` (new) |
+| — | `a_string_at_the_courant_limit_is_rejected` (new) |
+
+**Three absolute thresholds became relative.** The antisymmetric bar's `1e-13` and `1e-15` were
+absolute on a fixture plucked to `1e-3`, which makes them claims about the amplitude someone picked
+rather than about the physics. They are scaled by the pluck amplitude and by `E^0` now.
+
+**The port was verified against the implementation it replaces, once, before the Python went.**
+Same fixture through both — two strings, `N = 100`, `lambda = 0.9`, `K = 8000`, one plucked, the
+body given an initial state, 500 steps: every state array and both energies are **bit-identical**,
+and the guard's `lambda_max` differs by **16 ulps (2.3e-15 relative)**, which is this crate's
+tridiagonal QL against LAPACK's general `dgeev` and is the only number in the model that could
+differ. That check is deliberately *not* a committed test — it is a cross-language parity
+comparison of the kind phase A retires — but it is why the arithmetic in `core/connection.rs` keeps
+the binding's expression order and its `reduce::sum`, and it stays repeatable until the binding
+goes.
+
+**Cost.** The Python file was 59.11 s of suite time; the 18 native bars run in **2.1 s** in the
+debug profile `cargo test` uses.
+
+**What is still only in the binding for this model.** `PySympatheticStrings` was left exactly as it
+is: the viewer builds it through Python, and `tests/test_web_backend.py`'s 22 sympathetic bars —
+including the antisymmetric zero, both transfer arms and the guard refusal — go on covering that
+path until phase D moves the viewer. Rewiring the binding class to delegate to `core::connection`
+would touch a shipping path to no end; it goes when the crate goes.
