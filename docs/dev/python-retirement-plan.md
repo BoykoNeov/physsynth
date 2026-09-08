@@ -419,7 +419,11 @@ The map's revised recommendation for the next batch was **sympathetic strings**,
 between models with thin coverage, it is the dependency order §13.1 derives inside §11's hole —
 ports, then wrappers, then bridges. **Batch 3 is done** (§14) and finishes the port tier: the hole
 is down to **eleven classes across two files**, the six grid wrappers plus three surface adapters,
-and the three bridges. The next batch is the wrappers (§14.8).
+and the three bridges. **Batch 4 is done** (§16) and takes the *linear* half of the wrapper
+tier — the ordinary plate and the drumhead, four wrappers and two seams, re-homed as one generic
+`RoomGrid<S>` — leaving **six**: the von Kármán seam with its two wrappers, and the three bridges.
+Read §13.1's derive together with §16.7's re-homing table from here on: the derive is a *name join*,
+and §16.2 renamed six classes on purpose, so it now over-reports.
 
 §11's table is **corrected by §13.1**: the hole is 16 classes across *three* binding files, not 14
 across two, and the file it missed is the one underneath the other two.
@@ -1052,3 +1056,339 @@ unmarked afterwards.
 | `test_refuses_a_malformed_extent` (the shape half) | **no analogue** — §14.2 |
 
 The next batch is still the wrappers (§14.8).
+
+---
+
+## 16. Phase C batch 4, done — the LINEAR wrapper tier, and the audit stops being computable
+
+`PlateSeam`, `MembraneSeam`, `GridPort` and `RoomGrid<S>` now live in
+`crates/physsynth-core/src/airbox_wrap.rs` beside §13's `RoomLoadedBody`, with
+`crates/physsynth-core/tests/airbox_grid.rs` (45 bars) replacing `tests/test_airbox_membrane.py`
+(20 functions, 545 lines, deleted whole) and the wrapper halves of `tests/test_airbox_surface.py`
+(19 -> 1) and `tests/test_airbox_dipole.py` (28 -> 1).
+
+**Split, the human's call.** The tier is 9 classes and ~106 test functions, larger than any batch
+this migration has done in one commit, so it lands in two: the **linear** pair — the ordinary plate
+and the drumhead, four of the six wrappers and two of the three seams — here, and the von Kármán
+seam with its two wrappers next. Two things were checked before the split rather than after: §48's
+half-state hazard does **not** apply (nothing Python is being *deleted*, only test files retired, so
+there is no `deleted_bodies`-shaped identity table to leave half-asserted), and the one bit-identity
+tie across the halves — `RoomLoadedVKPlate(nonlinear=False)` must reproduce `RoomLoadedPlate` under
+`array_equal` — lives in `test_airbox_vk.py`, which retires in the *second* commit with both sides
+already native.
+
+### 16.1 §14.7's unrecoverable measurement, made and discharged
+
+§14.7 said the six `splu` calls are the only consumers of `port.load_matrix`, that *how* `a_loaded`
+reaches the factorization is a decision whose reference disappears with the wrapper, and that the
+comparison could not be deferred. It was made first, on scenes that actually solve, for all six
+wrappers — and it comes out better than §14.7 feared.
+
+The reference's expression is `(a_bare + load_matrix * load_scale).tocsc()` then
+`eliminate_zeros()`. Three findings, in order of how much they were worth:
+
+1. **`eliminate_zeros()` never fires.** Measured at every reachable fixture — all six wrappers at
+   the shipped defaults, plus `nearest` spreading, a grid-aligned plate, an integral-offset origin,
+   and the zero-**area** surface the call's own comment says it exists for: `nnz` before and after
+   is the same number every time. The reason is structural rather than lucky. `spread` drops a
+   zero weight, so `T` carries no explicit zero; `R` is strictly positive; and `T^T R T` is
+   therefore a Gram matrix over positive weights, which cannot cancel to an exact zero. On the
+   zero-area path `T` has `nnz = 0` and there is nothing to eliminate at all.
+2. **The native assembly reproduces it by construction, not by imitation.** `Csr::add` builds
+   through `Csr::from_rows`, which drops an entry whose value is exactly `0.0` — so the elimination
+   is *inside* the add. SciPy's `csr_binop_csr` does the same thing (it writes a result only when
+   it is nonzero). One line, `a_bare.add(&port.load_matrix().scaled(load_scale))`, and both the
+   arithmetic and the zero-dropping match.
+3. **So `nnz_growth` and `lu_nnz` are the same quantities, not redefinitions**, and this is worth
+   saying explicitly because it was the one place where a plausible number could have been quietly
+   wrong in either direction. The native values agree with the reference's exactly:
+   `nnz_growth = 2.8642714570858283` and `lu_nnz = 1911` for the plate on both tiers,
+   `12.484444444444444` and `9345` for the membrane on both.
+
+One structural fact worth recording alongside: the load's sparsity pattern **subsumes** the plate's
+under `bilinear` (501 of 1435 entries) but does **not** under `nearest` (255 load entries, 501 bare,
+533 in the sum) — so the assembly genuinely needs a union merge and a bar that only ever ran
+`bilinear` would not have discovered that.
+
+### 16.2 Six classes become two generic types, and that is not a simplification
+
+The reference has six wrappers because Python has no generics: `RoomLoadedPlate`,
+`RoomSuspendedPlate` and the four others are one body of arithmetic with two enum arms in it (which
+face the surface is mounted on, and therefore which port it drives) and one attribute name that
+differs. The binding says so in its own comment — "the reference's six wrappers are one class with
+two enum arms". Natively that is expressible: `RoomGrid<S>` over the seam, with the tier carried by
+`GridPort`, and `baffled` / `suspended` constructors.
+
+It loses no distinction the reference made — `test_airbox_vk.py` anchors the two tiers against each
+other with `array_equal`, which is only meaningful because they *are* one transcription — and it
+removes five chances to drift. The three decisions that propagate:
+
+* **The seam is a trait, `GridSeam`**, with the load-bearing member being `u_prev`: a live read the
+  caller must take *before* `commit` rolls it away, which is why `RoomGrid::prepare` copies it out
+  rather than reading it again later in the step.
+* **The wrapper owns its resonator and the room is passed at each call**, which is §13.2's decision
+  unchanged and what lets two instruments share one room.
+* **`RoomGrid::refactor` replaces a manoeuvre the reference did by hand.** Five retired tests
+  rebuilt `A_loaded` from scratch in Python to install a deliberately wrong coupling
+  (`inst._lu_loaded = splu(...)`), which was a *second spelling* of `build`'s assembly and could
+  have drifted from it. `refactor()` rebuilds through the one spelling. The port's four written
+  slots — §31.6 of the Rust migration plan found `T`, `load_matrix`, `R` and `areas` are written by
+  tests — kept their native setters for the same reason.
+
+### 16.3 The one-time check: 72 quantities over four scenes, and the ONE thing that is not exact
+
+Same scenes through both implementations, before the Python went, deliberately not committed. Four
+scenes (plate and membrane, baffled and suspended), 200 hand-driven coupled steps each plus one
+`f_ext`-driven step, 18 quantities apiece: `a_bare`, the load matrix and `T` as full
+`indptr`/`indices`/`data`, `R`, the derived scalars, and per-step `energy`, `volume_velocity`,
+`radiated_energy` and room energy, then the final resonator state, `pbar`, the per-node volume
+velocity and the room's **whole** pressure field.
+
+**Sixty-five of the seventy-two are bit-identical.** The seven that are not are the coupling ledger
+`radiated_energy` and the `energy()` that contains it, at `1.3e-16` to `1.3e-15` relative.
+
+The initial conditions were built from integers on purpose — `1e-3 ((i mod 7) - 3) / 8` rather than
+a Gaussian bump — so that both sides start from the identical doubles instead of from NumPy's `exp`
+and Rust's. That is the standing `libm`-dispatch finding applied in advance rather than diagnosed
+afterwards.
+
+**The ledger is `k * np.dot(pbar, q)` and `np.dot` is BLAS `ddot`.** Probed at the actual operand
+lengths: a serial `s += x*y` reproduces it exactly on two of the four scenes, `f64::mul_add` on
+three, and **nothing tried reproduces it on the fourth** (`n = 169`, suspended membrane) — not a
+serial fold, not a fused one, not `np.sum(a*b)`, not 2-, 4- or 8-way blocking. So this is the
+migration's standing "bit-identity ends at a BLAS reduction" finding, met again.
+
+What is new is the *disposition*, and it is decided by a measurement rather than by preference:
+**the ledger does not feed back.** Over 200 steps of all four scenes the resonator's state, the
+room's entire pressure field, `pbar` and the per-node volume velocity are bit-identical while this
+number is not — which is what "does not reach the timestep" looks like when it is measured instead
+of argued. So it takes the crate's documented **read-out** spelling, `plate::dot`'s plain
+`s += x * y`, and not this module's `mul_add` one (which exists because `RoomLoadedBody`'s single
+`dot` *does* reach the timestep). Two reasons, neither a preference: the ledger reaches nothing, and
+the identity it exists for is `radiated == injected`, whose other side the room books with exactly
+this spelling. **Matching the room matters more than matching a `ddot` that is about to stop
+existing.**
+
+### 16.4 Three mutations, and the one that CANNOT be seen is the finding
+
+A passing comparison proves nothing unless a wrong version fails it (§14.4's discipline).
+
+| mutation | effect |
+|---|---|
+| re-associate the two room load terms, `base + (-a + b)` for `(base - a) + b` | **all four scenes red**, on every quantity: 49/49 plate nodes, 1559/1560 room nodes, 200/200 volume velocities |
+| take the interior port's pressure jump the other way round, `lo - hi` | **exactly the two suspended scenes red**, on everything; the two baffled ones untouched |
+| the suspended closure's operand order, `2 (R q)` for `(2 R) q` | **nothing, anywhere** |
+
+The third is the one worth recording. The binding carries a careful comment pinning that operand
+order — "the operand order is the reference's, `(2 R) q` rather than `2 (R q)`" — and it **cannot
+matter**: multiplying a double by 2 is exact, and rounding is scale-invariant in binary floating
+point, so `round(2 r q) = 2 round(r q)` for any operands short of overflow or subnormals. The
+general form, and the third entry on this migration's list of operand-order hazards:
+
+> **An operand-order note is load-bearing only when the constant is not a power of two.** A
+> transcription that pins `(2 R) q` is pinning nothing; one that pins `(0.5 k) / rho` against
+> `0.5 (k / rho)` is pinning a real bit.
+
+A fourth divergence was found by the same route and is *not* a mutation: the two tiers'
+**load matrices are bit-identical**, because an `InteriorSurfacePort`'s `R` is exactly half a
+`SurfacePort`'s (a face in the interior sees half the node weight of one on a wall) and the
+suspended tier doubles it back. So a bar comparing the two tiers' load matrices is not a
+discriminating test, and `airbox_grid.rs` says so where the enum is defined rather than shipping
+one.
+
+### 16.5 A translation hazard with teeth: `np.allclose`'s default `rtol`
+
+`test_the_default_origin_centres_a_disk` asserted `np.allclose(load[perm][:, perm], load,
+atol=1e-18)`, and read as written that is a claim at `1e-18` **absolute**. It is not:
+`np.allclose` keeps its default `rtol = 1e-5` unless told otherwise, so the bar that actually ran
+was `|a - b| <= 1e-18 + 1e-5 |b|`. Carried over as its `atol` alone the native bar is seven orders
+of magnitude stricter than the claim it stands for, and it **failed** — the triple product's
+summation order leaves a node and its 180-degree image 2e-15 apart *relatively*.
+
+The rule, which will recur across the remaining files: **read a translated `allclose` for the
+tolerance it did not write down.** An `atol=` with no `rtol=` is almost always a bar the author
+believed was absolute and that NumPy ran as relative. The native bar keeps the relative form and
+sets it at `1e-12`, still seven decades tighter than what shipped.
+
+### 16.6 Two more verdicts of "no analogue", and they are different kinds
+
+§14.2 established a third verdict beside *retire* and *stays*: a claim with **no native analogue**.
+Two more, and they fail for different reasons:
+
+* **`test_a_sign_flip_is_invisible_to_every_energy_quantity`, the suspended arm** worked by
+  *replacing two of the port's methods on the live instance*
+  (`port.free_pressure = lambda: tuple(reversed(free()))`). The binding deliberately keeps that seam
+  alive by giving every port class a `dict` (Rust migration plan §31.6). A value-typed native port
+  has no such seam and no way to grow one that is not production API written for a test. What
+  survives: the *baffled* arm of the same claim, which is expressible through `set_t`, and the
+  detector the claim exists to justify — `the_sign_is_readable_on_the_first_step`, on three planes
+  and both boundaries. **The general form: a test that works by replacing a live object's methods
+  has no analogue once the object becomes a value.**
+* **`test_there_is_no_pressure_readout_and_that_is_deliberate`** asserted `not hasattr(inst,
+  "pressure")` on the membrane wrapper. Natively `pressure()` is an inherent method on
+  `RoomGrid<PlateSeam>` alone, so the membrane wrapper does not have one and *cannot be asked* — a
+  bar asserting its absence would not compile. This is §14.2's shape verdict again: **a claim about
+  what an object does not have becomes a type, and a type is not a test.** Likewise the delegation
+  half of `test_delegates_to_the_membrane_and_overrides_energy`: Python's `__getattr__` forwarding
+  has no analogue because Rust has no attribute fallback (§13.8), and the caller reads
+  `inst.seam.membrane.u` directly. The `energy()`-override half is a real claim and is carried.
+
+### 16.7 The audit that made the hole computable has stopped being computable
+
+§13.1's three-step derive — every `#[pyclass(name = ...)]` minus every core `pub struct`/`pub enum`,
+then clear the case-spelling false positives — is a **name join**, and it was correct exactly as
+long as every port was 1:1 and name-preserving. This batch broke that assumption on purpose (§16.2),
+so re-running the derive today still lists all twelve remaining names, six of which are re-homed:
+
+| Python-facing class | native home |
+|---|---|
+| `_PlateSurface` | `airbox_wrap::PlateSeam` |
+| `_MembraneSurface` | `airbox_wrap::MembraneSeam` |
+| `RoomLoadedPlate` | `airbox_wrap::RoomGrid<PlateSeam>::baffled` |
+| `RoomSuspendedPlate` | `airbox_wrap::RoomGrid<PlateSeam>::suspended` |
+| `RoomLoadedMembrane` | `airbox_wrap::RoomGrid<MembraneSeam>::baffled` |
+| `RoomSuspendedMembrane` | `airbox_wrap::RoomGrid<MembraneSeam>::suspended` |
+
+**The remaining hole is six** — and §10/§14.8's "eleven classes across two files" was itself a
+miscount of **twelve** (six wrappers + three surface adapters + three bridges), so do not read
+11 − 6 = 5 off it: `_VKPlateSurface`, `RoomLoadedVKPlate`, `RoomSuspendedVKPlate`, and
+the three bridges `StringBodyBridge`, `StringPlateBridge`, `StringVKPlateBridge`. Read §13.1's
+derive together with this table from here on; it is a *lower* bound on what is done, not a
+statement of what is left. The lesson is general and cheap to state: **an audit built on a name
+join measures the port's fidelity to a naming convention, not to a contract**, and it expires the
+first time a port is allowed to be a better shape than its original.
+
+### 16.8 The retirement rule, discharged
+
+`tests/test_airbox_membrane.py` — **deleted whole**.
+
+| retired | native replacement |
+|---|---|
+| `test_zero_area_reduces_to_the_bare_membrane` | `zero_area_reduces_to_the_bare_membrane` |
+| `test_ledgers_agree_and_the_channel_is_not_vacuous` | `the_heads_two_ledgers_agree_and_the_channel_is_not_vacuous` |
+| `test_the_scene_total_is_flat` | `the_heads_scene_total_is_flat` |
+| `test_the_channel_shows_the_acoustic_short_circuit` | `the_channel_shows_the_acoustic_short_circuit` |
+| `test_the_coupled_residual_catches_both_wrong_2s` | `the_heads_coupled_residual_catches_both_wrong_2s` |
+| `test_a_lossy_head_in_a_lossy_room_is_monotone` | `a_lossy_head_in_a_lossy_room_is_monotone` |
+| `test_R_is_the_rooms_own_differential_response` | `r_is_the_rooms_own_differential_response` |
+| `test_the_f_ext_term_is_pinned_twice` | `the_f_ext_term_is_pinned_twice` |
+| `test_the_lagged_explicit_load_is_caught_only_by_the_total` | `the_lagged_explicit_load_is_caught_only_by_the_total` |
+| `test_the_cut_follows_the_port_and_the_two_areas_differ` | `the_cut_follows_the_port_and_the_two_areas_differ` |
+| `test_the_default_origin_centres_a_disk` | `the_default_origin_centres_a_disk` (§16.5) |
+| `test_refuses_a_sample_rate_mismatch_and_names_the_membrane` | `a_head_rate_mismatch_is_rejected_and_names_the_membrane` |
+| `test_the_membrane_cfl_is_the_models_own_refusal` | `the_membrane_cfl_is_the_models_own_refusal` |
+| `test_delegates_to_the_membrane_and_overrides_energy` (the override) | `the_head_overrides_energy_rather_than_delegating_it` |
+| `test_delegates_to_the_membrane_and_overrides_energy` (the delegation) | **no analogue** — §16.6 |
+| `test_reset_clears_the_ledger_but_not_the_geometry` | `reset_clears_the_ledger_but_not_the_geometry` |
+| `test_two_heads_share_one_room` | `two_heads_share_one_room` |
+| `test_there_is_no_pressure_readout_and_that_is_deliberate` | **no analogue** — §16.6 |
+| `test_refuses_a_head_that_overruns_the_plane` | already native, §14: `a_footprint_reaching_the_face_rim_is_rejected` |
+| `test_refuses_solving_twice_without_a_room_step` | `solving_twice_without_a_room_step_is_rejected` |
+| `test_refuses_overlapping_ports` | already native, §14: `overlapping_surfaces_are_rejected` |
+
+`tests/test_airbox_surface.py` — 19 functions to **1**.
+
+| retired | native replacement |
+|---|---|
+| `test_ledgers_agree` | `the_two_ledgers_agree` (both tiers, 12 cases) |
+| `test_conservation_is_blind_to_a_wrong_R` | `conservation_is_blind_to_a_wrong_r` |
+| `test_R_j_is_what_the_room_does` | `r_j_is_what_the_room_does` |
+| `test_volume_is_conserved_exactly` | `volume_is_conserved_exactly` (both tiers) |
+| `test_coupled_scheme_residual` | `the_coupled_scheme_residual_vanishes` |
+| `test_no_air_load_reproduces_the_bare_plate` | `no_air_load_reproduces_the_bare_plate` (both tiers) |
+| `test_sign_convention_is_uniform_over_faces` | `the_sign_convention_is_uniform_over_all_six_faces` |
+| `test_a_sign_flip_is_invisible_to_every_energy_quantity` | `a_sign_flip_is_invisible_to_every_energy_quantity` |
+| `test_scene_total_is_flat` | `the_scene_total_is_flat` (both tiers) |
+| `test_lossy_plate_scene_is_monotone` | `a_lossy_plate_scene_is_monotone` |
+| `test_free_plate_piston_is_fully_radiated` | `a_free_plate_piston_is_fully_radiated` |
+| `test_load_matrix_is_symmetric_and_the_cost_is_reported` (cost) | `the_factorization_cost_is_reported` |
+| `test_load_matrix_is_symmetric_and_the_cost_is_reported` (symmetry) | already native, §14: `the_load_matrix_is_symmetric_but_not_symmetrised` |
+| `test_an_even_mode_is_silent_to_every_one_port_and_still_radiates` | same name — **the headline** |
+| `test_the_silence_is_a_property_of_the_whole_scene` | same name |
+| `test_free_pressure_matches_full_array` | already native, §14: `the_local_free_pressure_read_is_the_full_array_update_exactly` |
+| `test_refuses_a_sample_rate_mismatch` | `a_sample_rate_mismatch_is_rejected` |
+| `test_refuses_solving_twice_without_a_room_step` | `solving_twice_without_a_room_step_is_rejected` |
+| `test_two_disjoint_surfaces_share_one_room` | `two_disjoint_surfaces_share_one_room` |
+| `test_string_bridge_plate_room_chain` | **stays** — drives `StringPlateBridge`, not ported |
+
+`tests/test_airbox_dipole.py` — 28 functions to **1**.
+
+| retired | native replacement |
+|---|---|
+| `test_ledgers_agree` | `the_two_ledgers_agree`, suspended arm |
+| `test_the_piston_is_the_non_vacuous_channel` | `the_piston_is_the_non_vacuous_channel` |
+| `test_the_coupled_residual_catches_both_wrong_2s` | `the_coupled_residual_catches_both_wrong_2s` |
+| `test_each_ledger_is_blind_to_a_different_wrong_2` | `each_ledger_is_blind_to_a_different_wrong_2` |
+| `test_R_j_is_the_same_on_both_planes_with_opposite_signs` | `r_j_is_the_same_on_both_planes_with_opposite_signs` |
+| `test_scene_total_is_flat` | `the_scene_total_is_flat`, suspended arm |
+| `test_volume_is_conserved_exactly` | `volume_is_conserved_exactly`, suspended arm |
+| `test_the_channel_is_a_reservoir_not_a_drain` | `the_channel_is_a_reservoir_not_a_drain` |
+| `test_the_sign_is_readable_on_the_first_step` | `the_sign_is_readable_on_the_first_step` |
+| `test_a_mirror_symmetric_scene_gives_pbar_lo_equal_to_minus_pbar_hi` | same name |
+| `test_the_source_alone_converges_to_silence` | same name — **the headline** |
+| `test_the_phantom_is_bit_identically_two_monopoles` | same name |
+| `test_no_air_load_reproduces_the_bare_plate` | `no_air_load_reproduces_the_bare_plate`, suspended arm |
+| `test_two_suspended_plates_share_one_room` | `two_suspended_plates_share_one_room` |
+| `test_surface_port_is_unchanged_...` (construction digests) | `the_baffled_port_construction_digests_are_unchanged` |
+| `test_surface_port_is_unchanged_...` (200-step run-end values) | **not re-frozen** — spent, see below |
+| `test_the_interior_port_can_never_touch_an_open_face` | `the_interior_port_can_never_touch_an_open_face` |
+| `test_a_sign_flip_is_invisible_to_every_energy_quantity` | **no analogue** — §16.6 |
+| `test_refuses_a_sample_rate_mismatch` | `a_sample_rate_mismatch_is_rejected` |
+| `test_refuses_solving_twice_without_a_room_step` | `solving_twice_without_a_room_step_is_rejected` |
+| the eight remaining `test_refuses_*` | already native, §14 (index, rim, outside-plane, too-coarse, overlap, hand-placed cut, unknown plane/spreading, `q` length) |
+| `test_string_bridge_plate_room_chain` | **stays** — drives `StringPlateBridge`, not ported |
+
+**The goldens are two thirds carried and one third spent, and the split is not arbitrary.**
+`SURFACE_GOLDEN`'s construction digests — `node_count`, `nnz(T)` and the index-weighted sums
+`sum_i a_i i`, which move by order unity under *any* permutation of the data — are carried over
+**unchanged**, asserted against the reference's own Windows-captured numbers. That is a free
+cross-implementation check on top of §16.3: the native `T` and load matrix reproduce digests
+measured through SciPy, at six cases including `nearest`, an off-centre origin and a `y1` face. The
+200-step run-end values are **not** re-frozen. They had already been downgraded from `==` to a
+tolerance because Windows and Linux differ in the last ULP, the refactor they were written to guard
+shipped long ago, and re-recording them from this machine would promote a pile of incidental digits
+to a cross-machine claim — §15's hazard, ledger #68, exactly.
+
+**Two helpers-file consequences.** Six membrane fixtures (`make_air_membrane`, `make_membrane_room`,
+`make_room_loaded_membrane`, `make_suspended_membrane`, `membrane_bump`, `membrane_bulge`) and the
+seven `AIRBOX_MEMBRANE_*` constants lost their only caller and went with the file — §15's rule, 117
+lines. `make_room_loaded_plate` and `make_suspended_plate` **stay**, each now with exactly one
+caller: the bridge test that outlived its file.
+
+### 16.9 Cost
+
+`tests/test_airbox_membrane.py` was 12.9 s of CI suite time and is gone outright. The two partial
+retirements take `test_airbox_surface.py` from 6.41 s and `test_airbox_dipole.py` from 7.3 s to
+0.65 s each measured locally; against three unchanged airbox files measured the same way
+(`scene` 6.78 s local / 13.64 CI, `energy` 0.61 / 1.35, `modal` 0.84 / 2.46, a CI:local ratio of
+2.0–2.9) that is **1.4 s** each in `scripts/shard_costs.json`. Total suite saving ~23 s. Unlike
+§14.7's partial retirement, this one *does* scale with the test count, because what left is the
+whole file except one test rather than the cheap half.
+
+The 45 native bars run in **0.86 s** release, 15.3 s debug. The headline pair — the phantom's `t50`
+at two air-grid refinements, four runs of up to 4000 steps in a 25x23x19 room — is inside that.
+
+### 16.10 The next batch
+
+The von Kármán seam and its two wrappers: `_VKPlateSurface`, `RoomLoadedVKPlate`,
+`RoomSuspendedVKPlate`, retiring `tests/test_airbox_vk.py` (26 functions, 65.2 s — five times any
+other file in this family) and whatever part of `tests/test_mallet_room_gong.py` has no unported
+caller. Four things are known in advance:
+
+1. **The seam is a different shape.** The linear seams' `commit` takes one array and their solve is
+   a back-substitution; the VK seam's `solve` *iterates* (Picard or Newton) and its `commit` takes
+   `(w, F)`. `GridSeam` as it stands cannot express that, so the trait grows an arm or the VK
+   wrapper takes a different path through `RoomGrid::step` — decide it before writing bars.
+2. **The bit-identity anchor is the batch's own gate.** `RoomLoadedVKPlate(nonlinear=false)` must
+   reproduce `RoomLoadedPlate` under `array_equal` on both stored levels, on the coupling ledger and
+   on the Airy roll. Both sides will be native, so it becomes a native bar — and §16.2's
+   single-transcription design is what makes it cheap.
+3. **`LoadedLu` is the seam the binding built for exactly this.** `physsynth_core::plate::ThetaSolve`
+   exists because the von Kármán kernel had to invert a matrix that lived in SciPy. Natively the
+   loaded factorization is a `SparseLu` and implements the trait directly, so that adapter has no
+   native counterpart — a third "no analogue", of the §16.6 second kind.
+4. **`test_mallet_room_gong.py` drives a client, not the wrapper.** `MalletVKPlate` in a room is
+   `VkRoom` in `crates/physsynth-py/src/mallet.rs`, which composes `prepare` / `loaded_rhs` /
+   `finish`. `physsynth_core::mallet` already has room-aware machinery
+   (`VkCoupledStep::with_rhs`), so how much of that file retires is a question about the *mallet*
+   tier and is worth answering before the batch rather than during it.

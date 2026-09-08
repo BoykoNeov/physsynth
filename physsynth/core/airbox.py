@@ -208,10 +208,11 @@ from physsynth_rs import (  # noqa: E402
 # module (measured before the fix: 15 tests, `array_equal` failing at ~1e-16).
 #
 # `splu` is looked up as a **module global at call time**, by the Rust wrappers in
-# `crates/physsynth-py/src/airbox_wrap.rs` and by three of the surviving physics test files
-# (`test_airbox_dipole.py`, `test_airbox_surface.py`, `test_airbox_vk.py`), which re-derive a
-# wrapper's factorization and must use the same factorizer it did. So this name is load-bearing in
-# both directions and stays exactly where it is.
+# `crates/physsynth-py/src/airbox_wrap.rs` and by `test_airbox_vk.py`, which re-derives a wrapper's
+# factorization and must use the same factorizer it did. So this name is load-bearing in both
+# directions and stays exactly where it is. (It used to name `test_airbox_dipole.py` and
+# `test_airbox_surface.py` too; retirement plan section 16 took their wrapper halves native and
+# neither file re-derives anything any more.)
 
 
 class _Fill:

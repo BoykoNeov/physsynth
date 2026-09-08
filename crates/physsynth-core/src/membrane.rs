@@ -391,6 +391,26 @@ fn meshgrid(xs: &[f64], ys: &[f64]) -> (Vec<f64>, Vec<f64>) {
 /// # Panics
 /// If the three slices do not all have `n_live` entries.
 pub fn step_into(u: &[f64], u_prev: &[f64], out: &mut [f64], p: &Params) {
+    step_numerator_into(u, u_prev, out, p);
+    let one_plus_sk = 1.0 + p.sigma * p.k;
+    for v in out.iter_mut() {
+        *v /= one_plus_sk;
+    }
+}
+
+/// The step's **numerator** `2 u^n - (1 - sigma k) u^{n-1} + c^2 k^2 L u^n`, before the
+/// `(1 + sigma k)` division — written into `out`.
+///
+/// Split out of [`step_into`] rather than copied, because it has a second caller with a different
+/// denominator: [`crate::airbox_wrap::MembraneSeam`] puts the air load *inside* an `A` matrix whose
+/// diagonal is `(1 + sigma k)`, so the room's right-hand side is exactly this numerator and the
+/// division happens in the solve instead. Two spellings of one expression is the hazard this repo
+/// has been bitten by three times (`docs/dev/rust-migration-findings.md`); one spelling with two
+/// callers cannot drift.
+///
+/// # Panics
+/// If the three slices do not all have `n_live` entries.
+pub fn step_numerator_into(u: &[f64], u_prev: &[f64], out: &mut [f64], p: &Params) {
     let n = p.n_live();
     assert_eq!(u.len(), n, "u must have n_live entries");
     assert_eq!(u_prev.len(), n, "u_prev must have n_live entries");
@@ -399,11 +419,10 @@ pub fn step_into(u: &[f64], u_prev: &[f64], out: &mut [f64], p: &Params) {
     let sk = p.sigma * p.k;
     let c2k2 = p.c * p.c * p.k * p.k;
     let one_minus_sk = 1.0 - sk;
-    let one_plus_sk = 1.0 + sk;
     let lu = p.l.matvec(u);
 
     for i in 0..n {
-        out[i] = ((2.0 * u[i] - one_minus_sk * u_prev[i]) + c2k2 * lu[i]) / one_plus_sk;
+        out[i] = (2.0 * u[i] - one_minus_sk * u_prev[i]) + c2k2 * lu[i];
     }
 }
 

@@ -49,7 +49,24 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    whole against the cut primitive §14 had to build, and recorded the one place this migration's
    exactness discipline does **not** apply: a bar asserting a tolerance on a *broadband* field is a
    claim about the class of fields, so replacing NumPy's PCG64 with any structureless hash is
-   correct rather than sloppy. A Python
+   correct rather than sloppy. **§16 then took the LINEAR half of the wrapper tier** (split in two,
+   the human's call): the ordinary plate and the drumhead, four of the six wrappers and two of the
+   three seams, re-homed as **one generic `RoomGrid<S>`** rather than six transcriptions — Python has
+   no generics, which is the only reason the reference had six. `tests/test_airbox_membrane.py` went
+   whole and two more files went to one test each, so **the hole is now SIX**: the von Kármán seam
+   with its two wrappers, and the three bridges. Five things §16 settles that outlive it: (a)
+   **§13.1's derive has expired as a measure of what is LEFT** — it is a name join, and a port is now
+   allowed to be a better shape than its original, so read it with §16.7's re-homing table; (b) a
+   reduction that provably **does not feed back** (measured, not argued: 200 steps with every state
+   array bit-identical while the ledger differs at 1e-16) takes the crate's **read-out** spelling and
+   matches the room it must agree with, not the `ddot` that is about to stop existing; (c) an
+   **operand-order note is load-bearing only when the constant is not a power of two** — pinning
+   `(2 R) q` over `2 (R q)` pins nothing, and a mutation proved it changes no digit anywhere; (d)
+   **`np.allclose` keeps `rtol=1e-5` when you pass only `atol`**, so a translated bar reading
+   `atol=1e-18` was never an absolute claim — read every carried `allclose` for the tolerance it did
+   not write down; (e) two more "no analogue" verdicts, of different kinds — a test that works by
+   **replacing a live object's methods** has none once the object is a value, and a test asserting an
+   attribute is **absent** becomes a type. A Python
    **plotting island** was chosen and withdrawn the same day: there is none, the plotting
    capability leaves, and where a diagnostic drew a figure Rust emits the data instead. The
    JavaScript front-end (`web/static/`) is not Python and is not in scope. **The rest of this
@@ -185,7 +202,7 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    list must stay empty, so it cannot reach a Bessel function) while its Python name lives in a
    `core/` module. **The crate a function is implemented in and the module its name lives in are
    separate questions** (§37.7).
-   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **seventy-four**
+   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **seventy-six**
    findings about when two implementations agree to the bit, when they cannot, and what a
    *deletion* breaks that a port does not (fed-back reductions, libm vs NumPy's own
    transcendentals, LLVM's constant fold, `np.sum`'s pairwise cutoff, descriptors that take a
