@@ -17,7 +17,10 @@
 //!
 //! `airbox.py` is 3,976 lines and holds three tiers above `AirBox` itself: the ports (`RoomPort`,
 //! `SurfacePort`, `InteriorSurfacePort`) and the six `RoomLoaded*` / `RoomSuspended*` wrappers.
-//! None of those is ported here. They reach into the room through a **duck-typed private surface**
+//! The lumped tier now *is* here — [`crate::airbox_port::RoomPort`] and
+//! [`crate::airbox_wrap::RoomLoadedBody`], re-homed by the retirement's second batch, because a
+//! class that lives only in the binding dies with the interpreter. The distributed tier is still
+//! only in the binding. What the reference's tiers reach for is a **duck-typed private surface**
 //! — `room._w`, `room._W`, `room._beta`, `room._open`, `room._has_walls`, `room._pending`,
 //! `room._pending_ports`, `room._ports`, `room._cut_mask`, `room._cut_index`, `room._cuts`,
 //! `room._register_cut`, `room._plane_axis` and `room._divergence` — fourteen private names, four
@@ -57,6 +60,7 @@
 //! `math.cos` — §22.3's portable-spelling manoeuvre a sixth time, and free here at ~60 calls per
 //! room.
 
+use crate::airbox_port::RoomView;
 use crate::fmt::py_float;
 use crate::pyfloat::scalar_pow;
 use crate::reduce;
@@ -683,6 +687,35 @@ pub fn pressure_step(p: &Params, p_old: &[f64], div: &[f64]) -> Vec<f64> {
 /// A queued scalar injection: `(node, q)`.
 pub type Injection = ([usize; 3], f64);
 
+/// One queued **port** injection: the flat node set, the share each node takes, and `q`.
+///
+/// The scalar [`Injection`] drives a single node; a port spreads one volume velocity over a
+/// staircased ball. The reference keeps the two in separate queues (`_pending` and
+/// `_pending_ports`) and applies them in that order, so this crate does too.
+#[derive(Clone, Debug)]
+pub struct PortInjection {
+    /// Flat C-order pressure-node indices the port covers.
+    pub nodes: Vec<usize>,
+    /// Per-node share of `q`, summing to 1.
+    pub w: Vec<f64>,
+    /// Volume velocity (m^3/s).
+    pub q: f64,
+}
+
+/// A registered port's footprint, kept so a second port overlapping it can be refused.
+///
+/// This is `room._ports` reduced to what the refusal actually reads. The reference keeps the port
+/// objects themselves and reaches back into each one to unstick it in `set_state`; the native room
+/// cannot hold its ports (they are values the caller owns — see [`AirBox::epoch`]), so it keeps
+/// the footprint and the label its message needs, and nothing else.
+#[derive(Clone, Debug)]
+pub struct PortClaim {
+    /// Flat C-order pressure-node indices, sorted.
+    pub nodes: Vec<usize>,
+    /// How the existing port names itself in the refusal — its centre index.
+    pub label: String,
+}
+
 /// Apply the queued scalar injections to `p_next` — `p_next[i] += gain * q / W[i]`.
 pub fn inject_scalar(p: &Params, p_next: &mut [f64], pending: &[Injection]) {
     let shape = p.p_shape();
@@ -892,6 +925,18 @@ pub struct AirBox {
     pub n: usize,
     /// Queued scalar injections for the next step.
     pub pending: Vec<Injection>,
+    /// Queued port injections for the next step — the reference's `_pending_ports`.
+    pub pending_ports: Vec<PortInjection>,
+    /// The footprints of every port built on this room, for the disjointness refusal.
+    pub claims: Vec<PortClaim>,
+    /// Bumped by [`AirBox::set_state`], and the whole of how a port unsticks itself.
+    ///
+    /// The reference's `set_state` iterates `room._ports` and writes `_queued_at = -1` into each
+    /// one. A native port is a value the caller owns, so the room cannot write into it. It carries
+    /// this counter instead and a port records the epoch alongside the step it queued at, which
+    /// makes the mark stale the moment the room is restarted. Same behaviour, no back-reference —
+    /// see [`crate::airbox_port::RoomPort::require_ready`].
+    pub epoch: u64,
 }
 
 impl AirBox {
@@ -911,6 +956,9 @@ impl AirBox {
             injected: 0.0,
             n: 0,
             pending: Vec::new(),
+            pending_ports: Vec::new(),
+            claims: Vec::new(),
+            epoch: 0,
             p,
         }
     }
@@ -944,6 +992,8 @@ impl AirBox {
         self.dissipated = 0.0;
         self.injected = 0.0;
         self.pending.clear();
+        self.pending_ports.clear();
+        self.epoch += 1;
         self.n = 0;
     }
 
@@ -953,20 +1003,36 @@ impl AirBox {
     }
 
     /// Advance one timestep: pressure (plus source and walls) first, then velocity.
+    /// The injection book is a per-step **subtotal**, added to the running total once. That is the
+    /// reference's association and it is only visible with two queued injections in one step —
+    /// exactly what two instruments sharing one room do. `total + (t0 + t1)` is not
+    /// `(total + t0) + t1`, and this crate said the latter until the port tier landed and made a
+    /// two-source scene expressible.
     pub fn step(&mut self) {
+        let queued = !self.pending.is_empty() || !self.pending_ports.is_empty();
         let div = divergence(&self.p, &self.u[0], &self.u[1], &self.u[2]);
         let mut p_next = pressure_step(&self.p, &self.pressure, &div);
-        if !self.pending.is_empty() {
+        if queued {
             inject_scalar(&self.p, &mut p_next, &self.pending);
+            for inj in &self.pending_ports {
+                inject_port(&self.p, &mut p_next, &inj.nodes, &inj.w, inj.q);
+            }
         }
         if self.p.has_walls {
             apply_walls(&self.p, &mut p_next, &self.pressure, &mut self.dissipated);
         }
-        if !self.pending.is_empty() {
+        if queued {
+            let mut injected = 0.0;
             for &(node, q) in &self.pending {
-                self.injected += booked_scalar(&self.p, &p_next, &self.pressure, node, q);
+                injected += booked_scalar(&self.p, &p_next, &self.pressure, node, q);
             }
+            for inj in &self.pending_ports {
+                injected +=
+                    booked_port(&self.p, &p_next, &self.pressure, &inj.nodes, &inj.w, inj.q);
+            }
+            self.injected += injected;
             self.pending.clear();
+            self.pending_ports.clear();
         }
         let u_next = momentum(
             &self.p,
@@ -992,6 +1058,28 @@ impl AirBox {
     /// The **conserved** total `acoustic + dissipated - injected` (Joules).
     pub fn energy(&self) -> f64 {
         self.acoustic_energy() + self.dissipated - self.injected
+    }
+
+    /// Everything a port kernel reads from this room, as borrowed slices.
+    ///
+    /// [`RoomView`] was written for the binding, which fills it from a *Python* room's attributes;
+    /// it is the same struct here because the kernels behind it are the ones already asserted
+    /// against NumPy. A room hands out a read-only view and a port never writes one: an injection
+    /// goes on [`AirBox::pending_ports`] and [`AirBox::step`] does the work.
+    pub fn view(&self) -> RoomView<'_> {
+        RoomView {
+            n: self.p.n,
+            h: self.p.h,
+            k: self.p.k,
+            rho0: self.p.rho0,
+            c0: self.p.c0,
+            p: &self.pressure,
+            u: [&self.u[0], &self.u[1], &self.u[2]],
+            w: [&self.p.w[0], &self.p.w[1], &self.p.w[2]],
+            node_w: &self.p.wv,
+            beta: &self.p.beta,
+            has_walls: self.p.has_walls,
+        }
     }
 
     /// Cut every face of the plane `axis == index`, the full cross-section.

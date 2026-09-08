@@ -2,7 +2,8 @@
 each other.
 
 The *physical* tier for air-box batch 2. The structural tests
-(:mod:`tests.test_airbox_port`) prove the coupling is exact and passive; they would all still pass
+(``crates/physsynth-core/tests/airbox_port.rs``) prove the coupling is exact and passive; they
+would all still pass
 if ``pbar_free`` were accidentally always zero, because the port would then degenerate into exactly
 :class:`~physsynth.core.radiation.RadiatedBody` with ``R = R_room`` — passive, perfectly
 conservative, and **silently reflection-free**. These tests are the ones that prove the free field

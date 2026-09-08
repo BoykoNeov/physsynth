@@ -414,21 +414,26 @@ eight of nine.
 Phase B is done (§9) including its own correction. Phase C's **first batch is done** (§12), and it
 found the hole §11 records.
 
-The map's revised recommendation for the next batch: **not** `string_damped`, which the first
-reading suggested and which turns out to have four native bars already. The genuinely unwritten
-model is **sympathetic strings** — 15 functions, zero native, and structurally simple (N linear
-strings sharing one bridge point on a modal body, no nonlinearity and no solver of its own). It is
-the smallest complete phase-C batch available and it exercises the whole retirement ritual once:
-write the native bars, name them in the commit that retires the Python ones, delete.
+The map's revised recommendation for the next batch was **sympathetic strings**, and §12 did it.
+**Batch 2 is done too** (§13), and it changes what "next" means: the ordering is no longer a choice
+between models with thin coverage, it is the dependency order §13.1 derives inside §11's hole —
+ports, then wrappers, then bridges. The next batch is `SurfacePort` and `InteriorSurfacePort`
+(§13.8).
+
+§11's table is **corrected by §13.1**: the hole is 16 classes across *three* binding files, not 14
+across two, and the file it missed is the one underneath the other two.
 
 **D**, the viewer, remains independent of all of this and is still the longest pole.
 
 ---
 
-## 11. The hole: fourteen model classes have no home outside the binding crate
+## 11. The hole: model classes with no home outside the binding crate
 
 Found on the first phase-C batch, 2026-09-08, and it is a correction to §1 and §7 rather than a
-detail of that batch.
+detail of that batch. **The count and the file list below are superseded by §13.1**, which derived
+them mechanically instead of by hand and found sixteen classes across *three* files — this section
+missed `airbox_port.rs` entirely, and it is the tier the other two stand on. Everything below about
+*why* the classes are there, and what porting them costs, still holds.
 
 §1's table counts `crates/physsynth-py` — 19,024 lines — as something that *goes away*, on the
 reasoning that a binding with nothing to bind is dead code. That is true of the binding **as
@@ -553,3 +558,195 @@ is: the viewer builds it through Python, and `tests/test_web_backend.py`'s 22 sy
 including the antisymmetric zero, both transfer arms and the guard refusal — go on covering that
 path until phase D moves the viewer. Rewiring the binding class to delegate to `core::connection`
 would touch a shipping path to no end; it goes when the crate goes.
+
+---
+
+## 13. Phase C batch 2, done — the lumped port and the body it loads
+
+`RoomPort` and `RoomLoadedBody` now live in `crates/physsynth-core/src/airbox_port.rs` and a new
+`crates/physsynth-core/src/airbox_wrap.rs`, with `crates/physsynth-core/tests/airbox_port.rs`
+(26 bars) replacing `tests/test_airbox_port.py` (25 functions, 427 lines), deleted in the same
+commit.
+
+### 13.1 §11's table was incomplete: the hole is 16 classes across THREE files
+
+§11 was hand-written and it missed a file. The audit is three steps and is worth keeping because it
+is reproducible where a hand list is not:
+
+1. every `#[pyclass(name = "...")]` in `crates/physsynth-py/src/` (43 names);
+2. every `pub struct` / `pub enum` in `crates/physsynth-core/src/` (88 names);
+3. the set difference, then **clear the case-spelling false positives by hand** — the two here are
+   `VKPlate` → core's `VkPlate` and `MalletVKPlate` → core's `MalletVkPlate`, both real ports whose
+   Python-facing name capitalises an acronym the Rust name does not.
+
+That leaves 18 names, 16 of them real (struck through = re-homed):
+
+| file | classes with no half in a surviving crate |
+|---|---|
+| `airbox_wrap.rs` | `_PlateSurface`, `_MembraneSurface`, `_VKPlateSurface`, `RoomLoadedPlate`, `RoomSuspendedPlate`, `RoomLoadedVKPlate`, `RoomSuspendedVKPlate`, `RoomLoadedMembrane`, `RoomSuspendedMembrane`, ~~`RoomLoadedBody`~~ |
+| `connection.rs` | `StringBodyBridge`, `StringPlateBridge`, `StringVKPlateBridge`, ~~`SympatheticStrings`~~ |
+| **`airbox_port.rs`** | `SurfacePort`, `InteriorSurfacePort`, ~~`RoomPort`~~ |
+
+**`airbox_port.rs` is the file §11 does not mention at all**, and it matters more than the count
+does, because it is *underneath* the other two. `Patch` (`crates/physsynth-py/src/airbox_port.rs:651`)
+holds `room`, `t`, `r` and `load_matrix` as `Py<PyAny>`, and the core's `airbox_port` module exports
+free functions only — `build_t`, `load_matrix`, `port_weights`, `r_room`, `free_pressure_nodes`,
+`ball_nodes`, `spread` — with no stateful port anywhere. Every wrapper in the tier above calls
+`port.require_ready()`, `port.free_pressure()`, `port.inject()` and `port.reset()`. So the ports
+must be re-homed **before** the wrappers, and the wrappers before the three bridges (whose `body=`
+and `plate=` slots take the room wrappers as arguments). That ordering is read off the source, not
+chosen.
+
+The native `AirBox` is a fourth understatement of the same kind. It is a *shell*: its `step` called
+`inject_scalar` and never `inject_port` / `booked_port`, which exist in the crate and were reachable
+only from the binding. `crates/physsynth-py/src/airbox.rs` does not hold a `core::AirBox` at all —
+it holds `core::Params` and re-assembles the step out of the same free kernels — so bringing the
+native room up to a full room **cannot** disturb the shipping path, which is what made it safe to do
+inside this batch rather than as its own.
+
+### 13.2 The decision that propagates to all sixteen: who owns the room
+
+`test_two_heads_share_one_room` (two instruments, one `AirBox`) rules out a wrapper owning its room.
+Of the three shapes left, this batch chose and the rest of the tier inherits:
+
+> **The port is a value the caller owns, and the room is passed at each call.**
+> `port.free_pressure(&room)`, `port.inject(&mut room, q)`, `inst.step(&mut room, force)`.
+
+Rejected: `Rc<RefCell<AirBox>>`, a literal transcription of Python's shared mutable object, which
+would put interior mutability into the core crate's public API; and "the room owns its ports and a
+wrapper holds an index", which works but makes every port method a method on the room and hands out
+an unchecked handle.
+
+Two invariants the reference kept **on the room** had to survive the change, and each cost one field
+on `AirBox`:
+
+* **Disjointness** — two ports may not share a node. `room.claims: Vec<PortClaim>` is `room._ports`
+  reduced to what the refusal actually reads (the flat footprint and the label its message quotes),
+  and `RoomPort::new` takes `&mut AirBox` and claims before it returns.
+* **Unsticking** — `AirBox.set_state` clears every registered port's pending mark by *writing into
+  it* (`port._queued_at = -1`). A value-typed port cannot be written into, so the room carries
+  `epoch: u64`, bumped by `set_state`, and the port records the epoch alongside the step it queued
+  at. A mark from epoch `e` says nothing about a room in epoch `e + 1`, whatever its step count.
+
+  That distinction is invisible to the retired test, and deliberately has its own new bar. In
+  `a_room_set_state_unsticks_every_port` the port queued at step 0 and `set_state` returns the room
+  to step 0 — so a bare step-count comparison refuses, and the bar passes only because the epoch
+  moved. `the_epoch_and_not_the_step_count_is_what_unsticks_a_port` asserts exactly that, and both
+  bars go red when the epoch is dropped from the comparison.
+
+### 13.3 The one-time check, and the one thing it found
+
+Same scene through both implementations, before the Python went, and deliberately not committed:
+two instruments in one room — a point port and a 33-node ball — 200 steps, comparing 34 quantities
+including all 693 pressure nodes and 1,840 velocity faces. Run on two fixtures: two lossless modes
+in a rigid room, and five damped modes in a room with two lossy walls.
+
+It found one real divergence, and it is a **fused multiply-add**.
+
+`u_free = np.dot(a, q^{n+1} - q^{n-1}) / 2k` is the modal read of the body's velocity, and it is the
+one `np.dot` in this crate that **reaches the timestep** — it becomes the volume velocity the room is
+injected with and the pressure the body is corrected by. The crate's three existing `dot` copies
+(`beam`, `plate`, `string_stiff`) spell themselves `s += x * y` and each says in its doc comment that
+it is a read-out. Spelled that way here, the native scene diverges from the reference at the **second
+step**, by one ulp in the ball port's volume velocity, and 200 steps later 661 of 693 pressure nodes
+differ at 1.9e-12 — the room amplifying a single ulp, with the body's own state still bit-identical
+throughout. Spelled `x.mul_add(y, s)`, all 34 quantities agree to the bit on both fixtures.
+
+BLAS `ddot` fuses its multiply-add; `f64::mul_add` is single-rounded by definition, so what the
+spelling buys is a *portable* native answer, and that it is also `ddot`'s answer is what the check
+measured, at two mode counts, while there was still something to measure it against.
+
+**And no native bar can see the difference.** Both spellings are physically correct — they differ in
+the last bit — so with the plain loop restored, all 26 bars still pass. Measured, not assumed. That
+generalises past this batch: *a last-bit choice invisible to every native bar is not a defect, but it
+is unrecoverable once the reference goes*, so the cross-implementation check has to happen in the
+batch that ports the class and cannot be deferred. The same is true of one more thing this batch
+changed: `AirBox::step` now books its injections as a **per-step subtotal** added once to the running
+total, which is the reference's association and differs from the crate's previous
+`self.injected += term` only when two injections land in one step — i.e. only in a scene the crate
+could not express until this batch. Reverting it breaks nothing native either.
+
+### 13.4 The retirement rule, discharged
+
+| retired | native replacement |
+|---|---|
+| `test_conserved_rigid_room` | `the_scene_total_is_flat_in_a_rigid_room` |
+| `test_conserved_lossy_walls` | `the_scene_total_is_flat_with_lossy_walls` |
+| `test_conserved_spread_port` | `a_spread_port_conserves_across_wall_sets` |
+| `test_conserved_lossy_body` | `a_lossy_body_makes_the_scene_total_decrease_monotonically` |
+| `test_free_pressure_matches_full_array` | `the_local_free_pressure_read_is_the_full_array_update_exactly` |
+| `test_free_pressure_matches_full_array_spread` | `a_clipped_ball_reads_the_same_as_the_full_array` |
+| `test_R_room_is_what_the_room_does` | `r_room_is_what_the_room_actually_does` |
+| `test_R_room_wall_factor_is_not_free` | `the_wall_closure_factor_in_r_room_is_not_free` |
+| `test_zero_radiation_is_bit_identical_to_bare_body` | `zero_radiation_is_bit_identical_to_the_bare_body` |
+| `test_absurd_coupling_stays_passive` | `an_absurd_coupling_stays_passive` |
+| `test_passivity_across_grids_and_walls` | `passivity_holds_across_grids_and_wall_sets` |
+| `test_open_face_port_is_refused` | `a_port_on_an_open_face_is_rejected` |
+| `test_open_face_reached_by_a_BALL_is_refused` | `an_open_face_reached_by_the_ball_is_rejected` |
+| `test_shared_node_is_refused` | `a_shared_node_is_rejected` |
+| `test_overlapping_balls_are_refused` | `overlapping_balls_are_rejected` |
+| `test_disjoint_ports_are_accepted` | `disjoint_ports_are_accepted` |
+| `test_port_outside_the_room_is_refused` | `a_port_outside_the_room_is_rejected` |
+| `test_unresolvable_radius_is_refused` | `an_unresolvable_radius_is_rejected` |
+| `test_forgotten_room_step_raises` | `a_forgotten_room_step_is_rejected_and_recovers` |
+| `test_forgotten_room_step_guard_is_per_port` | `the_forgotten_room_step_guard_is_per_port` |
+| `test_sample_rate_mismatch_is_refused` | `a_sample_rate_mismatch_is_rejected` |
+| `test_set_state_and_reset_clear_the_coupling_ledger` | `set_state_and_reset_clear_the_coupling_ledger` |
+| `test_energy_is_an_override_not_a_delegation` | `the_energy_is_an_override_not_a_delegation` |
+| `test_room_set_state_unsticks_every_port` | `a_room_set_state_unsticks_every_port` |
+| `test_string_bridge_body_room_chain_conserves` | **moved, not replaced** — see §13.5 |
+| — | `the_two_ledgers_agree_across_the_terminal` (new) |
+| — | `the_epoch_and_not_the_step_count_is_what_unsticks_a_port` (new) |
+
+### 13.5 One test could not be replaced, and it moved rather than died
+
+`test_string_bridge_body_room_chain_conserves` drives `string -> StringBodyBridge -> RoomLoadedBody
+-> AirBox`, and `StringBodyBridge` is one of the three classes still only in the binding. It is now
+the last test in `tests/test_connection.py`, which is the bridge's own file and retires with it.
+§12's harvesting rule says a survivor goes where its referent is; here the referent is the thing
+blocking it.
+
+### 13.6 The new bar's fixture was wrong, and a mutation found it
+
+`the_two_ledgers_agree_across_the_terminal` was written with both instruments at interior nodes.
+Deleting the `1 / (1 + beta)` factor from `r_room` — the trap the whole file exists to catch — left
+it **green**, because at an interior node `beta` is zero and the factor is exactly 1. Moved to a
+corner, it goes red. The bar as first written asserted a true thing about a fixture that could not
+exercise it.
+
+The same mutation is worth recording for what it did *not* break: with the factor deleted, all six
+conservation and passivity bars stay green — the conserved total is structurally blind to it, exactly
+as the retired file's header claimed, and now measured natively rather than quoted. Three bars catch
+it and none of them is the drift.
+
+### 13.7 Cost, and what is still only in the binding
+
+The Python file was 3.39 s of suite time (`scripts/shard_costs.json`, entry removed with it); the 26
+native bars run in **0.9 s** in the debug profile `cargo test` uses.
+
+`PyRoomPort` and `PyRoomLoadedBody` are left exactly as they are, per §12's precedent. The viewer
+builds a `RoomLoadedBody` (`web/serialize.py:9288`, the string→bridge→body→room scene) and
+`tests/test_airbox_scene.py` and `tests/test_web_backend.py` both cover that path; rewiring the
+binding classes to delegate to the core would touch a shipping path to no end. They go when the crate
+goes.
+
+### 13.8 The next batch
+
+The ordering §13.1 derives makes it **`SurfacePort` and `InteriorSurfacePort`** — the distributed
+tier of the same module, and the last thing between the retirement and the six grid wrappers. Their
+kernels are already in core with bars behind them (`build_t`, `spread`, `patch_resistance`,
+`load_matrix`, `footprint_unfed`); what is new is the same room-ownership shape applied to a port
+that carries three sparse matrices, and one thing this batch did not have to face — `load_matrix` is
+a sparse triple product whose **stored order**, not just its values, has to match, because SciPy's
+ordering has caught this project out before.
+
+**And one constraint this batch created for the bridge batch, written down now because §13.3 says
+it is the kind that cannot be recovered later.** `RoomLoadedBody` overrides `energy()` and delegates
+everything else; in the reference the attribute fallback made that automatic, which is exactly what
+lets a bridge take a room-loaded body without knowing a room exists. Whatever trait or enum the
+bridge batch puts over `StringBodyBridge`'s `body=` slot must therefore dispatch **`energy()` to the
+wrapper** and the modal reads (`q`, `q_prev`, `m`, `omega`, `phi`, `a`, `bridge_displacement`) to the
+inner `ModalBody`. Handing a bridge the inner body instead — the shape Rust makes easiest, because
+`inst.body` is right there and has the modal surface on it — compiles, conserves nothing, and is
+asserted against by exactly one test: the chain test §13.5 moved, which retires with the bridge
+itself.

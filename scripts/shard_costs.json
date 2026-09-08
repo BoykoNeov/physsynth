@@ -52,7 +52,6 @@
   "test_membrane_stability.py": 5.65,
   "test_bow_energy.py": 4.85,
   "test_body.py": 3.76,
-  "test_airbox_port.py": 3.39,
   "test_airbox_freefield.py": 3.13,
   "test_vk_stability.py": 2.95,
   "test_modal.py": 2.74,

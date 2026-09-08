@@ -88,6 +88,7 @@
 
 pub mod airbox;
 pub mod airbox_port;
+pub mod airbox_wrap;
 pub mod banded;
 pub mod beam;
 pub mod body;

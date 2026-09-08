@@ -56,7 +56,7 @@ G_WILD = dict(grain_x=11.0, grain_cross=2.5, grain_y=0.9)  # nothing is made of 
 
 
 # Passivity is asserted against a roundoff bar relative to the initial energy, the same shape as
-# `test_bore_radiation.py` and `test_airbox_port.py` -- NOT against a bare `<= 0.0`.
+# `test_bore_radiation.py` and `airbox_port.rs`'s native bars -- NOT against a bare `<= 0.0`.
 #
 # This is not defensive slack, it is required, and the reason is the *first* step. Every test here
 # plucks from rest, so at step 0 the velocity is exactly zero and the step dissipates essentially

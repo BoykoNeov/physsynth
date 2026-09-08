@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 from helpers import BODY_FREQS_DEFAULT, K_BRIDGE_DEFAULT, make_bridge
 
+from physsynth.core.airbox import AirBox, RoomLoadedBody, impedance_from_zeta
 from physsynth.core.body import ModalBody
 from physsynth.core.connection import StringBodyBridge
 from physsynth.core.engine import simulate
@@ -164,3 +165,47 @@ def test_right_end_must_be_free():
     b = ModalBody(freqs=BODY_FREQS_DEFAULT, fs=fs)
     with pytest.raises(ValueError, match="free"):
         StringBodyBridge(string=s, body=b, K=K_BRIDGE_DEFAULT)
+
+
+# -- Composition: the bridge is blind to what its body is ------------------------------------
+def test_string_bridge_body_room_chain_conserves():
+    """The full ``string -> bridge -> body -> room`` chain, with ``connection.py`` untouched.
+
+    ``RoomLoadedBody`` is a drop-in for ``ModalBody``, so the bridge calls ``body.step(force=F)``
+    without knowing a room exists. Note the caller's loop: the *bridge* owns the body's step, which
+    is exactly why a port must not step its own room.
+
+    Moved here from ``tests/test_airbox_port.py`` when the port tier was re-homed into
+    ``physsynth-core`` (retirement plan section 13). Every other bar in that file has a native
+    replacement in ``crates/physsynth-core/tests/airbox_port.rs``; this one does not, because
+    ``StringBodyBridge`` is still only in the binding crate. It lands in the file that retires with
+    the bridge rather than in the one that has already gone.
+    """
+    N, L, T, rho, K = 100, 1.0, 200.0, 0.005, 8000.0
+    c = np.sqrt(T / rho)
+    fs = c * N / (L * 0.9)
+    string = IdealString(L=L, T=T, rho=rho, fs=fs, N=N, boundary=("fixed", "free"))
+    h = 343.0 * np.sqrt(3.0) / (0.9 * fs)
+    room = AirBox(L=(10 * h, 8 * h, 6 * h), fs=fs, h=h, walls=impedance_from_zeta(1.0))
+    body = ModalBody(
+        freqs=np.array([180.0, 291.0]), fs=fs, masses=0.02, phi=1.0,
+        radiation=np.array([3e-3, 2e-3]),
+    )
+    inst = RoomLoadedBody(body=body, room=room, at=(3 * h, 3 * h, 3 * h), radius=None)
+    bridge = StringBodyBridge(string=string, body=inst, K=K)
+    string.set_state(triangular_pluck(string.x, string.L, 0.3 * string.L, amplitude=1e-3))
+
+    def total():
+        # bridge.energy() already carries inst.energy(), i.e. the body PLUS its radiated channel --
+        # the drop-in property, visible in the ledger: adding radiated_energy again double-counts.
+        return bridge.energy() + room.energy()
+
+    e0 = total()
+    lo = hi = e0
+    for _ in range(600):
+        bridge.step()
+        room.step()
+        e = total()
+        lo, hi = min(lo, e), max(hi, e)
+    assert (hi - lo) / abs(e0) < DRIFT_TOL
+    assert inst.radiated_energy != 0.0  # the room was actually driven

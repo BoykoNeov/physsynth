@@ -64,6 +64,7 @@
 //! §26.5's "do the outer factors share a mantissa" question with a sharper answer — here they are
 //! not merely commensurate, they are *the same number*.
 
+use crate::airbox::AirBox;
 use crate::fmt::py_float;
 use crate::pyfloat::scalar_pow;
 use crate::reduce;
@@ -284,6 +285,345 @@ pub fn r_room(view: &RoomView<'_>, nodes: &[&[usize]; 3], w: &[f64], big_w: &[f6
         })
         .collect();
     reduce::sum(&terms)
+}
+
+// -- RoomPort: the lumped tier, as a value ---------------------------------------------------
+
+/// A construction- or call-time rejection from the lumped port.
+///
+/// Every `Display` is the reference's message verbatim, because the retired Python suite matched
+/// on the text and the native bars match on it now.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PortError {
+    /// The requested centre is not in the room. Carries the room's own refusal.
+    OutsideRoom(crate::airbox::ParamError),
+    /// `radius` was not a positive finite length. Carries it.
+    BadRadius(f64),
+    /// The ball is finer than the grid, so it is a point port wearing a radius.
+    UnresolvableRadius {
+        /// The radius asked for (m).
+        radius: f64,
+        /// The grid spacing (m).
+        h: f64,
+        /// The centre node it collapsed onto.
+        index: [usize; 3],
+    },
+    /// The footprint reaches a pressure-release face. Carries the centre and the faces.
+    OnOpenFace {
+        /// The centre node index.
+        index: [usize; 3],
+        /// The offending face names, quoted, in [`FACES`] order.
+        faces: Vec<String>,
+    },
+    /// Two ports share a node. Carries everything the message quotes.
+    Overlapping {
+        /// The centre node index of the port being built.
+        index: [usize; 3],
+        /// The first shared node, unravelled.
+        node: [usize; 3],
+        /// How the existing port names itself.
+        other: String,
+        /// How many nodes the two have in common.
+        count: usize,
+        /// The grid spacing, for the snapping note (m).
+        h: f64,
+    },
+    /// A second solve inside one room step. Carries the centre and the room's step count.
+    NotReady {
+        /// The centre node index.
+        index: [usize; 3],
+        /// `room.n` at the moment of the refusal.
+        n: usize,
+    },
+}
+
+impl std::fmt::Display for PortError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PortError::OutsideRoom(e) => write!(f, "{e}"),
+            PortError::BadRadius(r) => write!(
+                f,
+                "port radius must be a positive length, got {}.",
+                py_float(*r)
+            ),
+            PortError::UnresolvableRadius { radius, h, index } => write!(
+                f,
+                "port radius {} m is smaller than the grid can resolve (h = {}): the ball \
+                 contains only the centre node {}, so this would silently be a point port with a \
+                 grid-dependent load magnitude. Coarsen the request, refine h, or pass \
+                 radius=None to ask for a point port on purpose.",
+                py_float(*radius),
+                py_float(*h),
+                index_repr(*index),
+            ),
+            PortError::OnOpenFace { index, faces } => write!(
+                f,
+                "port at {} touches the open (pressure-release) face(s) [{}], where p is pinned \
+                 to 0: pbar_free and R_room are both exactly zero, so the body would radiate into \
+                 a short circuit \u{2014} perfectly conservative, perfectly silent, and invisible \
+                 to the energy report. Move the port off that face, or give the face a finite \
+                 impedance.",
+                index_repr(*index),
+                faces.join(", "),
+            ),
+            PortError::Overlapping {
+                index,
+                node,
+                other,
+                count,
+                h,
+            } => write!(
+                f,
+                "port at {} shares node {} with the existing port at {other} ({count} node(s) in \
+                 common). Overlapping ports are not independent within a step, so each one's \
+                 solve uses a pressure that never occurred and the energy ledgers stop matching. \
+                 Note grid snapping: two nearby centres collapse onto one node at h = {}.",
+                index_repr(*index),
+                index_repr(*node),
+                py_float(*h),
+            ),
+            PortError::NotReady { index, n } => write!(
+                f,
+                "port at {} was asked to solve twice within one room step (room.n = {n}). A port \
+                 does not step its room \u{2014} the caller does, once, after every port has \
+                 solved:  for inst in instruments: inst.step(...)  then  room.step(). Without it \
+                 the room is frozen and the body is loaded by a stale field, silently.",
+                index_repr(*index),
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PortError {}
+
+/// `str()` of a Python tuple of three indices — the shape every port message quotes.
+fn index_repr(i: [usize; 3]) -> String {
+    format!("({}, {}, {})", i[0], i[1], i[2])
+}
+
+/// A lumped two-way terminal between a body and a room: one node, or a staircased ball of them.
+///
+/// The reference (`airbox.py`'s `RoomPort`) is a Python object the room holds a reference to, and
+/// which reaches back into the room to append its injection and to read the open-circuit pressure.
+/// Rust cannot have that cycle, and the retirement's second batch chose the shape the rest of the
+/// tier will follow: **the port is a value the caller owns and the room is passed at each call.**
+///
+/// Two invariants the reference kept on the room survive the change:
+///
+/// * **Disjointness.** Two ports may not share a node — overlapping ports are not independent
+///   within a step. [`RoomPort::new`] takes `&mut AirBox` and records its footprint in
+///   [`crate::airbox::AirBox::claims`], which is `room._ports` reduced to what the refusal reads.
+/// * **Unsticking.** `AirBox::set_state` cannot write `_queued_at = -1` into ports it does not
+///   hold, so it bumps `AirBox::epoch` and the port compares against it. See
+///   [`RoomPort::require_ready`].
+#[derive(Debug, Clone)]
+pub struct RoomPort {
+    index: [usize; 3],
+    radius: Option<f64>,
+    nodes: Nodes,
+    flat: Vec<usize>,
+    w: Vec<f64>,
+    r_room: f64,
+    /// The room step this port last queued at, and the epoch it was queued in.
+    queued: Option<(u64, usize)>,
+}
+
+impl RoomPort {
+    /// Place a port at `at` (m), covering one node or a ball of radius `radius` (m).
+    ///
+    /// The two refusals run in the reference's order — open faces before disjointness — because a
+    /// port that is both gets the message it always got.
+    pub fn new(
+        room: &mut AirBox,
+        at: [f64; 3],
+        radius: Option<f64>,
+    ) -> Result<RoomPort, PortError> {
+        let index = match crate::airbox::node_index(at, room.p.h, room.p.n) {
+            Some(i) => i,
+            None => {
+                return Err(PortError::OutsideRoom(
+                    crate::airbox::ParamError::OutsideRoom {
+                        point: at,
+                        index: crate::airbox::node_index_raw(at, room.p.h),
+                        l_actual: room.p.l_actual,
+                        n: room.p.n,
+                    },
+                ))
+            }
+        };
+        let view = room.view();
+        let nodes: Nodes = match radius {
+            None => [vec![index[0]], vec![index[1]], vec![index[2]]],
+            Some(r) => {
+                if r <= 0.0 || !r.is_finite() {
+                    return Err(PortError::BadRadius(r));
+                }
+                let ball = ball_nodes(view.n, view.h, index, r);
+                if ball[0].len() == 1 {
+                    return Err(PortError::UnresolvableRadius {
+                        radius: r,
+                        h: view.h,
+                        index,
+                    });
+                }
+                ball
+            }
+        };
+
+        let touched = touched_open_faces(&room.p, &nodes);
+        if !touched.is_empty() {
+            return Err(PortError::OnOpenFace {
+                index,
+                faces: touched,
+            });
+        }
+
+        let shape = view.node_shape();
+        let flat = ravel(&[&nodes[0], &nodes[1], &nodes[2]], shape);
+        for claim in &room.claims {
+            let (first, count) = shared_nodes(&flat, &claim.nodes);
+            if let Some(first) = first {
+                return Err(PortError::Overlapping {
+                    index,
+                    node: unravel(first, shape),
+                    other: claim.label.clone(),
+                    count,
+                    h: view.h,
+                });
+            }
+        }
+
+        let cols = [&nodes[0][..], &nodes[1][..], &nodes[2][..]];
+        let (w, big_w) = port_weights(&view, &cols);
+        let r = r_room(&view, &cols, &w, &big_w);
+
+        room.claims.push(crate::airbox::PortClaim {
+            nodes: flat.clone(),
+            label: index_repr(index),
+        });
+        Ok(RoomPort {
+            index,
+            radius,
+            nodes,
+            flat,
+            w,
+            r_room: r,
+            queued: None,
+        })
+    }
+
+    /// The centre node index.
+    pub fn index(&self) -> [usize; 3] {
+        self.index
+    }
+
+    /// The ball radius as asked for (m), or `None` for a point port.
+    pub fn radius(&self) -> Option<f64> {
+        self.radius
+    }
+
+    /// The port's node set, as three parallel index arrays.
+    pub fn nodes(&self) -> &Nodes {
+        &self.nodes
+    }
+
+    /// The port's nodes as flat C-order pressure indices.
+    pub fn flat(&self) -> &[usize] {
+        &self.flat
+    }
+
+    /// The per-node share of the volume velocity, `w = W / sum W`.
+    pub fn w(&self) -> &[f64] {
+        &self.w
+    }
+
+    /// The lumped internal resistance the body sees looking into the room (Pa s / m^3).
+    pub fn r_room(&self) -> f64 {
+        self.r_room
+    }
+
+    /// How many grid nodes the port actually covers, clipping at walls included.
+    pub fn node_count(&self) -> usize {
+        self.nodes[0].len()
+    }
+
+    /// The port's discrete volume `sum_n W_n` (m^3) — the staircased ball, made visible.
+    pub fn volume(&self, room: &AirBox) -> f64 {
+        let view = room.view();
+        let vals: Vec<f64> = self.flat.iter().map(|&f| view.node_w[f]).collect();
+        reduce::sum(&vals)
+    }
+
+    /// The open-circuit centered pressure `pbar_free` this port would feel with `q = 0`.
+    pub fn free_pressure(&self, room: &AirBox) -> f64 {
+        let view = room.view();
+        let cols = [&self.nodes[0][..], &self.nodes[1][..], &self.nodes[2][..]];
+        let pbar = free_pressure_nodes(&view, &cols);
+        let terms: Vec<f64> = self.w.iter().zip(pbar.iter()).map(|(a, b)| a * b).collect();
+        reduce::sum(&terms)
+    }
+
+    /// Refuse if this port's previous injection is still pending — i.e. no `room.step()`.
+    ///
+    /// The reference compares its `_queued_at` mark against `room.n` and relies on the room to
+    /// clear the mark when it is restarted. Here the mark carries the room's epoch, so a
+    /// `set_state` invalidates it without the room reaching in: a mark from epoch `e` says nothing
+    /// about a room now in epoch `e + 1`, whatever its step count.
+    pub fn require_ready(&self, room: &AirBox) -> Result<(), PortError> {
+        if self.queued == Some((room.epoch, room.n)) {
+            return Err(PortError::NotReady {
+                index: self.index,
+                n: room.n,
+            });
+        }
+        Ok(())
+    }
+
+    /// Queue this port's volume velocity `q` (m^3/s) for the room's next `AirBox::step`.
+    pub fn inject(&mut self, room: &mut AirBox, q: f64) -> Result<(), PortError> {
+        self.require_ready(room)?;
+        room.pending_ports.push(crate::airbox::PortInjection {
+            nodes: self.flat.clone(),
+            w: self.w.clone(),
+            q,
+        });
+        self.queued = Some((room.epoch, room.n));
+        Ok(())
+    }
+
+    /// Forget any pending-injection mark — for reusing the port on a fresh run.
+    pub fn reset(&mut self) {
+        self.queued = None;
+    }
+}
+
+/// Which pressure-release faces a node set touches, in [`FACES`] order and quoted.
+///
+/// A rigid or lossy room short-circuits: `_open` is all false and the reference's `np.any` is the
+/// same early return.
+fn touched_open_faces(p: &crate::airbox::Params, nodes: &Nodes) -> Vec<String> {
+    if !p.open.iter().any(|&o| o) {
+        return Vec::new();
+    }
+    let mut touched = Vec::new();
+    for (i, face) in FACES.iter().enumerate() {
+        if p.walls[i] != 0.0 {
+            continue;
+        }
+        let axis = AXES
+            .iter()
+            .position(|&c| c == face.as_bytes()[0] as char)
+            .expect("a face name starts with an axis letter");
+        let end = if face.as_bytes()[1] == b'0' {
+            0
+        } else {
+            p.n[axis]
+        };
+        if nodes[axis].contains(&end) {
+            touched.push(format!("'{face}'"));
+        }
+    }
+    touched
 }
 
 // -- the distributed tier ------------------------------------------------------------------------

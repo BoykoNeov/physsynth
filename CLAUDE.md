@@ -27,11 +27,18 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    `docs/dev/python-retirement-plan.md`: ~58,300 lines of Python go, and with them
    `crates/physsynth-py` — 19,024 lines of **Rust** that exist only to talk to Python. **Not all of
    that 19,024 is deletable, and the plan said it was** (§11, found on the first phase-C batch,
-   2026-09-08): `connection.rs` and `airbox_wrap.rs` — 3,231 lines, fourteen classes — are the ONLY
-   implementation of models this project ships, put there because they are polymorphic over their
-   collaborators through Python duck typing. They have to be **re-homed into a surviving crate
-   before the binding can go**, which is phase C work by another name and is not in the plan's
-   test-count estimate. §12 is the first one done. A Python
+   2026-09-08): three of its files are the ONLY implementation of models this project ships, put
+   there because they are polymorphic over their collaborators through Python duck typing. They
+   have to be **re-homed into a surviving crate before the binding can go**, which is phase C work
+   by another name and is not in the plan's test-count estimate.
+
+   **§11 counted them by hand and undercounted** — §13.1 derives the list instead (every
+   `#[pyclass]` minus every core `pub struct`/`pub enum`, then clear the case-spelling false
+   positives) and it is **sixteen classes across three files**, not fourteen across two. The file
+   §11 missed, `airbox_port.rs`, is the tier the other two stand on, so the porting order is
+   **forced rather than chosen: ports, then wrappers, then bridges** — each tier's slots take the
+   tier below as arguments. §12 (`SympatheticStrings`) and §13 (`RoomPort` + `RoomLoadedBody`,
+   which also turned the native `AirBox` from a shell into a full room) are the two done. A Python
    **plotting island** was chosen and withdrawn the same day: there is none, the plotting
    capability leaves, and where a diagnostic drew a figure Rust emits the data instead. The
    JavaScript front-end (`web/static/`) is not Python and is not in scope. **The rest of this
@@ -167,7 +174,7 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    list must stay empty, so it cannot reach a Bessel function) while its Python name lives in a
    `core/` module. **The crate a function is implemented in and the module its name lives in are
    separate questions** (§37.7).
-   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **seventy**
+   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **seventy-four**
    findings about when two implementations agree to the bit, when they cannot, and what a
    *deletion* breaks that a port does not (fed-back reductions, libm vs NumPy's own
    transcendentals, LLVM's constant fold, `np.sum`'s pairwise cutoff, descriptors that take a
