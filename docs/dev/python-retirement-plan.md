@@ -1602,8 +1602,9 @@ constructor's whole influence column was compared too.
 | all six | `radiated_energy` only | 20–129 steps, ≤ 3.2e-16 of the ledger's size |
 
 Identical in the debug and release profiles. The one difference is §16.3's coupling-ledger `ddot`
-again, which does not feed back; `mal.energy()`, which *contains* the ledger, was exact on every
-step, and so was the room's own booking of the same identity. Measured relative to the value
+again, which does not feed back; the room's own booking of the same identity was exact. (So was
+`mal.energy()`, which contains the ledger — but that is rounding absorbing a last-bit difference in
+a term far smaller than the plate's energy, not independent evidence.) Measured relative to the value
 instead of to its size, the suspended scene reads 2.5e-14 — because the ledger passes near zero
 there, which is the findings ledger's "what is the bar divided by" (#30), not a larger error.
 
@@ -1619,7 +1620,7 @@ function (`plate_step_of`) and commit through `VkPlate::record`, and
 `both_mallets_write_every_read_out_through_the_one_commit_path` seeds all six with garbage first so
 an untouched field cannot pass by coincidence.
 
-### 18.4 Four deliberate breakages — and the retired file's tangent bar could not see its own defect
+### 18.4 Five deliberate breakages — and the retired file's tangent bar could not see its own defect
 
 | breakage | bars that fail |
 |---|---|
@@ -1627,6 +1628,7 @@ an untouched field cannot pass by coincidence.
 | no generation check (a rebuilt factorization never noticed) | 1: the rebuild |
 | `finish` handed the field from **before** the commit | 3: the committed field, the miss, the scene total |
 | the tangent's operator left on the plate's own factorization | 1: the tangent — **after a rewrite; 0 as carried** |
+| the bare mallet's old three-field hand commit put back | 1: the one-commit-path bar (reads the seeded `-7.0`) |
 
 The last row is the batch's finding (#78). The Python bar for the exact tangent compared the room's
 tangent with a bare gong's and asserted they **differ**. They do — but the retargeted *column* alone
