@@ -1680,6 +1680,20 @@ impl VkPlate {
     /// If either factorization cannot back-substitute.
     pub fn step(&mut self, f_ext: Option<&[f64]>) -> Result<(), SparseLuError> {
         let out = vk_step(&self.u, &self.u_prev, &self.f, &self.f_prev, f_ext, &self.p)?;
+        self.record(out);
+        Ok(())
+    }
+
+    /// Commit one solved step: roll both histories and write all six read-outs.
+    ///
+    /// The **one** place a [`VkStep`] becomes plate state. [`VkPlate::step`] goes through it and so
+    /// does the room's seam (`airbox_wrap::VkSeam`), which is what makes "the room-driven plate
+    /// writes every read-out the bare one writes" true by construction rather than by two lists of
+    /// assignments staying in step — the binding's seam once had its own list, and it missed two.
+    ///
+    /// `F` is rolled only when the step returned one: the linear path does not touch the stress
+    /// cache, exactly as [`vk_step_with`]'s early return documents.
+    pub fn record(&mut self, out: VkStep) {
         self.u_prev = std::mem::replace(&mut self.u, out.u);
         if let Some(f_new) = out.f {
             self.f_prev = std::mem::replace(&mut self.f, f_new);
@@ -1691,7 +1705,6 @@ impl VkPlate {
         self.residual_ratio = out.residual_ratio;
         self.n_solves = out.n_solves;
         self.n_fallbacks = out.n_fallbacks;
-        Ok(())
     }
 
     /// Current displacement as a full-grid field, rim zero.

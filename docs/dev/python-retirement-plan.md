@@ -423,7 +423,10 @@ and the three bridges. **Batch 4 is done** (§16) and takes the *linear* half of
 tier — the ordinary plate and the drumhead, four wrappers and two seams, re-homed as one generic
 `RoomGrid<S>` — leaving **six**: the von Kármán seam with its two wrappers, and the three bridges.
 Read §13.1's derive together with §16.7's re-homing table from here on: the derive is a *name join*,
-and §16.2 renamed six classes on purpose, so it now over-reports.
+and §16.2 renamed six classes on purpose, so it now over-reports. **Batch 5 is done** (§17) and
+finishes the wrapper tier with the von Kármán seam, as a third seam of the same generic. What is
+left is the **three bridges and one thing no class count could see**: the mallet's gong-in-a-room
+*mode* (§17.5), a composition that lives inside `MalletVKPlate` rather than in a class of its own.
 
 §11's table is **corrected by §13.1**: the hole is 16 classes across *three* binding files, not 14
 across two, and the file it missed is the one underneath the other two.
@@ -1392,3 +1395,153 @@ caller. Four things are known in advance:
    `finish`. `physsynth_core::mallet` already has room-aware machinery
    (`VkCoupledStep::with_rhs`), so how much of that file retires is a question about the *mallet*
    tier and is worth answering before the batch rather than during it.
+
+---
+
+## 17. Phase C batch 5, done — the von Kármán seam, and the wrapper tier is finished
+
+Commit 2 of §16's split (the human's: linear first, gong second). The nonlinear plate's room
+wrappers — the reference's `_VKPlateSurface`, `RoomLoadedVKPlate` and `RoomSuspendedVKPlate` —
+re-home into `crates/physsynth-core/src/airbox_wrap.rs` as a third seam, `VkSeam`, of the same
+generic `RoomGrid<S>`. Seventeen native bars in `crates/physsynth-core/tests/airbox_vk.rs`;
+seventeen of `tests/test_airbox_vk.py`'s twenty-six functions retire. With this the **wrapper tier
+is finished**: every class the reference's `airbox.py` had is native.
+
+### 17.1 §16.10's first question: the seam is a different shape, and one provided method absorbs it
+
+The linear seams solve once and commit one array; the von Kármán seam *iterates* and commits two
+histories plus six read-outs. §16.10 said to decide before writing bars whether the trait grows an
+arm or the wrapper takes a different path through `RoomGrid::step`. It grew **one provided
+method**, `GridSeam::advance(&mut self, lu, rhs) -> u_next`. Its default is the linear seams' "one
+back-substitution, then `commit`", so `PlateSeam` and `MembraneSeam` did not change and their 45
+bars are untouched. `VkSeam` overrides it with the model's own coupled step, `plate::vk_step_with`,
+against `VkCoupledStep::with_rhs(rhs, …, &lu_loaded)`. `RoomGrid::step` borrows the seam mutably and
+the factorization immutably; they are disjoint fields.
+
+Two structural decisions ride on it:
+
+* **One commit path.** `VkPlate::step`'s six assignments moved into `VkPlate::record(VkStep)`, and
+  the seam commits through it. The binding's seam once kept its own list and missed two
+  (`n_solves`, `residual_ratio` — the air-box Newton plan's §2.4); natively "the room-driven plate
+  writes every read-out the bare step writes" is true by construction, and a bar still says so.
+* **`theta_matrix` and `plate_areas` are shared** between `PlateSeam` and `VkSeam` rather than
+  written twice, so the `nonlinear = false` anchor cannot fail on the matrix for a spelling reason.
+  The **force path is deliberately not shared**: the linear seam adds `f_ext` inside
+  `plate::step_rhs`, the gong's through `add_f_ext` on `VkPlate::linear_rhs`, so their agreement is
+  a measurement the anchor makes with `sigma > 0` and a live force, not a consequence of the code.
+
+### 17.2 One deliberate departure: the stress cache on the linear path
+
+With `nonlinear = false` the model's step returns no stress function. The binding's seam handed the
+model's own `F` back and rolled it anyway (`F_prev <- F`); `VkSeam` follows the **bare plate** and
+leaves both levels alone. The two agree whenever the cache holds what the model put there (zeros on
+that path) and differ only for a caller who wrote `F` by hand — and there, "a room-loaded plate
+reduces to the bare one" requires the bare plate's behaviour. Documented on `VkSeam` itself.
+
+### 17.3 The one-time check: 8 scenes, 120 steps, every state quantity and every iteration count exact
+
+The concern going in: batch 4 compared one solve per step, but this seam back-substitutes **many**
+times per step and the sweep count branches on a norm, so a last-bit difference between SciPy's
+`splu` (the binding's `LoadedLu`) and the native `SparseLu` could flip an iteration count and send
+the two trajectories apart. Measured, with the inputs recorded from the binding as raw doubles so
+both sides start from identical numbers (no transcendental evaluated on either side):
+
+| scenes | compared every step | differing |
+|---|---|---|
+| supported / free × baffled / suspended, `sigma = 2`, lossy mounting wall, live `f_ext`, `auto` | `w`, `F`, the room's whole pressure field, volume velocity, `last_residual`, `(n_iters, n_solves, n_fallbacks, converged)`, `room.injected` | **0** |
+| supported baffled, lossless, rigid room | same | **0** |
+| free suspended under **Newton** (3–4 iterations, GMRES inside) | same | **0** |
+| both `nonlinear = false` arms | same | **0** |
+| all eight | `radiated_energy` and the wrapper's `energy()` | 10–115 of 120 steps, ≤ 2.0e-16 relative |
+
+Identical in the debug and the release profile. The only difference is the coupling ledger's BLAS
+`ddot`, which §16.3 already showed does not feed back — and the room's *own* booking of the same
+identity, `injected`, is exact. The iteration counts span 6–19 sweeps per step, so the concern was
+exercised hard and did not materialise: the native factorization reproduces SuperLU's solves to the
+bit on these matrices, which batch 4's exact state arrays implied for a single solve and which this
+shows survives a loop that branches on the result.
+
+### 17.4 Three deliberate breakages, three different sets of bars
+
+| breakage | bars that fail |
+|---|---|
+| the seam iterates against the plate's **own** operator (`VkCoupledStep::new` for `with_rhs`) — the plausible slip | 6: the `nonlinear = false` anchor, the coupled residual, flat and monotone totals, the `couple_tol` split, Newton past the wall |
+| `rho_v` where `rho_s` belongs in the denominator | 7: the same six plus the factorization-inputs bar |
+| commit by hand instead of through `VkPlate::record`, dropping three read-outs | 4: the read-outs bar, the capped-step verdict, `couple_method`, the zero-area reduction |
+
+Note what passes under the first: **`radiated == injected`**. A gong that is not in the room at all
+still books its ledger consistently. That is the family's standing rule — no single detector is
+sufficient — for the fifth batch running.
+
+### 17.5 §16.10's fourth question: the mallet, and a piece of the hole no class count could see
+
+`tests/test_mallet_room_gong.py` does not drive a wrapper. It drives `MalletVKPlate`, and when that
+class is handed a room wrapper instead of a bare plate it switches to a different step
+(`step_in_room` in `crates/physsynth-py/src/mallet.rs`) that composes the wrapper's
+`prepare`/`loaded_rhs`/`finish` around its own outer iteration. That composition exists **only in
+the binding** — `physsynth_core::mallet` has the pieces (`vk_plate_step_with`, `retarget_column`)
+but nothing that assembles them around a room — so it is part of the hole. It is a *mode* of an
+existing class rather than a class, so neither §11's hand count nor §13.1's derive could list it.
+
+To make sure it is the only one, every binding site that recognises a room wrapper was grepped
+(`VkRoom::of`, casts to the `PyRoom*` classes, `in_room`, `airbox_wrap::` outside that file). One
+site: the mallet. (The bridges accept room wrappers too, but they are already on the list.) So the
+hole after this batch is **the three bridges and the mallet's room mode**. The mallet file was not
+retired here: the batch plan the human approved had five steps and the mallet was not among them.
+When it is ported, `RoomGrid` already has everything it composes, and the binding's
+pointer-identity check for a swapped factorization has a clean native analogue — a generation
+counter that `RoomGrid::refactor` bumps.
+
+### 17.6 The retirement rule, discharged
+
+`tests/test_airbox_vk.py` 26 -> 9. The seventeen that went are every test whose referent is the
+wrapper; the nine that stay drive `StringVKPlateBridge` (§14.3's rule). The file's docstring is
+rewritten to say so, and its helpers and imports shrink to what the chain uses.
+
+| retired | native bar |
+|---|---|
+| `test_nonlinear_false_is_the_linear_room_loaded_plate_bit_identical` (8 cases) | same name, all 8 cases, plus the room's pressure field |
+| `test_the_loaded_factorization_matches_the_linear_one` | same name |
+| `test_the_loaded_factorization_is_never_assigned_to_the_model` | same name — **behavioural**, see below |
+| `test_the_nonlinear_path_runs_inside_the_load` | same name |
+| `test_zero_area_reduces_to_the_bare_vk_plate` | same name, plus `n_solves` |
+| `test_ledgers_agree_and_the_channel_is_not_vacuous` (12) | same name |
+| `test_the_piston_is_the_free_plate_s_fat_channel` | same name |
+| `test_the_scene_total_is_flat` | same name |
+| `test_the_lossy_scene_total_is_monotone` | same name |
+| `test_energy_is_an_override_and_not_a_delegation` | same name |
+| `test_the_coupled_residual_at_two_timesteps` (8, three controls each) | same name |
+| `test_couple_tol_moves_the_total_and_not_the_money_test` (`slow`) | same name — **not** ignored natively |
+| `test_the_room_seam_writes_every_read_out_the_bare_step_writes` | same name, plus `n_fallbacks` |
+| `test_a_short_capped_room_step_reports_capped_and_not_expansive` | same name |
+| `test_the_loaded_step_honours_couple_method` | same name |
+| `test_newton_carries_a_strike_that_kills_the_loaded_picard_loop` | same name |
+| `test_refuses_a_sample_rate_mismatch` | same name, plus "a refused wrapper claims nothing" |
+
+Two carried differently, and neither is a weakening:
+
+* **"Never assigned to the model"** asserted `plate._lu is not inst._lu_loaded`, an identity.
+  Natively the loaded factorization is an *argument* to `advance` and the plate's own is a field of
+  its parameters, so identity is structural. What is left to assert is the behaviour the identity
+  protected: after a run in the room, the plate's own operator is still the one a fresh plate
+  builds, and it differs from the loaded one.
+* **`_refactor`**, the reference's hand re-derivation of `A_loaded` for the half-load control,
+  becomes `RoomGrid::refactor` after rescaling the port's load — the wrapper's one assembly
+  spelling, as §16.8 did for the linear tier.
+
+The `slow` bar runs in ordinary CI natively: the whole file is 0.7 s in release and 9 s in debug.
+
+### 17.7 Cost
+
+`tests/test_airbox_vk.py` was the most expensive file in the airbox family (65.2 s in CI). The nine
+chain tests are the larger half of it — measured in one process against the old file, the remainder
+costs 0.52 of the whole — so `scripts/shard_costs.json` carries **33.9 s**, an estimate for the next
+CI durations run to replace.
+
+### 17.8 The next batch
+
+The hole is the three bridges in `crates/physsynth-py/src/connection.rs` (`StringBodyBridge`,
+`StringPlateBridge`, `StringVKPlateBridge`) and the mallet's room mode. The mallet is the small one
+and stands on nothing unported, so it can go first or alongside; the bridges are what every
+remaining chain test in `test_airbox_vk.py`, `test_airbox_surface.py` and `test_airbox_dipole.py`
+waits on.

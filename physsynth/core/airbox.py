@@ -207,12 +207,12 @@ from physsynth_rs import (  # noqa: E402
 # factorization here would break all four anchors for a reason having nothing to do with this
 # module (measured before the fix: 15 tests, `array_equal` failing at ~1e-16).
 #
-# `splu` is looked up as a **module global at call time**, by the Rust wrappers in
-# `crates/physsynth-py/src/airbox_wrap.rs` and by `test_airbox_vk.py`, which re-derives a wrapper's
-# factorization and must use the same factorizer it did. So this name is load-bearing in both
-# directions and stays exactly where it is. (It used to name `test_airbox_dipole.py` and
-# `test_airbox_surface.py` too; retirement plan section 16 took their wrapper halves native and
-# neither file re-derives anything any more.)
+# `splu` is looked up as a **module global at call time** by the Rust wrappers in
+# `crates/physsynth-py/src/airbox_wrap.rs`, so this name is load-bearing and stays exactly where it
+# is. (It used to name three test files that re-derived a wrapper's factorization and had to use
+# the same factorizer -- `test_airbox_dipole.py` and `test_airbox_surface.py` until retirement plan
+# section 16, `test_airbox_vk.py` until section 17. All three wrapper halves are native now and no
+# test re-derives anything.)
 
 
 class _Fill:

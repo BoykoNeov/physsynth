@@ -66,7 +66,13 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    `atol=1e-18` was never an absolute claim — read every carried `allclose` for the tolerance it did
    not write down; (e) two more "no analogue" verdicts, of different kinds — a test that works by
    **replacing a live object's methods** has none once the object is a value, and a test asserting an
-   attribute is **absent** becomes a type. A Python
+   attribute is **absent** becomes a type. **§17 finished the wrapper tier**: the von Kármán seam is a
+   third seam of the same generic (`VkSeam`, one provided `GridSeam::advance` absorbing the fact that
+   its solve iterates), `tests/test_airbox_vk.py` 26 -> 9, and over 8 scenes × 120 steps every state
+   array **and every per-step iteration count** matched the binding to the bit — the many-solves-per-
+   step loop did not break SuperLU agreement. It also found a piece of the hole **no class count
+   could see**: `MalletVKPlate`'s gong-in-a-room *mode* lives only in the binding, inside an existing
+   class. **The hole is now the three bridges plus the mallet's room mode** (§17.5). A Python
    **plotting island** was chosen and withdrawn the same day: there is none, the plotting
    capability leaves, and where a diagnostic drew a figure Rust emits the data instead. The
    JavaScript front-end (`web/static/`) is not Python and is not in scope. **The rest of this

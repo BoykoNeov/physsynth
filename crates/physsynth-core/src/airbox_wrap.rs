@@ -2,9 +2,9 @@
 //!
 //! The retirement's second batch opens this module with one class, [`RoomLoadedBody`]: a
 //! [`crate::body::ModalBody`] radiating into an [`crate::airbox::AirBox`] through a
-//! [`crate::airbox_port::RoomPort`]. The six *grid* wrappers (the plate, the von Kármán plate and
-//! the membrane, baffled and suspended) are still only in the binding, together with the
-//! distributed ports they stand on; they land in later batches and belong here when they do.
+//! [`crate::airbox_port::RoomPort`]. The six *grid* wrappers the reference has (the plate, the von
+//! Kármán plate and the membrane, baffled and suspended) followed in two later batches, as one
+//! generic type, [`RoomGrid`], over three seams: [`PlateSeam`], [`MembraneSeam`] and [`VkSeam`].
 //!
 //! # Why a wrapper exists at all
 //!
@@ -37,7 +37,7 @@ use crate::airbox_port::{InteriorSurfacePort, PortError, RoomPort, Spreading, Su
 use crate::body::ModalBody;
 use crate::fmt::py_float;
 use crate::membrane::{self, Membrane};
-use crate::plate::{self, Boundary, Plate};
+use crate::plate::{self, Boundary, Plate, VkCoupledStep, VkPlate};
 use crate::reduce;
 use crate::sparse::Csr;
 use crate::sparse_lu::{SparseLu, SparseLuError};
@@ -310,8 +310,9 @@ impl RoomLoadedBody {
 // -- the grid tier ------------------------------------------------------------------------------
 //
 // The reference's six `RoomLoaded*` / `RoomSuspended*` classes, and the three `_*Surface` adapters
-// underneath them, land here. The linear pair -- a `Plate` and a `Membrane` -- is this batch; the
-// von Karman seam is the next one.
+// underneath them, land here: the linear pair -- a `Plate` and a `Membrane` -- in one batch, the
+// von Karman seam in the next. The von Karman seam is the one whose solve iterates, and the trait
+// absorbs that difference in exactly one provided method, `GridSeam::advance`.
 //
 // # Six classes, two types
 //
@@ -321,8 +322,8 @@ impl RoomLoadedBody {
 // name that differs (`plate` vs `membrane`). The binding says so in its own comment -- "the
 // reference's six wrappers are one class with two enum arms". Here that is expressible: the tier
 // is [`RoomGrid<S>`], generic over the seam, with the tier itself carried by [`GridPort`]. So the
-// six become `RoomGrid<PlateSeam>` and `RoomGrid<MembraneSeam>`, each with a `baffled` and a
-// `suspended` constructor.
+// six become `RoomGrid<PlateSeam>`, `RoomGrid<MembraneSeam>` and `RoomGrid<VkSeam>`, each with a
+// `baffled` and a `suspended` constructor.
 //
 // This is not a simplification of the physics and it loses no distinction the reference made:
 // `test_airbox_vk.py` anchors the two tiers against each other with `array_equal`, which is only
@@ -399,6 +400,25 @@ pub trait GridSeam {
     /// Roll `u^{n-1} <- u^n <- u^{n+1}` and refresh whatever the model caches from it.
     fn commit(&mut self, u_next: Vec<f64>);
 
+    /// Solve the loaded system for `u^{n+1}`, commit it, and return the committed field.
+    ///
+    /// The one place the seams genuinely differ in *shape*, which is why it is a provided method
+    /// rather than a member every seam must spell. The linear seams take the default: one
+    /// back-substitution, one [`GridSeam::commit`]. The von Karman seam overrides it, because its
+    /// solve **iterates** on the loaded operator and its commit rolls a second history (the stress
+    /// function) and six read-outs -- see [`VkSeam`].
+    ///
+    /// The field returned must be the one that was committed, because [`RoomGrid::finish`] builds
+    /// the room's injection from it.
+    ///
+    /// # Errors
+    /// If a back-substitution fails -- unreachable for a factorization [`RoomGrid`] built.
+    fn advance(&mut self, lu: &SparseLu, rhs: Vec<f64>) -> Result<Vec<f64>, WrapError> {
+        let u_next = lu.solve(&rhs)?;
+        self.commit(u_next.clone());
+        Ok(u_next)
+    }
+
     /// The model's own discrete energy (Joules), without the coupling channel.
     fn energy(&self) -> f64;
 
@@ -433,6 +453,31 @@ fn masked_coords(x: &[f64], y: &[f64], mask: &crate::ops2d::Mask) -> Vec<[f64; 2
     coords
 }
 
+/// The unloaded theta-scheme matrix of a plate: `(1 + sigma k) I + theta k^2 kappa^2 B`
+/// supported, the same with `W` for `I` and `K` for `B` free.
+///
+/// Shared by [`PlateSeam`] and [`VkSeam`] rather than written twice, because a von Karman plate
+/// with its nonlinearity off is anchored to the linear plate under `array_equal`, and one spelling
+/// cannot disagree with itself.
+fn theta_matrix(p: &plate::Params) -> Csr {
+    let sk = p.sigma * p.k;
+    let coeff = p.theta * p.k * p.k * p.kappa * p.kappa;
+    let left = match p.boundary {
+        Boundary::Supported => Csr::identity(p.n_live),
+        Boundary::Free => p.mass.clone().expect("the free branch assembles W"),
+    };
+    left.scaled(1.0 + sk).add(&p.stiffness.scaled(coeff))
+}
+
+/// The per-node areas a plate spreads onto the air: `h^2` everywhere supported, the lumped
+/// quadrature weights `W` free (`h^2`, `h^2/2`, `h^2/4` -- no dead rim).
+fn plate_areas(p: &plate::Params) -> Vec<f64> {
+    match p.boundary {
+        Boundary::Supported => vec![p.h * p.h; p.n_live],
+        Boundary::Free => p.w.clone(),
+    }
+}
+
 /// The seam on the [`Plate`] side -- model #5, and both of its boundary branches.
 #[derive(Debug, Clone)]
 pub struct PlateSeam {
@@ -452,10 +497,7 @@ impl PlateSeam {
     /// (`h^2`, `h^2/2`, `h^2/4` -- no dead rim), and because `W` sits *inside* `A` and is divided
     /// out by the solve, the denominator is the areal density alone.
     pub fn new(plate: Plate) -> PlateSeam {
-        let areas = match plate.p.boundary {
-            Boundary::Supported => vec![plate.p.h * plate.p.h; plate.p.n_live],
-            Boundary::Free => plate.p.w.clone(),
-        };
+        let areas = plate_areas(&plate.p);
         let denominator = plate.p.force_denominator();
         PlateSeam {
             plate,
@@ -498,14 +540,7 @@ impl GridSeam for PlateSeam {
     /// `B` free -- the reference's own operand order, which is what keeps a von Karman plate with
     /// its nonlinearity switched off a byte-exact reduction rather than a second transcription.
     fn a_bare(&self) -> Csr {
-        let p = &self.plate.p;
-        let sk = p.sigma * p.k;
-        let coeff = p.theta * p.k * p.k * p.kappa * p.kappa;
-        let left = match p.boundary {
-            Boundary::Supported => Csr::identity(p.n_live),
-            Boundary::Free => p.mass.clone().expect("the free branch assembles W"),
-        };
-        left.scaled(1.0 + sk).add(&p.stiffness.scaled(coeff))
+        theta_matrix(&self.plate.p)
     }
 
     fn u_prev(&self) -> &[f64] {
@@ -645,6 +680,141 @@ impl GridSeam for MembraneSeam {
 
     fn set_state(&mut self, u0: &[f64], v0: &[f64]) {
         self.membrane.set_state(u0, v0);
+    }
+}
+
+/// The seam on the [`VkPlate`] side -- model #6, the gong and the cymbal.
+///
+/// Three things set it apart from [`PlateSeam`], and they are the whole of this batch's design:
+///
+/// * **The solve iterates.** [`GridSeam::advance`] is overridden to run the model's own coupled
+///   step -- [`plate::vk_step_with`], Picard, Newton or `auto` as the plate was built -- against
+///   the **loaded** factorization and the room's right-hand side, through
+///   [`VkCoupledStep::with_rhs`]. [`VkCoupledStep::new`] would be the plausible slip: it installs
+///   the plate's *own* operator and right-hand side, and the result is a gong that iterates happily
+///   and simply is not in the room. The `nonlinear = false` anchor against [`PlateSeam`] is the bar
+///   that sees it.
+/// * **The commit rolls two histories and six read-outs**, and it does so through
+///   [`VkPlate::record`] -- the very method the bare plate's own step commits through. The
+///   binding's seam once kept its own list of assignments and missed two of them.
+/// * **The force is added outside the plate's `step_rhs`**, by [`add_f_ext`], because the linear
+///   right-hand side a von Karman plate exposes carries no force. So the equality of this seam's
+///   force path with [`PlateSeam`]'s is a measured fact, asserted with `sigma > 0` and a live
+///   `f_ext`, not a consequence of sharing code.
+///
+/// # One deliberate departure from the reference
+///
+/// On the **linear** path (`nonlinear = false`) the model's step returns no stress function. The
+/// binding's seam then handed back the model's own `F` and rolled it anyway, `F_prev <- F`. This
+/// seam follows the bare plate instead and leaves both levels alone. The two agree whenever the
+/// cache holds what the model put there (zeros, on that path); they differ only for a caller who
+/// wrote `F` by hand, and there the bare plate's behaviour is the one a room-loaded plate reducing
+/// to the bare one has to have.
+#[derive(Debug, Clone)]
+pub struct VkSeam {
+    /// The resonator. Public because a caller reads its state and its iteration read-outs
+    /// directly, and Rust has no attribute fallback to delegate through.
+    pub plate: VkPlate,
+    areas: Vec<f64>,
+    denominator: f64,
+}
+
+impl VkSeam {
+    /// Wrap `plate`.
+    ///
+    /// The denominator is read off the model's **field**, `force_denominator = rho_s h^2`
+    /// supported and `rho_s` free -- the areal density, never `rho_v`. That substitution is the
+    /// one this model makes and every energy report in the repo is blind to it: written the other
+    /// way the air load is a thousand times too weak at `e = 1 mm` and every ledger still
+    /// telescopes.
+    pub fn new(plate: VkPlate) -> VkSeam {
+        let areas = plate_areas(&plate.p.lin);
+        let denominator = plate.p.force_denominator;
+        VkSeam {
+            plate,
+            areas,
+            denominator,
+        }
+    }
+}
+
+impl GridSeam for VkSeam {
+    fn label(&self) -> &'static str {
+        "plate"
+    }
+
+    fn k(&self) -> f64 {
+        self.plate.p.lin.k
+    }
+
+    fn fs(&self) -> f64 {
+        self.plate.p.lin.fs
+    }
+
+    fn n_live(&self) -> usize {
+        self.plate.p.lin.n_live
+    }
+
+    fn coords(&self) -> Vec<[f64; 2]> {
+        let p = &self.plate.p.lin;
+        masked_coords(&p.x, &p.y, &p.mask)
+    }
+
+    fn areas(&self) -> &[f64] {
+        &self.areas
+    }
+
+    fn denominator(&self) -> f64 {
+        self.denominator
+    }
+
+    /// The linear plate's own matrix -- the same function [`PlateSeam`] calls.
+    fn a_bare(&self) -> Csr {
+        theta_matrix(&self.plate.p.lin)
+    }
+
+    fn u_prev(&self) -> &[f64] {
+        &self.plate.u_prev
+    }
+
+    /// [`VkPlate::linear_rhs`] plus the force path.
+    fn rhs(&self, f_ext: Option<&[f64]>) -> Vec<f64> {
+        let k = self.plate.p.lin.k;
+        add_f_ext(self.plate.linear_rhs(), f_ext, k * k, self.denominator)
+    }
+
+    /// Roll the displacement history alone -- the linear path's commit, and what a caller that
+    /// solved the system itself gets. [`GridSeam::advance`] does not come through here.
+    fn commit(&mut self, u_next: Vec<f64>) {
+        self.plate.u_prev = std::mem::replace(&mut self.plate.u, u_next);
+        self.plate.n += 1;
+    }
+
+    /// The model's own coupled step, against the **loaded** operator and the room's right-hand
+    /// side, committed through [`VkPlate::record`].
+    fn advance(&mut self, lu: &SparseLu, rhs: Vec<f64>) -> Result<Vec<f64>, WrapError> {
+        let out = {
+            let pl = &self.plate;
+            let ctx = VkCoupledStep::with_rhs(rhs, &pl.u_prev, &pl.f_prev, &pl.p, lu);
+            plate::vk_step_with(&ctx, &pl.u, &pl.u_prev, &pl.f)?
+        };
+        let u_next = out.u.clone();
+        self.plate.record(out);
+        Ok(u_next)
+    }
+
+    fn energy(&self) -> f64 {
+        self.plate.energy()
+    }
+
+    /// # Panics
+    /// If the Airy factorization cannot back-substitute, which it always can for the matrix
+    /// [`plate::VkParams::new`] factored -- the trait's `set_state` has no error channel, and a
+    /// stress cache left unseeded would be a wrong trajectory rather than a refusal.
+    fn set_state(&mut self, u0: &[f64], v0: &[f64]) {
+        self.plate
+            .set_state(u0, v0)
+            .expect("the Airy factorization back-substitutes");
     }
 }
 
@@ -1063,9 +1233,9 @@ impl<S: GridSeam> RoomGrid<S> {
     pub fn step(&mut self, room: &mut AirBox, f_ext: Option<&[f64]>) -> Result<(), WrapError> {
         let half = self.prepare(room)?;
         let rhs = self.loaded_rhs(&half, f_ext);
-        let u_next = self.lu_loaded.solve(&rhs)?;
-        // The load was IN the solve, so the seam's own caches carry it with no post-solve refresh.
-        self.seam.commit(u_next.clone());
+        // The load is IN the solve, so the seam's own caches carry it with no post-solve refresh.
+        // `seam` and `lu_loaded` are disjoint fields, so the two borrows coexist.
+        let u_next = self.seam.advance(&self.lu_loaded, rhs)?;
         self.finish(room, &half, &u_next)
     }
 

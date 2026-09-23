@@ -927,8 +927,9 @@ pub fn grain_ratios_from_material(
 ///
 /// The four `_`-prefixed methods below are `airbox.py`'s, not this class's own convenience. They
 /// were the seam's per-sweep arithmetic until `docs/dev/air-box-vk-newton-plan.md` Part 2 pointed
-/// `_VKPlateSurface.solve` at this class's own kernel instead; they stay exposed because
-/// `tests/test_airbox_vk.py` reassembles a sweep out of them by hand to check the seam against.
+/// `_VKPlateSurface.solve` at this class's own kernel instead. `_linear_rhs` is still called by
+/// that seam; the other three lost their last caller when retirement plan §17 took
+/// `tests/test_airbox_vk.py`'s coupled-residual bar native, and they leave with the binding.
 #[pyclass(name = "VKPlate", module = "physsynth_rs")]
 pub struct PyVKPlate {
     p: core::VkParams,
