@@ -2040,21 +2040,6 @@ def make_suspended_plate(
     )
 
 
-def surface_scene_energy(*instruments) -> float:
-    """The conserved total of a surface scene: ``sum_j inst_j.energy() + room.energy()``.
-
-    :func:`room_scene_energy` one tier up — and carrying the same warning, sharpened by batch 3's
-    own measurement: this total is **necessary and not sufficient**. It stays flat (4.9e-15) with a
-    deliberately wrong ``R_j`` that leaves the two ledgers 18% apart, because each side's ledger
-    telescopes against whatever pressure *it* used. Assert it, and assert ``radiated == injected``
-    beside it.
-    """
-    room = instruments[0].room
-    if any(inst.room is not room for inst in instruments):
-        raise ValueError("surface_scene_energy expects instruments sharing a single room.")
-    return sum(inst.energy() for inst in instruments) + room.energy()
-
-
 # -- air-box batch 6: the von KÁRMÁN plate as a baffled and suspended surface ---------------
 # Batches 3/4's room and plate span, with model #6 in place of model #5. The material is
 # test_vk_free.py's canonical steel sheet, so the nonlinearity's amplitude scale is the familiar

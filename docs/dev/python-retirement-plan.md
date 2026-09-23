@@ -1487,8 +1487,9 @@ To make sure it is the only one, every binding site that recognises a room wrapp
 (`VkRoom::of`, casts to the `PyRoom*` classes, `in_room`, `airbox_wrap::` outside that file). One
 site: the mallet. (The bridges accept room wrappers too, but they are already on the list.) So the
 hole after this batch is **the three bridges and the mallet's room mode**. The mallet file was not
-retired here: the batch plan the human approved had five steps and the mallet was not among them.
-When it is ported, `RoomGrid` already has everything it composes, and the binding's
+retired here. That is **not** a decision to leave it: the plan this batch ran on simply did not list
+it, and whether it goes next, rides with the bridges, or waits is the human's call and is still
+open. When it is ported, `RoomGrid` already has everything it composes, and the binding's
 pointer-identity check for a swapped factorization has a clean native analogue — a generation
 counter that `RoomGrid::refactor` bumps.
 
