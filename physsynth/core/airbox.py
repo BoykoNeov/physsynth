@@ -211,10 +211,9 @@ from physsynth_rs import (  # noqa: E402
 # `crates/physsynth-py/src/airbox_wrap.rs`, so this name is load-bearing and stays exactly where it
 # is. (It used to name three test files that re-derived a wrapper's factorization and had to use
 # the same factorizer -- `test_airbox_dipole.py` and `test_airbox_surface.py` until retirement plan
-# section 16, `test_airbox_vk.py` until section 17. All three wrapper halves are native now. One
-# test file still re-derives a wrapper's factorization -- `test_mallet_room_gong.py`, twice, to hand
-# the mallet a swapped operator -- but it imports SciPy's `splu` directly rather than this name, so
-# it does not lean on it.)
+# section 16, `test_airbox_vk.py` until section 17. All three wrapper halves are native now, and the
+# last file that re-derived a wrapper's factorization, `test_mallet_room_gong.py`, retired whole in
+# section 18; it had imported SciPy's `splu` directly and never leaned on this name.)
 
 
 class _Fill:

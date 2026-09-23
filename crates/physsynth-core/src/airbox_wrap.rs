@@ -964,6 +964,9 @@ pub struct RoomGrid<S: GridSeam> {
     nnz_growth: f64,
     lu_loaded: SparseLu,
     lu_nnz: usize,
+    /// How many times `lu_loaded` has been rebuilt since construction -- see
+    /// [`RoomGrid::generation`].
+    generation: u64,
     radiated_energy: f64,
     nodal_volume_velocity: Vec<f64>,
     pbar: Vec<f64>,
@@ -1042,6 +1045,7 @@ impl<S: GridSeam> RoomGrid<S> {
             nnz_growth,
             lu_loaded,
             lu_nnz: l_nnz + u_nnz,
+            generation: 0,
             radiated_energy: 0.0,
             nodal_volume_velocity: vec![0.0; n_ledger],
             pbar: vec![0.0; n_ledger],
@@ -1071,7 +1075,23 @@ impl<S: GridSeam> RoomGrid<S> {
         let (l_nnz, u_nnz) = self.lu_loaded.nnz();
         self.lu_nnz = l_nnz + u_nnz;
         self.t_transpose = self.port.t().transpose();
+        self.generation += 1;
         Ok(())
+    }
+
+    /// Which factorization `lu_loaded` is: `0` as built, and one more after every
+    /// [`RoomGrid::refactor`].
+    ///
+    /// For a client that derives something from the factorization and has to know when it went
+    /// stale. The mallet is the one: its chord freezes a drive-point column off `A_loaded`, and a
+    /// column left on an operator nothing inverts any more costs about five times the outer
+    /// iterations while every answer stays right, so nothing but a stamp would notice. The binding
+    /// compared the factorization object's **pointer**, because a Python caller could assign a new
+    /// one; here `refactor` is the only way in, so a counter it bumps is the whole analogue.
+    ///
+    /// Bumped only on success: a refactor that fails leaves the old factorization in place.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// The timestep (s).

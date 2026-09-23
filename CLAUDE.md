@@ -72,7 +72,13 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    array **and every per-step iteration count** matched the binding to the bit — the many-solves-per-
    step loop did not break SuperLU agreement. It also found a piece of the hole **no class count
    could see**: `MalletVKPlate`'s gong-in-a-room *mode* lives only in the binding, inside an existing
-   class. **The hole is now the three bridges plus the mallet's room mode** (§17.5). A Python
+   class. **§18 took that mode** as its own native type, `MalletVkRoom` (a `RoomGrid<VkSeam>` plus a
+   generation stamp `RoomGrid::refactor` bumps, in place of the binding's pointer check), and
+   `tests/test_mallet_room_gong.py` retired **whole**: six scenes matched the binding to the bit in
+   every state quantity and count; the native bare mallet's hand-written commit was §17.1's drift
+   a second time; and the retired tangent bar could not see its own defect, because a bar that
+   asserts a *difference* from a twin differing in two ways certifies neither (finding #78).
+   **The hole is now only the three bridges** (§18.7). A Python
    **plotting island** was chosen and withdrawn the same day: there is none, the plotting
    capability leaves, and where a diagnostic drew a figure Rust emits the data instead. The
    JavaScript front-end (`web/static/`) is not Python and is not in scope. **The rest of this
@@ -208,7 +214,7 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    list must stay empty, so it cannot reach a Bessel function) while its Python name lives in a
    `core/` module. **The crate a function is implemented in and the module its name lives in are
    separate questions** (§37.7).
-   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **seventy-seven**
+   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **seventy-eight**
    findings about when two implementations agree to the bit, when they cannot, and what a
    *deletion* breaks that a port does not (fed-back reductions, libm vs NumPy's own
    transcendentals, LLVM's constant fold, `np.sum`'s pairwise cutoff, descriptors that take a

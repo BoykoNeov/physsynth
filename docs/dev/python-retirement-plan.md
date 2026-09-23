@@ -1545,3 +1545,138 @@ nothing unported, and retires most of `tests/test_mallet_room_gong.py`. After it
 the three bridges in `crates/physsynth-py/src/connection.rs` (`StringBodyBridge`,
 `StringPlateBridge`, `StringVKPlateBridge`) — what every remaining chain test in
 `test_airbox_vk.py`, `test_airbox_surface.py` and `test_airbox_dipole.py` waits on.
+
+## 18. Phase C batch 6, done — the mallet's room mode, and the hole is the three bridges
+
+The batch §17.8 named, on its own (the human's call). The gong-in-a-room step that lived only in
+the binding (`step_in_room` in `crates/physsynth-py/src/mallet.rs`) re-homes as its own native type,
+`MalletVkRoom` in `crates/physsynth-core/src/mallet.rs`, holding a `RoomGrid<VkSeam>`. Ten native
+bars in `crates/physsynth-core/tests/mallet_room_gong.rs`; `tests/test_mallet_room_gong.py` retires
+**whole** — §17.8 said "most", and every one of its thirteen functions (21 collected tests) turned
+out to have either a native bar or a recorded verdict (§18.5). Its helpers, `make_mallet_room_gong`
+and the `MALLET_ROOM_*` constants, had no other caller and went with it.
+
+### 18.1 A type, not a mode
+
+The binding recognised a room wrapper at construction and branched inside one class. Natively the
+two are different types with different step signatures — the bare gong owns its plate and steps with
+no argument, the room gong holds a wrapper that never owns its room and so steps with
+`step(&mut AirBox)`, as `RoomGrid::step` does. One class with a branch would have had to carry an
+`Option<&mut AirBox>` whose `None` is an error in one mode and required in the other. The step is the
+binding's five phases unchanged: refresh the column if stale, `prepare` once, the chord (whose trial
+solver is `loaded_rhs` + `VkCoupledStep::with_rhs` against `lu_loaded`, the same pair
+`VkSeam::advance` uses), one commit, `finish` once from the field read back off the plate.
+
+Two pieces of the binding had no clean native shape and each got one:
+
+* **The swapped-factorization check** compared the Python factorization object's pointer each
+  step, because a caller could assign `_lu_loaded`. Natively `RoomGrid::refactor` is the only way the
+  factorization changes, so it now bumps `RoomGrid::generation()` and the mallet compares stamps —
+  §17.5's prediction, taken as written.
+* **The error channel** needed `ParkedErr` in the binding because two failures inside the trial
+  solver were Python exceptions. Natively `loaded_rhs` cannot fail, so the error is a plain two-arm
+  enum, `RoomGongError { Room(WrapError), Gong(VkContactError) }`.
+
+The bare mallet was **not** made generic over "a plate or a room". Its twelve bars
+(`mallet_gong.rs`) did not move, and the one piece the two must share — the commit — is a function
+both call (§18.3).
+
+### 18.2 The one-time check: six scenes, every state quantity and every count exact
+
+The binding's side was dumped from Python as raw doubles and replayed natively in a scratch crate
+under `W:\temp\claude\mallet_room`, with the wheel reinstalled first. Compared every step: the
+plate's `w` and `F`, the room's whole pressure field, the per-node volume velocity, the outer
+residual, contact force, `z_H`, penetration, `room.injected`, `last_residual`, `g_s`, `mal.energy()`,
+and eleven counts and flags (`n_outer`, `n_solves`, `inner_iters`, `n_fallbacks`, the three
+convergence flags, `in_contact`, and the plate's `n_iters`, `n_fallbacks`, `converged`). The
+constructor's whole influence column was compared too.
+
+| scene | steps | differing |
+|---|---|---|
+| baffled, supported, lossless, `auto` | 200 | **0** |
+| suspended, same | 200 | **0** |
+| baffled, `nonlinear = false` | 200 | **0** |
+| suspended, a miss (`v0 = -1`, `gap = 0.01`, 2e initial deflection) | 120 | **0** |
+| suspended, **free** edge, `sigma = 2`, **Newton** | 150 | **0** |
+| baffled, factorization swapped to the plate's own at step 60 | 200 | **0** — `g_s` refreshed on the same step, to the bit |
+| all six | `radiated_energy` only | 20–129 steps, ≤ 3.2e-16 of the ledger's size |
+
+Identical in the debug and release profiles. The one difference is §16.3's coupling-ledger `ddot`
+again, which does not feed back; `mal.energy()`, which *contains* the ledger, was exact on every
+step, and so was the room's own booking of the same identity. Measured relative to the value
+instead of to its size, the suspended scene reads 2.5e-14 — because the ledger passes near zero
+there, which is the findings ledger's "what is the bar divided by" (#30), not a larger error.
+
+### 18.3 A second hand-written commit, found in the native bare mallet
+
+`MalletVkPlate::step` in the core crate rolled the plate's histories and wrote **three** of its six
+read-outs by hand (`n_iters`, `converged`, `n_solves`), leaving `last_residual`, `residual_ratio` and
+`n_fallbacks` at whatever the previous bare step had left. The binding's commit wrote all six — the
+outer residual as `last_residual`, `NaN` as `residual_ratio`, the summed `n_fallbacks`. It is
+§17.1's drift exactly, one type over, and invisible to every bar the bare gong had because none of
+them reads those three after a mallet step. Both mallets now convert their `VkContactStep` with one
+function (`plate_step_of`) and commit through `VkPlate::record`, and
+`both_mallets_write_every_read_out_through_the_one_commit_path` seeds all six with garbage first so
+an untouched field cannot pass by coincidence.
+
+### 18.4 Four deliberate breakages — and the retired file's tangent bar could not see its own defect
+
+| breakage | bars that fail |
+|---|---|
+| no retarget at construction (the chord frozen on the bare column) | 4: the loaded column, `n_outer == 1`, the rebuild, the tangent |
+| no generation check (a rebuilt factorization never noticed) | 1: the rebuild |
+| `finish` handed the field from **before** the commit | 3: the committed field, the miss, the scene total |
+| the tangent's operator left on the plate's own factorization | 1: the tangent — **after a rewrite; 0 as carried** |
+
+The last row is the batch's finding (#78). The Python bar for the exact tangent compared the room's
+tangent with a bare gong's and asserted they **differ**. They do — but the retargeted *column* alone
+makes them differ, so the bar passed with the *operator* unrouted, which is the precise defect the
+mallet-room batch recorded as its own scar (a loaded right-hand side inverted against the bare
+Jacobian). Carried over faithfully, the native bar was green under that mutation too. It is now a
+**positive** oracle: `response = -d w_node / d f` at the root, so a central difference of the room's
+own trial solve from the pre-step state has to match it. At the step of largest force, with
+`delta = 1e-4 f`, routed agrees to 9.5e-11 (baffled) and 2.6e-12 (suspended); unrouted misses by
+9.1e-6 in both. The bar is 1e-8, about a hundred times clear of each. The by-difference assertion
+is kept beside it.
+
+A fifth breakage was not run, because it cannot be expressed: driving the wrapper once per trial now
+**refuses** at the second `inject` (`require_ready`), so the miscount the Python file was designed
+around is a runtime error natively. The injection-count bar is kept as a statement of the design,
+and its second half asserts the refusal and that a refused step mutates nothing.
+
+### 18.5 The retirement rule, discharged
+
+| retired (`tests/test_mallet_room_gong.py`) | native bar, or verdict |
+|---|---|
+| `test_the_wrapper_is_what_mal_plate_returns` (2) | **type** — `MalletVkRoom` holds a `RoomGrid<VkSeam>`; there is no second object to hand back (§14.2) |
+| `test_a_bare_gong_is_unchanged_by_the_widening` | **type** — two types, no widened cast |
+| `test_a_linear_plate_still_gets_the_message_that_names_MalletPlate` | **type** here (a `RoomGrid<PlateSeam>` does not compile); the message itself is still asserted on the bare class by `tests/test_mallet_gong.py` |
+| `test_the_chord_freezes_the_LOADED_column_not_the_plates_own` (2) | `the_chord_freezes_the_loaded_column_not_the_plates_own` |
+| `test_nonlinear_false_in_a_room_exits_the_chord_at_one_iteration` (2) | same name, with the rate arithmetic |
+| `test_a_swapped_factorization_refreshes_the_frozen_column` | `a_rebuilt_factorization_refreshes_the_frozen_column` — through `refactor` and the stamp, plus "no rebuild, no refresh" and "stale until the next step" |
+| `test_the_exact_tangent_is_taken_against_the_LOADED_operator` | same name — **sharpened** to a finite-difference oracle, both mounts (§18.4) |
+| `test_a_mallet_that_never_lands_leaves_the_room_scene_bit_identical` (2) | same name, plus `F` |
+| `test_the_port_is_injected_once_per_step_however_long_the_chord_runs` (2) | same name — counted in `room.pending_ports`, whose per-injection size is read off the bare wrapper (a suspended port queues a `-q`/`+q` pair); plus the refusal |
+| `test_the_room_is_driven_by_the_COMMITTED_field_not_by_a_trial` (2) | same name |
+| `test_the_rooms_load_terms_do_not_move_across_the_chord` (2) | **no analogue** — it counted calls by replacing the port's methods (§16.6's first kind); `step` calls `prepare` once and hands the chord the half by reference |
+| `test_the_scene_total_is_conserved_through_the_strike` (2) | same name |
+| `test_the_delegated_plate_energy_is_the_wrong_number_and_the_wrapper_knows_it` | `the_plates_own_energy_is_the_wrong_number_and_the_wrapper_knows_it` |
+| — | **new**: `both_mallets_write_every_read_out_through_the_one_commit_path` (§18.3) |
+
+The whole native file runs in 3.9 s in debug. The Python file was never in `scripts/shard_costs.json`,
+so nothing there moves.
+
+### 18.6 What stays in the binding
+
+`PyMalletVKPlate`'s room arm — `VkRoom::of` in the constructor, `step_in_room`, `loaded_influence`,
+`ParkedErr` and the routed tangent — is left as it is. After this batch nothing in Python drives it
+and nothing tests it; it goes when `crates/physsynth-py` does. Deleting it now would change what the
+Python class accepts, which is not this batch's call, and would buy nothing the crate's deletion
+does not.
+
+### 18.7 The next batch
+
+**The three bridges** in `crates/physsynth-py/src/connection.rs` — `StringBodyBridge`,
+`StringPlateBridge`, `StringVKPlateBridge` — and with them the chain tests still in
+`tests/test_airbox_vk.py` (9), `tests/test_airbox_surface.py` and `tests/test_airbox_dipole.py`.
+That is the whole hole: after the bridges, nothing is implemented only in the binding.

@@ -45,6 +45,8 @@
 //! `sqrt(K/M)` with exact velocity reversal. It owns no field and performs no reduction, so unlike
 //! the coupled model it is expected to be bit-identical in *every* observable, its energy included.
 
+use crate::airbox::AirBox;
+use crate::airbox_wrap::{RoomGrid, VkSeam, WrapError};
 use crate::collision::{self, contact_potential, ContactError, ContactParams, PowPath};
 use crate::krylov;
 use crate::membrane;
@@ -1742,14 +1744,7 @@ impl MalletVkPlate {
             &self.plate.p,
             &mut self.state,
         )?;
-        self.plate.u_prev = std::mem::replace(&mut self.plate.u, out.u.clone());
-        if let Some(f_new) = out.f_full.clone() {
-            self.plate.f_prev = std::mem::replace(&mut self.plate.f, f_new);
-        }
-        self.plate.n += 1;
-        self.plate.n_iters = out.inner_iters;
-        self.plate.converged = out.inner_converged;
-        self.plate.n_solves = out.n_solves;
+        self.plate.record(plate_step_of(&out));
         self.last = Some(out);
         Ok(())
     }
@@ -1769,5 +1764,260 @@ impl MalletVkPlate {
     /// Mallet velocity `delta_t- z_H` (m/s).
     pub fn mallet_velocity(&self) -> f64 {
         self.state.velocity(self.params.k)
+    }
+}
+
+/// A gong step's plate half, in the shape the plate's one commit path takes.
+///
+/// Both native mallets go through this and then [`plate::VkPlate::record`], so "a struck gong
+/// writes every read-out a bare step writes" holds by construction. It did not before: the bare
+/// mallet here rolled the histories and wrote three of the six read-outs by hand, leaving
+/// `last_residual`, `residual_ratio` and `n_fallbacks` at whatever the previous bare step had left,
+/// while the binding wrote all six. That is the list-of-assignments drift the room seam once had
+/// (`docs/dev/python-retirement-plan.md` §17.1), found a second time.
+///
+/// The values are the binding's: `last_residual` is the **outer** chord's residual, because that
+/// is the iteration the step's verdict is about, and `residual_ratio` is `NaN`, because a step made
+/// of `n_outer + 1` plate solves has no single exit ratio to report.
+fn plate_step_of(out: &VkContactStep) -> plate::VkStep {
+    plate::VkStep {
+        u: out.u.clone(),
+        f: out.f_full.clone(),
+        n_iters: out.inner_iters,
+        converged: out.inner_converged,
+        last_residual: out.outer_residual,
+        residual_ratio: f64::NAN,
+        n_solves: out.n_solves,
+        n_fallbacks: out.n_fallbacks,
+    }
+}
+
+/// `(k^2 / force_den) A_loaded^-1 e_node` -- the **room-loaded** drive-point influence column.
+///
+/// [`VkPlateParams::new`]'s expression with the room's factorization in place of the plate's own,
+/// and spelled the same way for the same reasons: `k * k` because it must be the double the
+/// right-hand side is scaled by, and the plate's `force_denominator` field because that is what
+/// the coupled step divides `f_ext` by.
+///
+/// # Errors
+/// If the loaded factorization cannot back-substitute.
+pub fn loaded_influence(grid: &RoomGrid<VkSeam>, node: usize) -> Result<Vec<f64>, SparseLuError> {
+    let vk = &grid.seam.plate.p;
+    let mut e = vec![0.0; vk.lin.n_live];
+    e[node] = 1.0;
+    let column = grid.lu_loaded().solve(&e)?;
+    let scale = vk.lin.k * vk.lin.k / vk.force_denominator;
+    Ok(column.iter().map(|&c| scale * c).collect())
+}
+
+/// Why a gong-in-a-room step failed: the room half refused, or one of the two nested solvers did.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RoomGongError {
+    /// The room half -- the port was not ready, or the loaded factorization could not be used.
+    Room(WrapError),
+    /// The gong half -- see [`VkContactError`].
+    Gong(VkContactError),
+}
+
+impl std::fmt::Display for RoomGongError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RoomGongError::Room(e) => write!(f, "{e}"),
+            RoomGongError::Gong(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for RoomGongError {}
+
+impl From<WrapError> for RoomGongError {
+    fn from(e: WrapError) -> Self {
+        RoomGongError::Room(e)
+    }
+}
+
+impl From<VkContactError> for RoomGongError {
+    fn from(e: VkContactError) -> Self {
+        RoomGongError::Gong(e)
+    }
+}
+
+/// A mallet striking a gong that is **itself loaded by a room** -- model #7g in the air box.
+///
+/// `docs/dev/mallet-vk-room-plan.md` is the design; `docs/dev/python-retirement-plan.md` §18 is
+/// this type's move out of the binding, where it was a *mode* of `MalletVKPlate` rather than a
+/// class of its own.
+///
+/// # Two things both want to own the step, and neither gets to
+///
+/// The mallet's chord solves the plate several times from one time-`n` state; a room wrapper's
+/// step is a once-per-step transaction that reads its port, injects once and books the radiated
+/// energy once. Driving [`RoomGrid::step`] per trial is therefore wrong, and here it cannot go
+/// wrong quietly: the port's `inject` checks `require_ready`, so a second injection in one step is
+/// a refusal rather than a miscount. The step is instead the wrapper's own phases with the chord in
+/// the middle -- see [`MalletVkRoom::step`].
+///
+/// # The column is the loaded operator's, and a stamp keeps it so
+///
+/// The chord's frozen tangent comes off `A_loaded`, the operator the coupled step inverts. It does
+/// not change the answer (the two `g_s` terms cancel at the fixed point, see
+/// [`VkPlateParams::retarget_column`]) and it is worth about five times the outer iterations, so
+/// only an exact bar notices a stale one. [`RoomGrid::refactor`] is the one way the factorization
+/// changes, and it bumps [`RoomGrid::generation`]; the step compares stamps before anything else
+/// and re-derives the column exactly when it has gone stale.
+///
+/// The room is passed at each call rather than owned, as the wrapper's is.
+#[derive(Debug, Clone)]
+pub struct MalletVkRoom {
+    params: VkPlateParams,
+    state: State,
+    /// The room-loaded gong: the plate is `grid.seam.plate`, the port `grid.port`.
+    pub grid: RoomGrid<VkSeam>,
+    /// The [`RoomGrid::generation`] the column in `params` was derived from.
+    generation: u64,
+    /// The last step's accounting.
+    pub last: Option<VkContactStep>,
+}
+
+impl MalletVkRoom {
+    /// Strike `grid`'s gong, with `params` validated against that gong's own `VkParams`.
+    ///
+    /// `params` comes from [`VkPlateParams::new`] on `&grid.seam.plate.p`, which builds the
+    /// **bare** column; it is retargeted here onto the loaded one.
+    ///
+    /// # Errors
+    /// If the loaded factorization cannot back-substitute.
+    ///
+    /// # Panics
+    /// If `params` was built against a plate with a different number of live nodes.
+    pub fn new(
+        mut params: VkPlateParams,
+        grid: RoomGrid<VkSeam>,
+        gap: f64,
+        strike_velocity: f64,
+    ) -> Result<MalletVkRoom, SparseLuError> {
+        let column = loaded_influence(&grid, params.node)?;
+        params.retarget_column(&column);
+        let u_node = grid.seam.plate.u[params.node];
+        let state = State::at_strike(gap, strike_velocity, params.k, u_node);
+        let generation = grid.generation();
+        Ok(MalletVkRoom {
+            params,
+            state,
+            grid,
+            generation,
+            last: None,
+        })
+    }
+
+    /// The parameter set, its influence column the **loaded** one.
+    pub fn params(&self) -> &VkPlateParams {
+        &self.params
+    }
+
+    /// The mallet's own state.
+    pub fn state(&self) -> &State {
+        &self.state
+    }
+
+    /// Advance one step: one room half, many plate solves, one injection.
+    ///
+    /// Five phases, and the design is the ordering:
+    ///
+    /// 1. **the column**, re-derived if the factorization was rebuilt since it was taken;
+    /// 2. **[`RoomGrid::prepare`], once** -- `require_ready`, the open-circuit pressure read before
+    ///    the room advances, and the two load terms. None of it depends on `w^{n+1}`, so every
+    ///    trial sees the same room;
+    /// 3. **the chord**, solving the plate as often as it needs against the loaded operator and the
+    ///    loaded right-hand side, varying only its own `f_ext`. A miss hands `None` to
+    ///    [`RoomGrid::loaded_rhs`], the expression [`RoomGrid::step`] assembles, so a mallet that
+    ///    never lands leaves the bare wrapper's trajectory to the bit;
+    /// 4. **one commit**, through [`plate::VkPlate::record`];
+    /// 5. **[`RoomGrid::finish`], once**, from the field that was **committed** -- read back off the
+    ///    plate, so handing it a trial iterate is not a thing this function can do.
+    ///
+    /// The caller steps the room afterwards.
+    ///
+    /// # Errors
+    /// [`RoomGongError::Room`] if the port was not ready (nothing is mutated then), or
+    /// [`RoomGongError::Gong`] from either nested solver.
+    pub fn step(&mut self, room: &mut AirBox) -> Result<(), RoomGongError> {
+        if self.grid.generation() != self.generation {
+            let column = loaded_influence(&self.grid, self.params.node).map_err(WrapError::from)?;
+            self.params.retarget_column(&column);
+            self.generation = self.grid.generation();
+        }
+        let half = self.grid.prepare(room)?;
+        let out = {
+            let grid = &self.grid;
+            let pl = &grid.seam.plate;
+            vk_plate_step_with(&pl.u_prev, &self.params, &pl.p, &mut self.state, |f_ext| {
+                let rhs = grid.loaded_rhs(&half, f_ext);
+                let lu = grid.lu_loaded();
+                let ctx = plate::VkCoupledStep::with_rhs(rhs, &pl.u_prev, &pl.f_prev, &pl.p, lu);
+                plate::vk_step_with(&ctx, &pl.u, &pl.u_prev, &pl.f)
+            })?
+        };
+        self.grid.seam.plate.record(plate_step_of(&out));
+        let committed = self.grid.seam.plate.u.clone();
+        self.grid.finish(room, &half, &committed)?;
+        self.last = Some(out);
+        Ok(())
+    }
+
+    /// Total discrete energy `H^n` (J): the **wrapper's** gong total, plus mallet kinetic, plus the
+    /// averaged contact potential.
+    ///
+    /// **Not the scene total.** The gong term is [`RoomGrid::energy`], so the radiated channel is
+    /// inside it -- the plate's own `energy()` is the total *without* the channel it radiates
+    /// through, and a sum built on it is short by exactly the ledger. What is still outside is the
+    /// air: the conserved statement is `mal.energy() + room.energy()`.
+    pub fn energy(&self) -> f64 {
+        let pl = &self.grid.seam.plate;
+        let i = self.params.node;
+        vk_plate_total_energy(
+            pl.u[i],
+            pl.u_prev[i],
+            self.grid.energy(),
+            &self.params,
+            &self.state,
+        )
+    }
+
+    /// Mallet velocity `delta_t- z_H` (m/s).
+    pub fn mallet_velocity(&self) -> f64 {
+        self.state.velocity(self.params.k)
+    }
+
+    /// The exact outer tangent against the **loaded** operator -- [`vk_drive_point_tangent_with`]
+    /// with both overrides routed, because in a room neither is optional.
+    ///
+    /// `u`, `u_prev` and `f_prev` are the plate's time-`n` state, `force` the contact force the
+    /// step was driven by and `w` the displacement it accepted. Returns
+    /// `(g_exact, response, products)`.
+    ///
+    /// # Errors
+    /// If either factorization cannot back-substitute.
+    pub fn drive_point_tangent(
+        &self,
+        u: &[f64],
+        u_prev: &[f64],
+        f_prev: &[f64],
+        force: f64,
+        w: &[f64],
+    ) -> Result<(f64, f64, usize), SparseLuError> {
+        let mut f_ext = vec![0.0; self.params.influence.len()];
+        f_ext[self.params.node] = -force;
+        vk_drive_point_tangent_with(
+            u,
+            u_prev,
+            f_prev,
+            Some(&f_ext),
+            w,
+            &self.params,
+            &self.grid.seam.plate.p,
+            Some(self.grid.lu_loaded()),
+            &self.params.influence,
+        )
     }
 }
