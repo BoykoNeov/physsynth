@@ -82,8 +82,11 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    `StringBodyBridge<B>` is native, generic over a `BridgeBody` trait that the four bodies its slot
    took all implement, with the room as the trait's associated `Room` type (`()` in free air, the
    `AirBox` when mounted) handed through `step` rather than owned. `tests/test_connection.py`
-   retired whole; the two **plate** bridges are left, and an exact anchor makes them one unit
-   (§19.6). A Python
+   retired whole. **§20 took the other two as ONE generic `StringPlateBridge<P: BridgePlate>`** —
+   the binding's two classes differed in one attribute name (`rho` vs `rho_s`), which natively is
+   `BridgePlate::linear()`, the von Kármán plate's `lin` already carrying the areal density — and
+   six Python files retired whole. **The hole is CLOSED: nothing is implemented only in the
+   binding** (the binding's own copies stay until the viewer stops calling them). A Python
    **plotting island** was chosen and withdrawn the same day: there is none, the plotting
    capability leaves, and where a diagnostic drew a figure Rust emits the data instead. The
    JavaScript front-end (`web/static/`) is not Python and is not in scope. **The rest of this
@@ -219,7 +222,7 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    list must stay empty, so it cannot reach a Bessel function) while its Python name lives in a
    `core/` module. **The crate a function is implemented in and the module its name lives in are
    separate questions** (§37.7).
-   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **seventy-eight**
+   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **seventy-nine**
    findings about when two implementations agree to the bit, when they cannot, and what a
    *deletion* breaks that a port does not (fed-back reductions, libm vs NumPy's own
    transcendentals, LLVM's constant fold, `np.sum`'s pairwise cutoff, descriptors that take a

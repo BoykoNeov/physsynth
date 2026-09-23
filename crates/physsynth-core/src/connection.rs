@@ -1,5 +1,17 @@
 //! The bridges: `SympatheticStrings` (several strings sharing **one** bridge point on a common
-//! `ModalBody`) and `StringBodyBridge` (one string on any modal body, bare or loaded).
+//! `ModalBody`), `StringBodyBridge` (one string on any modal body, bare or loaded) and
+//! `StringPlateBridge` (one string on a grid plate — linear or von Karman, bare or in a room).
+//!
+//! # `StringPlateBridge`, and the two classes that were one
+//!
+//! The binding had `StringPlateBridge` and `StringVKPlateBridge`, differing in one attribute name —
+//! the plate's areal density, `rho` on one and `rho_s` on the other — and an exact anchor saying
+//! their guards agree to the last digit. Here they are one type generic over [`BridgePlate`], and
+//! the density's two spellings are [`BridgePlate::linear`]: a von Karman plate's linear parameters
+//! already carry `rho_v e` as their `rho` (retirement plan §20). Checked once against the binding:
+//! ten scenes over both boundaries, loss, the gong with and without its nonlinearity, and all four
+//! room mountings — every state array and every per-step sweep count bit-identical, the default
+//! drive node identical, nine margins of ten exact and the tenth within 4.3e-16.
 //!
 //! # `StringBodyBridge`, and the slot that took four types
 //!
@@ -64,12 +76,15 @@
 //! it.
 
 use crate::airbox::AirBox;
-use crate::airbox_wrap::{RoomLoadedBody, WrapError};
+use crate::airbox_wrap::{PlateSeam, RoomGrid, RoomLoadedBody, VkSeam, WrapError};
 use crate::body::ModalBody;
 use crate::eig;
 use crate::fmt::py_exp;
+use crate::plate::{self, Params as PlateParams, Plate, VkPlate};
 use crate::radiation::{RadiatedBody, ReactiveRadiatedBody};
 use crate::reduce;
+use crate::sparse::Csr;
+use crate::sparse_lu::{SparseLu, SparseLuError};
 use crate::string_ideal::{self, Boundary, IdealString};
 
 /// The slack on both stability comparisons, so that a fixture built to sit exactly at a bound is
@@ -517,6 +532,8 @@ pub enum BridgeError {
     UnstableMargin(f64),
     /// The body bridge's eigenvalue computation failed.
     Eigen(eig::EigError),
+    /// The plate bridge's guard could not factor or solve its plate block.
+    Solve(SparseLuError),
 }
 
 impl std::fmt::Display for BridgeError {
@@ -555,6 +572,7 @@ impl std::fmt::Display for BridgeError {
                  increase the string/plate node mass."
             ),
             BridgeError::Eigen(e) => write!(f, "the coupled stability guard failed: {e}"),
+            BridgeError::Solve(e) => write!(f, "the coupled stability guard failed: {e}"),
         }
     }
 }
@@ -961,4 +979,459 @@ impl<B: BridgeBody> StringBodyBridge<B> {
         let n = self.dofs();
         eig::symmetric_max_eigenvalue(&self.symmetrized_operator(), n).map_err(BridgeError::Eigen)
     }
+}
+
+/// What a string's bridge spring can drive at one node: a grid plate, bare or in a room, linear or
+/// von Karman.
+///
+/// The binding's `plate=` slot took a `Plate`, a `VKPlate` and four room wrappers, and read
+/// `theta`, `kappa`, `h`, `B` / `W` / `K`, the areal density (spelled `rho` on one class and
+/// `rho_s` on the other), `u`, `u_prev` and `step(f_ext=)` off whatever it was handed. The one
+/// method [`BridgePlate::linear`] replaces all of the reads the guard makes, and the density's two
+/// spellings collapse into it: a [`VkPlate`]'s linear parameters are the plate it reduces to with
+/// the coupling off, whose `rho` **is** the areal density `rho_v e`. So there is one margin
+/// function for every plate, and the `rho_v` / `rho_s` trap the binding had to police with an
+/// exact cross-class anchor lives in exactly one place, [`VkParams`](crate::plate::VkParams)'s
+/// construction of `lin`.
+///
+/// The room is an associated type, as in [`BridgeBody`], for the same reason.
+pub trait BridgePlate {
+    /// What a step needs besides the force: `()`, or the room the plate is mounted in.
+    type Room: ?Sized;
+    /// What a step can fail with.
+    type Error;
+
+    /// The plate's linear parameters: grid, mask, matrices, `theta`, `kappa` and the **areal**
+    /// density. The guard reads these and nothing else — never a room's loaded factorization,
+    /// because the air load is dissipative and enters the step operator, not `G0`.
+    fn linear(&self) -> &PlateParams;
+
+    /// `u^n` over the live nodes.
+    fn u(&self) -> &[f64];
+
+    /// `u^{n-1}` over the live nodes.
+    fn u_prev(&self) -> &[f64];
+
+    /// Advance one step under the nodal force vector `f_ext` (N).
+    ///
+    /// # Errors
+    /// Whatever the plate's own step refuses.
+    fn step(&mut self, room: &mut Self::Room, f_ext: &[f64]) -> Result<(), Self::Error>;
+
+    /// The plate's total energy — for a mounted plate the wrapper's override, which books the
+    /// coupling channel, never the bare plate's own.
+    fn energy(&self) -> f64;
+}
+
+impl BridgePlate for Plate {
+    type Room = ();
+    type Error = std::convert::Infallible;
+
+    fn linear(&self) -> &PlateParams {
+        &self.p
+    }
+
+    fn u(&self) -> &[f64] {
+        &self.u
+    }
+
+    fn u_prev(&self) -> &[f64] {
+        &self.u_prev
+    }
+
+    fn step(&mut self, _room: &mut (), f_ext: &[f64]) -> Result<(), Self::Error> {
+        Plate::step(self, Some(f_ext));
+        Ok(())
+    }
+
+    fn energy(&self) -> f64 {
+        Plate::energy(self)
+    }
+}
+
+impl BridgePlate for VkPlate {
+    type Room = ();
+    type Error = SparseLuError;
+
+    fn linear(&self) -> &PlateParams {
+        &self.p.lin
+    }
+
+    fn u(&self) -> &[f64] {
+        &self.u
+    }
+
+    fn u_prev(&self) -> &[f64] {
+        &self.u_prev
+    }
+
+    fn step(&mut self, _room: &mut (), f_ext: &[f64]) -> Result<(), SparseLuError> {
+        VkPlate::step(self, Some(f_ext))
+    }
+
+    fn energy(&self) -> f64 {
+        VkPlate::energy(self)
+    }
+}
+
+impl BridgePlate for RoomGrid<PlateSeam> {
+    type Room = AirBox;
+    type Error = WrapError;
+
+    fn linear(&self) -> &PlateParams {
+        &self.seam.plate.p
+    }
+
+    fn u(&self) -> &[f64] {
+        &self.seam.plate.u
+    }
+
+    fn u_prev(&self) -> &[f64] {
+        &self.seam.plate.u_prev
+    }
+
+    fn step(&mut self, room: &mut AirBox, f_ext: &[f64]) -> Result<(), WrapError> {
+        RoomGrid::step(self, room, Some(f_ext))
+    }
+
+    fn energy(&self) -> f64 {
+        RoomGrid::energy(self)
+    }
+}
+
+impl BridgePlate for RoomGrid<VkSeam> {
+    type Room = AirBox;
+    type Error = WrapError;
+
+    fn linear(&self) -> &PlateParams {
+        &self.seam.plate.p.lin
+    }
+
+    fn u(&self) -> &[f64] {
+        &self.seam.plate.u
+    }
+
+    fn u_prev(&self) -> &[f64] {
+        &self.seam.plate.u_prev
+    }
+
+    fn step(&mut self, room: &mut AirBox, f_ext: &[f64]) -> Result<(), WrapError> {
+        RoomGrid::step(self, room, Some(f_ext))
+    }
+
+    fn energy(&self) -> f64 {
+        RoomGrid::energy(self)
+    }
+}
+
+/// A string terminated on a grid plate — a soundboard, a suspended cymbal, a gong — through a
+/// linear spring `K` at one live node, `drive_index`.
+///
+/// One type where the binding had two classes: `StringPlateBridge` and `StringVKPlateBridge`
+/// differed in exactly one attribute name, and an exact anchor made them agree to the last digit.
+/// Here the difference is [`BridgePlate::linear`] and the anchor is that there is one piece of
+/// code.
+///
+/// The string takes its reaction as a post-step impulse at its free end; the plate takes `+F`
+/// into its implicit right-hand side before the solve — and, for a von Karman plate, outside the
+/// iteration, because `F = K eta^n` reads only time-`n` state.
+///
+/// # The guard
+///
+/// The spring is explicit and the plate implicit, so the exact stability condition is a rank-one
+/// (Sherman-Morrison) statement: `(k^2/4) K [ (G0_str^-1)_end + (G0_plate^-1)_dp ] < 1`, with
+/// `G0 = M + (theta - 1/4) k^2 S` for each part. The string part is tridiagonal and is solved
+/// directly; the plate part is assembled from [`BridgePlate::linear`]'s matrices and factored with
+/// [`SparseLu`]. Linear in `K`, which the construction's ceiling bars use.
+///
+/// # What a pressure read-out is a fact about
+///
+/// [`StringPlateBridge::pressure`] exists only for the two **linear** plates. The binding's
+/// von Karman bridge had no `pressure` attribute on purpose — the compact monopole reads 3e-7 of
+/// the truth for a gong (air-box batch 6) — and a test asserted `hasattr` was false. Natively that
+/// is the absence of an impl.
+#[derive(Debug, Clone)]
+pub struct StringPlateBridge<P: BridgePlate> {
+    string: IdealString,
+    plate: P,
+    k_spring: f64,
+    k: f64,
+    drive_index: usize,
+    beta_s: f64,
+    /// The nodal force vector handed to the plate. Only `drive_index` is ever nonzero, and that
+    /// entry is overwritten before every step.
+    ///
+    /// The binding zeroed it again after each step, because there a caller could replace the
+    /// vector or move `drive_index` between steps. Here neither can change after construction, so
+    /// a stale entry is always the one about to be overwritten: removing the reset was measured to
+    /// change no bar and no bit, and unobservable code is not kept (retirement plan §20.3).
+    f_ext: Vec<f64>,
+    stability_margin: f64,
+    n: usize,
+}
+
+impl<P: BridgePlate> StringPlateBridge<P> {
+    /// Validate, run the exact guard, and take ownership of both parts.
+    ///
+    /// `drive_index = None` takes the live node nearest `(0.3 Lx, 0.4 Ly)` — off every low mode's
+    /// symmetry axis — with `Ly` the plate's **snapped** side.
+    ///
+    /// # Errors
+    /// In the original's order: [`BridgeError::TimestepMismatch`],
+    /// [`BridgeError::RightEndNotFree`], [`BridgeError::LambdaAtLimit`],
+    /// [`BridgeError::NegativeStiffness`], [`BridgeError::DriveIndexOutOfRange`], then the guard
+    /// ([`BridgeError::Solve`] or [`BridgeError::UnstableMargin`]). The original's refusal of a
+    /// boundary that is neither `"supported"` nor `"free"` has no analogue: the boundary is an enum
+    /// with those two variants.
+    pub fn new(
+        string: IdealString,
+        plate: P,
+        k_spring: f64,
+        drive_index: Option<usize>,
+    ) -> Result<Self, BridgeError> {
+        let sp = string.params();
+        let lin = plate.linear();
+        let ks = sp.k;
+        let kp = lin.k;
+        if (ks - kp).abs() > 1e-15 {
+            return Err(BridgeError::TimestepMismatch("plate", ks, kp));
+        }
+        if sp.bc_right != Boundary::Free {
+            return Err(BridgeError::RightEndNotFree("plate"));
+        }
+        // lambda = 1 makes the guard's string block singular: the Nyquist trap.
+        if sp.lam >= 1.0 - CFL_TOL {
+            return Err(BridgeError::LambdaAtLimit);
+        }
+        if k_spring < 0.0 {
+            return Err(BridgeError::NegativeStiffness);
+        }
+        let n_live = lin.n_live;
+        let drive =
+            drive_index.unwrap_or_else(|| plate::pickup_index_at(0.3 * lin.lx, 0.4 * lin.ly, lin));
+        if drive >= n_live {
+            return Err(BridgeError::DriveIndexOutOfRange(drive, n_live));
+        }
+
+        let k = ks;
+        // The string end node's inverse half-cell mass, times k^2.
+        let beta_s = 2.0 * k * k / (sp.rho * sp.h);
+        let mut me = StringPlateBridge {
+            string,
+            plate,
+            k_spring,
+            k,
+            drive_index: drive,
+            beta_s,
+            f_ext: vec![0.0; n_live],
+            stability_margin: 0.0,
+            n: 0,
+        };
+        me.stability_margin = me.margin().map_err(BridgeError::Solve)?;
+        if me.stability_margin >= 1.0 - CFL_TOL {
+            return Err(BridgeError::UnstableMargin(me.stability_margin));
+        }
+        Ok(me)
+    }
+
+    // -- attributes ----------------------------------------------------------------------------
+
+    /// The string.
+    pub fn string(&self) -> &IdealString {
+        &self.string
+    }
+
+    /// The string, mutably — how a caller plucks it.
+    pub fn string_mut(&mut self) -> &mut IdealString {
+        &mut self.string
+    }
+
+    /// The plate.
+    pub fn plate(&self) -> &P {
+        &self.plate
+    }
+
+    /// The plate, mutably — how a caller gives it an initial state.
+    pub fn plate_mut(&mut self) -> &mut P {
+        &mut self.plate
+    }
+
+    /// The bridge stiffness `K` (N/m).
+    pub fn stiffness(&self) -> f64 {
+        self.k_spring
+    }
+
+    /// Replace `K` **without re-running the guard**.
+    ///
+    /// A deliberate bypass, kept because the guard's ceiling has to be shown to be the *physical*
+    /// onset and not merely self-consistent: build inside, raise `K` just past the ceiling, and the
+    /// run must diverge. `beta_s` and the force vector do not depend on `K`, so nothing else goes
+    /// stale; [`StringPlateBridge::stability_margin`] keeps the construction-time value.
+    pub fn set_stiffness_unguarded(&mut self, k_spring: f64) {
+        self.k_spring = k_spring;
+    }
+
+    /// The shared timestep `k` (s).
+    pub fn timestep(&self) -> f64 {
+        self.k
+    }
+
+    /// The live node the spring drives.
+    pub fn drive_index(&self) -> usize {
+        self.drive_index
+    }
+
+    /// `2 k^2 / (rho h)`, the weight of the string's end-node reaction impulse.
+    pub fn beta_s(&self) -> f64 {
+        self.beta_s
+    }
+
+    /// Replace the string's reaction weight — a fault injection, not a tuning knob.
+    ///
+    /// Newton's third law at the spring is upstream of every port, so a wrong `beta_s` is seen by
+    /// the scene total and not by a room's money test; a bar shows exactly that, and needs a way
+    /// to put the fault in.
+    pub fn set_beta_s(&mut self, beta_s: f64) {
+        self.beta_s = beta_s;
+    }
+
+    /// `(k^2/4) K [ (G0_str^-1)_end + (G0_plate^-1)_dp ]`, as measured at construction.
+    pub fn stability_margin(&self) -> f64 {
+        self.stability_margin
+    }
+
+    /// Steps taken.
+    pub fn n_steps(&self) -> usize {
+        self.n
+    }
+
+    // -- helpers -------------------------------------------------------------------------------
+
+    /// Spring stretch `eta = u_end - w_dp`, at step `n` or (`prev`) `n - 1`.
+    pub fn stretch(&self, prev: bool) -> f64 {
+        let s = &self.string;
+        if prev {
+            s.u_prev[s.u_prev.len() - 1] - self.plate.u_prev()[self.drive_index]
+        } else {
+            s.u[s.u.len() - 1] - self.plate.u()[self.drive_index]
+        }
+    }
+
+    /// The current bridge force `F = K eta^n` (N).
+    pub fn connection_force(&self) -> f64 {
+        self.k_spring * self.stretch(false)
+    }
+
+    /// The displacement at the driving point, `w_dp^n`.
+    pub fn driving_point_displacement(&self) -> f64 {
+        self.plate.u()[self.drive_index]
+    }
+
+    // -- time stepping -------------------------------------------------------------------------
+
+    /// Advance one timestep; a mounted plate's room is passed through (`&mut ()` for a bare one).
+    ///
+    /// # Errors
+    /// Whatever the plate's step refuses. The string has already stepped by then, as in the
+    /// original.
+    pub fn step(&mut self, room: &mut P::Room) -> Result<(), P::Error> {
+        let f = self.connection_force();
+        self.string.step();
+        let last = self.string.u.len() - 1;
+        self.string.u[last] -= self.beta_s * f;
+        self.f_ext[self.drive_index] = f;
+        self.plate.step(room, &self.f_ext)?;
+        self.n += 1;
+        Ok(())
+    }
+
+    // -- diagnostics ---------------------------------------------------------------------------
+
+    /// Total discrete energy `E_string + E_plate + E_conn` (Joules).
+    pub fn energy(&self) -> f64 {
+        let e_conn = 0.5 * self.k_spring * self.stretch(false) * self.stretch(true);
+        self.string.energy() + self.plate.energy() + e_conn
+    }
+
+    /// The guard's margin, recomputed from the current string, plate and `K`.
+    ///
+    /// # Errors
+    /// If the plate block's factorization fails, which an SPD `G0` (`theta >= 1/4`) does not cause.
+    pub fn margin(&self) -> Result<f64, SparseLuError> {
+        let quarter_k2 = 0.25 * self.k * self.k;
+        let g_str = string_end_compliance(&self.string, quarter_k2);
+        let g_plate = plate_drive_compliance(self.plate.linear(), self.k, self.drive_index)?;
+        Ok(quarter_k2 * self.k_spring * (g_str + g_plate))
+    }
+}
+
+impl StringPlateBridge<Plate> {
+    /// Radiated pressure from the plate, carrying the injected force.
+    pub fn pressure(&self) -> f64 {
+        self.plate.pressure()
+    }
+}
+
+impl StringPlateBridge<RoomGrid<PlateSeam>> {
+    /// Radiated pressure from the plate, carrying the injected force and the room load.
+    pub fn pressure(&self) -> f64 {
+        self.plate.pressure()
+    }
+}
+
+/// `(G0_str^-1)_{end,end}` for `G0_str = M_str - (k^2/4) S_str` over the string's free DOFs
+/// (node 0 clamped), `S_str = (T/h) D^T D` with the free end's half row.
+///
+/// Tridiagonal, so solved directly (forward elimination, back substitution) rather than through a
+/// general factorization. The entries are formed as the original's sparse expression formed them:
+/// `(T/h) * dtd`, then `quarter_k2 *` that, then `mass -` that.
+fn string_end_compliance(s: &IdealString, quarter_k2: f64) -> f64 {
+    let p = s.params();
+    let n = p.n;
+    let rho_h = p.rho * p.h;
+    let t_h = p.t / p.h;
+    let mut diag = vec![0.0; n];
+    for (i, d) in diag.iter_mut().enumerate() {
+        let (m, main) = if i + 1 == n {
+            (0.5 * rho_h, 1.0)
+        } else {
+            (rho_h, 2.0)
+        };
+        *d = m - quarter_k2 * (t_h * main);
+    }
+    let off = 0.0 - quarter_k2 * -t_h;
+    // Thomas algorithm on the symmetric tridiagonal, right-hand side e_end.
+    let mut c = vec![0.0; n];
+    let mut dd = vec![0.0; n];
+    let mut rhs = vec![0.0; n];
+    rhs[n - 1] = 1.0;
+    dd[0] = diag[0];
+    for i in 1..n {
+        c[i - 1] = off / dd[i - 1];
+        dd[i] = diag[i] - c[i - 1] * off;
+        rhs[i] -= c[i - 1] * rhs[i - 1];
+    }
+    // Only the last unknown is wanted, and back substitution produces it first.
+    rhs[n - 1] / dd[n - 1]
+}
+
+/// `(G0_plate^-1)_{dp,dp}` for `G0_plate = M + (theta - 1/4) k^2 kappa^2 S`:
+/// `rho h^2 [I + c B]` simply supported, `rho [W + c K]` free (`W` already carries `h^2`).
+fn plate_drive_compliance(p: &PlateParams, k: f64, drive: usize) -> Result<f64, SparseLuError> {
+    let coeff = (p.theta - 0.25) * k * k * p.kappa * p.kappa;
+    let g = match p.boundary {
+        plate::Boundary::Supported => Csr::identity(p.n_live)
+            .add(&p.stiffness.scaled(coeff))
+            .scaled(p.rho * p.h * p.h),
+        plate::Boundary::Free => {
+            let w = p
+                .mass
+                .as_ref()
+                .expect("a free plate carries its lumped mass");
+            w.add(&p.stiffness.scaled(coeff)).scaled(p.rho)
+        }
+    };
+    let mut e = vec![0.0; p.n_live];
+    e[drive] = 1.0;
+    Ok(SparseLu::factor(&g)?.solve(&e)?[drive])
 }

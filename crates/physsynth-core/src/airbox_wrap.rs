@@ -326,7 +326,7 @@ impl RoomLoadedBody {
 // `baffled` and a `suspended` constructor.
 //
 // This is not a simplification of the physics and it loses no distinction the reference made:
-// `test_airbox_vk.py` anchors the two tiers against each other with `array_equal`, which is only
+// `test_airbox_vk.py` anchored the two tiers against each other with `array_equal`, which was only
 // meaningful because they *are* one transcription. Six copies would have been six chances to drift.
 //
 // # Why a wrapper exists at all, one tier up from `RoomLoadedBody`

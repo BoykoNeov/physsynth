@@ -428,8 +428,9 @@ finishes the wrapper tier with the von Kármán seam, as a third seam of the sam
 left is the **three bridges and one thing no class count could see**: the mallet's gong-in-a-room
 *mode* (§17.5), a composition that lives inside `MalletVKPlate` rather than in a class of its own.
 **Batch 6 is done** (§18) and takes that mode as its own type, leaving only the three bridges.
-**Batch 7's first half is done** (§19): `StringBodyBridge` is native, generic over the four bodies
-its slot took. The hole is now **the two plate bridges**, which an exact anchor binds into one unit.
+**Batch 7 is done** (§19, §20): `StringBodyBridge` is native, generic over the four bodies its slot
+took, and the two plate bridges are one generic `StringPlateBridge`. **The hole is closed** — nothing
+is implemented only in the binding.
 
 §11's table is **corrected by §13.1**: the hole is 16 classes across *three* binding files, not 14
 across two, and the file it missed is the one underneath the other two.
@@ -1812,3 +1813,173 @@ the crate does. Same reasoning as §12 and §18.6.
 `tests/test_vk_connection.py` and the chain tests in `tests/test_airbox_vk.py` (9),
 `tests/test_airbox_surface.py` (1) and `tests/test_airbox_dipole.py` (1). After it nothing is
 implemented only in the binding.
+
+## 20. Phase C batch 7, second half — the plate bridges, and the hole is closed
+
+`StringPlateBridge` and `StringVKPlateBridge` re-home as **one** generic type,
+`StringPlateBridge<P: BridgePlate>` in `crates/physsynth-core/src/connection.rs`, with 48 native
+bars in `crates/physsynth-core/tests/connection_plate.rs`. Six Python files retire **whole**:
+`tests/test_plate_connection.py` (18 functions), `tests/test_free_plate_connection.py` (18),
+`tests/test_vk_connection.py` (16), and the three that had been kept only for their chain tests,
+`tests/test_airbox_vk.py` (9), `tests/test_airbox_surface.py` (1) and `tests/test_airbox_dipole.py`
+(1) — 63 functions, 268 s of `scripts/shard_costs.json`. Thirty-four helpers left
+`tests/helpers.py` with them; `plate_bump`, `plate_mode_shape` and `vk_strike`, which sat in the
+same section, stay because other files use them.
+
+**With this, nothing is implemented only in the binding.** Every model class the binding holds has a
+native implementation. What remains in `crates/physsynth-py` is glue, plus the binding's own copies
+of the four bridges, which the viewer still builds (§19.5's reasoning, unchanged).
+
+### 20.1 Two classes, one type, and where the density lives
+
+The binding's two classes differed in exactly one attribute name, the plate's areal density —
+`rho` on a `Plate`, `rho_s` on a `VKPlate` — and an exact anchor required their guards to agree to
+the bit, so they already had to be one piece of arithmetic. Natively the difference is a trait
+method, `BridgePlate::linear()`, returning the plate's linear parameters. For a `VkPlate` that is
+`p.lin`, the plate it reduces to with the coupling off, whose `rho` is already `rho_v e`. So there
+is one margin function for all four plate collaborators — `Plate`, `VkPlate`,
+`RoomGrid<PlateSeam>`, `RoomGrid<VkSeam>` — and the factor-of-1000 trap the Python policed with a
+cross-class anchor lives in one place, `VkParams`'s construction of `lin`.
+
+The room is an associated type, as in §19.1. Three other shape decisions:
+
+* **The pressure read-out is an impl, not a method on the trait.** It exists for
+  `StringPlateBridge<Plate>` and `StringPlateBridge<RoomGrid<PlateSeam>>` only. The binding's von
+  Kármán bridge had no `pressure` on purpose (the compact monopole reads 3e-7 of the truth for a
+  gong), and a Python test asserted the attribute was absent; natively that is a type fact
+  (§16.6's second kind).
+* **Two setters, both found by grepping every write to a bridge attribute across the suite.**
+  `set_beta_s` (the wrong-reaction test injects a fault) and `set_stiffness_unguarded` (the
+  true-onset tests raise `K` past the ceiling after construction). The first grep matched only a
+  variable named `bridge` and missed `over.K = 1.05 * Kc`; the second matched any name.
+* **The boundary refusal has no analogue.** The binding refused a plate whose `boundary` was neither
+  `"supported"` nor `"free"`; the native boundary is a two-variant enum.
+
+The guard itself is the binding's expression order: the string block is tridiagonal and solved
+directly (forward elimination, one back-substitution for the last unknown), and the plate block is
+assembled as `rho h^2 (I + c B)` or `rho (W + c K)` and factored with the crate's `SparseLu`.
+
+### 20.2 The one-time check
+
+Ten scenes dumped from the binding (wheel reinstalled) and replayed natively under
+`W:\temp\claude\bridges`:
+
+| scene | steps | differing |
+|---|---|---|
+| supported plate, `K = 3000` | 400 | **0**; margin exact |
+| free plate, `K = 6000` | 400 | **0**; margin exact |
+| supported, lossy string and plate, `lambda = 0.7` | 400 | **0**; margin 4.3e-16 |
+| von Kármán, supported and free | 300 each | **0**, including every step's sweep count and convergence flag; margins exact |
+| von Kármán, `nonlinear = false`, free, `sigma = 2` | 300 | **0**; margin exact |
+| linear plate in a room, baffled supported and suspended free | 300 each | **0** in state, room field and `injected`; margins exact |
+| the gong chain, suspended free and baffled supported | 300 each | **0** in state, sweep counts, room field and `injected`; margins exact |
+| the four room scenes | — | `radiated_energy` only: ≤ 1.1e-15 relative, plus one last-bit total energy that contains it |
+
+The default drive node matched in every scene (79 supported and 107 free on the suite's plate,
+15 and 29 on the room's), as did the string's reaction weight. The only difference is §16.3's
+coupling-ledger `ddot`, which does not feed back.
+
+One thing looked wrong and was not. The supported and free von Kármán margins agree to the last
+digit. That could have meant the plate block was below the string block's rounding, and then the
+Python bar "the margin uses the areal density" would have been blind to the density. Measured through
+the binding: with the volume density the margin is 0.1394 against 0.1425, so the bar is live. The two
+boundaries agree because the drive node is interior, where both lumped masses are `rho_s h^2`, and
+the theta-excess stiffness is negligible at this timestep. The bar is now sharpened to assert the
+volume-density twin **differs** (finding #79), so the check that was made here stays made.
+
+### 20.3 Nine deliberate breakages, and one that no bar could see
+
+| breakage | bars that fail |
+|---|---|
+| a room-mounted **linear** plate's energy read from the bare plate, not the wrapper's override | 1: the linear chain |
+| the same for the room-mounted **gong** | 4: the gong chain, the lossy chain, and two detector bars |
+| the plate handed `-F` | 18 |
+| no `lambda < 1` refusal | 1 |
+| the free plate block given an extra `h^2` | 26 (the margin crosses 1, so most constructions refuse) |
+| the string block solved without its off-diagonal | 5: both frozen-margin bars and three ceiling bars |
+| the energy's cross-time factor read at the current level | 14 |
+| the gong's linear parameters carrying the volume density | 3, including the sharpened density bar |
+| **the force entry not zeroed after the step** | **0** |
+
+The last row is finding #79. The binding zeroed the drive entry after every step because there a
+caller could replace `_f_ext` or move `drive_index`. Natively neither can change after construction,
+so the only nonzero entry is always the one about to be overwritten, and the reset is unobservable.
+The shape bar's comment claimed a leak would be caught; that was false. The reset and the claim are
+both gone. The advisor had listed that mutation as one to run, and running it is what showed the
+code was dead.
+
+The two energy-override rows were run separately (#73, #78's "mutate each half"). A first attempt
+at them did not compile — the trait method was not in scope — and a row reading "0 fail" from a
+mutant that never built would have been a false green. The sweep script now reports a mutant that
+did not run as such.
+
+### 20.4 The retirement rule, discharged
+
+Where a bar loops over both boundaries it carries one test from each linear file.
+
+| retired | native bar, or verdict |
+|---|---|
+| `test_total_energy_conserved_across_lambda` (plate + free, 6) | `the_total_energy_is_conserved_across_lambda` |
+| `test_total_energy_conserved_across_stiffness` (plate + free, 8) | `the_total_energy_is_conserved_across_stiffness` |
+| `test_string_energy_alone_is_not_conserved` (plate + free) | `the_string_energy_alone_is_not_conserved` |
+| `test_energy_flows_string_to_plate` (plate + free) | `energy_flows_from_the_string_into_the_plate` |
+| `test_passivity_with_plate_damping` (plate + free) | `a_lossy_plate_makes_the_total_decrease_monotonically` |
+| `test_passivity_with_string_damping` (plate + free) | `a_lossy_string_makes_the_total_decrease_monotonically` |
+| `test_K0_bit_identical_to_uncoupled_parts` (plate + free) | `at_zero_stiffness_the_bridge_is_bit_identical_to_the_uncoupled_parts` |
+| `test_pressure_includes_coupling_term` (plate + free) | `the_pressure_read_out_carries_the_coupling_term` |
+| `test_no_rigid_body_drift` (free) | `a_free_plate_does_not_drift_rigidly` |
+| `test_unstable_stiffness_rejected` (plate + free) | `an_over_stiff_spring_is_rejected` |
+| `test_margin_is_linear_in_stiffness` (plate + free) | `the_margin_is_linear_in_the_stiffness` |
+| `test_guard_holds_at_its_boundary` (plate + free) | `the_guard_holds_just_inside_its_boundary` |
+| `test_just_over_the_ceiling_is_rejected` (plate + free) | `just_over_the_ceiling_is_rejected` |
+| `test_ceiling_is_the_true_instability_onset` (plate + free) | `the_ceiling_is_the_true_instability_onset`, through `set_stiffness_unguarded` |
+| `test_string_at_lambda_one_rejected` (plate + free) | `a_string_at_the_courant_limit_is_rejected` |
+| `test_mismatched_timestep_rejected` (plate + free) | `a_mismatched_timestep_is_rejected` |
+| `test_right_end_must_be_free` (plate + free) | `a_clamped_right_end_is_rejected` |
+| `test_drive_index_out_of_range_rejected` (plate + free) | `a_drive_index_off_the_plate_is_rejected` |
+| `test_free_plate_is_accepted` | **type** — the boundary is an enum, and every bar that loops over both boundaries builds a free bridge |
+| `test_nonlinear_false_is_the_linear_bridge_bit_identical` (4) | `nonlinear_false_is_the_linear_bridge_bit_identical` — still a real comparison: a linear `VkPlate` against an independently built `Plate`, two different step paths |
+| `test_the_margin_ignores_the_nonlinearity_and_uses_the_areal_density` (2) | same name, **sharpened**: the volume-density twin must differ (§20.2) |
+| `test_total_energy_conserved_lossless` (2) | `the_von_karman_total_is_conserved_lossless` |
+| `test_nonlinearity_is_genuinely_engaged` (2) | `the_string_drives_the_plate_past_its_thickness` |
+| `test_passivity_with_loss` (4) | `a_lossy_von_karman_chain_decreases_monotonically` |
+| `test_zero_stiffness_decouples_bit_identically` (2) | `at_zero_stiffness_the_von_karman_bridge_decouples_bit_identically` |
+| `test_vk_connection.py::test_string_energy_alone_is_not_conserved` | `the_string_energy_alone_is_not_conserved_on_the_gong` |
+| `test_a_linear_body_scales_bit_exactly_with_the_pluck` (2) | same name |
+| `test_departure_from_a_linear_body_is_second_order_in_the_pluck` (2) | `the_departure_from_a_linear_body_is_second_order_in_the_pluck` |
+| `test_linear_energy_share_is_amplitude_invariant_and_the_gong_s_is_not` (2) | `the_linear_energy_share_is_amplitude_invariant_and_the_gongs_is_not` |
+| `test_rigid_modes_are_immune_to_the_nonlinearity` | same name — a claim about the von Kármán plate itself that had no other native bar, so it lands here |
+| `test_guard_rejects_an_overstiff_spring` (2) | `the_von_karman_guard_rejects_an_over_stiff_spring` |
+| `test_the_linear_margin_survives_a_strongly_nonlinear_run` | same name |
+| `test_the_failure_mode_migrates_to_non_convergence` | same name |
+| `test_construction_rejects_mismatched_and_malformed_inputs` | `the_von_karman_bridge_refuses_malformed_inputs` |
+| `test_bridge_exposes_no_pressure_readout` | **type** — `pressure()` is implemented only for the two linear plates |
+| `test_airbox_vk.py::test_the_chain_composes_and_the_guard_is_bit_identical` (4) | `the_gong_chain_composes_and_the_guard_ignores_the_room` |
+| `test_the_money_test_holds_with_the_string_as_the_only_excitation` (4) | same name |
+| `test_the_room_adds_no_outer_iteration` (4) | same name |
+| `test_zero_bridge_stiffness_decouples_the_chain` (4) | same name |
+| `test_the_nonlinear_false_chain_is_the_linear_bridge_bit_identical` (4) | `the_nonlinear_false_chain_is_the_linear_chain_bit_identical` |
+| `test_the_lossy_chain_is_monotone` (4) | same name |
+| `test_band_overlap_decides_the_rigid_share_not_the_pluck` (2) | same name |
+| `test_a_wrong_string_reaction_is_seen_by_the_total_and_not_the_money_test` (2) | same name, through `set_beta_s` |
+| `test_every_detector_is_blind_to_a_drive_index_that_differs_between_two_runs` (2) | same name |
+| `test_airbox_surface.py::test_string_bridge_plate_room_chain` (2), `test_airbox_dipole.py::test_string_bridge_plate_room_chain` (2) | `the_linear_plate_chain_conserves_and_the_guard_ignores_the_room` |
+| — | **new**: `one_step_is_the_free_parts_plus_exactly_one_spring_force` |
+| — | **new**: `the_guard_reproduces_the_binding_measured_margins` and `the_chain_margins_reproduce_the_binding` — six margins frozen to 1e-12 |
+| — | **new**: `a_negative_stiffness_is_rejected`, `the_default_drive_node_is_the_corner_offset_point` |
+
+**The two cross-class equalities**, which are now one code path, each got a verdict rather than being
+carried as tautologies. The von Kármán margin equalling the linear one is kept, because the twin is an
+independently built `Plate` and the equality asserts that `lin` carries the areal density. It is now
+paired with the volume-density twin that must differ. The room-loaded margin equalling the bare one
+is kept as the statement that the guard reads the plate's parameters and never the loaded
+factorization.
+
+The 48 bars run in 198 s in debug (7 s in release); the six Python files were 268 s of shard cost.
+
+### 20.5 What is next
+
+Phase C's hole work is done. What stands between here and deleting `crates/physsynth-py` is the
+rest of the plan as §7 laid it out: the viewer (phase D, still the longest pole), the scripts
+(phase E), and the remaining Python physics files whose bars have not been carried yet (§9's map,
+read with §16.7's table).

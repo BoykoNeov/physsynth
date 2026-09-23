@@ -2,8 +2,8 @@
 //! (HANDOFF §12.H, air-box batch 6), `RoomGrid<VkSeam>`.
 //!
 //! These carry over the wrapper half of `tests/test_airbox_vk.py`. Its other half — the three-way
-//! chain `string -> bridge -> room-loaded gong -> room` — drives `StringVKPlateBridge`, which is not
-//! ported yet, so those tests stay in Python until the bridge tier is.
+//! chain `string -> bridge -> room-loaded gong -> room` — went native with the plate bridge and is
+//! in `tests/connection_plate.rs` (retirement plan §20); the Python file is gone.
 //!
 //! # What the gong adds to the family
 //!
