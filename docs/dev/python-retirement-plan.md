@@ -427,6 +427,9 @@ and §16.2 renamed six classes on purpose, so it now over-reports. **Batch 5 is 
 finishes the wrapper tier with the von Kármán seam, as a third seam of the same generic. What is
 left is the **three bridges and one thing no class count could see**: the mallet's gong-in-a-room
 *mode* (§17.5), a composition that lives inside `MalletVKPlate` rather than in a class of its own.
+**Batch 6 is done** (§18) and takes that mode as its own type, leaving only the three bridges.
+**Batch 7's first half is done** (§19): `StringBodyBridge` is native, generic over the four bodies
+its slot took. The hole is now **the two plate bridges**, which an exact anchor binds into one unit.
 
 §11's table is **corrected by §13.1**: the hole is 16 classes across *three* binding files, not 14
 across two, and the file it missed is the one underneath the other two.
@@ -1682,3 +1685,130 @@ does not.
 `StringPlateBridge`, `StringVKPlateBridge` — and with them the chain tests still in
 `tests/test_airbox_vk.py` (9), `tests/test_airbox_surface.py` and `tests/test_airbox_dipole.py`.
 That is the whole hole: after the bridges, nothing is implemented only in the binding.
+
+## 19. Phase C batch 7, first half — the body bridge
+
+§18.7 named all three bridges as the next batch. They split in two along the only exact anchor
+that ties any of them together: `StringVKPlateBridge`'s guard must equal `StringPlateBridge`'s to
+the last digit when the plate is linear, so those two are **one unit**; nothing binds
+`StringBodyBridge` to either (the anchor that bound it to `SympatheticStrings` was restated away in
+§12). So this half is `StringBodyBridge` alone, and the plate pair is §20.
+
+`StringBodyBridge<B>` is in `crates/physsynth-core/src/connection.rs`, with 22 native bars in
+`crates/physsynth-core/tests/connection_body.rs`. `tests/test_connection.py` retires **whole**
+(13 functions), with the four chain tests that put the bridge in front of a loaded body: three in
+`tests/test_radiation.py` and one in `tests/test_airbox_freefield.py`. `make_bridge` and its two
+constants had no other caller and went with them, and so did `make_sympathetic`, which had had no
+caller since §12 retired its file and was left behind then.
+
+### 19.1 Four bodies, one slot, and the room as an argument
+
+The binding's `body=` slot took a `ModalBody`, a `RadiatedBody`, a `ReactiveRadiatedBody` and a
+`RoomLoadedBody`, and read `phi`, `m`, `omega`, `q_prev` and three methods off whatever it was
+given. That is now the trait `BridgeBody`: `modal()` for the bare body underneath, `step`,
+`energy` and `pressure`. Two choices inside it are worth stating.
+
+* **The room is an associated type, not a member.** A mounted body steps as
+  `RoomLoadedBody::step(&mut AirBox, F)`, because a port never owns the room it drives (§13.2). So
+  `BridgeBody::Room` is `()` for the three free-air bodies and `AirBox` for the mounted one, and
+  `StringBodyBridge::step(&mut B::Room)` passes it straight through. The bridge never steps the room
+  itself; the caller does, afterwards, exactly as every Python chain's loop read
+  `bridge.step(); room.step()`. The cost is `br.step(&mut ())` at a free-air call site.
+* **The guard reads only `modal()`.** The radiation load — resistive, reactive or a room — is
+  dissipative or a separate storage channel and was never in the leapfrog operator the binding
+  assembled. Folding it in would change which configurations are refused.
+
+Two things were deliberately **not** carried across from the sympathetic set, which is otherwise
+the same spring on one string. The set refuses `lambda >= 1`; this bridge never did, and at
+`lambda = 1` the binding accepts `K = 100` (`k^2 lambda_max = 3.99986`) and refuses `K = 1000`
+through the *spectral* guard. And the body's row of the coupled operator keeps the binding's two
+statements (`omega^2 q`, then `- K phi eta / m`) rather than the set's summed force, so the guard
+stays comparable to the binding's while both exist.
+
+### 19.2 The one-time check
+
+Six scenes dumped from the binding (wheel reinstalled first) and replayed natively, under
+`W:\temp\claude\bridges`:
+
+| scene | steps | differing |
+|---|---|---|
+| bare body, the suite's default fixture, body given an initial state | 500 | **0** |
+| lossy string and body, `lambda = 0.7`, `K = 15000` | 500 | **0** |
+| non-unit mode weights and masses | 500 | **0** in state and energy; 45 read-outs of the previous-step stretch, ≤ 4.6e-14 relative |
+| `RadiatedBody`, `R = 1500` | 500 | **0** |
+| `ReactiveRadiatedBody`, `R = 1500`, `M_a = 0.05` | 500 | **0** |
+| `RoomLoadedBody` in a matched-wall room, room stepped after the bridge | 300 | **0**, including the room's whole pressure field and `injected` |
+| guard `lambda_max`, all six | — | ≤ 4.8e-15 relative |
+
+Compared every step: the string's `u`, the body's `q`, the total energy, the pressure read-out,
+the bridge force, the previous-step stretch, the loaded body's radiated energy. Identical in the
+debug and release profiles.
+
+The one difference is the previous-step stretch, and only where the mode weights are not all 1.
+The binding forms `phi . q_prev` with `np.dot`, which is BLAS `ddot` and fuses its multiply-add
+(§14.2); natively it is a plain index-order sum. With every weight 1.0 the products are exact and
+the two agree; with `phi = [1, 0.6, -0.4, 0.8]` they do not. It is a read-out only — the energy's
+cross-time factor — and the energy that contains it still matched to the bit, which is rounding
+absorbing a last-bit difference, not independent evidence (§18.2's note, again). The stretch *now*,
+which is the force and does reach the trajectory, goes through the body's own
+`bridge_displacement()` on both sides and was exact.
+
+### 19.3 Six deliberate breakages
+
+| breakage | bars that fail |
+|---|---|
+| `energy()` reads the bare modal body instead of the loaded body's override | 3: the resistive, reactive and room chains |
+| no end-node correction on the string | 10, including the shape bar |
+| the body handed `-F` | 10, including the shape bar and the pressure bar |
+| the guard's spring term without the half-cell factor 2 | 2: the frozen `lambda_max` and the self-adjointness bar |
+| the sympathetic set's `lambda < 1` refusal copied in | 1: the Courant-limit bar |
+| the energy's cross-time factor read at the same time level | 8, every conservation and passivity bar |
+
+The first row is the one a single-body test file could never have produced: it is invisible on a
+bare `ModalBody`, whose override *is* the delegated number, and only a chain with a sink sees it.
+
+### 19.4 The retirement rule, discharged
+
+| retired | native bar, or verdict |
+|---|---|
+| `test_total_energy_conserved_across_lambda` (3) | `the_total_energy_is_conserved_across_lambda` |
+| `test_total_energy_conserved_across_stiffness` (4) | `the_total_energy_is_conserved_across_stiffness` |
+| `test_string_energy_alone_is_not_conserved` | `the_string_energy_alone_is_not_conserved` |
+| `test_energy_flows_string_to_body` | `energy_flows_from_the_string_into_the_body` |
+| `test_passivity_with_body_damping` | `a_lossy_body_makes_the_total_decrease_monotonically` |
+| `test_passivity_with_string_damping` | `a_lossy_string_makes_the_total_decrease_monotonically` |
+| `test_K0_bit_identical_to_uncoupled_parts` | `at_zero_stiffness_the_bridge_is_bit_identical_to_the_uncoupled_parts` |
+| `test_pressure_includes_coupling_term` | `the_pressure_read_out_carries_the_coupling_term` |
+| `test_unstable_stiffness_rejected` | `an_over_stiff_spring_is_rejected` |
+| `test_guard_holds_at_its_boundary` | `the_guard_holds_just_inside_its_boundary` |
+| `test_mismatched_timestep_rejected` | `a_mismatched_timestep_is_rejected` |
+| `test_right_end_must_be_free` | `a_clamped_right_end_is_rejected` |
+| `test_string_bridge_body_room_chain_conserves` | `the_string_bridge_body_room_chain_conserves` |
+| `test_radiation.py::test_full_chain_radiates_with_retardation` | `the_full_chain_radiates_with_retardation` |
+| `test_radiation.py::test_full_chain_with_radiation_conserves_the_total` | `the_full_chain_with_radiation_conserves_the_total` |
+| `test_radiation.py::test_full_chain_with_reactive_radiation_conserves_the_total` | `the_full_chain_with_reactive_radiation_conserves_the_total` |
+| `test_airbox_freefield.py::test_string_bridge_body_air_load_drives_the_room` | `the_string_bridge_body_air_load_drives_the_room` |
+| — | **new**: `one_step_is_the_free_parts_plus_exactly_one_spring_force` — §12's restated shape bar, on the bridge it was restated away from |
+| — | **new**: `the_guard_reproduces_the_binding_measured_spectral_radius` — `1.6617411698938603e9` to 1e-12, which makes the mass derivation load-bearing (§12's argument) |
+| — | **new**: `the_coupled_operator_is_self_adjoint_in_the_energy_inner_product` |
+| — | **new**: `a_string_at_the_courant_limit_is_refused_only_by_the_spectral_guard` |
+| — | **new**: `a_negative_stiffness_is_rejected` |
+
+The other 49 functions in `test_radiation.py` and five in `test_airbox_freefield.py` stay: their
+referents are the radiation tiers and the room, not the bridge (§14.3's referent rule).
+`tests/test_connection.py` was 39.67 s in `scripts/shard_costs.json` and its line is gone; the 22
+native bars run in 2.1 s in debug.
+
+### 19.5 What stays in the binding
+
+`PyStringBodyBridge` is untouched. The viewer builds it — on a bare body and on three loaded
+ones — and `tests/test_binding_surface.py`'s rows for it are claims about the binding that go when
+the crate does. Same reasoning as §12 and §18.6.
+
+### 19.6 The next batch
+
+**The two plate bridges, as one unit** (§20): `StringPlateBridge` and `StringVKPlateBridge`, with
+`tests/test_plate_connection.py`, `tests/test_free_plate_connection.py`,
+`tests/test_vk_connection.py` and the chain tests in `tests/test_airbox_vk.py` (9),
+`tests/test_airbox_surface.py` (1) and `tests/test_airbox_dipole.py` (1). After it nothing is
+implemented only in the binding.

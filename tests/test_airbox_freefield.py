@@ -14,8 +14,10 @@ it must reproduce both in the limits where they apply.
   ``R = (zeta - 1)/(zeta + 1)``.
 - **The bore (§7.10).** A box one cell thick in ``y`` and ``z`` *is* a 1-D duct, and must track the
   repo's :class:`Bore` step for step.
-- **The full chain (§7.11).** ``string -> bridge -> ReactiveRadiatedBody -> AirBox`` runs with no
-  edits to ``body.py``, ``connection.py`` or ``radiation.py``.
+- **The full chain (§7.11)** — ``string -> bridge -> ReactiveRadiatedBody -> AirBox`` — went
+  native with the bridge (retirement plan section 19): it is
+  ``the_string_bridge_body_air_load_drives_the_room`` in
+  ``crates/physsynth-core/tests/connection_body.rs``.
 
 Two traps govern the free-field measurement, and both were found by measuring:
 
@@ -42,13 +44,11 @@ Two traps govern the free-field measurement, and both were found by measuring:
 
 import numpy as np
 import pytest
-from helpers import gaussian_pulse, make_airbox, make_bridge
+from helpers import gaussian_pulse, make_airbox
 
 from physsynth.core.airbox import C0_AIR, RHO0_AIR, AirBox, impedance_from_zeta
 from physsynth.core.bore import Bore
-from physsynth.core.connection import StringBodyBridge
-from physsynth.core.exciter import triangular_pluck
-from physsynth.core.radiation import AirRadiation, RationalAirLoad, ReactiveRadiatedBody
+from physsynth.core.radiation import AirRadiation
 
 
 def _free_field_fit(N, *, L=1.0, f0=1400.0, cfl=0.9):
@@ -219,41 +219,3 @@ def test_quasi_1d_box_tracks_the_repo_bore():
     assert not np.array_equal(traces[:, 0], traces[:, 1]), "bit-identity is not promised here"
     # The h/2 transverse half-cells must raise no dynamics of their own, even against the open face.
     assert np.max(np.abs(box.p - box.p[:, :1, :1])) == 0.0
-
-
-# -- §7.11 the full chain, with zero edits elsewhere ---------------------------------------------
-def test_string_bridge_body_air_load_drives_the_room():
-    """``string -> bridge -> ReactiveRadiatedBody -> AirBox``, driven by the body's public
-    ``volume_velocity``.
-
-    Volume velocity is the primitive because it is what the continuity equation's source term *is*.
-    The lumped tier's ``_VolumeAccelerationSource`` protocol hands out ``Q''`` instead, so the chain
-    reads ``volume_velocity`` — the exact quantity, already public — and needs **no edits** to
-    ``body.py``, ``connection.py`` or ``radiation.py``. Integrating ``Q''`` here to fake the
-    protocol would introduce a DC drift mode with nothing to restore it, and it would be silent.
-    """
-    bridge = make_bridge(sigma_string=0.0, sigma_body=0.0, K=8000.0)
-    fs = 1.0 / bridge.body.k
-    loaded = ReactiveRadiatedBody(
-        body=bridge.body, load=RationalAirLoad(fs=fs, R=1500.0, M_a=0.05)
-    )
-    chain = StringBodyBridge(string=bridge.string, body=loaded, K=8000.0)
-    s = chain.string
-    s.set_state(triangular_pluck(s.x, s.L, 0.3 * s.L, amplitude=1e-3))
-
-    # The room has to run at the string's rate for the drive to be sample-aligned, so the CFL fixes
-    # h -- a real 3-D constraint, not a tuning choice: h >= sqrt(3) c0 / fs.
-    h = np.sqrt(3.0) * C0_AIR / fs
-    room = AirBox(L=(8 * h, 6 * h, 5 * h), fs=fs, h=h, walls=RHO0_AIR * C0_AIR)
-    room.set_state(np.zeros(room.p.shape))
-
-    heard = 0.0
-    for _ in range(400):
-        chain.step()
-        room.inject(loaded.volume_velocity)
-        room.step()
-        heard = max(heard, abs(room.pressure_at((6 * h, 3 * h, 2 * h))))
-    assert heard > 0.0, "the room heard nothing"
-    assert room.injected_energy() != 0.0
-    # The room's own three-channel identity still closes while an external chain drives it.
-    assert abs(room.energy()) / abs(room.injected_energy()) < 1e-9

@@ -10,8 +10,12 @@ energy identity:
   * retardation is an exact integer-sample delay (amplitude preserved, wavefront in transit =
     silence for ``r / c0`` seconds);
   * linearity/superposition of the transform;
-  * end-to-end: a real ModalBody and a full string->bridge->body chain radiate a finite, non-trivial
-    pressure equal to the gain times the body's volume acceleration.
+  * end-to-end: a real ModalBody radiates a finite, non-trivial pressure equal to the gain times
+    the body's volume acceleration.
+
+The three string->bridge->body chains that used to live here (retardation, the resistive total,
+the reactive total) went native with the bridge: ``crates/physsynth-core/tests/connection_body.rs``
+(retirement plan section 19).
 """
 
 import numpy as np
@@ -19,14 +23,12 @@ import pytest
 from helpers import (
     SPHERE_RADIUS_DEFAULT,
     make_body,
-    make_bridge,
     make_radiated_body,
     make_radiation,
     make_reactive_body,
 )
 
 from physsynth.core.body import ModalBody
-from physsynth.core.connection import StringBodyBridge
 from physsynth.core.radiation import (
     C0_AIR,
     RHO0_AIR,
@@ -137,25 +139,6 @@ def test_radiates_a_real_modal_body():
         assert p == pytest.approx(rad.gain * body.pressure(), rel=1e-12)
         peaks.append(abs(p))
     assert max(peaks) > 0.0  # the body genuinely radiates
-
-
-def test_full_chain_radiates_with_retardation():
-    # string -> bridge -> modal body -> air: the full instrument chain producing radiated sound.
-    bridge = make_bridge()
-    from physsynth.core.exciter import triangular_pluck
-
-    s = bridge.string
-    bridge.string.set_state(triangular_pluck(s.x, s.L, 0.3 * s.L, amplitude=1e-3))
-    fs = 1.0 / bridge.k
-    rad = make_radiation(fs=fs)  # retarded default
-    p = np.empty(4000)
-    for i in range(4000):
-        bridge.step()
-        p[i] = rad.radiate(bridge)
-    assert np.all(np.isfinite(p))
-    # Silence until the wavefront arrives, then a non-trivial radiated signal.
-    assert np.allclose(p[: rad.latency_samples], 0.0)
-    assert np.max(np.abs(p[rad.latency_samples:])) > 0.0
 
 
 def test_reset_clears_the_delay_line():
@@ -297,28 +280,6 @@ def test_loaded_body_radiates_through_the_air():
         loaded.step()
         # pressure() reflects the corrected (post-load) acceleration; the air reads it exactly.
         assert rad.radiate(loaded) == pytest.approx(rad.gain * loaded.pressure(), rel=1e-12)
-
-
-# -- full chain: string -> bridge -> RADIATED body conserves E_str+E_body+E_conn+integral P_rad -
-def test_full_chain_with_radiation_conserves_the_total():
-    # A lossless string and lossless body modes; the ONLY sink is the radiation channel, so the
-    # bridge's own energy() (string + loaded-body.energy() + E_conn) must be conserved.
-    bridge = make_bridge(sigma_string=0.0, sigma_body=0.0, K=8000.0)
-    loaded = RadiatedBody(body=bridge.body, R=1500.0)
-    chain = StringBodyBridge(string=bridge.string, body=loaded, K=8000.0)
-    from physsynth.core.exciter import triangular_pluck
-
-    s = chain.string
-    s.set_state(triangular_pluck(s.x, s.L, 0.3 * s.L, amplitude=1e-3))
-    e0 = chain.energy()
-    peak = 0.0
-    for _ in range(6000):
-        chain.step()
-        peak = max(peak, abs(chain.energy() - e0) / abs(e0))
-    assert peak < 1e-9                          # the four-way energy identity holds
-    assert loaded.radiated_energy > 0.0         # the body genuinely radiated
-    # The radiated energy is a real fraction of the total: the chain has audibly rung down into air.
-    assert loaded.radiated_energy > 0.05 * e0
 
 
 # -- the (1 + sigma k) factor: a LOSSY body must match the exact dense coupled implicit solve ---
@@ -743,25 +704,6 @@ def test_lossy_reactive_body_matches_the_exact_dense_coupled_solve(fs):
         q1_ref = np.linalg.solve(mmat, rhs)
         loaded.step()
         assert np.allclose(b.q, q1_ref, rtol=0, atol=1e-13)
-
-
-# -- full chain: string -> bridge -> REACTIVELY radiated body, with zero bridge edits -------------
-def test_full_chain_with_reactive_radiation_conserves_the_total():
-    bridge = make_bridge(sigma_string=0.0, sigma_body=0.0, K=8000.0)
-    load = RationalAirLoad(fs=1.0 / bridge.body.k, R=1500.0, M_a=0.05)
-    loaded = ReactiveRadiatedBody(body=bridge.body, load=load)
-    chain = StringBodyBridge(string=bridge.string, body=loaded, K=8000.0)
-    from physsynth.core.exciter import triangular_pluck
-
-    s = chain.string
-    s.set_state(triangular_pluck(s.x, s.L, 0.3 * s.L, amplitude=1e-3))
-    e0 = chain.energy()
-    peak = 0.0
-    for _ in range(6000):
-        chain.step()
-        peak = max(peak, abs(chain.energy() - e0) / abs(e0))
-    assert peak < 1e-9                       # E_string + E_body + E_conn + E_air holds
-    assert loaded.radiated_energy > 0.05 * e0
 
 
 def test_the_discrete_impedance_converges_to_the_continuous_one():

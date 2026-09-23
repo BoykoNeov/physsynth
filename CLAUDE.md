@@ -78,7 +78,12 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    every state quantity and count; the native bare mallet's hand-written commit was §17.1's drift
    a second time; and the retired tangent bar could not see its own defect, because a bar that
    asserts a *difference* from a twin differing in two ways certifies neither (finding #78).
-   **The hole is now only the three bridges** (§18.7). A Python
+   **The hole is now only the three bridges** (§18.7), and **§19 took the first of them**:
+   `StringBodyBridge<B>` is native, generic over a `BridgeBody` trait that the four bodies its slot
+   took all implement, with the room as the trait's associated `Room` type (`()` in free air, the
+   `AirBox` when mounted) handed through `step` rather than owned. `tests/test_connection.py`
+   retired whole; the two **plate** bridges are left, and an exact anchor makes them one unit
+   (§19.6). A Python
    **plotting island** was chosen and withdrawn the same day: there is none, the plotting
    capability leaves, and where a diagnostic drew a figure Rust emits the data instead. The
    JavaScript front-end (`web/static/`) is not Python and is not in scope. **The rest of this
