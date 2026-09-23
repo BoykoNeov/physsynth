@@ -174,10 +174,31 @@ jobs:
       # Runs `crates/physsynth-core/tests/` — the native energy/passivity/modal bars, and the
       # dependency allowlist. No interpreter involved, so a failure here is the physics or the
       # crate graph, never the binding.
+      #
+      # The WHOLE suite runs in `--release`: that is the codegen the wheel ships, and it is the
+      # profile where a test pinning an arithmetic spelling can go vacuous (plan §17.2, §23.5 —
+      # LLVM folds a literal exponent, so the pin compares a value with itself).
+      #
+      # The debug run is the second half of that rule ("run it in both profiles") and also the only
+      # run where `debug_assert!` fires. It takes every test target EXCEPT the ones below, which
+      # are long physics trajectories and none of which pins a spelling. Unoptimised they were
+      # ~15 of this step's 19 minutes (2026-09-23: 495 s, 353 s, 64 s, against 23 s, 17 s, 3 s in
+      # release). The list is an exclusion on purpose: a new test file lands in both profiles by
+      # default, and a stale name here fails the step rather than quietly excluding nothing.
       - name: Native validation + dependency allowlist
         run: |
-          cargo test --workspace
           cargo test --workspace --release
+          release_only="connection_plate mallet_gong plate"
+          for n in $release_only; do
+            ls crates/*/tests/$n.rs > /dev/null || { echo "release_only names $n: no such test file"; exit 1; }
+          done
+          targets=""
+          for f in crates/*/tests/*.rs; do
+            n=$(basename "$f" .rs)
+            case " $release_only " in *" $n "*) continue ;; esac
+            targets="$targets --test $n"
+          done
+          cargo test --workspace --lib $targets
 
       - uses: actions/setup-python@v5
         with:
