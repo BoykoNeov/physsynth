@@ -524,9 +524,10 @@ def test_the_strings_and_the_beam_share_one_theta_and_the_plate_deliberately_doe
 # `tests/test_rust_parity_connection.py` was deleted with `connection.py`'s Python bodies, and it
 # held two kinds of test mixed together — the distinction this file's own docstring is built on.
 # The **comparisons** (four bit-identical trajectories, two cross-language anchors) went with the
-# twin they compared against; the *within-language* half of both anchors survives untouched in
-# `tests/test_sympathetic.py` and `tests/test_airbox_vk.py`, which assert them on the default path
-# and now assert them of Rust.
+# twin they compared against; the *within-language* half of both anchors survived in
+# `tests/test_sympathetic.py` and `tests/test_airbox_vk.py`, and has since gone native with the
+# bridges themselves (`crates/physsynth-core/tests/connection.rs`, `connection_plate.rs`;
+# retirement plan sections 12 and 20), where one of the two became a single code path.
 #
 # What moved here is the other kind, and three of them got *stronger* on the way rather than
 # weaker: a claim of the form "Rust agrees with Python about this reduction" becomes "Rust agrees

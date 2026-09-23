@@ -4038,9 +4038,9 @@ def _build_payload_body(p: dict[str, Any]) -> dict[str, Any]:
 # so the third stage of exciter -> resonator -> body finally has a PICTURE: the soundboard (#5,
 # supported) / cymbal (#5b, free) lighting up and ringing on the heatmap as the pluck's energy
 # transfers into it. All-wrapper; the hard explicit-string/implicit-plate coupling AND the EXACT
-# Sherman-Morrison guard are already built + validated in core (test_free_plate_connection.py, 23
-# tests, + the supported-bridge battery). The measured decisions (platebody-viewer-probe, task 2)
-# that shape this backend:
+# Sherman-Morrison guard are already built + validated in core (crates/physsynth-core/tests/
+# connection_plate.rs since retirement plan section 20). The measured decisions
+# (platebody-viewer-probe, task 2) that shape this backend:
 #   * The guard ceiling K_c ~ 13,968 N/m is the SAME for supported and free (the STRING end-node
 #     term dominates the exact margin; the interior driving point has W_dp = h^2 either way), so
 #     bridge_stiffness is ONE range for both boundaries. K_c shrinks with n_plate; a high-N x high-K

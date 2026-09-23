@@ -20,6 +20,10 @@
 //! | `_register_cut`, `_plane_axis` | `InteriorSurfacePort` | — |
 //! | `_divergence` | `test_airbox_port`, `test_airbox_surface` | — |
 //!
+//! That table is a snapshot from when this file was written. Several of the test files it names
+//! have since retired to native bars (retirement plan §13–§20), so it records why each name was
+//! exposed, not who reads it today.
+//!
 //! So none of the six containers can be mirrored in Rust: a client appends to `_pending_ports` and
 //! a test assigns a fresh `[None, None, None]` over `_cut_mask`. They are Python objects the class
 //! merely holds, and every step reads them back. That is §12.2's finding ("a leading underscore is

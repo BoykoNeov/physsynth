@@ -1826,8 +1826,9 @@ bars in `crates/physsynth-core/tests/connection_plate.rs`. Six Python files reti
 `tests/helpers.py` with them; `plate_bump`, `plate_mode_shape` and `vk_strike`, which sat in the
 same section, stay because other files use them.
 
-**With this, nothing is implemented only in the binding.** Every model class the binding holds has a
-native implementation. What remains in `crates/physsynth-py` is glue, plus the binding's own copies
+**With this, nothing is implemented only in the binding** — derived at the class level and one level
+down (§20.5), because §17.5 showed a class count alone cannot see a mode living inside a method.
+Every model class the binding holds has a native implementation. What remains in `crates/physsynth-py` is glue, plus the binding's own copies
 of the four bridges, which the viewer still builds (§19.5's reasoning, unchanged).
 
 ### 20.1 Two classes, one type, and where the density lives
@@ -1885,7 +1886,8 @@ Python bar "the margin uses the areal density" would have been blind to the dens
 the binding: with the volume density the margin is 0.1394 against 0.1425, so the bar is live. The two
 boundaries agree because the drive node is interior, where both lumped masses are `rho_s h^2`, and
 the theta-excess stiffness is negligible at this timestep. The bar is now sharpened to assert the
-volume-density twin **differs** (finding #79), so the check that was made here stays made.
+volume-density twin **differs** — finding #78's pattern, an equality that could not rule out the
+defect replaced by a positive claim — so the check that was made here stays made.
 
 ### 20.3 Nine deliberate breakages, and one that no bar could see
 
@@ -1905,8 +1907,8 @@ The last row is finding #79. The binding zeroed the drive entry after every step
 caller could replace `_f_ext` or move `drive_index`. Natively neither can change after construction,
 so the only nonzero entry is always the one about to be overwritten, and the reset is unobservable.
 The shape bar's comment claimed a leak would be caught; that was false. The reset and the claim are
-both gone. The advisor had listed that mutation as one to run, and running it is what showed the
-code was dead.
+both gone. The mutation was planned before the port as a check on the reset; running it is what
+showed there was nothing for the reset to do.
 
 The two energy-override rows were run separately (#73, #78's "mutate each half"). A first attempt
 at them did not compile — the trait method was not in scope — and a row reading "0 fail" from a
@@ -1975,9 +1977,41 @@ paired with the volume-density twin that must differ. The room-loaded margin equ
 is kept as the statement that the guard reads the plate's parameters and never the loaded
 factorization.
 
-The 48 bars run in 198 s in debug (7 s in release); the six Python files were 268 s of shard cost.
+The 48 bars run in 198 s in debug locally (7 s in release); the six Python files were 268 s of
+shard cost. **On CI that trade is not neutral, and it is recorded here rather than tuned away.** The
+Rust job's native step went from 6 min 56 s on §19's run to **18 min 46 s** on this one
+(runner-class variance on this project is ~1.6x, and the run before §19 took 12 min 37 s, so the
+jump is not the runner). The Python bars were spread over three concurrent shards; the native ones
+all land in the one Rust job, in the debug profile `cargo test --workspace` uses, where the two
+long conservation bars (1.2–1.5 s of audio each, at up to 40 kHz, over both boundaries and several
+lambdas or stiffnesses) dominate. The Rust job was already the slowest in the run; it is now the
+whole run's critical path, at ~20 minutes against ~3 per Python shard. Whether to answer that — the
+native step in release, a split of the Rust job, or fewer audio-seconds in the two long bars — is
+the human's call, and none of it is done here.
 
-### 20.5 What is next
+### 20.5 The closing claim, derived one level down
+
+§13.1's derive is a name join and has expired as a measure (§16.7), so "the hole is closed" was
+checked three ways rather than one:
+
+1. **Classes.** Every `#[pyclass]` name in `crates/physsynth-py` against every public native type:
+   43 classes, 10 without a same-named native type, and all 10 are recorded re-homings — the six
+   room wrappers and three surface adapters (`RoomGrid<S>` and its seams, §16.7) and
+   `StringVKPlateBridge` (`StringPlateBridge<VkPlate>`, here).
+2. **Methods that compute.** Every `#[pymethods]` method and `#[pyfunction]` whose body has a loop
+   or three or more arithmetic operations — 34. Each was read: the bridges, wrappers and loaded
+   bodies are ported (§13–§20); the rest are constructors and argument parsing around a native
+   type that does the work (`AirBox::add_cut`, `GeometricString::step` with both of its branches,
+   `TensionModulatedString::tension`, `parabolic_refine` with its edge case, and so on).
+3. **Methods that orchestrate.** The second pass exists because the first is blind to exactly the
+   thing this batch ported: the bridges' `step` did one multiplication, and its content was the
+   *sequence* of calls on duck-typed collaborators. Every call on a Python object outside the
+   ported files is NumPy marshalling, the room reading its own attributes, or the bore's `source`
+   hook, which the native `Bore::step` takes too.
+
+The only type-dispatched mode in the binding is `MalletVKPlate`'s room arm, which is §18's.
+
+### 20.6 What is next
 
 Phase C's hole work is done. What stands between here and deleting `crates/physsynth-py` is the
 rest of the plan as §7 laid it out: the viewer (phase D, still the longest pole), the scripts
