@@ -1487,9 +1487,8 @@ To make sure it is the only one, every binding site that recognises a room wrapp
 (`VkRoom::of`, casts to the `PyRoom*` classes, `in_room`, `airbox_wrap::` outside that file). One
 site: the mallet. (The bridges accept room wrappers too, but they are already on the list.) So the
 hole after this batch is **the three bridges and the mallet's room mode**. The mallet file was not
-retired here. That is **not** a decision to leave it: the plan this batch ran on simply did not list
-it, and whether it goes next, rides with the bridges, or waits is the human's call and is still
-open. When it is ported, `RoomGrid` already has everything it composes, and the binding's
+retired here: the plan this batch ran on did not list it. Asked afterwards, **the human chose to
+port it next, as its own batch (2026-09-23)**, ahead of the bridges. When it is ported, `RoomGrid` already has everything it composes, and the binding's
 pointer-identity check for a swapped factorization has a clean native analogue — a generation
 counter that `RoomGrid::refactor` bumps.
 
@@ -1541,8 +1540,8 @@ CI durations run to replace.
 
 ### 17.8 The next batch
 
-The hole is the three bridges in `crates/physsynth-py/src/connection.rs` (`StringBodyBridge`,
-`StringPlateBridge`, `StringVKPlateBridge`) and the mallet's room mode. The mallet is the small one
-and stands on nothing unported, so it can go first or alongside; the bridges are what every
-remaining chain test in `test_airbox_vk.py`, `test_airbox_surface.py` and `test_airbox_dipole.py`
-waits on.
+**The mallet's room mode, on its own** (the human's call, 2026-09-23): it is small, stands on
+nothing unported, and retires most of `tests/test_mallet_room_gong.py`. After it, the hole is only
+the three bridges in `crates/physsynth-py/src/connection.rs` (`StringBodyBridge`,
+`StringPlateBridge`, `StringVKPlateBridge`) — what every remaining chain test in
+`test_airbox_vk.py`, `test_airbox_surface.py` and `test_airbox_dipole.py` waits on.
