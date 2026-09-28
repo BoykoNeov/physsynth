@@ -297,3 +297,100 @@ pub fn string_block(s: &StringInfo, of: &str) -> Value {
         s.fs / 2.0,
     )
 }
+
+/// Which 2-D scheme a rectangular grid block describes.
+#[derive(Debug, Clone, Copy)]
+pub enum Grid2dScheme {
+    /// The membrane's explicit leapfrog, wave speed `c`.
+    Membrane {
+        /// Wave speed (m/s).
+        c: f64,
+    },
+    /// The simply-supported plate's theta-scheme.
+    Plate {
+        /// Stiffness parameter `kappa`.
+        kappa: f64,
+        /// The scheme's theta.
+        theta: f64,
+    },
+}
+
+/// `_horizon_grid2d`: a rectangular 2-D grid — the membrane (explicit) or the simply-supported
+/// plate (theta). The caller has already refused the shapes and boundaries with no continuum
+/// reference. The index reading takes the worst of the three corner families, because which
+/// corner is worst is a property of the scheme rather than of the block (plan §8.7, §10.5).
+#[allow(clippy::too_many_arguments)]
+pub fn grid2d_block(
+    h: f64,
+    k: f64,
+    lx: f64,
+    ly: f64,
+    fs: f64,
+    scheme: Grid2dScheme,
+    of: &str,
+) -> Value {
+    let nx = crate::py::round_int(lx / h);
+    let ny = crate::py::round_int(ly / h);
+    if nx.min(ny) < 2 {
+        return horizon_none("this grid carries no interior modes.", Some(of));
+    }
+    let count = ((nx - 1) * (ny - 1)) as usize;
+    if count > HORIZON_MAX_MODES {
+        return horizon_none(
+            &format!(
+                "this grid carries {count} modes, past the {HORIZON_MAX_MODES} the read-out \
+                 examines; no horizon is reported rather than one read off a truncated spectrum."
+            ),
+            Some(of),
+        );
+    }
+    let freqs = |pairs: &[(i64, i64)]| -> (Vec<f64>, Vec<f64>) {
+        let lam = modal::rectangular_discrete_eigenvalues(h, nx, ny, pairs);
+        match scheme {
+            Grid2dScheme::Plate { kappa, theta } => (
+                lam.iter()
+                    .map(|&l| modal::discrete_plate_eigenfrequency(l, kappa, k, theta))
+                    .collect(),
+                modal::rectangular_plate_freqs(kappa, lx, ly, pairs),
+            ),
+            Grid2dScheme::Membrane { c } => (
+                lam.iter()
+                    .map(|&l| modal::discrete_membrane_eigenfrequency(l, c, k))
+                    .collect(),
+                modal::rectangular_membrane_freqs(c, lx, ly, pairs),
+            ),
+        }
+    };
+    let pairs: Vec<(i64, i64)> = (1..nx).flat_map(|m| (1..ny).map(move |n| (m, n))).collect();
+    let (f_disc, f_cont) = freqs(&pairs);
+    let labels: Vec<String> = pairs
+        .iter()
+        .map(|(m, n)| format!("mode ({m}, {n})"))
+        .collect();
+    let corner = nx.min(ny) - 1;
+    let families: Vec<Family> = [
+        ("axial", "axial (m, 1)"),
+        ("axial_y", "axial (1, n)"),
+        ("diagonal", "diagonal (m, m)"),
+    ]
+    .iter()
+    .map(|&(kind, name)| {
+        let fam = horizon::mode_family(kind, corner).expect("corner >= 1 and a known family");
+        (name.to_owned(), freqs(&fam))
+    })
+    .collect();
+    let scheme_name = match scheme {
+        Grid2dScheme::Plate { .. } => "implicit theta-scheme",
+        Grid2dScheme::Membrane { .. } => "explicit leapfrog",
+    };
+    horizon_report(
+        &f_disc,
+        &f_cont,
+        &labels,
+        &families,
+        scheme_name,
+        2,
+        of,
+        fs / 2.0,
+    )
+}

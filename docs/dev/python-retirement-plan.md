@@ -2775,3 +2775,49 @@ grid's pairs still come back doubled at block 1: by the time twelve values conve
 fed each pair's second direction into the basis. The grid is therefore a closed-form bar and not
 the multiplicity bar, and its test says so. That is the reason the diagonal triple exists, since a
 diagonal operator gives rounding nothing to mix.
+
+### 23.12 Batch D5, first scene — the membrane
+
+Fifteen of the twenty-two keys are now native. **`membrane`** (disk and rectangle) is in
+`crates/physsynth-viewer/src/membrane.rs`, and it is the first scene whose payload runs through
+the new solver. Its spectrum markers are the operator's lowest twelve eigenfrequencies.
+`horizon.rs` gained `grid2d_block`, the rectangular 2-D read-out, written with a scheme enum so
+the plate can reuse it.
+
+| corpus | requests | identical | within a class | failing |
+|---|---|---|---|---|
+| membrane (test-derived, both domains, the horizon section's rectangles, a 99 x 99 square) | 30 | 28 | 2 | 0 |
+| the browser's own requests (disk and rectangle) | 2 | 2 | 0 | 0 |
+
+**The eigenvalues needed no tolerance class after all.** §23.11 expected one, because the markers
+come from an iteration. But the payload rounds them to four decimals, and in all seventeen
+successful cases every marker came out identical to SciPy's after rounding, as did the fundamental
+that sets the animation stride. The two cases within a class are the fitted decay rate, the
+existing class. The solver's own bars (1e-11 to 1e-12 relative against closed forms) are what
+certifies the unrounded values. The rounding hides a difference at that level except when a value
+sits within that distance of a rounding boundary, which a future diff could hit. If one does, the
+class to add is relative 1e-10 on `modes_discrete`, and it is not a regression.
+
+**A finding the membrane test now pins: a grid disk has the square's symmetry, not the circle's.**
+Its cos/sin pairs of odd angular order come back exactly repeated, since they belong to the
+square group's two-dimensional representation. The even-order ones split: at `N = 48` the (2, 1)
+pair is 323.32 / 323.47 Hz. The markers carry the exact pairs doubled and the split ones as two
+lines, identically to the reference. This is the first scene where the solver's block design is
+visible in a payload.
+
+**The headless check passed both domains** on the Rust server (drift 9.4e-15 and 1.1e-14; the
+rectangle's read-out "trustworthy to 866 Hz, 40 modes"). Its Chrome leaked again and was closed
+through its DevTools port.
+
+**Tests carried:**
+
+- `tests/membrane.rs`, 12 tests: the reference's membrane section (its parametrized cases
+  folded into loops), plus one new test, the disk's repeated and split pairs above. Unoptimized it
+  takes 48 s. It stays in both profiles: the `release_only` list holds files well past a minute,
+  and the name `membrane` would also exclude the core crate's own `tests/membrane.rs`, which must
+  run in both.
+- `tests/horizon.rs`, 16 tests (+3): the 2-D halves that were waiting for a 2-D scene. They
+  check that the index reading is the conservative one, that the worst corner is axial at the
+  CFL ceiling and tied below it, and that a disk is refused as a staircase. The membrane was
+  added to the monotone-bound, hertz-ceiling and strict-JSON loops.
+- The whole workspace: 1,088 Rust tests pass.

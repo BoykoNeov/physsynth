@@ -13,6 +13,7 @@
 //! the other.
 
 use crate::bow::BowedString;
+use crate::membrane::Membrane;
 use crate::string_damped::DampedStiffString;
 use crate::string_ideal::IdealString;
 use crate::string_nonlinear::TensionModulatedString;
@@ -227,5 +228,27 @@ impl Resonator for BowedString {
     }
     fn timestep(&self) -> f64 {
         self.p.k
+    }
+}
+
+/// The membrane's `state` is the FULL row-major node field (zeros at dead nodes), as the
+/// original's snapshot is: the viewer ships frames on the grid, not on the live-node list.
+/// `displacement_at` takes a live-node index, which is what `pickup_index_at` returns.
+impl Resonator for Membrane {
+    fn step(&mut self) -> Result<(), String> {
+        Membrane::step(self);
+        Ok(())
+    }
+    fn energy(&self) -> f64 {
+        Membrane::energy(self)
+    }
+    fn state(&self) -> Vec<f64> {
+        Membrane::state(self)
+    }
+    fn displacement_at(&self, index: usize) -> f64 {
+        Membrane::displacement_at(self, index)
+    }
+    fn timestep(&self) -> f64 {
+        self.params().k
     }
 }

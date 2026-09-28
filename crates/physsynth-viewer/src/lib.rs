@@ -30,6 +30,7 @@ pub mod contact;
 pub mod energy;
 pub mod geometric;
 pub mod horizon;
+pub mod membrane;
 pub mod py;
 pub mod radbody;
 pub mod reed;
@@ -59,7 +60,7 @@ pub const MODELS: [(&str, bool); 22] = [
     ("fret", true),
     ("bore", false),
     ("reed", true),
-    ("membrane", false),
+    ("membrane", true),
     ("mallet", false),
     ("plate", false),
     ("vk", false),
@@ -144,6 +145,7 @@ fn build_payload(p: &Value) -> Result<Value, Refusal> {
         _ if model == "radbody" => radbody::build_payload(p),
         _ if model == "airload" => airload::build_payload(p),
         _ if model == "body" => body::build_payload(p),
+        _ if model == "membrane" => membrane::build_payload(p),
         _ if model == "jawari" => contact::build_payload_jawari(p),
         _ if model == "juari" => contact::build_payload_juari(p),
         _ if model == "fret" => contact::build_payload_fret(p),

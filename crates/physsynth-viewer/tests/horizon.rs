@@ -1,8 +1,8 @@
 //! The resolution-horizon read-out — the viewer half of `docs/dev/resolution-horizon-plan.md`.
 //!
 //! The physics is asserted against the primitives in `physsynth-analysis`; what is asserted here is
-//! that the viewer asks them the right question about the right scene. The 2-D rows (membrane,
-//! plate, von Kármán) arrive with those scenes' builders.
+//! that the viewer asks them the right question about the right scene. The membrane's 2-D rows
+//! are here; the plate's and the von Kármán plate's arrive with those scenes' builders.
 
 mod common;
 
@@ -13,6 +13,19 @@ use physsynth_viewer::py::{has_nonfinite, num, NONFINITE};
 use physsynth_viewer::MODELS;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
+
+/// A short rectangular membrane — the reference's `_membrane_params(domain="rectangle", ...)`.
+fn rect_membrane(n: i64, extra: Value) -> Value {
+    let mut p = json!({
+        "model": "membrane", "domain": "rectangle",
+        "T": 200.0, "rho": 0.005, "radius": 0.5, "N": n, "lambda": 0.6, "sigma": 0.0,
+        "pluck_x": 0.4, "pluck_y": 0.55, "pluck_width": 0.45, "amplitude": 1e-3,
+        "pickup_x": 0.65, "pickup_y": 0.6,
+        "audio_duration": 0.05, "animation_window": 0.04, "playback_speed": 0.02,
+    });
+    common::merge(&mut p, extra);
+    p
+}
 
 /// The models whose builders compute a read-out; with `HORIZON_ABSENT` this partitions the list.
 const HORIZON_MEASURED: [&str; 11] = [
@@ -195,6 +208,7 @@ fn a_tighter_bound_can_only_shorten_the_claim() {
     for params in [
         base_params(json!({"model": "ideal", "lambda": 0.8})),
         base_params(json!({"model": "stiff", "N": 96, "kappa": 4.0})),
+        rect_membrane(24, json!({})),
     ] {
         let bands = horizon(&params)["bands"].as_array().unwrap().clone();
         for pair in bands.windows(2) {
@@ -211,13 +225,74 @@ fn a_tighter_bound_can_only_shorten_the_claim() {
 
 #[test]
 fn the_hertz_ceiling_stops_below_the_first_mode_that_is_out_of_tune() {
-    let b = band(
-        &horizon(&base_params(json!({"model": "damped", "N": 96}))),
-        5.0,
+    for params in [
+        base_params(json!({"model": "damped", "N": 96})),
+        rect_membrane(24, json!({})),
+    ] {
+        let b = band(&horizon(&params), 5.0);
+        assert_eq!(b["saturated"], false);
+        assert!(!b["hz"].is_null(), "{b}");
+        assert!(f(&b["limit_hz"]) > f(&b["hz"]), "{b}");
+        assert!(f(&b["limit_cents"]).abs() > f(&b["cents"]), "{b}");
+    }
+}
+
+/// Why a 2-D scene ships two numbers: a block is not a family, and the index reading counts only
+/// the square block whose corners are all in tune — the smaller claim, by a factor of four at 25
+/// cents on this membrane.
+#[test]
+fn the_2d_readings_differ_and_the_index_one_is_the_conservative_one() {
+    let block = horizon(&rect_membrane(24, json!({})));
+    assert_eq!(block["dims"], 2);
+    for b in block["bands"].as_array().unwrap() {
+        assert!(f(&b["index"]) <= f(&b["modes"]), "{b}");
+    }
+    let loose = band(&block, 25.0);
+    assert!(f(&loose["modes"]) > f(&loose["index"]), "{loose}");
+}
+
+/// At the 2-D CFL ceiling the membrane's DIAGONAL family is exact and the axial ones are not, so
+/// the corner that limits a block is axial — the plate's rule inverted (plan §10.6). Below the
+/// ceiling the three families land on one integer and the payload says they tie.
+#[test]
+fn a_membranes_worst_corner_is_axial_at_the_courant_ceiling() {
+    let lmax = 1.0 / 2.0f64.sqrt();
+    let ceiling = band(&horizon(&rect_membrane(32, json!({"lambda": lmax}))), 5.0);
+    let fam = ceiling["family"].as_str().unwrap();
+    assert!(
+        fam.contains("axial") && !fam.contains("diagonal"),
+        "{ceiling}"
     );
-    assert_eq!(b["saturated"], false);
-    assert!(f(&b["limit_hz"]) > f(&b["hz"]), "{b}");
-    assert!(f(&b["limit_cents"]).abs() > f(&b["cents"]), "{b}");
+    let idx = |name: &str| {
+        ceiling["families"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["name"] == name)
+            .map(|x| f(&x["index"]))
+            .unwrap()
+    };
+    let diag = idx("diagonal (m, m)");
+    assert!(
+        diag > idx("axial (m, 1)") && diag > idx("axial (1, n)"),
+        "{ceiling}"
+    );
+    let low = band(&horizon(&rect_membrane(32, json!({"lambda": 0.3}))), 5.0);
+    assert_eq!(low["family_tied"], true, "{low}");
+}
+
+/// A staircased disk is refused with the mechanism named, not quoted.
+#[test]
+fn a_circular_membrane_is_refused_as_a_staircase() {
+    let mut p = rect_membrane(40, json!({"domain": "circle"}));
+    common::merge(&mut p, json!({"audio_duration": 0.05}));
+    let block = horizon(&p);
+    assert_eq!(block["kind"], "none");
+    assert!(
+        block["reason"].as_str().unwrap().contains("staircased"),
+        "{block}"
+    );
+    assert_eq!(block["of"], "the membrane");
 }
 
 #[test]
@@ -287,6 +362,8 @@ fn survives_strict_json() {
     for params in [
         base_params(json!({})),
         base_params(json!({"model": "damped", "N": 96})),
+        rect_membrane(24, json!({})),
+        rect_membrane(40, json!({"domain": "circle"})),
     ] {
         let payload = ok(&params);
         assert!(!has_nonfinite(&payload));

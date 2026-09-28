@@ -7,6 +7,7 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 - [Commit & push at batch end](commit-push-at-batch-end.md) — batch end → memory+docs, commit, push; "commit" always pushes
 - [Parity files run UNFLAGGED](parity-files-run-unflagged.md) — SUPERSEDED by phase A: no flag exists; still reinstall the wheel first
 - [Respect ruff line length](respect-ruff-line-length.md) — ≤100 chars in the FIRST draft; CI fails fast on `ruff check .`
+- [Gate commit on lint exit](gate-commit-on-lint-exit.md) — lint in its own step; a `| grep` swallows clippy's failure and a red commit gets pushed
 - [Destructive undo discipline](destructive-undo-discipline.md) — never undo a temp edit with `git checkout --`; it discarded a whole batch
 - [Identify processes before killing](identify-processes-before-killing.md) — read the command line first; the user runs their own Python here
 - [Port reclaim modus operandi](port-reclaim-modus-operandi.md) — reclaim a busy port only from a stale run of THIS program
@@ -52,7 +53,7 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 - [Retirement batch 7](rust-retirement-batch7-state.md) — all three bridges native (`BridgeBody`, one generic `StringPlateBridge`); the hole is CLOSED; finding 79
 - [Retirement phase A](retirement-phase-a-state.md) — flag GONE; banded deleted; default suite == old flagged; reconcile counts via a worktree
 - [Retirement phase E](retirement-phase-e-state.md) — 36 scripts + viz gone; sweep → Cargo example; convergence edge is a last-bit event
-- [Retirement phase D](retirement-phase-d-state.md) — viewer to Rust: D1-D4 done (14/22 keys), trajectories bit-identical; diff harness + browser request log; next D5
+- [Retirement phase D](retirement-phase-d-state.md) — viewer to Rust: D1-D4 + membrane done (15/22 keys), own eigsh solver; diff harness + browser request log; next D5 rest
 - [Viewer stays Python](viewer-stays-python.md) — SUPERSEDED; only coverage proves a line runs, not a grep
 - [Analysis freeze](analysis-freeze-state.md) — 62 fixtures frozen from the Python before it was deleted
 - [Deletion phase](rust-deletion-phase-state.md) — all 11 units gone, 23,396 lines, zero physics bars retired

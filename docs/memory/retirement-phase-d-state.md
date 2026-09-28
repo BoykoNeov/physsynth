@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-d-state
-description: "Phase D (viewer to Rust) IN PROGRESS — D1-D4 done 2026-09-28: crates/physsynth-viewer, 14 of 22 keys; every trajectory bit-identical to the Python; next D5 (sparse shift-invert eigsh)"
+description: "Phase D (viewer to Rust) IN PROGRESS — D1-D4 + D5 membrane done 2026-09-28: crates/physsynth-viewer, 15 of 22 keys; core::eigs solver; next D5 rest (mallet, plate x3, vk, bore, platebody)"
 metadata:
   node_type: memory
   type: project
@@ -15,7 +15,7 @@ the viewer in rust". Scope = plan §5: backend to Rust, `web/static/` JS untouch
 parametric) + bow; D3 (§23.9) sympathetic, geometric, reed (memo dropped), radbody, airload — all
 139 D3 requests + 11 browser requests matched, 149 of the 150 to the bit; D4 (§23.10) body, jawari,
 juari, fret + `physsynth_analysis::spectrum::rfft` (Bluestein, any length) — 73 + 8 browser, 0 failing. `physsynth-core/src/engine.rs` = native `simulate`, `Resonator::step` is FALLIBLE
-(step failure → payload kind `internal`). The other 8 keys are refused with kind `unported`. Python server
+(step failure → payload kind `internal`). The other 7 keys are refused with kind `unported`. Python server
 stays the live viewer until D7.
 
 **How each batch is checked:** `W:\temp\claude\viewer-port\`:
@@ -57,8 +57,14 @@ binding's exception type (RuntimeError -> internal, ValueError -> construction).
 snap) is PORTED and PINNED by a test, fix only as a decision after the switch. The running viewer
 server locks `target/release/physsynth-viewer.exe` — stop it (by PID) before `cargo test`.
 
+**D5 so far (§23.11-23.12):** `physsynth_core::eigs::eigsh_shift_invert` (shift-invert, block of
+3, full reorth, SplitMix start) + `eig::symmetric_eigen` (vectors). Membrane: 30 + 2 browser, 0
+failing; markers identical to SciPy after the payload's 4-decimal rounding. A grid disk's ODD
+angular pairs are exact repeats, EVEN ones split. D6 vkroom's per-mode shares are basis-dependent
+on its square plate: decide (group sums vs mirror basis) BEFORE diffing.
+
 **Next (§23.7):**
-- D5: membrane, mallet, plate, vk, bore, platebody (eigsh);
+- D5 rest: mallet, plate (3 outlines), vk, bore, platebody (the solver exists now);
 - D6: airbox, vkroom (dense eigh vectors);
 - D7: FREEZE the reference outputs as a native fixture first, then port the headless check, switch
   servers, delete `web/*.py` + `test_web_backend.py`. Only the reed has a cache (`_REED_SWEEP_MEMO`):
