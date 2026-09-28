@@ -2761,7 +2761,9 @@ surprise in the solver blocks one scene rather than six.
 **The solver is done** (`physsynth_core::eigs::eigsh_shift_invert`, with `eig::symmetric_eigen`
 under it for the small projected problem). It factors `K - sigma M` once with the crate's
 `SparseLu`, grows an `M`-orthonormal Krylov basis three vectors at a time with full
-reorthogonalization (twice), and accepts a Ritz pair when its residual is below `1e-10 |theta|`.
+reorthogonalization (twice), and accepts a Ritz pair when the part of `Op y` outside the basis
+is below `1e-10 |theta|` (ARPACK's test; the first version used the full residual, which §23.13
+found to stall on a free plate).
 There are no restarts, and the start vectors come from a fixed SplitMix sequence, so a run is
 reproducible to the bit. Its bars in `crates/physsynth-core/tests/eigs.rs` all check closed
 forms or a dense reference: the 1-D Dirichlet and reflected (singular) operators, the 2-D grid
@@ -2882,3 +2884,18 @@ should move is the human's question.
   `tests/plate.rs`. That coincidence is recorded here so that it is not mistaken for a decision.
   `tests/mallet.rs` takes 36 s and runs in both profiles.
 - The whole workspace: 1,121 Rust tests pass.
+
+**Two guards added after the review of this batch, and one re-measurement.**
+- `eigsh_shift_invert` now refuses a `K` or `M` that is not symmetric to `1e-12` of its largest
+  entry. The method would not fail on one: it symmetrizes the projected problem, so it would
+  return plausible wrong frequencies, and SciPy would be wrong differently. That diff would read as
+  a porting bug. The bore's operator is a slice of a staggered pressure/flow operator, the first
+  one this solver sees that is not symmetric by construction, so the check comes before that scene.
+- It gives up at a basis of 300 (`MAX_BASIS`) with a named `NotConverged`, as ARPACK gives up at
+  its restart cap, instead of growing to the whole space at cubic cost per block. Both guards have
+  native bars, and every membrane, mallet and plate payload is unchanged by them. Any solver
+  failure in a scene is now `internal` in both the membrane and the plate. The reference's ARPACK
+  error was an uncaught `RuntimeError`; the membrane had said `construction`.
+- The block-of-one fault was re-planted after the convergence fix, since the new test accepts
+  pairs sooner, which is the direction that could let a single-vector space pass. The triple
+  still fails at block 1, so the multiplicity bar stands.

@@ -57,6 +57,16 @@ pub const BLOCK: usize = 3;
 /// Accept a Ritz pair when the out-of-basis part of `Op y` is below `RESIDUAL_TOL * |theta|`.
 pub const RESIDUAL_TOL: f64 = 1e-10;
 
+/// Largest Krylov basis before the solve gives up, unless the whole space is smaller (then it is
+/// solved exactly). ARPACK gives up too — after its restart cap, with an error — and the viewer's
+/// problems converge far below this (the 9,801-unknown membrane at 72, the free plate under 120).
+/// Without a cap an unconvergeable problem grows the basis to the whole space at cubic cost per
+/// block, which is how one request once stalled for ten minutes (retirement plan §23.13).
+pub const MAX_BASIS: usize = 300;
+
+/// `K` (and `M`) must be symmetric to this fraction of their largest entry.
+pub const SYMMETRY_TOL: f64 = 1e-12;
+
 /// A new vector that keeps less than this fraction of its `M`-norm through orthogonalization is
 /// treated as already in the space, and replaced by a fresh random one.
 const DEPENDENT_TOL: f64 = 1e-10;
@@ -82,6 +92,12 @@ pub enum EigsError {
     Factor(SparseLuError),
     /// The small projected problem failed, which a finite symmetric one does not.
     Projected(EigError),
+    /// `K` or `M` is not symmetric. The method would not error on one — it symmetrizes the
+    /// projected problem — so it would return plausible wrong eigenvalues instead; this is the
+    /// refusal that turns that into a named failure. Carries which matrix.
+    NotSymmetric(&'static str),
+    /// The wanted pairs had not converged when the basis reached [`MAX_BASIS`].
+    NotConverged(usize),
 }
 
 impl std::fmt::Display for EigsError {
@@ -90,6 +106,14 @@ impl std::fmt::Display for EigsError {
             EigsError::BadShape(s) => write!(f, "{s}"),
             EigsError::Factor(e) => write!(f, "factor of K - sigma M failed: {e}"),
             EigsError::Projected(e) => write!(f, "projected eigenproblem failed: {e}"),
+            EigsError::NotSymmetric(which) => write!(
+                f,
+                "{which} is not symmetric to {SYMMETRY_TOL:e} of its largest entry; the                  shift-invert Lanczos method needs a symmetric pencil."
+            ),
+            EigsError::NotConverged(dim) => write!(
+                f,
+                "the eigenpairs had not converged with a Krylov basis of {dim} vectors."
+            ),
         }
     }
 }
@@ -103,6 +127,25 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
         s += x * y;
     }
     s
+}
+
+/// Is `a` square and symmetric to [`SYMMETRY_TOL`] of its largest entry?
+fn symmetric_to_rounding(a: &Csr) -> bool {
+    let n = a.nrows();
+    if a.ncols() != n {
+        return false;
+    }
+    let scale = a.data().iter().fold(0.0f64, |m, v| m.max(v.abs()));
+    let tol = SYMMETRY_TOL * scale;
+    for i in 0..n {
+        for p in a.indptr()[i]..a.indptr()[i + 1] {
+            let j = a.indices()[p];
+            if (a.data()[p] - a.get(j, i)).abs() > tol || a.data()[p].is_nan() {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// SplitMix64: a fixed, structureless sequence of start vectors. A structured start (all ones,
@@ -194,6 +237,12 @@ pub fn eigsh_shift_invert(
             )));
         }
     }
+    if !symmetric_to_rounding(k) {
+        return Err(EigsError::NotSymmetric("K"));
+    }
+    if m.is_some_and(|m| !symmetric_to_rounding(m)) {
+        return Err(EigsError::NotSymmetric("M"));
+    }
     if nev == 0 || nev >= n {
         return Err(EigsError::BadShape(format!(
             "nev must be in [1, {n}) for a {n} x {n} problem, got {nev}."
@@ -251,6 +300,10 @@ pub fn eigsh_shift_invert(
                     ..found
                 });
             }
+        }
+
+        if dim >= MAX_BASIS && dim < n {
+            return Err(EigsError::NotConverged(dim));
         }
 
         // Grow by one block: the images of the newest block, each orthogonalized in.

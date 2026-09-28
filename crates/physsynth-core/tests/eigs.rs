@@ -336,3 +336,59 @@ fn a_free_plate_converges_through_its_nearly_singular_shift() {
     );
     assert_pairs_are_eigenpairs(&p.stiffness, Some(w), &got);
 }
+
+/// A non-symmetric `K` would not make the method fail — the projected problem is symmetrized — it
+/// would return plausible wrong eigenvalues. So it is refused, by name, before any work.
+#[test]
+fn a_non_symmetric_pencil_is_refused_rather_than_answered() {
+    let rows = (0..6)
+        .map(|i| {
+            let mut r = vec![(i, 2.0)];
+            if i + 1 < 6 {
+                r.push((i + 1, -1.0));
+            }
+            if i > 0 {
+                r.push((i - 1, -0.9)); // the lower band does not mirror the upper
+            }
+            r
+        })
+        .collect();
+    let k = Csr::from_rows(6, 6, rows);
+    assert_eq!(
+        eigsh_shift_invert(&k, None, 0.0, 2).unwrap_err(),
+        EigsError::NotSymmetric("K")
+    );
+    let good = second_difference(6, false);
+    let m = Csr::from_rows(
+        6,
+        6,
+        (0..6).map(|i| vec![(i, 1.0), ((i + 1) % 6, 0.1)]).collect(),
+    );
+    assert_eq!(
+        eigsh_shift_invert(&good, Some(&m), 0.0, 2).unwrap_err(),
+        EigsError::NotSymmetric("M")
+    );
+    // symmetric up to rounding is symmetric
+    let near = Csr::from_rows(
+        3,
+        3,
+        vec![
+            vec![(0, 2.0), (1, -1.0)],
+            vec![(0, -1.0 + 1e-15), (1, 2.0), (2, -1.0)],
+            vec![(1, -1.0), (2, 2.0)],
+        ],
+    );
+    assert!(eigsh_shift_invert(&near, None, 0.0, 1).is_ok());
+}
+
+/// The basis cap: a request that cannot converge inside it is refused rather than grown to the
+/// whole space at cubic cost per block (ARPACK gives up too, with an error).
+#[test]
+fn a_problem_that_cannot_converge_inside_the_cap_is_refused() {
+    use physsynth_core::eigs::MAX_BASIS;
+    let k = second_difference(1000, false);
+    match eigsh_shift_invert(&k, None, 0.0, 280) {
+        Err(EigsError::NotConverged(dim)) => assert!(dim >= MAX_BASIS, "{dim}"),
+        other => panic!("expected NotConverged, got {other:?}"),
+    }
+}

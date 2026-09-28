@@ -232,7 +232,8 @@ pub fn discrete_eigenfreqs(res: &Membrane, c: f64, k_request: usize) -> Result<V
     }
     let neg_l = p.l.scaled(-1.0);
     let pairs = eigsh_shift_invert(&neg_l, None, 0.0, k)
-        .map_err(|e| Refusal::Construction(e.to_string()))?;
+        // An ARPACK failure was a RuntimeError the reference never caught: `internal`.
+        .map_err(|e| Refusal::Internal(e.to_string()))?;
     let mut f: Vec<f64> = pairs
         .values
         .iter()
