@@ -2695,7 +2695,8 @@ finished run:
 **One deliberate difference.** At `bridge_stiffness = 0` the body never moves, and the reference
 computed its `omega2_consistency` read-out as 0/0 = NaN. The Python server serializes with
 `allow_nan=False`, so it would have answered that request with a 500. The Rust payload carries
-`null`, which the front-end already renders as "—". The recorder now marks every such reference
+`null`, which the front-end already renders as "—" (`app.js`: `o2 == null ? "—" : o2.toFixed(2)`,
+read rather than assumed). The recorder now marks every such reference
 payload, and the comparison treats NaN-versus-null as its own named class.
 
 **One reference quirk carried, and pinned.** The juari reads `N` twice. The first read is a
@@ -2722,4 +2723,7 @@ Windows will not replace a running executable.
   pre-read quirk) and 20 for the fret. The fret's two-sided brightness-peak test, parametrized in
   the reference for wall-clock, is one test here, since the whole file runs in 10 s. Its
   dispatch-`kind` test folds into the two blocks that already assert `kind`.
+- Unoptimized, `tests/contact.rs` takes 145 s on this machine (10 s in release), so it joins CI's
+  `release_only` list, the first viewer file to do so. It pins no arithmetic spelling, which is
+  that list's condition. `tests/body.rs` takes 1 s unoptimized and stays in both profiles.
 - The whole workspace: 1,059 Rust tests pass.

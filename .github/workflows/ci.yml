@@ -172,12 +172,14 @@ jobs:
       # run where `debug_assert!` fires. It takes every test target EXCEPT the ones below, which
       # are long physics trajectories and none of which pins a spelling. Unoptimised they were
       # ~15 of this step's 19 minutes (2026-09-23: 495 s, 353 s, 64 s, against 23 s, 17 s, 3 s in
-      # release). The list is an exclusion on purpose: a new test file lands in both profiles by
-      # default, and a stale name here fails the step rather than quietly excluding nothing.
+      # release). `contact` (the viewer's barrier scenes, ~25 fret renders) joined 2026-09-28 at
+      # 145 s unoptimised against 10 s in release on the dev machine. The list is an exclusion on
+      # purpose: a new test file lands in both profiles by default, and a stale name here fails the
+      # step rather than quietly excluding nothing.
       - name: Native validation + dependency allowlist
         run: |
           cargo test --workspace --release
-          release_only="connection_plate mallet_gong plate"
+          release_only="connection_plate contact mallet_gong plate"
           for n in $release_only; do
             ls crates/*/tests/$n.rs > /dev/null || { echo "release_only names $n: no such test file"; exit 1; }
           done
