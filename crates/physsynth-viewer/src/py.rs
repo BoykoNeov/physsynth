@@ -472,3 +472,53 @@ pub fn b64f32(a: &[f64]) -> String {
 pub fn b64u8(a: &[u8]) -> String {
     b64encode(a)
 }
+
+/// Python's `f"{x:.{prec}e}"`: Rust writes `3.162e-4`, Python `3.162e-04` (a sign and at least
+/// two exponent digits).
+pub fn sci(x: f64, prec: usize) -> String {
+    let s = format!("{x:.prec$e}");
+    match s.split_once('e') {
+        Some((m, e)) => {
+            let (sign, digits) = match e.strip_prefix('-') {
+                Some(d) => ('-', d),
+                None => ('+', e),
+            };
+            format!("{m}e{sign}{digits:0>2}")
+        }
+        None => s,
+    }
+}
+
+/// Python's `f"{x:g}"`: six significant digits, trailing zeros dropped, scientific when the
+/// exponent is below -4 or at least 6.
+pub fn fmt_g(x: f64) -> String {
+    if x == 0.0 {
+        return if x.is_sign_negative() {
+            "-0".into()
+        } else {
+            "0".into()
+        };
+    }
+    if !x.is_finite() {
+        return physsynth_core::fmt::py_float(x);
+    }
+    let e: i32 = format!("{x:.5e}")
+        .split_once('e')
+        .and_then(|(_, e)| e.parse().ok())
+        .expect("a finite float formats with an exponent");
+    let strip = |s: String| -> String {
+        if s.contains('.') {
+            s.trim_end_matches('0').trim_end_matches('.').to_owned()
+        } else {
+            s
+        }
+    };
+    if (-4..6).contains(&e) {
+        let decimals = (5 - e).max(0) as usize;
+        strip(format!("{x:.decimals$}"))
+    } else {
+        let s = sci(x, 5);
+        let (m, rest) = s.split_once('e').expect("scientific");
+        format!("{}e{rest}", strip(m.to_owned()))
+    }
+}

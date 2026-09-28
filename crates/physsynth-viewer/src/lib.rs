@@ -23,6 +23,7 @@
 //! yet is refused with kind `unported`, so a scene can never render from a half-finished payload;
 //! the Python backend stays the live viewer until the list below is complete.
 
+pub mod airbox;
 pub mod airload;
 pub mod body;
 pub mod bore;
@@ -73,7 +74,7 @@ pub const MODELS: [(&str, bool); 22] = [
     ("platebody", true),
     ("radbody", true),
     ("airload", true),
-    ("airbox", false),
+    ("airbox", true),
     ("vkroom", false),
 ];
 
@@ -156,6 +157,7 @@ fn build_payload(p: &Value) -> Result<Value, Refusal> {
         _ if model == "bore" => bore::build_payload(p),
         _ if model == "vk" => vk::build_payload(p),
         _ if model == "platebody" => platebody::build_payload(p),
+        _ if model == "airbox" => airbox::build_payload(p),
         _ if model == "jawari" => contact::build_payload_jawari(p),
         _ if model == "juari" => contact::build_payload_juari(p),
         _ if model == "fret" => contact::build_payload_fret(p),

@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-d-state
-description: "Phase D (viewer to Rust) IN PROGRESS — D1-D5 done 2026-09-28: crates/physsynth-viewer, 20 of 22 keys (airbox, vkroom left = D6); core::eigs solver (symmetry guard, basis cap)"
+description: "Phase D (viewer to Rust) IN PROGRESS — D1-D5 + airbox done 2026-09-28: crates/physsynth-viewer, 21 of 22 keys (vkroom left, blocked on the human: modal_drift basis); core::eigs solver"
 metadata:
   node_type: memory
   type: project
@@ -15,7 +15,7 @@ the viewer in rust". Scope = plan §5: backend to Rust, `web/static/` JS untouch
 parametric) + bow; D3 (§23.9) sympathetic, geometric, reed (memo dropped), radbody, airload — all
 139 D3 requests + 11 browser requests matched, 149 of the 150 to the bit; D4 (§23.10) body, jawari,
 juari, fret + `physsynth_analysis::spectrum::rfft` (Bluestein, any length) — 73 + 8 browser, 0 failing. `physsynth-core/src/engine.rs` = native `simulate`, `Resonator::step` is FALLIBLE
-(step failure → payload kind `internal`). The other 2 keys are refused with kind `unported`. Python server
+(step failure → payload kind `internal`). The other key (vkroom) is refused with kind `unported`. Python server
 stays the live viewer until D7.
 
 **How each batch is checked:** `W:\temp\claude\viewer-port\`:
@@ -74,6 +74,12 @@ defaults drifts 1.32e-10 > 1e-10 in the PYTHON too — model behaviour, flagged 
 band peak) — 1e6x at an anechoic bell, so its class is 1e-9 not 1e-12; `dispersion.order` at
 lambda = 1 is a ratio of two rounding residues (meaningless in the reference too). Python's `.3e`
 is `1.000e+03`, Rust's `1.000e3` — use a local `sci3`.
+
+**Found in D6 airbox (§23.17):** 37/37 bit-exact. `np.percentile` linear = `(n-1) q` virtual index,
+NOT the general `n q + (alpha + q(1-alpha-beta)) - 1` (last-bit different). `py::sci` / `py::fmt_g`
+are the Python `.2e` / `:g` formats. vkroom: only `modal_drift(_twin)` is basis-dependent (per-mode
+shares on a square free plate's repeated pairs) — ASKED the human: group pairs / fix a basis / leave.
+Also asked: the free plate's default render fails its own 1e-10 bar (1.32e-10, same in Python).
 
 **Next (§23.7):**
 - D6: airbox, vkroom (dense eigh vectors);

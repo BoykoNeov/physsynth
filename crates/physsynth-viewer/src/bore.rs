@@ -59,21 +59,6 @@ fn pf(x: f64) -> String {
     py_float(x)
 }
 
-/// Python's `f"{x:.3e}"`: Rust writes `3.162e-4`, Python `3.162e-04` (a sign and two digits).
-fn sci3(x: f64) -> String {
-    let s = format!("{x:.3e}");
-    match s.split_once('e') {
-        Some((m, e)) => {
-            let (sign, digits) = match e.strip_prefix('-') {
-                Some(d) => ('-', d),
-                None => ('+', e),
-            };
-            format!("{m}e{sign}{digits:0>2}")
-        }
-        None => s,
-    }
-}
-
 /// `int(float)` refused the way the reference's uncaught `ValueError`/`OverflowError` was.
 fn int_of(x: f64) -> Result<i64, Refusal> {
     match float_to_int(x) {
@@ -202,7 +187,7 @@ fn build(p: &Value) -> Result<(Bore, Info), Refusal> {
             "the bell's R/Z0 must be in [{}, {}], got {} (bell_ratio_exp = {}).",
             pf(BORE_R_RATIO_MIN),
             pf(BORE_R_RATIO_MAX),
-            sci3(ratio),
+            crate::py::sci(ratio, 3),
             pf(ratio_exp)
         )));
     }

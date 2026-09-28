@@ -453,7 +453,8 @@ and the Python server stays the live viewer until the last of them lands. **Batc
 geometric, reed, radbody and airload. **Batch D4 is done** (§23.10): body, jawari, juari and
 fret, plus an arbitrary-length `rfft` in the analysis crate. **D5 is under way** (§23.11-§23.13): a
 native eigensolver, then membrane, mallet, all three plates, the bore, the von Kármán plate and
-the plate body. **D5 is done: twenty keys native**, `airbox` and `vkroom` (D6) to go.
+the plate body. **D5 is done**; D6's `airbox` too (§23.17) — **twenty-one keys native**, `vkroom`
+to go, waiting on a decision (§23.17's last paragraph).
 
 ---
 
@@ -2998,3 +2999,39 @@ because the mallet and the plate were counted as reaching eighteen when they rea
 three commit messages that repeated the numbers (mallet and plates, bore, von Kármán plate) carry
 the same error, and pushed history is not rewritten for it. The dispatch table is the source of
 truth, and it reads twenty `true` and two `false` (`airbox`, `vkroom`).
+
+### 23.17 Batch D6, first half — the air box
+
+Twenty-one of the twenty-two keys are now native. **`airbox`** (`crates/physsynth-viewer/src/airbox.rs`)
+is string -> body -> a 3-D room: the first `dims: 3` payload, sent as a set of three decimated
+orthogonal slices. It runs on the core's `StringBodyBridge<RoomLoadedBody>` stepping into a
+native `AirBox`, with the step order the reference's contract: the bridge queues the port's
+injection, then the room steps once.
+
+| corpus | requests | identical | within a class | failing |
+|---|---|---|---|---|
+| airbox (three wall kinds, four mic positions, three Courant numbers, the snap, the refusals) | 37 | 37 | 0 | 0 |
+| the browser's own requests (rigid, absorbing) | 2 | 2 | 0 | 0 |
+
+**Every field matched to the bit**, including the lattice light-cone integers, the five booked
+channels, the cross-ledger residual, the slice frames and the colour-scale reference. That last one
+took one correction. The reference is `np.percentile(live, 55)`, shipped unrounded, and the first
+transcription used the virtual index of NumPy's general quantile method, `n q + (alpha + q (1 -
+alpha - beta)) - 1`. The default `linear` method overrides it with `(n - 1) q`. The two are
+algebraically equal and differ in the last bit, and the diff caught it in 10 of 37 cases.
+`airbox::np_percentile` is now pinned by a test against values NumPy printed.
+
+**Two Python number formats became shared helpers**, `py::sci` (`f"{x:.2e}"` is `1.20e+09`, where
+Rust writes `1.2e9`) and `py::fmt_g` (`f"{x:g}"`), with `tests/py_format.rs` pinning both
+against CPython's output. The bore's local copy was folded into `py::sci`.
+
+**Tests carried:** `tests/airbox.rs`, 14 tests: the reference's 13 plus the percentile's pin.
+Unoptimized they take 51 s and stay in both profiles. The whole workspace: 1,176 Rust tests pass.
+
+**What remains is `vkroom`, and it needs a decision first.** §23.11 found that its per-mode
+energy shares depend on the basis chosen inside each repeated pair. On reading the scene, the
+exposure is narrower than feared: the shares reach the payload only through `modal_drift` and
+`modal_drift_twin`, each a total-variation distance between the first and last window's share
+vectors. The efficiency figures use the modes only through a projection that does not depend
+on the basis. So one pair of scalars is basis-dependent, in the reference too. How to treat
+it is the human's call.
