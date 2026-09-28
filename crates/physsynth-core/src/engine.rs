@@ -13,7 +13,9 @@
 //! the other.
 
 use crate::bow::BowedString;
+use crate::mallet::MalletMembrane;
 use crate::membrane::Membrane;
+use crate::plate::Plate;
 use crate::string_damped::DampedStiffString;
 use crate::string_ideal::IdealString;
 use crate::string_nonlinear::TensionModulatedString;
@@ -250,5 +252,45 @@ impl Resonator for Membrane {
     }
     fn timestep(&self) -> f64 {
         self.params().k
+    }
+}
+
+/// The mallet-struck membrane: the head's field is the state, and a contact-solve failure is a
+/// step failure carrying the solve's own message.
+impl Resonator for MalletMembrane {
+    fn step(&mut self) -> Result<(), String> {
+        MalletMembrane::step(self).map_err(|e| e.to_string())
+    }
+    fn energy(&self) -> f64 {
+        MalletMembrane::energy(self)
+    }
+    fn state(&self) -> Vec<f64> {
+        self.membrane.state()
+    }
+    fn displacement_at(&self, index: usize) -> f64 {
+        self.membrane.displacement_at(index)
+    }
+    fn timestep(&self) -> f64 {
+        self.params().k
+    }
+}
+
+/// The linear plate, unforced. `state` is the full node field, as the membrane's is.
+impl Resonator for Plate {
+    fn step(&mut self) -> Result<(), String> {
+        Plate::step(self, None);
+        Ok(())
+    }
+    fn energy(&self) -> f64 {
+        Plate::energy(self)
+    }
+    fn state(&self) -> Vec<f64> {
+        Plate::state(self)
+    }
+    fn displacement_at(&self, index: usize) -> f64 {
+        self.u[index]
+    }
+    fn timestep(&self) -> f64 {
+        self.p.k
     }
 }

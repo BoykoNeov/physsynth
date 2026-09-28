@@ -77,7 +77,8 @@ pub enum Geom {
 }
 
 impl Geom {
-    fn domain(&self) -> &'static str {
+    /// The domain's spelling in the payload.
+    pub fn domain(&self) -> &'static str {
         match self {
             Geom::Circle { .. } => "circle",
             Geom::Rectangle { .. } => "rectangle",
@@ -85,7 +86,7 @@ impl Geom {
     }
 
     /// `_length_scale`: the disk's radius, or the rectangle's shorter side.
-    fn length_scale(&self) -> f64 {
+    pub fn length_scale(&self) -> f64 {
         match *self {
             Geom::Circle { radius } => radius,
             Geom::Rectangle { lx, ly } => py_min2(lx, ly),
@@ -93,7 +94,7 @@ impl Geom {
     }
 
     /// `_frac_to_xy`: `(fx, fy)` in `(0, 1)²` to a physical point.
-    fn frac_to_xy(&self, fx: f64, fy: f64) -> (f64, f64) {
+    pub fn frac_to_xy(&self, fx: f64, fy: f64) -> (f64, f64) {
         match *self {
             Geom::Circle { radius } => ((2.0 * fx - 1.0) * radius, (2.0 * fy - 1.0) * radius),
             Geom::Rectangle { lx, ly } => (fx * lx, fy * ly),
@@ -300,21 +301,26 @@ pub fn modal_spectrum_block(
 }
 
 /// `_horizon_membrane_block`: a rectangle is measured, a staircased disk is refused.
-pub fn horizon_block(b: &Built, of: &str) -> Value {
-    match b.geom {
+pub fn horizon_block(geom: &Geom, p: &mem::Params, of: &str) -> Value {
+    match *geom {
         Geom::Circle { .. } => horizon_none(HORIZON_STAIRCASE, Some(of)),
-        Geom::Rectangle { lx, ly } => {
-            let p = b.res.params();
-            grid2d_block(
-                p.h,
-                p.k,
-                lx,
-                ly,
-                p.fs,
-                Grid2dScheme::Membrane { c: p.c },
-                of,
-            )
-        }
+        Geom::Rectangle { lx, ly } => grid2d_block(
+            p.h,
+            p.k,
+            lx,
+            ly,
+            p.fs,
+            Grid2dScheme::Membrane { c: p.c },
+            of,
+        ),
+    }
+}
+
+/// `_xy_to_frac`: the inverse of [`Geom::frac_to_xy`], for the strike marker.
+pub fn xy_to_frac(geom: &Geom, x: f64, y: f64) -> (f64, f64) {
+    match *geom {
+        Geom::Circle { radius } => ((x / radius + 1.0) / 2.0, (y / radius + 1.0) / 2.0),
+        Geom::Rectangle { lx, ly } => (x / lx, y / ly),
     }
 }
 
@@ -483,7 +489,7 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
     let lam = b.res.params().lam;
     Ok(json!({
         "model": "membrane",
-        "horizon": horizon_block(&b, "the membrane"),
+        "horizon": horizon_block(&geom, b.res.params(), "the membrane"),
         "domain": geom.domain(),
         "fs_sim": num(round_nd(fs, 3)),
         "lambda": num(round_nd(lam, 6)),

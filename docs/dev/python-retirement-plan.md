@@ -451,7 +451,8 @@ the three linear strings; the other nineteen scenes follow model by model in the
 and the Python server stays the live viewer until the last of them lands. **Batch D2 is done**
 (§23.8): the tension string, both regimes, and the bow. **Batch D3 is done** (§23.9): sympathetic,
 geometric, reed, radbody and airload. **Batch D4 is done** (§23.10): body, jawari, juari and
-fret, plus an arbitrary-length `rfft` in the analysis crate — fourteen keys native, eight to go.
+fret, plus an arbitrary-length `rfft` in the analysis crate. **D5 is under way** (§23.11-§23.13): a
+native eigensolver, then membrane, mallet and all three plates — eighteen keys native, four to go.
 
 ---
 
@@ -2821,3 +2822,63 @@ through its DevTools port.
   CFL ceiling and tied below it, and that a disk is refused as a staircase. The membrane was
   added to the monotone-bound, hertz-ceiling and strict-JSON loops.
 - The whole workspace: 1,088 Rust tests pass.
+
+### 23.13 Batch D5, continued — the mallet and all three plates, and a solver bug the plate found
+
+Eighteen of the twenty-two keys are now native. **`mallet`** (`crates/physsynth-viewer/src/mallet.rs`)
+reuses the membrane's machinery with a hand-stepped contact loop. **`plate`** (`…/src/plate.rs`)
+covers the simply-supported rectangle, the free rectangle and the guitar outline. The guitar
+brings its waist sweep, which is the first payload to read eigenVECTORS, its outline report, and
+the pooled display decimation that cannot split a concave outline.
+
+| corpus | requests | identical | within a class | failing |
+|---|---|---|---|---|
+| mallet | 24 | 24 | 0 | 0 |
+| plate (all three plates, the guitar's edge cases, the refusals) | 40 | 38 | 2 | 0 |
+| membrane, re-run after the solver fix below | 30 | 28 | 2 | 0 |
+| the browser's own requests (two mallets, three plates) | 5 | 5 | 0 | 0 |
+
+The four in-class cases are all the fitted decay rate. **Every guitar sweep row matched SciPy
+exactly**: every parity (to six places), both strike overlaps and both frequencies, over 24 waists
+in each of eleven guitars, including the rows either side of the crossing. §23.11's claim holds:
+a quadratic form and an absolute value cannot see an eigenvector's sign, and nothing else of the
+vector reaches the payload.
+
+**The solver's convergence test was wrong, and the free plate showed it.** The first plate
+comparison stalled for more than ten minutes on one request. It was the free plate: its shifted
+matrix `K - sigma W` is nearly singular, because the three rigid-body modes sit right beside the
+negative shift, so every linear solve carries an error of about 1e-5 relative. The test accepted a
+Ritz pair on the FULL residual `||Op y - theta y||`, which includes that solve error. The solve
+error does not shrink as the basis grows, so it floored above the bar, and the basis grew to the
+whole space. The test is now ARPACK's: the part of `Op y` outside the basis. Each earlier block's
+image was orthogonalized into the basis when the next block was built, so only the newest block
+contributes, and the solve error is absorbed rather than measured. The free plate now takes 1.8 s
+and the guitar 0.9 s, on a par with Python, and the 9,801-unknown membrane bar fell from 0.66 s to
+0.43 s. A new bar in `crates/physsynth-core/tests/eigs.rs` builds that free plate and asserts
+three things: the basis stays under 120, the rigid trio comes back at zero, and every pair
+satisfies `K x = lambda W x`. The old criterion was not planted back to watch that bar fail,
+because under it the bar runs for minutes rather than failing. The evidence that it catches the
+fault is the viewer run that stalled.
+
+**A finding that is not a porting one: the free plate at the browser's defaults fails its own
+lossless bar.** At `N = 60`, `mu = 1` and one second of audio, the drift is 1.3189e-10 against
+the 1e-10 bar, and the Python reference reports the identical number and `pass: false`. It is the
+model's behaviour at that setting, so the port reproduces it. It is recorded here and not
+touched. The bar is not to be tightened or loosened (`CLAUDE.md`), and whether that default
+should move is the human's question.
+
+**Tests carried:**
+
+- `tests/mallet.rs`, 10 tests. Nine are the reference's section. The tenth is the "an exciter
+  inherits the horizon of what it drives" half that the reference's docstring described and never
+  asserted: a struck rectangle reports exactly the plain membrane's read-out. One more pins the
+  reference's two `N` defaults: the pre-check reads 60 and the drum is built at 80.
+- `tests/plate.rs`, 21 tests: the rectangle and guitar sections, with their parametrized cases
+  folded into loops, including the two pooling unit tests on synthetic masks.
+- `tests/horizon.rs`, 17 tests (+1, plus the plate added to three loops): one plate key, three
+  plates, one horizon.
+- Unoptimized, `tests/plate.rs` takes 102 s. It is already excluded from CI's debug pass, because
+  `release_only` excludes by file name and `plate` is on the list for the core crate's own
+  `tests/plate.rs`. That coincidence is recorded here so that it is not mistaken for a decision.
+  `tests/mallet.rs` takes 36 s and runs in both profiles.
+- The whole workspace: 1,121 Rust tests pass.

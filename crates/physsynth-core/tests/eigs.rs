@@ -298,3 +298,41 @@ fn the_viewers_largest_membrane_problem_matches_the_closed_form() {
         assert!(rel(g, w) < 1e-11, "eigenvalue {j}: {g} vs {w}");
     }
 }
+
+/// The fixture that found the convergence bug: a FREE plate, whose `K - sigma W` is nearly
+/// singular because the three rigid modes sit right beside the negative shift. Measured against
+/// the full residual `||Op y - theta y||`, the solve error floored above the bar and the basis
+/// grew to the whole space (minutes, not a second). The bar: the basis stays small, the rigid trio
+/// comes back at zero, and every pair satisfies `K x = lambda W x`.
+#[test]
+fn a_free_plate_converges_through_its_nearly_singular_shift() {
+    use physsynth_core::plate::{Boundary, Params, PlateSpec};
+    let n = 40;
+    let (kappa, lx) = (20.0, 1.0);
+    let h = lx / n as f64;
+    let spec = PlateSpec {
+        lx,
+        ly: 1.0,
+        kappa,
+        rho: 0.005,
+        fs: kappa / (h * h),
+        n,
+        boundary: Some(Boundary::Free),
+        nu: Some(0.3),
+        ..PlateSpec::default()
+    };
+    let p = Params::new(&spec).unwrap();
+    let w = p.mass.as_ref().unwrap();
+    let shift = -1e-3 * (13.0f64 / (lx * 1.0)).powi(2);
+    let got = eigsh_shift_invert(&p.stiffness, Some(w), shift, 9).unwrap();
+    assert!(got.basis_size <= 120, "basis grew to {}", got.basis_size);
+    let top = got.values[8];
+    for (j, &v) in got.values.iter().take(3).enumerate() {
+        assert!(v.abs() < 1e-8 * top, "rigid mode {j}: {v}");
+    }
+    assert!(
+        got.values[3] > 1e-3 * top,
+        "the first elastic mode is not rigid"
+    );
+    assert_pairs_are_eigenpairs(&p.stiffness, Some(w), &got);
+}

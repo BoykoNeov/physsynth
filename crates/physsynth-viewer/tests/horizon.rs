@@ -1,8 +1,8 @@
 //! The resolution-horizon read-out — the viewer half of `docs/dev/resolution-horizon-plan.md`.
 //!
 //! The physics is asserted against the primitives in `physsynth-analysis`; what is asserted here is
-//! that the viewer asks them the right question about the right scene. The membrane's 2-D rows
-//! are here; the plate's and the von Kármán plate's arrive with those scenes' builders.
+//! that the viewer asks them the right question about the right scene. The membrane's and the
+//! plate's 2-D rows are here; the von Kármán plate's arrive with that scene's builder.
 
 mod common;
 
@@ -22,6 +22,20 @@ fn rect_membrane(n: i64, extra: Value) -> Value {
         "pluck_x": 0.4, "pluck_y": 0.55, "pluck_width": 0.45, "amplitude": 1e-3,
         "pickup_x": 0.65, "pickup_y": 0.6,
         "audio_duration": 0.05, "animation_window": 0.04, "playback_speed": 0.02,
+    });
+    common::merge(&mut p, extra);
+    p
+}
+
+/// The reference's `_plate_params`, short.
+fn plate(extra: Value) -> Value {
+    let mut p = json!({
+        "model": "plate", "domain": "supported",
+        "kappa": 20.0, "rho": 0.005, "Lx": 1.0, "Ly": 1.0,
+        "N": 40, "mu": 1.0, "sigma": 0.0, "nu": 0.3,
+        "pluck_x": 0.4, "pluck_y": 0.55, "pluck_width": 0.3, "amplitude": 1e-3,
+        "pickup_x": 0.62, "pickup_y": 0.58,
+        "audio_duration": 0.2, "animation_window": 0.02, "playback_speed": 0.02,
     });
     common::merge(&mut p, extra);
     p
@@ -201,6 +215,29 @@ fn is_built_from_the_scheme_and_not_from_the_display_arrays() {
         ));
         assert_eq!(block["n_modes"], n - 1);
     }
+    // the plate panel ships 6 markers; the read-out's mode set is the whole grid's
+    let plate_block = horizon(&plate(json!({})));
+    assert_eq!(plate_block["n_modes"], 39 * 39);
+}
+
+/// One select carries three plates, and only the supported rectangle has a horizon: the free
+/// plate's reference is a table, the guitar's error is its staircase.
+#[test]
+fn the_plate_key_covers_three_plates_and_only_one_has_a_horizon() {
+    assert_eq!(
+        horizon(&plate(json!({"domain": "supported"})))["kind"],
+        "prefix"
+    );
+    for (domain, needle) in [("free", "tabulated"), ("guitar", "staircased")] {
+        let block = horizon(&plate(
+            json!({"domain": domain, "N": 24, "audio_duration": 0.05}),
+        ));
+        assert_eq!(block["kind"], "none", "{domain}");
+        assert!(
+            block["reason"].as_str().unwrap().contains(needle),
+            "{block}"
+        );
+    }
 }
 
 #[test]
@@ -209,6 +246,7 @@ fn a_tighter_bound_can_only_shorten_the_claim() {
         base_params(json!({"model": "ideal", "lambda": 0.8})),
         base_params(json!({"model": "stiff", "N": 96, "kappa": 4.0})),
         rect_membrane(24, json!({})),
+        plate(json!({})),
     ] {
         let bands = horizon(&params)["bands"].as_array().unwrap().clone();
         for pair in bands.windows(2) {
@@ -364,6 +402,7 @@ fn survives_strict_json() {
         base_params(json!({"model": "damped", "N": 96})),
         rect_membrane(24, json!({})),
         rect_membrane(40, json!({"domain": "circle"})),
+        plate(json!({})),
     ] {
         let payload = ok(&params);
         assert!(!has_nonfinite(&payload));

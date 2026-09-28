@@ -31,9 +31,13 @@
 //! is replaced by a fresh random one, so the space keeps growing and reaches the whole space if it
 //! has to, where the answer is exact.
 //!
-//! **Converged means the residual, not the eigenvalue.** A Ritz pair `(theta, y)` is accepted when
-//! `||Op y - theta y||_M <= RESIDUAL_TOL |theta|`. The eigenvalue error is then of the order of the
-//! square of that over the gap to the next eigenvalue, far below what any payload rounds to.
+//! **Converged means the Krylov residual, not the eigenvalue.** A Ritz pair `(theta, y)` is
+//! accepted when the part of `Op y` outside the basis has `M`-norm below `RESIDUAL_TOL |theta|` —
+//! ARPACK's criterion. Not the full `||Op y - theta y||`: that also carries the error of each
+//! linear solve, which does not shrink as the basis grows, and on a nearly singular `K - sigma M`
+//! (a free plate's rigid modes sit right beside the shift) it floored above the bar and grew the
+//! basis to the whole space. The eigenvalue error is of the order of the residual's square over
+//! the gap to the next eigenvalue, far below what any payload rounds to.
 //!
 //! # What is NOT promised
 //!
@@ -50,7 +54,7 @@ use crate::sparse_lu::{SparseLu, SparseLuError};
 /// Vectors added per step: the largest multiplicity found by construction.
 pub const BLOCK: usize = 3;
 
-/// Accept a Ritz pair when `||Op y - theta y||_M <= RESIDUAL_TOL * |theta|`.
+/// Accept a Ritz pair when the out-of-basis part of `Op y` is below `RESIDUAL_TOL * |theta|`.
 pub const RESIDUAL_TOL: f64 = 1e-10;
 
 /// A new vector that keeps less than this fraction of its `M`-norm through orthogonalization is
@@ -311,7 +315,19 @@ fn rayleigh_ritz(
             }
         }
         if !exact {
-            let r: Vec<f64> = wy.iter().zip(&y).map(|(a, b)| a - t * b).collect();
+            // The part of `Op y` OUTSIDE the basis — ARPACK's residual, not `Op y - theta y`.
+            // Every earlier block's image was orthogonalized INTO the basis when the next block
+            // was built, so only the newest block contributes; the in-span remainder is the
+            // symmetrization of H, i.e. solve error, and it does not shrink as the space grows
+            // (measured: on a free plate, K - sigma M is nearly singular and the full residual
+            // floored above the bar, growing the basis to the whole space).
+            let coeff: Vec<f64> = basis.mq.iter().map(|mq| dot(mq, &wy)).collect();
+            let mut r = wy.clone();
+            for (c, q) in coeff.iter().zip(&basis.q) {
+                for (rv, qv) in r.iter_mut().zip(q) {
+                    *rv -= c * qv;
+                }
+            }
             let rn = dot(&r, &basis.apply_m(&r)).sqrt();
             // A NaN residual is not converged either.
             if rn > RESIDUAL_TOL * t.abs() || rn.is_nan() {
