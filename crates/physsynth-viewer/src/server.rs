@@ -1,4 +1,4 @@
-//! The localhost HTTP shell — `web/server.py`, on `std::net`.
+//! The localhost HTTP shell — what `web/server.py` was, on `std::net`.
 //!
 //! A local dev tool: no auth, bound to `127.0.0.1` by default, HTTP/1.0 with one request per
 //! connection, and a thread per connection so a multi-second render on one never blocks the

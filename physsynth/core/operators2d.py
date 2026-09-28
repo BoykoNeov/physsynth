@@ -30,8 +30,9 @@ Two things about the surface, both deliberate:
   Dropping the other three would leave an arbitrary hole in a family, which is a different thing
   from `collision`'s three private helpers, deleted with unit 1 because nothing anywhere named
   them and they had no Rust twin either.
-* **`guitar_mask` and `prune_to_area_carrying` are read by the viewer** (`web/serialize.py`), so
-  the outline half of this module is on the seam the viewer's import audit covers (§37.0).
+* **`guitar_mask` and `prune_to_area_carrying` were read by the viewer** (`web/serialize.py`,
+  deleted at retirement plan §23.19), which is why the outline half of this module was on the
+  seam the viewer's import audit covered (§37.0).
 
 Headless: NumPy + SciPy (sparse). No I/O, no plotting.
 """

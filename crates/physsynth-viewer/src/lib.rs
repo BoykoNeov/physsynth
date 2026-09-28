@@ -1,8 +1,9 @@
 //! The web viewer's backend: a request's params in, a JSON payload out.
 //!
-//! The Rust edition of `web/serialize.py` (retirement plan §5, phase D). [`simulate_to_payload`] is
-//! the whole contract the front-end in `web/static/` speaks, and it is socket-free and
-//! graphics-free so that it is tested directly; `main.rs` is a thin HTTP shell over it.
+//! The Rust edition of `web/serialize.py`, which it replaced (retirement plan §5, phase D; the
+//! Python was deleted at §23.19). [`simulate_to_payload`] is the whole contract the front-end in
+//! `web/static/` speaks, and it is socket-free and graphics-free so that it is tested directly;
+//! `main.rs` is a thin HTTP shell over it.
 //!
 //! # The contract
 //!

@@ -5,10 +5,10 @@
 //! physsynth-viewer payload < params.json > payload.json
 //! ```
 //!
-//! `serve` is `python web/server.py`'s replacement; then open `http://127.0.0.1:8000`. `payload`
-//! runs one request through the payload builder with no socket, which is what the one-time
-//! comparison against the Python reference drives (retirement plan §23), and what a script that
-//! wants a scene's numbers without a browser should use.
+//! `serve` replaced `python web/server.py` (deleted at retirement plan §23.19); then open
+//! `http://127.0.0.1:8000`. `payload` runs one request through the payload builder with no socket,
+//! which is what the one-time comparison against the Python reference drove (retirement plan §23),
+//! and what a script that wants a scene's numbers without a browser should use.
 
 use std::io::Read;
 use std::net::TcpListener;

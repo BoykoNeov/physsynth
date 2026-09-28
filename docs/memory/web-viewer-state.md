@@ -8,6 +8,8 @@ metadata:
   modified: 2026-07-20T15:48:32.208Z
 ---
 
+**2026-09-28: the backend is RUST now** (`crates/physsynth-viewer`; `web/serialize.py`, `web/server.py` and `tests/test_web_backend.py` deleted at retirement plan §23.19). Where this note says "Python backend" or names `serialize.py`, read it as history — see [[retirement-phase-d-state]]. The Rust server does not hot-reload either: restart it after a rebuild.
+
 Interactive web viewer started after model #4 (the human picked it over model #5 plate; see
 [[membrane-state]]). **Architecture B** (chosen with the human): a *local Python backend + browser
 frontend* — move a control → backend recomputes **offline** (seconds) → streams displacement field +

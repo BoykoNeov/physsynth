@@ -453,8 +453,10 @@ and the Python server stays the live viewer until the last of them lands. **Batc
 geometric, reed, radbody and airload. **Batch D4 is done** (§23.10): body, jawari, juari and
 fret, plus an arbitrary-length `rfft` in the analysis crate. **D5 is under way** (§23.11-§23.13): a
 native eigensolver, then membrane, mallet, all three plates, the bore, the von Kármán plate and
-the plate body. **D5 and D6 are done** (§23.11-§23.18): **all twenty-two keys are native**. D7
-(freeze, port the headless check, switch servers, delete the Python viewer) waits on the human.
+the plate body. **D5 and D6 are done** (§23.11-§23.18): **all twenty-two keys are native**. **D7 is
+done** (§23.19): the Python viewer's outputs are frozen in `crates/physsynth-viewer/tests/frozen.rs`
+(exact on the recording platform, structure elsewhere), the browser check is a Cargo example, and
+`web/*.py` and `tests/test_web_backend.py` are deleted. **Phase D is done.**
 
 ---
 
@@ -3090,3 +3092,129 @@ through the DevTools port: it leaked every run of this phase. Then switch the se
 Rust binary, and delete `web/serialize.py`, `web/server.py` and `tests/test_web_backend.py`. That
 last step removes the reference the whole of phase D was checked against, so it waits for the
 human's go-ahead.
+
+### 23.19 Batch D7 done — the freeze, the browser check in Rust, and the Python viewer deleted
+
+The human's go-ahead came 2026-09-28 ("do all of D7"), together with a second decision: the free
+plate's default render fails its own lossless bar (drift 1.32e-10 against 1e-10, the Python
+identically), and the answer was to **change the scene's opening settings, not the bar**.
+
+**The free plate opens green.** A regime-only override (`"plate:free"` in `MODEL_RANGES`) was the
+obvious edit and the wrong one: `regimeSwitchRerangs` exists so that a supported → free switch keeps
+the user's sliders, and a regime key would reset them on every switch. So the plate's base defaults
+moved for both rectangles, from `N = 60, mu = 1` to `N = 48, mu = 2` (the guitar outline keeps its
+own `N = 40, mu = 2`). Measured on the 1 s default render:
+
+| | old (N 60, mu 1) | new (N 48, mu 2) |
+|---|---|---|
+| supported: drift, render time | 1.35e-11, 76 s | 1.60e-11, 13 s |
+| free: drift, render time | **1.32e-10 (fails)**, 86 s | 1.49e-11, 15 s |
+
+The supported plate's fundamental moves from 62.817 to 62.808 Hz, and its horizon read-out now
+quotes 251 Hz, because the grid is coarser. Both open green in a real browser. The bar is
+untouched: a user who drags the free plate back to `N = 60, mu = 1` sees it fail, honestly.
+
+#### 23.19.1 Every Python test accounted for, before the file went
+
+`tests/test_web_backend.py` was the viewer's specification (§5): 338 functions, 429 once
+parametrized. A count comparison (about 390 Rust viewer tests) proves nothing, so each function was
+mapped to the Rust test that carries it. The pairs were proposed by name and every weak pair and
+every miss was read by hand. The table is `docs/dev/viewer-test-accounting.md`.
+
+**338 of 338 carried; none dies.** Two had not been carried by D1–D6 and were added now: the phantom
+regime's own work budget, and the bridge-coupled string refusing a horizon **through a real payload**
+(the table was asserted, the path that reads it was not). The horizon-mark vocabulary check moved to
+`tests/front_end.rs` and now reads the Rust harness. The deletion took pytest from 2,099 to 1,669:
+the file's 429, plus one parametrization of `test_xdist_groups.py`, which derives its population from
+the test files with module-scoped fixtures.
+
+#### 23.19.2 The freeze
+
+`crates/physsynth-viewer/tests/frozen.rs`, fixtures in `tests/frozen/`: **588 requests over 26
+corpora**, the phase's whole comparison set, recorded from the Python on a freshly reinstalled wheel.
+The payloads were 180 MB; the fixture is 3.3 MB, and it is a digest that gives up no exactness:
+
+- keys, strings, bools, nulls, ints, and int-versus-float type are kept as they were;
+- numbers are kept, except inside a numeric list longer than 16, which becomes its length and an
+  FNV-1a hash of each element's type tag and bits;
+- a base64 buffer becomes its byte length and an FNV-1a hash;
+- a buffer or long list under a tolerance class keeps its hash, 64 samples plus its argmax, and the
+  max and min of 64 blocks. The class's bar bounds these soundly: an extreme cannot move further than
+  the worst element does.
+
+`compare.py`'s tolerance classes are carried as they were, reasons included, none widened; the
+model-restricted ones stay restricted. The coverage is **derived**: every key in `MODELS` must have a
+successful frozen case, and every option in the front-end's own `DOMAIN_OPTS` must be named by one.
+The first run of that guard found the air box's `open` walls missing, which turned out to be the
+guard's error: the room's select is sent as `walls`, not `domain` (`gatherParams`).
+
+**Proved to bite while the Python still existed.** The Rust comparator's verdict, run over all 26
+corpora, matched `compare.py`'s count for count: the same number of identical, in-class and failing
+cases in every corpus. A test corrupts one thing at a time — one ulp, one buffer byte, one audio
+sample, an int, an int turned float, a key, a length, a string — and each must fail.
+
+#### 23.19.3 Exactness is a claim about the platform — measured
+
+§23.7 warned that Rust's `sin`, `ln` and `log2` come from the platform's C library. The freeze was
+run on three machines before landing:
+
+| machine | result |
+|---|---|
+| the dev machine (`x86_64-pc-windows-msvc`, the recording platform) | 588 of 588 |
+| GitHub `windows-latest` | **588 of 588, to the bit** |
+| GitHub `ubuntu-latest` | 430 of 588; the 158 others differ |
+
+On Linux, 157 of the 158 differ only in float values: last-bit drift through a transcendental,
+which moves figures that are themselves rounding noise by tens of percent (a lossless drift of
+6.1e-15 against 8.3e-15). The parametric tension scene's own instability carries the last bit to
+about 1e-6 in its audio. **No tolerance that admits that asserts anything anywhere else**, so none
+was attempted. The 158th was not a float at all, or rather was one in disguise: the geometric string's
+`orbit.u` is a float32 buffer under a key that does not end in `b64`, so the freezer had kept it
+as a string. A scan of every recorded payload for long base64 strings found it and `orbit.w`
+and nothing else; frozen as buffers, **no int, string, key or length differs on Linux in any of
+the 588 cases.**
+
+So the freeze has two modes. On the recording platform, everything above is compared. Everywhere
+else only what cannot pass through a transcendental is: keys, types, lengths, ints, strings, bools.
+CI runs both: the Linux `rust` job in structure mode, and a new `frozen-windows` job exactly. This is
+ledger #28 and findings §22.1 again, now for a whole payload rather than one reduction.
+
+In release the freeze takes about 3.5 minutes on this machine (4.5 on the Windows runner); the three
+default plate renders are four of the ten single-thread minutes. It joins `release_only`.
+
+#### 23.19.4 The browser check, in Rust
+
+`crates/physsynth-viewer/examples/verify_headless.rs` replaces `scripts/verify_web_headless.py`:
+the same probe, the same verdict (status, painted pixels, deep-link notes, the horizon strip and the
+panel's horizon mark), and three more cases (stiff, damped, damped-lossy), so every model is rendered
+at least once — a guard in `tests/front_end.rs` derives that from `MODELS`.
+
+The WebSocket client is **hand-written on `std::net`**, not a crate. `tests/deps.rs` walks only what
+the viewer ships, so a dev-dependency's whole tree would go unreviewed, and the protocol needs little:
+one handshake, masked text frames out, fragmented text frames in, a pong for a ping. Its first run
+found its own bug: the DevTools endpoint ignores `Connection: close`, so a read-to-end only ended at
+the timeout. It reads by `Content-Length` now.
+
+**It shuts its browser down through the browser's own port.** The Python harness ended with
+`proc.terminate()`, which on Windows stops only the launcher stub; the real browser survived every
+run of this phase. Measured again here: the spawned PID was 24812 and the browser that answered the
+port was 31880, relaunched by the stub. So the harness gives the browser its own profile directory
+and port, sends `Browser.close`, and waits for the port to go quiet. Only if the browser outlives
+that does it kill anything, and only the process it spawned. A browser it attached to is never
+closed. Full run against the Rust server: **40 of 40 pass, and nothing is left on the port.**
+
+#### 23.19.5 Deleted, switched and left
+
+Deleted: `web/__init__.py`, `web/serialize.py` (10,263 lines), `web/server.py`,
+`tests/test_web_backend.py` (5,524) and `scripts/verify_web_headless.py`, with the shard-cost entry.
+The README launches `cargo run --release -p physsynth-viewer -- serve`. Comments in five Python
+modules and two tests that named `web/serialize.py` as a live reader now say it was. `web/` holds
+only `static/`.
+
+**Left for later, recorded rather than done:** the binding's names that only the viewer reached
+(`_stretch`, `_bridge_displacement`, `_support`, `_b`, `_open_left`, `_open_right`, and the six state
+arrays written on the geometric string) are now dead code, and their doc comments still name the
+viewer as the reason they exist. They go with the binding.
+
+**Phase D is done.** The served viewer is the Rust binary, and nothing in the viewer path imports
+Python.

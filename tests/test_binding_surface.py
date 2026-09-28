@@ -68,7 +68,8 @@ def test_state_is_a_copy_not_a_view():
 
 
 def test_set_state_accepts_a_plain_list():
-    # Not a numpy array: `web/serialize.py` deserialises JSON, and JSON has no ndarray.
+    # Not a numpy array: a caller holding parsed JSON has none (the Python viewer was that caller
+    # until retirement plan §23.19 deleted it).
     s = IdealString(**_params(N=4))
     s.set_state([0.0, 1.0, 2.0, 1.0, 0.0])
     assert np.array_equal(s.u, np.array([0.0, 1.0, 2.0, 1.0, 0.0]))

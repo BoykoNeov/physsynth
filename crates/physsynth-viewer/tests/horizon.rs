@@ -200,6 +200,24 @@ fn is_absent_from_an_error_payload() {
     assert!(payload.get("error").is_some() && payload.get("horizon").is_none());
 }
 
+/// The fallback path through a real payload, not the table it reads: a string terminating on a
+/// spring has its partials shifted BY the coupling, so a cents comparison against the uncoupled
+/// series would report the scene itself as discretisation error. The table alone cannot show the
+/// fallback is wired.
+#[test]
+fn a_bridge_coupled_string_is_refused_rather_than_quoted() {
+    let block = horizon(&json!({"model": "body", "audio_duration": 0.5}));
+    assert_eq!(block["kind"], "none");
+    assert!(block["reason"]
+        .as_str()
+        .unwrap()
+        .contains("spring-coupled bridge"));
+    assert!(
+        block.get("of").is_none(),
+        "the table has no member to name; the builders do"
+    );
+}
+
 #[test]
 fn the_explicit_string_at_lambda_one_is_in_tune_across_the_whole_grid() {
     let block = horizon(&base_params(json!({"model": "ideal", "lambda": 1.0})));
