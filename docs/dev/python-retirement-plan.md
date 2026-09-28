@@ -3151,7 +3151,9 @@ guard's error: the room's select is sent as `walls`, not `domain` (`gatherParams
 **Proved to bite while the Python still existed.** The Rust comparator's verdict, run over all 26
 corpora, matched `compare.py`'s count for count: the same number of identical, in-class and failing
 cases in every corpus. A test corrupts one thing at a time — one ulp, one buffer byte, one audio
-sample, an int, an int turned float, a key, a length, a string — and each must fail.
+sample, an int, an int turned float, a key, a length, a string — and each must fail. The value
+corruptions need exact mode (below), so off the recording platform that half is reported as
+*ignored*, not as a pass that asserted nothing.
 
 #### 23.19.3 Exactness is a claim about the platform — measured
 

@@ -706,13 +706,14 @@ fn the_comparator_fails_each_structural_corruption_in_both_modes() {
 
 /// A change of VALUE fails in exact mode. The baseline must be exact first, which is a claim about
 /// the recording platform — elsewhere the payload itself may differ in the last bit, so this half
-/// runs where [`EXACT`] holds (the Windows CI job) and nowhere else.
+/// runs where [`EXACT`] holds (the Windows CI job) and is IGNORED elsewhere — reported as ignored,
+/// not as a pass that asserted nothing.
 #[test]
+#[cfg_attr(
+    not(all(target_os = "windows", target_env = "msvc", target_arch = "x86_64")),
+    ignore = "exact mode holds only on the recording platform; the Windows CI job runs this"
+)]
 fn the_comparator_fails_each_value_corruption_in_exact_mode() {
-    if !EXACT {
-        eprintln!("not the recording platform: the exact half runs in the Windows CI job");
-        return;
-    }
     let (want, got, model) = cheap_case();
     assert_eq!(hard(&want, &got, &model, true), 0);
 
