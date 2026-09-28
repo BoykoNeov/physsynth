@@ -23,11 +23,14 @@
 //! yet is refused with kind `unported`, so a scene can never render from a half-finished payload;
 //! the Python backend stays the live viewer until the list below is complete.
 
+pub mod airload;
 pub mod bow;
 pub mod energy;
 pub mod geometric;
 pub mod horizon;
 pub mod py;
+pub mod radbody;
+pub mod reed;
 pub mod resample;
 pub mod server;
 pub mod string;
@@ -53,15 +56,15 @@ pub const MODELS: [(&str, bool); 22] = [
     ("juari", false),
     ("fret", false),
     ("bore", false),
-    ("reed", false),
+    ("reed", true),
     ("membrane", false),
     ("mallet", false),
     ("plate", false),
     ("vk", false),
     ("body", false),
     ("platebody", false),
-    ("radbody", false),
-    ("airload", false),
+    ("radbody", true),
+    ("airload", true),
     ("airbox", false),
     ("vkroom", false),
 ];
@@ -135,6 +138,9 @@ fn build_payload(p: &Value) -> Result<Value, Refusal> {
         _ if model == "bow" => bow::build_payload(p),
         _ if model == "sympathetic" => sympathetic::build_payload(p),
         _ if model == "geometric" => geometric::build_payload(p),
+        _ if model == "reed" => reed::build_payload(p),
+        _ if model == "radbody" => radbody::build_payload(p),
+        _ if model == "airload" => airload::build_payload(p),
         // `ideal`, `stiff`, `damped` — and every unknown key, which the string builder refuses
         // with the reference's message after reading the params it reads first.
         _ => string::build_payload(p),

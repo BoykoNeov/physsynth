@@ -288,6 +288,38 @@ pub fn linspace_idx(last: usize, num: usize) -> Vec<usize> {
     }
 }
 
+/// `np.geomspace(start, stop, num)` for positive `start < stop`.
+///
+/// NumPy's chain, transcribed: `linspace(log10(start), log10(stop), num)` (which is `i * step +
+/// start` with the last entry overwritten by the endpoint), raised as `10.0 ** y`, and then BOTH
+/// ends overwritten with `start` and `stop` exactly, since `10 ** log10(x)` need not be `x`.
+pub fn geomspace(start: f64, stop: f64, num: usize) -> Vec<f64> {
+    if num == 0 {
+        return Vec::new();
+    }
+    let (ls, le) = (start.log10(), stop.log10());
+    let mut out: Vec<f64> = if num == 1 {
+        vec![10f64.powf(ls)]
+    } else {
+        let step = (le - ls) / (num - 1) as f64;
+        (0..num)
+            .map(|i| {
+                let y = if i == num - 1 {
+                    le
+                } else {
+                    i as f64 * step + ls
+                };
+                physsynth_core::pyfloat::scalar_pow(10.0, y)
+            })
+            .collect()
+    };
+    out[0] = start;
+    if num > 1 {
+        out[num - 1] = stop;
+    }
+    out
+}
+
 /// `_finite_list`: floats to a JSON list, non-finite values to `null`, optionally rounded.
 pub fn finite_list(arr: &[f64], ndigits: Option<usize>) -> Value {
     Value::Array(

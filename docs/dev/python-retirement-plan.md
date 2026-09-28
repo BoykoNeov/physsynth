@@ -449,7 +449,8 @@ keeping is a Cargo example. The sharding scripts leave with the suite at F; the 
 batch is done** (§23): `crates/physsynth-viewer` exists, serves the untouched front-end, and renders
 the three linear strings; the other nineteen scenes follow model by model in the order §23.7 derives,
 and the Python server stays the live viewer until the last of them lands. **Batch D2 is done**
-(§23.8): the tension string, both regimes, and the bow — five keys native, seventeen to go.
+(§23.8): the tension string, both regimes, and the bow. **Batch D3 is done** (§23.9): sympathetic,
+geometric, reed, radbody and airload — ten keys native, twelve to go.
 
 ---
 
@@ -2593,3 +2594,59 @@ adds when it relaunches itself. That makes it likely that the process ID `verify
 holds is a launcher that has already exited, so its `proc.terminate()` misses the browser. The
 likely cause is recorded here rather than fixed, because the script is ported at D7 and the port
 should shut the browser down through its port.
+
+### 23.9 Batch D3, done — five scenes with no new numerics
+
+Ten of the twenty-two keys are now native. The five added here are **`sympathetic`** (normal,
+transfer and weinreich), **`geometric`** (planar, rotating, whirl and phantom), **`reed`**,
+**`radbody`** and **`airload`**.
+
+| corpus | requests | identical | within a class | failing |
+|---|---|---|---|---|
+| sympathetic | 22 | 22 | 0 | 0 |
+| geometric | 24 | 23 | 1 (phantom audio) | 0 |
+| reed | 27 | 27 | 0 | 0 |
+| radbody | 30 | 30 | 0 | 0 |
+| airload | 36 | 36 | 0 | 0 |
+| the browser's own requests, all eleven scene/regime pairs | 11 | 11 | 0 | 0 |
+
+The headless check passed all eleven of this batch's cases on the Rust server.
+
+Four things the batch settled:
+
+- **`uniform_filter1d` had one right order out of three plausible ones.** SciPy keeps a running
+  sum and divides on output (`tmp += new - old; out = tmp / size`). Dividing inside the update,
+  or compensating the sum, each missed tens of thousands of samples against the installed SciPy.
+  The matching order was found by testing all three on random data before any of them was used,
+  and it matched every sample (`py::uniform_filter1d_nearest`). The weinreich envelopes are
+  bit-identical because of it.
+- **`np.geomspace` is three steps, and two of them overwrite.** It computes the log-spaced
+  `linspace`, raises it as `10 ** y`, and then puts `start` and `stop` back exactly, since
+  `10 ** log10(x)` need not be `x`. Transcribed as such (`py::geomspace`), both sweeps' `R` and
+  `f` grids are bit-identical.
+- **The reed's sweep cache is gone, deliberately.** `_REED_SWEEP_MEMO` existed because the
+  threshold-plus-pitch sweep cost ~3.5 s in Python. Natively it is well under a second, so it is
+  recomputed. The reference's own docstring called its key "the trap", since a key that misses an
+  input returns stale numbers, and a cache that is not needed cannot be keyed wrong. The test that
+  guarded the key keeps its assertion: the sweep must move with `f_reed`, `q_reed`, the bell and
+  `L`.
+- **A step failure's error kind follows the binding's exception type.** The tension string's and
+  the bow's steps raised `RuntimeError`, which the reference never caught, so they are `internal`
+  here. The geometric string's raised `ValueError`, which the reference reported as a construction
+  error, so it is `construction` here.
+
+**The headless check leaked its Chrome a second time**, so this is now a confirmed pattern and not
+a one-off. The fix belongs in D7's port of the check: shut the browser down through its DevTools
+port and wait for it to exit. The next batch's runs close it by hand the same way. `Browser.close`
+takes about two seconds to exit, so a check made immediately afterwards still sees it running.
+
+**Tests carried:**
+
+- `tests/sympathetic.rs` (22), `tests/geometric.rs` (30), `tests/reed.rs` (17),
+  `tests/radbody.rs` (16) and `tests/airload.rs` (21): every test in the reference's five sections.
+- The one exception is radbody's `R = 0` anchor against the `body` scene, which lands with that
+  scene in D4. Airload's anchor against radbody is carried, since both sides are native now.
+- The two remaining patched constants (`RADBODY_SWEEP_WORK_MAX`, `AIRLOAD_SWEEP_WORK_MAX`) became
+  `build_payload_with(p, work_max)`, the same move as D2's.
+- The phantom tests share one run through a `OnceLock`, the reference's module-scoped fixture.
+- Unoptimized, the slowest new file is the reed's at about 9 s.

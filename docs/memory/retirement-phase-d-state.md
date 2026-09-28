@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-d-state
-description: "Phase D (viewer to Rust) IN PROGRESS — D1+D2 done 2026-09-28: crates/physsynth-viewer, 5 of 22 keys (ideal/stiff/damped/tension/bow); every trajectory bit-identical to the Python; next D3"
+description: "Phase D (viewer to Rust) IN PROGRESS — D1-D3 done 2026-09-28: crates/physsynth-viewer, 10 of 22 keys; every trajectory bit-identical to the Python; next D4 (arbitrary-length rfft)"
 metadata:
   node_type: memory
   type: project
@@ -12,8 +12,9 @@ Phase D of `docs/dev/python-retirement-plan.md` (§23), started 2026-09-28 when 
 the viewer in rust". Scope = plan §5: backend to Rust, `web/static/` JS untouched.
 
 **Done:** D1 (§23.1–23.7) crate + std::net server + ideal/stiff/damped; D2 (§23.8) tension (duffing +
-parametric) + bow. `physsynth-core/src/engine.rs` = native `simulate`, `Resonator::step` is FALLIBLE
-(step failure → payload kind `internal`). Other 17 keys refused with kind `unported`. Python server
+parametric) + bow; D3 (§23.9) sympathetic, geometric, reed (memo dropped), radbody, airload — all
+139 D3 requests + 11 browser requests matched, 149 of the 150 to the bit. `physsynth-core/src/engine.rs` = native `simulate`, `Resonator::step` is FALLIBLE
+(step failure → payload kind `internal`). The other 12 keys are refused with kind `unported`. Python server
 stays the live viewer until D7.
 
 **How each batch is checked:** `W:\temp\claude\viewer-port\`:
@@ -45,13 +46,16 @@ Start the Rust server via PowerShell Start-Process -PassThru and kill it by that
 Chrome LEAKS: Chrome relaunches itself, so the PID it holds is a dead launcher. Afterwards, check
 port 9333 and close via CDP `Browser.close` (never by name).
 
+**Found in D3:** `uniform_filter1d` = running sum, divide on output (the only one of 3 orders that
+matched SciPy); `np.geomspace` overwrites BOTH ends; the step-failure error kind follows the
+binding's exception type (RuntimeError -> internal, ValueError -> construction).
+
 **Next (§23.7):**
-- D3: geometric, sympathetic, reed (loss-channel sum order matters), radbody, airload;
 - D4: body, jawari, juari, fret (arbitrary-length rfft);
 - D5: membrane, mallet, plate, vk, bore, platebody (eigsh);
 - D6: airbox, vkroom (dense eigh vectors);
 - D7: FREEZE the reference outputs as a native fixture first, then port the headless check, switch
   servers, delete `web/*.py` + `test_web_backend.py`. Only the reed has a cache (`_REED_SWEEP_MEMO`):
-  measure first, and drop it if Rust is fast enough.
+  dropped in D3, since Rust is fast enough. The radbody `R = 0` anchor test lands with `body` in D4.
 
 Related: [[python-retirement-state]], [[retirement-phase-e-state]], [[web-viewer-state]].
