@@ -2,7 +2,7 @@
 //!
 //! The claim is the BOOKED channel: `E_string + E_body + E_conn + int P_rad` conserves while the
 //! mechanical part drains away as sound, and the drain has an OPTIMUM in `R` — more air is worse.
-//! (The `R = 0` anchor against the plain `body` scene lands with that scene, in batch D4.)
+//! (The `R = 0` anchor against the plain `body` scene lives in `tests/body.rs`.)
 
 mod common;
 

@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-d-state
-description: "Phase D (viewer to Rust) IN PROGRESS — D1-D3 done 2026-09-28: crates/physsynth-viewer, 10 of 22 keys; every trajectory bit-identical to the Python; next D4 (arbitrary-length rfft)"
+description: "Phase D (viewer to Rust) IN PROGRESS — D1-D4 done 2026-09-28: crates/physsynth-viewer, 14 of 22 keys; every trajectory bit-identical to the Python; next D5 (sparse shift-invert eigsh)"
 metadata:
   node_type: memory
   type: project
@@ -13,8 +13,9 @@ the viewer in rust". Scope = plan §5: backend to Rust, `web/static/` JS untouch
 
 **Done:** D1 (§23.1–23.7) crate + std::net server + ideal/stiff/damped; D2 (§23.8) tension (duffing +
 parametric) + bow; D3 (§23.9) sympathetic, geometric, reed (memo dropped), radbody, airload — all
-139 D3 requests + 11 browser requests matched, 149 of the 150 to the bit. `physsynth-core/src/engine.rs` = native `simulate`, `Resonator::step` is FALLIBLE
-(step failure → payload kind `internal`). The other 12 keys are refused with kind `unported`. Python server
+139 D3 requests + 11 browser requests matched, 149 of the 150 to the bit; D4 (§23.10) body, jawari,
+juari, fret + `physsynth_analysis::spectrum::rfft` (Bluestein, any length) — 73 + 8 browser, 0 failing. `physsynth-core/src/engine.rs` = native `simulate`, `Resonator::step` is FALLIBLE
+(step failure → payload kind `internal`). The other 8 keys are refused with kind `unported`. Python server
 stays the live viewer until D7.
 
 **How each batch is checked:** `W:\temp\claude\viewer-port\`:
@@ -50,12 +51,17 @@ port 9333 and close via CDP `Browser.close` (never by name).
 matched SciPy); `np.geomspace` overwrites BOTH ends; the step-failure error kind follows the
 binding's exception type (RuntimeError -> internal, ValueError -> construction).
 
+**Found in D4:** a fitted decay rate needs an ABSOLUTE class (at sigma0 = 0 it is ~6e-12 of noise,
+0.5 % apart relatively); the reference's NaN (body K=0 omega2) is emitted as `null` on purpose
+(Python server would 500); the juari's `N` pre-read quirk (N=40.0 → main run's thread on the N=100
+snap) is PORTED and PINNED by a test, fix only as a decision after the switch. The running viewer
+server locks `target/release/physsynth-viewer.exe` — stop it (by PID) before `cargo test`.
+
 **Next (§23.7):**
-- D4: body, jawari, juari, fret (arbitrary-length rfft);
 - D5: membrane, mallet, plate, vk, bore, platebody (eigsh);
 - D6: airbox, vkroom (dense eigh vectors);
 - D7: FREEZE the reference outputs as a native fixture first, then port the headless check, switch
   servers, delete `web/*.py` + `test_web_backend.py`. Only the reed has a cache (`_REED_SWEEP_MEMO`):
-  dropped in D3, since Rust is fast enough. The radbody `R = 0` anchor test lands with `body` in D4.
+  dropped in D3, since Rust is fast enough.
 
 Related: [[python-retirement-state]], [[retirement-phase-e-state]], [[web-viewer-state]].

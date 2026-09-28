@@ -170,7 +170,7 @@ pub fn mode_shape(n: usize, m: usize) -> Vec<f64> {
 /// `_mode1_shape`: `np.pi * np.arange(N + 1) / N` — one factor fewer than [`mode_shape`], so it
 /// is spelled separately rather than as `mode_shape(n, 1)` (which multiplies by `1.0` first; the
 /// same value, but this is the reference's expression).
-fn mode1_shape(n: usize) -> Vec<f64> {
+pub fn mode1_shape(n: usize) -> Vec<f64> {
     (0..=n)
         .map(|i| PI * i as f64 / n as f64)
         .map(f64::sin)

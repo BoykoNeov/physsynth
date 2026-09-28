@@ -24,7 +24,9 @@
 //! the Python backend stays the live viewer until the list below is complete.
 
 pub mod airload;
+pub mod body;
 pub mod bow;
+pub mod contact;
 pub mod energy;
 pub mod geometric;
 pub mod horizon;
@@ -52,16 +54,16 @@ pub const MODELS: [(&str, bool); 22] = [
     ("bow", true),
     ("geometric", true),
     ("sympathetic", true),
-    ("jawari", false),
-    ("juari", false),
-    ("fret", false),
+    ("jawari", true),
+    ("juari", true),
+    ("fret", true),
     ("bore", false),
     ("reed", true),
     ("membrane", false),
     ("mallet", false),
     ("plate", false),
     ("vk", false),
-    ("body", false),
+    ("body", true),
     ("platebody", false),
     ("radbody", true),
     ("airload", true),
@@ -141,6 +143,10 @@ fn build_payload(p: &Value) -> Result<Value, Refusal> {
         _ if model == "reed" => reed::build_payload(p),
         _ if model == "radbody" => radbody::build_payload(p),
         _ if model == "airload" => airload::build_payload(p),
+        _ if model == "body" => body::build_payload(p),
+        _ if model == "jawari" => contact::build_payload_jawari(p),
+        _ if model == "juari" => contact::build_payload_juari(p),
+        _ if model == "fret" => contact::build_payload_fret(p),
         // `ideal`, `stiff`, `damped` — and every unknown key, which the string builder refuses
         // with the reference's message after reading the params it reads first.
         _ => string::build_payload(p),

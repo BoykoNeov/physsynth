@@ -191,6 +191,90 @@ fn fft_in_place(re: &mut [f64], im: &mut [f64]) {
     }
 }
 
+/// `np.fft.rfft(x)` at the record's OWN length: the one-sided DFT, `n/2 + 1` bins as `(re, im)`.
+///
+/// [`magnitude_spectrum`] zero-pads to a power of two, so its bins are not `rfft(x)`'s whenever
+/// `x.len()` is not one; the viewer's brightness and band panels take `rfft` of the raw record, so
+/// they need a transform of any length. Power-of-two lengths go straight through
+/// [`fft_in_place`]. Every other length uses **Bluestein's** identity `nk = (n² + k² - (k-n)²)/2`,
+/// which turns the DFT into a circular convolution with the chirp `exp(-i pi k²/n)` that the
+/// power-of-two FFT evaluates. Two details decide its accuracy:
+///
+/// * the chirp's angle is taken from `k² mod 2n` in **integer** arithmetic before it becomes a
+///   float, so the phase of a late `k` is not `pi k²/n` computed from a huge `k²` and losing its
+///   low bits;
+/// * the inverse transform is `conj(fft(conj(x)))/m`, so there is one FFT routine to trust.
+///
+/// Like the rest of the magnitude axis this is a tolerance port, not a transcription of pocketfft
+/// (see the module header): it is a correct DFT to `O(eps log n)` relative to `sum |x|`, which
+/// `tests/spectrum.rs` checks against a directly evaluated DFT at prime, composite and
+/// power-of-two lengths.
+///
+/// # Panics
+/// On an empty record, where NumPy raises.
+pub fn rfft(x: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    let n = x.len();
+    assert!(n > 0, "rfft of an empty record");
+    let half = n / 2 + 1;
+    if n.is_power_of_two() {
+        let mut re = x.to_vec();
+        let mut im = vec![0.0; n];
+        fft_in_place(&mut re, &mut im);
+        re.truncate(half);
+        im.truncate(half);
+        return (re, im);
+    }
+    // The chirp w_k = exp(-i pi k^2 / n), its angle reduced exactly.
+    let two_n = 2 * n as u128;
+    let (wc, ws): (Vec<f64>, Vec<f64>) = (0..n)
+        .map(|k| {
+            let r = ((k as u128 * k as u128) % two_n) as f64;
+            let (sn, cs) = (-PI * r / n as f64).sin_cos();
+            (cs, sn)
+        })
+        .unzip();
+    let m = (2 * n - 1).next_power_of_two();
+    // a_k = x_k w_k, zero-padded to m.
+    let (mut ar, mut ai) = (vec![0.0; m], vec![0.0; m]);
+    for k in 0..n {
+        ar[k] = x[k] * wc[k];
+        ai[k] = x[k] * ws[k];
+    }
+    // b_k = conj(w_k), wrapped so the convolution is circular: b_k and b_{m-k}.
+    let (mut br, mut bi) = (vec![0.0; m], vec![0.0; m]);
+    br[0] = wc[0];
+    bi[0] = -ws[0];
+    for k in 1..n {
+        br[k] = wc[k];
+        bi[k] = -ws[k];
+        br[m - k] = wc[k];
+        bi[m - k] = -ws[k];
+    }
+    fft_in_place(&mut ar, &mut ai);
+    fft_in_place(&mut br, &mut bi);
+    // C = A B, then the inverse as conj(fft(conj(C))) / m.
+    let (mut cr, mut ci) = (vec![0.0; m], vec![0.0; m]);
+    for k in 0..m {
+        cr[k] = ar[k] * br[k] - ai[k] * bi[k];
+        ci[k] = -(ar[k] * bi[k] + ai[k] * br[k]);
+    }
+    fft_in_place(&mut cr, &mut ci);
+    let scale = 1.0 / m as f64;
+    let (mut re, mut im) = (Vec::with_capacity(half), Vec::with_capacity(half));
+    for k in 0..half {
+        let (yr, yi) = (cr[k] * scale, -ci[k] * scale);
+        re.push(yr * wc[k] - yi * ws[k]);
+        im.push(yr * ws[k] + yi * wc[k]);
+    }
+    (re, im)
+}
+
+/// `np.abs(np.fft.rfft(x))` — the magnitude of every one-sided bin.
+pub fn rfft_mag(x: &[f64]) -> Vec<f64> {
+    let (re, im) = rfft(x);
+    re.iter().zip(&im).map(|(r, i)| r.hypot(*i)).collect()
+}
+
 /// `(freqs, magnitude, nfft)` of the DC-removed, Hann-windowed signal.
 ///
 /// The mean is a plain left-to-right sum, **not** NumPy's pairwise one, and that is a deliberate

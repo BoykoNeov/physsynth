@@ -33,7 +33,7 @@ pub struct EnergyOpts<'a> {
     pub convergence: Option<Value>,
     /// Cumulative exciter work per step — switches the block to the balance verdict.
     pub balance_work: Option<&'a [f64]>,
-    /// `false` drops the measured-vs-oracle `2 sigma` line (the mallet: a closed system whose
+    /// `true` drops the measured-vs-oracle `2 sigma` line (the mallet: a closed system whose
     /// energy floors at the mallet's kinetic energy, so a fitted rate would be a lying zero).
     pub no_decay_oracle: bool,
     /// Named channels of the same total (the bore's acoustic / radiated split), decimated alike.

@@ -288,3 +288,90 @@ fn the_separation_rule_suppresses_a_sidelobe_next_to_a_strong_tone() {
         );
     }
 }
+
+// -- rfft at the record's own length (the viewer's brightness and band panels)
+
+/// A directly evaluated one-sided DFT, in extended care: the angle is reduced exactly first.
+fn direct_rfft(x: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    let n = x.len();
+    (0..n / 2 + 1)
+        .map(|k| {
+            let (mut re, mut im) = (0.0, 0.0);
+            for (j, &xj) in x.iter().enumerate() {
+                let r = ((j * k) % n) as f64;
+                let (s, c) = (-2.0 * std::f64::consts::PI * r / n as f64).sin_cos();
+                re += xj * c;
+                im += xj * s;
+            }
+            (re, im)
+        })
+        .unzip()
+}
+
+/// A deterministic, structureless test signal (no RNG crate: a fixed quadratic-residue hash).
+fn signal(n: usize) -> Vec<f64> {
+    (0..n)
+        .map(|i| {
+            let h = ((i as u64 * 2_654_435_761 + 97) % 1_000_003) as f64 / 1_000_003.0;
+            (h - 0.5) + 0.3 * (0.37 * i as f64).sin()
+        })
+        .collect()
+}
+
+#[test]
+fn rfft_matches_a_direct_dft_at_prime_composite_and_power_of_two_lengths() {
+    for n in [
+        1, 2, 3, 4, 5, 7, 8, 12, 17, 31, 32, 60, 97, 100, 128, 255, 256, 257, 1000, 1009,
+    ] {
+        let x = signal(n);
+        let (re, im) = physsynth_analysis::spectrum::rfft(&x);
+        let (dr, di) = direct_rfft(&x);
+        assert_eq!(re.len(), n / 2 + 1, "n = {n}");
+        let scale: f64 = x.iter().map(|v| v.abs()).sum::<f64>().max(1e-300);
+        for k in 0..re.len() {
+            let err = (re[k] - dr[k]).hypot(im[k] - di[k]) / scale;
+            assert!(err < 1e-13, "n = {n}, bin {k}: relative error {err:e}");
+        }
+    }
+}
+
+#[test]
+fn rfft_satisfies_parseval_and_real_input_edge_bins() {
+    for n in [99, 100, 4097, 44_101] {
+        let x = signal(n);
+        let (re, im) = physsynth_analysis::spectrum::rfft(&x);
+        // DC and (for even n) Nyquist bins of a real signal are real.
+        assert!(im[0].abs() <= 1e-9 * re[0].abs().max(1.0), "n = {n}");
+        if n % 2 == 0 {
+            assert!(im[n / 2].abs() <= 1e-9, "n = {n}");
+        }
+        // Parseval, one-sided: sum x^2 = (|X0|^2 + 2 sum |Xk|^2 [+ |X_{n/2}|^2]) / n.
+        let time: f64 = x.iter().map(|v| v * v).sum();
+        let mut freq = re[0] * re[0];
+        for k in 1..re.len() {
+            let p = re[k] * re[k] + im[k] * im[k];
+            freq += if n % 2 == 0 && k == n / 2 { p } else { 2.0 * p };
+        }
+        freq /= n as f64;
+        assert!(
+            (time - freq).abs() <= 1e-11 * time,
+            "n = {n}: {time} vs {freq}"
+        );
+    }
+}
+
+#[test]
+fn rfft_finds_a_pure_tone_in_its_own_bin_at_an_awkward_length() {
+    // A tone exactly on bin 7 of a length-1001 record: all the energy in bin 7, none elsewhere.
+    let n = 1001;
+    let x: Vec<f64> = (0..n)
+        .map(|i| (2.0 * std::f64::consts::PI * 7.0 * i as f64 / n as f64).cos())
+        .collect();
+    let mag = physsynth_analysis::spectrum::rfft_mag(&x);
+    assert!((mag[7] - n as f64 / 2.0).abs() < 1e-9 * n as f64);
+    for (k, &m) in mag.iter().enumerate() {
+        if k != 7 {
+            assert!(m < 1e-9 * n as f64, "bin {k}: {m}");
+        }
+    }
+}

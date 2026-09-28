@@ -450,7 +450,8 @@ batch is done** (§23): `crates/physsynth-viewer` exists, serves the untouched f
 the three linear strings; the other nineteen scenes follow model by model in the order §23.7 derives,
 and the Python server stays the live viewer until the last of them lands. **Batch D2 is done**
 (§23.8): the tension string, both regimes, and the bow. **Batch D3 is done** (§23.9): sympathetic,
-geometric, reed, radbody and airload — ten keys native, twelve to go.
+geometric, reed, radbody and airload. **Batch D4 is done** (§23.10): body, jawari, juari and
+fret, plus an arbitrary-length `rfft` in the analysis crate — fourteen keys native, eight to go.
 
 ---
 
@@ -2650,3 +2651,75 @@ takes about two seconds to exit, so a check made immediately afterwards still se
   `build_payload_with(p, work_max)`, the same move as D2's.
 - The phantom tests share one run through a `OnceLock`, the reference's module-scoped fixture.
 - Unoptimized, the slowest new file is the reed's at about 9 s.
+
+### 23.10 Batch D4, done — the lumped body and the three barrier scenes
+
+Fourteen of the twenty-two keys are now native. The four added here are **`body`** (a string on a
+lumped modal body, radiating), and the three configurations of the barrier model: **`jawari`** (a
+curved bridge), **`juari`** (a single-node thread) and **`fret`** (a flat rail). They live in
+`crates/physsynth-viewer/src/body.rs` and `…/contact.rs`. The three barrier scenes share one
+contact runner, one centroid and one band spectrum, where the reference had three near-copies.
+
+**The one new numerical routine is an `rfft` at any length** (`physsynth_analysis::spectrum::rfft`,
+and `rfft_mag` beside it). A power-of-two length goes through the existing FFT, and any other length
+through Bluestein's chirp-z transform. The chirp's angle is taken from `k² mod 2n` in 128-bit
+integers, so it does not lose precision at long records. It got its three native bars before any
+payload used it: a direct DFT at twenty lengths (relative error under 1e-13), Parseval's identity
+with purely real edge bins, and a pure tone at `n = 1001` landing on its bin. Planting a sign error
+in the chirp made all three fail.
+
+| corpus | requests | identical | within a class | failing |
+|---|---|---|---|---|
+| body | 22 | 8 | 14 | 0 |
+| jawari, juari, fret | 51 | 23 | 28 | 0 |
+| the browser's own requests (all four scenes, plus radbody again) | 8 | 1 | 7 | 0 |
+| every earlier corpus, re-run after this batch | 259 | 235 | 24 | 0 |
+
+**Every trajectory matched to the bit** again, including every contact statistic: the fret's
+duty, episode count, active-set sizes, Newton iteration counts and its whole contact raster, the
+jawari's wrap edge, and the juari's tuning-curve positions. The spectral centroids, which the
+panels round to 0.1 Hz, matched exactly after rounding. The tolerance cases all come from reading a
+finished run:
+
+- **the normalized magnitude spectra** (`meta.spectrum.mag`, and now `meta.spectrum.spectra.*.mag`
+  too, the nested form the barrier scenes use). Bluestein is not pocketfft's algorithm, so bins
+  differ in the last bit. The largest difference is 4.4e-16 against a peak of 1.0, inside the
+  existing absolute class of 1e-12.
+- **the fret's decay-rate triple.** `rate` is the same least-squares fit as the other scenes'
+  `measured_2sigma`, but it needs an ABSOLUTE class: at `sigma0 = 0` it is a fit to conserved
+  energy, a rate of about 6e-12 made of rounding noise, and the two fits disagree there by 0.5 %
+  relative while agreeing to 3e-14 absolutely. The class is 1e-12 absolute (largest seen 4.3e-14).
+  `corrected` is `2 sigma0 <2KE/E>`, where `KE` is a BLAS `ddot` in the reference: relative 1e-13
+  (largest seen 2.1e-16).
+
+**One deliberate difference.** At `bridge_stiffness = 0` the body never moves, and the reference
+computed its `omega2_consistency` read-out as 0/0 = NaN. The Python server serializes with
+`allow_nan=False`, so it would have answered that request with a 500. The Rust payload carries
+`null`, which the front-end already renders as "—". The recorder now marks every such reference
+payload, and the comparison treats NaN-versus-null as its own named class.
+
+**One reference quirk carried, and pinned.** The juari reads `N` twice. The first read is a
+pre-read that `int()`s it only when `str(N)` is all digits, and otherwise snaps the thread on
+`N = 100`. The second read re-snaps the label on the validated `N`. For `N = 40.0`, which the
+front-end never sends, the main audio run's thread therefore sits at node `round(0.1 · 100) = 10`,
+while the curve and the marker report node 4. It is ported exactly, because this batch's job is
+agreement, and a test (`juari_n_pre_read_matches_the_reference_including_its_float_quirk`) pins
+it, so that fixing it after the switch is a recorded decision rather than a silent change.
+
+**The headless check passed all four scenes** on the Rust server: shimmer 3.44x, the juari buzzing
+2.84x at 0.1 L, the fret's brightness 4.682x, and the body's terminus at 90.8 Hz. **It leaked its
+Chrome a third time**, and it was closed through its own DevTools port again. The running viewer
+server also has to be stopped (by the process ID recorded at launch) before `cargo test`, because
+Windows will not replace a running executable.
+
+**Tests carried:**
+
+- `tests/body.rs`, 14 tests: all 13 of the reference's body section, including the `K = 0`
+  bit-identity against a bare fixed/free string, which now asserts the `null` read-out as well.
+  The fourteenth is radbody's `R = 0` anchor, deferred from D3: at `R = 0` the radiation-loaded
+  body reproduces this scene's energy report, audio bytes, frames and exchange channels exactly.
+- `tests/contact.rs`, 44 tests: 11 for the jawari, 13 for the juari (the reference's 12 plus the
+  pre-read quirk) and 20 for the fret. The fret's two-sided brightness-peak test, parametrized in
+  the reference for wall-clock, is one test here, since the whole file runs in 10 s. Its
+  dispatch-`kind` test folds into the two blocks that already assert `kind`.
+- The whole workspace: 1,059 Rust tests pass.
