@@ -25,11 +25,13 @@
 
 pub mod bow;
 pub mod energy;
+pub mod geometric;
 pub mod horizon;
 pub mod py;
 pub mod resample;
 pub mod server;
 pub mod string;
+pub mod sympathetic;
 pub mod tension;
 
 use serde_json::{json, Value};
@@ -45,8 +47,8 @@ pub const MODELS: [(&str, bool); 22] = [
     ("damped", true),
     ("tension", true),
     ("bow", true),
-    ("geometric", false),
-    ("sympathetic", false),
+    ("geometric", true),
+    ("sympathetic", true),
     ("jawari", false),
     ("juari", false),
     ("fret", false),
@@ -131,6 +133,8 @@ fn build_payload(p: &Value) -> Result<Value, Refusal> {
         ))),
         _ if model == "tension" => tension::build_payload(p),
         _ if model == "bow" => bow::build_payload(p),
+        _ if model == "sympathetic" => sympathetic::build_payload(p),
+        _ if model == "geometric" => geometric::build_payload(p),
         // `ideal`, `stiff`, `damped` — and every unknown key, which the string builder refuses
         // with the reference's message after reading the params it reads first.
         _ => string::build_payload(p),

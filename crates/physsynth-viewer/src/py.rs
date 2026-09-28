@@ -132,6 +132,20 @@ pub fn round_nd(x: f64, ndigits: usize) -> f64 {
         .expect("a formatted finite float parses")
 }
 
+/// `_as_bool(v, default)`: a bool is itself, absent/`null` is the default, a number is its
+/// truthiness, and anything else is `str(v).strip().lower() in ("1", "true", "yes", "on")`.
+pub fn as_bool(v: Option<&Value>, default: bool) -> bool {
+    match v {
+        None | Some(Value::Null) => default,
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Number(n)) => n.as_f64().is_none_or(|x| x != 0.0),
+        Some(other) => matches!(
+            py_str(other).trim().to_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+    }
+}
+
 /// `str(v)` for a JSON value: a string is itself, anything else its repr.
 pub fn py_str(v: &Value) -> String {
     match v {
@@ -349,6 +363,36 @@ pub fn dot(a: &[f64], b: &[f64]) -> f64 {
 /// `np.linalg.norm` of a vector — `sqrt(dot(x, x))`, with [`dot`]'s caveat.
 pub fn norm(a: &[f64]) -> f64 {
     dot(a, a).sqrt()
+}
+
+/// `scipy.ndimage.uniform_filter1d(x, size, mode="nearest")` — a sliding mean, edge-extended.
+///
+/// SciPy keeps a RUNNING SUM and divides on output: `tmp += new - old; out = tmp / size`. That
+/// order was found by trying the three candidates against the installed SciPy 1.17.1 on random
+/// data (sizes 1..257, lengths 5..5000): this one matched every sample, while
+/// dividing inside the update or compensating the sum each missed tens of thousands.
+pub fn uniform_filter1d_nearest(x: &[f64], size: usize) -> Vec<f64> {
+    let n = x.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let size = size.max(1);
+    let s1 = size / 2;
+    let s2 = size - s1 - 1;
+    let mut ext = vec![x[0]; s1];
+    ext.extend_from_slice(x);
+    ext.extend(std::iter::repeat_n(x[n - 1], s2));
+    let mut out = Vec::with_capacity(n);
+    let mut tmp = 0.0;
+    for v in &ext[..size] {
+        tmp += v;
+    }
+    out.push(tmp / size as f64);
+    for ll in 1..n {
+        tmp += ext[ll + size - 1] - ext[ll - 1];
+        out.push(tmp / size as f64);
+    }
+    out
 }
 
 // -- base64 ---------------------------------------------------------------------------------------

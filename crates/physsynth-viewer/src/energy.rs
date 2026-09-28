@@ -179,15 +179,24 @@ pub fn fit_decay(t: &[f64], e: &[f64]) -> Option<f64> {
     if pts.len() < 2 {
         return None;
     }
-    let n = pts.len() as f64;
-    let tm = pts.iter().map(|p| p.0).sum::<f64>() / n;
-    let ym = pts.iter().map(|p| p.1).sum::<f64>() / n;
+    let (t, y): (Vec<f64>, Vec<f64>) = pts.into_iter().unzip();
+    Some(-lstsq_slope(&t, &y))
+}
+
+/// The slope of the least-squares line through `(x, y)` — `np.polyfit(x, y, 1)[0]`.
+///
+/// `polyfit` solves this through LAPACK's SVD; this is the closed form about the mean, the same
+/// line, differing from LAPACK's in the last bits (measured: 3e-14 relative at worst).
+pub fn lstsq_slope(x: &[f64], y: &[f64]) -> f64 {
+    let n = x.len() as f64;
+    let xm = x.iter().sum::<f64>() / n;
+    let ym = y.iter().sum::<f64>() / n;
     let (mut sxy, mut sxx) = (0.0, 0.0);
-    for &(tv, yv) in &pts {
-        sxy += (tv - tm) * (yv - ym);
-        sxx += (tv - tm) * (tv - tm);
+    for (&xv, &yv) in x.iter().zip(y) {
+        sxy += (xv - xm) * (yv - ym);
+        sxx += (xv - xm) * (xv - xm);
     }
-    Some(-(sxy / sxx))
+    sxy / sxx
 }
 
 /// The energy-BALANCE verdict for an actively driven model: `E - E0 == work_in - loss`.
