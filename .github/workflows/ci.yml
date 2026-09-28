@@ -9,50 +9,25 @@ on:
     - cron: "0 4 * * *"
   workflow_dispatch:
 
-# Why the gate is SPLIT across machines (2026-08-17)
-# --------------------------------------------------
-# It used to be one job, and it took ~15 min. The standing explanation was that two `xdist_group`-
-# pinned modules held ~470 s and ~300 s of un-parallelisable chain, so the wall was a bottleneck.
-# Measured, that explanation is wrong: a 4-core runner offers ~3700 core-seconds across a 920 s
-# wall and the suite genuinely uses ~80-85% of them. The longest chain is barely half the wall, and
-# the rest of that worker was packed. This suite is BULK-bound, not bottleneck-bound.
+# What sets this workflow's wall (measured 2026-09-29, run 36489946068)
+# ---------------------------------------------------------------------
+# The Python suite used to be split over three runners (2026-08-17), because it was ~15 min of
+# bulk-bound simulation. The deletions moved that simulation into Rust: the three shards ran
+# 41 s, 41 s and 86 s of tests, so the split bought nothing and cost two runners, a planning job,
+# a partition script with its cost table and self-test, and a reconciliation step. It is ONE job
+# again, and every guard that existed only for the split went with it rather than being left to
+# guard a partition of one.
 #
-# The confirming number was already on the record and had been read the other way round: the old
-# fast lane deselected the entire expensive family — 69 of 1721 tests, every one of the chains —
-# and still took 784 s against the full run's 922 s. Remove the bottleneck and you keep ~85% of the
-# wall, which is what "the bulk is the cost" means.
-#
-# A bulk-bound suite has exactly one lever: more cores. On a public repo more cores are free, in
-# units of one 4-core runner per job, so the suite is partitioned over N of them and the wall
-# becomes (total core-seconds)/(4N) — until it meets the longest single chain inside a shard, which
-# is where splitting the pins starts to matter and not before.
+# The wall was the `rust` job, ~19 min, and ~10 of that was its UNOPTIMISED pass -- of which ~8
+# was the viewer crate re-rendering whole scenes in debug. That pass is now its own job
+# (`rust-debug`) and covers the crates whose tests the both-profiles rule is about. See there.
 jobs:
-  # The split's width lives in `scripts/shard_tests.py` as ONE Python constant, and this job is how
-  # the workflow reads it instead of repeating it. Writing it in both places fails silently: a
-  # matrix of [1, 2] against a split computed `--of 3` runs two thirds of the suite and goes green.
-  setup:
-    name: Plan the split
-    runs-on: ubuntu-latest
-    outputs:
-      shards: ${{ steps.plan.outputs.shards }}
-      count: ${{ steps.plan.outputs.count }}
-    steps:
-      - uses: actions/checkout@v4
-      # No install, no `setup-python`: the script is stdlib-only precisely so this job is ~5 s.
-      - id: plan
-        run: |
-          echo "shards=$(python3 scripts/shard_tests.py --matrix)" >> "$GITHUB_OUTPUT"
-          echo "count=$(python3 scripts/shard_tests.py --count)" >> "$GITHUB_OUTPUT"
-          python3 scripts/shard_tests.py --list
-
   validate:
-    name: Validation harness (py${{ matrix.python-version }}, shard ${{ matrix.shard }})
+    name: Validation harness (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    needs: setup
     strategy:
-      # Do not cancel 3.12 because 3.11 went red, and do not cancel shard 2 because shard 1 went
-      # red: when two of these disagree, the disagreement IS the finding, and cancelling the rest
-      # hides which axis the split is on.
+      # Do not cancel 3.12 because 3.11 went red: when the two disagree, the disagreement IS the
+      # finding, and cancelling one hides it.
       fail-fast: false
       matrix:
         # Pushes and PRs pay for one interpreter and the nightly pays for both. This is pure-numeric
@@ -60,7 +35,6 @@ jobs:
         # repo's history was Windows vs Linux, an axis the matrix does not even cover).
         # fromJSON is required: a matrix value must be an ARRAY, and the ternary yields a string.
         python-version: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["3.11","3.12"]' || '["3.12"]') }}
-        shard: ${{ fromJSON(needs.setup.outputs.shards) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -104,19 +78,17 @@ jobs:
       # `-qq`, which suppresses the `N passed in …` summary entirely — a green run and a red run
       # then end the same way on screen. Verified both ways on 2026-08-10.
       #
-      # `--durations=25` is free (it only reports what pytest already timed). Per SHARD it is also
-      # the only way to see a shard going chain-bound: when one file's setup approaches the shard's
-      # own wall, more runners stop buying anything and the fix moves inside that file.
-      - name: Run validation harness (shard ${{ matrix.shard }}/${{ needs.setup.outputs.count }})
+      # `--durations=25` is free (it only reports what pytest already timed), and it is how to see
+      # the job going chain-bound: when one file's setup approaches the job's own wall, the fix
+      # moves inside that file (the per-fixture `xdist_group`s are that fix, already made).
+      - name: Run validation harness
         run: |
           echo "cores: $(nproc)"
-          files=$(python scripts/shard_tests.py --shard ${{ matrix.shard }} \
-                    --of ${{ needs.setup.outputs.count }})
-          pytest -n auto --dist loadgroup $files --durations=25
+          pytest -n auto --dist loadgroup --durations=25
 
   # The Rust migration's gate (docs/dev/rust-migration-plan.md).
   #
-  # A SEPARATE job, deliberately not a step inside the three shards: the native bars and the
+  # A SEPARATE job, deliberately not a step inside `validate`: the native bars and the
   # binding's own properties are a different question from the Python suite, and keeping them
   # apart keeps the answer legible when one goes red and the other does not.
   #
@@ -129,7 +101,7 @@ jobs:
   # `PHYSSYNTH_RS` -- first as twenty-one per-batch steps here, then as the whole-suite
   # `rust-harness` job (plan §35.7), which was the migration's actual success condition. Phase A of
   # the retirement plan (§21) deleted the last Python bodies and the flag with them, so the plain
-  # `validate` shards now run exactly what `rust-harness` ran: measured before the deletion, the
+  # `validate` job now runs exactly what `rust-harness` ran: measured before the deletion, the
   # flagged suite minus the parity files was 1,920 passed, and after it the unflagged suite is
   # 1,940 -- the 20 reconciled per file (§21.1: +28 harvested into the binding-surface file, -8
   # from guards over the deleted machinery). One run of the suite, not two identical ones.
@@ -166,33 +138,10 @@ jobs:
       #
       # The WHOLE suite runs in `--release`: that is the codegen the wheel ships, and it is the
       # profile where a test pinning an arithmetic spelling can go vacuous (plan §17.2, §23.5 —
-      # LLVM folds a literal exponent, so the pin compares a value with itself).
-      #
-      # The debug run is the second half of that rule ("run it in both profiles") and also the only
-      # run where `debug_assert!` fires. It takes every test target EXCEPT the ones below, which
-      # are long physics trajectories and none of which pins a spelling. Unoptimised they were
-      # ~15 of this step's 19 minutes (2026-09-23: 495 s, 353 s, 64 s, against 23 s, 17 s, 3 s in
-      # release). `contact` (the viewer's barrier scenes, ~25 fret renders) joined 2026-09-28 at
-      # 145 s unoptimised against 10 s in release on the dev machine; `platebody` (the viewer's
-      # string-on-plate scenes) at 85 s against 3 s; `vkroom` (the gong in the room) at 145 s
-      # against 7 s. NB `plate` matches by basename, so it also excludes the viewer's own
-      # tests/plate.rs (102 s) — a coincidence, recorded in plan §23.13.
-      # The list is an exclusion on purpose: a new test file lands in both profiles by default,
-      # and a stale name here fails the step rather than quietly excluding nothing.
+      # LLVM folds a literal exponent, so the pin compares a value with itself). The debug half of
+      # that rule is the `rust-debug` job below, which runs in parallel with this one.
       - name: Native validation + dependency allowlist
-        run: |
-          cargo test --workspace --release
-          release_only="connection_plate contact frozen mallet_gong plate platebody vkroom"
-          for n in $release_only; do
-            ls crates/*/tests/$n.rs > /dev/null || { echo "release_only names $n: no such test file"; exit 1; }
-          done
-          targets=""
-          for f in crates/*/tests/*.rs; do
-            n=$(basename "$f" .rs)
-            case " $release_only " in *" $n "*) continue ;; esac
-            targets="$targets --test $n"
-          done
-          cargo test --workspace --lib $targets
+        run: cargo test --workspace --release
 
       - uses: actions/setup-python@v5
         with:
@@ -234,7 +183,7 @@ jobs:
       # native Rust bar can see (buffer lifetime, what `state` hands out, PyO3's argument mapping),
       # and `test_rust_parity_ops2d.py`, whose Python side went with unit 5 and which now measures
       # the Rust builders against SciPy's own sparse products and the guitar outline's margin. Both
-      # also run in the shards; they run again here for `-rP`, whose reports are the point.
+      # also run in `validate`; they run again here for `-rP`, whose reports are the point.
       #
       # `tests/test_rust_parity.py` itself went with unit 8 (plan section 45). Emptying a list
       # rather than deleting the file would have left a `parametrize` over nothing, which COLLECTS
@@ -242,8 +191,8 @@ jobs:
       #
       # The bare `import` first is not belt-and-braces. Every file below opens with a
       # module-level `pytest.importorskip`, so a failed or missing install SKIPS them and the
-      # step exits 0 having asserted nothing at all -- the same shape as the empty-sum hazard
-      # the `checks` job below documents.
+      # step exits 0 having asserted nothing at all -- a guard that passes quietly is the failure
+      # it exists to catch, one level down.
       - name: Binding surface and the 2-D builders against SciPy
         run: |
           python -c "import physsynth_rs; print(physsynth_rs.__file__)"
@@ -263,14 +212,14 @@ jobs:
       #
       # `physsynth/analysis/` has no Python body any more, so `PHYSSYNTH_RS_ANALYSIS` selects
       # between one implementation and itself. The step it gated became a strict subset of the
-      # whole-suite flagged job, and since phase A (retirement plan §21) of the plain shards, which
+      # whole-suite flagged job, and since phase A (retirement plan §21) of the plain `validate` run, which
       # run those 65 files against exactly the same Rust detector. Keeping it would be running 65
       # files twice and calling the second run a different claim.
       #
       # What replaces the *other* half of that claim -- a Rust instrument checked against a second
       # implementation -- is `tests/test_analysis_frozen.py`, which holds 62 fixtures' worth of
       # what the Python oracles said, recorded to the last digit before they were deleted. It runs
-      # in every shard, and needs no environment at all.
+      # in `validate`, and needs no environment at all.
       #
       # The derivation that built this step's file list is worth keeping on the record even though
       # the step is gone, because the lesson outlived it: the obvious grep -- files importing
@@ -278,73 +227,62 @@ jobs:
       # instrument and measures on its callers' behalf. 27 files matched; 65 actually reached. A
       # derived list is only as honest as the reachability it models (ledger #32).
 
-  # Lint, plus the OUTER half of the shard guard.
+  # The UNOPTIMISED half of "run it in both profiles", in parallel with `rust` rather than after it.
   #
-  # The inner half is `tests/test_shard_partition.py`, which asserts the split covers `tests/`
-  # exactly once — but it cannot catch a split that dropped the file it lives in, because then it
-  # does not run. So this job asks pytest itself, four times over, and does the arithmetic: the
-  # shards' collected counts must sum to the whole suite's. That subtraction is the only thing that
-  # can tell "everything ran, in pieces" apart from "a piece never ran and every job was green".
-  checks:
-    name: Lint + shard reconciliation
+  # Two things only a debug build does: `debug_assert!` fires, and LLVM does not fold a literal
+  # exponent, so a test pinning an arithmetic SPELLING asserts something here that it cannot in
+  # release (plan §17.2, §23.5). Every such pin, and every `debug_assert!`, is in the CORE and
+  # ANALYSIS crates, so those crates' test files run here, all of them by default.
+  #
+  # The viewer's integration tests do NOT run here. They render whole scenes, pin no spelling, and
+  # were ~490 s of this pass's ~615 s (run 36489946068) against ~310 s in release. Its inline unit
+  # tests still do (`--workspace --lib`). The exclusion is by CRATE, not by file name, because the
+  # viewer reuses core's names (`mallet`, `membrane`, `plate`, `reed`): the old basename list
+  # excluded the viewer's `plate.rs` by accident while meaning core's (plan §23.13).
+  #
+  # `release_only` is the three core files that are long trajectories and pin no spelling (495 s,
+  # 353 s and 64 s unoptimised, 2026-09-23). It is an exclusion on purpose: a new core test file
+  # lands in both profiles by default, and a stale name here fails the step.
+  rust-debug:
+    name: Rust core, unoptimised (debug asserts, unfolded arithmetic)
     runs-on: ubuntu-latest
-    needs: setup
     steps:
       - uses: actions/checkout@v4
-
-      # THIS JOB PAYS A RUST COMPILE, and it did not before 2026-09-03. It has to: the
-      # reconciliation step below runs `pytest --collect-only` over the whole suite, and a deleted
-      # model's module is now an unconditional `from physsynth_rs import X` at module scope (plan
-      # section 39.6, route 1). Without the extension that is a COLLECTION ERROR, not a skip -- so
-      # every count this job subtracts would be wrong, or missing, and the guard that exists to
-      # catch "a piece never ran" would itself never run. The lint half needs none of this; the
-      # arithmetic half cannot do without it.
       - uses: dtolnay/rust-toolchain@1.98.0
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
+      - name: Core and analysis bars, unoptimised
+        run: |
+          release_only="connection_plate mallet_gong plate"
+          for n in $release_only; do
+            ls crates/physsynth-core/tests/$n.rs > /dev/null || { echo "no core test $n"; exit 1; }
+          done
+          targets=""
+          for f in crates/physsynth-core/tests/*.rs; do
+            n=$(basename "$f" .rs)
+            case " $release_only " in *" $n "*) continue ;; esac
+            targets="$targets --test $n"
+          done
+          cargo test --workspace --lib
+          cargo test -p physsynth-analysis --tests
+          cargo test -p physsynth-core $targets
 
+  # Lint only. This job used to pay a Rust compile and a wheel install, because it also counted the
+  # suite's collected tests per shard to prove the split dropped nothing; with one Python job there
+  # is nothing to reconcile, and ruff needs neither.
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: pyproject.toml
-      - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-          pip install ./crates/physsynth-py
-          pip install ruff
-
       - name: Lint (ruff)
-        run: ruff check .
-
-      # Collection output is captured, never echoed: it is one line per test, and 4 x 1800 lines of
-      # ids would bury the two numbers this job exists to print.
-      #
-      # `set -euo pipefail` is load-bearing, not boilerplate. Without `pipefail` the exit status of
-      # `pytest | grep` is GREP's, so a collection error inside pytest is invisible here; and without
-      # the emptiness check `sum=$((sum + ))` is a silent no-op rather than an error, so a shard that
-      # half-collected could still reconcile. A guard that can pass quietly is the failure it exists
-      # to catch, one level down.
-      - name: Shard split covers the suite exactly once
         run: |
-          set -euo pipefail
-          count_collected() {
-            pytest --collect-only "$@" | grep -oE '[0-9]+ tests? collected' | grep -oE '^[0-9]+'
-          }
-          total=$(count_collected)
-          test -n "$total"
-          sum=0
-          for i in $(seq 1 ${{ needs.setup.outputs.count }}); do
-            files=$(python scripts/shard_tests.py --shard "$i" --of ${{ needs.setup.outputs.count }})
-            n=$(count_collected $files)
-            test -n "$n"
-            echo "shard $i: $n tests"
-            sum=$((sum + n))
-          done
-          echo "shards sum to $sum; whole suite collects $total"
-          test "$sum" -eq "$total"
+          pip install ruff
+          ruff check .
 
   # The web viewer's payloads, against the Python viewer's own outputs frozen before it was deleted
   # (`crates/physsynth-viewer/tests/frozen.rs`, retirement plan §23.19). EXACT agreement is a claim

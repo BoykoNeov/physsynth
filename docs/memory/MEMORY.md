@@ -54,6 +54,7 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 - [Retirement phase A](retirement-phase-a-state.md) — flag GONE; banded deleted; default suite == old flagged; reconcile counts via a worktree
 - [Retirement phase E](retirement-phase-e-state.md) — 36 scripts + viz gone; sweep → Cargo example; convergence edge is a last-bit event
 - [Retirement phase D](retirement-phase-d-state.md) — DONE: Python viewer deleted; freeze exact on Windows only (Linux: 158/588 last-bit), structure elsewhere; browser check = Cargo example
+- [Phase C carrying](retirement-phase-c-carrying-state.md) — batch 1 free ortho plate done; record SciPy with LAPACK dense (ARPACK 7e-7 off); next: supported ortho
 - [Viewer stays Python](viewer-stays-python.md) — SUPERSEDED (viewer is Rust since D7); only coverage proves a line runs, not a grep
 - [Analysis freeze](analysis-freeze-state.md) — 62 fixtures frozen from the Python before it was deleted
 - [Deletion phase](rust-deletion-phase-state.md) — all 11 units gone, 23,396 lines, zero physics bars retired
@@ -64,7 +65,7 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 - [CI flagged-suite collapse](ci-flagged-suite-collapse.md) — HISTORY: flagged job gone at phase A; filter AFTER a computed split
 - [NumPy libm CPU dispatch](numpy-libm-cpu-dispatch.md) — NumPy's own transcendentals: bit-identity depends on the CI machine
 - [CI runner variance](ci-runner-variance.md) — runners vary ~1.6x; compare within a job
-- [Test suite performance](test-suite-performance.md) — bulk-bound; shards computed from the glob; never pass `-q`
+- [Test suite performance](test-suite-performance.md) — Python split REMOVED 2026-09-29 (one job); debug pass = own job, core+analysis only; never pass `-q`
 
 ## Models
 

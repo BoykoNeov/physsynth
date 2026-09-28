@@ -25,7 +25,7 @@ physsynth/
   analysis/    # analytic oracles (modal frequencies) + spectral partial detection
 web/static/    # the viewer's browser front-end (served by crates/physsynth-viewer)
 tests/         # validation harness: energy, modal, convergence, stability
-scripts/       # test-suite sharding
+scripts/       # the low-priority pytest wrapper
 crates/        # the Rust core, analysis, viewer backend and Python binding; examples under crates/*/examples/
 docs/dev/      # per-feature dev-docs (plan / context / tasks)
 ```
@@ -69,11 +69,9 @@ Pick the worker count deliberately rather than reaching for `-n auto`: `auto` ta
 is the configuration actually measured here. CI uses `-n auto` because its runners are small and
 otherwise idle.
 
-A new test file needs no registration to be run by CI: `scripts/shard_tests.py` partitions
-`glob("tests/test_*.py")`, so a file that exists is in exactly one shard by construction — the
-most it can do by being unknown to the cost table is unbalance a shard. Run it with
-`--of 3 --list` to see the balance; a skewed split means the profile is stale, not that
-anything is untested.
+A new test file needs no registration to be run by CI: the `validate` job runs plain `pytest`
+over the whole of `tests/`, in one job. (It was split over three runners until 2026-09-29; once
+the models moved to Rust the whole suite took about three minutes and the split bought nothing.)
 
 `--dist loadgroup` matters: a handful of modules carry `pytest.mark.xdist_group` because their
 module-scoped fixtures are expensive (the whirling and phantom sweeps run 30–110 s of simulation

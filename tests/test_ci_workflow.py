@@ -141,12 +141,11 @@ def test_every_test_file_guards_its_extension_import():
     looks exactly like every other line.
 
     **Two things changed on 2026-09-03 and the rule survives both.** The premise used to be "the
-    default gate does not build ``physsynth_rs``"; it does now (plan section 39.6, route 1), and
-    the ``checks`` job builds it too for the reason its own comment gives. What still holds is the
+    default gate does not build ``physsynth_rs``"; it does now (plan section 39.6, route 1). What
+    still holds is the
     narrower and more durable reason: a module-scope ``import physsynth_rs`` is a **collection
     error** rather than a skip in any environment that lacks the wheel, and a collection error
-    fails the shard it lands in *and* makes the reconciliation step's ``grep`` find no count at
-    all -- two jobs red for one line. Contributors, forks and a local ``pytest`` before
+    stops the whole run rather than one file. Contributors, forks and a local ``pytest`` before
     ``pip install ./crates/physsynth-py`` are all such environments.
 
     And the POPULATION changed -- twice, because the first change was reasoned about wrongly and
@@ -191,8 +190,8 @@ def test_every_test_file_guards_its_extension_import():
             assert stripped != "import physsynth_rs", (
                 f"{path.name}:{lineno} imports the extension at MODULE SCOPE. Use "
                 'pytest.importorskip("physsynth_rs") -- in an environment without the wheel a '
-                "module-scope import is a collection error rather than a skip, which fails the "
-                "shard AND leaves the reconciliation step with no count to subtract."
+                "module-scope import is a collection error rather than a skip, which stops the "
+                "whole run."
             )
         assert 'importorskip(' in text and '"physsynth_rs"' in text, (
             f"{path.name} never reaches the extension through importorskip"

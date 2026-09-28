@@ -5,8 +5,22 @@ metadata:
   node_type: memory
   type: project
   originSessionId: aae47a22-23c6-4ed1-8713-4f9ae587e626
-  modified: 2026-08-17T16:38:19.541Z
+  modified: 2026-09-28T23:01:36.597Z
 ---
+
+**THE SPLIT IS GONE (2026-09-29, the human's call "lean all tests", option 1+2+4).** Measured on
+run 36489946068 the three Python shards ran 41/41/86 s of tests, so the suite is ONE `validate` job
+again (plain `pytest -n auto --dist loadgroup`); `scripts/shard_tests.py`, the cost table + its
+refresh script, `tests/test_shard_partition.py`, the `setup` job and the reconciliation step are
+DELETED (a guard that reaches zero is deleted, not left at `SHARDS = 1`). The `checks` job is now
+`lint`, ruff only, no Rust compile. Collection 1637 -> 1622 reconciled: 14 in the deleted file + 1
+fewer parametrized file in `test_xdist_groups.py` (kept: loadgroup still used). The CI wall was the
+`rust` job (~19 min), ~10 min of it the UNOPTIMISED pass and ~8 of THAT the viewer crate; the
+debug pass is now its own parallel job `rust-debug` over core+analysis tests (+ every crate's
+`--lib`), excluded BY CRATE because the viewer reuses core's file names. Linux `frozen` stays in
+release (structure mode catches int/length flips). Locally a full `cargo test --workspace
+--release` is ~4m51, of which `frozen.rs` (exact on Windows) is ~3m16.
+Everything below about shards is HISTORY.
 
 **SUPERSEDED IN ITS NUMBERS by the deletion phase, 2026-09-03** — see
 [[rust-deletion-phase-state]]. The suite now collects **2,739** unflagged (was 4,566 before the

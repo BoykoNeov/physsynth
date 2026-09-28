@@ -2,10 +2,10 @@
 
 ``--dist loadgroup`` builds a module-scoped fixture once **per worker**, so an expensive one is kept
 on a single worker by giving its tests a shared ``xdist_group``. The gate used to do that a module
-at a time, which is safe but coarse: it turns a whole file into one serial chain, and since the
-suite is run in shards a chain longer than its shard's wall is a floor no number of runners can
-divide. Two files now group *per fixture* instead, which is finer and faster -- and which
-introduces a failure this file exists to catch.
+at a time, which is safe but coarse: it turns a whole file into one serial chain, and a chain
+longer than the rest of the job is a floor no number of workers can divide. Two files now group
+*per fixture* instead, which is finer and faster -- and which introduces a failure this file
+exists to catch.
 
 The failure is silent. A test written against the ``tongue`` fixture but carrying the neighbouring
 group runs on a different worker, rebuilds 200 s of string simulation there, and **passes**. Nothing
@@ -127,7 +127,7 @@ def test_a_module_scoped_fixture_is_not_split_across_groups(filename):
 
 
 def test_the_two_geometric_files_are_grouped_per_fixture_and_not_per_module():
-    """The concrete arrangement the split shard depends on, asserted where it can be read.
+    """The concrete arrangement the parallel run depends on, asserted where it can be read.
 
     The general invariant above is satisfied by grouping a whole module too, which is what these two
     files used to do -- so it cannot notice a revert. This one can: the whirl and phantom fixtures
