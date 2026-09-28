@@ -34,6 +34,7 @@ pub mod horizon;
 pub mod mallet;
 pub mod membrane;
 pub mod plate;
+pub mod platebody;
 pub mod py;
 pub mod radbody;
 pub mod reed;
@@ -69,7 +70,7 @@ pub const MODELS: [(&str, bool); 22] = [
     ("plate", true),
     ("vk", true),
     ("body", true),
-    ("platebody", false),
+    ("platebody", true),
     ("radbody", true),
     ("airload", true),
     ("airbox", false),
@@ -154,6 +155,7 @@ fn build_payload(p: &Value) -> Result<Value, Refusal> {
         _ if model == "plate" => plate::build_payload(p),
         _ if model == "bore" => bore::build_payload(p),
         _ if model == "vk" => vk::build_payload(p),
+        _ if model == "platebody" => platebody::build_payload(p),
         _ if model == "jawari" => contact::build_payload_jawari(p),
         _ if model == "juari" => contact::build_payload_juari(p),
         _ if model == "fret" => contact::build_payload_fret(p),

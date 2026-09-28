@@ -452,8 +452,8 @@ and the Python server stays the live viewer until the last of them lands. **Batc
 (§23.8): the tension string, both regimes, and the bow. **Batch D3 is done** (§23.9): sympathetic,
 geometric, reed, radbody and airload. **Batch D4 is done** (§23.10): body, jawari, juari and
 fret, plus an arbitrary-length `rfft` in the analysis crate. **D5 is under way** (§23.11-§23.13): a
-native eigensolver, then membrane, mallet, all three plates, the bore and the von Kármán plate —
-twenty keys native, two to go.
+native eigensolver, then membrane, mallet, all three plates, the bore, the von Kármán plate and
+the plate body. **D5 is done: twenty keys native**, `airbox` and `vkroom` (D6) to go.
 
 ---
 
@@ -2828,7 +2828,7 @@ through its DevTools port.
 
 ### 23.13 Batch D5, continued — the mallet and all three plates, and a solver bug the plate found
 
-Eighteen of the twenty-two keys are now native. **`mallet`** (`crates/physsynth-viewer/src/mallet.rs`)
+Seventeen of the twenty-two keys are now native. **`mallet`** (`crates/physsynth-viewer/src/mallet.rs`)
 reuses the membrane's machinery with a hand-stepped contact loop. **`plate`** (`…/src/plate.rs`)
 covers the simply-supported rectangle, the free rectangle and the guitar outline. The guitar
 brings its waist sweep, which is the first payload to read eigenVECTORS, its outline report, and
@@ -2903,7 +2903,7 @@ should move is the human's question.
 
 ### 23.14 Batch D5, continued — the bore
 
-Nineteen of the twenty-two keys are now native. **`bore`** (`crates/physsynth-viewer/src/bore.rs`)
+Eighteen of the twenty-two keys are now native. **`bore`** (`crates/physsynth-viewer/src/bore.rs`)
 is the first wind scene. Its field is pressure, and its loss is booked: a lossless tube with a
 radiating bell conserves `acoustic + radiated`, and the energy panel plots the split. Three of its
 panels read the operator instead of a render. The resonances come from a generalized solve on the
@@ -2944,7 +2944,7 @@ Unoptimized they take 2 s. The whole workspace: 1,141 Rust tests pass.
 
 ### 23.15 Batch D5, continued — the von Kármán plate
 
-Twenty of the twenty-two keys are now native. **`vk`** (`crates/physsynth-viewer/src/vk.rs`) is
+Nineteen of the twenty-two keys are now native. **`vk`** (`crates/physsynth-viewer/src/vk.rs`) is
 the gong (supported) and the cymbal (free). The native `VkParams` carries a complete linear plate
 (`lin`), so the plate scene's marker solve and horizon block serve it unchanged. The run loop is
 hand-written for the convergence record the energy verdict is gated on.
@@ -2964,3 +2964,37 @@ fitted decay rate. One spelling mattered: this scene's time axis is `np.arange(n
 as the string `"false"`), plus two horizon tests the vk scene unblocked: a zero horizon ships
 `null`, and the nonlinear plate is refused while its linear twin is measured. Unoptimized,
 `tests/vk.rs` takes 46 s and stays in both profiles.
+
+### 23.16 Batch D5, done — the plate body
+
+Twenty of the twenty-two keys are now native. **`platebody`**
+(`crates/physsynth-viewer/src/platebody.rs`) is the lumped body scene with the modal body swapped
+for a grid plate: the supported soundboard or the free cymbal. The coupling and its exact stability
+guard are the core's `StringPlateBridge<Plate>`. It reuses the body scene's spectrum, terminus and
+consistency helpers, and the plate scene's marker solve.
+
+| corpus | requests | identical | within a class | failing |
+|---|---|---|---|---|
+| platebody (both boundaries, the soft and decoupled bridges, both guards, the refusals) | 26 | 13 | 13 | 0 |
+| the browser's own requests (free, supported) | 2 | 0 | 2 | 0 |
+
+Every in-class difference is the pooled spectrum's last digits, plus one expected null.
+**`K = 0` repeats the body scene's finding**: the plate never moves, the omega² read-out is 0/0,
+and the reference's own server would answer that request with a 500. The port ships `null`, as
+§23.10 decided for the lumped body.
+
+**Tests carried:** `tests/platebody.rs`, 12 tests: the reference's section, with the `K = 0`
+bit-identity against a bare string also asserting the `null`. Unoptimized they take 85 s, so
+`platebody` joins CI's `release_only` list. The name is unique across the crates, unlike `plate`
+(§23.13). The whole workspace: 1,160 Rust tests pass.
+
+**D5 is complete**: a native eigensolver, then membrane, mallet, the three plates, the bore, the
+von Kármán plate and the plate body. Two keys remain, `airbox` and `vkroom`, and that is D6. D6
+must settle §23.11's basis decision before its first diff: vkroom's per-mode energy shares on a
+square plate depend on the basis chosen inside each repeated pair.
+
+**A counting error, corrected here.** From §23.13 on, each batch's opening count was one too high,
+because the mallet and the plate were counted as reaching eighteen when they reached seventeen. The
+three commit messages that repeated the numbers (mallet and plates, bore, von Kármán plate) carry
+the same error, and pushed history is not rewritten for it. The dispatch table is the source of
+truth, and it reads twenty `true` and two `false` (`airbox`, `vkroom`).

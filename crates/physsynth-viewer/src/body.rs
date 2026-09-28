@@ -219,7 +219,7 @@ pub fn median(v: &[f64]) -> f64 {
 }
 
 /// `_body_omega2_consistency`: median of `|Q''| / |W_b| / (2 pi f)²` over the strong peaks.
-fn omega2_consistency(qaccel: &[f64], wb: &[f64], fs: f64, f_max: f64) -> f64 {
+pub(crate) fn omega2_consistency(qaccel: &[f64], wb: &[f64], fs: f64, f_max: f64) -> f64 {
     let (freqs, pqa) = windowed_mag(qaccel, fs, true);
     let (_, pwb) = windowed_mag(wb, fs, true);
     let band_max = freqs
@@ -254,7 +254,7 @@ fn omega2_consistency(qaccel: &[f64], wb: &[f64], fs: f64, f_max: f64) -> f64 {
 }
 
 /// `_body_terminus_f1`: the coupled fundamental from the free-end pickup, band from `c/4L..c/2L`.
-fn terminus_f1(u_end: &[f64], fs: f64, c: f64, l: f64) -> f64 {
+pub(crate) fn terminus_f1(u_end: &[f64], fs: f64, c: f64, l: f64) -> f64 {
     let n = u_end.len();
     let (freqs, spec) = windowed_mag(u_end, fs, true);
     let (lo, hi) = (0.5 * c / (4.0 * l), 1.3 * c / (2.0 * l));
@@ -286,7 +286,7 @@ fn terminus_f1(u_end: &[f64], fs: f64, c: f64, l: f64) -> f64 {
 }
 
 /// `np.max` / `np.min` of a non-empty slice, NaN-propagating.
-fn np_extreme(a: &[f64], max: bool) -> f64 {
+pub(crate) fn np_extreme(a: &[f64], max: bool) -> f64 {
     let mut m = if max {
         f64::NEG_INFINITY
     } else {
@@ -304,7 +304,7 @@ fn np_extreme(a: &[f64], max: bool) -> f64 {
 }
 
 /// A read-out that may have nothing to measure: the number, or `null` when it is not finite.
-fn opt_finite(x: f64) -> Value {
+pub(crate) fn opt_finite(x: f64) -> Value {
     if x.is_finite() {
         num(x)
     } else {

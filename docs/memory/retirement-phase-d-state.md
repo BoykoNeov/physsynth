@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-d-state
-description: "Phase D (viewer to Rust) IN PROGRESS — D1-D4 + D5 all but platebody done 2026-09-28: crates/physsynth-viewer, 20 of 22 keys; core::eigs solver (symmetry guard, basis cap); next platebody, then D6"
+description: "Phase D (viewer to Rust) IN PROGRESS — D1-D5 done 2026-09-28: crates/physsynth-viewer, 20 of 22 keys (airbox, vkroom left = D6); core::eigs solver (symmetry guard, basis cap)"
 metadata:
   node_type: memory
   type: project
@@ -76,7 +76,6 @@ lambda = 1 is a ratio of two rounding residues (meaningless in the reference too
 is `1.000e+03`, Rust's `1.000e3` — use a local `sci3`.
 
 **Next (§23.7):**
-- D5 rest: platebody;
 - D6: airbox, vkroom (dense eigh vectors);
 - D7: FREEZE the reference outputs as a native fixture first, then port the headless check, switch
   servers, delete `web/*.py` + `test_web_backend.py`. Only the reed has a cache (`_REED_SWEEP_MEMO`):
