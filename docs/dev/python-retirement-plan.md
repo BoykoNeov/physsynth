@@ -448,7 +448,8 @@ keeping is a Cargo example. The sharding scripts leave with the suite at F; the 
 **D**, the viewer, remains independent of all of this and is still the longest pole. **Its first
 batch is done** (§23): `crates/physsynth-viewer` exists, serves the untouched front-end, and renders
 the three linear strings; the other nineteen scenes follow model by model in the order §23.7 derives,
-and the Python server stays the live viewer until the last of them lands.
+and the Python server stays the live viewer until the last of them lands. **Batch D2 is done**
+(§23.8): the tension string, both regimes, and the bow — five keys native, seventeen to go.
 
 ---
 
@@ -2483,7 +2484,23 @@ uses it. That is the krylov precedent.
 | D4 | `body`, `jawari`, `juari`, `fret` | arbitrary-length `rfft` (`np.hanning` is already `spectrum::hann`) |
 | D5 | `membrane`, `mallet`, `plate` (all three outlines), `vk`, `bore`, `platebody` | sparse shift-invert eigensolver |
 | D6 | `airbox`, `vkroom` | dense symmetric eigenvectors |
-| D7 | the headless check ported to Rust (a WebSocket client as a **dev**-dependency, allowlisted with its reason), the servers switched, `web/*.py` and `test_web_backend.py` deleted | — |
+| D7 | **freeze first**, then: the headless check ported to Rust (a WebSocket client as a **dev**-dependency, allowlisted with its reason), the servers switched, `web/*.py` and `test_web_backend.py` deleted | — |
+
+**The exact-agreement evidence has to outlive the reference, and nothing yet makes it.** The scratch
+diff is the only thing that saw "56 of 60 identical". The native tests are *property* tests, so a
+changed rounding, decimation index or band field could pass all of them. The analysis port set the
+precedent (`tests/analysis_frozen_values.py`, the human's condition for deleting that Python):
+freeze the reference's numbers before the reference goes. So D7 does not delete `serialize.py` until
+a native fixture holds each batch's corpus and the Python's payloads, compared with `compare.py`'s
+tolerance classes. The audio is size-bounded by short durations, or frozen as a digest plus
+spot samples. One caution transfers from findings §22.1: Rust's own `sin`, `ln` and `log2` come
+from the platform libm, so the Linux CI runner may differ from this machine in the last bits. Any
+frozen field that passes through them needs a peak- or relative-class, never exact.
+
+**Each batch's corpus also takes the browser's own requests**, captured during the headless run.
+`gatherParams` sends every slider, hidden ones included, and a scene reading another model's
+parameter is a failure this viewer has shipped before (the leak family, batches 2/3/7/8/12). The
+test-derived corpus does not send those extra parameters.
 
 Four constants in `serialize.py` are lowered by `monkeypatch` in its tests so that a guard which
 cannot fire in the shipped range fires somewhere real: `PARAM_SWEEP_WORK_MAX`,
@@ -2492,3 +2509,87 @@ cannot be patched. The batch that ports each one decides whether it becomes a pa
 internal function or whether the test is rewritten against a fixture that reaches the guard. That
 is §16.6's "no analogue" verdict (a test that works by replacing part of a live module), arriving
 at the viewer.
+
+### 23.8 Batch D2, done — the tension string (both regimes) and the bow
+
+Five of the twenty-two keys are now native: `ideal`, `stiff`, `damped`, **`tension`** (the Duffing
+regime and the parametric one) and **`bow`**. `crates/physsynth-viewer/src/tension.rs` and
+`…/bow.rs` carry them, and `string.rs`'s `_build_resonator` now builds all five kinds it builds in
+the reference.
+
+**The check, on two corpora.**
+
+| corpus | requests | identical | within a class | failing |
+|---|---|---|---|---|
+| test-derived (`corpus_d2.py`) | 60 | 41 | 19 | 0 |
+| the browser's own requests, logged | 7 | 3 | 4 | 0 |
+| batch 1's strings, re-run after this batch | 60 | 56 | 4 | 0 |
+
+The browser corpus is the advisor's point from §23.7 put into practice. The server gained
+`PHYSSYNTH_VIEWER_REQUEST_LOG`: set it to a path and every accepted `/simulate` body is appended as
+one JSON line. The headless check was then run over all seven string-family scenes against the Rust
+server, and the seven logged bodies each carry about sixty keys, most of them other models' sliders.
+All seven matched.
+
+**Every simulated trajectory matched to the bit** in all 60 test-derived cases: the energies, the
+frames and the audio. That includes the parametric regime's seeded start, which is the one place a
+stray last bit would be amplified exponentially. The 19 tolerance cases all come from quantities
+computed *after* a run:
+
+- **the off-mode fractions.** These are the `off`, `env` and `level` traces, `purity.off_mode`,
+  `cascade.grid_scale`, and the seed floors. Each is a norm of `u - q·shape`, which cancels to about
+  1e-7 of the amplitude (or about 1e-14 for a pure mode). BLAS `ddot` fuses its multiply-adds
+  (findings §14.2), so its last bit differs, and the cancellation amplifies that difference in
+  *relative* terms up to 2.7e-4. In the units the fractions are defined in (the driven amplitude)
+  the largest difference is 3e-17. The class is absolute, 1e-15. No gate moves: the purity gate is at
+  1e-6, the instability gate at 100 times the floor, and every derived boolean, every growth factor
+  and every cascade partner matched exactly.
+- **the decay-rate fit**, as in batch 1: 2.8e-15 relative.
+
+**The comparison found one bug** that no test was set up to find. In the parametric regime a
+non-numeric `mode_number` got `_fnum`'s message ("'mode_number' must be a number"). The reference
+says "mode_number must be an integer". Its `int(_fnum(...))` sits inside `except (TypeError,
+ValueError)`, and **`ParamError` subclasses `ValueError`**, so the outer handler catches the inner
+refusal and rewords it. Grepped: it is the only `int(_fnum(...))` wrapped that way. A native test
+now pins the message.
+
+**The random seed is frozen, not reimplemented.** The parametric regime seeds its run from
+`np.random.default_rng(12345).standard_normal(25)`. Those 25 numbers are in `tension.rs` as
+`PARAM_SEED_COEF`, with the NumPy version (2.4.6) they came from. Reproducing PCG64 plus NumPy's
+ziggurat in Rust would mean keeping a second copy of NumPy's internals in step, and the point of a
+fixed seed is only that the perturbation is the same every time.
+
+**`engine::Resonator::step` is now fallible.** The tension string's root-find and the bow's
+friction solve can fail inside a step, which in Python was an exception unwinding out of
+`simulate`. It is now an `Err` carrying the model's own message, `simulate` stops there, and the
+payload is an `internal` error. A step that merely did not *converge* is still not an error: the
+models count those themselves, and the payload's convergence gate reports them. Two more of §23.3's
+deliberate differences come with this batch, both cases where the reference gave the browser a
+dropped connection:
+
+- a step failure is an `internal` error payload;
+- a `mode_number` above the number of modes tracked at a small `N`, which made the reference index
+  past its array, is an `internal` error payload.
+
+**The two patched constants became arguments.** `measure_mode1` takes the measurement length in
+periods, and `build_payload_parametric_with` takes the sweep's work budget. The two tests that
+patched `TENSION_MEASURE_PERIODS` and `PARAM_SWEEP_WORK_MAX` pass the lowered value instead. Both
+lowered values *replaced a number*, not a function, so an argument covers them exactly.
+
+**Tests carried:**
+
+- `tests/tension.rs`, 28 tests: all 10 of the Duffing section, all 17 of the parametric section,
+  and the new `mode_number` message test.
+- `tests/bow.rs`, 15 tests: all 14 of the bow section, plus the horizon section's "an exciter
+  inherits the horizon of what it drives", which has a bow scene to answer it now.
+- Unoptimized, the tension file takes 24 s. That is inside what CI's debug pass tolerates, so it is
+  not added to `release_only`.
+
+**Found along the way: the headless check leaks its Chrome.** The second browser run reported
+"attaching to the Chrome already listening on :9333". That was the first run's headless Chrome,
+still alive under its own temporary profile. It was closed through its own DevTools port
+(`Browser.close`) and not by any kill. Its command line carried `--do-not-de-elevate`, which Chrome
+adds when it relaunches itself. That makes it likely that the process ID `verify_web_headless.py`
+holds is a launcher that has already exited, so its `proc.terminate()` misses the browser. The
+likely cause is recorded here rather than fixed, because the script is ported at D7 and the port
+should shut the browser down through its port.

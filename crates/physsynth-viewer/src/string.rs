@@ -1,5 +1,6 @@
-//! The linear string family — `ideal`, `stiff`, `damped` — `_build_resonator` and
-//! `_build_payload_string`.
+//! The string family's constructor, `_build_resonator` — all five keys it builds (`ideal`,
+//! `stiff`, `damped`, `tension`, `bow`) — and the linear strings' payload, `_build_payload_string`.
+//! The tension string's and the bow's payloads are in their own modules.
 //!
 //! Two runs per request, decoupled on purpose (the viewer plan's catches #1 and #2): an **audio**
 //! run over the full duration that records only the pickup, and a short **animation** run on a
@@ -8,10 +9,12 @@
 //! alias the wiggle it exists to show.
 
 use physsynth_analysis::{modal, spectrum};
+use physsynth_core::bow::BowedString;
 use physsynth_core::engine::{simulate, Resonator};
 use physsynth_core::exciter::triangular_pluck;
 use physsynth_core::string_damped::{self as damped, DampedStiffString};
 use physsynth_core::string_ideal::{self as ideal, Boundary, IdealString};
+use physsynth_core::string_nonlinear::{self as nonlinear, TensionModulatedString};
 use physsynth_core::string_stiff::{self as stiff, StiffString};
 use serde_json::{json, Value};
 
@@ -40,28 +43,35 @@ pub const ANIM_WIN_MAX: f64 = 2.0;
 /// Fastest playback speed.
 pub const SPEED_MAX: f64 = 8.0;
 
-/// One of the three linear strings.
+/// Whatever `_build_resonator` built.
 pub enum StringRes {
     Ideal(IdealString),
     Stiff(StiffString),
     Damped(DampedStiffString),
+    Tension(TensionModulatedString),
+    Bow(Box<BowedString>),
 }
 
 impl StringRes {
-    fn resonator(&mut self) -> &mut dyn Resonator {
+    /// The resonator, for the engine.
+    pub fn resonator(&mut self) -> &mut dyn Resonator {
         match self {
             StringRes::Ideal(r) => r,
             StringRes::Stiff(r) => r,
             StringRes::Damped(r) => r,
+            StringRes::Tension(r) => r,
+            StringRes::Bow(r) => r.as_mut(),
         }
     }
 
-    /// Node positions `x`.
+    /// Node positions `x` (the bowed string's own).
     pub fn grid(&self) -> Vec<f64> {
         match self {
             StringRes::Ideal(r) => r.params().grid(),
             StringRes::Stiff(r) => r.p.grid(),
             StringRes::Damped(r) => r.p.grid(),
+            StringRes::Tension(r) => r.p.grid(),
+            StringRes::Bow(r) => r.string.p.grid(),
         }
     }
 
@@ -71,22 +81,47 @@ impl StringRes {
             StringRes::Ideal(r) => r.params().lam,
             StringRes::Stiff(r) => r.p.lam,
             StringRes::Damped(r) => r.p.lam,
+            StringRes::Tension(r) => r.p.lam,
+            StringRes::Bow(r) => r.string.p.lam,
         }
     }
 
     /// Displace from rest with zero velocity — `set_state(u0)`.
-    fn set_displacement(&mut self, u0: &[f64]) {
+    pub fn set_displacement(&mut self, u0: &[f64]) {
         let v0 = vec![0.0; u0.len()];
         match self {
             StringRes::Ideal(r) => r.set_state(u0, &v0),
             StringRes::Stiff(r) => r.set_state(u0, &v0),
             StringRes::Damped(r) => r.set_state(u0, &v0),
+            StringRes::Tension(r) => r.set_state(u0, &v0),
+            StringRes::Bow(r) => r.string.set_state(u0, &v0),
+        }
+    }
+
+    /// The tension string, for the builders that asked for one.
+    pub fn into_tension(self) -> TensionModulatedString {
+        match self {
+            StringRes::Tension(r) => r,
+            _ => unreachable!("built with model = tension"),
+        }
+    }
+
+    /// The bowed string, for the builder that asked for one.
+    pub fn into_bow(self) -> BowedString {
+        match self {
+            StringRes::Bow(r) => *r,
+            _ => unreachable!("built with model = bow"),
         }
     }
 
     /// What the resolution read-out needs.
+    ///
+    /// # Panics
+    /// On the tension string, which has no linear modal reference and is never asked.
     pub fn horizon_info(&self) -> StringInfo {
         match self {
+            StringRes::Tension(_) => unreachable!("the tension string's read-out is a refusal"),
+            StringRes::Bow(r) => damped_info(&r.string),
             StringRes::Ideal(r) => {
                 let p = r.params();
                 StringInfo {
@@ -111,18 +146,69 @@ impl StringRes {
                     k: r.p.k,
                 },
             },
-            StringRes::Damped(r) => StringInfo {
-                pinned: true,
-                n: r.p.n,
-                c: r.p.c,
-                l: r.p.l,
-                fs: r.p.fs,
-                scheme: StringScheme::Theta {
-                    kappa: r.p.kappa,
-                    theta: r.p.theta,
-                    k: r.p.k,
-                },
-            },
+            StringRes::Damped(r) => damped_info(r),
+        }
+    }
+}
+
+/// The bow's read-out is its string's: an exciter inherits the dispersion of what it drives.
+pub fn damped_info(r: &DampedStiffString) -> StringInfo {
+    StringInfo {
+        pinned: true,
+        n: r.p.n,
+        c: r.p.c,
+        l: r.p.l,
+        fs: r.p.fs,
+        scheme: StringScheme::Theta {
+            kappa: r.p.kappa,
+            theta: r.p.theta,
+            k: r.p.k,
+        },
+    }
+}
+
+/// Snapshots flattened for the payload: the float32 buffer, its shape, and each frame's step.
+pub struct Frames {
+    pub flat: Vec<f64>,
+    pub n: usize,
+    pub width: usize,
+    /// Step index of each frame, relative to `offset` (so the animation clock starts at 0).
+    pub steps: Vec<f64>,
+}
+
+impl Frames {
+    /// Flatten `(step, state)` snapshots, reporting steps relative to `offset`.
+    pub fn of(snaps: &[(usize, Vec<f64>)], offset: usize) -> Frames {
+        Frames {
+            flat: snaps.iter().flat_map(|(_, s)| s.iter().copied()).collect(),
+            n: snaps.len(),
+            width: snaps.first().map_or(0, |s| s.1.len()),
+            steps: snaps.iter().map(|(i, _)| (*i - offset) as f64).collect(),
+        }
+    }
+
+    /// The `frames` object of a 1-D payload.
+    pub fn json(&self) -> Value {
+        json!({
+            "b64": b64f32(&self.flat),
+            "n_frames": int(self.n as i64),
+            "width": int(self.width as i64),
+            "dims": int(1),
+        })
+    }
+
+    /// `frame_steps / fs`, rounded to 6 places — the `frame_times` list.
+    pub fn times(&self, fs: f64) -> Value {
+        let t: Vec<f64> = self.steps.iter().map(|s| s / fs).collect();
+        finite_list(&t, Some(6))
+    }
+
+    /// `np.max(np.abs(frames))`, or 0 with no frames — `field_amp`.
+    pub fn amp(&self) -> f64 {
+        if self.flat.is_empty() {
+            0.0
+        } else {
+            max_abs(&self.flat)
         }
     }
 }
@@ -152,7 +238,7 @@ fn py_min3(a: f64, b: f64, c: f64) -> f64 {
 }
 
 /// A core constructor's refusal, surfaced as `serialize.py`'s `except ValueError` did.
-fn construction<E: std::fmt::Display>(e: E) -> Refusal {
+pub(crate) fn construction<E: std::fmt::Display>(e: E) -> Refusal {
     Refusal::Construction(e.to_string())
 }
 
@@ -245,6 +331,99 @@ pub fn build_resonator(p: &Value) -> Result<Built, Refusal> {
                 n,
                 fs,
                 // The frequency-INDEPENDENT base rate; sigma1 adds a per-mode term on top.
+                sigma_zero: s0 == 0.0 && s1 == 0.0,
+                oracle_2sigma: 2.0 * s0,
+            })
+        }
+        "tension" => {
+            let s0 = fnum(p, "sigma0", 0.0)?;
+            let s1 = fnum(p, "sigma1", 0.0)?;
+            let ea = fnum(p, "EA", crate::tension::TENSION_EA_DEFAULT)?;
+            if !(0.0..=crate::tension::TENSION_EA_MAX).contains(&ea) {
+                return Err(Refusal::Param(format!(
+                    "EA must be in [0, {:.0}] N, got {}.",
+                    crate::tension::TENSION_EA_MAX,
+                    physsynth_core::fmt::py_float(ea)
+                )));
+            }
+            let kappa = fnum(p, "kappa", 0.0)?;
+            let theta = fnum(p, "theta", 0.28)?;
+            let params = nonlinear::Params::new(
+                l,
+                t,
+                rho,
+                fs,
+                n,
+                kappa,
+                ea,
+                s0,
+                s1,
+                theta,
+                nonlinear::TENSION_TOL_DEFAULT,
+                true,
+            )
+            .map_err(construction)?;
+            Ok(Built {
+                res: StringRes::Tension(TensionModulatedString::new(params)),
+                c,
+                l,
+                n,
+                fs,
+                sigma_zero: s0 == 0.0 && s1 == 0.0,
+                oracle_2sigma: 2.0 * s0,
+            })
+        }
+        "bow" => {
+            use crate::bow as b;
+            let s0 = fnum(p, "sigma0", b::BOW_SIGMA0_DEFAULT)?;
+            let s1 = fnum(p, "sigma1", b::BOW_SIGMA1_DEFAULT)?;
+            let force = fnum(p, "force", b::BOW_FORCE_DEFAULT)?;
+            let v_bow = fnum(p, "v_bow", b::BOW_V_DEFAULT)?;
+            let sharp = fnum(p, "sharpness", b::BOW_SHARPNESS_DEFAULT)?;
+            let pf = physsynth_core::fmt::py_float;
+            if !(0.0..=b::BOW_FORCE_MAX).contains(&force) {
+                return Err(Refusal::Param(format!(
+                    "force must be in [0, {}] N, got {}.",
+                    pf(b::BOW_FORCE_MAX),
+                    pf(force)
+                )));
+            }
+            if !(0.0 < v_bow && v_bow <= b::BOW_V_MAX) {
+                return Err(Refusal::Param(format!(
+                    "v_bow must be in (0, {}] m/s, got {}.",
+                    pf(b::BOW_V_MAX),
+                    pf(v_bow)
+                )));
+            }
+            if !(0.0 < sharp && sharp <= b::BOW_SHARPNESS_MAX) {
+                return Err(Refusal::Param(format!(
+                    "sharpness must be in (0, {}], got {}.",
+                    pf(b::BOW_SHARPNESS_MAX),
+                    pf(sharp)
+                )));
+            }
+            let kappa = fnum(p, "kappa", 0.0)?;
+            let theta = fnum(p, "theta", 0.28)?;
+            let sp = damped::Params::new(l, t, rho, fs, n, kappa, s0, s1, theta, true)
+                .map_err(construction)?;
+            let bow_position = fnum(p, "bow_position", b::BOW_POSITION_DEFAULT)?;
+            // `BowedString`'s own defaults for the Newton solve: tol 1e-13, 60 iterations.
+            let bowed = BowedString::new(
+                DampedStiffString::new(sp),
+                bow_position,
+                v_bow,
+                force,
+                sharp,
+                1e-13,
+                60,
+            )
+            .map_err(construction)?;
+            Ok(Built {
+                res: StringRes::Bow(Box::new(bowed)),
+                c,
+                l,
+                n,
+                fs,
                 sigma_zero: s0 == 0.0 && s1 == 0.0,
                 oracle_2sigma: 2.0 * s0,
             })
@@ -357,8 +536,8 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
     let pluck = triangular_pluck(&x, l, pluck_frac * l, amplitude).map_err(construction)?;
     b.res.set_displacement(&pluck);
     let n_audio = round_int(audio_dur * fs).max(1);
-    let audio_run =
-        simulate(b.res.resonator(), n_audio as usize, Some(pickup_idx), 0).map_err(construction)?;
+    let audio_run = simulate(b.res.resonator(), n_audio as usize, Some(pickup_idx), 0)
+        .map_err(Refusal::Internal)?;
     let pickup = audio_run.output.as_deref().expect("a pickup was requested");
     if !pickup.iter().all(|v| v.is_finite()) {
         return Err(Refusal::Param(
@@ -380,7 +559,7 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
         None,
         anim_stride as usize,
     )
-    .map_err(construction)?;
+    .map_err(Refusal::Internal)?;
     let n_frames = anim_run.snapshots.len();
     let width = anim_run.snapshots.first().map_or(0, |s| s.1.len());
     let flat: Vec<f64> = anim_run

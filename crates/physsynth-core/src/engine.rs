@@ -12,17 +12,25 @@
 //! original's convention, kept so that a decimation index computed against one is valid against
 //! the other.
 
+use crate::bow::BowedString;
 use crate::string_damped::DampedStiffString;
 use crate::string_ideal::IdealString;
+use crate::string_nonlinear::TensionModulatedString;
 use crate::string_stiff::StiffString;
 
 /// What [`simulate`] needs from a resonator — `engine.py`'s `Resonator` protocol.
 ///
 /// `state` returns an owned copy, as the Python property did (`resonator.state` is a fresh array
 /// per read), so a snapshot can never alias the live field.
+///
+/// `step` is fallible because a model with a solve inside its step can fail it (the tension
+/// string's root-find, the bow's friction solve). In Python that was an exception unwinding out of
+/// `simulate`; here it is an `Err` carrying the model's own message, and `simulate` stops there.
+/// A step that merely did not *converge* is not an error — the models count those themselves and
+/// keep stepping, because a run that has to be discarded is more useful comparable than truncated.
 pub trait Resonator {
     /// Advance one timestep.
-    fn step(&mut self);
+    fn step(&mut self) -> Result<(), String>;
     /// Discrete energy `E^n` (Joules).
     fn energy(&self) -> f64;
     /// A copy of the displacement field.
@@ -80,7 +88,7 @@ fn nan_max(it: impl Iterator<Item = f64>) -> f64 {
 /// Run `resonator` for `num_steps` steps, capturing energy (always) and optionally a pickup signal
 /// and periodic state snapshots (`snapshot_stride == 0` means none).
 ///
-/// Refuses `num_steps < 1` with the original's message.
+/// Refuses `num_steps < 1` with the original's message, and stops at the first step that fails.
 pub fn simulate<R: Resonator + ?Sized>(
     resonator: &mut R,
     num_steps: usize,
@@ -103,7 +111,7 @@ pub fn simulate<R: Resonator + ?Sized>(
         snapshots.push((0, resonator.state()));
     }
     for i in 1..n {
-        resonator.step();
+        resonator.step()?;
         energy.push(resonator.energy());
         if let (Some(out), Some(j)) = (output.as_mut(), pickup_index) {
             out.push(resonator.displacement_at(j));
@@ -124,8 +132,9 @@ pub fn simulate<R: Resonator + ?Sized>(
 }
 
 impl Resonator for IdealString {
-    fn step(&mut self) {
+    fn step(&mut self) -> Result<(), String> {
         IdealString::step(self);
+        Ok(())
     }
     fn energy(&self) -> f64 {
         IdealString::energy(self)
@@ -142,8 +151,9 @@ impl Resonator for IdealString {
 }
 
 impl Resonator for StiffString {
-    fn step(&mut self) {
+    fn step(&mut self) -> Result<(), String> {
         StiffString::step(self);
+        Ok(())
     }
     fn energy(&self) -> f64 {
         StiffString::energy(self)
@@ -160,8 +170,9 @@ impl Resonator for StiffString {
 }
 
 impl Resonator for DampedStiffString {
-    fn step(&mut self) {
+    fn step(&mut self) -> Result<(), String> {
         DampedStiffString::step(self);
+        Ok(())
     }
     fn energy(&self) -> f64 {
         DampedStiffString::energy(self)
@@ -171,6 +182,48 @@ impl Resonator for DampedStiffString {
     }
     fn displacement_at(&self, index: usize) -> f64 {
         self.u[index]
+    }
+    fn timestep(&self) -> f64 {
+        self.p.k
+    }
+}
+
+impl Resonator for TensionModulatedString {
+    fn step(&mut self) -> Result<(), String> {
+        // `Ok(false)` — the bracket search hit its cap — is counted in `n_not_converged` and is
+        // not an error: the step still advanced.
+        TensionModulatedString::step(self)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    fn energy(&self) -> f64 {
+        TensionModulatedString::energy(self)
+    }
+    fn state(&self) -> Vec<f64> {
+        self.u.clone()
+    }
+    fn displacement_at(&self, index: usize) -> f64 {
+        self.u[index]
+    }
+    fn timestep(&self) -> f64 {
+        self.p.k
+    }
+}
+
+impl Resonator for BowedString {
+    fn step(&mut self) -> Result<(), String> {
+        BowedString::step(self)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    fn energy(&self) -> f64 {
+        BowedString::energy(self)
+    }
+    fn state(&self) -> Vec<f64> {
+        self.string.u.clone()
+    }
+    fn displacement_at(&self, index: usize) -> f64 {
+        self.string.u[index]
     }
     fn timestep(&self) -> f64 {
         self.p.k

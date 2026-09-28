@@ -23,12 +23,14 @@
 //! yet is refused with kind `unported`, so a scene can never render from a half-finished payload;
 //! the Python backend stays the live viewer until the list below is complete.
 
+pub mod bow;
 pub mod energy;
 pub mod horizon;
 pub mod py;
 pub mod resample;
 pub mod server;
 pub mod string;
+pub mod tension;
 
 use serde_json::{json, Value};
 
@@ -41,8 +43,8 @@ pub const MODELS: [(&str, bool); 22] = [
     ("ideal", true),
     ("stiff", true),
     ("damped", true),
-    ("tension", false),
-    ("bow", false),
+    ("tension", true),
+    ("bow", true),
     ("geometric", false),
     ("sympathetic", false),
     ("jawari", false),
@@ -71,6 +73,9 @@ pub enum Refusal {
     Construction(String),
     /// A model key whose builder has not been ported yet.
     Unported(String),
+    /// A solve inside a step failed, or a payload held a non-finite number. The reference raised
+    /// here and the browser saw a dropped connection; this is a payload saying so instead.
+    Internal(String),
 }
 
 /// `_fnum`: read a float param, refusing (as `param`) anything `float()` would not take.
@@ -124,6 +129,8 @@ fn build_payload(p: &Value) -> Result<Value, Refusal> {
             "the {model:?} scene has not been ported to the Rust viewer yet \
              (docs/dev/python-retirement-plan.md section 23)."
         ))),
+        _ if model == "tension" => tension::build_payload(p),
+        _ if model == "bow" => bow::build_payload(p),
         // `ideal`, `stiff`, `damped` — and every unknown key, which the string builder refuses
         // with the reference's message after reading the params it reads first.
         _ => string::build_payload(p),
@@ -142,6 +149,7 @@ pub fn simulate_to_payload(params: &Value) -> Value {
             return json!({"error": {"kind": "construction", "message": m}})
         }
         Err(Refusal::Unported(m)) => return json!({"error": {"kind": "unported", "message": m}}),
+        Err(Refusal::Internal(m)) => return json!({"error": {"kind": "internal", "message": m}}),
     };
     if py::has_nonfinite(&payload) {
         return json!({"error": {

@@ -10,8 +10,12 @@ struct Counter {
 }
 
 impl Resonator for Counter {
-    fn step(&mut self) {
+    fn step(&mut self) -> Result<(), String> {
+        if self.n == 99 {
+            return Err("the counter refuses step 100".to_owned());
+        }
         self.n += 1;
+        Ok(())
     }
     fn energy(&self) -> f64 {
         self.n as f64
@@ -44,6 +48,12 @@ fn snapshots_start_at_zero_and_land_on_multiples_of_the_stride() {
     assert_eq!(steps, vec![0, 3, 6]);
     assert_eq!(r.snapshots[2].1, vec![6.0, 12.0]); // a copy of the state AT that step
     assert!(r.output.is_none());
+}
+
+#[test]
+fn a_failed_step_stops_the_run_with_the_models_own_message() {
+    let err = simulate(&mut Counter { n: 0 }, 200, None, 0).unwrap_err();
+    assert_eq!(err, "the counter refuses step 100");
 }
 
 #[test]

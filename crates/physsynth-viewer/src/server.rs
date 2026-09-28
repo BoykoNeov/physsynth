@@ -25,6 +25,34 @@ use serde_json::{json, Value};
 /// Request body cap (params are tiny; reject anything absurd).
 pub const MAX_BODY: usize = 1 << 20;
 
+/// Environment variable naming a file every accepted `/simulate` body is appended to, one JSON
+/// object per line. Off unless set.
+///
+/// A development aid for the port: the front-end's `gatherParams` sends *every* slider, hidden
+/// ones included, and a scene that reads another model's parameter is a failure this viewer has
+/// shipped before. A corpus written from the test suite never sends those extra keys; a log of
+/// what the browser actually sent does (retirement plan §23.7).
+pub const REQUEST_LOG_ENV: &str = "PHYSSYNTH_VIEWER_REQUEST_LOG";
+
+/// Serializes appends from the connection threads, so two bodies never interleave on one line.
+static REQUEST_LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn log_request(params: &Value) {
+    let Some(path) = std::env::var_os(REQUEST_LOG_ENV) else {
+        return;
+    };
+    let _guard = REQUEST_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let line = format!("{params}\n");
+    let written = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut f| f.write_all(line.as_bytes()));
+    if let Err(e) = written {
+        eprintln!("  request log {}: {e}", PathBuf::from(path).display());
+    }
+}
+
 /// What the handler needs.
 #[derive(Clone)]
 pub struct Config {
@@ -230,6 +258,7 @@ fn handle(stream: TcpStream, cfg: &Config) -> std::io::Result<String> {
                 request_error(&stream, "body must be a JSON object")?;
                 return Ok(format!("{summary} 400"));
             }
+            log_request(&params);
             let t0 = std::time::Instant::now();
             let result = std::panic::catch_unwind(|| crate::simulate_to_payload(&params));
             match result {

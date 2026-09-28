@@ -310,6 +310,47 @@ pub fn max_abs(a: &[f64]) -> f64 {
     m
 }
 
+/// `f"{n:,}"` — an integer with comma thousands separators, as the budget refusals print it.
+pub fn commas(n: i64) -> String {
+    let digits = n.unsigned_abs().to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3 + 1);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    if n < 0 {
+        format!("-{out}")
+    } else {
+        out
+    }
+}
+
+/// `np.mean` of a 1-D float array: NumPy's pairwise sum, divided by the length.
+pub fn np_mean(a: &[f64]) -> f64 {
+    physsynth_core::reduce::sum(a) / a.len() as f64
+}
+
+/// `np.dot` of two vectors, left to right.
+///
+/// **Not** NumPy's value to the bit: `np.dot` is BLAS `ddot`, which fuses its multiply-adds and
+/// picks its kernel by CPU (findings §14.2), so there is no scalar recipe that reproduces it. Every
+/// caller here feeds a gated or rounded quantity, and the one-time comparison measures what the
+/// difference reaches.
+pub fn dot(a: &[f64], b: &[f64]) -> f64 {
+    let mut s = 0.0;
+    for (x, y) in a.iter().zip(b) {
+        s += x * y;
+    }
+    s
+}
+
+/// `np.linalg.norm` of a vector — `sqrt(dot(x, x))`, with [`dot`]'s caveat.
+pub fn norm(a: &[f64]) -> f64 {
+    dot(a, a).sqrt()
+}
+
 // -- base64 ---------------------------------------------------------------------------------------
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
