@@ -1023,7 +1023,8 @@ fn the_free_plate_is_not_blind_to_the_split() {
         v.sort_by(f64::total_cmp);
         let lam = p.lx * p.lx * v[3].max(0.0).sqrt();
         assert!(
-            rel(lam, scipy) < 1e-9,
+            // Measured 3.0e-10 (lambda, i.e. half the relative error in mu); 1e-8 keeps 30x.
+            rel(lam, scipy) < 1e-8,
             "g_1={g_1}: {lam:?} vs LAPACK {scipy:?}"
         );
         lams.push(lam);
@@ -1075,7 +1076,9 @@ fn the_grain_reorders_the_free_plates_modes() {
         let (vals, vecs) = pencil(&k, &w);
         for (j, want) in scipy.iter().enumerate() {
             assert!(
-                rel(vals[3 + j], *want) < 1e-10,
+                // Measured 6.0e-11: 625 unknowns put LAPACK's own floor, eps·mu_max/mu, at
+                // ~2.5e-11 here. 1e-9 keeps 16x.
+                rel(vals[3 + j], *want) < 1e-9,
                 "g_y={g_y} mode {j}: {}",
                 vals[3 + j]
             );
@@ -1176,8 +1179,9 @@ const SCIPY_CONVERGENCE: [[f64; 3]; 3] = [
     [32.46220813026825, 36.03453196098951, 170.9693123802085],
 ];
 
-/// 1e-8, not the 1e-9 of the coarser fixtures in this file: LAPACK's floor at `N = 80`, above.
-const SCIPY_CONVERGENCE_TOL: f64 = 1e-8;
+/// LAPACK's floor at `N = 80`, above: measured 2.1e-9 there (1.2e-10 at `N = 40`, 5e-12 at
+/// `N = 20`), so 2e-8 keeps ~10x.
+const SCIPY_CONVERGENCE_TOL: f64 = 2e-8;
 
 #[test]
 fn a_grained_free_plate_self_converges_at_second_order() {

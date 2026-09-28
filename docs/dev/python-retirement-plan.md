@@ -3277,8 +3277,22 @@ ARPACK values are kept in the doc comments as the finding.
 At `N = 80` (6,561 unknowns) the referees swap. A dense solve's error is absolute, about
 `eps · mu_max`, and `mu_max` grows like `h^-4`, so relative to the low modes LAPACK's floor there is
 ~1e-9. The native shift-invert sits 2.1e-9 from LAPACK and 2.1e-10 from ARPACK: the two *shifted*
-solvers agree and the dense one is the outlier. That one test's bar is `1e-8`; every other recorded
-comparison holds at `1e-9` to `1e-12`.
+solvers agree and the dense one is the outlier.
+
+**Every recorded margin was then measured, not only the ones that failed** (findings #80). Passing
+is not headroom: three bars passed within 1.7x–4.7x of their tolerance and were widened in a
+follow-up commit, each with its measurement written beside it. All three gaps are the same cause,
+LAPACK's `eps·mu_max/mu` floor on the larger pencils:
+
+| comparison | measured | bar | headroom |
+|---|---|---|---|
+| zero-torsion scale / fifth eigenvalue | 5.6e-16 / 9.2e-14 | 1e-12 / 1e-9 | > 1,000x |
+| guard pencils, scale / first elastic | 1.2e-15 / 3.3e-11 | 1e-12 / 1e-9 | ≥ 30x |
+| free beam | 1.1e-12 | 1e-10 | 94x |
+| mode reordering (625 unknowns) | 6.0e-11 | 1e-10 → **1e-9** | 1.7x → 16x |
+| the two fundamentals | 7.9e-12 | 1e-9 | 127x |
+| split lambdas | 3.0e-10 | 1e-9 → **1e-8** | 3.4x → 34x |
+| convergence N = 20 / 40 / 80 | 5.3e-12 / 1.2e-10 / 2.1e-9 | 1e-8 → **2e-8** | 4.7x → 9x at N = 80 |
 
 **The lesson generalises past this file:** a recorded oracle is only as good as the configuration it
 was run in, and a test whose assertion is loose never exercised that. Record with an accurate
