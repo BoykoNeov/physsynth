@@ -194,6 +194,8 @@ struct Verdict {
     worst_rel: f64,
     n_list: usize,
     n_buf: usize,
+    /// Samples or block extremes of a classed buffer or list, outside the class's bar.
+    n_sampled: usize,
 }
 
 /// The samples and block extremes of a classed buffer or list, against the got values.
@@ -227,6 +229,7 @@ fn cmp_sampled(want: &Value, got: &[f64], path: &str, tol: Tol, v: &mut Verdict)
         let d = (w - g).abs();
         worst = worst.max(d);
         if d > bar_of(w) {
+            v.n_sampled += 1;
             v.hard.push(format!("{path}{label}: {w} vs {g}"));
         }
     };
@@ -463,13 +466,15 @@ fn check(corpus: &str) {
         if !v.hard.is_empty() {
             let shown: Vec<&String> = v.hard.iter().take(8).collect();
             failing.push(format!(
-                "{key}: {} differences ({} scalar floats, worst relative {:.1e}; {} hashed lists;                  {} buffers; {} other), first {shown:?}",
+                "{key}: {} differences ({} scalar floats, worst relative {:.1e}; {} hashed \
+                 lists; {} buffers; {} sampled; {} other), first {shown:?}",
                 v.hard.len(),
                 v.n_float,
                 v.worst_rel,
                 v.n_list,
                 v.n_buf,
-                v.hard.len() - v.n_float - v.n_list - v.n_buf
+                v.n_sampled,
+                v.hard.len() - v.n_float - v.n_list - v.n_buf - v.n_sampled
             ));
         } else if v.soft.is_empty() {
             exact += 1;

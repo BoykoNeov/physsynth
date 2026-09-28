@@ -194,6 +194,20 @@ jobs:
           done
           cargo test --workspace --lib $targets
 
+  # PROBE (side branch only): does a Windows runner reproduce the viewer's frozen Python payloads
+  # exactly, as the machine that recorded them does? Linux measured 158 of 588 cases apart.
+  frozen-windows:
+    name: Viewer freeze on Windows (probe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - name: The frozen viewer payloads
+        run: cargo test --release -p physsynth-viewer --test frozen
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
