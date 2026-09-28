@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-d-state
-description: "Phase D (viewer to Rust) IN PROGRESS — D1-D4 + D5 membrane/mallet/plate done 2026-09-28: crates/physsynth-viewer, 18 of 22 keys; core::eigs solver; next D5 rest (vk, bore, platebody)"
+description: "Phase D (viewer to Rust) IN PROGRESS — D1-D4 + D5 membrane/mallet/plate/bore done 2026-09-28: crates/physsynth-viewer, 19 of 22 keys; core::eigs solver (symmetry guard, basis cap); next vk, platebody, then D6"
 metadata:
   node_type: memory
   type: project
@@ -15,7 +15,7 @@ the viewer in rust". Scope = plan §5: backend to Rust, `web/static/` JS untouch
 parametric) + bow; D3 (§23.9) sympathetic, geometric, reed (memo dropped), radbody, airload — all
 139 D3 requests + 11 browser requests matched, 149 of the 150 to the bit; D4 (§23.10) body, jawari,
 juari, fret + `physsynth_analysis::spectrum::rfft` (Bluestein, any length) — 73 + 8 browser, 0 failing. `physsynth-core/src/engine.rs` = native `simulate`, `Resonator::step` is FALLIBLE
-(step failure → payload kind `internal`). The other 4 keys are refused with kind `unported`. Python server
+(step failure → payload kind `internal`). The other 3 keys are refused with kind `unported`. Python server
 stays the live viewer until D7.
 
 **How each batch is checked:** `W:\temp\claude\viewer-port\`:
@@ -70,8 +70,13 @@ parities/overlaps matched SciPy exactly (sign-invariant by construction). Free p
 defaults drifts 1.32e-10 > 1e-10 in the PYTHON too — model behaviour, flagged to the human.
 `release_only` excludes by BASENAME, so viewer tests/plate.rs rides core's `plate` entry.
 
+**Found in D5 bore (§23.14):** a band-normalized spectrum amplifies FFT rounding by (record peak /
+band peak) — 1e6x at an anechoic bell, so its class is 1e-9 not 1e-12; `dispersion.order` at
+lambda = 1 is a ratio of two rounding residues (meaningless in the reference too). Python's `.3e`
+is `1.000e+03`, Rust's `1.000e3` — use a local `sci3`.
+
 **Next (§23.7):**
-- D5 rest: vk, bore, platebody (the solver exists now);
+- D5 rest: vk, platebody;
 - D6: airbox, vkroom (dense eigh vectors);
 - D7: FREEZE the reference outputs as a native fixture first, then port the headless check, switch
   servers, delete `web/*.py` + `test_web_backend.py`. Only the reed has a cache (`_REED_SWEEP_MEMO`):

@@ -452,7 +452,8 @@ and the Python server stays the live viewer until the last of them lands. **Batc
 (§23.8): the tension string, both regimes, and the bow. **Batch D3 is done** (§23.9): sympathetic,
 geometric, reed, radbody and airload. **Batch D4 is done** (§23.10): body, jawari, juari and
 fret, plus an arbitrary-length `rfft` in the analysis crate. **D5 is under way** (§23.11-§23.13): a
-native eigensolver, then membrane, mallet and all three plates — eighteen keys native, four to go.
+native eigensolver, then membrane, mallet, all three plates and the bore — nineteen keys native,
+three to go.
 
 ---
 
@@ -2899,3 +2900,44 @@ should move is the human's question.
 - The block-of-one fault was re-planted after the convergence fix, since the new test accepts
   pairs sooner, which is the direction that could let a single-vector space pass. The triple
   still fails at block 1, so the multiplicity bar stands.
+
+### 23.14 Batch D5, continued — the bore
+
+Nineteen of the twenty-two keys are now native. **`bore`** (`crates/physsynth-viewer/src/bore.rs`)
+is the first wind scene. Its field is pressure, and its loss is booked: a lossless tube with a
+radiating bell conserves `acoustic + radiated`, and the energy panel plots the split. Three of its
+panels read the operator instead of a render. The resonances come from a generalized solve on the
+free pressure nodes. The dispersion-versus-lambda curve is eighteen such solves and no stepping.
+The one-bounce reflection is checked against `r = (R - Z0)/(R + Z0)`.
+
+| corpus | requests | identical | within a class | failing |
+|---|---|---|---|---|
+| bore (both ends, five `R/Z0`, four `N`, the refusals) | 24 | 9 | 15 | 0 |
+| the browser's own requests (radiating, open) | 2 | 0 | 2 | 0 |
+
+Every trajectory, energy, reflection number and eigenfrequency matched exactly. The two classes
+this scene adds are both about what a panel does to a number after the run:
+
+- **The band spectrum** (`meta.spectrum.spectrum.mag`), absolute 1e-9. An FFT's rounding is
+  relative to the whole RECORD. At the anechoic bell the pulse leaves the tube, and the plotted
+  low band holds only 1.06e-6 of the record's peak, so normalizing to that band amplifies the
+  rounding about a millionfold. Measured: 2.8e-11. The contact and body spectra, whose band holds
+  most of the record, stay in the 1e-12 class.
+- **`dispersion.order[8]`, no tolerance.** At lambda = 1 the scheme is dispersionless, both
+  departures round to 0.0 cents, and "order" is the ratio of two rounding residues: 2.667 in the
+  reference, 1.2 here, for the same request. It is meaningless in both, and the front-end reads
+  only `order[0]`. Shipping `null` there would be the honest payload. That is a change to the
+  reference's output, so it is recorded here for after the switch rather than made now.
+
+**Before this scene the solver got the reviewer's guard** (§23.11's addendum): it refuses a
+non-symmetric pencil. A new native bar in `crates/physsynth-core/tests/eigs.rs` checks the bore's
+own free-node pencil: `L` exactly symmetric, `C` a positive diagonal, and the first five
+resonances on `(2n-1) c0 / 4L` to 1e-10 at lambda = 1. The bore is the first operator the solver
+sees that is not symmetric by construction, and this bar asserts it rather than assuming it.
+
+Also carried: the reference formats the ratio refusal with Python's `{:.3e}` (`1.000e+03`), which
+Rust's `{:.3e}` spells `1.000e3`. A local `sci3` restores the signed two-digit exponent, and a
+test pins the message.
+
+**Tests carried:** `tests/bore.rs`, 17 tests: the reference's 16, plus the refusal's format.
+Unoptimized they take 2 s. The whole workspace: 1,141 Rust tests pass.

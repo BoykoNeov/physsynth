@@ -25,6 +25,7 @@
 
 pub mod airload;
 pub mod body;
+pub mod bore;
 pub mod bow;
 pub mod contact;
 pub mod energy;
@@ -60,7 +61,7 @@ pub const MODELS: [(&str, bool); 22] = [
     ("jawari", true),
     ("juari", true),
     ("fret", true),
-    ("bore", false),
+    ("bore", true),
     ("reed", true),
     ("membrane", true),
     ("mallet", true),
@@ -150,6 +151,7 @@ fn build_payload(p: &Value) -> Result<Value, Refusal> {
         _ if model == "membrane" => membrane::build_payload(p),
         _ if model == "mallet" => mallet::build_payload(p),
         _ if model == "plate" => plate::build_payload(p),
+        _ if model == "bore" => bore::build_payload(p),
         _ if model == "jawari" => contact::build_payload_jawari(p),
         _ if model == "juari" => contact::build_payload_juari(p),
         _ if model == "fret" => contact::build_payload_fret(p),

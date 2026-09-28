@@ -392,3 +392,59 @@ fn a_problem_that_cannot_converge_inside_the_cap_is_refused() {
         other => panic!("expected NotConverged, got {other:?}"),
     }
 }
+
+/// The bore's pencil — the first operator this solver sees that is not symmetric by construction
+/// (a slice of the staggered pressure/flow operator, with boundary rows). Asserted, not assumed:
+/// `L` is symmetric and `C` is positive diagonal on the free nodes, and the closed-open tube's
+/// resonances land on `(2n-1) c0 / 4L` through the leapfrog map at lambda = 1.
+#[test]
+fn the_bores_free_node_pencil_is_symmetric_and_gives_the_odd_series() {
+    use physsynth_core::bore::{End, Params};
+    let (l, n, c0) = (0.5, 128usize, 343.0);
+    let fs = c0 / (l / n as f64);
+    let p = Params::new(
+        l,
+        fs,
+        n,
+        0.008,
+        Some((End::Closed, End::Open)),
+        0.0,
+        0.0,
+        1.2041,
+        c0,
+    )
+    .unwrap();
+    let dof = p.dof();
+    let (lop, cmat) = p.pressure_operator();
+    let pick = |a: &Csr| {
+        let rows = dof
+            .iter()
+            .map(|&i| {
+                dof.iter()
+                    .enumerate()
+                    .filter_map(|(k, &j)| {
+                        let v = a.get(i, j);
+                        (v != 0.0).then_some((k, v))
+                    })
+                    .collect()
+            })
+            .collect();
+        Csr::from_rows(dof.len(), dof.len(), rows)
+    };
+    let (lf, cf) = (pick(&lop), pick(&cmat));
+    assert!(
+        lf.is_symmetric(),
+        "the free-node pressure operator must be exactly symmetric"
+    );
+    assert!(
+        (0..dof.len()).all(|i| cf.get(i, i) > 0.0),
+        "C is a positive diagonal"
+    );
+    let got = eigsh_shift_invert(&lf, Some(&cf), 0.0, 5).unwrap();
+    let k = 1.0 / fs;
+    for (j, &w2) in got.values.iter().enumerate() {
+        let f = (0.5 * k * w2.sqrt()).clamp(-1.0, 1.0).asin() / (PI * k);
+        let want = (2 * j + 1) as f64 * c0 / (4.0 * l);
+        assert!(rel(f, want) < 1e-10, "mode {j}: {f} vs {want}");
+    }
+}

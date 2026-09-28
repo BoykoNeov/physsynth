@@ -254,7 +254,12 @@ fn centroid_below(sig: &[f64], fs: f64, fmax: f64) -> f64 {
 
 /// `_jawari_band_spectrum`: `[0, f_max]` of `|rfft(sig * hann)|`, max-pooled to `n_points`.
 /// Returns `(f, mag, norm)`; the caller divides `mag` by a SHARED norm.
-fn band_spectrum(sig: &[f64], fs: f64, f_max: f64, n_points: usize) -> (Vec<f64>, Vec<f64>, f64) {
+pub(crate) fn band_spectrum(
+    sig: &[f64],
+    fs: f64,
+    f_max: f64,
+    n_points: usize,
+) -> (Vec<f64>, Vec<f64>, f64) {
     let w = hann(sig.len());
     let x: Vec<f64> = sig.iter().zip(&w).map(|(s, wi)| s * wi).collect();
     let mag = rfft_mag(&x);
