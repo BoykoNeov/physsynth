@@ -39,7 +39,6 @@
   "test_convergence.py": 7.47,
   "test_bore_modal.py": 7.16,
   "test_mallet_energy.py": 6.49,
-  "test_free_plate_orthotropic.py": 5.72,
   "test_membrane_stability.py": 5.65,
   "test_bow_energy.py": 4.85,
   "test_body.py": 3.76,

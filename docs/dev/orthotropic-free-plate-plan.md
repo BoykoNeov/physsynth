@@ -1,5 +1,10 @@
 # Orthotropic free plate — plan (model #5of: the *free* plate gets a grain)
 
+> **2026-09-29: the Python suite named below is gone.** Its bars are native, in
+> `crates/physsynth-core/tests/plate_free_grain.rs`, carried test by test in
+> `docs/dev/python-retirement-plan.md` §24 — with SciPy's eigenvalues recorded before the file was
+> deleted. The Python names in this document are history.
+
 > **Status: IMPLEMENTED (2026-08-17).** Four-constant orthotropy in
 > `operators2d.free_plate_stiffness` (one code path), `grain_coupling`/`grain_torsion` on `Plate`'s
 > free branch, `plate.grain_ratios_from_material` returning the split, oracles

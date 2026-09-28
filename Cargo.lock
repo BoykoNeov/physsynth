@@ -117,6 +117,7 @@ dependencies = [
 name = "physsynth-core"
 version = "0.1.0"
 dependencies = [
+ "physsynth-analysis",
  "serde_json",
 ]
 

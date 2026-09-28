@@ -17,3 +17,10 @@ license.workspace = true
 # exclusion is self-testing rather than asserted.
 [dev-dependencies]
 serde_json = "1"
+# Test-only, and outside the allowlist rule for the same reason serde_json is (`tests/deps.rs`
+# walks normal and build edges only). The free orthotropic plate's bars check the operator against
+# the analysis crate's closed forms — the twist bound and the coupling form — which is the claim the
+# Python file made, and copying the two formulas into the test would leave the analysis crate's
+# versions unchecked against the plate (retirement plan §24, the human's call 2026-09-29).
+# `physsynth-analysis` depends on nothing, so this adds no cycle.
+physsynth-analysis = { path = "../physsynth-analysis" }

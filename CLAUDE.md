@@ -108,6 +108,15 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    its Chrome through the DevTools port, never by name. Every payload float goes through `py::num`,
    because `serde_json` turns NaN into `null` silently.
 
+   **Phase C's CARRYING batches began 2026-09-29 (retirement plan §24)** — retiring a Python
+   physics file whose model is already native: read each test's assertions, write or find the
+   native bar, plant breakages to prove the bars live, delete. 62 physics files / 625 functions
+   remain (§24.1; §9's map is stale). Two rules §24 set: where a Python test's truth came from
+   SciPy's eigensolvers, **record SciPy's numbers before deleting** — and record them with LAPACK's
+   dense solve, because ARPACK at the test's own shift was the least accurate solver in the room
+   (7e-7 off, §24.3); and a bar needing both crates lives in `physsynth-core`'s tests through a
+   **test-only** dependency on `physsynth-analysis` (the human's call, §24.2).
+
    **REVERSED 2026-09-07, see above.** ~~One exception, 2026-09-03 (the human's call):~~ the
    **viewer backend stays Python** and talks
    to Rust through the binding — `web/serialize.py` is a serializer, not a model, and there is no

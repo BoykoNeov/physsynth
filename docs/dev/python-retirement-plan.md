@@ -3220,3 +3220,141 @@ viewer as the reason they exist. They go with the binding.
 
 **Phase D is done.** The served viewer is the Rust binary, and nothing in the viewer path imports
 Python.
+
+---
+
+## 24. Phase C, carrying batch 1 — the free orthotropic plate
+
+Done 2026-09-29. **The first batch that retires a Python file without porting anything first.** Every
+function `tests/test_free_plate_orthotropic.py` called — the four-constant free assembly, the
+plate's split API, the free beam, both eigensolvers, the two closed-form oracles — was already
+native. So this batch is the shape the rest of phase C takes: read each Python test's assertions,
+find or write the native bar, prove the new bars are live, delete. It sets the pattern, and its
+accounting is written out in full for that reason.
+
+The new file is `crates/physsynth-core/tests/plate_free_grain.rs`: 30 `#[test]`s for the file's 29
+functions (31 pytest cases).
+
+### 24.1 §9.4's map had gone stale, and was re-measured
+
+The batch was first scoped from §9.4, which lists the **sympathetic strings** as the one model with
+genuinely zero native bars. That was true on 2026-09-07 and has not been since §12 (2026-09-08),
+which ported the class and retired its file; its bars are in `connection.rs` and
+`connection_body.rs`. A map is dated, and §9's is three weeks and twenty batches old. Re-measured
+after this batch: **62 Python physics files, 625 test functions** — the seven non-physics files
+(`test_binding_surface`, `test_ci_workflow`, `test_rust_parity_ops2d`, `test_shard_partition`,
+`test_stability`, `test_xdist_groups`, `test_analysis_frozen`) excluded, since §2 already accounts
+for them.
+
+### 24.2 Where a bar that needs both crates lives — the human's call
+
+Three bars check the plate's operator against the analysis crate's closed forms
+(`free_plate_twist_bound`, `free_plate_coupling_form`). No native test used both crates before.
+Three homes were put to the human: a **test-only dependency** of `physsynth-core` on
+`physsynth-analysis`, copying the two formulas into the test, or the viewer crate (which already
+links both). **Chosen: the test-only dependency.** `tests/deps.rs` walks normal and build edges
+only, so the shipped core stays dependency-free exactly as it is for `serde_json`, and the analysis
+crate depends on nothing, so there is no cycle. Copying the formulas was the option that looked
+safest and was not: it would leave the analysis crate's own versions unchecked against the plate,
+which is the claim the Python made.
+
+### 24.3 SciPy retires as the oracle, and ARPACK was the least accurate solver in the room
+
+Seven of the Python tests took their truth from `scipy.linalg.eigh` (LAPACK) or
+`scipy.sparse.linalg.eigsh` (ARPACK). Carrying only their inequalities would leave the native
+eigensolvers as the sole referee of their own answers, so SciPy's values at the file's exact
+fixtures were recorded before deletion (with the wheel freshly reinstalled) and are asserted as
+`SCIPY_*` constants, alongside the inequalities rather than instead of them.
+
+Recording them found something. At `test_free_plate_is_not`'s shift of `-1e-4` — three orders
+closer to the rigid trio than `free_plate_low_eigenfrequencies` goes — **ARPACK was off by up to
+7.2e-7 in the eigenvalue** (`g_1 = -0.1`: ARPACK `31.9445589`, LAPACK dense `31.94453600587`).
+The native shift-invert at the same shift lands within 1.7e-11 of LAPACK, and the native dense
+solver within 4.8e-11. The Python bar was `ratio > 4` and could never have noticed. So where the
+Python used ARPACK, the recorded referee is **LAPACK's dense solve of the same pencil**, and the
+ARPACK values are kept in the doc comments as the finding.
+
+At `N = 80` (6,561 unknowns) the referees swap. A dense solve's error is absolute, about
+`eps · mu_max`, and `mu_max` grows like `h^-4`, so relative to the low modes LAPACK's floor there is
+~1e-9. The native shift-invert sits 2.1e-9 from LAPACK and 2.1e-10 from ARPACK: the two *shifted*
+solvers agree and the dense one is the outlier. That one test's bar is `1e-8`; every other recorded
+comparison holds at `1e-9` to `1e-12`.
+
+**The lesson generalises past this file:** a recorded oracle is only as good as the configuration it
+was run in, and a test whose assertion is loose never exercised that. Record with an accurate
+solver, not with the one the test happened to call.
+
+### 24.4 Six deliberate breakages
+
+Each was planted in `crates/physsynth-core/src` (snapshot, one change, release build of the new
+file, restore from the snapshot, byte-compare). All six were caught.
+
+| breakage | red | what catches it |
+|---|---|---|
+| `grain_x` / `grain_y` swapped in the assembly | 6 | the direct build, the beam reduction (both), the mode reordering, the guard pencil, the zero-torsion pencil |
+| coupling 10% low | 8 | the coupling probe, the direct build, every recorded eigenvalue; the twist probe does NOT (it is blind by design) |
+| torsion's factor 4 → 2 | 9 | the twist numerator and its convergence, the direct build, every recorded eigenvalue; the coupling probe does NOT |
+| coupling not symmetrized (`cross` doubled, not `cross + crossᵀ`) | 12 | symmetry, and the only breakage the **energy ledger** sees — conservation and passivity go red here and nowhere else |
+| the constructor swaps coupling and torsion | 8 | the two seam bars, the von Kármán anchor, the implied-Poisson bar, the eigenvalues |
+| the constructor swaps `grain_x` and `grain_y` | 2 | **only** the two non-square seam bars |
+
+The last row is the Python docstring's warning made measurable: on a square an x/y transposition is
+invisible, so every square-plate bar in the file passes it. The fourth row is the file's other
+warning: any symmetric `K` conserves exactly, so the ledger validates the time-stepper, not the
+material.
+
+### 24.5 The retirement rule, discharged
+
+| retired | native bar, or verdict |
+|---|---|
+| `test_isotropic_split_is_bit_identical_on_every_grid` | **verdict: one code path.** `free_plate_stiffness_from_mask` fills a missing half-split with `unwrap_or(nu)` and `unwrap_or(0.5 * (1.0 - nu))`, the same expressions a caller passes, into the same assembly; a carried equality compares a computation with itself (finding #78). `the_isotropic_split_is_the_isotropic_plate_by_construction` pins the premise over the same seven grids and four `nu` |
+| `test_resonator_default_free_plate_is_bit_identical_to_the_helper` | `the_default_free_plate_is_the_isotropic_operator_and_its_split_is_nus` |
+| `test_resonator_builds_the_operator_its_own_parameters_imply` | `a_grained_plate_builds_the_operator_its_own_parameters_imply` — **sharpened**: asserts the fixture is non-square, which is its whole point (§24.4, last row) |
+| `test_matches_direct_assembly_with_four_distinct_constants` | `the_assembly_matches_a_direct_per_node_build_with_four_distinct_constants` |
+| `test_operator_stays_symmetric_with_a_grain` | `the_grained_operator_stays_symmetric` |
+| `test_rigid_body_nullspace_survives_the_grain` | same name |
+| `test_zero_torsion_puts_the_saddle_into_the_nullspace` | same name, plus LAPACK's scale and fifth eigenvalue |
+| `test_twist_quotient_is_blind_to_the_other_three_constants` | `the_twist_quotient_is_blind_to_the_other_three_constants` |
+| `test_twist_numerator_is_the_closed_form_and_exact_without_cancellation` | same name |
+| `test_twist_quotient_converges_to_the_continuum_bound_at_h2` | same name |
+| `test_fundamental_is_below_the_twist_bound_and_the_bound_is_informative` | same name, through the analysis crate's `free_plate_twist_bound`, plus LAPACK's two fundamentals |
+| `test_transverse_independent_spectrum_is_the_free_beam_exactly` (x, y) | `a_field_constant_along_one_axis_has_the_free_beams_spectrum_exactly`, both axes, plus LAPACK's beam eigenvalues |
+| `test_coupling_breaks_the_beam_reduction_without_changing_its_energy` | same name |
+| `test_coupling_probe_hits_its_exact_discrete_value` | `the_coupling_probe_hits_its_exact_discrete_value`, through `free_plate_coupling_form` |
+| `test_only_the_coupling_probe_sees_the_coupling_rigidity` | same name |
+| `test_free_grain_admissibility_is_rejected_at_construction` | same name — `plate.rs`'s `the_grain_guards_are_the_branchs_own` had only one value per side; this carries all five and the just-inside case |
+| `test_the_two_boundaries_admissible_sets_differ` | same name |
+| `test_the_guard_is_conservative_and_the_claim_is_one_sided` | same name, plus LAPACK's scale and first elastic eigenvalue for all six pencils |
+| `test_the_split_api_refuses_every_ambiguous_call` | same name — **sharpened**: each refusal asserts its exact variant as well as the Python's `match=` words |
+| `test_supported_is_blind_to_the_split` | `the_supported_plate_is_blind_to_the_split` |
+| `test_free_plate_is_not` | `the_free_plate_is_not_blind_to_the_split`, plus LAPACK's five lambdas (§24.3) |
+| `test_the_grain_reorders_the_free_plates_modes` | same name, plus LAPACK's eigenvalues for both plates |
+| `test_the_grain_is_worth_more_here_than_the_supported_branch_suggested` | same name |
+| `test_energy_conserved_with_a_grain` (mu 0.5, 4.0) | `a_grained_free_plate_conserves_its_energy`, both |
+| `test_passivity_with_a_grain` | `a_lossy_grained_free_plate_is_passive` |
+| `test_self_convergence_order_h2_with_a_grain` | `a_grained_free_plate_self_converges_at_second_order`, plus LAPACK's nine eigenvalues |
+| `test_material_chain_returns_a_consistent_split` | `the_material_split_adds_back_to_its_cross_term`, with `plate.rs`'s `isotropic_material_comes_back_at_exactly_one` (the isotropic split) and `spruce_is_not_an_isotropic_plate_with_one_axis_stretched` (the 82% torsional share), which already asserted the other clauses |
+| `test_von_karman_plate_is_untouched` | `the_von_karman_plates_bending_operator_is_the_isotropic_free_plate` |
+| `test_an_implied_poisson_ratio_above_one_half_is_admissible` | same name, and `a_plain_isotropic_call_still_refuses_that_poisson_ratio` (a `should_panic`, since the refusal is an `assert!`) |
+
+Also deleted: `tests/helpers.py`'s `make_orthotropic_free_plate` and `spruce_free_grain`, which had
+no other caller, with the helper module's now-unused import of `grain_ratios_from_material`, and
+the file's `scripts/shard_costs.json` entry. The model's design record,
+`docs/dev/orthotropic-free-plate-plan.md`, now points at the native file.
+
+### 24.6 Cost and counts
+
+- **pytest 1,669 → 1,637.** The file was 31 cases; the 32nd is
+  `test_xdist_groups.py::test_a_module_scoped_fixture_is_not_split_across_groups`, which is
+  parametrized over every test file.
+- **Native: 1,224 → 1,254 in release.** The new file runs in 1.5 s in release and ~30 s in debug
+  on the dev machine; the Python file was 5.7 s of shard cost. It is **not** on the CI job's
+  `release_only` list, so it runs in both profiles by default — 30 s is small against the 64–495 s
+  files that list exists for, and several of these bars assert bit-identity, which is the kind the
+  both-profiles rule protects. Whether to add it is the human's call.
+
+### 24.7 What is next
+
+The next carrying batch is `tests/test_plate_orthotropic.py` (19 functions), the *supported*
+grained plate — the other half of the material story, and held back from this batch so that this
+one's pattern could be checked first. After it, §24.1's 625 functions are what is left of phase C.
