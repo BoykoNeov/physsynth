@@ -43,7 +43,6 @@ mod airbox;
 mod airbox_port;
 mod airbox_wrap;
 mod analysis;
-mod banded;
 mod beam;
 mod body;
 mod bore;
@@ -741,12 +740,6 @@ fn physsynth_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(collision::py_solve_contact_vector, m)?)?;
     m.add_function(wrap_pyfunction!(collision::py_lu_factor, m)?)?;
     m.add_function(wrap_pyfunction!(collision::py_lu_solve, m)?)?;
-    m.add_function(wrap_pyfunction!(banded::py_cholesky_banded_upper, m)?)?;
-    m.add_function(wrap_pyfunction!(banded::py_cho_solve_banded_upper, m)?)?;
-    m.add(
-        "NotPositiveDefinite",
-        m.py().get_type::<banded::NotPositiveDefinite>(),
-    )?;
     m.add_function(wrap_pyfunction!(op_delta_x_forward, m)?)?;
     m.add_function(wrap_pyfunction!(op_delta_x_backward, m)?)?;
     m.add_function(wrap_pyfunction!(op_delta_xx, m)?)?;

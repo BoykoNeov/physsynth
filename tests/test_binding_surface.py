@@ -16,9 +16,10 @@ signature whose argument mapping it could probe. §39.3 says the same of ``conne
 airbox wrapper tier for the same underlying reason: what only exists at the binding can only be
 checked from Python.
 
-Deliberately **not** named ``test_rust_parity_*``: that prefix means "must run unflagged, because
-it builds both sides itself" (``scripts/shard_tests.py``'s ``PARITY_PREFIX``). Nothing here builds
-a Python side, so it should run in every shard of every job, flagged or not.
+Deliberately **not** named ``test_rust_parity_*``: that prefix meant "must run unflagged, because
+it builds both sides itself", and nothing here ever built a Python side. The prefix stopped meaning
+anything when phase A removed the flag (retirement plan §21), and so did the shard script's
+exclusion that read it.
 """
 
 import importlib
@@ -1160,3 +1161,132 @@ def test_an_explicit_none_drive_index_is_the_omitted_one():
     )
     assert omitted.drive_index == explicit.drive_index
     assert omitted.stability_margin == explicit.stability_margin
+
+
+# -- the 1-D operators: what `test_rust_parity_operators.py` left (plan §21) ----------------------
+#
+# That file compared each operator with its Python transcription, and phase A deleted the
+# transcription. Twelve of its fourteen tests were comparisons with nothing left on the far side;
+# the correctness they guarded is asserted natively in `crates/physsynth-core/tests/ops.rs`
+# against what each operator is supposed to BE (exact on polynomials, exact discrete eigenpairs,
+# `B = D2 D2`, the free beam's rigid-body nullspace). The ones below had a referent that is not
+# being deleted -- NumPy's slicing, NumPy's `dot`, SciPy's sparse product, or the binding itself --
+# and two of them are sharper for being re-aimed at it: "Rust agrees with a Python transcription of
+# `D2 @ D2`" becomes "Rust agrees with SciPy's own `D2 @ D2`".
+
+OPS_SIZES = [2, 3, 4, 5, 8, 16, 33, 64]
+
+
+def _ops_fields(n_nodes, seed=20260826):
+    """A smooth field and a random one: a sign slip can cancel in the first, not the second."""
+    x = np.linspace(0.0, 1.0, n_nodes)
+    rng = np.random.default_rng(seed)
+    return [np.sin(3.0 * np.pi * x) + 0.4 * x * x, rng.standard_normal(n_nodes)]
+
+
+def _ops_rebuild(triplets):
+    data, indices, indptr, shape = triplets
+    return sparse.csr_matrix((data, indices, indptr), shape=shape)
+
+
+def test_the_two_first_differences_are_the_same_function():
+    # `delta_x_backward` exists for notational symmetry in the energy proofs. If the two ever
+    # differed, every proof that swaps one for the other would stop being about the scheme.
+    u = _ops_fields(12)[0]
+    forward, backward = physsynth_rs.delta_x_forward, physsynth_rs.delta_x_backward
+    assert np.array_equal(forward(u, 0.1), backward(u, 0.1))
+
+
+def test_a_too_short_field_yields_numpys_empty_slice_rather_than_a_panic():
+    # The Rust kernels document a precondition and would panic; a panic at the interpreter boundary
+    # is a PanicException, so the binding guards the length. What it must return is what NumPy's
+    # slicing returns, which is the original's behaviour and is written out here, not imported.
+    for name, need in [
+        ("delta_x_forward", 2),
+        ("delta_x_backward", 2),
+        ("delta_xx", 3),
+        ("delta_xxxx", 5),
+    ]:
+        for n_nodes in range(need):
+            u = np.zeros(n_nodes)
+            assert getattr(physsynth_rs, name)(u, 0.5).shape == u[need - 1 :].shape == (0,)
+
+
+@pytest.mark.parametrize("n_nodes", [4, 17, 129, 1025])
+def test_the_inner_product_agrees_with_numpys_dot_to_the_group_a_target(n_nodes):
+    # `h * np.dot` goes through BLAS, which accumulates in an order no portable loop reproduces,
+    # so this is a tolerance (the plan's Group A 1e-13), not a bit. The comparand was always NumPy;
+    # the deleted transcription was one line wrapped around it.
+    h = 1.0 / (n_nodes - 1)
+    f, g = _ops_fields(n_nodes)
+    for a, b in ((f, g), (g, f), (f, f)):
+        rs, ref = physsynth_rs.inner(a, b, h), float(h * np.dot(a, b))
+        assert abs(rs - ref) <= 1e-13 * max(abs(rs), abs(ref), 1e-300)
+    rs, ref = physsynth_rs.norm2(f, h), float(h * np.dot(f, f))
+    assert abs(rs - ref) <= 1e-13 * max(abs(rs), abs(ref))
+    assert rs >= 0.0
+
+
+def test_inner_is_exactly_norm2_when_the_operands_coincide():
+    # Not a tautology across the boundary: `norm2` is a separate binding entry point, and the two
+    # would drift apart if it ever grew its own summation.
+    f = _ops_fields(65)[0]
+    assert physsynth_rs.inner(f, f, 0.01) == physsynth_rs.norm2(f, 0.01)
+
+
+@pytest.mark.parametrize("n", OPS_SIZES)
+@pytest.mark.parametrize("length", [1.0, 0.65])
+def test_the_biharmonic_is_scipys_own_product_of_the_second_difference(n, length):
+    """The one that paid for the whole parity file, re-aimed at the library it was copying.
+
+    ``B = D2 @ D2``, so its entries are genuine three-term sums and its boundary-adjacent diagonal
+    (``5/h^4``, not ``6/h^4``) is produced by the product rather than written down. The deleted
+    Python body was that product in SciPy; here SciPy computes it from the binding's own ``D2`` and
+    the binding's ``B`` must match it value for value. Both a tidy ``h = 1/N`` and a 0.65 m string,
+    where ``1/(h*h)`` rounds differently. Stored order is normalised away: SciPy's SMMP kernel
+    returns unsorted columns, the crate returns canonical ones, and both are the same matrix.
+    """
+    h = length / n
+    d2 = _ops_rebuild(physsynth_rs.second_difference_matrix_csr(n, h))
+    rs = _ops_rebuild(physsynth_rs.biharmonic_matrix_csr(n, h))
+    sp = (d2 @ d2).tocsr()
+    for m in (rs, sp):
+        m.sum_duplicates()
+        m.sort_indices()
+    assert rs.shape == sp.shape and rs.nnz == sp.nnz
+    assert np.array_equal(rs.indptr, sp.indptr) and np.array_equal(rs.indices, sp.indices)
+    assert np.array_equal(rs.data, sp.data), (
+        f"B(N={n}, L={length}) is not SciPy's D2 @ D2; worst |delta| = "
+        f"{np.abs(rs.data - sp.data).max():.3e}"
+    )
+
+
+@pytest.mark.parametrize("n", [-1, 0, 1])
+def test_a_grid_too_coarse_to_have_an_interior_is_refused(n):
+    for name in ("second_difference_matrix", "biharmonic_matrix", "free_beam_stiffness"):
+        with pytest.raises(ValueError):
+            getattr(physsynth_rs, f"{name}_csr")(n, 0.5)
+
+
+def test_the_binding_hands_back_triplets_not_a_matrix():
+    # `physsynth-core` must not know what SciPy is, so the binding returns `(data, indices, indptr,
+    # shape)` and `operators.py` rebuilds. If that ever became an object, the shim would be a no-op.
+    out = physsynth_rs.second_difference_matrix_csr(8, 0.125)
+    assert isinstance(out, tuple) and len(out) == 4
+    data, indices, indptr, shape = out
+    assert data.dtype == np.float64
+    assert indices.dtype == np.int32 and indptr.dtype == np.int32
+    assert shape == (7, 7)
+    assert indptr[-1] == len(data) == len(indices)
+
+
+def test_the_operator_shim_takes_what_numpy_would():
+    # The reason `operators` wraps rather than re-exports: the binding refuses a strided view or an
+    # integer array, NumPy's slicing did not, and callers were written against NumPy.
+    from physsynth.core import operators
+
+    u = np.arange(21) ** 2  # int64, and exact on a quadratic
+    for field in (u, u.astype(float)[::2], np.asfortranarray(u.astype(float))):
+        out = operators.delta_xx(field, 1.0)
+        expected = np.asarray(field, dtype=float)
+        assert np.array_equal(out, expected[2:] - 2.0 * expected[1:-1] + expected[:-2])

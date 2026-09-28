@@ -435,6 +435,9 @@ is implemented only in the binding.
 §11's table is **corrected by §13.1**: the hole is 16 classes across *three* binding files, not 14
 across two, and the file it missed is the one underneath the other two.
 
+**Phase A is done** (§21): `PHYSSYNTH_RS` is read by nothing, `banded.py` and its binding are gone, and
+the `rust-harness` CI job with them. The default suite is now what the flagged suite was.
+
 **D**, the viewer, remains independent of all of this and is still the longest pole.
 
 ---
@@ -2017,3 +2020,131 @@ Phase C's hole work is done. What stands between here and deleting `crates/physs
 rest of the plan as §7 laid it out: the viewer (phase D, still the longest pole), the scripts
 (phase E), and the remaining Python physics files whose bars have not been carried yet (§9's map,
 read with §16.7's table).
+
+---
+
+## 21. Phase A, done — the flag is gone
+
+`PHYSSYNTH_RS` is read by nothing. The last three modules that chose between two implementations at
+import time are resolved, and the choice they offered went with them:
+
+| module | before | after |
+|---|---|---|
+| `physsynth/core/exciter.py` | 116 lines: a NumPy body, `_py` aliases, a swap block | 34: three re-exports, since the binding's signatures are the body's, keywords and defaults included |
+| `physsynth/core/operators.py` | 253 lines: a NumPy/SciPy body, aliases, a swap block | 106: the swap block's two seams **as the whole body** — `_csr` rebuilds a `csr_matrix` from the binding's triplets, `_asarray` re-widens the input to what NumPy accepted. It delegates rather than re-exports, the same shape as `operators2d` |
+| `physsynth/core/banded.py` | 106 lines, LAPACK behind a swap | **deleted whole.** No model has called it since the string family's bodies went (unit 1); its only importer was its own parity file |
+| `crates/physsynth-py/src/banded.rs` | 113 lines of **Rust** | **deleted**, with its registration and the `NotPositiveDefinite` exception type. The native solver in `physsynth-core` is untouched and is what the four strings factor with |
+
+Also gone: `tests/test_rust_parity_banded.py` and `tests/test_rust_parity_operators.py` (116
+cases), the `rust-harness` CI job, and `scripts/shard_tests.py --exclude-parity` with its two guard
+tests. That last one existed only so the flagged run could skip the two-sided files, and the flagged
+run is gone.
+
+### 21.1 The acceptance run: the default suite IS the old flagged suite
+
+Measured on a freshly installed wheel, before any edit: the whole suite minus the three parity files,
+with `PHYSSYNTH_RS=1`, **1,920 passed**. After the deletion, the same suite with no flag at all (and
+minus the one remaining parity file) **1,940 passed**. The 20 is reconciled case by case against a
+collection of the pre-deletion tree, not by arithmetic on totals:
+
+- +28 in `tests/test_binding_surface.py`, the harvest (§21.3);
+- −6 in `tests/test_shard_partition.py`, the `--exclude-parity` guard (5 shard counts) and its canary;
+- −2 in `tests/test_xdist_groups.py`, whose module-fixture scan is parametrized over test files and
+  lost exactly the two deleted parity files.
+
+Nothing else moved, so the property the plan wanted is met: the default run now exercises what the
+flagged run did, and a module that grew a second implementation again would fail
+`test_no_module_chooses_between_two_implementations` (§21.4).
+
+### 21.2 LAPACK retires as the oracle, with its numbers
+
+`banded.py`'s Python side was never a transcription. It was `dpbtrf`/`dpbtrs` through SciPy, the
+library call every θ-scheme string acceptance number was first measured against. Deleting it retires
+that yardstick, and §4 required the retirement be stated with the numbers rather than rediscovered:
+
+- **lossless energy drift, transcribed solver 2.7e-12 against LAPACK's 2.7e-12** on the same string,
+  against a bar of 1e-10 (measured 2026-08-27);
+- **the four models' agreement with each other stays exact** — `sigma1 = 0`, `EA = 0` and `EA = T`
+  are still `array_equal`, because all four call the same native solver.
+
+Two measurements lived only in the deleted file's comments and are kept here so they are not lost:
+
+- **The two solvers separate like a square root, not a saturation.** On N = 128, kappa = 2.7,
+  sigma = 3, worst state difference as a fraction of the run's amplitude: 100 steps 1.1e-13, 500
+  2.9e-13, 1000 4.1e-13, 2000 9.7e-13, 5000 2.0e-12, 20000 3.2e-12. The Group A target of ~1e-13 was
+  a *hundred-step* claim for a fed-back solve. Normalise by the run's amplitude, never pointwise: a
+  damped string decays by orders of magnitude.
+- **The factor matched OpenBLAS on 120/120 of the family's matrices with a fused multiply-add in the
+  rank-1 update and 82/120 without.** The native solver deliberately does not fuse, since fusing is a
+  property of the kernel OpenBLAS picks at run time. The worst relative difference stayed under
+  1e-13.
+
+### 21.3 The retirement rule, discharged
+
+**`tests/test_rust_parity_banded.py`** (46 cases):
+
+| retired | native bar, or verdict |
+|---|---|
+| `test_factor_agrees_with_lapack` (18) | LAPACK as oracle retired (§21.2); `the_factor_reconstructs_the_matrix` asserts what the factor is *for* |
+| `test_solve_agrees_with_lapack` (18), `test_the_solve_actually_inverts_the_matrix` | `the_solve_inverts_the_matrix` |
+| `test_how_often_the_factor_is_exact_is_measured_not_asserted` | a measurement against LAPACK, recorded in §21.2; no subject left |
+| `test_a_non_spd_band_is_refused_with_lapacks_own_message` | `a_non_positive_definite_band_names_the_minor_that_failed` and `a_zero_diagonal_is_refused_and_so_is_a_nan`. The message *text* was LAPACK's and retires with it |
+| `test_a_shape_that_is_not_a_band_is_refused` (3), `test_a_right_hand_side_of_the_wrong_shape_is_refused` | `a_shape_that_is_not_a_band_is_refused`, whose third assertion is the right-hand side's length. The 1-D refusal was the binding's and went with it |
+| `test_the_shim_keeps_the_exception_type_scipy_raises`, `test_lower_storage_is_refused_rather_than_silently_transposed` | **no referent**: both were about the Python shim, which is deleted, and nothing in Python calls a banded solve |
+| `test_the_family_still_reduces_to_itself_exactly` | `sigma1_zero_is_the_stiff_string_exactly`, `ea_zero_is_model_three_bit_for_bit`, `ea_equals_t_is_bit_identical_to_the_damped_string`; each anchor is also still asserted in Python in `test_damped_string.py`, `test_tension_string.py` and `test_geometric_energy.py` |
+
+**`tests/test_rust_parity_operators.py`** (70 cases). Twelve of its fourteen tests compared an
+operator with its Python transcription. The ones with a referent that is not being deleted were
+**harvested** into `tests/test_binding_surface.py`, and two are sharper for being re-aimed at it:
+
+| retired | native bar, or where it went |
+|---|---|
+| `test_pointwise_differences_are_bit_identical` (20) | `forward_difference_is_exact_on_a_linear_ramp`, `second_difference_is_exact_on_a_quadratic`, `second_difference_has_the_exact_discrete_eigenvector`, `fourth_difference_is_exact_on_a_quartic` |
+| `test_the_fourth_difference_divisor_survives_a_sweep_of_h` (7) | twin only: it measured whether two libms agree on `h**4` (they disagree with `h*h*h*h` on 1,400 of N = 2..3999). `fourth_difference_is_exact_on_a_quartic` |
+| `test_the_two_first_differences_are_the_same_function_on_both_sides` | the Rust half kept: `test_the_two_first_differences_are_the_same_function` |
+| `test_a_too_short_field_yields_an_empty_array_on_both_sides` | **re-aimed at NumPy's slicing**: `test_a_too_short_field_yields_numpys_empty_slice_rather_than_a_panic` |
+| `test_the_inner_product_agrees_to_the_group_a_target` (4) | **re-aimed at `h * np.dot`**, the thing the transcription wrapped: `test_the_inner_product_agrees_with_numpys_dot_to_the_group_a_target`; natively `the_inner_product_is_the_energy_bookkeeping_it_claims_to_be` |
+| `test_inner_is_exactly_norm2_when_the_operands_coincide` | kept, same name |
+| `test_second_difference_matrix_is_bit_identical` (8) | `the_second_difference_matrix_is_the_pointwise_operator_with_dirichlet_ghosts`, `the_second_difference_matrix_has_the_exact_discrete_eigenpair` |
+| `test_biharmonic_matrix_is_bit_identical` (8) + the `B` half of `test_the_matrices_agree_on_a_non_unit_grid_spacing` | **re-aimed at SciPy**: `test_the_biharmonic_is_scipys_own_product_of_the_second_difference` (16 — both grids, eight sizes), exact in values. Natively `the_biharmonic_is_the_second_difference_squared_and_conserves_the_energy_identity` and two more |
+| `test_free_beam_stiffness_is_bit_identical` (8) + the `D2`, `K`, `W` half of the non-unit test | `the_free_beam_mass_is_trapezoidal`, `the_free_beam_stiffness_annihilates_exactly_the_rigid_body_space`, `the_mass_normalised_free_beam_is_bilbaos_energy_conserving_bar`, `the_free_beam_bending_energy_is_the_curvature_norm` |
+| `test_both_sides_reject_a_grid_too_coarse_to_have_an_interior` (3) | the Rust half kept: `test_a_grid_too_coarse_to_have_an_interior_is_refused` |
+| `test_the_binding_hands_back_triplets_not_a_matrix` | kept, same name |
+| — | **new**: `test_the_operator_shim_takes_what_numpy_would`, the reason `operators` delegates rather than re-exports (an int array, a strided view, a Fortran-ordered one) |
+
+**`tests/test_rust_parity_ops2d.py` is not part of phase A**, and §2's count of 275 parity tests
+misleads on this point. Its Python side went with unit 5 (rust-migration-plan §43) and it was
+harvested then. What it asserts now is against SciPy and against itself: the Gram-association
+witness, the guitar outline's margin, the Airy solve against SuperLU. Its 159 cases stay until phase
+F or until each claim has a native home. It keeps its old prefix, which no longer means anything.
+
+### 21.4 The guards: two tables deleted, one widened, per ledger #52 and #67
+
+`tests/test_stability.py`'s `test_the_rust_swap_matches_the_environment` became
+`test_no_module_chooses_between_two_implementations`:
+
+- **the `_USE_RUST` reader tuple** (operators, exciter, banded) had nothing left to read, and it is
+  **deleted**;
+- **`ported_expected`**, the `<name>_py` function table, had no aliases left to derive over, and it
+  is **deleted**;
+- **the `if expected_rust:` captured-binding block** is **deleted**, because every assertion in it
+  had become `x is x`, for example `string_stiff.biharmonic_matrix is operators.biharmonic_matrix`
+  and `reed.Bore is bore.Bore`;
+- **the flag and alias checks are WIDENED** from hand-written tuples to every module `pkgutil`
+  finds in `physsynth/core/`: no module has `_USE_RUST`, and none defines a name ending in `Py` or
+  `_py`. Named positive controls keep an empty scan from passing;
+- `deleted_bodies` gains `exciter`'s three names, and `operators` joins `operators2d` under the
+  *inverted* claim: each function is a wrapper defined in its module, never the Rust function
+  itself.
+
+In CI, the `rust` job's comparison step is renamed for what is left in it. It is
+`test_binding_surface.py` plus the SciPy-facing 2-D file, run with `-rP` for their reports. The
+`validate` job's own comment had said the flag's end was the moment "these two jobs are the same run
+and one of them should be removed", and `rust-harness` is the one removed.
+
+### 21.5 What is next
+
+Phase A is the first phase of this plan to finish outright. What stands between here and deleting
+`crates/physsynth-py` is unchanged in kind: the viewer (phase D, still the longest pole), the scripts
+(phase E), and the Python physics files whose bars have not yet been carried natively (§9's map, read
+with §16.7's table). `test_rust_parity_ops2d.py` joins that last list.

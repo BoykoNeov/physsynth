@@ -134,10 +134,11 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    `physsynth-core` test cannot reach it), and that is **not** a reason its body cannot be deleted
    — the airbox wrapper tier was under the identical blocker and §48 deleted it, with the physics
    asserted by Python tests running against Rust, which is what §39.5 says a body-deletion actually
-   retires. **`PHYSSYNTH_RS` can no longer change which model a run exercises.** It still swaps
-   `operators`, `exciter` and `banded`, but none of those is a resonator: the flag now chooses
-   between two spellings of an operator or between two solvers, and that is the migration's real
-   finish line.
+   retires. **`PHYSSYNTH_RS` can no longer change which model a run exercises.** After §49 it still
+   swapped `operators`, `exciter` and `banded`, none of them a resonator; **retirement plan §21
+   (phase A, 2026-09-28) removed those three swaps and the flag with them** — `banded.py` and its
+   binding deleted whole, `exciter` three re-exports, `operators` delegating wrappers (CSR rebuild
+   plus input coercion). Nothing reads `PHYSSYNTH_RS`, and the `rust-harness` CI job is gone.
 
    Seven things about the state this leaves:
 
@@ -166,12 +167,12 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
      reading a hand-written tuple at all and now reads the package (`pkgutil.iter_modules`, 23
      modules), so the claim became "no module in `physsynth.core` chooses between two
      implementations of a class any more" — worth more at zero than it was at four. Widening the
-     tuple *by hand* would only have restated the hole at a larger number (ledger #67). What is left to edit is `deleted_bodies` and
-     `ported_expected` (the `<name>_py` FUNCTION table — the one §46.7 missed) and the `_USE_RUST`
-     reader tuple, all in `tests/test_stability.py`; `REMAINING_PARITY_FAMILY` in
-     `tests/test_shard_partition.py` (now **stable at three** rather than draining — none of the
-     three has a Python body to delete); the extension-import scan in `tests/test_ci_workflow.py`;
-     and the `rust` job's file list.
+     tuple *by hand* would only have restated the hole at a larger number (ledger #67). Phase A
+     (retirement plan §21.4) took the same two exits again: `ported_expected`, the `_USE_RUST`
+     reader tuple and the `if expected_rust:` capture block were **deleted**, and the flag and alias
+     checks were **widened** to every module `pkgutil` finds; the guard is now
+     `test_no_module_chooses_between_two_implementations`. `REMAINING_PARITY_FAMILY` and the
+     `--exclude-parity` option it guarded are gone with the flagged job that needed them.
    - **`tests/test_binding_surface.py` is where a parity file's survivors go**, and a parity file
      is **harvested, not dropped**: 26 of `connection`'s 36 tests outlived their twin, and three
      got *sharper* by being re-aimed at what the transcription was actually copying — "Rust agrees
@@ -196,14 +197,13 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
      `splu`. A deletion also **changes which tests share a process**, so it surfaces order- and
      process-dependent defects that are not yours (ledger #44, #46).
 
-   `cargo test --workspace` runs the native bars and the Cargo dependency allowlists. `PHYSSYNTH_RS=1
-   pytest` no longer changes any **model** — it swaps `operators`, `exciter` and `banded` only — so
-   the default run and the flagged run now differ by three parity files and 275 tests, and *both*
-   exercise Rust physics end to end (reinstall the wheel before believing any number — nothing can
-   tell a stale wheel from a fresh one).
+   `cargo test --workspace` runs the native bars and the Cargo dependency allowlists. Plain `pytest`
+   is the one Python run: measured at phase A, the old flagged suite (1,920 passed) and the new
+   default one (1,940, the difference reconciled case by case) exercise the same code. Reinstall the
+   wheel before believing any number — nothing can tell a stale wheel from a fresh one.
 
-   **There is ONE flag now, and the second one's job was handed to a file.** `PHYSSYNTH_RS` swaps
-   the *models*. `PHYSSYNTH_RS_ANALYSIS` swapped the *instrument that measures them* and is read by
+   **There are NO flags now, and the second one's job was handed to a file.** `PHYSSYNTH_RS` swapped
+   the *models* until phase A. `PHYSSYNTH_RS_ANALYSIS` swapped the *instrument that measures them* and is read by
    nothing since units 10 and 11 were deleted (plan §44) — `physsynth/analysis/` has one
    implementation. The separation it protected is worth understanding rather than forgetting,
    because it is what makes the acceptance run mean anything: with only the model flag set, a Rust

@@ -20,7 +20,6 @@ mask machinery the guitar uses. See ``docs/dev/guitar-plate-plan.md``.
 from __future__ import annotations
 
 import math
-import os
 from hashlib import sha256
 
 import numpy as np
@@ -202,7 +201,6 @@ def _fingerprint(mask, h):
             f"K nnz {K.nnz}, max abs(K - K.T) {sym:.3e}, "
             f"indices sha {sha256(Kc.indices.tobytes()).hexdigest()[:16]}",
             f"mu[0:8] {np.array2string(mu, precision=6, max_line_width=200)}",
-            f"PHYSSYNTH_RS={os.environ.get('PHYSSYNTH_RS', 'unset')}",
         )
     )
 

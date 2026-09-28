@@ -82,11 +82,12 @@ jobs:
       # pure-Python path left to run, and a job that skipped what it could not import would report
       # green while asserting nothing about the model. See plan 39.6 for the two rejected routes.
       #
-      # What this job still is, and it is not nothing: the suite with NO flag set. Every model whose
-      # Python body survives runs its Python implementation here and its Rust one in
-      # `rust-harness`, so the pair of jobs still splits a physics regression from a port
-      # regression. That distinction narrows by one model per deletion and ends when the last body
-      # goes -- at which point these two jobs are the same run and one of them should be removed.
+      # This job was paired with `rust-harness` -- the same shards with `PHYSSYNTH_RS=1` -- and the
+      # pair split a physics regression from a port regression while any module still had a Python
+      # body to run here. This comment said the distinction would end when the last body went, "at
+      # which point these two jobs are the same run and one of them should be removed". Phase A
+      # (python-retirement-plan §21) deleted the last three and the flag with them, so
+      # `rust-harness` is gone and this is the one run of the suite.
       - name: Install
         run: |
           python -m pip install --upgrade pip
@@ -115,37 +116,24 @@ jobs:
 
   # The Rust migration's gate (docs/dev/rust-migration-plan.md).
   #
-  # A SEPARATE job, deliberately not a step inside the three shards. Those shards run the suite
-  # with no flag set -- so every model that still HAS a Python body runs it there, and that is the
-  # baseline a ported model is measured against. Keeping the two apart keeps the answer legible
-  # when they disagree: a red shard is a physics regression, a red `rust` job is a port regression.
+  # A SEPARATE job, deliberately not a step inside the three shards: the native bars and the
+  # binding's own properties are a different question from the Python suite, and keeping them
+  # apart keeps the answer legible when one goes red and the other does not.
   #
-  # The shards install the wheel as of 2026-09-03 (plan 39.6) because deleted models have no
-  # Python left to run; they are no longer the "pure-Python core" run this comment used to
-  # describe, and the count it quoted (1,808) was stale by 200 tests besides.
-  #
-  # Three things are checked, in increasing order of what they cost to discover:
+  # Two things are checked, in increasing order of what they cost to discover:
   #   1. the crates compile, are formatted, and pass clippy;
   #   2. `cargo test` — the native physics bars, plus the Cargo dependency allowlist that is the
-  #      Rust half of the portability contract (plan §2.2);
-  #   3. the EXISTING Python tests, unmodified, run against the Rust model via `PHYSSYNTH_RS`.
-  #      That third one is the migration's actual success condition. The first two only make its
-  #      failures cheap to read.
+  #      Rust half of the portability contract (plan §2.2).
   #
-  # (3) is the `rust-harness` job below rather than a step here. It used to be TWENTY-ONE steps in
-  # this job, one per batch, each naming by hand the files that batch's port could reach -- and
-  # each of those lists was a *claim* at the time it was written: "these are the tests that touch
-  # what I just ported, and they stay green with it underneath". With `physsynth/core/` finished
-  # (plan §34) every one of those claims is subsumed by a single larger one -- the whole suite runs
-  # green under the flag -- and twenty-one hand-maintained file lists are then twenty-one chances
-  # to name a file that no longer exists while proving nothing the one run does not.
-  #
-  # Measured before the collapse, on 2026-09-03 and on this repo's dev box rather than a runner:
-  # the whole suite minus the parity family, with `PHYSSYNTH_RS=1`, is 2,001 passed. That number is
-  # what licenses the deletion. The union of the twenty-one subset lists was never the suite, so
-  # until it was actually run, "the flagged suite is green" was an assumption and not a result.
+  # There used to be a third: the EXISTING Python tests, unmodified, run against the Rust model via
+  # `PHYSSYNTH_RS` -- first as twenty-one per-batch steps here, then as the whole-suite
+  # `rust-harness` job (plan §35.7), which was the migration's actual success condition. Phase A of
+  # the retirement plan (§21) deleted the last Python bodies and the flag with them, so the plain
+  # `validate` shards now run exactly what `rust-harness` ran: measured before the deletion, the
+  # flagged suite minus the parity files was 1,920 passed, and after it the unflagged suite runs
+  # the same 1,920 on the same code. One run of the suite, not two identical ones.
   rust:
-    name: Rust core (compile, native bars, parity)
+    name: Rust core (compile, native bars, binding surface)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -231,42 +219,35 @@ jobs:
           grep -m1 'model name' /proc/cpuinfo || true
           python -c "import numpy; numpy.show_runtime()"
 
-      # The comparison the physics bars are too loose to make: state arrays bit-for-bit and energy
-      # to the plan's Group A target, for every model whose Python reference implementation still
-      # exists. Runs WITHOUT the flag -- these files import both implementations by name and need
-      # neither swapped.
+      # The binding's own properties, and the 2-D builders held against SciPy.
       #
-      # THIS LIST DRAINS. One entry goes with each deletion (plan section 39's units), and when the
-      # last goes there is no two-sided comparison left to run anywhere. `test_binding_surface.py`
-      # is first on purpose: it is not a comparison, it holds the properties of the BINDING that
-      # neither a physics bar nor a native Rust bar can see (buffer lifetime, what `state` hands
-      # out, PyO3's argument mapping), and it is the entry that never drains -- which is also what
-      # keeps `tests/test_ci_workflow.py`'s asserted token count from reaching zero and going green
-      # forever.
+      # This step was "Rust vs Python parity", and its list DRAINED one file per deletion (plan
+      # section 39's units). Phase A (retirement plan §21) took the last two comparisons, operators
+      # and banded, so nothing here compares two implementations any more. What is left:
+      # `test_binding_surface.py`, the properties of the BINDING that neither a physics bar nor a
+      # native Rust bar can see (buffer lifetime, what `state` hands out, PyO3's argument mapping),
+      # and `test_rust_parity_ops2d.py`, whose Python side went with unit 5 and which now measures
+      # the Rust builders against SciPy's own sparse products and the guitar outline's margin. Both
+      # also run in the shards; they run again here for `-rP`, whose reports are the point.
       #
-      # `tests/test_rust_parity.py` itself went with unit 8 (plan section 45). It had been down
-      # to a single row -- the cross-model spelling table, one class per surviving Python twin
-      # -- and `FreeBeam` was the last of the six. Emptying the list rather than deleting the
-      # file would have left a `parametrize` over nothing, which COLLECTS AS A SKIP: a green
-      # log asserting nothing, which is section 39.6's route 2 arriving by accident.
+      # `tests/test_rust_parity.py` itself went with unit 8 (plan section 45). Emptying a list
+      # rather than deleting the file would have left a `parametrize` over nothing, which COLLECTS
+      # AS A SKIP: a green log asserting nothing.
       #
       # The bare `import` first is not belt-and-braces. Every file below opens with a
       # module-level `pytest.importorskip`, so a failed or missing install SKIPS them and the
       # step exits 0 having asserted nothing at all -- the same shape as the empty-sum hazard
-      # the `checks` job below documents. The skip is right for the shard run, where the
-      # extension is genuinely absent; it is wrong here, where its absence is the failure.
-      - name: Rust vs Python parity
+      # the `checks` job below documents.
+      - name: Binding surface and the 2-D builders against SciPy
         run: |
           python -c "import physsynth_rs; print(physsynth_rs.__file__)"
-          # `-rP` prints the captured stdout of tests that PASSED. Several parity tests
-          # measure a separation and report it rather than asserting a number that would
-          # be a claim about the machine (plan 22.1); without this the reports are
-          # discarded on exactly the runs where they are the news.
+          # `-rP` prints the captured stdout of tests that PASSED. Several of these measure a
+          # separation and report it rather than asserting a number that would be a claim
+          # about the machine (plan 22.1); without this the reports are discarded on exactly
+          # the runs where they are the news.
           pytest --durations=10 -rP \
             tests/test_binding_surface.py \
-            tests/test_rust_parity_operators.py \
-            tests/test_rust_parity_ops2d.py \
-            tests/test_rust_parity_banded.py
+            tests/test_rust_parity_ops2d.py
 
       # PHASE 7'S SUCCESS CONDITION STOOD HERE and is retired with unit 10 and unit 11
       # (plan §44). It ran the instrument's 65 client files with BOTH flags set, because that was
@@ -275,97 +256,21 @@ jobs:
       # separation §36.4 built the second flag for.
       #
       # `physsynth/analysis/` has no Python body any more, so `PHYSSYNTH_RS_ANALYSIS` selects
-      # between one implementation and itself. The step it gated is now a strict subset of the
-      # three-shard flagged job below, which runs the whole suite -- those 65 files included --
-      # with `PHYSSYNTH_RS=1` against exactly the same Rust detector. Keeping it would be running
-      # 65 files twice and calling the second run a different claim.
+      # between one implementation and itself. The step it gated became a strict subset of the
+      # whole-suite flagged job, and since phase A (retirement plan §21) of the plain shards, which
+      # run those 65 files against exactly the same Rust detector. Keeping it would be running 65
+      # files twice and calling the second run a different claim.
       #
       # What replaces the *other* half of that claim -- a Rust instrument checked against a second
       # implementation -- is `tests/test_analysis_frozen.py`, which holds 62 fixtures' worth of
       # what the Python oracles said, recorded to the last digit before they were deleted. It runs
-      # in every shard of every job, flagged and unflagged, and needs no environment at all.
+      # in every shard, and needs no environment at all.
       #
       # The derivation that built this step's file list is worth keeping on the record even though
       # the step is gone, because the lesson outlived it: the obvious grep -- files importing
       # `physsynth.analysis` -- was WRONG BY 43 FILES, since `tests/helpers.py` imports the
       # instrument and measures on its callers' behalf. 27 files matched; 65 actually reached. A
       # derived list is only as honest as the reachability it models (ledger #32).
-
-  # The migration's success condition, as one claim instead of twenty-one (plan §35.7).
-  #
-  # The whole validation suite, unmodified, with `PHYSSYNTH_RS=1` -- so every ported model, solver,
-  # operator, room, port, wrapper and bridge is exercised through its real clients rather than
-  # through a hand-picked list of the files someone thought it could reach. Not one line of
-  # `tests/` mentions Rust; the substitution happens inside `physsynth/core/*.py`, gated on this
-  # variable, which is what makes running the suite unmodified mean anything at all.
-  #
-  # THE PARITY FAMILY IS EXCLUDED, and that is not an optimisation. `test_rust_parity_*.py` build
-  # BOTH sides themselves and assert something about the pair; with the flag set, the side they
-  # take to be Python is Rust too, so the file compares Rust against Rust. Most assertions then
-  # pass vacuously and at least one -- a negative control, which asserts that a difference *exists*
-  # -- fails outright. Neither is information. They run once, unflagged, in the `rust` job above.
-  # `scripts/shard_tests.py --exclude-parity` owns the removal, and it removes them AFTER the
-  # split so these shards are provably the `validate` job's shards minus a known list; see that
-  # script's `PARITY_PREFIX` and `tests/test_shard_partition.py` for why the order is the hazard.
-  #
-  # Sharded over the same three runners as `validate`, for the same reason: the suite is
-  # bulk-bound, so the only lever is cores. The cost stated plainly -- three matrix jobs each build
-  # the wheel, so the Rust compile is paid three times, in parallel. That is the trade this file
-  # already makes everywhere else (one runner per job is free on a public repo, wall clock is not).
-  rust-harness:
-    name: The suite, unmodified, against Rust (shard ${{ matrix.shard }})
-    runs-on: ubuntu-latest
-    needs: setup
-    strategy:
-      # Same reasoning as `validate`: when two shards disagree, the disagreement is the finding.
-      fail-fast: false
-      matrix:
-        shard: ${{ fromJSON(needs.setup.outputs.shards) }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@1.98.0
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target"
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: pyproject.toml
-
-      - name: Install both sides
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-          pip install ./crates/physsynth-py
-
-      # The import is checked before the suite runs, and it is load-bearing. Every `physsynth/core`
-      # module reads `PHYSSYNTH_RS` at import and swaps in `physsynth_rs` when it is set -- but a
-      # failed wheel install would make that import raise inside a module the suite imports, which
-      # reports as a collection error rather than as "the extension is missing". Asking here means
-      # the answer is one line at the top of the log instead of 2,000 identical tracebacks.
-      - name: Record what decides the last bit
-        run: |
-          grep -m1 'model name' /proc/cpuinfo || true
-          python -c "import physsynth_rs; print(physsynth_rs.__file__)"
-          python -c "import numpy; numpy.show_runtime()"
-
-      # The collected count is echoed for the same reason the `checks` job echoes its own: a shard
-      # that collected nothing runs nothing and exits 0, and the number is the only thing that
-      # tells that apart from a shard that passed.
-      - name: Run the suite against Rust (shard ${{ matrix.shard }}/${{ needs.setup.outputs.count }})
-        env:
-          PHYSSYNTH_RS: "1"
-        run: |
-          set -euo pipefail
-          echo "cores: $(nproc)"
-          files=$(python scripts/shard_tests.py --shard ${{ matrix.shard }} \
-                    --of ${{ needs.setup.outputs.count }} --exclude-parity)
-          test -n "$files"
-          echo "files in this flagged shard: $(echo $files | wc -w)"
-          pytest -n auto --dist loadgroup $files --durations=25
 
   # Lint, plus the OUTER half of the shard guard.
   #
