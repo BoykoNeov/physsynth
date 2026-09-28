@@ -59,6 +59,8 @@ pub enum EigError {
     /// Thirty sweeps per eigenvalue is EISPACK's cap and is not reachable by a well-formed
     /// symmetric matrix; a matrix carrying a NaN is the way it happens in practice.
     NotConverged(usize),
+    /// A generalized problem's diagonal mass had a non-positive (or NaN) entry at this index.
+    MassNotPositive(usize),
 }
 
 impl std::fmt::Display for EigError {
@@ -69,6 +71,10 @@ impl std::fmt::Display for EigError {
                 f,
                 "the QL iteration did not converge for eigenvalue {i} within {MAX_QL_SWEEPS} \
                  sweeps; the matrix is not a finite symmetric one."
+            ),
+            EigError::MassNotPositive(i) => write!(
+                f,
+                "the diagonal mass matrix must be positive definite; entry {i} is not positive."
             ),
         }
     }
@@ -143,6 +149,44 @@ pub fn symmetric_eigen(a: &[f64], n: usize) -> Result<(Vec<f64>, Vec<f64>), EigE
     for (jn, &jo) in order.iter().enumerate() {
         for i in 0..n {
             vectors[i * n + jn] = z[i * n + jo];
+        }
+    }
+    Ok((values, vectors))
+}
+
+/// Eigenpairs of `A x = lambda D x` for a symmetric `A` and a positive DIAGONAL `D`, ascending.
+///
+/// Reduced to the symmetric standard problem `S = D^-1/2 A D^-1/2` and mapped back with
+/// `x = D^-1/2 y`, so the vectors come out `D`-orthonormal (`V^T D V = I`) — the normalization
+/// `scipy.linalg.eigh(A, B)` returns and the one a caller that PROJECTS under the mass needs.
+/// Row-major `vectors`, eigenvector `j` in column `j`; sign and the basis inside a repeated
+/// eigenvalue are arbitrary, as for [`symmetric_eigen`].
+///
+/// # Errors
+/// [`EigError::BadShape`] if `a.len() != n * n` or `d.len() != n`;
+/// [`EigError::MassNotPositive`] for a non-positive or NaN mass; otherwise as [`symmetric_eigen`].
+pub fn generalized_eigen_diag(
+    a: &[f64],
+    d: &[f64],
+    n: usize,
+) -> Result<(Vec<f64>, Vec<f64>), EigError> {
+    if a.len() != n * n || d.len() != n {
+        return Err(EigError::BadShape);
+    }
+    if let Some(i) = d.iter().position(|&v| v <= 0.0 || v.is_nan()) {
+        return Err(EigError::MassNotPositive(i));
+    }
+    let inv_sqrt: Vec<f64> = d.iter().map(|v| 1.0 / v.sqrt()).collect();
+    let mut s = vec![0.0; n * n];
+    for i in 0..n {
+        for j in 0..n {
+            s[i * n + j] = a[i * n + j] * inv_sqrt[i] * inv_sqrt[j];
+        }
+    }
+    let (values, mut vectors) = symmetric_eigen(&s, n)?;
+    for i in 0..n {
+        for j in 0..n {
+            vectors[i * n + j] *= inv_sqrt[i];
         }
     }
     Ok((values, vectors))

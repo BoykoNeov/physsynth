@@ -453,8 +453,8 @@ and the Python server stays the live viewer until the last of them lands. **Batc
 geometric, reed, radbody and airload. **Batch D4 is done** (§23.10): body, jawari, juari and
 fret, plus an arbitrary-length `rfft` in the analysis crate. **D5 is under way** (§23.11-§23.13): a
 native eigensolver, then membrane, mallet, all three plates, the bore, the von Kármán plate and
-the plate body. **D5 is done**; D6's `airbox` too (§23.17) — **twenty-one keys native**, `vkroom`
-to go, waiting on a decision (§23.17's last paragraph).
+the plate body. **D5 and D6 are done** (§23.11-§23.18): **all twenty-two keys are native**. D7
+(freeze, port the headless check, switch servers, delete the Python viewer) waits on the human.
 
 ---
 
@@ -3035,3 +3035,58 @@ exposure is narrower than feared: the shares reach the payload only through `mod
 vectors. The efficiency figures use the modes only through a projection that does not depend
 on the basis. So one pair of scalars is basis-dependent, in the reference too. How to treat
 it is the human's call.
+
+**Measured, and the decision is moot.** The reviewer's point was that the dependence needs the
+energy's direction inside a repeated pair to ROTATE during the run: a fixed direction contributes
+`|g - g'|` in every basis. So this was measured on the reference rather than argued
+(`W:\temp\claude\viewer-port\vkroom_basis_probe.py`). Every exactly repeated pair of SciPy's
+eigenvectors was rotated (71 pairs on the shipped plate), the payload was recomputed, and the
+result was compared. Five configurations were used (default, short, baffled, linear, harder
+strike) at four angles (0.3, 0.7, 1.1 and 2.0 rad). `modal_drift`, `modal_drift_twin` and every
+efficiency figure were identical to all six shipped decimals in every case. Any orthonormal basis
+of a pair is such a rotation (or a sign flip, which a square cannot see), so no solver's choice
+can move the payload. `vkroom` is ported as the reference defines it, and the only new numerical
+obligation is the one the reviewer named: the vectors must be `W`-orthonormal (`V^T W V = I`), as
+`scipy.linalg.eigh(A, B)` returns them.
+
+### 23.18 Batch D6 done — the gong in the room; every scene is native
+
+**All twenty-two keys are now native**, and no model is refused as `unported`. **`vkroom`**
+(`crates/physsynth-viewer/src/vkroom.rs`) is the von Kármán cymbal as a radiating surface in the
+3-D room, baffled in a wall or suspended mid-room, on the core's `RoomGrid<VkSeam>`. The claim is a
+separation: the struck plate's radiation pattern moves during the strike, and its linear twin's does
+not.
+
+The one new numerical routine is `eig::generalized_eigen_diag`, the dense `A x = lambda D x` for a
+positive diagonal mass, with `D`-orthonormal vectors as `scipy.linalg.eigh(A, B)` returns them.
+Its bar in `crates/physsynth-core/tests/eig.rs` uses a free square plate, whose spectrum has the
+rigid trio and exactly repeated pairs. It asserts `V^T W V = I`, `K V = W V Lambda`, the trio, a
+repeated pair, and agreement with the independent sparse shift-invert route. A planted fault that
+skips the back-transform fails it.
+
+| corpus | requests | identical | within a class | failing |
+|---|---|---|---|---|
+| vkroom (both tiers, linear, quiet, coarsest plate, an off-default rig, the guards) | 18 | 9 | 9 | 0 |
+| the browser's own requests (suspended twice, baffled) | 3 | 0 | 3 | 0 |
+
+**Every state array, every claim figure and every convergence count matched to the bit.** The
+in-class differences are the radiated-energy ledger's last bit, which §16 decided: the binding
+accumulates it through NumPy's dot, the core through its own read-out sum, and the ledger never
+feeds back. That reaches the scene total and every fraction of it (at most 1.6e-15 relative), and
+the drift and residual figures that are differences of two nearly equal ledgers (at most 1.7e-16
+absolute). These classes are the first ones restricted to ONE model (`compare.py`'s
+`MODEL_CLASSES`), so the loosening cannot hide a regression in another scene.
+
+**The final regression**, every corpus re-run after the last scene: 17 corpora, 561 requests,
+0 failing.
+
+**Tests carried:** `tests/vkroom.rs`, 12 tests: the reference's section, with the module-scoped
+fixture as a `OnceLock`. Unoptimized they take 145 s, so `vkroom` joins `release_only`. The whole
+workspace: 1,189 Rust tests pass.
+
+**What is left is D7**, and it is not only engineering. Freeze the reference's outputs as a native
+fixture while the Python still exists. Port the headless check, and make it shut its Chrome down
+through the DevTools port: it leaked every run of this phase. Then switch the served viewer to the
+Rust binary, and delete `web/serialize.py`, `web/server.py` and `tests/test_web_backend.py`. That
+last step removes the reference the whole of phase D was checked against, so it waits for the
+human's go-ahead.

@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-d-state
-description: "Phase D (viewer to Rust) IN PROGRESS — D1-D5 + airbox done 2026-09-28: crates/physsynth-viewer, 21 of 22 keys (vkroom left, blocked on the human: modal_drift basis); core::eigs solver"
+description: "Phase D (viewer to Rust) IN PROGRESS — D1-D6 DONE 2026-09-28: all 22 keys native in crates/physsynth-viewer; D7 (freeze, headless port, switch, delete web/*.py) waits on the human"
 metadata:
   node_type: memory
   type: project
@@ -15,7 +15,7 @@ the viewer in rust". Scope = plan §5: backend to Rust, `web/static/` JS untouch
 parametric) + bow; D3 (§23.9) sympathetic, geometric, reed (memo dropped), radbody, airload — all
 139 D3 requests + 11 browser requests matched, 149 of the 150 to the bit; D4 (§23.10) body, jawari,
 juari, fret + `physsynth_analysis::spectrum::rfft` (Bluestein, any length) — 73 + 8 browser, 0 failing. `physsynth-core/src/engine.rs` = native `simulate`, `Resonator::step` is FALLIBLE
-(step failure → payload kind `internal`). The other key (vkroom) is refused with kind `unported`. Python server
+(step failure → payload kind `internal`). No key is refused as `unported` any more. Python server
 stays the live viewer until D7.
 
 **How each batch is checked:** `W:\temp\claude\viewer-port\`:
@@ -78,8 +78,13 @@ is `1.000e+03`, Rust's `1.000e3` — use a local `sci3`.
 **Found in D6 airbox (§23.17):** 37/37 bit-exact. `np.percentile` linear = `(n-1) q` virtual index,
 NOT the general `n q + (alpha + q(1-alpha-beta)) - 1` (last-bit different). `py::sci` / `py::fmt_g`
 are the Python `.2e` / `:g` formats. vkroom: only `modal_drift(_twin)` is basis-dependent (per-mode
-shares on a square free plate's repeated pairs) — ASKED the human: group pairs / fix a basis / leave.
-Also asked: the free plate's default render fails its own 1e-10 bar (1.32e-10, same in Python).
+shares on a square free plate's repeated pairs) — MEASURED moot: rotating all 71 repeated pairs
+changes no shipped digit (5 configs x 4 angles), so ported as defined. Dense generalized solve =
+`eig::generalized_eigen_diag` (D-orthonormal). vkroom's ledger last bit = §16's deliberate
+read-out spelling; `compare.py` MODEL_CLASSES keep that loosening vkroom-only. Final regression:
+17 corpora, 561 requests, 0 failing. OPEN for the human: D7 go-ahead (deleting the Python viewer
+= deleting the reference); the free plate's default render fails its own 1e-10 bar (1.32e-10,
+identical in Python).
 
 **Next (§23.7):**
 - D6: airbox, vkroom (dense eigh vectors);

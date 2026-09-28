@@ -306,3 +306,83 @@ fn the_vector_path_refuses_a_ragged_matrix_and_accepts_an_empty_one() {
     let (vals, vecs) = symmetric_eigen(&[], 0).unwrap();
     assert!(vals.is_empty() && vecs.is_empty());
 }
+
+// -- the generalized problem with a diagonal mass (`generalized_eigen_diag`) ----------------------
+
+/// The case the room scene needs: a FREE square plate's `K x = lambda W x`, whose spectrum has the
+/// rigid trio at zero and exactly repeated pairs. Asserted: `V^T W V = I` (a projection under the
+/// mass is only a projection with this), `K V = W V Lambda`, the trio, a repeated pair, and the
+/// low values against the independent sparse shift-invert route.
+#[test]
+fn a_free_square_plates_pencil_is_solved_mass_orthonormally() {
+    use physsynth_core::eig::generalized_eigen_diag;
+    use physsynth_core::eigs::eigsh_shift_invert;
+    use physsynth_core::plate::{Boundary, Params, PlateSpec};
+    let n_seg = 8;
+    let h = 1.0 / n_seg as f64;
+    let spec = PlateSpec {
+        lx: 1.0,
+        ly: 1.0,
+        kappa: 20.0,
+        rho: 0.005,
+        fs: 20.0 / (h * h),
+        n: n_seg,
+        boundary: Some(Boundary::Free),
+        nu: Some(0.3),
+        ..PlateSpec::default()
+    };
+    let p = Params::new(&spec).unwrap();
+    let n = p.n_live;
+    let mut a = vec![0.0; n * n];
+    for i in 0..n {
+        for j in 0..n {
+            a[i * n + j] = p.stiffness.get(i, j);
+        }
+    }
+    let w = &p.w;
+    let (vals, v) = generalized_eigen_diag(&a, w, n).unwrap();
+    let scale = vals[n - 1].abs();
+    for j in 0..n {
+        for l in 0..n {
+            let g: f64 = (0..n).map(|i| v[i * n + j] * w[i] * v[i * n + l]).sum();
+            assert!(
+                (g - if j == l { 1.0 } else { 0.0 }).abs() < 1e-10,
+                "V^T W V ({j}, {l}) = {g}"
+            );
+        }
+        for i in 0..n {
+            let kv: f64 = (0..n).map(|k| a[i * n + k] * v[k * n + j]).sum();
+            let r = kv - vals[j] * w[i] * v[i * n + j];
+            assert!(r.abs() < 1e-9 * scale, "K v != lambda W v at mode {j}");
+        }
+    }
+    assert!(
+        vals[..3].iter().all(|x| x.abs() < 1e-9 * scale),
+        "the rigid trio: {:?}",
+        &vals[..3]
+    );
+    assert!(vals[3] > 1e-6 * scale);
+    let pairs = vals
+        .windows(2)
+        .filter(|x| (x[1] - x[0]).abs() < 1e-9 * x[1].abs())
+        .count();
+    assert!(pairs >= 1, "a square free plate has exactly repeated pairs");
+    let sparse = eigsh_shift_invert(&p.stiffness, p.mass.as_ref(), -1e-3 * 169.0, 9).unwrap();
+    for (j, (&s, &d)) in sparse.values.iter().zip(&vals).enumerate().skip(3) {
+        assert!(
+            (s - d).abs() < 1e-9 * d.abs(),
+            "mode {j}: sparse {s} vs dense {d}"
+        );
+    }
+    // refusals
+    assert_eq!(
+        generalized_eigen_diag(&a, &w[..n - 1], n).unwrap_err(),
+        EigError::BadShape
+    );
+    let mut bad = w.clone();
+    bad[5] = 0.0;
+    assert_eq!(
+        generalized_eigen_diag(&a, &bad, n).unwrap_err(),
+        EigError::MassNotPositive(5)
+    );
+}

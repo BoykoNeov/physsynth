@@ -45,6 +45,7 @@ pub mod string;
 pub mod sympathetic;
 pub mod tension;
 pub mod vk;
+pub mod vkroom;
 
 use serde_json::{json, Value};
 
@@ -75,7 +76,7 @@ pub const MODELS: [(&str, bool); 22] = [
     ("radbody", true),
     ("airload", true),
     ("airbox", true),
-    ("vkroom", false),
+    ("vkroom", true),
 ];
 
 /// Why a request produced no scene.
@@ -158,6 +159,7 @@ fn build_payload(p: &Value) -> Result<Value, Refusal> {
         _ if model == "vk" => vk::build_payload(p),
         _ if model == "platebody" => platebody::build_payload(p),
         _ if model == "airbox" => airbox::build_payload(p),
+        _ if model == "vkroom" => vkroom::build_payload(p),
         _ if model == "jawari" => contact::build_payload_jawari(p),
         _ if model == "juari" => contact::build_payload_juari(p),
         _ if model == "fret" => contact::build_payload_fret(p),

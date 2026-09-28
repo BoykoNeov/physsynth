@@ -323,25 +323,25 @@ fn build(p: &Value) -> Result<(Bridge, AirBox, Info), Refusal> {
 }
 
 /// `room.node_index(point)` — the points this scene asks about are inside the room by design.
-fn index(room: &AirBox, point: [f64; 3]) -> [usize; 3] {
+pub(crate) fn index(room: &AirBox, point: [f64; 3]) -> [usize; 3] {
     ab::node_index(point, room.p.h, room.p.n).expect("the scene's points lie inside the room")
 }
 
 /// `room.snapped(point)`: the nearest node's coordinates.
-fn snap(room: &AirBox, point: [f64; 3]) -> [f64; 3] {
+pub(crate) fn snap(room: &AirBox, point: [f64; 3]) -> [f64; 3] {
     index(room, point).map(|i| i as f64 * room.p.h)
 }
 
 /// One slice plane's geometry.
-struct Plane {
-    json: Map<String, Value>,
+pub(crate) struct Plane {
+    pub(crate) json: Map<String, Value>,
     axis: usize,
     at: usize,
     stride: usize,
 }
 
 /// `_airbox_slice_planes`: the three named orthogonal planes and their decimation strides.
-fn slice_planes(room: &AirBox, frac: f64) -> Vec<Plane> {
+pub(crate) fn slice_planes(room: &AirBox, frac: f64) -> Vec<Plane> {
     let n = room.p.n.map(|v| v + 1);
     let idx: Vec<usize> = n
         .iter()
@@ -387,7 +387,7 @@ fn slice_planes(room: &AirBox, frac: f64) -> Vec<Plane> {
 }
 
 /// `_airbox_take_slices`: one frame, the three decimated planes head to tail.
-fn take_slices(room: &AirBox, planes: &[Plane]) -> Vec<f64> {
+pub(crate) fn take_slices(room: &AirBox, planes: &[Plane]) -> Vec<f64> {
     let shape = room.p.p_shape();
     let mut out = Vec::new();
     for pl in planes {
