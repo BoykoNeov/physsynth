@@ -2727,3 +2727,51 @@ Windows will not replace a running executable.
   `release_only` list, the first viewer file to do so. It pins no arithmetic spelling, which is
   that list's condition. `tests/body.rs` takes 1 s unoptimized and stays in both profiles.
 - The whole workspace: 1,059 Rust tests pass.
+
+### 23.11 Before D5: which eigen-solves reach a payload, and what each needs
+
+An eigen-solver fixes each eigenvector only up to its sign, and a repeated eigenvalue only up to a
+rotation inside its group. So a native solver cannot be expected to reproduce SciPy's *vectors* to
+the bit, and each use has to be classified before the solver is written, not after a diff fails.
+Seven calls, found by grepping `serialize.py` for `eigsh` and `eigh`:
+
+| scene (batch) | call | what reaches the payload | sign | repeated eigenvalues |
+|---|---|---|---|---|
+| `membrane` (D5) | `eigsh(-L)`, values only | frequencies | — | invariant |
+| `plate` and `vk`, supported / free (D5; one helper serves both) | `eigsh(-L)` and `eigsh(K, M)`, values only | frequencies | — | invariant |
+| `bore` (D5) | `eigsh(L, M)`, values only | frequencies | — | invariant |
+| `plate` guitar (D5) | `eigsh(K, M)` with vectors | mirror parity of mode 1; `abs` of each of the first four modes' overlap with the strike | invariant (a quadratic, and an `abs`) | a guitar outline has none; the bending/twist crossing is resolved by the mirror symmetry, so it bites only if a sweep point sits exactly on the crossing |
+| `vkroom` (D6) | dense `eigh(K, M)` with vectors | per-mode energy SHARES `c_j²`, and a projection onto the resolved modes | invariant (squares, and `V Vᵀ`) | **basis-dependent.** The plate is square and free, so it has exactly repeated pairs, and one pair's share can split any way between its two members |
+
+So D5 needs no sign rule at all, only a named tolerance class for the eigenvalues, which come from
+an iteration rather than a closed form. The guitar's parity and strike overlaps are sign-invariant
+by construction. They get a small absolute class, and the corpus includes a waist point next to the
+crossing, so that the class is measured where it is weakest. D6 needs a real decision before its
+diff means anything. The choices are to compare the shares summed over each repeated group, or to
+fix the basis inside each group by the plate's x↔y mirror (symmetric and antisymmetric members).
+The second makes the Rust output well-defined where SciPy's is not. That decision is D6's.
+
+**The order inside D5 follows the reviewer's advice** (the D3 and airbox-halves precedent). The
+solver goes first, shift-invert Lanczos in the mass inner product on the existing `SparseLu`, with
+its native bars against closed forms (a 1-D Laplacian, a diagonal generalized pencil, and a
+rectangle's Navier modes). Then one scene. Only after that do the other five follow, so that a
+surprise in the solver blocks one scene rather than six.
+
+**The solver is done** (`physsynth_core::eigs::eigsh_shift_invert`, with `eig::symmetric_eigen`
+under it for the small projected problem). It factors `K - sigma M` once with the crate's
+`SparseLu`, grows an `M`-orthonormal Krylov basis three vectors at a time with full
+reorthogonalization (twice), and accepts a Ritz pair when its residual is below `1e-10 |theta|`.
+There are no restarts, and the start vectors come from a fixed SplitMix sequence, so a run is
+reproducible to the bit. Its bars in `crates/physsynth-core/tests/eigs.rs` all check closed
+forms or a dense reference: the 1-D Dirichlet and reflected (singular) operators, the 2-D grid
+with its repeated pairs, a mass matrix that varies, a generalized pencil with a triple and the
+shift inside the spectrum, and the viewer's largest membrane size (9,801 unknowns, 12 values:
+0.66 s in release). `tests/eig.rs` gained five bars for the vector path, including that its
+eigenvalues are the value path's to the bit.
+
+Two planted faults, both on a saved copy restored afterwards. A wrong sign in the QL
+eigenvector rotation fails three of the vector bars. Block size 1 fails the triple, but the 2-D
+grid's pairs still come back doubled at block 1: by the time twelve values converge, rounding has
+fed each pair's second direction into the basis. The grid is therefore a closed-form bar and not
+the multiplicity bar, and its test says so. That is the reason the diagonal triple exists, since a
+diagonal operator gives rounding nothing to mix.

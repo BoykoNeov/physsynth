@@ -12,7 +12,9 @@
 //! iteration for the guard (see the module header), so a routine that quietly failed on them
 //! would be failing at exactly the fixture the caller has.
 
-use physsynth_core::eig::{symmetric_eigenvalues, symmetric_max_eigenvalue, EigError};
+use physsynth_core::eig::{
+    symmetric_eigen, symmetric_eigenvalues, symmetric_max_eigenvalue, EigError,
+};
 
 /// Largest absolute difference between two same-length sequences.
 fn max_abs_diff(a: &[f64], b: &[f64]) -> f64 {
@@ -196,4 +198,111 @@ fn the_trace_and_the_frobenius_norm_survive_the_reduction() {
     // Sorted ascending, which every caller relies on and `symmetric_max_eigenvalue` states.
     assert!(values.windows(2).all(|w| w[0] <= w[1]));
     assert_eq!(symmetric_max_eigenvalue(&a, n).unwrap(), values[n - 1]);
+}
+
+// -- eigenvectors (`symmetric_eigen`, EISPACK tred2/tql2) ------------------------------------------
+
+/// A fixed, structureless symmetric matrix: no closed form, so only invariants can judge it.
+fn scrambled(n: usize) -> Vec<f64> {
+    build(n, |i, j| {
+        let (a, b) = (i.min(j) as f64, i.max(j) as f64);
+        (0.37 * a + 1.3 * b).sin() + if i == j { 0.1 * i as f64 } else { 0.0 }
+    })
+}
+
+/// The vector path returns the value path's eigenvalues to the BIT: the extra bookkeeping writes
+/// only the upper triangle and a separate matrix, which is what lets it inherit the bars above.
+#[test]
+fn the_vector_path_returns_the_same_doubles_as_the_value_path() {
+    for n in [1, 2, 3, 7, 20, 41] {
+        let a = scrambled(n);
+        let (vals, _) = symmetric_eigen(&a, n).unwrap();
+        assert_eq!(vals, symmetric_eigenvalues(&a, n).unwrap(), "n = {n}");
+    }
+}
+
+#[test]
+fn eigenvectors_are_orthonormal_and_satisfy_the_eigen_equation() {
+    let n = 41;
+    let a = scrambled(n);
+    let (vals, v) = symmetric_eigen(&a, n).unwrap();
+    let scale = vals.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+    for j in 0..n {
+        for l in 0..n {
+            let dot: f64 = (0..n).map(|i| v[i * n + j] * v[i * n + l]).sum();
+            let want = if j == l { 1.0 } else { 0.0 };
+            assert!((dot - want).abs() < 1e-13, "V^T V at ({j}, {l}) = {dot}");
+        }
+        for i in 0..n {
+            let av: f64 = (0..n).map(|k| a[i * n + k] * v[k * n + j]).sum();
+            assert!(
+                (av - vals[j] * v[i * n + j]).abs() < 1e-13 * scale,
+                "A v != lambda v, j = {j}"
+            );
+        }
+    }
+}
+
+/// The `(1, -2, 1)` operator's eigenvectors are `sin(m k pi / (n+1))`, up to sign and scale.
+#[test]
+fn the_second_difference_eigenvectors_are_the_discrete_sines() {
+    let n = 30;
+    let a = build(n, |i, j| match i.abs_diff(j) {
+        0 => -2.0,
+        1 => 1.0,
+        _ => 0.0,
+    });
+    let (vals, v) = symmetric_eigen(&a, n).unwrap();
+    let pi = std::f64::consts::PI;
+    for (j, &lam) in vals.iter().enumerate() {
+        // ascending: the most negative eigenvalue is the highest mode, m = n - j
+        let m = (n - j) as f64;
+        let want = -4.0 * (m * pi / (2.0 * (n as f64 + 1.0))).sin().powi(2);
+        assert!((lam - want).abs() < 1e-13, "eigenvalue {j}");
+        let s: Vec<f64> = (0..n)
+            .map(|k| (m * (k as f64 + 1.0) * pi / (n as f64 + 1.0)).sin())
+            .collect();
+        let ns = s.iter().map(|x| x * x).sum::<f64>().sqrt();
+        let cos: f64 = (0..n).map(|k| v[k * n + j] * s[k] / ns).sum();
+        assert!(
+            (cos.abs() - 1.0).abs() < 1e-12,
+            "mode {m}: |cos| = {}",
+            cos.abs()
+        );
+    }
+}
+
+/// A repeated eigenvalue gets an orthonormal basis of its WHOLE eigenspace, not two copies of one
+/// vector — which is what a Rayleigh-Ritz step over a degenerate pair depends on.
+#[test]
+fn a_repeated_eigenvalue_gets_an_orthonormal_basis_of_its_eigenspace() {
+    let n = 6;
+    let d = [3.0, 1.0, 3.0, 2.0, 3.0, 5.0];
+    // rotate diag(d) by a fixed orthogonal matrix so the eigenspace is not coordinate-aligned
+    let q = {
+        let (vals, vecs) = symmetric_eigen(&scrambled(n), n).unwrap();
+        let _ = vals;
+        vecs
+    };
+    let a = build(n, |i, j| {
+        (0..n).map(|k| q[i * n + k] * d[k] * q[j * n + k]).sum()
+    });
+    let (vals, v) = symmetric_eigen(&a, n).unwrap();
+    assert!(max_abs_diff(&vals, &[1.0, 2.0, 3.0, 3.0, 3.0, 5.0]) < 1e-13);
+    for j in 2..5 {
+        for l in 2..5 {
+            let dot: f64 = (0..n).map(|i| v[i * n + j] * v[i * n + l]).sum();
+            assert!((dot - if j == l { 1.0 } else { 0.0 }).abs() < 1e-13);
+        }
+    }
+}
+
+#[test]
+fn the_vector_path_refuses_a_ragged_matrix_and_accepts_an_empty_one() {
+    assert_eq!(
+        symmetric_eigen(&[1.0, 2.0, 3.0], 2).unwrap_err(),
+        EigError::BadShape
+    );
+    let (vals, vecs) = symmetric_eigen(&[], 0).unwrap();
+    assert!(vals.is_empty() && vecs.is_empty());
 }

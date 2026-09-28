@@ -41,10 +41,13 @@
 //!
 //! The reduction is Householder's, in the EISPACK `tred2`/`tql1` arrangement that Numerical
 //! Recipes §11.2-11.3 also uses: reduce to tridiagonal from the last row upward, then run QL with
-//! Wilkinson shifts on the tridiagonal, deflating from the bottom. Eigenvectors are not
-//! accumulated — nothing here needs them, and leaving them out removes the whole back-transform.
-//! The arithmetic is ours to order (no NumPy twin), so it is written in the plain left-to-right
-//! way this crate uses everywhere a reduction is not transcribed.
+//! Wilkinson shifts on the tridiagonal, deflating from the bottom. [`symmetric_eigenvalues`] does
+//! not accumulate eigenvectors; [`symmetric_eigen`] does (EISPACK `tred2`/`tql2`), for the
+//! Rayleigh-Ritz step of [`crate::eigs`]. The vector bookkeeping only writes the upper triangle
+//! and rotates a separate matrix, so the eigenvalues the two routines return are the SAME doubles
+//! — `tests/eig.rs` asserts that, since it is what lets the vector path inherit the value path's
+//! bars. The arithmetic is ours to order (no NumPy twin), so it is written in the plain
+//! left-to-right way this crate uses everywhere a reduction is not transcribed.
 
 /// Why an eigenvalue computation was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,8 +95,8 @@ pub fn symmetric_eigenvalues(a: &[f64], n: usize) -> Result<Vec<f64>, EigError> 
         return Ok(Vec::new());
     }
     let mut m = a.to_vec();
-    let (mut d, mut e) = tridiagonalize(&mut m, n);
-    ql(&mut d, &mut e, n)?;
+    let (mut d, mut e) = tridiagonalize(&mut m, n, false);
+    ql(&mut d, &mut e, n, None)?;
     d.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
     Ok(d)
 }
@@ -114,12 +117,45 @@ pub fn symmetric_max_eigenvalue(a: &[f64], n: usize) -> Result<f64, EigError> {
     Ok(values[n - 1])
 }
 
+/// Eigenvalues and eigenvectors of a real symmetric matrix, eigenvalues ascending.
+///
+/// Returns `(values, vectors)` with `vectors` row-major `n * n` and eigenvector `j` in COLUMN `j`,
+/// orthonormal. Each vector's sign is whatever the QL rotations leave, which is arbitrary; so is
+/// the basis inside a repeated eigenvalue. A caller that ships a vector has to be invariant to
+/// both (retirement plan §23.11).
+///
+/// # Errors
+/// As [`symmetric_eigenvalues`].
+pub fn symmetric_eigen(a: &[f64], n: usize) -> Result<(Vec<f64>, Vec<f64>), EigError> {
+    if a.len() != n * n {
+        return Err(EigError::BadShape);
+    }
+    if n == 0 {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let mut z = a.to_vec();
+    let (mut d, mut e) = tridiagonalize(&mut z, n, true);
+    ql(&mut d, &mut e, n, Some(&mut z))?;
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&x, &y| d[x].partial_cmp(&d[y]).unwrap_or(std::cmp::Ordering::Equal));
+    let values: Vec<f64> = order.iter().map(|&j| d[j]).collect();
+    let mut vectors = vec![0.0; n * n];
+    for (jn, &jo) in order.iter().enumerate() {
+        for i in 0..n {
+            vectors[i * n + jn] = z[i * n + jo];
+        }
+    }
+    Ok((values, vectors))
+}
+
 /// Householder reduction to tridiagonal form, in place; returns `(diagonal, subdiagonal)`.
 ///
 /// `e[0]` is unused and returned as zero, which is the arrangement the QL step below expects.
-/// Eigenvectors are not accumulated, so the transformations are applied to the trailing submatrix
-/// and then discarded.
-fn tridiagonalize(a: &mut [f64], n: usize) -> (Vec<f64>, Vec<f64>) {
+/// With `vectors` false the transformations are applied to the trailing submatrix and then
+/// discarded. With `vectors` true (`tred2`) each Householder vector is also kept in the upper
+/// triangle, and `a` comes back holding the accumulated orthogonal transform — the starting
+/// point the QL rotations are applied to.
+fn tridiagonalize(a: &mut [f64], n: usize, vectors: bool) -> (Vec<f64>, Vec<f64>) {
     let mut d = vec![0.0; n];
     let mut e = vec![0.0; n];
     let at = |i: usize, j: usize| i * n + j;
@@ -147,6 +183,10 @@ fn tridiagonalize(a: &mut [f64], n: usize) -> (Vec<f64>, Vec<f64>) {
                 a[at(i, l)] = f - g;
                 f = 0.0;
                 for j in 0..=l {
+                    if vectors {
+                        // The upper triangle: never read by the reduction, which reads the lower.
+                        a[at(j, i)] = a[at(i, j)] / h;
+                    }
                     let mut g = 0.0;
                     for k in 0..=j {
                         g += a[at(j, k)] * a[at(i, k)];
@@ -174,8 +214,33 @@ fn tridiagonalize(a: &mut [f64], n: usize) -> (Vec<f64>, Vec<f64>) {
     }
 
     e[0] = 0.0;
+    if !vectors {
+        for i in 0..n {
+            d[i] = a[at(i, i)];
+        }
+        return (d, e);
+    }
+    // Accumulate the transform. `d[i]` still holds that step's `h`, and a zero `h` means the step
+    // reflected nothing, so there is nothing to apply.
+    d[0] = 0.0;
     for i in 0..n {
+        if d[i] != 0.0 {
+            for j in 0..i {
+                let mut g = 0.0;
+                for k in 0..i {
+                    g += a[at(i, k)] * a[at(k, j)];
+                }
+                for k in 0..i {
+                    a[at(k, j)] -= g * a[at(k, i)];
+                }
+            }
+        }
         d[i] = a[at(i, i)];
+        a[at(i, i)] = 1.0;
+        for j in 0..i {
+            a[at(j, i)] = 0.0;
+            a[at(i, j)] = 0.0;
+        }
     }
     (d, e)
 }
@@ -204,10 +269,12 @@ fn sign(a: f64, b: f64) -> f64 {
     }
 }
 
-/// QL with implicit Wilkinson shifts on the tridiagonal `(d, e)`, eigenvalues only.
+/// QL with implicit Wilkinson shifts on the tridiagonal `(d, e)`.
 ///
-/// `d` comes back holding the eigenvalues in no particular order; the caller sorts.
-fn ql(d: &mut [f64], e: &mut [f64], n: usize) -> Result<(), EigError> {
+/// `d` comes back holding the eigenvalues in no particular order; the caller sorts. When `z` is
+/// given (row-major `n * n`), every rotation is applied to its columns as well (`tql2`); the
+/// rotations never read `z` into `d` or `e`, so the eigenvalues are the same with or without it.
+fn ql(d: &mut [f64], e: &mut [f64], n: usize, mut z: Option<&mut [f64]>) -> Result<(), EigError> {
     if n == 1 {
         return Ok(());
     }
@@ -264,6 +331,13 @@ fn ql(d: &mut [f64], e: &mut [f64], n: usize) -> Result<(), EigError> {
                 p = s * r;
                 d[i + 1] = g + p;
                 g = c * r - b;
+                if let Some(z) = z.as_deref_mut() {
+                    for k in 0..n {
+                        let f = z[k * n + i + 1];
+                        z[k * n + i + 1] = s * z[k * n + i] + c * f;
+                        z[k * n + i] = c * z[k * n + i] - s * f;
+                    }
+                }
             }
             if underflowed {
                 continue;

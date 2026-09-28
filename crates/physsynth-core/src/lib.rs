@@ -98,6 +98,7 @@ pub mod collision;
 pub mod connection;
 pub mod dense;
 pub mod eig;
+pub mod eigs;
 pub mod engine;
 pub mod exciter;
 pub mod fmt;
