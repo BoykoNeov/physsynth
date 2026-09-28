@@ -17,6 +17,16 @@
 //! - Python's `NaN`, which its server could not serialize and this crate ships as `null`, is
 //!   `{"$nan": 0}`.
 //!
+//! # Two modes, because exactness is a claim about the platform
+//!
+//! The recording platform is `x86_64-pc-windows-msvc`. There, and in the `frozen-windows` CI job,
+//! every comparison above runs. Everywhere else — the Linux CI job — only what cannot pass through
+//! a transcendental is compared: keys, types, lengths, ints, strings and bools. Float values,
+//! hashes and samples are skipped. Measured 2026-09-28: a GitHub Windows runner reproduced all 588
+//! cases to the bit; the Linux runner differed in 158, all of them floats except one, and the
+//! parametric scene's own growth carried a last-bit difference to ~1e-6 in its audio. No tolerance
+//! that admits that would assert anything anywhere else, so none is attempted.
+//!
 //! What this catches: a transcription error, a wrong branch, a regression. What it cannot catch is
 //! an error the Python made too — the per-scene tests beside this file are for that.
 
@@ -183,8 +193,23 @@ fn num_bytes(v: &Value) -> Option<[u8; 9]> {
     Some(out)
 }
 
+/// Exact comparison is a claim about the platform's math library as much as about this crate:
+/// `sin`, `exp` and `ln` come from the C runtime, and a last-bit difference in one of them moves the
+/// last bits of every step downstream. The payloads were recorded on `x86_64-pc-windows-msvc`, and a
+/// GitHub Windows runner reproduced all 588 of them to the bit; the Linux runner differed in 158,
+/// every difference but one a float (retirement plan §23.19). So the exact claim is made where it
+/// holds, and every other platform compares structure only.
+const EXACT: bool = cfg!(all(
+    target_os = "windows",
+    target_env = "msvc",
+    target_arch = "x86_64"
+));
+
 #[derive(Default)]
 struct Verdict {
+    /// Compare float values, hashes and samples (the recording platform), or only what does not
+    /// pass through a transcendental: keys, types, lengths, strings, bools, ints.
+    exact: bool,
     /// Differences inside a stated tolerance (or a NaN shipped as the null it has to be).
     soft: Vec<String>,
     hard: Vec<String>,
@@ -196,13 +221,34 @@ struct Verdict {
     n_buf: usize,
     /// Samples or block extremes of a classed buffer or list, outside the class's bar.
     n_sampled: usize,
+    /// Everything else — keys, lengths, types, ints, strings, bools: a change of STRUCTURE, never
+    /// a last bit. Listed first in a failure, because it is the one that matters.
+    other: Vec<String>,
+}
+
+impl Verdict {
+    fn new() -> Self {
+        Self {
+            exact: EXACT,
+            ..Self::default()
+        }
+    }
+
+    /// A structural difference: recorded in `hard` and, for the failure message, in `other`.
+    fn structural(&mut self, msg: String) {
+        self.other.push(msg.clone());
+        self.hard.push(msg);
+    }
 }
 
 /// The samples and block extremes of a classed buffer or list, against the got values.
 fn cmp_sampled(want: &Value, got: &[f64], path: &str, tol: Tol, v: &mut Verdict) {
     let n = want["n"].as_u64().unwrap() as usize;
     if got.len() != n {
-        v.hard.push(format!("{path}: length {n} vs {}", got.len()));
+        v.structural(format!("{path}: length {n} vs {}", got.len()));
+        return;
+    }
+    if !v.exact {
         return;
     }
     let (maxes, mins) = (
@@ -271,15 +317,13 @@ fn cmp(want: &Value, got: &Value, path: &str, model: &str, v: &mut Verdict) {
                 if got.is_null() {
                     v.soft.push(format!("{path}: NaN shipped as null"));
                 } else {
-                    v.hard
-                        .push(format!("{path}: NaN in the reference, {got} here"));
+                    v.structural(format!("{path}: NaN in the reference, {got} here"));
                 }
                 return;
             }
             "$buf" => {
                 let Some(s) = got.as_str() else {
-                    v.hard
-                        .push(format!("{path}: a buffer in the reference, {got} here"));
+                    v.structural(format!("{path}: a buffer in the reference, {got} here"));
                     return;
                 };
                 let raw = decode_b64(s);
@@ -287,7 +331,9 @@ fn cmp(want: &Value, got: &Value, path: &str, model: &str, v: &mut Verdict) {
                     body[0].as_u64().unwrap() as usize,
                     body[1].as_str().unwrap(),
                 );
-                if raw.len() != n || fnv(raw.iter().copied()) != h {
+                if raw.len() != n {
+                    v.structural(format!("{path}: {n} bytes vs {}", raw.len()));
+                } else if v.exact && fnv(raw.iter().copied()) != h {
                     v.n_buf += 1;
                     v.hard.push(format!(
                         "{path}: buffer differs ({n} bytes vs {})",
@@ -298,12 +344,11 @@ fn cmp(want: &Value, got: &Value, path: &str, model: &str, v: &mut Verdict) {
             }
             "$audio" => {
                 let Some(s) = got.as_str() else {
-                    v.hard
-                        .push(format!("{path}: audio in the reference, {got} here"));
+                    v.structural(format!("{path}: audio in the reference, {got} here"));
                     return;
                 };
                 let raw = decode_b64(s);
-                if fnv(raw.iter().copied()) == body["fnv"].as_str().unwrap() {
+                if v.exact && fnv(raw.iter().copied()) == body["fnv"].as_str().unwrap() {
                     return;
                 }
                 let xs: Vec<f64> = raw
@@ -316,8 +361,7 @@ fn cmp(want: &Value, got: &Value, path: &str, model: &str, v: &mut Verdict) {
             }
             "$nums" | "$numsc" => {
                 let Some(list) = got.as_array() else {
-                    v.hard
-                        .push(format!("{path}: a list in the reference, {got} here"));
+                    v.structural(format!("{path}: a list in the reference, {got} here"));
                     return;
                 };
                 let bytes: Option<Vec<u8>> = list
@@ -336,7 +380,11 @@ fn cmp(want: &Value, got: &Value, path: &str, model: &str, v: &mut Verdict) {
                         body["fnv"].as_str().unwrap(),
                     )
                 };
-                if list.len() == n && bytes.as_deref().map(fnv_of) == Some(h.to_owned()) {
+                if list.len() != n {
+                    v.structural(format!("{path}: {n} elements vs {}", list.len()));
+                    return;
+                }
+                if !v.exact || bytes.as_deref().map(fnv_of) == Some(h.to_owned()) {
                     return;
                 }
                 if tag == "$nums" {
@@ -356,7 +404,7 @@ fn cmp(want: &Value, got: &Value, path: &str, model: &str, v: &mut Verdict) {
                     })
                     .collect();
                 let Some(xs) = xs else {
-                    v.hard.push(format!("{path}: a non-float element"));
+                    v.structural(format!("{path}: a non-float element"));
                     return;
                 };
                 let tol = classify(model, &format!("{path}[0]")).expect("a $numsc list is classed");
@@ -371,7 +419,7 @@ fn cmp(want: &Value, got: &Value, path: &str, model: &str, v: &mut Verdict) {
             let (ka, kb): (BTreeSet<&String>, BTreeSet<&String>) =
                 (a.keys().collect(), b.keys().collect());
             if ka != kb {
-                v.hard.push(format!(
+                v.structural(format!(
                     "{path}: keys only in the reference {:?}, only here {:?}",
                     ka.difference(&kb).collect::<Vec<_>>(),
                     kb.difference(&ka).collect::<Vec<_>>()
@@ -383,8 +431,7 @@ fn cmp(want: &Value, got: &Value, path: &str, model: &str, v: &mut Verdict) {
         }
         (Value::Array(a), Value::Array(b)) => {
             if a.len() != b.len() {
-                v.hard
-                    .push(format!("{path}: length {} vs {}", a.len(), b.len()));
+                v.structural(format!("{path}: length {} vs {}", a.len(), b.len()));
                 return;
             }
             for (i, (x, y)) in a.iter().zip(b).enumerate() {
@@ -393,11 +440,18 @@ fn cmp(want: &Value, got: &Value, path: &str, model: &str, v: &mut Verdict) {
         }
         (Value::Number(a), Value::Number(b)) => {
             if a.is_f64() != b.is_f64() {
-                v.hard.push(format!("{path}: int-vs-float {a} vs {b}"));
+                v.structural(format!("{path}: int-vs-float {a} vs {b}"));
                 return;
             }
             // `Number`'s `==` is `f64`'s for floats, so `-0.0 == 0.0` here as in the reference
             if a == b {
+                return;
+            }
+            if !a.is_f64() {
+                v.structural(format!("{path}: int {a} vs {b}"));
+                return;
+            }
+            if !v.exact {
                 return;
             }
             let (x, y) = (a.as_f64().unwrap(), b.as_f64().unwrap());
@@ -417,7 +471,7 @@ fn cmp(want: &Value, got: &Value, path: &str, model: &str, v: &mut Verdict) {
         }
         _ => {
             if want != got {
-                v.hard.push(format!("{path}: {want} vs {got}"));
+                v.structural(format!("{path}: {want} vs {got}"));
             }
         }
     }
@@ -461,20 +515,26 @@ fn check(corpus: &str) {
         let req = &case["request"];
         let model = physsynth_viewer::model_of(req);
         let got = simulate_to_payload(req);
-        let mut v = Verdict::default();
+        let mut v = Verdict::new();
         cmp(&case["expect"], &got, "", &model, &mut v);
         if !v.hard.is_empty() {
-            let shown: Vec<&String> = v.hard.iter().take(8).collect();
+            // structure first: it is never a last bit
+            let shown: Vec<&String> = v
+                .other
+                .iter()
+                .chain(v.hard.iter().filter(|h| !v.other.contains(h)))
+                .take(8)
+                .collect();
             failing.push(format!(
-                "{key}: {} differences ({} scalar floats, worst relative {:.1e}; {} hashed \
-                 lists; {} buffers; {} sampled; {} other), first {shown:?}",
+                "{key}: {} differences ({} structural; {} scalar floats, worst relative {:.1e}; \
+                 {} hashed lists; {} buffers; {} sampled), first {shown:?}",
                 v.hard.len(),
+                v.other.len(),
                 v.n_float,
                 v.worst_rel,
                 v.n_list,
                 v.n_buf,
-                v.n_sampled,
-                v.hard.len() - v.n_float - v.n_list - v.n_buf - v.n_sampled
+                v.n_sampled
             ));
         } else if v.soft.is_empty() {
             exact += 1;
@@ -598,40 +658,79 @@ fn cheap_case() -> (Value, Value, String) {
     (case["expect"].clone(), simulate_to_payload(&req), model)
 }
 
-fn hard(want: &Value, got: &Value, model: &str) -> usize {
-    let mut v = Verdict::default();
+fn hard(want: &Value, got: &Value, model: &str, exact: bool) -> usize {
+    let mut v = Verdict {
+        exact,
+        ..Verdict::default()
+    };
     cmp(want, got, "", model, &mut v);
     v.hard.len()
 }
 
+/// A change of STRUCTURE fails in both modes, on every platform.
 #[test]
-fn the_comparator_passes_the_real_payload_and_fails_each_kind_of_corruption() {
+fn the_comparator_fails_each_structural_corruption_in_both_modes() {
     let (want, got, model) = cheap_case();
-    assert_eq!(hard(&want, &got, &model), 0);
+    assert_eq!(hard(&want, &got, &model, false), 0);
+    for exact in [false, true] {
+        // int -> float of the same value
+        let mut g = got.clone();
+        let n = g["frames"]["n_frames"].as_i64().unwrap();
+        g["frames"]["n_frames"] = serde_json::json!(n as f64);
+        assert_eq!(hard(&want, &g, &model, exact), 1);
+
+        // an int moved by one
+        let mut g = got.clone();
+        g["frames"]["n_frames"] = serde_json::json!(n + 1);
+        assert_eq!(hard(&want, &g, &model, exact), 1);
+
+        // a key added
+        let mut g = got.clone();
+        g["meta"]["extra"] = Value::Bool(true);
+        assert_eq!(hard(&want, &g, &model, exact), 1);
+
+        // a buffer one float shorter
+        let mut g = got.clone();
+        let raw = decode_b64(g["frames"]["b64"].as_str().unwrap());
+        g["frames"]["b64"] = Value::String(encode_b64(&raw[..raw.len() - 4]));
+        assert_eq!(hard(&want, &g, &model, exact), 1);
+
+        // a string changed
+        let mut g = got.clone();
+        g["model"] = Value::String("not-a-model".into());
+        assert_eq!(hard(&want, &g, &model, exact), 1);
+    }
+}
+
+/// A change of VALUE fails in exact mode. The baseline must be exact first, which is a claim about
+/// the recording platform — elsewhere the payload itself may differ in the last bit, so this half
+/// runs where [`EXACT`] holds (the Windows CI job) and nowhere else.
+#[test]
+fn the_comparator_fails_each_value_corruption_in_exact_mode() {
+    if !EXACT {
+        eprintln!("not the recording platform: the exact half runs in the Windows CI job");
+        return;
+    }
+    let (want, got, model) = cheap_case();
+    assert_eq!(hard(&want, &got, &model, true), 0);
 
     // one scalar, one ulp
     let mut g = got.clone();
     let x = g["fs_sim"].as_f64().unwrap();
     g["fs_sim"] = serde_json::json!(f64::from_bits(x.to_bits() + 1));
-    assert_eq!(hard(&want, &g, &model), 1);
-
-    // int -> float of the same value
-    let mut g = got.clone();
-    let n = g["frames"]["n_frames"].as_i64().unwrap();
-    g["frames"]["n_frames"] = serde_json::json!(n as f64);
-    assert_eq!(hard(&want, &g, &model), 1);
+    assert_eq!(hard(&want, &g, &model, true), 1);
+    assert_eq!(
+        hard(&want, &g, &model, false),
+        0,
+        "structure mode skips float values"
+    );
 
     // one byte of a buffer
     let mut g = got.clone();
     let s = g["frames"]["b64"].as_str().unwrap().to_owned();
     let flipped = if s.starts_with('A') { "B" } else { "A" };
     g["frames"]["b64"] = Value::String(format!("{flipped}{}", &s[1..]));
-    assert_eq!(hard(&want, &g, &model), 1);
-
-    // a key added
-    let mut g = got.clone();
-    g["meta"]["extra"] = Value::Bool(true);
-    assert_eq!(hard(&want, &g, &model), 1);
+    assert_eq!(hard(&want, &g, &model, true), 1);
 
     // one sample of the audio, far outside its peak-scaled bar
     let mut g = got.clone();
@@ -644,7 +743,7 @@ fn the_comparator_passes_the_real_payload_and_fails_each_kind_of_corruption() {
     xs[i] += 0.01;
     let bytes: Vec<u8> = xs.iter().flat_map(|x| x.to_le_bytes()).collect();
     g["audio"]["b64"] = Value::String(encode_b64(&bytes));
-    assert!(hard(&want, &g, &model) >= 1);
+    assert!(hard(&want, &g, &model, true) >= 1);
 }
 
 /// Standard base64 with padding — only for the corruption test above.

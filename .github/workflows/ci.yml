@@ -194,20 +194,6 @@ jobs:
           done
           cargo test --workspace --lib $targets
 
-  # PROBE (side branch only): does a Windows runner reproduce the viewer's frozen Python payloads
-  # exactly, as the machine that recorded them does? Linux measured 158 of 588 cases apart.
-  frozen-windows:
-    name: Viewer freeze on Windows (probe)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.98.0
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target"
-      - name: The frozen viewer payloads
-        run: cargo test --release -p physsynth-viewer --test frozen
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -359,3 +345,23 @@ jobs:
           done
           echo "shards sum to $sum; whole suite collects $total"
           test "$sum" -eq "$total"
+
+  # The web viewer's payloads, against the Python viewer's own outputs frozen before it was deleted
+  # (`crates/physsynth-viewer/tests/frozen.rs`, retirement plan §23.19). EXACT agreement is a claim
+  # about the platform's math library as well as the code — `sin`, `exp` and `ln` come from the C
+  # runtime — and the payloads were recorded on x86_64-pc-windows-msvc. Measured 2026-09-28: a
+  # windows-latest runner reproduced all 588 to the bit, the Linux runner differed in 158 (last-bit
+  # drift, amplified to ~1e-6 by the parametric scene's own growth). So the exact comparison runs
+  # HERE; the Linux `rust` job runs the same file in structure-only mode (keys, types, lengths,
+  # ints, strings), which holds on any platform.
+  frozen-windows:
+    name: Viewer freeze, exact (the recording platform)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - name: The frozen viewer payloads, exactly
+        run: cargo test --release -p physsynth-viewer --test frozen
