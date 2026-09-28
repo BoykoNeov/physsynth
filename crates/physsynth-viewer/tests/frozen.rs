@@ -10,7 +10,9 @@
 //! - every key, string, bool, null, and int-versus-float type is kept as it was;
 //! - every number is kept, except inside a numeric list longer than 16, which becomes its length
 //!   and an FNV-1a hash of each element's type tag and bits;
-//! - a base64 buffer becomes its byte length and an FNV-1a hash of its bytes;
+//! - a base64 buffer becomes its byte length and an FNV-1a hash of its bytes — every `….b64`, and
+//!   the geometric string's `orbit.u` / `orbit.w`, which are buffers under other names (a scan of
+//!   every recorded payload for long base64 strings found those two and no others);
 //! - a buffer or long list under a tolerance class keeps its hash (so an exact match is still
 //!   recognised as exact), 64 samples plus its argmax, and the max and min of 64 blocks. The class's
 //!   bar bounds those soundly: an extreme cannot move further than the worst element does.
