@@ -1,11 +1,11 @@
 ---
 name: rust-phase1-state
-description: "Phase 1 of the Rust migration is BUILT (2026-08-26) — the core's dependency list stays EMPTY (hand-rolled CSR), the assembled matrices come out BIT-IDENTICAL to SciPy including nnz/indices, and the one flag now swings five still-Python models at once"
+description: "Rust migration Phase 1 (operators) — hand-rolled CSR keeps the dep list empty, the matrices come out bit-identical, and the swap now swings FIVE still-Python models at once"
 metadata: 
   node_type: memory
   type: project
   originSessionId: badff900-5024-422d-8f19-15b06875c6a8
-  modified: 2026-08-26T13:32:29.538Z
+  modified: 2026-08-26T13:19:11.833Z
 ---
 
 Phase 1 of the Rust migration is **built** (2026-08-26): all of `physsynth/core/operators.py` —
@@ -57,3 +57,12 @@ is relative to what the same operator does to a field that genuinely bends.
 none of `delta_xxxx` or the three builders. Naming it as the phase's gate would have been green and
 meaningless — the same failure Phase 0's §5 correction records. Generalised: **a module's tests are
 not in the file named after it, and neither are its clients'.** Look them up every phase.
+
+**Superseded in part, 2026-08-27 (see [[rust-phase3-strings-state]]).** This phase decided that the
+Rust `Csr` stays **canonical** while SciPy's is not, and gave "nothing downstream reads `.data` or
+`.indices`" as half the reason. That half is now **false**: `string_stiff` multiplies by `L` in its
+inner loop, and a CSR matvec sums a row in stored order, so SciPy's *descending* `biharmonic_matrix`
+gives a different sum in 2000/2000 vectors. The decision survived anyway, on its other reason — but
+the parity test's "canonicalise the SciPy side before comparing" is no longer a comparison
+convenience, it is the actual behaviour: `physsynth/core/portable.py` sorts the four theta-scheme
+strings' operators for real. The plate family still has the old behaviour and hits this at Phase 5.

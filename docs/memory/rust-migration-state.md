@@ -5,11 +5,13 @@ metadata:
   node_type: memory
   type: project
   originSessionId: d50bab7a-4456-48ae-8486-af5a6f9535f3
-  modified: 2026-08-26T11:54:54.643Z
+  modified: 2026-08-31T19:56:14.151Z
 ---
 
 **2026-08-26, the human's call: Python goes — all of it.** Core, `analysis/`, the viewer backend
-**and the 26k-line test suite**. Target **Rust**. New physics is written natively as soon as the
+**and the 26k-line test suite**. Target **Rust**. **AMENDED 2026-09-03, also the human's call: the
+viewer backend STAYS Python** and talks to Rust through the binding — see [[viewer-stays-python]].
+Everything else on that list stands. New physics is written natively as soon as the
 harness is proven (end of Phase 2), not derived in Python first. Plan:
 `docs/dev/rust-migration-plan.md`. This **supersedes non-negotiable #3** in `CLAUDE.md` (struck
 through in place, not deleted) and two clauses of `docs/dev/portability-contract.md`.
@@ -37,12 +39,24 @@ scipy's `splu` **is SuperLU**, linking SuperLU itself would collapse group D's r
 unchecked), which is why the 254-line `beam` goes first, as it did the first time
 ([[beam-state]] de-risked [[plate-state]]). Files can appear in **two** groups.
 
-**Two traps found by review, both after the plan read as finished.** `bow` is **not** a
-transcription-only model — it runs a safeguarded Newton iteration and **delegates a banded solve to
+**Two traps found by review, both after the plan read as finished.** (The second is now *reduced*
+rather than removed by the 2026-09-03 amendment: the viewer stays Python, so nothing has to be
+translated — but it still imports `physsynth` 21 times and still gates every deletion.) `bow` is
+**not** a transcription-only model — it runs a safeguarded Newton iteration and **delegates a banded solve to
 the string it bows** ([[bow-state]]). And the **viewer is the binding's second consumer**:
 `web/serialize.py` imports `physsynth` 21 times, so deleting a Python model without re-pointing it
 turns 403 web tests red for a reason unrelated to the port — the binding is a **live dependency for
 the whole migration**, not test scaffolding.
+
+**2026-08-31 status: `physsynth/core/` is FINISHED** — every model, operator, solver, room, port,
+wrapper and bridge has a Rust implementation behind `PHYSSYNTH_RS` (plan §9-§34). The last file was
+`connection.py` ([[rust-phase5-connection-state]]).
+
+**2026-09-03 status: `analysis/` is all but finished too.** `spectrum` ([[rust-phase7-spectrum-state]]),
+then `modal` + `damping` + `dispersion` + `duffing` + the Bessel/elliptic functions and the piston
+helper ([[rust-phase7-oracles-state]]). **Only `rotating_wave.py` is left.** After it: the test-suite
+port, the viewer's *import audit* (not its port), and the deletions — the last a batch about scope
+rather than arithmetic, since §1.2 says a Python model dies when its clients do.
 
 **Sizes that drive the schedule:** core is 13,413 lines but **43 % is docstrings** (~7,710 real) ·
 tests are **3.4× the core's code volume and ARE the migration** · ~84 % of call sites bind

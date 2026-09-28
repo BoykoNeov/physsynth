@@ -8,9 +8,16 @@ metadata:
   modified: 2026-08-17T16:38:19.541Z
 ---
 
-**1844 tests** as of 2026-08-26 (1808 at the 2026-08-17 measurement; model #5g's outline batch
-added 22). The **5027.9 core-seconds** figure is still the 2026-08-17 CI measurement and has NOT
-been re-measured — a local run is not a substitute for it and must not overwrite it. For scale only,
+**SUPERSEDED IN ITS NUMBERS by the deletion phase, 2026-09-03** — see
+[[rust-deletion-phase-state]]. The suite now collects **2,739** unflagged (was 4,566 before the
+first deletion, 1844 as counted here) and runs in **102 s** locally against 480 s, because what it
+used to spend its time on was stepping Python models. Eight deletions removed ~1,827 collected
+tests and **not one physics bar**. The flagged run (three shards, parity excluded) is 2,088. The *structure* below — bulk-bound, three computed shards, the two
+guards, xdist groups, and every "still true" item — stands unchanged; only the arithmetic moved.
+
+Historical, as measured: **1844 tests** as of 2026-08-26 (1808 at the 2026-08-17 measurement; model
+#5g's outline batch added 22). The **5027.9 core-seconds** figure is the 2026-08-17 CI measurement
+and has NOT been re-measured — a local run is not a substitute for it and must not overwrite it. For scale only,
 2026-08-26 local: 618 s wall on `-n 6`, which is a *different machine and a different worker count*
 and therefore incomparable to the CI number by this file's own rule below.
 The gate is now **three concurrent jobs**, ~5-8 min wall depending on the runners, down from 15-21.

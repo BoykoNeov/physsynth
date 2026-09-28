@@ -61,3 +61,16 @@ spell a coefficient the way the operator is *built*, not the way it is written. 
 84 cases.
 
 **Surfaced in the viewer the same day** — [[guitar-plate-viewer-state]] (batch 20). It answered this model's open question (the waist **reorders**, and the detector is a mirror parity that reads exactly ±1) and found two things this plan did not: the viewer's *display* decimation can draw the outline as **two disconnected guitars** while the solver has one plate, and the plate's default strike sits close enough to the centre line that the odd family — the fundamental past the crossing — is barely excited.
+
+**An unexplained CI-only intermittency, 2026-08-27, left instrumented rather than "fixed".**
+`test_the_degenerate_pairs_split_and_the_exact_answer_is_zero` failed **twice** on the GitHub runner
+under `PHYSSYNTH_RS=1` with a *different wrong value each time* — 4.955% then 5.891% against a 2%
+ceiling at N=32 — then **passed** on the next run of the same code. On the development machine it is
+stable at 1.003%, and with the flag on and off the mask hashes identically (793 live nodes, `K` nnz
+9757, `max abs(K - K.T)` exactly 0.0). Ruled out and none explained it: ARPACK `v0` (6 trials),
+`sigma` over −1e-8…−1.0, 1e-12 relative nudges of `K`, test pollution (CI's exact 16-file list
+passes locally), and the two `disk_mask` paths being the same exact arithmetic. The same file passes
+*without* the flag on the same run's shard. **Do not touch the 0.02/0.012/0.006 ceilings** — they are
+physics bars and the human's call. The bar now prints a fingerprint on failure (live-node count,
+mask sha, `K` nnz + asymmetry + index sha, the first eight eigenvalues, the flag) so the next
+occurrence separates "the geometry differed" from "the eigensolve did" without costing a run.
