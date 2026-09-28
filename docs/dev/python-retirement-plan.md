@@ -452,8 +452,8 @@ and the Python server stays the live viewer until the last of them lands. **Batc
 (§23.8): the tension string, both regimes, and the bow. **Batch D3 is done** (§23.9): sympathetic,
 geometric, reed, radbody and airload. **Batch D4 is done** (§23.10): body, jawari, juari and
 fret, plus an arbitrary-length `rfft` in the analysis crate. **D5 is under way** (§23.11-§23.13): a
-native eigensolver, then membrane, mallet, all three plates and the bore — nineteen keys native,
-three to go.
+native eigensolver, then membrane, mallet, all three plates, the bore and the von Kármán plate —
+twenty keys native, two to go.
 
 ---
 
@@ -2941,3 +2941,26 @@ test pins the message.
 
 **Tests carried:** `tests/bore.rs`, 17 tests: the reference's 16, plus the refusal's format.
 Unoptimized they take 2 s. The whole workspace: 1,141 Rust tests pass.
+
+### 23.15 Batch D5, continued — the von Kármán plate
+
+Twenty of the twenty-two keys are now native. **`vk`** (`crates/physsynth-viewer/src/vk.rs`) is
+the gong (supported) and the cymbal (free). The native `VkParams` carries a complete linear plate
+(`lin`), so the plate scene's marker solve and horizon block serve it unchanged. The run loop is
+hand-written for the convergence record the energy verdict is gated on.
+
+| corpus | requests | identical | within a class | failing |
+|---|---|---|---|---|
+| vk (both boundaries, linear toggle as bool and string, hardest strike, the refusals) | 20 | 19 | 1 | 0 |
+| the browser's own requests (gong, cymbal) | 2 | 2 | 0 | 0 |
+
+**The nonlinear trajectories match to the bit**, including every per-step iteration count behind
+`max_iters` and every fixed-point residual behind `worst_residual`. That is expected, not lucky:
+the reference steps the same native plate through the binding. The one case in a class is the
+fitted decay rate. One spelling mattered: this scene's time axis is `np.arange(n) * k`, not
+`i / fs`, and the two can differ in the last digit, so it is transcribed as the reference wrote it.
+
+**Tests carried:** `tests/vk.rs`, 5 tests (the reference's section; the linear toggle is also sent
+as the string `"false"`), plus two horizon tests the vk scene unblocked: a zero horizon ships
+`null`, and the nonlinear plate is refused while its linear twin is measured. Unoptimized,
+`tests/vk.rs` takes 46 s and stays in both profiles.

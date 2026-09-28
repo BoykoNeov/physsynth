@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-d-state
-description: "Phase D (viewer to Rust) IN PROGRESS — D1-D4 + D5 membrane/mallet/plate/bore done 2026-09-28: crates/physsynth-viewer, 19 of 22 keys; core::eigs solver (symmetry guard, basis cap); next vk, platebody, then D6"
+description: "Phase D (viewer to Rust) IN PROGRESS — D1-D4 + D5 all but platebody done 2026-09-28: crates/physsynth-viewer, 20 of 22 keys; core::eigs solver (symmetry guard, basis cap); next platebody, then D6"
 metadata:
   node_type: memory
   type: project
@@ -15,7 +15,7 @@ the viewer in rust". Scope = plan §5: backend to Rust, `web/static/` JS untouch
 parametric) + bow; D3 (§23.9) sympathetic, geometric, reed (memo dropped), radbody, airload — all
 139 D3 requests + 11 browser requests matched, 149 of the 150 to the bit; D4 (§23.10) body, jawari,
 juari, fret + `physsynth_analysis::spectrum::rfft` (Bluestein, any length) — 73 + 8 browser, 0 failing. `physsynth-core/src/engine.rs` = native `simulate`, `Resonator::step` is FALLIBLE
-(step failure → payload kind `internal`). The other 3 keys are refused with kind `unported`. Python server
+(step failure → payload kind `internal`). The other 2 keys are refused with kind `unported`. Python server
 stays the live viewer until D7.
 
 **How each batch is checked:** `W:\temp\claude\viewer-port\`:
@@ -76,7 +76,7 @@ lambda = 1 is a ratio of two rounding residues (meaningless in the reference too
 is `1.000e+03`, Rust's `1.000e3` — use a local `sci3`.
 
 **Next (§23.7):**
-- D5 rest: vk, platebody;
+- D5 rest: platebody;
 - D6: airbox, vkroom (dense eigh vectors);
 - D7: FREEZE the reference outputs as a native fixture first, then port the headless check, switch
   servers, delete `web/*.py` + `test_web_backend.py`. Only the reed has a cache (`_REED_SWEEP_MEMO`):

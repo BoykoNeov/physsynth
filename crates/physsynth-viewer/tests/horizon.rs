@@ -1,8 +1,7 @@
 //! The resolution-horizon read-out — the viewer half of `docs/dev/resolution-horizon-plan.md`.
 //!
 //! The physics is asserted against the primitives in `physsynth-analysis`; what is asserted here is
-//! that the viewer asks them the right question about the right scene. The membrane's and the
-//! plate's 2-D rows are here; the von Kármán plate's arrive with that scene's builder.
+//! that the viewer asks them the right question about the right scene, 1-D and 2-D.
 
 mod common;
 
@@ -39,6 +38,51 @@ fn plate(extra: Value) -> Value {
     });
     common::merge(&mut p, extra);
     p
+}
+
+/// The reference's `_vk_params`, short.
+fn vk(extra: Value) -> Value {
+    let mut p = json!({
+        "model": "vk", "domain": "supported",
+        "E": 2.0e11, "e": 1.0e-3, "nu": 0.3, "rho": 7800.0,
+        "Lx": 0.15, "Ly": 0.15, "N": 14, "fs": 48000.0, "sigma": 0.0,
+        "nonlinear": true, "w_over_e": 3.0,
+        "pluck_x": 0.5, "pluck_y": 0.5, "pluck_width": 0.28,
+        "pickup_x": 0.47, "pickup_y": 0.53,
+        "audio_duration": 0.12, "animation_window": 0.01, "playback_speed": 0.02,
+    });
+    common::merge(&mut p, extra);
+    p
+}
+
+/// A coarse plate's FUNDAMENTAL is already out of tune, so the honest ceiling is "none": `hz` is
+/// `null` (0.0 would read as a measurement, NaN would be refused on the way out) — and the same
+/// payload shows the other arm as the bound loosens.
+#[test]
+fn a_zero_horizon_ships_null_rather_than_a_number() {
+    let block = horizon(&vk(json!({"nonlinear": false})));
+    let b5 = band(&block, 5.0);
+    assert_eq!(b5["modes"], 0);
+    assert!(b5["hz"].is_null(), "{b5}");
+    assert_eq!(b5["limited_by"], "mode (1, 1)");
+    assert!(f(&b5["limit_cents"]).abs() > 5.0);
+    let b25 = band(&block, 25.0);
+    assert!(
+        b25["modes"].as_u64().unwrap() >= 1 && f(&b25["hz"]) > 0.0,
+        "{b25}"
+    );
+}
+
+/// The FLAG decides, not the model key: the nonlinear plate is refused and its linear twin is a
+/// simply-supported plate with the measured horizon.
+#[test]
+fn the_nonlinear_plate_is_refused_and_its_linear_twin_is_not() {
+    let on = horizon(&vk(json!({"nonlinear": true})));
+    assert_eq!(on["kind"], "none");
+    assert!(on["reason"].as_str().unwrap().contains("nonlinear"));
+    let off = horizon(&vk(json!({"nonlinear": false})));
+    assert_eq!(off["kind"], "prefix");
+    assert_eq!(off["scheme"], "implicit theta-scheme");
 }
 
 /// The models whose builders compute a read-out; with `HORIZON_ABSENT` this partitions the list.
@@ -403,6 +447,7 @@ fn survives_strict_json() {
         rect_membrane(24, json!({})),
         rect_membrane(40, json!({"domain": "circle"})),
         plate(json!({})),
+        vk(json!({"nonlinear": false})),
     ] {
         let payload = ok(&params);
         assert!(!has_nonfinite(&payload));
