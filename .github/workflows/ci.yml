@@ -130,8 +130,9 @@ jobs:
   # `rust-harness` job (plan §35.7), which was the migration's actual success condition. Phase A of
   # the retirement plan (§21) deleted the last Python bodies and the flag with them, so the plain
   # `validate` shards now run exactly what `rust-harness` ran: measured before the deletion, the
-  # flagged suite minus the parity files was 1,920 passed, and after it the unflagged suite runs
-  # the same 1,920 on the same code. One run of the suite, not two identical ones.
+  # flagged suite minus the parity files was 1,920 passed, and after it the unflagged suite is
+  # 1,940 -- the 20 reconciled per file (§21.1: +28 harvested into the binding-surface file, -8
+  # from guards over the deleted machinery). One run of the suite, not two identical ones.
   rust:
     name: Rust core (compile, native bars, binding surface)
     runs-on: ubuntu-latest

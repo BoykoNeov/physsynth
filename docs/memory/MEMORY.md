@@ -58,7 +58,7 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 - [Airbox native bars](rust-airbox-native-bars.md) — the audit read a directory, not the runner
 - [Deletion 10: the last body](rust-deletion-connection-state.md) — a parity file is HARVESTED; a freeze promotes digits
 - [Deletion in halves](rust-deletion-split-guards.md) — a split deletion empties `deleted_bodies`
-- [CI flagged-suite collapse](ci-flagged-suite-collapse.md) — 3 shards (49m → 9m); exclude parity AFTER the split
+- [CI flagged-suite collapse](ci-flagged-suite-collapse.md) — HISTORY: flagged job gone at phase A; filter AFTER a computed split
 - [NumPy libm CPU dispatch](numpy-libm-cpu-dispatch.md) — NumPy's own transcendentals: bit-identity depends on the CI machine
 - [CI runner variance](ci-runner-variance.md) — runners vary ~1.6x; compare within a job
 - [Test suite performance](test-suite-performance.md) — bulk-bound; shards computed from the glob; never pass `-q`

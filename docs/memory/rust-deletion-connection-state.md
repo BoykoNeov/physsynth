@@ -14,7 +14,8 @@ in the project — **23,396 lines gone across ten batches, not one physics bar r
 
 ## The finish line is that the flag stopped mattering
 
-`PHYSSYNTH_RS` still exists and still swaps `operators`, `exciter` and `banded` — but **none of
+(**Superseded 2026-09-28** by [[retirement-phase-a-state]]: the flag and those three swaps are gone.)
+`PHYSSYNTH_RS` still existed and still swapped `operators`, `exciter` and `banded` — but **none of
 those is a resonator**. It now chooses between two spellings of an operator or between two solvers,
 and cannot change which *model* a run exercises. Default and flagged runs differ by three parity
 files and 275 tests, and both are Rust physics end to end.

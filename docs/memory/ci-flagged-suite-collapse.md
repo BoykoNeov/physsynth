@@ -1,12 +1,16 @@
 ---
 name: ci-flagged-suite-collapse
-description: "The CI rust job's 21 per-batch steps became one 3-shard flagged run (49m -> 9m); the parity family is INSIDE the shards so it must be excluded, and excluded AFTER the split"
+description: "HISTORY (superseded 2026-09-28 by phase A: the flagged job and --exclude-parity are GONE) — the rust job's 21 per-batch steps became one 3-shard flagged run (49m -> 9m); parity excluded AFTER the split"
 metadata: 
   node_type: memory
   type: project
   originSessionId: 2d381787-81fe-408c-aa3e-260eac2cbf68
   modified: 2026-09-03T09:41:38.873Z
 ---
+
+**Superseded 2026-09-28** by [[retirement-phase-a-state]]: `PHYSSYNTH_RS` is read by nothing, and the
+`rust-harness` job and `shard_tests.py --exclude-parity` are deleted. Kept as history — the
+"exclude AFTER the split" lesson still applies to any future filter over a computed partition.
 
 Done 2026-09-03 as plan §35.7, first step of the spectrum batch. See
 [[parity-files-run-unflagged]] for why the exclusion exists at all and
