@@ -52,6 +52,7 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 - [Retirement batch 7](rust-retirement-batch7-state.md) — all three bridges native (`BridgeBody`, one generic `StringPlateBridge`); the hole is CLOSED; finding 79
 - [Retirement phase A](retirement-phase-a-state.md) — flag GONE; banded deleted; default suite == old flagged; reconcile counts via a worktree
 - [Retirement phase E](retirement-phase-e-state.md) — 36 scripts + viz gone; sweep → Cargo example; convergence edge is a last-bit event
+- [Retirement phase D1](retirement-phase-d1-state.md) — viewer crate + std::net server; strings ported, 56/60 bit-identical; next batches ordered by missing numerics
 - [Viewer stays Python](viewer-stays-python.md) — SUPERSEDED; only coverage proves a line runs, not a grep
 - [Analysis freeze](analysis-freeze-state.md) — 62 fixtures frozen from the Python before it was deleted
 - [Deletion phase](rust-deletion-phase-state.md) — all 11 units gone, 23,396 lines, zero physics bars retired

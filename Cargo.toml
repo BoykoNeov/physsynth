@@ -20,7 +20,12 @@
 # harness exists to exclude.
 [workspace]
 resolver = "2"
-members = ["crates/physsynth-core", "crates/physsynth-analysis", "crates/physsynth-py"]
+members = [
+    "crates/physsynth-core",
+    "crates/physsynth-analysis",
+    "crates/physsynth-py",
+    "crates/physsynth-viewer",
+]
 
 [workspace.package]
 version = "0.1.0"

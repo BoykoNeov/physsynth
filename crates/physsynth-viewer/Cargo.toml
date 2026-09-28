@@ -1,0 +1,25 @@
+[package]
+name = "physsynth-viewer"
+description = "The web viewer's backend — payload builder and a localhost HTTP server. Not the core."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# The viewer is a CLIENT of the physics, so it is the one crate here that may do I/O: it binds a
+# socket, reads the front-end's files off disk and writes JSON. What it may pull in to do that is
+# held by its own `tests/deps.rs`, separately from the core's empty list — the same two-step rule
+# (a name lands here and in that allowlist in one commit, with the reason).
+#
+# `serde_json` is the one outside name. `float_roundtrip` is load-bearing, not a nicety: without it
+# serde_json parses a decimal to the NEAREST-BUT-ONE double in rare cases, and a request's `L` or
+# `T` one ulp off moves the last bits of every step of the run it parameterizes. Python's
+# `json.loads` is correctly rounded, and so is this with the feature on.
+#
+# No HTTP crate. The server is `std::net` plus one thread per connection, which is all the Python
+# `ThreadingHTTPServer` it replaces was, and a framework would bring `log` (on the core's NEVER
+# list by category) and an executor this project has no use for (retirement plan §5).
+[dependencies]
+physsynth-core = { path = "../physsynth-core" }
+physsynth-analysis = { path = "../physsynth-analysis" }
+serde_json = { version = "1", features = ["float_roundtrip"] }

@@ -93,6 +93,15 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    item is now HISTORY** — accurate about how the port was done, no longer a statement of where
    the project is going.
 
+   **Phase D, the viewer, has started (2026-09-28, retirement plan §23).** `crates/physsynth-viewer`
+   is the backend's Rust half: `simulate_to_payload` plus a `std::net` server (`cargo run --release
+   -p physsynth-viewer -- serve`) serving `web/static/` untouched. It ports **model by model**, in
+   the order §23.7 derives from which missing numerical tool each scene needs; an unported key is
+   refused with error kind `unported`. **The Python server stays the live viewer until the last
+   scene lands**, and each batch is checked against it with a scratch payload diff
+   (`W:\temp\claude\viewer-port\`: parsed-tree compare, exact unless a named tolerance class).
+   Every payload float goes through `py::num`, because `serde_json` turns NaN into `null` silently.
+
    **REVERSED 2026-09-07, see above.** ~~One exception, 2026-09-03 (the human's call):~~ the
    **viewer backend stays Python** and talks
    to Rust through the binding — `web/serialize.py` is a serializer, not a model, and there is no

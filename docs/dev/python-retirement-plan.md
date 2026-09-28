@@ -445,7 +445,10 @@ the `rust-harness` CI job with them. The default suite is now what the flagged s
 `physsynth/viz/` are deleted, matplotlib is no longer a dependency, and the one measurement worth
 keeping is a Cargo example. The sharding scripts leave with the suite at F; the browser check with D.
 
-**D**, the viewer, remains independent of all of this and is still the longest pole.
+**D**, the viewer, remains independent of all of this and is still the longest pole. **Its first
+batch is done** (§23): `crates/physsynth-viewer` exists, serves the untouched front-end, and renders
+the three linear strings; the other nineteen scenes follow model by model in the order §23.7 derives,
+and the Python server stays the live viewer until the last of them lands.
 
 ---
 
@@ -2273,3 +2276,219 @@ same is true of `verify_web_headless.py` relative to D.
 Unchanged in kind from §21.5: D (the viewer, the longest pole, and now also the owner of the one
 script left that is not about running pytest), and the physics files whose bars are not yet native
 (§9.4's list; the air box is still the largest shortfall).
+
+---
+
+## 23. Phase D, batch 1 — the crate, the server, and the three linear strings
+
+The viewer's backend has a Rust half. `crates/physsynth-viewer` is a library (`simulate_to_payload`,
+the whole contract the front-end speaks) plus a binary: `physsynth-viewer serve` is `python
+web/server.py`'s replacement, and `physsynth-viewer payload < params.json` runs one request with no
+socket. It serves `web/static/` unchanged. Of the twenty-two model keys the front-end offers, three are
+ported — `ideal`, `stiff`, `damped` — and the rest are refused with a new error kind, `unported`, so a
+scene can never render from a half-built payload. **The Python server is still the viewer anyone
+should use** until §23.7's list is finished; nothing about it changed.
+
+What landed:
+
+| where | what |
+|---|---|
+| `crates/physsynth-core/src/engine.rs` | `physsynth/core/engine.py`'s `simulate` and its `Resonator` protocol, native, with `tests/engine.rs` |
+| `crates/physsynth-viewer/src/lib.rs` | the dispatch, the three-arm refusal, the horizon fallback |
+| `…/py.rs` | Python's coercions, rounding and reprs (§23.3), NumPy's `linspace` index, base64 |
+| `…/resample.rs` | `scipy.signal.resample_poly` and `Fraction.limit_denominator`, transcribed |
+| `…/energy.rs`, `…/horizon.rs` | the energy panel and the resolution read-out, whole — every verdict branch, not only the strings' |
+| `…/string.rs` | `_build_resonator` and `_build_payload_string` |
+| `…/server.rs`, `…/main.rs` | the HTTP shell and the CLI |
+| `crates/physsynth-viewer/tests/` | `deps`, `strings`, `horizon`, `server` — 36 tests, plus 5 unit tests in `resample.rs` |
+
+`cargo test --workspace --release`: **848 passed**, the 801 before this batch plus 6 engine and 41
+viewer tests.
+
+### 23.1 No HTTP crate, measured rather than assumed
+
+§5 named `tiny_http` as the obvious candidate and said to measure it at the batch. Measured on
+2026-09-28, `tiny_http 0.12` pulls `ascii`, `chunked_transfer`, `httpdate` and **`log`**, and `log` is
+on the core's NEVER list by category. The server is `std::net` plus one thread per connection, which is
+all the Python `ThreadingHTTPServer` was: HTTP/1.0, one request per connection, localhost. The
+viewer's only outside dependency is `serde_json`, with what it pulls (`serde_core`, `itoa`, `zmij`,
+`memchr`), and `tests/deps.rs` holds that list — the third copy of the rule, and the first non-empty
+one. Its NEVER list names the binding (`physsynth-py`, `pyo3`, `numpy`): the viewer is what makes the
+binding deletable, so it must never come to depend on it.
+
+**The allowlist test found a hole in its own walker on its first run.** `serde_json` declares `serde`
+under `[target.'cfg(any())'.dependencies]` purely to constrain which `serde` version may coexist with
+it. That cfg holds on no platform, so nothing is compiled, and `cargo tree` shows nothing, but `cargo
+metadata`'s resolve lists the edge with the cfg as data. The walk reported `serde`, `serde_derive`,
+`syn`, `quote`, `proc-macro2` and `unicode-ident` as shipped. The viewer's copy now skips exactly the
+literal `cfg(any())` and nothing else, so a real platform cfg is still walked and over-reports on the
+safe side. The two physics crates' copies have the same blind spot but cannot hit it: their normal
+dependency lists are empty.
+
+`serde_json` takes the `float_roundtrip` feature. Without it the parser is not correctly rounded, and
+a request's `L` or `T` one ulp off would move the last bits of every step of the run it
+parameterizes.
+
+### 23.2 "Never a NaN" had to be made true again
+
+The Python server dumped with `json.dumps(..., allow_nan=False)`, so a non-finite float anywhere in a
+payload was a loud failure. `serde_json` does the opposite, and silently: `Value::from(f64::NAN)` is
+`null`. A test asserting "no NaN in the payload" would then pass while checking nothing. So every float
+enters a payload through `py::num`, which turns a non-finite value into a marker string, and
+`simulate_to_payload` walks the finished tree for it. If it finds one, the whole payload is refused
+with kind `internal`. The one field that *should* carry `null` for a non-finite value (`_finite_list`)
+does that on purpose and is the only path that can. A test pins both halves, including the
+`serde_json` behaviour that makes the marker necessary.
+
+### 23.3 Python's semantics, where the payload depended on them
+
+The reference read its request with `float()`, `int()` and `str()`, and those accept more than a
+JSON number: a numeric string, a bool (`float(True) == 1.0`), a float for an integer (`int(64.7) ==
+64`). Its refusal messages quote the offending value in Python's `repr`. All of that is reproduced in
+`py.rs`, along with four spellings that decide numbers rather than messages:
+
+- **`round(x)` is ties-to-even**, and the index arithmetic inherits it (`pickup_idx`, step counts,
+  strides). `f64::round` rounds ties away from zero; `round_ties_even` is used instead.
+- **`round(x, n)`** goes through Rust's fixed-precision formatting and back. Rust's formatting is
+  correctly rounded on the exact binary value with ties to even, which is CPython's
+  `float.__round__`. That was checked against Python on halfway values (`0.5`, `2.5`, `0.125`,
+  `0.375`), on `2.675`, on a negative zero and on `1e300` before any code relied on it.
+- **Python's `min(a, b, c)`** returns the first element unless a later one is strictly smaller, so
+  a NaN in first position passes a `<= 0` guard. Transcribed rather than "fixed", because the guard
+  order is part of which refusal a request gets.
+- **NumPy's `linspace(...).astype(int)`** overwrites its last entry with the endpoint, so the
+  energy trace's decimation index is reproduced exactly.
+
+Six differences are **deliberate**, and they are the only ones:
+
+1. `int(float("inf"))` raised an uncaught `OverflowError` in Python, and the request died with a
+   500. Here it is refused the way a NaN is.
+2. A dict quoted in a refusal message prints its keys sorted, because `serde_json`'s map is ordered by
+   key. Only a malformed request reaches this.
+3. A request body using the `NaN` / `Infinity` JSON literals, which Python's `json.loads` accepted,
+   is a 400. The browser cannot send them (`JSON.stringify` writes `null`).
+4. `HEAD` is served. The Python handler had no `do_HEAD`, so it answered 501, despite a `_send` that
+   was written to support it.
+5. A panic inside a render is a 500 with a JSON body. The Python server dropped the connection.
+6. Path traversal is refused by construction: only plain path components are accepted. The Python
+   server compared strings after `normpath`.
+
+### 23.4 The one-time check: 60 requests against the live Python serializer
+
+The same discipline as every port in this migration: run both implementations on one corpus while
+the reference still exists, then compare parsed JSON trees rather than text. Key sets must match
+exactly, and so must int-versus-float type, strings and bools. Floats are exact unless a named
+tolerance class says otherwise, with the reason written next to it. The corpus has 60 requests:
+
+- defaults and the canonical short run;
+- all three models, lossless and lossy;
+- the horizon fixtures from `test_web_backend.py`;
+- an odd-rate grid and `N = 2`;
+- 14 refusals;
+- 17 coercion cases (strings, bools, nulls, lists and dicts where numbers belong).
+
+The Python side ran on a freshly reinstalled wheel. The harness is `W:\temp\claude\viewer-port\`
+(`dump.py`, `compare.py`, `corpus_strings.py`) and is scratch, not repo: once the reference is deleted
+there is nothing left for it to compare against.
+
+**Result: 56 identical to the bit, 4 within a stated tolerance, 0 failing.**
+
+- **The decay-rate fit** (3 lossy cases): at most **1.9e-14 relative**. `np.polyfit` solves the
+  least-squares line through LAPACK's SVD; this uses the closed form about the mean. The class is set
+  at 1e-12.
+- **The `N = 2` audio**: 52 of 14,520 float32 samples differ, by at most **1.9e-33 against a peak of
+  0.9**. Those are samples that should cancel to exactly zero and carry rounding noise in both
+  implementations. A per-sample ulp count put the difference at 19 million ulps, because that is
+  the wrong scale for a value near zero. The class is 2 float32 ulps of the buffer's *peak*.
+
+**The audio was expected to be the weak point and was not.** `resample.rs`'s header argues that the
+filter taps cannot be bit-identical: they call `sin`, which NumPy computes with its own CPU-dispatched
+routine (findings §22.1), and a Kaiser window, whose Bessel `I0` is Cephes' Chebyshev expansion in
+SciPy and a power series here. That argument is correct about what *can* differ. On this machine,
+nothing did: 59 of the 60 audio buffers are identical to the bit. The tolerance class stays in place,
+because the header's reason is still true on another CPU.
+
+**In the browser.** The existing headless check (`scripts/verify_web_headless.py`), pointed at the
+Rust server with `VIEWER_BASE`, plus a scratch copy that adds `stiff`, `damped` and a lossy `damped`,
+passed all four string scenes on its own gates. The rendered readouts checked were:
+
+- the energy verdict;
+- the partials panel;
+- the horizon strip, and the horizon mark cross-checked against it;
+- the deep link applying every parameter;
+- the canvas actually painted.
+
+The three unported scenes in its list (`tension`, the parametric regime, `bow`) show the `unported`
+message and fail, as they must.
+
+### 23.5 The retirement rule, discharged for this batch
+
+`test_web_backend.py` is the specification (§5), so its string tests are carried as native tests
+rather than dropped:
+
+- the eleven string tests in its opening section are all in `tests/strings.rs`, with the
+  parametrized ones as loops;
+- `tests/horizon.rs` carries every horizon test that a string scene can answer.
+
+The horizon tests are split where a test mixes a string fixture with a 2-D one, and the 2-D half is
+still owed:
+
+- `test_horizon_is_built_from_the_SCHEME_...` has a plate half;
+- `test_horizon_a_tighter_bound_...` has membrane and plate halves;
+- `test_horizon_the_hertz_ceiling_...` has a membrane half;
+- `test_horizon_survives_the_servers_strict_json` has 2-D halves.
+
+Each 2-D half lands with its scene's batch.
+
+Some tests are new, because the port created something to test:
+
+- **the refusal messages, word for word.** The reference asserted substrings, and a port is exactly
+  where a message drifts.
+- **the coercions.** A string-spelled request must be the same scene as the numeric one.
+- **params for other models are ignored.**
+- **the non-finite marker** (§23.2).
+- **the dispatch table against the markup.** This extends
+  `test_horizon_every_model_the_viewer_OFFERS_is_classified`, so a model offered in the `<select>`
+  can never fall through to the string builder's "unknown model".
+
+**No Python test is deleted in this batch.** They test the Python serializer, which is still the
+live viewer. They go in the batch that deletes it, and so does
+`test_horizon_the_canvas_MARK_vocabulary_...`, which reads the headless harness that goes then too.
+
+### 23.6 Cost
+
+The Rust payloads are fast enough that no budget moved: the full string test file runs in 0.1 s in
+release and 1.7 s unoptimized. The default ideal-string render took 0.05 s in the browser run. The
+viewer's tests add about 13 s to CI's debug pass.
+
+### 23.7 The order of the remaining nineteen
+
+This order is derived rather than chosen. The derivation takes the transitive closure of each
+payload builder over `serialize.py`'s helpers, then records which SciPy or NumPy tool the closure
+needs that is not native yet. Three tools are missing:
+
+- **`np.fft.rfft` at an arbitrary length.** The analysis crate's FFT pads to a power of two, and
+  `np.fft.rfft(sig)` does not.
+- **`scipy.sparse.linalg.eigsh`** in shift-invert mode, including the generalized form with a mass
+  matrix and eigenvectors (the guitar's modes).
+- **`scipy.linalg.eigh`** with eigenvectors. `physsynth-core::eig` returns eigenvalues only.
+
+Each is a new numerical routine, so each gets native bars against a closed form before a payload
+uses it. That is the krylov precedent.
+
+| batch | scenes | new numerics |
+|---|---|---|
+| D2 | `tension` (both regimes), `bow` | none |
+| D3 | `geometric`, `sympathetic`, `reed`, `radbody`, `airload` | none new (the rotating-wave oracle is already in `physsynth-analysis`; `uniform_filter1d` and a median are a few lines each) |
+| D4 | `body`, `jawari`, `juari`, `fret` | arbitrary-length `rfft` (`np.hanning` is already `spectrum::hann`) |
+| D5 | `membrane`, `mallet`, `plate` (all three outlines), `vk`, `bore`, `platebody` | sparse shift-invert eigensolver |
+| D6 | `airbox`, `vkroom` | dense symmetric eigenvectors |
+| D7 | the headless check ported to Rust (a WebSocket client as a **dev**-dependency, allowlisted with its reason), the servers switched, `web/*.py` and `test_web_backend.py` deleted | — |
+
+Four constants in `serialize.py` are lowered by `monkeypatch` in its tests so that a guard which
+cannot fire in the shipped range fires somewhere real: `PARAM_SWEEP_WORK_MAX`,
+`RADBODY_SWEEP_WORK_MAX`, `AIRLOAD_SWEEP_WORK_MAX` and `TENSION_MEASURE_PERIODS`. A Rust constant
+cannot be patched. The batch that ports each one decides whether it becomes a parameter of an
+internal function or whether the test is rewritten against a fixture that reaches the guard. That
+is §16.6's "no analogue" verdict (a test that works by replacing part of a live module), arriving
+at the viewer.
