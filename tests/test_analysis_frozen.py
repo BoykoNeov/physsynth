@@ -39,7 +39,8 @@ a small error and no tolerance can describe one.
 of ``tests/helpers.py`` by ``docs/dev/resolution-horizon-plan.md`` §6, whose own text says freezing
 it is impossible because no Python implementation is left. That was a generalisation from §44 and it
 is false here: the Python bodies were live in the test folder right up to the commit that replaced
-them, so ``scripts/freeze_horizon.py`` recorded them in the one batch where it could. The gap
+them, so ``scripts/freeze_horizon.py`` (deleted at retirement plan §22, last present at
+``17efb1e``) recorded them in the one batch where it could. The gap
 measured on the generating machine was **exactly zero on every float case**, including the root find
 inside ``sinc_horizon_fraction`` — which is a statement about that machine and not a promise about
 CI (ledger #28), and is exactly why the bar below is a tolerance rather than an equality.
@@ -78,7 +79,7 @@ ANALYSIS_MODULES = tuple(
     sorted(m.name for m in pkgutil.iter_modules(physsynth.analysis.__path__))
 )
 
-# The sentinel `scripts/freeze_horizon.py` writes where a case has no float in its answer at all.
+# The sentinel `scripts/freeze_horizon.py` wrote where a case has no float in its answer at all.
 # It is NOT "the comparison failed" -- it is "the comparison was entirely the exact one", which is
 # the stronger arm. Spelled out here rather than matched loosely so that a *real* incomparability
 # (a differing structure, a missing binding) still fails the canary below.
@@ -134,11 +135,10 @@ def test_every_public_analysis_function_is_frozen():
             if f"{module}.{name}" not in frozen:
                 missing.append(f"{module}.{name}")
     assert not missing, (
-        f"these analysis functions have no frozen case: {sorted(missing)}. Add one to "
-        "`tests/analysis_frozen_cases.py` and regenerate with `python scripts/freeze_analysis.py` "
-        "-- which only works while a second implementation exists, so if the Python bodies are "
-        "already gone the honest options are a native bar in `crates/physsynth-analysis/tests/` or "
-        "nothing"
+        f"these analysis functions have no frozen case: {sorted(missing)}. Nothing can freeze one "
+        "any more -- the generator went at retirement plan §22, because a freeze needs a second "
+        "implementation to record and none is left. Give the new function a native bar in "
+        "`crates/physsynth-analysis/tests/`, and exempt its name in this test with that reason"
     )
 
 

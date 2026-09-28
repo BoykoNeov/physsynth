@@ -683,7 +683,7 @@ pub fn py_duffing_frequency_expansion(amplitude: f64, omega0_sq: f64, eps: f64) 
 // The names stutter (`horizon_pitch_horizon`), and that is deliberate. Every function in this
 // binding is `<module>_<function>`, the shim in `physsynth/analysis/horizon.py` is the only caller,
 // and one grep for `horizon_` has to find the whole surface. A prettier one-off spelling would buy
-// nothing and would join the list `scripts/freeze_analysis.py` warns about — names that are not a
+// nothing and would join the list `scripts/freeze_analysis.py` warned about — names that are not a
 // mechanical transform of the Python ones, so guessing them silently reports "no Rust twin".
 //
 // `pitch_error_cents` takes two flat arrays and the shim ravels; the rest are scalars and small

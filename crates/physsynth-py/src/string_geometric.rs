@@ -6,9 +6,8 @@
 //! are assigned to from outside**: `tests/helpers.py::seed_rotating_wave` writes the exact
 //! two-level helix history rather than going through `set_state` (whose Taylor start would seed an
 //! `O(k^3)` error the helix immediately sheds into the longitudinal field — ten orders on the
-//! claim being measured), and `tests/test_geometric_rotating_wave.py`,
-//! `web/serialize.py::_build_payload_geometric` and `scripts/diagnose_geometric_string.py` do the
-//! same. So `u`, `w`, `v`, `u_prev`, `w_prev`, `v_prev`, `n` and `converged` all take setters, and
+//! claim being measured), and `tests/test_geometric_rotating_wave.py` and
+//! `web/serialize.py::_build_payload_geometric` do the same. So `u`, `w`, `v`, `u_prev`, `w_prev`, `v_prev`, `n` and `converged` all take setters, and
 //! `step` rebinds them the way the original does: after a step `u_prev` **is** the object `u` was.
 //!
 //! # The private names, and §12.2 for the n-th time

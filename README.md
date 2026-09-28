@@ -23,10 +23,10 @@ closed-form physics**, not judged by ear.
 physsynth/
   core/        # headless DSP: operators, resonators, exciters, engine (no I/O, no graphics)
   analysis/    # analytic oracles (modal frequencies) + spectral partial detection
-  viz/         # diagnostic plots (matplotlib, Agg backend) — imports core, never vice versa
 web/           # interactive viewer (wrapper): local HTTP backend + static frontend — imports core
 tests/         # validation harness: energy, modal, convergence, stability
-scripts/       # runnable diagnostics (e.g. diagnose_ideal_string.py)
+scripts/       # test-suite sharding, the headless-browser viewer check
+crates/        # the Rust core, analysis and Python binding; examples under crates/*/examples/
 docs/dev/      # per-feature dev-docs (plan / context / tasks)
 ```
 
@@ -88,13 +88,15 @@ unchanged, and the xdist workers inherit the lowered priority:
 python scripts/nicepytest.py -n 8 --dist loadgroup
 ```
 
-## Generate diagnostics
+## Measurements outside the test suite
+
+The matplotlib diagnostics are gone (retirement plan §22): every number they printed is asserted by
+a test or recorded in `docs/`, and the browser viewer below is the visualization. A measurement
+that backs an open problem survives as a Rust example that prints a table and draws nothing:
 
 ```bash
-python scripts/diagnose_ideal_string.py
+cargo run --release -p physsynth-core --example geometric_lam_long
 ```
-
-Writes `out/` figures: energy-vs-time, detected-vs-analytic partials, and a grid-convergence plot.
 
 ## Interactive web viewer
 

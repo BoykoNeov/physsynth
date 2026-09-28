@@ -11,8 +11,8 @@ Three things stay, and none of them is a shim:
 
 * the three **measured** constants below — their docstrings are the record of the measurements that
   set them, and ``LAM_LONG_WARN``'s in particular is the longest single piece of reasoning in this
-  package. ``LAM_LONG_WARN`` is read by ``web/serialize.py``, ``tests/test_geometric_energy.py`` and
-  ``scripts/sweep_geometric_lam_long.py``; ``NEWTON_MAXITER_DEFAULT`` by
+  package. ``LAM_LONG_WARN`` is read by ``web/serialize.py`` and
+  ``tests/test_geometric_energy.py``; ``NEWTON_MAXITER_DEFAULT`` by
   ``physsynth/analysis/rotating_wave.py``.
 * ``GeometricState``, and this one is load-bearing in a direction the migration did not expect:
   **the Rust class constructs it.** ``crates/physsynth-py/src/string_geometric.rs`` does
@@ -57,12 +57,16 @@ above it. This one is an **accuracy** bar on an unconditionally stable scheme, w
 makes it dangerous: nothing throws, nothing violates, and the model quietly returns nonsense.
 
 **There are two edges here, not one, and they are a factor of two apart.** Re-measured 2026-09-03
-by ``scripts/sweep_geometric_lam_long.py`` over nine ``(N, amplitude, IC)`` cells -- plucked and
+by ``scripts/sweep_geometric_lam_long.py`` (since 2026-09-28
+``crates/physsynth-core/examples/geometric_lam_long.rs``) over nine ``(N, amplitude, IC)`` cells --
+plucked and
 mode-3, ``N`` 16 to 32, amplitudes to 1e-2 -- with the Newton iteration counter read beside the
 drift rather than the drift alone::
 
     lam_long <= 2    conserves ~1e-13 .. 1e-15, no step exhausts newton_maxiter
-    lam_long  = 4    the CONVERGENCE edge: steps begin to exhaust newton_maxiter (7 of 9 cells)
+    lam_long ~ 4    the CONVERGENCE edge: steps begin to exhaust newton_maxiter (<= 4 in 7 of 9
+                     cells on the Python implementation, 6 of 9 on Rust -- a last-bit event, so
+                     quote it as "about 4", never per cell; scientific-hurdles.md section 6)
     lam_long  5-10   the ENERGY edge, case-dependent: drift breaks 1e-10 and runs to 1e+5
 
 Between the two the solve stalls on up to a fifth of its steps and the energy *still* conserves to

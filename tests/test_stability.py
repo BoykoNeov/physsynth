@@ -343,9 +343,9 @@ def test_no_module_chooses_between_two_implementations():
 
 
 def test_core_does_not_import_sibling_layers():
-    # The dependency arrow points one way: analysis/viz/io depend on core, never the reverse.
+    # The dependency arrow points one way: analysis/io depend on core, never the reverse.
     body = (
-        "bad={'physsynth.viz','physsynth.analysis','physsynth.io'};"
+        "bad={'physsynth.analysis','physsynth.io'};"
         "hit=sorted(m for m in sys.modules if any(m==b or m.startswith(b+'.') for b in bad));"
         "print(','.join(hit));"
         "sys.exit(1 if hit else 0)"

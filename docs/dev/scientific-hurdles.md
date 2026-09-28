@@ -443,6 +443,21 @@ and names the sweep script as the thing to re-run if the edge ever moves. The ex
 sweep stays in the script: the suite is bulk-bound and a run that blows up on purpose is not a cheap
 test.
 
+**Re-taken on the Rust model (2026-09-28), and the convergence edge is implementation-sensitive.**
+The script could no longer import (its A/B control subclassed a class that is now Rust), so it was
+replaced by `crates/physsynth-core/examples/geometric_lam_long.rs` (retirement plan §22), and the
+original was re-run at its own commit `305661f` in a worktree to check the port. **The energy edge is
+identical in 9 cells of 9** (7, 5, 9, 10, 7, 10, 7, 9, 6). **The convergence edge differs in 4 of 9,
+by one grid point, in both directions** — Python `4, 3, 8, 4, 4, 4, 4, 9, 4`, Rust
+`4, 4, 9, 4, 4, 6, 4, 9, 3` — and the example agrees to the cell with the same sweep driven through
+the binding, so the port is faithful and the difference is the implementation's. (The "7 of 9" above
+counted cells at *or below* 4 in the Python column; the Rust count is 6.) A stall is a step whose
+Newton residual fails a `1e-15` tolerance, which sits at round-off, so which step first fails is a
+last-bit event — the same flip-both-ways sensitivity the Jacobian A/B showed. **Quote the
+convergence edge as "about 4", never per cell.** The pinned test's cell is the `6` in the Rust row:
+at `λ_long = 6` it sees 2 stalls in ~95 steps and none at 5, so its "stalls fire" half now has half a
+grid step of margin where it had two.
+
 ## 7. The point port does not converge — refused, measured
 
 A `radius=None` port is a sphere of radius `≈ h/3.1`, so refining the grid halves its equivalent

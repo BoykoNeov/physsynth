@@ -1,11 +1,16 @@
 """The fixtures the analysis oracles are frozen at — imported by the generator AND the test.
 
+The generator is gone (retirement plan §22; last present at commit ``17efb1e``), so these fixtures
+are now read by the test alone — and they must not change, because the frozen answers were recorded
+at exactly these inputs.
+
 One module, because the whole point is that the *inputs* are identical on both sides of a
 recording made months apart. Anything random here is drawn from a written-down seed; nothing is
 read off the clock, the filesystem or the environment.
 
-See ``scripts/freeze_analysis.py`` for the generator and ``tests/test_analysis_frozen.py`` for what
-is done with the result. ``docs/dev/rust-migration-plan.md`` §44 is why this exists at all.
+See ``git show 17efb1e:scripts/freeze_analysis.py`` for the generator and
+``tests/test_analysis_frozen.py`` for what is done with the result.
+``docs/dev/rust-migration-plan.md`` §44 is why this exists at all.
 """
 
 from __future__ import annotations

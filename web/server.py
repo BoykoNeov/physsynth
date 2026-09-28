@@ -23,7 +23,7 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Put the repo root on sys.path so `python web/server.py` can import the package without an editable
-# install (mirrors the scripts/diagnose_*.py shim).
+# install.
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)

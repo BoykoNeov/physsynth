@@ -16,10 +16,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Visualization/diagnostics. Kept OUT of `dependencies` so the headless DSP core
-# (physsynth/core) never even has plotting available to import. See CLAUDE.md #4.
-viz = ["matplotlib>=3.7"]
-dev = ["pytest>=7.4", "pytest-xdist>=3.5", "matplotlib>=3.7"]
+# No plotting extra: `physsynth/viz/` and the matplotlib diagnostics went at retirement plan §22.
+# The browser viewer (`web/`) is the project's visualization.
+dev = ["pytest>=7.4", "pytest-xdist>=3.5"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["physsynth"]

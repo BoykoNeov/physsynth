@@ -51,6 +51,7 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 - [Retirement batch 6](rust-retirement-batch6-state.md) — the mallet's room MODE as its own type; a two-way-differing twin bar is vacuous
 - [Retirement batch 7](rust-retirement-batch7-state.md) — all three bridges native (`BridgeBody`, one generic `StringPlateBridge`); the hole is CLOSED; finding 79
 - [Retirement phase A](retirement-phase-a-state.md) — flag GONE; banded deleted; default suite == old flagged; reconcile counts via a worktree
+- [Retirement phase E](retirement-phase-e-state.md) — 36 scripts + viz gone; sweep → Cargo example; convergence edge is a last-bit event
 - [Viewer stays Python](viewer-stays-python.md) — SUPERSEDED; only coverage proves a line runs, not a grep
 - [Analysis freeze](analysis-freeze-state.md) — 62 fixtures frozen from the Python before it was deleted
 - [Deletion phase](rust-deletion-phase-state.md) — all 11 units gone, 23,396 lines, zero physics bars retired

@@ -139,6 +139,10 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    (phase A, 2026-09-28) removed those three swaps and the flag with them** — `banded.py` and its
    binding deleted whole, `exciter` three re-exports, `operators` delegating wrappers (CSR rebuild
    plus input coercion). Nothing reads `PHYSSYNTH_RS`, and the `rust-harness` CI job is gone.
+   **Phase E (§22, same day)** deleted 36 of `scripts/`'s 41 files and `physsynth/viz/`; matplotlib
+   is no longer a dependency, and the one measurement kept is a Cargo example
+   (`crates/physsynth-core/examples/`). What is left in `scripts/` runs the suite or checks the
+   viewer, and goes with them.
 
    Seven things about the state this leaves:
 

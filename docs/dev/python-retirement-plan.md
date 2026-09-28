@@ -179,6 +179,9 @@ phase must not repeat.
 
 ## 6. Phase E — the scripts, triaged rather than ported
 
+**Done at §22** — and this table's sharding row was wrong about *when*: those scripts run the suite,
+so they leave at F with it (§22.4).
+
 41 files, and they are not one thing:
 
 | group | count | recommendation |
@@ -437,6 +440,10 @@ across two, and the file it missed is the one underneath the other two.
 
 **Phase A is done** (§21): `PHYSSYNTH_RS` is read by nothing, `banded.py` and its binding are gone, and
 the `rust-harness` CI job with them. The default suite is now what the flagged suite was.
+
+**Phase E is done** except what cannot go yet (§22): 36 of `scripts/`'s 41 files and
+`physsynth/viz/` are deleted, matplotlib is no longer a dependency, and the one measurement worth
+keeping is a Cargo example. The sharding scripts leave with the suite at F; the browser check with D.
 
 **D**, the viewer, remains independent of all of this and is still the longest pole.
 
@@ -2148,3 +2155,117 @@ Phase A is the first phase of this plan to finish outright. What stands between 
 `crates/physsynth-py` is unchanged in kind: the viewer (phase D, still the longest pole), the scripts
 (phase E), and the Python physics files whose bars have not yet been carried natively (§9's map, read
 with §16.7's table). `test_rust_parity_ops2d.py` joins that last list.
+
+---
+
+## 22. Phase E, done except what cannot go yet — the scripts
+
+Thirty-six of `scripts/`'s forty-one files are gone, with `physsynth/viz/` and the `viz` extra:
+**9,590 lines**, and not one test with them. The collected suite is the same size before and after
+(2,099 test ids, measured on a fresh wheel), because no test imported a deleted file.
+
+| what | lines | verdict |
+|---|---|---|
+| `diagnose_*.py`, all 33 | 8,414 | **deleted as spent** (§22.1) |
+| `physsynth/viz/` (`plots.py` + `__init__`) | 610 | **deleted** — its only importers were the 33 |
+| `freeze_analysis.py`, `freeze_horizon.py` | 332 | **deleted**; provenance by commit (§22.3) |
+| `sweep_geometric_lam_long.py` | 234 | **replaced** by a native example (§22.2) |
+| `shard_tests.py`, `shard_costs.json`, `shard_costs_from_durations.py`, `nicepytest.py` | — | **stay until F** — §6 was wrong about the timing (§22.4) |
+| `verify_web_headless.py` | — | **stays until D**, which it ports with (§6.1) |
+
+`matplotlib` has left `pyproject.toml` entirely (the `viz` extra and the `dev` pin), so CI no longer
+installs it.
+
+### 22.1 The triage bar, and why it is lower than §6 made it sound
+
+§6 framed triage as a coverage question. It is not one: **CI never ran any of these scripts**, so
+deleting one removes no enforced check. The question per script is narrower — *does it compute a
+number that is recorded nowhere else, in no test and no doc?* Every `print` literal of the 33 was
+extracted by AST and sorted into three bins:
+
+- **validation reports** (24 scripts — ideal, stiff and damped strings, membrane, the plates, bore,
+  bell, reed, bow, the collisions, the bridges, sympathetic, tension, both von Kármán plates, the
+  three radiation scripts): the printed numbers *are* the suite's bars — drift against 1e-10,
+  partials against the oracle, convergence order;
+- **investigation records** (9 — the six air-box scripts, the string→gong→room chain, the geometric
+  string, both orthotropic plates): each finding is written into the plan that cites the script.
+  Twenty distinctive numbers and phrases were grepped for in `docs/` and every one was found;
+- **recorded nowhere**: none.
+
+`diagnose_mallet_plate.py` was the one script no doc names; its findings are in
+`docs/dev/mallet-plate-plan.md`, which describes them without the filename.
+
+**The picture-output scripts §6 flagged** (the Chladni figures, the air-box field slices, the
+Schelleng diagram, the whirl orbits) got the verdict §6 asked for: each was a *look at this*, and
+the viewer shows all of them interactively. The Schelleng diagram's one number, its clean-Helmholtz cell
+count, is *recorded* (23 of 48, `docs/memory/bow-state.md`) but is **not** a bar:
+`tests/test_bow_modal.py` only picks points known to lie inside the window. That was true before this
+deletion too, and the web viewer plan already says why no bar is attempted — the window has no
+closed form in the core.
+
+**The scripts' own verdicts were never gates**, and one run shows it: `diagnose_membrane.py` prints
+`energy monotone non-increasing = False` on today's tree, over a single rise of 6.0e-19 J at step 0
+of 17,066 (1.6e-15 relative). `tests/test_membrane_energy.py` asserts the same property with a
+`1e-12 * E0` round-off allowance and passes. A script that printed a verdict with no tolerance was
+a reader's aid, and deleting it loses nothing the suite asserts.
+
+### 22.2 The sweep was already dead, and its successor is half of it
+
+`scripts/sweep_geometric_lam_long.py` backs `docs/dev/scientific-hurdles.md` §6, which is still open,
+so §6 of this plan named it a survivor candidate. It turned out to be **unimportable on the tree it
+was being triaged on**: its A/B control was `class OldJacobianString(GeometricString)`, and since the
+geometric string's body was deleted the base is a pyo3 class that is not subclassable —
+`TypeError: type 'physsynth_rs.GeometricString' is not an acceptable base type`. A Python override of
+`_dg_jacobian` would have done nothing anyway, because the Rust `step` never calls back into Python.
+`tests/test_geometric_energy.py` meanwhile told a reader whose bar failed to re-run it.
+
+Its successor is `crates/physsynth-core/examples/geometric_lam_long.rs` — the project's first Cargo
+example, no dependencies, built by `cargo test --workspace` and linted by `clippy --all-targets`, so
+it cannot rot silently the way the script did. It carries the half of the script that measures
+**the model as it is**: the two-edge table (default) and the full drift/iterations/stalls sweep
+(`--full`). The A/B half is spent — its answer, 9 cells of 9 unmoved, is §6's record — and the
+amplitude table existed only to explain that answer.
+
+One deliberate difference: a non-finite drift now counts as past the energy gate. The script's
+`drift > gate` is false for NaN, so a run that went to NaN would have read as conserving.
+
+**The port was checked against the original, and the check found something.** The script cannot
+run on today's tree, so it was run at its own commit (`305661f`) in a `git worktree`, where the
+string was still Python. The energy edge agreed in **9 cells of 9**. The convergence edge differed
+in **4 of 9**, by one grid point, in both directions. Driving the same sweep through today's binding
+reproduced the example to the cell, so the port is faithful and the difference is the Python-to-Rust
+move: a stall is a Newton residual failing a `1e-15` tolerance, which sits at round-off, so which
+step fails first is a last-bit event. `scientific-hurdles.md` §6 now says to quote the edge as
+"about 4" and never per cell. Two consequences, both recorded where they live:
+
+- the "7 of 9" in three places counted cells **at or below** 4 on Python; on Rust it is 6. The hurdle
+  doc, the model's docstring table and the pinned test's docstring now say so;
+- the pinned test (`test_a_flat_energy_is_not_a_convergence_certificate_in_the_under_resolved_band`)
+  asserts stalls at `λ_long = 6`, and its cell is the one that moved from 4 to 6. It sees 2 stalls in
+  ~95 steps at 6 and none at 5 — **half a grid step of margin, where it had two**. It passes; it was
+  not changed in this batch, because the margin was lost at the deletion of the Python body, not here.
+  A future move of the solver's last bits could flip it, and its message now names the example to
+  re-run.
+
+### 22.3 The freezers: deleted, provenance by commit
+
+Both freezers' docstrings argued for keeping them unrunnable, on the principle that a generated file
+must name its generator. The plan (§6) said delete, and the human's call was to delete and keep the
+principle by **commit**: `tests/analysis_frozen_values.py`'s header now says nothing regenerates it,
+that `17efb1e` is the last commit containing both generators, and that a new oracle gets a native
+bar rather than a row. `test_analysis_frozen.py`'s "regenerate with `freeze_analysis.py`" message is
+replaced by the only remedy left.
+
+### 22.4 What §6 had wrong: the sharding scripts go at F, not E
+
+§6's table filed `shard_tests.py`, `shard_costs*` and `nicepytest.py` under **delete**, and that is
+the end state, but not this phase's: CI calls `shard_tests.py` in the `setup` and `validate` jobs,
+`tests/test_shard_partition.py` imports it, and the README's local run uses `nicepytest.py`. They
+exist to split and run the pytest suite, so they leave in the commit that deletes the suite (§7). The
+same is true of `verify_web_headless.py` relative to D.
+
+### 22.5 What is next
+
+Unchanged in kind from §21.5: D (the viewer, the longest pole, and now also the owner of the one
+script left that is not about running pytest), and the physics files whose bars are not yet native
+(§9.4's list; the air box is still the largest shortfall).

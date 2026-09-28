@@ -13,6 +13,12 @@
   (``docs/dev/resolution-horizon-plan.md`` §6). That generator can no longer run either, and for
   the same reason: its subject was replaced by the shim in the commit after it ran.
 
+**Nothing regenerates this file any more.** Both generators were deleted as unrunnable in
+``docs/dev/python-retirement-plan.md`` §22; commit ``17efb1e`` is the last that contains them, and
+``git show 17efb1e:scripts/freeze_analysis.py`` (or ``freeze_horizon.py``) is where to read exactly
+how each row was produced. A new oracle gets a native bar in ``crates/physsynth-analysis/tests/``,
+not a row here.
+
 ``gap`` on each row is ``max|python - rust| / max|python|`` as measured on the machine that
 generated it. It is a **record, not a bar** — the bars live in ``tests/test_analysis_frozen.py``
 and are chosen with these numbers in front of you, because a bar with no measurement behind it is

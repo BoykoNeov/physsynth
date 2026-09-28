@@ -592,12 +592,15 @@ def test_a_flat_energy_is_not_a_convergence_certificate_in_the_under_resolved_ba
 
     The warning above says "past ``lam_long ~ 4`` the Newton solve stops converging and energy
     drift explodes", which reads as one threshold. It is two, and the sweep that separated them
-    (``scripts/sweep_geometric_lam_long.py``, 2026-09-03, nine ``(N, amplitude, IC)`` cells) puts
-    them a factor of two apart:
+    (``scripts/sweep_geometric_lam_long.py``, 2026-09-03, nine ``(N, amplitude, IC)`` cells; now
+    ``crates/physsynth-core/examples/geometric_lam_long.rs``) puts them a factor of two apart:
 
     * **The convergence edge** -- the first ``lam_long`` at which any step exhausts
-      ``newton_maxiter`` -- is at **4** in seven of the nine cells. That is exactly the number the
-      old table reported, so the old table was right about *convergence*.
+      ``newton_maxiter`` -- is at **about 4**: at or below 4 in seven of the nine cells on the
+      Python implementation, six on the Rust one, because which step first fails a round-off
+      tolerance is a last-bit event (``docs/dev/scientific-hurdles.md`` section 6). That is the
+      number the old table reported, so the old table was right about *convergence*. This test's
+      own cell starts stalling between 5 and 5.5 on the Rust model -- 2 stalls at 6, none at 5.
     * **The energy edge** -- the first ``lam_long`` whose lossless drift breaks
       :data:`DRIFT_GATE` -- is at **5 to 10**, case-dependent. So the old table's ``1e+3 .. 1e+5``
       drift belongs to a *different, higher* threshold than its non-convergence claim, and the two
@@ -639,7 +642,7 @@ def test_a_flat_energy_is_not_a_convergence_certificate_in_the_under_resolved_ba
     drift_band, stalled_band = trajectory(6.0)
     assert stalled_band > 0, (
         "lam_long = 6 sits above the convergence edge — if nothing stalls here the edge has "
-        "moved, and scripts/sweep_geometric_lam_long.py is the thing to re-run"
+        "moved; re-run `cargo run --release -p physsynth-core --example geometric_lam_long`"
     )
     assert drift_band < DRIFT_GATE, (
         f"the point of this test is that the energy gate passes ({drift_band:.2e}) while "
