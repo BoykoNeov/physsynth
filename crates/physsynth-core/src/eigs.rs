@@ -235,8 +235,9 @@ pub fn eigsh_shift_invert(
                 if i == proj.len() {
                     proj.push(Vec::with_capacity(dim));
                 }
-                for j in proj[i].len()..dim {
-                    let v = dot(&basis.mq[i], &w[j]);
+                let have = proj[i].len();
+                for wj in &w[have..dim] {
+                    let v = dot(&basis.mq[i], wj);
                     proj[i].push(v);
                 }
             }
