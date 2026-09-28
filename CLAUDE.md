@@ -172,9 +172,10 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
 
    - **The wheel is now REQUIRED**, everywhere. A deleted model's module is an unconditional
      `from physsynth_rs import X`, so `pip install ./crates/physsynth-py` is a precondition for
-     `pytest` to *collect*, not just to pass. The `validate` and `checks` CI jobs install it (the
+     `pytest` to *collect*, not just to pass. The `validate` and `rust` CI jobs install it (the
      human's call, §39.6 route 1); `validate` is therefore no longer a pure-Python baseline, and
-     nothing is.
+     nothing is. (`checks` installed it too, to count collected tests per shard; since 2026-09-29
+     the suite is one job, that job is `lint`, and it needs neither Rust nor the wheel.)
    - **A deleted module is not empty.** Three things survive every time — types with no runtime
      implementation (`Literal`, `Callable`, `Protocol`, `NamedTuple`), measured constants *with their
      docstrings*, and re-exports of names defined elsewhere but reached through this module. And the
