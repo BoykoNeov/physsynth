@@ -8,10 +8,10 @@ explicit second-order scheme, and the **cross-time** potential term that is the 
 :meth:`energy` conserves to machine precision rather than drifting at ~1e-3 — is documented at
 length in that Rust module's header, which is now the only copy of it.
 
-What this file is *not* is a compatibility shim that could be removed. Under §35.5's route (b) the
-viewer stays Python, so ``physsynth.core.string_ideal`` remains the import path for
-``web/serialize.py``, ``connection.py``, the diagnostic scripts and the whole test suite. The name
-is the interface; only the body moved.
+What this file is *not* is a compatibility shim that could be removed:
+``physsynth.core.string_ideal`` remains the import path for ``connection.py`` and the whole test
+suite (and was for the Python viewer until retirement plan §23.19 deleted it). The name is the
+interface; only the body moved.
 
 Two consequences worth stating here rather than rediscovering:
 

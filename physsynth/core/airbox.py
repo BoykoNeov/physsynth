@@ -165,8 +165,9 @@ Spreading = Literal["bilinear", "nearest"]
 # wrappers and the three seams. They are imported into this namespace rather than reached through
 # `physsynth_rs` at each use site for two reasons, and the second is not optional:
 #
-#   * they are this module's public names -- `__all__` above lists ten of them, `tests/helpers.py`
-#     imports eight and `web/serialize.py` five;
+#   * they are this module's public names -- `__all__` above lists ten of them and
+#     `tests/helpers.py` imports eight (the Python viewer imported five until retirement plan
+#     §23.19 deleted it);
 #   * `crates/physsynth-py/src/airbox_wrap.rs` calls `py.import("physsynth.core.airbox")` and reads
 #     `RoomPort`, `splu` and the seam and port class names **off this namespace at call time** --
 #     the reference's own behaviour, transcribed. That is findings ledger #39, Rust depending on

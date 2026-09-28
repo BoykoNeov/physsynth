@@ -15,7 +15,7 @@ use common::{decode_b64, decode_f32, f, ok, sim};
 use physsynth_viewer::energy::LOSSLESS_TOL;
 use physsynth_viewer::geometric::{
     GEOM_DT_MAX, GEOM_LAM_LONG_MAX, GEOM_N_MAX, GEOM_PHANTOM_DEFECT_MIN, GEOM_PHANTOM_WINDOW,
-    GEOM_WORK_MAX,
+    GEOM_PHANTOM_WORK_MAX, GEOM_WORK_MAX,
 };
 use physsynth_viewer::py::commas;
 use physsynth_viewer::AUDIO_FS;
@@ -337,6 +337,24 @@ fn phantom_window_is_fixed_physics_and_ignores_the_animation_slider() {
     let d = phantom();
     let want = (GEOM_PHANTOM_WINDOW * f(&d["fs_sim"])).round_ties_even() as i64;
     assert_eq!(d["meta"]["num_steps"].as_i64().unwrap(), want);
+}
+
+/// Its budget is ~2.75x the other regimes'. The window is fixed physics and fs rides the
+/// longitudinal wave, so ~15,900 vector Newton steps is the floor at the default N = 32 — the
+/// shared `GEOM_WORK_MAX` would reject the regime's own default parameters.
+#[test]
+fn phantom_has_its_own_work_budget_because_it_is_the_slowest_render() {
+    // N = 32, lam_long = 0.9, EA = 1e5, rho = 5e-3 -> fs = 159,009 Hz
+    let default_steps = (GEOM_PHANTOM_WINDOW * 159_009.0).round_ties_even() as i64;
+    const { assert!(GEOM_PHANTOM_WORK_MAX > GEOM_WORK_MAX) };
+    assert!(
+        default_steps < GEOM_PHANTOM_WORK_MAX,
+        "the N = 32 default fits..."
+    );
+    assert!(
+        default_steps > GEOM_WORK_MAX,
+        "...and would not have, before"
+    );
 }
 
 #[test]

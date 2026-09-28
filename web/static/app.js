@@ -1,5 +1,5 @@
 "use strict";
-/* Web viewer front-end (architecture B). Talks to the local Python backend: POST /simulate -> the
+/* Web viewer front-end (architecture B). Talks to the local Rust backend: POST /simulate -> the
  * core recomputes offline -> we animate the string (slow-mo, decoupled from audio per catch #2),
  * play the sound at its true rate (48 kHz, catch #1), and draw the energy + partials diagnostics
  * gated by loss (catch #4). Vanilla JS + Canvas2D, no framework. */
@@ -100,7 +100,17 @@ const MODEL_RANGES = {
             audio_duration: { max: 2, val: 1 },
             mass: { val: 0.02 }, stiffness: { val: 50000 }, alpha: { val: 2.3 },
             strike_velocity: { val: 3.0 }, hysteresis: { val: 0 } },
-  plate: { N: { max: 80, val: 60 }, kappa: { min: 2, max: 80, step: 0.5, fixed: 1, val: 20 },
+  // N = 48 with mu = 2 is the default for BOTH rectangles, and the free plate is why: at the old
+  // N = 60, mu = 1 its lossless 1 s render drifted 1.3e-10 and opened red against its own 1e-10 bar
+  // (the Python backend did the same before it was retired). Measured on the 1 s default render,
+  // 2026-09-28:
+  //   supported  N60 mu1 1.35e-11 (76 s)   N48 mu2 1.60e-11 (13 s)
+  //   free       N60 mu1 1.32e-10 (86 s)   N48 mu2 1.49e-11 (15 s)
+  // It is NOT a `plate:free` entry: supported <-> free must keep the user's sliders (see
+  // regimeSwitchRerangs), and a regime key would reset them on every switch. The bar is untouched;
+  // a user who drags back to N = 60, mu = 1 on the free plate will see it fail, honestly.
+  plate: { N: { max: 80, val: 48 }, mu: { val: 2.0 },
+           kappa: { min: 2, max: 80, step: 0.5, fixed: 1, val: 20 },
            rho: { min: 0.001, max: 0.02, step: 0.0005, fixed: 4, val: 0.005, unit: "kg/m²" },
            Lx: { val: 1.0 }, Ly: { val: 1.0 }, audio_duration: { max: 2, val: 1 } },
   // The guitar outline (#5g). Geometry leads: a guitar top is 0.37 x 0.48 m, and the aspect is not

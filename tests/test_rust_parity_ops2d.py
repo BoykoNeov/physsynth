@@ -115,7 +115,7 @@ def test_inner2d_is_exactly_norm2_when_the_operands_coincide():
 # -- the guitar outline: how much room a last bit of `sin` has ------------------------------------
 #
 # The outline parameters that ship: `plate.py`'s defaults, the two fixtures in
-# `tests/test_guitar_plate.py`, `tests/test_web_backend.py`'s long narrow plate, the first point of
+# `tests/test_guitar_plate.py`, the viewer tests' long narrow plate, the first point of
 # the viewer's waist sweep (`waist = 0.0`) and a negative `asym`. The degenerate lens is in the
 # list on purpose -- it is the only one whose mask a last bit could move.
 OUTLINES = [(0.42, 0.30), (0.97, 0.30), (0.88, 0.0), (0.0, 0.0), (0.60, -0.30)]

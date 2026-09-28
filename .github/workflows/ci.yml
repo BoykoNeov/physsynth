@@ -182,7 +182,7 @@ jobs:
       - name: Native validation + dependency allowlist
         run: |
           cargo test --workspace --release
-          release_only="connection_plate contact mallet_gong plate platebody vkroom"
+          release_only="connection_plate contact frozen mallet_gong plate platebody vkroom"
           for n in $release_only; do
             ls crates/*/tests/$n.rs > /dev/null || { echo "release_only names $n: no such test file"; exit 1; }
           done

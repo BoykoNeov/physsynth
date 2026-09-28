@@ -17,7 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # No plotting extra: `physsynth/viz/` and the matplotlib diagnostics went at retirement plan §22.
-# The browser viewer (`web/`) is the project's visualization.
+# The browser viewer (`crates/physsynth-viewer` + `web/static/`) is the project's visualization.
 dev = ["pytest>=7.4", "pytest-xdist>=3.5"]
 
 [tool.hatch.build.targets.wheel]

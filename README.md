@@ -23,10 +23,10 @@ closed-form physics**, not judged by ear.
 physsynth/
   core/        # headless DSP: operators, resonators, exciters, engine (no I/O, no graphics)
   analysis/    # analytic oracles (modal frequencies) + spectral partial detection
-web/           # interactive viewer (wrapper): local HTTP backend + static frontend — imports core
+web/static/    # the viewer's browser front-end (served by crates/physsynth-viewer)
 tests/         # validation harness: energy, modal, convergence, stability
-scripts/       # test-suite sharding, the headless-browser viewer check
-crates/        # the Rust core, analysis and Python binding; examples under crates/*/examples/
+scripts/       # test-suite sharding
+crates/        # the Rust core, analysis, viewer backend and Python binding; examples under crates/*/examples/
 docs/dev/      # per-feature dev-docs (plan / context / tasks)
 ```
 
@@ -103,7 +103,7 @@ cargo run --release -p physsynth-core --example geometric_lam_long
 A local backend recomputes a model **offline** on each parameter change and streams the displacement
 field + audio + energy to a browser, which animates the string (slow-motion, so the vibration is
 visible), plays the sound, and shows the live energy-drift / passivity and partials diagnostics.
-Accuracy-first: no in-browser physics, no real-time port — the validated Python core stays the single
+Accuracy-first: no in-browser physics, no real-time port — the validated Rust core stays the single
 source of truth (architecture B; see `docs/dev/web-viewer-plan.md`).
 
 One model is deliberately **viz-only**: the geometrically-exact string carries a longitudinal wave at
@@ -112,11 +112,13 @@ point of that model) forces a sample rate ~22× higher and a second of audio wou
 compute. It shows orbits instead — including one thing no other model here can draw at all.
 
 ```bash
-python web/server.py            # then open http://localhost:8000
+cargo run --release -p physsynth-viewer -- serve    # then open http://127.0.0.1:8000
 ```
 
-The physics lives entirely in `physsynth/core`; `web/` is a wrapper (`serialize.py` packs the payload,
-`server.py` is a thin `ThreadingHTTPServer` shell) and never the other way around.
+The physics lives entirely in `crates/physsynth-core`; `crates/physsynth-viewer` is a client of it
+(`src/lib.rs` packs the payload, `src/server.rs` is a thin `std::net` shell serving `web/static/`) and
+never the other way around. `cargo run --release -p physsynth-viewer --example verify_headless`
+checks, in a real headless Chrome, that every scene renders (the server must be running).
 
 ## Status
 
