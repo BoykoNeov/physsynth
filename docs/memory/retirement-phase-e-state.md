@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 83e6ecf8-ce3d-4838-a2cf-608814834af3
-  modified: 2026-09-28T12:02:49.858Z
+  modified: 2026-09-28T12:05:50.796Z
 ---
 
 Phase E of `docs/dev/python-retirement-plan.md` (§22), 2026-09-28. The user picked E ("2") from
@@ -27,7 +27,7 @@ use them) go at F; `verify_web_headless.py` goes with D. Plan §6 was wrong on t
 **Sweep finding:** it was already unimportable (subclassing a pyo3 class). Successor
 `crates/physsynth-core/examples/geometric_lam_long.rs`. Checked against the original run at its own
 commit in a `git worktree` (PHYSSYNTH_RS unset → Python): energy edge 9/9 identical, convergence edge
-differs in 4/9 by one grid point both ways — the binding reproduces the example exactly, so it is the
+differs in 4/9 both ways (one grid point in three, TWO in the pinned test's cell, 4 -> 6) — the binding reproduces the example exactly, so it is the
 Python→Rust move (a stall is a 1e-15 tolerance miss = last-bit event). The pinned test
 `test_a_flat_energy_is_not_a_convergence_certificate...` now has half a grid step of margin
 (2 stalls at lam_long 6, none at 5). Not fixed — recorded in scientific-hurdles §6.

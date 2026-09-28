@@ -447,8 +447,8 @@ test.
 The script could no longer import (its A/B control subclassed a class that is now Rust), so it was
 replaced by `crates/physsynth-core/examples/geometric_lam_long.rs` (retirement plan §22), and the
 original was re-run at its own commit `305661f` in a worktree to check the port. **The energy edge is
-identical in 9 cells of 9** (7, 5, 9, 10, 7, 10, 7, 9, 6). **The convergence edge differs in 4 of 9,
-by one grid point, in both directions** — Python `4, 3, 8, 4, 4, 4, 4, 9, 4`, Rust
+identical in 9 cells of 9** (7, 5, 9, 10, 7, 10, 7, 9, 6). **The convergence edge differs in 4 of 9, in
+both directions — by one grid point in three cells and by two in the fourth, the pinned test's** — Python `4, 3, 8, 4, 4, 4, 4, 9, 4`, Rust
 `4, 4, 9, 4, 4, 6, 4, 9, 3` — and the example agrees to the cell with the same sweep driven through
 the binding, so the port is faithful and the difference is the implementation's. (The "7 of 9" above
 counted cells at *or below* 4 in the Python column; the Rust count is 6.) A stall is a step whose

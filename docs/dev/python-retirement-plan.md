@@ -2189,7 +2189,10 @@ extracted by AST and sorted into three bins:
   partials against the oracle, convergence order;
 - **investigation records** (9 — the six air-box scripts, the string→gong→room chain, the geometric
   string, both orthotropic plates): each finding is written into the plan that cites the script.
-  Twenty distinctive numbers and phrases were grepped for in `docs/` and every one was found;
+  Twenty numbers and phrases were grepped for in `docs/` and every one was found. That is a spot
+  check, not a proof: a few of the tokens (`5.3`, `8.9`, `cn`) are common enough to match unrelated
+  text, and the evidence is carried by the specific ones — `57.9 kHz`, `2.35 M`, `0.9998`, `5a/6`,
+  `0.5625`, `781`, `46.0%`, `anticlastic`, `0.567`;
 - **recorded nowhere**: none.
 
 `diagnose_mallet_plate.py` was the one script no doc names; its findings are in
@@ -2232,7 +2235,8 @@ One deliberate difference: a non-finite drift now counts as past the energy gate
 **The port was checked against the original, and the check found something.** The script cannot
 run on today's tree, so it was run at its own commit (`305661f`) in a `git worktree`, where the
 string was still Python. The energy edge agreed in **9 cells of 9**. The convergence edge differed
-in **4 of 9**, by one grid point, in both directions. Driving the same sweep through today's binding
+in **4 of 9**, in both directions — by one grid point in three cells and by two in the fourth, the
+pinned test's. Driving the same sweep through today's binding
 reproduced the example to the cell, so the port is faithful and the difference is the Python-to-Rust
 move: a stall is a Newton residual failing a `1e-15` tolerance, which sits at round-off, so which
 step fails first is a last-bit event. `scientific-hurdles.md` §6 now says to quote the edge as
