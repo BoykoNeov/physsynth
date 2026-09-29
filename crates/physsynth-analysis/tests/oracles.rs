@@ -17,7 +17,11 @@ use physsynth_analysis::duffing::{
     duffing_displacement, duffing_elliptic_parameter, duffing_frequency,
     duffing_frequency_expansion, duffing_frequency_shift, kc_mode_coefficients, kc_mode_stretch,
 };
-use physsynth_analysis::modal::{discrete_mode_frequency, discrete_stiff_mode_frequency};
+use physsynth_analysis::horizon::pitch_horizon;
+use physsynth_analysis::modal::{
+    discrete_mode_frequency, discrete_stiff_mode_frequency, harmonic_frequencies, inharmonicity_b,
+    stiff_harmonic_frequencies,
+};
 use physsynth_analysis::radiation::{
     piston_radiation_resistance, C0_AIR, PISTON_SERIES_CUTOFF_KA, RHO0_AIR,
 };
@@ -199,6 +203,164 @@ fn stiff_dispersion_delegates_exactly_too() {
         assert!(
             v[i] > v[i - 1],
             "stiffness did not raise the phase velocity"
+        );
+    }
+}
+
+// -- the stiff string's oracles, at its harness's parameters (retirement plan §32) -------------
+//
+// Carried from `tests/test_stiff_string.py`'s oracle-only tests: `c = 200 m/s`, `L = 1`,
+// `kappa = 2` (`KAPPA_DEFAULT`), `theta = 0.28` (`THETA_DEFAULT`, written as a literal: this crate
+// cannot see the core's constant, and `string_stiff_harness.rs` pins the two equal).
+
+const STIFF_C: f64 = 200.0;
+const STIFF_L: f64 = 1.0;
+const STIFF_KAPPA: f64 = 2.0;
+const STIFF_THETA: f64 = 0.28;
+
+#[test]
+fn the_stiff_oracle_sits_on_the_stretched_law_out_to_a_measured_horizon() {
+    // Carried from `test_discrete_oracle_converges_to_continuum_stretched_law`, the physics anchor
+    // (no simulation). On a fine grid the discrete oracle sits on `f_n = n f0 sqrt(1 + B n^2)`, and
+    // the fundamental is itself stretched. The band is MEASURED by `pitch_horizon`; the old
+    // hand-picked 10 survives as a FLOOR, so a wrong "fix" that shortened the band cannot pass on
+    // fewer modes (resolution-horizon plan §6; 48 when measured on 2026-09-07).
+    let (c, l, kappa) = (STIFF_C, STIFF_L, STIFF_KAPPA);
+    let (n, fs) = (4000i64, 8.0e5);
+    let k = 1.0 / fs;
+    let window = 200usize;
+    let floor = 10usize;
+    let oracle: Vec<f64> = (1..=window as i64)
+        .map(|m| discrete_stiff_mode_frequency(c, l, n, kappa, k, m, STIFF_THETA))
+        .collect();
+    let continuum = stiff_harmonic_frequencies(c, l, kappa, window);
+    let (horizon, monotone) = pitch_horizon(&oracle, &continuum, 1.0).unwrap();
+    println!("stiff pitch horizon: {horizon} (monotone {monotone})");
+    assert!(
+        monotone,
+        "pitch error is not monotone in mode index, so the prefix count hides a mode"
+    );
+    assert!(
+        horizon < window,
+        "horizon {horizon} truncated by the window"
+    );
+    assert!(
+        horizon >= floor,
+        "only the first {horizon} partials are within a cent of the stretched law"
+    );
+
+    let f0 = c / (2.0 * l);
+    let b = inharmonicity_b(c, l, kappa);
+    let rel = |a: f64, b: f64| ((a - b) / b).abs();
+    // The continuum stretches even the fundamental: f1 = f0 sqrt(1 + B), sharp of f0.
+    assert!(rel(continuum[0], f0 * (1.0 + b).sqrt()) <= 1e-12);
+    assert!(continuum[0] > f0);
+    assert!(
+        rel(oracle[0], continuum[0]) <= 1e-4,
+        "{} vs {}",
+        oracle[0],
+        continuum[0]
+    );
+}
+
+#[test]
+fn the_inharmonicity_is_zero_scales_as_kappa_squared_and_stretches_every_partial() {
+    // Carried from `test_inharmonicity_B_and_stretched_law`.
+    let (c, l) = (STIFF_C, STIFF_L);
+    assert_eq!(inharmonicity_b(c, l, 0.0), 0.0);
+    // B ~ kappa^2 -- `pytest.approx`'s default `rel = 1e-6`.
+    let (b1, b2) = (inharmonicity_b(c, l, 1.0), inharmonicity_b(c, l, 2.0));
+    assert!((b2 - 4.0 * b1).abs() <= 1e-6 * 4.0 * b1, "{b2} vs 4 x {b1}");
+    // kappa = 0 recovers the exact harmonic series.
+    let harm = stiff_harmonic_frequencies(c, l, 0.0, 6);
+    for (a, b) in harm.iter().zip(harmonic_frequencies(c, l, 6)) {
+        assert!((a - b).abs() <= 1e-8 + 1e-5 * b.abs(), "{a} vs {b}");
+    }
+    // kappa > 0: every partial sharp of n f0, and increasingly so -- the stretch grows with n.
+    let f0 = c / (2.0 * l);
+    let stretch: Vec<f64> = stiff_harmonic_frequencies(c, l, STIFF_KAPPA, 6)
+        .iter()
+        .enumerate()
+        .map(|(i, f)| f / ((i + 1) as f64 * f0))
+        .collect();
+    assert!(stretch.iter().all(|&s| s > 1.0), "{stretch:?}");
+    assert!(stretch.windows(2).all(|w| w[1] > w[0]), "{stretch:?}");
+}
+
+#[test]
+fn the_stiff_oracle_approaches_the_continuum_under_refinement() {
+    // Carried from `test_discrete_stiff_oracle_tends_to_continuum_on_refinement`: mode 3 at
+    // lam = 1 (`fs = c N / L`), N = 256, 512, 1024.
+    let (c, l, kappa, m) = (STIFF_C, STIFF_L, STIFF_KAPPA, 3i64);
+    let cont = stiff_harmonic_frequencies(c, l, kappa, m as usize)[m as usize - 1];
+    let errs: Vec<f64> = [256i64, 512, 1024]
+        .iter()
+        .map(|&n| {
+            let fs = c * n as f64 / l;
+            (discrete_stiff_mode_frequency(c, l, n, kappa, 1.0 / fs, m, STIFF_THETA) - cont).abs()
+        })
+        .collect();
+    assert!(
+        errs[0] > errs[1] && errs[1] > errs[2],
+        "not monotone: {errs:?}"
+    );
+}
+
+#[test]
+fn the_stiff_dispersion_is_the_scalar_oracle_and_rises_above_c() {
+    // Carried from `test_stiff_dispersion_frequencies_match_scalar_oracle`, at its N = 128 and
+    // lam = 1 (`k = L / (c N)`). Exactly equal -- the vector form is a map over the scalar one --
+    // and every phase velocity above c, where the bar above asserts only that it rises.
+    let (c, l, n, kappa) = (STIFF_C, STIFF_L, 128i64, STIFF_KAPPA);
+    let k = l / (c * n as f64);
+    let modes = [1i64, 5, 10, 25, 50];
+    let vec = stiff_dispersion_frequencies(c, l, n, kappa, k, STIFF_THETA, &modes);
+    for (i, &m) in modes.iter().enumerate() {
+        assert_eq!(
+            vec[i],
+            discrete_stiff_mode_frequency(c, l, n, kappa, k, m, STIFF_THETA),
+            "mode {m}"
+        );
+    }
+    let vp = phase_velocity(&vec, l, &modes);
+    assert!(vp.iter().all(|&v| v / c > 1.0), "{vp:?}");
+}
+
+#[test]
+fn at_zero_stiffness_the_theta_scheme_is_its_own_closed_form_and_only_near_the_ideal_string() {
+    // Carried from `test_kappa_zero_is_self_consistent_not_ideal_string`. At kappa = 0 the stiff
+    // string is the implicit theta-scheme -- a DIFFERENT scheme from the explicit ideal string,
+    // not exact even at lam = 1. (a) Its oracle is the closed form
+    // `s = lam^2 sin^2 / (1 + 4 theta lam^2 sin^2)`, strictly below the explicit oracle for
+    // theta > 0; (c) the two agree only loosely, in the low-mode limit.
+    let (c, l, n) = (STIFF_C, STIFF_L, 128i64);
+    // `make_stiff_string(N=128, lam=1.0)`: fs = c N / (L lam), k = 1 / fs.
+    let k = 1.0 / (c * n as f64 / (l * 1.0));
+    let theta = STIFF_THETA;
+    for m in [1i64, 5, 20] {
+        let f_stiff0 = discrete_stiff_mode_frequency(c, l, n, 0.0, k, m, theta);
+        let f_ideal = discrete_mode_frequency(c, l, n, 1.0, m);
+        assert!(
+            f_stiff0 < f_ideal,
+            "mode {m}: the implicit scheme must lie below"
+        );
+        let sin2 = (m as f64 * std::f64::consts::PI / (2 * n) as f64)
+            .sin()
+            .powi(2);
+        let s_val = sin2 / (1.0 + 4.0 * theta * sin2);
+        let closed = s_val.sqrt().asin() / (std::f64::consts::PI * k);
+        assert!(
+            ((f_stiff0 - closed) / closed).abs() <= 1e-12,
+            "mode {m}: {f_stiff0} vs the closed form {closed}"
+        );
+    }
+    for m in [1i64, 2, 4] {
+        let f_stiff0 = discrete_stiff_mode_frequency(c, l, n, 0.0, k, m, theta);
+        let f_ideal = discrete_mode_frequency(c, l, n, 1.0, m);
+        let rel = (f_stiff0 - f_ideal).abs() / f_ideal;
+        assert!(
+            rel < 1e-2,
+            "mode {m}: {rel:e} -- close, but NOT machine precision"
         );
     }
 }

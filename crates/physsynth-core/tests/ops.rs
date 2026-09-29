@@ -213,6 +213,96 @@ fn the_biharmonic_eigenvalue_is_the_second_difference_eigenvalue_squared() {
     }
 }
 
+// -- carried from `tests/test_stiff_string.py` (retirement plan §32) -------------------------------
+
+/// `np.allclose(a, b, rtol, atol)`, both terms written down: `|a - b| <= atol + rtol |b|` per
+/// element. The Python passed `rtol` at most, so every carried call keeps NumPy's hidden
+/// `atol = 1e-8`, and a call that passed neither keeps `rtol = 1e-5` too (§16's (d)).
+fn allclose(a: &[f64], b: &[f64], rtol: f64, atol: f64) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|(x, y)| (x - y).abs() <= atol + rtol * y.abs())
+}
+
+#[test]
+fn the_biharmonic_rows_and_eigenvectors_at_the_stiff_string_fixture() {
+    // Carried from `test_biharmonic_matrix_structure`, at its own N = 12, h = 0.1. The whole
+    // boundary row is pinned -- `[5, -4, 1, 0, 0] / h^4`, the simply-supported ghost reflection --
+    // where the bars above check only its diagonal; and the eigenvector claim at three modes.
+    let (n, h) = (12usize, 0.1);
+    let b = biharmonic_matrix(n, h);
+    let h4 = h.powi(4);
+    let row = |i: usize, len: usize| -> Vec<f64> { (0..len).map(|j| b.get(i, j) * h4).collect() };
+    assert!(
+        allclose(&row(0, 5), &[5.0, -4.0, 1.0, 0.0, 0.0], 1e-5, 1e-8),
+        "boundary row {:?}",
+        row(0, 5)
+    );
+    assert!(
+        allclose(&row(2, 6), &[1.0, -4.0, 6.0, -4.0, 1.0, 0.0], 1e-5, 1e-8),
+        "interior row {:?}",
+        row(2, 6)
+    );
+    assert!(b.is_symmetric());
+    for m in [1.0, 3.0, 5.0] {
+        let phi: Vec<f64> = (1..n)
+            .map(|l| (m * std::f64::consts::PI * l as f64 / n as f64).sin())
+            .collect();
+        let p4 =
+            ((4.0 / (h * h)) * (m * std::f64::consts::PI / (2.0 * n as f64)).sin().powi(2)).powi(2);
+        let want: Vec<f64> = phi.iter().map(|v| p4 * v).collect();
+        assert!(allclose(&b.matvec(&phi), &want, 1e-9, 1e-8), "mode {m}");
+    }
+}
+
+#[test]
+fn the_biharmonic_matrix_is_the_pure_stencil_away_from_the_boundary() {
+    // Carried from `test_biharmonic_matrix_matches_pure_operator_in_interior` (N = 16, h = 0.05).
+    // The Python drew the field from NumPy's seeded PCG64; the claim is about a structureless
+    // field, not that stream, so any deterministic hash will do (§15).
+    let (n, h) = (16usize, 0.05);
+    let b = biharmonic_matrix(n, h);
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    let mut u: Vec<f64> = (0..=n)
+        .map(|_| {
+            // splitmix64, mapped to [-1, 1).
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^= z >> 31;
+            (z >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
+        })
+        .collect();
+    u[0] = 0.0;
+    u[n] = 0.0;
+    let full = b.matvec(&u[1..n]); // interior nodes 1 .. N-1
+    let stencil = delta_xxxx(&u, h); // nodes 2 .. N-2
+    assert_eq!(stencil.len(), full.len() - 2);
+    assert!(
+        allclose(&full[1..full.len() - 1], &stencil, 1e-10, 1e-8),
+        "matrix {:?} vs stencil {stencil:?}",
+        &full[1..full.len() - 1]
+    );
+}
+
+#[test]
+fn the_second_difference_eigenpair_at_the_stiff_string_fixture() {
+    // Carried from `test_second_difference_matrix_eigenvalues`, at its own N = 20, h = 0.05 and
+    // modes {1, 4, 9}, with its per-element bound rather than the max-norm one above.
+    let (n, h) = (20usize, 0.05);
+    let d2 = second_difference_matrix(n, h);
+    for m in [1.0, 4.0, 9.0] {
+        let phi: Vec<f64> = (1..n)
+            .map(|l| (m * std::f64::consts::PI * l as f64 / n as f64).sin())
+            .collect();
+        let p2 = (4.0 / (h * h)) * (m * std::f64::consts::PI / (2.0 * n as f64)).sin().powi(2);
+        let want: Vec<f64> = phi.iter().map(|v| -p2 * v).collect();
+        assert!(allclose(&d2.matvec(&phi), &want, 1e-10, 1e-8), "mode {m}");
+    }
+}
+
 // -- the free-free beam operator ------------------------------------------------------------------
 
 #[test]

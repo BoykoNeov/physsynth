@@ -10,7 +10,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.sparse.linalg import eigsh
 
-from physsynth.analysis import modal, spectrum
+from physsynth.analysis import modal
 from physsynth.analysis.horizon import pitch_horizon
 from physsynth.analysis.rotating_wave import rotating_wave_history, solve_rotating_wave
 from physsynth.core.airbox import (
@@ -36,7 +36,7 @@ from physsynth.core.reed import ReedBore
 from physsynth.core.string_damped import DampedStiffString
 from physsynth.core.string_geometric import GeometricString
 from physsynth.core.string_nonlinear import TENSION_TOL_DEFAULT, TensionModulatedString
-from physsynth.core.string_stiff import THETA_DEFAULT, StiffString
+from physsynth.core.string_stiff import THETA_DEFAULT
 
 L_DEFAULT = 1.0
 T_DEFAULT = 200.0
@@ -82,29 +82,6 @@ def arpack_v0(op) -> NDArray[np.float64]:
 
 def wave_speed(T: float = T_DEFAULT, rho: float = RHO_DEFAULT) -> float:
     return float(np.sqrt(T / rho))
-
-
-def make_stiff_string(
-    *,
-    N: int = 100,
-    lam: float = 1.0,
-    kappa: float = KAPPA_DEFAULT,
-    sigma: float = 0.0,
-    theta: float = THETA_DEFAULT,
-    L: float = L_DEFAULT,
-    T: float = T_DEFAULT,
-    rho: float = RHO_DEFAULT,
-) -> StiffString:
-    """Build a stiff string at Courant number ``lam`` via ``fs = c N / (L lam)``.
-
-    Unlike the explicit ideal string, ``lam > 1`` is allowed (the implicit scheme is unconditionally
-    stable) -- a coarse-grid / large-timestep regime the explicit stiff scheme could not run.
-    """
-    c = wave_speed(T, rho)
-    fs = c * N / (L * lam)
-    return StiffString(
-        L=L, T=T, rho=rho, fs=fs, N=N, kappa=kappa, sigma=sigma, theta=theta
-    )
 
 
 def make_damped_string(
@@ -951,42 +928,6 @@ def convergence_orders(errors: np.ndarray, step_sizes: np.ndarray) -> np.ndarray
     errors = np.asarray(errors, dtype=float)
     step_sizes = np.asarray(step_sizes, dtype=float)
     return np.log(errors[:-1] / errors[1:]) / np.log(step_sizes[:-1] / step_sizes[1:])
-
-
-def measure_stiff_mode_frequencies(
-    modes: np.ndarray,
-    *,
-    N: int,
-    lam: float,
-    kappa: float = KAPPA_DEFAULT,
-    theta: float = THETA_DEFAULT,
-    secs: float = 0.5,
-    amplitude: float = 1e-3,
-) -> np.ndarray:
-    """Measure the stiff-string FDTD frequency (Hz) of each single spatial mode in ``modes``.
-
-    ``sin(m pi x / L)`` is still an *exact* discrete eigenvector of the stiff string (the
-    biharmonic block is ``(delta_xx)^2``), so a single-mode initial condition stays a pure tone and
-    its modal coordinate ``q = <u, phi_m>`` is a clean cosine at the stiff discrete frequency. The
-    projection is measured rather than a grid pickup, which can sit on a node of the mode (mode N/2
-    vanishes at every even node). The peak search is anchored at the closed-form stiff dispersion
-    oracle (which depends on ``theta``). The ideal string's twin of this helper went native with its
-    tests (retirement plan §31): ``measure_mode_frequencies`` in
-    ``crates/physsynth-core/tests/string_ideal.rs``.
-    """
-    c, L = wave_speed(), L_DEFAULT
-    out = []
-    for m in np.atleast_1d(modes):
-        m = int(m)
-        s = make_stiff_string(N=N, lam=lam, kappa=kappa, theta=theta)
-        phi = modal.mode_shape(s.x, L, m)
-        s.set_state(phi * amplitude)
-        res = simulate(s, num_steps=int(secs * s.fs), snapshot_stride=1)
-        states = np.array([state for _, state in res.snapshots])
-        q = states @ phi
-        f_oracle = modal.discrete_stiff_mode_frequency(c, L, N, kappa, s.k, m, theta)
-        out.append(spectrum.measure_partials_near(q, res.fs, np.array([f_oracle]))[0])
-    return np.array(out)
 
 
 # -- model #9: tension-modulated string -------------------------------------------------

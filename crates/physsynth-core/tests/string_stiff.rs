@@ -10,6 +10,9 @@
 //! at `sigma1 = 0` *is* model #2 has to see both, and it is the reason the two cores are separate
 //! transcriptions in the first place (see `string_stiff`'s header).
 //!
+//! The bars carried from the retired `tests/test_stiff_string.py` live in `string_stiff_harness.rs`
+//! at that file's own fixture (retirement plan §32), not here.
+//!
 //! # One test here must be run in both profiles
 //!
 //! [`squaring_is_pow_not_multiply`] pins an arithmetic *spelling*, and §17.2 established that such
@@ -17,6 +20,7 @@
 //! against `pyfloat::scalar_pow`'s `#[inline(never)]` rather than against a witness value, so it
 //! holds in both; `cargo test --release` is the run that proves it.
 
+use physsynth_core::engine::simulate;
 use physsynth_core::pyfloat::scalar_pow;
 use physsynth_core::sparse::Csr;
 use physsynth_core::string_damped as damped;
@@ -91,14 +95,13 @@ fn lossless_energy_is_conserved() {
         let mut s = stiff::StiffString::new(p);
         let x = s.p.grid();
         s.set_state(&pluck(&x, L, 0.137 * L, 1e-3), &vec![0.0; x.len()]);
-        let e0 = s.energy();
-        assert!(e0 > 0.0, "a plucked string must store energy");
-        let mut worst: f64 = 0.0;
-        for _ in 0..2000 {
-            s.step();
-            worst = worst.max((s.energy() - e0).abs() / e0);
-        }
-        assert!(worst < 1e-10, "kappa = {kappa}: drift {worst:e}");
+        assert!(s.energy() > 0.0, "a plucked string must store energy");
+        // Through the driver's `energy_drift`, which propagates a NaN; the `worst.max(..)` fold
+        // this used to be drops one and reports a clean drift for a run that blew up (§29.3).
+        let drift = simulate(&mut s, 2000, None, 0)
+            .expect("a lossless run completes")
+            .energy_drift();
+        assert!(drift < 1e-10, "kappa = {kappa}: drift {drift:e}");
     }
 }
 

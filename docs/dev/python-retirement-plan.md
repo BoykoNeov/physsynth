@@ -4415,3 +4415,211 @@ The three remaining string families, all built on this one:
 
 The human picks. §27's loose end, the free-plate half of `test_arpack_oracles_are_bit_reproducible`,
 is still open.
+
+## 32. Phase C, carrying batch 9 — the stiff string
+
+Done 2026-09-29. The human took the recommendation: the stiff string next, because the damped string
+is built on it and can then lean on its bars. One file retires whole, `tests/test_stiff_string.py`:
+**20 functions, 48 pytest cases** (the κ × λ energy sweep alone is 16).
+
+Unlike §30 and §31 this is a **new** harness file, `crates/physsynth-core/tests/string_stiff_harness.rs`
+(12 `#[test]`s), and not an extension of `string_stiff.rs`. Two reasons, both about that file:
+
+- it builds the string at `fs = 44100` and `κ = 1.5`, not at the retired `make_stiff_string`'s
+  `fs = c N / (L λ)` and `κ = 2`, so none of its fixtures was the Python's;
+- it holds `squaring_is_pow_not_multiply`, which asserts nothing in release unless it also runs
+  unoptimised (§17.2). The carried trajectories are long, and if they ever push their file into CI's
+  `release_only` list, that test must not go with them.
+
+The rest went where it belongs by §31's split. Three operator tests went to
+`crates/physsynth-core/tests/ops.rs` at the Python's own `N` and `h`. Five oracle-only tests went to
+`crates/physsynth-analysis/tests/oracles.rs`, with `θ = 0.28` written as a literal because the
+analysis crate cannot see the core's constant. There was no core source change: `impl Resonator for
+StiffString` has been in `engine.rs` since the viewer port.
+
+### 32.1 No outside referee, and the native twin reproduces the Python's figures to every digit
+
+As in §31, nothing was frozen. Every number the retired tests compared against was a closed form
+written in the test (`exp(-2σt)`, `B = π²κ²/(c²L²)`, the one-cent and 0.05-cent bars, the
+θ-scheme's `κ = 0` closed form) or already Rust through the binding (`triangular_pluck`, `simulate`,
+the spectrum detector, every oracle, `biharmonic_matrix`, `delta_xxxx`). NumPy's only other role was
+arithmetic, and the one random field (`default_rng(0)` in the stencil test) is a broadband field,
+replaced by a splitmix64 hash under §15's rule.
+
+The Python's figures were recorded before the deletion with the wheel freshly reinstalled
+(`W:\temp\claude\stiff-string\record_python.py`). The native twins reproduce **every one to every
+printed digit**, including the three that go through a reduction the native file writes by hand:
+the modal projection `q = <u, φ_m>` (Python: `states @ phi`, a BLAS dot), and the least-squares
+`B` fit (Python: `np.sum`). The convergence errors are 1.90195423931209 / 0.47833069060158095 /
+0.11986683788921937 Hz on both sides, and the five `B_fit / B_true` ratios agree to the last digit.
+That is stronger than §31, which reproduced its worst cases to the digits the Python's *comments*
+gave.
+
+### 32.2 What the existing native bars could not see
+
+`string_stiff.rs` had 14 bars before this batch, and three things the Python asserted had no native
+line at all:
+
+- **The stiff string's own loss.** Both native passivity bars ran on `DampedStiffString`, a
+  separate transcription (kept separate on purpose, see `string_stiff`'s header). `StiffString`'s
+  `σ` had neither a passivity nor a decay-rate bar. Planted breakages J and K below are the proof:
+  the only native bars that saw them were the carried ones and the twin anchor.
+- **Every θ but 0.28.** Every stiff-string energy bar ran at the default `θ`. The energy form and
+  the step both carry `θ`, and a `θ` hard-coded to 0.28 in either (breakages A and B) is exact at
+  the default. Only the carried θ sweep, `θ ∈ {0.25, 0.28, 0.5}`, sees either one.
+- **Three of the nine construction refusals.** `ρ = -1`, `T = 0` and `L = -2` had no native line.
+  The native test now asserts each of the nine at the Python's own values (base `fs = 20000`) and
+  asserts the *variant*, which `pytest.raises(ValueError)` never asked.
+
+`boundary="clamped"` is the one refusal whose subject does not survive. Parsing the string is done in
+the binding (`crates/physsynth-py/src/string_stiff.rs::boundary_ok`), and it retires with the binding.
+The core takes the answer as `boundary_ok: bool`, and what it owns is the refusal: `false` must
+return `BadBoundary`, with the base's `true` as the control. That is what is carried, and the table
+below says so rather than presenting it as the parse.
+
+One existing bar was also repaired. `lossless_energy_is_conserved` folded its drift with
+`worst.max(..)`, which drops a NaN (§29.3); it now goes through the driver's `energy_drift`.
+
+No run got shorter (§30's review rule). The existing 2,000-step runs stay, and every carried run is
+the Python's own length. Two Python tests became subsets of the κ × λ sweep, and the sweep asserts
+their claims on every one of its 16 runs:
+
+- `test_energy_conserved_quick` (κ = 2, λ = 1, 1 s, energy positive) is the sweep's κ = 2, λ = 1
+  run cut short, so the sweep asserts energy positive and finite at every step of all 16 runs;
+- `test_no_nan_including_explicit_forbidden_lambda` (κ = 5 at all four λ, 0.5 s, pickup and energy
+  finite) is the sweep's κ = 5 row cut short, so the sweep asserts the pickup finite too.
+
+The fixtures read `THETA_DEFAULT` from the model, so a default moved below the 1/4 stability floor
+would have run every Python test at the new value. The native file writes 0.28 down instead
+(§29.3), so one new line pins the model's default to the value the harness validates.
+
+### 32.3 Every margin measured
+
+| bar | measured | bar |
+|---|---|---|
+| lossless drift, κ ∈ {0, 0.5, 2, 5} × λ ∈ {1, 0.5, 2, 4}, 2 s | ≤ 1.70e-11 (κ = 0.5, λ = 0.5, 80,000 steps) | 1e-10 |
+| lossless drift, θ ∈ {0.25, 0.28, 0.5}, N = 120, 2 s | **3.39e-11** (θ = 0.25) / 1.87e-12 / 1.01e-11 | 1e-10 |
+| passivity, worst step rise / E⁰ (σ = 5, 2 s) | −2.19e-7 (every step fell) | ≤ 1e-12 |
+| decay vs `exp(-2σt)`, mode 1, σ = 4, log space | 6.0e-4 | 1% |
+| eight pluck partials vs the discrete oracle, N = 128 | 5.9e-3 cents | 0.05 cents |
+| `B_fit / B_true`, κ = 1 … 5, N = 512 | 0.9557 … 0.9963 | (0.92, 1.02) |
+| `B / κ²` spread (κ ≥ 2) / `B(4) / B(2)` | 1.0088 / 4.032 | < 1.03 / 4 ± 3% |
+| mode 4 at λ = 0.9: errors at N = 64 / 128 / 256 | 1.902 / 0.478 / 0.120 Hz | strictly shrinking |
+| its orders / mean order | 1.991, 1.997 / 1.994 | > 1.7 / (1.85, 2.15) |
+| seven modes vs the stiff oracle, λ = 0.8 | 8.0e-6 relative | 1e-4 |
+| `v_p / c` over those modes | 1.0019 → 1.8477, rising | > 1, rising |
+| start-up at rest, `u¹ − u⁻¹` vs `θa²/(1+θa) u⁰` (λ = 1 / 4) | 2.8e-10 / 2.0e-11 of its size | 1e-8 |
+| start-up launched, centred velocity vs `v⁰` | 2.4e-15 | 1e-12 |
+| pitch horizon of the oracle vs the stretched law | 48, monotone | ≥ 10, < 200 |
+
+The θ = 1/4 drift is the batch's thinnest margin, **2.9×**. It is the zero-positivity-margin case
+(the stabiliser term vanishes), and it is the same headroom §26.2 recorded for the plate at
+μ = 0.5. The bar stays at 1e-10 (CLAUDE.md).
+
+Every carried `np.allclose` keeps its unwritten `atol = 1e-8`, and the two row checks keep the
+`rtol = 1e-5` they did not write either (§16's (d)); `ops.rs` spells both terms in one helper.
+
+### 32.4 Fourteen deliberate breakages
+
+Planted one at a time with `W:\temp\claude\stiff-string\mutate.py`: each source tree snapshotted
+first, restored by copy, byte-compared. The "red" column counts `string_stiff_harness.rs`,
+`string_stiff.rs`, `ops.rs` and `oracles.rs`.
+
+| breakage | red | caught by |
+|---|---|---|
+| **A** energy: θ fixed at 0.28 (exact at the default) | 1 | of the string's own bars, the carried θ sweep only; workspace-wide also the viewer freeze `strings` |
+| **B** step: θ fixed at 0.28 in the right-hand side | 1 | the same two as A |
+| **C** construction: `t <= 0` → `t < 0` | 1 | the nine refusals, and nothing else in the workspace |
+| **D** construction: the `ρ` check dropped | 1 | the nine refusals, and nothing else in the workspace. ρ = −1 is still refused, later: `c = √(T/ρ)` is NaN, the first Cholesky pivot fails `ajj > 0`, and the error is `NotFactorable`. A test asking only for *an* error would have passed; asserting the variant is what catches it |
+| **E** oracle: κ for κ² (exact at κ = 1) | 4 | pluck partials, swept modes, `B` fit, horizon |
+| **F** start-up: the ½ dropped | 1 → 2 | at first, among the string's own bars, **only the twin anchor** `sigma1_zero_is_the_stiff_string_exactly`; now also the new start-up bar (below) |
+| **G** `B`: κ for κ² (exact at κ = 1) | 5 | `B` fit, κ-scaling, refinement, horizon, convergence |
+| **H** stretched law: `B n` for `B n²` | 3 | horizon, refinement, convergence |
+| **I** model: κ for κ² (exact at κ = 1) | 6 | pluck partials, swept modes, `B` fit, convergence, the old single-mode bar, the twin |
+| **J** loss sign flipped | 3 | passivity, decay, the twin |
+| **K** σ doubled | 2 | decay, the twin |
+| **L** `delta_xxxx`: `w[0]` weighted 1 + 1e-7 | 2 | the carried stencil bar, the old quartic |
+| **M** `D2` diagonal off by 5e-10 relative | 7 | every eigenpair bar, both carried |
+| **N** peak refiner's sign flipped | 3 | pluck partials, swept modes, convergence |
+
+**F is this batch's §30.4.** Energy is conserved from any start, and a frequency does not care about
+phase, so dropping the ½ in `u⁻¹ = u⁰ − k v⁰ + ½ k² L u⁰` passed every physics bar carried. It was
+seen only by the anchor between the stiff and damped transcriptions, and that anchor says two
+copies now *differ*, not which is wrong. The fix is §30.4's again: on an exact eigenmode `L → −λ`,
+so one step is scalar algebra. With `a = k²λ` and the string at rest,
+`u¹ − u⁻¹ = θa² / (1 + θa) · u⁰`, second order in `a`; without the ½ it is first order. Launched
+from `u⁰ = 0`, `u¹ = −u⁻¹ = k v⁰`, so the centred velocity is `v⁰` exactly.
+`the_start_up_is_the_consistent_taylor_step_exactly` asserts both at λ = 1 and λ = 4, and re-planting
+F turns it red.
+
+A twin anchor turned red on I, J and K too. Each time a carried physics bar was also red, and that
+is what the table credits (the advisor's warning before planting).
+
+The "only" claims above were then re-planted against the whole workspace (§31's rule), with
+`cargo test --workspace --release --no-fail-fast` over all 82 test binaries
+(`W:\temp\claude\stiff-string\mutate_ws.py`):
+
+| breakage | red, workspace-wide |
+|---|---|
+| A | `string_stiff_harness`'s θ sweep; `physsynth-viewer`'s `frozen::strings` |
+| B | the same two |
+| C | the nine refusals, alone |
+| D | the nine refusals, alone |
+| F | the twin anchor; the new start-up bar; `frozen::strings` |
+
+So A, B and F each have a second witness outside the string's own files: the viewer freeze. That
+freeze compares exactly only on the Windows CI job (§23.19), so on Linux it is a structure check and
+A, B and F would each be seen by the string's own bars alone. C and D really are seen by one test
+in the workspace. F confirms §30.4's point from the other side: before the start-up bar, its two
+witnesses were the damped transcription and the viewer's frozen payload. Both are copies, and a
+copy going red says a number moved, not which side is right.
+
+### 32.5 The retirement rule, discharged
+
+| retired | native bar |
+|---|---|
+| `test_energy_conserved_quick` | `lossless_energy_is_conserved_across_stiffness_and_courant_number` — its κ = 2, λ = 1 run, 2 s ⊇ 1 s, energy positive at every step |
+| `test_energy_conserved_across_kappa_and_lambda` (16) | the same test, all 16 runs |
+| `test_energy_conserved_across_theta` (3) | `lossless_energy_is_conserved_and_positive_at_every_theta` |
+| `test_passivity_monotonic_decrease` | `the_stiff_strings_own_loss_is_passive` |
+| `test_decay_rate_matches_2sigma_low_mode` | `a_low_mode_decays_at_two_sigma` |
+| `test_partials_match_discrete_oracle` | `every_partial_of_a_pluck_lands_on_the_schemes_own_oracle` |
+| `test_discrete_oracle_converges_to_continuum_stretched_law` | `oracles.rs::the_stiff_oracle_sits_on_the_stretched_law_out_to_a_measured_horizon` |
+| `test_B_tracks_kappa_squared` | `the_fitted_inharmonicity_tracks_kappa_squared` |
+| `test_second_order_convergence` | `a_stiff_mode_converges_at_second_order_onto_the_stretched_law` |
+| `test_dispersion_matches_stiff_oracle_and_stiffens_high_partials` | `every_swept_mode_lands_on_the_stiff_oracle_and_the_phase_velocity_rises_above_c` |
+| `test_no_nan_including_explicit_forbidden_lambda` (4) | the κ × λ sweep's κ = 5 row, 2 s ⊇ 0.5 s, pickup and energy finite |
+| `test_invalid_parameters_rejected` (9) | `the_nine_invalid_parameter_sets_are_rejected`; `"clamped"` as `boundary_ok = false` (the parse retires with the binding) |
+| `test_lambda_above_one_accepted` | `a_courant_number_above_one_is_accepted_and_reported` |
+| `test_kappa_zero_is_self_consistent_not_ideal_string` | `oracles.rs::at_zero_stiffness_the_theta_scheme_is_its_own_closed_form_and_only_near_the_ideal_string` |
+| `test_biharmonic_matrix_structure` | `ops.rs::the_biharmonic_rows_and_eigenvectors_at_the_stiff_string_fixture` |
+| `test_biharmonic_matrix_matches_pure_operator_in_interior` | `ops.rs::the_biharmonic_matrix_is_the_pure_stencil_away_from_the_boundary` |
+| `test_second_difference_matrix_eigenvalues` | `ops.rs::the_second_difference_eigenpair_at_the_stiff_string_fixture` |
+| `test_inharmonicity_B_and_stretched_law` | `oracles.rs::the_inharmonicity_is_zero_scales_as_kappa_squared_and_stretches_every_partial` |
+| `test_discrete_stiff_oracle_tends_to_continuum_on_refinement` | `oracles.rs::the_stiff_oracle_approaches_the_continuum_under_refinement` |
+| `test_stiff_dispersion_frequencies_match_scalar_oracle` | `oracles.rs::the_stiff_dispersion_is_the_scalar_oracle_and_rises_above_c` |
+
+Orphans removed from `tests/helpers.py`, each name grepped on its own (§31.5):
+
+- `make_stiff_string` and `measure_stiff_mode_frequencies`, whose only caller was the deleted file;
+- with them the `StiffString` import and the `spectrum` import, which ruff reported unused.
+
+`THETA_DEFAULT`, `KAPPA_DEFAULT` and `convergence_orders` stay: the damped, tension and geometric
+string files and the bore's modal file still call them. `docs/dev/resolution-horizon-plan.md`'s
+hand-picked-band audit names the two native bars for the stiff string's rows.
+
+### 32.6 Cost and counts
+
+- **pytest 1,294 → 1,245**: 48 cases plus the one `test_xdist_groups` parametrization for the
+  deleted file, reconciled by collecting before and after.
+- **Native +20**: 12 in the new `string_stiff_harness.rs`, 3 in `ops.rs` (14 → 17) and 5 in
+  `oracles.rs` (17 → 22). The new file takes 6.9 s in release and **92 s in debug** on
+  the dev machine. It stays in both CI profiles by the default: the debug job took 6.0 minutes
+  against the release job's 11.3 at §31, so it remains the shorter job.
+- **43 physics files remain**, with **476** test functions by the §24.1 count (496 − 20).
+
+### 32.7 What is next
+
+The two remaining string families: the damped string (`test_damped_string`, 16 functions), which
+can now lean on this file's harness, and the tension-modulated string (`test_tension_string`, 30).
+The human picks. §27's loose end is still open.
