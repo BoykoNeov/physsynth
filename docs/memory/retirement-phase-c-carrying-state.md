@@ -1,11 +1,11 @@
 ---
 name: retirement-phase-c-carrying-state
-description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-7 done 2026-09-29 (every plate family, membrane, beam); 48 files / 510 functions left"
+description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-8 done 2026-09-29 (every plate family, membrane, beam, ideal string); 44 files / 496 functions left"
 metadata:
   node_type: memory
   type: project
   originSessionId: bc58c454-d6f0-40f5-8259-4ca90ee23d46
-  modified: 2026-09-29T07:53:06.604Z
+  modified: 2026-09-29T13:49:32.533Z
 ---
 
 Phase C of `docs/dev/python-retirement-plan.md`, second kind of work: the model is already Rust,
@@ -29,7 +29,12 @@ breakages, delete the file.
   (16 fns / 32 cases) → EXTENDED the existing `tests/beam.rs` (17 → 24) instead of a new harness file,
   because it was already at `make_beam`'s parameters. `impl Resonator for FreeBeam` added to engine.rs.
   Frozen `tests/reference/beam.json` (7 grids). 12 plants all red.
-Remaining after §30: **48 physics files / 510 functions** (next: the string families). Next batch not
+- §31 batch 8 (human took the recommendation, "ideal string"): `test_{energy,modal,convergence,dispersion}.py`
+  whole + the first 4 fns of `test_stability.py` (20 fns / 35 cases) → EXTENDED `tests/string_ideal.rs`
+  (13 → 21) + one bar in `physsynth-analysis/tests/oracles.rs`. NO outside referee: nothing frozen. Orphans
+  `make_string` and `measure_mode_frequencies` removed from helpers. 10 plants all red.
+Remaining after §31: **44 physics files / 496 functions** (re-count; the same count at §30's commit gives 512,
+not 510 — a counting-method gap). Next: stiff (20), damped (16) or tension (30) string. Next batch not
 chosen — the user picks the family; a recommendation + "go with it" is an accepted answer.
 Loose end (from §27): `test_arpack_oracles_are_bit_reproducible`'s surviving free-plate half guards a
 helper whose only caller is the guard itself.
@@ -93,6 +98,14 @@ helper whose only caller is the guard itself.
   old length) — the first draft cut μ=16 from 8,000 steps to 5,120 (caught in review).
 - A margin row must be the measured worst over EVERY step, not a sampled one (review caught "never rose").
 - §30 beam.rs: 0.70 s release / 14.5 s debug locally, 1.1 s / 9.5 s on CI (run 36553822722, green on Linux, first Linux run of the frozen referee) — both profiles (debug job 3.2 min vs release 11.6).
+- An existing native bar at ONE parameter value is blind to a defect that vanishes there (§31: an energy with
+  `(h/k)²` for `c²` is exact at λ=1 and passed every pre-existing string bar). Carry the Python's SWEEP, and
+  plant a defect that is invisible at the old parameter to prove it.
+- Grep each helper name ALONE before calling it live: an OR'd grep reported callers that belonged to the
+  other names, and `make_string` was actually an orphan (§31.5).
+- A refiner mutation can leave a bar green for a structural reason: when every tone lands on an exact FFT bin
+  the parabolic correction is 0 whatever its sign (§31.4 J). Explain it, don't call it a gap.
+- §31 string_ideal.rs: 0.16 s release / 3.3 s debug locally — both profiles.
 - §29 core file: 3.4 s release / 59 s debug locally, 3.9 s / 37 s on CI (run 36546609975, green on Linux) — stayed in both profiles (debug job 3.0 min vs release 11.2).
 
 Related: [[python-retirement-state]], [[retirement-phase-d-state]], [[retirement-phase-a-state]],
