@@ -110,8 +110,12 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
 
    **Phase C's CARRYING batches began 2026-09-29 (retirement plan §24)** — retiring a Python
    physics file whose model is already native: read each test's assertions, write or find the
-   native bar, plant breakages to prove the bars live, delete. 62 physics files / 625 functions
-   remain (§24.1; §9's map is stale). Two rules §24 set: where a Python test's truth came from
+   native bar, plant breakages to prove the bars live, delete. §25 did the supported grained
+   plate; **61 physics files / 606 functions remain** (§25.6; §9's map is stale). §25 added two
+   rules: everything else in a Python test already runs through the Rust binding, so **only the
+   NumPy/SciPy numbers are independent referees** — those are what must be recorded; and a
+   **control must assert that it differs** from its subject, or it can silently assert nothing
+   (the Python ledger control did). Two rules §24 set: where a Python test's truth came from
    SciPy's eigensolvers, **record SciPy's numbers before deleting** — and record them with LAPACK's
    dense solve, because ARPACK at the test's own shift was the least accurate solver in the room
    (7e-7 off, §24.3); and a bar needing both crates lives in `physsynth-core`'s tests through a

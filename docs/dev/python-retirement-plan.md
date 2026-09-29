@@ -3486,7 +3486,10 @@ which had no other caller. `docs/dev/orthotropic-plate-plan.md` now points at th
   2,209-node plate for the FFT bar, three 20k-step conservation runs). The file is **not** on the
   `rust-debug` job's `release_only` list, per the default that a new core file lands in both
   profiles, and it asserts bit-identity in two places (the squaring path, the reproduced SciPy gap)
-  — the kind the both-profiles rule protects. Whether to add it is the human's call.
+  — the kind the both-profiles rule protects. Whether to add it is the human's call. **On CI
+  (`679a9ad`)** the file took 304 s in `rust-debug`, which went from ~3.5 min to 8 min 20 s; it
+  is not the gate's critical path, which is still the release `rust` job at ~10 min. Everything
+  passed on Linux, including the ledger control's last-bit difference.
 
 ### 25.6 What is next
 

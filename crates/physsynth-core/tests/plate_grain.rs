@@ -45,8 +45,9 @@ const THETA: f64 = 0.28;
 const DRIFT_TOL: f64 = 1e-10;
 
 /// Passivity is asserted against a roundoff bar relative to the initial energy, not a bare
-/// `<= 0.0`. Every test here plucks from rest, so step 0 dissipates essentially nothing (measured
-/// -2.70e-18 against -1.50e-10 for the next step) and its sign is decided by summation order. The
+/// `<= 0.0`. Every test here plucks from rest, so step 0 dissipates essentially nothing (the Python
+/// file measured -2.70e-18 against -1.50e-10 for the next step) and its sign is decided by
+/// summation order, which is how the Python's bare `<= 0.0` passed locally and failed on CI. The
 /// bar is ~3e-17 here, still five orders below a genuine decrement.
 const PASSIVITY_ROUNDOFF: f64 = 1e-12;
 
@@ -257,7 +258,8 @@ fn the_analytic_sine_is_an_exact_eigenvector_of_the_grained_operator() {
     // The bar is 1e-10, not the Python's 1e-11, because the Python's passed with 2.2x to spare:
     // measured worst 4.5e-12 (strong) and 3.0e-12 (wild). That is the rounding floor, not a
     // defect — `B`'s entries are ~1e8 (`g · 64/h⁴`) and the (1,1) eigenvalue ~1e3, so
-    // `eps · |B| / q` is already ~1e-11. Any wiring error puts the residual near 1, so 1e-10 (22x) loses nothing.
+    // `eps · |B| / q` is already ~1e-11. Any wiring error puts the residual near 1, so 1e-10
+    // (22x) loses nothing.
     for g in [G_STRONG, G_WILD] {
         let p = params(24, 2.0, 0.0, (0.62, 0.43), g);
         let mut worst = 0.0f64;
