@@ -22,12 +22,14 @@
 //!
 //! Model #3 is model #2 plus one loss term, and its Python file is very nearly a copy of this one.
 //! Backing both Python classes with a single superset here would be less code and would **make a
-//! test stop testing**: `tests/test_damped_string.py` anchors the two together by asserting that a
-//! damped string with `sigma1 = 0` is `array_equal` to a stiff one, energy trace included, over
-//! 1,500 steps. That anchor is a real comparison of two independent transcriptions in Python; if
-//! both sides resolved to one implementation here it would be vacuously true under the flag, and a
-//! guard that silently covers nothing is a failure mode this migration has already met once
-//! (§17.6). So the duplication is deliberate, and the anchor stays a detector.
+//! test stop testing**: the retired `tests/test_damped_string.py` anchored the two together by
+//! asserting that a damped string with `sigma1 = 0` is `array_equal` to a stiff one, energy trace
+//! included, over 1,500 steps, and that anchor is native now at the same fixture
+//! (`tests/string_damped_harness.rs`) and at its own (`tests/string_stiff.rs`). It is a real
+//! comparison of two independent transcriptions; if both sides resolved to one implementation it
+//! would be vacuously true, and a guard that silently covers nothing is a failure mode this
+//! migration has already met once (§17.6). So the duplication is deliberate, and the anchor stays a
+//! detector — of a DIFFERENCE, not of which side is wrong (retirement plan §32.4, §33.4).
 //!
 //! # Where the two evaluation-order hazards live
 //!

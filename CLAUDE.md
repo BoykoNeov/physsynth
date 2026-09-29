@@ -112,8 +112,12 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    physics file whose model is already native: read each test's assertions, write or find the
    native bar, plant breakages to prove the bars live, delete. §25 did the supported grained
    plate, §26 the plain plate, §27 the free plate, §28 the guitar/disk — **every plate family's
-   Python suite is gone** — §29 the membrane, §30 the beam, §31 the ideal string and §32 the stiff
-   string; **43 physics files / 476 functions remain** (§9's map is stale). §32 reproduced every
+   Python suite is gone** — §29 the membrane, §30 the beam, §31 the ideal string, §32 the stiff
+   string and §33 the damped string; **42 physics files / 460 functions remain** (§9's map is
+   stale). §33 found three defects NOTHING in the workspace saw — the damped string's `θ` hard-coded
+   to its default in the energy or the step (every test ran at the default), and the T60 constant
+   moved 1% (it cancels from both round trips) — and the human chose to guard both, the second by
+   carrying the analysis freeze's recorded row natively. §32 reproduced every
    Python figure to the digit, and found §30's start-up blind spot again: a dropped ½ in `u⁻¹` was
    seen only by two copies, the stiff↔damped twin anchor and the viewer freeze, until an exact
    eigenmode start-up bar was added — a copy going red says two numbers differ, not which is wrong. §31 had no outside referee to freeze, and

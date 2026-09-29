@@ -21,7 +21,6 @@ from physsynth.core.body import ModalBody
 from physsynth.core.bore import C0_AIR, RHO0_AIR, Bore
 from physsynth.core.bow import BowedString
 from physsynth.core.collision import BarrierString
-from physsynth.core.engine import simulate
 from physsynth.core.mallet import MalletMembrane, MalletPlate, MalletVKPlate, MalletWall
 from physsynth.core.membrane import Domain, Membrane
 from physsynth.core.plate import THETA_DEFAULT as PLATE_THETA_DEFAULT
@@ -106,51 +105,6 @@ def make_damped_string(
     return DampedStiffString(
         L=L, T=T, rho=rho, fs=fs, N=N, kappa=kappa, sigma0=sigma0, sigma1=sigma1, theta=theta
     )
-
-
-def measure_mode_decay_factor(
-    m: int,
-    *,
-    N: int,
-    lam: float,
-    kappa: float = KAPPA_DEFAULT,
-    sigma0: float = 0.0,
-    sigma1: float = 0.0,
-    theta: float = THETA_DEFAULT,
-    steps: int = 4000,
-    window: tuple[float, float] = (0.1, 0.7),
-    amplitude: float = 1e-3,
-) -> float:
-    """Measure the per-step **energy** decay factor ``g_m`` of a single mode ``m`` (model #3).
-
-    Initialises the string with one exact discrete eigenvector ``sin(m pi x / L)``; the field stays
-    ``u(t) = q(t) phi_m`` so the energy decays (essentially ripple-free, like the lossless
-    cross-time energy) as ``g_m^n``. A log-linear least-squares fit of ``E^n`` over an **interior**
-    window (``window`` fractions of the run -- skipping the start, where the lossless Taylor
-    ``u^{-1}`` is slightly inconsistent under damping) recovers ``ln g_m`` robustly; the fit
-    averages out any small ripple. Returns ``g_m = exp(slope per step)``, comparable directly to
-    :func:`physsynth.analysis.damping.discrete_damped_mode_decay`.
-    """
-    L = L_DEFAULT
-    s = make_damped_string(
-        N=N, lam=lam, kappa=kappa, sigma0=sigma0, sigma1=sigma1, theta=theta
-    )
-    phi = modal.mode_shape(s.x, L, m)
-    s.set_state(phi * amplitude)
-    res = simulate(s, num_steps=steps)
-    e = res.energy
-
-    i0 = int(window[0] * steps)
-    i1 = int(window[1] * steps)
-    # Clip the window to where energy is still well above the roundoff floor (avoid log of noise).
-    floor = e[0] * 1e-13
-    good = np.where(e[i0 : i1 + 1] > floor)[0]
-    if len(good) < 8:
-        raise ValueError("decay window too short / energy hit the roundoff floor; raise amplitude "
-                         "or lower steps/sigma.")
-    idx = np.arange(i0, i1 + 1)[good]
-    slope = np.polyfit(idx, np.log(e[idx]), 1)[0]  # per-step ln-energy slope
-    return float(np.exp(slope))
 
 
 # =====================================================================================

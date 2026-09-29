@@ -181,8 +181,9 @@ fn a_single_mode_oscillates_at_the_analytic_frequency() {
 
 #[test]
 fn sigma1_zero_is_the_stiff_string_exactly() {
-    // The anchor `tests/test_damped_string.py` asserts across the two Python classes, here across
-    // the two Rust ones. Exact, not close: the sigma1 terms are GUARDED OUT rather than added as
+    // The anchor the retired `tests/test_damped_string.py` asserted across the two Python classes,
+    // here across the two Rust ones (its own fixture is carried in `string_damped_harness.rs`).
+    // Exact, not close: the sigma1 terms are GUARDED OUT rather than added as
     // zeros, in the matrix and in the right-hand side alike, so the two must do identical
     // arithmetic. This is the test that pays for keeping the two cores separate transcriptions.
     for kappa in [0.0, KAPPA] {

@@ -226,7 +226,8 @@ actually produced is a limiter for each one, written into the test beside the nu
 
 ### 7.1 §6 named the wrong example, and deriving it would have made the test worse
 
-`test_damped_string.py::test_sigma1_makes_high_partials_die_faster` asserts over `[1..16]`, and §6
+`test_damped_string.py::test_sigma1_makes_high_partials_die_faster` (native since 2026-09-29 as
+`string_damped_harness.rs::sigma1_makes_high_partials_die_faster`) asserts over `[1..16]`, and §6
 cited it as the exemplar. It is a **decay-rate** band: the claim is that the per-mode damping rate
 *rises* with `σ₁ > 0` and *falls* without it, and the test's own comment already names its limiter —
 "the rate turns over past ~m=32". That turnover is a numerator `~p²` against a θ denominator `~p⁴`;
@@ -285,11 +286,11 @@ the beam's row carries two bounds.
 | `test_bore_modal.py::test_open_open_full_series_present` | 4 | continuum | exact at `λ=1`; the claim is *presence* of the evens | no |
 | `test_bore_modal.py::test_discrete_equals_continuum_at_lambda_one` | 6 | continuum | exactness **is** the subject | no |
 | `test_stiff_string.py::test_partials_match_discrete_oracle` (native since 2026-09-29: `string_stiff_harness.rs::every_partial_of_a_pluck_lands_on_the_schemes_own_oracle`, same eight partials and 0.05 cent) | 8 | own discrete oracle | detectability | no |
-| `test_damped_string.py::test_partials_unmoved_by_light_damping` | 8 | own discrete oracle | detectability | no |
+| `test_damped_string.py::test_partials_unmoved_by_light_damping` (native since 2026-09-29: `string_damped_harness.rs::light_damping_leaves_every_partial_on_the_undamped_oracle`, same eight partials and one cent) | 8 | own discrete oracle | detectability | no |
 | `test_bore_modal.py::test_oracle_tracks_measured_spectrum` | 5 | own discrete oracle | detectability | no |
 | `test_plate_modal.py::test_low_spectrum_via_eigsh_matches_oracle` | 6 | own discrete oracle | detectability + `eigsh` cost | no |
 | `test_membrane_modal.py::test_circle_low_spectrum_tracks_bessel` (native since 2026-09-29: `membrane_harness.rs::the_disk_low_spectrum_tracks_the_sorted_bessel_series`, same bar, the "not a horizon" note carried verbatim) | 8 @ 20c | Bessel continuum | **staircased domain**, not dispersion | no |
-| `test_damped_string.py::test_sigma1_makes_high_partials_die_faster` | `[1..16]` | — (decay rates) | rate turnover at `~m=32` | no, §7.1 |
+| `test_damped_string.py::test_sigma1_makes_high_partials_die_faster` (native since 2026-09-29: `string_damped_harness.rs::sigma1_makes_high_partials_die_faster`, same `[1..16]` and the same note) | `[1..16]` | — (decay rates) | rate turnover at `~m=32` | no, §7.1 |
 | four single-mode FFT sanity checks (beam, plate, free plate, orthotropic plate) | 1 | own oracle | one mode by design | no |
 
 **Every literal was conservative, never over-claiming.** 10 against a real 48, 4 against 6, 1

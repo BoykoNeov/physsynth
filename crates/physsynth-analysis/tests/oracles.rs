@@ -112,6 +112,136 @@ fn the_spatial_eigenvalue_reaches_its_continuum_value() {
     }
 }
 
+// The five below are carried from `tests/test_damped_string.py` (retirement plan §33), at the
+// damped-string harness's own numbers — the stiff string's c = 200 m/s, L = 1, kappa = 2 and
+// theta = 0.28, declared with the stiff-string bars further down. The bars above make the same
+// kinds of claim at L = 0.65, kappa = 0 and theta = 0.5, which is not the Python's case, and never
+// reach the T60 mapping's stiff branch.
+
+#[test]
+fn the_continuum_loss_rate_is_two_sigma_eff_and_rises_only_with_sigma1() {
+    // Carried from `test_continuum_rate_is_two_sigma_eff`. `2(sigma0 + sigma1 beta^2)` with
+    // `beta = m pi / L`, written here; then frequency-independent (identical at every mode) when
+    // sigma1 = 0, and rising with mode number when sigma1 > 0.
+    let (c, l, kappa) = (STIFF_C, STIFF_L, STIFF_KAPPA);
+    let (s0, s1) = (1.5, 3e-4);
+    for m in [1i64, 3, 7] {
+        let beta2 = (m as f64 * std::f64::consts::PI / l).powi(2);
+        let want = 2.0 * (s0 + s1 * beta2);
+        let got = modal_loss_rate_continuum(c, l, kappa, s0, s1, m);
+        assert!(
+            ((got - want) / want).abs() <= 1e-12,
+            "mode {m}: {got} != {want}"
+        );
+    }
+    let flat: Vec<f64> = [1i64, 5, 10]
+        .iter()
+        .map(|&m| modal_loss_rate_continuum(c, l, 0.0, 2.0, 0.0, m))
+        .collect();
+    assert!(flat[0] == flat[1] && flat[1] == flat[2], "{flat:?}");
+    let rising: Vec<f64> = [1i64, 5, 10]
+        .iter()
+        .map(|&m| modal_loss_rate_continuum(c, l, 0.0, 2.0, 1e-3, m))
+        .collect();
+    assert!(rising[0] < rising[1] && rising[1] < rising[2], "{rising:?}");
+}
+
+#[test]
+fn the_discrete_loss_rate_tends_to_the_continuum_one_at_the_harness_parameters() {
+    // Carried from `test_discrete_rate_tends_to_continuum_on_refinement`: mode 4 at lam = 1
+    // (`k = L / (c N)`), N = 256, 512, 1024 — the error falls monotonically and is inside 0.1% on
+    // the finest grid.
+    let (c, l, kappa, m) = (STIFF_C, STIFF_L, STIFF_KAPPA, 4i64);
+    let (s0, s1) = (2.0, 5e-4);
+    let cont = modal_loss_rate_continuum(c, l, kappa, s0, s1, m);
+    let errs: Vec<f64> = [256i64, 512, 1024]
+        .iter()
+        .map(|&n| {
+            let k = l / (c * n as f64);
+            (discrete_damped_mode_rate(c, l, n, kappa, k, STIFF_THETA, s0, s1, m) - cont).abs()
+        })
+        .collect();
+    println!("errors {errs:?}, finest relative {:e}", errs[2] / cont);
+    assert!(
+        errs[0] > errs[1] && errs[1] > errs[2],
+        "not converging to the continuum: {errs:?}"
+    );
+    assert!(
+        errs[2] / cont < 1e-3,
+        "{:e} on the finest grid",
+        errs[2] / cont
+    );
+}
+
+#[test]
+fn a_lossless_stiff_string_does_not_decay_at_the_harness_parameters() {
+    // Carried from `test_decay_factor_lossless_is_unity`: N = 128, lam = 1, modes 1, 10 and 50.
+    // The Python allowed `abs = 1e-15` on `g`; this asserts it EXACTLY, as the kappa = 0 bar above
+    // does — with both sigmas zero, `a` and `c` are the same expression (`base +- 0 k`).
+    let (c, l, n, kappa) = (STIFF_C, STIFF_L, 128i64, STIFF_KAPPA);
+    let k = l / (c * n as f64);
+    for m in [1i64, 10, 50] {
+        let g = discrete_damped_mode_decay(c, l, n, kappa, k, STIFF_THETA, 0.0, 0.0, m);
+        assert_eq!(g, 1.0, "mode {m}");
+        let rate = discrete_damped_mode_rate(c, l, n, kappa, k, STIFF_THETA, 0.0, 0.0, m);
+        assert_eq!(rate, 0.0, "mode {m}");
+    }
+}
+
+#[test]
+fn the_t60_inversion_round_trips_through_the_stiff_dispersion() {
+    // Carried from `test_loss_coefficients_from_T60_pure_roundtrip`, at kappa = 2: the STIFF
+    // branch of `beta^2(omega)`, which the kappa = 0 round trip above never takes. The forward map
+    // is the Python's own `t60_at`, written here from the continuum dispersion
+    // `kappa^2 beta^4 + c^2 beta^2 = omega^2` rather than read from the implementation, so a
+    // wrong branch is not inverted by itself.
+    let (c, l, kappa) = (STIFF_C, STIFF_L, STIFF_KAPPA);
+    let (s0, s1) = (1.3, 8e-4);
+    let t60_at = |f: f64| {
+        let omega2 = (2.0 * std::f64::consts::PI * f).powi(2);
+        let beta2 =
+            (-(c * c) + (c.powi(4) + 4.0 * kappa * kappa * omega2).sqrt()) / (2.0 * kappa * kappa);
+        t60_seconds_per_rate() / (s0 + s1 * beta2)
+    };
+    let (f1, f2) = (120.0, 1800.0);
+    let (g0, g1) = loss_coefficients_from_t60(c, l, kappa, f1, t60_at(f1), f2, t60_at(f2))
+        .expect("a decreasing T60 pair is solvable");
+    println!("sigma0 {g0:?}, sigma1 {g1:?}");
+    assert!(((g0 - s0) / s0).abs() <= 1e-10, "sigma0 {g0} != {s0}");
+    assert!(((g1 - s1) / s1).abs() <= 1e-10, "sigma1 {g1} != {s1}");
+}
+
+#[test]
+fn the_t60_inversion_refuses_a_rising_t60_and_a_single_frequency_for_their_own_reasons() {
+    // Carried from `test_loss_coefficients_from_T60_rejects_increasing_T60`, at kappa = 2. The
+    // Python asked only for a `ValueError`; the two refusals are told apart here by their prose
+    // (not by the numbers the first one formats).
+    let (c, l, kappa) = (STIFF_C, STIFF_L, STIFF_KAPPA);
+    let rising = loss_coefficients_from_t60(c, l, kappa, 100.0, 1.0, 2000.0, 5.0)
+        .expect_err("T60 rising with frequency asks for negative loss");
+    assert!(rising.contains("negative loss"), "{rising}");
+    let single = loss_coefficients_from_t60(c, l, kappa, 100.0, 1.0, 100.0, 2.0)
+        .expect_err("one frequency cannot separate sigma0 from sigma1");
+    assert!(single.contains("two distinct frequencies"), "{single}");
+}
+
+#[test]
+fn the_t60_inversion_lands_on_the_pythons_recorded_answer() {
+    // NOT carried from `test_damped_string.py`: added in §33.4 (the human's call). The two round
+    // trips above spell the forward map with `t60_seconds_per_rate()` too, so a constant moved by
+    // 1% cancels out of both, and the harness's simulated T60 bar is 4%; a 1% move was seen by
+    // nothing native in the workspace. This is the row `tests/analysis_frozen_values.py` recorded
+    // from the Python implementation before it was deleted (gap 0.0 at generation), at the frozen
+    // case's own arguments, against that file's 1e-13 relative bar.
+    let (g0, g1) = loss_coefficients_from_t60(200.0, 0.65, 0.7, 200.0, 6.0, 2000.0, 1.5)
+        .expect("the frozen case is solvable");
+    println!("sigma0 {g0:?}, sigma1 {g1:?}");
+    for (got, want) in [(g0, 1.1147930129676977), (g1, 0.0009249908881590224)] {
+        let rel = ((got - want) / want).abs();
+        assert!(rel <= 1e-13, "{got:?} vs the Python's {want:?} ({rel:e})");
+    }
+}
+
 // -- dispersion ------------------------------------------------------------------------------
 
 #[test]

@@ -4633,3 +4633,212 @@ hand-picked-band audit names the two native bars for the stiff string's rows.
 The two remaining string families: the damped string (`test_damped_string`, 16 functions), which
 can now lean on this file's harness, and the tension-modulated string (`test_tension_string`, 30).
 The human picks. §27's loose end is still open.
+
+## 33. Phase C, carrying batch 10 — the damped string
+
+Done 2026-09-29. The human took the recommendation: the damped string, because it is built on the
+stiff string and can lean on §32's bars. One file retires whole, `tests/test_damped_string.py`:
+**16 functions, 28 pytest cases** (the ten invalid parameter sets and the four Courant numbers of
+the no-NaN run are parametrised).
+
+As in §32 this is a **new** harness file, `crates/physsynth-core/tests/string_damped_harness.rs`
+(14 `#[test]`s: 12 carried, 2 added), for §32's two reasons: the existing `string_damped.rs` runs
+its own fixture, and `string_stiff.rs` holds `squaring_is_pow_not_multiply`, which must keep its
+debug run. The five oracle-only tests went to `crates/physsynth-analysis/tests/oracles.rs` at the
+harness's own numbers (`c = 200`, `L = 1`, `κ = 2`, `θ = 0.28` written as a literal, §29.3), with
+one added bar next to them. There was no core source change.
+
+### 33.1 One outside referee, replaced rather than dropped
+
+The per-mode decay factor, the file's money test, was measured by `np.polyfit` over `ln E^n` — a
+NumPy number, and the only one in the file. §26.1's move carries it: the harness's
+`mode_decay_factor` transcribes the retired `measure_mode_decay_factor` (window
+`[int(0.1 steps), int(0.7 steps)]`, clipped at `1e-13 E^0`, at least eight points) with the slope
+written as the centred normal equation, and `the_decay_fit_reproduces_numpys_polyfit` certifies it
+against the six factors the Python recorded before the deletion
+(`W:\temp\claude\damped-string\python_record.txt`, wheel freshly reinstalled). The bar is 1e-9 on
+the rate; the measured gap is **0** at all six modes.
+
+The certificate is not a physics bar and the breakage table does not credit it. The energy it fits
+is Rust on both sides, recomputed on every run, so any change to the model moves the energy and
+turns it red: it went red on five of the fourteen breakages, always beside a physics bar except
+once (G, below).
+
+Every other number the retired tests compared against was a closed form written in the test (the
+continuum rate `2(σ0 + σ1β²)`, the one-cent bar, the 60 dB = `1e-3` amplitude of the T60 check) or
+already Rust through the binding (`simulate`, `triangular_pluck`, every oracle in
+`analysis/damping.py`, the spectrum detector). The native twins reproduce **every recorded Python
+figure to every printed digit**: the lossless drift, both passivity rises, the six decay factors
+and their errors, the two measured rates, both T60 inversions and their errors, the refinement
+errors and the partial shift — as §32.1 did for the stiff string.
+
+### 33.2 What the existing native bars could not see
+
+The damped string has no native test file of its own. Five bars in `string_stiff.rs` ran it at
+that file's fixture (`fs = 44100`, `κ = 1.5`): a passivity bar, the twin anchor, the solve's
+inverse, the construction order and the no-CFL run. The analysis crate had the damping oracles at
+`L = 0.65`, `κ = 0`, `θ = 0.5`. What the Python asserted and no native line did:
+
+- **The damped string lossless.** No native bar ran `DampedStiffString` with both losses zero;
+  `string_stiff.rs`'s lossless bar runs `StiffString`.
+- **The money test.** A single mode's measured decay against the scheme's own `g = c/a`, at six
+  modes, with the underdamped branch asserted. Breakage C (the continuum `β²` in place of the
+  discrete `p²` inside the oracle's `σ_eff`) is seen by this one test **and nothing else in the
+  workspace** (re-planted over all 83 test binaries).
+- **The T60 mapping's stiff branch.** The analysis crate's round trip ran at `κ = 0`, so the
+  `κ²β⁴ + c²β² = ω²` solve was never taken. Breakage E (κ for κ², exact at κ = 1) is now red in
+  the carried round trip and the carried simulated T60.
+- **The ten construction refusals at the Python's values** (`ρ = −1`, `T = 0`, `L = −2`,
+  `κ = −0.1`, `σ0 = −0.1`, `σ1 = −0.1`, `N = 1`, `θ = 0`, `θ = 1.5`, `"clamped"`, base
+  `fs = 20000`, `N = 100`); `construction_rejects_in_pythons_order` checks the order at its own
+  fixture. The native test asserts each *variant*. `"clamped"` is carried as
+  `boundary_ok = false` → `BadBoundary`, as in §32.2: the parse retires with the binding.
+
+And three things **nothing** saw — neither the Python nor any native bar — which §33.4 found by
+planting and which the human chose to guard (two new bars; see §33.4).
+
+No run got shorter (§30's review rule): every carried run is the Python's own length, the money
+test's 15,000 steps and the T60 check's 20,000 included.
+
+### 33.3 Every margin measured
+
+| bar | measured | bar |
+|---|---|---|
+| lossless drift, N = 100, λ = 1, 1 s | 7.83e-12 | 1e-10 |
+| lossless drift, θ ∈ {0.25, 0.28, 0.5}, N = 120, 2 s (added) | **3.39e-11** / 1.87e-12 / 1.01e-11 | 1e-10 |
+| `σ1 = 0` vs the stiff string, N = 128, σ = 3, 1,500 steps | identical, energy and pickup | exact |
+| passivity, both losses, worst step rise / E⁰ | −2.69e-6 (every step fell) | ≤ 1e-12 |
+| passivity, σ1 only | −8.29e-7 | ≤ 1e-12 |
+| decay fit vs NumPy's `polyfit`, rate-relative | 0 | 1e-9 |
+| per-mode decay vs `g = c/a`, modes 1–32 | **2.14e-5** (mode 1) … 4.4e-8 (mode 32) | 5e-4 |
+| rates rise with σ1 / fall without it, consecutive modes | min +3.9e-3 / max −2.0e-3 | > 0 / < 0 |
+| measured rate, mode 16 / mode 2 | 4.2714 / 4.0051 = 1.066 | > 1.02 |
+| simulated T60 vs target, mode 1 / mode 20, N = 256 | 3.2e-5 / **1.30%** | 4% |
+| light damping: eight partials vs the undamped oracle | 5.06e-3 cents | 1 cent |
+| discrete rate → continuum, N = 256 / 512 / 1024 | 6.9e-4 / 1.7e-4 / 4.3e-5 | 1e-3 at the finest, shrinking |
+| lossless decay factor, modes 1, 10, 50 | exactly 1, rate exactly 0 | exact |
+| T60 round trip, stiff branch | σ0 exact, σ1 off by 1.1e-16 relative | 1e-10 |
+| T60 inversion vs the Python's recorded answer (added) | identical | 1e-13 |
+| start-up at rest, `u¹` vs `R u⁰` (λ = 1 / 4, added) | 2.6e-15 / 5.8e-14 | 1e-12 |
+| start-up launched, `u¹` vs `g k v⁰` (added) | 5.4e-16 / 2.4e-15 | 1e-12 |
+
+The thinnest margins are the θ = 1/4 drift (**2.9×**, the same number as §32.3's: at `σ = 0` the
+damped string is the stiff string to the bit) and mode 20's simulated T60 (**3.1×**, the Python's
+own 4% bar against the scheme's `θ` suppression of high-mode loss). Every bar stays where the
+Python had it.
+
+### 33.4 Fourteen deliberate breakages — three that nothing in the workspace could see
+
+Planted one at a time with `W:\temp\claude\damped-string\mutate.py`: each source tree snapshotted
+first, restored by copy, byte-compared. The "red" column counts `string_damped_harness.rs`,
+`string_stiff.rs`, `string_stiff_harness.rs` and `oracles.rs` **before** the two added bars.
+
+| breakage | red | caught by |
+|---|---|---|
+| **A** step: the σ1 right-hand-side term's sign flipped | 6 | both passivity bars, per-mode decay, σ1 ordering, simulated T60 |
+| **B** matrix: the σ1 band dropped (right-hand side keeps it) | 7 | as A, and `apply_ainv_inverts_the_matrix_the_step_uses` |
+| **C** oracle: continuum `β²` for the discrete `p²` in `σ_eff` | 1 | per-mode decay, and nothing else in the workspace |
+| **D** oracle: the underdamped predicate's sign flipped | 2 | per-mode decay (it asserts the branch), the analysis crate's predicate bar |
+| **E** T60 stiff branch: κ for κ² (exact at κ = 1) | 2 | both carried T60 bars |
+| **F** T60 constant 1% high | **0 → 1** | nothing in the workspace; now the recorded-answer bar (below) |
+| **G** start-up: the ½ dropped | 3 → 4 | at first **only copies**: both twin anchors and the polyfit certificate; now also the start-up bar (below) |
+| **H** energy: θ fixed at 0.28 (exact at the default) | **0 → 1** | nothing in the workspace; now the θ sweep (below) |
+| **I** step: θ fixed at 0.28 (exact at the default) | **0 → 1** | nothing in the workspace; now the θ sweep |
+| **J** σ0 sign flipped, matrix and right-hand side | 7 | both passivity bars, per-mode decay, simulated T60, both twins |
+| **K** σ1 doubled, matrix and right-hand side | 4 | per-mode decay, simulated T60, `apply_ainv` |
+| **M** oracle: θ suppression dropped from `g` | 3 | per-mode decay, σ1 ordering, the predicate bar |
+| **N** continuum rate halved | 3 | the carried continuum and refinement bars, the analysis crate's own |
+| **O** construction: the σ1 check dropped | 2 | the ten refusals, `construction_rejects_in_pythons_order` |
+
+The "nothing else" claims were re-planted against the whole workspace (§31's rule), with
+`cargo test --workspace --release --no-fail-fast` over all 83 test binaries
+(`W:\temp\claude\damped-string\mutate_ws.py`):
+
+| breakage | red, workspace-wide |
+|---|---|
+| C | per-mode decay, alone |
+| F | **nothing** |
+| G | 8, every one a copy: the stiff twin anchors in `string_damped_harness` and `string_stiff`, `string_geometric`'s `ea_equals_t_is_bit_identical_to_the_damped_string`, `string_nonlinear`'s `ea_zero_is_model_three_bit_for_bit`, the polyfit certificate, and `physsynth-viewer`'s `frozen::strings`, `frozen::browser4`, `frozen::contact` |
+| H | **nothing** |
+| I | **nothing** |
+
+**G is §30.4 and §32.4 a third time.** Dropping the ½ in `u⁻¹ = u⁰ − k v⁰ + ½k² L u⁰` passes every
+physics bar, because energy is conserved (or dissipated) from any start and a decay rate does not
+care about phase. Eight tests saw it, and every one compares with a copy — so a red one says two
+numbers now differ, not which is wrong. The fix is §32.4's with both losses in: on an exact
+eigenmode `L → −Q` and `D2 → −p²`, so one step is scalar algebra. With `a = k²Q` and
+`s = (σ0 + σ1 p²) k`, and the start the **lossless** Taylor one (neither loss enters it),
+
+- at rest, `u⁻¹ = (1 − a/2) u⁰` and `u¹ = R u⁰` with
+  `R = [2 − (1 − 2θ)a − (1 + θa − s)(1 − a/2)] / (1 + θa + s)`;
+- launched from `u⁰ = 0`, `u⁻¹ = −k v⁰` and `u¹ = (1 + θa − s)/(1 + θa + s) · k v⁰`.
+
+`the_start_up_is_the_lossless_taylor_step_exactly_under_both_losses` asserts both at λ = 1 and
+λ = 4 (mode 3, `σ0 = 2`, `σ1 = 1e-4`); the defect moves `R` by about `a/2`, 4.5e-3 and 7.2e-2, and
+the bar is 1e-12. Re-planting G turns it red. It was added without asking, as §30.4 and §32.4 did:
+it is the same bar a third time, for a defect whose only witnesses were copies.
+
+**F, H and I were taken to the human** (the advisor's instruction: "if nothing sees it, take that
+to the human; don't silently add a bar or omit it"), in plain terms, and the human chose to guard
+both:
+
+- **H and I** — the damped string's `θ` is honoured nowhere a test looks. Every Python test and
+  every native bar built it at the default, where a hard-coded 0.28 is exact; the stiff string's θ
+  sweep runs the other transcription. `lossless_energy_is_conserved_and_positive_at_every_theta`
+  is §32's sweep on this model (θ ∈ {0.25, 0.28, 0.5}, N = 120, 2 s) and turns red on both.
+- **F** — the T60 constant cancels out of both round trips (the forward map in each is spelled
+  with `t60_seconds_per_rate()` too), and the simulated T60 check's 4% bar is wider than a 1%
+  move although mode 1 lands within 3.2e-5. Only `tests/test_analysis_frozen.py` saw it, and that
+  file is Python too. `the_t60_inversion_lands_on_the_pythons_recorded_answer` carries its row
+  (`loss_coefficients_from_T60(200, 0.65, 0.7, 200, 6, 2000, 1.5)` → `(1.1147930129676977,
+  0.0009249908881590224)`, recorded from the Python implementation before §44 deleted it) against
+  that file's 1e-13 bar. The native answer is identical to the last digit. This is the first row of
+  the analysis freeze carried natively; when `test_analysis_frozen.py` itself retires, the rest
+  follow the same way. The human preferred it to a bar on the constant alone (`ln 1000`), which
+  would have guarded one number rather than the whole inversion.
+
+Re-planted with the added bars: F → the recorded answer; G → the start-up bar beside the three
+copies; H and I → the θ sweep.
+
+### 33.5 The retirement rule, discharged
+
+| retired | native bar |
+|---|---|
+| `test_lossless_energy_conserved_quick` | `with_both_losses_zero_the_energy_is_conserved` |
+| `test_sigma1_zero_reduces_to_stiff_string_bit_for_bit` | `sigma1_zero_is_the_stiff_string_bit_for_bit_at_the_pythons_fixture` — energy and pickup traces, `assert_eq!` |
+| `test_passivity_broadband` | `both_losses_together_are_passive_for_a_broadband_pluck` |
+| `test_passivity_sigma1_only` | `the_frequency_dependent_loss_alone_is_passive` |
+| `test_per_mode_decay_matches_discrete_oracle` | `every_modes_decay_lands_on_the_schemes_own_oracle`, its fit certified by `the_decay_fit_reproduces_numpys_polyfit` |
+| `test_sigma1_makes_high_partials_die_faster` | `sigma1_makes_high_partials_die_faster` |
+| `test_T60_mapping_roundtrip` | `two_t60_targets_invert_to_losses_that_reproduce_them` |
+| `test_no_nan_unconditional` (4) | `there_is_no_courant_limit_even_with_heavy_stiffness_and_both_losses`, all four λ |
+| `test_invalid_parameters_rejected` (10) | `the_ten_invalid_parameter_sets_are_rejected`; `"clamped"` as `boundary_ok = false` |
+| `test_lambda_above_one_accepted` | `a_courant_number_above_one_is_accepted_and_reported` |
+| `test_partials_unmoved_by_light_damping` | `light_damping_leaves_every_partial_on_the_undamped_oracle` |
+| `test_continuum_rate_is_two_sigma_eff` | `oracles.rs::the_continuum_loss_rate_is_two_sigma_eff_and_rises_only_with_sigma1` |
+| `test_discrete_rate_tends_to_continuum_on_refinement` | `oracles.rs::the_discrete_loss_rate_tends_to_the_continuum_one_at_the_harness_parameters` |
+| `test_decay_factor_lossless_is_unity` | `oracles.rs::a_lossless_stiff_string_does_not_decay_at_the_harness_parameters` |
+| `test_loss_coefficients_from_T60_pure_roundtrip` | `oracles.rs::the_t60_inversion_round_trips_through_the_stiff_dispersion` |
+| `test_loss_coefficients_from_T60_rejects_increasing_T60` | `oracles.rs::the_t60_inversion_refuses_a_rising_t60_and_a_single_frequency_for_their_own_reasons` — the two refusals told apart by their prose |
+
+Orphans removed from `tests/helpers.py`: `measure_mode_decay_factor`, whose only caller was the
+deleted file, and with it the `simulate` import. `make_damped_string` stays: `test_bow_energy`,
+`test_collision_energy` and `test_resolution_horizon` still call it.
+`docs/dev/resolution-horizon-plan.md`'s hand-picked-band audit names the two native bars for the
+damped string's rows. The two comments that named the retired file as the stiff↔damped anchor's
+home (`string_stiff.rs`'s module header and its test) now name the native anchors.
+
+### 33.6 Cost and counts
+
+- **pytest 1,245 → 1,216**: 28 cases plus the one `test_xdist_groups` parametrisation for the
+  deleted file.
+- **Native +20**: 14 in the new `string_damped_harness.rs` and 6 in `oracles.rs` (22 → 28). The new
+  file takes 3.5 s in release (one thread) and 15.1 s in debug on the dev machine, so it stays in
+  both CI profiles by the default without weighing it against `release_only` (§32.6's warning was
+  about a file costing minutes, not seconds).
+- **42 physics files remain**, with **460** test functions by the §24.1 count (476 − 16).
+
+### 33.7 What is next
+
+The last string family, the tension-modulated string (`test_tension_string`, 30 functions). §27's
+loose end is still open. The human picks.
