@@ -3522,8 +3522,14 @@ head — reverse first-touch order — dropping exact-zero sums). And the transc
 faithful**, not assumed: before deletion, SciPy's actual product was recorded for all four grids
 the Python used (`N` = 8, 12, 16, 24; NumPy 2.4.6, SciPy 1.17.1) as `nnz`, `Σ (i+1)·indices[i]`
 and `Σ data[i]·(i+1)` summed left to right. The two weighted sums see the stored ORDER as well as
-the values, and the transcription reproduces all four digests exactly. This is §25.1's move again,
-at a larger scale: an independent stand-in, certified by reproducing the retiring referee's output.
+the values, and the transcription reproduces all four digests exactly — an independent stand-in,
+certified by reproducing the retiring referee's output. **This certificate is weaker than §25.1's
+in one respect, measured:** on these four grids `1/h²` is an exact integer (64, 144, 256, 576), so
+every entry of `L @ L` is an exact integer and any accumulation order gives the same values. The
+value half of the digest therefore cannot see accumulation ORDER; what certifies the kernel is the
+stored column order (the index-weighted sum) and the sparsity (`nnz`, including SciPy's dropped
+zeros). That is exactly what the three tests are about, so it suffices here; accumulation order is
+certified by §25.1's non-dyadic grid, where SciPy's gap was reproduced to the bit.
 
 | retired | native bar, or verdict |
 |---|---|
@@ -3540,7 +3546,7 @@ at a larger scale: an independent stand-in, certified by reproducing the retirin
 | lossy, worst step / final energy | every step negative (max -2.0e-5·E0) / 0.54 E0 | ≤ 1e-10·E0 |
 | low-mode decay vs 2σ | 0.20% | 2% |
 | retained energy, (1,1) vs (8,8) | 0.028 vs 0.869 | high > low |
-| E(2ρ) / E(ρ) − 2 | 0 exactly | 2e-12 |
+| E(2ρ) / E(ρ) − 2 | 0 exactly | 2e-12 (the Python's `np.isclose(rtol=1e-12)` kept its default `atol=1e-8`, finding (d), so its bar was effectively 1e-8) |
 | B eigenvalues vs Λ² | 2.6e-13 | 1e-10 |
 | convergence order | 2.02 | > 1.8 |
 | one-cent block / horizons / inside / outside | 0.621 / 2 and 2 (window 6) / 0.621 / 1.406 | < 1 |
@@ -3552,8 +3558,11 @@ at a larger scale: an independent stand-in, certified by reproducing the retirin
 — is 3.5e-11 against 1e-10, **2.9x**. That bar is the project's acceptance contract (CLAUDE.md:
 not tightened, and by the same reasoning not loosened), the Python test ran the same Rust model at
 the same margin, and it is recorded here rather than adjusted. It is the thinnest acceptance margin
-any carrying batch has measured so far; if a platform ever fails it, the drift is a random walk in
-the step count and the fix is a shorter run, not a wider bar.
+any carrying batch has measured so far. It is **not** a random walk in the step count: the three
+runs are 2,560, 10,240 and 40,960 steps, and the drift goes 4.0e-13 → 1.5e-12 → 3.5e-11, x3.75 and
+then x23 for each x4 in steps, where a random walk would give x2. What drives it is unmeasured
+(cancellation in `(u − u_prev)/k` as `k` shrinks is one candidate, and a shorter run would not
+cure that). If a platform ever fails it, that is a question for the human, not a bar to move.
 
 ### 26.3 Eight deliberate breakages
 
@@ -3606,6 +3615,11 @@ Also removed from `tests/helpers.py`: `plate_low_eigenfrequencies` (no other cal
   on `release_only` from the start (the human's call, asked before pushing). Its exact checks —
   SciPy's digests, the builder-equals-plate premise — are multiply-and-add with no transcendental
   or constant exponent, and they passed unoptimised before leaving that pass.
+
+  **On CI (`dfe5e4e`), all green on Linux**, including the 2.9x drift margin. The file costs
+  **54 s** in the release `rust` job, which IS the gate's critical path; the job's own wall-clock is
+  too noisy to isolate that (10.3, 5.6 and 10.8 min over the last three runs, mostly build cache),
+  so the file's own time is the number to quote. `rust-debug` stayed at ~3 min.
 
 ### 26.6 What is next
 
