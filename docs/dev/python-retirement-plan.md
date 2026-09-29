@@ -3787,8 +3787,12 @@ disk (N = 32, 64, 128; 6 and 11 pairs) and every circle (N = 32, 33, 64, 128) th
 `-1e-3 mu_1` — `free_plate_low_eigenfrequencies`' own convention, `-0.03` for a unit disk — it
 converges everywhere, the rigid modes come out clean to 1e-12…1e-9 of the first elastic one (bar
 1e-6), and it matches LAPACK. The shift is an instrument setting, so the bars use it; the
-solver's behaviour that close to a singular pencil is recorded here rather than fixed, since no
-shipped path asks for it.
+solver's behaviour that close to a singular pencil is recorded here rather than fixed, because **no
+shipped path asks for it** — checked, every `eigsh_shift_invert` caller in `crates/*/src` is in the
+viewer: the free plate at `-1e-3 (13/(Lx·Ly))²` (the same convention), the closed bore at
+`-1e-3 (π c/L)²` below its zero mode, and the supported plate, membrane and open bore at `0.0` on
+pencils with no nullspace. Remaining Python files that call ARPACK at a tiny shift next to a
+nullspace will need the same change when they are carried.
 
 ### 28.3 Every margin measured
 
@@ -3808,7 +3812,7 @@ shipped path asks for it.
 | rectangle's area deficit | 2.3e-15 | 1e-14 → **1e-12** |
 
 The last row: the Python's absolute 1e-14 had 4.3x and sat **below** the worst-case rounding of the
-441-weight sum it checks (`n·eps ≈ 1e-13`); the bar is that bound with 10x on top.
+336-weight sum it checks (21 × 16 nodes; `n·eps ≈ 7.5e-14`); the bar is ~13x that bound.
 
 ### 28.4 Seven deliberate breakages — two caught only elsewhere, on purpose
 
@@ -3820,7 +3824,7 @@ The last row: the Python's absolute 1e-14 had 4.3x and sat **below** the worst-c
 | connectivity refusal off | 1 | the pinch bar |
 | rim depth `min → max` | 2 | the rim bar and the pinch |
 | disk rim made inclusive (`<` → `<=`) | **0** | the only on-rim nodes are one-node spikes the prune removes; `ops2d.rs`'s `a_node_on_the_rim_is_dead` catches it |
-| twist `(1/h)(1/h)` → `1/(h·h)` | **0** | the last bit of the operator; `ops2d.rs`'s `the_twist_coefficient_is_two_reciprocals_and_not_one` and six exact viewer freezes (`plate`, `vk`, `vkroom`, `browser5b/5d/6b`) catch it |
+| twist `(1/h)(1/h)` → `1/(h·h)` | **0** | the last bit of the operator; `ops2d.rs`'s `the_twist_coefficient_is_two_reciprocals_and_not_one` pins it on every platform, and six viewer freezes (`plate`, `vk`, `vkroom`, `browser5b/5d/6b`) catch it too — but those compare exactly only on the Windows CI job |
 
 The last row is the retired file's headline finding (its rectangle bar): the masked and
 Kronecker assemblies differed on exactly one grid until the twist was spelled as two reciprocals.
@@ -3859,6 +3863,11 @@ at the native file.
 - **pytest 1,528 → 1,414**: 113 cases plus one `test_xdist_groups` parametrization.
 - **Native +18**, 2.7 s in release and **45 s in debug** on the dev machine — in both CI profiles by
   the default, like §24's 30 s file.
+- **On CI (run 36538027804, `b7b06aa`, all green)**: 5.3 s in the release job and **75.7 s in the
+  debug job**, which went from ~2.6 to ~4.6 minutes. That job still ends ~7 minutes before the
+  release job, so the run's wall clock did not move; if the debug job ever becomes the long pole,
+  this file is the first candidate for `release_only`. The lens bar passed on Linux, so the
+  `float_roundtrip` fix holds across platforms.
 
 ### 28.7 What is next
 

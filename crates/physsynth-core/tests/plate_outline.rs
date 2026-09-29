@@ -717,7 +717,7 @@ fn a_rectangle_still_prunes_nothing_and_carries_its_whole_area() {
     let p = Params::new(&free_spec(0.4, 0.3, 20, Domain::Rectangle)).unwrap();
     assert_eq!(p.n_pruned, 0);
     // Measured -2.3e-15: the Python's 1e-14 had 4.3x, and sat BELOW the worst-case rounding of the
-    // 441-weight sum it checks (n·eps ≈ 1e-13). 1e-12 is that bound with 10x on top.
+    // 336-weight sum it checks (21 x 16 nodes; n·eps ≈ 7.5e-14). 1e-12 is ~13x that bound.
     assert!(p.area_deficit.abs() <= 1e-12, "{:e}", p.area_deficit);
     assert_eq!(p.domain, Domain::Rectangle);
 }
