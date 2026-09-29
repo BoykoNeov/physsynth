@@ -14,8 +14,9 @@ use physsynth_analysis::modal::{
     free_circular_plate_lambda_roots, free_circular_plate_lambdas,
     free_circular_plate_saddle_bound, free_free_beam_beta_l, free_free_beam_freqs,
     free_plate_coupling_form, free_plate_freq_from_lambda, free_plate_twist_bound,
-    harmonic_frequencies, inharmonicity_b, orthotropic_plate_freqs, rectangular_membrane_freqs,
-    rectangular_plate_freqs, stiff_harmonic_frequencies,
+    harmonic_frequencies, inharmonicity_b, orthotropic_plate_freqs,
+    rectangular_discrete_eigenvalues, rectangular_membrane_freqs, rectangular_plate_freqs,
+    stiff_harmonic_frequencies,
 };
 
 /// The free–free beam's first four roots, published to twelve digits in every vibration text.
@@ -315,4 +316,105 @@ fn a_square_membrane_has_the_degeneracy_a_rectangle_does_not() {
     assert_eq!(sq[0], sq[1]);
     let re = rectangular_membrane_freqs(200.0, 0.4, 0.3, &[(1, 2), (2, 1)]);
     assert!(re[0] > re[1], "the short axis must carry the higher mode");
+}
+
+// -- the membrane's 2-D dispersion: no Courant number removes it ------------------------------
+//
+// Carried from `tests/test_membrane_dispersion.py` (retirement plan §29). The 1-D headline --
+// lambda = 1 is exact, zero dispersion -- does NOT transfer to 2-D. The 5-point Laplacian's
+// plane-wave symbol is `Lambda(kx, ky) = (4/h²)[sin²(kx h/2) + sin²(ky h/2)]`, so at a fixed
+// wavenumber magnitude the discrete phase speed depends on the propagation DIRECTION. These
+// characterize that rather than bound it: the direction-dependence is real at every admissible
+// lambda and vanishes only in the continuum limit. The symbol is written here, not taken from the
+// model; its tie to the real operator is the first test below plus the core bar
+// `membrane_harness.rs::the_square_eigenvalues_are_the_closed_form_and_lapacks`.
+
+/// `c = sqrt(T / rho)` at the suite's `T = 200`, `rho = 0.005`.
+const C_MEMBRANE: f64 = 200.0;
+
+/// The 5-point Laplacian's plane-wave symbol.
+fn five_point_symbol(kx: f64, ky: f64, h: f64) -> f64 {
+    (4.0 / (h * h)) * ((kx * h / 2.0).sin().powi(2) + (ky * h / 2.0).sin().powi(2))
+}
+
+/// Discrete phase speed `2 pi f_disc / kappa` of a plane wave of magnitude `kappa`, axial
+/// (`kx = kappa`) or diagonal (`kx = ky = kappa/sqrt 2`), at Courant number `lam` on spacing `h`.
+fn phase_speed(kappa: f64, diagonal: bool, lam: f64, h: f64) -> f64 {
+    let k = lam * h / C_MEMBRANE;
+    let (kx, ky) = if diagonal {
+        (kappa / 2.0f64.sqrt(), kappa / 2.0f64.sqrt())
+    } else {
+        (kappa, 0.0)
+    };
+    let f = discrete_membrane_eigenfrequency(five_point_symbol(kx, ky, h), C_MEMBRANE, k);
+    2.0 * std::f64::consts::PI * f / kappa
+}
+
+#[test]
+fn the_plane_wave_symbol_is_the_rectangle_eigenvalue_at_a_standing_wave() {
+    // A standing wave sin(m pi x / Lx) sin(n pi y / Ly) is a superposition of plane waves with
+    // |kx| = m pi / Lx, |ky| = n pi / Ly, so the symbol there IS the rectangle's discrete
+    // eigenvalue -- the one the core bar checks against the assembled operator and LAPACK.
+    let (lx, nx, ny) = (1.0, 24i64, 18i64);
+    let h = lx / nx as f64;
+    let ly = ny as f64 * h;
+    for (m, n) in [(1, 1), (2, 1), (3, 5), (23, 17)] {
+        let want = rectangular_discrete_eigenvalues(h, nx, ny, &[(m, n)])[0];
+        let pi = std::f64::consts::PI;
+        let got = five_point_symbol(m as f64 * pi / lx, n as f64 * pi / ly, h);
+        assert!(
+            (got - want).abs() <= 1e-12 * want,
+            "({m},{n}): {got} vs {want}"
+        );
+    }
+}
+
+#[test]
+fn the_membrane_is_isotropic_only_in_the_continuum_limit() {
+    // At long wavelength (kappa h = 0.02) both directions recover c, even at the CFL ceiling.
+    let h = 1e-3;
+    let kappa = 0.02 / h;
+    for diagonal in [false, true] {
+        let v = phase_speed(kappa, diagonal, 1.0 / 2.0f64.sqrt(), h);
+        assert!(
+            (v - C_MEMBRANE).abs() / C_MEMBRANE < 1e-3,
+            "diagonal={diagonal}: speed {v} != c at long wavelength"
+        );
+    }
+}
+
+#[test]
+fn the_membrane_is_anisotropic_at_every_admissible_courant_number() {
+    // Near Nyquist (kappa h = 0.6 pi) the axial and diagonal speeds differ for EVERY lambda in
+    // the range -- including the ceiling, where a 1-D reader would expect exactness.
+    let h = 1e-3;
+    let kappa = 0.6 * std::f64::consts::PI / h;
+    for lam in [1.0 / 2.0f64.sqrt(), 0.6, 0.4, 0.2] {
+        let (ax, di) = (
+            phase_speed(kappa, false, lam, h),
+            phase_speed(kappa, true, lam, h),
+        );
+        let gap = (ax - di).abs() / C_MEMBRANE;
+        assert!(
+            gap > 1e-3,
+            "no anisotropy at lam = {lam}: axial {ax}, diagonal {di}"
+        );
+    }
+}
+
+#[test]
+fn short_membrane_waves_are_subluminal_in_both_directions() {
+    // Numerical dispersion slows short waves (phase speed <= c), as in 1-D. The diagonal case at
+    // the ceiling is NOT slowed: there the 5-point scheme is exact along the diagonal (the 2-D
+    // echo of 1-D lambda = 1), measured at v/c - 1 = +2.2e-16 in NumPy. The 1e-9 slack is what
+    // lets an exact identity pass through round-off, so it must not be tightened to zero.
+    let h = 1e-3;
+    let kappa = 0.6 * std::f64::consts::PI / h;
+    for diagonal in [false, true] {
+        let v = phase_speed(kappa, diagonal, 1.0 / 2.0f64.sqrt(), h);
+        assert!(
+            v <= C_MEMBRANE * (1.0 + 1e-9),
+            "diagonal={diagonal}: {v} exceeds c"
+        );
+    }
 }

@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-c-carrying-state
-description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-5 done 2026-09-29 (every plate family); 55 files / 545 functions left"
+description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-6 done 2026-09-29 (every plate family + membrane); 51 files / 526 functions left"
 metadata:
   node_type: memory
   type: project
@@ -21,8 +21,12 @@ breakages, delete the file.
 - §28 batch 5 (human chose "guitar"): `test_guitar_plate.py` (21 fns / 113 cases) → `tests/plate_outline.rs`
   (18). NumPy outline masks, SciPy Bessel quotients, LAPACK disk eigenvalues frozen into
   `crates/physsynth-core/tests/reference/guitar_plate.json` (first frozen reference in core).
-Remaining after §28: **55 physics files / 545 functions** (next candidates: membrane, beam). Next batch not chosen — scope by model;
-the user picks the family (asked via options last time).
+- §29 batch 6 (human took the recommendation, "membrane"): `test_membrane_{energy,modal,stability,dispersion}.py`
+  (19 fns / 42 cases) → `tests/membrane_harness.rs` (14) + 4 dispersion bars in `physsynth-analysis/tests/modal.rs`
+  (they touch no model). LAPACK eigenvalues of the disk (N=32/64/128) + SciPy Bessel zeros frozen into
+  `tests/reference/membrane.json`; ARPACK at shift 0 (no nullspace) agreed with LAPACK to 5e-16.
+Remaining after §29: **51 physics files / 526 functions** (next candidate: beam, 16 fns). Next batch not
+chosen — the user picks the family; a recommendation + "go with it" is an accepted answer.
 
 **Rules these batches set:**
 - A bar needing core + analysis: `physsynth-analysis` is a TEST-ONLY dev-dependency of
@@ -62,6 +66,11 @@ the user picks the family (asked via options last time).
   plate_outline stays in BOTH (CI: 5.3 s release / 75.7 s debug; debug job 2.6 → 4.6 min, still
   ~7 min shorter than the release job) — first candidate if the debug job becomes the long pole.
 - Bash heredocs with backticks/quotes in markdown fail to parse here — append docs via Edit.
+- A bar about a CONSTANT must not import it from the model (§29.3: CFL bars read `lambda_max()`, so a
+  planted `1.1/sqrt2` moved bar and model together). Write the constant in the test, as the Python did.
+- A rectangle oracle bug that swaps axes is invisible on a SQUARE — check which bars use Lx != Ly.
+- Python edits via `open(p,'w')` on Windows write CRLF; use `newline=''` (git warns on the .rs files).
+- §29 core file: 3.4 s release / 59 s debug locally — stayed in both CI profiles (not asked; not the long pole).
 
 Related: [[python-retirement-state]], [[retirement-phase-d-state]], [[retirement-phase-a-state]],
 [[free-plate-orthotropic-state]], [[orthotropic-plate-state]], [[rust-airbox-native-bars]].

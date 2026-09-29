@@ -407,23 +407,6 @@ def beam_low_eigenfrequencies(
     return freqs
 
 
-def membrane_low_eigenfrequencies(membrane: Membrane, n_modes: int) -> np.ndarray:
-    """The ``n_modes`` lowest discrete modal frequencies (Hz) of ``membrane`` (ascending).
-
-    Uses shift-invert ``eigsh`` (around 0) on the SPD operator ``-L`` to get the smallest
-    eigenvalues ``Λ`` robustly, then maps each through
-    :func:`modal.discrete_membrane_eigenfrequency` (the scheme's exact ``Λ -> f`` relation).
-    Degeneracy-robust: it just returns sorted values, so
-    cos/sin (and square ``(m,n)<->(n,m)``) pairs appear as the near-equal entries they are.
-    """
-    lam_vals = eigsh(
-        -membrane.L, k=n_modes, sigma=0.0, which="LM", return_eigenvectors=False,
-        v0=arpack_v0(membrane.L),
-    )
-    lam_vals = np.sort(lam_vals)
-    return np.asarray(modal.discrete_membrane_eigenfrequency(lam_vals, membrane.c, membrane.k))
-
-
 # Modal body (body/radiation node): a few guitar-top-ish modes. fs is high (audio rate) so every
 # mode sits well under the modal CFL omega*k < 2.
 BODY_FREQS_DEFAULT = np.array([110.0, 196.0, 261.0, 440.0])  # Hz

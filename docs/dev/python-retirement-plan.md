@@ -3874,3 +3874,135 @@ at the native file.
 55 physics files, 545 test functions. With the plates done, the natural next families are the
 membrane (`test_membrane_{energy,modal,stability,dispersion}`) or the beam
 (`test_beam_{energy,modal,stability}`); the human picks.
+
+## 29. Phase C, carrying batch 6 — the membrane
+
+Done 2026-09-29; the human chose the membrane on the recommendation (the plates' method carries
+straight over, and it closes the 2-D grid models). Four files — `tests/test_membrane_{energy,modal,
+stability,dispersion}.py`, **19 functions, 42 pytest cases** — retire into
+`crates/physsynth-core/tests/membrane_harness.rs` (14 `#[test]`s) and four bars appended to
+`crates/physsynth-analysis/tests/modal.rs`. The dispersion file touched no model — its only
+subject was `discrete_membrane_eigenfrequency` and a symbol written inside the test — so its bars
+live with the oracle, not the core.
+
+`membrane.rs` already existed and stays: it is the port's own floor at a drumhead's `T` and `rho`.
+The new file is the acceptance contract at `make_membrane`'s parameters (`c = 200 m/s`, unit
+square, disk of radius 0.5, `fs = c/(lambda h)`). An existing bar counted as carried only where it
+asserted the same claim at the same or a stricter bar; none did exactly, so every Python test has
+a bar in the new file at its own parameters.
+
+### 29.1 Two outside referees, frozen
+
+Everything else the four files touched — `raised_cosine_2d`, `simulate`, `measure_partials_near`,
+every `modal.*` oracle — already ran through the binding (§25's rule). What did not, recorded into
+`crates/physsynth-core/tests/reference/membrane.json` (wheel reinstalled; NumPy 2.4.6, SciPy 1.17.1):
+
+- **LAPACK's dense eigenvalues of `-L`**, the lowest 8 on the staircased disk at N = 32, 64, 128
+  and the lowest 6 on the unit square at N = 24, with the mask digest (`count`, `Σ(i+1)`,
+  `Σ(i+1)²`) and `h` of each grid. N = 128 is 12,849 unknowns, 1.3 GB dense and 62 s in `evr`.
+  **ARPACK agreed with LAPACK to ≤ 4.8e-16 of `8/h²` everywhere** — unlike §24.3 and §28.2, the
+  Python's shift of 0 sits on a pencil with no nullspace, so the dense rule cost nothing here. ARPACK's
+  values are in the file too, for the comparison.
+- **SciPy's Bessel zeros** (Cephes) for the eight lowest circular modes with their `(m, n)` and
+  degeneracy. `crates/physsynth-analysis/tests/bessel.rs` pinned the crate's zeros on their own terms
+  (vanishing, interlacing, three published digits), never against SciPy; now all eight are, at 8 eps.
+
+The disk keeps its **exact degenerate pairs** (4-fold symmetry: `m = 1` and `m = 3` stay paired,
+`m = 2` splits — visible in the record), the square has two more; the native single-start Krylov
+solve returned every copy of every pair.
+
+### 29.2 Every margin measured
+
+| bar | measured | bar |
+|---|---|---|
+| native eigenvalues vs LAPACK, 30 values on 4 grids | ≤ 2.1 eps·8/h² (disk N = 64, 7th) | 20 |
+| crate's Bessel zeros vs SciPy (through the frequency round trip) | ≤ 1.9 eps | 8 eps |
+| lossless drift, 2 domains × λ ∈ {0.7071, 0.6, 0.4}, 1 s | ≤ 8.5e-15 | 1e-10 |
+| passivity, worst step / E⁰ (σ = 8) | −4.2e-16 (never rose) | ≤ 1e-12 |
+| decay rate vs `2σ` | 9.6e-5 relative | 2% |
+| `E(2ρ)/E(ρ) − 2` | 0 | 2e-12 |
+| square eigenvalues vs closed form | 1.6e-15 | 1e-10 |
+| square continuum order, N = 16…128 | 2.0003 | > 1.8 |
+| disk Bessel order, N = 32 / 64 / 128 | 0.818, 0.955 | (0.5, 1.5) |
+| disk fundamental at N = 128 | **8.75 cents** | 12 |
+| disk low 8 vs sorted Bessel, N = 128 | **9.11 cents** | 20 |
+| FFT peak vs discrete fundamental | 0.0067 cents | 5 |
+| λ reported at the ceiling | exact | 1e-9 |
+| isotropy at κh = 0.02 | 8.3e-6 | 1e-3 |
+| axial–diagonal gap at κh = 0.6π, 4 λ | ≥ 0.070 c | > 1e-3 c |
+| diagonal speed at the ceiling, `v/c − 1` | **+2.2e-16** | ≤ 1e-9 |
+
+The two bold cents rows are the Python's own staircase bars at 1.4x and 2.2x; they measure a
+geometry error (the "not a horizon" note is carried verbatim) and were not moved. The last row is
+the finding: **at `λ = 1/√2` the 5-point scheme is exact along the diagonal** — the 2-D echo of the
+1-D string at `λ = 1` — so the "subluminal" bar's 1e-9 slack is what lets an exact identity through
+round-off, and it is now commented as such so nobody tightens it to zero.
+
+### 29.3 Nine deliberate breakages
+
+| breakage | red | caught by |
+|---|---|---|
+| Laplacian drops one neighbour (`ops2d`) | 11 | energy, eigenvalues, Bessel, FFT — here and in `membrane.rs` |
+| disk rim inclusive (`<` → `<=`) | 2 | **the mask digest**: 4 extra rim nodes, `[797, …]` vs `[793, …]` |
+| energy drops `rho` | 1 | only the density-ratio bar — every other energy check is a ratio to itself |
+| loss sign in the denominator | 3 | passivity (both files) and the `2σ` rate |
+| CFL ceiling `1.1/√2` | 1 | the 5%-past bar — **after** a fix, below |
+| start-up drops the `½` | 1 | **only `membrane.rs`'s eigenmode bar** — pinned elsewhere, as §28.4 |
+| rectangle oracle's `y` factor uses `Nx` | 1 | **only the new symbol bar** in `modal.rs` — below |
+| Bessel oracle drops the `2` | 3 | both disk bars and the analysis crate's first-zero bar |
+| `discrete_membrane_eigenfrequency` `½` → `0.45` | 6 | across both crates |
+
+Two rows needed the bars changed first:
+
+- **The CFL bars first read the ceiling from the model** (`membrane::lambda_max`). A planted
+  `1.1/√2` would then pass both: `1.05×` the moved ceiling is still past it, and the moved ceiling
+  is still accepted. The Python wrote its own `LAMBDA_MAX`; the native file now does too. A bar
+  about a constant must not import the constant.
+- **A rectangle oracle that used `Nx` for both axes is invisible on a square**, and every rectangle
+  bar here runs on the unit square, as the Python's did. The new
+  `the_plane_wave_symbol_is_the_rectangle_eigenvalue_at_a_standing_wave` evaluates the dispersion
+  bars' symbol at `m π/Lx, n π/Ly` on a 24 × 18 grid and requires it to equal
+  `rectangular_discrete_eigenvalues` — which catches the defect and also ties the dispersion bars'
+  hand-written symbol to the operator the core bars check against LAPACK.
+
+### 29.4 The retirement rule, discharged
+
+| retired | native bar |
+|---|---|
+| `test_energy_conserved` (6) | `lossless_energy_is_flat_and_positive_on_both_domains_at_every_courant_number` |
+| `test_circle_conserves_like_rectangle` | the same runs (its two are two of the six) |
+| `test_energy_strictly_positive_when_lossless` | the same runs — its circle at 0.6 for 0.5 s is a prefix of the 1 s run |
+| `test_passivity_monotonic_decrease` | `loss_makes_the_energy_fall_at_every_step`, its parameters and slack |
+| `test_decay_rate_matches_2sigma` | `a_uniformly_damped_membrane_loses_energy_at_two_sigma` |
+| `test_energy_units_scale_with_density` | `energy_is_in_joules_and_linear_in_the_areal_density` |
+| `test_rectangle_eigenvalues_match_closed_form` | `the_square_eigenvalues_are_the_closed_form_and_lapacks` — plus LAPACK |
+| `test_rectangle_continuum_convergence_order` | `the_square_continuum_error_converges_at_second_order` |
+| `test_circle_bessel_convergence_rate` | `the_disk_fundamental_converges_to_bessel_at_the_staircase_rate` — plus LAPACK at all three N |
+| `test_circle_low_spectrum_tracks_bessel` | `the_disk_low_spectrum_tracks_the_sorted_bessel_series` — plus LAPACK and SciPy's zeros |
+| `test_circle_fft_peak_at_fundamental` | `a_struck_disk_rings_at_its_discrete_fundamental` |
+| `test_no_nan_across_valid_lambda` (10) | `nothing_blows_up_anywhere_in_the_admissible_courant_range` |
+| `test_lambda_above_cfl_rejected_at_construction` | `a_courant_number_just_past_the_ceiling_is_refused_at_construction` — also the variant |
+| `test_lambda_at_cfl_ceiling_accepted` | `the_ceiling_itself_is_accepted_and_reported` |
+| `test_invalid_parameters_rejected` (7) | `non_physical_or_missing_parameters_are_refused` — each case's variant, not just "an error" |
+| `test_rectangle_requires_sides` | `a_rectangle_without_sides_says_rectangle` |
+| `test_isotropic_in_continuum_limit` | `modal.rs::the_membrane_is_isotropic_only_in_the_continuum_limit` |
+| `test_anisotropic_at_every_lambda` (4) | `modal.rs::the_membrane_is_anisotropic_at_every_admissible_courant_number` |
+| `test_both_directions_subluminal` | `modal.rs::short_membrane_waves_are_subluminal_in_both_directions` |
+
+One helper was orphaned and deleted: `membrane_low_eigenfrequencies` in `tests/helpers.py`.
+`make_membrane` keeps three callers (`test_mallet_energy`, `test_mallet_signature`,
+`test_resolution_horizon`). `docs/dev/membrane-plan.md` now points at the native files, and the
+hand-picked-band audit row in `docs/dev/resolution-horizon-plan.md` names the native bar.
+
+### 29.5 Cost and counts
+
+- **pytest 1,414 → 1,368**: 42 cases plus four `test_xdist_groups` parametrizations (one per file).
+- **Native +18** (14 core, 4 analysis). The core file is 3.4 s in release and **59 s in debug** on
+  the dev machine — most of it the six 1-second conservation runs (up to 24,000 steps each). It stays
+  in both CI profiles by the default: on §28.6's numbers the debug job would still end minutes before
+  the release job.
+
+### 29.6 What is next
+
+51 physics files, 526 test functions. The beam (`test_beam_{energy,modal,stability}`, 16
+functions) is the other family §28.7 named; after it the string families; the human picks.

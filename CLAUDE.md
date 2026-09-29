@@ -112,7 +112,9 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    physics file whose model is already native: read each test's assertions, write or find the
    native bar, plant breakages to prove the bars live, delete. §25 did the supported grained
    plate, §26 the plain plate, §27 the free plate, §28 the guitar/disk — **every plate family's
-   Python suite is gone**; **55 physics files / 545 functions remain** (§9's map is stale). §28
+   Python suite is gone** — and §29 the membrane; **51 physics files / 526 functions remain**
+   (§9's map is stale). §29 set a rule: **a bar about a constant must not import the constant**
+   (the CFL bars read the ceiling from the model, so a moved ceiling moved the bar). §28
    froze outside referees into `crates/physsynth-core/tests/reference/` — which needs serde_json's
    `float_roundtrip` to read a float back exactly.
    §26 carried three tests whose SUBJECT was SciPy by transcribing SciPy's kernel into the test and

@@ -288,7 +288,7 @@ the beam's row carries two bounds.
 | `test_damped_string.py::test_partials_unmoved_by_light_damping` | 8 | own discrete oracle | detectability | no |
 | `test_bore_modal.py::test_oracle_tracks_measured_spectrum` | 5 | own discrete oracle | detectability | no |
 | `test_plate_modal.py::test_low_spectrum_via_eigsh_matches_oracle` | 6 | own discrete oracle | detectability + `eigsh` cost | no |
-| `test_membrane_modal.py::test_circle_low_spectrum_tracks_bessel` | 8 @ 20c | Bessel continuum | **staircased domain**, not dispersion | no |
+| `test_membrane_modal.py::test_circle_low_spectrum_tracks_bessel` (native since 2026-09-29: `membrane_harness.rs::the_disk_low_spectrum_tracks_the_sorted_bessel_series`, same bar, the "not a horizon" note carried verbatim) | 8 @ 20c | Bessel continuum | **staircased domain**, not dispersion | no |
 | `test_damped_string.py::test_sigma1_makes_high_partials_die_faster` | `[1..16]` | — (decay rates) | rate turnover at `~m=32` | no, §7.1 |
 | four single-mode FFT sanity checks (beam, plate, free plate, orthotropic plate) | 1 | own oracle | one mode by design | no |
 

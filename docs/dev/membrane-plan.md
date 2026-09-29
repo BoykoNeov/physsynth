@@ -1,5 +1,12 @@
 # Membrane (2D) — Phase 3 Plan (model #4, circular drumhead)
 
+> **2026-09-29: the Python suite named below is gone.** Its bars are native —
+> `crates/physsynth-core/tests/membrane_harness.rs`, plus the dispersion bars in
+> `crates/physsynth-analysis/tests/modal.rs` — carried test by test in
+> `docs/dev/python-retirement-plan.md` §29, with LAPACK's eigenvalues of the staircased disk and
+> SciPy's Bessel zeros frozen into `crates/physsynth-core/tests/reference/membrane.json` before the
+> files were deleted. The Python names in this document are history.
+
 > **Status: PLANNED → IMPLEMENTED & GREEN (2026-06-21).** First 2D model. Crosses from the 1D
 > string family (#1–3) into Phase 3 (HANDOFF §5 row 4, §9). Core in `core/membrane.py` +
 > `core/operators2d.py`, oracles in `analysis/modal.py`, suite in `tests/test_membrane_*.py`,
