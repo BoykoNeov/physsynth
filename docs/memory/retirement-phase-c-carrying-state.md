@@ -92,7 +92,7 @@ helper whose only caller is the guard itself.
 - Extending an existing bar to the Python's length must not SHORTEN it anywhere: use max(Python length,
   old length) — the first draft cut μ=16 from 8,000 steps to 5,120 (caught in review).
 - A margin row must be the measured worst over EVERY step, not a sampled one (review caught "never rose").
-- §30 beam.rs: 0.70 s release / 14.5 s debug locally — both profiles.
+- §30 beam.rs: 0.70 s release / 14.5 s debug locally, 1.1 s / 9.5 s on CI (run 36553822722, green on Linux, first Linux run of the frozen referee) — both profiles (debug job 3.2 min vs release 11.6).
 - §29 core file: 3.4 s release / 59 s debug locally, 3.9 s / 37 s on CI (run 36546609975, green on Linux) — stayed in both profiles (debug job 3.0 min vs release 11.2).
 
 Related: [[python-retirement-state]], [[retirement-phase-d-state]], [[retirement-phase-a-state]],

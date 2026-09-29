@@ -4179,6 +4179,10 @@ audit names the native bar.
 - **Native +7**, all in `beam.rs`. The file takes 0.74 s in release and **14.5 s in debug** on the
   dev machine (the one-second runs are 220k steps of a 65-node beam), so it stays in both CI
   profiles by the default. Workspace: 1,353 passed in release.
+- **On CI (run 36553822722, `358e004`, all green)**: 1.1 s in the release job and **9.5 s in the
+  debug job**, which took 3.2 minutes against the release job's 11.6. This was the first Linux run of
+  the frozen-referee, roots and start-up bars (glibc's `cos`/`cosh` under the roots, and the
+  frozen LAPACK and Rayleigh numbers read back on a second platform); every bar passed.
 
 ### 30.7 What is next
 
