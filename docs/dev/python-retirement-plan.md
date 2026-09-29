@@ -4837,9 +4837,10 @@ home (`string_stiff.rs`'s module header and its test) now name the native anchor
 - **pytest 1,245 → 1,216**: 28 cases plus the one `test_xdist_groups` parametrisation for the
   deleted file.
 - **Native +20**: 14 in the new `string_damped_harness.rs` and 6 in `oracles.rs` (22 → 28). The new
-  file takes 3.5 s in release (one thread) and 15.1 s in debug on the dev machine, so it stays in
-  both CI profiles by the default without weighing it against `release_only` (§32.6's warning was
-  about a file costing minutes, not seconds).
+  file takes 3.5 s in release (one thread) and 15.1 s in debug on the dev machine, and **1.7 s /
+  27.3 s on CI** (run 36622026049, green, the first Linux run of these bars). It stays in both CI
+  profiles by the default without weighing it against `release_only` (§32.6's warning was about a
+  file costing minutes, not seconds): the debug job ran 7.8 minutes against the release job's 12.0.
 - **42 physics files remain**, with **460** test functions by the §24.1 count (476 − 16).
 
 ### 33.7 What is next
