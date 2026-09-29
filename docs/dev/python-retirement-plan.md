@@ -3661,7 +3661,7 @@ record with the dense solver, not with the one the test called.
 | retained, fundamental vs 13th elastic | 0.027 vs 0.053 | high > low |
 | E(2ρ)/E(ρ) − 2 | 0 exactly | 2e-12 |
 | symmetry | 0 exactly | 1e-12 |
-| Kronecker vs direct assembly | 2.4e-16 **relative** | 1e-12 absolute → **1e-14 relative** |
+| production vs dense per-node assembly | 2.4e-16 **relative** | 1e-12 absolute → **1e-14 relative** |
 | nullspace {1, x, y} / saddle xy | 5e-19 – 4e-18 / 1.1e-5 | 1e-12 / > 1e-9 and 1e6x contrast |
 | xy energy ∝ (1 − nu) | 5.7e-15 | 1e-12 |
 | bending diagonal = beam | 5.7e-14 | 1e-12 |
@@ -3713,7 +3713,7 @@ watches the plate. `collocated_d2_1d` keeps its own bars in `ops2d.rs`.
 | `test_higher_mode_underdamps_relative_to_lower` | `a_higher_mode_underdamps_relative_to_the_fundamental` |
 | `test_energy_units_scale_with_density` | `energy_is_in_joules_and_scales_with_areal_density` |
 | `test_operator_symmetric` | `the_energy_first_operator_is_symmetric` |
-| `test_matches_direct_assembly` | `the_kronecker_assembly_matches_a_direct_per_node_build` — bar made relative (§27.2) |
+| `test_matches_direct_assembly` | `the_assembly_matches_a_dense_per_node_build` — bar made relative (§27.2), and renamed: the Python called the production build a Kronecker one, the Rust builder assembles row by row from the mask; the corner-weight clause's `np.allclose` defaults (~4e-6 relative) tightened to 1e-14 |
 | `test_rigid_body_nullspace` | `the_rigid_body_nullspace_is_exact_and_the_saddle_is_not_in_it` |
 | `test_xy_energy_scales_with_one_minus_nu` | `the_saddles_energy_scales_exactly_with_one_minus_nu` (the Python's `np.allclose` kept `atol=1e-8`, finding (d); this is the relative claim alone) |
 | `test_exactly_three_zero_modes` | `exactly_three_modes_are_rigid`, plus LAPACK |

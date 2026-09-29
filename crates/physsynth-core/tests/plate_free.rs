@@ -10,7 +10,7 @@
 //! **SciPy retires as a referee here, with its numbers.** Every eigenvalue the Python file used
 //! came from ARPACK. Following §24.3's rule, the recorded referee is LAPACK's DENSE solve of the
 //! same pencil (`W^{-1/2} K W^{-1/2}`, `dsyevr`), taken on 2026-09-29 before deletion (NumPy 2.4.6,
-//! SciPy 1.17.1, wheel reinstalled); the ARPACK values are in retirement plan §27.1. A dense
+//! SciPy 1.17.1, wheel reinstalled); ARPACK's discrepancies are in retirement plan §27.1. A dense
 //! solve's error is absolute, about `eps · mu_max`, and `mu_max` grows like `h^-4` — 2.2e-9 at
 //! N = 20, 5.8e-7 at N = 80 — so every comparison is written in units of that floor rather than as
 //! a bare number.
@@ -359,7 +359,8 @@ fn the_energy_first_operator_is_symmetric() {
     assert!(asym < 1e-12, "K not symmetric: {asym:.3e}");
 }
 
-/// `K` by explicit per-node loops — no Kronecker products — the reference for the ordering.
+/// `K` by explicit per-node dense loops — the reference for the ordering. (The Python called the
+/// production build a Kronecker one; the Rust builder assembles row by row from the mask.)
 /// Dense, row-major `nn x nn`.
 fn direct_k(nx: usize, ny: usize, h: f64, nu: f64) -> Vec<f64> {
     let nn = (nx + 1) * (ny + 1);
@@ -435,7 +436,7 @@ fn direct_k(nx: usize, ny: usize, h: f64, nu: f64) -> Vec<f64> {
 }
 
 #[test]
-fn the_kronecker_assembly_matches_a_direct_per_node_build() {
+fn the_assembly_matches_a_dense_per_node_build() {
     // Non-square grids, so an x <-> y swap would show.
     for (nx, ny, nu) in [
         (4usize, 4usize, 0.3),
@@ -453,16 +454,19 @@ fn the_kronecker_assembly_matches_a_direct_per_node_build() {
         // relative) measured on the wrong scale. 1e-14 is 42x.
         assert!(
             diff < 1e-14,
-            "({nx},{ny},{nu}): kron K != direct assembly by {diff:.2e}"
+            "({nx},{ny},{nu}): K != the dense per-node build by {diff:.2e}"
         );
         let trivial: Vec<i64> = (0..((nx + 1) * (ny + 1)) as i64).collect();
         assert_eq!(index_map, trivial, "every node is live, in C order");
         let wmin = (0..w.nrows())
             .map(|i| w.get(i, i))
             .fold(f64::INFINITY, f64::min);
+        // The Python's `np.allclose` defaults (atol 1e-8, rtol 1e-5) were a ~4e-6 relative bar
+        // on 0.0025 (finding (d)); this is the relative claim.
+        let want = 0.25 * h * h;
         assert!(
-            (wmin - 0.25 * h * h).abs() <= 1e-8 + 1e-5 * 0.25 * h * h,
-            "corner weight h²/4"
+            (wmin - want).abs() <= 1e-14 * want,
+            "corner weight {wmin} != h²/4"
         );
     }
 }
@@ -548,11 +552,9 @@ fn exactly_three_modes_are_rigid() {
         .count();
     assert_eq!(n_zero, 3, "near-zero modes: {vals:?}");
     // Against LAPACK: the rigid ones are zero to the dense floor, the elastic ones agree.
-    let (_, want) = lapack(20);
     for v in &vals[..3] {
         assert!(v.abs() < 100.0 * floor(20), "a rigid eigenvalue {v:e}");
     }
-    assert!(want[..3].iter().all(|v| v.abs() < 100.0 * floor(20)));
     against_lapack(20, &vals[3..], 3, 20.0);
 }
 
