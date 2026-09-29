@@ -3372,3 +3372,125 @@ the file's `scripts/shard_costs.json` entry. The model's design record,
 The next carrying batch is `tests/test_plate_orthotropic.py` (19 functions), the *supported*
 grained plate — the other half of the material story, and held back from this batch so that this
 one's pattern could be checked first. After it, §24.1's 625 functions are what is left of phase C.
+
+## 25. Phase C, carrying batch 2 — the supported orthotropic plate
+
+Done 2026-09-29. The other half of the material story: `tests/test_plate_orthotropic.py` (19
+functions, 22 pytest cases), the *simply-supported* grained plate, whose three ratios enter as
+`B = g_x δ_xx² + 2 g_h δ_xx δ_yy + g_y δ_yy²`. Every function it called was already native, so this
+is §24's shape again: read the assertions, write the bars, plant breakages, delete. The new file is
+`crates/physsynth-core/tests/plate_grain.rs`, 19 `#[test]`s (the two parametrized Python tests,
+over two grains and three `mu`, loop inside one bar each).
+
+### 25.1 What came from outside the project's code, and was recorded
+
+Everything the Python file asserted already ran through the Rust binding — the model, the operator
+builders, the analysis oracles — so almost every number in it was Rust checking Rust. Exactly two
+referees were independent, and both were recorded before deletion (wheel reinstalled first; NumPy
+2.4.6, SciPy 1.17.1):
+
+- **LAPACK's eigenvalues** of the guard's N = 8 operators (`np.linalg.eigvalsh`): smallest
+  `56.543774203884176` just inside the cross-term floor, `-1639.6437722933872` just outside it.
+  The native dense solver sits 1.9e-11 and 1.8e-10 away. A dense solve's error is absolute, about
+  `eps · lambda_max` (~1.4e-10 here), so the bar is written in that unit — 20 of them, ~2.9e-9 —
+  rather than §24's bare `1e-9`, which the outside value would have met with only 5.7x to spare.
+- **SciPy's sparse `L @ L`**, which the isotropic-default bar compares the plate against. Natively
+  that product cannot be `biharmonic_from_mask` — it is what `Params` itself calls, and comparing a
+  builder with itself proves nothing — so the bar builds `L @ L` by hand (dense, `k` ascending).
+  The hand loop is **proved faithful** rather than assumed: its gap to the general assembly is
+  SciPy's recorded `1.70601310856e-16` exactly, over the same 195 entries, and both are asserted.
+  That is multiply-and-add with no transcendental, so it is a cross-platform claim.
+
+### 25.2 Every margin measured; two were thin
+
+| bar | measured | bar | headroom |
+|---|---|---|---|
+| sine residual (strong / wild) | 4.5e-12 / 3.0e-12 | 1e-11 → **1e-10** | 2.2x → 22x |
+| LAPACK, outside the floor | 1.8e-10 | 1e-9 → **20·eps·λ_max ≈ 2.9e-9** | 5.7x → 16x |
+| LAPACK, inside the floor | 1.9e-11 | same | 150x |
+| uniform grain vs isotropic, spectrum / 200 steps | 3.6e-16 / 1.9e-12 | 1e-14 / 1e-11 | 28x / 5x |
+| convergence order | 2.003 | > 1.8 | — |
+| FFT fundamental | 0.023 cents | 5 cents | 200x |
+| drift at mu 0.5 / 2 / 8 | 1.3e-13 / 4.4e-12 / 1.8e-13 | 1e-10 | ≥ 23x |
+| lossy fundamental vs 2σ | 0.45% | 2% | 4.4x |
+| mutation separation (swap / factor 2 / D_1) | 1.25 / 0.095 / 0.136 | > 0.05 | factor 2 only 1.9x |
+| damping split, grained | 22.3% | > 15% | — |
+| detune: (3,1) / (2,4) / spread | 2.3% / 29.0% / 21.7x | < 5% / > 25% / > 15x | — |
+| level ratios | 0.811 – 1.117 | straddle 1, within 30% | — |
+
+The sine residual is §24.3's cause in a different place: `B`'s entries are ~1e8 (`g · 64/h⁴`) and
+the (1,1) eigenvalue ~1e3, so `eps · |B| / q` is ~1e-11 by itself. Any wiring error puts the
+residual near 1, so the wider bar loses nothing. The deterministic physics margins (the 4.4x on the
+decay rate, the 1.9x on the dropped factor of 2) are not rounding and were left as the Python set
+them, with the measurement written beside each.
+
+### 25.3 Seven deliberate breakages
+
+Planted one at a time in `crates/physsynth-core/src` and `crates/physsynth-analysis/src` (snapshot,
+one change, release run of the new file, restore by copy, byte-compare). All seven caught.
+
+| breakage | red | what catches it |
+|---|---|---|
+| assembly swaps `grain_x` / `grain_y` | 1 | **only** the sine residual — the one bar on a rectangle |
+| assembly's cross factor 2 → 1 | 5 | residual, uniform twin, guard, isotropic default, the FFT |
+| `grain_is_isotropic` forced false | 1 | only the isotropic-default bar, as designed |
+| constructor feeds `grain_cross` where `grain_y` belongs | 3 | residual, guard, the FFT |
+| constructor swaps `grain_x` / `grain_y` | 1 | **only** the sine residual |
+| the floor's `<=` → `<` | 1 | the exactly-at-the-floor refusal |
+| the **oracle** drops its factor 2 | 4 | the FFT and the uniform twin — the two bars where the frequency formula meets something it did not compute — plus convergence and the detune |
+
+Two things here are the file's own warnings made measurable. A transposed grain is invisible on a
+square, and every bar but one is on a square — so the one rectangular bar is load-bearing, and an
+edit that squared its fixture would leave the transposition uncaught. And the energy ledger went red
+for none of the seven.
+
+The last row is why it was planted: several bars (the ledger's modal detector, the diagonal
+blindness, the detune) compare the oracle with itself and pass a broken oracle. It has independent
+witnesses, so it is not self-certifying.
+
+### 25.4 The retirement rule, discharged
+
+| retired | native bar, or verdict |
+|---|---|
+| `test_operator_eigenvalue_is_the_closed_form` (strong, wild) | `the_analytic_sine_is_an_exact_eigenvector_of_the_grained_operator`, both grains, bar widened (§25.2) |
+| `test_the_isotropic_default_stays_on_the_untouched_squaring_path` | same name — **sharpened**: the reference `L @ L` is proved to be SciPy's by reproducing its gap exactly |
+| `test_uniform_grain_collapses_to_an_isotropic_plate` | `a_uniform_grain_is_an_isotropic_plate_of_stiffness_kappa_sqrt_r` — **sharpened**: asserts the plate took the general path, which the Python's "through the *new* code path" only claimed |
+| `test_continuum_oracle_and_its_isotropic_reduction` | `the_continuum_law_reduces_to_the_isotropic_one_and_the_grain_is_not_vacuous` (the analysis crate's `the_orthotropic_oracles_reduce_to_the_isotropic_ones` asserts the reduction at 1e-9; this is 1e-14) |
+| `test_discrete_converges_to_the_continuum_at_second_order` | same name |
+| `test_the_time_stepper_actually_rings_at_the_grained_frequency` | `the_time_stepper_rings_at_the_grained_frequency` |
+| `test_energy_is_conserved_with_grain` (mu 0.5, 2, 8) | `a_grained_plate_conserves_its_energy`, all three |
+| `test_lossy_grained_plate_is_passive_and_a_low_mode_decays_at_2sigma` | `a_lossy_grained_plate_is_passive_and_its_fundamental_decays_at_two_sigma` |
+| `test_the_cross_term_guard_is_sharp_and_rejected_at_construction` | same name, plus LAPACK's two eigenvalues; each refusal asserts its variant as well as the word |
+| `test_degenerate_grain_arguments_are_rejected` | `degenerate_grain_ratios_are_refused` |
+| `test_grain_on_the_free_boundary_needs_the_split_and_says_so` | `a_grain_on_the_free_boundary_needs_the_split_and_says_so` |
+| `test_an_isotropic_material_returns_exactly_no_grain` | `an_isotropic_material_returns_exactly_no_grain_and_an_areal_density_by_name`, with `plate.rs`'s `isotropic_material_comes_back_at_exactly_one` |
+| `test_the_two_rival_cross_term_packagings_are_measurably_wrong` | same name |
+| `test_spruce_is_not_a_stretched_isotropic_plate` | same name, with `plate.rs`'s `spruce_is_not_an_isotropic_plate_with_one_axis_stretched` |
+| `test_the_energy_ledger_cannot_see_a_wrongly_wired_grain` | same name — **sharpened, and the Python control was a verdict**: described as "the same operator, reassociated", it built the *identical* plate and asserted nothing. The native control scales every modulus by 1.1, which lands the ratios on the same values in exact arithmetic and a different last bit in doubles (`cross` and `y` differ), and **asserts that it differs** so it cannot silently go vacuous again |
+| `test_a_square_plates_diagonal_modes_are_blind_to_the_grain_running_the_wrong_way` | same name |
+| `test_grain_makes_the_theta_damping_anisotropic_and_the_ledger_stays_green` | same name; the rates reproduce the Python docstring's 5.857 / 5.857 and 6.024 / 7.751 |
+| `test_the_cross_term_detunes_selectively_without_reordering_anything` | same name — **sharpened**: asserts no exact frequency ties before comparing orderings, since `np.argsort` leaves a tie's order unspecified |
+| `test_the_grain_is_in_the_partial_series_and_not_in_the_level` | same name; the five level ratios reproduce the Python's 0.811–1.117 |
+
+Also deleted: `tests/helpers.py`'s `SPRUCE`, `make_orthotropic_plate` and `orthotropic_mode_freqs`,
+which had no other caller. `docs/dev/orthotropic-plate-plan.md` now points at the native file.
+`ops2d.rs`'s two orthotropic bars stay; they probe the builder on other fixtures.
+
+### 25.5 Cost and counts
+
+- **pytest 1,622 → 1,599**, measured against a worktree at the previous commit: the file's 22 cases
+  plus its `test_xdist_groups` parametrization. (§24.6's 1,637 predates `687003c`, which removed the
+  shard-partition tests; this batch accounts for 23 of the 38.)
+- **Native: +19 in both profiles.** 8 s in release, **240 s in debug** on the dev machine — eight
+  times §24's file, because several bars carry the Python's long trajectories (23,040 steps of a
+  2,209-node plate for the FFT bar, three 20k-step conservation runs). The file is **not** on the
+  `rust-debug` job's `release_only` list, per the default that a new core file lands in both
+  profiles, and it asserts bit-identity in two places (the squaring path, the reproduced SciPy gap)
+  — the kind the both-profiles rule protects. Whether to add it is the human's call.
+
+### 25.6 What is next
+
+61 physics files, 606 test functions (re-derived after this batch, with §24.1's exclusions). The
+smallest are `test_convergence` (2), then `test_beam_stability`, `test_geometric_limits`,
+`test_membrane_dispersion`, `test_modal` and `test_vk_modal` (3 each). A batch is better scoped by
+model than by size, so the next step is to pick a model family and check its native bars first.

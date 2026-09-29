@@ -12,7 +12,8 @@ Model **#5o**: the simply-supported plate (#5) gets three bending stiffnesses in
 along the grain, across it, and a cross term — i.e. wood instead of metal. Shipped 2026-08-17.
 `operators2d.orthotropic_biharmonic`, three `grain_*` keywords on `Plate`,
 `plate.grain_ratios_from_material`, three oracles in `analysis/modal.py`,
-`tests/test_plate_orthotropic.py` (21 tests). Plan: `docs/dev/orthotropic-plate-plan.md`.
+`tests/test_plate_orthotropic.py` (21 tests; since 2026-09-29 native in
+`crates/physsynth-core/tests/plate_grain.rs`, retirement plan §25). Plan: `docs/dev/orthotropic-plate-plan.md`.
 
 **Why this batch and not a bell or a mass-spring network.** The selection rule is the project's own
 acceptance contract, and it is worth reusing: **(a)** switching the new term off must reproduce a

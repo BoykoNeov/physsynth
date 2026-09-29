@@ -1,5 +1,10 @@
 # Orthotropic plate — plan (model #5o: the plate gets a grain direction)
 
+> **2026-09-29: the Python suite named below is gone.** Its bars are native, in
+> `crates/physsynth-core/tests/plate_grain.rs`, carried test by test in
+> `docs/dev/python-retirement-plan.md` §25 — with LAPACK's eigenvalues and SciPy's `L @ L` gap
+> recorded before the file was deleted. The Python names in this document are history.
+
 > **Status: IMPLEMENTED (2026-08-17).** `operators2d.orthotropic_biharmonic`, three `grain_*`
 > keywords on `Plate` (supported branch), `plate.grain_ratios_from_material`, oracles
 > `modal.orthotropic_plate_freqs` / `discrete_orthotropic_plate_eigenfrequency` /
