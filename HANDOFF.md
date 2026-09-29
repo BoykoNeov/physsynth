@@ -394,6 +394,10 @@ CLAUDE.md
 HANDOFF.md
 ```
 
+The layout above is the milestone as first specified. The Python it names is gone; the ideal
+string's acceptance harness is now `crates/physsynth-core/tests/string_ideal.rs`, with its
+oracle-only claims in `crates/physsynth-analysis/tests/oracles.rs` (retirement plan §31).
+
 ---
 
 ## 11. Open decisions — CLOSED (kept as a decision record)

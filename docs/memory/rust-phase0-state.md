@@ -79,3 +79,5 @@ resolve set** (a workspace-scoped check passes vacuously — the workspace conta
 **Correction the plan needed:** `tests/test_string_ideal*.py` **never existed**. Tests here are
 filed by *criterion*, not by model — the ideal string's 38 live in `test_energy` · `test_modal` ·
 `test_convergence` · `test_dispersion` · `test_stability`. Look them up; do not guess a filename.
+
+**SUPERSEDED 2026-09-29 (retirement plan §31):** those four files are deleted and `test_stability` kept only its non-string guards; the ideal string's bars are now `crates/physsynth-core/tests/string_ideal.rs`. See [[retirement-phase-c-carrying-state]].

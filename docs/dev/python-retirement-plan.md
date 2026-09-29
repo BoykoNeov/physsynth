@@ -4244,11 +4244,17 @@ it says "~8e-10".
 Before the carry, `string_ideal.rs` checked the claims the Python made, but mostly at other
 parameters. Three differences mattered.
 
-- **Every native energy bar ran at λ = 1.** The Python's `test_energy_conserved_across_lambda`
-  exists because the conservation identity is algebraic, not a λ = 1 accident. The planted
-  breakage B below proves the gap: an energy that uses `(h/k)²` where `c²` belongs is exact at
-  λ = 1. **It passed every native bar that existed before this batch.** It is caught only by the
-  carried λ sweep and the carried λ = 0.9 free-end runs.
+- **Every energy bar in `string_ideal.rs` ran at λ = 1.** The Python's
+  `test_energy_conserved_across_lambda` exists because the conservation identity is algebraic, not
+  a λ = 1 accident. The planted breakage B below proves the gap. An energy that uses `(h/k)²` where
+  `c²` belongs is exact at λ = 1, so **it passed every bar the string's own file had before this
+  batch.** Inside that file it is caught only by the carried λ sweep and the carried λ = 0.9
+  free-end runs.
+
+  The workspace as a whole did see it (§31.4, re-planted workspace-wide after review). It saw it
+  only through models *built on* the string (the bridges, the sympathetic strings) and through the
+  viewer, never through the string's own harness. A defect in the string found only by a chain's
+  ledger reads as a chain failure, which is the wrong place to start looking.
 - **Two energy bars folded with `worst.max(..)`**, which drops a NaN (§29.3). Both now go through
   the driver's `energy_drift`, which `engine.rs` proves propagates one. The passivity bar was a
   per-step comparison and could not pass a NaN, but its carried twin goes through `nan_max` anyway.
@@ -4306,8 +4312,8 @@ only the test files afterwards.
 | breakage | red | caught by |
 |---|---|---|
 | **A** update uses λ for λ² (identical at λ = 1) | 5 | λ sweep, free end at 0.9, dispersion at 0.8, convergence, the old discrete cosine |
-| **B** energy uses `(h/k)²` for `c²` (identical at λ = 1) | 2 | **only the carried λ sweep and free-end λ = 0.9 runs** |
-| **C** energy drops `ρ` | 1 | only the density bar, as §29.3 and §30.4 |
+| **B** energy uses `(h/k)²` for `c²` (identical at λ = 1) | 2 | in `string_ideal.rs`, **only the carried λ sweep and free-end λ = 0.9 runs**; workspace-wide, 48 tests in 11 files (below) |
+| **C** energy drops `ρ` | 1 | in `string_ideal.rs`, only the density bar; workspace-wide, 59 tests in the same 11 files |
 | **D** update doubles σ | 1 | the decay rate |
 | **E** loss sign flipped | 2 | passivity, decay rate |
 | **F** free-end weight `h/2` → `h` | 1 | the free-end bar |
@@ -4316,11 +4322,24 @@ only the test files afterwards.
 | **I** oracle: λ moved outside the `asin` (identical at λ = 1) | 4 | dispersion at 0.8, convergence vs oracle, both analysis dispersion bars |
 | **J** `parabolic_refine`'s sign flipped | 4 | ten partials, blind detector, dispersion at 0.8, convergence |
 
+The "red" column counts `string_ideal.rs` (plus `oracles.rs` for I and J). B and C were then
+re-planted against the **whole workspace**, `cargo test --workspace --release --no-fail-fast`, with
+`W:\temp\claude\ideal-string\mutate_ws.py`. That was done after review, because §30.4's
+"nothing in the workspace" claims had been made that way and this section's first draft had only
+run the one file. Both went red in the same eleven test binaries:
+
+- `physsynth-core`: `connection`, `connection_body`, `connection_plate`, `string_ideal`;
+- `physsynth-viewer`: `airbox`, `airload`, `body`, `frozen`, `platebody`, `radbody`, `sympathetic`.
+
+Every chain that carries an ideal string runs it inside a total-energy ledger, often at λ < 1. The
+Windows-exact viewer freeze pins the energy's bits. So neither defect could have shipped. What the
+carry fixes is *where* it would have been found.
+
 Two things the table shows beyond "all red":
 
 - **B is the batch's reason to exist.** Energy bars at λ = 1 alone cannot see a defect that
-  vanishes at λ = 1. The same holds for A and I at the other two layers: the model's update and the
-  oracle.
+  vanishes at λ = 1, and the string's own harness had nothing else. The same holds for A and I at
+  the other two layers: the model's update and the oracle.
 - **J left the λ = 1 continuum bar green, and that is not a gap.** At λ = 1 with N = 128 the
   window is 0.5 s at `fs = 25,600`, zero-padded to 32,768 points. The bin spacing is then exactly
   0.78125 Hz, and every swept mode `m · 100 Hz` lands on bin `128 m`. The peak is centred on its
@@ -4376,7 +4395,11 @@ hand-picked-band audit names the native bar for the ten-partial test.
   collecting before and after. Full run: 1,294 passed.
 - **Native +9**: eight in `string_ideal.rs` (13 → 21) and one in `oracles.rs`. The whole file
   takes 0.16 s in release and **3.3 s in debug** on the dev machine, so it stays in both CI
-  profiles by the default.
+  profiles by the default. Workspace: 1,362 passed in release.
+- **On CI (run 36578409910, `9ab14d0`, all green)**: 0.36 s in the release job and **6.2 s in the
+  debug job**. The debug job took 6.0 minutes against the release job's 11.3, the exact Windows
+  viewer freeze 5.8 and the Python suite 2.6. This was the first Linux run of the carried
+  frequency bars at the Python's parameters, and every bar passed.
 - **44 physics files remain** (§24.1's exclusions). Their test functions come to **496** by a
   re-count. The same count run over §30's commit gives 512, not §30.7's 510, so the two-function
   gap is a difference in how the count was taken, not in the files. The carried 16 physics

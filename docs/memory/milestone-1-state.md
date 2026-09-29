@@ -63,3 +63,5 @@ created 2026-06-21 via `gh repo create`); local `main` tracks `origin/main`. Fou
 Next: Phase 2 stiff string (implicit) — add `-κ²·u_xxxx` biharmonic, stretched partials
 `fₙ = n·f₁·√(1+B·n²)`, tighter CFL; the energy/modal/convergence/dispersion harness carries over.
 See `docs/dev/ideal-string-plan.md` for the full results table + dispersion design notes.
+
+**SUPERSEDED 2026-09-29 (retirement plan §31):** the Python harness named above (`test_energy`, `test_modal`, `test_convergence`, `test_dispersion`, `helpers.measure_mode_frequencies`) is deleted; the ideal string's bars are native in `crates/physsynth-core/tests/string_ideal.rs` (+ one oracle bar in `crates/physsynth-analysis/tests/oracles.rs`). See [[retirement-phase-c-carrying-state]].
