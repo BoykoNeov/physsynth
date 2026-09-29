@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-c-carrying-state
-description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-2 done 2026-09-29 (free + supported orthotropic plate); 61 files / 606 functions left"
+description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-3 done 2026-09-29 (free + supported ortho plate, plain plate); 58 files / 585 functions left"
 metadata:
   node_type: memory
   type: project
@@ -13,8 +13,11 @@ so a batch = read each Python test's ASSERTIONS (not names), find/write the nati
 breakages, delete the file.
 - §24 batch 1: `tests/test_free_plate_orthotropic.py` → `crates/physsynth-core/tests/plate_free_grain.rs`.
 - §25 batch 2: `tests/test_plate_orthotropic.py` (19 fns / 22 cases) → `tests/plate_grain.rs` (19).
-Remaining after §25: **61 physics files / 606 functions** (smallest: test_convergence 2; beam_stability,
-geometric_limits, membrane_dispersion, modal, vk_modal 3 each). Next batch not chosen — scope by model.
+- §26 batch 3 (human chose "plain plate"): `test_plate_{energy,modal,stability}.py` (21 fns / 45 cases)
+  → `tests/plate_kirchhoff.rs` (19). Three tests were ABOUT SciPy's `L @ L` row order: SciPy's
+  `csr_matmat` transcribed into the test and certified by reproducing recorded digests.
+Remaining after §26: **58 physics files / 585 functions**. Next batch not chosen — scope by model;
+the user picks the family (asked via options last time).
 
 **Rules these batches set:**
 - A bar needing core + analysis: `physsynth-analysis` is a TEST-ONLY dev-dependency of
@@ -22,6 +25,9 @@ geometric_limits, membrane_dispersion, modal, vk_modal 3 each). Next batch not c
 - Only NumPy/SciPy/LAPACK numbers are independent referees — everything else in a Python test
   already runs through the Rust binding (Rust checking Rust). Record those BEFORE deleting
   (reinstall the wheel first), with LAPACK dense `eigh` not ARPACK (7e-7 off in §24).
+- A test whose SUBJECT is SciPy: transcribe the SciPy kernel and certify it against a recorded
+  digest (§26.1), rather than dropping the test.
+- The 1e-10 acceptance bar is never moved even at 2.9x headroom (§26.2 mu=0.5 drift 3.5e-11) — record it.
 - A dense-eigen bar is written in units of `eps·lambda_max` (§25 uses 20 of them), not a bare 1e-9.
 - A hand-built stand-in for a SciPy product is PROVED faithful by reproducing SciPy's recorded
   number exactly (§25: the L@L gap 1.70601310856e-16 over 195 entries), not assumed.
@@ -38,6 +44,8 @@ geometric_limits, membrane_dispersion, modal, vk_modal 3 each). Next batch not c
 - New native files run in BOTH CI profiles unless added to `rust-debug`'s `release_only`. §25's
   (8 s release / 304 s debug on CI) WAS added, the human's call: a long-trajectory file whose exact
   checks have no transcendental/constant exponent goes release-only. Ask; don't add unasked.
+  §26's plate_kirchhoff (45 s / 1,072 s debug) also release-only, asked BEFORE pushing because it
+  would have become the gate's slowest job.
 - Bash heredocs with backticks/quotes in markdown fail to parse here — append docs via Edit.
 
 Related: [[python-retirement-state]], [[retirement-phase-d-state]], [[retirement-phase-a-state]],

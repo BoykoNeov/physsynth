@@ -1,5 +1,10 @@
 # Plate (Kirchhoff) — Phase 3 Plan (model #5, simply-supported rectangular plate)
 
+> **2026-09-29: the Python suite named below is gone.** Its bars are native, in
+> `crates/physsynth-core/tests/plate_kirchhoff.rs`, carried test by test in
+> `docs/dev/python-retirement-plan.md` §26 — with SciPy's `L @ L` recorded before the files were
+> deleted. The Python names in this document are history.
+
 > **Status: IMPLEMENTED (2026-06-23).** `core/plate.py` (implicit θ-scheme), biharmonic
 > `operators2d.biharmonic_from_mask` (`B = L@L`), oracles `rectangular_plate_freqs` +
 > `discrete_plate_eigenfrequency` in `analysis/modal.py`, suite in `tests/test_plate_{energy,modal,

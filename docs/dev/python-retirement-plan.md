@@ -3500,3 +3500,115 @@ which had no other caller. `docs/dev/orthotropic-plate-plan.md` now points at th
 smallest are `test_convergence` (2), then `test_beam_stability`, `test_geometric_limits`,
 `test_membrane_dispersion`, `test_modal` and `test_vk_modal` (3 each). A batch is better scoped by
 model than by size, so the next step is to pick a model family and check its native bars first.
+
+## 26. Phase C, carrying batch 3 — the plain plate
+
+Done 2026-09-29; the human chose the model family. Model #5's three files —
+`tests/test_plate_energy.py` (7 functions), `tests/test_plate_modal.py` (8) and
+`tests/test_plate_stability.py` (6), 21 functions and 45 pytest cases — retire into one native
+file, `crates/physsynth-core/tests/plate_kirchhoff.rs` (19 `#[test]`s; parametrized cases loop
+inside a bar, and the two free/supported stability pairs share one bar each).
+
+### 26.1 Three tests were about SciPy, and SciPy was transcribed rather than dropped
+
+`test_plate_modal.py` held three tests whose subject was SciPy's sparse product itself: the Rust
+port of `biharmonic_from_mask` sorts each row, where SciPy's `L @ L` had stored it in kernel order,
+and a CSR matvec sums a row in stored order — so the port changed the shipped plate's last bits
+(migration plan §26). With SciPy gone those tests have no referee unless one is written.
+
+So SciPy's `csr_matmat` kernel is **transcribed** into the test (`scipy_csr_matmat`, ~30 lines:
+accumulate over `A`'s row, thread each column onto a linked list on first touch, emit from the
+head — reverse first-touch order — dropping exact-zero sums). And the transcription is **proved
+faithful**, not assumed: before deletion, SciPy's actual product was recorded for all four grids
+the Python used (`N` = 8, 12, 16, 24; NumPy 2.4.6, SciPy 1.17.1) as `nnz`, `Σ (i+1)·indices[i]`
+and `Σ data[i]·(i+1)` summed left to right. The two weighted sums see the stored ORDER as well as
+the values, and the transcription reproduces all four digests exactly. This is §25.1's move again,
+at a larger scale: an independent stand-in, certified by reproducing the retiring referee's output.
+
+| retired | native bar, or verdict |
+|---|---|
+| `test_the_canonical_sort_changed_an_order_and_not_a_value` | `the_canonical_sort_changed_an_order_and_not_a_value` — against SciPy's product reproduced to the digest: unsorted, and row-sorted it IS the shipped operator to the bit |
+| `test_the_canonical_sort_left_the_shipped_plate_where_it_was` | same name — SciPy's kernel-order operator injected through `Csr::from_arrays_preserving_order` (the constructor that exists for this test) and asserted unsorted; the Python's seeded normal draw is replaced by a structureless splitmix64 field (§15's rule for broadband fields) |
+| `test_the_free_plate_was_not_touched_at_all` | **verdict**: it asserted that SciPy returns the free Gram product sorted, but since phase A that builder has been Rust, whose `Csr` sorts every row it assembles — so it was already asserting Rust, not SciPy. Carried as a premise, `the_free_plates_stiffness_is_canonical_by_construction` |
+
+### 26.2 Every margin measured; one is the acceptance bar itself
+
+| bar | measured | bar |
+|---|---|---|
+| lossless drift, mu 0.5 / 2 / 8 (1 s, N = 32) | **3.5e-11** / 1.5e-12 / 4.0e-13 | 1e-10 |
+| drift at mu 16 / mu 50 supported / mu 50 free | 2.8e-13 / 8.1e-14 / 2.3e-14 | 1e-10 / 1e-9 / 1e-9 |
+| lossy, worst step / final energy | every step negative (max -2.0e-5·E0) / 0.54 E0 | ≤ 1e-10·E0 |
+| low-mode decay vs 2σ | 0.20% | 2% |
+| retained energy, (1,1) vs (8,8) | 0.028 vs 0.869 | high > low |
+| E(2ρ) / E(ρ) − 2 | 0 exactly | 2e-12 |
+| B eigenvalues vs Λ² | 2.6e-13 | 1e-10 |
+| convergence order | 2.02 | > 1.8 |
+| one-cent block / horizons / inside / outside | 0.621 / 2 and 2 (window 6) / 0.621 / 1.406 | < 1 |
+| low spectrum vs oracle | 9.6e-12 cents | 0.5 cents |
+| FFT fundamental | 0.030 cents | 5 cents |
+| kernel-order vs canonical, 2000 steps (N 12 / 16) | 1.0e-13 / 1.3e-13; drifts ≤ 3.7e-13 | 1e-11 / 1e-10 |
+
+**One margin is thin, and it is not ours to move**: the lossless drift at `mu = 0.5` — 40,960 steps
+— is 3.5e-11 against 1e-10, **2.9x**. That bar is the project's acceptance contract (CLAUDE.md:
+not tightened, and by the same reasoning not loosened), the Python test ran the same Rust model at
+the same margin, and it is recorded here rather than adjusted. It is the thinnest acceptance margin
+any carrying batch has measured so far; if a platform ever fails it, the drift is a random walk in
+the step count and the fix is a shorter run, not a wider bar.
+
+### 26.3 Eight deliberate breakages
+
+Planted one at a time in `crates/physsynth-core/src` (snapshot, one change, release run, restore by
+copy, byte-compare). All eight caught.
+
+| breakage | red | what catches it |
+|---|---|---|
+| `B` scaled 0.1% high | 3 | the eigenvalue bar and both SciPy bars — **not** the FFT: 0.1% in `B` is 0.9 cents, inside its 5-cent bar |
+| Laplacian diagonal −4 → −4.01 | 3 | eigenvalues, low spectrum, the SciPy digest |
+| loss term dropped from the RHS | 2 | passivity, the 2σ decay |
+| loss doubled in `A` | 1 | only the 2σ decay |
+| kinetic energy halved | 6 | every conservation bar, passivity, decay |
+| theta 1% off in the RHS | 7 | conservation, decay, the SciPy trajectory, the FFT |
+| negative sigma accepted | 1 | the refusal table |
+| `nu = 1/2` accepted | 1 | the refusal table |
+
+### 26.4 The retirement rule, discharged
+
+| retired | native bar, or verdict |
+|---|---|
+| `test_energy_conserved` (mu 0.5, 2, 8) | `a_lossless_plate_conserves_energy_across_mu` |
+| `test_energy_conserved_with_timestep_explicit_could_not_run` | `energy_is_conserved_at_a_timestep_an_explicit_plate_could_not_run` |
+| `test_energy_strictly_positive_when_lossless` | `lossless_energy_stays_strictly_positive` |
+| `test_passivity_monotonic_decrease` | `a_lossy_plate_decreases_monotonically` — **sharpened**: also asserts the energy fell, since a plate that never moved is monotone too |
+| `test_decay_rate_matches_2sigma_low_mode` | `a_single_low_mode_decays_at_two_sigma` |
+| `test_higher_mode_underdamps_relative_to_lower` | `a_higher_mode_underdamps_relative_to_a_lower_one` |
+| `test_energy_units_scale_with_density` | `energy_is_in_joules_and_scales_with_areal_density` |
+| `test_biharmonic_eigenvalues_are_squared_laplacian` | `the_biharmonic_eigenvalues_are_the_squared_laplacian_ones` — ARPACK there, native shift-invert here; the truth is the closed form `Λ²`, so nothing of SciPy's needed recording. The builder-equals-plate half is structural in Rust and kept as a premise |
+| `test_rectangle_continuum_convergence_order` | `the_discrete_law_converges_to_the_continuum_at_second_order` |
+| `test_low_modes_within_one_cent` | `the_low_modes_are_within_one_cent_and_the_band_is_the_measured_horizon`, through the analysis crate's `horizon` module |
+| `test_low_spectrum_via_eigsh_matches_oracle` | `the_low_spectrum_of_the_assembled_laplacian_matches_the_oracle` (truth: the closed form) |
+| `test_fft_peak_at_fundamental` | `the_time_stepper_rings_at_the_discrete_fundamental` |
+| the three SciPy-order tests | §26.1 |
+| `test_no_nan_across_mu` + `test_free_no_nan_across_mu` | `no_nan_across_mu_on_either_boundary`, all ten |
+| `test_explicit_unstable_config_runs_stably` + `test_free_explicit_unstable_config_runs_stably` | `a_timestep_200x_past_the_explicit_bound_runs_and_conserves_on_either_boundary` |
+| `test_invalid_parameters_rejected` (15) | `non_physical_parameters_are_refused_at_construction` — **sharpened**: each case asserts its variant (and the offending value), where the Python accepted any `ValueError`. `boundary="clamped"` is a **shape** refusal (§14's rule): the native API cannot spell a clamped plate, so the case is the binding's `None` → `BadBoundary` |
+| `test_free_boundary_is_accepted` | `the_free_boundary_constructs_with_every_node_a_free_unknown` |
+
+Also removed from `tests/helpers.py`: `plate_low_eigenfrequencies` (no other caller) and
+`plate_kwargs`, which existed only for the column-order test and is folded back into `make_plate`.
+`docs/dev/plate-plan.md` now points at the native file.
+
+### 26.5 Cost and counts
+
+- **pytest 1,599 → 1,551**: 45 cases plus one `test_xdist_groups` parametrization per file.
+- **Native +19.** 37–56 s in release on the dev machine (the conservation bars carry the Python's
+  1-second runs: 40,960 steps at `mu = 0.5`). **1,072 s in debug** — all 19 pass there too. Left
+  in both profiles it would have made `rust-debug` the gate's slowest job by ~10 minutes, so it is
+  on `release_only` from the start (the human's call, asked before pushing). Its exact checks —
+  SciPy's digests, the builder-equals-plate premise — are multiply-and-add with no transcendental
+  or constant exponent, and they passed unoptimised before leaving that pass.
+
+### 26.6 What is next
+
+58 physics files, 585 test functions. The nearest families to what the three plate batches built
+are the free plate (`test_free_plate_energy`, `test_free_plate_modal`) and the guitar plate
+(`test_guitar_plate`), which reuse this file's fixtures; the human picks.

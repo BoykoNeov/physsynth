@@ -111,7 +111,10 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    **Phase C's CARRYING batches began 2026-09-29 (retirement plan §24)** — retiring a Python
    physics file whose model is already native: read each test's assertions, write or find the
    native bar, plant breakages to prove the bars live, delete. §25 did the supported grained
-   plate; **61 physics files / 606 functions remain** (§25.6; §9's map is stale). §25 added two
+   plate and §26 the plain plate; **58 physics files / 585 functions remain** (§9's map is stale).
+   §26 carried three tests whose SUBJECT was SciPy by transcribing SciPy's kernel into the test and
+   certifying it against SciPy's recorded output — a referee that is leaving can be replaced, not
+   only dropped. §25 added two
    rules: everything else in a Python test already runs through the Rust binding, so **only the
    NumPy/SciPy numbers are independent referees** — those are what must be recorded; and a
    **control must assert that it differs** from its subject, or it can silently assert nothing
