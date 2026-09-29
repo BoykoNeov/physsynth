@@ -5,9 +5,11 @@
 //!
 //! `x`, `K` and `W` are immutable after construction and handed back by `clone_ref`. `K` and `W`
 //! are `scipy.sparse.csr_matrix` objects built **once**, which here is not merely the §11.4
-//! precaution it was for the membrane: `tests/helpers.beam_low_eigenfrequencies` hands both of
-//! them straight to a generalized `eigsh`, and `tests/test_beam_energy.py` does it again for the
-//! eigenvectors. A getter that rebuilt them per access would be paying for a shift-invert twice.
+//! precaution it was for the membrane: `tests/helpers.beam_low_eigenfrequencies` handed both of
+//! them straight to a generalized `eigsh`, and `tests/test_beam_energy.py` did it again for the
+//! eigenvectors. A getter that rebuilt them per access would have paid for a shift-invert twice.
+//! (Both retired in retirement plan §30; the eigen-oracle is native, in
+//! `physsynth-core/tests/beam.rs`, and SciPy's numbers are frozen beside it.)
 //!
 //! # `K` and `W` are public names, and that is the whole eigen-oracle
 //!

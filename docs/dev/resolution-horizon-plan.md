@@ -279,7 +279,7 @@ the beam's row carries two bounds.
 | test | band | reference | limiter | derived |
 |---|---|---|---|---|
 | `test_stiff_string.py::test_discrete_oracle_converges_to_continuum_stretched_law` | 10 -> **48** | continuum stretched law | **pitch horizon** | **yes** |
-| `test_beam_modal.py::test_modal_frequencies_match_closed_form` | 1 @ 0.5c -> **2**; 4 @ 2c -> **6** | `cos βL cosh βL = 1` | **pitch horizon** | **yes** |
+| `test_beam_modal.py::test_modal_frequencies_match_closed_form` (native since 2026-09-29: `beam.rs::the_low_modes_sit_inside_their_measured_pitch_horizons`, same floors, window and monotone flag) | 1 @ 0.5c -> **2**; 4 @ 2c -> **6** | `cos βL cosh βL = 1` | **pitch horizon** | **yes** |
 | `test_plate_modal.py::test_low_modes_within_one_cent` | 4 `(m,n)` pairs = the `2×2` block | continuum plate | pitch — a **block**, read through its diagonal corner | **yes**, §8 |
 | `test_modal.py::test_partials_within_one_cent_at_lambda_one` | 10 | continuum harmonics | scheme **exact** at `λ=1`; detectability | no |
 | `test_bore_modal.py::test_open_open_full_series_present` | 4 | continuum | exact at `λ=1`; the claim is *presence* of the evens | no |

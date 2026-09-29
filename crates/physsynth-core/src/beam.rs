@@ -76,7 +76,8 @@ use crate::sparse_lu::{SparseLu, SparseLuError};
 pub const THETA_DEFAULT: f64 = 0.28;
 
 /// A construction-time rejection. Every variant's `Display` is the Python original's message
-/// verbatim, because `tests/test_beam_stability.py` matches on the text.
+/// verbatim: the binding raises it as the `ValueError`'s text, and `tests/beam.rs` pins the
+/// variant of every refusal and the text of the one that is a physics decision (`kappa = 0`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParamError {
     /// One of `L`, `rho`, `fs` was not positive.

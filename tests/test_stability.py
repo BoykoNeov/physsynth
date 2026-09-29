@@ -368,19 +368,17 @@ def test_core_does_not_import_sibling_layers():
 
 
 def test_arpack_oracles_are_bit_reproducible():
-    from helpers import beam_low_eigenfrequencies, make_beam, make_free_plate
+    # The beam's half went with its helper (retirement plan §30): the beam suite is native, and its
+    # eigenvalues are frozen in crates/physsynth-core/tests/reference/beam.json.
     from helpers import free_plate_low_eigenfrequencies as fp
+    from helpers import make_free_plate
 
-    beam = make_beam(N=32)
     plate = make_free_plate(N=12)
-    for name, first, second in (
-        ("beam", beam_low_eigenfrequencies(beam, 4), beam_low_eigenfrequencies(beam, 4)),
-        ("free plate", fp(plate, 3), fp(plate, 3)),
-    ):
-        assert np.array_equal(first, second), (
-            f"{name} oracle is not bit-reproducible: {first} vs {second} -- an eigsh call lost "
-            "its pinned v0"
-        )
+    first, second = fp(plate, 3), fp(plate, 3)
+    assert np.array_equal(first, second), (
+        f"free plate oracle is not bit-reproducible: {first} vs {second} -- an eigsh call lost "
+        "its pinned v0"
+    )
 
 
 def test_every_eigsh_call_in_the_tests_pins_v0():

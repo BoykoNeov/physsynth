@@ -4018,3 +4018,176 @@ hand-picked-band audit row in `docs/dev/resolution-horizon-plan.md` names the na
 
 51 physics files, 526 test functions. The beam (`test_beam_{energy,modal,stability}`, 16
 functions) is the other family §28.7 named; after it the string families; the human picks.
+
+## 30. Phase C, carrying batch 7 — the free-free beam
+
+Done 2026-09-29; the human named the beam as the natural next batch. Three files —
+`tests/test_beam_{energy,modal,stability}.py`, **16 functions, 32 pytest cases** — retire into
+`crates/physsynth-core/tests/beam.rs`, which goes from 17 `#[test]`s to 24.
+
+Unlike §29 there is no new harness file. `beam.rs` was already written at `make_beam`'s own
+parameters (`L = 1`, `rho = 0.005`, `kappa = 20`, `theta = 0.28`, `fs = kappa / (mu h^2)`) and
+carried about half the claims at the same or a stricter bar, so it was extended rather than
+duplicated. Where an existing bar was at the Python's parameters it was counted as carried; where
+it was shorter or on another grid it was brought to the Python's. `theta` was checked first:
+`make_beam` took its default from `string_stiff`, not from the beam module, and both are 0.28.
+
+One core source change: `impl Resonator for FreeBeam` in `engine.rs`, so the carried bars run
+through the same `simulate` and NaN-propagating `energy_drift` the Python did. The binding does not
+use it (it keeps the beam's state in NumPy arrays, per Phase 0).
+
+### 30.1 One outside referee, frozen — and a stronger truth than LAPACK
+
+The only SciPy numbers the three files touched were ARPACK's eigenpairs of `K phi = mu W phi`
+(`beam_low_eigenfrequencies`, `_elastic_eigenvector`). Everything else ran through the binding.
+Recorded into `crates/physsynth-core/tests/reference/beam.json` (wheel reinstalled; NumPy 2.4.6,
+SciPy 1.17.1) at all seven grids the suite solved on (N = 48, 50, 64, 100, 120, 200, 400), with
+`h`, the node count and `K`'s stored-entry count so a fixture that built a different beam fails
+loudly:
+
+- **LAPACK's dense generalized `eigh`** and its largest eigenvalue, for the `eps mu_max` unit;
+- **ARPACK's values at the Python's own settings** (shift `-1e-3 mu_1`, `v0 = arpack_v0`);
+- **the 50-digit Rayleigh quotient of LAPACK's eigenvector** (mpmath), rounded once. It is exact
+  for that double vector, and its error as an eigenvalue is second order in the vector's error. So
+  it is a better truth than either solver, and it is what the native bars are measured against.
+
+Against it, **ARPACK was the least accurate solver in the room for the third time** (§24.3,
+§27.1): **22.6 `eps mu_max` on the second elastic mode at N = 120**, and 7.4 at N = 100. LAPACK was
+within 1.8 everywhere. The bar asserts the finding, so a re-recorded file that lost it would fail.
+
+Also recorded: **LAPACK's eigenvalues-only path is a different algorithm** from the path that also
+computes eigenvectors. The rigid pair at N = 200 moved from −1.4e-6 to −6.3e-6 between the two. The
+record says which path produced it.
+
+### 30.2 The native Krylov solver's error has two terms, and neither alone is a bar
+
+`eigs::eigsh_shift_invert` was held to §25's `20 eps mu_max` and failed at N = 200: **172 `eps
+mu_max` at the top of the 24-mode window**. That is 3e-11 relative, which is what its stopping rule
+promises. It accepts a Ritz pair when the out-of-basis residual is below `RESIDUAL_TOL = 1e-10` of
+`theta`, and that is a *relative* promise. A relative bar then failed the other way. At N = 400,
+`mu_1 / mu_max` is about 1e-9, so the fundamental's 0.04 `eps mu_max` reads as 7e-9 relative.
+
+The bar is therefore **`20 eps mu_max + 1e-9 |mu|` per mode**: a floor every solve through `K`
+shares, plus the solver's relative tolerance, written as a literal so a loosened `RESIDUAL_TOL`
+cannot move it (§29.3). The rigid pair has no relative scale and gets the first term alone. Worst
+use of the allowance: **0.072** (N = 200). The file's own inverse iteration, which supplies the
+eigenvectors the single-mode bars start from, is held to the plain dense unit on exactly those modes.
+Its worst is **0.034 `eps mu_max`**.
+
+### 30.3 Every margin measured
+
+| bar | measured | bar |
+|---|---|---|
+| lossless drift, N = 64, `mu` ∈ {0.5, 2, 8, 16} for 1 s, 50 for 8,000 steps | ≤ 5.5e-12 (`mu` = 2) | 1e-10 |
+| passivity, worst rise / E⁰ over 1 s (σ = 8) | never rose | ≤ 1e-10 |
+| passivity, retained energy after 1 s | 0.141 (the single-mode rate would leave 1.1e-7) | < 0.5, and > 10× that |
+| low-mode decay vs `2σ` | 1.7e-3 relative | 2% |
+| high/low retained (underdamping caveat) | 0.164 vs 0.027 | high > low |
+| `E(2ρ)/E(ρ) − 2` | 0 | 1e-12 |
+| `K 1`, `K x` / `K x²` relative residual | 0, 4.0e-18 / 1.06e-6 | < 1e-12 / > 1e-9 |
+| closed form, modes 1 / 5 at N = 200 | 0.18 / **1.45 cents** | 0.5 / 2 |
+| pitch horizon at 0.5 / 2 cents | 2 / 6, monotone | ≥ 1 / ≥ 4, < 24 |
+| rigid pair from the solver, / (1e-6 μ₁) | 7.0e-4 | < 1 |
+| convergence order, fundamental / low 3 | 1.9999 / 1.9996 | > 1.9 |
+| discrete cosine, pointwise / amplitude | **3.6e-14** | 1e-13 |
+| start-up at rest / launched (new, §30.4) | 9.5e-15 / 6.9e-16 | 1e-12 |
+| FFT fundamental vs discrete, N = 120 | 0.010 cents | 5 |
+| local roots vs the crate's `brentq` roots | 3.7e-13 | 1e-11 |
+| `mu = 50`, N = 40, 0.5 s drift | 3.4e-14 | 1e-9 |
+| Krylov / inverse iteration vs the frozen truth | 0.072 of allowance / 0.034 `eps mu_max` | 1 / 20 |
+| the record's LAPACK vs its own Rayleigh quotients | 1.80 (N = 50) | 3 |
+
+The two bold rows are existing bars. The cents row measures an O(h²) discretization error that is
+deterministic to ~1e-12, so its 1.4x cannot flake. The discrete cosine's 2.8x is round-off; it has
+passed on Linux CI since the port. The start-up bar's first draft was 1e-14 against a measured
+9.5e-15. It was widened to 1e-12 before landing, 10⁸ below what the missing ½ reads.
+
+### 30.4 Twelve deliberate breakages — one that nothing in the workspace could see
+
+| breakage | red | caught by |
+|---|---|---|
+| end mass cell `h/2` → `h` | 5 | trapezoid, frozen referee, closed form, horizon, order |
+| `K` scaled by `1 + 1e-7` | 1 | **only the frozen referee** — energy, cents and FFT cannot see 1e-7 |
+| last curvature row dropped | 6 | referee, closed form, horizon, order, decay, FFT |
+| `theta` in the update matrix only (×0.9) | 8 | every trajectory bar |
+| loss sign in the update matrix | 3 | passivity, decay, underdamping |
+| **start-up drops the ½** | **1** | **only the new start-up bar** — below |
+| start-up velocity sign flipped | 1 | only the new start-up bar |
+| energy drops `rho` | 1 | only the density bar, as §29.3 |
+| `N ≥ 4` guard → `N ≥ 3` | 1 | the refusal table |
+| `free_free_beam_beta_l`: `sech` × 1.01 | 2 | the new roots bar, and the analysis crate's own |
+| `discrete_beam_eigenfrequency`: `4θ` → `3.6θ` | 1 | the discrete-cosine cross-check, now calling the function |
+| the step writes a NaN into node 1 | 8 | every trajectory bar — **4 against the committed file** |
+
+**Dropping the ½ in `u^{-1} = u^0 - k v^0 + ½ k² a^0` passed every test in every crate** (checked
+workspace-wide), and nothing in the Python suite looked either. Energy cannot see it, because any
+`u^{-1}` gives a conserved run. The discrete cosine cannot, because the recurrence holds from every
+start. A phase error of order `c` is invisible to a five-cent FFT. The new
+`the_start_up_is_the_consistent_second_order_one` asserts the two exact identities the start implies
+for an eigenmode:
+
+- at rest, `u^1 - u^{-1} = theta c² / (1 + theta c) u^0`, which is not zero, because `1 - c/2` is
+  only the Taylor start of the scheme's own `cos(omega k)`;
+- launched from rest, the centred velocity is exactly `V`.
+
+The NaN row is §29.3's rule proven on this file. Its convergence bar folded `err_low3` with
+`f64::max`, and its discrete-cosine bar folded the residual the same way. **The committed
+discrete-cosine bar passed a run that was NaN from the first step**: every residual was NaN, so the
+worst stayed 0. Both folds now go through `nan_max`.
+
+### 30.5 The retirement rule, discharged
+
+| retired | native bar |
+|---|---|
+| `test_energy_conserved` (3) | `a_lossless_beam_conserves_its_energy_at_every_mu` — now 1 s at each `mu`, not 8,000 steps |
+| `test_energy_conserved_with_timestep_explicit_could_not_run` | the same run at `mu = 16` |
+| `test_energy_strictly_positive_when_lossless` | the same runs; its 0.5 s at `mu = 2` is a prefix |
+| `test_passivity_monotonic_decrease` | `a_lossy_beam_is_passive` — now 1 s, its slack |
+| `test_decay_rate_matches_2sigma_low_mode` | `a_low_mode_decays_at_twice_sigma` |
+| `test_higher_mode_underdamps_relative_to_lower` | `a_higher_mode_underdamps_relative_to_a_lower_one` |
+| `test_energy_units_scale_with_density` | `the_energy_scales_linearly_with_density` — stricter: `np.isclose(rtol=1e-12)` kept `atol = 1e-8` (§16's (d)) |
+| `test_operator_symmetric` | `the_stiffness_is_symmetric_to_the_bit` |
+| `test_rigid_body_nullspace` | `the_stiffness_annihilates_its_rigid_body_nullspace_and_nothing_else` |
+| `test_modal_frequencies_match_closed_form` | `the_low_modes_sit_inside_their_measured_pitch_horizons` (new) — plus the frozen referee |
+| `test_convergence_order_h2` | `the_operator_eigenvalues_converge_at_second_order` — NaN fold fixed |
+| `test_fft_rings_at_fundamental` | `a_struck_beam_rings_at_its_discrete_fundamental` (new) |
+| `test_resonator_uses_operator_helper` | `the_resonator_uses_the_operator_helper_verbatim` — to the bit |
+| `test_no_nan_across_mu` (5) | `nothing_blows_up_anywhere_in_the_mu_sweep` (new) |
+| `test_explicit_unstable_config_runs_stably` | `a_courant_number_two_hundred_times_the_explicit_bound_runs_and_conserves` (new) |
+| `test_invalid_parameters_rejected` (11) | `the_construction_refusals_are_the_documented_ones` — each variant |
+
+Three new bars carry no Python test:
+
+- `both_eigensolvers_reproduce_the_frozen_referee_at_every_grid_the_suite_solved_on` (§30.1–30.2);
+- `the_local_roots_are_the_analysis_crates_roots`, which ties the file's own bisected oracle to the
+  crate's `brentq` one, so a defect in either is seen;
+- the start-up bar.
+
+The file's header no longer says the core crate has no path to the analysis crate. That stopped
+being true at §24.
+
+Orphans removed from `tests/helpers.py`: `make_beam`, `beam_low_eigenfrequencies`,
+`KAPPA_BEAM_DEFAULT`, `MU_BEAM_DEFAULT` and the `FreeBeam` import. `tests/test_stability.py`'s
+`test_arpack_oracles_are_bit_reproducible` lost its beam half. `docs/dev/plate-free-edge-plan.md`
+points at the native file. The beam row of `docs/dev/resolution-horizon-plan.md`'s hand-picked-band
+audit names the native bar.
+
+### 30.6 Cost and counts
+
+- **pytest 1,368 → 1,333**: 32 cases plus three `test_xdist_groups` parametrizations, reconciled
+  by collecting before and after. Full run: 1,333 passed.
+- **Native +7**, all in `beam.rs`. The file takes 0.74 s in release and **14.5 s in debug** on the
+  dev machine (the one-second runs are 220k steps of a 65-node beam), so it stays in both CI
+  profiles by the default. Workspace: 1,353 passed in release.
+
+### 30.7 What is next
+
+48 physics files, 510 test functions. The string families are next by §28.7's order; the human
+picks.
+
+One loose end, from §27 rather than this batch: the surviving half of
+`test_arpack_oracles_are_bit_reproducible` guards `free_plate_low_eigenfrequencies`, and that
+helper's only remaining caller is the guard itself. The guard still asserts something true, but
+about a helper nothing uses. It is the drained-table shape of ledger #52, one level up. The second
+guard there, "every `eigsh` call pins `v0`", is still live: the bore and the von Kármán free plate
+call `eigsh`.

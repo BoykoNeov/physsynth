@@ -17,7 +17,6 @@ from physsynth.core.airbox import (
     AirBox,
     RoomLoadedBody,
 )
-from physsynth.core.beam import FreeBeam
 from physsynth.core.body import ModalBody
 from physsynth.core.bore import C0_AIR, RHO0_AIR, Bore
 from physsynth.core.bow import BowedString
@@ -57,13 +56,6 @@ KAPPA_PLATE_DEFAULT = 20.0
 # mu <= 1/4). The implicit theta-scheme has no limit, so the default sits well past 1/4 -- a regime
 # the explicit plate could not run. make_plate solves fs from mu: fs = kappa / (mu h^2).
 MU_PLATE_DEFAULT = 2.0
-
-# Free-free beam (model #5b-pre): stiffness kappa = sqrt(E I / (rho A)) (m^2/s). Same plate-Courant
-# parameter mu = kappa k / h^2 (no CFL limit -- implicit theta-scheme). rho is the *linear* density
-# (kg/m), so RHO_DEFAULT carries over. The fundamental is f_1 = kappa (beta_1 L)^2 / (2 pi L^2) with
-# beta_1 L ~ 4.730, i.e. ~ 71.3 Hz at kappa = 20, L = 1.
-KAPPA_BEAM_DEFAULT = 20.0
-MU_BEAM_DEFAULT = 2.0
 
 
 # ARPACK start vector. `eigsh` without `v0` draws a RANDOM one, so every eigensolve in the suite is
@@ -351,57 +343,6 @@ def free_plate_low_eigenfrequencies(
     mu = np.sort(mu)
     rigid, elastic = mu[:3], mu[3:n_total]
     freqs = plate.kappa * np.sqrt(np.clip(elastic, 0.0, None)) / (2.0 * np.pi)
-    if return_rigid:
-        return freqs, rigid
-    return freqs
-
-
-def make_beam(
-    *,
-    N: int,
-    mu: float = MU_BEAM_DEFAULT,
-    kappa: float = KAPPA_BEAM_DEFAULT,
-    sigma: float = 0.0,
-    theta: float = THETA_DEFAULT,
-    L: float = L_DEFAULT,
-    rho: float = RHO_DEFAULT,
-) -> FreeBeam:
-    """Build a free-free beam at beam-Courant number ``mu = kappa k / h^2``.
-
-    ``h = L/N`` is fixed by the geometry, so the sample rate is solved for to hit the target ``mu``:
-    ``fs = kappa / (mu h^2)`` (the 1D analogue of :func:`make_plate`). There is no CFL ceiling (the
-    implicit theta-scheme is unconditionally stable for ``theta >= 1/4``), so ``mu`` above the
-    explicit bound ``1/4`` is a feature. Smaller ``mu`` -> finer timestep (less dispersion), for the
-    tight modal tests.
-    """
-    h = L / N
-    fs = kappa / (mu * h * h)
-    return FreeBeam(L=L, rho=rho, fs=fs, N=N, kappa=kappa, sigma=sigma, theta=theta)
-
-
-def beam_low_eigenfrequencies(
-    beam: FreeBeam, n_modes: int, *, return_rigid: bool = False
-):
-    """The ``n_modes`` lowest **elastic** spatial eigenfrequencies (Hz) of ``beam`` (ascending).
-
-    Solves the generalized eigenproblem ``K φ = mu W φ`` (``mu = ω²/κ²``, the 4th-power spatial
-    eigenvalue). ``K`` is only **positive-semidefinite** (the ``{1, x}`` rigid-body nullspace), so
-    shift-invert at ``sigma = 0`` is singular -- a small **negative** shift is used instead
-    (``K - sigma W`` SPD). The two ``mu ≈ 0`` rigid-body modes are discarded; each remaining ``mu``
-    is mapped to the spatial frequency ``f = kappa·sqrt(mu)/(2π)``. With ``return_rigid=True`` the
-    two discarded near-zero ``mu`` are also returned (a free cross-check that the nullspace is wired
-    right).
-    """
-    n_total = n_modes + 2  # + the 2 rigid-body modes to discard
-    mu1_est = (4.730041 / beam.L) ** 4  # continuum fundamental scale -> a safe (< mu_1) shift
-    sigma = -1e-3 * mu1_est
-    mu = eigsh(
-        beam.K, k=n_total, M=beam.W, sigma=sigma, which="LM", return_eigenvectors=False,
-        v0=arpack_v0(beam.K),
-    )
-    mu = np.sort(mu)
-    rigid, elastic = mu[:2], mu[2:n_total]
-    freqs = beam.kappa * np.sqrt(np.clip(elastic, 0.0, None)) / (2.0 * np.pi)
     if return_rigid:
         return freqs, rigid
     return freqs

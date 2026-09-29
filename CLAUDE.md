@@ -112,8 +112,11 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    physics file whose model is already native: read each test's assertions, write or find the
    native bar, plant breakages to prove the bars live, delete. §25 did the supported grained
    plate, §26 the plain plate, §27 the free plate, §28 the guitar/disk — **every plate family's
-   Python suite is gone** — and §29 the membrane; **51 physics files / 526 functions remain**
-   (§9's map is stale). §29 set a rule: **a bar about a constant must not import the constant**
+   Python suite is gone** — §29 the membrane and §30 the beam; **48 physics files / 510 functions
+   remain** (§9's map is stale). §30 froze a truth stronger than LAPACK (the 50-digit Rayleigh
+   quotient of LAPACK's eigenvector), found the native Krylov solver's error is `eps·mu_max` PLUS
+   1e-10 relative (neither alone is a bar), and found a start-up defect nothing in the workspace
+   could see. §29 set a rule: **a bar about a constant must not import the constant**
    (the CFL bars read the ceiling from the model, so a moved ceiling moved the bar). §28
    froze outside referees into `crates/physsynth-core/tests/reference/` — which needs serde_json's
    `float_roundtrip` to read a float back exactly.

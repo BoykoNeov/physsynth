@@ -12,6 +12,7 @@
 //! original's convention, kept so that a decimation index computed against one is valid against
 //! the other.
 
+use crate::beam::FreeBeam;
 use crate::bow::BowedString;
 use crate::mallet::MalletMembrane;
 use crate::membrane::Membrane;
@@ -289,6 +290,28 @@ impl Resonator for Plate {
     }
     fn displacement_at(&self, index: usize) -> f64 {
         self.u[index]
+    }
+    fn timestep(&self) -> f64 {
+        self.p.k
+    }
+}
+
+/// The free-free beam — a native caller's handle only: the binding keeps the beam's state in NumPy
+/// arrays (Phase 0) and has its own driver. Added so the beam's acceptance bars run through the
+/// same `simulate` and NaN-propagating `energy_drift` the Python suite did (retirement plan §30).
+impl Resonator for FreeBeam {
+    fn step(&mut self) -> Result<(), String> {
+        FreeBeam::step(self);
+        Ok(())
+    }
+    fn energy(&self) -> f64 {
+        FreeBeam::energy(self)
+    }
+    fn state(&self) -> Vec<f64> {
+        self.u.clone()
+    }
+    fn displacement_at(&self, index: usize) -> f64 {
+        FreeBeam::displacement_at(self, index)
     }
     fn timestep(&self) -> f64 {
         self.p.k

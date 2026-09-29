@@ -71,6 +71,12 @@ dimensionless frequency parameters (percent-level absolute anchor).
 
 ## Part 0 — 1D free-free beam de-risk (model #5b-pre) ✅ DONE
 
+> **2026-09-29: the Python beam suite named below is gone.** Its bars are native —
+> `crates/physsynth-core/tests/beam.rs` — carried test by test in
+> `docs/dev/python-retirement-plan.md` §30, with SciPy's eigenvalues of the free-free pencil
+> frozen into `crates/physsynth-core/tests/reference/beam.json` before the files were deleted.
+> The Python names in this section are history.
+
 > **Built & green (2026-06-23).** `core/beam.py` (`FreeBeam`), `operators.free_beam_stiffness`,
 > `analysis/modal.{free_free_beam_betaL,free_free_beam_freqs,discrete_beam_eigenfrequency}`,
 > `tests/test_beam_{modal,energy,stability}.py` — 263 tests total, lint-clean. Measured results:

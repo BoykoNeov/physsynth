@@ -9,10 +9,10 @@ and the broad damping caveat that comes with it.
 
 This is the 1D rehearsal of the free-edge Chladni plate and the one free-boundary flexural model in
 the project with a genuine closed-form spectrum, ``cos(βL)·cosh(βL) = 1``. The bars that check it
-against that spectrum are ``crates/physsynth-core/tests/beam.rs`` — which derives the oracle by
-bisection rather than importing it, and solves ``K φ = mu W φ`` with a shifted inverse iteration
-built on the crate's own sparse LU — and ``tests/test_beam_modal.py``, which is unchanged and now
-measures the Rust beam through SciPy.
+against that spectrum are ``crates/physsynth-core/tests/beam.rs``, which derives the oracle by
+bisection as well as importing it, and solves ``K φ = mu W φ`` two ways on the crate's own sparse
+LU. The Python suite that measured the Rust beam through SciPy retired into that file
+(``docs/dev/python-retirement-plan.md`` §30), with SciPy's eigenvalues frozen beside it.
 
 What stays here is ``Boundary`` (a `Literal`) and the ``THETA_DEFAULT`` **re-export**. That
 constant is defined once, in :mod:`physsynth.core.string_stiff`, and reached through this module by
