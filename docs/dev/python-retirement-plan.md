@@ -4674,9 +4674,9 @@ errors and the partial shift — as §32.1 did for the stiff string.
 
 ### 33.2 What the existing native bars could not see
 
-The damped string has no native test file of its own. Five bars in `string_stiff.rs` ran it at
+The damped string has no native test file of its own. Four bars in `string_stiff.rs` ran it at
 that file's fixture (`fs = 44100`, `κ = 1.5`): a passivity bar, the twin anchor, the solve's
-inverse, the construction order and the no-CFL run. The analysis crate had the damping oracles at
+inverse and the construction order. (That file's no-CFL run builds only `StiffString`.) The analysis crate had the damping oracles at
 `L = 0.65`, `κ = 0`, `θ = 0.5`. What the Python asserted and no native line did:
 
 - **The damped string lossless.** No native bar ran `DampedStiffString` with both losses zero;
@@ -4694,8 +4694,9 @@ inverse, the construction order and the no-CFL run. The analysis crate had the d
   fixture. The native test asserts each *variant*. `"clamped"` is carried as
   `boundary_ok = false` → `BadBoundary`, as in §32.2: the parse retires with the binding.
 
-And three things **nothing** saw — neither the Python nor any native bar — which §33.4 found by
-planting and which the human chose to guard (two new bars; see §33.4).
+And three things no native bar anywhere in the workspace saw, and no test in the retired file
+either, which §33.4 found by planting and which the human chose to guard (two new bars; see
+§33.4).
 
 No run got shorter (§30's review rule): every carried run is the Python's own length, the money
 test's 15,000 steps and the T60 check's 20,000 included.
@@ -4762,6 +4763,9 @@ The "nothing else" claims were re-planted against the whole workspace (§31's ru
 | H | **nothing** |
 | I | **nothing** |
 
+The three viewer freezes compare exactly only on the Windows CI job (§23.19); on Linux they check
+structure, so there G's copy witnesses are five, not eight.
+
 **G is §30.4 and §32.4 a third time.** Dropping the ½ in `u⁻¹ = u⁰ − k v⁰ + ½k² L u⁰` passes every
 physics bar, because energy is conserved (or dissipated) from any start and a decay rate does not
 care about phase. Eight tests saw it, and every one compares with a copy — so a red one says two
@@ -4788,8 +4792,8 @@ both:
   is §32's sweep on this model (θ ∈ {0.25, 0.28, 0.5}, N = 120, 2 s) and turns red on both.
 - **F** — the T60 constant cancels out of both round trips (the forward map in each is spelled
   with `t60_seconds_per_rate()` too), and the simulated T60 check's 4% bar is wider than a 1%
-  move although mode 1 lands within 3.2e-5. Only `tests/test_analysis_frozen.py` saw it, and that
-  file is Python too. `the_t60_inversion_lands_on_the_pythons_recorded_answer` carries its row
+  move although mode 1 lands within 3.2e-5. Only `tests/test_analysis_frozen.py` would see it —
+  inferred, not planted: its row moves about 1% against a 1e-13 bar — and that file is Python too. `the_t60_inversion_lands_on_the_pythons_recorded_answer` carries its row
   (`loss_coefficients_from_T60(200, 0.65, 0.7, 200, 6, 2000, 1.5)` → `(1.1147930129676977,
   0.0009249908881590224)`, recorded from the Python implementation before §44 deleted it) against
   that file's 1e-13 bar. The native answer is identical to the last digit. This is the first row of

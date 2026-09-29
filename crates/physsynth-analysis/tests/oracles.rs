@@ -112,11 +112,11 @@ fn the_spatial_eigenvalue_reaches_its_continuum_value() {
     }
 }
 
-// The five below are carried from `tests/test_damped_string.py` (retirement plan §33), at the
-// damped-string harness's own numbers — the stiff string's c = 200 m/s, L = 1, kappa = 2 and
+// The first five below are carried from `tests/test_damped_string.py` (retirement plan §33), at
+// the damped-string harness's own numbers — the stiff string's c = 200 m/s, L = 1, kappa = 2 and
 // theta = 0.28, declared with the stiff-string bars further down. The bars above make the same
 // kinds of claim at L = 0.65, kappa = 0 and theta = 0.5, which is not the Python's case, and never
-// reach the T60 mapping's stiff branch.
+// reach the T60 mapping's stiff branch. The sixth was added in §33.4 and says so.
 
 #[test]
 fn the_continuum_loss_rate_is_two_sigma_eff_and_rises_only_with_sigma1() {
