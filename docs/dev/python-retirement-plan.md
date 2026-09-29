@@ -3734,6 +3734,8 @@ have other callers. `docs/dev/plate-free-edge-plan.md` now points at the native 
 - **Native +18.** 9–18 s in release on the dev machine, **213 s in debug** (all 18 pass there).
   It would not have become the gate's slowest job, but it is on `release_only` for consistency with
   §25's file in the same position (the human's call, asked before pushing).
+  **On CI (`f6115a3`)**, all green on Linux: the file took **6.5 s** in the release `rust` job, and
+  `rust-debug` stayed at ~2.6 min.
 
 ### 27.6 What is next
 
