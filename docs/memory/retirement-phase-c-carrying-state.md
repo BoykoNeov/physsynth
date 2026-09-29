@@ -68,9 +68,11 @@ chosen — the user picks the family; a recommendation + "go with it" is an acce
 - Bash heredocs with backticks/quotes in markdown fail to parse here — append docs via Edit.
 - A bar about a CONSTANT must not import it from the model (§29.3: CFL bars read `lambda_max()`, so a
   planted `1.1/sqrt2` moved bar and model together). Write the constant in the test, as the Python did.
+- A carried "worst of" must propagate NaN (`fold(_, f64::max)` drops it): §29's passivity bar passed a
+  NaN run until fixed in review. Use a `nan_max` / assert every element, like `np.all`.
 - A rectangle oracle bug that swaps axes is invisible on a SQUARE — check which bars use Lx != Ly.
 - Python edits via `open(p,'w')` on Windows write CRLF; use `newline=''` (git warns on the .rs files).
-- §29 core file: 3.4 s release / 59 s debug locally — stayed in both CI profiles (not asked; not the long pole).
+- §29 core file: 3.4 s release / 59 s debug locally, 3.9 s / 37 s on CI (run 36546609975, green on Linux) — stayed in both profiles (debug job 3.0 min vs release 11.2).
 
 Related: [[python-retirement-state]], [[retirement-phase-d-state]], [[retirement-phase-a-state]],
 [[free-plate-orthotropic-state]], [[orthotropic-plate-state]], [[rust-airbox-native-bars]].

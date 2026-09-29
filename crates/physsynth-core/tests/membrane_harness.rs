@@ -54,6 +54,20 @@ fn c() -> f64 {
     (T / RHO).sqrt()
 }
 
+/// `np.max`: NaN-propagating, unlike `fold(_, f64::max)`, which returns the other operand when one
+/// side is NaN and so would report a clean figure for a run that blew up (the trap `engine.rs`'s
+/// `energy_drift` documents). Every worst-case figure in this file goes through it (§29.3).
+fn nan_max(it: impl Iterator<Item = f64>) -> f64 {
+    let mut m = f64::NEG_INFINITY;
+    for v in it {
+        if v.is_nan() {
+            return f64::NAN;
+        }
+        m = m.max(v);
+    }
+    m
+}
+
 fn reference() -> Value {
     serde_json::from_str(include_str!("reference/membrane.json")).expect("the frozen record")
 }
@@ -218,12 +232,13 @@ fn loss_makes_the_energy_fall_at_every_step() {
     let mut m = membrane(Domain::Circle, 48, 0.6, 8.0);
     let res = run(&mut m, 1.0);
     let e0 = res.energy[0];
-    let worst = res
-        .energy
-        .windows(2)
-        .map(|w| w[1] - w[0])
-        .fold(f64::NEG_INFINITY, f64::max);
-    assert!(worst <= 1e-12 * e0, "max positive step {worst:e}");
+    // Asserted step by step, as `np.all` did: a NaN step fails the comparison instead of being
+    // folded away.
+    let worst = nan_max(res.energy.windows(2).map(|w| w[1] - w[0]));
+    assert!(
+        res.energy.windows(2).all(|w| w[1] - w[0] <= 1e-12 * e0),
+        "max positive step {worst:e}"
+    );
 }
 
 #[test]
@@ -278,11 +293,12 @@ fn the_square_eigenvalues_are_the_closed_form_and_lapacks() {
     oracle.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
 
     let native = certify_against_lapack(&m, &reference()["square_24"], modes.len());
-    let rel = native
-        .iter()
-        .zip(oracle.iter())
-        .map(|(g, w)| (g - w).abs() / w)
-        .fold(0.0, f64::max);
+    let rel = nan_max(
+        native
+            .iter()
+            .zip(oracle.iter())
+            .map(|(g, w)| (g - w).abs() / w),
+    );
     assert!(
         rel < 1e-10,
         "discrete eigenvalue mismatch {rel:e} (operator is mis-assembled)"
@@ -301,11 +317,11 @@ fn the_square_continuum_error_converges_at_second_order() {
         let p = m.params();
         let ny = (p.ly.expect("Ly") / p.h).round() as i64;
         let lam = rectangular_discrete_eigenvalues(p.h, n, ny, &modes);
-        let err = lam
-            .iter()
-            .zip(f_cont.iter())
-            .map(|(&l, &fc)| (discrete_membrane_eigenfrequency(l, c(), p.k) - fc).abs())
-            .fold(0.0, f64::max);
+        let err = nan_max(
+            lam.iter()
+                .zip(f_cont.iter())
+                .map(|(&l, &fc)| (discrete_membrane_eigenfrequency(l, c(), p.k) - fc).abs()),
+        );
         hs.push(p.h);
         errs.push(err);
     }
@@ -395,11 +411,11 @@ fn the_disk_low_spectrum_tracks_the_sorted_bessel_series() {
     // error here is the staircased circular boundary, so this compares against the frequency of a
     // slightly DIFFERENT shape and a cents reading mixes two errors. The circle needs a
     // geometry-convergence study instead (docs/dev/resolution-horizon-plan.md section 5).
-    let worst = lam
-        .iter()
-        .zip(oracle.iter())
-        .map(|(&l, &fo)| cents(discrete_membrane_eigenfrequency(l, p.c, p.k), fo).abs())
-        .fold(0.0, f64::max);
+    let worst = nan_max(
+        lam.iter()
+            .zip(oracle.iter())
+            .map(|(&l, &fo)| cents(discrete_membrane_eigenfrequency(l, p.c, p.k), fo).abs()),
+    );
     assert!(
         worst < 20.0,
         "worst low-mode error {worst:.2} cents (bound 20)"

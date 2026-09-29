@@ -40,6 +40,13 @@ potential via the same masked L, exactly like [[stiff-string-state]]), `analysis
 viz `plots.py` (`plot_membrane_field` Chladni heatmap, `save_membrane_animation`),
 `scripts/diagnose_membrane.py`, plan `docs/dev/membrane-plan.md`.
 
+**2026-09-29: every Python file above is gone** (the model since the Rust port, the tests in
+retirement plan §29). The bars are `crates/physsynth-core/tests/membrane.rs` (the port's floor),
+`membrane_harness.rs` (the old suite, carried) and the dispersion bars in
+`crates/physsynth-analysis/tests/modal.rs`. Also found there: at λ = 1/√2 the scheme is EXACT along
+the diagonal (v/c − 1 = 2e-16) — so "no λ is dispersionless" means no λ is dispersionless in EVERY
+direction.
+
 **Money test = the discrete-eigenvalue oracle:** eigsh on −L → `discrete_membrane_eigenfrequency`.
 Rectangle: assembled-L eigenvalues match closed-form Λ_mn to 2e-14 (proves the operator), continuum
 f_mn at clean O(h²). Circle: f_disc vs Bessel converges at p≈0.66→0.87 (→ first-order staircase),

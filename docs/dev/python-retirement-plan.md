@@ -3965,6 +3965,15 @@ Two rows needed the bars changed first:
   `rectangular_discrete_eigenvalues` — which catches the defect and also ties the dispersion bars'
   hand-written symbol to the operator the core bars check against LAPACK.
 
+A tenth, found in review after the batch commit: **the passivity bar folded its worst step with
+`f64::max`, which drops a NaN** (it returns the other operand), so a lossy run whose energy went NaN
+after step 0 folded to `-inf` and passed — where the Python's `np.all(steps <= 1e-12 E⁰)` fails.
+Planted (the step writes NaN whenever `sigma > 0`): the committed bar **passed**, the fixed one
+fails. It now asserts every step, and every worst-case figure in the file goes through a
+NaN-propagating `nan_max` — the trap `engine.rs`'s `energy_drift` already documents. None of the
+nine plants reached it: each broke a *value*, and a NaN is not a value. **A carried "worst of"
+must propagate NaN, or it is weaker than the `np.max` / `np.all` it replaces.**
+
 ### 29.4 The retirement rule, discharged
 
 | retired | native bar |
@@ -3999,8 +4008,11 @@ hand-picked-band audit row in `docs/dev/resolution-horizon-plan.md` names the na
 - **pytest 1,414 → 1,368**: 42 cases plus four `test_xdist_groups` parametrizations (one per file).
 - **Native +18** (14 core, 4 analysis). The core file is 3.4 s in release and **59 s in debug** on
   the dev machine — most of it the six 1-second conservation runs (up to 24,000 steps each). It stays
-  in both CI profiles by the default: on §28.6's numbers the debug job would still end minutes before
-  the release job.
+  in both CI profiles by the default.
+- **On CI (run 36546609975, `1be106d`, all green)**: 3.9 s in the release job and **37.4 s in the
+  debug job**, which took 3.0 minutes against the release job's 11.2 — nowhere near the long pole.
+  First run on Linux (glibc's `sin`/`cos`/`acos`): every bar passed, including the Bessel-zero bar
+  whose 4x headroom was the thinnest cross-platform margin in the file.
 
 ### 29.6 What is next
 
