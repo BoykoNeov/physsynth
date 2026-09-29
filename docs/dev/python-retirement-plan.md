@@ -4463,10 +4463,12 @@ line at all:
 - **The stiff string's own loss.** Both native passivity bars ran on `DampedStiffString`, a
   separate transcription (kept separate on purpose, see `string_stiff`'s header). `StiffString`'s
   `σ` had neither a passivity nor a decay-rate bar. Planted breakages J and K below are the proof:
-  the only native bars that saw them were the carried ones and the twin anchor.
+  of the string's own bars, only the carried ones and the twin anchor saw them. Workspace-wide the
+  viewer freeze did too, which compares exactly only on Windows (§32.4).
 - **Every θ but 0.28.** Every stiff-string energy bar ran at the default `θ`. The energy form and
   the step both carry `θ`, and a `θ` hard-coded to 0.28 in either (breakages A and B) is exact at
-  the default. Only the carried θ sweep, `θ ∈ {0.25, 0.28, 0.5}`, sees either one.
+  the default. Of the string's own bars only the carried θ sweep, `θ ∈ {0.25, 0.28, 0.5}`, sees
+  either one; workspace-wide the viewer freeze does too, exactly only on Windows (§32.4).
 - **Three of the nine construction refusals.** `ρ = -1`, `T = 0` and `L = -2` had no native line.
   The native test now asserts each of the nine at the Python's own values (base `fs = 20000`) and
   asserts the *variant*, which `pytest.raises(ValueError)` never asked.
@@ -4543,9 +4545,10 @@ first, restored by copy, byte-compared. The "red" column counts `string_stiff_ha
 | **N** peak refiner's sign flipped | 3 | pluck partials, swept modes, convergence |
 
 **F is this batch's §30.4.** Energy is conserved from any start, and a frequency does not care about
-phase, so dropping the ½ in `u⁻¹ = u⁰ − k v⁰ + ½ k² L u⁰` passed every physics bar carried. It was
-seen only by the anchor between the stiff and damped transcriptions, and that anchor says two
-copies now *differ*, not which is wrong. The fix is §30.4's again: on an exact eigenmode `L → −λ`,
+phase, so dropping the ½ in `u⁻¹ = u⁰ − k v⁰ + ½ k² L u⁰` passed every physics bar carried. Among
+the string's own bars it was seen only by the anchor between the stiff and damped transcriptions
+(and workspace-wide by the viewer freeze, below), and that anchor says two copies now *differ*, not
+which is wrong. The fix is §30.4's again: on an exact eigenmode `L → −λ`,
 so one step is scalar algebra. With `a = k²λ` and the string at rest,
 `u¹ − u⁻¹ = θa² / (1 + θa) · u⁰`, second order in `a`; without the ½ it is first order. Launched
 from `u⁰ = 0`, `u¹ = −u⁻¹ = k v⁰`, so the centred velocity is `v⁰` exactly.
@@ -4566,11 +4569,14 @@ The "only" claims above were then re-planted against the whole workspace (§31's
 | C | the nine refusals, alone |
 | D | the nine refusals, alone |
 | F | the twin anchor; the new start-up bar; `frozen::strings` |
+| J | passivity, decay, the twin anchor; `frozen::strings` |
+| K | decay, the twin anchor; `frozen::strings` |
 
-So A, B and F each have a second witness outside the string's own files: the viewer freeze. That
-freeze compares exactly only on the Windows CI job (§23.19), so on Linux it is a structure check and
-A, B and F would each be seen by the string's own bars alone. C and D really are seen by one test
-in the workspace. F confirms §30.4's point from the other side: before the start-up bar, its two
+So A, B, F, J and K each have a second witness outside the string's own files: the viewer freeze.
+That freeze compares exactly only on the Windows CI job (§23.19), so on Linux it is a structure
+check and each of the five would be seen by the string's own bars alone. J and K were re-planted
+after review, because §32.2 had made the same "only" claim about them. C and D really are seen by
+one test in the workspace. F confirms §30.4's point from the other side: before the start-up bar, its two
 witnesses were the damped transcription and the viewer's frozen payload. Both are copies, and a
 copy going red says a number moved, not which side is right.
 
@@ -4614,8 +4620,12 @@ hand-picked-band audit names the two native bars for the stiff string's rows.
   deleted file, reconciled by collecting before and after.
 - **Native +20**: 12 in the new `string_stiff_harness.rs`, 3 in `ops.rs` (14 → 17) and 5 in
   `oracles.rs` (17 → 22). The new file takes 6.9 s in release and **92 s in debug** on
-  the dev machine. It stays in both CI profiles by the default: the debug job took 6.0 minutes
-  against the release job's 11.3 at §31, so it remains the shorter job.
+  the dev machine, and **8.1 s / 99.9 s on CI** (run 36593245615, green, the first Linux run of
+  these bars). It stays in both CI profiles by the default: the debug job went 6.0 → 7.3 minutes
+  and the release job ran 9.7, so the debug job is still the shorter one, by less than before. The
+  next long file added to both profiles should be weighed against `release_only` first.
+- The thinnest margin, the θ = 1/4 drift (3.39e-11 against 1e-10 on Windows), passed on Linux; its
+  Linux value is not printed by the test, so only pass/fail is known there.
 - **43 physics files remain**, with **476** test functions by the §24.1 count (496 − 20).
 
 ### 32.7 What is next

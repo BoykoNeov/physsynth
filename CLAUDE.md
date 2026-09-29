@@ -115,8 +115,8 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    Python suite is gone** — §29 the membrane, §30 the beam, §31 the ideal string and §32 the stiff
    string; **43 physics files / 476 functions remain** (§9's map is stale). §32 reproduced every
    Python figure to the digit, and found §30's start-up blind spot again: a dropped ½ in `u⁻¹` was
-   seen only by the stiff↔damped twin anchor until an exact eigenmode start-up bar was added — a
-   twin going red says two copies differ, not which one is wrong. §31 had no outside referee to freeze, and
+   seen only by two copies, the stiff↔damped twin anchor and the viewer freeze, until an exact
+   eigenmode start-up bar was added — a copy going red says two numbers differ, not which is wrong. §31 had no outside referee to freeze, and
    showed why a carried sweep matters: every energy bar in the string's own native file ran at
    λ = 1, so an energy spelled with `(h/k)²` for `c²` — identical at λ = 1 — passed all of them
    and was seen only by the chains built on the string and the viewer freeze (re-plant a "nothing
