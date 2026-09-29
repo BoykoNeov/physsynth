@@ -1,5 +1,10 @@
 # Free-edge plate (Chladni) — Phase 3 Plan (model #5b, free rectangular plate)
 
+> **2026-09-29: the Python suite named below is gone.** Its bars are native, in
+> `crates/physsynth-core/tests/plate_free.rs`, carried test by test in
+> `docs/dev/python-retirement-plan.md` §27 — with LAPACK's eigenvalues recorded before the files
+> were deleted. The Python names in this document are history.
+
 > **Status: Part 0 DONE (2026-06-23), Part 1 DONE (2026-06-30).** Follow-on to the simply-supported
 > plate
 > (`docs/dev/plate-plan.md`, model #5). This is the *visual showpiece* half of HANDOFF §5 row 5 — the

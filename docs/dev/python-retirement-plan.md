@@ -3626,3 +3626,116 @@ Also removed from `tests/helpers.py`: `plate_low_eigenfrequencies` (no other cal
 58 physics files, 585 test functions. The nearest families to what the three plate batches built
 are the free plate (`test_free_plate_energy`, `test_free_plate_modal`) and the guitar plate
 (`test_guitar_plate`), which reuse this file's fixtures; the human picks.
+
+## 27. Phase C, carrying batch 4 — the free plate
+
+Done 2026-09-29; the human chose the family. Model #5b's two files — `tests/test_free_plate_energy.py`
+(7 functions) and `tests/test_free_plate_modal.py` (12), 19 functions and 21 pytest cases — retire
+into `crates/physsynth-core/tests/plate_free.rs` (18 `#[test]`s).
+
+### 27.1 SciPy's eigenvalues, recorded — and ARPACK was the least accurate solver again
+
+Every eigenvalue the Python file used came from ARPACK. Per §24.3 the recorded referee is LAPACK's
+dense solve of the same pencil, symmetrized as `W^{-1/2} K W^{-1/2}` (`dsyevr`), for every grid the
+file used (N = 20, 32, 40, 64, 80; NumPy 2.4.6, SciPy 1.17.1): three rigid and five elastic
+eigenvalues each, plus each grid's largest, `mu_max`. A dense solve's error is absolute, about
+`eps · mu_max` — 2.2e-9 at N = 20, 1.5e-8 at 32, 3.6e-8 at 40, 2.4e-7 at 64, 5.8e-7 at 80 — so
+every comparison is written **in units of that floor** (bar: 20). The native shift-invert sat at
+most **0.38** floors from LAPACK anywhere.
+
+ARPACK, as the Python called it (shift `-1e-3 (13/a²)²`), was not so close. At N = 40 its fourth
+elastic eigenvalue came back `1208.1428639773883` against LAPACK's `1208.14286648793` — 2.5e-6 off,
+**~70 LAPACK floors** — and further up the recorded list it was 1.4e-5 off (`3700.50185267` against
+`3700.50186634`). No Python bar was tight enough to notice (the nearest was Leissa's 0.6%), and the
+Python never used those modes at N = 40, but it is §24.3's finding a second time on a second pencil:
+record with the dense solver, not with the one the test called.
+
+### 27.2 Every margin measured
+
+| bar | measured | bar |
+|---|---|---|
+| lossless drift, mu 0.5 / 2 / 8 (1 s, N = 32) | **2.3e-11** / 8.8e-13 / 4.8e-13 | 1e-10 |
+| drift at mu 16 | 2.8e-13 | 1e-10 |
+| lossy, worst step / final | every step negative / 0.54 E0 | ≤ 1e-10·E0 |
+| saddle decay vs 2σ | 0.33% | 3% |
+| retained, fundamental vs 13th elastic | 0.027 vs 0.053 | high > low |
+| E(2ρ)/E(ρ) − 2 | 0 exactly | 2e-12 |
+| symmetry | 0 exactly | 1e-12 |
+| Kronecker vs direct assembly | 2.4e-16 **relative** | 1e-12 absolute → **1e-14 relative** |
+| nullspace {1, x, y} / saddle xy | 5e-19 – 4e-18 / 1.1e-5 | 1e-12 / > 1e-9 and 1e6x contrast |
+| xy energy ∝ (1 − nu) | 5.7e-15 | 1e-12 |
+| bending diagonal = beam | 5.7e-14 | 1e-12 |
+| self-convergence orders | 2.15, 2.36, 2.26, 2.34 | > 1.8 / > 1.6 |
+| Leissa at N = 32 / 64 | 0.25% / 0.026% | 0.6%, decreasing |
+| saddle corners / centre | ±1.000 / 2.5e-12 | ±0.5 / 0.1 |
+| FFT fundamental | 0.080 cents | 8 cents |
+| supported operators through the generalized map | 8.6e-13 | 1e-9 |
+
+Two notes. The direct-assembly bar was the Python's **absolute** 1e-12 on entries of ~2e3, met with
+2.2x to spare; it is one ulp of rounding measured on the wrong scale, so it is relative now (42x).
+And the lossless drift at `mu = 0.5`, 2.3e-11, is 4.4x under the acceptance bar — thin, as §26.2's
+3.5e-11 on the supported plate was, and recorded rather than moved for the same reason.
+
+### 27.3 Seven deliberate breakages — and one the carried bar could not see
+
+Planted one at a time in `crates/physsynth-core/src` (snapshot, one change, release run, restore by
+copy, byte-compare).
+
+| breakage | red | what catches it |
+|---|---|---|
+| torsion factor 4 → 2 | 5 | direct assembly, zero modes, convergence, Leissa, the FFT |
+| coupling not symmetrized (`2·cross`, not `cross + crossᵀ`) | 12 | symmetry, every energy bar, the spectrum — the only one the ledger sees |
+| coupling 10% low | 5 | direct assembly, zero modes, convergence, Leissa, the FFT |
+| the plate's own curvature `-2 → -2.01` | 8 | the bending diagonal, direct assembly, the nullspace, the (1 − nu) scaling, the spectrum |
+| loss term dropped from the free RHS | 2 | passivity, the 2σ decay |
+| free kinetic energy halved | 4 | conservation (both), passivity, decay |
+| `collocated_d2_1d`'s `-2 → -2.01` | — | see below |
+
+The last row is why the bending-diagonal bar was **rewritten rather than carried**. The Python
+rebuilt the plate's bending diagonal from `_collocated_d2_1d` and compared it with the free beam.
+Transcribed literally, a planted error in `collocated_d2_1d` turned that bar — and only that bar —
+red, and no plate bar noticed: the Rust plate assembles its curvatures from the mask
+(`free_plate_stiffness_from_mask`) and **never calls `collocated_d2_1d`**. The carried bar would
+have certified a building block the plate does not use. The native bar reads the diagonal off the
+real builder instead (`free_plate_stiffness` with coupling and torsion set to zero, which leaves
+exactly the two bending terms), and the plate's-own-curvature row above is the proof that it now
+watches the plate. `collocated_d2_1d` keeps its own bars in `ops2d.rs`.
+
+### 27.4 The retirement rule, discharged
+
+| retired | native bar, or verdict |
+|---|---|
+| `test_energy_conserved` (mu 0.5, 2, 8) | `a_lossless_free_plate_conserves_energy_across_mu` |
+| `test_energy_conserved_with_timestep_explicit_could_not_run` | `energy_is_conserved_at_a_timestep_an_explicit_plate_could_not_run` |
+| `test_energy_strictly_positive_when_lossless` | `lossless_energy_stays_strictly_positive` |
+| `test_passivity_monotonic_decrease` | `a_lossy_free_plate_decreases_monotonically` — also asserts the energy fell |
+| `test_decay_rate_matches_2sigma_low_mode` | `the_saddle_fundamental_decays_at_two_sigma` |
+| `test_higher_mode_underdamps_relative_to_lower` | `a_higher_mode_underdamps_relative_to_the_fundamental` |
+| `test_energy_units_scale_with_density` | `energy_is_in_joules_and_scales_with_areal_density` |
+| `test_operator_symmetric` | `the_energy_first_operator_is_symmetric` |
+| `test_matches_direct_assembly` | `the_kronecker_assembly_matches_a_direct_per_node_build` — bar made relative (§27.2) |
+| `test_rigid_body_nullspace` | `the_rigid_body_nullspace_is_exact_and_the_saddle_is_not_in_it` |
+| `test_xy_energy_scales_with_one_minus_nu` | `the_saddles_energy_scales_exactly_with_one_minus_nu` (the Python's `np.allclose` kept `atol=1e-8`, finding (d); this is the relative claim alone) |
+| `test_exactly_three_zero_modes` | `exactly_three_modes_are_rigid`, plus LAPACK |
+| `test_bending_diagonal_is_beam_operator` | `the_plates_bending_diagonal_is_the_free_beam_operator_along_each_axis` — **rewritten against the plate's own assembly** (§27.3) |
+| `test_self_convergence_order_h2` | `the_low_eigenvalues_self_converge_at_second_order`, plus LAPACK at all three grids |
+| `test_leissa_ffff_square_anchor` | `the_low_modes_match_leissas_ffff_square_and_improve_with_refinement`, plus LAPACK |
+| `test_fundamental_is_saddle` | `the_fundamental_is_the_saddle_not_a_bulge` |
+| `test_fft_rings_at_fundamental` | `the_time_stepper_rings_at_the_discrete_fundamental`, plus LAPACK |
+| `test_resonator_uses_operator_helper` | already carried: §24's `the_default_free_plate_is_the_isotropic_operator_and_its_split_is_nus` asserts the resonator's `K` and `W` are the helper's **bit for bit** on the same `N = 16` grid, stricter than this test's 1e-12 |
+| `test_ss_operators_through_generalized_map_match_model5` | `the_generalized_map_on_the_supported_operators_is_model_5` |
+
+No helper was orphaned: `make_free_plate`, `free_plate_low_eigenfrequencies` and `arpack_v0` all
+have other callers. `docs/dev/plate-free-edge-plan.md` now points at the native file.
+
+### 27.5 Cost and counts
+
+- **pytest 1,551 → 1,528**: 21 cases plus one `test_xdist_groups` parametrization per file.
+- **Native +18.** 9–18 s in release on the dev machine, **213 s in debug** (all 18 pass there).
+  It would not have become the gate's slowest job, but it is on `release_only` for consistency with
+  §25's file in the same position (the human's call, asked before pushing).
+
+### 27.6 What is next
+
+56 physics files, 566 test functions. The guitar plate (`test_guitar_plate`) is the last plate
+family and the nearest to these four batches; the human picks.
