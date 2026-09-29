@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: bc58c454-d6f0-40f5-8259-4ca90ee23d46
-  modified: 2026-09-29T04:45:04.898Z
+  modified: 2026-09-29T07:53:06.604Z
 ---
 
 Phase C of `docs/dev/python-retirement-plan.md`, second kind of work: the model is already Rust,
@@ -58,7 +58,9 @@ the user picks the family (asked via options last time).
   (8 s release / 304 s debug on CI) WAS added, the human's call: a long-trajectory file whose exact
   checks have no transcendental/constant exponent goes release-only. Ask; don't add unasked.
   §26's plate_kirchhoff (45 s / 1,072 s debug) also release-only, asked BEFORE pushing because it
-  would have become the gate's slowest job.
+  would have become the gate's slowest job. §27's plate_free also release-only. §28's
+  plate_outline stays in BOTH (CI: 5.3 s release / 75.7 s debug; debug job 2.6 → 4.6 min, still
+  ~7 min shorter than the release job) — first candidate if the debug job becomes the long pole.
 - Bash heredocs with backticks/quotes in markdown fail to parse here — append docs via Edit.
 
 Related: [[python-retirement-state]], [[retirement-phase-d-state]], [[retirement-phase-a-state]],
