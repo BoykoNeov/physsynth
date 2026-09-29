@@ -135,6 +135,53 @@ fn dispersion_delegates_exactly_and_flattens_at_lambda_one() {
 }
 
 #[test]
+fn the_string_harness_oracles_hold_at_its_own_parameters() {
+    // Carried from `tests/test_modal.py::test_discrete_oracle_matches_continuous_at_lambda_one` and
+    // `tests/test_dispersion.py`'s two helper tests (retirement plan §31), at the Python's own
+    // numbers: `make_string`'s c = 200 m/s on a unit length. The bar above makes the same claims at
+    // L = 0.65 and N = 128 with a 1e-9 ABSOLUTE bound; these are relative, at 1e-12. The Python's
+    // `np.isclose` / `np.allclose` carried NumPy's default `atol = 1e-8` (§16's (d)), which at
+    // 2,500 Hz was the looser of its two terms; the bound here is the `rtol` it wrote down.
+    let (c, l) = (200.0, 1.0);
+    let rel = |a: f64, b: f64| ((a - b) / b).abs();
+
+    // The scalar oracle at lambda = 1 IS the continuum, mode by mode (N = 100).
+    for m in [1_i64, 5, 10, 25] {
+        let f = discrete_mode_frequency(c, l, 100, 1.0, m);
+        let cont = m as f64 * c / (2.0 * l);
+        assert!(rel(f, cont) < 1e-12, "mode {m}: {f} vs {cont}");
+    }
+
+    // `v_p = 2 L f / m` hands back c for every mode of the continuum series.
+    let modes: Vec<i64> = (1..=20).collect();
+    let f_cont: Vec<f64> = modes.iter().map(|&m| m as f64 * c / (2.0 * l)).collect();
+    for (m, v) in modes.iter().zip(phase_velocity(&f_cont, l, &modes)) {
+        assert!(rel(v, c) < 1e-12, "mode {m}: v_p {v} != c");
+    }
+
+    // The vectorised oracle is the scalar one (exactly — it is a map over it), equals the
+    // continuum at lambda = 1, and lies below it at `LAMBDA_DISPERSIVE = 0.8` for every mode.
+    let (n, lam) = (128_i64, 0.8);
+    let modes = [1_i64, 5, 10, 25, 50];
+    let vec = dispersion_frequencies(c, l, n, lam, &modes);
+    let at_one = dispersion_frequencies(c, l, n, 1.0, &modes);
+    for (i, &m) in modes.iter().enumerate() {
+        let cont = m as f64 * c / (2.0 * l);
+        assert_eq!(vec[i], discrete_mode_frequency(c, l, n, lam, m), "mode {m}");
+        assert!(
+            rel(at_one[i], cont) < 1e-12,
+            "mode {m}: {} vs {cont}",
+            at_one[i]
+        );
+        assert!(
+            vec[i] < cont,
+            "mode {m} is not lowered by dispersion: {}",
+            vec[i]
+        );
+    }
+}
+
+#[test]
 fn stiff_dispersion_delegates_exactly_too() {
     let (c, l, n, kappa, k, theta) = (200.0, 0.65, 128i64, 0.7, 1e-5, 0.5);
     let modes: Vec<i64> = (1..=6).collect();

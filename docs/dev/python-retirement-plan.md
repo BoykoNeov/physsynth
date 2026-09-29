@@ -4195,3 +4195,200 @@ helper's only remaining caller is the guard itself. The guard still asserts some
 about a helper nothing uses. It is the drained-table shape of ledger #52, one level up. The second
 guard there, "every `eigsh` call pins `v0`", is still live: the bore and the von Kármán free plate
 call `eigsh`.
+
+## 31. Phase C, carrying batch 8 — the ideal string
+
+Done 2026-09-29. The human took the recommendation: the ideal string first among the string
+families, because it is the base the stiff, damped and tension strings build on. Its harness was
+never one file. The Python suite was organised by acceptance criterion rather than by model, so
+four files retire whole:
+
+- `tests/test_energy.py` (6 functions, 10 cases);
+- `tests/test_modal.py` (3);
+- `tests/test_convergence.py` (2, both `slow`);
+- `tests/test_dispersion.py` (5, three `slow`).
+
+A fifth, `tests/test_stability.py`, loses its first four functions (15 cases), the string's
+stability and construction guards, and keeps the rest. What stays in it is about the Python
+package: the headless-core import check, the dependency allowlist, the sibling-layer check, the
+one-implementation guard and the two ARPACK guards. **20 functions, 35 pytest cases** in all.
+
+As in §30 there is no new harness file. `crates/physsynth-core/tests/string_ideal.rs` already built
+its string exactly as `make_string` does (`fs = c N / (L lam)`, `c = 200 m/s`), so it was extended,
+from 13 `#[test]`s to 21. The claims that touch no model went to
+`crates/physsynth-analysis/tests/oracles.rs`, as one new bar. There was no core source change,
+because `impl Resonator for IdealString` has been in `engine.rs` since Phase 0.
+
+### 31.1 No outside referee
+
+This is the first carrying batch with nothing to freeze. Every number the retired tests compared
+against was one of two things:
+
+- **a closed form**, written in the test: `n c / 2L`, `exp(-2 sigma t)`, the ratio 2 and the
+  one-cent bar;
+- **already Rust through the binding**, which makes it Rust checking Rust:
+  - `triangular_pluck`, `simulate` and `modal.mode_shape`;
+  - `spectrum.measure_partials_near` and `spectrum.detect_peaks`;
+  - `modal.discrete_mode_frequency`, `dispersion.dispersion_frequencies` and
+    `dispersion.phase_velocity`.
+
+NumPy's only role was arithmetic on those results (`np.diff`, `np.log`, `np.round`, `states @ phi`),
+and none of it is a referee. The one reduction transcribed by hand, the modal projection
+`q = <u, phi_m>`, is a sum whose ordering cannot move a frequency measured to 1e-4 or 1e-7. The
+native twin of the Python's `measure_mode_frequencies` reproduces the Python's own recorded worst
+cases: 1.35e-5 at λ = 0.8, where the Python's comment says "~1.3e-5", and 8.1e-10 at λ = 1, where
+it says "~8e-10".
+
+### 31.2 What the existing native bars could not see
+
+Before the carry, `string_ideal.rs` checked the claims the Python made, but mostly at other
+parameters. Three differences mattered.
+
+- **Every native energy bar ran at λ = 1.** The Python's `test_energy_conserved_across_lambda`
+  exists because the conservation identity is algebraic, not a λ = 1 accident. The planted
+  breakage B below proves the gap: an energy that uses `(h/k)²` where `c²` belongs is exact at
+  λ = 1. **It passed every native bar that existed before this batch.** It is caught only by the
+  carried λ sweep and the carried λ = 0.9 free-end runs.
+- **Two energy bars folded with `worst.max(..)`**, which drops a NaN (§29.3). Both now go through
+  the driver's `energy_drift`, which `engine.rs` proves propagates one. The passivity bar was a
+  per-step comparison and could not pass a NaN, but its carried twin goes through `nan_max` anyway.
+- **The decay-rate bar was at 5%, the Python's at 2%.** It now carries 2%, against a measured 8e-6.
+
+No run got shorter (§30's review rule).
+
+- The old λ = 1 lossless run (pluck at 0.3, 10,000 steps) stays beside the carried sweep.
+- The free-end test runs each of its three end combinations at both the old λ = 1 and the
+  Python's λ = 0.9, each for the longer of 2 s and 5,000 steps.
+- The passivity test keeps the old σ = 3 run and adds the Python's σ = 5 over 2 s.
+
+`boundary="clamped"` was the one construction refusal with no native line. It is a refusal of a
+*value*, so by §14's rule it has an analogue. `Boundary::parse("clamped")` must return `None`, with
+the two known spellings as its control.
+
+### 31.3 Every margin measured
+
+| bar | measured | bar |
+|---|---|---|
+| lossless drift, λ ∈ {1, 0.99, 0.9, 0.7, 0.5}, 2 s | ≤ 7.0e-14 (λ = 0.5, 80,000 steps) | 1e-10 |
+| lossless drift, three free-end combinations × λ ∈ {1, 0.9} | ≤ 5.1e-14 (free–free, 0.9) | 1e-10 |
+| passivity, worst step rise / E⁰ (σ = 3 / σ = 5) | 5.8e-16 / −4.0e-16 (every step fell) | ≤ 1e-12 |
+| decay vs `exp(-2σt)`, log space | 8.1e-6 | 2% |
+| `E(2ρ, 2T) / E(ρ, T)` | exactly 2 | **exact** (below) |
+| ten partials vs `n c / 2L`, λ = 1 | 2.8e-3 cents | 1 cent |
+| blind detector, six peaks vs nearest harmonic | 2.8e-3 cents; harmonics {1, 2, 3, 5, 6, 10} | 1 cent |
+| mode 8 at λ = 0.9: errors at N = 64 / 128 / 256 | 0.989 / 0.245 / 0.061 Hz | strictly shrinking |
+| its orders / mean order | 2.015, 2.006 / 2.010 | > 1.7 / (1.85, 2.15) |
+| its N = 128 run vs the dispersion oracle | 2.9e-4 Hz | 3.4e-3 Hz |
+| nine modes vs the oracle, λ = 0.8 | 1.35e-5 relative | 1e-4 |
+| nine modes vs the continuum, λ = 1 | 8.1e-10 relative | 1e-7 |
+| `|v_p / c − 1|` at λ = 1 | 8.1e-10 | 1e-7 |
+
+The density bar is now an exact equality, and that is a structural claim, not a measured one.
+Doubling both `ρ` and `T` leaves `c` bit-identical, and with it the grid, `fs` and the displacement
+field; the test asserts both of those as its control. `ρ` itself was doubled, which is exact in
+binary floating point on any IEEE platform. The Python's `np.isclose(rtol=1e-12)` carried
+`atol = 1e-8` (§16's (d)).
+
+The phase-velocity bar at λ = 1 is asserted as the bare `1e-7` the Python wrote. Its
+`np.allclose` had kept `rtol = 1e-5`.
+
+The three oracle claims moved to the analysis crate, at the Python's own `c = 200`, `L = 1` and
+N ∈ {100, 128}, at 1e-12 relative. The existing oracle bar made the same claims at L = 0.65 with a
+1e-9 *absolute* bound, and the Python's `np.isclose` at 2,500 Hz had been governed by its hidden
+`atol`.
+
+### 31.4 Ten deliberate breakages
+
+Planted one at a time with `W:\temp\claude\ideal-string\mutate.py`. Each source file was
+snapshotted first and restored by copy. Every restore was byte-compared, and `git status` showed
+only the test files afterwards.
+
+| breakage | red | caught by |
+|---|---|---|
+| **A** update uses λ for λ² (identical at λ = 1) | 5 | λ sweep, free end at 0.9, dispersion at 0.8, convergence, the old discrete cosine |
+| **B** energy uses `(h/k)²` for `c²` (identical at λ = 1) | 2 | **only the carried λ sweep and free-end λ = 0.9 runs** |
+| **C** energy drops `ρ` | 1 | only the density bar, as §29.3 and §30.4 |
+| **D** update doubles σ | 1 | the decay rate |
+| **E** loss sign flipped | 2 | passivity, decay rate |
+| **F** free-end weight `h/2` → `h` | 1 | the free-end bar |
+| **G** CFL test loosened to `λ > 1.1` | 1 | the construction refusal |
+| **H** `Boundary::parse` accepts `"clamped"` | 1 | the new `parse` line |
+| **I** oracle: λ moved outside the `asin` (identical at λ = 1) | 4 | dispersion at 0.8, convergence vs oracle, both analysis dispersion bars |
+| **J** `parabolic_refine`'s sign flipped | 4 | ten partials, blind detector, dispersion at 0.8, convergence |
+
+Two things the table shows beyond "all red":
+
+- **B is the batch's reason to exist.** Energy bars at λ = 1 alone cannot see a defect that
+  vanishes at λ = 1. The same holds for A and I at the other two layers: the model's update and the
+  oracle.
+- **J left the λ = 1 continuum bar green, and that is not a gap.** At λ = 1 with N = 128 the
+  window is 0.5 s at `fs = 25,600`, zero-padded to 32,768 points. The bin spacing is then exactly
+  0.78125 Hz, and every swept mode `m · 100 Hz` lands on bin `128 m`. The peak is centred on its
+  bin, so the refiner's correction is zero whatever its sign. That bar asserts the continuum, and
+  the refiner is pinned by the four bars that went red.
+
+### 31.5 The retirement rule, discharged
+
+| retired | native bar |
+|---|---|
+| `test_energy_conserved_across_lambda` (5) | `lossless_energy_is_conserved_and_positive_at_every_courant_number` |
+| `test_energy_conserved_free_boundary` | `a_free_end_conserves_energy_too` — its λ = 0.9 run, both ends free |
+| `test_energy_strictly_positive_when_lossless` | the λ sweep — every step of all five 2 s runs, a superset of its 1 s at 0.9 |
+| `test_passivity_monotonic_decrease` | `loss_makes_the_energy_decrease_monotonically` — its σ = 5, 2 s run |
+| `test_decay_rate_matches_2sigma` | `the_decay_rate_matches_the_analytic_two_sigma` — its 2% |
+| `test_energy_units_scale_with_density` | `the_energy_is_in_joules_and_scales_with_density` — exact |
+| `test_partials_within_one_cent_at_lambda_one` | `a_plucked_string_sounds_its_harmonic_series_within_a_cent` |
+| `test_blind_detection_finds_harmonic_series` | `the_blind_detector_finds_the_harmonic_series_on_its_own` |
+| `test_discrete_oracle_matches_continuous_at_lambda_one` | `oracles.rs::the_string_harness_oracles_hold_at_its_own_parameters` |
+| `test_second_order_convergence_at_fixed_lambda` | `a_dispersive_mode_converges_at_second_order_onto_the_dispersion_oracle` |
+| `test_detected_frequency_tracks_dispersion_oracle` | the same test, reading its N = 128 run against the oracle |
+| `test_dispersion_matches_oracle_below_lambda_one` | `every_swept_mode_lands_on_the_dispersion_oracle_and_droops_below_c` |
+| `test_phase_velocity_droops_with_mode_below_lambda_one` | the same test, on the same measurement |
+| `test_dispersion_flat_at_lambda_one` | `at_courant_one_every_swept_mode_is_on_the_continuum` |
+| `test_phase_velocity_recovers_c_for_continuum` | `oracles.rs::the_string_harness_oracles_hold_at_its_own_parameters` |
+| `test_dispersion_frequencies_match_scalar_oracle_and_droop` | the same analysis bar — the vector–scalar agreement exact (`assert_eq!`) |
+| `test_no_nan_across_valid_lambda` (7) | `no_admissible_courant_number_produces_a_nan` |
+| `test_lambda_above_one_rejected_at_construction` | `courant_above_one_is_rejected_at_construction` (existing, same λ = 1.05 and the "CFL" text) |
+| `test_lambda_exactly_one_is_accepted` | `courant_exactly_one_is_accepted` (existing, same 1e-12) |
+| `test_invalid_parameters_rejected` (6) | `non_physical_parameters_are_rejected` (existing, each variant); `"clamped"` in `an_unparseable_boundary_is_rejected_after_the_scalar_checks` |
+
+The file's header no longer says the Python tests "are still the authority". It names what was
+carried and why nothing was frozen.
+
+Orphans removed from `tests/helpers.py`:
+
+- `make_string`, whose last callers were the deleted files and the carried half of
+  `test_stability.py`. That removal took the module's `string_ideal` import with it.
+- `measure_mode_frequencies`, whose only caller was `test_dispersion.py`. Its stiff-string twin,
+  `measure_stiff_mode_frequencies`, had defined itself in its docstring as "identical to
+  `measure_mode_frequencies`". That docstring now stands alone and points at the native twin.
+
+Each name was grepped on its own. The first scoping grep OR'd the string helpers together, and it
+reported callers that belonged to `wave_speed` and `convergence_orders`, not to `make_string`.
+Those two stay: eight files call the first and two the second. `tests/test_stability.py` dropped its string
+imports and says in its docstring where its first four tests went. `docs/dev/resolution-horizon-plan.md`'s
+hand-picked-band audit names the native bar for the ten-partial test.
+
+### 31.6 Cost and counts
+
+- **pytest 1,333 → 1,294**: 35 cases plus four `test_xdist_groups` parametrizations, one per
+  deleted file. The stability file stays, so it keeps its parametrization. Reconciled by
+  collecting before and after. Full run: 1,294 passed.
+- **Native +9**: eight in `string_ideal.rs` (13 → 21) and one in `oracles.rs`. The whole file
+  takes 0.16 s in release and **3.3 s in debug** on the dev machine, so it stays in both CI
+  profiles by the default.
+- **44 physics files remain** (§24.1's exclusions). Their test functions come to **496** by a
+  re-count. The same count run over §30's commit gives 512, not §30.7's 510, so the two-function
+  gap is a difference in how the count was taken, not in the files. The carried 16 physics
+  functions are the difference either way.
+
+### 31.7 What is next
+
+The three remaining string families, all built on this one:
+
+- the stiff string (`test_stiff_string`, 20 functions);
+- the damped string (`test_damped_string`, 16);
+- the tension-modulated string (`test_tension_string`, 30).
+
+The human picks. §27's loose end, the free-plate half of `test_arpack_oracles_are_bit_reproducible`,
+is still open.

@@ -112,8 +112,10 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    physics file whose model is already native: read each test's assertions, write or find the
    native bar, plant breakages to prove the bars live, delete. §25 did the supported grained
    plate, §26 the plain plate, §27 the free plate, §28 the guitar/disk — **every plate family's
-   Python suite is gone** — §29 the membrane and §30 the beam; **48 physics files / 510 functions
-   remain** (§9's map is stale). §30 froze a truth stronger than LAPACK (the 50-digit Rayleigh
+   Python suite is gone** — §29 the membrane, §30 the beam and §31 the ideal string; **44 physics
+   files / 496 functions remain** (§9's map is stale). §31 had no outside referee to freeze, and
+   showed why a carried sweep matters: every energy bar the string had natively ran at λ = 1, so
+   an energy spelled with `(h/k)²` for `c²` — identical at λ = 1 — passed all of them. §30 froze a truth stronger than LAPACK (the 50-digit Rayleigh
    quotient of LAPACK's eigenvector), found the native Krylov solver's error is `eps·mu_max` PLUS
    1e-10 relative (neither alone is a bar), and found a start-up defect nothing in the workspace
    could see. §29 set a rule: **a bar about a constant must not import the constant**
