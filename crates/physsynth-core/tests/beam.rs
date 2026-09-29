@@ -379,10 +379,11 @@ fn the_grid_overwrites_its_endpoint_rather_than_computing_it() {
 /// `mu` far past the explicit bound `1/4` — which is the unconditional-stability claim of the
 /// implicit theta-scheme stated as a measurement rather than as an argument.
 ///
-/// One second at every `mu`, as the Python ran it (`test_energy_conserved` at 0.5, 2, 8 and the
-/// explicit-could-not-run case at 16); `mu = 50` is kept at 8,000 steps, which is 4.9 s at this
-/// grid. Every step's energy must also be positive (`test_energy_strictly_positive_when_lossless`,
-/// whose 0.5 s at `mu = 2` is a prefix of this run). At `mu = 0.5` that is 163,840 steps.
+/// The longer of one second — the Python's run (`test_energy_conserved` at 0.5, 2, 8 and the
+/// explicit-could-not-run case at 16) — and the 8,000 steps this file ran before it carried them,
+/// so neither bar got shorter: `mu = 16` is 5,120 steps a second here, and `mu = 50` is 1,638.
+/// Every step's energy must also be positive (`test_energy_strictly_positive_when_lossless`, whose
+/// 0.5 s at `mu = 2` is a prefix of this run). At `mu = 0.5` that is 163,840 steps.
 ///
 /// The bar is the project-wide 1e-10 and is deliberately not tightened (`CLAUDE.md`).
 #[test]
@@ -390,8 +391,7 @@ fn a_lossless_beam_conserves_its_energy_at_every_mu() {
     for mu in [0.5, 2.0, 8.0, 16.0, 50.0] {
         let mut b = beam(64, mu, 0.0);
         assert!(b.p.mu > 0.0);
-        let steps_at_least = if mu > 16.0 { 8_000 } else { 0 };
-        let res = run(&mut b, 1.0, steps_at_least);
+        let res = run(&mut b, 1.0, 8_000);
         assert!(
             res.energy.iter().all(|&e| e > 0.0),
             "mu = {mu}: the energy was not positive at every step"

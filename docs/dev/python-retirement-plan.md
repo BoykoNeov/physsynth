@@ -4078,8 +4078,8 @@ Its worst is **0.034 `eps mu_max`**.
 
 | bar | measured | bar |
 |---|---|---|
-| lossless drift, N = 64, `mu` ∈ {0.5, 2, 8, 16} for 1 s, 50 for 8,000 steps | ≤ 5.5e-12 (`mu` = 2) | 1e-10 |
-| passivity, worst rise / E⁰ over 1 s (σ = 8) | never rose | ≤ 1e-10 |
+| lossless drift, N = 64, `mu` ∈ {0.5, 2, 8, 16, 50}, the longer of 1 s and 8,000 steps | ≤ 5.5e-12 (`mu` = 2) | 1e-10 |
+| passivity, worst step / E⁰, all 40,960 steps of 1 s (σ = 8) | **−1.7e-6** (every step fell) | ≤ 1e-10 |
 | passivity, retained energy after 1 s | 0.141 (the single-mode rate would leave 1.1e-7) | < 0.5, and > 10× that |
 | low-mode decay vs `2σ` | 1.7e-3 relative | 2% |
 | high/low retained (underdamping caveat) | 0.164 vs 0.027 | high > low |
@@ -4139,7 +4139,7 @@ worst stayed 0. Both folds now go through `nan_max`.
 
 | retired | native bar |
 |---|---|
-| `test_energy_conserved` (3) | `a_lossless_beam_conserves_its_energy_at_every_mu` — now 1 s at each `mu`, not 8,000 steps |
+| `test_energy_conserved` (3) | `a_lossless_beam_conserves_its_energy_at_every_mu` — now the longer of 1 s and the 8,000 steps it ran before, so no run got shorter |
 | `test_energy_conserved_with_timestep_explicit_could_not_run` | the same run at `mu = 16` |
 | `test_energy_strictly_positive_when_lossless` | the same runs; its 0.5 s at `mu = 2` is a prefix |
 | `test_passivity_monotonic_decrease` | `a_lossy_beam_is_passive` — now 1 s, its slack |
