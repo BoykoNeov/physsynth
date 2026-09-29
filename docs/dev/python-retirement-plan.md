@@ -3741,3 +3741,127 @@ have other callers. `docs/dev/plate-free-edge-plan.md` now points at the native 
 
 56 physics files, 566 test functions. The guitar plate (`test_guitar_plate`) is the last plate
 family and the nearest to these four batches; the human picks.
+
+## 28. Phase C, carrying batch 5 — the curved-outline plate
+
+Done 2026-09-29; the human chose the family. `tests/test_guitar_plate.py` (21 functions, **113**
+pytest cases — one parametrization alone is 2 plates × 4 outlines × 10 grids) retires into
+`crates/physsynth-core/tests/plate_outline.rs` (18 `#[test]`s). With it **every plate family's
+Python suite is gone** (§24–§28).
+
+### 28.1 Three outside referees, frozen into a reference file
+
+This file had more independent referees than any before it, and they were frozen — not merely
+summarised — into `crates/physsynth-core/tests/reference/guitar_plate.json` (37 kB; wheel reinstalled;
+NumPy 2.4.6, SciPy 1.17.1), the first frozen reference in the core crate:
+
+- **The outline's pre-2026-08-28 NumPy spelling.** The shipped geometry was validated against the
+  vectorised `sin`/`cos` profile; on 2026-08-28 it moved to the scalar libm so the port could match
+  it to the bit, and the Python kept the old expression to pin that no node moved. Frozen as a digest
+  (`count`, `Σ(i+1)`, `Σ(i+1)²` over the live flat indices) of all 80 old-spelling masks, before and
+  after the prune — the Rust masks reproduce every one. For the degenerate lens, where mask equality
+  would be a claim about a CPU's `sin`, NumPy's half-width values themselves are frozen and the Rust
+  profile matches them to **0 ulps** (bar: the Python's 4, kept for another platform's libm).
+- **SciPy's Bessel functions** (Cephes/AMOS), which evaluated each derived circular-plate root's own
+  Rayleigh quotient. Natively the quotient is recomputed with the analysis crate's `bessel` module —
+  a second, independent implementation — and agrees with SciPy's recorded value to **≤ 1.4e-14** on
+  all eight roots — a comparison the Python never made, now asserted at 1e-12.
+  Against `lam⁴` itself the quotient is within 1.8e-9 (the 40,000-point quadrature); the Python's bar
+  there was 3e-3.
+- **LAPACK's dense eigenvalues** of the staircased disks at N = 32 and 64 and the shipped circle at
+  N = 33, with each `mu_max` (§24.3). The native solver sits 0.26–0.44 dense floors away (bar 20).
+
+**Recording it found that the core crate could not read it exactly.** The first run failed the lens
+bar at 31 ulps: `serde_json` without its `float_roundtrip` feature parses a decimal to the
+nearest-but-one double in rare cases, and one ulp of a recorded `t` near `t = 1` — where `sin(πt)` is
+small and steep — is 31 ulps of the profile. The viewer crate had already learned this (its
+`Cargo.toml` calls the feature load-bearing); the core crate's test-only `serde_json` had not, because
+nothing in it had read a float from JSON before. The feature is now on there too, with the reason.
+**Any frozen float read by a crate without `float_roundtrip` is a one-ulp question.**
+
+### 28.2 The native eigensolver cannot run at the Python's shift
+
+The Python asked ARPACK for the eigenvalues nearest `-1e-8`, a hair below the plate's three rigid
+modes. The native shift-invert Krylov solver hits its 300-iteration cap there — measured on every
+disk (N = 32, 64, 128; 6 and 11 pairs) and every circle (N = 32, 33, 64, 128) this file solves. At
+`-1e-3 mu_1` — `free_plate_low_eigenfrequencies`' own convention, `-0.03` for a unit disk — it
+converges everywhere, the rigid modes come out clean to 1e-12…1e-9 of the first elastic one (bar
+1e-6), and it matches LAPACK. The shift is an instrument setting, so the bars use it; the
+solver's behaviour that close to a singular pencil is recorded here rather than fixed, since no
+shipped path asks for it.
+
+### 28.3 Every margin measured
+
+| bar | measured | bar |
+|---|---|---|
+| the 80 outline digests, raw and pruned | all equal | equal |
+| lens vs NumPy | 0 ulps | 4 ulps |
+| pruned-node depth, N = 20…80 | 0.750, 0.733, 0.712, 0.704, 0.703 h (= Python's) | (0.6, 0.85) h |
+| crate vs SciPy Bessel quotient | ≤ 1.4e-14 | 1e-12 |
+| quotient vs lam⁴ | ≤ 1.8e-9 | 3e-3 |
+| disk vs oracle, N = 32 / 64 / 128 | 8.5% / 4.0% / 2.0%; rate 2.12, 2.00 | < 12% / < 3%; (1.25, 2.6) |
+| circle, abs(error + deficit), N = 32 / 33 / 64 / 128 | 4.4e-3 / 6.2e-3 / 2.3e-3 / 1.0e-3 | 0.012 |
+| degenerate pair split, N = 32 / 64 / 128 | 1.0% / 0.52% / 0.013% (= Python's) | 2% / 1.2% / 0.6% |
+| eig(B) vs eig(−L)² on the guitar | ≤ 6.4e-13 | 1e-8 |
+| drift, guitar / circle | 5.0e-15 / 2.2e-14 | 1e-10 |
+| outline area vs `guitar_area` | 0 | 1e-9 |
+| rectangle's area deficit | 2.3e-15 | 1e-14 → **1e-12** |
+
+The last row: the Python's absolute 1e-14 had 4.3x and sat **below** the worst-case rounding of the
+441-weight sum it checks (`n·eps ≈ 1e-13`); the bar is that bound with 10x on top.
+
+### 28.4 Seven deliberate breakages — two caught only elsewhere, on purpose
+
+| breakage | red here | notes |
+|---|---|---|
+| outline profile mis-parenthesised (`4π t − 0.5`) | 2 | the digests and the rim depth — the slip the NumPy pin exists for |
+| prune keeps only nodes touching 2+ cells | 12 | nearly everything |
+| area weight `¼ → 0.3` per cell | 6 | the trapezoid bar, the deficits, the whole disk anchor |
+| connectivity refusal off | 1 | the pinch bar |
+| rim depth `min → max` | 2 | the rim bar and the pinch |
+| disk rim made inclusive (`<` → `<=`) | **0** | the only on-rim nodes are one-node spikes the prune removes; `ops2d.rs`'s `a_node_on_the_rim_is_dead` catches it |
+| twist `(1/h)(1/h)` → `1/(h·h)` | **0** | the last bit of the operator; `ops2d.rs`'s `the_twist_coefficient_is_two_reciprocals_and_not_one` and six exact viewer freezes (`plate`, `vk`, `vkroom`, `browser5b/5d/6b`) catch it |
+
+The last row is the retired file's headline finding (its rectangle bar): the masked and
+Kronecker assemblies differed on exactly one grid until the twist was spelled as two reciprocals.
+With the Kronecker assembly gone that bar compares a computation with itself and is a **verdict**
+(finding #78) — and the planted breakage shows the spelling is still pinned, just not here.
+
+### 28.5 The retirement rule, discharged
+
+| retired | native bar, or verdict |
+|---|---|
+| `test_the_scalar_libm_spelling_moved_no_node_of_any_shipped_outline` (80) | same name, against the frozen digests (§28.1) |
+| `test_the_degenerate_lens_gets_the_weaker_claim_it_can_actually_support` (10) | `the_degenerate_lens_agrees_with_its_old_spelling_to_a_few_ulps`, against the frozen values |
+| `test_masked_assembly_reproduces_the_rectangle_bit_for_bit` | **verdict** (§28.4): `free_plate_stiffness` delegates to the masked builder; kept as the premise bar `the_rectangle_builder_is_the_masked_builder_on_a_full_mask` over the same 84 cases |
+| `test_area_weight_is_the_trapezoidal_rule_restated` | `the_area_weight_is_the_trapezoidal_rule_restated` |
+| `test_a_curved_outline_produces_massless_nodes_and_the_prune_removes_them` | `a_curved_outline_makes_massless_nodes_and_the_prune_removes_them` |
+| `test_prune_is_idempotent_and_reaches_a_fixed_point` | same name |
+| `test_every_pruned_node_lies_at_the_rim` (5) | same name, all five grids |
+| `test_a_pinched_outline_is_refused_rather_than_silently_two_plates` | same name — asserts the `Disconnected` variant as well as the words |
+| `test_derived_frequency_equation_admits_the_rigid_body_modes` | `the_derived_frequency_equation_admits_the_rigid_body_modes` |
+| `test_saddle_bound_brackets_the_derived_fundamental` | already carried, stricter: the analysis crate's `the_free_disk_reproduces_its_derived_lambdas_and_respects_its_own_bound` asserts the bound, and the overshoot at 8.18 ± 0.05% against this test's (5%, 12%) |
+| `test_every_derived_root_returns_lambda_to_the_fourth_in_the_plate_energy` | same name — **sharpened** with the SciPy comparison (§28.1) |
+| `test_staircased_disk_matches_the_derived_oracle_and_converges` | `a_staircased_disk_matches_the_derived_oracle_and_converges_at_first_order`, plus LAPACK |
+| `test_the_shipped_circle_path_matches_the_derived_oracle` | same name, plus LAPACK at N = 33 |
+| `test_the_degenerate_pairs_split_and_the_exact_answer_is_zero` | same name. The Python's `_fingerprint` diagnostic (SHA-256 of the mask and `K`, printed on failure) is not carried: it asserted nothing |
+| `test_a_supported_curved_plate_is_the_membrane_squared_and_therefore_says_nothing` | same name — the refusal asserts `CurvedSupported(Guitar)` as well as the words |
+| `test_lossless_outline_plate_conserves_energy` (guitar, circle) | `a_lossless_outline_plate_conserves_energy`, both |
+| `test_lossy_outline_plate_is_passive` (guitar, circle) | `a_lossy_outline_plate_is_passive`, both — also asserts the energy fell |
+| `test_the_area_deficit_is_reported_and_shrinks_under_refinement` | same name |
+| `test_a_rectangle_still_prunes_nothing_and_carries_its_whole_area` | same name, bar re-derived (§28.3) |
+
+No helper was orphaned (`arpack_v0` has other callers). `docs/dev/guitar-plate-plan.md` now points
+at the native file.
+
+### 28.6 Cost and counts
+
+- **pytest 1,528 → 1,414**: 113 cases plus one `test_xdist_groups` parametrization.
+- **Native +18**, 2.7 s in release and **45 s in debug** on the dev machine — in both CI profiles by
+  the default, like §24's 30 s file.
+
+### 28.7 What is next
+
+55 physics files, 545 test functions. With the plates done, the natural next families are the
+membrane (`test_membrane_{energy,modal,stability,dispersion}`) or the beam
+(`test_beam_{energy,modal,stability}`); the human picks.

@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-c-carrying-state
-description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-4 done 2026-09-29 (ortho plates, plain plate, free plate); 56 files / 566 functions left"
+description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-5 done 2026-09-29 (every plate family); 55 files / 545 functions left"
 metadata:
   node_type: memory
   type: project
@@ -18,7 +18,10 @@ breakages, delete the file.
   `csr_matmat` transcribed into the test and certified by reproducing recorded digests.
 - §27 batch 4 (human chose "free plate"): `test_free_plate_{energy,modal}.py` (19 fns / 21 cases)
   → `tests/plate_free.rs` (18). LAPACK recorded at N=20..80, bars in units of eps·mu_max.
-Remaining after §27: **56 physics files / 566 functions**. Next batch not chosen — scope by model;
+- §28 batch 5 (human chose "guitar"): `test_guitar_plate.py` (21 fns / 113 cases) → `tests/plate_outline.rs`
+  (18). NumPy outline masks, SciPy Bessel quotients, LAPACK disk eigenvalues frozen into
+  `crates/physsynth-core/tests/reference/guitar_plate.json` (first frozen reference in core).
+Remaining after §28: **55 physics files / 545 functions** (next candidates: membrane, beam). Next batch not chosen — scope by model;
 the user picks the family (asked via options last time).
 
 **Rules these batches set:**
@@ -31,6 +34,12 @@ the user picks the family (asked via options last time).
   digest (§26.1), rather than dropping the test.
 - A carried bar can certify a building block the model no longer USES (§27.3: `collocated_d2_1d`);
   plant the error in the model's real path and rewrite the bar against the real builder.
+- Frozen floats in JSON need serde_json `float_roundtrip` (now on in core's dev-dep): without it a
+  1-ulp parse error became a 31-ulp failure (§28.1).
+- Native `eigsh_shift_invert` fails (300-iter cap) at shift -1e-8 next to a 3-D rigid nullspace;
+  use -1e-3·mu_1 (§28.2).
+- When a planted breakage goes uncaught, find WHERE it is pinned (other test files, viewer freezes)
+  before calling it a gap (§28.4).
 - The 1e-10 acceptance bar is never moved even at 2.9x headroom (§26.2 mu=0.5 drift 3.5e-11) — record it.
 - A dense-eigen bar is written in units of `eps·lambda_max` (§25 uses 20 of them), not a bare 1e-9.
 - A hand-built stand-in for a SciPy product is PROVED faithful by reproducing SciPy's recorded

@@ -1,5 +1,11 @@
 # Guitar-shaped plate plan — model #5g: the outline stops being a rectangle
 
+> **2026-09-29: the Python suite named below is gone.** Its bars are native, in
+> `crates/physsynth-core/tests/plate_outline.rs`, carried test by test in
+> `docs/dev/python-retirement-plan.md` §28 — with NumPy's pre-port outline masks, SciPy's Bessel
+> quotients and LAPACK's disk eigenvalues frozen into `crates/physsynth-core/tests/reference/`
+> before the file was deleted. The Python names in this document are history.
+
 **Status: BUILT** (2026-08-26). The build record is §9 at the foot of this document; everything
 above it is the plan as it stood before the code, corrected once where a probe refuted it.
 

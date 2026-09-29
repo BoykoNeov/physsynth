@@ -111,8 +111,10 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    **Phase C's CARRYING batches began 2026-09-29 (retirement plan §24)** — retiring a Python
    physics file whose model is already native: read each test's assertions, write or find the
    native bar, plant breakages to prove the bars live, delete. §25 did the supported grained
-   plate, §26 the plain plate, §27 the free plate; **56 physics files / 566 functions remain**
-   (§9's map is stale).
+   plate, §26 the plain plate, §27 the free plate, §28 the guitar/disk — **every plate family's
+   Python suite is gone**; **55 physics files / 545 functions remain** (§9's map is stale). §28
+   froze outside referees into `crates/physsynth-core/tests/reference/` — which needs serde_json's
+   `float_roundtrip` to read a float back exactly.
    §26 carried three tests whose SUBJECT was SciPy by transcribing SciPy's kernel into the test and
    certifying it against SciPy's recorded output — a referee that is leaving can be replaced, not
    only dropped. §25 added two

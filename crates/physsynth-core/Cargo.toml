@@ -15,8 +15,13 @@ license.workspace = true
 # Test-only. Excluded from the allowlist rule by construction — `tests/deps.rs` walks NORMAL and
 # BUILD edges only, and asserts that serde_json itself is absent from what it walks, so the
 # exclusion is self-testing rather than asserted.
+#
+# `float_roundtrip` is load-bearing, as it is in the viewer: without it serde_json parses a decimal
+# to the nearest-but-one double in rare cases, and `tests/reference/guitar_plate.json`'s recorded
+# outline parameters sit where one ulp of `t` near `t = 1` moved the profile by 31 ulps (retirement
+# plan §28). Measured, not assumed: that bar failed without the feature.
 [dev-dependencies]
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 # Test-only, and outside the allowlist rule for the same reason serde_json is (`tests/deps.rs`
 # walks normal and build edges only). The free orthotropic plate's bars check the operator against
 # the analysis crate's closed forms — the twist bound and the coupling form — which is the claim the
