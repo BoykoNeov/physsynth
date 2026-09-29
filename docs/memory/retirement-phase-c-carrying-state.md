@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-c-carrying-state
-description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-6 done 2026-09-29 (every plate family + membrane); 51 files / 526 functions left"
+description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-7 done 2026-09-29 (every plate family, membrane, beam); 48 files / 510 functions left"
 metadata:
   node_type: memory
   type: project
@@ -25,8 +25,14 @@ breakages, delete the file.
   (19 fns / 42 cases) → `tests/membrane_harness.rs` (14) + 4 dispersion bars in `physsynth-analysis/tests/modal.rs`
   (they touch no model). LAPACK eigenvalues of the disk (N=32/64/128) + SciPy Bessel zeros frozen into
   `tests/reference/membrane.json`; ARPACK at shift 0 (no nullspace) agreed with LAPACK to 5e-16.
-Remaining after §29: **51 physics files / 526 functions** (next candidate: beam, 16 fns). Next batch not
+- §30 batch 7 (human: "the natural next batch is the beam - do it"): `test_beam_{energy,modal,stability}.py`
+  (16 fns / 32 cases) → EXTENDED the existing `tests/beam.rs` (17 → 24) instead of a new harness file,
+  because it was already at `make_beam`'s parameters. `impl Resonator for FreeBeam` added to engine.rs.
+  Frozen `tests/reference/beam.json` (7 grids). 12 plants all red.
+Remaining after §30: **48 physics files / 510 functions** (next: the string families). Next batch not
 chosen — the user picks the family; a recommendation + "go with it" is an accepted answer.
+Loose end (from §27): `test_arpack_oracles_are_bit_reproducible`'s surviving free-plate half guards a
+helper whose only caller is the guard itself.
 
 **Rules these batches set:**
 - A bar needing core + analysis: `physsynth-analysis` is a TEST-ONLY dev-dependency of
@@ -72,6 +78,21 @@ chosen — the user picks the family; a recommendation + "go with it" is an acce
   NaN run until fixed in review. Use a `nan_max` / assert every element, like `np.all`.
 - A rectangle oracle bug that swaps axes is invisible on a SQUARE — check which bars use Lx != Ly.
 - Python edits via `open(p,'w')` on Windows write CRLF; use `newline=''` (git warns on the .rs files).
+- A truth STRONGER than LAPACK: the 50-digit (mpmath) Rayleigh quotient of LAPACK's eigenvector — exact for
+  that vector, error second order in the vector's. Record it beside LAPACK and measure the native solvers
+  against it (§30.1). ARPACK was the outlier a third time (22.6 eps·mu_max, N=120).
+- LAPACK `eigh` eigenvalues-only (jobz='N') and with-vectors are DIFFERENT algorithms (the rigid pair moved
+  -1.4e-6 → -6.3e-6); say which path produced the record.
+- Native `eigsh_shift_invert`'s error = eps·mu_max floor PLUS its 1e-10 RELATIVE stopping rule. Neither unit
+  alone is a bar (172 eps·mu_max at the top of a 24-mode window; 7e-9 relative at N=400's fundamental).
+  Bar per mode: `20 eps mu_max + 1e-9 |mu|`, the 1e-9 written as a literal (§30.2).
+- Plant the START-UP too: dropping the ½ in u^{-1} passed the WHOLE workspace (energy can't see any u^{-1},
+  the discrete cosine holds from any start, FFT too coarse). Pin it with the exact eigenmode identities:
+  at rest u¹−u⁻¹ = θc²/(1+θc)·u⁰; launched, centred velocity = V exactly (§30.4).
+- Extending an existing bar to the Python's length must not SHORTEN it anywhere: use max(Python length,
+  old length) — the first draft cut μ=16 from 8,000 steps to 5,120 (caught in review).
+- A margin row must be the measured worst over EVERY step, not a sampled one (review caught "never rose").
+- §30 beam.rs: 0.70 s release / 14.5 s debug locally — both profiles.
 - §29 core file: 3.4 s release / 59 s debug locally, 3.9 s / 37 s on CI (run 36546609975, green on Linux) — stayed in both profiles (debug job 3.0 min vs release 11.2).
 
 Related: [[python-retirement-state]], [[retirement-phase-d-state]], [[retirement-phase-a-state]],
