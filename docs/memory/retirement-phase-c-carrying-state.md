@@ -35,8 +35,9 @@ geometric_limits, membrane_dispersion, modal, vk_modal 3 each). Next batch not c
   byte-compare, `git status`. Script: `W:\temp\claude\ortho-supported\mutate.py`.
 - pytest count drops by (cases + 1): `test_xdist_groups` is parametrized per test file. Reconcile
   against a `git worktree` at HEAD with `--collect-only` — a count from an older section is stale.
-- New native files run in BOTH CI profiles unless added to `rust-debug`'s `release_only`; §25's is
-  8 s release / 240 s debug — flagged to the human, not added.
+- New native files run in BOTH CI profiles unless added to `rust-debug`'s `release_only`. §25's
+  (8 s release / 304 s debug on CI) WAS added, the human's call: a long-trajectory file whose exact
+  checks have no transcendental/constant exponent goes release-only. Ask; don't add unasked.
 - Bash heredocs with backticks/quotes in markdown fail to parse here — append docs via Edit.
 
 Related: [[python-retirement-state]], [[retirement-phase-d-state]], [[retirement-phase-a-state]],

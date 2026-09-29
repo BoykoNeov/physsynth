@@ -240,9 +240,11 @@ jobs:
   # viewer reuses core's names (`mallet`, `membrane`, `plate`, `reed`): the old basename list
   # excluded the viewer's `plate.rs` by accident while meaning core's (plan §23.13).
   #
-  # `release_only` is the three core files that are long trajectories and pin no spelling (495 s,
-  # 353 s and 64 s unoptimised, 2026-09-23). It is an exclusion on purpose: a new core test file
-  # lands in both profiles by default, and a stale name here fails the step.
+  # `release_only` is the core files that are long trajectories (495 s, 353 s and 64 s unoptimised,
+  # 2026-09-23; `plate_grain` 304 s, 2026-09-29, the human's call, retirement plan §25.5). Three pin
+  # no spelling; `plate_grain`'s two exact checks use no transcendental and no constant exponent, so
+  # release cannot fold them differently. It is an exclusion on purpose: a new core test file lands
+  # in both profiles by default, and a stale name here fails the step.
   rust-debug:
     name: Rust core, unoptimised (debug asserts, unfolded arithmetic)
     runs-on: ubuntu-latest
@@ -254,7 +256,7 @@ jobs:
           workspaces: ". -> target"
       - name: Core and analysis bars, unoptimised
         run: |
-          release_only="connection_plate mallet_gong plate"
+          release_only="connection_plate mallet_gong plate plate_grain"
           for n in $release_only; do
             ls crates/physsynth-core/tests/$n.rs > /dev/null || { echo "no core test $n"; exit 1; }
           done

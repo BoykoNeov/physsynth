@@ -3489,7 +3489,10 @@ which had no other caller. `docs/dev/orthotropic-plate-plan.md` now points at th
   — the kind the both-profiles rule protects. Whether to add it is the human's call. **On CI
   (`679a9ad`)** the file took 304 s in `rust-debug`, which went from ~3.5 min to 8 min 20 s; it
   is not the gate's critical path, which is still the release `rust` job at ~10 min. Everything
-  passed on Linux, including the ledger control's last-bit difference.
+  passed on Linux, including the ledger control's last-bit difference. **Then added to
+  `release_only` (the human's call, same day).** What the unoptimised pass would have protected is
+  the two exact checks, and neither contains a transcendental or a constant exponent for LLVM to
+  fold; both had passed unoptimised locally and on CI before the file left that pass.
 
 ### 25.6 What is next
 
