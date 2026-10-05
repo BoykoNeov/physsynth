@@ -69,7 +69,10 @@ breakages, delete the file.
   undamped field keeps its energy). Model #9↔#10 bar (raw pitch within 2%) passed a LINEAR model #9 →
   human chose pitch-RISE comparison. Thin margins: three-waves v 1.03x, detuning 1.29x, stall count min 1
   over 30 ulp nudges. §34's claim that geometric tests import the Python material helper was FALSE →
-  the dead Python copy deleted. pytest 1,175 → 1,115; workspace 1,471 release.
+  the dead Python copy deleted. pytest 1,175 → 1,115; workspace 1,471 release. CI run 37329760185 green:
+  harness 1.30 s release / 5.99 s debug, long 13.34 s release only (jobs 11.8 / 4.9 min). Review caught 3 prose
+  overclaims again (a miscount, an unmeasured plant reading, an inferred "more slowly") — measure every
+  number in the write-up before committing it.
 Remaining after §35: **38 physics files / 392 functions** (§24.1 count). Next: the geometric string's second
 half (`test_geometric_{whirl,phantom,rotating_wave}.py`, 31 fns). Next batch not chosen — the user picks; a
 recommendation + "go with it" is an accepted answer.

@@ -2,7 +2,7 @@
 //! carried from `tests/test_geometric_energy.py` and `tests/test_geometric_limits.py` (retirement
 //! plan §35) at the same fixture as `string_geometric_harness.rs`, whose header describes it.
 //!
-//! Split out so that it can run **optimised only** in CI (the human's call, §35.6): together these
+//! Split out so that it can run **optimised only** in CI (the human's call, §35.7): together these
 //! are most of the batch's cost unoptimised (one run is 60,000 Newton steps), and none of their
 //! exact checks pins a spelling the release profile could fold differently — they are frequency,
 //! convergence-rate and drift bars against tolerances.

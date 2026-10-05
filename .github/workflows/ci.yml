@@ -245,7 +245,7 @@ jobs:
   # 2026-09-29, the human's calls, retirement plan §25.5-§27.5). Three pin no spelling; the plate
   # files' exact checks use no transcendental and no constant exponent, so release cannot fold them
   # differently. `string_geometric_long` (the geometric string's long simulations, split from its
-  # harness for this, the human's call, plan §35.6) holds frequency, rate and drift bars only. It
+  # harness for this, the human's call, plan §35.7) holds frequency, rate and drift bars only. It
   # is an exclusion on purpose: a new core test file lands
   # in both profiles by default, and a stale name here fails the step.
   rust-debug:

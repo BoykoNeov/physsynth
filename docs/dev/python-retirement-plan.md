@@ -5111,14 +5111,14 @@ The bars went to **two new files and a shared module**, at the retired helper
 - `crates/physsynth-core/tests/string_geometric_harness.rs` — 33 `#[test]`s (30 carried, 3 added):
   the scheme, the energy, the guards and the two polarizations. Both CI profiles.
 - `crates/physsynth-core/tests/string_geometric_long.rs` — 6 carried: every long simulation the
-  three files ran. **Optimised only** (§35.6, the human's call).
+  three files ran. **Optimised only** (§35.7, the human's call).
 - `crates/physsynth-core/tests/geometric_fixture/mod.rs` — the builder and initial conditions both
   files share. A directory module, so Cargo does not make it a test target of its own.
 
 Separate from `string_geometric.rs` for §32's reason: that file runs its own fixture (`L = 0.65`,
 `kappa = 1.5`) and holds the bars about the sparse LU's node ordering, which are about the port.
 
-Three Python tests have **no analogue**, and one carries only its condition:
+Two Python tests have **no analogue**, and a third carries only its condition:
 
 - `test_apply_Ainv_raises_for_a_reason_that_is_not_model_9s`: the native `GeometricString` has no
   `apply_ainv`, so the wrong call does not compile (§16's "an absence becomes a type").
@@ -5226,13 +5226,14 @@ asserted with `==`.
 Planted one at a time with `W:\temp\claude\geometric-string-1\mutate.py`: source trees snapshotted,
 restored by copy, byte-compared. The "red" column counts `string_geometric_harness.rs`,
 `string_geometric.rs` and `string_nonlinear_harness.rs` (and, for T and V,
-`string_geometric_long.rs`) **before** the three added bars.
+`string_geometric_long.rs`) **before** the three added bars; where a cell reads `x → y`, `y` is the
+count with them (and, for T and V, after §35.5's change to the model-#9 comparison).
 
 | breakage | red | caught by |
 |---|---|---|
 | **A** DG force: `chi` from the plus level only | 11 | the identity, every conservation bar, the FD Jacobian |
 | **B** DG force: the `w` row reads `u_bar` | 21 | the polarization bars, conservation, the identity |
-| **C** Jacobian: rank-one coefficient halved | 1 | the FD bar (Newton still converges, more slowly) |
+| **C** Jacobian: rank-one coefficient halved | 1 | the FD bar (Newton still converges: 1,200 iterations against 729 in the tolerance bar's run) |
 | **D** Jacobian: rank-one block transposed | 1 | the FD bar |
 | **E** `newton_tol` ignored | 1 | the drift-follows-the-tolerance bar |
 | **F** `kappa_w` ignored | 1 | the detuning control |
@@ -5248,7 +5249,7 @@ restored by copy, byte-compared. The "red" column counts `string_geometric_harne
 | **P** strain: the `w` row reads `u` | 16 | the polarization bars, conservation |
 | **Q** stretch density's 2 → 4 | 10 | the identity, conservation |
 | **S** oracle: `EA/(2ρ)` for `EA/(4ρ)` | 4 | the Duffing shift bars of both models |
-| **T** model #9 made linear | 12 → 13 | model #9's own bars; the model-#9 comparison **only after** §35.4's change |
+| **T** model #9 made linear | 12 → 13 | model #9's own bars; the model-#9 comparison **only after** §35.5's change |
 | **V** model #10's nonlinearity halved consistently (force, Jacobian and energy) | 2 → 3 | the continuum-gradient bar, the Duffing shift; the model-#9 comparison after the change |
 
 Every few- and no-witness case was re-planted against the whole workspace (§31's rule) with
@@ -5280,7 +5281,10 @@ What was added, and on whose call:
   time-reversible (the discrete gradient is symmetric in its two levels), so the first step must
   mirror the Taylor start to its own `O(k^4)`. Measured against the step's size in `u` (the ½) and
   in `v`, whose only acceleration at `t = 0` is the nonlinear force — so dropping that force from
-  the start puts the whole of `v^1` into the asymmetry. Both plants read about 1 against a 1e-2 bar.
+  the start puts the whole of `v^1` into the asymmetry. Measured: the dropped ½ reads 2.4e4 (`u`)
+  and 1.5e3 (`v`) against the 1e-2 bar; the dropped force leaves `v^{-1} = 0`, which the bar's first
+  assertion refuses (its asymmetry would be exactly 1). The bound is this fixture's: the Taylor
+  start's own error grows like `(k ω)²`, and a correct start on mode 3 at `N = 32` reads 4.7e-2.
 - **The own-losses bar** (`each_field_takes_its_own_losses`) — a new kind of gap, so **taken to the
   human**, who chose to guard it. At `EA = T` the fields are decoupled linear strings; give one
   zero losses and the other the Python's, in both directions, and the undamped field must keep its
@@ -5375,3 +5379,21 @@ fast-lane paragraph.
 The second half of the geometric string: `test_geometric_whirl.py`, `test_geometric_phantom.py` and
 `test_geometric_rotating_wave.py` (31 functions). After it, no string family's Python suite is left.
 The human picks.
+
+### 35.9 On CI
+
+Run 37329760185 on `033180e`, all five jobs green, and the first Linux run of these bars:
+
+- `string_geometric_harness.rs` took **1.30 s** in the release job and **5.99 s** in the debug job;
+  `string_geometric_long.rs` took **13.34 s** in the release job and, being in `release_only`, did
+  not run in the debug job, whose existence check accepted the new name. The jobs took 11.8 and 4.9
+  minutes.
+- The three thinnest bars passed on glibc's `sin`, where the start vectors differ from NumPy's in
+  the last bits: the longitudinal wave's frequency (1.03× locally), the detuning control (1.29×) and
+  the band's stall count. CI runs without `--nocapture`, so it reports the passes, not the margins.
+
+Review fixes, after the advisor's read of the first commit: two Python tests have no analogue, not
+three (the warning test is carried as its condition); the start-up bar's planted readings were
+measured (2.4e4 / 1.5e3 for the ½; the dropped force is refused by the bar's first assertion) rather
+than estimated, and the bound is marked as this fixture's; breakage C's slower Newton was measured
+(1,200 iterations against 729); and two comment-level test names the rewrap had split are whole.

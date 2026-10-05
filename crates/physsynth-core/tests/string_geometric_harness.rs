@@ -21,18 +21,22 @@
 //!   exact to round-off. Energy cannot see a defect here; these bars can.
 //! - **The limits** — in `string_geometric_long.rs`, with every other long simulation the three
 //!   files ran (the three linear waves, the softening sweep, the under-resolved band). That file is
-//!   optimised-only in CI (the human's call, §35.6); this one runs in both profiles, because the
+//!   optimised-only in CI (the human's call, §35.7); this one runs in both profiles, because the
 //!   exact structural bars here are the ones most worth an unfolded-arithmetic run.
 //!
-//! Three Python tests have **no analogue**.
-//! `test_apply_Ainv_raises_for_a_reason_that_is_not_model_9s` asserted that a call raises; the
-//! native [`GeometricString`] has no `apply_ainv`, so the wrong call does not compile (§16's "an
-//! absence becomes a type"). `test_set_state_velocity_arguments_\ are_keyword_only` guarded a
-//! Python name clash (`v0` is a displacement here and a velocity in models #1–#9); natively the
-//! velocities are a separate typed argument, `dots: &[Vec<f64>; 3]`, so model #3's `set_state(u0,
-//! v0)` does not compile against this model. And the two warnings' **prose** lives in the binding
-//! and goes with it; what the core reports — `Params::warn_lam_long` and the Newton report's
-//! `converged` — is asserted below in every configuration the Python built.
+//! Two Python tests have **no analogue**:
+//!
+//! - `test_apply_Ainv_raises_for_a_reason_that_is_not_model_9s` asserted that a call raises; the
+//!   native [`GeometricString`] has no `apply_ainv`, so the wrong call does not compile (§16's "an
+//!   absence becomes a type").
+//! - `test_set_state_velocity_arguments_are_keyword_only` guarded a Python name clash (`v0` is a
+//!   displacement here and a velocity in models #1–#9); natively the velocities are a separate
+//!   typed argument, `dots: &[Vec<f64>; 3]`, so model #3's `set_state(u0, v0)` does not compile.
+//!
+//! A third, `test_non_convergence_warns_and_is_counted`, is carried as its **condition** only: the
+//! two warnings' prose lives in the binding and goes with it, and what the core reports —
+//! `Params::warn_lam_long` and the Newton report's `converged` — is asserted below in every
+//! configuration the Python built.
 
 mod geometric_fixture;
 
@@ -590,6 +594,12 @@ fn released_from_rest_the_first_step_is_time_symmetric_in_every_field() {
     // against the step's size: the transverse field (the 1/2) and the longitudinal one, whose ONLY
     // acceleration at t = 0 is the nonlinear force, so leaving that force out of the start puts
     // the whole of `v^1` into the asymmetry.
+    //
+    // The 1e-2 bound is THIS fixture's (mode 1 at `N = 64`, `lam_long = 0.5`, where `k omega` is
+    // small): the Taylor start's own error grows like `(k omega)^2`, and a correct start on mode 3
+    // at `N = 32` already reads 4.7e-2. Do not reuse the bound elsewhere. Planted, the dropped 1/2
+    // read 2.4e4 (u) and 1.5e3 (v); the dropped nonlinear force leaves `v^{-1} = 0`, which the
+    // first assertion below refuses (its asymmetry would be exactly 1).
     let mut s = Geo::new(64).build();
     let u0 = mode_ic(&s, 1, 4e-3);
     start_u(&mut s, &u0);
@@ -1058,7 +1068,7 @@ fn an_arbitrary_rotation_commutes_with_the_dynamics() {
 #[test]
 fn detuning_breaks_rotation_only_through_the_linear_operator() {
     // Carried from
-    // `test_rotation_invariance_is_broken_by_detuning_but_isotropy_of_the_nonlinearity_\ is_not`:
+    // `test_rotation_invariance_is_broken_by_detuning_but_isotropy_of_the_nonlinearity_is_not`:
     // `kappa_u != kappa_w` must break rotational invariance (that is what buys whirling), and the
     // same run with the bending matched must not — so the anisotropy did not leak into the discrete
     // gradient.
