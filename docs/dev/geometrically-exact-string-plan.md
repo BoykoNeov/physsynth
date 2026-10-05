@@ -4,6 +4,12 @@
 > Batch 1 = the resonator + its structural gates; batch 2 = phantom partials, the polarization
 > discriminator, and the whirling threshold; batch 3 = the Tier B rotating-wave BVP + the rig.
 > Model #9's two refusals are discharged.
+> **Where the tests live now (2026-10-05):** every `tests/test_geometric_*.py` file named below is
+> retired and its bars are native — `crates/physsynth-core/tests/string_geometric_{harness,long}.rs`
+> (energy, polarization, limits; `docs/dev/python-retirement-plan.md` §35),
+> `string_geometric_{whirl,phantom,helix}.rs` and `crates/physsynth-analysis/tests/rotating_wave.rs`
+> (whirl, phantom, rotating wave; §36). The findings recorded below are the record; the file names
+> are history.
 > Follows [model #9](tension-modulated-string-plan.md) (`TensionModulatedString`), whose closing
 > caveats this model exists to discharge. Builds on [model #3](damped-string-plan.md)
 > (`DampedStiffString`) for the linear operator, θ-scheme, and energy form, and on

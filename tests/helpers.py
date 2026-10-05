@@ -12,7 +12,6 @@ from scipy.sparse.linalg import eigsh
 
 from physsynth.analysis import modal
 from physsynth.analysis.horizon import pitch_horizon
-from physsynth.analysis.rotating_wave import rotating_wave_history, solve_rotating_wave
 from physsynth.core.airbox import (
     AirBox,
     RoomLoadedBody,
@@ -33,7 +32,6 @@ from physsynth.core.radiation import (
 )
 from physsynth.core.reed import ReedBore
 from physsynth.core.string_damped import DampedStiffString
-from physsynth.core.string_geometric import GeometricString
 from physsynth.core.string_stiff import THETA_DEFAULT
 
 L_DEFAULT = 1.0
@@ -849,109 +847,6 @@ def convergence_orders(errors: np.ndarray, step_sizes: np.ndarray) -> np.ndarray
     return np.log(errors[:-1] / errors[1:]) / np.log(step_sizes[:-1] / step_sizes[1:])
 
 
-# -- model #9: tension-modulated string -------------------------------------------------
-
-EA_DEFAULT = 1.0e5
-"""Axial stiffness (N) for the model #10 tests, model #9's number. With T_DEFAULT = 200 N this is
-EA/T = 500 -- squarely in a real steel string's range (the governing ratio is EA/T = (c_long/c)^2
-~ 150-600; see ``string_coefficients_from_material`` in
-``crates/physsynth-core/src/string_nonlinear.rs``)."""
-
-GEO_NEWTON_TOL = 1e-15
-"""Relative Newton tolerance for model #10 tests -- **tighter than the class default on purpose**.
-
-Energy drift is *proportional* to it (measured over five decades), so the drift gate is really a
-statement about this number. The tests pin it rather than inherit, so that a future change to the
-class default cannot silently loosen the 1e-10 bar.
-
-It is only *reachable* because :data:`GEO_LAM_LONG_DEFAULT` is small: the residual's round-off floor
-scales with the operator norm, which grows like ``lam_long^2``. At ``lam_long ~ 11`` the floor sits
-*above* this bar, so every step exhausts ``newton_maxiter`` and stalls -- 60 iterations per step,
-and a tolerance that can never be met. The two constants are a pair."""
-
-GEO_LAM_LONG_DEFAULT = 0.5
-"""Default **longitudinal** Courant number for model #10 tests -- the fast field sets the timestep.
-
-Measured: ``lam_long <= 2`` conserves energy to ~1e-12 across every hard case tried (plucked and
-mode-3 ICs, amplitudes to 1e-2); at ``lam_long >= 4`` the Newton solve fails and drift explodes to
-1e+3 .. 1e+5. There is no CFL to catch this -- the theta-scheme is unconditionally stable and
-reports nothing -- so 0.5 buys a 4x margin on a measured cliff. Tests that *want* the unresolved
-regime pass ``lam=`` explicitly."""
-
-
-# -- model #10: geometrically-exact string ----------------------------------------------
-
-
-def make_geometric_string(
-    *,
-    N: int = 64,
-    lam: float | None = None,
-    lam_long: float | None = None,
-    kappa: float = KAPPA_DEFAULT,
-    kappa_w: float | None = None,
-    EA: float = EA_DEFAULT,
-    sigma0: float = 0.0,
-    sigma1: float = 0.0,
-    sigma0_long: float | None = None,
-    sigma1_long: float | None = None,
-    theta: float = THETA_DEFAULT,
-    newton_tol: float = GEO_NEWTON_TOL,
-    L: float = L_DEFAULT,
-    T: float = T_DEFAULT,
-    rho: float = RHO_DEFAULT,
-    **kwargs,
-) -> GeometricString:
-    """Build a geometrically-exact string (model #10), timestep set from ``lam_long`` by default.
-
-    ``EA = T`` is model #3 bit-for-bit (the nonlinearity coefficient is ``EA - T0``); the default
-    ``EA = EA_DEFAULT`` is **the same number model #9's tests use**, so the batch-2 cross-model KC
-    check is apples-to-apples -- modulo the identification ``EA_#9 <-> (EA - T0)_#10``, a 0.2 %
-    offset at these values that is *the identification, not a discrepancy*.
-
-    **The fast field sets the timestep, so ``lam_long`` is the default knob** (see
-    ``GEO_LAM_LONG_DEFAULT``). Pass ``lam=`` to set ``fs`` from the **transverse** wave instead;
-    the two are mutually exclusive.
-
-    Why the default is this way round, and not model #1-#9's ``lam``: the longitudinal field runs at
-    ``lam_long = sqrt(EA/T) * lam``, about **22x larger** at the default ``EA/T = 500``. So the
-    familiar ``lam=0.5`` silently means ``lam_long = 11`` -- eleven cells of longitudinal travel per
-    timestep. The implicit scheme is unconditionally *stable* there and reports no CFL violation,
-    but **stable is not accurate**, and past ``lam_long ~ 4`` the Newton solve stops converging and
-    the energy gate fails by *fourteen orders of magnitude* rather than a little. ``lam=`` is
-    therefore a deliberate opt-in, not the path of least resistance. Phantom *frequencies* ride on
-    the well-resolved transverse partials and are safe either way.
-    """
-    if lam is not None and lam_long is not None:
-        raise ValueError("pass lam= or lam_long=, not both — they both set fs")
-    c = wave_speed(T, rho)
-    if lam is not None:
-        fs = c * N / (L * lam)
-    else:
-        lam_long = GEO_LAM_LONG_DEFAULT if lam_long is None else lam_long
-        fs = float(np.sqrt(EA / rho)) * N / (L * lam_long)
-    return GeometricString(
-        L=L, T=T, rho=rho, fs=fs, N=N, EA=EA, kappa=kappa, kappa_w=kappa_w, sigma0=sigma0,
-        sigma1=sigma1, sigma0_long=sigma0_long, sigma1_long=sigma1_long, theta=theta,
-        newton_tol=newton_tol, **kwargs,
-    )
-
-
-def geometric_mode_ic(N: int, m: int = 1, amp: float = 1e-3, L: float = L_DEFAULT) -> np.ndarray:
-    """A single simply-supported eigenmode ``amp * sin(m pi x / L)`` on the full ``N+1`` grid."""
-    return amp * np.sin(m * np.pi * np.linspace(0.0, L, N + 1) / L)
-
-
-def mode_off_fraction(u: np.ndarray, shape: np.ndarray, scale: float) -> float:
-    """Off-mode content of ``u``, as a fraction of the **fixed** amplitude ``scale``.
-
-    Never normalize by the instantaneous ``||u||``: a single mode passes through ``u ~ 0`` twice a
-    period, where roundoff dominates and the ratio reports a spurious ``1.0`` that looks exactly
-    like a catastrophic bug. ``scale`` should be ``||u_0||`` (see the model #9 plan doc).
-    """
-    proj = np.dot(u, shape) / np.dot(shape, shape) * shape
-    return float(np.linalg.norm(u - proj) / scale)
-
-
 # -- the 3-D air box (HANDOFF §12.H): the distributed tier of the air node ---------------
 #
 # A small, ordinary room. The default grid is deliberately tiny (0.9 x 0.7 x 0.6 m at h = 10 cm,
@@ -1087,53 +982,6 @@ def gaussian_pulse(fs: float, f0: float, *, amplitude: float = 1e-3, widths: flo
         )
 
     return q, qdot, 2.0 * widths * sigma
-
-
-# -- model #10, Tier B: the rotating-wave relative equilibrium ---------------------------
-
-
-def geometric_rotating_wave(s: GeometricString, amplitude: float, mode: int = 1, **kwargs):
-    """Solve the rotating-wave BVP for the string ``s``'s **own** parameters.
-
-    Reads ``theta``, ``fs``, ``N`` and ``kappa`` off the resonator rather than taking them again:
-    the helix is a solution *of a particular scheme*, so a BVP solved at different settings than the
-    string it seeds is not an oracle, it is a near-miss. Takes ``kappa_u`` -- a rotating wave exists
-    only on a degenerate string.
-    """
-    return solve_rotating_wave(
-        L=s.L, T=s.T, rho=s.rho, EA=s.EA, fs=s.fs, N=s.N, theta=s.theta, kappa=s.kappa_u,
-        amplitude=amplitude, mode=mode, **kwargs,
-    )
-
-
-def seed_rotating_wave(s: GeometricString, wave) -> None:
-    """Seed ``s`` with the helix's **exact** two-level history.
-
-    .. warning::
-       **Never route a rotating wave through** :meth:`~physsynth.core.string_geometric.\
-GeometricString.set_state`. Its ``y^{-1}`` is a second-order Taylor start -- *consistent*, but not
-       *exact* -- so it seeds an ``O(k^3)`` history error that the helix immediately sheds into the
-       longitudinal field. Measured at the same amplitude: exact history gives
-       ``long_kin/E ~ 2e-26``, ``set_state`` gives ``~1e-16`` -- **ten orders worse**, and the
-       whole Tier B claim gone. This helper exists so no test can reach for the wrong one.
-    """
-    u0, w0, v0, up, wp, vp = rotating_wave_history(wave, fs=s.fs)
-    s.u, s.w, s.v = u0, w0, v0
-    s.u_prev, s.w_prev, s.v_prev = up, wp, vp
-    s.n = 0
-    s.converged = True
-
-
-def longitudinal_kinetic_energy(s: GeometricString) -> float:
-    """``(rho/2) h ||delta_t- v^n||^2`` (J) -- the longitudinal field's **motion** alone.
-
-    The right probe for a rotating wave, and :meth:`~physsynth.core.string_geometric.\
-GeometricString.longitudinal_energy` is the wrong one: the helix holds a **static** longitudinal
-    stretch ``psi != 0``, so its longitudinal *energy* is legitimately nonzero while its
-    longitudinal *motion* is bit-zero. Testing the total would assert the physics away.
-    """
-    dt_v = (s.v[1:-1] - s.v_prev[1:-1]) / s.k
-    return 0.5 * s.rho * s.h * float(np.dot(dt_v, dt_v))
 
 
 def plate_bump(plate: Plate, amplitude: float = 1e-3) -> np.ndarray:

@@ -18,6 +18,9 @@
 //!    existed only in `tests/test_geometric_rotating_wave.py`, in Python — an overclaim that unit
 //!    10's deletion is what found (plan §44).
 
+use physsynth_analysis::damping::spatial_eigenvalue_p2;
+use physsynth_analysis::duffing::kc_mode_coefficients;
+use physsynth_analysis::modal::discrete_stiff_mode_frequency;
 use physsynth_analysis::rotating_wave::{
     kc_circular_frequency, planar_hessian_cells, rotating_wave_history, solve_rotating_wave,
     BvpParams, CONTINUATION_STEPS_DEFAULT, NEWTON_MAXITER_DEFAULT, NEWTON_TOL_DEFAULT,
@@ -302,4 +305,257 @@ fn a_rotation_past_nyquist_is_refused_rather_than_wrapped() {
         out.is_err() || out.as_ref().unwrap().omega.is_finite(),
         "either refused, or a finite frequency -- never a NaN"
     );
+}
+
+// -- 4. carried from tests/test_geometric_rotating_wave.py (retirement plan §36) -----------------
+//
+// The bars that need only the BVP. The ones that spin a string are in
+// `crates/physsynth-core/tests/string_geometric_helix.rs`. `params()` above IS the Python's
+// `_string()` fixture; `at(ea, lam_long)` is that fixture rebuilt at another `EA` or `lam_long`,
+// with the sample rate re-derived from the longitudinal Courant number the way the helper did.
+
+fn at(ea: f64, lam_long: f64) -> BvpParams {
+    let p = params();
+    BvpParams {
+        ea,
+        fs: (ea / p.rho).sqrt() * p.n_cells as f64 / (p.l * lam_long),
+        ..p
+    }
+}
+
+/// `kc_mode_coefficients` with the discrete `p2`, under `EA -> EA - T`.
+fn kc(p: &BvpParams, mode: usize) -> (f64, f64) {
+    let h = p.l / p.n_cells as f64;
+    let p2 = spatial_eigenvalue_p2(p.n_cells as i64, h, mode as i64);
+    kc_mode_coefficients((p.t / p.rho).sqrt(), 0.0, p.ea - p.t, p.rho, p2, p.l).unwrap()
+}
+
+fn err_of(p: &BvpParams) -> String {
+    solve_rotating_wave(p).expect_err("must be refused")
+}
+
+#[test]
+fn at_zero_amplitude_the_helix_is_the_linear_modal_oracle() {
+    // Carried from `test_rotating_wave_at_zero_amplitude_is_the_linear_modal_oracle`. Distinct from
+    // the R -> 0 gate above in the one way that matters: that one checks `s` against the closed
+    // form written out in the test, this one checks the reported FREQUENCY against
+    // `modal::discrete_stiff_mode_frequency`, independent code from eight models earlier -- so it
+    // also covers the `arcsin` that turns `s` back into Hz.
+    for &kappa in &[0.0f64, 2.0] {
+        for &mode in &[1usize, 2, 5] {
+            let p = BvpParams {
+                amplitude: 1e-9,
+                mode,
+                kappa,
+                ..params()
+            };
+            let w = solve_rotating_wave(&p).unwrap();
+            let c = (p.t / p.rho).sqrt();
+            let want = discrete_stiff_mode_frequency(
+                c,
+                p.l,
+                p.n_cells as i64,
+                kappa,
+                1.0 / p.fs,
+                mode as i64,
+                p.theta,
+            );
+            let err = rel(w.frequency, want);
+            println!("kappa {kappa}, mode {mode}: {err:.3e}");
+            assert!(w.converged);
+            assert!(err < 1e-12, "kappa {kappa}, mode {mode}: {err:.3e}");
+        }
+    }
+}
+
+#[test]
+fn the_kirchhoff_carrier_error_is_the_mode_shape_deformation() {
+    // Carried from `test_kc_circular_frequency_error_is_the_mode_shape_deformation`. KC assumes a
+    // sine; a spun helix is stretched most at the nodes, so the tension is non-uniform and the true
+    // shape is a deformed sine. The frequency error tracks that deformation ~4/3 : 1 whatever
+    // `EA/T` or the mode -- asserted as a BAND, because the constant is measured, not derived.
+    // Semi-discrete on purpose: the time-discrete Omega also carries the theta-scheme's temporal
+    // dispersion, which has nothing to do with the shape and would swamp it.
+    for (ea_over_t, mode) in [(50.0, 1usize), (500.0, 1), (500.0, 2)] {
+        let p = BvpParams {
+            time_discrete: false,
+            mode,
+            ..at(ea_over_t * 200.0, 0.5)
+        };
+        let (omega0_sq, eps) = kc(&p, mode);
+        let wave = solve_rotating_wave(&BvpParams {
+            amplitude: 1e-3,
+            ..p
+        })
+        .unwrap();
+        let kc_om = kc_circular_frequency(omega0_sq, eps, 1e-3).unwrap();
+        let err = (wave.omega - kc_om) / kc_om;
+        let tiny = solve_rotating_wave(&BvpParams {
+            amplitude: 1e-6,
+            ..p
+        })
+        .unwrap();
+        let tiny_err = rel(
+            tiny.omega,
+            kc_circular_frequency(omega0_sq, eps, 1e-6).unwrap(),
+        );
+        let ratio = err / wave.shape_residual;
+        println!(
+            "EA/T {ea_over_t}, mode {mode}: err {err:.4e}, ratio {ratio:.4}, tiny {tiny_err:.3e}"
+        );
+        // Positive: tension peaks where phi' does, so the Rayleigh quotient beats the
+        // uniform-tension estimate. Negative would mean the deformation was read backwards.
+        assert!(err > 0.0, "EA/T {ea_over_t}, mode {mode}: {err:.3e}");
+        assert!(
+            1.2 < ratio && ratio < 1.45,
+            "EA/T {ea_over_t}, mode {mode}: {ratio}"
+        );
+        // ...and KC is exact in the limit it is the limit of.
+        assert!(
+            tiny_err < 1e-9,
+            "EA/T {ea_over_t}, mode {mode}: {tiny_err:.3e}"
+        );
+    }
+}
+
+#[test]
+fn the_shape_residual_quadruples_per_doubling_over_four_amplitudes() {
+    // Carried from `test_shape_residual_scales_as_amplitude_squared`: 4.000x per doubling, measured
+    // rather than Taylor-asserted. An under-converged Newton would not land on a clean power law.
+    let mut res = Vec::new();
+    for amp in [5e-4, 1e-3, 2e-3, 4e-3] {
+        let w = solve_rotating_wave(&BvpParams {
+            amplitude: amp,
+            time_discrete: false,
+            ..params()
+        })
+        .unwrap();
+        assert!(w.converged);
+        res.push(w.shape_residual);
+    }
+    for pair in res.windows(2) {
+        let ratio = pair[1] / pair[0];
+        println!("doubling: {ratio:.7}");
+        assert!((ratio - 4.0).abs() < 0.05, "{ratio}");
+    }
+}
+
+#[test]
+fn the_tension_field_peaks_at_the_ends_and_its_spread_grows_as_r_squared() {
+    // Carried from `test_the_tension_field_is_non_uniform_and_that_is_the_mechanism`. Model #9
+    // collapses the tension to one number; here it is a field, peaked at the ENDS (where phi' is
+    // largest) rather than where the displacement is. Barely: ~2e-5 of T at R = 2e-3, which is why
+    // KC is a good oracle and still a wrong one.
+    let p = params();
+    let mut spreads = Vec::new();
+    let mut stretched = true;
+    for amp in [1e-3, 2e-3] {
+        let w = solve_rotating_wave(&BvpParams {
+            amplitude: amp,
+            ..p
+        })
+        .unwrap();
+        let t = &w.tension;
+        let lo = t.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = t.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        println!("R {amp:e}: ends {:.9}, middle {:.9}", t[0], t[t.len() / 2]);
+        assert!(
+            t.iter().all(|x| *x > 0.0),
+            "a hardening helix never goes slack"
+        );
+        assert!(t[0] > t[t.len() / 2], "peaked at the ends, not the middle");
+        spreads.push((hi - lo) / p.t);
+        // The Python read the LAST loop's stretch ratio; every cell of it must be stretched.
+        stretched = w.stretch_ratio.iter().all(|l| *l >= 1.0);
+    }
+    let ratio = spreads[1] / spreads[0];
+    println!("spreads {spreads:?}, ratio {ratio:.6}");
+    assert!(spreads[0] > 1e-6, "{:.3e}", spreads[0]);
+    // O(R^2) with a visible O(R^4) correction (4.004 .. 4.232 over R = 5e-4 .. 8e-3), so the bar
+    // sits where the leading order is still clean.
+    assert!((ratio - 4.0).abs() < 0.05, "{ratio}");
+    // ...and Lambda >= 1, the energy floor's premise.
+    assert!(stretched, "every cell of the helix must be stretched");
+}
+
+#[test]
+fn time_discrete_and_semi_discrete_differ_by_the_temporal_dispersion_only() {
+    // Carried from `test_time_discrete_and_semi_discrete_differ_by_temporal_dispersion`: halving k
+    // must quarter the gap. If it did not, one of the two time factors would be wrong rather than
+    // merely time-discrete -- and that licenses semi-discrete for physics, discrete for seeding.
+    let mut gaps = Vec::new();
+    for lam_long in [0.5, 0.25] {
+        let p = BvpParams {
+            amplitude: 5e-3,
+            ..at(params().ea, lam_long)
+        };
+        let d = solve_rotating_wave(&p).unwrap();
+        let semi = solve_rotating_wave(&BvpParams {
+            time_discrete: false,
+            ..p
+        })
+        .unwrap();
+        gaps.push((d.omega - semi.omega).abs() / semi.omega);
+    }
+    let ratio = gaps[0] / gaps[1];
+    println!("gaps {gaps:?}, ratio {ratio:.7}");
+    assert!(gaps[0] > 0.0);
+    assert!((ratio - 4.0).abs() < 0.3, "{ratio}");
+}
+
+#[test]
+fn the_pythons_refusals_name_what_they_refuse() {
+    // Carried from `test_softening_string_is_rejected` and `test_bad_parameters_are_rejected` (11
+    // cases): the message fragment the Python matched, not merely "some error". A negative `N` or
+    // `mode` cannot be spelled as a `usize`, so those refusals are types natively; every value the
+    // Python passed here is representable and is refused by the solver itself.
+    let p = BvpParams {
+        amplitude: 1e-3,
+        ..params()
+    };
+    let soft = err_of(&BvpParams { ea: 0.5 * p.t, ..p });
+    assert!(soft.contains("softening"), "{soft}");
+    let cases: [(&str, BvpParams); 11] = [
+        ("positive", BvpParams { l: -1.0, ..p }),
+        ("positive", BvpParams { rho: 0.0, ..p }),
+        ("N must be", BvpParams { n_cells: 1, ..p }),
+        ("mode must be", BvpParams { mode: 0, ..p }),
+        ("mode must be", BvpParams { mode: 99, ..p }),
+        ("kappa", BvpParams { kappa: -1.0, ..p }),
+        ("theta", BvpParams { theta: 0.0, ..p }),
+        ("theta", BvpParams { theta: 1.5, ..p }),
+        (
+            "continuation_steps",
+            BvpParams {
+                continuation_steps: 0,
+                ..p
+            },
+        ),
+        ("maxiter", BvpParams { maxiter: 0, ..p }),
+        ("tol", BvpParams { tol: 0.0, ..p }),
+    ];
+    for (fragment, bad) in cases {
+        let msg = err_of(&bad);
+        assert!(msg.contains(fragment), "expected {fragment:?} in {msg:?}");
+    }
+    // Carried from `test_history_helper_requires_a_positive_rate`.
+    let wave = solve_rotating_wave(&p).unwrap();
+    let msg = rotating_wave_history(&wave, 0.0).expect_err("a wrong fs is a wrong helix");
+    assert!(msg.contains("fs"), "{msg}");
+}
+
+#[test]
+fn a_starved_continuation_reports_that_it_did_not_converge() {
+    // Carried from `test_non_convergence_warns_and_is_reported`: one continuation step straight to
+    // a large amplitude with one iteration. The RuntimeWarning's prose lives in the binding and
+    // goes with it; what the solver owes a caller is the flag, so that a shape which merely came
+    // back is never mistaken for a helix.
+    let wave = solve_rotating_wave(&BvpParams {
+        amplitude: 0.05,
+        continuation_steps: 1,
+        maxiter: 1,
+        ..params()
+    })
+    .expect("a stall is reported, not refused");
+    assert!(!wave.converged);
 }

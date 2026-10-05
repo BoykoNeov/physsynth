@@ -1,10 +1,15 @@
 //! The geometrically exact string's shared test fixture — the retired Python helper
 //! `make_geometric_string` and its initial conditions, used by `string_geometric_harness.rs` and
-//! `string_geometric_long.rs` (retirement plan §35). See the harness file's header for the
-//! parameters and why they are spelled the way they are.
+//! `string_geometric_long.rs` (retirement plan §35), and by `string_geometric_{whirl,phantom,helix}.rs`
+//! with the rotating-wave helpers below (§36). See the harness file's header for the parameters
+//! and why they are spelled the way they are.
 
 #![allow(dead_code)]
 
+use physsynth_analysis::rotating_wave::{
+    rotating_wave_history, solve_rotating_wave, BvpParams, RotatingWave,
+    CONTINUATION_STEPS_DEFAULT, NEWTON_MAXITER_DEFAULT, NEWTON_TOL_DEFAULT,
+};
 use physsynth_core::string_geometric::{GeometricString, ParamError, Params};
 use std::f64::consts::PI;
 
@@ -188,6 +193,15 @@ pub fn max_abs(v: &[f64]) -> f64 {
     })
 }
 
+/// `max(a, b)` that propagates NaN, where `f64::max` drops it (§29.3).
+pub fn nan_max(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.max(b)
+    }
+}
+
 pub fn ptp(v: &[f64]) -> f64 {
     let lo = v.iter().copied().fold(f64::INFINITY, f64::min);
     let hi = v.iter().copied().fold(f64::NEG_INFINITY, f64::max);
@@ -200,6 +214,84 @@ pub fn dot(a: &[f64], b: &[f64]) -> f64 {
 
 pub fn rel_drift(e: f64, e0: f64) -> f64 {
     (e - e0).abs() / e0.abs()
+}
+
+// -- the rotating wave (retirement plan §36) ----------------------------------------------------
+
+/// `geometric_rotating_wave(s, amplitude, mode, time_discrete=...)`: the BVP solved for the
+/// string's **own** `theta`, `fs`, `N` and `kappa_u` — a helix solved at other settings than the
+/// string it seeds is a near-miss, not an oracle. Continuation, tolerance and cap at their defaults.
+pub fn bvp(s: &GeometricString, amplitude: f64, mode: usize, time_discrete: bool) -> BvpParams {
+    BvpParams {
+        l: s.p.l,
+        t: s.p.t,
+        rho: s.p.rho,
+        ea: s.p.ea,
+        fs: s.p.fs,
+        n_cells: s.p.n,
+        theta: s.p.theta,
+        amplitude,
+        mode,
+        kappa: s.p.kappa_u,
+        time_discrete,
+        continuation_steps: CONTINUATION_STEPS_DEFAULT,
+        tol: NEWTON_TOL_DEFAULT,
+        maxiter: NEWTON_MAXITER_DEFAULT,
+    }
+}
+
+/// The time-discrete helix of mode 1 at `amplitude`, required to converge.
+pub fn helix(s: &GeometricString, amplitude: f64) -> RotatingWave {
+    let wave = solve_rotating_wave(&bvp(s, amplitude, 1, true)).expect("the BVP must solve");
+    assert!(wave.converged, "the helix must converge");
+    wave
+}
+
+/// `seed_rotating_wave`: the helix's **exact** two-level history, assigned straight onto the
+/// fields. Never through `set_state`, whose `y^{-1}` is a second-order Taylor start — consistent,
+/// not exact — and costs ten orders (`a_taylor_start_costs_ten_orders` measures it).
+pub fn seed_helix(s: &mut GeometricString, wave: &RotatingWave) {
+    let (u0, w0, v0, up, wp, vp) =
+        rotating_wave_history(wave, s.p.fs).expect("the string's own fs is positive");
+    (s.u, s.w, s.v) = (u0, w0, v0);
+    (s.u_prev, s.w_prev, s.v_prev) = (up, wp, vp);
+    s.n = 0;
+    s.converged = true;
+}
+
+/// `longitudinal_kinetic_energy`: `(rho/2) h ||delta_t- v||^2` over the interior — the
+/// longitudinal **motion** alone. The helix holds a static stretch `psi != 0`, so its longitudinal
+/// *energy* is legitimately nonzero; asserting that would assert the physics away.
+pub fn long_kin(s: &GeometricString) -> f64 {
+    let n = s.p.n;
+    let k = s.p.k;
+    let sq: f64 = (1..n)
+        .map(|i| {
+            let d = (s.v[i] - s.v_prev[i]) / k;
+            d * d
+        })
+        .sum();
+    0.5 * s.p.rho * s.p.h * sq
+}
+
+/// `_spin`: step `n_steps`, returning `(max long_kin, max |r - r0| / max r0, max |v - v0|)`.
+pub fn spin(s: &mut GeometricString, n_steps: usize) -> (f64, f64, f64) {
+    let radius = |s: &GeometricString| -> Vec<f64> {
+        s.u.iter().zip(&s.w).map(|(u, w)| u.hypot(*w)).collect()
+    };
+    let r0 = radius(s);
+    let v0 = s.v.clone();
+    let gap = |a: &[f64], b: &[f64]| -> f64 {
+        max_abs(&a.iter().zip(b).map(|(x, y)| x - y).collect::<Vec<_>>())
+    };
+    let (mut lk, mut r_dev, mut v_dev) = (0.0f64, 0.0f64, 0.0f64);
+    for _ in 0..n_steps {
+        step(s);
+        lk = nan_max(lk, long_kin(s));
+        r_dev = nan_max(r_dev, gap(&radius(s), &r0));
+        v_dev = nan_max(v_dev, gap(&s.v, &v0));
+    }
+    (lk, r_dev / max_abs(&r0), v_dev)
 }
 
 /// A deterministic standard-normal draw, standing in for the Python's `rng.normal`.

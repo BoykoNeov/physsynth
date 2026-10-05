@@ -45,23 +45,18 @@ just wires up the `physsynth` package and dev extras.)
 
 ```bash
 pytest                  # full harness
-pytest -m "not slow"    # the fast lane — skips the sweeps and refinement studies
-pytest -n 8 --dist loadgroup      # same tests, spread across cores (needs pytest-xdist)
+pytest -n 8             # same tests, spread across cores (needs pytest-xdist)
 ```
 
-`-m "not slow"` is a **lane, not a gate**: CI runs the full harness on every push — split across
-three machines, one third of the files each, so the wall clock is a third of the work rather than a
-third of the tests — and this is for the edit/run loop. What it gives up is specific — the
-geometric-string (model #10) validation files `test_geometric_whirl.py` and
-`test_geometric_phantom.py`, plus the convergence/dispersion sweeps in the
-string files. That is roughly a third of the suite's CPU in a handful of files, because each of
-them re-runs the model it is studying: a convergence study refines and re-runs, a Mathieu tongue is
-mapped by running the string on both sides of it. **Model #10 is almost entirely deselected, so run
-the full harness before you claim anything about the geometric string.**
+There is no fast lane any more. `-m "not slow"` used to skip the geometric string's whirl and
+phantom files, the last tests to carry the `slow` mark; their bars are native now
+(`crates/physsynth-core/tests/string_geometric_{whirl,phantom}.rs`, retirement plan §36), and the
+mark went with them. For the same reason nothing needs `--dist loadgroup`: the per-worker
+`xdist_group` pins were for those two files' expensive shared runs.
 
-The full harness is long — it simulates every model in the repo. Prefer the parallel form for a
-whole-suite run and the plain form when debugging a single test, where worker startup is pure
-overhead and the serial run gets the full multi-threaded BLAS (measurably faster per test).
+Prefer the parallel form for a whole-suite run and the plain form when debugging a single test,
+where worker startup is pure overhead and the serial run gets the full multi-threaded BLAS
+(measurably faster per test).
 
 Pick the worker count deliberately rather than reaching for `-n auto`: `auto` takes one worker per
 *logical* core, which oversubscribes a hyperthreaded desktop that is also doing other work. `-n 8`
@@ -72,17 +67,12 @@ A new test file needs no registration to be run by CI: the `validate` job runs p
 over the whole of `tests/`, in one job. (It was split over three runners until 2026-09-29; once
 the models moved to Rust the whole suite took about three minutes and the split bought nothing.)
 
-`--dist loadgroup` matters: a handful of modules carry `pytest.mark.xdist_group` because their
-module-scoped fixtures are expensive (the whirling and phantom sweeps run 30–110 s of simulation
-*before* their first assertion). The mark keeps those on one worker so the fixture is built once;
-everything else — including the 336-test web-backend module — scatters freely.
-
 A parallel run saturates every core, which makes the rest of the desktop sluggish. To keep working
 while it runs, prefix any invocation with the priority wrapper — it forwards its arguments to pytest
 unchanged, and the xdist workers inherit the lowered priority:
 
 ```bash
-python scripts/nicepytest.py -n 8 --dist loadgroup
+python scripts/nicepytest.py -n 8
 ```
 
 ## Measurements outside the test suite

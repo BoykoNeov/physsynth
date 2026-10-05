@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-c-carrying-state
-description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-12 done by 2026-10-05 (every plate family, membrane, beam, ideal/stiff/damped/tension string, geometric string first half); 38 files / 392 functions left"
+description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-13 done by 2026-10-05 (every plate family, membrane, beam, every string family incl. both geometric halves); 35 files / 361 functions left"
 metadata:
   node_type: memory
   type: project
@@ -73,13 +73,30 @@ breakages, delete the file.
   harness 1.30 s release / 5.99 s debug, long 13.34 s release only (jobs 11.8 / 4.9 min). Review caught 3 prose
   overclaims again (a miscount, an unmeasured plant reading, an inferred "more slowly") — measure every
   number in the write-up before committing it.
-Remaining after §35: **38 physics files / 392 functions** (§24.1 count). Next: the geometric string's second
-half (`test_geometric_{whirl,phantom,rotating_wave}.py`, 31 fns). Next batch not chosen — the user picks; a
-recommendation + "go with it" is an accepted answer.
+- §36 batch 13 (2026-10-05, human: "do it"): `test_geometric_{whirl,phantom,rotating_wave}.py` (31 fns / 41
+  cases) → NEW core `string_geometric_{whirl,phantom,helix}.rs` (8/6/8; helix = rotating-wave bars that SPIN a
+  string, so core + analysis via the test-only dep) + 7 in analysis `tests/rotating_wave.rs` (its `params()` WAS
+  the Python fixture). Shared tongue/phantom runs = `OnceLock` (the Python module-scoped fixtures). Fixture
+  gained `bvp`/`seed_helix`/`long_kin`/`spin`/`nan_max`. Nothing frozen; every figure reproduced to the digit
+  (whirl to ~15). 12 plants all red; nothing seen by nothing → no bar added, nothing asked. Workspace-wide:
+  the cancelling (v,v) Jacobian entry was seen only by the deleted Python test + Windows viewer freeze before.
+  A linear u→v coupling at 1e-6/step passes the phantom "partials absent from v" bars (EA=T control sees it);
+  at 1e-4 they go red — the absence half is coarse. Both CI profiles (the human's call; whirl 41.6 s / phantom
+  44.5 s debug locally). Human chose to delete `tests/test_xdist_groups.py` (unfailable once no file uses
+  `xdist_group`) + the `slow`/`xdist_group` marker declarations + CI `--dist loadgroup` + README fast lane.
+  pytest 1,115 → 1,029; workspace 1,500 release. Existing native bars with SIMILAR NAMES were weaker claims
+  (sine-not-RE was a shape-residual band; R→0 gate vs an inline formula) — map by assertion, not name.
+  Viewer tests (`physsynth-viewer/tests/geometric.rs`) already covered a whirl/phantom subset at looser
+  bars — grep the viewer before writing "nothing native ran X".
+Remaining after §36: **35 physics files / 361 functions** (§24.1 count); no string family left. Next batch not
+chosen — the user picks; a recommendation + "go with it" is an accepted answer. Re-derive the remaining list
+(§9's map is stale).
 Loose end (from §27): `test_arpack_oracles_are_bit_reproducible`'s surviving free-plate half guards a
 helper whose only caller is the guard itself.
 
 **Rules these batches set:**
+- pytest count rule: a drop of (cases + 1) NO LONGER holds — `test_xdist_groups.py` is gone (§36);
+  a deleted file now drops exactly its own cases.
 - A bar comparing two models' ABSOLUTE values can be blind to the effect it tests when the effect is small
   next to the value (§35.5: 0.18% hardening under a 2% pitch bar). Plant the effect away (make one model
   linear) before trusting it; compare the EFFECT (rise from each model's own baseline) instead.

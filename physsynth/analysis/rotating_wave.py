@@ -5,8 +5,10 @@ through the wrappers below (``docs/dev/rust-migration-plan.md`` §44, unit 10). 
 Jacobian, the continuation and the Newton solve all live there; what stays here is the result type
 (a ``NamedTuple`` with no runtime implementation), the three measured defaults with their
 reasoning, and the non-convergence warning — which must be raised **from this frame**, because
-``stacklevel=2`` cannot mean what it means from inside an extension module and
-``tests/test_geometric_rotating_wave.py`` matches its text.
+``stacklevel=2`` cannot mean what it means from inside an extension module. (The retired
+``tests/test_geometric_rotating_wave.py`` matched its text; retirement plan §36 carried that test
+to ``crates/physsynth-analysis/tests/rotating_wave.rs`` as the ``converged`` flag the warning
+reports, since the prose goes with this module.)
 """
 
 from __future__ import annotations
@@ -172,8 +174,8 @@ def solve_rotating_wave(
     ) = scalars
     if not converged:
         # Raised here rather than in Rust: the binding has no business owning a Python warning
-        # category, and the message has to match character for character because
-        # `test_geometric_rotating_wave.py` matches on it.
+        # category. The retired `test_geometric_rotating_wave.py` matched this text; nothing
+        # asserts the prose now, only the `converged` flag behind it (retirement plan §36).
         warnings.warn(
             f"Rotating-wave BVP did not converge at continuation step {failed_step}/"
             f"{continuation_steps} (amplitude {failed_amplitude:.3e} m) in {maxiter} Newton "

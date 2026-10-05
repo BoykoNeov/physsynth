@@ -12,8 +12,8 @@ import os
 # -- BLAS threads under xdist ----------------------------------------------------------------------
 #
 # SciPy/NumPy ship OpenBLAS, which by default opens one thread per core (16 on the dev box). That is
-# a win for a SERIAL run -- measured ~14% FASTER on tests/test_geometric_limits.py than with one
-# thread -- so the default `pytest` invocation deliberately leaves it alone.
+# a win for a SERIAL run -- measured ~14% FASTER on tests/test_geometric_limits.py (since retired,
+# plan §35) than with one thread -- so the default `pytest` invocation deliberately leaves it alone.
 #
 # Under `pytest -n N` it inverts: N workers x 16 threads each oversubscribes the machine badly, and
 # the threads spend their time contending rather than computing. Each worker therefore gets exactly

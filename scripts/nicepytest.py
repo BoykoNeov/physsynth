@@ -4,7 +4,7 @@ The full validation harness is ~39 min serially and saturates every core under `
 priority that starves whatever else the machine is doing. Child processes inherit the priority on
 both platforms, so setting it once here covers the whole xdist worker pool. Run::
 
-    python scripts/nicepytest.py -n 8 --dist loadgroup
+    python scripts/nicepytest.py -n 8
 
 Every argument is forwarded verbatim to pytest, so this is a drop-in prefix for any invocation.
 

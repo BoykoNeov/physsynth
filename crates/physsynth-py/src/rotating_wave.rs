@@ -65,7 +65,9 @@ type WaveScalars = (
 /// Solve the rotating-wave BVP for `(phi, psi, Omega)` by amplitude continuation.
 ///
 /// Every validation error the original raises as `ValueError` is returned as one here, with the
-/// same message, because `tests/test_geometric_rotating_wave.py` matches on the text.
+/// same message, because the retired `tests/test_geometric_rotating_wave.py` matched on the text
+/// (retirement plan §36 carried those fragments to the solver's own messages, in
+/// `crates/physsynth-analysis/tests/rotating_wave.rs`).
 #[pyfunction]
 #[pyo3(name = "rotating_wave_solve")]
 #[pyo3(signature = (

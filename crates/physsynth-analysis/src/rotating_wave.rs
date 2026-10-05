@@ -260,10 +260,11 @@ fn stretch(p: &[f64], z: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
 /// longitudinal diagonal adds `EA` and stays positive.
 ///
 /// Public because it cross-checks against the core: `H/2` is exactly
-/// `GeometricString::dg_jacobian(q, q)`, the `1/2` being `d(qbar)/d(q+)`. That check cannot be a
-/// native test in this crate without the dependency edge `tests/deps.rs` refuses, so it stays the
-/// Python test it has always been (`test_geometric_rotating_wave.py`, at 1e-12 since the core's
-/// `(v,v)` block was made cancellation-free).
+/// `string_geometric::dg_jacobian(q, q)`, the `1/2` being `d(qbar)/d(q+)`. That check cannot live
+/// in this crate without the dependency edge `tests/deps.rs` refuses, so it is a core test reaching
+/// this crate through its test-only dev-dependency (retirement plan §24.2):
+/// `crates/physsynth-core/tests/string_geometric_helix.rs`, at 1e-12 since the core's `(v,v)`
+/// block was made cancellation-free. It was `test_geometric_rotating_wave.py` until §36.
 pub fn planar_hessian_cells(p: &[f64], z: &[f64], a: f64) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
     let (lam, chi, _) = stretch(p, z);
     let n = p.len();
@@ -728,7 +729,7 @@ mod tests {
     //! module has no body any more, and this file's own header had been claiming these bars for a
     //! phase without them existing — an overclaim the deletion is what found.
     //!
-    //! The fixture is `tests/helpers.py`'s own string, evaluated: `L = 1`, `T = 200`,
+    //! The fixture is the retired `tests/helpers.py` string, evaluated: `L = 1`, `T = 200`,
     //! `rho = 0.005`, `EA = 1e5`, `kappa = 0` (bending is irrelevant to the relative equilibrium),
     //! `N = 32`, `theta = 0.28`, and the `fs` the helper derives from `lam_long = 0.5`.
 

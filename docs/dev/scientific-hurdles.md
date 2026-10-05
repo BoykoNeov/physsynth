@@ -59,7 +59,7 @@ fifth digit exactly where the model is used.
 only steers the iteration, so no trajectory or energy number depended on it. But §29's finding is
 that this model's cost *is* its Newton iteration (a factorization per iteration per step), a
 worse Jacobian is more iterations, and the cross-check test in `test_geometric_rotating_wave.py`
-had to block at 1e-8 with a note saying "if this is ever reused where accuracy matters, this is
+(now `crates/physsynth-core/tests/string_geometric_helix.rs`, retirement plan §36) had to block at 1e-8 with a note saying "if this is ever reused where accuracy matters, this is
 the note".
 
 **The fix.** With `Λ̄ − 1 = mean(Λ − 1)` the three terms collapse exactly to

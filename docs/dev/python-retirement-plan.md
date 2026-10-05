@@ -5397,3 +5397,267 @@ three (the warning test is carried as its condition); the start-up bar's planted
 measured (2.4e4 / 1.5e3 for the ½; the dropped force is refused by the bar's first assertion) rather
 than estimated, and the bound is marked as this fixture's; breakage C's slower Newton was measured
 (1,200 iterations against 729); and two comment-level test names the rewrap had split are whole.
+
+## 36. Phase C, carrying batch 13 — the geometric string, second half
+
+Done 2026-10-05. The second half of §35's split: `tests/test_geometric_whirl.py`,
+`tests/test_geometric_phantom.py` and `tests/test_geometric_rotating_wave.py` retire whole — **31
+functions, 41 pytest cases** (the rotating wave's eleven refusals are parametrised). With them **no
+string family's Python suite is left.**
+
+The bars went to three new core files and one extended analysis file:
+
+- `crates/physsynth-core/tests/string_geometric_whirl.rs` — 8, the whirling threshold. The Python's
+  module-scoped tongue fixture (six runs) is a `OnceLock`, built once per test binary and read by
+  five bars, as the fixture was.
+- `crates/physsynth-core/tests/string_geometric_phantom.rs` — 6, the phantom partials and the
+  polarization discriminator; the two-mode run, its `amp -> 0` twin and the three polarization runs
+  are `OnceLock`s for the same reason.
+- `crates/physsynth-core/tests/string_geometric_helix.rs` — 8, the rotating-wave bars that **spin a
+  string**: rigid rotation, conservation, the four negative controls and the Hessian cross-check.
+  They need the core model and the analysis BVP, so they live in core through §24.2's test-only
+  dependency.
+- `crates/physsynth-analysis/tests/rotating_wave.rs` — 7 added (11 → 18), the bars that need **only
+  the BVP**: the zero-amplitude gate, the KC error, the shape law, the tension field, the
+  time-discrete gap, the refusals and the stall flag. That file's `params()` already *was* the
+  Python's `_string()` fixture (`N = 32`, `kappa = 0`, `EA = 1e5`, `lam_long = 0.5`), so this is
+  §30's extension case, not a new harness.
+- `crates/physsynth-core/tests/geometric_fixture/mod.rs` gained the retired helpers the rotating
+  wave needed: `bvp` (`geometric_rotating_wave`), `seed_helix` (`seed_rotating_wave`), `long_kin`
+  (`longitudinal_kinetic_energy`) and `spin` (`_spin`), plus a NaN-propagating `nan_max`.
+
+The existing analysis bars with similar names were **not** the Python's claims, and were kept beside
+the carried ones rather than counted as them: `a_sine_is_not_a_relative_equilibrium_but_the_solution_is`
+bounds a shape residual, where the Python spun a sine helix and asked for 1e6x more longitudinal
+motion; the existing tension and shape-law bars pin one amplitude's digits or a 3–5 band at two
+amplitudes, where the Python asserted the end-peaked shape, `Λ >= 1` and a 4 ± 0.05 law over four;
+and the existing `R -> 0` gate checks `s` against a closed form written in the test, where the
+Python checked the reported **frequency** against `modal::discrete_stiff_mode_frequency`, independent
+code that also covers the `arcsin`.
+
+One Python test has **no analogue** and two refusals become types:
+
+- The non-convergence **warning's prose** lives in `physsynth/analysis/rotating_wave.py` and goes
+  with it; what the solver owes a caller is `converged == false`, which is asserted (§35's ruling on
+  the same shape).
+- `N` and `mode` cross the binding as signed integers so that a negative one reaches the Python's
+  message; natively they are `usize`, so a negative one does not compile. Every value the Python
+  actually passed (`N = 1`, `mode = 0`, `mode = 99`) is representable and is refused by the solver,
+  with the fragment the Python matched.
+
+### 36.1 No outside referee, and every figure reproduced
+
+Nothing the three files compared against was NumPy's or SciPy's own number: the BVP, its history,
+the spectrum (`detect_peaks`, `magnitude_spectrum`), the Duffing coefficients and the core Jacobian
+were all this workspace's Rust, reached through the binding. So nothing was frozen, as in §31 and
+§35. The Python figures were recorded first, with the wheel reinstalled
+(`W:\temp\claude\geometric-string-2\rec_{whirl,phantom,rw}.txt`), and the native twins reproduce
+**every figure to the printed digit** on Windows — the whirl runs to about fifteen digits (every
+growth, drift and envelope quarter), the phantom peaks, combination errors and pump ratio
+(113,016x), and all of the helix's `long_kin/E` values (1.353e-26, 1.397e-26, 5.697e-18, 3.316e-11,
+7.824e-3, 3.733e-3, 4.035e-16). The projections are left-to-right sums where the Python's `np.dot`
+was BLAS, and the bars are tolerances, so that agreement is evidence rather than a claim.
+
+The Hessian cross-check's random strains draw from the fixture's splitmix64 stream instead of PCG64
+(§15: the claim is about every state).
+
+Several docstring figures the Python carried were stale against its own run, and the native headers
+and this section use the recorded ones: the tongue at `0.07` grows **16.0x** (the docstring said
+14.7x), and the Taylor start leaves `long_kin/E` at **5.7e-18** (the docstring said ~1e-16; the ten
+orders are still eight and a half).
+
+### 36.2 What the existing native bars could not see
+
+- **The whirl and phantom physics at the Python's own bars.** `physsynth-viewer/tests/geometric.rs`
+  already ran a whirl inside and outside the tongue, the degenerate and velocity-seed controls, the
+  honesty gate, the Mathieu rate, and the phantom combinations, absence half, defect and `EA = T`
+  control — through the viewer's payload, at the viewer's parameters and looser bars (growth > 3
+  where the Python asked > 40, the rate to ±35% where it asked ±20% and a sign). What no native line
+  had: the tongue's six-point shape and its peak at 0.25, the rate at three points, the `sqrt(delta)`
+  threshold, Gough's asymmetry, the secular 1 : 2 : 3 : 4 envelope against the exponential, grid
+  invariance, the ladder oracle and the gap to `f3`, and the whole polarization pair (the circular
+  null, the doubled static stretch, ellipticity).
+- **The spinning helix.** The analysis crate solved the BVP but never seeded a string with it, so
+  rigid rotation, the 1e-26 longitudinal null and the four negative controls had no native line.
+- **The Hessian cross-check**, which the analysis source said "stays the Python test" because the
+  analysis crate cannot depend on core. Core can depend on analysis for tests (§24.2), so it moved.
+  Breakage A below shows what it guards.
+- **κ_w.** §35.4's breakage F (κ_w ignored) was seen only by the detuning control and the viewer;
+  the whirl bars and the detuned helix now see it eight times over (breakage H below).
+
+No run got shorter (§30's rule): every carried run is the Python's own length and grid.
+
+### 36.3 Every margin measured
+
+| bar | measured | bar |
+|---|---|---|
+| zero amplitude vs the modal oracle (worst: κ = 0, mode 5) | 1.5e-14 | 1e-12 |
+| helix, one revolution: `long_kin/E` / radius | 1.4e-26 / 1.3e-11 | 1e-20 / 1e-9 |
+| helix, 400 steps: drift / nonlinear fraction | 1.4e-13 / 3.8e-3 | 1e-10 / > 1e-6 |
+| Taylor start / exact | 4.2e8 | > 1e6 |
+| KC sine / exact | 2.5e15 | > 1e6 |
+| circular / planar `long_kin/E` | 1.4e-26 / 7.8e-3 | < 1e-20 / > 1e-4 |
+| `psi = 0` / exact | 2.8e23 | > 1e15 |
+| detuned / degenerate | 3.0e10 | > 1e6 |
+| Hessian vs core Jacobian, worst block | 3.9e-16 | 1e-12 |
+| KC error / shape residual (EA/T 50, 500; mode 2) | 1.328, 1.324, **1.296** | 1.2 – 1.45 |
+| KC at 1e-6 | ≤ 2.5e-12 | 1e-9 |
+| shape residual per doubling (worst) | 3.99975 | 4 ± 0.05 |
+| tension spread ratio / smallest spread | 4.0147 / 4.9e-6 | 4 ± 0.05 / > 1e-6 |
+| time-discrete gap ratio | 3.9999974 | 4 ± 0.3 |
+| tongue: 0.00 / 0.07 / 0.25 / 0.41 / 0.50 / 0.80 | 1.00 / 16.0 / 76.3 / 37.4 / 8.42 / **1.626** | peak at 0.25, > 40, < 2 |
+| Mathieu rate ratio, 0.07 / 0.25 / 0.41 | 0.951 / 0.920 / **0.892** | 1 ± 0.2, and < 1 |
+| whirl drift / off-mode, worst of six | 1.5e-12 / 9.4e-4 | 1e-10 / 0.01 |
+| unseeded `max|w|` / `max|u|` | 0 exactly / 1.0005 A | == 0 / > 0.9 A |
+| stiff plane / soft plane | 0.9999 / 76.3 | < 1.5 / ratio > 30 |
+| threshold: A1 at δ1 / A1 at δ2 / A2 at δ2 | 25.9 / **1.881** / 214.6 | > 10 / < 2.5 / > 10 |
+| degenerate envelope | 1 : 1.911 : 3.077 : 4.013 | 1:2:3:4 ± 12% |
+| detuned envelope, smallest neighbour ratio / last | 3.05 / 37.6 | > 2 / > 5 x 4.013 |
+| N = 32: inside / outside | 29.7 / **1.611** | > 10 / < 2 |
+| four combination tones, worst error | 0.039 Hz | 0.15 Hz |
+| weakest combination / strongest other | **5.37** | > 3 |
+| nearest peak to f1 / f2 | **4.56** / 4.55 Hz | > 3 Hz |
+| defect / its two readings | 4.574 / 4.559, 4.553 Hz | > 3; ± 0.3 Hz |
+| ladder at amp -> 0, f1 / f2 | 1.5e-4 / 4.4e-5 | 1e-3 |
+| gap to f3 / hardening | 11.41 / 1.29 Hz | > 0 / < 0.4 gap |
+| `EA = T`: bridge force | 0 exactly | == 0 |
+| planar / circular pump | 1.13e5 | > 1e4 |
+| circular / planar static stretch | 1.9871 | 2 ± 5% |
+| circular `max|w|` / planar `max|w|` | 1.000006 A / 0 exactly | A ± 5% / == 0 |
+| naive / tuned pump; DC gap; planar / naive | 308; 1.3e-3; 367 | > 50; 1e-2; > 50 |
+
+The thinnest, all the Python's own bars and left where it had them:
+
+- **The tongue's upper edge, 1.23x and 1.24x** (1.626 and 1.611 against 2.0, at N = 16 and 32). The
+  edge is soft by construction (a leading-order oracle), which the Python reported rather than pinned.
+- **The threshold's stable run, 1.33x** (1.881 against 2.5).
+- **The KC ratio for mode 2, 0.096 above its floor** (1.296 against 1.2), and the Mathieu rate at
+  0.41, 0.092 inside its band.
+- **The phantom's absence half, 1.52x** (4.56 Hz against 3 Hz), and the combination dominance, 1.79x.
+
+### 36.4 Twelve breakages
+
+Planted one at a time with `W:\temp\claude\geometric-string-2\mutate.py`: source trees snapshotted,
+restored by copy, byte-compared. The "red" column counts the four files above.
+
+| breakage | red | caught by |
+|---|---|---|
+| **A** core Jacobian's `(v, v)` entry back to its cancelling literal form | 1 | the Hessian cross-check |
+| **B** history: `w_prev`'s sign flipped | 1 | the existing history bar's digits |
+| **C** history: `v_prev = 0` | 6 | the five helix bars that compare against the exact seed's `long_kin`, the history bar |
+| **D** BVP: the `(1 − θk²s)` factor dropped | 10 | both zero-amplitude gates, the reference digits, the helix bars |
+| **E** `kc_circular_frequency` with `εR²/2` | 2 | the existing no-half bar, the KC error bar |
+| **F** a linear `u -> v` coupling, `1e-6 u` per step | 14 | the `EA = T` control, seven helix bars, the circular pair, four whirl bars through their drift gates |
+| **G** parabolic refinement's sign flipped | 2 | two of the three combination-tone bars |
+| **H** κ_w ignored | 8 | the tongue, the threshold, the envelope, Gough's asymmetry, the detuned helix |
+| **I** the Duffing coefficient's `EA/(4ρ)` → `EA/(2ρ)` | 10 | seven whirl bars (the sweep is placed by it), the KC error, the circular pair |
+| **J** BVP: the DG row's `cos(Ωk)` factor dropped | 8 | the reference digits, the helix bars |
+| **K** DG force: the `w` row reads `u_bar` | 18 | all eight whirl bars, seven helix bars, the circular pair, one combination bar |
+| **L** as F, 100x stronger (`1e-4 u`) | 18 | as F, plus all three combination-tone bars and Gough's asymmetry |
+
+Three readings that are not gaps:
+
+- **B is a symmetry, not a defect the helix can see.** Flipping `w_prev` reverses the rotation, and
+  a helix spinning the other way is equally a relative equilibrium; only the history bar's digits
+  (the function's contract) see it.
+- **D and J split exactly as they should.** The `(1 − θk²s)` factor is linear, so the zero-amplitude
+  gates see D; the `cos(Ωk)` factor multiplies the nonlinear force, which vanishes at zero
+  amplitude, so they cannot see J.
+- **F against L measures the phantom bars' resolution.** The Python's docstring says the absence of
+  `f1` and `f2` from `v` excludes a linear coupling. At `1e-6` per step it does not — the combination
+  bars stay green and the bit-exact `EA = T` control is what sees it — while at `1e-4` all three go
+  red. The absence half is a coarse detector; the control is the sharp one.
+
+Re-planted workspace-wide (§31's rule) for the three with two or fewer witnesses:
+
+| breakage | red, workspace-wide |
+|---|---|
+| A | the Hessian cross-check, `frozen::geom`, `frozen::browser` |
+| E | the existing no-half bar and the KC error bar, alone |
+| G | 32 tests across the workspace (every spectrum-reading bar) |
+
+So **A was seen only by the deleted Python test and, on Windows, the viewer freeze** before this
+batch (`frozen::*` compares exactly only on the Windows CI job, §23.19). Nothing was seen by nothing,
+so no bar was added and nothing went to the human.
+
+### 36.5 The retirement rule, discharged
+
+| retired | native bar |
+|---|---|
+| `test_the_whirling_growth_maps_the_mathieu_tongue` | `string_geometric_whirl.rs::the_whirling_growth_maps_the_mathieu_tongue` |
+| `test_the_growth_rate_is_the_mathieu_rate_the_plan_discarded_as_a_precession_rate` | `…::the_growth_rate_is_the_mathieu_rate_the_plan_discarded_as_a_precession_rate` |
+| `test_the_whirl_conserves_energy_and_stays_converged` | `…::the_whirl_conserves_energy_and_stays_converged` |
+| `test_whirling_must_be_seeded_and_never_leaks_from_a_planar_start` | `…::whirling_must_be_seeded_and_never_leaks_from_a_planar_start` |
+| `test_only_the_plane_of_the_lower_mode_whirls` | `…::only_the_plane_of_the_lower_mode_whirls` |
+| `test_the_threshold_moves_as_the_square_root_of_the_detuning` | `…::the_threshold_moves_as_the_square_root_of_the_detuning` |
+| `test_the_degenerate_string_is_marginal_not_exponential` | `…::the_degenerate_string_is_marginal_not_exponential` |
+| `test_the_tongue_does_not_move_with_the_grid` | `…::the_tongue_does_not_move_with_the_grid` |
+| `test_longitudinal_peaks_are_quadratic_combinations_of_the_transverse_partials` | `string_geometric_phantom.rs::` the same name |
+| `test_phantoms_are_displaced_from_the_partials_by_the_inharmonicity_defect` | `…::` the same name |
+| `test_the_phantom_lands_below_where_the_third_partial_would_be` | `…::` the same name |
+| `test_a_linear_string_has_no_longitudinal_motion_to_put_a_phantom_in` | `…::` the same name |
+| `test_a_circular_mode_does_not_pump_the_longitudinal_field` | `…::` the same name |
+| `test_the_circular_residual_is_ellipticity_not_a_defect_of_the_scheme` | `…::` the same name |
+| `test_rotating_wave_at_zero_amplitude_is_the_linear_modal_oracle` | analysis `rotating_wave.rs::at_zero_amplitude_the_helix_is_the_linear_modal_oracle` |
+| `test_seeded_helix_rotates_rigidly_and_the_longitudinal_field_never_moves` | `string_geometric_helix.rs::a_seeded_helix_rotates_rigidly_and_its_longitudinal_field_never_moves` |
+| `test_rotating_wave_conserves_energy` | `…::a_spinning_helix_conserves_energy_with_the_nonlinearity_engaged` |
+| `test_set_state_seeding_costs_ten_orders` | `…::a_taylor_start_costs_ten_orders` |
+| `test_a_sine_is_not_a_relative_equilibrium` | `…::a_sine_at_the_kirchhoff_carrier_frequency_is_not_a_relative_equilibrium` |
+| `test_circular_is_bit_zero_where_planar_is_percent_level` | `…::circular_is_bit_zero_where_planar_is_percent_level` |
+| `test_the_static_stretch_is_the_ingredient_batch_2_never_varied` | `…::the_static_stretch_is_the_ingredient_batch_two_never_varied` |
+| `test_helix_does_not_survive_on_a_non_degenerate_string` | `…::a_helix_does_not_survive_on_a_non_degenerate_string` |
+| `test_planar_hessian_matches_the_core_discrete_gradient_jacobian` | `…::the_planar_hessian_is_twice_the_core_discrete_gradient_jacobian` |
+| `test_kc_circular_frequency_error_is_the_mode_shape_deformation` | analysis `…::the_kirchhoff_carrier_error_is_the_mode_shape_deformation` |
+| `test_shape_residual_scales_as_amplitude_squared` | analysis `…::the_shape_residual_quadruples_per_doubling_over_four_amplitudes` |
+| `test_the_tension_field_is_non_uniform_and_that_is_the_mechanism` | analysis `…::the_tension_field_peaks_at_the_ends_and_its_spread_grows_as_r_squared` |
+| `test_time_discrete_and_semi_discrete_differ_by_temporal_dispersion` | analysis `…::time_discrete_and_semi_discrete_differ_by_the_temporal_dispersion_only` |
+| `test_softening_string_is_rejected` | analysis `…::the_pythons_refusals_name_what_they_refuse` |
+| `test_bad_parameters_are_rejected` (11) | the same bar, all eleven fragments |
+| `test_history_helper_requires_a_positive_rate` | the same bar, the `fs` fragment |
+| `test_non_convergence_warns_and_is_reported` | analysis `…::a_starved_continuation_reports_that_it_did_not_converge` — the flag; the prose is the shim's |
+
+**The findings that lived in these docstrings are in the design doc**, checked before the deletion:
+the discarded precession rate is the whirl growth rate, the circular residual is ellipticity, and the
+φ-versus-Ω ordering inverts between metrics (`docs/dev/geometrically-exact-string-plan.md`: the
+whirling section's precession paragraph, the batch-2 ellipticity finding, and the batch-3
+inversion paragraph). The native headers carry the parameter rationales the Python's constants
+documented (`TENSION_RISE`, `KAPPA_PHANTOM`, 0.1 s rather than 0.05 s).
+
+**Orphans removed from `tests/helpers.py`**, each name grepped alone: `make_geometric_string`,
+`geometric_mode_ic`, `mode_off_fraction`, `EA_DEFAULT`, `GEO_NEWTON_TOL`, `GEO_LAM_LONG_DEFAULT`,
+`geometric_rotating_wave`, `seed_rotating_wave`, `longitudinal_kinetic_energy`, and the
+`GeometricString` and `rotating_wave` imports. `KAPPA_DEFAULT` stays (another helper uses it). The
+`physsynth/analysis/rotating_wave.py` and `physsynth/core/string_geometric.py` shims stay: the
+frozen-analysis and `pkgutil` guards still read them.
+
+**Two drained mechanisms went with the files, the human's call.** No test uses the `slow` mark or
+an `xdist_group` any more, so `tests/test_xdist_groups.py` (45 cases: one per test file, plus the
+check that opened the whirl and phantom files) could never fail again — the rule for a guard that
+reaches zero is delete or widen, and there is nothing wider to derive it over. Deleted, with both
+marker declarations in `pyproject.toml`, CI's `--dist loadgroup` and its comment, the
+`nicepytest.py` example, and the README's fast-lane paragraph, which also still said CI was split
+over three machines.
+
+Comments that named the retired files now name the native bars: the analysis source's
+`planar_hessian_cells` note and its `mod tests` header, the binding's `string_geometric.rs` and
+`rotating_wave.rs` headers, the Python shim's warning note, `conftest.py`'s BLAS measurement,
+`scientific-hurdles.md`'s Jacobian note, and a pointer at the top of the design doc.
+
+### 36.6 Cost and counts
+
+- **pytest 1,115 → 1,029**: the three files' 41 cases and the 45 of `test_xdist_groups.py`,
+  reconciled per file against a worktree at `462c4df` with `--collect-only`; every other file's count
+  is unchanged.
+- **Native +29**: 8 + 8 + 6 in core, 7 in analysis. Workspace 1,471 → 1,500 optimised, all green.
+- **Both CI profiles, the human's call**: unoptimised locally the whirl file takes 41.6 s, phantom
+  44.5 s, helix 2.6 s and the analysis file 0.1 s (optimised: 4.6 s, 5.1 s, 0.35 s, 0.02 s). The
+  unoptimised job ran 4.9 minutes at §35.9 against 11.8 for the optimised one, so it stays the
+  shorter job. Their bit-exact structural claims (an unseeded string never leaks into `w`; at
+  `EA = T` the bridge force is exactly zero) are the kind worth running unoptimised.
+- **35 physics files remain**, with **361** test functions by the §24.1 count (392 − 31). No string
+  family's Python suite is left.
+
+### 36.7 What is next
+
+The next batch is not chosen; the human picks. §9's map is stale — re-derive the remaining 35 files
+before recommending one.

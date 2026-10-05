@@ -8,6 +8,8 @@ metadata:
   modified: 2026-09-28T23:01:36.597Z
 ---
 
+**UPDATE 2026-10-05 (retirement plan §36, the human's call):** the whirl and phantom files were the last users of `xdist_group` and `slow`; both marker declarations, `tests/test_xdist_groups.py`, CI's `--dist loadgroup` and the README fast lane are GONE. CI runs `pytest -n auto --durations=25`. Everything below about groups, loadgroup and the `slow` lane is HISTORY.
+
 **THE SPLIT IS GONE (2026-09-29, the human's call "lean all tests", option 1+2+4).** Measured on
 run 36489946068 the three Python shards ran 41/41/86 s of tests, so the suite is ONE `validate` job
 again (plain `pytest -n auto --dist loadgroup`); `scripts/shard_tests.py`, the cost table + its
