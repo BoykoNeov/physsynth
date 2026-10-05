@@ -51,10 +51,9 @@ pytest -n 8 --dist loadgroup      # same tests, spread across cores (needs pytes
 
 `-m "not slow"` is a **lane, not a gate**: CI runs the full harness on every push — split across
 three machines, one third of the files each, so the wall clock is a third of the work rather than a
-third of the tests — and this is for the edit/run loop. What it gives up is specific — the four
-geometric-string (model #10) validation files, which are `test_geometric_whirl.py`,
-`test_geometric_phantom.py`, `test_geometric_limits.py`
-and two tests of `test_geometric_energy.py`, plus the convergence/dispersion sweeps in the
+third of the tests — and this is for the edit/run loop. What it gives up is specific — the
+geometric-string (model #10) validation files `test_geometric_whirl.py` and
+`test_geometric_phantom.py`, plus the convergence/dispersion sweeps in the
 string files. That is roughly a third of the suite's CPU in a handful of files, because each of
 them re-runs the model it is studying: a convergence study refines and re-runs, a Mathieu tongue is
 mapped by running the string on both sides of it. **Model #10 is almost entirely deselected, so run

@@ -12,12 +12,13 @@
 //!
 //! # The private names, and §12.2 for the n-th time
 //!
-//! `tests/test_geometric_energy.py` calls `_dg_force`, `_dg_jacobian`, `_nl_density`,
-//! `_stretch_ratio` and reads `_a`, `_Gp` and `_Gm`; `tests/test_geometric_rotating_wave.py` calls
-//! `_dg_jacobian` to cross-check the analysis module's Hessian. A leading underscore is not a
-//! statement about the interface, so every one of them is a method or a getter here — including
-//! the two that hand back **SciPy** matrices, because `s._Gm @ s._Gp` and `.toarray()` are what
-//! the assertions are written in.
+//! `tests/test_geometric_energy.py` called `_dg_force`, `_dg_jacobian`, `_nl_density`,
+//! `_stretch_ratio` and read `_a`, `_Gp` and `_Gm` until retirement plan §35 carried it to
+//! `crates/physsynth-core/tests/string_geometric_harness.rs`;
+//! `tests/test_geometric_rotating_wave.py` still calls `_dg_jacobian` to cross-check the analysis
+//! module's Hessian. A leading underscore is not a statement about the interface, so every one of
+//! them is a method or a getter here — including the two that hand back **SciPy** matrices, because
+//! `s._Gm @ s._Gp` and `.toarray()` are what the assertions are written in.
 //!
 //! `_dg_force` and `_dg_jacobian` take `(3, N)` arrays of *arbitrary* strains, not the model's own
 //! state: the finite-difference check perturbs one entry at a time and the DG-identity check feeds

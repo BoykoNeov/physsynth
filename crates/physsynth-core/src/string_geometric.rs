@@ -44,9 +44,10 @@
 //! * **`EA == T` is exact and structural.** The nonlinearity coefficient is `a = EA - T0`, so
 //!   `EA = T` makes `a` exactly zero and [`step`] takes a branch with no Newton solve at all:
 //!   three banded back-substitutions, model #3's expressions in model #3's order. That is what
-//!   `tests/test_geometric_energy.py::test_EA_equals_T_is_bit_identical_to_damped_string` asserts
-//!   against `DampedStiffString` — an anchor between two model *classes* (§15.2), now between two
-//!   Rust ones — and it holds bit-for-bit including `energy()`, because the two spare fields
+//!   `tests/string_geometric_harness.rs::ea_equals_t_is_model_three_bit_for_bit_from_a_pluck`
+//!   asserts against `DampedStiffString` (carried from the retired Python test, retirement plan
+//!   §35) — an anchor between two model *classes* (§15.2), now between two Rust ones — and it
+//!   holds bit-for-bit including `energy()`, because the two spare fields
 //!   contribute exact zeros and adding `0.0` changes nothing.
 //! * **`EA != T` diverges at the sparse LU**, per §24.2's measured verdict, and nowhere earlier:
 //!   every matrix on the update path arrives from SciPy already canonical (measured at four grid
@@ -93,7 +94,8 @@ const ARMIJO_C: f64 = 1e-4;
 const ARMIJO_MAXITER: usize = 40;
 
 /// A construction-time rejection. Every variant's `Display` is the Python original's message
-/// verbatim, because `tests/test_stability.py` and `tests/test_geometric_energy.py` match on it.
+/// verbatim; `tests/string_geometric_harness.rs` asserts each variant with the fragment the
+/// retired Python test matched on.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParamError {
     /// One of `L`, `T`, `rho`, `fs` was not positive.

@@ -20,7 +20,7 @@
 //! - **the energy edge** — the smallest `lam_long` whose lossless drift breaks [`DRIFT_GATE`].
 //!
 //! Between them the solve stalls and the energy still conserves, so a flat energy is not a
-//! convergence certificate there. `tests/test_geometric_energy.py` pins one point of that band.
+//! convergence certificate there. `tests/string_geometric_harness.rs` pins one point of that band.
 //!
 //! A non-finite drift counts as past the gate. The Python original compared `drift > gate`, which
 //! is false for NaN, so a run that blew up to NaN before ever exceeding the gate would have been

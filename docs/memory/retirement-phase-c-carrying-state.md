@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-c-carrying-state
-description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-11 done by 2026-10-05 (every plate family, membrane, beam, ideal/stiff/damped/tension string); 41 files / 430 functions left"
+description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-12 done by 2026-10-05 (every plate family, membrane, beam, ideal/stiff/damped/tension string, geometric string first half); 38 files / 392 functions left"
 metadata:
   node_type: memory
   type: project
@@ -57,13 +57,36 @@ breakages, delete the file.
   + `free_plate_low_eigenfrequencies` deleted). pytest 1,216 → 1,175. CI run 37302929849 green: 0.41 s release /
   6.22 s debug (jobs 12.0 / 10.0 min). Material bar exact on glibc too: the six recorded UCRT `pow`s were
   checked correctly rounded first (`fractions.Fraction`) — do that check for ANY bit-exact `pow` record.
-Remaining after §34: **41 physics files / 430 functions** (§24.1 count). Next: the geometric string (six
-`test_geometric_*` files, the last string family; it still imports the Python material helper). Next batch
-not chosen — the user picks the family; a recommendation + "go with it" is an accepted answer.
+- §35 batch 12 (2026-10-05, human chose "geometric string, split in two"): first half =
+  `test_geometric_{energy,polarization,limits}.py` (38 fns / 57 cases) → NEW `tests/string_geometric_harness.rs`
+  (33: 30 carried + 3 added, both profiles) + NEW `tests/string_geometric_long.rs` (6 long sims, added to CI
+  `release_only`, the human's call: one file was 110 s debug) + shared `tests/geometric_fixture/mod.rs`
+  (directory module = not a test target; `#![allow(dead_code)]`). Nothing frozen (no outside referee);
+  every trajectory figure reproduced to the digit. 20 plants: θ (step/matrix/energy) blind → θ sweep added
+  unasked (3rd instance); start-up NONLINEAR force dropped seen only by the Windows-exact viewer freeze →
+  new time-symmetry start-up bar (from rest f¹ must mirror f⁻¹; v's only t=0 accel is nonlinear);
+  longitudinal losses routed to the wrong field seen by NOTHING → human chose a guard (EA=T decoupled,
+  undamped field keeps its energy). Model #9↔#10 bar (raw pitch within 2%) passed a LINEAR model #9 →
+  human chose pitch-RISE comparison. Thin margins: three-waves v 1.03x, detuning 1.29x, stall count min 1
+  over 30 ulp nudges. §34's claim that geometric tests import the Python material helper was FALSE →
+  the dead Python copy deleted. pytest 1,175 → 1,115; workspace 1,471 release.
+Remaining after §35: **38 physics files / 392 functions** (§24.1 count). Next: the geometric string's second
+half (`test_geometric_{whirl,phantom,rotating_wave}.py`, 31 fns). Next batch not chosen — the user picks; a
+recommendation + "go with it" is an accepted answer.
 Loose end (from §27): `test_arpack_oracles_are_bit_reproducible`'s surviving free-plate half guards a
 helper whose only caller is the guard itself.
 
 **Rules these batches set:**
+- A bar comparing two models' ABSOLUTE values can be blind to the effect it tests when the effect is small
+  next to the value (§35.5: 0.18% hardening under a 2% pitch bar). Plant the effect away (make one model
+  linear) before trusting it; compare the EFFECT (rise from each model's own baseline) instead.
+- For a nonlinear model there is no exact eigenmode start-up identity; time-reversibility is the substitute:
+  released from rest, the first step must mirror the Taylor start (§35.4). Check the field whose ONLY
+  initial acceleration is the term a plant would drop.
+- Editing a source file while a mutation script runs: the script restores from its snapshot and silently
+  reverts the edit. Sync the snapshot (copy the edited file in) or wait.
+- `pytest.approx(rel=x)` keeps `abs=1e-12`; on a small quantity (energy 1e-2 J) the abs term dominates.
+- Collect counts per file through `--rootdir <tree>` for both the worktree and the live tree.
 - A bar needing core + analysis: `physsynth-analysis` is a TEST-ONLY dev-dependency of
   `physsynth-core` (the human's call; `deps.rs` walks normal/build edges only, no cycle).
 - Only NumPy/SciPy/LAPACK numbers are independent referees — everything else in a Python test

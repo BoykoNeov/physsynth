@@ -5093,3 +5093,285 @@ Run 37302929849 on `c048393`, all five jobs green, and the first Linux run of th
   correct-rounding check in §34.1 predicted.
 - The breakup bar passed on Linux. Its crossing step there is not printed, because CI runs without
   `--nocapture`.
+
+## 35. Phase C, carrying batch 12 — the geometric string, first half
+
+Done 2026-10-05. The human took the recommendation: the geometrically exact string (model #10), the
+last string family, split in two because it is the largest family left (six files, 69 functions).
+This first half retires three files whole: `tests/test_geometric_energy.py`,
+`tests/test_geometric_polarization.py` and `tests/test_geometric_limits.py` — **38 functions, 57
+pytest cases** (the three `EA = T` loss sets, the three softening moduli, the twelve refusals, the
+four rotation angles and the two Duffing amplitudes are parametrised). The second half is
+`test_geometric_whirl.py`, `test_geometric_phantom.py` and `test_geometric_rotating_wave.py`.
+
+The bars went to **two new files and a shared module**, at the retired helper
+`make_geometric_string`'s parameters (`L = 1`, `kappa = 2`, `theta = 0.28`, `EA = 1e5`, `fs` from
+`lam_long = 0.5`):
+
+- `crates/physsynth-core/tests/string_geometric_harness.rs` — 33 `#[test]`s (30 carried, 3 added):
+  the scheme, the energy, the guards and the two polarizations. Both CI profiles.
+- `crates/physsynth-core/tests/string_geometric_long.rs` — 6 carried: every long simulation the
+  three files ran. **Optimised only** (§35.6, the human's call).
+- `crates/physsynth-core/tests/geometric_fixture/mod.rs` — the builder and initial conditions both
+  files share. A directory module, so Cargo does not make it a test target of its own.
+
+Separate from `string_geometric.rs` for §32's reason: that file runs its own fixture (`L = 0.65`,
+`kappa = 1.5`) and holds the bars about the sparse LU's node ordering, which are about the port.
+
+Three Python tests have **no analogue**, and one carries only its condition:
+
+- `test_apply_Ainv_raises_for_a_reason_that_is_not_model_9s`: the native `GeometricString` has no
+  `apply_ainv`, so the wrong call does not compile (§16's "an absence becomes a type").
+- `test_set_state_velocity_arguments_are_keyword_only` guarded a Python name clash (`v0` is a
+  displacement here and a velocity in models #1–#9). Natively the velocities are a separate typed
+  argument, `dots: &[Vec<f64>; 3]`, so model #3's `set_state(u0, v0)` does not compile against it.
+- The two `RuntimeWarning`s' **prose** lives in the binding and goes with it. What the core owes the
+  caller is the condition — `Params::warn_lam_long` in all six of the Python's warn/silent
+  configurations, and a Newton report with `converged == false` on every stalled step — and both
+  are asserted.
+
+### 35.1 No outside referee, and every figure reproduced
+
+Nothing the three files compared against was NumPy's or SciPy's own number: the oracles were
+closed forms, model #9 or model #3 (Rust through the binding), and the random strains were tolerance
+claims about any state. So nothing was frozen, as in §31. The Python figures were still recorded
+first (wheel reinstalled, `W:\temp\claude\geometric-string-1\python_record_{a,b}.txt`), and the
+native twins reproduce **every trajectory figure to the printed digit** on Windows: both drifts and
+fractions, the tolerance pair, the floor, passivity, the anchors, the tension spread, the four
+rotations, the detuning pair, the circular ratio, the stall counts and drifts of the band, the
+softening sweep, the three linear-wave frequencies, the Richardson ratio (3.962798) and both
+Duffing shifts.
+
+The random-strain bars draw from a splitmix64 Box–Muller stream instead of PCG64 (§15: the claim is
+about every state, so only the breadth matters). The draw is required to reach the stretch terms'
+second branch (`denom <= 1`), which a uniform field at the same scale would not, and the
+telescoping bar asserts that it does.
+
+### 35.2 What the existing native bars could not see
+
+`string_geometric.rs` already had a conservation bar, passivity, the DG identity on one smooth
+state, the `EA = T` anchor on a single mode, planar invariance from a mode and the rejections. What
+the Python asserted and no native line did:
+
+- **Every bar at the helper's fixture.** The native file runs `L = 0.65`, `kappa = 1.5`.
+- **The broadband pluck**: conservation (the local tension field is what model #9 lacks), planar
+  invariance and the `EA = T` anchor from a pluck rather than a mode.
+- **The polarization bars**: the 90° swap bit for bit, four arbitrary rotations, the detuning
+  negative control and DG equivariance. Energy cannot see a polarization defect; these can.
+- **The DG Jacobian against finite differences.** Breakages C and D (§35.4) are seen by it and,
+  elsewhere in the workspace, only by the viewer freeze.
+- **The drift follows `newton_tol`.** Breakage E is seen by this bar and nothing else.
+- **The negative control** (`Λ(mean)` misses the identity by percent), the continuum-gradient
+  limit, the SBP pair, the relaxed state, the six-loss passivity and the loss inheritance.
+- **The guards**: softening refused and then conserving at three moduli, three refusals the native
+  test lacked (`T < 0`, `sigma0_long < 0`, `theta = 1.5`), the stall report, the Courant numbers and
+  the warning flag's exemption at `a = 0` (breakage H: this bar alone).
+- **The limits**: the three linear waves, Richardson self-convergence and the Duffing shift.
+
+No run got shorter (§30's rule): every carried run is the Python's own length.
+
+### 35.3 Every margin measured
+
+| bar | measured | bar |
+|---|---|---|
+| DG identity, five strain decades (worst) | 9.1e-16 relative | 1e-12 |
+| naive `Λ(mean)` midpoint (worst) | 10.1 relative | > 1e-2 |
+| DG at equal states vs continuum gradient | 5.7e-13 relative | 1e-11 |
+| `Gm Gp − D2` | 0 | 1e-9 · max\|D2\| |
+| Jacobian vs finite differences / asymmetry | 1.4e-11 / 0.90 | 1e-6 / > 0.1 |
+| `EA = T` decoupled three fields, drift | 6.0e-14 | 1e-12 |
+| single mode: drift / nonlinear / longitudinal | **2.33e-11** / 1.45e-2 / 1.93e-2 | 1e-10 / > 1e-3 / > 1e-3 |
+| pluck: drift / stretch spread | **2.07e-11** / 7.8e-5 | 1e-10 / > 1e-6 |
+| `newton_tol` 1e-4 / 1e-15 | 4.56e-2 / 1.06e-11 (0 / 729 iterations) | ratio > 1e6; < 1e-10 |
+| pluck at θ ∈ {0.25, 0.28, 0.5} (added) | 1.04e-11 / 2.07e-11 / 1.91e-11 | 1e-10 |
+| lowest energy, pluck / at rest | 5.5e-3 J / 0 exactly | ≥ 0 / == 0 |
+| passivity, worst one-step change | −2.9e-13 | ≤ 0 |
+| own losses (added): undamped field / damped field | 6.6e-14, 2.6e-15 / 0.117, 0.142 | < 1e-12 / > 1e-3 |
+| start-up symmetry (added), u / v | 8.4e-5 / 1.35e-3 | < 1e-2 |
+| tension spread after a pluck | 7.4e-2 T0 | > 1e-3 T0 |
+| rotation gaps (worst of four angles) / energy | 3.1e-13 / 4.4e-13 relative | 1e-11 / 1e-11 |
+| detuned / isotropic | **1.294e-6** / 1.8e-13 | > 1e-6 / < 1e-11 |
+| DG equivariance | 1.7e-16 | 1e-13 |
+| circular / planar energy | 1.985 | 2 ± 5% |
+| softening, three moduli: drift / min E / min tension | ≤ 1.6e-13 / 2.4e-3 J / 199.98 N | 1e-10 / > 0 / > 0 |
+| stall: 30 steps at `lam_long ≈ 45`, three iterations | 30 stalled | > 0 |
+| band: `lam_long` 2 / 6 — drift, stalls | 7.3e-14, 0 / 3.8e-15, **2** | 1e-10, 0 / 1e-10, > 0 |
+| three linear waves: u 1 / w 2 / v 3 | 7.8e-5 / 3.8e-4 / **1.94e-3** relative | 2e-3 |
+| Richardson ratio / smallest nonlinear fraction | 3.963 / 3.0e-3 | 3.4 – 5.2 / > 1e-3 |
+| Duffing shift, A = 0.004 / 0.008 | 6.2e-4 / 5.1e-4 relative | 5e-2 |
+| pitch rise, model #10 vs model #9 (changed) | 3.5e-3 relative (0.1843 vs 0.1837 Hz) | 2e-2 |
+
+The thinnest margins, all in the Python's own bars and all left where it had them:
+
+- **The longitudinal wave's frequency, 1.03×.** At `lam_long = 0.7` the theta-scheme's temporal
+  dispersion puts mode 3 of `v` 0.194% low against a 0.2% bar. It is deterministic — a property of
+  the scheme at that Courant number — so a last-bit change of platform cannot move it by the 3% of
+  itself it would need. But any change to the scheme's dispersion will.
+- **The detuning control, 1.29×.** The detuned run must break rotation by more than 1e-6; it breaks
+  it by 1.29e-6 after 250 steps.
+- **The band's stall count.** It is a last-bit event (`docs/dev/scientific-hurdles.md` §6). Probed
+  through the binding with the start nudged by up to four ulp in 30 draws, `lam_long = 6` stalled 1
+  to 3 times and never 0; at 5.5, 1 to 2; at 6.5, 2 to 5. The bar is `> 0`, so it holds with a
+  minimum of one.
+- **The two lossless drifts, 4.3× and 4.8×**, the same order as §34's.
+
+The rotation bar's energy clause was `pytest.approx(rel=1e-11)`, which keeps `abs = 1e-12`: against
+an energy of 1e-2 J that is about 1e-10 relative, so that is what the Python actually enforced. The
+relative bar alone is carried, and holds at 4.4e-13. The rest-tension bar was
+`np.allclose(rtol=1e-12)` with its default `atol = 1e-8`; at rest the value is exactly `T0` and is
+asserted with `==`.
+
+### 35.4 Twenty breakages — four that nothing in the workspace could see
+
+Planted one at a time with `W:\temp\claude\geometric-string-1\mutate.py`: source trees snapshotted,
+restored by copy, byte-compared. The "red" column counts `string_geometric_harness.rs`,
+`string_geometric.rs` and `string_nonlinear_harness.rs` (and, for T and V,
+`string_geometric_long.rs`) **before** the three added bars.
+
+| breakage | red | caught by |
+|---|---|---|
+| **A** DG force: `chi` from the plus level only | 11 | the identity, every conservation bar, the FD Jacobian |
+| **B** DG force: the `w` row reads `u_bar` | 21 | the polarization bars, conservation, the identity |
+| **C** Jacobian: rank-one coefficient halved | 1 | the FD bar (Newton still converges, more slowly) |
+| **D** Jacobian: rank-one block transposed | 1 | the FD bar |
+| **E** `newton_tol` ignored | 1 | the drift-follows-the-tolerance bar |
+| **F** `kappa_w` ignored | 1 | the detuning control |
+| **G** softening guard removed | 2 | both rejection bars |
+| **H** `lam_long` flag's `a = 0` exemption dropped | 1 | the linear-anchor bar |
+| **I** tension `EA Λ + a` | 4 | the tension bars, the relaxed state, the softening sweep |
+| **J** step: θ fixed at 0.28 | **0 → 1** | nothing; now the θ sweep |
+| **K** update matrix: θ fixed at 0.28 | **0 → 1** | nothing; now the θ sweep |
+| **L** energy: θ fixed at 0.28 | **0 → 1** | nothing; now the θ sweep |
+| **M** start-up: the ½ dropped | 2 → 3 | the two `EA = T` twin anchors; now the start-up bar |
+| **N** start-up: the nonlinear force dropped | **0 → 1** | nothing in these files; now the start-up bar |
+| **O** `v` damped with the transverse losses | **0 → 1** | nothing; now the own-losses bar |
+| **P** strain: the `w` row reads `u` | 16 | the polarization bars, conservation |
+| **Q** stretch density's 2 → 4 | 10 | the identity, conservation |
+| **S** oracle: `EA/(2ρ)` for `EA/(4ρ)` | 4 | the Duffing shift bars of both models |
+| **T** model #9 made linear | 12 → 13 | model #9's own bars; the model-#9 comparison **only after** §35.4's change |
+| **V** model #10's nonlinearity halved consistently (force, Jacobian and energy) | 2 → 3 | the continuum-gradient bar, the Duffing shift; the model-#9 comparison after the change |
+
+Every few- and no-witness case was re-planted against the whole workspace (§31's rule) with
+`cargo test --workspace --release --no-fail-fast` (`mutate.py --ws`). That run compiled the θ sweep
+and the start-up bar, which had just been added, so their columns are in it:
+
+| breakage | red, workspace-wide |
+|---|---|
+| C, D | the FD bar, `frozen::geom`, `frozen::browser` |
+| E | the tolerance bar, alone |
+| F | the detuning control, `frozen::geom`, `frozen::browser`, and three whirl bars in `physsynth-viewer/tests/geometric.rs` |
+| H | the linear-anchor bar, alone |
+| J, K, L | the θ sweep, alone |
+| M | both twin anchors, the start-up bar, `frozen::geom`, `frozen::browser` |
+| N | the start-up bar, `frozen::geom`, `frozen::browser` |
+| O | **nothing** |
+
+`frozen::*` compares exactly only on the Windows CI job (§23.19); on Linux it checks structure. So
+before this batch **N was seen only by a copy, on one platform**, and J, K, L and O by nothing.
+
+What was added, and on whose call:
+
+- **The θ sweep** (`a_broadband_pluck_conserves_energy_at_every_theta`) — §33's and §34's guard, a
+  third time, for the third time on a pluck at θ ∈ {0.25, 0.28, 0.5}. Added without asking, as the
+  established remedy for an established gap.
+- **The start-up bar** (`released_from_rest_the_first_step_is_time_symmetric_in_every_field`) — also
+  established (§30, §32, §33), but §30's exact eigenmode identities do not exist for a nonlinear
+  model. What replaces them: released from rest the motion is even in time, and the scheme is
+  time-reversible (the discrete gradient is symmetric in its two levels), so the first step must
+  mirror the Taylor start to its own `O(k^4)`. Measured against the step's size in `u` (the ½) and
+  in `v`, whose only acceleration at `t = 0` is the nonlinear force — so dropping that force from
+  the start puts the whole of `v^1` into the asymmetry. Both plants read about 1 against a 1e-2 bar.
+- **The own-losses bar** (`each_field_takes_its_own_losses`) — a new kind of gap, so **taken to the
+  human**, who chose to guard it. At `EA = T` the fields are decoupled linear strings; give one
+  zero losses and the other the Python's, in both directions, and the undamped field must keep its
+  energy to 1e-12 while the damped one loses more than 1e-3.
+
+### 35.5 The model-#9 comparison could not see the nonlinearity — changed, the human's call
+
+`test_model_9_is_the_kc_limit_of_model_10` compared the two models' **absolute** mode-1 frequencies
+within 2% at `A = 2e-3`. There the hardening is 0.18% of the pitch, so a **linear** model #9 sat
+0.21% off and passed (recorded in the Python before the deletion, and breakage T confirmed it
+natively): finding #78's shape, a bar too loose to see what it was written for. The human chose to
+compare each model's **rise** from its own quiet frequency instead, at the Python's 2%: the two
+rises agree to 0.35% (5.8×), a linear twin has no rise at all, and the bar now turns red on both T
+and V. `model_nine_is_the_kirchhoff_carrier_limit_of_model_ten` asserts the rise is real (> 0.1 Hz)
+before comparing it.
+
+### 35.6 The retirement rule, discharged
+
+| retired | native bar |
+|---|---|
+| `test_discrete_gradient_telescopes_exactly` | `the_discrete_gradient_telescopes_at_five_decades_of_strain` |
+| `test_naive_midpoint_gradient_is_not_a_discrete_gradient` | `the_naive_midpoint_misses_the_identity_by_percent` |
+| `test_dg_at_equal_states_is_the_continuum_gradient` | `at_equal_states_the_discrete_gradient_is_the_continuum_gradient` |
+| `test_sbp_adjoint_pair` | `the_sbp_pair_is_an_exact_adjoint_and_composes_to_d2` |
+| `test_dg_jacobian_matches_finite_differences_and_is_not_symmetric` | `the_newton_jacobian_matches_finite_differences_and_is_not_symmetric` |
+| `test_EA_equals_T_is_bit_identical_to_damped_string` (3) | `ea_equals_t_is_model_three_bit_for_bit_from_a_pluck`, all three loss sets |
+| `test_EA_equals_T_makes_all_three_fields_linear_and_decoupled` | `at_ea_equals_t_the_three_fields_are_three_decoupled_linear_strings` |
+| `test_lossless_drift_single_mode_with_nonlinear_fraction_reported` | `a_single_mode_conserves_energy_with_the_nonlinearity_engaged` |
+| `test_lossless_drift_from_a_plucked_broadband_ic` | `a_broadband_pluck_conserves_energy_through_the_local_tension_field` |
+| `test_drift_is_controlled_by_the_newton_tolerance` | `the_drift_follows_the_newton_tolerance` |
+| `test_energy_floor_is_zero_and_respected` | `the_energy_floor_is_zero_and_a_string_at_rest_sits_on_it` — the floor written as `0.0` (§29.3) |
+| `test_the_relaxed_state_is_inadmissible_with_clamped_ends` | `the_relaxed_state_is_unreachable_with_clamped_ends` — the tension read off the model's own field |
+| `test_passivity_is_monotone_with_all_six_losses` | `losses_make_the_energy_monotone_with_all_six_terms` |
+| `test_longitudinal_loss_defaults_to_the_transverse_values` | `the_longitudinal_losses_inherit_the_transverse_ones_unless_set` |
+| `test_small_amplitude_recovers_three_linear_waves` | `string_geometric_long.rs::at_vanishing_amplitude_the_model_is_three_linear_waves` |
+| `test_both_polarizations_share_one_wave_speed` | `both_polarizations_share_one_wave_speed` |
+| `test_softening_EA_is_rejected_by_default_and_permitted_on_request` | `a_softening_string_is_refused_by_default_and_built_on_request` — the variant |
+| `test_softening_is_hyperreal_not_unstable` (3) | `string_geometric_long.rs::a_softening_string_conserves_stays_positive_and_cannot_go_slack` |
+| `test_construction_rejects_nonphysical_parameters` (12) | `the_pythons_twelve_refusals_are_the_right_variants` — variant and fragment |
+| `test_apply_Ainv_raises_for_a_reason_that_is_not_model_9s` | **no analogue**: the method does not exist natively |
+| `test_non_convergence_warns_and_is_counted` | `a_stalled_newton_solve_is_reported_and_counted` — the condition; the prose is the binding's |
+| `test_set_state_velocity_arguments_are_keyword_only` | **no analogue**: the velocities are a separate typed argument |
+| `test_reported_courant_numbers_expose_the_longitudinal_tax` | `the_reported_courant_numbers_expose_the_longitudinal_tax` |
+| `test_under_resolved_longitudinal_field_warns_because_nothing_else_will` | `an_under_resolved_longitudinal_field_is_flagged_because_nothing_else_will` |
+| `test_a_flat_energy_is_not_a_convergence_certificate_in_the_under_resolved_band` | `string_geometric_long.rs::a_flat_energy_is_not_a_convergence_certificate_in_the_under_resolved_band` |
+| `test_the_linear_anchor_never_warns_however_coarse_the_longitudinal_field` | `the_linear_anchor_is_never_flagged_however_coarse` |
+| `test_tension_is_a_field_not_a_scalar` | `the_tension_is_a_field_not_a_scalar` |
+| `test_planar_ic_stays_bit_exactly_planar` | `a_planar_pluck_stays_planar_to_the_bit` |
+| `test_planar_subspace_invariance_survives_detuning` | `planar_stays_planar_when_the_polarizations_are_detuned` |
+| `test_the_other_polarization_is_equally_invariant` | `the_other_polarization_is_equally_invariant` |
+| `test_ninety_degree_swap_is_bit_exact` | `a_ninety_degree_rotation_is_bit_exact` |
+| `test_arbitrary_rotation_commutes_with_the_dynamics` (4) | `an_arbitrary_rotation_commutes_with_the_dynamics`, all four angles |
+| `test_rotation_invariance_is_broken_by_detuning_but_isotropy_of_the_nonlinearity_is_not` | `detuning_breaks_rotation_only_through_the_linear_operator` |
+| `test_nonlinearity_depends_on_the_polarizations_only_through_r_squared` | `the_discrete_gradient_is_equivariant_under_rotation` |
+| `test_circular_and_planar_are_different_motions_and_not_equal_energy` | `a_circular_mode_is_a_different_motion_with_twice_the_energy` |
+| `test_richardson_second_order_self_convergence` | `string_geometric_long.rs::the_scheme_self_converges_at_second_order` |
+| `test_amplitude_shift_tracks_the_duffing_limit` (2) | `string_geometric_long.rs::the_amplitude_shift_tracks_the_duffing_limit`, both amplitudes |
+| `test_model_9_is_the_kc_limit_of_model_10` | `string_geometric_long.rs::model_nine_is_the_kirchhoff_carrier_limit_of_model_ten` — as pitch rise (§35.5) |
+
+**Orphans removed from `tests/helpers.py`**: `make_tension_string` (its only caller was the limits
+file) with its `TensionModulatedString` and `TENSION_TOL_DEFAULT` import, and `geometric_pluck_ic`.
+`make_geometric_string`, `geometric_mode_ic`, `GEO_NEWTON_TOL` and `EA_DEFAULT` stay: the second
+half calls them.
+
+**§34 was wrong about the Python material helper, and it is deleted.** §34.0 kept
+`physsynth/core/string_nonlinear.py::string_coefficients_from_material` because "four
+`test_geometric_*` files still import it". None did — a repo-wide grep found it only in its own
+module and in `EA_DEFAULT`'s docstring — so its stated reason to exist was false, and it went with
+`StringCoefficients` and the module's `numpy` import. The native port (§34) is untouched.
+
+Comments that named the retired files now name the native bars: `string_geometric.rs`'s module
+header, the binding's header, the shim's `LAM_LONG_WARN` note, `examples/geometric_lam_long.rs`,
+`test_geometric_phantom.py`, `test_geometric_whirl.py`, `scientific-hurdles.md` §6 and the README's
+fast-lane paragraph.
+
+### 35.7 Cost and counts
+
+- **pytest 1,175 → 1,115**: the three files' 57 cases and their three `test_xdist_groups`
+  parametrisations, reconciled per file against a worktree at `f5e6a34` with `--collect-only`.
+- **Native +39**: 33 in `string_geometric_harness.rs` and 6 in `string_geometric_long.rs`.
+- **CI profiles, the human's call.** The first draft was one file: 22 s optimised and **110 s
+  unoptimised** locally, mostly the 60,000-step linear-wave run, which would have made the
+  unoptimised job about as long as the optimised one (10.0 against 12.0 minutes at §34.8). Split:
+  the harness runs in both profiles (0.6 s optimised, 8 s unoptimised, which is where its bit-exact
+  structural bars most need to be), and `string_geometric_long` joins `release_only` in
+  `.github/workflows/ci.yml` (9.1 s optimised). Its bars are frequency, rate and drift tolerances,
+  none pinning a spelling the optimiser could fold.
+- **38 physics files remain**, with **392** test functions by the §24.1 count (430 − 38).
+
+### 35.8 What is next
+
+The second half of the geometric string: `test_geometric_whirl.py`, `test_geometric_phantom.py` and
+`test_geometric_rotating_wave.py` (31 functions). After it, no string family's Python suite is left.
+The human picks.

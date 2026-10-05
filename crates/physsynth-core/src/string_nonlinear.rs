@@ -47,6 +47,7 @@
 //! *modelling oracle*, six floats derived from a material and a radius and never touched again.
 //! Python going to zero reversed that, and retirement plan §34 ported them when their tests
 //! retired. They are still not on any trajectory, and the binding still does not expose them.
+//! The Python copy §34 kept went in §35, once it turned out to have no callers.
 
 use crate::banded::{self, BandedError};
 use crate::fmt::py_float;

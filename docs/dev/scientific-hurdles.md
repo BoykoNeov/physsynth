@@ -437,7 +437,8 @@ a flat energy is not a stability certificate** (§8 is the first), and unlike §
 safe-looking direction. `LAM_LONG_WARN` stays at 1.0 — the human's call, and its 4× margin is now
 explicitly margin against the *convergence* edge.
 
-Pinned by `tests/test_geometric_energy.py::test_a_flat_energy_is_not_a_convergence_certificate_in_the_under_resolved_band`,
+Pinned by `crates/physsynth-core/tests/string_geometric_harness.rs::a_flat_energy_is_not_a_convergence_certificate_in_the_under_resolved_band`
+(carried from the retired `tests/test_geometric_energy.py`, retirement plan §35),
 which asserts both halves at `λ_long = 6` (stalls fire, gate passes) against a `λ_long = 2` control,
 and names the sweep script as the thing to re-run if the edge ever moves. The expensive nine-cell
 sweep stays in the script: the suite is bulk-bound and a run that blows up on purpose is not a cheap

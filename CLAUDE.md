@@ -113,9 +113,15 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    native bar, plant breakages to prove the bars live, delete. §25 did the supported grained
    plate, §26 the plain plate, §27 the free plate, §28 the guitar/disk — **every plate family's
    Python suite is gone** — §29 the membrane, §30 the beam, §31 the ideal string, §32 the stiff
-   string, §33 the damped string and §34 the tension-modulated string; **41 physics files / 430
-   functions remain** (§9's map is stale), and only the geometric string's family is left of the
-   strings. §34 ported the string material helper into core (its tests had nowhere else to go),
+   string, §33 the damped string, §34 the tension-modulated string and §35 the first half of the
+   geometric string (energy, polarization, limits); **38 physics files / 392 functions remain**
+   (§9's map is stale), and only the geometric string's second half (whirl, phantom, rotating
+   wave) is left of the strings. §35 found the θ blind spot a third time (guarded the same way),
+   a start-up whose NONLINEAR force could be dropped unseen (a time-symmetry bar now pins it: from
+   rest the first step must mirror the start), longitudinal losses that could be routed to the
+   wrong field unseen (guarded, the human's call), and a cross-model bar too loose to see the
+   nonlinearity it tested (now a pitch-RISE comparison, the human's call); its long simulations
+   are a separate optimised-only file. §34 ported the string material helper into core (its tests had nowhere else to go),
    and its θ was blind exactly as §33's was, guarded the same way; there, unlike §30–§33, a
    physics bar (the Richardson run against the exact Duffing waveform) already saw both start-up
    plants, so no start-up bar was added. §33 found three defects NOTHING in the workspace saw — the damped string's `θ` hard-coded

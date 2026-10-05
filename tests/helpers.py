@@ -34,7 +34,6 @@ from physsynth.core.radiation import (
 from physsynth.core.reed import ReedBore
 from physsynth.core.string_damped import DampedStiffString
 from physsynth.core.string_geometric import GeometricString
-from physsynth.core.string_nonlinear import TENSION_TOL_DEFAULT, TensionModulatedString
 from physsynth.core.string_stiff import THETA_DEFAULT
 
 L_DEFAULT = 1.0
@@ -853,10 +852,10 @@ def convergence_orders(errors: np.ndarray, step_sizes: np.ndarray) -> np.ndarray
 # -- model #9: tension-modulated string -------------------------------------------------
 
 EA_DEFAULT = 1.0e5
-"""Axial stiffness (N) for model #9 tests. With T_DEFAULT = 200 N this is EA/T = 500 -- squarely in
-a real steel string's range (the governing ratio is EA/T = (c_long/c)^2 ~ 150-600; see
-:func:`~physsynth.core.string_nonlinear.string_coefficients_from_material`). **Reused by model
-#10**, so the cross-model KC check compares like with like."""
+"""Axial stiffness (N) for the model #10 tests, model #9's number. With T_DEFAULT = 200 N this is
+EA/T = 500 -- squarely in a real steel string's range (the governing ratio is EA/T = (c_long/c)^2
+~ 150-600; see ``string_coefficients_from_material`` in
+``crates/physsynth-core/src/string_nonlinear.rs``)."""
 
 GEO_NEWTON_TOL = 1e-15
 """Relative Newton tolerance for model #10 tests -- **tighter than the class default on purpose**.
@@ -878,34 +877,6 @@ mode-3 ICs, amplitudes to 1e-2); at ``lam_long >= 4`` the Newton solve fails and
 1e+3 .. 1e+5. There is no CFL to catch this -- the theta-scheme is unconditionally stable and
 reports nothing -- so 0.5 buys a 4x margin on a measured cliff. Tests that *want* the unresolved
 regime pass ``lam=`` explicitly."""
-
-
-def make_tension_string(
-    *,
-    N: int = 100,
-    lam: float = 1.0,
-    kappa: float = KAPPA_DEFAULT,
-    EA: float = 0.0,
-    sigma0: float = 0.0,
-    sigma1: float = 0.0,
-    theta: float = THETA_DEFAULT,
-    tension_tol: float = TENSION_TOL_DEFAULT,
-    L: float = L_DEFAULT,
-    T: float = T_DEFAULT,
-    rho: float = RHO_DEFAULT,
-) -> TensionModulatedString:
-    """Build a tension-modulated string (model #9) at Courant ``lam`` via ``fs = c N/(L lam)``.
-
-    ``EA = 0`` (the default) is model #3 bit-for-bit -- pass ``EA=EA_DEFAULT`` for the nonlinearity.
-    ``lam > 1`` is allowed (the linear part is unconditionally stable), though a nonlinearity always
-    wants oversampling on its own account.
-    """
-    c = wave_speed(T, rho)
-    fs = c * N / (L * lam)
-    return TensionModulatedString(
-        L=L, T=T, rho=rho, fs=fs, N=N, kappa=kappa, EA=EA, sigma0=sigma0, sigma1=sigma1,
-        theta=theta, tension_tol=tension_tol,
-    )
 
 
 # -- model #10: geometrically-exact string ----------------------------------------------
@@ -968,20 +939,6 @@ def make_geometric_string(
 def geometric_mode_ic(N: int, m: int = 1, amp: float = 1e-3, L: float = L_DEFAULT) -> np.ndarray:
     """A single simply-supported eigenmode ``amp * sin(m pi x / L)`` on the full ``N+1`` grid."""
     return amp * np.sin(m * np.pi * np.linspace(0.0, L, N + 1) / L)
-
-
-def geometric_pluck_ic(
-    N: int, amp: float = 1e-3, at: float = 0.2, L: float = L_DEFAULT
-) -> np.ndarray:
-    """A triangular pluck of height ``amp`` at fractional position ``at`` (full ``N+1`` grid).
-
-    **The general-case IC, and the one that matters.** A single-mode IC is secretly a scalar Duffing
-    test: it keeps the strain field nearly uniform and never exercises the *local* tension that
-    distinguishes model #10 from model #9's spatial scalar. The pluck's corner is broadband, so the
-    stretch varies cell-to-cell -- which is the thing under test.
-    """
-    x = np.linspace(0.0, 1.0, N + 1)
-    return amp * np.where(x <= at, x / at, (1.0 - x) / (1.0 - at))
 
 
 def mode_off_fraction(u: np.ndarray, shape: np.ndarray, scale: float) -> float:

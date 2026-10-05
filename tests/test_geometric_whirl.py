@@ -468,8 +468,9 @@ def test_whirling_must_be_seeded_and_never_leaks_from_a_planar_start(tongue):
     If it could, the tongue's 76x would be partly a measurement of that leak, and the ``1.63x``
     outside the tongue would be a floor rather than a null.
 
-    ``test_geometric_polarization.py`` makes this claim structurally; this is the same claim at the
-    parameters that would actually break it, which is the version worth having here.
+    ``crates/physsynth-core/tests/string_geometric_harness.rs`` makes this claim structurally; this
+    is the same claim at the parameters that would actually break it, which is the version worth
+    having here.
     """
     amp = _amp_for(TENSION_RISE)
     s = make_geometric_string(

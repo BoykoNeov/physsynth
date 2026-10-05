@@ -11,8 +11,8 @@ structurally lacks::
 
 ``r^2 v_x / 2`` is **quadratic in the transverse fields and linear in the longitudinal one**, so two
 transverse partials at ``f_i``, ``f_j`` drive ``v`` at ``f_i ± f_j``. Those are Conklin's (1999)
-phantom partials. ``test_geometric_limits.py`` measures where model #10 *agrees* with model #9; this
-file measures the physics that makes them different models.
+phantom partials. ``crates/physsynth-core/tests/string_geometric_harness.rs`` measures where model
+#10 *agrees* with model #9; this file measures the physics that makes them different models.
 
 **Readout: the bridge force ``EA v_x(0)``** — what actually radiates in a real piano, and the honest
 place to look. Below the first longitudinal resonance the ``v`` response is quasi-static
