@@ -249,7 +249,8 @@ pub fn helix(s: &GeometricString, amplitude: f64) -> RotatingWave {
 
 /// `seed_rotating_wave`: the helix's **exact** two-level history, assigned straight onto the
 /// fields. Never through `set_state`, whose `y^{-1}` is a second-order Taylor start — consistent,
-/// not exact — and costs ten orders (`a_taylor_start_costs_ten_orders` measures it).
+/// not exact — and costs eight and a half orders on `long_kin/E`
+/// (`a_taylor_start_leaks_orders_of_magnitude_more_than_the_exact_history` measures it).
 pub fn seed_helix(s: &mut GeometricString, wave: &RotatingWave) {
     let (u0, w0, v0, up, wp, vp) =
         rotating_wave_history(wave, s.p.fs).expect("the string's own fs is positive");

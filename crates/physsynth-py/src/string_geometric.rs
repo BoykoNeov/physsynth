@@ -5,13 +5,14 @@
 //! Every earlier string exposes `u` and `u_prev`. This one has three fields, and **all six arrays
 //! were assigned to from outside**: the retired `tests/helpers.py::seed_rotating_wave` wrote the
 //! exact two-level helix history rather than going through `set_state` (whose Taylor start would
-//! seed an `O(k^3)` error the helix immediately sheds into the longitudinal field — ten orders on
-//! the claim being measured), and `tests/test_geometric_rotating_wave.py` and the retired
-//! `web/serialize.py::_build_payload_geometric` did the same. Both callers are gone (retirement
-//! plan §36 carried the first to `crates/physsynth-core/tests/string_geometric_helix.rs`, which
-//! assigns the native fields directly), but the setters stay while the binding does. So `u`, `w`,
-//! `v`, `u_prev`, `w_prev`, `v_prev`, `n` and `converged` all take setters, and `step` rebinds them
-//! the way the original does: after a step `u_prev` **is** the object `u` was.
+//! seed an `O(k^3)` error the helix immediately sheds into the longitudinal field — measured at
+//! eight and a half orders on the claim being measured), and the retired
+//! `tests/test_geometric_rotating_wave.py` and `web/serialize.py::_build_payload_geometric` did the
+//! same. All three callers are gone — retirement plan §36 carried the helper and the test to
+//! `crates/physsynth-core/tests/string_geometric_helix.rs`, which assigns the native fields
+//! directly — but the setters stay while the binding does. So `u`, `w`, `v`, `u_prev`, `w_prev`,
+//! `v_prev`, `n` and `converged` all take setters, and `step` rebinds them the way the original
+//! does: after a step `u_prev` **is** the object `u` was.
 //!
 //! # The private names, and §12.2 for the n-th time
 //!
@@ -19,7 +20,8 @@
 //! `_stretch_ratio` and read `_a`, `_Gp` and `_Gm` until retirement plan §35 carried it to
 //! `crates/physsynth-core/tests/string_geometric_harness.rs`, and
 //! `tests/test_geometric_rotating_wave.py` called `_dg_jacobian` to cross-check the analysis
-//! module's Hessian until §36 carried that to `string_geometric_helix.rs`. A leading underscore is not a statement about the interface, so every one of
+//! module's Hessian until retirement plan §36 carried that to `string_geometric_helix.rs`. A
+//! leading underscore is not a statement about the interface, so every one of
 //! them is a method or a getter here — including the two that hand back **SciPy** matrices, because
 //! `s._Gm @ s._Gp` and `.toarray()` are what the assertions are written in.
 //!

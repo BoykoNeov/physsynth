@@ -264,7 +264,8 @@ fn stretch(p: &[f64], z: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
 /// in this crate without the dependency edge `tests/deps.rs` refuses, so it is a core test reaching
 /// this crate through its test-only dev-dependency (retirement plan §24.2):
 /// `crates/physsynth-core/tests/string_geometric_helix.rs`, at 1e-12 since the core's `(v,v)`
-/// block was made cancellation-free. It was `test_geometric_rotating_wave.py` until §36.
+/// block was made cancellation-free. It was `test_geometric_rotating_wave.py` until retirement
+/// plan §36.
 pub fn planar_hessian_cells(p: &[f64], z: &[f64], a: f64) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
     let (lam, chi, _) = stretch(p, z);
     let n = p.len();

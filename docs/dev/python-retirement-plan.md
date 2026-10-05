@@ -5463,8 +5463,8 @@ The Hessian cross-check's random strains draw from the fixture's splitmix64 stre
 
 Several docstring figures the Python carried were stale against its own run, and the native headers
 and this section use the recorded ones: the tongue at `0.07` grows **16.0x** (the docstring said
-14.7x), and the Taylor start leaves `long_kin/E` at **5.7e-18** (the docstring said ~1e-16; the ten
-orders are still eight and a half).
+14.7x), and the Taylor start leaves `long_kin/E` at **5.7e-18** (the docstring said ~1e-16), so the
+"ten orders" in its name are eight and a half (4.2e8) — the native bar's name states no count.
 
 ### 36.2 What the existing native bars could not see
 
@@ -5558,8 +5558,9 @@ restored by copy, byte-compared. The "red" column counts the four files above.
 Three readings that are not gaps:
 
 - **B is a symmetry, not a defect the helix can see.** Flipping `w_prev` reverses the rotation, and
-  a helix spinning the other way is equally a relative equilibrium; only the history bar's digits
-  (the function's contract) see it.
+  a helix spinning the other way is equally a relative equilibrium. Workspace-wide it is seen by the
+  history bar's digits (the function's contract) and, on Windows, by the viewer freeze — not by the
+  viewer's own rotating-wave bars, which a reversed circle also satisfies.
 - **D and J split exactly as they should.** The `(1 − θk²s)` factor is linear, so the zero-amplitude
   gates see D; the `cos(Ωk)` factor multiplies the nonlinear force, which vanishes at zero
   amplitude, so they cannot see J.
@@ -5568,11 +5569,12 @@ Three readings that are not gaps:
   bars stay green and the bit-exact `EA = T` control is what sees it — while at `1e-4` all three go
   red. The absence half is a coarse detector; the control is the sharp one.
 
-Re-planted workspace-wide (§31's rule) for the three with two or fewer witnesses:
+Re-planted workspace-wide (§31's rule) for the four with two or fewer witnesses:
 
 | breakage | red, workspace-wide |
 |---|---|
 | A | the Hessian cross-check, `frozen::geom`, `frozen::browser` |
+| B | the history bar, `frozen::geom`, `frozen::browser` |
 | E | the existing no-half bar and the KC error bar, alone |
 | G | 32 tests across the workspace (every spectrum-reading bar) |
 
@@ -5601,7 +5603,7 @@ so no bar was added and nothing went to the human.
 | `test_rotating_wave_at_zero_amplitude_is_the_linear_modal_oracle` | analysis `rotating_wave.rs::at_zero_amplitude_the_helix_is_the_linear_modal_oracle` |
 | `test_seeded_helix_rotates_rigidly_and_the_longitudinal_field_never_moves` | `string_geometric_helix.rs::a_seeded_helix_rotates_rigidly_and_its_longitudinal_field_never_moves` |
 | `test_rotating_wave_conserves_energy` | `…::a_spinning_helix_conserves_energy_with_the_nonlinearity_engaged` |
-| `test_set_state_seeding_costs_ten_orders` | `…::a_taylor_start_costs_ten_orders` |
+| `test_set_state_seeding_costs_ten_orders` | `…::a_taylor_start_leaks_orders_of_magnitude_more_than_the_exact_history` |
 | `test_a_sine_is_not_a_relative_equilibrium` | `…::a_sine_at_the_kirchhoff_carrier_frequency_is_not_a_relative_equilibrium` |
 | `test_circular_is_bit_zero_where_planar_is_percent_level` | `…::circular_is_bit_zero_where_planar_is_percent_level` |
 | `test_the_static_stretch_is_the_ingredient_batch_2_never_varied` | `…::the_static_stretch_is_the_ingredient_batch_two_never_varied` |
@@ -5661,3 +5663,33 @@ Comments that named the retired files now name the native bars: the analysis sou
 
 The next batch is not chosen; the human picks. §9's map is stale — re-derive the remaining 35 files
 before recommending one.
+
+### 36.8 On CI
+
+Run 37353479969 on `2cf169b`, all five jobs green, and the first Linux run of these bars:
+
+| file | optimised | unoptimised |
+|---|---|---|
+| `string_geometric_whirl.rs` | 3.07 s | 46.92 s |
+| `string_geometric_phantom.rs` | 2.51 s | 39.67 s |
+| `string_geometric_helix.rs` | 0.21 s | 3.36 s |
+| analysis `rotating_wave.rs` | 0.00 s | 0.00 s |
+
+The new files added **about 1.5 minutes** to the unoptimised job, as forecast when the human chose
+both builds. The jobs took **7.8 minutes optimised and 10.2 unoptimised** — the reverse of §35.9's
+11.8 and 4.9 — and that swing is the machines, measured inside each job (finding: runners vary, so
+compare within a job): the unchanged `string_geometric_harness.rs` took 10.97 s unoptimised here
+against 5.99 s at §35.9 (a machine 1.8x slower) and 0.69 s optimised against 1.30 s (1.9x faster).
+On §35's machines the unoptimised job would have been about 5.5 minutes. Taken to the human, who
+kept both builds.
+
+The thin margins (the tongue's upper edge at 1.23x and 1.24x, the threshold's stable run at 1.33x)
+passed on glibc's `sin`, where the start vectors differ from the Windows ones in the last bits. CI
+runs without `--nocapture`, so it reports the passes, not the margins.
+
+Review fixes, after the advisor's read of the first commit: breakage B (the reversed history) was
+re-planted workspace-wide too — it had one witness in the four files, and the viewer freeze also
+sees it on Windows, so §36.4's "only the history bar" was wrong and is corrected; the Taylor-start
+bar's name no longer claims "ten orders" (it measures eight and a half); and two bare "§36"
+references in Rust comments, which in those files would be read as the migration plan's, now say
+"retirement plan §36".

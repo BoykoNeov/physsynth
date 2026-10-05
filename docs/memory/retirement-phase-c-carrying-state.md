@@ -84,7 +84,10 @@ breakages, delete the file.
   at 1e-4 they go red — the absence half is coarse. Both CI profiles (the human's call; whirl 41.6 s / phantom
   44.5 s debug locally). Human chose to delete `tests/test_xdist_groups.py` (unfailable once no file uses
   `xdist_group`) + the `slow`/`xdist_group` marker declarations + CI `--dist loadgroup` + README fast lane.
-  pytest 1,115 → 1,029; workspace 1,500 release. Existing native bars with SIMILAR NAMES were weaker claims
+  pytest 1,115 → 1,029; workspace 1,500 release. CI run 37353479969 green: whirl 3.07/46.92 s, phantom
+  2.51/39.67 s (opt/unopt); jobs 7.8 opt / 10.2 unopt — the ORDER flipped from runner variance (harness file
+  1.8x slower unopt, 1.9x faster opt vs §35.9); human kept both builds. Review: re-plant EVERY ≤2-witness
+  plant workspace-wide (I skipped B; the viewer freeze also saw it); don't put a count in a test NAME. Existing native bars with SIMILAR NAMES were weaker claims
   (sine-not-RE was a shape-residual band; R→0 gate vs an inline formula) — map by assertion, not name.
   Viewer tests (`physsynth-viewer/tests/geometric.rs`) already covered a whirl/phantom subset at looser
   bars — grep the viewer before writing "nothing native ran X".

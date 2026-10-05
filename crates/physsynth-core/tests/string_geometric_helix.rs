@@ -86,7 +86,7 @@ fn a_spinning_helix_conserves_energy_with_the_nonlinearity_engaged() {
 }
 
 #[test]
-fn a_taylor_start_costs_ten_orders() {
+fn a_taylor_start_leaks_orders_of_magnitude_more_than_the_exact_history() {
     // Carried from `test_set_state_seeding_costs_ten_orders`. `set_state`'s `y^{-1}` is a
     // second-order Taylor start: consistent, not exact. The helix sheds that history error into
     // the longitudinal field, and the number it leaves (~6e-18) still LOOKS like machine precision.
