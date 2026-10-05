@@ -566,12 +566,62 @@ fn verdicts(cases: &[(&String, &Value)]) -> Vec<Result<Verdict, String>> {
         .collect()
 }
 
+/// The variable a local quick run uses to leave named scenes out: `corpus/case` entries separated
+/// by commas or whitespace. `scripts/cargo-test-nice.ps1` sets it from `scripts/quick-skip.txt`;
+/// CI never sets it, so there every case runs.
+const SKIP_VAR: &str = "PHYSSYNTH_FROZEN_SKIP";
+
+/// This corpus's skipped case keys. An entry naming a case the corpus does not have panics: a
+/// renamed or deleted case must not leave a skip entry that silently matches nothing.
+fn skipped_in(corpus: &str, cases: &Map<String, Value>) -> BTreeSet<String> {
+    let Ok(list) = std::env::var(SKIP_VAR) else {
+        return BTreeSet::new();
+    };
+    let entries: Vec<&str> = list
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|e| !e.is_empty())
+        .collect();
+    let malformed: Vec<&&str> = entries.iter().filter(|e| !e.contains('/')).collect();
+    assert!(
+        malformed.is_empty(),
+        "{SKIP_VAR} entries must be corpus/case: {malformed:?}"
+    );
+    let known = corpora();
+    let unknown: Vec<&&str> = entries
+        .iter()
+        .filter(|e| {
+            e.split_once('/')
+                .is_some_and(|(c, _)| !known.iter().any(|k| k == c))
+        })
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "{SKIP_VAR} names corpora that do not exist: {unknown:?}"
+    );
+    let mine: BTreeSet<String> = entries
+        .iter()
+        .filter_map(|e| e.split_once('/'))
+        .filter(|(c, _)| *c == corpus)
+        .map(|(_, k)| k.to_owned())
+        .collect();
+    let stale: Vec<&String> = mine.iter().filter(|k| !cases.contains_key(*k)).collect();
+    assert!(
+        stale.is_empty(),
+        "{SKIP_VAR} names cases {corpus} does not have: {stale:?}"
+    );
+    mine
+}
+
 /// Run one corpus; panic listing every case with a difference outside its class.
 fn check(corpus: &str) {
     let cases = load(corpus);
+    let skipped = skipped_in(corpus, &cases);
     let (mut exact, mut within) = (0, 0);
     let mut failing = Vec::new();
-    let ordered: Vec<(&String, &Value)> = cases.iter().collect();
+    let ordered: Vec<(&String, &Value)> = cases
+        .iter()
+        .filter(|(k, _)| !skipped.contains(*k))
+        .collect();
     for ((key, _), v) in ordered.iter().zip(verdicts(&ordered)) {
         let v = match v {
             Ok(v) => v,
@@ -606,8 +656,13 @@ fn check(corpus: &str) {
         }
     }
     if std::env::var_os("FROZEN_REPORT").is_some() {
+        let quick = if skipped.is_empty() {
+            String::new()
+        } else {
+            format!(", {} skipped by {SKIP_VAR}", skipped.len())
+        };
         eprintln!(
-            "{corpus}: {exact} exact, {within} within a stated tolerance, {} failing (of {})",
+            "{corpus}: {exact} exact, {within} within a stated tolerance, {} failing (of {}){quick}",
             failing.len(),
             cases.len()
         );
