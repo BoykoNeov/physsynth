@@ -113,8 +113,12 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    native bar, plant breakages to prove the bars live, delete. §25 did the supported grained
    plate, §26 the plain plate, §27 the free plate, §28 the guitar/disk — **every plate family's
    Python suite is gone** — §29 the membrane, §30 the beam, §31 the ideal string, §32 the stiff
-   string and §33 the damped string; **42 physics files / 460 functions remain** (§9's map is
-   stale). §33 found three defects NOTHING in the workspace saw — the damped string's `θ` hard-coded
+   string, §33 the damped string and §34 the tension-modulated string; **41 physics files / 430
+   functions remain** (§9's map is stale), and only the geometric string's family is left of the
+   strings. §34 ported the string material helper into core (its tests had nowhere else to go),
+   and its θ was blind exactly as §33's was, guarded the same way; there, unlike §30–§33, a
+   physics bar (the Richardson run against the exact Duffing waveform) already saw both start-up
+   plants, so no start-up bar was added. §33 found three defects NOTHING in the workspace saw — the damped string's `θ` hard-coded
    to its default in the energy or the step (every test ran at the default), and the T60 constant
    moved 1% (it cancels from both round trips) — and the human chose to guard both, the second by
    carrying the analysis freeze's recorded row natively. §32 reproduced every

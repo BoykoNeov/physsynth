@@ -4847,3 +4847,232 @@ home (`string_stiff.rs`'s module header and its test) now name the native anchor
 
 The last string family, the tension-modulated string (`test_tension_string`, 30 functions). §27's
 loose end is still open. The human picks.
+
+## 34. Phase C, carrying batch 11 — the tension-modulated string
+
+Done 2026-10-05. The human took the recommendation: the tension-modulated string (model #9), the
+last string family before the geometric one, with §27's loose end closed first. One file retires
+whole, `tests/test_tension_string.py`: **30 functions, 39 pytest cases** (the three mode-purity
+starts, the three amplitude shifts, the two absolute frequencies, the three `EA = 0` loss sets and
+the three material radii are parametrised).
+
+As in §32 and §33 this is a **new** harness file,
+`crates/physsynth-core/tests/string_nonlinear_harness.rs` (24 `#[test]`s: 23 carried, 1 added), for
+their reason: the existing `string_nonlinear.rs` runs its own fixture (`fs = 44100`, `κ = 1.5`) and
+holds `the_stretch_squares_with_pow_and_not_a_multiply`, which must keep its debug run. The six
+oracle-only tests went to `crates/physsynth-analysis/tests/oracles.rs` (28 → 34) at the Python's own
+numbers (`ω₀² = 3.947e5`, `ε = 5e7`). The stretch identity needs the core grid and stayed in the
+harness.
+
+**Core gained a function.** `string_coefficients_from_material` and its `StringCoefficients` had been
+left in Python by the port (§11.2.1: port the hot path, name the half that is not). Four of the
+retired tests were about that helper, and with Python going to zero there is nowhere else for
+them to go. So the helper is now native in `crates/physsynth-core/src/string_nonlinear.rs`, as the
+plate's `grain_ratios_from_material` already was. The Python copy stays: four `test_geometric_*`
+files still import it, and the binding does not expose the native one.
+
+### 34.1 One outside referee, and every recorded figure reproduced
+
+The material helper was NumPy arithmetic over four scalars, so its six fields are a genuine outside
+referee. They were recorded at the file's three radii before the deletion (wheel freshly reinstalled,
+`W:\temp\claude\tension-string\python_record.txt`) and are asserted **to the bit** by
+`the_material_helper_reproduces_numpys_arithmetic_to_the_bit`. They match with `radius ** 2` and
+`** 4` spelled through `scalar_pow`, as §17.3 predicts.
+
+Everything else the Python compared against was a closed form in the test or already Rust through
+the binding (`triangular_pluck`, the Duffing oracle, `spatial_eigenvalue_p2`). The native twins
+reproduce every **trajectory** figure the Python recorded to every printed digit, including the
+mode-started runs, whose start vector is NumPy's `sin` on one side and the C library's on the other:
+
+- both drifts, fractions and tension peaks;
+- the four drift-by-tolerance figures;
+- the passivity rise;
+- the sub-threshold purity;
+- the breakup's worst off-mode fraction, drift and the step it crosses 1e-3 (608);
+- every measured frequency but one, every shift and the linear limit;
+- the telemetry and the steel run.
+
+The only figures that differ do so in the last few digits, and all are **read-outs through a
+projection**: the short-run purity fractions, the breakup's modal amplitudes, the Richardson
+errors (the orders agree to 1e-9) and the absolute frequency at A = 0.005 (…306 against …307, one
+ulp; the frequencies interpolate zero crossings of the same projection). Those go through `np.dot`
+(BLAS) on the Python side and a left-to-right sum here. No bar sits near any of them.
+
+### 34.2 What the existing native bars could not see
+
+`string_nonlinear.rs` has thirteen bars, and every energy bar in it **starts on a single mode**.
+That is the Python file's own warning: a single-mode start is secretly a scalar Duffing test and
+never exercises the cross-mode coupling through `I = ∫u_x²`. What the Python asserted and no native
+line did:
+
+- **The broadband energy test**, a triangular pluck with the nonlinear fraction (> 0.25) and
+  tension peak (> 1.8 T₀) asserted in the same run as the drift. Breakage C (below) is exact on
+  any sine mode and seen by this bar.
+- **The large-amplitude single-mode drift with its fraction (> 0.5) and peak (> 5 T₀) in the same
+  run.** The native fraction bar is a separate run.
+- **The drift tracks `tension_tol`.** Nothing native showed the tolerance is honoured. Breakage
+  A is seen by this bar **and nothing else in the workspace**.
+- **Mode purity**, structural (20 steps), sub-threshold (1,500) and the breakup signature.
+- **Every frequency bar against the Duffing oracle**: the amplitude shift, the Richardson
+  convergence to the exact `cn` waveform, the absolute frequency, and the glide landing on the
+  linear string. The native `pitch_rises_with_amplitude` asserts only the sign.
+- **The `EA = 0` anchor at the Python's losses** (`σ1 = 5e-3`, sixty times the native anchor's).
+- **`E = 0` at rest**, which the native at-rest bar does not assert.
+- Four Duffing oracle claims the analysis crate lacked: the `ε = 0` limit at three decades of
+  `ω₀²` to 1e-15, the expansion's divergence at `A = 0.3`, `m ∈ [0, ½]` out to `A = 1e8`, and the
+  negative-`ω₀²` refusal. Both refusals' prose is asserted, so neither can stand in for the other
+  (§32.4 D).
+
+`test_apply_Ainv_refuses_because_A_is_time_varying` has **no analogue**. The native
+`TensionModulatedString` has no `apply_ainv` and implements no trait that asks for one, so the
+wrong call does not compile: §16's "an absence becomes a type". The binding's raising method stays
+with the binding.
+
+No run got shorter (§30's rule): every carried run is the Python's own length.
+
+### 34.3 Every margin measured
+
+| bar | measured | bar |
+|---|---|---|
+| single mode, `EA = 3e5`, A = 0.05: drift / fraction / T/T₀ | 6.05e-13 / 0.822 / 10.25 | 1e-10 / > 0.5 / > 5 |
+| broadband pluck, A = 0.04: drift / fraction / T/T₀ | 9.67e-14 / 0.482 / 3.98 | 1e-10 / > 0.25 / > 1.8 |
+| pluck at θ ∈ {0.25, 0.28, 0.5} (added) | 8.26e-14 / 9.67e-14 / 1.60e-13 | 1e-10 |
+| drift by `tension_tol` 1e-4 / 1e-6 / 1e-8 / 1e-12 | 2.83e-6 / 5.81e-9 / 1.55e-12 / 1.46e-13 | > 1e-7, falling, < 1e-11 |
+| energy at large amplitude, minimum | 2.77 J | ≥ 0 |
+| passivity, worst one-step change | −2.99e-6 (every step fell) | ≤ +1e-18 |
+| structural purity, modes 1 / 3 / 7, 20 steps | 4.6e-15 / 9.3e-15 / **2.0e-14** | 1e-12 |
+| sub-threshold purity, 1,500 steps / T/T₀ | 5.6e-14 / 2.11 | 1e-11 / < 3 |
+| breakup: worst off-mode / drift | 0.369 / 2.26e-13 | > 1e-3 / 1e-10 |
+| breakup: neighbours vs grid scale | 8.5e-3 vs 1.9e-17 | > 100× |
+| amplitude shift vs Duffing, A = 0.01 / 0.02 / 0.03 | 1.24e-3 / 1.47e-3 / **1.82e-3** relative | 1e-2 |
+| Richardson orders, N = 50 → 400 | 2.97 / 2.40 / **2.25** | > 1.9; last < 3.2 |
+| absolute frequency vs Duffing, A = 0.005 / 0.02 | 1.1e-4 / **2.9e-4** relative | 3e-3 |
+| glide f(0.05)/f(1e-5) / f(1e-5) vs the linear string | 1.80 / 4.6e-8 relative | > 1.5 / 1e-6 |
+| modal stretch vs the grid, modes 1 / 3 / 7 | ≤ 6e-16 relative | 1e-12 |
+| steel string: drift / fraction | 2.93e-13 / **3.6e-3** | 1e-10 / > 1e-3 |
+| material fields vs NumPy | identical | exact |
+
+The thinnest margins:
+
+- **The last Richardson order** (2.25 against a 1.9 floor). It is approaching 2 from above, so it
+  thins as N grows, and the Python's comment already says so.
+- **The steel string's nonlinear fraction** (3.6×).
+- **The amplitude shift at A = 0.03** (5.5×).
+
+Every bar stays where the Python had it.
+
+**The breakup is seeded by roundoff.** It crossed 1e-3 at step 608 of 1,500 here and in the Python,
+on Windows. On another C library the seed differs, and the crossing step will move. The bar asserts
+only that breakup happens within 1,500 steps, a 2.5× margin in time. Whether Linux keeps it is
+measured by CI, below.
+
+### 34.4 Thirteen deliberate breakages — two that nothing in the workspace could see
+
+Planted one at a time with `W:\temp\claude\tension-string\mutate.py`: each source tree snapshotted
+first, restored by copy, byte-compared. The "red" column counts `string_nonlinear_harness.rs`,
+`string_nonlinear.rs` and `oracles.rs` **before** the added θ sweep.
+
+| breakage | red | caught by |
+|---|---|---|
+| **A** `tension_tol` ignored (1e-13 hard-coded) | 1 | the drift-by-tolerance bar, and nothing else in the workspace |
+| **B** hardening sign flipped (β negated) | 16 | the conservation, passivity, purity and frequency bars of both files |
+| **C** `stretch_int` uses the first end twice (exact on any sine mode) | 6 | the broadband pluck, the large single mode, the breakup, the tolerance bar, the steel run, the native association bar |
+| **D** step: θ fixed at 0.28 (exact at the default) | **0 → 1** | nothing in the workspace; now the θ sweep |
+| **E** energy: θ fixed at 0.28 (exact at the default) | **0 → 1** | nothing in the workspace; now the θ sweep |
+| **F** start-up: the ½ dropped | 3 | the Richardson bar, and the two `EA = 0` twin anchors |
+| **G** start-up: the `t = 0` tension dropped | 1 | the Richardson bar (orders fall to 0.51 / 1.08 / 1.17) |
+| **H** tension coefficient doubled in the solve only | 13 | the conservation and passivity bars, the shift, absolute and Richardson bars, the sub-threshold purity, the bracket bar |
+| **I** stretch-energy coefficient doubled | 8 | every conservation and passivity bar |
+| **J** step: the σ1 term's sign flipped | 4 | both passivity bars, both `EA = 0` anchors |
+| **K** material: second moment `/2` for `/4` | 1 | the NumPy record |
+| **L** oracle: `EA/(2ρ)` for `EA/(4ρ)` | 4 | the shift, absolute and Richardson bars, the native coefficient bar |
+| **M** oracle: the elliptic parameter's 2 → 4 | 5 | the shift, absolute and Richardson bars, both expansion bars |
+
+The single-witness and no-witness cases were re-planted against the whole workspace (§31's rule)
+with `cargo test --workspace --release --no-fail-fast` (`mutate.py --ws`):
+
+| breakage | red, workspace-wide |
+|---|---|
+| A | the drift-by-tolerance bar, alone |
+| D | **nothing** |
+| E | **nothing** |
+| F | 5: the Richardson bar, the two twin anchors, `physsynth-viewer`'s `tension::dt_over_t_matches_the_closed_form` and `frozen::d2` |
+| G | 2: the Richardson bar and `frozen::d2` |
+
+`frozen::d2` compares exactly only on the Windows CI job (§23.19); on Linux it checks structure.
+
+**F and G each have a physics witness**, and that differs from §30, §32 and §33. The Richardson bar
+compares the waveform with the exact `cn` solution, which starts at rest. So a start-up that
+injects a spurious velocity, or opens on the linear rather than the nonlinear frequency, costs
+an order of convergence. G took the orders from 2.97 / 2.40 / 2.25 to 0.51 / 1.08 / 1.17. So
+the eigenmode start-up bar of those batches was **not** added: the start-up is pinned by a bar
+that is not a copy.
+
+**D and E were taken to the human**, in plain terms, and the human chose §33's guard.
+`a_broadband_pluck_conserves_energy_at_every_theta` plucks at θ ∈ {0.25, 0.28, 0.5} and turns red on
+both. It is the broadband start rather than §33's single mode, because a pluck is this file's
+general case.
+
+### 34.5 The retirement rule, discharged
+
+| retired | native bar |
+|---|---|
+| `test_duffing_frequency_linear_limit_is_exact` | `oracles.rs::at_zero_eps_the_duffing_frequency_is_omega_zero_to_the_last_bit_at_three_scales` |
+| `test_duffing_frequency_matches_expansion_at_small_amplitude` | `oracles.rs::the_expansion_agrees_at_small_amplitude_and_is_simply_wrong_at_large` |
+| `test_duffing_elliptic_parameter_never_reaches_the_singularity` | `oracles.rs::a_hardening_duffings_parameter_never_reaches_the_pole` |
+| `test_duffing_displacement_starts_at_rest_and_degenerates_to_cosine` | `oracles.rs::the_waveform_starts_at_its_amplitude_and_is_a_cosine_at_zero_eps_at_the_harness_numbers` |
+| `test_kc_mode_stretch_matches_the_discrete_grid_exactly` | `the_modal_stretch_is_the_grids_own_stretch_exactly` — against a hand sum and the model's own `stretch` |
+| `test_kc_mode_coefficients_reduce_to_the_linear_string` | `oracles.rs::the_kirchhoff_carrier_coefficients_reduce_to_the_stiff_string_at_zero_ea` |
+| `test_duffing_oracle_rejects_nonphysical_input` | `oracles.rs::the_duffing_oracle_refuses_a_negative_ea_and_a_negative_omega_zero_squared` |
+| `test_EA_zero_is_model3_bit_identical` (3) | `ea_zero_is_model_three_bit_for_bit_at_the_pythons_fixture`, all three loss sets |
+| `test_lossless_drift_single_mode_large_amplitude` | `a_single_mode_at_large_amplitude_conserves_energy_where_the_stretch_dominates` |
+| `test_lossless_drift_plucked_broadband` | `a_broadband_pluck_conserves_energy_through_the_cross_mode_coupling` |
+| `test_drift_falls_with_tension_tol` | `the_drift_tracks_the_tension_solves_tolerance` |
+| `test_energy_non_negative_at_large_amplitude` | `the_energy_stays_non_negative_at_large_amplitude` |
+| `test_passivity_with_losses` | `losses_make_the_energy_monotone_from_a_pluck` |
+| `test_tension_only_ever_rises` | `the_tension_only_ever_rises_after_a_pluck` |
+| `test_mode_purity_is_structural_short_run` (3) | `a_single_mode_stays_single_per_step_at_any_amplitude` |
+| `test_single_mode_stays_pure_below_the_parametric_threshold` | `a_single_mode_stays_pure_below_the_parametric_threshold` |
+| `test_single_mode_breaks_up_above_threshold_while_energy_conserves` | `above_the_threshold_the_mode_breaks_up_while_the_energy_is_conserved` |
+| `test_amplitude_shift_matches_duffing` (3) | `the_amplitude_shift_lands_on_the_duffing_shift` |
+| `test_frequency_converges_to_the_exact_duffing_solution` | `the_waveform_converges_at_second_order_to_the_exact_duffing_solution` |
+| `test_absolute_frequency_matches_duffing_loosely` (2) | `the_absolute_frequency_lands_on_the_duffing_frequency_loosely` |
+| `test_pitch_rises_monotonically_with_amplitude_and_lands_on_the_linear_limit` | `the_pitch_rises_with_amplitude_and_lands_on_the_linear_string` |
+| `test_rejects_negative_EA`, `test_rejects_bad_tension_tol_and_boundary` | `the_pythons_three_refusals_are_the_right_variants`; `"fixed"` as `boundary_ok = false` |
+| `test_apply_Ainv_refuses_because_A_is_time_varying` | **no analogue**: the method does not exist natively (§34.2) |
+| `test_solver_telemetry_is_exposed` | `the_solver_telemetry_reports_a_clean_run` |
+| `test_string_at_rest_stays_at_rest` | `a_string_at_rest_stays_at_rest_with_no_energy` |
+| `test_material_helper_ratio_is_radius_independent` (3) | `the_material_ratio_is_radius_independent`, plus `the_material_helper_reproduces_numpys_arithmetic_to_the_bit` |
+| `test_material_helper_lands_in_the_real_steel_range` | `the_material_helper_lands_in_the_real_steel_range` |
+| `test_material_helper_feeds_the_core_consistently` | `the_material_helper_builds_a_string_that_runs_and_conserves_energy` |
+| `test_material_helper_rejects_nonphysical_input` | `the_material_helper_refuses_a_negative_modulus` — variant and prose |
+
+Orphans removed from `tests/helpers.py`: `measure_tension_mode_frequency`, whose only caller was the
+deleted file. `make_tension_string`, `mode_off_fraction` and `EA_DEFAULT` stay, because the geometric
+files still call them. Five comments that named the retired file now name the native bars:
+`duffing.rs`, `elliptic.rs` and its test, the binding's `string_nonlinear.rs`, and
+`plate_free_grain.rs`'s pointer at the retired helper below. `string_nonlinear.rs`'s module header
+no longer says the material helper stays in Python.
+
+**§27's loose end, closed.** `tests/test_stability.py`'s `test_arpack_oracles_are_bit_reproducible`
+had been reduced, by §30, to its free-plate half. That half guarded
+`tests/helpers.py::free_plate_low_eigenfrequencies`, and the helper's only remaining caller was the
+guard itself. Both are deleted. The second guard, `test_every_eigsh_call_in_the_tests_pins_v0`, is
+still live: the bore and the von Kármán free plate call `eigsh`, through `helpers.arpack_v0`. Its
+comment now says why it stands alone. `make_free_plate` stays, because `test_mallet_plate` calls it.
+`numpy` went from `test_stability.py`'s imports with the test.
+
+### 34.6 Cost and counts
+
+- **pytest 1,216 → 1,175**: the file's 39 cases, its one `test_xdist_groups` parametrisation and
+  the loose end's one test, reconciled per file against a worktree at `c3aa4f1` with
+  `--collect-only`.
+- **Native +30**: 24 in the new `string_nonlinear_harness.rs` and 6 in `oracles.rs`. The new file
+  takes 0.71 s in release (one thread) and 1.5 s in debug on the dev machine, so it stays in both
+  CI profiles by the default.
+- **41 physics files remain**, with **430** test functions by the §24.1 count (460 − 30).
+
+### 34.7 What is next
+
+Every string family but one is native. The geometrically exact string (`test_geometric_*`, six files)
+is the last, and it is the one that still imports the Python material helper. The human picks.

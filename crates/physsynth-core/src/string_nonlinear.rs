@@ -40,13 +40,13 @@
 //! downstream depends on this" expires the moment something downstream ports* — arriving one batch
 //! after it was written down. The reduction is now `portable.dot` on both sides.
 //!
-//! # What is deliberately absent
+//! # The material helper, ported late
 //!
-//! `string_coefficients_from_material` and its `StringCoefficients` named tuple stay in Python.
-//! They are a construction-time *modelling oracle* — six floats derived from a material and a
-//! radius, never touched again — so they are not on any trajectory, and reproducing a named
-//! tuple's tuple protocol through PyO3 would buy nothing measurable. §11.2.1's rule cuts this way:
-//! port the function group that is on the hot path, and name the half that is not.
+//! [`string_coefficients_from_material`] and its [`StringCoefficients`] were left in Python by the
+//! port, on §11.2.1's rule (port the hot path, name the half that is not): a construction-time
+//! *modelling oracle*, six floats derived from a material and a radius and never touched again.
+//! Python going to zero reversed that, and retirement plan §34 ported them when their tests
+//! retired. They are still not on any trajectory, and the binding still does not expose them.
 
 use crate::banded::{self, BandedError};
 use crate::fmt::py_float;
@@ -716,4 +716,85 @@ impl TensionModulatedString {
     pub fn nonlinear_energy(&self) -> f64 {
         nonlinear_energy(&self.u, &self.u_prev, &self.p)
     }
+}
+
+// -- the material helper (a modelling oracle, not a constraint) --------------------------------
+
+/// A physically consistent coefficient set for a plain (unwound) cylindrical string —
+/// `StringCoefficients`.
+///
+/// The model itself takes effective coefficients `(T, rho, kappa, EA)` that are mutually
+/// unconstrained — a string may be given steel's bending stiffness and rubber's axial stiffness,
+/// which is a feature (HANDOFF §12.J) and also the honest surface for wound strings. This set
+/// *offers* consistency with a real material; nothing imposes it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StringCoefficients {
+    /// Linear density (kg/m) `rho_v pi r^2`.
+    pub rho: f64,
+    /// Stiffness `sqrt(E I_area / rho)` (m^2/s), `I_area = pi r^4 / 4`.
+    pub kappa: f64,
+    /// Axial stiffness (N) `E pi r^2`.
+    pub ea: f64,
+    /// Transverse wave speed `sqrt(T / rho)` (m/s).
+    pub c: f64,
+    /// Longitudinal wave speed `sqrt(E / rho_v)` (m/s).
+    pub c_long: f64,
+    /// The governing nonlinearity ratio `EA / T0 = (c_long / c)^2`, which is radius-independent.
+    pub ea_over_t: f64,
+}
+
+/// Why a material was refused.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MaterialError {
+    /// One of `E`, `radius`, `rho_v`, `T` was not positive.
+    NonPositive,
+}
+
+impl std::fmt::Display for MaterialError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MaterialError::NonPositive => write!(f, "E, radius, rho_v, T must all be positive."),
+        }
+    }
+}
+
+impl std::error::Error for MaterialError {}
+
+/// Real material and geometry to a consistent `(rho, kappa, EA)` —
+/// `string_coefficients_from_material`.
+///
+/// `e` is Young's modulus (Pa), `radius` the string's radius (m), `rho_v` the volumetric density
+/// (kg/m^3) and `t` the rest tension (N), which sets the transverse wave speed.
+///
+/// The nonlinearity's governing ratio is radius-independent:
+/// `EA/T0 = E pi r^2 / (rho_v pi r^2 c^2) = E / (rho_v c^2) = (c_long / c)^2`. Hardening is set by
+/// the ratio of longitudinal to transverse wave speed; steel (`c_long ~ 5000 m/s`) at musical
+/// `c ~ 200-400 m/s` gives `EA/T0 ~ 150-600`.
+///
+/// `radius ** 2` and `radius ** 4` go through [`scalar_pow`], as the Python float powers did
+/// (§17.3), so every field is the Python's to the bit.
+///
+/// # Errors
+/// A non-positive input.
+pub fn string_coefficients_from_material(
+    e: f64,
+    radius: f64,
+    rho_v: f64,
+    t: f64,
+) -> Result<StringCoefficients, MaterialError> {
+    if e.min(radius).min(rho_v).min(t) <= 0.0 {
+        return Err(MaterialError::NonPositive);
+    }
+    let pi = std::f64::consts::PI;
+    let area = pi * scalar_pow(radius, 2.0);
+    let second_moment = pi * scalar_pow(radius, 4.0) / 4.0;
+    let rho = rho_v * area;
+    Ok(StringCoefficients {
+        rho,
+        kappa: (e * second_moment / rho).sqrt(),
+        ea: e * area,
+        c: (t / rho).sqrt(),
+        c_long: (e / rho_v).sqrt(),
+        ea_over_t: e * area / t,
+    })
 }

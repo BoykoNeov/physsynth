@@ -43,7 +43,7 @@ fn ellipj_is_hyperbolic_on_the_separatrix() {
 #[test]
 fn ellipj_degenerates_to_the_circular_functions_exactly() {
     // m = 0 terminates the Landen sequence before its first step, so this is not "close to cos" --
-    // it IS cos, and `tests/test_tension_string.py` leans on that at atol 1e-14.
+    // it IS cos, and `oracles.rs` leans on that at atol 1e-14.
     for &u in &[-3.5, -0.25, 0.0, 0.25, 1.0, 7.75] {
         let (sn, cn, dn) = ellipj(u, 0.0);
         assert_eq!(sn, u.sin(), "sn(u, 0) = sin u");

@@ -15,7 +15,6 @@ import pkgutil
 import subprocess
 import sys
 
-import numpy as np
 import pytest
 
 import physsynth.core
@@ -321,23 +320,11 @@ def test_core_does_not_import_sibling_layers():
 # run to run. Measured on the free-free beam: elastic eigenvalues wobble ~1e-12 relative, their
 # eigenvectors ~5e-11, and the two rigid-body modes come back as an arbitrary basis of the {1, x}
 # nullspace (~1e-1 apart). An eigenvector fed to `set_state` is an INITIAL CONDITION, so that is a
-# different trajectory, not a last-digit difference -- and it would read as a port bug. The first
-# test asserts the property; the second asserts it cannot be lost by adding a call site, which is
-# the shape of guard Sec 17.6 and Sec 23.7 record going quietly empty.
-
-
-def test_arpack_oracles_are_bit_reproducible():
-    # The beam's half went with its helper (retirement plan §30): the beam suite is native, and its
-    # eigenvalues are frozen in crates/physsynth-core/tests/reference/beam.json.
-    from helpers import free_plate_low_eigenfrequencies as fp
-    from helpers import make_free_plate
-
-    plate = make_free_plate(N=12)
-    first, second = fp(plate, 3), fp(plate, 3)
-    assert np.array_equal(first, second), (
-        f"free plate oracle is not bit-reproducible: {first} vs {second} -- an eigsh call lost "
-        "its pinned v0"
-    )
+# different trajectory, not a last-digit difference -- and it would read as a port bug. The test
+# below asserts the pin cannot be lost by adding a call site, which is the shape of guard Sec 17.6
+# and Sec 23.7 record going quietly empty. A second test used to assert the property itself, by
+# solving twice through a helper and comparing; the beam's half went with its helper (retirement
+# plan §30) and the free plate's half with the last (§34), whose only caller was that test.
 
 
 def test_every_eigsh_call_in_the_tests_pins_v0():

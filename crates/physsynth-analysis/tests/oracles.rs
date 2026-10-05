@@ -592,6 +592,94 @@ fn the_kirchhoff_carrier_coefficients_are_the_linear_and_cubic_halves() {
     );
 }
 
+// The tension-modulated string harness's oracle bars, carried from `tests/test_tension_string.py`
+// at its own numbers (retirement plan §34): `omega0² = 3.947e5` (mode 1 of the harness string,
+// rounded) and `eps = 5e7`. The stretch identity needs the core crate's grid and lives in
+// `crates/physsynth-core/tests/string_nonlinear_harness.rs`.
+
+#[test]
+fn at_zero_eps_the_duffing_frequency_is_omega_zero_to_the_last_bit_at_three_scales() {
+    // Carried from `test_duffing_frequency_linear_limit_is_exact`: `m = 0` and `K(0) = pi/2`
+    // cancel, at three decades of `omega0²` and a large amplitude that must not matter.
+    for w0sq in [1.0f64, 1e4, 3.947e5] {
+        let w = duffing_frequency(2.3, w0sq, 0.0).unwrap();
+        assert!(
+            (w / w0sq.sqrt() - 1.0).abs() <= 1e-15,
+            "{w} vs {}",
+            w0sq.sqrt()
+        );
+    }
+}
+
+#[test]
+fn the_expansion_agrees_at_small_amplitude_and_is_simply_wrong_at_large() {
+    // Carried from `test_duffing_frequency_matches_expansion_at_small_amplitude`: elliptic form vs
+    // the independent Lindstedt–Poincaré expansion. Agreement as A -> 0 is evidence both are right;
+    // at A = 0.3 the expansion is ~74 % off, which is why it is not the oracle.
+    let (w0sq, eps) = (3.947e5, 5.0e7);
+    let exact = duffing_frequency(1e-3, w0sq, eps).unwrap();
+    let approx = duffing_frequency_expansion(1e-3, w0sq, eps).unwrap();
+    assert!(
+        (exact - approx).abs() <= 1e-7 * approx,
+        "{exact} vs {approx}"
+    );
+    let exact = duffing_frequency(0.3, w0sq, eps).unwrap();
+    let approx = duffing_frequency_expansion(0.3, w0sq, eps).unwrap();
+    println!("A = 0.3: elliptic {exact}, expansion {approx}");
+    assert!((exact - approx).abs() / exact > 0.5, "{exact} vs {approx}");
+}
+
+#[test]
+fn a_hardening_duffings_parameter_never_reaches_the_pole() {
+    // Carried from `test_duffing_elliptic_parameter_never_reaches_the_singularity`. Hardening keeps
+    // `m` in [0, 1/2], strictly away from K(m)'s pole at 1; in floating point it ROUNDS to 1/2 at
+    // extreme amplitude, harmless since K(1/2) ~ 1.854. A softening spring would have no such bound.
+    let (w0sq, eps) = (3.947e5, 5.0e7);
+    for a in [0.0, 1.0, 1e4, 1e8] {
+        let m = duffing_elliptic_parameter(a, w0sq, eps).unwrap();
+        assert!((0.0..=0.5).contains(&m), "A = {a}: m = {m}");
+    }
+    assert!(duffing_elliptic_parameter(1.0, w0sq, eps).unwrap() < 0.5);
+    assert!(duffing_frequency(1e8, w0sq, eps).unwrap().is_finite());
+}
+
+#[test]
+fn the_waveform_starts_at_its_amplitude_and_is_a_cosine_at_zero_eps_at_the_harness_numbers() {
+    // Carried from `test_duffing_displacement_starts_at_rest_and_degenerates_to_cosine`, on the
+    // Python's 200-point window to 0.05 s and its `atol = 1e-14`.
+    let w0sq = 3.947e5;
+    let q0 = duffing_displacement(&[0.0], 0.07, w0sq, 5e7).unwrap()[0];
+    assert!((q0 / 0.07 - 1.0).abs() <= 1e-14, "{q0}");
+    let ts: Vec<f64> = (0..200).map(|i| 0.05 * i as f64 / 199.0).collect();
+    let q = duffing_displacement(&ts, 0.07, w0sq, 0.0).unwrap();
+    for (qi, &t) in q.iter().zip(&ts) {
+        let cosine = 0.07 * (w0sq.sqrt() * t).cos();
+        assert!((qi - cosine).abs() <= 1e-14, "t = {t}: {qi} vs {cosine}");
+    }
+}
+
+#[test]
+fn the_kirchhoff_carrier_coefficients_reduce_to_the_stiff_string_at_zero_ea() {
+    // Carried from `test_kc_mode_coefficients_reduce_to_the_linear_string`: `EA = 0` gives
+    // `eps = 0`, and `omega0² = c²p² + kappa²p⁴` is the linear stiff-string relation (written out
+    // here, with the harness's `kappa = 2`, so the bar does not repeat the oracle's spelling).
+    let p2 = 9.87;
+    let (w0sq, eps) = kc_mode_coefficients(200.0, 2.0, 0.0, 0.005, p2, 1.0).unwrap();
+    assert_eq!(eps, 0.0);
+    let want = 200.0 * 200.0 * p2 + 2.0 * 2.0 * p2 * p2;
+    assert!((w0sq / want - 1.0).abs() <= 1e-12, "{w0sq} vs {want}");
+}
+
+#[test]
+fn the_duffing_oracle_refuses_a_negative_ea_and_a_negative_omega_zero_squared() {
+    // Carried from `test_duffing_oracle_rejects_nonphysical_input`, with the prose asserted so the
+    // two refusals cannot stand in for each other (§32.4 D).
+    let err = kc_mode_coefficients(200.0, 2.0, -1.0, 0.005, 9.87, 1.0).unwrap_err();
+    assert_eq!(err, "EA (axial stiffness) must be >= 0.");
+    let err = duffing_frequency(0.1, -1.0, 1e7).unwrap_err();
+    assert_eq!(err, "omega0_sq must be positive, got -1");
+}
+
 // -- radiation (the piston oracle) -------------------------------------------------------------
 
 #[test]

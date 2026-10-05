@@ -14,7 +14,8 @@
 //!
 //! One degenerate case is exact rather than approximate and a test pins it: at `ε = 0` the
 //! parameter `m` is zero, `cn(u, 0) = cos u`, and `duffing_displacement` reduces to
-//! `A cos(ω₀t)` — which `tests/test_tension_string.py` compares against at `atol = 1e-14`.
+//! `A cos(ω₀t)` — which `tests/oracles.rs` compares against at `atol = 1e-14` (carried from the
+//! retired `tests/test_tension_string.py`, retirement plan §34).
 
 use crate::elliptic::{ellipj, ellipk};
 

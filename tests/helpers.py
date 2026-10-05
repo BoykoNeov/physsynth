@@ -228,40 +228,6 @@ def make_free_plate(
     )
 
 
-def free_plate_low_eigenfrequencies(
-    plate: Plate, n_modes: int, *, return_rigid: bool = False, lam1_hint: float | None = None
-):
-    """The ``n_modes`` lowest **elastic** eigenfrequencies (Hz) of a free ``plate`` (ascending).
-
-    Solves the generalized eigenproblem ``K φ = mu W φ`` (``mu = ω²/κ²``, the 4th-power spatial
-    eigenvalue). ``K`` is only **positive-semidefinite** (the 3-dim ``{1, x, y}`` rigid-body
-    nullspace), so shift-invert at ``sigma = 0`` is singular -- a small **negative** shift is used
-    (``K - sigma W`` SPD). The **3** rigid-body modes (``mu ≈ 0``) are discarded; each remaining
-    ``mu`` maps to ``f = kappa·sqrt(mu)/(2π)``. Degeneracy-robust (returns sorted values, so the
-    square plate's degenerate pairs appear as the near-equal entries they are). With
-    ``return_rigid=True`` the 3 discarded near-zero ``mu`` are also returned (a free cross-check of
-    the nullspace). The free-plate analogue of :func:`beam_low_eigenfrequencies`.
-    """
-    n_total = n_modes + 3  # + the 3 rigid-body modes to discard
-    a = plate.Lx
-    # lambda_1 ~ 13.47 for the isotropic square -> a safe (< mu_1) negative shift scale. A GRAINED
-    # free plate sits far lower (spruce: lambda_1 ~ 5.7, since the twist mode is governed by the
-    # torsional rigidity alone), so `lam1_hint` lets a caller scale the shift with the material. The
-    # default is left as the literal 13.0 so every shipped free-plate number is untouched.
-    mu1_est = ((13.0 if lam1_hint is None else lam1_hint) / (a * a)) ** 2
-    sigma = -1e-3 * mu1_est
-    mu = eigsh(
-        plate.K, k=n_total, M=plate.W, sigma=sigma, which="LM", return_eigenvectors=False,
-        v0=arpack_v0(plate.K),
-    )
-    mu = np.sort(mu)
-    rigid, elastic = mu[:3], mu[3:n_total]
-    freqs = plate.kappa * np.sqrt(np.clip(elastic, 0.0, None)) / (2.0 * np.pi)
-    if return_rigid:
-        return freqs, rigid
-    return freqs
-
-
 # Modal body (body/radiation node): a few guitar-top-ish modes. fs is high (audio rate) so every
 # mode sits well under the modal CFL omega*k < 2.
 BODY_FREQS_DEFAULT = np.array([110.0, 196.0, 261.0, 440.0])  # Hz
@@ -1027,37 +993,6 @@ def mode_off_fraction(u: np.ndarray, shape: np.ndarray, scale: float) -> float:
     """
     proj = np.dot(u, shape) / np.dot(shape, shape) * shape
     return float(np.linalg.norm(u - proj) / scale)
-
-
-def measure_tension_mode_frequency(
-    s: TensionModulatedString,
-    shape: np.ndarray,
-    *,
-    n_crossings: int = 10,
-    max_steps: int = 400_000,
-) -> float:
-    """Measure a mode's **nonlinear** frequency (Hz) from descending zero crossings of ``q(t)``.
-
-    Steps ``s`` in place. Uses the modal projection ``q = <u, shape>/<shape, shape>`` (maximal SNR
-    for any mode and any N, unlike a point pickup that may sit on a node) and linearly interpolates
-    each crossing. Zero crossings -- **not** ``spectrum.measure_partials_near``: its search window
-    is anchored on the *linear* frequency and simply misses a peak shifted tens of percent by
-    hardening (model #6's lesson, the same trap in a new model).
-    """
-    denom = float(np.dot(shape, shape))
-    prev = float(np.dot(s.state, shape)) / denom
-    times: list[float] = []
-    for n in range(1, max_steps + 1):
-        s.step()
-        cur = float(np.dot(s.state, shape)) / denom
-        if prev > 0.0 >= cur:
-            times.append((n - 1 + prev / (prev - cur)) * s.k)
-            if len(times) >= n_crossings:
-                break
-        prev = cur
-    if len(times) < 2:
-        raise RuntimeError(f"only {len(times)} crossings in {max_steps} steps -- can't measure")
-    return 1.0 / float(np.mean(np.diff(times)))
 
 
 # -- the 3-D air box (HANDOFF §12.H): the distributed tier of the air node ---------------

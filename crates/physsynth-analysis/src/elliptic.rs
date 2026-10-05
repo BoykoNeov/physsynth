@@ -29,7 +29,7 @@
 //!
 //! One case is exactly reproduced rather than approximately, and a test pins it: at `m = 0` the
 //! Landen sequence terminates before its first step (`c₀ = √0 = 0`), `φ` collapses to `u`, and
-//! `cn(u, 0) = cos(u)` on the nose — which is what `tests/test_tension_string.py` compares
+//! `cn(u, 0) = cos(u)` on the nose — which is what `tests/oracles.rs` compares
 //! `duffing_displacement(t, A, ω₀², 0)` against at `atol = 1e-14`.
 
 use std::f64::consts::PI;

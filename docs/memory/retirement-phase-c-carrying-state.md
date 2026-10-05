@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-c-carrying-state
-description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-8 done 2026-09-29 (every plate family, membrane, beam, ideal string); 44 files / 496 functions left"
+description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-11 done by 2026-10-05 (every plate family, membrane, beam, ideal/stiff/damped/tension string); 41 files / 430 functions left"
 metadata:
   node_type: memory
   type: project
@@ -33,9 +33,31 @@ breakages, delete the file.
   whole + the first 4 fns of `test_stability.py` (20 fns / 35 cases) → EXTENDED `tests/string_ideal.rs`
   (13 → 21) + one bar in `physsynth-analysis/tests/oracles.rs`. NO outside referee: nothing frozen. Orphans
   `make_string` and `measure_mode_frequencies` removed from helpers. 10 plants all red.
-Remaining after §31: **44 physics files / 496 functions** (re-count; the same count at §30's commit gives 512,
-not 510 — a counting-method gap). Next: stiff (20), damped (16) or tension (30) string. Next batch not
-chosen — the user picks the family; a recommendation + "go with it" is an accepted answer.
+- §32 batch 9 (human took the recommendation, "stiff string"): `test_stiff_string.py` (20 fns / 48 cases)
+  → NEW `tests/string_stiff_harness.rs` (12; not an extension: string_stiff.rs runs another fixture and holds
+  the both-profiles `squaring_is_pow_not_multiply`) + 3 in `ops.rs` + 5 in analysis `oracles.rs`. Nothing
+  frozen; every Python figure reproduced to the digit. 14 plants all red; start-up bar added (F).
+- §33 batch 10 (human took the recommendation, "damped string"): `test_damped_string.py` (16 fns / 28 cases)
+  → NEW `tests/string_damped_harness.rs` (14: 12 carried + start-up bar + θ sweep) + 6 in analysis `oracles.rs`
+  (5 carried + the analysis freeze's T60 row). `np.polyfit` decay fit transcribed + certified (gap 0). Every
+  Python figure reproduced to the digit. 14 plants; F (T60 const), H/I (θ hard-coded) seen by NOTHING
+  workspace-wide → asked the human, who chose to guard both. 3.5 s release / 15 s debug locally,
+  1.7 s / 27.3 s on CI (run 36622026049, green; debug job 7.8 min vs release 12.0): both profiles.
+  Review caught 3 prose overclaims (a miscounted bar list, an inferred catch written as measured,
+  a missing Windows-only caveat on the viewer freeze) — check §-prose against the logs before pushing.
+- §34 batch 11 (2026-10-05, human took the recommendation, "tension string"): `test_tension_string.py`
+  (30 fns / 39 cases) → NEW `tests/string_nonlinear_harness.rs` (24: 23 carried + a θ sweep) + 6 in analysis
+  `oracles.rs`. CORE GAINED `string_coefficients_from_material` (+ `StringCoefficients`, `MaterialError`) —
+  four tests were about the Python-only helper; ported unasked (plate precedent), NumPy's six fields asserted
+  to the bit. Python copy stays (geometric tests import it). Every trajectory figure reproduced to the digit;
+  only projection read-outs (np.dot BLAS) differ in last digits. 13 plants: A (tol ignored) only the tol bar;
+  D/E (θ hard-coded) seen by NOTHING → human chose the θ sweep; start-up plants F/G seen by the Richardson
+  bar (a physics bar, not a twin) → no start-up bar added. `apply_Ainv` refusal: no analogue (absent = type).
+  0.71 s release / 1.5 s debug: both profiles. §27's loose end closed (`test_arpack_oracles_are_bit_reproducible`
+  + `free_plate_low_eigenfrequencies` deleted). pytest 1,216 → 1,175.
+Remaining after §34: **41 physics files / 430 functions** (§24.1 count). Next: the geometric string (six
+`test_geometric_*` files, the last string family; it still imports the Python material helper). Next batch
+not chosen — the user picks the family; a recommendation + "go with it" is an accepted answer.
 Loose end (from §27): `test_arpack_oracles_are_bit_reproducible`'s surviving free-plate half guards a
 helper whose only caller is the guard itself.
 
@@ -109,6 +131,31 @@ helper whose only caller is the guard itself.
 - A refiner mutation can leave a bar green for a structural reason: when every tone lands on an exact FFT bin
   the parabolic correction is 0 whatever its sign (§31.4 J). Explain it, don't call it a gap.
 - §31 string_ideal.rs: 0.16 s release / 3.3 s debug locally, 0.36 s / 6.2 s on CI (run 36578409910, green) — both profiles.
+- A red TWIN anchor (two transcriptions compared) says two copies differ, not which is wrong — §32's
+  dropped-½ start-up was seen only by the stiff↔damped anchor (+ viewer freeze) until the exact eigenmode
+  start-up bar was added. Credit a plant to a physics bar, not to a twin.
+- The viewer freeze `physsynth-viewer --test frozen` is a second witness for string defects but compares
+  exactly only on Windows CI; on Linux it is structure only — say so when crediting it (§32.4).
+- A refusal bar must assert the error VARIANT: with the ρ check dropped, ρ=−1 still errors (NaN pivot →
+  NotFactorable), so `pytest.raises(ValueError)`-style "some error" would have passed (§32.4 D).
+- §32 string_stiff_harness.rs: 6.9 s release / 92 s debug locally, 8.1 s / 99.9 s on CI (run 36593245615,
+  green) — both profiles, but the debug job grew 6.0 → 7.3 min vs release 9.7: the gap is closing, weigh
+  `release_only` (ask the human) before the next long both-profile file.
+- The viewer freeze caught 5 of §32's 7 re-planted plants (A, B, F, J, K) — re-plant EVERY "only" claim
+  workspace-wide, including ones in the prose (§32.2's J/K claim was caught by the advisor, not by me).
+- A constant that appears on BOTH sides of a round trip cancels out of it (§33 F: T60 constant +1% passed
+  both inversion round trips). Pin it with an independent recorded answer (the analysis freeze's row).
+- A model PARAMETER every test builds at its default is unguarded (§33 H/I: damped θ hard-coded to 0.28 seen
+  by nothing). Grep the fixtures for the parameter's range, not just the model's bars.
+- If a plant is seen by NOTHING, ask the human (plain words, recommendation first) before adding or omitting a
+  bar; a third instance of an already-established bar (the start-up bar) was added without asking.
+- A Python-only HELPER whose tests are retiring gets ported into core unasked when a sibling precedent exists
+  (§34: the string material helper, after plate's `grain_ratios_from_material`); say so in the report.
+- Before adding the start-up bar, check whether a convergence bar against an exact solution already sees the
+  plant: §34's Richardson run dropped to first order under both start-up plants, so no bar was needed.
+- Projection read-outs (`np.dot` = BLAS) differ in the last digits from a left-to-right sum even when the
+  trajectory is bit-identical — attribute last-digit differences to the read-out, not the model (§34.1).
+- Bash heredocs choke on markdown with backticks: Write the section to a temp file, append with Python.
 - §29 core file: 3.4 s release / 59 s debug locally, 3.9 s / 37 s on CI (run 36546609975, green on Linux) — stayed in both profiles (debug job 3.0 min vs release 11.2).
 
 Related: [[python-retirement-state]], [[retirement-phase-d-state]], [[retirement-phase-a-state]],

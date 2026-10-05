@@ -4,7 +4,7 @@
 //! places, and every one of them is a thing `cargo test` cannot see.
 //!
 //! 1. **Four public telemetry attributes**, two of them integers: `delta_tension`, `converged`,
-//!    `bracket_expansions`, `n_not_converged`. `tests/test_tension_string.py` reads them, and
+//!    `bracket_expansions`, `n_not_converged`. the retired `tests/test_tension_string.py` read them, and
 //!    `bracket_expansions` is *cumulative and settable* on the Python object, so it is a getter
 //!    and a setter rather than a read-out.
 //! 2. **`apply_Ainv` raises.** Every other string in the family implements it; this one refuses,

@@ -137,9 +137,10 @@ fn centred(nx: usize, ny: usize, h: f64, f: impl Fn(f64, f64) -> f64) -> Vec<f64
     v
 }
 
-/// `tests/helpers.py::free_plate_low_eigenfrequencies` as the eigenvalues `mu = ω²/κ²`: the
-/// `n_modes` lowest ELASTIC ones, the three rigid-body modes discarded, by shift-invert at a small
-/// negative shift scaled by the caller's guess at the fundamental's frequency parameter.
+/// The retired `tests/helpers.py::free_plate_low_eigenfrequencies` as the eigenvalues
+/// `mu = ω²/κ²`: the `n_modes` lowest ELASTIC ones, the three rigid-body modes discarded, by
+/// shift-invert at a small negative shift scaled by the caller's guess at the fundamental's
+/// frequency parameter.
 fn low_elastic_mu(p: &Params, n_modes: usize, lam1_hint: f64) -> Vec<f64> {
     let a = p.lx;
     let mu1_est = (lam1_hint / (a * a)).powi(2);
