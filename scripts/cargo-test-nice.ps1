@@ -68,6 +68,17 @@ param(
     [string[]]$TestArgs = @()
 )
 
+# Run as `.\cargo-test-nice.ps1` or `& …` this script shares the CALLER'S session, so everything
+# it changes there is put back on every way out — above all the frozen skip list, which would
+# otherwise make every later plain `cargo test` in that window skip scenes without a word.
+$savedEnv = @{
+    PHYSSYNTH_FROZEN_SKIP = $env:PHYSSYNTH_FROZEN_SKIP
+    CARGO_MANIFEST_DIR    = $env:CARGO_MANIFEST_DIR
+}
+$savedPriority = [System.Diagnostics.Process]::GetCurrentProcess().PriorityClass
+$savedEap = $ErrorActionPreference
+
+function Invoke-Main {
 # Not 'Stop': under a host that captures stderr, PS 5.1 turns cargo's `Compiling` lines into
 # terminating NativeCommandErrors. Every failure below is checked explicitly instead.
 $ErrorActionPreference = 'Continue'
@@ -111,7 +122,7 @@ if (-not $Full) {
 $manifest = Join-Path $repo 'Cargo.toml'
 $json = & cargo test --workspace --release --no-run --manifest-path $manifest `
     --message-format=json-render-diagnostics
-if ($LASTEXITCODE -ne 0) { Write-Host '[cargo-test-nice] build FAILED'; exit $LASTEXITCODE }
+if ($LASTEXITCODE -ne 0) { Write-Host '[cargo-test-nice] build FAILED'; return $LASTEXITCODE }
 
 $bins = @()
 foreach ($line in $json) {
@@ -131,7 +142,7 @@ foreach ($line in $json) {
 $unknown = @($skipTests.Keys | Where-Object { $k = $_; -not ($bins | Where-Object Name -eq $k) })
 if ($unknown.Count) { throw "$skipFile names test binaries that do not exist: $($unknown -join ', ')" }
 if ($Filter) { $bins = @($bins | Where-Object { $_.Name -match $Filter }) }
-if ($bins.Count -eq 0) { Write-Host '[cargo-test-nice] no test binary matched'; exit 1 }
+if ($bins.Count -eq 0) { Write-Host '[cargo-test-nice] no test binary matched'; return 1 }
 
 # ---- longest first ------------------------------------------------------------------------------
 $known = @{}
@@ -219,7 +230,7 @@ $times | ConvertTo-Json | Set-Content -Encoding utf8 $durationsFile
 $docOk = $true
 if (-not $NoDoc -and -not $Filter) {
     Write-Host '[cargo-test-nice] doctests'
-    & cargo test --workspace --release --doc --manifest-path $manifest
+    & cargo test --workspace --release --doc --manifest-path $manifest | Out-Host
     $docOk = ($LASTEXITCODE -eq 0)
 }
 
@@ -242,5 +253,23 @@ if ($Full) {
 }
 foreach ($b in $bad) { Write-Host "  FAILED (exit $($b.Code)): $($b.Name)  log: $($b.Log)" }
 if (-not $docOk) { Write-Host '  FAILED: doctests' }
-if ($bad.Count -gt 0 -or -not $docOk) { exit 1 }
-exit 0
+if ($bad.Count -gt 0 -or -not $docOk) { return 1 }
+return 0
+}
+
+$code = 1
+try {
+    # Everything the body writes to the pipeline is the exit code alone: output goes to the host.
+    $code = Invoke-Main | Select-Object -Last 1
+} finally {
+    foreach ($k in $savedEnv.Keys) {
+        if ($null -eq $savedEnv[$k]) {
+            Remove-Item "Env:$k" -ErrorAction SilentlyContinue
+        } else {
+            Set-Item "Env:$k" $savedEnv[$k]
+        }
+    }
+    [System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = $savedPriority
+    $ErrorActionPreference = $savedEap
+}
+exit $code
