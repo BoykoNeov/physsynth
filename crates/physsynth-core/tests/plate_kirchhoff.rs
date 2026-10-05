@@ -606,15 +606,36 @@ fn all_finite(res: &SimResult) -> bool {
 #[test]
 fn no_nan_across_mu_on_either_boundary() {
     // The implicit theta-scheme (theta >= 1/4) has no CFL ceiling to reject, on either branch.
-    for mu in [0.1, 0.5, 2.0, 8.0, 32.0] {
-        assert!(
-            all_finite(&stability_run(plate(40, mu), 0.3)),
-            "supported, mu = {mu}"
-        );
-        assert!(
-            all_finite(&stability_run(free(32, mu), 0.3)),
-            "free, mu = {mu}"
-        );
+    // The ten runs are independent and the small-mu ones are long, so they run on threads; the
+    // assertions stay on this thread, in the order a serial loop would make them.
+    let runs: Vec<(String, bool)> = std::thread::scope(|s| {
+        let handles: Vec<_> = [0.1, 0.5, 2.0, 8.0, 32.0]
+            .into_iter()
+            .flat_map(|mu| {
+                [
+                    (
+                        format!("supported, mu = {mu}"),
+                        s.spawn(move || all_finite(&stability_run(plate(40, mu), 0.3))),
+                    ),
+                    (
+                        format!("free, mu = {mu}"),
+                        s.spawn(move || all_finite(&stability_run(free(32, mu), 0.3))),
+                    ),
+                ]
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|(label, h)| {
+                let ok = h
+                    .join()
+                    .unwrap_or_else(|_| panic!("{label}: the run panicked"));
+                (label, ok)
+            })
+            .collect()
+    });
+    for (label, ok) in runs {
+        assert!(ok, "{label}");
     }
 }
 

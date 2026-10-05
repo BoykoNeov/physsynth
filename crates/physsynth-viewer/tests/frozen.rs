@@ -508,17 +508,78 @@ fn corpora() -> Vec<String> {
     names
 }
 
-/// Run one corpus; panic listing every case with a difference outside its class.
-fn check(corpus: &str) {
-    let cases = load(corpus);
-    let (mut exact, mut within) = (0, 0);
-    let mut failing = Vec::new();
-    for (key, case) in &cases {
+/// Simulate and compare one case. A panic is caught so the failure can name its case.
+fn verdict_of(case: &Value) -> Result<Verdict, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let req = &case["request"];
         let model = physsynth_viewer::model_of(req);
         let got = simulate_to_payload(req);
         let mut v = Verdict::new();
         cmp(&case["expect"], &got, "", &model, &mut v);
+        v
+    }))
+    .map_err(|e| {
+        e.downcast_ref::<String>()
+            .cloned()
+            .or_else(|| e.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+            .unwrap_or_else(|| "a non-string panic".to_owned())
+    })
+}
+
+/// Every case's verdict, in the corpus's key order.
+///
+/// The cases share nothing (no crate in the workspace holds global state), so they run on a pool:
+/// a corpus's wall is otherwise the SUM of its scenes, and three of them are a minute each. Each
+/// worker takes the next case from a counter; the verdicts are put back in key order, so the
+/// failure message is the one a serial loop would write.
+fn verdicts(cases: &[(&String, &Value)]) -> Vec<Result<Verdict, String>> {
+    let workers = std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .min(cases.len())
+        .max(1);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut slots: Vec<Option<Result<Verdict, String>>> = (0..cases.len()).map(|_| None).collect();
+    std::thread::scope(|s| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                s.spawn(|| {
+                    let mut mine = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if i >= cases.len() {
+                            return mine;
+                        }
+                        mine.push((i, verdict_of(cases[i].1)));
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            for (i, v) in h.join().expect("verdict_of catches every panic") {
+                slots[i] = Some(v);
+            }
+        }
+    });
+    slots
+        .into_iter()
+        .map(|v| v.expect("every case was taken by a worker"))
+        .collect()
+}
+
+/// Run one corpus; panic listing every case with a difference outside its class.
+fn check(corpus: &str) {
+    let cases = load(corpus);
+    let (mut exact, mut within) = (0, 0);
+    let mut failing = Vec::new();
+    let ordered: Vec<(&String, &Value)> = cases.iter().collect();
+    for ((key, _), v) in ordered.iter().zip(verdicts(&ordered)) {
+        let v = match v {
+            Ok(v) => v,
+            Err(msg) => {
+                failing.push(format!("{key}: panicked: {msg}"));
+                continue;
+            }
+        };
         if !v.hard.is_empty() {
             // structure first: it is never a last bit
             let shown: Vec<&String> = v
