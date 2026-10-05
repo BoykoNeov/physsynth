@@ -54,7 +54,9 @@ breakages, delete the file.
   D/E (θ hard-coded) seen by NOTHING → human chose the θ sweep; start-up plants F/G seen by the Richardson
   bar (a physics bar, not a twin) → no start-up bar added. `apply_Ainv` refusal: no analogue (absent = type).
   0.71 s release / 1.5 s debug: both profiles. §27's loose end closed (`test_arpack_oracles_are_bit_reproducible`
-  + `free_plate_low_eigenfrequencies` deleted). pytest 1,216 → 1,175.
+  + `free_plate_low_eigenfrequencies` deleted). pytest 1,216 → 1,175. CI run 37302929849 green: 0.41 s release /
+  6.22 s debug (jobs 12.0 / 10.0 min). Material bar exact on glibc too: the six recorded UCRT `pow`s were
+  checked correctly rounded first (`fractions.Fraction`) — do that check for ANY bit-exact `pow` record.
 Remaining after §34: **41 physics files / 430 functions** (§24.1 count). Next: the geometric string (six
 `test_geometric_*` files, the last string family; it still imports the Python material helper). Next batch
 not chosen — the user picks the family; a recommendation + "go with it" is an accepted answer.

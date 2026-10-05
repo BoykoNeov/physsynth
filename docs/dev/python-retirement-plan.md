@@ -4877,12 +4877,16 @@ The material helper was NumPy arithmetic over four scalars, so its six fields ar
 referee. They were recorded at the file's three radii before the deletion (wheel freshly reinstalled,
 `W:\temp\claude\tension-string\python_record.txt`) and are asserted **to the bit** by
 `the_material_helper_reproduces_numpys_arithmetic_to_the_bit`. They match with `radius ** 2` and
-`** 4` spelled through `scalar_pow`, as §17.3 predicts.
+`** 4` spelled through `scalar_pow`, as §17.3 predicts. That makes the record **UCRT's `pow`**, and
+`pow` is the one operation in the helper that is not IEEE-exact. So the six powers were checked
+against the correctly rounded value (`fractions.Fraction`), and all six are correctly rounded. A
+correctly rounded `pow` on the Linux runner gives the same bits, and §34.8 records that it did.
 
 Everything else the Python compared against was a closed form in the test or already Rust through
 the binding (`triangular_pluck`, the Duffing oracle, `spatial_eigenvalue_p2`). The native twins
-reproduce every **trajectory** figure the Python recorded to every printed digit, including the
-mode-started runs, whose start vector is NumPy's `sin` on one side and the C library's on the other:
+reproduce every **trajectory** figure the Python recorded to every printed digit, on Windows. That
+includes the mode-started runs, whose start vector is NumPy's `sin` on one side and the C library's on
+the other, so on another C library it is not a promise:
 
 - both drifts, fractions and tension peaks;
 - the four drift-by-tolerance figures;
@@ -4963,8 +4967,8 @@ Every bar stays where the Python had it.
 
 **The breakup is seeded by roundoff.** It crossed 1e-3 at step 608 of 1,500 here and in the Python,
 on Windows. On another C library the seed differs, and the crossing step will move. The bar asserts
-only that breakup happens within 1,500 steps, a 2.5× margin in time. Whether Linux keeps it is
-measured by CI, below.
+only that breakup happens within 1,500 steps, a 2.5× margin in time. CI runs without
+`--nocapture`, so it reports whether the bar passes on Linux (§34.8), not the step it crosses at.
 
 ### 34.4 Thirteen deliberate breakages — two that nothing in the workspace could see
 
@@ -4976,7 +4980,7 @@ first, restored by copy, byte-compared. The "red" column counts `string_nonlinea
 |---|---|---|
 | **A** `tension_tol` ignored (1e-13 hard-coded) | 1 | the drift-by-tolerance bar, and nothing else in the workspace |
 | **B** hardening sign flipped (β negated) | 16 | the conservation, passivity, purity and frequency bars of both files |
-| **C** `stretch_int` uses the first end twice (exact on any sine mode) | 6 | the broadband pluck, the large single mode, the breakup, the tolerance bar, the steel run, the native association bar |
+| **C** `stretch_int` uses the first end twice (exact on any sine mode) | 6 | the broadband pluck, the large single mode, the breakup, the tolerance bar, the steel run, the native association bar. The two single-mode runs are far above the parametric threshold (peak T/T₀ = 10.25 in one; ΔT/T₀ ≈ 11 by the Python's estimate in the other), where roundoff breaks the mode's symmetry and C's error becomes real |
 | **D** step: θ fixed at 0.28 (exact at the default) | **0 → 1** | nothing in the workspace; now the θ sweep |
 | **E** energy: θ fixed at 0.28 (exact at the default) | **0 → 1** | nothing in the workspace; now the θ sweep |
 | **F** start-up: the ½ dropped | 3 | the Richardson bar, and the two `EA = 0` twin anchors |
@@ -5068,11 +5072,24 @@ comment now says why it stands alone. `make_free_plate` stays, because `test_mal
   the loose end's one test, reconciled per file against a worktree at `c3aa4f1` with
   `--collect-only`.
 - **Native +30**: 24 in the new `string_nonlinear_harness.rs` and 6 in `oracles.rs`. The new file
-  takes 0.71 s in release (one thread) and 1.5 s in debug on the dev machine, so it stays in both
-  CI profiles by the default.
+  takes 0.71 s in release on the dev machine (one thread; the 1.5 s debug figure was a parallel run
+  and is not comparable), so it stays in both CI profiles by the default. CI's figures are §34.8's.
+  Workspace: 1,432 passed in release.
 - **41 physics files remain**, with **430** test functions by the §24.1 count (460 − 30).
 
 ### 34.7 What is next
 
 Every string family but one is native. The geometrically exact string (`test_geometric_*`, six files)
 is the last, and it is the one that still imports the Python material helper. The human picks.
+
+### 34.8 On CI
+
+Run 37302929849 on `c048393`, all five jobs green, and the first Linux run of these bars:
+
+- `string_nonlinear_harness.rs` took **0.41 s** in the release job and **6.22 s** in the debug job.
+  The jobs took 12.0 and 10.0 minutes, so the debug job is still not the long pole and the file stays
+  in both profiles.
+- `the_material_helper_reproduces_numpys_arithmetic_to_the_bit` passed on glibc's `pow`, as the
+  correct-rounding check in §34.1 predicted.
+- The breakup bar passed on Linux. Its crossing step there is not printed, because CI runs without
+  `--nocapture`.
