@@ -1,5 +1,9 @@
 # Mallet–plate collision — model #7p, the strike on an *implicit* resonator
 
+> **2026-10-06: the Python tests this plan names are retired** (`docs/dev/python-retirement-plan.md`
+> §38). Their bars are `crates/physsynth-core/tests/mallet_plate_harness.rs`, at the retired
+> `make_mallet_plate`'s parameters; `mallet.rs`'s plate section keeps its own fixture.
+
 > **Status: BUILT & GREEN (2026-09-06).** `MalletPlate` in `crates/physsynth-core/src/mallet.rs`,
 > bound in `crates/physsynth-py/src/mallet.rs`, re-exported by `physsynth/core/mallet.py`.
 > Tests: `crates/physsynth-core/tests/mallet.rs` (+9 native bars, 21 in the file),

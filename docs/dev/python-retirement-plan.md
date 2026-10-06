@@ -6030,3 +6030,211 @@ slowest is 1.37 s), the felt-law bar's effect on F, G and O (re-planted: unchang
 unoptimised timings after that bar was added. "By no Python test" is marked as an inference, and
 §35.4's precedent is stated with its difference (an established bar kind there, a new one here).
 §37.7's remaining-file list is now all 28.
+
+## 38. Phase C, carrying batch 16 — the mallet on a plate
+
+Done 2026-10-06 (the human took the recommendation, "mallet on a plate"). Two files, retired whole:
+`tests/test_mallet_plate.py` and `tests/test_mallet_plate_signature.py` — **25 functions, 37 pytest
+cases** (32 + 5).
+
+The bars went to one new file and one extended one:
+
+- `crates/physsynth-core/tests/mallet_plate_harness.rs` — 24: 21 carried and 3 added (§38.4), at
+  the retired `make_mallet_plate`'s parameters (a 1 m square at `kappa = 20`, `rho = 0.005`,
+  `theta = 0.28`, `nu = 0.3`, `N = 24`, `mu = 1`, so `fs = 11,520 Hz`; a 20 g mallet, `K = 5e4`,
+  `alpha = 2.3`, at `(0.3, 0.4)` and 3 m/s; the binding's solve defaults). **Not `mallet.rs`'s
+  fixture** — that file's plate section is a 0.4 m plate at `kappa = 1`, `rho = 2`, `fs = 20 kHz`,
+  `N = 12` or `14`, and it stays as it is.
+- `crates/physsynth-core/src/engine.rs` — `impl Resonator for MalletPlate`, as §30 and §37 added the
+  beam's and the barrier's, so the Python's duck-typing test became "drive it through `simulate` and
+  check each method against the plate".
+
+### 38.1 The comparison — every figure reproduced
+
+Recorded first, wheel reinstalled (`W:\temp\claude\mallet-plate-batch\rec.txt`, the script beside
+it).
+
+**Start states bit-identical.** `plate_bump` on both boundaries at `N = 16` and `24`, on
+`make_free_plate`'s and on `make_plate`'s lossy plate — six vectors, every element the same double as
+NumPy's, including the free plate's mean removal (`np.mean` is pairwise; `reduce::sum` reproduces it).
+So the strike is the Python's strike step for step, and **every trajectory figure matches to all
+sixteen printed digits**: the column and admittance mismatches (`2.576289935681396e-16`,
+`1.9639975955745938e-16`), all four lossless drifts, the `N = 48` rig's `4.6669458421256926e-12`, the
+plate's share (`0.7249576871623167`), the tolerance triple, the three passivity rises and ends, the
+four read-out errors, the free and supported drifts (`9.80900545973403e-10`, `3.48e-13`), both curved
+outlines with their live-node counts (305, 226), the contact counts (547 / 447), the bounce (one,
+493 steps, exit `2.9685322596235153` m/s) and all four departures from scaling.
+
+**What differs is the read-outs.** The analytic mode shapes differ from NumPy's in the last bit or
+two (worst `6.9e-17`; the Python normalised twice, by the rms and then by the norm, and its sine is
+NumPy's). The mode projections and the free plate's weighted mean are `@` and `np.dot` in the Python
+(BLAS) and left-to-right sums here: the projections agree to fourteen or fifteen digits, the
+weighted-mean secants and the rigid drifts to about `1e-14` relative. The centre-strike nulls agree to
+three digits (`6.2155e-14` against `6.2171e-14` of the fundamental) because they ARE rounding — a
+cancellation to nothing, sixteen hundred times under the bar either way. The two centroids
+(`np.fft` → `physsynth_analysis::spectrum`) agree to fifteen and sixteen digits. Nothing was frozen.
+
+### 38.2 What the existing native bars could not see
+
+`mallet.rs`'s plate section (nine bars, written when the model was built) ran its own small fixture for up to 2,000 steps,
+and `physsynth-viewer` never builds a `MalletPlate` (its mallet scene is the drumhead) — grepped,
+both `src` and `tests`. What no native line had:
+
+- **The Python's runs.** Four felts over 4,000 steps; the 48-cell rig at sixteen times the
+  conditioning; the drift-versus-solve-tolerance scaling; three losses over 3,000 steps; the two
+  curved outlines; the coupling share. The native plate ran two felt exponents and one loss sweep.
+- **The free branch's attribution.** The read-out error's quadratic law in the rigid drift (no mallet
+  in the room) and the free-against-supported control on one mallet.
+- **Every signature.** Mode spread, the centre-strike null with its symmetric survivor, hard against
+  soft, the single bounce, and the felt exponent as the only source of dynamic timbre.
+- **Two identities.** `g == g_s + g_h`, and the struck field's orientation (the full-grid index of the
+  peak has the strike's `x` and `y`). `mallet.rs`'s snap bar checked the node against
+  `pickup_index_at`; the reported coordinates are now checked against the live nodes walked from the
+  mask, independently of the model's `live_coords`.
+
+**One Python assertion sharpens on the way.** `pytest.approx(rel=1e-14)` on the one-newton
+admittance kept its default `abs=1e-12`, which at `g_s = 5.5e-4` is a `1.8e-9` relative bar. The
+comment claimed `1e-14` relative, and that is what is asserted; measured 0 (supported) and `2.0e-16`
+(free).
+
+### 38.3 Every margin measured
+
+| bar | measured | bar |
+|---|---|---|
+| column vs forced step, supported / free | 2.6e-16 / 4.1e-16 | 1e-14 |
+| one newton vs admittance, supported / free | 0 / 2.0e-16 | 1e-14 relative |
+| lossless drift, worst of four (`alpha = 3`) | 6.3e-13 | 1e-10 |
+| `N = 48`, `mu = 4` drift | 4.7e-12 | 1e-10 |
+| plate share at peak | 0.725 | > 0.3 |
+| steps per felt half-period | 22.9 | ≥ 8 |
+| tolerance scaling: tight / loose over tight | 3.5e-13 / 1.5e6 | 1e-10 / > 100 |
+| passivity: worst rise / ends (`E0`) | 4.1e-13 / 0.984, 0.948, 0.970 | 1e-9 / < 0.99 |
+| read-out at zero mean momentum / spread of error ÷ drift² | 1.4e-15 J / 1.008 | 1e-14 / < 1.3 |
+| free / supported drift, supported ÷ free | 9.8e-10 / 3.5e-13, 3.5e-4 | 1e-8 / 1e-10, < 1e-2 |
+| recoil: secant / change in secant | 0.133 / 6.1e-10 relative | > 1e-6 / 1e-9 |
+| curved drift, circle / guitar (live nodes) | 6.1e-10 (305) / 2.4e-10 (226) | 1e-8 (< 441) |
+| modes above 1% / weakest counted | 6 of 7 / 0.018 | ≥ 6 / 0.01 |
+| centre null (2,1), (1,2) / off-centre / (3,3) survives | 6.2e-14, 5.3e-14 / 0.195, 0.083 / 0.014 | 1e-10 / > 1e-3 / > 1e-3 |
+| hard / soft: steps with force, centroid | 447 / 547, 59.2 / 33.6 Hz | hard shorter, brighter |
+| bounce: contacts / exit velocity | 1 / +2.969 m/s | == 1 / > 0 |
+| departure from scaling, `alpha` = 1 / 1.5 / 2.3 / 3 | 7.6e-13 / 0.19 / 0.62 / 0.71 | 1e-10 / > 0.05 / monotone |
+| felt law (added) | equal at every step, 495 with a force | `==`, > 100 |
+| acceleration vs second difference (added) | 2.8e-16 of max \|u\| | 1e-14 |
+| pre-set plate: `u` at the strike node (added) | 6.2e-5 m against a 5e-6 m gap | > 10 × gap |
+
+The thinnest, all the Python's own bars and left where it had them: **the recoil's constant
+velocity, 1.65x** (`6.1e-10` against `1e-9`), **the weakest counted mode, 1.8x** (the (3,1) at 1.8%
+of the fundamental against 1%), and the `sigma = 2` passivity end, **1.6% lost against the 1%
+required**.
+
+### 38.4 Fourteen breakages — three that nothing in the workspace could see
+
+Planted one at a time with `W:\temp\claude\mallet-plate-batch\mutate.py` (snapshot, restore by copy,
+byte-compare). "Red" counts `mallet_plate_harness`, `mallet`, `mallet_gong`,
+`mallet_membrane_harness` and `mallet_room_gong`; the counts are the final round, with the three
+added bars in place.
+
+| breakage | red | caught by |
+|---|---|---|
+| **A** the strike corrects `u` but leaves `accel` stale | 1 | the acceleration bar, added for it; **0 workspace-wide before** |
+| **B** felt stiffness read 1% high (force AND potential), plate path only | 2 | the felt-law bar, added for it; before, only the linear-gong twin anchor |
+| **C** the influence column without the nodal mass `force_denominator` | 15 | the column and admittance bars, conservation, passivity, the signatures |
+| **D** `eta_prev` read after the plate's advance | 11 | conservation and passivity, the felt law, the dynamic-timbre bar |
+| **E** strike coordinates read from the full grid at the live index | 4 | the snap bars (both files), the orientation bar, the centre null |
+| **F** displacement injected with the wrong sign | 20 | nearly everything |
+| **G** the mallet's admittance dropped from `g` | 10 | the admittance identity, conservation, passivity |
+| **H** `g_s` 1% off the column's own entry | 10 | the admittance bars, conservation, passivity |
+| **I** the acceleration correction without its `1/k^2` | 2 | the acceleration bar; before, only `mallet.rs`'s column bar |
+| **L** the mallet seeded against node 0, not the strike node | 1 | the pre-set-plate bar, added for it; **0 workspace-wide before** |
+| **O** the scalar solve ignores its tolerance | 1 | the tolerance-scaling bar |
+| **P1** test helper: `plate_bump` keeps its mean on the free plate | 0 | — |
+| **P2** test helper: the centroid without its mean removal | 0 | — |
+| **P3** test helper: the centroid without its Hann window | 0 | — |
+
+Re-planted workspace-wide (§31's rule) for every one with two or fewer witnesses, before the three
+bars were added: **A 0, L 0, B 1** (the twin anchor), **I 1** (`mallet.rs`'s column bar), **O 1**
+(the tolerance bar) — no binary outside the five files saw any of them.
+
+Four readings:
+
+- **A was the reviewer's prediction, measured.** The energy never reads `accel`, and the one test
+  that does — `mallet.rs`'s column bar — calls `plate_inject` directly, so it cannot see the step
+  forgetting to. A struck plate whose `pressure()` reports the unstruck plate passed everything, and
+  by reading no Python test could see it either: the retired files asserted only that `pressure()`
+  returns a float, and `tests/test_mallet_gong.py`, the one Python file left that builds a
+  `MalletPlate`, never reads its `accel` or `pressure()`. The
+  human chose a bar: through a real strike, at every node and every step, `accel` must be the plate's
+  own second difference. It sees A and I.
+- **L could not be seen from rest.** Every fixture starts the plate at rest, where every node reads
+  zero, so seeding the mallet against the wrong node changes no number. The human chose a bar: the
+  plate is pre-set with the bump, the mallet starts 5e-6 m above it, and the starting penetration
+  must be the strike node's displacement less the gap — the felt starts compressed, which a reading at
+  the corner (3e-21 m) would deny.
+- **B is §37's J again, on the plate's own path.** A consistent 1% stiffness conserves perfectly; only
+  the linear-gong anchor saw it, and a red twin says two copies differ, not which. The plate twin of
+  §37's felt-law bar was added **without asking**, on §37.4's precedent, and the human was told.
+- **C was expected to be a lossy-only plant and is not**: `force_denominator` is the nodal mass
+  (`rho h^2` supported, `rho` free), not the `(1 + sigma k)` loss factor, so dropping it mis-scales
+  every strike. The loss factor lives in the plate's own `A` and the plate's own bars. **P1–P3 are not
+  gaps**: the mean removal exists for the radiation scenes (a net piston drowns the other channels),
+  and a static mean is not a momentum, so the read-out bar is unmoved; the hard/soft centroid gap
+  (1.76x) absorbs the 0 Hz bin and the window alike.
+
+### 38.5 The retirement rule, discharged
+
+| retired | native bar |
+|---|---|
+| `test_the_influence_column_reproduces_a_forced_step_at_every_node` (2) | `mallet_plate_harness.rs::the_influence_column_reproduces_a_forced_step_at_every_node` |
+| `test_one_newton_moves_the_strike_node_by_the_admittance` (2) | `…::one_newton_moves_the_strike_node_by_the_admittance` (sharpened, §38.2) |
+| `test_the_strike_snaps_to_a_node_and_says_where` | `…::the_strike_snaps_to_a_node_and_says_where` |
+| `test_the_struck_field_is_oriented_the_way_the_coordinates_are` | `…::the_struck_field_is_oriented_the_way_the_coordinates_are` |
+| `test_supported_lossless_energy_conserved` (4) | `…::supported_lossless_energy_is_conserved` |
+| `test_the_bar_is_not_fitted_to_one_rig` | `…::the_bar_is_not_fitted_to_one_rig` |
+| `test_strike_actually_couples` | `…::the_strike_actually_couples` |
+| `test_the_felt_is_resolved_on_the_shipped_defaults` | `…::the_felt_is_resolved_on_the_shipped_defaults` |
+| `test_drift_scales_with_newton_tolerance` | `…::the_drift_scales_with_the_newton_tolerance` |
+| `test_loss_only_removes_energy` (3) | `…::loss_only_ever_removes_energy` |
+| `test_missing_mallet_is_bit_identical_to_bare_plate` | `…::a_mallet_that_never_touches_is_the_bare_plate_to_the_bit` |
+| `test_the_free_readout_error_is_quadratic_in_the_rigid_drift` | `…::the_free_readout_error_is_quadratic_in_the_rigid_drift` |
+| `test_free_strike_conserves_within_the_readouts_reach` | `…::a_free_strike_conserves_within_the_readouts_reach` |
+| `test_a_struck_free_plate_recoils` | `…::a_struck_free_plate_recoils` |
+| `test_a_curved_free_plate_is_struck_too` (2) | `…::a_curved_free_plate_is_struck_too` |
+| `test_the_scalar_checks_are_the_membrane_models` (5) | `mallet.rs::the_plate_mallet_refuses_what_the_membrane_mallet_refuses` + `the_refusal_messages_are_the_pythons` — each Python regex is a substring of its variant's message, checked |
+| `test_mallet_plate_is_a_resonator` | `…::the_struck_plate_runs_through_the_resonator_interface` (+ `impl Resonator`); the `isinstance` half is a type |
+| `test_a_nonlinear_plate_is_refused_and_the_message_names_the_model_that_takes_one` | **no analogue**: `MalletPlate` holds a `plate::Plate`, so a gong cannot be handed to it — a refusal about the argument's *shape* becomes a type (§14). The "not affine" message stays asserted by `tests/test_mallet_gong.py` until that file retires; naming `MalletVKPlate` is the binding's prose |
+| `test_aliasing_the_two_state_buffers_is_survivable` | **no analogue**: two NumPy buffers made one object through public setters; two `Vec`s cannot alias, and the binding that could goes with Python |
+| `test_the_plate_handed_in_is_the_plate_held` | **no analogue**: Python object identity; the native model owns its plate by value (§16(e)'s kind) |
+| `test_strike_excites_many_modes` | `…::a_strike_excites_many_modes` |
+| `test_a_centre_strike_nulls_the_antisymmetric_modes` | `…::a_centre_strike_nulls_the_antisymmetric_modes` |
+| `test_a_harder_felt_makes_a_shorter_brighter_strike` | `…::a_harder_felt_makes_a_shorter_brighter_strike` |
+| `test_the_mallet_bounces_and_flies_clear` | `…::the_mallet_bounces_and_flies_clear` |
+| `test_the_felt_exponent_is_the_only_source_of_dynamic_timbre` | `…::the_felt_exponent_is_the_only_source_of_dynamic_timbre` |
+
+**Orphans removed from `tests/helpers.py`**, each name grepped alone: `make_mallet_plate`,
+`MALLET_PLATE_MU_DEFAULT`, `MALLET_PLATE_N_DEFAULT`, `MALLET_MASS_DEFAULT`,
+`MALLET_VELOCITY_DEFAULT`, `make_free_plate`, `plate_bump`, `plate_mode_shape`. They stay:
+`make_plate` (`test_resolution_horizon.py`), `MALLET_K_DEFAULT` and `MALLET_ALPHA_DEFAULT`
+(`make_mallet_gong`), the `MalletPlate` import (`gong_linear_twin`), and the `PLATE_THETA_DEFAULT`
+import — its only use in the file went with `make_mallet_plate`, but `test_resolution_horizon.py`
+imports it from `helpers`, so it is now marked as a re-export (`# noqa: F401`), which is ledger
+#66's `ruff --fix` hazard in another form. `make_mallet_gong`'s docstring no longer names the
+retired helper. `docs/dev/mallet-plate-plan.md` has a pointer at the top.
+
+### 38.6 Cost and counts
+
+- **pytest 972 → 935**: the two files' 37 cases, reconciled with `--collect-only` against a worktree
+  at the previous commit (32 + 5); every other file's count unchanged. 935 passed.
+- **Native +24**: workspace 1,542 → 1,566 optimised (`scripts/cargo-test-nice.ps1 -Full`), all
+  green.
+- **Both CI profiles.** The harness takes 0.70 s optimised and 17.6 s unoptimised locally, under
+  §32's 92 s file. Timed alone (`--exact`, one thread), the slowest test is the four-felt lossless
+  sweep at 0.60 s, under the quick lane's 2-second cut-off, so `scripts/quick-skip.txt` is unchanged.
+- **26 physics files remain**, with **294** test functions by the §24.1 count (319 − 25). The mallet
+  on a gong (`test_mallet_gong.py`) is the last contact file.
+
+### 38.7 What is next
+
+The next batch is not chosen; the human picks. The 26 files, by family: the bow (`test_bow_*`, 3),
+the reed (`test_reed_*`, 3), the bore (`test_bore_*`, 4), the body (1), the mallet on a gong (1), the
+gong plate (`test_vk_*`, 6), the room (`test_airbox_*`, 4), radiation (1), the resolution horizon
+(1), the spectrum detector (1) and the operators (1).

@@ -15,7 +15,7 @@
 use crate::beam::FreeBeam;
 use crate::bow::BowedString;
 use crate::collision::BarrierString;
-use crate::mallet::MalletMembrane;
+use crate::mallet::{MalletMembrane, MalletPlate};
 use crate::membrane::Membrane;
 use crate::plate::Plate;
 use crate::string_damped::DampedStiffString;
@@ -338,5 +338,26 @@ impl Resonator for BarrierString {
     }
     fn timestep(&self) -> f64 {
         self.string.p.k
+    }
+}
+
+/// The plate struck by a mallet — added with model #7p's acceptance bars (retirement plan §38), as
+/// the drumhead's and the barrier's were. `state` is the plate's full node field, so a struck plate
+/// and a bare one read the same way.
+impl Resonator for MalletPlate {
+    fn step(&mut self) -> Result<(), String> {
+        MalletPlate::step(self).map_err(|e| e.to_string())
+    }
+    fn energy(&self) -> f64 {
+        MalletPlate::energy(self)
+    }
+    fn state(&self) -> Vec<f64> {
+        self.plate.state()
+    }
+    fn displacement_at(&self, index: usize) -> f64 {
+        self.plate.u[index]
+    }
+    fn timestep(&self) -> f64 {
+        self.params().k
     }
 }

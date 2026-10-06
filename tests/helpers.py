@@ -21,7 +21,7 @@ from physsynth.core.bore import C0_AIR, RHO0_AIR, Bore
 from physsynth.core.bow import BowedString
 from physsynth.core.mallet import MalletPlate, MalletVKPlate
 from physsynth.core.membrane import Domain, Membrane
-from physsynth.core.plate import THETA_DEFAULT as PLATE_THETA_DEFAULT
+from physsynth.core.plate import THETA_DEFAULT as PLATE_THETA_DEFAULT  # noqa: F401 (re-export)
 from physsynth.core.plate import Plate, VKPlate
 from physsynth.core.radiation import (
     AirRadiation,
@@ -195,33 +195,6 @@ def make_plate(
     h = Lx / N
     fs = kappa / (mu * h * h)
     return Plate(Lx=Lx, Ly=Ly, kappa=kappa, rho=rho, fs=fs, N=N, sigma=sigma, theta=theta)
-
-
-def make_free_plate(
-    *,
-    N: int,
-    mu: float = MU_PLATE_DEFAULT,
-    kappa: float = KAPPA_PLATE_DEFAULT,
-    nu: float = 0.3,
-    sigma: float = 0.0,
-    theta: float = THETA_DEFAULT,
-    a: float = 1.0,
-    rho: float = RHO_AREAL_DEFAULT,
-) -> Plate:
-    """Build a **completely free** square plate (side ``a``) at plate-Courant number ``mu``.
-
-    The free-edge (FFFF, curved-Chladni) counterpart of :func:`make_plate` (model #5b). Square by
-    construction (``Lx = Ly = a``, no ``Ly``-snapping), which is the geometry of the Leissa anchor.
-    ``h = a/N`` is fixed, so ``fs = kappa/(mu h²)`` hits the target ``mu`` (no CFL ceiling — the
-    implicit theta-scheme is unconditionally stable for ``theta >= 1/4``). ``nu`` (Poisson's ratio,
-    default 0.3) re-enters for free edges.
-    """
-    h = a / N
-    fs = kappa / (mu * h * h)
-    return Plate(
-        Lx=a, Ly=a, kappa=kappa, rho=rho, fs=fs, N=N, sigma=sigma, theta=theta,
-        boundary="free", nu=nu,
-    )
 
 
 # Modal body (body/radiation node): a few guitar-top-ish modes. fs is high (audio rate) so every
@@ -469,70 +442,14 @@ def make_reed_bore(
     return ReedBore(bore=bore, p_mouth=p_mouth, f_reed=f_reed, q_reed=q_reed)
 
 
-# The mallet's felt (model #7), shared by the plate and gong helpers below. The drumhead helpers
-# `make_mallet` and `make_mallet_wall` retired with their tests (retirement plan §37); the
-# drumhead's bars are `crates/physsynth-core/tests/mallet_membrane_harness.rs`, at these numbers.
-MALLET_MASS_DEFAULT = 0.02      # kg
+# The mallet's felt (model #7), shared by the gong helpers below. The drumhead helpers `make_mallet`
+# and `make_mallet_wall` retired with their tests (retirement plan §37), and the plate helper
+# `make_mallet_plate` with its own (§38); their bars are
+# `crates/physsynth-core/tests/mallet_membrane_harness.rs` and `mallet_plate_harness.rs`, at these
+# numbers and the retired mallet's 20 g at 3 m/s.
 MALLET_K_DEFAULT = 5.0e4        # N/m^alpha  (felt stiffness)
 MALLET_ALPHA_DEFAULT = 2.3      # felt exponent (piano-ish)
-MALLET_VELOCITY_DEFAULT = 3.0   # m/s impact speed toward the head
 
-
-# Mallet on a PLATE (model #7p). The same felt and mallet as the retired drumhead helper, against an
-# *implicit* resonator instead of an explicit one -- which is the whole difference, and the reason
-# the default `mu` here is 1.0 rather than the plate suite's 2.0. `mu` sets the timestep
-# (`fs = kappa / (mu h^2)`), and the felt does not care about the plate's Courant number, it cares
-# about its own half-period `pi*sqrt(M/K)` ~ 1.99 ms: at `mu = 1, N = 24, Lx = 1` that is
-# `fs = 11520 Hz` and ~23 steps through the contact, against the 8 below which the model warns.
-# Raising `mu` or coarsening `N` lowers `fs` and will eventually under-resolve the strike, so
-# `test_mallet_plate.py` asserts `steps_per_contact` on the shipped defaults rather than trusting
-# this comment.
-MALLET_PLATE_MU_DEFAULT = 1.0
-MALLET_PLATE_N_DEFAULT = 24
-
-
-def make_mallet_plate(
-    *,
-    N: int = MALLET_PLATE_N_DEFAULT,
-    mu: float = MALLET_PLATE_MU_DEFAULT,
-    kappa: float = KAPPA_PLATE_DEFAULT,
-    K: float = MALLET_K_DEFAULT,
-    mass: float = MALLET_MASS_DEFAULT,
-    alpha: float = MALLET_ALPHA_DEFAULT,
-    hysteresis: float = 0.0,
-    strike_x: float = 0.3,
-    strike_y: float = 0.4,
-    strike_velocity: float = MALLET_VELOCITY_DEFAULT,
-    gap: float = 0.0,
-    sigma: float = 0.0,
-    boundary: str = "supported",
-    domain: str = "rectangle",
-    Lx: float = 1.0,
-    Ly: float = 1.0,
-    nu: float = 0.3,
-    theta: float = PLATE_THETA_DEFAULT,
-    rho: float = RHO_AREAL_DEFAULT,
-) -> MalletPlate:
-    """Build a mallet striking a Kirchhoff plate (model #7p).
-
-    ``boundary="supported"`` is a struck soundboard, ``boundary="free"`` a suspended cymbal --
-    which **recoils**, because a point strike feeds the free plate's ``{1, x, y}`` rigid nullspace
-    and nothing holds the mean. ``sigma = 0`` with ``hysteresis = 0`` gives the lossless
-    conservation money test, either one positive the passivity test.
-
-    The strike defaults to ``(0.3 Lx, 0.4 Ly)``: off every low mode's symmetry axis, so no partial
-    is nulled by accident. Move it to the centre deliberately when that is the point.
-    """
-    h = Lx / N
-    fs = kappa / (mu * h * h)
-    plate = Plate(
-        Lx=Lx, Ly=Ly, kappa=kappa, rho=rho, fs=fs, N=N, sigma=sigma, theta=theta,
-        boundary=boundary, domain=domain, nu=nu,
-    )
-    return MalletPlate(
-        plate=plate, mass=mass, stiffness=K, alpha=alpha, hysteresis=hysteresis,
-        strike_x=strike_x * Lx, strike_y=strike_y * Ly, strike_velocity=strike_velocity, gap=gap,
-    )
 
 # Mallet on a GONG (model #7g) -- the nested solve. The same felt again, now against a *nonlinear*
 # resonator, so there is no drive-point influence column and the contact force is found by an outer
@@ -586,9 +503,10 @@ def make_mallet_gong(
 
     ``boundary="supported"`` is a gong and ``"free"`` a suspended cymbal -- which **recoils**, and
     whose energy read-out is therefore a read-out bar rather than an energy bar, exactly as it is
-    for the linear :func:`make_mallet_plate`. ``nonlinear=False`` is the regression path: the plate
-    is then affine in the contact force, the outer loop exits at one iteration, and the whole model
-    reduces to :func:`make_mallet_plate` on :func:`gong_linear_twin`.
+    for the linear ``MalletPlate`` (``crates/physsynth-core/tests/mallet_plate_harness.rs``).
+    ``nonlinear=False`` is the regression path: the plate is then affine in the contact force, the
+    outer loop exits at one iteration, and the whole model reduces to the linear ``MalletPlate``
+    :func:`gong_linear_twin` builds.
 
     ``rho`` inside ``material`` is the plate's **volumetric** density, as :class:`VKPlate` spells
     it. Rectangles only: :class:`VKPlate` has no outline argument, so #7p's "the outline is free"
@@ -815,37 +733,6 @@ def gaussian_pulse(fs: float, f0: float, *, amplitude: float = 1e-3, widths: flo
         )
 
     return q, qdot, 2.0 * widths * sigma
-
-
-def plate_bump(plate: Plate, amplitude: float = 1e-3) -> np.ndarray:
-    """A smooth off-centre bump on ``plate``'s live nodes — the generic struck initial condition.
-
-    Off-centre so it is not orthogonal to the antisymmetric modes. The free plate gets its mean
-    removed: a net piston is the most efficient radiator the geometry has (see §7.8), so leaving it
-    in would drown every other channel within a few hundred steps.
-    """
-    x, y = plate.X[plate.mask], plate.Y[plate.mask]
-    width = 0.08 * plate.Lx
-    u0 = amplitude * np.exp(
-        -(((x - 0.42 * plate.Lx) ** 2 + (y - 0.38 * plate.Ly) ** 2) / (width * width))
-    )
-    return u0 if plate.boundary == "supported" else u0 - u0.mean()
-
-
-def plate_mode_shape(plate: Plate, m: int, n: int) -> np.ndarray:
-    """The **exact** discrete mode ``sin(m pi x/Lx) sin(n pi y/Ly)`` of a supported plate, rms 1.
-
-    Exact because ``B = L^2`` keeps the sine product an eigenvector of the scheme, which is what
-    makes ``sum_i sin(m pi i/N) = 0`` for even ``m`` an *identity* rather than an approximation —
-    i.e. what makes an even-index mode's net volume displacement exactly zero.
-    """
-    if plate.boundary != "supported":
-        raise ValueError(
-            "the closed-form sine mode is the supported plate's; #5b has no such form."
-        )
-    x, y = plate.X[plate.mask], plate.Y[plate.mask]
-    shape = np.sin(m * np.pi * x / plate.Lx) * np.sin(n * np.pi * y / plate.Ly)
-    return shape / np.sqrt(np.mean(shape * shape))
 
 
 def vk_strike(vk: VKPlate, amplitude: float | None = None, width: float = 0.20) -> np.ndarray:
