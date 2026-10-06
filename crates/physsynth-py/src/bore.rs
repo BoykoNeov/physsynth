@@ -8,9 +8,9 @@
 //! `bow` and every continuous exciter after it.
 //!
 //! The answer, measured rather than assumed (§12.8): the hook stays a **general Python callable**.
-//! `tests/test_reed_stability.py` passes its own `lambda p: None` to assert the hook is inert when
-//! unused, so it is not merely the reed's private channel and porting `reed` removes the *hot*
-//! crossing, not the capability. So:
+//! `tests/test_reed_stability.py` (retired, retirement plan §42) passed its own `lambda p: None`
+//! to assert the hook is inert when unused, so it is not merely the reed's private channel and
+//! porting `reed` removes the *hot* crossing, not the capability. So:
 //!
 //! - `physsynth_core::bore::Source` is a plain Rust closure — a PyO3 type inside `physsynth-core`
 //!   would break exactly what `crates/physsynth-core/tests/deps.rs` guards.
@@ -32,7 +32,8 @@
 //!
 //! `Lop` and `Cmat` are the membrane's `L` problem again, and the measurement that settles it is
 //! §12.8's: `tests/helpers.py`, `tests/test_bore_energy.py`, `tests/test_bore_modal.py` and
-//! `web/serialize.py` all reach for them, with fancy indexing (`bore.Lop[dof][:, dof]`), with `.T`
+//! `web/serialize.py` (all four since retired from that use, the last at retirement plan §42) all
+//! reached for them, with fancy indexing (`bore.Lop[dof][:, dof]`), with `.T`
 //! and `.max()`, and as the `M=` argument of a generalized `eigsh`. They must be real
 //! `scipy.sparse` objects on the instance, built once — so the constructor builds them here, as
 //! `membrane` does. `physsynth-py` is a SciPy client; `physsynth-core` is not.
@@ -57,7 +58,7 @@
 //!
 //! # Private names are part of the surface, for the third time
 //!
-//! `_open_left` and `_open_right` are read by `tests/test_bore_radiation.py` and by
+//! `_open_left` and `_open_right` were read by `tests/test_bore_radiation.py` (retired, §42) and by
 //! `web/serialize.py`; `_bc_left` is read by `reed.py`, which refuses to build on a bore whose
 //! mouthpiece end is not `"closed"`. Measured by grep, not guessed — plan §1.2 and §12.2.
 
@@ -427,7 +428,8 @@ impl PyBore {
     fn _bc_right(&self) -> &'static str {
         self.params.bc_right.name()
     }
-    /// Private in the original and read by `tests/test_bore_radiation.py` and `web/serialize.py`.
+    /// Private in the original, and read by `tests/test_bore_radiation.py` and `web/serialize.py`
+    /// until both were retired.
     #[getter]
     fn _open_left(&self) -> bool {
         self.params.open_left()

@@ -7051,3 +7051,276 @@ The advisor's read of the first commit found these, all fixed here:
 - The binding's `step_reporting` comment no longer calls the retired parity file its live caller.
   No bow plan document exists in `docs/dev/`, and `scientific-hurdles.md` names the bow only in its
   aliasing row, which this batch does not touch.
+
+## 42. Phase C, carrying batch 20 — the bore and the reed
+
+Done 2026-10-07 (the human took the recommendation, "go with it"). Two families were done as
+one batch, as in §37: the reed's three files all build a bore to blow into, so carried alone the
+reed's bars would have leant on bore behaviour that nothing native checked at the Python's rig. Seven
+files, retired whole: `tests/test_bore_energy.py`, `test_bore_modal.py`, `test_bore_radiation.py`,
+`test_bore_stability.py`, `test_reed_energy.py`, `test_reed_signature.py` and
+`test_reed_stability.py` — **56 functions, 97 pytest cases** (bore 6 + 6 + 14 + 5 functions, 13 +
+6 + 21 + 24 cases; reed 7 + 8 + 10 functions, 9 + 8 + 16 cases).
+
+The bars went to two new files:
+
+- `crates/physsynth-core/tests/bore_harness.rs` — **32 tests** (thirty carried, two added in §42.4
+  at the human's call), at `make_bore`'s rig: a 0.5 m cylinder of radius 8 mm in ambient air, the
+  rate solved for the Courant number as `fs = c0 / (lam h)`, and the Python's bump
+  `1e-3 exp(-(x - c)^2 / (2 w^2))`. **Not `bore.rs`'s rig** (0.6 m, a unit bump of another shape), so
+  that file keeps its own bars.
+- `crates/physsynth-core/tests/reed_harness.rs` — **21 tests** (eighteen carried, three added), at
+  `make_reed_bore`'s rig: that tube on `N = 200` at `lam = 1` with a 650 Pa·s/m³ bell, the default
+  reed (2.5 kHz, `q = 4`, `mu = 0.03`, `Sr = 1.5e-4`, `width = 1.5e-2`, `H0 = 4e-4`) solved to
+  `1e-10`. **Not `reed.rs`'s rig** (0.6 m, mostly `N = 100`). The nine notes the signature and
+  stability bars read are each played once and shared, one `OnceLock` per note; a shorter read of
+  a note is a prefix of the same deterministic run, which is what the Python's separate shorter
+  runs computed.
+
+`engine.rs` gained `impl Resonator for Bore` and `impl Resonator for ReedBore` (precedent §30, §37),
+so the carried bars run through the same `simulate` and NaN-propagating `energy_drift` the Python
+suite did. The binding does **not** wrap the native structs — it assembles the kernels itself — so
+the comparison below is a real cross-check of two assemblies; the viewer uses the native structs.
+
+### 42.1 The comparison — every figure reproduced
+
+Recorded first, wheel reinstalled (`W:\temp\claude\bore-reed\python-record.txt`, `record.py`
+beside it). **Every trajectory figure matches to all printed digits**: the nine lossless drifts and
+their energies and last pickups, the viscous run's largest step and final ratio, the eleven
+stability runs' peaks and drifts, the bell's three identity drifts and radiated energies, the five
+reflections and the anechoic run, the far-field microphone's peak and first sound (step 400), the
+odd/even peaks of the three spectra, and every reed figure — the four balance runs' errors, final
+energies and the three work channels, **and the exact steps on which the bracketed fallback fired**
+(none at 1000 Pa, 49 at 1500, 53 at 2500, 9 with the 5e4 bell), every note's RMS, pitch, peaks,
+beat onset (step 416, 31,486 shut steps) and minimum opening, and the closing pressures. NumPy's
+`exp` and the platform's agreed on every entry of every bump (counted), so the initial conditions
+are the Python's to the bit on Windows.
+
+Three readings are not to the digit, and each for a known reason:
+
+- **The resonances**, ~1e-9 Hz: the Python read them off SciPy's ARPACK, the native bars off
+  `eig::generalized_eigen_diag`, a dense solve.
+- **The single-mode decay ratio**, 4e-15 relative: the mode is each solver's own eigenvector.
+  ARPACK's and LAPACK's vectors gave the same ratio to 3e-16 in the Python.
+- **The two Nyquist fractions**, 1e-14 relative: the native `spectrum::rfft` is a tolerance port,
+  not pocketfft.
+
+**The eigenvalue referee is a closed form, and here ARPACK beat LAPACK.** The only independent
+referees in these files were SciPy's `eigsh` and one `np.fft.rfft`. Before freezing LAPACK as §24
+prescribes, the record found that the free-node problem `L phi = omega^2 C phi` of a closed-open
+tube has the exact spectrum `omega_n^2 = (2 c0 / h)^2 sin^2((2n - 1) pi / 4N)`, checked at 50 digits:
+**ARPACK matched it to 2e-15 relative on every rig** (shift-invert is relatively accurate at the
+bottom of the spectrum), **LAPACK only to 0.7 `eps omega_max^2`** — 4e-11 relative at the
+fundamental. That reverses §24's ranking (there ARPACK was the least accurate), because there the
+truth was an interior eigenvalue at a poor shift. Nothing was frozen: the native bar
+`the_free_spectrum_is_the_closed_form_and_the_solver_finds_it` writes the formula in the test and
+certifies the dense solve against it on all seven rigs the Python read (worst 1.6
+`eps omega_max^2`, bar 4), and the carried cent bars run on that solve.
+
+### 42.2 What the existing native bars could not see
+
+`bore.rs` (24 tests) and `reed.rs` (22) were written at their own rigs, and mapped by assertion:
+
+- **Already native, coarser or elsewhere**: lossless conservation at one Courant number and two
+  boundary pairs; the viscous decrease; the closed-open and open-open resonances (inverse
+  iteration, 5 cents); the bell's identity at one placement and both ends; a matched load and a
+  stiff one; the inert hook; the reed's refusals, jet law, balance (at `N = 100`, 3,000 steps, a
+  final-state scale), sign-definite channels, the speak/silent pair and the fallback firing.
+- **Not native at all**: the Courant sweep, the four-boundary sweep at `lam = 0.9`, positivity, the
+  `2 sigma` decay rate, area scaling, the FFT odd/even gap, the measured-spectrum tracking, the
+  second-order convergence, the stability sweeps, the `1 - r^2` reflection oracle, the realistic and
+  rigid bells' spectra, the far-field cleanliness, the composition with `AirRadiation`, the piston
+  resistance; for the reed, the per-step balance (the Python's `|e| + |mouth|` scale over 8,000
+  steps), the pitch lock, the reed sweep, the odd harmonics, the beating and the bounded sweep.
+- **Run by the viewer, at its own scenes**: `physsynth-viewer/tests/reed.rs` checks speak/silent,
+  the threshold bracket and the odd harmonics on its own clarinet.
+- **Sharpened**: the area-scaling bar asserts the `rtol = 1e-12` the Python wrote — `np.isclose`
+  had silently kept `atol = 1e-8`, the bar that actually bit (measured 4.4e-16); the "no radiating
+  end" bar uses a **nonzero** unused resistance (the Python compared a keyword default with an
+  explicit `0.0`, which has no native analogue); refusals are checked by variant and message.
+- **No analogue**: `source=None` against the default (an `Option` has no third spelling), and
+  `isinstance` / `hasattr` / `callable` — read instead through the `Resonator` trait.
+
+### 42.3 Every margin measured
+
+| bar | measured | bar |
+|---|---|---|
+| lossless drift, worst of 9 (Courant and boundary sweeps) | 5.4e-15 | 1e-10 |
+| viscous, largest step / E0 | −1.0e-15 (never rises) | ≤ 1e-10 |
+| `2 sigma` decay rate | 0.18% | 2% |
+| area scaling, `|ratio - 2|` | 4.4e-16 | 2e-12 |
+| closed-open odd / even | 2.28e5 | > 1e3 |
+| open-open partials | 2.5e-6 cents | 2 |
+| `lam = 1` against the continuum | 1.1e-8 cents | 0.05 |
+| oracle against the measured spectrum | 0.0062 cents | 0.5 |
+| convergence order | 2.00007 | > 1.9 |
+| closed-form spectrum, worst (added) | 1.6 `eps omega_max^2` | 4 |
+| bell identity, worst of 3 | 1.3e-13 | 1e-10 |
+| reflection against `1 - r^2`, worst of 5 | 8.4e-16 relative | 2% |
+| absurd `R`, peak pickup | 9.97e-4 | ≤ 2e-3 |
+| realistic / rigid bell odd-even ratio | 7.2e5 / 2.0e-7 | > 1e3 / < 1 |
+| far-field Nyquist fraction; against the raw node | 3.5e-4; 0.064 | < 1e-2; < 0.5 |
+| far-field integral against `U_out` (added) | 0 | ≤ 1e-9 peak |
+| piston `R / Z0` | 3.2e-4 | < 1e-3 |
+| reed balance, worst of 4 | 7.8e-15 | 1e-11 |
+| reed balance off the default reed and air (added) | 1.3e-14 | 1e-11 |
+| loose ÷ tight balance; loose (added) | 6.4e3; 4.0e-11 | > 100; < 1e-9 |
+| fallbacks per 8,000 steps (added) | 49 / 53 | < 100 |
+| sustained RMS; second half ÷ first | 1,441 Pa; 1.03 | > 100; > 0.5 |
+| silent RMS | 0.117 Pa | < 5 |
+| speak onset, loud ÷ quiet | 9,070 | > 50 |
+| pitch against `c / 4L` | 3.6% | < 10% |
+| reed sweep: worst pitch; spread | 5.4%; 3.1% | < 10%; < 6% |
+| fundamental ÷ second; third ÷ second | 1.96e4; 19.3 | > 100; > 1 |
+| bounded sweep, peak ÷ `p_mouth` | 1.26 | < 20 |
+
+Every bar is the Python's own except the six added. The thinnest are the Python's: **the reed
+sweep, 1.85x** (5.4% against 10%), **the absurd-`R` peak, 2.0x**, the sweep's spread, 2.0x, and the
+pitch lock, 2.8x — each reads the same deterministic figure the Python did. Of the added ones the
+fallback bound is 2x by design (it guards an order-of-magnitude cost, 49 against 1,900) and the
+closed-form bar 2.5x.
+
+### 42.4 Thirty breakages
+
+Planted one at a time with `W:\temp\claude\bore-reed\mutate.py` (snapshot, restore by copy,
+byte-compare, a per-plant time limit). "Red" counts `bore_harness`, `reed_harness`, `bore`, `reed`
+and the core's unit tests; every plant with two or fewer witnesses was re-planted workspace-wide
+(§31's rule), and every zero was probed at off-default rigs before it was called a gap.
+
+| breakage | red | workspace-wide, and now |
+|---|---|---|
+| **BA** viscous numerator `(1 - sk)` dropped | 3 | decay rate, both monotone bars |
+| **BB** compliance at the default `c0` | 0 | **0** → spectrum off the defaults (**added**) |
+| **BC** inductance at the default `rho0` | 0 | **0** → the same bar |
+| **BD** inductive energy as a same-time square | 15 | every conservation and balance bar |
+| **BE** right open end not pinned | 5 | the spectra, the decay rate, the pin |
+| **BF** bell solve with `+ b p_old` | 14 | identity, reflection, anechoic, five reed notes |
+| **BG** bell energy booked at half | 9 | identity, reflection, anechoic, both reed balances |
+| **BH** left bell reads `p_old[1]` | 3 | the both-ends identity (both files) |
+| **BI** hook after the radiating drain | 1 | `bore.rs`'s ordering bar only — a direct bar |
+| **BJ** divergence without the right wall's segment | 11 | identity, reflection, rigid bell, far field |
+| **BK** far-field read-out not differenced | 0 | the viewer freeze only → the integral bar (**added**) |
+| **BL** CFL ceiling without its tolerance | 59 | everything at `lam = 1` |
+| **BM** right end a full cell | 1 | `bore.rs`'s weight bar, and the viewer's reflection bar and freeze |
+| **BN** viscous denominator `(1 + sk)` dropped | 3 | decay rate, both monotone bars |
+| **RA** reed mass at the default `mu` | 0 | **0** → balance off the defaults (**added**) |
+| **RB** jet at the default width | 0 | **0** → the same bar |
+| **RC** opening at the default `H0` | 0 | **0** → the rest opening (**added**) |
+| **RD** `newton_tol` replaced by the default | 0 | **0** → the loose solve (**added**) |
+| **RE** jet at the default `rho` | 0 | **0** → balance off the defaults |
+| **RF** reed sweep with the wrong sign | 4 | every balance bar |
+| **RG** damping booked without `g` | 4 | every balance bar |
+| **RH** fallback counter not bumped | 2 | `reed.rs`'s firing bar, the balance bar's exercised check, the freeze |
+| **RI** Newton seeded from zero | 0 | the viewer freeze only → the fallback bound (**added**) |
+| **RJ** stall test spelled `>=` | 0 | **0**, and no bit changes on any probed run (below) |
+| **RK** mouth pressure pushes the reed the wrong way | 11 | every balance and signature bar |
+| **RL** jet loss booked on the total flow | 6 | balance, the monotone channels |
+| **RM** reed CFL ceiling at 3 | 1 | the carried refusal — a direct bar |
+| **RN** closing pressure without `H0` | 2 | the gamma bars, and four viewer reed bars |
+| **RO** node-0 compliance tidied to the bore's | 1 | `reed.rs`'s one-ulp bar — a direct bar — and the freeze |
+| **RP** damping `g` with `q = 4` | 0 | the viewer's reed sweep bar and freeze |
+
+The probe (a temporary test, deleted) printed trajectory digests and balance errors at the default
+rig and at `rho0 = 1.18`, `c0 = 340`, `mu = 0.05`, `width = 1.2e-2`, `H0 = 3e-4`, `q = 3` and
+`newton_tol = 1e-6, 1e-13`. Five readings:
+
+- **Seven parameters had only ever run at their defaults**, the lesson of §33 and §41 again, and a
+  default hard-wired into the step or the energy passed the whole workspace. Off the default each is
+  a real defect: BB and BC move the wave speed (the tube still conserves perfectly — only its pitch
+  is wrong), RA, RB and RE break the reed's books by 5%, 5% and 0.2%, RC plays a different reed, RD
+  ignores the tolerance (a 1e-6 solve balanced to 6e-15 instead of 4e-11). The human chose a bar for
+  each: the closed-form spectrum at three off-default airs, the balance at three off-default reeds
+  and airs, the rest opening at `H0 = 3e-4`, and a looser solve showing in the books.
+- **The reed's tolerance is visible, unlike the bow's.** Its per-step balance error is linear in
+  the scalar residual (the bow reads the true velocity and is exact at any tolerance), so at `1e-6`
+  the balance is 4e-11 — past the 1e-11 bar. The carried bars run at `1e-10`; the added bar asserts
+  only that the loose solve is measurably worse and still bounded.
+- **BK and RI were seen only by the viewer's freeze**, which is exact on Windows only. BK leaves a
+  clean, nonzero signal that is the flow rather than its rate; the added bar integrates the read-out
+  and recovers the bell's outgoing flow exactly. RI leaves the physics unchanged to the last digits
+  but takes the bracketed fallback 1,900 times instead of 49; the human chose a bound (< 100).
+- **RJ is not a gap, and an existing claim about it was false.** `reed.rs::the_stall_test_is_nan_true`
+  said it pinned the `!(a < b)` spelling. Planted, `>=` iterates on NaN up to the cap and reaches the
+  same bracket and the same refusal, so the test passes either way, and on every finite probed run
+  the plant changed no bit. The comments in `reed.rs` (test and source) now say what is asserted —
+  the refusal — and that the spelling is unpinned.
+- **RP is seen by the viewer's own reed sweep**, not only by its freeze, so it was left there; it
+  is the eighth default-only parameter, and the one the workspace already watched.
+
+### 42.5 The retirement rule, discharged
+
+| retired | native bar (`bore_harness.rs` / `reed_harness.rs`) |
+|---|---|
+| `test_bore_energy.py::test_energy_conserved_across_lambda` (5) | `a_lossless_tube_conserves_energy_across_the_courant_range` |
+| `…::test_energy_conserved_all_boundaries` (4) | `a_lossless_tube_conserves_energy_for_every_boundary_combination` |
+| `…::test_energy_strictly_positive_when_lossless` | `a_lossless_tube_has_strictly_positive_energy` |
+| `…::test_passivity_monotonic_decrease` | `a_viscous_tube_loses_energy_monotonically` |
+| `…::test_decay_rate_matches_2sigma_single_mode` | `a_single_mode_decays_at_twice_sigma` |
+| `…::test_energy_units_scale_with_area` | `the_energy_scales_with_the_cross_section`, at the `rtol` the Python wrote |
+| `test_bore_modal.py::test_pressure_operator_symmetric` | `the_pressure_operator_is_symmetric` |
+| `…::test_closed_open_is_odd_harmonic_only` | `a_closed_open_tube_is_odd_harmonic_only` |
+| `…::test_open_open_full_series_present` | `an_open_open_tube_carries_the_full_series` |
+| `…::test_discrete_equals_continuum_at_lambda_one` | `at_lambda_one_the_discrete_resonances_are_the_continuum`, and the closed-form bar |
+| `…::test_oracle_tracks_measured_spectrum` | `the_discrete_resonances_track_the_measured_spectrum` |
+| `…::test_convergence_order_h2` | `the_dispersion_error_converges_at_second_order` |
+| `test_bore_stability.py::test_no_nan_across_valid_lambda` (7) | `nothing_blows_up_across_the_valid_courant_range` |
+| `…::test_no_nan_across_boundaries` (4) | `nothing_blows_up_for_any_boundary_combination` |
+| `…::test_lambda_above_one_rejected_at_construction` | `a_courant_number_above_one_is_refused_and_one_is_accepted`, the message exact |
+| `…::test_lambda_exactly_one_is_accepted` | the same test |
+| `…::test_invalid_parameters_rejected` (11) | `non_physical_parameters_are_refused`, variant and message |
+| `test_bore_radiation.py::test_radiation_energy_identity` (3) | `the_bell_books_exactly_what_the_field_loses_at_every_placement` |
+| `…::test_acoustic_energy_decreases_as_bell_radiates` | `the_field_energy_falls_as_the_bell_radiates_while_the_total_holds` |
+| `…::test_unconditional_stability_absurd_R` (2) | `an_absurd_resistance_is_still_stable` |
+| `…::test_reflection_energy_matches_1_minus_r2` (5) | `one_reflection_sheds_one_minus_r_squared` |
+| `…::test_matched_load_is_anechoic` | `a_matched_load_is_anechoic` |
+| `…::test_small_R_bell_is_odd_harmonic_clarinet` | `a_realistic_bell_stays_an_odd_harmonic_clarinet` |
+| `…::test_large_R_bell_recovers_closed_wall` | `a_rigid_bell_is_a_closed_wall` |
+| `…::test_far_field_readout_is_clean` | `the_far_field_readout_is_clean` |
+| `…::test_pressure_readout_composes_with_air_radiation` | `the_bell_drives_the_far_field_microphone` |
+| `…::test_physical_bell_resistance_is_lightly_radiating` | `a_physical_bell_radiates_lightly` |
+| `…::test_radiating_requires_positive_R`, `test_negative_R_rejected`, `test_unknown_boundary_token_rejected` | `the_bells_refusals_carry_the_originals_words` |
+| `…::test_no_radiating_end_is_bit_identical_to_plain_bore` | `a_resistance_without_a_radiating_end_changes_nothing` (§42.2) |
+| `test_reed_energy.py::test_lossless_energy_balance` (3) | `a_lossless_clarinet_balances_its_books_every_step`, the bracket's use asserted |
+| `…::test_reed_injects_energy` | `the_breath_drives_the_air_column_up_from_rest`, from exactly 0 |
+| `…::test_dissipation_channels_are_nonnegative`, `test_jet_and_reed_damp_are_monotone` | `both_dissipation_channels_are_passive_and_monotone` |
+| `…::test_balance_with_radiating_bell` | `the_balance_survives_a_radiating_bell` |
+| `…::test_energy_is_bore_plus_reed`, `test_reed_energy_zero_at_rest` | `the_energy_is_the_bores_plus_the_reeds_and_zero_at_rest`, `==` |
+| `test_reed_signature.py::test_self_sustains_above_threshold` | `the_note_sustains_above_threshold` |
+| `…::test_silent_below_threshold` | `the_note_is_silent_below_threshold` |
+| `…::test_threshold_is_between_gentle_and_hard_blowing` | `the_threshold_lies_between_gentle_and_hard_blowing` |
+| `…::test_pitch_locked_near_quarter_wave` | `the_pitch_locks_near_the_quarter_wave` |
+| `…::test_pitch_set_by_bore_not_reed` | `the_bore_sets_the_pitch_not_the_reed` |
+| `…::test_odd_harmonics_dominate` | `the_odd_harmonics_dominate` |
+| `…::test_reed_beats_shut_when_blown_hard`, `test_reed_stays_open_below_threshold` | `the_reed_beats_shut_when_blown_hard_and_stays_open_when_not` |
+| `test_reed_stability.py::test_source_none_is_bit_identical`, `test_noop_source_is_bit_identical` | `an_inert_hook_is_bit_for_bit_the_undriven_bore`, `p` and `U`; `None` against the default has **no analogue** |
+| `…::test_bounded_across_blowing` (4) | `the_reed_stays_bounded_across_the_blowing_range` |
+| `…::test_reed_is_a_resonator` | `the_clarinet_is_a_resonator`, through the trait; `isinstance` / `hasattr` have **no analogue** |
+| `…::test_bernoulli_flow_is_odd_and_passive`, `test_flow_scales_as_sqrt_dp` | `the_jet_is_an_odd_passive_square_root_law` |
+| `…::test_non_closed_left_end_rejected`, `test_reed_cfl_rejected`, `test_nonphysical_params_rejected` (4) | `the_reed_refuses_what_the_python_refused`, the CFL message exact |
+| `…::test_p_closing_and_gamma` | `the_closing_pressure_and_the_blowing_ratio_are_the_documented_ones` |
+
+**Orphans removed from `tests/helpers.py`**, each name grepped alone across `tests/`: `make_bore`,
+`make_radiating_bore`, `make_reed_bore`, `bore_low_eigenfrequencies`, `convergence_orders`,
+`BORE_LENGTH_DEFAULT`, `BORE_RADIUS_DEFAULT`, `R_BELL_DEFAULT`, `REED_P_MOUTH_DEFAULT`, and the
+`Bore`, `ReedBore` and `eigsh` imports. `arpack_v0` stays (`test_stability.py`), and so do
+`RHO0_AIR` / `C0_AIR` (the air box's helper). Comments naming the deleted files were updated in the
+core's `bore.rs`, `reed.rs` and `tests/bore.rs`, `tests/reed.rs`, the analysis crate's
+`radiation.rs`, the binding's `bore.rs` and `reed.rs`, and `tests/test_airbox_freefield.py`; the
+reed header's "compared step for step in the parity file" now says where that comparison went.
+
+### 42.6 Cost and counts
+
+- **pytest 786 → 689**: the seven files' 97 cases (13 + 6 + 21 + 24 + 9 + 8 + 16); 689 passed.
+- **Native +53**: workspace 1,614 → 1,667 optimised (`scripts/cargo-test-nice.ps1 -Full`), all
+  green; `bore_harness.rs` 0 → 32, `reed_harness.rs` 0 → 21, `bore.rs` and `reed.rs` unchanged.
+- **Both profiles (the human's call).** Optimised 1.7 s and 1.5 s; unoptimised on one thread
+  33.5 s and 7.7 s (44.6 s and 10.0 s on a busier first timing). The tube file's cost is the dense
+  eigensolves (up to 400 × 400, eleven of them) and the `lam = 0.1` stability run.
+- **9 physics files remain**, with **159** test functions by the §24.1 count (215 − 56). Neither
+  the bore nor the reed has a Python file left.
+
+### 42.7 What is next
+
+The next batch is not chosen; the human picks. The 9 files, by family: the body (1), the room
+(`test_airbox_*`, 4), radiation (1), the resolution horizon (1), the spectrum detector (1) and the
+operators (1).

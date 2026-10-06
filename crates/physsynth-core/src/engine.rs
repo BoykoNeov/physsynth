@@ -13,11 +13,13 @@
 //! the other.
 
 use crate::beam::FreeBeam;
+use crate::bore::Bore;
 use crate::bow::BowedString;
 use crate::collision::BarrierString;
 use crate::mallet::{MalletMembrane, MalletPlate};
 use crate::membrane::Membrane;
 use crate::plate::Plate;
+use crate::reed::ReedBore;
 use crate::string_damped::DampedStiffString;
 use crate::string_ideal::IdealString;
 use crate::string_nonlinear::TensionModulatedString;
@@ -356,6 +358,49 @@ impl Resonator for MalletPlate {
     }
     fn displacement_at(&self, index: usize) -> f64 {
         self.plate.u[index]
+    }
+    fn timestep(&self) -> f64 {
+        self.params().k
+    }
+}
+
+/// The acoustic bore, undriven — added with the wind leg's acceptance bars (retirement plan §42), as
+/// the beam's and the barrier's were. The "displacement" is the pressure field, as the original's
+/// `displacement_at` documented it: a microphone, not a displacement.
+impl Resonator for Bore {
+    fn step(&mut self) -> Result<(), String> {
+        Bore::step(self, None);
+        Ok(())
+    }
+    fn energy(&self) -> f64 {
+        Bore::energy(self)
+    }
+    fn state(&self) -> Vec<f64> {
+        self.p().to_vec()
+    }
+    fn displacement_at(&self, index: usize) -> f64 {
+        Bore::displacement_at(self, index)
+    }
+    fn timestep(&self) -> f64 {
+        self.params().k
+    }
+}
+
+/// The bore blown through a reed (retirement plan §42). `state` and the pickup read the bore's
+/// pressure field, as the binding's did; a bracket the scalar solve cannot find is the step's
+/// error, carried with the model's own message.
+impl Resonator for ReedBore {
+    fn step(&mut self) -> Result<(), String> {
+        ReedBore::step(self).map_err(|e| e.to_string())
+    }
+    fn energy(&self) -> f64 {
+        ReedBore::energy(self)
+    }
+    fn state(&self) -> Vec<f64> {
+        self.bore().p().to_vec()
+    }
+    fn displacement_at(&self, index: usize) -> f64 {
+        self.bore().displacement_at(index)
     }
     fn timestep(&self) -> f64 {
         self.params().k

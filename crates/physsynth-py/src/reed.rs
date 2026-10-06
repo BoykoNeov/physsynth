@@ -3,9 +3,9 @@
 //! # This is the seam the whole batch was held for, and here it stops being a seam
 //!
 //! `bore::PyBore::step` accepts an arbitrary Python callable and hands it a live view of the
-//! in-progress pressure field, because `tests/test_reed_stability.py` passes its own
-//! `lambda p: None` and the capability is therefore not the reed's private channel (plan §12.8).
-//! That path costs a Python call per timestep.
+//! in-progress pressure field, because `tests/test_reed_stability.py` (retired, retirement plan
+//! §42) passed its own `lambda p: None` and the capability is therefore not the reed's private
+//! channel (plan §12.8). That path costs a Python call per timestep.
 //!
 //! `PyReedBore` does not take it. It **requires a `PyBore`** — the Rust air column — extracted
 //! natively, and injects through `PyBore::step_native`, a Rust closure. So the clarinet's hot loop
@@ -20,8 +20,8 @@
 //!
 //! # `.bore` is the object the caller passed, not a copy
 //!
-//! `tests/test_reed_energy.py` and `web/serialize.py` both reach through `reed.bore` and call
-//! `energy()`, `set_state()` and `pressure()` on it. So this type holds a `Py<PyBore>` handle
+//! `tests/test_reed_energy.py` and `web/serialize.py` (both since retired) reached through
+//! `reed.bore` and called `energy()`, `set_state()` and `pressure()` on it. So this type holds a `Py<PyBore>` handle
 //! rather than owning a `physsynth_core::reed::ReedBore`, and the free functions in the core
 //! module — `inject`, `commit` — are what it actually calls. Same reasoning as every other model
 //! here: the native owning struct is for `cargo test`, the binding owns the Python object graph.

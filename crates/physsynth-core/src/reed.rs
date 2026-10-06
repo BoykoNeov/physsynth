@@ -19,11 +19,13 @@
 //!
 //! - **Which branch a step took is part of the trajectory, not a diagnostic.** If Rust takes the
 //!   fallback on a different step than Python, the two separate structurally rather than by
-//!   rounding, and no energy bar sees it. `fallbacks` is therefore compared step for step in the
-//!   parity file, not merely at the end.
+//!   rounding, and no energy bar sees it. The parity file that compared `fallbacks` step for
+//!   step is long gone; the last comparison, against the Python's recorded fallback steps, matched
+//!   every one (retirement plan §42.1), and `tests/reed_harness.rs` bounds their count.
 //! - **The stall test is `!(|r_new| < |r|)`, not `|r_new| >= |r|`.** The original spells it
 //!   `if not (abs(r_new) < abs(r))`, which is *true* when a residual is NaN. Spelling it the other
-//!   way round would silently accept a NaN Newton step and keep iterating on it.
+//!   way round would accept a NaN Newton step and iterate on it up to the cap — after which it
+//!   reaches the same bracket and the same refusal, so the difference is cost, on NaN only.
 //!
 //! # The one-ulp compliance, preserved rather than tidied
 //!
@@ -384,9 +386,9 @@ pub fn solve_dp(
         // `if not (abs(r_new) < abs(r))` — NaN-true, deliberately. See the module header.
         //
         // clippy wants `>=` here and it is WRONG about this one: the two spellings differ exactly
-        // when a residual is NaN, and `!(a < b)` is the branch that bails out to the bracket
-        // instead of iterating on a NaN forever. `tests/reed.rs::the_stall_test_is_nan_true`
-        // pins it, and `the reed's own docstring` spells it the same way.
+        // when a residual is NaN, and `!(a < b)` is the branch that bails out to the bracket at
+        // once instead of iterating on NaN up to the cap. Nothing pins it — the cap ends in the
+        // same refusal (`tests/reed.rs::the_stall_test_is_nan_true` asserts that refusal, §42.4).
         #[allow(clippy::neg_cmp_op_on_partial_ord)]
         if !(r_new.abs() < r.abs()) {
             break; // stalled on the sqrt cusp -> robust bracket

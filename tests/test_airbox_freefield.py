@@ -190,9 +190,11 @@ def test_quasi_1d_box_tracks_the_repo_bore():
     uninteresting reason.
 
     The closed-open clarinet's **odd-harmonic series** ``f_n = (2n-1) c0/(4L)`` reaches the box
-    *through* this agreement, inherited from ``test_bore_modal``. It is deliberately **not**
-    re-asserted here by FFT peak-picking off a short box run: at 4000 steps the bin width is 12 Hz,
-    and a Gaussian IC puts spectral nulls on some of the very partials being counted. A trace that
+    *through* this agreement, inherited from the bore's own resonance bars
+    (``crates/physsynth-core/tests/bore_harness.rs`` since retirement plan §42). It is
+    deliberately **not** re-asserted here by FFT peak-picking off a short box run: at 4000 steps
+    the bin width is 12 Hz, and a Gaussian IC puts spectral nulls on some of the very partials
+    being counted. A trace that
     matches the bore's to 1e-14 for 4000 steps is strictly stronger evidence, and far cheaper, than
     a spectrum that resolves five peaks badly.
     """

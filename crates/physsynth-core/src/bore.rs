@@ -25,9 +25,10 @@
 //! `crates/physsynth-core/tests/deps.rs` exists to guard, and that is the one mistake in this
 //! batch which would be expensive to undo. The binding wraps a Python callable into one of these
 //! instead, so the capability survives without the dependency. The plan's §12.8 recorded that the
-//! hook is load-bearing rather than transitional: `tests/test_reed_stability.py` passes its own
-//! `lambda p: None` to assert the hook is inert when unused, so porting `reed` removes the *hot*
-//! crossing, never the capability.
+//! hook is load-bearing rather than transitional: `tests/test_reed_stability.py` passed its own
+//! `lambda p: None` to assert the hook is inert when unused (retired at retirement plan §42; the
+//! bar is now `tests/reed_harness.rs::an_inert_hook_is_bit_for_bit_the_undriven_bore`), so
+//! porting `reed` removes the *hot* crossing, never the capability.
 //!
 //! # The ordering inside a step is load-bearing and no energy test can see it
 //!

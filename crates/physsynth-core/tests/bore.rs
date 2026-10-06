@@ -1,5 +1,5 @@
-//! Native acceptance bars for `bore` — the same claims `tests/test_bore_*.py` make about the
-//! Python original, asserted here against the Rust one without a Python interpreter in the way.
+//! Native acceptance bars for `bore`, at this file's own rig (a 0.6 m tube and a unit bump). The
+//! retired Python suite's claims, at its own rig, are in `bore_harness.rs` (retirement plan §42).
 //!
 //! The project's contract (`CLAUDE.md`) is that correctness is asserted against closed-form
 //! physics, not against a reference implementation. These are that: a lossless tube conserves its
@@ -565,7 +565,7 @@ fn the_far_field_readout_is_zero_without_a_radiating_end() {
 
 #[test]
 fn an_inert_hook_is_bit_for_bit_the_undriven_bore() {
-    // `tests/test_reed_stability.py` asserts exactly this on the Python side, with its own
+    // `reed_harness.rs` asserts the same at the retired Python suite's rig (§42), with its own
     // `lambda p: None`. It is the bar that keeps the hook from being a hidden perturbation.
     let p = params(40, 1.0, (End::Closed, End::Radiating), 0.0, 650.0);
     let mut driven = Bore::new(p.clone());

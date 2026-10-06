@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.sparse.linalg import eigsh
 
 from physsynth.analysis import modal
 from physsynth.analysis.horizon import pitch_horizon
@@ -17,7 +16,7 @@ from physsynth.core.airbox import (
     RoomLoadedBody,
 )
 from physsynth.core.body import ModalBody
-from physsynth.core.bore import C0_AIR, RHO0_AIR, Bore
+from physsynth.core.bore import C0_AIR, RHO0_AIR
 from physsynth.core.membrane import Domain, Membrane
 from physsynth.core.plate import THETA_DEFAULT as PLATE_THETA_DEFAULT  # noqa: F401 (re-export)
 from physsynth.core.plate import Plate
@@ -27,7 +26,6 @@ from physsynth.core.radiation import (
     RationalAirLoad,
     ReactiveRadiatedBody,
 )
-from physsynth.core.reed import ReedBore
 from physsynth.core.string_damped import DampedStiffString
 from physsynth.core.string_stiff import THETA_DEFAULT
 
@@ -286,143 +284,6 @@ def make_reactive_body(
     return ReactiveRadiatedBody(body=body, load=RationalAirLoad(fs=fs, R=R, M_a=M_a))
 
 
-# Acoustic bore (wind leg). A closed-open cylinder ~0.5 m long (clarinet-ish): the odd-harmonic
-# fundamental is f1 = c0/(4L) = 171.5 Hz on ambient air. radius small (8 mm) — it only scales the
-# absolute energy, not the resonances (which depend on L and c0 alone).
-BORE_LENGTH_DEFAULT = 0.5    # m
-BORE_RADIUS_DEFAULT = 0.008  # m
-
-
-def make_bore(
-    *,
-    N: int = 200,
-    lam: float = 1.0,
-    boundary=("closed", "open"),
-    sigma: float = 0.0,
-    L: float = BORE_LENGTH_DEFAULT,
-    radius: float = BORE_RADIUS_DEFAULT,
-    rho0: float = RHO0_AIR,
-    c0: float = C0_AIR,
-) -> Bore:
-    """Build an acoustic bore whose Courant number is exactly ``lam`` via ``fs = c0 / (lam h)``.
-
-    ``h = L/N`` is fixed by the geometry, so the sample rate is solved for to hit the target ``lam``
-    (the 1D-wave CFL ceiling is ``lam <= 1``; ``lam = 1`` is dispersionless). Default is the
-    clarinet (closed-open) cylinder. Pass ``boundary=("open", "open")`` for the full-harmonic pipe,
-    or ``sigma > 0`` for the passivity test.
-    """
-    h = L / N
-    fs = c0 / (lam * h)
-    return Bore(
-        L=L, fs=fs, N=N, radius=radius, boundary=boundary, sigma=sigma, rho0=rho0, c0=c0
-    )
-
-
-# Radiating bell (wind leg, batch 2): a closed-open clarinet whose open end is a passively-lossy
-# bell of acoustic resistance R (Pa·s/m^3). R_BELL_DEFAULT ~ the piston radiation resistance at the
-# fundamental (a realistic, lightly-radiating clarinet bell: R << Z0, high reflection, slow leak).
-# The characteristic impedance Z0 = rho0 c0 / S dwarfs it (~2e6 here), so the tube stays
-# odd-harmonic and only acquires finite-Q resonances. A specific reflection sweep passes R directly.
-R_BELL_DEFAULT = 650.0  # Pa·s/m^3
-
-
-def make_radiating_bore(
-    *,
-    N: int = 200,
-    lam: float = 1.0,
-    boundary=("closed", "radiating"),
-    R_bell: float = R_BELL_DEFAULT,
-    sigma: float = 0.0,
-    L: float = BORE_LENGTH_DEFAULT,
-    radius: float = BORE_RADIUS_DEFAULT,
-    rho0: float = RHO0_AIR,
-    c0: float = C0_AIR,
-) -> Bore:
-    """Build a clarinet with a **radiating** (passively-lossy) bell at Courant number ``lam``.
-
-    The batch-2 counterpart of :func:`make_bore`: identical geometry/rig (``fs = c0 / (lam h)``),
-    but the open end is replaced by a radiation resistance ``R_bell`` that sheds sound to the field.
-    Default ``R_bell`` is a realistic lightly-radiating bell (``R << Z0``); pass a larger ``R_bell``
-    (toward ``Z0``) for a heavily-absorbing / anechoic termination, or ``boundary`` to place the
-    radiating end differently. ``sigma > 0`` adds the interior viscous loss on top of the radiation.
-    """
-    h = L / N
-    fs = c0 / (lam * h)
-    return Bore(
-        L=L, fs=fs, N=N, radius=radius, boundary=boundary, R_bell=R_bell, sigma=sigma,
-        rho0=rho0, c0=c0,
-    )
-
-
-# Single-reed mouthpiece (wind leg, batch 3): a dynamic reed blowing a clarinet air column. The
-# defaults are a clarinet-plausible reed (f_reed ~ 2.5 kHz, heavily lip-damped) whose closing
-# pressure p_closing = mu wr^2 H0 ~ 3 kPa; the control is gamma = p_mouth / p_closing (the note
-# speaks around gamma ~ 1/3). Default bore is a radiating clarinet so the note settles into a steady
-# regime; pass boundary=("closed", "open") + sigma=0 for the LOSSLESS energy-balance money test.
-REED_P_MOUTH_DEFAULT = 1500.0  # Pa (gamma ~ 0.5, comfortably above threshold)
-
-
-def make_reed_bore(
-    *,
-    N: int = 200,
-    lam: float = 1.0,
-    p_mouth: float = REED_P_MOUTH_DEFAULT,
-    boundary=("closed", "radiating"),
-    R_bell: float = R_BELL_DEFAULT,
-    sigma: float = 0.0,
-    f_reed: float = 2500.0,
-    q_reed: float = 4.0,
-    L: float = BORE_LENGTH_DEFAULT,
-    radius: float = BORE_RADIUS_DEFAULT,
-) -> ReedBore:
-    """Build a dynamic-reed clarinet (a :class:`ReedBore` on a :class:`Bore`) at Courant ``lam``.
-
-    The bore is the batch-1/2 clarinet (``fs = c0 / (lam h)``, left end ``"closed"`` for the
-    mouthpiece); the reed self-oscillates it under a steady mouth pressure ``p_mouth``. Default is a
-    lightly-radiating bell (``R_bell``) so the tone reaches a steady amplitude. For the lossless
-    energy-balance test pass ``boundary=("closed", "open"), sigma=0`` (then ``E = E_bore + E_reed``
-    changes only by ``mouth_work - jet_loss - reed_damp_work``). Lower ``p_mouth`` below threshold
-    to watch the note fail to speak.
-    """
-    h = L / N
-    fs = C0_AIR / (lam * h)
-    bore = Bore(
-        L=L, fs=fs, N=N, radius=radius, boundary=boundary, R_bell=R_bell, sigma=sigma
-    )
-    return ReedBore(bore=bore, p_mouth=p_mouth, f_reed=f_reed, q_reed=q_reed)
-
-
-def bore_low_eigenfrequencies(bore: Bore, n_modes: int) -> np.ndarray:
-    """The ``n_modes`` lowest discrete resonance frequencies (Hz) of ``bore`` (ascending).
-
-    Solves the generalized eigenproblem ``L φ = ω² C φ`` on the **free** (non-open) pressure nodes —
-    ``L = Gᵀ M⁻¹ G`` (pressure stiffness) and ``C`` (compliance mass), both exposed by the bore,
-    for the smallest ``ω²``, then maps each through :func:`modal.discrete_bore_eigenfrequency` (the
-    leapfrog dispersion). A closed-open or open-open tube is positive-definite (an open end pins a
-    node), so plain shift-invert at ``σ = 0`` works; a fully closed tube has a constant-pressure
-    nullspace (``ω = 0``), handled with a small negative shift and dropping that mode.
-    """
-    dof = bore.dof
-    Lfree = bore.Lop[dof][:, dof]
-    Cfree = bore.Cmat[dof][:, dof]
-    n_open = int(bore._open_left) + int(bore._open_right)
-    if n_open == 0:
-        w1_scale = (np.pi * bore.c0 / bore.L) ** 2  # ~ first resonance ω² -> a safe negative shift
-        shift = -1e-3 * w1_scale
-        w2 = eigsh(
-            Lfree, k=n_modes + 1, M=Cfree, sigma=shift, which="LM", return_eigenvectors=False,
-            v0=arpack_v0(Lfree),
-        )
-        w2 = np.sort(w2)[1 : n_modes + 1]  # drop the ω≈0 constant-pressure mode
-    else:
-        w2 = eigsh(
-            Lfree, k=n_modes, M=Cfree, sigma=0.0, which="LM", return_eigenvectors=False,
-            v0=arpack_v0(Lfree),
-        )
-        w2 = np.sort(w2)
-    return np.asarray(modal.discrete_bore_eigenfrequency(w2, bore.k))
-
-
 def discrete_sho_frequency(f: float, k: float) -> float:
     """Exact discrete oscillation frequency (Hz) of the leapfrog SHO for a mode of ``f`` Hz.
 
@@ -434,19 +295,12 @@ def discrete_sho_frequency(f: float, k: float) -> float:
     return float(np.arcsin(0.5 * omega * k) / (np.pi * k))
 
 
-def convergence_orders(errors: np.ndarray, step_sizes: np.ndarray) -> np.ndarray:
-    """Empirical orders ``p`` between consecutive (h, error) pairs: ``error ~ C h^p``."""
-    errors = np.asarray(errors, dtype=float)
-    step_sizes = np.asarray(step_sizes, dtype=float)
-    return np.log(errors[:-1] / errors[1:]) / np.log(step_sizes[:-1] / step_sizes[1:])
-
-
 # -- the 3-D air box (HANDOFF §12.H): the distributed tier of the air node ---------------
 #
 # A small, ordinary room. The default grid is deliberately tiny (0.9 x 0.7 x 0.6 m at h = 10 cm,
 # i.e. 10 x 8 x 7 = 560 nodes): 3-D is the first model here where grid cost is a design constraint,
 # and every structural/modal oracle is grid-size-independent, so they run where they are free.
-# The sample rate is *solved for* from the requested Courant number, exactly as make_bore does --
+# The sample rate is *solved for* from the requested Courant number, as the bore's helper did --
 # but the 3-D ceiling is lambda <= 1/sqrt(3) ~ 0.577, and unlike the 1-D string NO lambda is
 # dispersionless, so 0.9 of the ceiling is a default, never a sweet spot.
 AIRBOX_ROOM_DEFAULT = (0.9, 0.7, 0.6)  # m

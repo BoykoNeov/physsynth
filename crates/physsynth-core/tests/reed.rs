@@ -1,5 +1,6 @@
-//! Native acceptance bars for `reed` — the same claims `tests/test_reed_*.py` make about the
-//! Python original, asserted here against the Rust one without a Python interpreter in the way.
+//! Native acceptance bars for `reed`, at this file's own rig (a 0.6 m tube, mostly on 100
+//! segments). The retired Python suite's claims, at its own rig, are in `reed_harness.rs`
+//! (retirement plan §42).
 //!
 //! The reed is an **active** exciter: the mouth does work, so the contract is not conservation but
 //! an exact **balance**,
@@ -20,8 +21,10 @@
 //!
 //! - `the_bracketed_fallback_actually_fires` — because the whole reason `crate::root` exists is
 //!   that it does, and a test suite that never took the branch would leave it unasserted.
-//! - `the_stall_test_is_nan_true` — the original spells it `if not (abs(r_new) < abs(r))`, and the
-//!   inverted spelling `>=` differs exactly when a residual is NaN.
+//! - `the_stall_test_is_nan_true` — a NaN residual must be refused, not returned as a root. It
+//!   does NOT pin the stall test's spelling: planted, `>=` (which accepts a NaN Newton step) spins
+//!   out the iteration cap and reaches the same refusal, so the two spellings differ in cost only
+//!   on a NaN and in nothing at all anywhere else (§42.4).
 
 use physsynth_core::bore::{self, Bore, End};
 use physsynth_core::reed::{self, ParamError, Params, ReedBore, State};
@@ -232,9 +235,11 @@ fn the_bracketed_fallback_actually_fires() {
 #[test]
 fn the_stall_test_is_nan_true() {
     // `if not (abs(r_new) < abs(r))` is TRUE for a NaN residual; the inverted spelling `>=` is
-    // FALSE, and would accept a NaN Newton step and keep iterating on it. This pins the spelling
-    // by driving the solver with a NaN `c_const`, which makes every residual NaN: the loop must
-    // break out to the bracket on the first iteration rather than spinning.
+    // FALSE, and would accept a NaN Newton step and keep iterating on it. Driving the solver with a
+    // NaN `c_const` makes every residual NaN. What this asserts is the outcome — a refusal naming
+    // the step — and that outcome is the same under either spelling: `>=` iterates on NaN up to
+    // `newton_maxiter` and then reaches the same bracket, which cannot succeed on NaN either. So
+    // the spelling itself is unpinned, and on a finite residual it is unobservable (§42.4).
     let bp = bore_params(60, 1.0, (End::Closed, End::Open), 0.0, 0.0);
     let rp = reed_params(&bp);
     // The bracket cannot succeed on NaN either, so the call must *refuse* rather than hang or

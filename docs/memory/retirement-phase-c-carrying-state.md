@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-c-carrying-state
-description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-19 done by 2026-10-06 (plates, membrane, beam, every string, every contact file, the gong plate, the bow); 16 files / 215 functions left"
+description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-20 done by 2026-10-07 (plates, membrane, beam, every string, every contact file, the gong plate, the bow, the bore and reed); 9 files / 159 functions left"
 metadata:
   node_type: memory
   type: project
@@ -176,9 +176,27 @@ breakages, delete the file.
   1-in-86k "wrong root" was its own unrefined comparison (bar's refined checker: 0) — refine a checker
   before quoting its exceptions; and measure a plant's reach at the OTHER grids in use (N 6/99 at N=100,
   48/99 at the viewer's N=64).
-Remaining after §41: **16 physics files / 215 functions** (§24.1 count), no bow file left. Next batch not
-chosen — the user picks; a recommendation + "go with it" is an accepted answer. Re-derive the remaining list
-(§9's map is stale).
+- §42 batch 20 (2026-10-07, human: "go with it" on bore+reed together): `test_bore_{energy,modal,radiation,
+  stability}.py` + `test_reed_{energy,signature,stability}.py` (56 fns / 97 cases) → NEW core
+  `bore_harness.rs` (32 = 30 + 2 guards) and `reed_harness.rs` (21 = 18 + 3 guards) at the Python rig (L=0.5;
+  `bore.rs`/`reed.rs` use L=0.6 and keep their bars). Added `impl Resonator for Bore` / `ReedBore` (engine.rs).
+  The binding assembles the kernels itself (does NOT wrap the native structs) → the comparison is a real
+  cross-check: every figure matched to the digit, incl. the reed's exact fallback STEP lists. Eigen referee:
+  the closed form ω² = (2c/h)² sin²((2n−1)π/4N) — ARPACK matched it to 2e-15 rel, LAPACK only to 0.7 eps·λmax
+  (reverse of §24: shift-invert is relatively accurate at the bottom). Nothing frozen. 30 plants: SEVEN
+  default-only params (c0, rho0 in the tube; mu, width, H0, rho, newton_tol in the reed) passed the whole
+  workspace; BK (far-field read-out not differenced) and RI (Newton seeded from 0: 1,900 fallbacks vs 49)
+  only the Windows-exact viewer freeze → human chose all guards (closed form at 3 off-default airs; balance at
+  off-default mu/width/rho0; rest opening at H0=3e-4; loose tol 1e-6 balance must be >100x worse (reed's error
+  is LINEAR in the residual, unlike the bow's); fallbacks < 100; read-out integral == U_out). RJ: the existing
+  `reed.rs::the_stall_test_is_nan_true` claimed to pin `!(a<b)` — planted `>=` reaches the same refusal after the
+  iteration cap, so it pinned nothing; comments corrected. A "this pins X" comment is a claim to PLANT.
+  pytest 786 → 689; workspace 1,614 → 1,667. Harness opt 1.7/1.5 s, unopt 33.5/7.7 s (1 thread): both
+  profiles (human). The plan file and tests/bore.rs are CRLF in the working copy — edit with CRLF preserved.
+  Bash heredoc with a Python body containing `'''` broke ("unexpected EOF"): write scripts with the Write tool.
+Remaining after §42: **9 physics files / 159 functions** (§24.1 count): body (1), room `test_airbox_*` (4),
+radiation (1), resolution horizon (1), spectrum detector (1), operators (1). Next batch not chosen — the user
+picks; a recommendation + "go with it" is an accepted answer.
 Loose end (from §27): `test_arpack_oracles_are_bit_reproducible`'s surviving free-plate half guards a
 helper whose only caller is the guard itself.
 

@@ -118,8 +118,17 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    the jawari and the mallet on a drumhead, two batches done together at the human's request (bars
    for both first, one comparison, one breakage round, one deletion), §38 the mallet on a
    plate, and §39 the mallet on a gong — **every contact file is gone** — and §40 the gong plate
-   itself (six files, its bracket and Airy solve included), and §41 the bowed string; **16 physics
-   files / 215 functions remain** (§9's map is stale). §41 found four gaps, all guarded at the
+   itself (six files, its bracket and Airy solve included), §41 the bowed string, and §42 the bore
+   and the reed together (seven files; the reed's bars stand on the bore); **9 physics files / 159
+   functions remain** (§9's map is stale). §42 found SEVEN parameters that had only ever run at
+   their defaults (sound speed, air density, reed mass, jet width, rest opening, the reed's air
+   density, its solve tolerance) — each hard-wired passed the whole workspace and each is a real
+   defect off the default — plus a far-field read-out and a solver seed seen only by the
+   Windows-exact viewer freeze; all guarded at the human's call. Grep a model's fixtures for EVERY
+   parameter's range, not only `θ`. Its eigenvalue referee was a closed form, and there ARPACK
+   (relatively accurate at the bottom of the spectrum) beat LAPACK (accurate to `eps·λ_max`) — the
+   reverse of §24. And an existing native test claimed to pin a spelling it could not see (the
+   reed's NaN stall test): a "this pins X" comment is a claim to plant, too. §41 found four gaps, all guarded at the
    human's call: the admittance built at the default `θ` (seen by nothing — every bar ran at the
    default, a fifth time), the balance's exactness at a loose solve tolerance (only the viewer
    freeze) and the tolerance itself (seen by nothing), the fallback's root choice and the bow's

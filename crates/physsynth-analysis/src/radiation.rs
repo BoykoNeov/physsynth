@@ -24,7 +24,8 @@
 //!
 //! # What makes swapping it under the model flag safe
 //!
-//! There is a real question underneath: `tests/test_bore_radiation.py` uses this resistance to
+//! There is a real question underneath: `tests/test_bore_radiation.py` (retired at retirement
+//! plan §42; its bars are in `physsynth-core/tests/bore_harness.rs`) used this resistance to
 //! check a bore's reflection, so under `PHYSSYNTH_RS=1` a Rust bore would be checked against a
 //! Rust-computed `R` — the shared-misreading shape the two-flag rule exists to prevent.
 //!
