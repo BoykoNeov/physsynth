@@ -19,7 +19,6 @@ use physsynth_core::ops2d::{
 };
 use physsynth_core::plate::linspace0;
 use physsynth_core::sparse::Csr;
-use physsynth_core::sparse_lu::SparseLu;
 use std::f64::consts::PI;
 
 /// Row-major flat index of node `(j, i)` on a grid `ncols` nodes wide — the one ordering every
@@ -1227,85 +1226,10 @@ fn max_abs(v: impl IntoIterator<Item = f64>) -> f64 {
     })
 }
 
-/// The clamped manufactured stress function on the `1 x 0.8` rectangle and its biharmonic.
-///
-/// `F = (1 - cos(2 pi x / Lx)) (1 - cos(2 pi y / Ly))` has `F = F,n = 0` on every edge, so it IS a
-/// clamped solution, and `lap F != 0` there, so it is NOT a Navier one. `g = 1 - cos(a x)` has
-/// `g'''' = -a^4 cos(a x)` -- note the sign.
-fn airy_manufactured(nx: usize, ny: usize) -> (Vec<f64>, Vec<f64>) {
-    let (lx, ly) = (1.0, 0.8);
-    let (a, b) = (2.0 * PI / lx, 2.0 * PI / ly);
-    let (x, y) = mesh(nx, ny, lx, ly);
-    let mut f = Vec::with_capacity(x.len());
-    let mut lap4 = Vec::with_capacity(x.len());
-    for (&xv, &yv) in x.iter().zip(y.iter()) {
-        let (cx, cy) = ((a * xv).cos(), (b * yv).cos());
-        let (g, q) = (1.0 - cx, 1.0 - cy);
-        f.push(g * q);
-        lap4.push(-(a.powi(4)) * cx * q + 2.0 * a * a * b * b * cx * cy - g * b.powi(4) * cy);
-    }
-    (f, lap4)
-}
-
 /// The Python's grid ladder: `h = 1 / Nx`, `Ny = round(0.8 / h)`.
 fn ladder(nx: usize) -> (usize, usize, f64) {
     let h = 1.0 / nx as f64;
     (nx, (0.8 / h).round() as usize, h)
-}
-
-#[test]
-fn the_airy_solve_recovers_a_clamped_manufactured_field_at_second_order() {
-    // THE Part-2 gate. The retired Python read 0.02258 / 0.005631 / 0.001407 and rates 2.0033 /
-    // 2.0008; the error is the discretization's, three orders above any solver's rounding.
-    let mut errs = Vec::new();
-    for nx in [40usize, 80, 160] {
-        let (nx, ny, h) = ladder(nx);
-        let (exact, lap4) = airy_manufactured(nx, ny);
-        let f = AiryStressSolver::new(nx, ny, h)
-            .expect("SPD")
-            .solve(&lap4)
-            .expect("solve");
-        errs.push(max_abs(f.iter().zip(exact.iter()).map(|(a, b)| a - b)));
-    }
-    eprintln!("Airy errors {errs:?}");
-    for w in errs.windows(2) {
-        let rate = (w[0] / w[1]).ln() / 2.0f64.ln();
-        assert!(
-            rate > 1.9,
-            "Airy solve converges at rate {rate:.4}, errors {errs:?}"
-        );
-    }
-    assert!(errs[2] < 5e-3, "finest error {:.3e}", errs[2]);
-}
-
-#[test]
-fn the_clamped_airy_operator_is_not_the_navier_biharmonic() {
-    // The discriminator: both operators are SPD, so only a field that is clamped but not Navier can
-    // tell them apart. Solving the same source through `B = L^2` saturates at O(1) (the retired
-    // Python: 4.144 against 0.005631, a factor of 736) while the clamped solve converges.
-    let (nx, ny, h) = ladder(80);
-    let (exact, lap4) = airy_manufactured(nx, ny);
-    let clamped = AiryStressSolver::new(nx, ny, h)
-        .expect("SPD")
-        .solve(&lap4)
-        .expect("solve");
-    let err_clamped = max_abs(clamped.iter().zip(exact.iter()).map(|(a, b)| a - b));
-    let mask = rectangle_mask(nx, ny);
-    let (b, _) = biharmonic_from_mask(&mask, h);
-    let live: Vec<usize> = (0..mask.flags().len())
-        .filter(|&p| mask.flags()[p])
-        .collect();
-    let rhs: Vec<f64> = live.iter().map(|&p| lap4[p]).collect();
-    let f_ss = SparseLu::factor(&b)
-        .expect("SPD")
-        .solve(&rhs)
-        .expect("solve");
-    let err_ss = max_abs(live.iter().zip(f_ss.iter()).map(|(&p, v)| v - exact[p]));
-    eprintln!("Navier {err_ss:e}, clamped {err_clamped:e}");
-    assert!(
-        err_ss > 50.0 * err_clamped,
-        "Navier {err_ss:.4e} against clamped {err_clamped:.4e}"
-    );
 }
 
 #[test]

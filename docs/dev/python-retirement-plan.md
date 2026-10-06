@@ -6494,16 +6494,16 @@ stress solve), and the coupled plate on both boundaries — the supported gong a
 
 The bars went to one new file and two extended ones:
 
-- `crates/physsynth-core/tests/vk_plate_harness.rs` — **15 tests**, new (fourteen carried, one added
-  in §40.4), at the Python's fixture: a 40 cm square of 1 mm steel (`E = 2e11`, `nu = 0.3`,
+- `crates/physsynth-core/tests/vk_plate_harness.rs` — **17 tests**, new (fourteen carried, one added
+  in §40.4, two of the Airy solve's moved here from `ops2d.rs` in §40.8), at the Python's fixture: a 40 cm square of 1 mm steel (`E = 2e11`, `nu = 0.3`,
   `rho = 7800`) at `N = 20`, `fs = 48 kHz`, struck with a centred 8 cm Gaussian, on the shipped
   solve defaults (`couple_tol = 1e-13`, cap 50, `couple_method = Auto` — the Python's defaults too, so the
   two ran the same path). **Not `plate.rs`'s fixture** (`rho = 7860`, `N = 16`, a 10 cm bump), which
   stays as it is. The energy, modal, stability and free-edge files ran the same bars on the two
   boundaries, so each native test loops over both where the Python had a twin, and reads the
   boundary-specific figure where the two Python files differed (§40.2).
-- `crates/physsynth-core/tests/ops2d.rs` — **41 → 48**: seven new tests for the operators against
-  closed forms, and four existing ones widened to the Python's grids and fields (§40.2).
+- `crates/physsynth-core/tests/ops2d.rs` — **41 → 46**: five new tests for the operators against
+  closed forms (two more went to the harness, §40.8), and four existing ones widened to the Python's grids and fields (§40.2).
 - `crates/physsynth-core/tests/plate.rs` — the `nonlinear = false` anchor widened to three
   non-default `theta`s with loss on (§40.4), the human's call.
 
@@ -6618,7 +6618,7 @@ Planted one at a time with `W:\temp\claude\vk-plate\mutate.py` (snapshot, restor
 byte-compare). "Red" counts eight files — `vk_plate_harness`, `ops2d`, `plate`,
 `plate_theta_solve`, `mallet_gong`, `mallet_room_gong`, `airbox_vk` and `connection_plate` — and is
 the first round's, except I, M and N, re-planted after the two bars added below, and L and Q,
-whose runs a hang cut short: theirs is the union over the runs that reached each file.
+re-run one file per cargo run with a 120 s limit each after a hang cut the first runs short (§40.8).
 
 | breakage | red | caught by |
 |---|---|---|
@@ -6633,10 +6633,10 @@ whose runs a hang cut short: theirs is the union over the runs that reached each
 | **I** the caller's `theta` replaced by the default | 0 → 1 | **0 workspace-wide**; the `nonlinear = false` anchor, widened to three `theta`s — **added** |
 | **J** the caller's `sigma` dropped | 3 | passivity (carried), the room's and the mallet's lossy totals |
 | **K** `couple_tol` ignored | 2 | the drift-versus-tolerance gate (carried), the room's tolerance bar |
-| **L** the coupling force's sign flipped | 39+ | everything that conserves — and it HANGS three string-on-gong tests in `connection_plate` and ten in `mallet_gong` (killed at 300 s) |
+| **L** the coupling force's sign flipped | 38, + 16 unfinished | everything that conserves, the harness's headline, passivity and start-up bar among them; 16 tests never finish in 120 s — 3 in the harness (the tolerance gate, both glides), 10 in `mallet_gong`, 3 in `connection_plate` |
 | **M** the start's coupling dropped, supported | 0 → 1 | **the viewer freeze only** (two scenes), Windows-exact; the time-symmetric start — **added** |
 | **N** the start's coupling dropped, free | 1 → 2 | the room's ledger bar; the time-symmetric start — **added** |
-| **Q** the free plate's coupling without its `h^2` | 21+ | the Newton suite, passivity, the gate; it hangs four harness bars, one in `plate` and one in `airbox_vk` (killed at 300 s) |
+| **Q** the free plate's coupling without its `h^2` | 21, + 6 unfinished | the Newton suite, passivity, the gate, the start-up bar; 6 never finish in 120 s — 4 in the harness, 1 in `plate`, 1 in `airbox_vk` |
 | **R** `w` not averaged with `w^{n-1}` | 34 | every conservation bar |
 | **S** the sweep seeded from `w^n` instead of the extrapolation | 2 | the mallet's stall bar and outer-cost bar |
 | **U** the Airy load weight made uniform | 0 | **none possible**: an equivalent mutant (below) |
@@ -6657,24 +6657,30 @@ N was not, before its bar went in; it has two witnesses now. Four readings:
   room bar. The second-order start's coupling is 0.76 of the first step at the headline's amplitude,
   yet a dropped one is a one-step error that conservation from step one onward cannot see. The human
   chose §35's start-up bar: released from rest the scheme must step symmetrically in time. It sees M
-  and N, with the coupling's share asserted above half so the bar cannot go vacuous.
+  and N **by the symmetry claim itself**: planted, the asymmetry reads **0.855** on the planted
+  boundary against 0.020 correct (a 43x separation; the 0.1 bound sits between). The coupling's
+  share is asserted above half so the bar cannot go vacuous, and a dropped coupling trips that guard
+  too (it reads exactly 0), which is why the symmetry assertion comes FIRST: in the commit that
+  added the bar the guard came first, so the red under M and N was the guard's and the 0.76 quoted
+  for the asymmetry was an estimate (the review caught it; measured and reordered in §40.8).
 - **U is not a defect.** The Airy solve's unknowns are the interior nodes, and every interior node's
   trapezoidal weight is exactly `h * h` (`wy * wx` with neither halved), so "uniform" is the same
   vector, bit for bit. A plant that changes no number cannot be caught and is not a gap.
-- **L and Q hang rather than fail**, and the first round's run of the previous session sat inside L
-  for over an hour before it was found (killed by its PID, the human's call). The script now gives
-  each plant 300 s and names the tests still running. A hang is a catch on CI only through the job
-  timeout, so the red counts above are what each plant turned red before the limit, with `+` where a
-  hang kept some tests from finishing. The harness's own conservation bars are among L's reds once the hanging
-  files are left out.
+- **L and Q make some tests run without end instead of failing**, and the first round's run of the
+  previous session sat inside L for over an hour before it was found (killed by its PID, the human's
+  call). Each file now runs in its own cargo run with its own limit, and a test counts as unfinished
+  only if it never reported `ok` or `FAILED` before the kill — libtest's "running for over 60
+  seconds" notice is not that (the first count used it, and named tests that went on to fail). An
+  unfinished test is a catch on CI only through the job timeout; both plants are also caught
+  outright, 38 and 21 times.
 
 ### 40.5 The retirement rule, discharged
 
 | retired | native bar |
 |---|---|
-| `test_vk_airy.py::test_manufactured_solution_second_order` | `ops2d.rs::the_airy_solve_recovers_a_clamped_manufactured_field_at_second_order` |
-| `…::test_clamped_is_not_navier_l2` | `…::the_clamped_airy_operator_is_not_the_navier_biharmonic` |
-| `…::test_operator_symmetric` | `…::the_airy_operator_is_symmetric_and_the_solve_inverts_it`, widened to the Python's two grids |
+| `test_vk_airy.py::test_manufactured_solution_second_order` | `vk_plate_harness.rs::the_airy_solve_recovers_a_clamped_manufactured_field_at_second_order` (§40.8) |
+| `…::test_clamped_is_not_navier_l2` | `vk_plate_harness.rs::the_clamped_airy_operator_is_not_the_navier_biharmonic` (§40.8) |
+| `…::test_operator_symmetric` | `ops2d.rs::the_airy_operator_is_symmetric_and_the_solve_inverts_it`, widened to the Python's two grids |
 | `…::test_operator_positive_definite` | `…::the_airy_operators_smallest_eigenvalue_is_lapacks` — sharpened from "positive" to LAPACK's value, frozen |
 | `…::test_zero_source_gives_zero_field` | `…::a_zero_source_gives_exactly_zero` (already native) |
 | `…::test_couples_with_bracket_quadratic_in_w` | `…::the_stress_field_is_quadratic_in_the_deflection_through_the_bracket_seam`, the factor four sharpened to `==` |
@@ -6726,12 +6732,13 @@ helper `arpack_v0` stays (`test_bore_energy.py`, `test_stability.py`).
 - **pytest 913 → 845**: the six files' 68 cases, reconciled with `--collect-only` against the
   collection taken before the deletion; 845 passed.
 - **Native +22**: workspace 1,571 → 1,593 optimised (`scripts/cargo-test-nice.ps1 -Full`), all
-  green; `vk_plate_harness.rs` 0 → 15, `ops2d.rs` 41 → 48. `plate.rs`'s anchor is one test, four
+  green; `vk_plate_harness.rs` 0 → 17, `ops2d.rs` 41 → 46 (after §40.8's move). `plate.rs`'s anchor is one test, four
   times as long.
 - **Optimised only, the human's call**: `vk_plate_harness` takes **5.7 s optimised and 160 s
   unoptimised** locally, checks no arithmetic spelling, and the model it drives has no
   `debug_assert!`, so it joins CI's `release_only` list (the comment there says why). `ops2d` stays
-  in both profiles (61 s unoptimised): its exact checks are about stencils.
+  in both profiles — its exact checks are about stencils — at 0.27 s unoptimised (0.14 s before the
+  batch) once §40.8 moved its two slow solver bars out.
 - Three lint findings in the new `ops2d.rs` code (a complex type, an index loop, `.err().expect()`)
   were fixed before the commit; CI's clippy is `-D warnings`.
 - **19 physics files remain**, with **237** test functions by the §24.1 count (281 − 44). The gong
@@ -6743,3 +6750,41 @@ The next batch is not chosen; the human picks. The 19 files, by family: the bow 
 the reed (`test_reed_*`, 3), the bore (`test_bore_*`, 4), the body (1), the room
 (`test_airbox_*`, 4), radiation (1), the resolution horizon (1), the spectrum detector (1) and the
 operators (1).
+
+### 40.8 Review fixes and CI
+
+Run 37480942836 on `9010298`, all five jobs green — the first Linux run of the new bars, and of the
+gate test's no-fallback assertion: on glibc's arithmetic too, every gate-regime step converged by its
+sweeps alone.
+
+| file | optimised | unoptimised |
+|---|---|---|
+| `vk_plate_harness.rs` | 6.92 s | — (`release_only`) |
+| `ops2d.rs` (before the move below) | 2.63 s | **69.52 s** |
+
+The jobs took **6.6 minutes optimised and 13.9 unoptimised**; the previous run on `main`
+(37429369407, §39's docs commit) took 10.9 and 11.4. Runners vary by up to 1.6x between runs, so the
+comparison that means something is inside one job: of the unoptimised job's 13.9 minutes, 69.5 s
+were `ops2d`, which had taken 0.14 s there before this batch.
+
+The advisor's read of the first commit found four things, all fixed here:
+
+- **The start-up bar's red under M and N was its guard's, not its claim's.** With the coupling
+  dropped, `w^{-1}` equals the bending-only start exactly, so the share guard (asserted first) read
+  0 and fired before the symmetry assertion was reached; the "0.76 in the asymmetry" in §40.4 and
+  the test's comment was an estimate. Reordered (the claim first, the guard second) and planted
+  again by hand with `--nocapture`: the asymmetry reads **0.855** on the planted boundary, caught by
+  the symmetry assertion itself. §40.4 and the comment carry the measured value.
+- **"Hung" overclaimed.** The first count named every test libtest reported as "running for over 60
+  seconds", and some of those went on to fail (`plate::a_nonlinear_plate_conserves_its_total_energy`
+  under Q was in both lists). L and Q were re-run one test file per cargo run, 120 s each, counting a
+  test as unfinished only if it never reported `ok` or `FAILED`: L 38 red + 16 unfinished, Q 21 red
+  + 6 unfinished (§40.4's table). The memory note's wording is corrected the same way.
+- **`ops2d`'s unoptimised growth was not measured or put to the human.** Measured against a worktree
+  at `446864e`: 0.14 s → 59 s locally, of which the Airy manufactured-solution gate is 58.6 s (it
+  factors the stress operator up to 160 x 128) and the Navier discriminator 6.7 s; optimised, 3.9 s
+  and 0.5 s. **The human chose to move those two** into `vk_plate_harness.rs`, which is optimised-only
+  — both read rates and error sizes, no spelling. `ops2d` is now 46 tests and **0.27 s** unoptimised;
+  the harness 17 tests and 6.9 s optimised. The workspace count is unchanged (1,593).
+- **This section**, and a check that the local toolchain is CI's pinned one (`rustc 1.98.0`, so the
+  local clippy pass is CI's).

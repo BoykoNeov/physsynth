@@ -17,10 +17,13 @@
 
 use physsynth_analysis::spectrum::{hann, rfft_mag, rfftfreq};
 use physsynth_core::eig::generalized_eigen_diag;
+use physsynth_core::ops2d::{biharmonic_from_mask, rectangle_mask, AiryStressSolver};
 use physsynth_core::plate::{
-    pickup_index_at, Boundary, Params, Plate, PlateSpec, VkParamError, VkParams, VkPlate, VkSpec,
+    linspace0, pickup_index_at, Boundary, Params, Plate, PlateSpec, VkParamError, VkParams,
+    VkPlate, VkSpec,
 };
 use physsynth_core::reduce;
+use physsynth_core::sparse_lu::SparseLu;
 use std::f64::consts::PI;
 
 const YOUNG: f64 = 2.0e11;
@@ -346,8 +349,9 @@ fn at_vanishing_amplitude_the_plate_is_the_linear_one_on_both_boundaries() {
 /// is time-reversible, so a start on the even solution makes `w^1 = w^{-1}` up to the Taylor
 /// start's own `O(k^4)` error. Read at the headline's three thicknesses, where the coupling is
 /// 0.76 of the first step's whole displacement (asserted above half, so the bar cannot go vacuous
-/// by the coupling becoming too small to matter). Measured: 2.0e-2 on both boundaries correct; a
-/// dropped coupling leaves that 0.76 in the asymmetry. The 0.1 bound is this fixture's.
+/// by the coupling becoming too small to matter). Measured: 2.0e-2 on both boundaries correct;
+/// planted, 0.855 on the planted boundary, caught by the symmetry assertion (the share guard reads
+/// 0 then too). The 0.1 bound is this fixture's.
 #[test]
 fn released_from_rest_the_first_step_is_time_symmetric_on_both_boundaries() {
     let gap = |a: &[f64], b: &[f64]| {
@@ -370,11 +374,13 @@ fn released_from_rest_the_first_step_is_time_symmetric_on_both_boundaries() {
         let coupling_share = gap(&back, &bending_only.u_prev) / size;
         let asym = gap(&v.u, &back) / size;
         eprintln!("{boundary:?}: coupling share {coupling_share:.3e}, asymmetry {asym:.3e}");
+        // The physics claim first, so a dropped coupling is caught BY it; the share is the guard
+        // that keeps the claim from going vacuous, and a dropped coupling trips it too.
+        assert!(asym < 0.1, "{boundary:?}: asymmetry {asym:.3e}");
         assert!(
             coupling_share > 0.5,
             "{boundary:?}: coupling {coupling_share:.3e}"
         );
-        assert!(asym < 0.1, "{boundary:?}: asymmetry {asym:.3e}");
     }
 }
 
@@ -781,4 +787,117 @@ fn a_free_plate_has_every_node_live_and_a_lumped_mass() {
     assert!(p.lin.mass.is_some(), "the free plate's mass matrix");
     assert_eq!(p.lin.w.len(), p.lin.n_live);
     assert_eq!(p.lin.stiffness.nrows(), p.lin.n_live);
+}
+
+// -- the Airy solve's two grid-refinement bars (moved from ops2d.rs, §40.8) -----------------------
+//
+// Operator bars, not plate bars: they sit here only because this file runs optimised-only. Both
+// factor the stress operator on grids up to 160 x 128, which takes ~60 s unoptimised against ~4 s
+// optimised, and both read rates and error sizes, never an exact spelling (the human's call).
+
+/// `np.meshgrid(np.linspace(0, lx, nx + 1), np.linspace(0, ly, ny + 1))`, flattened row-major.
+fn mesh(nx: usize, ny: usize, lx: f64, ly: f64) -> (Vec<f64>, Vec<f64>) {
+    let xs = linspace0(lx, nx + 1);
+    let ys = linspace0(ly, ny + 1);
+    let mut x = Vec::with_capacity((nx + 1) * (ny + 1));
+    let mut y = Vec::with_capacity((nx + 1) * (ny + 1));
+    for &yv in &ys {
+        for &xv in &xs {
+            x.push(xv);
+            y.push(yv);
+        }
+    }
+    (x, y)
+}
+
+fn max_abs(v: impl IntoIterator<Item = f64>) -> f64 {
+    // NaN-propagating, as `np.max` is: a NaN must fail the bar it is compared against.
+    v.into_iter().fold(0.0f64, |m, x| {
+        if x.is_nan() || m.is_nan() {
+            f64::NAN
+        } else {
+            m.max(x.abs())
+        }
+    })
+}
+
+/// The clamped manufactured stress function on the `1 x 0.8` rectangle and its biharmonic.
+///
+/// `F = (1 - cos(2 pi x / Lx)) (1 - cos(2 pi y / Ly))` has `F = F,n = 0` on every edge, so it IS a
+/// clamped solution, and `lap F != 0` there, so it is NOT a Navier one. `g = 1 - cos(a x)` has
+/// `g'''' = -a^4 cos(a x)` -- note the sign.
+fn airy_manufactured(nx: usize, ny: usize) -> (Vec<f64>, Vec<f64>) {
+    let (lx, ly) = (1.0, 0.8);
+    let (a, b) = (2.0 * PI / lx, 2.0 * PI / ly);
+    let (x, y) = mesh(nx, ny, lx, ly);
+    let mut f = Vec::with_capacity(x.len());
+    let mut lap4 = Vec::with_capacity(x.len());
+    for (&xv, &yv) in x.iter().zip(y.iter()) {
+        let (cx, cy) = ((a * xv).cos(), (b * yv).cos());
+        let (g, q) = (1.0 - cx, 1.0 - cy);
+        f.push(g * q);
+        lap4.push(-(a.powi(4)) * cx * q + 2.0 * a * a * b * b * cx * cy - g * b.powi(4) * cy);
+    }
+    (f, lap4)
+}
+
+/// The Python's grid ladder: `h = 1 / Nx`, `Ny = round(0.8 / h)`.
+fn ladder(nx: usize) -> (usize, usize, f64) {
+    let h = 1.0 / nx as f64;
+    (nx, (0.8 / h).round() as usize, h)
+}
+
+#[test]
+fn the_airy_solve_recovers_a_clamped_manufactured_field_at_second_order() {
+    // THE Part-2 gate. The retired Python read 0.02258 / 0.005631 / 0.001407 and rates 2.0033 /
+    // 2.0008; the error is the discretization's, three orders above any solver's rounding.
+    let mut errs = Vec::new();
+    for nx in [40usize, 80, 160] {
+        let (nx, ny, h) = ladder(nx);
+        let (exact, lap4) = airy_manufactured(nx, ny);
+        let f = AiryStressSolver::new(nx, ny, h)
+            .expect("SPD")
+            .solve(&lap4)
+            .expect("solve");
+        errs.push(max_abs(f.iter().zip(exact.iter()).map(|(a, b)| a - b)));
+    }
+    eprintln!("Airy errors {errs:?}");
+    for w in errs.windows(2) {
+        let rate = (w[0] / w[1]).ln() / 2.0f64.ln();
+        assert!(
+            rate > 1.9,
+            "Airy solve converges at rate {rate:.4}, errors {errs:?}"
+        );
+    }
+    assert!(errs[2] < 5e-3, "finest error {:.3e}", errs[2]);
+}
+
+#[test]
+fn the_clamped_airy_operator_is_not_the_navier_biharmonic() {
+    // The discriminator: both operators are SPD, so only a field that is clamped but not Navier can
+    // tell them apart. Solving the same source through `B = L^2` saturates at O(1) (the retired
+    // Python: 4.144 against 0.005631, a factor of 736) while the clamped solve converges.
+    let (nx, ny, h) = ladder(80);
+    let (exact, lap4) = airy_manufactured(nx, ny);
+    let clamped = AiryStressSolver::new(nx, ny, h)
+        .expect("SPD")
+        .solve(&lap4)
+        .expect("solve");
+    let err_clamped = max_abs(clamped.iter().zip(exact.iter()).map(|(a, b)| a - b));
+    let mask = rectangle_mask(nx, ny);
+    let (b, _) = biharmonic_from_mask(&mask, h);
+    let live: Vec<usize> = (0..mask.flags().len())
+        .filter(|&p| mask.flags()[p])
+        .collect();
+    let rhs: Vec<f64> = live.iter().map(|&p| lap4[p]).collect();
+    let f_ss = SparseLu::factor(&b)
+        .expect("SPD")
+        .solve(&rhs)
+        .expect("solve");
+    let err_ss = max_abs(live.iter().zip(f_ss.iter()).map(|(&p, v)| v - exact[p]));
+    eprintln!("Navier {err_ss:e}, clamped {err_clamped:e}");
+    assert!(
+        err_ss > 50.0 * err_clamped,
+        "Navier {err_ss:.4e} against clamped {err_clamped:.4e}"
+    );
 }
