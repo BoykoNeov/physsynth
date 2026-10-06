@@ -10,8 +10,8 @@
 //! ```
 //!
 //! solved by a safeguarded Newton seeded from the previous step (*continuation*) with a scanned
-//! bracket plus [`crate::root::brentq`] behind it. `physsynth/core/bow.py` is the reference and its
-//! docstrings carry the physics; this module carries the arithmetic.
+//! bracket plus [`crate::root::brentq`] behind it. The Python original is deleted; this module is
+//! the model, and its acceptance bars are `tests/bow.rs` and `tests/bow_harness.rs`.
 //!
 //! # The finding this module exists to record: the residual is spelled TWICE, on purpose
 //!
@@ -51,8 +51,9 @@
 //! (batch 3), the Brent fallback is [`crate::root`] (Phase 2 batch 3) and the scan-and-bracket
 //! idiom is [`crate::collision::linspace`]'s (batch 2) — which is why that helper is shared rather
 //! than copied. What is genuinely new is the *hand hoist* above, and the question §19.11 left: a
-//! Newton **iteration count** and a fallback **branch** are compared by nothing in the repo, so
-//! `tests/test_rust_parity_bow.py` compares them step for step.
+//! Newton **iteration count** and a fallback **branch** were compared by nothing in the repo, so
+//! the parity file `tests/test_rust_parity_bow.py` compared them step for step until it was
+//! retired with the Python model.
 //!
 //! # The admittance is built ONCE
 //!
@@ -280,7 +281,8 @@ pub fn bracketed_root(v_free: f64, seed: f64, p: &Params) -> Result<f64, BowErro
 ///
 /// `newton_evals` is **not** part of the Python original's interface. It is here because §19.11
 /// asked for it: an iteration count is a control-flow decision a last bit can reach, and nothing in
-/// the repo compared one until `tests/test_rust_parity_bow.py` did.
+/// the repo compared one until the (since retired) `tests/test_rust_parity_bow.py` did.
+/// `tests/bow_harness.rs` now reads it to check the tolerance the caller passed is the one used.
 ///
 /// It counts **residual evaluations inside the Newton phase**, seed included, and deliberately not
 /// accepted steps. Two reasons, both about being comparable: it is what the Python side can count

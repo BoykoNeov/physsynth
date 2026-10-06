@@ -118,8 +118,14 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    the jawari and the mallet on a drumhead, two batches done together at the human's request (bars
    for both first, one comparison, one breakage round, one deletion), §38 the mallet on a
    plate, and §39 the mallet on a gong — **every contact file is gone** — and §40 the gong plate
-   itself (six files, its bracket and Airy solve included); **19 physics files / 237 functions
-   remain** (§9's map is stale). §40 found two defects the workspace could not see, both guarded at
+   itself (six files, its bracket and Airy solve included), and §41 the bowed string; **16 physics
+   files / 215 functions remain** (§9's map is stale). §41 found four gaps, all guarded at the
+   human's call: the admittance built at the default `θ` (seen by nothing — every bar ran at the
+   default, a fifth time), the balance's exactness at a loose solve tolerance and the tolerance
+   itself (seen by nothing / only the viewer freeze), the fallback's root choice and the bow's node
+   rounding (only the Windows-exact viewer freeze). Before calling a zero-witness plant a gap, PROBE
+   it: print trajectory digests at the default AND off-default rigs — two of §41's zeros changed no
+   bit anywhere and are not gaps. §40 found two defects the workspace could not see, both guarded at
    the human's call: the plate's constructor dropping the caller's `θ` (step and energy then agree
    on the wrong θ, so conservation is blind — the bit-identity anchor now runs at three θs), and
    the start dropping the membrane force (seen only by the Windows-exact viewer freeze — §35's

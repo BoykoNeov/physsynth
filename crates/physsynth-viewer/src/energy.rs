@@ -22,7 +22,8 @@ pub const N_ENERGY_POINTS: usize = 600;
 pub const LOSSLESS_TOL: f64 = 1e-10;
 /// Relative per-step energy-increase tolerance for the passivity check.
 pub const MONOTONE_TOL: f64 = 1e-9;
-/// Lossless `|dE - work| / scale` bar for a driven model (`tests/test_bow_energy.py`).
+/// Lossless `|dE - work| / scale` bar for a driven model (the retired
+/// `tests/test_bow_energy.py`'s, now `physsynth-core/tests/bow_harness.rs`'s).
 pub const BOW_BALANCE_TOL: f64 = 1e-11;
 
 /// The optional parts of an energy report; `Default` is the plain string's.

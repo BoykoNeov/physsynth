@@ -5,9 +5,8 @@
 //! This is the third model in the project that holds another Rust pyclass and corrects it once per
 //! step — after `PyReedBore` and `PyMalletMembrane` — and it follows both:
 //!
-//! * **`.string` is the object the caller passed, not a copy.** `tests/test_bow_energy.py` calls
-//!   `bow.string.set_state(...)` and `bow.string.energy()`, `tests/test_bow_modal.py` reads
-//!   `bow.string.fs` and `.N`, and `web/serialize.py` reads `.lam` and `.x`. So this type holds a
+//! * **`.string` is the object the caller passed, not a copy.** the retired bow tests called
+//!   `bow.string.set_state(...)` and `bow.string.energy()` and read `bow.string.fs` and `.N`, and `web/serialize.py` reads `.lam` and `.x`. So this type holds a
 //!   `Py<PyDampedStiffString>` and drives the free functions in the core module.
 //! * **It requires a Rust `DampedStiffString`.** Handed the pure-Python `DampedStiffStringPy` it
 //!   raises `TypeError` rather than falling back — a Rust bow reporting Rust while bowing a Python
@@ -28,7 +27,7 @@
 //!
 //! # Every underscore-named attribute is exposed
 //!
-//! `tests/test_bow_stability.py` reads `bow._g` to re-derive `helmholtz_number`. §12.2's rule
+//! The retired `tests/test_bow_stability.py` read `bow._g` to re-derive `helmholtz_number`. §12.2's rule
 //! applies — a leading underscore is not a statement about the interface — so `_g`, `_a_vec`,
 //! `_a_full` and `_force_pref` are all getters rather than a judgement call about which of them
 //! somebody might mean.
@@ -189,7 +188,7 @@ impl PyBowedString {
         self.p.helmholtz_number
     }
 
-    /// `g = k a_i / (2 rho h)` — read by `tests/test_bow_stability.py`, see the module header.
+    /// `g = k a_i / (2 rho h)` — read by the retired `tests/test_bow_stability.py`, see the module header.
     #[getter]
     fn _g(&self) -> f64 {
         self.p.g

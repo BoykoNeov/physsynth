@@ -46,7 +46,7 @@ pub const BOW_FORCE_MAX: f64 = 5.0;
 pub const BOW_V_MAX: f64 = 1.0;
 /// Sharpness ceiling.
 pub const BOW_SHARPNESS_MAX: f64 = 200.0;
-/// Lossless balance bar (`tests/test_bow_energy.py`).
+/// Lossless balance bar (the retired `tests/test_bow_energy.py`'s; now `bow_harness.rs`'s).
 pub const BOW_BALANCE_TOL: f64 = crate::energy::BOW_BALANCE_TOL;
 /// Clean one-slip-per-period window for the stick-slip verdict.
 pub const BOW_SLIPS_LO: f64 = 0.85;

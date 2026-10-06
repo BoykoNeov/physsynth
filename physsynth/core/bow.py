@@ -9,8 +9,8 @@ test is an energy **balance** rather than conservation, and ``σ₁ > 0`` is *re
 one-slip Helmholtz motion rather than merely nice to have.
 
 ``friction_smooth`` and ``friction_smooth_deriv`` come from Rust rather than being re-derived here:
-``tests/test_bow_stability.py`` imports them by name and asserts the curve's oddness, peak and
-derivative directly.
+the retired ``tests/test_bow_stability.py`` imported them by name; the curve's oddness, peak and
+derivative are now asserted in ``crates/physsynth-core/tests/bow.rs``.
 
 Headless: no I/O, no graphics.
 """

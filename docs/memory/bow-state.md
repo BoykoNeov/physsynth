@@ -73,3 +73,8 @@ Files: `physsynth/core/bow.py` (`BowedString`, `friction_smooth`, `friction_smoo
 balance, Helmholtz corner+stick-slip+sawtooth, harmonic spectrum, **Schelleng wedge** 23/48 clean).
 Next breadth options still open: sympathetic/coupled strings (reuse body node), hammer/mallet contact,
 wind/bore+reed.
+
+**2026-10-06 (retirement §41):** the Python suite (`tests/test_bow_*.py`) is deleted; its bars live in
+`crates/physsynth-core/tests/bow_harness.rs` at the helper rig above, plus four guards (θ, solve tolerance,
+fallback root choice, node rounding). The `helpers.py` rig and `BOW_*` constants are gone. See
+[[retirement-phase-c-carrying-state]].

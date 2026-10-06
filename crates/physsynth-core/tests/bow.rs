@@ -1,6 +1,8 @@
 //! Native bars for the bowed string (plan §20) — the exciter's acceptance contract, no interpreter.
 //!
-//! The Python suite's criteria are reproduced in the order they are argued there: the lossless
+//! Written beside the Python suite, at its own rig (the bow at `0.2`, mostly at a sharpness of
+//! 100); the Python's assertions at the Python's rig went to `bow_harness.rs` when
+//! `tests/test_bow_*.py` were retired (retirement plan §41). The criteria here: the lossless
 //! **energy balance** (the money test — the bow is active, so `E` is not conserved and the claim is
 //! that every joule is accounted for by the bow's work), **passivity** under loss, `force = 0`
 //! decoupling the bow **bit-for-bit** from the bare string, the friction curve's shape, and the
@@ -249,6 +251,15 @@ fn construction_rejects_the_unphysical() {
     // The message quotes both numbers as Python's `str(float)` would.
     let msg = mk(1.5, 1.0, 100.0, 60).unwrap_err().to_string();
     assert_eq!(msg, "bow_position must satisfy 0 < x < L (L=1.0), got 1.5.");
+    // The retired `test_bow_stability.py` matched each refusal by one word; each message names its
+    // own parameter.
+    let word =
+        |pos: f64, force: f64, sharp: f64| mk(pos, force, sharp, 60).unwrap_err().to_string();
+    assert_eq!(word(0.13, -1.0, 100.0), "bow force must be >= 0.");
+    assert_eq!(word(0.13, 1.0, 0.0), "sharpness (a) must be > 0.");
+    for pos in [-0.1, 0.0, 1.0] {
+        assert!(word(pos, 1.0, 100.0).starts_with("bow_position must satisfy"));
+    }
 }
 
 #[test]
@@ -258,6 +269,10 @@ fn the_bow_node_is_snapped_into_the_interior() {
         .expect("valid bow");
     assert!(b.p.node >= 1 && b.p.node < b.string.p.n);
     assert!(b.x_bow > 0.0 && b.x_bow < b.string.p.l);
+    // `0.004 / h = 0.4` rounds to the clamped end and is pulled in to the first interior node — the
+    // node the retired Python test's own rig (`fs = 40 kHz`, the same `h`) snapped to as well.
+    assert_eq!(b.p.node, 1);
+    assert_eq!(b.x_bow, 0.01);
     // The admittance vanishes at both clamped ends, which is what makes the correction a no-op
     // there and the `force = 0` anchor above meaningful.
     assert_eq!(b.a_full[0], 0.0);

@@ -1,11 +1,11 @@
 ---
 name: retirement-phase-c-carrying-state
-description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-17 done by 2026-10-06 (plates, membrane, beam, every string, every contact file incl. mallet-on-gong); 25 files / 281 functions left"
+description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-19 done by 2026-10-06 (plates, membrane, beam, every string, every contact file, the gong plate, the bow); 16 files / 215 functions left"
 metadata:
   node_type: memory
   type: project
   originSessionId: bc58c454-d6f0-40f5-8259-4ca90ee23d46
-  modified: 2026-10-06T07:23:24.654Z
+  modified: 2026-10-06T14:59:58.645Z
 ---
 
 Phase C of `docs/dev/python-retirement-plan.md`, second kind of work: the model is already Rust,
@@ -136,7 +136,43 @@ breakages, delete the file.
   14.6 unopt (unopt unchanged, file is release_only). Review AGAIN caught prose overclaims (a "three" that was
   two-and-a-half, a "wherever" fallback claim wider than the rigs that assert it, one surviving stale comment,
   a Python Linux figure tabled as native) — grep the write-up's quantifiers against the code before pushing.
-Remaining after §39: **25 physics files / 281 functions** (§24.1 count), no contact file left. Next batch not
+- §40 batch 18 (2026-10-06, "do the gong"; resumed after /clear with "1"): all six `test_vk_*.py`
+  (44 fns / 68 cases) → NEW `vk_plate_harness.rs` (17, CI `release_only`, the human's call: ~7 s opt /
+  160 s unopt, no spelling pins) + `ops2d.rs` 41 → 46 + `plate.rs` anchor widened. pytest 913 → 845;
+  workspace 1,571 → 1,593. Review: two NEW ops2d Airy bars cost 65 s unopt (ops2d 0.14 → 69.5 s on CI)
+  → moved into the release_only harness (human's call). MEASURE every new test's unopt cost against a
+  worktree of the previous commit, not just the new file's. CI 37480942836 green on 9010298. Free glide's ARPACK "mode" was a mix (residual 0.45) → native uses dense
+  generalized solve; Python re-run with LAPACK's vector to compare. Plants: I (theta dropped in the VK
+  constructor — step+energy agree on the WRONG theta, so conservation is blind) seen by nothing → anchor at
+  3 thetas; M (start drops coupling) seen only by viewer freeze → §35 time-symmetric start bar; both the
+  human's calls. U was an EQUIVALENT mutant (interior weights are exactly h*h) — not a gap.
+  INCIDENT: the previous session's mutate.py was STILL RUNNING after /clear (hung >1 h on plant L, which
+  makes tests spin, not fail) and my second run raced it on the same src files → junk "0 red" results and a
+  plant left in src. Before any breakage round: list processes for mutate.py/cargo of THIS repo; the script
+  (W:\temp\claude\vk-plate\mutate.py) runs ONE cargo per test file with its own LIMIT, kills its own
+  cargo by PID, and counts a test "unfinished" only if it never printed ok/FAILED before the kill —
+  libtest's "running for over 60 seconds" notice is NOT a hang (the first count used it and named tests
+  that later failed; the review caught it). It also counts `test result:` lines (0 binaries ≠ "0 red").
+  Review also caught: a bar's red under a plant came from its GUARD assert, not its claim — order the
+  claim's assert first and MEASURE the planted value (`--nocapture`), never estimate it.
+- §41 batch 19 (2026-10-06, human: "work on bow"): `test_bow_{energy,modal,stability}.py` (22 fns / 59
+  cases) → NEW core `bow_harness.rs` (21 = 17 carried + 4 guards) at the helper's rig (bow 0.13, a=60;
+  `bow.rs` bows at 0.2, a=100 and keeps its bars) + `bow.rs` refusal words / snap node pinned. Six 2.5 s
+  notes shared via `OnceLock` (the v_bow sweep's first point IS the beta=0.13 slip rig). Nothing frozen; every
+  figure AND every fallback/onset count reproduced to the digit. The v_bow=0.15 midpoint slips TWICE per
+  period (not Helmholtz) — the amplitude claim rests on two points; no monotone bar. 16 plants; 10 had zero
+  bow-file witnesses → PROBED first (a temp test printing digests at default + off-default rigs: θ 0.5/1,
+  newton_tol 1e-6, bow at 0.35) before calling anything a gap: A (admittance at default θ) seen by nothing
+  (5th θ instance), B (power from Newton iterate) / I (newton_tol ignored) visible only off the default
+  tolerance, C/D (fallback root pick) and N (node floored; moves 6 of 99 positions) only by the Windows-exact
+  viewer freeze → human chose all four guards (θ balance, loose-tol balance + cost ratio via `newton_evals`,
+  a (v_free, seed) root-choice sweep vs an independent bisection scan, snap at 0.29/0.47/...). J (scan uses the
+  Newton residual) and K (skip zero correction) changed NO bit anywhere → not gaps; P last digits only.
+  pytest 845 → 786; workspace 1,593 → 1,614. Harness 1.5 s opt / 18.6 s unopt (1 thread): both profiles,
+  nothing quick-skipped (slowest 0.42 s). Bash `start /b /wait x.bat` with `exit /b` leaves `cmd /K` at a
+  prompt (looks like a hang) — end .bat files with `exit %errorlevel%`; a quoted `start ""` from bash
+  mangles to `\"\"`. Recount functions with `grep -c "^def test_"` — I first said 19, it was 22.
+Remaining after §41: **16 physics files / 215 functions** (§24.1 count), no bow file left. Next batch not
 chosen — the user picks; a recommendation + "go with it" is an accepted answer. Re-derive the remaining list
 (§9's map is stale).
 Loose end (from §27): `test_arpack_oracles_are_bit_reproducible`'s surviving free-plate half guards a

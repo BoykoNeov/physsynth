@@ -55,7 +55,7 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 - [Retirement phase A](retirement-phase-a-state.md) — flag GONE; banded deleted; default suite == old flagged; reconcile counts via a worktree
 - [Retirement phase E](retirement-phase-e-state.md) — 36 scripts + viz gone; sweep → Cargo example; convergence edge is a last-bit event
 - [Retirement phase D](retirement-phase-d-state.md) — DONE: Python viewer deleted; freeze exact on Windows only (Linux: 158/588 last-bit), structure elsewhere; browser check = Cargo example
-- [Phase C carrying](retirement-phase-c-carrying-state.md) — batches 1-17 (plates, membrane, beam, strings, every contact file) done; carry the SWEEP; map by ASSERTION; 25 files left
+- [Phase C carrying](retirement-phase-c-carrying-state.md) — batches 1-19 (plates, membrane, beam, strings, contact, gong plate, bow) done; carry the SWEEP; PROBE zero-witness plants; 16 files left
 - [Viewer stays Python](viewer-stays-python.md) — SUPERSEDED (viewer is Rust since D7); only coverage proves a line runs, not a grep
 - [Analysis freeze](analysis-freeze-state.md) — 62 fixtures frozen from the Python before it was deleted
 - [Deletion phase](rust-deletion-phase-state.md) — all 11 units gone, 23,396 lines, zero physics bars retired

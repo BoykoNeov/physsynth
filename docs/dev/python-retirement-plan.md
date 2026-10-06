@@ -6788,3 +6788,218 @@ The advisor's read of the first commit found four things, all fixed here:
   the harness 17 tests and 6.9 s optimised. The workspace count is unchanged (1,593).
 - **This section**, and a check that the local toolchain is CI's pinned one (`rustc 1.98.0`, so the
   local clippy pass is CI's).
+
+## 41. Phase C, carrying batch 19 — the bowed string
+
+Done 2026-10-06 (the human: "work on bow"). Three files, retired whole: `tests/test_bow_energy.py`,
+`test_bow_modal.py` and `test_bow_stability.py` — **22 functions, 59 pytest cases** (6 + 6 + 10
+functions; 10 + 10 + 39 cases). They were the bowed string's validation suite: the energy balance
+(the bow is active, so the claim is a balance, not conservation), the Helmholtz motion that actually
+exercises the friction coupling, and stability across the playable space.
+
+The bars went to one new file and one extended one:
+
+- `crates/physsynth-core/tests/bow_harness.rs` — **21 tests**, new (seventeen carried, four added in
+  §41.4 at the human's call), at `make_bowed_string`'s rig: a flexible (`kappa = 0`) fixed-end 1 m
+  string with `c = 200` m/s, `N = 100`, `lam = 0.9`, `theta = 0.28`, `sigma0 = 0.5`,
+  `sigma1 = 0.05`, bowed at `0.13` of its length at `0.1` m/s with a 1 N peak friction and a
+  sharpness of 60, on the binding's solve defaults (`newton_tol = 1e-13`, cap 60). **Not
+  `bow.rs`'s rig**, which bows at `0.2` and mostly at a sharpness of 100, so that file keeps its own
+  bars and this one is new, as the stiff string's was (§32). The six 2.5 s notes the Helmholtz bars
+  read are each played once and shared through a `OnceLock` (§36's pattern); the bow-speed sweep's
+  first point is the `beta = 0.13` slip rig, so there are six notes, not seven.
+- `crates/physsynth-core/tests/bow.rs` — still **11 tests**; the refusal test now also checks each
+  message by the word the Python matched, and the snap test pins the node (`1`) and its coordinate.
+
+### 41.1 The comparison — every figure reproduced
+
+Recorded first, wheel reinstalled (`W:\temp\claude\bow\python-record.txt`, the script beside it).
+The Python files asserted bounds and printed nothing, so the script re-ran each measurement and
+printed the number. **Every figure matches to all printed digits**, the integer counts included:
+the three lossless balance errors (`5.973959234910564e-15`, `5.622687646885464e-15`,
+`9.581554552983489e-15`) with their final energies and works, the injected work
+(`5.595368685394135e-4`), the three dissipations and their smallest steps, the force-free run's
+`sum |u|` (`2.7607002792604898e-3`), the delegated energy after 50 steps, the pickup at node 10,
+the bowed pitch (`97.89476119467204` Hz, `-36.8357260009603` cents), the three bow-speed pitches and
+their spread (`16.706299275670403` cents), the three amplitudes and the ratio (`2.072540856302792`),
+the three slip fractions, the slip velocity (`-0.7683677482378564`), every one of the 28 sweep
+points' peak displacement and energy, and every Helmholtz number. The counts: fallbacks 110 / 202 /
+45 on the balance runs, 487 on the pitch run, 557 / 500 / 753 on the slip runs, 10 / 0 on the strong
+and weak bows and all 28 sweep points'; slip onsets 99 / 99 / 98.
+
+The signals are measured as the Python measured them: `sig - sig.mean()` takes NumPy's pairwise mean
+(`reduce::sum`), and the pitch goes through `physsynth_analysis::spectrum::measure_partials_near`,
+which is what the Python's `spectrum` had called since phase 7. Nothing was frozen: the files had no
+NumPy or SciPy referee — every number in them was the binding's, which is this code.
+
+**The amplitude claim rests on two points, and the third is not Helmholtz motion.** The Python bowed
+at `v_bow = 0.1, 0.15, 0.2` for the pitch bar but compared amplitudes at `0.1` and `0.2` only. The
+middle note is *quieter* than the slow one (`3.06e-4` against `7.58e-4`), and it is also the pitch
+outlier (98.47 Hz against 99.32 and 99.43): measured, it slips **twice** per period (197 onsets in
+the 100-period tail, slip fraction 0.27 against `beta = 0.13`). It is outside the clean one-slip
+regime at `force = 4 v_bow`, so the "force scales with speed holds the Schelleng window" premise
+fails there. The carried bar keeps the Python's two points and its `(1.5, 2.5)` window; no
+monotonicity bar was added — it would fail, and correctly.
+
+### 41.2 What the existing native bars could not see
+
+Grepped first: the core's `bow.rs` and `engine.rs`, and the viewer's `bow.rs` (fifteen payload
+tests) and `frozen` corpora. Mapped by assertion, not name:
+
+- **Already native at another rig**: `bow.rs` ran the balance at the same three `(force, sharpness)`
+  pairs, net work, the loss pairs, the force-free anchor, the force × speed sweep, the fallback
+  regimes and the Helmholtz formula — all with the bow at `0.2` (and the work, loss and sweep bars at
+  a sharpness of 100). The Python's rig is `0.13` and 60; the carried bars run there.
+- **Run by the viewer, coarser**: `physsynth-viewer/tests/bow.rs` checks the slip fraction against
+  `beta` at `0.13 / 0.2 / 0.25` with `force = 0.4`, one slip per period within 0.25, and the pitch
+  within 60 cents — on its own `N = 64`, 1 s scene with its own tolerance. So the Helmholtz claims
+  were not unrun natively; they were unrun at the Python's resolution and length.
+- **Carried as they stood**: the friction curve's shape (`bow.rs`, already sharper than the Python's
+  `np.isclose`), the refusals (variants), the snap.
+- **Sharpened**: the Helmholtz formula is `==`, not `np.isclose`; the balance bar also asserts the
+  bracket was exercised; the force-free anchor also compares `u^{n-1}` and pins the node (13); the
+  resonator test reads through the engine's `Resonator` trait (state length, pickup equal to the
+  state's entry and nonzero, the timestep).
+- **No analogue**: `isinstance(bow, BowedString)`, `hasattr(bow, "k")` and `callable(bow.step)` —
+  a type, not a value.
+
+### 41.3 Every margin measured
+
+| bar | measured | bar |
+|---|---|---|
+| lossless balance, worst of three | 9.6e-15 | 1e-11 |
+| loss, smallest dissipation step, worst of three | +6.9e-11 (never negative) | ≥ −1e-9 (·(W + 1)) |
+| pitch at the fundamental | −36.8 cents | ±60 |
+| pitch spread across bow speeds | 16.7 cents | < 25 |
+| amplitude ratio for twice the bow speed | 2.07 | (1.5, 2.5) |
+| slip fraction − `beta`, at 0.13 / 0.2 / 0.25 | 0.027 / 0.017 / 0.011 | < 0.05 |
+| slips per period, at 0.13 / 0.2 / 0.25 | 0.99 / 0.99 / 0.98 | (0.85, 1.25) |
+| slip velocity against the two-slope ideal | 14.8% | < 40% |
+| strong / weak bow, fallbacks | 10 / 0 | > 0 / = 0 |
+| balance at `theta` 0.5 / 1 (added) | 2.2e-13 / 2.1e-13 | 1e-11 |
+| balance at `newton_tol = 1e-6` (added) | 6.7e-15 | 1e-11 |
+| Newton evaluations, loose ÷ tight (added) | 12,683 / 16,557 = 0.77 | < 0.9 |
+| fallbacks taking a root other than the nearest (added) | 0 of 7,710 (702 with several roots) | 0 |
+
+Every bar is the Python's own except the four added. The thinnest are **the pitch, 1.6x** (36.8
+cents against 60), **the bow-speed spread, 1.5x**, and **the slip fraction at `beta = 0.13`, 1.8x** —
+the Python's, left where it had them; each reads the same deterministic figure the Python did. Of
+the added ones, **the cost ratio is the thinnest, 1.17x** (0.77 against 0.9); planted, it reads
+exactly 1.0, so the bar sits between the two.
+
+### 41.4 Sixteen breakages
+
+Planted one at a time with `W:\temp\claude\bow\mutate.py` (snapshot, restore by copy,
+byte-compare). "Red" counts `bow_harness`, `bow` and the core library's unit tests in the first
+round, before the guards below existed; the last column is the workspace-wide re-plant (§31's rule)
+for every plant with two or fewer witnesses, and the guard that sees it now.
+
+| breakage | red | workspace-wide, and now |
+|---|---|---|
+| **A** the admittance built at the default `theta`, not the string's | 0 | **0** → the `theta` balance bar (**added**): 8.9e-2 at 0.5 |
+| **B** the power read from the Newton iterate, not the true velocity | 0 | the viewer freeze only → the loose-tolerance balance (**added**): 3.1e-6 |
+| **C** the bracket seeded from the Newton iterate, not the pre-step velocity | 0 | the viewer freeze only → the root-choice sweep (**added**): 38 wrong |
+| **D** the first bracketed root wins, not the nearest | 0 | the viewer freeze only → the root-choice sweep: 408 wrong |
+| **E** the friction force's sign flipped | 4 | the bow-speed pitch and amplitude, slip fraction, slips per period |
+| **F** the bow speed dropped from the power | 6 | every balance bar, both files |
+| **G** `v_free` over `k`, not `2k` | 10 | balance, loss, the Helmholtz bars |
+| **H** the fallback counter not bumped | 3 | the fallback regimes (both files), the balance bar's exercised check |
+| **I** `newton_tol` replaced by the default | 0 | **0** → the cost ratio (**added**): 16,557 / 16,557 |
+| **J** the bracket scan spelled with the Newton residual | 0 | **0**, and no bit changes on any probed run (below) |
+| **K** the correction skipped when the force is zero | 0 | **0**, and no bit changes anywhere (below) |
+| **L** the force prefactor without `h` | 9 | balance, the fallback regimes, the slip bars |
+| **M** `g` without the 2 | 10 | balance, every Helmholtz bar |
+| **N** the bow node rounded down, not to nearest | 0 | the viewer freeze only → the snap bar (**added**) |
+| **O** the Helmholtz number without `e^{1/2}` | 2 | the formula bar in both files, and the viewer freeze |
+| **P** the bracket scan without the hump's width | 0 | the viewer freeze only, last digits (below) |
+
+Before any of these was called a gap, each zero was run through a probe (a temporary test, deleted)
+that printed trajectory digests at the default rig, a `beta = 0.25` slip rig, a bow at `0.35`, and
+lossless rigs at `newton_tol = 1e-6` and `theta = 0.5, 1`. Five readings:
+
+- **A is §33's lesson a fifth time.** The driving-point admittance `a = A^{-1} e_i` is solved once,
+  with the string's `theta`. Every bar — the Python's included — ran at the default `0.28`, where a
+  plant that rebuilds the factor at `0.28` is the same factor, so nothing in the workspace could see
+  it; at `0.5` and `1` the balance is off by 9% and 25%. The human chose the bar: the lossless
+  balance at `theta = 0.5` and `1`, measured 2.2e-13 and 2.1e-13 correct.
+- **B and I are one claim seen from two sides.** The model's exactness trick is reading the power
+  from the true post-correction velocity, so the balance holds whatever the Newton residual. At the
+  shipped `1e-13` the residual is too small for the difference to show; at `1e-6` a plant that reads
+  the iterate is off by 3.1e-6, against 6.7e-15 correct. And nothing ever varied the tolerance, so
+  ignoring it was invisible. The human chose both bars: the balance at `1e-6`, and a looser solve
+  doing measurably less Newton work (it reads the per-step `newton_evals` the binding added for the
+  parity file).
+- **C and D are the branch pick, and they are physics.** At a slip the residual has several roots;
+  the physical one is nearest the *pre-step* relative velocity. On every default-rig probe neither
+  plant changed a bit, but on the loose-tolerance rig D changed the fallback count from 110 to 41, and the viewer freeze, exact only on
+  Windows, saw both. The human chose a direct bar: a 120 × 120 sweep of `(v_free, seed)` through
+  `solve_v_rel`, each fallback checked against an independent 4,000-point scan refined by bisection.
+  Correct, 0 of 7,710 fallbacks take another root; planted, C reads 38 and D 408.
+- **N moves the bow for six positions in a hundred.** `position / h` lands a hair below the integer
+  for 0.29, 0.47, 0.57, 0.58, 0.59 and 0.94 (`0.29 / 0.01 = 28.999…96`), so rounding down would put
+  the bow one 1 cm cell short; none of the carried positions is one of them. The human chose the
+  snap bar over those six.
+- **J, K and P are not gaps.** J (the scan spelled with the Newton residual) changed **no bit** on any
+  probed run, and no binary in the workspace — the viewer freeze included — saw it. The pin
+  `bow.rs::the_two_residual_spellings_are_not_the_same_double` guards the two *functions* staying
+  distinct; nothing guards the call site, and nothing can, while the two give the same brackets
+  everywhere it has been run. K (skip the correction when `f_B = 0`) changed no bit on any probed run
+  either, and nothing saw it: adding `0 * a` can change a value only when that value is `-0.0`, and
+  the probed force-free run held none. P (the scan without its 6σ margin)
+  moves last digits only — every root lies within `g |Phi|_max` of `v_free` anyway — so it is a
+  rounding change, seen only by the bit-exact freeze.
+
+### 41.5 The retirement rule, discharged
+
+| retired | native bar |
+|---|---|
+| `test_bow_energy.py::test_lossless_energy_balance` (3) | `bow_harness.rs::a_lossless_bowed_string_balances_energy_against_the_bow_work`, with the bracket's use asserted |
+| `…::test_bow_injects_energy` | `…::the_bow_drives_a_string_up_from_rest`, from an energy of exactly 0 |
+| `…::test_loss_only_removes_energy` (3) | `…::loss_only_ever_removes_energy` |
+| `…::test_zero_force_is_bit_identical_to_bare_string` | `…::a_force_free_bow_is_bit_identical_to_the_bare_string`, `u^{n-1}` and the node added |
+| `…::test_energy_method_delegates_to_string` | `…::the_bows_energy_is_the_strings` |
+| `…::test_bowed_string_is_a_resonator` | `…::the_bowed_string_is_a_resonator`, through the `Resonator` trait; `isinstance` / `hasattr` / `callable` have **no analogue** (a type) |
+| `test_bow_modal.py::test_helmholtz_pitch_at_fundamental` | `…::the_helmholtz_note_sits_at_the_strings_fundamental` |
+| `…::test_pitch_independent_of_bow_speed` | `…::the_pitch_does_not_follow_the_bow_speed` |
+| `…::test_amplitude_scales_with_bow_speed` | `…::the_amplitude_follows_the_bow_speed` (§41.1 on its middle point) |
+| `…::test_slip_fraction_matches_beta` (3) | `…::the_slip_fraction_is_the_bow_position` |
+| `…::test_one_slip_per_period` (3) | `…::the_string_slips_once_per_period` |
+| `…::test_slip_velocity_matches_helmholtz_prediction` | `…::the_slip_velocity_is_the_helmholtz_two_slope_one` |
+| `test_bow_stability.py::test_no_blowup_force_speed_sweep` (12) | `…::nothing_blows_up_across_force_and_bow_speed` (and `bow.rs`'s at its own rig) |
+| `…::test_no_blowup_sharpness_position_sweep` (16) | `…::nothing_blows_up_across_sharpness_and_bow_position` |
+| `…::test_friction_solve_always_converges_in_helmholtz_regime` | `…::the_multivalued_regime_needs_the_fallback_and_the_solve_never_fails` |
+| `…::test_helmholtz_number_below_one_is_single_valued` | `…::the_single_valued_regime_never_needs_the_fallback`, with the weak bow's work asserted nonzero |
+| `…::test_helmholtz_number_formula` | `…::the_helmholtz_number_is_the_documented_product_at_the_pythons_bow`, `==` |
+| `…::test_friction_curve_shape` | `bow.rs::the_friction_curve_has_the_documented_shape` (already native, tighter) |
+| `…::test_rejects_negative_force` | `bow.rs::construction_rejects_the_unphysical`, the message now checked |
+| `…::test_rejects_nonpositive_sharpness` | the same test |
+| `…::test_rejects_bow_position_out_of_range` (4) | the same test, all four positions |
+| `…::test_bow_node_is_interior_and_snapped` | `bow.rs::the_bow_node_is_snapped_into_the_interior`, node `1` and `x_bow = 0.01` pinned (the Python's `fs = 40` kHz rig has the same `h`) |
+
+**Orphans removed from `tests/helpers.py`**, each name grepped alone across `tests/`:
+`make_bowed_string`, `BOW_POSITION_DEFAULT`, `V_BOW_DEFAULT`, `BOW_FORCE_DEFAULT`,
+`BOW_SHARPNESS_DEFAULT`, `BOW_SIGMA0_DEFAULT`, `BOW_SIGMA1_DEFAULT`, and the `BowedString` import.
+`make_damped_string`, `wave_speed` and `L_DEFAULT` stay (`test_resolution_horizon.py`,
+`test_binding_surface.py`). Comments naming the deleted files were updated in the core's `bow.rs`
+(which also still named the long-retired parity file as live), the viewer's `bow.rs` and
+`energy.rs`, the binding's `bow.rs`, and the `physsynth/core/bow.py` shim.
+
+### 41.6 Cost and counts
+
+- **pytest 845 → 786**: the three files' 59 cases, reconciled with `--collect-only` before the
+  deletion (10 + 10 + 39); 786 passed.
+- **Native +21**: workspace 1,593 → 1,614 optimised (`scripts/cargo-test-nice.ps1 -Full`), all
+  green; `bow_harness.rs` 0 → 21, `bow.rs` unchanged at 11.
+- **Both profiles.** The harness takes **1.5 s optimised** (four threads) and **18.6 s unoptimised**
+  on one thread, of which the six shared notes are most (the first test to touch each pays for it);
+  that is the damped string's harness's order (§33, 15 s), which runs in both, so it is not added to
+  `release_only`. Timed alone on one thread the slowest optimised test is 0.42 s (the amplitude bar,
+  which plays two of the shared notes), so nothing joins `scripts/quick-skip.txt`.
+- **16 physics files remain**, with **215** test functions by the §24.1 count (237 − 22). The bow
+  has no Python file left.
+
+### 41.7 What is next
+
+The next batch is not chosen; the human picks. The 16 files, by family: the reed (`test_reed_*`, 3),
+the bore (`test_bore_*`, 4), the body (1), the room (`test_airbox_*`, 4), radiation (1), the
+resolution horizon (1), the spectrum detector (1) and the operators (1).
