@@ -321,3 +321,78 @@ fn the_vector_forms_agree_with_the_scalar_ones_where_numpy_makes_them() {
         );
     }
 }
+
+// -- carried from `tests/test_mallet_wall.py` (retirement plan §37) -------------------------------
+//
+// At that file's own constants and on the SCALAR path, which is the one its float arguments reached
+// through the binding.
+
+#[test]
+fn stuck_the_discrete_gradient_is_the_elastic_force_and_apart_it_tends_to_the_midpoint_force() {
+    let (k, alpha, tol) = (3.0e4, 2.3, 1e-12);
+    let s = PowPath::Scalar;
+    // Exactly equal arguments: 0/0, so the Taylor branch must return phi'(eta) itself. The Python
+    // asserted this to `pytest.approx(rel=1e-12)`, whose default `abs=1e-12` dominates at a force
+    // of ~4e-3 N; it measured exact equality, and that is what is asserted.
+    for &eta in &[0.5e-3, 1e-3, 2e-3] {
+        let f = contact_force_dg(eta, eta, k, alpha, tol, s);
+        assert!(f.is_finite(), "eta = {eta} gave {f}");
+        assert_eq!(f, contact_force_elastic(eta, k, alpha, s));
+    }
+    // Just inside the threshold: still the Taylor branch, still finite (a NaN without it).
+    assert!(contact_force_dg(1e-3 + 1e-14, 1e-3, k, alpha, tol, s).is_finite());
+    // Well outside it, the quotient is consistent: it tends to phi'(midpoint) as the gap shrinks.
+    // Measured 1.2e-9 relative at a 1e-7 gap.
+    let (a, b) = (1e-3 + 1e-7, 1e-3);
+    let f_dg = contact_force_dg(a, b, k, alpha, tol, s);
+    let f_mid = contact_force_elastic(0.5 * (a + b), k, alpha, s);
+    assert!(
+        (f_dg - f_mid).abs() <= 1e-4 * f_mid.abs(),
+        "the discrete gradient {f_dg} is not the midpoint force {f_mid}"
+    );
+}
+
+#[test]
+fn each_primitive_is_one_sided_and_the_derivative_of_the_one_before() {
+    let (k, alpha) = (1.0e4, 2.0);
+    let s = PowPath::Scalar;
+    for &eta in &[-1.0, -1e-9, 0.0] {
+        assert_eq!(contact_potential(eta, k, alpha, s), 0.0);
+        assert_eq!(contact_force_elastic(eta, k, alpha, s), 0.0);
+        assert_eq!(contact_stiffness(eta, k, alpha, s), 0.0);
+    }
+    // In contact: force = d(potential)/d(eta), stiffness = d(force)/d(eta), by central differences.
+    // Measured 7.8e-11 and 9.3e-11 relative.
+    let (eta, d) = (1e-3, 1e-9);
+    let dphi = (contact_potential(eta + d, k, alpha, s) - contact_potential(eta - d, k, alpha, s))
+        / (2.0 * d);
+    let force = contact_force_elastic(eta, k, alpha, s);
+    assert!(
+        (dphi - force).abs() <= 1e-5 * force.abs(),
+        "dphi/deta {dphi} vs force {force}"
+    );
+    let df = (contact_force_elastic(eta + d, k, alpha, s)
+        - contact_force_elastic(eta - d, k, alpha, s))
+        / (2.0 * d);
+    let stiff = contact_stiffness(eta, k, alpha, s);
+    assert!(
+        (df - stiff).abs() <= 1e-5 * stiff.abs(),
+        "df/deta {df} vs stiffness {stiff}"
+    );
+}
+
+#[test]
+fn at_alpha_one_the_stiffness_is_k_in_contact_and_zero_out_of_it() {
+    // The `0 ** 0` trap from the other side: `nothing_touches_the_string_outside_the_barrier` pins
+    // the zero; this pins that the contact value is K itself and not something the guard broke.
+    let k = 1.0e4;
+    for s in [PowPath::Scalar, PowPath::Array] {
+        let in_contact = contact_stiffness(1e-3, k, 1.0, s);
+        assert!(
+            (in_contact - k).abs() <= 1e-12 * k,
+            "stiffness {in_contact} at alpha = 1"
+        );
+        assert_eq!(contact_stiffness(-1e-3, k, 1.0, s), 0.0);
+        assert_eq!(contact_stiffness(0.0, k, 1.0, s), 0.0);
+    }
+}

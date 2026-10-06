@@ -14,6 +14,7 @@
 
 use crate::beam::FreeBeam;
 use crate::bow::BowedString;
+use crate::collision::BarrierString;
 use crate::mallet::MalletMembrane;
 use crate::membrane::Membrane;
 use crate::plate::Plate;
@@ -315,5 +316,27 @@ impl Resonator for FreeBeam {
     }
     fn timestep(&self) -> f64 {
         self.p.k
+    }
+}
+
+/// The string against a distributed barrier — a native caller's handle, added with the barrier's
+/// acceptance bars (retirement plan §37) as the beam's was. A vector solve that stalls is NOT an
+/// error: the original warns and keeps stepping, and so does this (`newton_iters` records it).
+impl Resonator for BarrierString {
+    fn step(&mut self) -> Result<(), String> {
+        BarrierString::step(self);
+        Ok(())
+    }
+    fn energy(&self) -> f64 {
+        BarrierString::energy(self)
+    }
+    fn state(&self) -> Vec<f64> {
+        self.string.u.clone()
+    }
+    fn displacement_at(&self, index: usize) -> f64 {
+        self.string.u[index]
+    }
+    fn timestep(&self) -> f64 {
+        self.string.p.k
     }
 }

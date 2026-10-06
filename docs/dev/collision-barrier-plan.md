@@ -1,5 +1,9 @@
 # Distributed-barrier collision — string against a rigid/nonlinear barrier (model #8)
 
+> **2026-10-06: the Python tests this plan names are retired** (`docs/dev/python-retirement-plan.md`
+> §37). Their bars are `crates/physsynth-core/tests/collision_barrier_harness.rs` (energy, the
+> static-equilibrium oracle, the scalar collapse, the signatures) beside `collision_barrier.rs`.
+
 > **Status: BUILT & GREEN (2026-07-10).** `core/collision.py` (promoted contact primitives +
 > `solve_contact_vector` + `BarrierString`), `mallet.py` now imports the primitives back
 > (bit-identical, its 26 tests still green), `tests/test_collision_{energy,modal,signature}.py`

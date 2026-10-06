@@ -671,10 +671,12 @@ impl PyBarrierString {
 
     // -- the underscored half of the interface, which is not private (§12.2) -----------------
     //
-    // `tests/test_collision_modal.py` reads `_b`, `_support` and `_G[0, 0]` and *writes* `_G` and
-    // `_force_pref` — doubling both is the negative control that proves the coupling magnitude
-    // gate has teeth. `web/serialize.py` reads `_b` and `_support` to draw the rail. So all five
-    // are part of the interface, and two of them are settable.
+    // The retired `tests/test_collision_modal.py` read `_b`, `_support` and `_G[0, 0]` and *wrote*
+    // `_G` and `_force_pref` — doubling both is the negative control that proves the coupling
+    // magnitude gate has teeth — and the retired `web/serialize.py` read `_b` and `_support` to
+    // draw the rail. Both callers are gone (retirement plan §37, §23): the native bars in
+    // `physsynth-core/tests/collision_barrier_harness.rs` and `collision_jawari.rs` write
+    // `BarrierParams` directly. The five stay exposed until the binding itself goes.
 
     /// Grid node indices carrying a finite barrier — the contact support.
     #[getter]
@@ -687,8 +689,8 @@ impl PyBarrierString {
     fn _b(&self, py: Python<'_>) -> Py<PyArray1<f64>> {
         PyArray1::from_slice(py, &self.p.b).unbind()
     }
-    /// Settable, and this one is not symmetry: `tests/test_jawari.py` flattens a curved bridge to
-    /// a rail at its own crest height, which is how "the wrap edge travels" is compared against a
+    /// Settable, and this one is not symmetry: the retired `tests/test_jawari.py` flattened a
+    /// curved bridge to a rail at its own crest height (now `collision_jawari.rs`), which is how "the wrap edge travels" is compared against a
     /// contact that cannot travel. Writing `_b` deliberately does NOT rebuild `G` or the admittance
     /// columns — neither does the Python original, and it is right not to: the support is chosen by
     /// which heights are *finite*, and a rewrite that keeps them finite leaves the string's
@@ -763,8 +765,8 @@ impl PyBarrierString {
     fn penetration(&self, py: Python<'_>) -> Py<PyArray1<f64>> {
         PyArray1::from_slice(py, &self.s.penetration).unbind()
     }
-    /// Settable, because `tests/test_collision_modal.py` seats the model at a static equilibrium
-    /// by hand and has to reset the continuation seed to match.
+    /// Settable, because the retired `tests/test_collision_modal.py` seated the model at a static
+    /// equilibrium by hand and had to reset the continuation seed to match (retirement plan §37).
     #[setter]
     fn set_penetration(&mut self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
         self.s.penetration = as_1d_f64(py, value, "penetration", self.p.support_len())?;

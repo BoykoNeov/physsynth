@@ -5693,3 +5693,277 @@ sees it on Windows, so §36.4's "only the history bar" was wrong and is correcte
 bar's name no longer claims "ten orders" (it measures eight and a half); and two bare "§36"
 references in Rust comments, which in those files would be read as the migration plan's, now say
 "retirement plan §36".
+
+## 37. Phase C, carrying batches 14 and 15 — the barrier and the mallet, done together
+
+Done 2026-10-06. The human asked for **several batches at once, compared all at once at the end,
+then deleted together**, and chose two families (and to do them inline, not with parallel agents):
+
+- **batch 14, the barrier (model #8) and the jawari**: `tests/test_collision_energy.py`,
+  `tests/test_collision_modal.py`, `tests/test_collision_signature.py`, `tests/test_jawari.py` —
+  24 functions, 31 pytest cases;
+- **batch 15, the mallet on a drumhead (model #7)**: `tests/test_mallet_energy.py`,
+  `tests/test_mallet_wall.py`, `tests/test_mallet_signature.py` — 18 functions, 26 cases.
+
+Together **42 functions, 57 cases**, retired whole. The order was the human's: write every native
+bar for both families first, then one recording-and-comparison pass, one round of planted
+breakages, and a single deletion of all seven files — neither family deleted early.
+
+The bars went to three new core files and two extended ones:
+
+- `crates/physsynth-core/tests/collision_barrier_harness.rs` — 15, the three collision files at the
+  retired `make_barrier_string`'s parameters (`N = 80`, `lam = 0.9` or `0.4`, `K = 1e6`,
+  `alpha = 1.5`, a rail 2 mm down, `newton_tol = 1e-13`): conservation over four `(K, alpha)` with
+  the solve's iteration cap asserted at every step, the contact-is-real guard, the drift-versus-
+  tolerance scaling, passivity over three losses, the out-of-reach anchor at `lam = 0.9`, the stiff
+  string, the **static-equilibrium magnitude oracle** and its negative control, the two
+  single-node collapses (generic and the juari thread's shipped numbers), and the four signatures.
+- `crates/physsynth-core/tests/collision_jawari.rs` — 9, `test_jawari.py` at `make_jawari_string`'s
+  parameters. The two 12,000-step runs (the jawari and its clean contrast) feed three bars and run
+  once behind a `OnceLock`. The profile is built in the file: it was a *test* helper in Python.
+- `crates/physsynth-core/tests/mallet_membrane_harness.rs` — 13: 12 carried from
+  `test_mallet_energy.py` and `test_mallet_signature.py`, and one added (§37.4, breakage J), at `make_mallet`'s drumhead (`T = 200`, `rho = 0.005`, `N = 40`,
+  `lam = 0.5`) — not `mallet.rs`'s (`T = 100`, `rho = 0.26`, `N = 24`), which runs 1,200 steps
+  where the Python ran up to 6,000 on four felts, three losses, a miss and a circular head.
+- `crates/physsynth-core/tests/collision.rs` — 3 added (9 → 12): `test_mallet_wall.py`'s primitive
+  tests at their own constants on the scalar path (the discrete gradient tending to the midpoint
+  force; each primitive the derivative of the one before; `alpha = 1` stiffness equal to `K`).
+- `crates/physsynth-core/tests/mallet.rs` — `test_mallet_wall.py`'s rig tests were **already there
+  at the same fixture** (§17), so the extension is a repair: see §37.2.
+- `crates/physsynth-core/src/engine.rs` — `impl Resonator for BarrierString`, as §30 added the
+  beam's, so the duck-typing test became "drive it through `simulate` and check each method against
+  the field". A stalled vector solve is not an `Err`: the original warns and keeps stepping.
+
+### 37.1 The comparison — every figure reproduced
+
+All seven files were recorded first, wheel reinstalled
+(`W:\temp\claude\contact-batch\rec_*.txt`, the script beside them), including the NumPy-side vectors.
+
+**Start states bit-identical.** The pluck (`amp sin(pi x / L)` at N = 80 and 100), the drumhead's
+`sin(pi X) sin(pi Y)`, and both jawari profiles and supports are the same doubles as NumPy's. So the
+intermittent contact is the Python's contact step for step — and it is: **every trajectory figure
+matches to all sixteen printed digits** — every energy drift (`8.300322011969541e-12` at
+`K = 5e5, alpha = 1`; the jawari's `7.042411861228087e-13`, the same at `alpha = 1.5` and `2`
+because its worst moment, step 124, comes before the first contact at step 127 — measured), every contact count (1071, 25 onsets,
+2203/940, 2566 with a 15-node span, 298/581, 802/534, the single 573-step bounce), every peak force,
+both solver mismatches (`3.35e-16`, `8.11e-15`), the mallet's fallback counts, its head share
+(0.6470705058064259), all three tolerance-scaling triples, and the mode projections to fifteen.
+
+**The tolerance-port readings agree to about thirteen digits**: the six centroids
+(`np.fft` → `physsynth_analysis::spectrum`), and the wrap spread (4.893770145997 against NumPy's
+`np.std` 4.893770145997376).
+
+**The one NumPy referee that is not reproduced to the bit is the equilibrium**, and it does not need
+to be. `np.linalg.solve`'s `u*` and the native dense LU's agree to 9.1e-16 (flat) and 5.0e-16
+(curved) of the deflection; seated at the native one the scheme holds it to 1.7e-16 and 3.6e-17
+(Python, at LAPACK's: 1.8e-16 and 3.4e-17). Nothing was frozen.
+
+### 37.2 What the existing native bars could not see
+
+- **The static-equilibrium oracle, on either profile.** No native line seated the barrier at a
+  closed-form equilibrium. Breakage A below is why it matters: a stiffness read 1% high in the
+  force and the potential together conserves perfectly.
+- **The single-node collapse** (two algorithms, one root), at either configuration.
+- **The stall guard.** No native barrier bar asserted `newton_iters < newton_maxiter` per step.
+- **Every signature**: brightness, closeness, intermittency, hardness; the jawari's sustain and wrap
+  travel; the mallet's mode spread, hardness, bounce and mode comb.
+- **The Python's run lengths and parameters.** The native barrier runs were 4,000 steps at
+  `lam = 0.4`; the Python's were 6,000, plus `lam = 0.9` for the out-of-reach anchor. The native
+  mallet ran one felt for 1,200 steps; the Python ran four for 6,000. Nothing existing was shortened
+  (§30's rule): the new runs are added beside the old.
+- **NaN.** `mallet.rs`'s rig and coupled conservation bars and `collision_barrier.rs`'s two
+  lossless bars folded with `f64::max`, which drops a NaN — a run that blew up reported its last
+  finite drift and passed. The Python's `np.max` propagated it and it asserted `isfinite`. Repaired
+  in place with a `max_nan` (and the plate model's twin in `mallet.rs`), which is what turned
+  `test_mallet_wall.py`'s rig tests from "already there" into carried.
+- **The primitives' calculus** (force = dφ/dη, stiffness = dF/dη) and the discrete gradient's
+  midpoint limit, and `contact_stiffness(1e-3, K, 1) == K` — the native one-sided bar pinned the
+  zero at `alpha = 1`, not the value in contact.
+
+Two Python assertions sharpen on the way: `pytest.approx(rel=1e-12)` on the Taylor branch kept its
+default `abs=1e-12`, which at a ~4e-3 N force is the whole tolerance; it measured exact equality, so
+equality is asserted.
+
+### 37.3 Every margin measured
+
+| bar | measured | bar |
+|---|---|---|
+| barrier lossless drift, worst of four (`K = 5e5`, `alpha = 1`) | 8.3e-12 | 1e-10 |
+| barrier: contact steps / peak force | 1071 / 58.9 N | > 300 / > 1 N |
+| barrier tolerance scaling: tight / loose over tight | 1.3e-12 / 2.1e6 | 1e-10 / > 100 |
+| barrier passivity, worst rise | 1.9e-14 E0 | 1e-9 E0 |
+| stiff string drift | 2.6e-13 | 1e-10 |
+| flat bed held (deflection 1.43e-3) / control ratio | 1.7e-16 / 1.4e13 | 1e-13 / > 1e4 |
+| point fret: mismatch / contact steps | 3.4e-16 / 298 | 1e-13 / > 100 |
+| **juari thread: mismatch** / contact steps | **8.1e-15** / 581 | 1e-13 / > 100 |
+| **buzz / free centroid** | **2.30** | > 1.3 |
+| **near / far centroid** | **1.34** | > 1 |
+| intermittency: onsets / fraction in contact | 25 / 0.175 | ≥ 3 / < 0.9 |
+| hard / soft steps in contact | 940 / 2203 | hard < soft |
+| jawari lossless drift, worst (`alpha = 1`) | 6.3e-12 | 1e-10 |
+| wrap: steps / widest span / peak force | 2566 / 15 / 132.5 N | > 300 / ≥ 3 / > 1 N |
+| curved bed held (deflection 1.63e-4) / control ratio | 3.6e-17 / 5.1e12 | 1e-13 / > 1e4 |
+| **jawari / clean centroid** | **3.11** | > 2 |
+| **late jawari / late clean** | **3.44** | > 2.5 |
+| late / early, jawari vs clean | 1.259 vs 1.0000001 | > 0.7; jawari > clean |
+| **wrap spread, curve / flat** | **2.08** (4.894 / 2.354) | > 1.5 |
+| bridge support | 15 nodes | 8 – 99 |
+| mallet lossless drift, worst of four | 1.08e-12 | 1e-10 |
+| head share at peak | 0.647 | > 0.3 |
+| mallet tolerance scaling: tight / loose over tight | 3.0e-13 / 3.9e6 | 1e-10 / > 100 |
+| mallet passivity, worst rise / circle drift | 3.6e-14 E0 / 3.4e-13 | 1e-9 E0 / 1e-10 |
+| peak head energy / end total | 0.687 | > 0.01 |
+| modes above 10% of the largest | 5 of 7 | ≥ 3 |
+| hard / soft: contact steps, centroid | 534 / 802, 108.8 / 37.9 Hz | hard shorter, brighter |
+| bounce: episodes / exit velocity | 1 / +2.998 m/s | == 1 / > 0 |
+| mode comb, offset / centre | 7.1e14 | > 50 |
+| wall rig: contact time, restitution, drift, hysteresis rise | 5.6e-5, 5.6e-14, 1.1e-12, 9.2e-15 E0 | 5e-3, 1e-9, 1e-11, 1e-9 E0 |
+| DG at a 1e-7 gap vs the midpoint force / dφ/dη / dF/dη | 1.2e-9 / 7.8e-11 / 9.3e-11 | 1e-4 / 1e-5 / 1e-5 |
+
+The thinnest, all the Python's own bars and left where it had them: **near/far brightness 1.34x**,
+**late jawari/clean 1.38x**, **wrap travel 1.39x**, **jawari/clean 1.56x**, **buzz/free 1.77x**, and
+the juari mismatch at 12x.
+
+### 37.4 Eighteen breakages
+
+Planted one at a time with `W:\temp\claude\contact-batch\mutate.py`: `physsynth-core`'s `src` and
+`tests` snapshotted, restored by copy, byte-compared. "Red" counts the six files above
+(`collision_barrier_harness`, `collision_jawari`, `mallet_membrane_harness`, `collision`, `mallet`,
+`collision_barrier`). C, E and J were re-run after the felt-law bar was added; the rest predate it,
+and none of them changes the force law, so it cannot move them.
+
+| breakage | red | caught by |
+|---|---|---|
+| **A** barrier: stiffness read 1% high in the force AND the potential | 4 | the flat and curved static oracles and their controls — **only** them |
+| **B** barrier: potential without its two-time average | 8 | every barrier and jawari conservation bar, passivity, tolerance scaling |
+| **D** barrier: `eta_prev` read after the advance | 8 | the conservation bars, both single-node collapses |
+| **H** barrier: `-inf` nodes admitted to the support | 12 | the support and refusal bars, the point fret, both collapses, every jawari run |
+| **I** barrier: hysteresis sign flipped | 2 | the two passivity bars |
+| **K** barrier: correction injected with the wrong sign | 21 | conservation, both static oracles, a collapse, the contact guards, four signatures |
+| **N** barrier: the vector solve ignores its tolerance | 1 | the tolerance-scaling bar |
+| **S** `contact_stiffness`: the `alpha = 1` guard loosened to `>=` | 2 | the two one-sided bars |
+| **T** barrier: the Taylor branch never taken | 7 | both static oracles and controls (a stuck node is `0/0`), tolerance scaling, two vector-solve bars |
+| **C** mallet: contact PE without its two-time average | 10 | every rig and drumhead conservation and passivity bar, the plate model's |
+| **E** mallet: `eta_prev` read after the advance | 7 | the coupled conservation bars, the felt law |
+| **F** mallet: `(1 + sigma k)` dropped from the head's admittance | 1 | the lossy sweep — invisible at `sigma = 0` |
+| **G** mallet: the head's admittance with `h` for `h^2` | 9 | conservation, the head-share guards, the mode spread |
+| **J** mallet: felt stiffness read 1% high (force AND potential) | 1 | the felt-law bar, added for it; **0 before** |
+| **O** mallet: the scalar solve ignores its tolerance | 1 | the tolerance-scaling bar |
+| **P1** test helper: the jawari profile linear, not parabolic | 1 | the wrap-travel bar |
+| **P2** test helper: the barrier centroid without its window | 1 | near/far brightness |
+| **P3** test helper: the mallet centroid without its mean removal | 0 | — |
+
+Re-planted workspace-wide (§31's rule) for every one with two or fewer witnesses in the source:
+
+| breakage | red, workspace-wide |
+|---|---|
+| I | the two passivity bars, alone |
+| N | the tolerance-scaling bar, alone |
+| S | the two one-sided bars, alone |
+| F | the lossy sweep, `frozen::mallet`, the viewer's `mallet::a_lossy_strike_reports_passivity_without_a_decay_oracle` |
+| J | `frozen::mallet` and `frozen::browser5b`, **alone** (before the felt-law bar) |
+| O | the tolerance-scaling bar, alone |
+
+Four readings:
+
+- **A is the static oracle's reason to exist, now measured.** A consistent stiffness scale
+  conserves energy perfectly and moves no signature past its bar; only seating the string at the
+  closed-form equilibrium sees it, on both profiles.
+- **J was seen only by the viewer freeze, which compares exactly only on the Windows CI job
+  (§23.19)** — and by no Python test either, so it is an old blind spot rather than one this batch
+  opened. The barrier has a magnitude oracle; the mallet had none. Following §35.4 (a defect seen
+  only by the Windows freeze got a bar), one was added rather than asked about:
+  `the_applied_force_is_the_felt_law_at_this_files_stiffness` checks, at every one of 1,200 steps,
+  that the applied force IS the discrete gradient of the felt at the `K` and `alpha` written in the
+  test — equality, since the lossless felt has no other term. It sees J and E.
+- **I, N, S and O have one witness each, and it is the bar that exists for them**: passivity for a
+  sign flip in a loss, the tolerance-scaling bar for an ignored tolerance, the one-sided bars for
+  the `0 ** 0` guard.
+- **P3 is not a gap.** Removing the mean changes only the 0 Hz bin, which adds to the denominator of
+  both centroids alike; the hard/soft gap is 2.88x and absorbs it. **P1 is a fact about the
+  profile test**: it asserts a monotone ramp that is absent off the span, and a linear ramp is both,
+  so the shape is pinned by the travel signature, not by the sanity test.
+
+### 37.5 The retirement rule, discharged
+
+| retired | native bar |
+|---|---|
+| `test_lossless_energy_conserved` (4) | `collision_barrier_harness.rs::lossless_energy_is_conserved_through_genuine_contact` |
+| `test_string_actually_contacts` | `…::the_string_actually_contacts_the_rail` |
+| `test_drift_scales_with_newton_tolerance` | `…::the_drift_scales_with_the_newton_tolerance` |
+| `test_loss_only_removes_energy` (3) | `…::loss_only_ever_removes_energy` |
+| `test_out_of_reach_barrier_is_bit_identical_to_bare_string` | `…::an_out_of_reach_barrier_is_the_bare_string_at_the_helpers_courant_number` |
+| `test_barrier_string_is_a_resonator` | `…::the_barrier_string_runs_through_the_resonator_interface` (+ `impl Resonator`) |
+| `test_stiff_string_barrier_conserves` | `…::a_stiff_string_conserves_against_the_barrier_too` |
+| `test_static_equilibrium_matches_closed_form` | `…::the_static_equilibrium_matches_the_closed_form` |
+| `test_static_equilibrium_negative_control` | `…::the_static_equilibrium_negative_control_has_teeth` |
+| `test_single_node_collapses_to_scalar_solver` | `…::a_single_contact_node_collapses_to_the_scalar_solve` |
+| `test_juari_thread_config_collapses_to_scalar_solver` | `…::the_juari_thread_collapses_to_the_scalar_solve_at_its_shipped_numbers` |
+| `test_barrier_brightens_the_tone` | `…::the_barrier_brightens_the_tone` |
+| `test_closer_barrier_is_brighter` | `…::a_closer_barrier_is_brighter` |
+| `test_contact_is_intermittent` | `…::the_contact_is_intermittent` |
+| `test_harder_barrier_shortens_contact` | `…::a_harder_barrier_shortens_the_contact` |
+| `test_lossless_energy_conserved_through_curved_wrap` (3) | `collision_jawari.rs::lossless_energy_is_conserved_through_the_curved_wrap` |
+| `test_string_actually_wraps_the_bridge` | `…::the_string_actually_wraps_the_bridge` |
+| `test_curved_static_equilibrium_matches_closed_form` | `…::the_curved_static_equilibrium_matches_the_closed_form` |
+| `test_curved_static_equilibrium_negative_control` | `…::the_curved_static_equilibrium_negative_control_has_teeth` |
+| `test_jawari_brightens_the_tone` | `…::the_jawari_brightens_the_tone` |
+| `test_jawari_brightness_is_sustained` | `…::the_jawari_brightness_is_sustained` |
+| `test_wrap_edge_travels_more_than_a_flat_rail` | `…::the_wrap_edge_travels_more_than_on_a_flat_rail` |
+| `test_jawari_profile_is_a_curved_ramp` | `…::the_jawari_profile_is_a_curved_ramp` |
+| `test_jawari_is_a_barrier_string` | `…::the_bridge_support_resolves_the_wrap_and_stays_under_the_dense_solve_cliff` — the `isinstance` half is a type |
+| `test_lossless_energy_conserved` (mallet, 4) | `mallet_membrane_harness.rs::lossless_energy_is_conserved_through_the_strike` |
+| `test_strike_actually_couples` | `…::the_strike_actually_couples` |
+| `test_drift_scales_with_newton_tolerance` (mallet) | `…::the_drift_scales_with_the_newton_tolerance` |
+| `test_loss_only_removes_energy` (mallet, 3) | `…::loss_only_ever_removes_energy` |
+| `test_missing_mallet_is_bit_identical_to_bare_membrane` | `…::a_mallet_that_never_arrives_leaves_the_head_bit_identical` |
+| `test_mallet_membrane_is_a_resonator` | `…::the_struck_head_runs_through_the_resonator_interface` |
+| `test_circle_membrane_strike_conserves` | `…::a_struck_circular_head_conserves_too` |
+| `test_strike_excites_multiple_modes` | `…::a_strike_excites_several_modes` |
+| `test_harder_mallet_is_shorter_and_brighter` | `…::a_harder_mallet_is_shorter_and_brighter` |
+| `test_mallet_bounces_off` | `…::the_mallet_bounces_off` |
+| `test_strike_position_mode_comb` | `…::the_strike_position_combs_out_the_modes_it_sits_on` |
+| `test_membrane_and_mallet_share_a_timestep` | `…::the_mallet_and_its_head_share_a_timestep` |
+| `test_contact_time_and_velocity_reversal_linear_felt` | `mallet.rs::the_linear_felt_reproduces_the_half_period_and_reverses_the_velocity` (same fixture) |
+| `test_standalone_energy_conserved` (4) | `mallet.rs::the_standalone_rig_conserves_at_every_exponent` (same fixture; NaN repaired) |
+| `test_discrete_gradient_removable_singularity` | `collision.rs::stuck_the_discrete_gradient_is_the_elastic_force_and_apart_it_tends_to_the_midpoint_force` |
+| `test_hysteresis_is_passive` | `mallet.rs::the_hysteretic_felt_is_strictly_dissipative` (same fixture) |
+| `test_contact_primitives_are_one_sided` | `collision.rs::each_primitive_is_one_sided_and_the_derivative_of_the_one_before` |
+| `test_stiffness_alpha_one_edge_case` | `collision.rs::at_alpha_one_the_stiffness_is_k_in_contact_and_zero_out_of_it` |
+
+**Orphans removed from `tests/helpers.py`**, each name grepped alone: `make_barrier_string`,
+`BARRIER_K_DEFAULT`, `BARRIER_ALPHA_DEFAULT`, `BARRIER_HEIGHT_DEFAULT`, `jawari_barrier`,
+`make_jawari_string`, `JAWARI_WIDTH_FRAC_DEFAULT`, `JAWARI_DEPTH_DEFAULT`, `JAWARI_K_DEFAULT`,
+`make_mallet`, `make_mallet_wall`, and the `BarrierString`, `MalletMembrane` and `MalletWall`
+imports. The four `MALLET_*` constants, `make_membrane`, `make_damped_string` and `RADIUS_DEFAULT`
+stay: the plate and gong helpers and `test_resolution_horizon.py` use them. The
+`physsynth/core/collision.py` and `mallet.py` shims stay (the remaining mallet-plate and gong files,
+`test_stability.py`'s identity guard).
+
+**The binding keeps attributes no Python test now uses**: `BarrierString`'s settable `_G`,
+`_force_pref`, `_b` and `penetration` existed for the retired modal and jawari files (and
+`web/serialize.py`, retired at §23). They stay until the binding goes; their comments now say so.
+Comments that named the retired files elsewhere now name the native bars: `src/collision.rs`'s
+`BarrierParams` note, `src/mallet.rs`'s `MalletMembrane` note, the binding's `collision.rs` and
+`mallet.rs`, `tests/test_binding_surface.py`, and a pointer at the top of each design doc
+(`collision-barrier-plan.md`, `hammer-collision-plan.md`, `jawari-plan.md`).
+
+### 37.6 Cost and counts
+
+- **pytest 1,029 → 972**: the seven files' 57 cases, reconciled per file with `--collect-only`;
+  every other file's count is unchanged.
+- **Native +40**: 15 + 9 + 13 new, 3 in `collision.rs`. Workspace 1,502 → 1,542 optimised
+  (`scripts/cargo-test-nice.ps1 -Full`), all green; pytest 972 passed.
+- **Both CI profiles.** Unoptimised locally the barrier harness takes 34.3 s, the mallet harness
+  9.6 s and the jawari 2.9 s (optimised: 1.9 s, 0.4 s, 0.3 s). That is under §32's 92 s file, which
+  stayed in both; nothing was added to `release_only`. The local quick lane runs optimised, where no
+  one of these tests reaches its 2-CPU-second cut-off, so `scripts/quick-skip.txt` is unchanged.
+- **28 physics files remain**, with **319** test functions by the §24.1 count (361 − 42). No
+  contact model with a string or a drumhead is left; the mallet on a plate and on a gong are.
+
+### 37.7 What is next
+
+The next batch is not chosen; the human picks. Candidates in plain size order: the bow (3 files,
+22 functions), the reed (3, 25), the bore (4, 31), the instrument body (1, 9), the mallet on a plate
+and a gong (2 + 1, 38), the gong plate (6, 44), the room (4, 43), radiation (1, 49), the
+resolution horizon (1, 48).

@@ -483,8 +483,8 @@ pub fn wall_energy(p: &WallParams, s: &State) -> f64 {
 ///
 /// The Python binding does **not** wrap this, for the reason every model in this crate has the
 /// same split: the binding must hold the caller's own `Membrane` object so that `mal.membrane` is
-/// the object that was passed in, and `tests/test_mallet_energy.py` reads the head's field through
-/// exactly that handle.
+/// the object that was passed in, and the retired `tests/test_mallet_energy.py` read the head's
+/// field through exactly that handle (retirement plan §37).
 #[derive(Debug, Clone)]
 pub struct MalletMembrane {
     params: Params,

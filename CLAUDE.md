@@ -114,8 +114,13 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    plate, §26 the plain plate, §27 the free plate, §28 the guitar/disk — **every plate family's
    Python suite is gone** — §29 the membrane, §30 the beam, §31 the ideal string, §32 the stiff
    string, §33 the damped string, §34 the tension-modulated string, and §35–§36 the geometric
-   string in two halves — **every string family's Python suite is gone**; **35 physics files / 361
-   functions remain** (§9's map is stale). §36 (whirl, phantom, rotating wave) found nothing
+   string in two halves — **every string family's Python suite is gone** — and §37 the barrier,
+   the jawari and the mallet on a drumhead, two batches done together at the human's request (bars
+   for both first, one comparison, one breakage round, one deletion); **28 physics files / 319
+   functions remain** (§9's map is stale). §37's one find: a felt stiffness read 1% high in force
+   AND potential conserves perfectly and was seen only by the Windows-exact viewer freeze, so the
+   applied force is now pinned to the felt law at the test's own `K` (the barrier's equivalent,
+   the static-equilibrium oracle, was the only thing that saw the same defect there). §36 (whirl, phantom, rotating wave) found nothing
    unseen; its bars that spin a helix need the core model AND the analysis BVP, so they live in
    core through §24.2's test-only dependency, and it took the `slow` mark, the `xdist_group` pins
    and their now-unfailable guard file with it (the human's call). §35 found the θ blind spot a third time (guarded the same way),

@@ -6,9 +6,10 @@
 //! contact root-find in Phase 3 batch 2. What is here is the shell. Two consequences for this
 //! file specifically:
 //!
-//! * **`.membrane` is the object the caller passed, not a copy.** `tests/test_mallet_energy.py`
-//!   reaches through it for `u`, `X`, `Y`, `mask`, `index_map` and `energy()`, and
-//!   `web/serialize.py` calls `pickup_index_at` and `energy()` on it every step of the audio run.
+//! * **`.membrane` is the object the caller passed, not a copy.** The retired
+//!   `tests/test_mallet_energy.py` (retirement plan §37) reached through it for `u`, `X`, `Y`,
+//!   `mask`, `index_map` and `energy()`, and the retired `web/serialize.py` called
+//!   `pickup_index_at` and `energy()` on it every step of the audio run.
 //!   So this type holds a `Py<PyMembrane>` handle and drives the free functions in the core
 //!   module, exactly as `PyReedBore` holds its `Py<PyBore>`.
 //! * **It requires a Rust `Membrane`.** Handed the pure-Python `MembranePy` it raises

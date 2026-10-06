@@ -1,5 +1,9 @@
 # Jawari / buzzing bridge — the sitar & tanpura curved-bridge timbre
 
+> **2026-10-06: `tests/test_jawari.py` and the `tests/helpers.py` jawari helpers are retired**
+> (`docs/dev/python-retirement-plan.md` §37). The bars are
+> `crates/physsynth-core/tests/collision_jawari.rs`, which builds the profile itself.
+
 > **Status: BUILT & GREEN (2026-07-10).** No new core code. `make_jawari_string` + `jawari_barrier`
 > in `tests/helpers.py`, `tests/test_jawari.py` (11 tests), `scripts/diagnose_jawari.py`. Full suite
 > **723** green, ruff clean. Gates: lossless conservation **drift ~7e-13** through the sustained

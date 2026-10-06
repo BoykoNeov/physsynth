@@ -19,8 +19,7 @@ from physsynth.core.airbox import (
 from physsynth.core.body import ModalBody
 from physsynth.core.bore import C0_AIR, RHO0_AIR, Bore
 from physsynth.core.bow import BowedString
-from physsynth.core.collision import BarrierString
-from physsynth.core.mallet import MalletMembrane, MalletPlate, MalletVKPlate, MalletWall
+from physsynth.core.mallet import MalletPlate, MalletVKPlate
 from physsynth.core.membrane import Domain, Membrane
 from physsynth.core.plate import THETA_DEFAULT as PLATE_THETA_DEFAULT
 from physsynth.core.plate import Plate, VKPlate
@@ -470,69 +469,16 @@ def make_reed_bore(
     return ReedBore(bore=bore, p_mouth=p_mouth, f_reed=f_reed, q_reed=q_reed)
 
 
-# Mallet-membrane collision (model #7, first contact model). A soft mallet strikes a square
-# drumhead at the centre. The defaults keep the felt half-period well-resolved (~32 steps at K=5e4,
-# M=0.02) and hand the head ~two thirds of the strike energy at peak, so the conservation money test
-# genuinely exercises the nonlinear coupling (a bracket bug can't hide behind a linear scheme).
+# The mallet's felt (model #7), shared by the plate and gong helpers below. The drumhead helpers
+# `make_mallet` and `make_mallet_wall` retired with their tests (retirement plan §37); the
+# drumhead's bars are `crates/physsynth-core/tests/mallet_membrane_harness.rs`, at these numbers.
 MALLET_MASS_DEFAULT = 0.02      # kg
 MALLET_K_DEFAULT = 5.0e4        # N/m^alpha  (felt stiffness)
 MALLET_ALPHA_DEFAULT = 2.3      # felt exponent (piano-ish)
 MALLET_VELOCITY_DEFAULT = 3.0   # m/s impact speed toward the head
 
 
-def make_mallet(
-    *,
-    N: int = 40,
-    lam: float = 0.5,
-    K: float = MALLET_K_DEFAULT,
-    mass: float = MALLET_MASS_DEFAULT,
-    alpha: float = MALLET_ALPHA_DEFAULT,
-    hysteresis: float = 0.0,
-    strike_x: float = 0.5,
-    strike_y: float = 0.5,
-    strike_velocity: float = MALLET_VELOCITY_DEFAULT,
-    gap: float = 0.0,
-    sigma: float = 0.0,
-    domain: Domain = "rectangle",
-    Lx: float = 1.0,
-    Ly: float = 1.0,
-    radius: float = RADIUS_DEFAULT,
-    T: float = T_DEFAULT,
-    rho: float = RHO_AREAL_DEFAULT,
-) -> MalletMembrane:
-    """Build a mallet striking a membrane (model #7). ``lam < 1/sqrt(2)`` (default 0.5) oversamples
-    the stiff contact; ``sigma = 0`` and ``hysteresis = 0`` give the lossless conservation money
-    test, ``sigma > 0`` or ``hysteresis > 0`` the passivity test. ``K = 0`` is not allowed (a
-    massless felt) — pass ``strike_velocity = 0`` or a large ``gap`` to keep the mallet clear."""
-    membrane = make_membrane(
-        domain=domain, N=N, lam=lam, sigma=sigma, T=T, rho=rho, Lx=Lx, Ly=Ly, radius=radius
-    )
-    return MalletMembrane(
-        membrane=membrane, mass=mass, stiffness=K, alpha=alpha, hysteresis=hysteresis,
-        strike_x=strike_x, strike_y=strike_y, strike_velocity=strike_velocity, gap=gap,
-    )
-
-
-def make_mallet_wall(
-    *,
-    K: float = MALLET_K_DEFAULT,
-    mass: float = MALLET_MASS_DEFAULT,
-    alpha: float = 1.0,
-    hysteresis: float = 0.0,
-    fs: float = 96000.0,
-    strike_velocity: float = 2.0,
-    gap: float = 0.0,
-) -> MalletWall:
-    """Build the standalone mass-vs-fixed-wall rig (model #7 closed-form oracle). ``alpha = 1``,
-    ``hysteresis = 0`` gives the analytic half-period ``pi*sqrt(M/K)`` and exact velocity reversal;
-    ``hysteresis > 0`` makes the felt lossy (restitution < 1)."""
-    return MalletWall(
-        mass=mass, stiffness=K, fs=fs, alpha=alpha, hysteresis=hysteresis,
-        strike_velocity=strike_velocity, gap=gap,
-    )
-
-
-# Mallet on a PLATE (model #7p). The same felt and the same mallet as `make_mallet`, against an
+# Mallet on a PLATE (model #7p). The same felt and mallet as the retired drumhead helper, against an
 # *implicit* resonator instead of an explicit one -- which is the whole difference, and the reason
 # the default `mu` here is 1.0 rather than the plate suite's 2.0. `mu` sets the timestep
 # (`fs = kappa / (mu h^2)`), and the felt does not care about the plate's Courant number, it cares
@@ -682,119 +628,6 @@ def gong_linear_twin(gong: MalletVKPlate) -> MalletPlate:
         plate=twin, mass=gong.M, stiffness=gong.K, alpha=gong.alpha, hysteresis=gong.lam_h,
         strike_x=gong.x_strike, strike_y=gong.y_strike,
         strike_velocity=gong.strike_velocity, gap=gong.z_H,
-    )
-
-
-# Barrier-string collision (model #8, first *distributed* contact model). A stiff/flexible string
-# vibrating against a one-sided nonlinear barrier below it (fret buzz / tanpura jawari). The default
-# is a flexible fixed-end string and a flat rail 2 mm below rest; K is a stiff felt/wood contact.
-# lam < 1 keeps the coupled solve clear of the string's Nyquist mode. A big-negative barrier (out of
-# reach) is the K=0 analog (bit-identical to the bare string).
-BARRIER_K_DEFAULT = 1.0e6      # N/m^alpha  (contact stiffness density)
-BARRIER_ALPHA_DEFAULT = 1.5    # contact exponent (Hertzian-ish)
-BARRIER_HEIGHT_DEFAULT = -2.0e-3  # m  (flat rail below the string's rest line)
-
-
-def make_barrier_string(
-    *,
-    N: int = 80,
-    lam: float = 0.9,
-    K: float = BARRIER_K_DEFAULT,
-    alpha: float = BARRIER_ALPHA_DEFAULT,
-    barrier=BARRIER_HEIGHT_DEFAULT,
-    hysteresis: float = 0.0,
-    kappa: float = 0.0,
-    sigma0: float = 0.0,
-    sigma1: float = 0.0,
-    theta: float = THETA_DEFAULT,
-    newton_tol: float = 1e-13,
-    L: float = L_DEFAULT,
-    T: float = T_DEFAULT,
-    rho: float = RHO_DEFAULT,
-) -> BarrierString:
-    """Build a string against a one-sided distributed barrier (model #8) at Courant number ``lam``.
-
-    ``fs = c N / (L lam)``; ``lam < 1`` gives the coupled contact solve headroom below the string's
-    Nyquist mode. ``sigma0 = sigma1 = 0`` and ``hysteresis = 0`` give the lossless conservation
-    money test; ``sigma > 0`` or ``hysteresis > 0`` the passivity test. ``barrier`` is a scalar flat
-    rail or an ``(N+1,)`` profile (use ``-inf`` off-support for a point fret). A big-negative
-    ``barrier`` keeps the string clear (the ``K = 0`` analog)."""
-    c = wave_speed(T, rho)
-    fs = c * N / (L * lam)
-    string = DampedStiffString(
-        L=L, T=T, rho=rho, fs=fs, N=N, kappa=kappa, sigma0=sigma0, sigma1=sigma1, theta=theta
-    )
-    return BarrierString(
-        string=string, barrier=barrier, stiffness=K, alpha=alpha, hysteresis=hysteresis,
-        newton_tol=newton_tol,
-    )
-
-
-# Jawari / buzzing bridge (composes model #8, no new core physics): a *curved* barrier at the string
-# termination. The bridge is a downward-opening parabola tangent to the rest line at the fixed end;
-# the string wraps onto it on the downswing, its departure point travelling along the curve — the
-# "life"/shimmer of the sitar & tanpura. `clearance` is the crest's drop below rest: >0 grazes,
-# <0 preloads (the whole span contacts at rest — the static-equilibrium-oracle case). `depth` is the
-# curve's total drop over the bridge span; keep it comparable to the near-termination downswing so
-# the string wraps a wide span (too deep -> it only grazes the crest, acting like a point contact).
-JAWARI_WIDTH_FRAC_DEFAULT = 0.15   # bridge span as a fraction of L (near the termination)
-JAWARI_DEPTH_DEFAULT = 1.0e-3      # m   (crest-to-far-edge drop of the parabola)
-JAWARI_K_DEFAULT = 2.0e6           # N/m^alpha  (stiff wood/bone bridge)
-
-
-def jawari_barrier(
-    x: np.ndarray,
-    L: float,
-    *,
-    width_frac: float = JAWARI_WIDTH_FRAC_DEFAULT,
-    depth: float = JAWARI_DEPTH_DEFAULT,
-    clearance: float = 0.0,
-) -> np.ndarray:
-    """Parabolic jawari-bridge profile on the grid ``x`` (length ``N+1``): a curved barrier hugging
-    the ``x = 0`` termination, ``-inf`` (out of support) beyond the bridge span.
-
-    ``b(x) = -clearance - depth·(x/d)²`` for ``0 < x ≤ d = width_frac·L``. The crest (nearest the
-    string) is at the termination side and the surface curves away by ``depth`` at the far edge.
-    """
-    d = width_frac * L
-    b = np.full_like(np.asarray(x, dtype=float), -np.inf)
-    on = (x > 0.0) & (x <= d)
-    b[on] = -clearance - depth * (x[on] / d) ** 2
-    return b
-
-
-def make_jawari_string(
-    *,
-    N: int = 100,
-    lam: float = 0.4,
-    K: float = JAWARI_K_DEFAULT,
-    alpha: float = BARRIER_ALPHA_DEFAULT,
-    width_frac: float = JAWARI_WIDTH_FRAC_DEFAULT,
-    depth: float = JAWARI_DEPTH_DEFAULT,
-    clearance: float = 0.0,
-    hysteresis: float = 0.0,
-    kappa: float = 0.0,
-    sigma0: float = 0.0,
-    sigma1: float = 0.0,
-    theta: float = THETA_DEFAULT,
-    newton_tol: float = 1e-13,
-    L: float = L_DEFAULT,
-    T: float = T_DEFAULT,
-    rho: float = RHO_DEFAULT,
-) -> BarrierString:
-    """Build a sitar/tanpura *jawari* string: a :class:`BarrierString` (model #8) whose barrier is
-    the curved bridge of :func:`jawari_barrier`. ``N = 100`` resolves the wrap (support ~15 nodes,
-    well under the dense-solve cliff). ``sigma0 = sigma1 = hysteresis = 0`` gives the lossless
-    conservation gate; ``clearance < 0`` seats the whole bridge in contact for the static oracle."""
-    c = wave_speed(T, rho)
-    fs = c * N / (L * lam)
-    string = DampedStiffString(
-        L=L, T=T, rho=rho, fs=fs, N=N, kappa=kappa, sigma0=sigma0, sigma1=sigma1, theta=theta
-    )
-    barrier = jawari_barrier(string.x, L, width_frac=width_frac, depth=depth, clearance=clearance)
-    return BarrierString(
-        string=string, barrier=barrier, stiffness=K, alpha=alpha, hysteresis=hysteresis,
-        newton_tol=newton_tol,
     )
 
 

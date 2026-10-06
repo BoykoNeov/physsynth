@@ -110,8 +110,8 @@ def test_an_in_place_write_through_u_reaches_the_string():
 
 
 def test_the_state_arrays_can_be_replaced_wholesale():
-    # `tests/test_collision_modal.py` does this to a string it owns (`bar.string.u = uf.copy()`),
-    # so assignment has to work, not just mutation.
+    # The retired `tests/test_collision_modal.py` did this to a string it owned
+    # (`bar.string.u = uf.copy()`), so assignment has to work, not just mutation.
     s = IdealString(**_params(N=8))
     fresh = np.linspace(0.0, 1.0, 9)
     s.u = fresh.copy()

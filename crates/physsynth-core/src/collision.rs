@@ -782,8 +782,8 @@ impl std::error::Error for BarrierError {}
 ///
 /// The admittance block is the expensive half: `m` banded solves against the string's factor,
 /// which is why it is built here and never again. `g_mat` and `force_pref` are `pub` and meant to
-/// be written — `tests/test_collision_modal.py` doubles both to move the fixed point, which is the
-/// negative control for the coupling magnitude.
+/// be written — `tests/collision_barrier_harness.rs` and `tests/collision_jawari.rs` double both to
+/// move the fixed point, which is the negative control for the coupling magnitude.
 #[derive(Debug, Clone)]
 pub struct BarrierParams {
     /// Stiffness, exponent, hysteresis, timestep and Taylor threshold, as the solve wants them.

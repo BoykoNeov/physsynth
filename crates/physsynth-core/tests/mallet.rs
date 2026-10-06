@@ -26,6 +26,16 @@ use physsynth_core::membrane::{self, Domain, Membrane};
 use physsynth_core::plate;
 use std::f64::consts::PI;
 
+/// `f64::max` drops a NaN, so a run that blew up would report its last finite drift and pass; the
+/// Python's `np.max` propagated it. This does too (retirement plan §37).
+fn max_nan(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.max(b)
+    }
+}
+
 const M: f64 = 0.02; // kg — the project's default mallet
 const K: f64 = 5.0e4; // N/m^alpha — the project's default felt
 const ETA_TOL: f64 = 1e-12;
@@ -165,7 +175,7 @@ fn the_standalone_rig_conserves_at_every_exponent() {
         let mut deepest: f64 = 0.0;
         for _ in 0..800 {
             rig.step().expect("contact solve converged");
-            worst = worst.max((rig.energy() - e0).abs());
+            worst = max_nan(worst, (rig.energy() - e0).abs());
             deepest = deepest.max(rig.state().penetration);
         }
         assert!(
@@ -188,7 +198,7 @@ fn the_coupled_model_conserves_the_total_energy() {
     let mut deepest: f64 = 0.0;
     for _ in 0..1_200 {
         mal.step().expect("contact solve converged");
-        worst = worst.max((mal.energy() - e0).abs());
+        worst = max_nan(worst, (mal.energy() - e0).abs());
         deepest = deepest.max(mal.state().penetration);
     }
     assert!(deepest > 0.0, "the mallet never struck the head");
@@ -617,7 +627,7 @@ fn a_struck_lossless_plate_conserves_the_total() {
             let mut worst = 0.0f64;
             for _ in 0..1500 {
                 m.step().expect("the contact solve converges");
-                worst = worst.max((m.energy() - e0).abs() / e0.abs());
+                worst = max_nan(worst, (m.energy() - e0).abs() / e0.abs());
             }
             assert!(
                 worst < 1e-10,

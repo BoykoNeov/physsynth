@@ -1,5 +1,9 @@
 # Mallet–membrane collision — Contact & Collisions Plan (model #7, first contact model)
 
+> **2026-10-06: the Python tests this plan names are retired** (`docs/dev/python-retirement-plan.md`
+> §37). The wall rig's bars are `crates/physsynth-core/tests/mallet.rs` and `collision.rs`; the
+> struck drumhead's are `mallet_membrane_harness.rs`.
+
 > **Status: BUILT & GREEN (2026-07-10).** `core/mallet.py` (`MalletMembrane` + standalone `MalletWall`
 > + vector-ready contact primitives), `tests/test_mallet_{wall,energy,signature}.py` (9+11+5 = 25
 > tests), `scripts/diagnose_mallet.py`. Full suite **673** green, ruff clean. Gates: standalone wall

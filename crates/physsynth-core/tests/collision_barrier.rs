@@ -26,6 +26,16 @@ use physsynth_core::collision::{BarrierError, BarrierString};
 use physsynth_core::pyfloat::scalar_pow;
 use physsynth_core::string_damped::{self, DampedStiffString};
 
+/// `f64::max` drops a NaN, so a run that blew up would report its last finite drift and pass; the
+/// Python's `np.max` propagated it. This does too (retirement plan §37).
+fn max_nan(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.max(b)
+    }
+}
+
 const L: f64 = 1.0;
 const T: f64 = 200.0;
 const RHO: f64 = 0.005; // -> c = 200 m/s
@@ -88,7 +98,7 @@ fn a_lossless_barrier_conserves_the_total_energy() {
         let mut worst: f64 = 0.0;
         for _ in 0..4000 {
             bar.step();
-            worst = worst.max(((bar.energy() - e0) / e0).abs());
+            worst = max_nan(worst, ((bar.energy() - e0) / e0).abs());
         }
         assert!(
             worst < DRIFT_TOL,
@@ -108,7 +118,7 @@ fn a_point_fret_conserves_too_and_it_is_a_different_code_path() {
     let mut worst: f64 = 0.0;
     for _ in 0..4000 {
         bar.step();
-        worst = worst.max(((bar.energy() - e0) / e0).abs());
+        worst = max_nan(worst, ((bar.energy() - e0) / e0).abs());
     }
     assert!(worst < DRIFT_TOL, "point fret drifted {worst:.3e}");
 }
