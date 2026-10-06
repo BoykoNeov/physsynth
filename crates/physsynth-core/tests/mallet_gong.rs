@@ -8,14 +8,16 @@
 //! plan §39): the anchor to model #7p, the energy ledger, the outer loop's cost and its tangent, the
 //! two failure attributions, and the physics payoff -- that on a linear plate an `alpha = 1` felt
 //! scales a strike exactly while a gong does not, and that the gong's spectrum climbs with the
-//! strike. Three of the Python tests have no analogue here: `mal.plate is plate` (the plate is
-//! owned by value) and the two refusals of the wrong kind of plate (the constructors take a
-//! `VkPlate` and a `Plate` by type).
+//! strike. What had no analogue: `mal.plate is plate` (the plate is owned by value), the test
+//! holding the two refusals of the wrong kind of plate (the constructors take a `VkPlate` and a
+//! `Plate` by type), and the step report's values before the first step (there is no report).
 //!
 //! **The plate's coupling method.** These rigs leave `VkSpec`'s `Auto` default in place while the
-//! Python fixture pinned `Picard`. `Auto` is Picard until a solve fails to converge, so wherever a
-//! bar here stands for a Python one it also asserts that nothing fell back, which is what makes
-//! the two the same trajectory -- and the carried figures reproduce the Python's to the digit.
+//! Python fixture pinned `Picard`. `Auto` is Picard until a solve fails to converge, so every rig
+//! whose figures were compared with the Python's -- the energy sweep, the loss pair, the
+//! free/supported pair, the tolerance sweep, both payoff tests and the tangent's driver -- also
+//! asserts that nothing fell back, which is what makes the two the same trajectory; those figures
+//! reproduce the Python's to the digit.
 
 use physsynth_analysis::spectrum::magnitude_spectrum;
 use physsynth_core::collision::ContactError;
@@ -642,7 +644,8 @@ fn the_outer_loop_takes_the_handful_of_iterations_the_bound_predicts() {
             }
         }
         let mean = total as f64 / hits as f64;
-        // Measured: mean 1.4-1.9, max 2 at the shipped `outer_tol = 1e-14`. The cap is 20.
+        eprintln!("M={mass} v0={v0}: mean {mean:.3}, worst {worst}, {hits} hits");
+        // Measured: mean 1.6-1.9, max 2 at the shipped `outer_tol = 1e-13`. The cap is 20.
         assert!(worst <= 4, "M={mass} v0={v0}: {worst} outer iterations");
         assert!(mean < 2.5, "M={mass} v0={v0}: mean {mean:.2}");
     }

@@ -6306,7 +6306,8 @@ measurements and printed the number.
 
 **`Auto` is `Picard` on every one of these runs, and that is asserted, not assumed.** `Auto` runs
 Picard and abandons a solve to Newton only when Picard fails; a run with no fallback is the same
-trajectory. Every native rig that stands for a Python one now sums `n_fallbacks` and asserts zero —
+trajectory. Every native rig whose figures were compared with the Python's now sums `n_fallbacks`
+and asserts zero —
 the energy sweep, the loss pair, the free/supported pair, the tolerance sweep, both payoff tests and
 the tangent's driver — and the figures bear it out: **every trajectory figure matches to all
 printed digits**. The three drifts (`5.341899762040864e-12`, `2.6683593606296402e-12`,
@@ -6357,7 +6358,7 @@ assertion, not name:
 | free / supported at 8,000 steps, ratio | 3.2e-10 / 2.7e-12, 121 | 1e-8 / 1e-11, > 50 |
 | tangent bound at the shipped mallet | 5.08e-3 | (1e-6, 5e-2) |
 | outer iterations, steps 601–1,000 | 2 on all 400 | ≤ 3 |
-| scaled departure, linear plate / gong (`alpha = 1`) | 0.0 (Windows; 3.52e-13 on Linux) / 2.12 | 1e-10 / > 1 |
+| scaled departure, linear plate / gong (`alpha = 1`) | 0.0 on Windows (the retired Python test read 3.52e-13 on Linux runners) / 2.12 | 1e-10 / > 1 |
 | centroid swing, linear plate / gong, ratio | 0.0016 / 0.74, 460 | < 0.01 / > 0.4, > 100 |
 | fewest solves beyond the inner iterations | 3 | ≥ 0 |
 
@@ -6367,8 +6368,9 @@ The thinnest are the Python's own and left where it had them: **the lossless dri
 last contact is step 1,201, and from there the hysteresis rig is a *lossless* plate ringing alone, so
 a step's "rise" is the energy read-out's rounding on a flat total (the Python stopped at 1,200 steps
 and read `3.7e-16`). Two of the existing file's comments were stale from the `outer_tol = 1e-14`
-era and are corrected: the energy drift read "4.1e-13 to 6.0e-13" and the free/supported factor
-"550".
+era and are corrected: the energy drift read "4.1e-13 to 6.0e-13", the free/supported factor
+"550", and the outer loop's counts were credited to `outer_tol = 1e-14` (re-measured at the shipped
+`1e-13`: mean 1.6–1.9, worst 2).
 
 ### 39.4 Twelve breakages
 
@@ -6455,3 +6457,29 @@ The next batch is not chosen; the human picks. The 25 files, by family: the bow 
 the reed (`test_reed_*`, 3), the bore (`test_bore_*`, 4), the body (1), the gong plate (`test_vk_*`,
 6), the room (`test_airbox_*`, 4), radiation (1), the resolution horizon (1), the spectrum detector
 (1) and the operators (1).
+
+### 39.8 On CI
+
+Run 37427694242 on `f3a9905`, all five jobs green — the first Linux run of the new bars, and of
+every `n_fallbacks == 0` assertion: on glibc's arithmetic too, no carried rig's plate solve left
+Picard, including the 16,384-step centroid runs.
+
+| file | optimised | unoptimised |
+|---|---|---|
+| `mallet_gong.rs` | 29.53 s | — (`release_only`) |
+
+The jobs took **10.2 minutes optimised and 14.6 unoptimised**; the previous run on `main`
+(37419829412, §38's docs commit) took 9.4 and 14.7, so the unoptimised job — which does not run this
+file — is unchanged, and the optimised one is under a minute longer. Locally the whole file takes
+20.8 s on four threads. CI runs without `--nocapture`, so it reports the passes, not the margins:
+the two thin ones (the lossless drift at 1.5x, the hysteresis rise at 1.85x) held on Linux, by how
+much is not recorded.
+
+Review fixes, after the advisor's read of the first commit. Four places in the prose said more than
+was measured, and are corrected: the file header counted "three" Python tests without an analogue
+(two tests and half of a third), the header and §39.1 said every carried bar asserts no fallback
+(only the rigs whose figures were compared do — the energy sweep, the loss pair, the free/supported
+pair, the tolerance sweep, both payoff tests and the tangent's driver), one stale `outer_tol = 1e-14`
+comment survived §39.3's sentence saying they were fixed (re-measured and corrected), and the margin
+table presented the retired Python's Linux reading as a native one. The quick lane was run once on
+this file: 10 passed, 7 skipped, one per `scripts/quick-skip.txt` entry.

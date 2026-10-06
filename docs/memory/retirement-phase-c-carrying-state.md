@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: bc58c454-d6f0-40f5-8259-4ca90ee23d46
-  modified: 2026-10-06T07:06:23.861Z
+  modified: 2026-10-06T07:23:24.654Z
 ---
 
 Phase C of `docs/dev/python-retirement-plan.md`, second kind of work: the model is already Rust,
@@ -132,6 +132,10 @@ breakages, delete the file.
   workspace 1,566 → 1,571. New user rule: run every suite at BelowNormal via
   `cmd //v:on //c "start /belownormal /b /wait <cmd> & exit !errorlevel!"`; a QUOTED exe path needs `start ""`
   (empty title) or it hangs. Bash heredocs with backticks fail → Write part files + a fill script.
+  CI 37427694242 green (first Linux run; no fallback on glibc either): mallet_gong 29.5 s opt; jobs 10.2 opt /
+  14.6 unopt (unopt unchanged, file is release_only). Review AGAIN caught prose overclaims (a "three" that was
+  two-and-a-half, a "wherever" fallback claim wider than the rigs that assert it, one surviving stale comment,
+  a Python Linux figure tabled as native) — grep the write-up's quantifiers against the code before pushing.
 Remaining after §39: **25 physics files / 281 functions** (§24.1 count), no contact file left. Next batch not
 chosen — the user picks; a recommendation + "go with it" is an accepted answer. Re-derive the remaining list
 (§9's map is stale).
