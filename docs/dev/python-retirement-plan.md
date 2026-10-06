@@ -6054,7 +6054,8 @@ The bars went to one new file and one extended one:
 Recorded first, wheel reinstalled (`W:\temp\claude\mallet-plate-batch\rec.txt`, the script beside
 it).
 
-**Start states bit-identical.** `plate_bump` on both boundaries at `N = 16` and `24`, on
+**Start states bit-identical — on Windows**, where this was recorded (§37.8: glibc's `exp` is
+another libm, so on Linux they need not be). `plate_bump` on both boundaries at `N = 16` and `24`, on
 `make_free_plate`'s and on `make_plate`'s lossy plate — six vectors, every element the same double as
 NumPy's, including the free plate's mean removal (`np.mean` is pairwise; `reduce::sum` reproduces it).
 So the strike is the Python's strike step for step, and **every trajectory figure matches to all
@@ -6068,11 +6069,12 @@ outlines with their live-node counts (305, 226), the contact counts (547 / 447),
 **What differs is the read-outs.** The analytic mode shapes differ from NumPy's in the last bit or
 two (worst `6.9e-17`; the Python normalised twice, by the rms and then by the norm, and its sine is
 NumPy's). The mode projections and the free plate's weighted mean are `@` and `np.dot` in the Python
-(BLAS) and left-to-right sums here: the projections agree to fourteen or fifteen digits, the
-weighted-mean secants and the rigid drifts to about `1e-14` relative. The centre-strike nulls agree to
-three digits (`6.2155e-14` against `6.2171e-14` of the fundamental) because they ARE rounding — a
-cancellation to nothing, sixteen hundred times under the bar either way. The two centroids
-(`np.fft` → `physsynth_analysis::spectrum`) agree to fifteen and sixteen digits. Nothing was frozen.
+(BLAS) and left-to-right sums here: the projections agree to thirteen to fifteen digits, the
+weighted-mean secants to fifteen and the rigid drifts to fourteen or more. The centre-strike nulls
+agree to two or three digits (`6.2155e-14` against `6.2171e-14` of the fundamental for (2,1),
+`5.333e-14` against `5.347e-14` for (1,2)) because they ARE rounding — a cancellation to nothing,
+about two thousand times under the bar either way. The two centroids (`np.fft` →
+`physsynth_analysis::spectrum`) agree to fifteen and thirteen digits. Nothing was frozen.
 
 ### 38.2 What the existing native bars could not see
 
@@ -6127,7 +6129,7 @@ velocity, 1.65x** (`6.1e-10` against `1e-9`), **the weakest counted mode, 1.8x**
 of the fundamental against 1%), and the `sigma = 2` passivity end, **1.6% lost against the 1%
 required**.
 
-### 38.4 Fourteen breakages — three that nothing in the workspace could see
+### 38.4 Fourteen breakages — two that nothing in the workspace could see
 
 Planted one at a time with `W:\temp\claude\mallet-plate-batch\mutate.py` (snapshot, restore by copy,
 byte-compare). "Red" counts `mallet_plate_harness`, `mallet`, `mallet_gong`,
@@ -6138,7 +6140,7 @@ added bars in place.
 |---|---|---|
 | **A** the strike corrects `u` but leaves `accel` stale | 1 | the acceleration bar, added for it; **0 workspace-wide before** |
 | **B** felt stiffness read 1% high (force AND potential), plate path only | 2 | the felt-law bar, added for it; before, only the linear-gong twin anchor |
-| **C** the influence column without the nodal mass `force_denominator` | 15 | the column and admittance bars, conservation, passivity, the signatures |
+| **C** the influence column without the nodal mass `force_denominator` | 15 | the column and admittance bars, conservation, passivity, the coupling share, the dynamic-timbre signature |
 | **D** `eta_prev` read after the plate's advance | 11 | conservation and passivity, the felt law, the dynamic-timbre bar |
 | **E** strike coordinates read from the full grid at the live index | 4 | the snap bars (both files), the orientation bar, the centre null |
 | **F** displacement injected with the wrong sign | 20 | nearly everything |
@@ -6157,19 +6159,29 @@ bars were added: **A 0, L 0, B 1** (the twin anchor), **I 1** (`mallet.rs`'s col
 
 Four readings:
 
-- **A was the reviewer's prediction, measured.** The energy never reads `accel`, and the one test
-  that does — `mallet.rs`'s column bar — calls `plate_inject` directly, so it cannot see the step
-  forgetting to. A struck plate whose `pressure()` reports the unstruck plate passed everything, and
+- **A was the reviewer's prediction, measured — and smaller than first described.** The energy never
+  reads `accel`, and the one test that does — `mallet.rs`'s column bar — calls `plate_inject`
+  directly, so it cannot see the step forgetting to. `Plate::step` rebuilds `accel` from scratch
+  every step, so the damage is confined to the contact: measured with the defect planted, the radiated
+  `pressure()` was wrong by up to **3.1x its true peak** (1,225 against 341) through the 495 contact
+  steps and **identical to the bit** before and after. A wrong attack transient — the part of the
+  sound the strike is — not, as the question put to the human said, a plate that sounds unstruck.
+  It passed everything, and
   by reading no Python test could see it either: the retired files asserted only that `pressure()`
   returns a float, and `tests/test_mallet_gong.py`, the one Python file left that builds a
   `MalletPlate`, never reads its `accel` or `pressure()`. The
   human chose a bar: through a real strike, at every node and every step, `accel` must be the plate's
   own second difference. It sees A and I.
-- **L could not be seen from rest.** Every fixture starts the plate at rest, where every node reads
-  zero, so seeding the mallet against the wrong node changes no number. The human chose a bar: the
-  plate is pre-set with the bump, the mallet starts 5e-6 m above it, and the starting penetration
+- **L could not be seen from rest, and does not misplace the strike.** Every fixture starts the
+  plate at rest, where every node reads zero, so seeding against the wrong node changes no number.
+  The question put to the human called it the way a pre-set plate's strike could be silently
+  misplaced; measured, it is not: the mallet's height is absolute (`z_h = gap`), and the stored
+  penetration only seeds the scalar solve, so on a pre-set plate the motion moved by 1.6e-13 of its
+  scale and the force by 3.6e-13 — solver tolerance. What it does change is the **reported starting
+  state** (the penetration and `in_contact` before the first step), and that is what the bar the human
+  chose guards: the plate pre-set with the bump, the mallet 5e-6 m above it, the starting penetration
   must be the strike node's displacement less the gap — the felt starts compressed, which a reading at
-  the corner (3e-21 m) would deny.
+  the corner (3e-21 m) would deny. The human was told the premise was overstated.
 - **B is §37's J again, on the plate's own path.** A consistent 1% stiffness conserves perfectly; only
   the linear-gong anchor saw it, and a red twin says two copies differ, not which. The plate twin of
   §37's felt-law bar was added **without asking**, on §37.4's precedent, and the human was told.
@@ -6238,3 +6250,36 @@ The next batch is not chosen; the human picks. The 26 files, by family: the bow 
 the reed (`test_reed_*`, 3), the bore (`test_bore_*`, 4), the body (1), the mallet on a gong (1), the
 gong plate (`test_vk_*`, 6), the room (`test_airbox_*`, 4), radiation (1), the resolution horizon
 (1), the spectrum detector (1) and the operators (1).
+
+### 38.8 On CI
+
+Run 37418629754 on `768f7e2`, all five jobs green, and the first Linux run of these bars:
+
+| file | optimised | unoptimised |
+|---|---|---|
+| `mallet_plate_harness.rs` | 2.27 s | 50.05 s |
+
+The jobs took **10.1 minutes optimised and 12.7 unoptimised** (§37.8: 8.1 and 11.7). The new file is
+about 50 s of the unoptimised job, 2.8x its local time — more than the drumhead harness's 1.9x in
+§37, so it is the slowest new file on CI at about half of §32's 92 s, still both profiles. The rest is
+the machine, measured inside the job on unchanged files: unoptimised, `mallet_membrane_harness.rs`
+took 16.17 s against §37.8's 16.07 s and `string_geometric_harness.rs` 12.19 s against 12.25 s, while
+`string_geometric_whirl.rs` took 58.71 s against 52.28 s; optimised, the drumhead harness took 0.81 s
+against 0.68 s. The two extra minutes of the optimised job are not this batch's 2.3 s.
+
+This was the first run on glibc's `exp` and `sin`, where the start bump is no longer guaranteed
+bit-identical to the Windows recording, and the thin bars held: the recoil's constant velocity
+(1.65x on Windows), the weakest counted mode (1.8x) and the `sigma = 2` passivity end. CI runs
+without `--nocapture`, so it reports the passes, not the margins.
+
+Review fixes, after the advisor's read of the first commit. The two defects nothing saw were
+described to the human before their effect was measured, and both descriptions were too strong.
+Measured with each planted: A leaves the radiated pressure wrong by up to 3.1x through the 495
+contact steps and bit-identical outside them (the step rebuilds `accel`), not "a plate that sounds
+unstruck"; L moves the motion only at solver tolerance (the mallet's height is absolute and the
+stored penetration only seeds the solve), not "a misplaced strike" — it misreports the starting
+state, which is what its bar guards. Both bars stay; §38.4, the two test comments and CLAUDE.md now
+say what each defect does, and the human was told. §38.1's digit counts were re-read from the record
+(centroids fifteen and thirteen, not fifteen and sixteen; nulls two or three digits; projections
+thirteen to fifteen), "bit-identical" is now "on Windows", §38.4's heading says two unseen defects,
+not three, and row C credits the one signature that went red.

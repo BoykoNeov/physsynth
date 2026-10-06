@@ -338,7 +338,10 @@ fn the_struck_plates_acceleration_is_the_second_difference_of_its_motion() {
     // corrects the plate's displacement AND its stored acceleration — the field `pressure()`, the
     // radiated read-out, is built from. Skipping the second correction left every bar in the
     // workspace green: the energy never reads `accel`, and the one test that does calls the
-    // injector directly rather than through a strike. So, through a real strike, at every node
+    // injector directly rather than through a strike. The step rebuilds `accel` from scratch, so
+    // the damage is confined to the contact — measured, the radiated pressure was wrong by up to
+    // 3.1x its true peak through the 495 contact steps and identical to the bit after separation:
+    // a wrong attack, the part of the sound the strike IS. So, through a real strike, at every node
     // and every step: `accel` must be `(u^{n+1} - 2 u^n + u^{n-1}) / k^2` of the motion the plate
     // actually made. Compared in displacement units (times `k^2`) against the field's own scale,
     // for the reason `mallet.rs`'s column test gives: the second difference is orders smaller.
@@ -373,9 +376,12 @@ fn a_mallet_set_against_a_moving_plate_reads_the_strike_node() {
     // Added with the batch, the human's call (retirement plan §38.4, breakage L). The starting
     // penetration is the plate's displacement AT THE STRIKE NODE minus the mallet's height, and
     // every other test starts the plate at rest, where every node reads zero — so reading the
-    // wrong node was invisible. Here the plate is already displaced (the bump reaches the strike
-    // node at ~6.2e-5 m) and the mallet starts 5e-6 m up: the felt is already compressed, which a
-    // reading at any node the bump does not reach would deny.
+    // wrong node was invisible. It does NOT misplace the strike — the mallet's height is absolute
+    // and the stored penetration only seeds the contact solve, so measured, the motion moved by
+    // 1.6e-13 of its own scale (solver tolerance) — but it misreports the starting state, which is
+    // what this guards. Here the plate is already displaced (the bump reaches the strike node at
+    // ~6.2e-5 m) and the mallet starts 5e-6 m up: the felt is already compressed, which a reading
+    // at any node the bump does not reach would deny.
     let mut pl = plate_at(
         Boundary::Supported,
         Domain::Rectangle,

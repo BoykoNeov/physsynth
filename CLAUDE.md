@@ -119,9 +119,10 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    for both first, one comparison, one breakage round, one deletion), and §38 the mallet on a
    plate; **26 physics files / 294 functions remain** (§9's map is stale). §38 found two defects
    NOTHING in the workspace saw, both guarded at the human's call: a strike that corrects the
-   plate's displacement but leaves its stored acceleration stale (so `pressure()` reports the
-   unstruck plate; the energy never reads `accel`), and a mallet seeded against the wrong node
-   (invisible from rest, where every node reads zero). §37's one find: a felt stiffness read 1% high in force
+   plate's displacement but leaves its stored acceleration stale (the radiated attack wrong by up
+   to 3x through the contact, exact after it; the energy never reads `accel`), and a mallet seeded
+   against the wrong node (invisible from rest; it moves only the reported starting state and the
+   solver's seed, not the strike — the question to the human overstated it). §37's one find: a felt stiffness read 1% high in force
    AND potential conserves perfectly and was seen only by the Windows-exact viewer freeze, so the
    applied force is now pinned to the felt law at the test's own `K` (the barrier's equivalent,
    the static-equilibrium oracle, was the only thing that saw the same defect there). §36 (whirl, phantom, rotating wave) found nothing
