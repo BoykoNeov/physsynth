@@ -24,7 +24,8 @@
 //!   **Python object** a constructor accepted and handed back. Here the gong in a room is its own
 //!   type holding a `RoomGrid<VkSeam>`; a linear plate's wrapper is a `RoomGrid<PlateSeam>` and
 //!   does not compile. The shape of an argument became a type (plan §14.2). The linear-plate
-//!   message itself is still asserted, on the bare class, by `tests/test_mallet_gong.py`.
+//!   message was asserted on the bare class by `tests/test_mallet_gong.py` until that file retired
+//!   (plan §39): it is the binding's prose, and it leaves with the binding.
 //! * "The port is read once a step" worked by replacing the port's `free_pressure` and
 //!   `require_ready` with counting wrappers. A native port is a value with no methods to replace
 //!   (§16.6). What that test protected is structural here: [`MalletVkRoom::step`] calls

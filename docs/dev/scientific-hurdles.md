@@ -135,7 +135,9 @@ machine. What broke the identity is that the *physics* is homogeneous and the *s
 discrete-gradient contact force's 0/0 Taylor-branch threshold and the bracketed scalar root find
 both carry **absolute** scales, which a four-times-larger trajectory meets at a different place.
 Exact power-of-two scaling is necessary and not sufficient, and the fixture-dependence is visible
-on the machine that reads zero: `ratio=8` and `strike_velocity=1.5` each read `4.30e-13`.
+on the machine that reads zero: `ratio=8` and `strike_velocity=1.5` each read `4.30e-13`. (The
+Python file retired 2026-10-06; the bar is native, unchanged at `1e-10`, as
+`crates/physsynth-core/tests/mallet_gong.rs::on_a_linear_plate_an_alpha_one_felt_scales_exactly_and_a_gong_does_not`.)
 
 So the generalised rule is **an exact-equality assertion is a claim about every rounding and every
 threshold on the path, not about the invariance being tested** — a `sin` on a different CPU and a

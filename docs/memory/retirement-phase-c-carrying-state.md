@@ -1,11 +1,11 @@
 ---
 name: retirement-phase-c-carrying-state
-description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-13 done by 2026-10-05 (every plate family, membrane, beam, every string family incl. both geometric halves); 35 files / 361 functions left"
+description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-17 done by 2026-10-06 (plates, membrane, beam, every string, every contact file incl. mallet-on-gong); 25 files / 281 functions left"
 metadata:
   node_type: memory
   type: project
   originSessionId: bc58c454-d6f0-40f5-8259-4ca90ee23d46
-  modified: 2026-09-29T14:07:47.776Z
+  modified: 2026-10-06T07:06:23.861Z
 ---
 
 Phase C of `docs/dev/python-retirement-plan.md`, second kind of work: the model is already Rust,
@@ -91,7 +91,48 @@ breakages, delete the file.
   (sine-not-RE was a shape-residual band; R→0 gate vs an inline formula) — map by assertion, not name.
   Viewer tests (`physsynth-viewer/tests/geometric.rs`) already covered a whirl/phantom subset at looser
   bars — grep the viewer before writing "nothing native ran X".
-Remaining after §36: **35 physics files / 361 functions** (§24.1 count); no string family left. Next batch not
+- §37 batches 14+15 TOGETHER (2026-10-06, human: "several batches at once, compare all at once, then delete";
+  chose barrier+jawari and mallet-on-drumhead, INLINE not parallel agents): 7 files (42 fns / 57 cases) →
+  NEW core `collision_barrier_harness.rs` (15), `collision_jawari.rs` (9), `mallet_membrane_harness.rs` (13 =
+  12 + felt-law bar) + 3 in `collision.rs`; `mallet.rs` already had test_mallet_wall's rig at the SAME fixture
+  (repaired: `f64::max` folds dropped NaN → `max_nan`). `impl Resonator for BarrierString` added. Order: all
+  bars, one record/compare pass, one 18-plant round, one deletion. Start vectors bit-identical to NumPy → every
+  trajectory figure to 16 digits. 1% consistent barrier K seen ONLY by the static oracles (their reason to
+  exist); 1% consistent mallet K seen only by the Windows viewer freeze (and never by Python) → added
+  felt-law bar unasked (§35.4 precedent), said so. Workspace 1,502 → 1,542; pytest 1,029 → 972. Mutate script
+  `W:\temp\claude\contact-batch\mutate.py`; core src/collision.rs is CRLF in the worktree (handle it).
+  CI 37405753035 green (opt 8.1 / unopt 11.7 min; barrier harness 67 s unopt). Review AGAIN caught "no native
+  line" written from core only — the viewer's contact.rs/mallet.rs ran half the signatures. Grep the VIEWER
+  first, every batch; and measure per-test (not per-file) times for the quick-skip claim.
+- §38 batch 16 (2026-10-06, human took the recommendation, "mallet on a plate"): `test_mallet_plate{,_signature}.py`
+  (25 fns / 37 cases) → NEW core `mallet_plate_harness.rs` (24 = 21 carried + 3 added) + `impl Resonator for
+  MalletPlate`. `mallet.rs`'s plate section is ANOTHER fixture (0.4 m, kappa 1) and stays. Bumps bit-identical
+  to NumPy (pairwise mean via `reduce::sum`) → every trajectory figure to 16 digits; only BLAS/np.sin read-outs
+  differ. Sharpened: `approx(rel=1e-14)` keeps abs=1e-12 → was 1.8e-9 relative at g_s 5.5e-4. 14 plants:
+  A (accel correction skipped: radiated attack wrong up to 3.1x during contact, bit-exact after — Plate::step
+  rebuilds accel) and L (mallet seeded at wrong node: only the REPORTED start state + solver seed change, motion
+  at 1.6e-13) seen by NOTHING workspace-wide → human chose bars for both. My questions OVERSTATED both ("sounds
+  unstruck", "strike misplaced") — the advisor caught it; MEASURE a plant's effect before describing it to the
+  human, not after; B (1% felt K, plate path) seen only by
+  the linear-gong twin → plate felt-law bar added unasked (§37 precedent, told the human). C (`force_denominator`
+  dropped) was NOT lossy-only: it is the nodal mass (rho h^2 / rho), not (1+sigma k). Mutation anchors that
+  match the membrane/VK twins too (G, L) need a plate-unique anchor. 0.70 s opt / 17.6 s unopt: both profiles,
+  quick-skip unchanged. pytest 972 → 935; workspace 1,542 → 1,566. Removing a helper can orphan an IMPORT that
+  another test file reaches through helpers (`PLATE_THETA_DEFAULT`) → mark it `# noqa: F401 (re-export)` on the
+  import line (a comment line between imports breaks isort).
+- §39 batch 17 (2026-10-06, human: "go with it", mallet on a gong): `test_mallet_gong.py` (13 fns / 22 cases)
+  → EXTENDED `mallet_gong.rs` (12 → 17; already CI `release_only`). Python fixture == native fixture EXCEPT
+  couple_method (Python Picard, native VkSpec default Auto) → every carried rig sums `n_fallbacks` and asserts 0
+  (Auto w/o fallback = Picard trajectory); every figure reproduced to the digit incl. 6 centroids (sums spelled
+  `x*x` + `reduce::sum`). Two existing comments were stale from the outer_tol=1e-14 era (drift 4e-13→really
+  6.7e-12; free/supported 550→121) — re-measure old comments, don't copy them. 12 plants: H (force-free solve
+  dropped from `inner_iters`, a read-out) seen by NOTHING → human chose a bar (a miss reports exactly the bare
+  step's n_solves/n_iters); A (alpha hard-coded) seen only by the carried alpha=1 headline. Python's 200-step
+  telemetry run took NO miss → miss half added. Centroid 14.4 s + headline 3.0 s → quick-skip. pytest 935 → 913;
+  workspace 1,566 → 1,571. New user rule: run every suite at BelowNormal via
+  `cmd //v:on //c "start /belownormal /b /wait <cmd> & exit !errorlevel!"`; a QUOTED exe path needs `start ""`
+  (empty title) or it hangs. Bash heredocs with backticks fail → Write part files + a fill script.
+Remaining after §39: **25 physics files / 281 functions** (§24.1 count), no contact file left. Next batch not
 chosen — the user picks; a recommendation + "go with it" is an accepted answer. Re-derive the remaining list
 (§9's map is stale).
 Loose end (from §27): `test_arpack_oracles_are_bit_reproducible`'s surviving free-plate half guards a

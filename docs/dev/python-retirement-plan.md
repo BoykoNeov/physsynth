@@ -6283,3 +6283,175 @@ say what each defect does, and the human was told. §38.1's digit counts were re
 (centroids fifteen and thirteen, not fifteen and sixteen; nulls two or three digits; projections
 thirteen to fifteen), "bit-identical" is now "on Windows", §38.4's heading says two unseen defects,
 not three, and row C credits the one signature that went red.
+
+## 39. Phase C, carrying batch 17 — the mallet on a gong
+
+Done 2026-10-06 (the human took the recommendation, "mallet on a gong"). One file, retired whole:
+`tests/test_mallet_gong.py` — **13 functions, 22 pytest cases**. It was the last contact file.
+
+Every bar went into the file that already held this model's native bars,
+`crates/physsynth-core/tests/mallet_gong.rs` (12 → 17 tests), because the Python fixture **was** its
+fixture: the 0.4 m square of 1 mm steel at `N = 20`, `fs = 48 kHz`, the 50 g head on `K = 5e4`,
+`alpha = 2.3` felt at `(0.3, 0.4)` of the side (the snapped `(0.12, 0.16)`), the shipped
+`outer_tol = 1e-13` and the binding's solve defaults. One difference, and it decided how the carried
+credit is earned (§39.1): the Python pinned the plate's `couple_method` to `"picard"` while the native
+rigs inherit `VkSpec`'s `Auto`. The file was already in CI's `release_only` list, so nothing here
+moves the unoptimised job.
+
+### 39.1 The comparison — every figure reproduced
+
+Recorded first, wheel reinstalled (`W:\temp\claude\mallet-gong\python-record.txt`, the script
+beside it). The Python file asserted bounds and printed nothing, so the script re-ran each of its
+measurements and printed the number.
+
+**`Auto` is `Picard` on every one of these runs, and that is asserted, not assumed.** `Auto` runs
+Picard and abandons a solve to Newton only when Picard fails; a run with no fallback is the same
+trajectory. Every native rig that stands for a Python one now sums `n_fallbacks` and asserts zero —
+the energy sweep, the loss pair, the free/supported pair, the tolerance sweep, both payoff tests and
+the tangent's driver — and the figures bear it out: **every trajectory figure matches to all
+printed digits**. The three drifts (`5.341899762040864e-12`, `2.6683593606296402e-12`,
+`6.6909440950742765e-12`), the three peak deflections and membrane shares, the tolerance triple
+(`3.7868083163022306e-07`, `7.340702366952377e-09`, `3.449327243585129e-11`), the free and supported
+drifts at 4,000 steps (`6.395735792826447e-11`, `2.6683593606296402e-12`), the tangent's step (579),
+force (`52.88255373789131`), `g_exact` and bound (`5.084064781679443e-3`), the scaled departures
+(`0.0` and `2.1242115761241145`), and all six spectral centroids — the last because the Python's
+`magnitude_spectrum` already called `physsynth_analysis` and the two sums are spelled the way NumPy
+spells them (`** 2` is `x * x`, `np.sum` is the pairwise `reduce::sum`). Nothing was frozen: the
+file had no NumPy or SciPy referee.
+
+### 39.2 What the existing native bars could not see
+
+`mallet_gong.rs` was written beside the Python file and split the work with it — its header said
+the Python half was "the binding's surface and its two refusals, the reduction to model #7p through
+the shipped classes, and the physics payoff". `physsynth-viewer` never builds a gong mallet (its
+gong scenes are the bare plate and the plate in a room) — grepped, `src` and `tests`. Mapped by
+assertion, not name:
+
+- **Carried as they stood**: the linear reduction (the same 400 steps, the same three assertions,
+  and both files' comments record the same `2.08e-14`), the seven refusals (variants; the two outer-loop messages are now also checked
+  against the Python's regexes, §39.5), the loss pair (1,500 steps against the Python's 1,200).
+- **Sharpened in place**: the energy sweep gained the Python's **peak deflection above one
+  thickness** (a run can carry a membrane share and still be the linear scheme's if the plate never
+  reaches its thickness); the free/supported pair gained the Python's **4,000-step** reading of the
+  factor of ten (an energy range only grows, so 8,000 steps implied the two absolute bounds but not
+  the ratio); the tangent test gained the shipped mallet's **bitwise `g_exact == response + g_h`**, the
+  bound's **`1e-6` floor**, and the Python's **at most three** outer iterations over the next 400 steps
+  (the native count bar allowed four); the miss gained the Python's start, `2 e sin(linspace(0, 3))`.
+- **New**: the drift answering to the outer tolerance, the alpha-one scaling headline, the centroid
+  climb, the step report after every step (on a hit and on a miss), and the plate's step counter.
+- **No analogue**: `mal.plate is plate` (the plate is owned by value), both wrong-plate refusals (a
+  refusal about the argument's shape is a type, §14), and the step report's "before the first step"
+  values (there is no report: `last` is `None`).
+
+### 39.3 Every margin measured
+
+| bar | measured | bar |
+|---|---|---|
+| linear reduction, field / force (the file's own record) | 2.08e-14 / 2.07e-14 | 1e-13 |
+| lossless drift, worst of four (`v0 = 12`) | 6.7e-12 | 1e-11 (contract 1e-10) |
+| peak `w/e`, lowest of four (`v0 = 3`) | 1.70 | > 1 |
+| membrane share, lowest of four (`v0 = 3`) | 0.018 | > 0.01 |
+| loss / hysteresis, worst rise over 1,500 steps | 1.2e-15 / 5.4e-14 | 1e-13 |
+| drift at `outer_tol` 1e-8 / 1e-10 / 1e-12 | 3.8e-7 / 7.3e-9 / 3.4e-11, first ÷ last 1.1e4 | falling, > 100 |
+| free / supported at 4,000 steps, ratio | 6.4e-11 / 2.7e-12, 24 | 1e-8 / 1e-11, > 10 |
+| free / supported at 8,000 steps, ratio | 3.2e-10 / 2.7e-12, 121 | 1e-8 / 1e-11, > 50 |
+| tangent bound at the shipped mallet | 5.08e-3 | (1e-6, 5e-2) |
+| outer iterations, steps 601–1,000 | 2 on all 400 | ≤ 3 |
+| scaled departure, linear plate / gong (`alpha = 1`) | 0.0 (Windows; 3.52e-13 on Linux) / 2.12 | 1e-10 / > 1 |
+| centroid swing, linear plate / gong, ratio | 0.0016 / 0.74, 460 | < 0.01 / > 0.4, > 100 |
+| fewest solves beyond the inner iterations | 3 | ≥ 0 |
+
+The thinnest are the Python's own and left where it had them: **the lossless drift, 1.5x** (the
+`1e-11` bar the native test already had, against the contract's `1e-10`), and **the hysteresis rise,
+1.85x**. The second is not the contact's: measured, the worst rise falls at step 1,458, the mallet's
+last contact is step 1,201, and from there the hysteresis rig is a *lossless* plate ringing alone, so
+a step's "rise" is the energy read-out's rounding on a flat total (the Python stopped at 1,200 steps
+and read `3.7e-16`). Two of the existing file's comments were stale from the `outer_tol = 1e-14`
+era and are corrected: the energy drift read "4.1e-13 to 6.0e-13" and the free/supported factor
+"550".
+
+### 39.4 Twelve breakages
+
+Planted one at a time with `W:\temp\claude\mallet-gong\mutate.py` (snapshot, restore by copy,
+byte-compare). "Red" counts `mallet_gong`, `mallet_room_gong`, `mallet` and `mallet_plate_harness`;
+the counts are the first round's, except E and H, re-planted after the added bar.
+
+| breakage | red | caught by |
+|---|---|---|
+| **A** felt exponent hard-coded to 2.3 on the gong path | 1 | the alpha-one scaling headline — carried, and the only witness |
+| **B** `outer_tol` ignored | 3 | the drift-versus-tolerance bar (carried), the outer-cost bar, the stall bar |
+| **C** the plate's step counter not bumped by the gong | 2 | the read-back bar (carried), `mallet_room_gong`'s commit-path bar |
+| **D** a miss reports a NaN outer residual | 1 | the step-report bar's miss half — **added**: the Python's 200 steps took no miss |
+| **E** the force-free solve dropped from `n_solves` | 2 | the step-report bar, the cost test (its ratio, and the miss identity added for H) |
+| **F** contact force applied with the wrong sign | 13 | nearly everything, the room file included |
+| **G** the mallet committed with the last iterate's contact, not the driving one | 2 | the stall bar, the outer-cost bar |
+| **H** the force-free solve dropped from `inner_iters` | 1 | the miss identity, added for it; **0 workspace-wide before** |
+| **I** the miss short-circuit removed | 4 | the bit-identical miss (both files), the step report, the cost test |
+| **J** the chord's tangent 1% off in the effective free node | 9 | conservation, the loop counts, the linear reduction (both files) |
+| **K** the stagnation exit removed | 2 | the stall bar, the outer-cost bar |
+| **L** the force scale without the mass | 3 | conservation, the stall bar, the free branch |
+
+Re-planted workspace-wide (§31's rule) for every one with two or fewer witnesses, before the bar was
+added — **A 1, C 2, D 1, E 2, G 2, H 0, K 2**, each exactly its four-file count: no binary outside
+them, the viewer's `frozen` included, saw any of them. Three readings:
+
+- **H was the one gap, and it is a read-out.** `inner_iters` is reported (and copied into the
+  plate's own `n_iters`) but never read back by the step, so leaving the force-free solve out of it
+  changes no motion — every step under-counts and a miss reports zero. The Python could not see it
+  either: `n_solves >= inner_iters` holds the more easily. The human chose a bar: a miss **is** a bare
+  step, so on every miss the step must report exactly the bare step's `n_solves` and `n_iters`, taken
+  from the same state — the cost test already built that bare step each step, and its comment's "a
+  miss costs exactly one bare step" was asserted only as a ratio. It sees E and H.
+- **A has one witness, and it is the headline.** Every other gong bar runs at `alpha = 2.3`, so a
+  hard-coded exponent is invisible to all of them; the scaling test is the only rig at `alpha = 1`.
+  That was the advisor's prediction going in, measured — and the reason the headline had to be
+  carried rather than dropped as "physics already covered".
+- **G is seen only where the loop stalls.** On a converged step the last iterate's contact and the
+  driving one differ by under `outer_tol`, below every energy bar; only a step that stops short leaves
+  them far enough apart to show. The pair the step commits is the one that drove the field, and the
+  stall bars are what hold it there.
+
+### 39.5 The retirement rule, discharged
+
+| retired | native bar |
+|---|---|
+| `test_the_gong_holds_the_plate_object_it_was_handed` | `mallet_gong.rs::the_plate_the_caller_reads_is_the_one_that_stepped`; the `is` half has **no analogue** (the plate is owned by value) |
+| `test_the_gong_refuses_a_linear_plate_and_points_at_the_model_that_takes_one` | **no analogue**, both directions: `MalletVkPlate` takes a `VkPlate` and `MalletPlate` a `Plate`, so a refusal about the argument's shape is a type (§14). The two messages ("use MalletPlate", "not affine") are the binding's prose and leave with it — §38.5 deferred the second to this file |
+| `test_the_five_shared_refusals_plus_the_outer_loops_own_two` (7) | `…::the_gong_refuses_what_every_mallet_refuses_plus_its_own_two` — variants, and now the two outer-loop messages word for word (the five shared ones are in `mallet.rs::the_refusal_messages_are_the_pythons`); each Python regex is a substring, checked |
+| `test_the_telemetry_is_zero_before_the_first_step_and_never_nan_after` | `…::the_step_report_is_never_nan_and_counts_every_solve`, with a miss added; "before the first step" is `last == None` |
+| `test_a_linear_gong_reduces_to_the_linear_mallet_plate` | `…::a_linear_gong_is_the_linear_mallet_plate_and_the_outer_loop_knows_it` |
+| `test_a_mallet_that_never_lands_leaves_the_gong_bit_identical` | `…::a_mallet_that_never_lands_leaves_the_gong_bit_identical`, with the Python's start added |
+| `test_energy_is_conserved_through_the_nested_solve` (3) | `…::energy_is_conserved_through_the_nested_solve`, with the peak deflection added |
+| `test_loss_and_hysteresis_each_make_the_total_monotone` (2) | `…::loss_and_hysteresis_each_make_the_total_monotone` |
+| `test_the_drift_answers_to_the_outer_tolerance` | `…::the_drift_answers_to_the_outer_tolerance` |
+| `test_the_free_branch_is_a_read_out_bar_with_the_supported_one_as_its_control` | `…::the_free_branch_read_out_error_is_quadratic_in_the_rigid_drift`, with the 4,000-step reading added |
+| `test_on_a_linear_plate_an_alpha_one_felt_scales_exactly_and_a_gong_does_not` | `…::on_a_linear_plate_an_alpha_one_felt_scales_exactly_and_a_gong_does_not` |
+| `test_the_gongs_spectral_centroid_climbs_with_the_strike_and_a_linear_plates_does_not` | `…::the_gongs_spectral_centroid_climbs_with_the_strike_and_a_linear_plates_does_not` |
+| `test_the_outer_tangent_is_closed_form_and_bounds_the_iteration_count` | `…::the_outer_tangent_is_closed_form_and_the_mallet_enters_it_only_through_g`, sharpened (§39.2) |
+
+**Orphans removed from `tests/helpers.py`**, each name grepped alone across `tests/`:
+`make_mallet_gong`, `gong_linear_twin`, `GONG_MATERIAL`, `GONG_SIDE`, `GONG_FS`, `GONG_N`,
+`GONG_VELOCITY_DEFAULT`, `GONG_MASS_DEFAULT`, `MALLET_K_DEFAULT`, `MALLET_ALPHA_DEFAULT`, and the
+`MalletPlate, MalletVKPlate` import. The `Plate` and `VKPlate` imports stay (`make_plate`,
+`vk_strike`). `docs/dev/mallet-gong-plan.md` has a pointer at the top, `scientific-hurdles.md` names
+the headline's native home, and `mallet_room_gong.rs`'s header no longer says the Python asserts the
+linear-plate message.
+
+### 39.6 Cost and counts
+
+- **pytest 935 → 913**: the file's 22 cases, reconciled with `--collect-only` against a worktree at
+  the previous commit; every other file's count unchanged. 913 passed.
+- **Native +5**: workspace 1,566 → 1,571 optimised (`scripts/cargo-test-nice.ps1 -Full`), all green;
+  `mallet_gong.rs` 12 → 17.
+- **Optimised only, as before**: `mallet_gong` was already in CI's `release_only`. Timed alone
+  (`--exact`, one thread), the centroid test takes **14.4 s** and the scaling headline **3.0 s**;
+  both are in `scripts/quick-skip.txt`. The tolerance sweep is 1.7 s.
+- **25 physics files remain**, with **281** test functions by the §24.1 count (294 − 13). No contact
+  file is left.
+
+### 39.7 What is next
+
+The next batch is not chosen; the human picks. The 25 files, by family: the bow (`test_bow_*`, 3),
+the reed (`test_reed_*`, 3), the bore (`test_bore_*`, 4), the body (1), the gong plate (`test_vk_*`,
+6), the room (`test_airbox_*`, 4), radiation (1), the resolution horizon (1), the spectrum detector
+(1) and the operators (1).

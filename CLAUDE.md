@@ -116,8 +116,13 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    string, §33 the damped string, §34 the tension-modulated string, and §35–§36 the geometric
    string in two halves — **every string family's Python suite is gone** — and §37 the barrier,
    the jawari and the mallet on a drumhead, two batches done together at the human's request (bars
-   for both first, one comparison, one breakage round, one deletion), and §38 the mallet on a
-   plate; **26 physics files / 294 functions remain** (§9's map is stale). §38 found two defects
+   for both first, one comparison, one breakage round, one deletion), §38 the mallet on a
+   plate, and §39 the mallet on a gong — **every contact file is gone**; **25 physics files / 281
+   functions remain** (§9's map is stale). §39 carried into the existing native file (the Python's
+   fixture was its fixture, save the plate's solve method — so every carried rig asserts no
+   fallback, which makes the two one trajectory), reproduced every figure to the digit, and found
+   one gap: the step's iteration count could drop its first solve unseen (a read-out, no motion);
+   the human chose a bar (a miss must report exactly a bare step's work). §38 found two defects
    NOTHING in the workspace saw, both guarded at the human's call: a strike that corrects the
    plate's displacement but leaves its stored acceleration stale (the radiated attack wrong by up
    to 3x through the contact, exact after it; the energy never reads `accel`), and a mallet seeded

@@ -5,8 +5,15 @@ metadata:
   node_type: memory
   type: project
   originSessionId: aae47a22-23c6-4ed1-8713-4f9ae587e626
-  modified: 2026-09-28T23:01:36.597Z
+  modified: 2026-10-05T20:20:26.447Z
 ---
+
+**UPDATE 2026-10-05 (Rust side, commits 473f68d + 42b2d2d):** local Rust runs go through
+`scripts/cargo-test-nice.ps1` — see [[rust-tests-parallel-nice]]. Full `--workspace --release`
+test run 94 s on a quiet box (was ~4m51 serial / ~218 s parallel): frozen.rs pools each corpus's
+cases, the plate mu-sweep threads its runs, and `SparseLu::solve` walks factor columns as row RUNS
+(1.75x on the solve, bit-identical, guarded by a to_bits test against the old CSC loop). The
+floor is three viewer plate scenes (39-57 CPU-s each). Quick lane 24.5 s vs Python suite 45 s.
 
 **UPDATE 2026-10-05 (retirement plan §36, the human's call):** the whirl and phantom files were the last users of `xdist_group` and `slow`; both marker declarations, `tests/test_xdist_groups.py`, CI's `--dist loadgroup` and the README fast lane are GONE. CI runs `pytest -n auto --durations=25`. Everything below about groups, loadgroup and the `slow` lane is HISTORY.
 

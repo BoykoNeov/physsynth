@@ -4,18 +4,30 @@
 //! evaluation. `crates/physsynth-core/src/mallet.rs`'s gong section derives the algorithm and
 //! `docs/dev/mallet-gong-plan.md` records what these bars measure.
 //!
-//! What is asserted here and not from Python: everything that needs the plate's *pre-step*
-//! buffers in hand (the exact outer tangent), the cost ratio against a bare step taken from the
-//! identical state, and the two failure attributions.
+//! Every bar about this model lives here since `tests/test_mallet_gong.py` was retired (retirement
+//! plan §39): the anchor to model #7p, the energy ledger, the outer loop's cost and its tangent, the
+//! two failure attributions, and the physics payoff -- that on a linear plate an `alpha = 1` felt
+//! scales a strike exactly while a gong does not, and that the gong's spectrum climbs with the
+//! strike. Three of the Python tests have no analogue here: `mal.plate is plate` (the plate is
+//! owned by value) and the two refusals of the wrong kind of plate (the constructors take a
+//! `VkPlate` and a `Plate` by type).
+//!
+//! **The plate's coupling method.** These rigs leave `VkSpec`'s `Auto` default in place while the
+//! Python fixture pinned `Picard`. `Auto` is Picard until a solve fails to converge, so wherever a
+//! bar here stands for a Python one it also asserts that nothing fell back, which is what makes
+//! the two the same trajectory -- and the carried figures reproduce the Python's to the digit.
 
+use physsynth_analysis::spectrum::magnitude_spectrum;
 use physsynth_core::collision::ContactError;
 use physsynth_core::mallet::{
     vk_drive_point_tangent, MalletPlate, MalletVkPlate, ParamError, PlateParams, VkContactError,
     VkPlateParams,
 };
 use physsynth_core::plate::{
-    vk_step, Boundary, CoupleMethod, Params, Plate, PlateSpec, VkParams, VkPlate, VkSpec,
+    pickup_index_at, vk_step, Boundary, CoupleMethod, Params, Plate, PlateSpec, VkParams, VkPlate,
+    VkSpec,
 };
+use physsynth_core::reduce;
 
 /// The shipped gong: a 0.4 m square 1 mm steel plate, simply supported, 361 live nodes.
 ///
@@ -80,6 +92,52 @@ fn ring(m: &mut MalletVkPlate, steps: usize) -> (f64, f64) {
     }
     let rigid = m.plate.u.iter().sum::<f64>() / m.plate.u.len() as f64;
     ((hi - lo) / e0.abs(), rigid)
+}
+
+/// The plate's thickness: the energy bar's unit of deflection, and the scale of one start.
+const THICKNESS: f64 = 1.0e-3;
+
+/// What the retired Python file's `ring` measured over one run.
+struct Rung {
+    /// Energy range over `|E0|`, read at each requested step count (the range only grows).
+    drifts: Vec<f64>,
+    /// `w` at the pickup node, one sample per step.
+    signal: Vec<f64>,
+    /// Inner solves rescued by Newton -- zero is what makes an `Auto` run a `Picard` one.
+    fallbacks: usize,
+}
+
+fn rung(m: &mut MalletVkPlate, checkpoints: &[usize], pickup: Option<usize>) -> Rung {
+    let steps = *checkpoints.last().expect("a run length");
+    let e0 = m.energy();
+    let (mut lo, mut hi) = (e0, e0);
+    let mut fallbacks = 0usize;
+    let mut drifts = Vec::new();
+    let mut signal = Vec::with_capacity(steps);
+    for i in 1..=steps {
+        m.step().expect("a gong step");
+        fallbacks += m.last.as_ref().expect("stepped").n_fallbacks;
+        let e = m.energy();
+        lo = lo.min(e);
+        hi = hi.max(e);
+        if let Some(j) = pickup {
+            signal.push(m.plate.u[j]);
+        }
+        if checkpoints.contains(&i) {
+            drifts.push((hi - lo) / e0.abs());
+        }
+    }
+    Rung {
+        drifts,
+        signal,
+        fallbacks,
+    }
+}
+
+/// The retired file's pickup: off every low mode's nodal line, and not the strike node.
+fn pickup_of(m: &MalletVkPlate) -> usize {
+    let lin = &m.plate.p.lin;
+    pickup_index_at(0.63 * lin.lx, 0.21 * lin.ly, lin)
 }
 
 // -- the anchor: switch the coupling off and this IS model #7p -------------------------------------
@@ -168,6 +226,75 @@ fn a_linear_gong_is_the_linear_mallet_plate_and_the_outer_loop_knows_it() {
     );
 }
 
+// -- the surface: the plate the caller reads is the plate that moved -------------------------------
+
+#[test]
+fn the_plate_the_caller_reads_is_the_one_that_stepped() {
+    // The Python original asserted `mal.plate is plate`, which has no analogue: the plate is owned
+    // by value, so there is no second reference to go stale. What it was FOR survives -- the viewer
+    // reads the field, the step count and the energy back through `m.plate`, so the step has to
+    // land there and the plate's own counter has to move with it.
+    let mut m = gong(&gong_spec(), MASS, 6.0);
+    for _ in 0..40 {
+        m.step().expect("a gong step");
+    }
+    assert_eq!(m.plate.n, 40, "the plate's counter did not see the steps");
+    assert_ne!(
+        m.plate.u[m.params().node],
+        0.0,
+        "a struck node that never moved proves nothing"
+    );
+}
+
+#[test]
+fn the_step_report_is_never_nan_and_counts_every_solve() {
+    // A nested solve has to report both loops, or the cost claim is unfalsifiable. Before the
+    // first step there is no report at all (`last` is `None`) -- the Python's "`nan` before the
+    // first step" is that `None`, spelled as a type. After it, every field is a number: on a hit,
+    // and on a miss, whose residual is the force-free advance's exact `0.0`.
+    let mut m = gong(&gong_spec(), MASS, 6.0);
+    assert!(m.last.is_none());
+    let mut fewest_extra = usize::MAX;
+    for _ in 0..200 {
+        m.step().expect("a gong step");
+        let l = m.last.as_ref().expect("stepped");
+        assert!(!l.outer_residual.is_nan(), "a NaN residual after a step");
+        // At least one back-substitution per inner iteration, and then some: the stress function
+        // and the force-free advance are solves too.
+        assert!(
+            l.n_solves >= l.inner_iters,
+            "{} < {}",
+            l.n_solves,
+            l.inner_iters
+        );
+        fewest_extra = fewest_extra.min(l.n_solves - l.inner_iters);
+    }
+    eprintln!("fewest solves beyond the inner iterations: {fewest_extra}");
+
+    // A miss, which the 200 steps above never take: the mallet recedes from a gap.
+    let p = VkParams::new(&gong_spec()).expect("a gong");
+    let mut miss = MalletVkPlate::new(
+        VkPlateParams::new(
+            &p, MASS, STIFFNESS, ALPHA, 0.0, 0.12, 0.16, 1.0, 0.01, 1e-12, 1e-14, 60, OUTER_TOL, 20,
+        )
+        .expect("a mallet"),
+        VkPlate::new(p),
+        0.01,
+        -1.0,
+    );
+    for _ in 0..20 {
+        miss.step().expect("a gong step");
+        let l = miss.last.as_ref().expect("stepped");
+        assert_eq!(l.n_outer, 0);
+        assert_eq!(
+            l.outer_residual, 0.0,
+            "a miss reports the force-free advance's residual"
+        );
+        assert!(l.outer_converged && !l.outer_stalled);
+        assert!(l.n_solves >= l.inner_iters);
+    }
+}
+
 // -- the miss, which is exact ----------------------------------------------------------------------
 
 #[test]
@@ -178,33 +305,51 @@ fn a_mallet_that_never_lands_leaves_the_gong_bit_identical() {
     // except `-0.0`.
     let spec = gong_spec();
     let p = VkParams::new(&spec).expect("a gong");
-    let mut m = MalletVkPlate::new(
-        VkPlateParams::new(
-            &p, MASS, STIFFNESS, ALPHA, 0.0, 0.12, 0.16, 1.0, 0.01, 1e-12, 1e-14, 60, OUTER_TOL, 20,
-        )
-        .expect("a mallet"),
-        VkPlate::new(p.clone()),
-        0.01,
-        -1.0, // receding: it never reaches the plate
-    );
-    let mut bare = VkPlate::new(p);
-    // A real deflection, so the bare plate is doing nonlinear work while the mallet is away.
-    let ic: Vec<f64> = (0..m.plate.p.lin.n_live)
+    let n_live = p.lin.n_live;
+    // Two real deflections, so the bare plate is doing nonlinear work while the mallet is away: a
+    // sawtooth, and the retired Python file's `2 e sin(linspace(0, 3, n_live))` -- two plate
+    // thicknesses, deep in the von Karman regime.
+    let sawtooth: Vec<f64> = (0..n_live)
         .map(|i| 2e-3 * ((i % 7) as f64 - 3.0) / 3.0)
         .collect();
-    let zero = vec![0.0; ic.len()];
-    m.plate.set_state(&ic, &zero).expect("a start");
-    bare.set_state(&ic, &zero).expect("a start");
-    for _ in 0..200 {
-        m.step().expect("a gong step");
-        bare.step(None).expect("a bare step");
-        assert_eq!(m.state().contact_force, 0.0);
-        assert_eq!(m.last.as_ref().expect("stepped").n_outer, 0);
-        assert_eq!(
-            m.plate.u, bare.u,
-            "a miss is not free of the plate's history"
+    let step = 3.0 / (n_live - 1) as f64;
+    let sine: Vec<f64> = (0..n_live)
+        .map(|i| {
+            2.0 * THICKNESS
+                * (if i == n_live - 1 {
+                    3.0
+                } else {
+                    i as f64 * step
+                })
+                .sin()
+        })
+        .collect();
+    for ic in [sawtooth, sine] {
+        let mut m = MalletVkPlate::new(
+            VkPlateParams::new(
+                &p, MASS, STIFFNESS, ALPHA, 0.0, 0.12, 0.16, 1.0, 0.01, 1e-12, 1e-14, 60,
+                OUTER_TOL, 20,
+            )
+            .expect("a mallet"),
+            VkPlate::new(p.clone()),
+            0.01,
+            -1.0, // receding: it never reaches the plate
         );
-        assert_eq!(m.plate.f, bare.f);
+        let mut bare = VkPlate::new(p.clone());
+        let zero = vec![0.0; ic.len()];
+        m.plate.set_state(&ic, &zero).expect("a start");
+        bare.set_state(&ic, &zero).expect("a start");
+        for _ in 0..200 {
+            m.step().expect("a gong step");
+            bare.step(None).expect("a bare step");
+            assert_eq!(m.state().contact_force, 0.0);
+            assert_eq!(m.last.as_ref().expect("stepped").n_outer, 0);
+            assert_eq!(
+                m.plate.u, bare.u,
+                "a miss is not free of the plate's history"
+            );
+            assert_eq!(m.plate.f, bare.f);
+        }
     }
 }
 
@@ -221,25 +366,40 @@ fn energy_is_conserved_through_the_nested_solve() {
         let mut m = gong(&gong_spec(), mass, v0);
         let e0 = m.energy();
         let (mut lo, mut hi) = (e0, e0);
-        let mut membrane_share = 0.0f64;
+        let (mut membrane_share, mut peak_w, mut fallbacks) = (0.0f64, 0.0f64, 0usize);
         for _ in 0..2000 {
             m.step().expect("a gong step");
             let l = m.last.as_ref().expect("stepped");
             assert!(l.outer_converged && l.inner_converged);
+            fallbacks += l.n_fallbacks;
             let e = m.energy();
             lo = lo.min(e);
             hi = hi.max(e);
             membrane_share = membrane_share.max(m.plate.membrane_energy() / e0.abs());
+            peak_w = peak_w.max(peak(&m.plate.u));
         }
         let drift = (hi - lo) / e0.abs();
-        // Measured 4.1e-13 to 6.0e-13 -- the same order as model #7p's linear plate, so the
-        // nested solve costs nothing in fidelity. The project's contract is 1e-10.
+        let we = peak_w / THICKNESS;
+        eprintln!(
+            "M={mass} v0={v0}: drift {drift:e}, peak w/e {we}, membrane share {membrane_share}"
+        );
+        assert_eq!(
+            fallbacks, 0,
+            "M={mass} v0={v0}: an Auto run left Picard's path"
+        );
+        // Measured 2.7e-12 to 6.7e-12 at the shipped `outer_tol` (the retired Python file's
+        // figures, reproduced), the same order as model #7p's linear plate. The contract is 1e-10.
         assert!(drift < 1e-11, "M={mass} v0={v0} drift {drift:e}");
-        // ... and the run has to be nonlinear, or the bar is re-testing the linear theta scheme.
+        // ... and the run has to be nonlinear, or the bar is re-testing the linear theta scheme:
+        // a measurable membrane share, and a plate driven past its own thickness.
         assert!(
             membrane_share > 0.01,
             "M={mass} v0={v0} membrane share {membrane_share:e} -- this strike never left the \
              linear regime, so the conservation above is model #5's and not the gong's"
+        );
+        assert!(
+            we > 1.0,
+            "M={mass} v0={v0} peak w/e {we:.3} -- the plate never reached its own thickness"
         );
     }
 }
@@ -260,13 +420,31 @@ fn loss_and_hysteresis_each_make_the_total_monotone() {
         let mut m = MalletVkPlate::new(params, VkPlate::new(p), 0.0, 6.0);
         let mut prev = m.energy();
         let mut worst = 0.0f64;
-        for _ in 0..1500 {
+        let (mut worst_at, mut last_hit, mut fallbacks) = (0usize, 0usize, 0usize);
+        for i in 1..=1500 {
             m.step().expect("a gong step");
+            let l = m.last.as_ref().expect("stepped");
+            fallbacks += l.n_fallbacks;
+            if l.n_outer > 0 {
+                last_hit = i;
+            }
             let e = m.energy();
-            worst = worst.max((e - prev) / prev.abs());
+            let rise = (e - prev) / prev.abs();
+            if rise > worst {
+                (worst, worst_at) = (rise, i);
+            }
             prev = e;
         }
-        // Measured 1.2e-15 / 4.8e-15.
+        eprintln!(
+            "sigma={sigma} lam_h={lam_h}: worst rise {worst:e} at step {worst_at}, last contact \
+             step {last_hit}, final E {prev}"
+        );
+        assert_eq!(fallbacks, 0, "an Auto run left Picard's path");
+        // Measured 1.2e-15 / 5.4e-14 over 1500 steps. The second is under half the bar and is not
+        // the contact's: it falls at step 1458, the mallet's last contact was step 1201, and from
+        // there the hysteresis rig is a LOSSLESS plate ringing alone -- a step's "rise" is the
+        // energy read-out's rounding on a flat total. (The retired Python file stopped at 1200
+        // steps and read 3.7e-16.)
         assert!(
             worst < 1e-13,
             "sigma={sigma} lam_h={lam_h} rose by {worst:e}"
@@ -288,6 +466,7 @@ fn the_nested_solve_costs_between_two_and_three_bare_steps() {
     for (mass, v0) in [(0.02, 3.0), (0.05, 6.0), (0.2, 6.0)] {
         let mut m = gong(&gong_spec(), mass, v0);
         let (mut mine, mut bare, mut in_contact, mut contact_solves) = (0usize, 0usize, 0usize, 0);
+        let mut misses = 0usize;
         for _ in 0..2000 {
             let b = vk_step(
                 &m.plate.u,
@@ -305,8 +484,26 @@ fn the_nested_solve_costs_between_two_and_three_bare_steps() {
             if l.n_outer > 0 {
                 in_contact += b.n_solves;
                 contact_solves += l.n_solves;
+            } else {
+                // A miss IS a bare step: its force-free advance is the answer, so the step must
+                // report exactly the work the bare step did -- both counts, and not merely the
+                // ratio below. The iteration count is a read-out the step never reads back, so
+                // this is the only place it is checked against anything (retirement plan §39.4).
+                misses += 1;
+                assert_eq!(
+                    l.n_solves, b.n_solves,
+                    "a miss reported other than one bare step"
+                );
+                assert_eq!(
+                    l.inner_iters, b.n_iters,
+                    "a miss reported other than one bare step"
+                );
             }
         }
+        assert!(
+            misses > 0,
+            "M={mass} v0={v0}: no step missed, so the identity went unchecked"
+        );
         let whole = mine as f64 / bare as f64;
         let during = contact_solves as f64 / in_contact as f64;
         // Measured 1.9 / 2.0 / 2.3 over the whole run, 2.4-2.9 during contact. A miss costs
@@ -346,6 +543,7 @@ fn the_outer_tangent_is_closed_form_and_the_mallet_enters_it_only_through_g() {
             driver.plate.f_prev.clone(),
         );
         driver.step().expect("a gong step");
+        assert_eq!(driver.last.as_ref().expect("stepped").n_fallbacks, 0);
         let f = driver.state().contact_force;
         if f > best.0 {
             best = (f, Some((before, driver.plate.u.clone())));
@@ -401,6 +599,32 @@ fn the_outer_tangent_is_closed_form_and_the_mallet_enters_it_only_through_g() {
         heavy < 0.05,
         "and every bound is far inside a contraction: {heavy:e}"
     );
+
+    // At the shipped mallet: `g_exact` IS `response + g_h`, to the bit (the mallet's own half is
+    // added once and nothing else), and the bound sits well inside (1e-6, 5e-2) -- a real
+    // contraction, but not so tight that the outer loop would be doing nothing. Measured 5.08e-3
+    // at step 579 of 600, force 52.9 N (the retired Python file's figures, reproduced).
+    let par = mallet_params(&p, MASS, ALPHA, 6.0, OUTER_TOL);
+    let (g_exact, response, _) =
+        vk_drive_point_tangent(&u, &u_prev, &f_prev, Some(&f_ext), &w, &par, &p)
+            .expect("a tangent");
+    assert_eq!(g_exact, response + par.g_h);
+    let bound = (1.0 - g_exact / par.g).abs();
+    eprintln!("shipped mallet: force {force}, g_exact {g_exact:e}, bound {bound:e}");
+    assert!(1e-6 < bound && bound < 5e-2, "bound {bound:e}");
+
+    // And the loop spends the handful of iterations that implies -- fewer than a contraction from
+    // an O(1) start would need, because the chord's first guess is the exact linear model's answer
+    // and the bound only has to close the nonlinear part of the gap. Measured: 2 on every one of
+    // the next 400 steps.
+    let mut worst = 0usize;
+    for _ in 0..400 {
+        driver.step().expect("a gong step");
+        let l = driver.last.as_ref().expect("stepped");
+        assert_eq!(l.n_fallbacks, 0, "an Auto run left Picard's path");
+        worst = worst.max(l.n_outer);
+    }
+    assert!(worst <= 3, "{worst} outer iterations");
 }
 
 #[test]
@@ -455,10 +679,31 @@ fn the_free_branch_read_out_error_is_quadratic_in_the_rigid_drift() {
     assert!(max / min < 1.3, "drift/rigid^2 ranged {min:e}..{max:e}");
 
     // And the supported control on the identical mallet, which is what makes this an attribution
-    // rather than an excuse.
-    let (supported, _) = ring(&mut gong(&gong_spec(), MASS, 6.0), 8000);
-    let (free, _) = ring(&mut gong(&spec, MASS, 6.0), 8000);
-    // Measured 5.9e-13 supported against 3.3e-10 free at 8000 steps -- a factor of 550, and the
+    // rather than an excuse -- read at 4000 steps, the retired Python file's length, and at 8000.
+    let supported = rung(&mut gong(&gong_spec(), MASS, 6.0), &[4000, 8000], None);
+    let free = rung(&mut gong(&spec, MASS, 6.0), &[4000, 8000], None);
+    assert_eq!(
+        supported.fallbacks + free.fallbacks,
+        0,
+        "an Auto run left Picard's path"
+    );
+    eprintln!(
+        "supported {:e} / {:e}, free {:e} / {:e} at 4000 / 8000 steps",
+        supported.drifts[0], supported.drifts[1], free.drifts[0], free.drifts[1]
+    );
+    // At 4000: measured 2.7e-12 supported against 6.4e-11 free, a factor of 24.
+    assert!(
+        supported.drifts[0] < 1e-11,
+        "supported control {:e}",
+        supported.drifts[0]
+    );
+    assert!(free.drifts[0] < 1e-8, "free read-out {:e}", free.drifts[0]);
+    assert!(
+        free.drifts[0] > 10.0 * supported.drifts[0],
+        "the free branch stopped being the one with the rigid mode in it (4000 steps)"
+    );
+    let (supported, free) = (supported.drifts[1], free.drifts[1]);
+    // Measured 2.7e-12 supported against 3.2e-10 free at 8000 steps -- a factor of 121, and the
     // free branch's number bounds a read-out, not the scheme.
     assert!(supported < 1e-11, "supported control {supported:e}");
     assert!(free < 1e-8, "free read-out {free:e}");
@@ -562,6 +807,18 @@ fn the_gong_refuses_what_every_mallet_refuses_plus_its_own_two() {
     )
     .expect_err("must refuse");
     assert_eq!(both, ParamError::NonPositiveMass);
+
+    // The outer loop's two messages name their argument, as the retired Python file's regexes
+    // required (`match="outer_tol"`, `match="outer_max_iter"`); the five shared ones are pinned
+    // word for word in `mallet.rs::the_refusal_messages_are_the_pythons`.
+    assert_eq!(
+        ParamError::NonPositiveOuterTol.to_string(),
+        "outer_tol must be > 0."
+    );
+    assert_eq!(
+        ParamError::TooFewOuterIters.to_string(),
+        "outer_max_iter must be >= 1."
+    );
 }
 
 #[test]
@@ -737,5 +994,160 @@ fn a_step_that_stops_contracting_stops_early_instead_of_spending_the_cap() {
     assert!(
         worst_n <= 6,
         "the stagnation exit did not fire: {worst_n} outer iterations"
+    );
+}
+
+// -- self-certification: the drift is the outer loop's, and it answers when asked ------------------
+
+#[test]
+fn the_drift_answers_to_the_outer_tolerance() {
+    // A scheme with no closed form proves its conservation is the discrete gradient's and not the
+    // solver's luck by showing the drift falls when the solver is asked for more -- and here the
+    // tolerance that has to move it is the OUTER one, this model's own. Measured 3.8e-7, 7.3e-9,
+    // 3.4e-11 over 1200 steps (the retired Python file's figures, reproduced): two decades per two
+    // decades of `outer_tol`, until the energy read-out's own rounding near 1e-12 takes over.
+    let p = VkParams::new(&gong_spec()).expect("a gong");
+    let drifts: Vec<f64> = [1e-8, 1e-10, 1e-12]
+        .iter()
+        .map(|&tol| {
+            let params = mallet_params(&p, MASS, ALPHA, 6.0, tol);
+            let mut m = MalletVkPlate::new(params, VkPlate::new(p.clone()), 0.0, 6.0);
+            let r = rung(&mut m, &[1200], None);
+            assert_eq!(r.fallbacks, 0, "an Auto run left Picard's path");
+            r.drifts[0]
+        })
+        .collect();
+    eprintln!("drift at outer_tol 1e-8 / 1e-10 / 1e-12: {drifts:?}");
+    assert!(
+        drifts[0] > drifts[1] && drifts[1] > drifts[2],
+        "the drift did not fall with the outer tolerance: {drifts:?}"
+    );
+    assert!(
+        drifts[0] / drifts[2] > 100.0,
+        "four decades of outer_tol bought under two of drift: {drifts:?}"
+    );
+}
+
+// -- the payoff: what a gong does that a linear plate cannot -------------------------------------
+
+/// A strike at `v0` on the shipped gong, `alpha` and the plate's coupling chosen.
+fn struck(v0: f64, alpha: f64, nonlinear: bool) -> MalletVkPlate {
+    let spec = VkSpec {
+        nonlinear,
+        ..gong_spec()
+    };
+    let p = VkParams::new(&spec).expect("a gong");
+    let params = mallet_params(&p, MASS, alpha, v0, OUTER_TOL);
+    MalletVkPlate::new(params, VkPlate::new(p), 0.0, v0)
+}
+
+/// The pickup signal of `steps` steps of a strike at `v0`.
+fn pickup_signal(v0: f64, alpha: f64, nonlinear: bool, steps: usize) -> Vec<f64> {
+    let mut m = struck(v0, alpha, nonlinear);
+    let pickup = pickup_of(&m);
+    let r = rung(&mut m, &[steps], Some(pickup));
+    assert_eq!(r.fallbacks, 0, "an Auto run left Picard's path");
+    r.signal
+}
+
+/// Departure from an exactly proportional response between a loud strike and one `ratio` softer,
+/// as a fraction of the loud strike's own peak.
+///
+/// `ratio` is a power of two on purpose: scaling a double by 4 is exact, so nothing in the
+/// ARITHMETIC of a degree-one system need round differently between the two runs. That is
+/// necessary and not sufficient -- see the test below.
+fn scaled_departure(nonlinear: bool, alpha: f64) -> f64 {
+    let ratio = 4.0;
+    let loud = pickup_signal(6.0, alpha, nonlinear, 6000);
+    let soft = pickup_signal(6.0 / ratio, alpha, nonlinear, 6000);
+    let worst = loud
+        .iter()
+        .zip(&soft)
+        .fold(0.0f64, |a, (&l, &s)| a.max((l - ratio * s).abs()));
+    worst / peak(&loud)
+}
+
+#[test]
+fn on_a_linear_plate_an_alpha_one_felt_scales_exactly_and_a_gong_does_not() {
+    // The batch's headline. At `alpha = 1` every part of the exciter's PHYSICS is homogeneous of
+    // degree one -- the head is a mass, the felt a linear spring, and the one-sided switching is
+    // scale-invariant -- so on a LINEAR plate a four-times-harder strike gives a four-times-larger
+    // response and nothing else. On a gong it does not, by twice the loud strike's own peak.
+    //
+    // The solver is not homogeneous, which is why the control's bar is the project's tier-1
+    // acceptance number and not `== 0.0`. The numerics carry two ABSOLUTE scales a four-times-larger
+    // trajectory meets at a different place -- the discrete-gradient force's 0/0 Taylor-branch
+    // threshold and the bracketed scalar root find's own exit. The control reads 0.0 on Windows and
+    // read a byte-identical 3.52e-13 on every Linux runner while this was a Python test; `ratio = 8`
+    // or `strike_velocity = 1.5` read 4.30e-13 on the machine that reads 0.0 here. Neither is a
+    // defect, and the gong's 2.12 stands twelve orders above all of them.
+    //
+    // Model #7p found that on a linear plate "the felt exponent is the only source of dynamic
+    // timbre". With the felt removed from the question by construction, the departure here is the
+    // plate's.
+    let control = scaled_departure(false, 1.0);
+    let gong = scaled_departure(true, 1.0);
+    eprintln!("scaled departure: linear plate {control:e}, gong {gong}");
+    assert!(control < 1e-10, "linear plate, alpha = 1: {control:e}");
+    assert!(gong > 1.0, "gong, alpha = 1: {gong}");
+}
+
+#[test]
+fn the_gongs_spectral_centroid_climbs_with_the_strike_and_a_linear_plates_does_not() {
+    // HOW the timbre changes: energy cascades up the spectrum as the strike gets harder -- the
+    // crash. Both sources of dynamic timbre are present (the felt at `alpha = 2.3`, and the plate)
+    // and this detector separates them by a factor of about 450: across a sixteenfold range of
+    // strike velocity the linear plate's centroid moves 0.16% (the felt, model #7p's effect, real
+    // but small) while the gong's moves 74%.
+    //
+    // It is not blind to the felt, only nearly: a power-weighted centroid on a plate is dominated
+    // by the lowest partials, whose comb a shorter contact pulse barely reshapes. The scaled
+    // response above splits the same two causes quite differently -- two detectors, two splits,
+    // the air-box family's rule that no single detector suffices, arriving on a contact model.
+    // The Python's `(f[f > 5] * w).sum() / w.sum()` with `w = mag[f > 5] ** 2`, spelled to the bit:
+    // `** 2` is NumPy's `x * x`, and `np.sum` is the pairwise `reduce::sum`. A read-out that feeds
+    // nothing back, so this buys only a comparison to the digit with the recorded figures.
+    let centroid = |sig: &[f64]| {
+        let s = magnitude_spectrum(sig, 48_000.0, 2);
+        let (mut fw, mut w) = (Vec::new(), Vec::new());
+        for (&f, &m) in s.freqs.iter().zip(&s.mag) {
+            if f > 5.0 {
+                let p = m * m;
+                fw.push(f * p);
+                w.push(p);
+            }
+        }
+        reduce::sum(&fw) / reduce::sum(&w)
+    };
+    let row = |nonlinear: bool| -> Vec<f64> {
+        [0.75, 3.0, 12.0]
+            .iter()
+            .map(|&v0| centroid(&pickup_signal(v0, ALPHA, nonlinear, 16_384)))
+            .collect()
+    };
+    let felt_only = row(false);
+    let plate = row(true);
+    eprintln!("centroids (Hz): linear plate {felt_only:?}, gong {plate:?}");
+    let (lo, hi) = felt_only
+        .iter()
+        .fold((f64::MAX, 0.0f64), |(a, b), &c| (a.min(c), b.max(c)));
+    let felt_swing = hi / lo - 1.0;
+    let plate_swing = plate[2] / plate[0] - 1.0;
+    // Measured 0.0016 and 0.74 (the retired Python file's figures, reproduced).
+    assert!(
+        felt_swing < 0.01,
+        "the linear plate's centroid moved {felt_swing}"
+    );
+    assert!(
+        plate[0] <= plate[1] && plate[1] <= plate[2],
+        "the gong's centroid did not climb: {plate:?}"
+    );
+    assert!(
+        plate_swing > 0.4,
+        "the gong's centroid moved only {plate_swing}"
+    );
+    assert!(
+        plate_swing > 100.0 * felt_swing,
+        "{plate_swing} is not two decades above {felt_swing}"
     );
 }

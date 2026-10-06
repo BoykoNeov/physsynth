@@ -10,6 +10,7 @@
 #
 # <package>/<test target> :: <exact test name>
 physsynth-core/plate_kirchhoff :: no_nan_across_mu_on_either_boundary  # 32.3
+physsynth-core/mallet_gong :: the_gongs_spectral_centroid_climbs_with_the_strike_and_a_linear_plates_does_not  # 14.4
 physsynth-core/string_geometric_long :: at_vanishing_amplitude_the_model_is_three_linear_waves  # 11.3
 physsynth-core/mallet_gong :: the_free_branch_read_out_error_is_quadratic_in_the_rigid_drift  # 10.7
 physsynth-viewer/contact :: fret_raster_resolves_at_least_ten_columns_per_period  # 7.2
@@ -43,6 +44,7 @@ physsynth-viewer/platebody :: the_terminus_is_the_opposite_story_per_boundary  #
 physsynth-viewer/plate :: the_sweep_grid_is_capped_independently_of_the_audio_grid  # 3.3
 physsynth-viewer/vkroom :: it_ignores_params_that_belong_to_other_models  # 3.1
 physsynth-viewer/plate :: a_reachable_narrow_deep_waisted_guitar_still_draws_one_plate  # 3.0
+physsynth-core/mallet_gong :: on_a_linear_plate_an_alpha_one_felt_scales_exactly_and_a_gong_does_not  # 3.0
 physsynth-core/string_geometric_whirl :: only_the_plane_of_the_lower_mode_whirls  # 3.0
 physsynth-viewer/airbox :: the_cone_tracks_the_mic_and_never_stops_matching  # 3.0
 physsynth-viewer/membrane :: a_small_geometry_is_rejected_by_the_work_budget_but_not_banned  # 2.9

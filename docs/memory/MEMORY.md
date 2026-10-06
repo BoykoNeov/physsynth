@@ -11,6 +11,7 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 - [Destructive undo discipline](destructive-undo-discipline.md) — never undo a temp edit with `git checkout --`; it discarded a whole batch
 - [Identify processes before killing](identify-processes-before-killing.md) — read the command line first; the user runs their own Python here
 - [Port reclaim modus operandi](port-reclaim-modus-operandi.md) — reclaim a busy port only from a stale run of THIS program
+- [Rust tests: parallel + nice](rust-tests-parallel-nice.md) — `scripts/cargo-test-nice.ps1`; QUICK lane default (24 s vs Python 45 s), `-Full` before commit; never RUSTC_BOOTSTRAP near cargo
 - [Unphysical params are a feature](unphysical-params-are-a-feature.md) — effective-coefficient APIs that permit odd combos; realism via helpers
 
 ## Rust migration and Python retirement
@@ -54,7 +55,7 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 - [Retirement phase A](retirement-phase-a-state.md) — flag GONE; banded deleted; default suite == old flagged; reconcile counts via a worktree
 - [Retirement phase E](retirement-phase-e-state.md) — 36 scripts + viz gone; sweep → Cargo example; convergence edge is a last-bit event
 - [Retirement phase D](retirement-phase-d-state.md) — DONE: Python viewer deleted; freeze exact on Windows only (Linux: 158/588 last-bit), structure elsewhere; browser check = Cargo example
-- [Phase C carrying](retirement-phase-c-carrying-state.md) — batches 1-13 (plates, membrane, beam, every string) done; carry the SWEEP; map by ASSERTION not name; 35 files left
+- [Phase C carrying](retirement-phase-c-carrying-state.md) — batches 1-17 (plates, membrane, beam, strings, every contact file) done; carry the SWEEP; map by ASSERTION; 25 files left
 - [Viewer stays Python](viewer-stays-python.md) — SUPERSEDED (viewer is Rust since D7); only coverage proves a line runs, not a grep
 - [Analysis freeze](analysis-freeze-state.md) — 62 fixtures frozen from the Python before it was deleted
 - [Deletion phase](rust-deletion-phase-state.md) — all 11 units gone, 23,396 lines, zero physics bars retired

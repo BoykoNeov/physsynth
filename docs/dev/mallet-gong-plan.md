@@ -1,5 +1,9 @@
 # Mallet–gong collision — model #7g, the nested solve
 
+> **2026-10-06: the Python tests this plan names are retired** (`docs/dev/python-retirement-plan.md`
+> §39). Their bars are in `crates/physsynth-core/tests/mallet_gong.rs`, at the same fixture; the
+> helpers `make_mallet_gong` and `gong_linear_twin` went with them.
+
 > **Status: BUILT & GREEN (2026-09-06).** `MalletVkPlate` in `crates/physsynth-core/src/mallet.rs`,
 > bound as `MalletVKPlate` in `crates/physsynth-py/src/mallet.rs`, re-exported by
 > `physsynth/core/mallet.py`.
