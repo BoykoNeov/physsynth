@@ -5749,9 +5749,11 @@ because its worst moment, step 124, comes before the first contact at step 127 �
 both solver mismatches (`3.35e-16`, `8.11e-15`), the mallet's fallback counts, its head share
 (0.6470705058064259), all three tolerance-scaling triples, and the mode projections to fifteen.
 
-**The tolerance-port readings agree to about thirteen digits**: the six centroids
-(`np.fft` → `physsynth_analysis::spectrum`), and the wrap spread (4.893770145997 against NumPy's
-`np.std` 4.893770145997376).
+**The tolerance-port readings agree to twelve to sixteen digits**: the twelve centroid readings
+(four barrier, six jawari counting the early and late halves, two mallet; `np.fft` →
+`physsynth_analysis::spectrum`), the worst the out-of-reach string's 99.99739565103383 against
+NumPy's 99.99739565104072 (6.9e-14 relative); and the wrap spread (4.893770145997294 against
+`np.std`'s 4.893770145997376).
 
 **The one NumPy referee that is not reproduced to the bit is the equilibrium**, and it does not need
 to be. `np.linalg.solve`'s `u*` and the native dense LU's agree to 9.1e-16 (flat) and 5.0e-16
@@ -5764,9 +5766,25 @@ to be. `np.linalg.solve`'s `u*` and the native dense LU's agree to 9.1e-16 (flat
   closed-form equilibrium. Breakage A below is why it matters: a stiffness read 1% high in the
   force and the potential together conserves perfectly.
 - **The single-node collapse** (two algorithms, one root), at either configuration.
-- **The stall guard.** No native barrier bar asserted `newton_iters < newton_maxiter` per step.
-- **Every signature**: brightness, closeness, intermittency, hardness; the jawari's sustain and wrap
-  travel; the mallet's mode spread, hardness, bounce and mode comb.
+- **The stall guard on the Python's runs.** No native barrier bar asserted
+  `newton_iters < newton_maxiter` at every step; the viewer's fret scene bounds its own run's worst
+  iteration count (`<= 3`), on its own configuration.
+- **Most of the signatures — but not all, and the viewer had more than the first draft of this
+  section said** (it read the core crate and stopped; review caught it, §36's lesson a second time).
+  `physsynth-viewer/tests/contact.rs` runs **the same 12,000-step jawari and clean runs** and pins
+  the late jawari/clean ratio (3.44 ± 0.05, tighter than the Python's > 2.5) and the wrap spread
+  (4.89 ± 0.05), plus conservation through the curved wrap and the juari's point contact. Its fret
+  scene is its own geometry (`K = 2e6`, pickup at 0.05 L) and pins a duty of 0.154, 1.24 slaps per
+  period and a brightness that peaks at an intermediate clearance. `physsynth-viewer/tests/mallet.rs`
+  strikes a **circular** head at the helper's `T`, `rho`, `N = 40`, `lam = 0.5` and pins lossless
+  conservation, separation with restitution > 0.99, a peak head share > 30%, lossy passivity and
+  that hysteresis lowers restitution. What no native line had: the jawari's whole-run brightness
+  against the clean string, its early-against-late sustain, and the flat-rail contrast that makes
+  the wrap spread a *travel* claim; the four flat-rail comparisons at the Python's `K = 1e6` and
+  0.1 L pickup (buzz against out of reach, near against far, the onset count, soft against hard);
+  and on the square drumhead the mode spread, the hard/soft comparison, the single bounce and the
+  mode comb. The viewer's `static_oracle` field is a reported literal (3.4e-15), not a
+  computation, so the first bullet stands.
 - **The Python's run lengths and parameters.** The native barrier runs were 4,000 steps at
   `lam = 0.4`; the Python's were 6,000, plus `lam = 0.9` for the out-of-reach anchor. The native
   mallet ran one felt for 1,200 steps; the Python ran four for 6,000. Nothing existing was shortened
@@ -5780,7 +5798,7 @@ to be. `np.linalg.solve`'s `u*` and the native dense LU's agree to 9.1e-16 (flat
   midpoint limit, and `contact_stiffness(1e-3, K, 1) == K` — the native one-sided bar pinned the
   zero at `alpha = 1`, not the value in contact.
 
-Two Python assertions sharpen on the way: `pytest.approx(rel=1e-12)` on the Taylor branch kept its
+One Python assertion sharpens on the way: `pytest.approx(rel=1e-12)` on the Taylor branch kept its
 default `abs=1e-12`, which at a ~4e-3 N force is the whole tolerance; it measured exact equality, so
 equality is asserted.
 
@@ -5829,8 +5847,9 @@ the juari mismatch at 12x.
 Planted one at a time with `W:\temp\claude\contact-batch\mutate.py`: `physsynth-core`'s `src` and
 `tests` snapshotted, restored by copy, byte-compared. "Red" counts the six files above
 (`collision_barrier_harness`, `collision_jawari`, `mallet_membrane_harness`, `collision`, `mallet`,
-`collision_barrier`). C, E and J were re-run after the felt-law bar was added; the rest predate it,
-and none of them changes the force law, so it cannot move them.
+`collision_barrier`). C, E, F, G, J and O — every mallet breakage — were re-run after the felt-law
+bar was added, and only E and J changed (it went red under both); the barrier breakages cannot
+reach it.
 
 | breakage | red | caught by |
 |---|---|---|
@@ -5870,9 +5889,12 @@ Four readings:
   conserves energy perfectly and moves no signature past its bar; only seating the string at the
   closed-form equilibrium sees it, on both profiles.
 - **J was seen only by the viewer freeze, which compares exactly only on the Windows CI job
-  (§23.19)** — and by no Python test either, so it is an old blind spot rather than one this batch
-  opened. The barrier has a magnitude oracle; the mallet had none. Following §35.4 (a defect seen
-  only by the Windows freeze got a bar), one was added rather than asked about:
+  (§23.19)** — and, by inference, by no Python test either (the carried bars are the Python's
+  assertions at its fixtures, matched to sixteen digits, and they stay green under J), so it is an
+  old blind spot rather than one this batch opened. The barrier has a magnitude oracle; the mallet
+  had none. One was added without asking. §35.4 did the same for a defect only the freeze saw, but
+  its bar was an established kind (the start-up bar); this one is new, so the human was told it was
+  added unasked and can be removed:
   `the_applied_force_is_the_felt_law_at_this_files_stiffness` checks, at every one of 1,200 steps,
   that the applied force IS the discrete gradient of the felt at the `K` and `alpha` written in the
   test — equality, since the lossless felt has no other term. It sees J and E.
@@ -5950,20 +5972,61 @@ Comments that named the retired files elsewhere now name the native bars: `src/c
 
 ### 37.6 Cost and counts
 
-- **pytest 1,029 → 972**: the seven files' 57 cases, reconciled per file with `--collect-only`;
-  every other file's count is unchanged.
+- **pytest 1,029 → 972**: the seven files' 57 cases, reconciled per file with `--collect-only`
+  against a worktree at the previous commit; every other file's count is unchanged.
 - **Native +40**: 15 + 9 + 13 new, 3 in `collision.rs`. Workspace 1,502 → 1,542 optimised
   (`scripts/cargo-test-nice.ps1 -Full`), all green; pytest 972 passed.
-- **Both CI profiles.** Unoptimised locally the barrier harness takes 34.3 s, the mallet harness
-  9.6 s and the jawari 2.9 s (optimised: 1.9 s, 0.4 s, 0.3 s). That is under §32's 92 s file, which
-  stayed in both; nothing was added to `release_only`. The local quick lane runs optimised, where no
-  one of these tests reaches its 2-CPU-second cut-off, so `scripts/quick-skip.txt` is unchanged.
+- **Both CI profiles.** Unoptimised locally the barrier harness takes 34.5 s, the mallet harness
+  8.6 s and the jawari 2.5 s (optimised: 1.9 s, 0.4 s, 0.3 s), measured after the felt-law bar was
+  added. That is under §32's 92 s file, which stayed in both; nothing was added to `release_only`.
+  The local quick lane runs optimised: timed alone (`--exact`, one thread, the skip file's own
+  method), the slowest new test is the barrier's lossless sweep at 1.37 s, under the 2-second
+  cut-off, so `scripts/quick-skip.txt` is unchanged.
 - **28 physics files remain**, with **319** test functions by the §24.1 count (361 − 42). No
   contact model with a string or a drumhead is left; the mallet on a plate and on a gong are.
 
 ### 37.7 What is next
 
-The next batch is not chosen; the human picks. Candidates in plain size order: the bow (3 files,
-22 functions), the reed (3, 25), the bore (4, 31), the instrument body (1, 9), the mallet on a plate
-and a gong (2 + 1, 38), the gong plate (6, 44), the room (4, 43), radiation (1, 49), the
-resolution horizon (1, 48).
+The next batch is not chosen; the human picks. The 28 files, by family: the bow (`test_bow_*`, 3
+files), the reed (`test_reed_*`, 3), the bore (`test_bore_*`, 4), the body (1), the mallet on a
+plate (`test_mallet_plate*`, 2) and on a gong (`test_mallet_gong`, 1), the gong plate (`test_vk_*`,
+6), the room (`test_airbox_*`, 4), radiation (1), the resolution horizon (1), the spectrum detector
+(1) and the operators (1).
+
+### 37.8 On CI
+
+Run 37405753035 on `e4d7244`, all five jobs green, and the first Linux run of these bars:
+
+| file | optimised | unoptimised |
+|---|---|---|
+| `collision_barrier_harness.rs` | 2.90 s | 67.29 s |
+| `collision_jawari.rs` | 0.27 s | 3.43 s |
+| `mallet_membrane_harness.rs` | 0.68 s | 16.07 s |
+
+The jobs took **8.1 minutes optimised and 11.7 unoptimised** (§36.8: 7.8 and 10.2). The new files
+account for about 1.4 minutes of the unoptimised job; the rest is the machine, measured inside the
+job (§36.8's method): the unchanged `string_geometric_whirl.rs` took 52.28 s unoptimised here
+against 46.92 s there, and `string_geometric_harness.rs` 12.25 s against 10.97 s — a runner about
+1.1x slower. The unoptimised job is now the longer one, by 3.6 minutes. Nothing was moved to
+`release_only`; the barrier harness is the first candidate if that gap matters.
+
+This was the first run on glibc's `sin`, where the start states are no longer bit-identical to the
+Windows recording, and the thin bars held: near/far brightness (1.34x on Windows), late
+jawari/clean (1.38x), wrap travel (1.39x). CI runs without `--nocapture`, so it reports the passes,
+not the margins.
+
+The two runs before this batch (on the quick-lane commits `42b2d2d` and `5f2283c`) show as failed:
+in both, every job passed except the optimised core job, which GitHub never started ("The job was
+not acquired by Runner of type hosted even after multiple attempts") — an outage, not a test.
+
+Review fixes, after the advisor's read of the first commit: §37.2 had said every signature lacked a
+native line, from reading the core crate only — the viewer's contact and mallet tests already ran
+the jawari's late ratio and wrap spread at the same runs, the fret's intermittency at its own
+geometry, and a circular-head strike; restated with what each runs and what was genuinely new.
+"The six centroids" were twelve, agreeing to 12–16 digits, not 13; "two assertions sharpen" was
+one. Four claims written as measured were argued and are now measured: the per-file pytest counts
+(against a worktree at the previous commit), the quick-lane cut-off (each test timed alone; the
+slowest is 1.37 s), the felt-law bar's effect on F, G and O (re-planted: unchanged), and the
+unoptimised timings after that bar was added. "By no Python test" is marked as an inference, and
+§35.4's precedent is stated with its difference (an established bar kind there, a new one here).
+§37.7's remaining-file list is now all 28.
