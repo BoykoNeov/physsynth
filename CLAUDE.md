@@ -117,8 +117,15 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    string in two halves — **every string family's Python suite is gone** — and §37 the barrier,
    the jawari and the mallet on a drumhead, two batches done together at the human's request (bars
    for both first, one comparison, one breakage round, one deletion), §38 the mallet on a
-   plate, and §39 the mallet on a gong — **every contact file is gone**; **25 physics files / 281
-   functions remain** (§9's map is stale). §39 carried into the existing native file (the Python's
+   plate, and §39 the mallet on a gong — **every contact file is gone** — and §40 the gong plate
+   itself (six files, its bracket and Airy solve included); **19 physics files / 237 functions
+   remain** (§9's map is stale). §40 found two defects the workspace could not see, both guarded at
+   the human's call: the plate's constructor dropping the caller's `θ` (step and energy then agree
+   on the wrong θ, so conservation is blind — the bit-identity anchor now runs at three θs), and
+   the start dropping the membrane force (seen only by the Windows-exact viewer freeze — §35's
+   time-symmetric start bar now pins it). Two of its plants HANG tests instead of failing them, so
+   a breakage round needs a per-plant time limit; and a plant that changes no bit (an equivalent
+   mutant) is not a gap. §39 carried into the existing native file (the Python's
    fixture was its fixture, save the plate's solve method — so every carried rig asserts no
    fallback, which makes the two one trajectory), reproduced every figure to the digit, and found
    one gap: the step's iteration count could drop its first solve unseen (a read-out, no motion);

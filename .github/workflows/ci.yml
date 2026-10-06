@@ -244,7 +244,9 @@ jobs:
   # 2026-09-29, the human's calls, retirement plan §25.5-§27.5). Three pin no spelling; the plate
   # files' exact checks use no transcendental and no constant exponent, so release cannot fold them
   # differently. `string_geometric_long` (the geometric string's long simulations, split from its
-  # harness for this, the human's call, plan §35.7) holds frequency, rate and drift bars only. It
+  # harness for this, the human's call, plan §35.7) holds frequency, rate and drift bars only.
+  # `vk_plate_harness` (the gong plate, 160 s unoptimised against 6 s, the human's call, plan
+  # §40.6) checks no spelling and the model it drives has no `debug_assert!`. It
   # is an exclusion on purpose: a new core test file lands
   # in both profiles by default, and a stale name here fails the step.
   rust-debug:
@@ -259,6 +261,7 @@ jobs:
       - name: Core and analysis bars, unoptimised
         run: |
           release_only="connection_plate mallet_gong plate plate_grain plate_kirchhoff plate_free string_geometric_long"
+          release_only="$release_only vk_plate_harness"
           for n in $release_only; do
             ls crates/physsynth-core/tests/$n.rs > /dev/null || { echo "no core test $n"; exit 1; }
           done

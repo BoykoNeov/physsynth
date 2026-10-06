@@ -33,8 +33,9 @@ use physsynth_core::reduce;
 
 /// The shipped gong: a 0.4 m square 1 mm steel plate, simply supported, 361 live nodes.
 ///
-/// The material and geometry are `tests/test_vk_energy.py`'s, so the nonlinear plate this model
-/// drives is the one every existing von Karman bar was measured on.
+/// The material and geometry are the retired `tests/test_vk_energy.py`'s, now
+/// `vk_plate_harness.rs`'s, so the nonlinear plate this model drives is the one every von Karman
+/// bar was measured on.
 fn gong_spec() -> VkSpec {
     VkSpec {
         lx: 0.4,

@@ -8,6 +8,7 @@
 //! plausible drum. `tests/test_rust_parity_membrane.py` covers agreement with SciPy; this file
 //! covers the properties that make the model correct in the first place.
 
+use physsynth_core::eig::symmetric_eigenvalues;
 use physsynth_core::ops2d::{
     avg_d1_1d, biharmonic_from_mask, cells_per_node, centered_d2_1d, clamped_d2_1d,
     collocated_d2_1d, dirichlet_interior_d2_1d, disk_mask, embed, forward_d1_1d,
@@ -16,7 +17,10 @@ use physsynth_core::ops2d::{
     norm2_2d, orthotropic_biharmonic, prune_to_area_carrying, rectangle_mask, AiryStressSolver,
     Mask, VonKarmanBracket,
 };
+use physsynth_core::plate::linspace0;
 use physsynth_core::sparse::Csr;
+use physsynth_core::sparse_lu::SparseLu;
+use std::f64::consts::PI;
 
 /// Row-major flat index of node `(j, i)` on a grid `ncols` nodes wide — the one ordering every
 /// live-node vector and every `index_map` in this project is written in.
@@ -953,6 +957,11 @@ fn the_bracket_is_symmetric_in_its_two_arguments() {
     // Symmetric by construction rather than to a tolerance: the two straight terms swap and the
     // twist product commutes, so the SAME doubles are added in the same order either way.
     assert_eq!(br.eval(&a, &b), br.eval(&b, &a));
+    // ... and off the rim-vanishing domain too, which is where the retired Python asked it: the
+    // swap argument is about the stencil, not about the fields.
+    let a = pseudorandom(8 * 6, 4);
+    let b = pseudorandom(8 * 6, 10);
+    assert_eq!(br.eval(&a, &b), br.eval(&b, &a));
 }
 
 #[test]
@@ -961,7 +970,16 @@ fn the_bracket_is_triple_self_adjoint_on_rim_vanishing_fields() {
     // scheme rests on `T(a, b, c)` being invariant under ANY permutation of its three arguments.
     // It holds only because the twist lives on cell centres and is averaged back by the adjoint of
     // the corner average -- the naive collocated bracket leaves an O(1) remainder.
-    for (nx, ny, h) in [(6usize, 6usize, 0.05), (9, 7, 0.037), (12, 12, 1.0 / 3.0)] {
+    // The last four are the retired Python's grids, at its h = 0.07.
+    for (nx, ny, h) in [
+        (6usize, 6usize, 0.05),
+        (9, 7, 0.037),
+        (12, 12, 1.0 / 3.0),
+        (9, 7, 0.07),
+        (12, 12, 0.07),
+        (17, 11, 0.07),
+        (24, 20, 0.07),
+    ] {
         let br = VonKarmanBracket::new(nx, ny, h);
         let a = rim_vanishing(nx, ny, 1);
         let b = rim_vanishing(nx, ny, 2);
@@ -1000,6 +1018,24 @@ fn the_bracket_annihilates_affine_data() {
         .chain(br.eval(&affine, &a).iter())
         .fold(0.0f64, |m, v| m.max(v.abs()));
     assert!(worst < 1e-9, "affine data left a residue of {worst:.3e}");
+    // ... and each of `{1, x, y}` alone, as the retired Python asked it: a combination could hide
+    // two residues that cancel.
+    type Field = (&'static str, fn(f64, f64) -> f64);
+    let fields: [Field; 3] = [("1", |_, _| 1.0), ("x", |x, _| x), ("y", |_, y| y)];
+    for (name, field) in fields {
+        let f: Vec<f64> = (0..(nx + 1) * (ny + 1))
+            .map(|p| field((p % (nx + 1)) as f64 * h, (p / (nx + 1)) as f64 * h))
+            .collect();
+        let worst = br
+            .eval(&a, &f)
+            .iter()
+            .chain(br.eval(&f, &a).iter())
+            .fold(0.0f64, |m, v| m.max(v.abs()));
+        assert!(
+            worst < 1e-9,
+            "the field {name} left a residue of {worst:.3e}"
+        );
+    }
 }
 
 #[test]
@@ -1024,7 +1060,14 @@ fn the_bracket_is_asymmetric_when_the_field_does_not_vanish_on_the_rim() {
 
 #[test]
 fn the_airy_operator_is_symmetric_and_the_solve_inverts_it() {
-    for (nx, ny, h) in [(6usize, 6usize, 0.05), (10, 8, 0.037), (12, 9, 1.0 / 3.0)] {
+    // The last two are the retired Python's symmetry and definiteness grids.
+    for (nx, ny, h) in [
+        (6usize, 6usize, 0.05),
+        (10, 8, 0.037),
+        (12, 9, 1.0 / 3.0),
+        (14, 11, 0.07),
+        (16, 12, 0.06),
+    ] {
         let airy = AiryStressSolver::new(nx, ny, h).expect("SPD");
         let bf = airy.bf();
         assert_eq!(bf.nrows(), airy.n_interior());
@@ -1153,6 +1196,287 @@ fn a_column_restriction_keeps_the_ascending_order_the_gram_contracts_over() {
                 assert_eq!(lc_r.get(i, renumber[j]), lc.data()[p]);
             }
         }
+    }
+}
+
+// -- the von Karman operators against closed forms (carried from tests/test_vk_{airy,bracket}.py) --
+
+/// `np.meshgrid(np.linspace(0, lx, nx + 1), np.linspace(0, ly, ny + 1))`, flattened row-major.
+fn mesh(nx: usize, ny: usize, lx: f64, ly: f64) -> (Vec<f64>, Vec<f64>) {
+    let xs = linspace0(lx, nx + 1);
+    let ys = linspace0(ly, ny + 1);
+    let mut x = Vec::with_capacity((nx + 1) * (ny + 1));
+    let mut y = Vec::with_capacity((nx + 1) * (ny + 1));
+    for &yv in &ys {
+        for &xv in &xs {
+            x.push(xv);
+            y.push(yv);
+        }
+    }
+    (x, y)
+}
+
+fn max_abs(v: impl IntoIterator<Item = f64>) -> f64 {
+    // NaN-propagating, as `np.max` is: a NaN must fail the bar it is compared against.
+    v.into_iter().fold(0.0f64, |m, x| {
+        if x.is_nan() || m.is_nan() {
+            f64::NAN
+        } else {
+            m.max(x.abs())
+        }
+    })
+}
+
+/// The clamped manufactured stress function on the `1 x 0.8` rectangle and its biharmonic.
+///
+/// `F = (1 - cos(2 pi x / Lx)) (1 - cos(2 pi y / Ly))` has `F = F,n = 0` on every edge, so it IS a
+/// clamped solution, and `lap F != 0` there, so it is NOT a Navier one. `g = 1 - cos(a x)` has
+/// `g'''' = -a^4 cos(a x)` -- note the sign.
+fn airy_manufactured(nx: usize, ny: usize) -> (Vec<f64>, Vec<f64>) {
+    let (lx, ly) = (1.0, 0.8);
+    let (a, b) = (2.0 * PI / lx, 2.0 * PI / ly);
+    let (x, y) = mesh(nx, ny, lx, ly);
+    let mut f = Vec::with_capacity(x.len());
+    let mut lap4 = Vec::with_capacity(x.len());
+    for (&xv, &yv) in x.iter().zip(y.iter()) {
+        let (cx, cy) = ((a * xv).cos(), (b * yv).cos());
+        let (g, q) = (1.0 - cx, 1.0 - cy);
+        f.push(g * q);
+        lap4.push(-(a.powi(4)) * cx * q + 2.0 * a * a * b * b * cx * cy - g * b.powi(4) * cy);
+    }
+    (f, lap4)
+}
+
+/// The Python's grid ladder: `h = 1 / Nx`, `Ny = round(0.8 / h)`.
+fn ladder(nx: usize) -> (usize, usize, f64) {
+    let h = 1.0 / nx as f64;
+    (nx, (0.8 / h).round() as usize, h)
+}
+
+#[test]
+fn the_airy_solve_recovers_a_clamped_manufactured_field_at_second_order() {
+    // THE Part-2 gate. The retired Python read 0.02258 / 0.005631 / 0.001407 and rates 2.0033 /
+    // 2.0008; the error is the discretization's, three orders above any solver's rounding.
+    let mut errs = Vec::new();
+    for nx in [40usize, 80, 160] {
+        let (nx, ny, h) = ladder(nx);
+        let (exact, lap4) = airy_manufactured(nx, ny);
+        let f = AiryStressSolver::new(nx, ny, h)
+            .expect("SPD")
+            .solve(&lap4)
+            .expect("solve");
+        errs.push(max_abs(f.iter().zip(exact.iter()).map(|(a, b)| a - b)));
+    }
+    eprintln!("Airy errors {errs:?}");
+    for w in errs.windows(2) {
+        let rate = (w[0] / w[1]).ln() / 2.0f64.ln();
+        assert!(
+            rate > 1.9,
+            "Airy solve converges at rate {rate:.4}, errors {errs:?}"
+        );
+    }
+    assert!(errs[2] < 5e-3, "finest error {:.3e}", errs[2]);
+}
+
+#[test]
+fn the_clamped_airy_operator_is_not_the_navier_biharmonic() {
+    // The discriminator: both operators are SPD, so only a field that is clamped but not Navier can
+    // tell them apart. Solving the same source through `B = L^2` saturates at O(1) (the retired
+    // Python: 4.144 against 0.005631, a factor of 736) while the clamped solve converges.
+    let (nx, ny, h) = ladder(80);
+    let (exact, lap4) = airy_manufactured(nx, ny);
+    let clamped = AiryStressSolver::new(nx, ny, h)
+        .expect("SPD")
+        .solve(&lap4)
+        .expect("solve");
+    let err_clamped = max_abs(clamped.iter().zip(exact.iter()).map(|(a, b)| a - b));
+    let mask = rectangle_mask(nx, ny);
+    let (b, _) = biharmonic_from_mask(&mask, h);
+    let live: Vec<usize> = (0..mask.flags().len())
+        .filter(|&p| mask.flags()[p])
+        .collect();
+    let rhs: Vec<f64> = live.iter().map(|&p| lap4[p]).collect();
+    let f_ss = SparseLu::factor(&b)
+        .expect("SPD")
+        .solve(&rhs)
+        .expect("solve");
+    let err_ss = max_abs(live.iter().zip(f_ss.iter()).map(|(&p, v)| v - exact[p]));
+    eprintln!("Navier {err_ss:e}, clamped {err_clamped:e}");
+    assert!(
+        err_ss > 50.0 * err_clamped,
+        "Navier {err_ss:.4e} against clamped {err_clamped:.4e}"
+    );
+}
+
+#[test]
+fn the_airy_operators_smallest_eigenvalue_is_lapacks() {
+    // Positive definite, and by how much: LAPACK's `eigvalsh` on the dense `B_F` at 16 x 12,
+    // h = 0.06 (recorded from the retired Python before deletion -- an outside referee) read
+    // 10.450443790844881. A smoke test of definiteness by itself (Navier is SPD too); the
+    // recorded value is what makes it a bar on the assembly.
+    const LAPACK_SMALLEST: f64 = 10.450443790844881;
+    let airy = AiryStressSolver::new(16, 12, 0.06).expect("SPD");
+    let bf = airy.bf();
+    let n = bf.nrows();
+    let mut dense = vec![0.0; n * n];
+    for i in 0..n {
+        for p in bf.indptr()[i]..bf.indptr()[i + 1] {
+            dense[i * n + bf.indices()[p]] = bf.data()[p];
+        }
+    }
+    let values = symmetric_eigenvalues(&dense, n).expect("symmetric");
+    let top = values[n - 1];
+    eprintln!("smallest {:e}, largest {top:e}", values[0]);
+    assert!(values[0] > 0.0);
+    assert!(
+        (values[0] - LAPACK_SMALLEST).abs() < 20.0 * f64::EPSILON * top,
+        "smallest {:.17e} vs LAPACK {LAPACK_SMALLEST:.17e} (lambda_max {top:.3e})",
+        values[0]
+    );
+}
+
+#[test]
+fn the_stress_field_is_quadratic_in_the_deflection_through_the_bracket_seam() {
+    // The first place the bracket and the Airy solve touch: `source = -(Ee/2) l(w, w)` is bilinear
+    // and the solve linear, so doubling `w` gives four times `F` -- not 16. The doubling is exact
+    // in binary and every operation on the way is linear, so the four times is EXACT here, not to
+    // a tolerance (the retired Python's bar was 1e-10 and it read 0.0).
+    let (nx, ny) = (18usize, 14usize);
+    let h = 1.0 / nx as f64;
+    let bracket = VonKarmanBracket::new(nx, ny, h);
+    let airy = AiryStressSolver::new(nx, ny, h).expect("SPD");
+    let (x, y) = mesh(nx, ny, 1.0, 0.8);
+    let w: Vec<f64> = x
+        .iter()
+        .zip(y.iter())
+        .map(|(&xv, &yv)| (PI * xv / 1.0).sin() * (PI * yv / 0.8).sin())
+        .collect();
+    let w2: Vec<f64> = w.iter().map(|v| 2.0 * v).collect();
+    let f1 = airy.solve(&bracket.eval(&w, &w)).expect("solve");
+    let f2 = airy.solve(&bracket.eval(&w2, &w2)).expect("solve");
+    assert!(f1.iter().all(|v| v.is_finite()));
+    assert!(
+        max_abs(f1.iter().copied()) > 0.0,
+        "a nonzero w builds a nonzero F"
+    );
+    for v in f1.iter().take(nx + 1) {
+        assert_eq!(*v, 0.0, "bottom rim");
+    }
+    for j in 0..=ny {
+        assert_eq!(f1[j * (nx + 1)], 0.0, "left rim");
+    }
+    for (a, b) in f2.iter().zip(f1.iter()) {
+        assert_eq!(*a, 4.0 * b);
+    }
+}
+
+#[test]
+fn the_trilinear_form_is_the_inner_product_of_the_bracket_with_the_third_field() {
+    // `T(a, b, c) = <l(a, b), c>` -- one call, so exactly, not to the Python's rel=1e-12.
+    let br = VonKarmanBracket::new(10, 8, 0.05);
+    let (a, b, c) = (
+        rim_vanishing(10, 8, 41),
+        rim_vanishing(10, 8, 42),
+        rim_vanishing(10, 8, 43),
+    );
+    assert_eq!(
+        br.trilinear(&a, &b, &c),
+        inner2d(&br.eval(&a, &b), &c, 0.05)
+    );
+}
+
+#[test]
+fn the_bracket_converges_to_the_monge_ampere_form_at_second_order() {
+    // Consistency, the counter to "l = 0 also passes symmetry": on a = sin(px) sin(qy),
+    // b = sin(rx) sin(sy) the analytic bracket a_xx b_yy + a_yy b_xx - 2 a_xy b_xy is
+    // (p^2 s^2 + q^2 r^2) a b - 2 p q r s cos(px) cos(qy) cos(rx) cos(sy). The one-node rim (with
+    // its one-sided end stencils) is skipped. The retired Python: 31.60 / 7.923 / 2.056 / 0.5204,
+    // rates 1.996 / 1.946 / 1.982.
+    let (lx, ly) = (1.0, 0.8);
+    let (p, q, r, s) = (PI / lx, 2.0 * PI / ly, 3.0 * PI / lx, PI / ly);
+    let mut errs = Vec::new();
+    for nx in [40usize, 80, 160, 320] {
+        let (nx, ny, h) = ladder(nx);
+        let (x, y) = mesh(nx, ny, lx, ly);
+        let a: Vec<f64> = x
+            .iter()
+            .zip(&y)
+            .map(|(&u, &v)| (p * u).sin() * (q * v).sin())
+            .collect();
+        let b: Vec<f64> = x
+            .iter()
+            .zip(&y)
+            .map(|(&u, &v)| (r * u).sin() * (s * v).sin())
+            .collect();
+        let got = VonKarmanBracket::new(nx, ny, h).eval(&a, &b);
+        let mut worst = 0.0f64;
+        for j in 2..ny - 1 {
+            for i in 2..nx - 1 {
+                let k = j * (nx + 1) + i;
+                let (u, v) = (x[k], y[k]);
+                let exact = (p * p * s * s + q * q * r * r) * a[k] * b[k]
+                    - 2.0
+                        * p
+                        * q
+                        * r
+                        * s
+                        * ((p * u).cos() * (q * v).cos() * (r * u).cos() * (s * v).cos());
+                let e = (got[k] - exact).abs();
+                worst = if e.is_nan() { f64::NAN } else { worst.max(e) };
+            }
+        }
+        errs.push(worst);
+    }
+    eprintln!("bracket errors {errs:?}");
+    for w in errs.windows(2) {
+        let rate = (w[0] / w[1]).ln() / 2.0f64.ln();
+        assert!(
+            rate > 1.9,
+            "bracket converges at rate {rate:.4}, errors {errs:?}"
+        );
+    }
+}
+
+#[test]
+fn the_bracket_and_the_airy_solver_refuse_a_grid_without_an_interior() {
+    // The two refusals both originals raise, and their text. Natively they are panics: the
+    // operators are built from sizes the caller already validated (`VkParams::new` refuses N < 2
+    // with its own message before either is reached).
+    let cases: [(usize, usize, f64, &str); 4] = [
+        (
+            1,
+            5,
+            0.1,
+            "Nx, Ny must be >= 2 (need at least one interior node per axis).",
+        ),
+        (
+            5,
+            1,
+            0.1,
+            "Nx, Ny must be >= 2 (need at least one interior node per axis).",
+        ),
+        (5, 5, 0.0, "h (grid spacing) must be positive."),
+        (5, 5, -0.1, "h (grid spacing) must be positive."),
+    ];
+    let message = |e: Box<dyn std::any::Any + Send>| -> String {
+        e.downcast_ref::<String>()
+            .cloned()
+            .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default()
+    };
+    // The hook is left alone (it is process-wide and the other tests run beside this one), so
+    // each caught refusal also prints its panic line; that is expected output, not a failure.
+    for (nx, ny, h, want) in cases {
+        let br = std::panic::catch_unwind(|| VonKarmanBracket::new(nx, ny, h));
+        let airy = std::panic::catch_unwind(|| AiryStressSolver::new(nx, ny, h).map(|_| ()));
+        let Err(br) = br else {
+            panic!("the bracket must refuse {nx} {ny} {h}")
+        };
+        let Err(airy) = airy else {
+            panic!("Airy must refuse {nx} {ny} {h}")
+        };
+        assert_eq!(message(br), want, "{nx} {ny} {h}");
+        assert_eq!(message(airy), want, "{nx} {ny} {h}");
     }
 }
 

@@ -1,5 +1,11 @@
 # Nonlinear (von Kármán) plate — Phase 4 Plan (model #6)
 
+> **2026-10-06: the Python tests this plan names are retired** (`docs/dev/python-retirement-plan.md`
+> §40) — all six `tests/test_vk_*.py`. The plate's bars are in
+> `crates/physsynth-core/tests/vk_plate_harness.rs` at the same fixture, the bracket's and the Airy
+> solve's in `crates/physsynth-core/tests/ops2d.rs`, and the `nonlinear = false` anchor in
+> `crates/physsynth-core/tests/plate.rs`.
+
 > **Status: Parts 1–6 COMPLETE & GREEN** (Parts 1–3 2026-07-01; Parts 4–6 2026-07-02, the
 > free-edge cymbal included). Part 1 = discrete bracket + money test
 > (`VonKarmanBracket`, `tests/test_vk_bracket.py`, 15 tests). Part 2 = Airy stress-function elliptic

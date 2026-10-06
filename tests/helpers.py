@@ -21,7 +21,7 @@ from physsynth.core.bore import C0_AIR, RHO0_AIR, Bore
 from physsynth.core.bow import BowedString
 from physsynth.core.membrane import Domain, Membrane
 from physsynth.core.plate import THETA_DEFAULT as PLATE_THETA_DEFAULT  # noqa: F401 (re-export)
-from physsynth.core.plate import Plate, VKPlate
+from physsynth.core.plate import Plate
 from physsynth.core.radiation import (
     AirRadiation,
     RadiatedBody,
@@ -626,19 +626,3 @@ def gaussian_pulse(fs: float, f0: float, *, amplitude: float = 1e-3, widths: flo
 
     return q, qdot, 2.0 * widths * sigma
 
-
-def vk_strike(vk: VKPlate, amplitude: float | None = None, width: float = 0.20) -> np.ndarray:
-    """A centred raised-Gaussian strike on ``vk``'s live nodes, peak ``amplitude`` (default ``e``).
-
-    The default amplitude is the plate thickness, i.e. the onset of the nonlinearity — scale it by
-    ``w/e`` to move between the frozen control (``w << e``) and the drifting regime (``w ~ 3e``).
-    ``width`` is a fraction of ``Lx``, and it is not a free parameter: a *narrow* strike is what
-    fails to converge, hitting the Picard cap and producing NaN, so the broad strike is the only
-    one that runs at large amplitude.
-    """
-    amp = vk.e if amplitude is None else amplitude
-    w = width * vk.Lx
-    dx = vk.X - 0.5 * vk.Lx
-    dy = vk.Y - 0.5 * vk.Ly
-    field = amp * np.exp(-((dx * dx + dy * dy) / (w * w)))
-    return field[vk.mask]

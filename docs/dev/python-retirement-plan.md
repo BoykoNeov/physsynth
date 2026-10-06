@@ -6483,3 +6483,263 @@ pair, the tolerance sweep, both payoff tests and the tangent's driver), one stal
 comment survived §39.3's sentence saying they were fixed (re-measured and corrected), and the margin
 table presented the retired Python's Linux reading as a native one. The quick lane was run once on
 this file: 10 passed, 7 skipped, one per `scripts/quick-skip.txt` entry.
+
+## 40. Phase C, carrying batch 18 — the gong plate
+
+Done 2026-10-06 (the human: "do the gong"). Six files, retired whole: `tests/test_vk_airy.py`,
+`test_vk_bracket.py`, `test_vk_energy.py`, `test_vk_modal.py`, `test_vk_stability.py` and
+`test_vk_free.py` — **44 functions, 68 pytest cases** (13 + 15 + 8 + 3 + 17 + 12). They are the
+von Kármán plate's own suite: the two operators it is built from (the bracket and the clamped Airy
+stress solve), and the coupled plate on both boundaries — the supported gong and the free cymbal.
+
+The bars went to one new file and two extended ones:
+
+- `crates/physsynth-core/tests/vk_plate_harness.rs` — **15 tests**, new (fourteen carried, one added
+  in §40.4), at the Python's fixture: a 40 cm square of 1 mm steel (`E = 2e11`, `nu = 0.3`,
+  `rho = 7800`) at `N = 20`, `fs = 48 kHz`, struck with a centred 8 cm Gaussian, on the shipped
+  solve defaults (`couple_tol = 1e-13`, cap 50, `couple_method = Auto` — the Python's defaults too, so the
+  two ran the same path). **Not `plate.rs`'s fixture** (`rho = 7860`, `N = 16`, a 10 cm bump), which
+  stays as it is. The energy, modal, stability and free-edge files ran the same bars on the two
+  boundaries, so each native test loops over both where the Python had a twin, and reads the
+  boundary-specific figure where the two Python files differed (§40.2).
+- `crates/physsynth-core/tests/ops2d.rs` — **41 → 48**: seven new tests for the operators against
+  closed forms, and four existing ones widened to the Python's grids and fields (§40.2).
+- `crates/physsynth-core/tests/plate.rs` — the `nonlinear = false` anchor widened to three
+  non-default `theta`s with loss on (§40.4), the human's call.
+
+### 40.1 The comparison — every figure reproduced
+
+Recorded first, wheel reinstalled (`W:\temp\claude\vk-plate\python-record.txt`, the script beside
+it). The Python files asserted bounds and printed nothing, so the script re-ran each measurement and
+printed the number. **Every trajectory figure matches to all printed digits**: the lossless drifts
+(`1.7080502696072876e-13` supported, `2.1259724093197682e-13` free), the membrane shares, the six
+tolerance-sweep drifts, the fractions the lossy plates keep (`0.7533738545468222`,
+`0.7511708184879562`), the gate's sweep counts and residuals, the small-amplitude pickups (`0.0` and
+`3.0298074874168867e-22`), the Navier fundamental (`38.971583220568334` Hz), the four supported glide
+frequencies, the six Richardson readings and both ratios (`4.3976702842431905`,
+`5.656180807081411`), and the three Airy manufactured-solution errors.
+
+Two readings differ in their last digits, and neither is a trajectory: the bracket's coarsest
+consistency error (`31.60110115929183` against `31.60110115929274`, the eleventh digit — the
+manufactured fields go through `sin` and `cos`, which are the C library's here and NumPy's own
+there) and the Navier discriminator's error (`4.144092032813184` against `4.144092032875774`, the
+tenth — the native sparse LU against SuperLU on the non-clamped operator, solving a source that
+operator cannot represent).
+
+**One outside referee, recorded and frozen as a literal**: LAPACK's smallest eigenvalue of the dense
+`B_F` at `16 x 12`, `h = 0.06`, `10.450443790844881`. The native dense solver reads
+`10.450443790834923`, `1.0e-11` away against a bar of `20 eps lambda_max = 7.7e-11`.
+
+**The free glide's start was not the mode the Python said it was.** `test_pitch_glide_hardening_free`
+drove the plate with "the first elastic mode", taken from ARPACK at `sigma = -1e-3` beside the free
+plate's three-dimensional rigid nullspace — §28.2's failure exactly. Checked against LAPACK's dense
+`eigh(K, W)` before writing the native bar, ARPACK's vector has a residual
+`|K x - mu W x| / |K x|` of **0.45** (LAPACK's: 2.0e-11) and an eigenvalue 3.4% low (342,704 against
+354,913): a mix of modes, not the mode. The test passed anyway, because the mix was mostly the right
+mode and the claim is only that the peak rises — 144, 156, 180, 252 Hz. The native bar drives the
+plate with the dense generalized solve's vector (`generalized_eigen_diag`; its eigenvalue
+`354913.18728027`, LAPACK's `354913.1872895303`), and the Python was re-run with LAPACK's vector to
+give it something to be compared with (`python-record2.txt`): **144, 156, 180, 204 Hz, matched
+exactly** (a glide of 1.42, not 1.75). The 144 Hz is the free square's first mode — `f = (1/2 pi)
+sqrt(kappa^2 mu)` is 145.3 Hz, and Leissa's `lambda^2 = 13.47` gives 146.
+
+### 40.2 What the existing native bars could not see
+
+Grepped first: the viewer's `vk.rs` (five payload tests — conservation, convergence, a hardening
+shift above 5%, passivity, ten refusals, at its own 15 cm `N = 14` scene) and the core's `plate.rs`,
+`ops2d.rs`, `mallet_gong.rs`, `airbox_vk.rs` and `plate_theta_solve.rs`. Mapped by assertion, not
+name:
+
+- **Already native, carried as they stood**: the `nonlinear = false` anchor on both boundaries
+  (`plate.rs::a_linear_von_karman_plate_is_bit_identical_to_the_linear_plate` — `assert_eq!` on the
+  state every step and on the energy; structural natively, since the two share a `Params` and a
+  `step_rhs` — and, it turned out, blind at the default `theta` to a constructor that drops the
+  caller's; widened in §40.4), the textbook clamped Gram `7, 6, -4, 1`, the zero source, the
+  membrane read-out's quadratic form, the asymmetry off the rim-vanishing domain, and the Airy
+  solve's rim held at zero.
+- **Widened in place**: argument symmetry now also on fields that do NOT vanish on the rim (the
+  Python's case; the native one used rim-vanishing fields only); triple self-adjointness at the
+  Python's four grids (`9x7`, `12x12`, `17x11`, `24x20` at `h = 0.07`) beside the native three; affine
+  annihilation for `1`, `x` and `y` separately as well as the native combination (one combination can
+  hide two residues that cancel); the Airy symmetry check at the Python's two grids.
+- **New**: both manufactured-solution convergence gates (Airy and bracket), the clamped-versus-Navier
+  discriminator, the eigenvalue against LAPACK, the bracket-to-Airy seam (quadratic in `w`),
+  `trilinear` as an inner product, both constructors' refusals as panics with their text; and on the
+  plate, everything in `vk_plate_harness.rs`. `plate.rs::a_nonlinear_plate_conserves_its_total_energy`
+  is the nearest native relative of the headline (300 steps, `N = 16`, a 10 cm bump, "the membrane
+  energy is positive"); the Python's bar reads the membrane's SHARE (above 10%) over 600 steps.
+- **Sharpened**: the energy ledger is `==` rather than `approx` (`energy()` is defined as the sum);
+  `trilinear` is `==` (one call); the seam's four times is `==` (doubling is exact in binary and every
+  step after it is linear; the Python's `1e-10` read 0.0); the derived constants are to four ulp
+  against formulas written in the test, not `rel=1e-6`; the gate test also asserts **no fallback** —
+  under `Auto` a step whose sweeps failed and Newton rescued reads `converged` too, so without it the
+  bar would not be about the sweeps.
+- **No analogue**: the boundary refusal's message (natively an unrecognised spelling is `None`, and
+  the text that quotes the caller's argument back is the binding's), `hasattr(vk, "K")` (a field is a
+  type), and the free strike's "no rim clamp" (on a free plate every node is live, so there is no
+  rim to clamp).
+
+Where the two Python files read a figure differently, each boundary keeps its own: the supported
+headline read the membrane share at the moment of peak deflection (0.5686), the free one at the start
+(0.5684). At the free plate's peak — which is on a free rim — the share is 0.089, below the bar, so
+the two are not interchangeable.
+
+### 40.3 Every margin measured
+
+| bar | measured | bar |
+|---|---|---|
+| lossless drift at `3e`, supported / free | 1.71e-13 / 2.13e-13 | 1e-10 |
+| membrane share, supported at peak / free at start | 0.569 / 0.568 | > 0.1 |
+| drift at `couple_tol` 1e-4 / 1e-8 / 1e-12, supported | 3.48e-5 / 1.75e-8 / 9.46e-13 | falling, last < 1e-10 |
+| the same, free | 3.48e-5 / 1.73e-8 / 1.06e-12 | falling, last < 1e-10 |
+| lossy plate (`sigma = 8`), share of the start kept over 800 steps | 0.753 / 0.751, every step falls by at least 4.0e-11 of the start | never rises beyond `1e-9 e0`, and falls |
+| gate regime, most sweeps / worst residual, supported and free | 5 / 9.8e-14 and 5 / 8.7e-14, no fallback | < 50 / ≤ `couple_tol` = 1e-13 |
+| vanishing amplitude against the linear plate, supported / free | 0 (bit-identical over 2,000 steps) / 3.4e-13 | < 1e-4 |
+| first step's time asymmetry / the coupling's share of it (added, §40.4) | 2.0e-2 / 0.76, both boundaries | < 0.1 / > 0.5 |
+| Navier fundamental on the non-square plate | 38.972 Hz against 39.047, 0.19% | 2% |
+| supported glide at 0.01, 1.5, 3, 5 thicknesses | 213.4, 239.8, 290.4, 373.0 Hz, x1.75 | rising, > 1.2x |
+| free glide at 0.01, 1, 2, 3 thicknesses | 144, 156, 180, 204 Hz, x1.42 | rising, > 1.15x |
+| Richardson ratio, supported / free | 4.398 / 5.656 | > 3.4 |
+| `B_F`'s smallest eigenvalue against LAPACK | 1.0e-11 | `20 eps lambda_max` = 7.7e-11 |
+| Airy manufactured solution, rates / finest error | 2.003, 2.001 / 1.41e-3 | > 1.9 / < 5e-3 |
+| clamped against Navier, error ratio | 736 | > 50 |
+| bracket against the Monge–Ampère form, rates | 1.996, 1.946, 1.982 | > 1.9 |
+
+Every bar is the Python's own except the two the native file sharpened (§40.2) and the one §40.4
+added. The thinnest are the Python's, left where it had them: **the bracket's middle convergence rate,
+1.946 against 1.9** (the Python's `np.all(rates > 1.9)`, and its figures to the eleventh digit),
+**the free glide, 1.23x** (a factor of 1.42 against 1.15) and **the supported Richardson ratio,
+1.29x** (4.398 against 3.4). All three are claims about an order or a sign, read off a
+deterministic run, and each reads the same figure the Python did.
+
+### 40.4 Eighteen breakages
+
+Planted one at a time with `W:\temp\claude\vk-plate\mutate.py` (snapshot, restore by copy,
+byte-compare). "Red" counts eight files — `vk_plate_harness`, `ops2d`, `plate`,
+`plate_theta_solve`, `mallet_gong`, `mallet_room_gong`, `airbox_vk` and `connection_plate` — and is
+the first round's, except I, M and N, re-planted after the two bars added below, and L and Q,
+whose runs a hang cut short: theirs is the union over the runs that reached each file.
+
+| breakage | red | caught by |
+|---|---|---|
+| **A** the Airy area weight not halved at the rim | 4 | both new Airy bars (manufactured solution, LAPACK eigenvalue), self-convergence, the mallet's stall bar |
+| **B** the clamped mirror not doubled | 13 | the textbook Gram (carried), the Navier discriminator, the 1-D stencils, the Newton suite |
+| **C** the bracket's twist term 5% light | 25 | the Monge–Ampère convergence gate (new), triple self-adjointness, every conservation bar |
+| **D** one straight term of the bracket doubled | 35 | argument symmetry, triple self-adjointness, the convergence gate, every conservation bar |
+| **E** the Airy source halved | 30 | every conservation bar, the free glide |
+| **F** the membrane energy halved | 21 | every conservation bar |
+| **G** the membrane energy not averaged over two levels | 22 | every conservation bar |
+| **H** `D` with `(1 - nu)` for `(1 - nu^2)` | 7 | the derived constants (sharpened), the Navier law, the free glide |
+| **I** the caller's `theta` replaced by the default | 0 → 1 | **0 workspace-wide**; the `nonlinear = false` anchor, widened to three `theta`s — **added** |
+| **J** the caller's `sigma` dropped | 3 | passivity (carried), the room's and the mallet's lossy totals |
+| **K** `couple_tol` ignored | 2 | the drift-versus-tolerance gate (carried), the room's tolerance bar |
+| **L** the coupling force's sign flipped | 39+ | everything that conserves — and it HANGS three string-on-gong tests in `connection_plate` and ten in `mallet_gong` (killed at 300 s) |
+| **M** the start's coupling dropped, supported | 0 → 1 | **the viewer freeze only** (two scenes), Windows-exact; the time-symmetric start — **added** |
+| **N** the start's coupling dropped, free | 1 → 2 | the room's ledger bar; the time-symmetric start — **added** |
+| **Q** the free plate's coupling without its `h^2` | 21+ | the Newton suite, passivity, the gate; it hangs four harness bars, one in `plate` and one in `airbox_vk` (killed at 300 s) |
+| **R** `w` not averaged with `w^{n-1}` | 34 | every conservation bar |
+| **S** the sweep seeded from `w^n` instead of the extrapolation | 2 | the mallet's stall bar and outer-cost bar |
+| **U** the Airy load weight made uniform | 0 | **none possible**: an equivalent mutant (below) |
+
+Re-planted workspace-wide (§31's rule) for every one with two or fewer witnesses — **I 0, M 2
+(both the viewer's `frozen`), U 0, K 2 (the same two), S 6** (its two plus four `frozen` scenes).
+N was not, before its bar went in; it has two witnesses now. Four readings:
+
+- **I was the gap, and it is a parameter every test built at its default** — §33's lesson a fourth
+  time, in a new shape. Here the constructor copied `theta` into the linear parameters it owns, so a
+  plant there makes step and energy agree on the WRONG `theta`, and conservation cannot see it
+  (§33's plant split them, and energy saw that). The Python never ran the plate off its default
+  either: its only `theta` cases were the two refusals. The human chose a bar: the existing
+  bit-identity anchor against the linear plate now also runs at `theta = 0.25, 0.5, 1` with
+  `sigma = 2`, where the linear plate takes the caller's `theta` directly — so a von Kármán plate
+  that drops it diverges on step one. Measured bit-identical correct on both boundaries.
+- **M was seen by the viewer freeze alone**, which compares exactly only on Windows, and N by one
+  room bar. The second-order start's coupling is 0.76 of the first step at the headline's amplitude,
+  yet a dropped one is a one-step error that conservation from step one onward cannot see. The human
+  chose §35's start-up bar: released from rest the scheme must step symmetrically in time. It sees M
+  and N, with the coupling's share asserted above half so the bar cannot go vacuous.
+- **U is not a defect.** The Airy solve's unknowns are the interior nodes, and every interior node's
+  trapezoidal weight is exactly `h * h` (`wy * wx` with neither halved), so "uniform" is the same
+  vector, bit for bit. A plant that changes no number cannot be caught and is not a gap.
+- **L and Q hang rather than fail**, and the first round's run of the previous session sat inside L
+  for over an hour before it was found (killed by its PID, the human's call). The script now gives
+  each plant 300 s and names the tests still running. A hang is a catch on CI only through the job
+  timeout, so the red counts above are what each plant turned red before the limit, with `+` where a
+  hang kept some tests from finishing. The harness's own conservation bars are among L's reds once the hanging
+  files are left out.
+
+### 40.5 The retirement rule, discharged
+
+| retired | native bar |
+|---|---|
+| `test_vk_airy.py::test_manufactured_solution_second_order` | `ops2d.rs::the_airy_solve_recovers_a_clamped_manufactured_field_at_second_order` |
+| `…::test_clamped_is_not_navier_l2` | `…::the_clamped_airy_operator_is_not_the_navier_biharmonic` |
+| `…::test_operator_symmetric` | `…::the_airy_operator_is_symmetric_and_the_solve_inverts_it`, widened to the Python's two grids |
+| `…::test_operator_positive_definite` | `…::the_airy_operators_smallest_eigenvalue_is_lapacks` — sharpened from "positive" to LAPACK's value, frozen |
+| `…::test_zero_source_gives_zero_field` | `…::a_zero_source_gives_exactly_zero` (already native) |
+| `…::test_couples_with_bracket_quadratic_in_w` | `…::the_stress_field_is_quadratic_in_the_deflection_through_the_bracket_seam`, the factor four sharpened to `==` |
+| `…::test_solved_field_is_rim_vanishing` | the same seam test's rim assertions, and the Airy symmetry test (already native) |
+| `…::test_laplacian_norm_sq_matches_quadratic_form` | `…::the_membrane_energy_read_out_is_the_quadratic_form_it_claims_to_be` (already native) |
+| `…::test_clamped_1d_gram_is_standard_clamped_biharmonic` | `…::the_clamped_gram_is_the_textbook_clamped_biharmonic` (already native) |
+| `…::test_constructor_rejects_bad_params` (4) | `…::the_bracket_and_the_airy_solver_refuse_a_grid_without_an_interior`, panics with their text |
+| `test_vk_bracket.py::test_bracket_symmetric_in_its_two_arguments` | `…::the_bracket_is_symmetric_in_its_two_arguments`, widened to fields that do not vanish on the rim |
+| `…::test_triple_self_adjointness` (4) | `…::the_bracket_is_triple_self_adjoint_on_rim_vanishing_fields`, widened to the Python's four grids |
+| `…::test_trilinear_matches_manual_inner_product` | `…::the_trilinear_form_is_the_inner_product_of_the_bracket_with_the_third_field`, `==` |
+| `…::test_symmetry_requires_rim_vanishing_fields` | `…::the_bracket_is_asymmetric_when_the_field_does_not_vanish_on_the_rim` (already native) |
+| `…::test_affine_annihilation` (3) | `…::the_bracket_annihilates_affine_data`, widened to `1`, `x`, `y` one at a time |
+| `…::test_consistency_second_order_convergence` | `…::the_bracket_converges_to_the_monge_ampere_form_at_second_order` |
+| `…::test_constructor_rejects_bad_params` (4) | the same refusal test as the Airy solver's |
+| `test_vk_energy.py::test_nonlinear_false_is_model5_bit_identical` | `plate.rs::a_linear_von_karman_plate_is_bit_identical_to_the_linear_plate`, widened to three `theta`s (§40.4) |
+| `…::test_lossless_energy_drift_large_amplitude` | `vk_plate_harness.rs::the_lossless_drift_at_three_thicknesses_meets_the_contract_on_both_boundaries` |
+| `…::test_energy_nonnegative_and_finite_large_amplitude` | the same test |
+| `…::test_drift_falls_with_couple_tolerance` | `…::the_drift_falls_with_the_coupling_tolerance_on_both_boundaries` |
+| `…::test_passivity_monotone_decay` | `…::a_lossy_plate_is_passive_on_both_boundaries` |
+| `…::test_energy_is_linear_plus_membrane` | `…::the_energy_is_the_linear_plus_the_membrane_part_and_the_linear_plate_has_no_membrane`, `==` |
+| `…::test_picard_converges_in_gate_regime` | `…::the_coupled_step_converges_by_its_sweeps_in_the_gate_regime_on_both_boundaries`, with no fallback asserted |
+| `…::test_membrane_energy_zero_when_linear` | the ledger test |
+| `test_vk_free.py::test_nonlinear_false_free_is_model5b_bit_identical` | the `plate.rs` anchor (both boundaries) |
+| `…::test_lossless_energy_drift_large_amplitude_free` | the headline (both boundaries) |
+| `…::test_energy_nonnegative_and_finite_free` | the headline |
+| `…::test_drift_falls_with_couple_tolerance_free` | the tolerance gate (both boundaries) |
+| `…::test_passivity_monotone_decay_free` | passivity (both boundaries) |
+| `…::test_small_amplitude_tracks_model5b` | `…::at_vanishing_amplitude_the_plate_is_the_linear_one_on_both_boundaries` |
+| `…::test_membrane_energy_positive_and_zero_when_linear` | the ledger test (both boundaries) |
+| `…::test_picard_converges_in_gate_regime_free` | the gate-regime test (both boundaries) |
+| `…::test_pitch_glide_hardening_free` | `…::the_free_cymbal_glides_up_with_amplitude_from_its_lowest_elastic_mode`, driven by the true mode (§40.1) |
+| `…::test_richardson_second_order_free` | `…::the_plate_self_converges_at_second_order_on_both_boundaries` |
+| `…::test_free_construction_all_nodes_live` | `…::a_free_plate_has_every_node_live_and_a_lumped_mass`; its `hasattr(vk, "K")` has **no analogue** (a field is a type) |
+| `…::test_rejects_bad_boundary` | **no analogue**: natively an unrecognised spelling is `None`, and the message quoting it back is the binding's |
+| `test_vk_modal.py::test_small_amplitude_tracks_model5` | the vanishing-amplitude test (both boundaries) |
+| `…::test_small_amplitude_fundamental_near_analytic` | `…::the_small_amplitude_fundamental_is_the_navier_law` |
+| `…::test_pitch_glide_hardening` | `…::the_supported_gong_glides_up_with_amplitude` |
+| `test_vk_stability.py::test_richardson_second_order` | the self-convergence test (both boundaries) |
+| `…::test_derived_material_quantities` | `…::the_derived_material_constants_are_the_textbook_ones`, to a few ulp |
+| `…::test_ly_snapped_to_square_cells` | `…::the_side_snaps_to_square_cells` |
+| `…::test_constructor_rejects_bad_params` (14) | `…::the_constructor_refuses_what_the_python_refused`, variant and message |
+
+**One orphan removed from `tests/helpers.py`**, grepped alone across `tests/`: `vk_strike`, which
+no file had called since before this batch, and with it the `VKPlate` import only it used. The
+helper `arpack_v0` stays (`test_bore_energy.py`, `test_stability.py`).
+
+### 40.6 Cost and counts
+
+- **pytest 913 → 845**: the six files' 68 cases, reconciled with `--collect-only` against the
+  collection taken before the deletion; 845 passed.
+- **Native +22**: workspace 1,571 → 1,593 optimised (`scripts/cargo-test-nice.ps1 -Full`), all
+  green; `vk_plate_harness.rs` 0 → 15, `ops2d.rs` 41 → 48. `plate.rs`'s anchor is one test, four
+  times as long.
+- **Optimised only, the human's call**: `vk_plate_harness` takes **5.7 s optimised and 160 s
+  unoptimised** locally, checks no arithmetic spelling, and the model it drives has no
+  `debug_assert!`, so it joins CI's `release_only` list (the comment there says why). `ops2d` stays
+  in both profiles (61 s unoptimised): its exact checks are about stencils.
+- Three lint findings in the new `ops2d.rs` code (a complex type, an index loop, `.err().expect()`)
+  were fixed before the commit; CI's clippy is `-D warnings`.
+- **19 physics files remain**, with **237** test functions by the §24.1 count (281 − 44). The gong
+  plate has no Python file left.
+
+### 40.7 What is next
+
+The next batch is not chosen; the human picks. The 19 files, by family: the bow (`test_bow_*`, 3),
+the reed (`test_reed_*`, 3), the bore (`test_bore_*`, 4), the body (1), the room
+(`test_airbox_*`, 4), radiation (1), the resolution horizon (1), the spectrum detector (1) and the
+operators (1).

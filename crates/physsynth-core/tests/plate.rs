@@ -183,44 +183,56 @@ fn a_linear_von_karman_plate_is_bit_identical_to_the_linear_plate() {
     // Structural here, not transcribed: `VkParams` OWNS a `Params` and both classes step through
     // the same `step_rhs`. In the Python original the two are separate spellings of the theta
     // scheme kept in step by a docstring, and the suite pins them with 150 steps of `array_equal`.
-    for boundary in [Boundary::Supported, Boundary::Free] {
-        let vk_spec = VkSpec {
-            lx: 0.4,
-            ly: 0.4,
-            young: 2.0e11,
-            thickness: 1e-3,
-            nu: 0.3,
-            rho: 7860.0,
-            fs: 48_000.0,
-            n: 16,
-            boundary: Some(boundary),
-            nonlinear: false,
-            ..VkSpec::default()
-        };
-        let mut vk = VkPlate::new(VkParams::new(&vk_spec).expect("a valid plate"));
-        let mut p5 = Plate::new(
-            Params::new(&PlateSpec {
+    //
+    // Run at three non-default `theta`s with loss on as well as at the defaults (§40.4): at the
+    // defaults alone the anchor cannot see the von Karman constructor dropping the caller's `theta`
+    // for the default, because both sides then agree on it. Planted, that defect was seen by
+    // nothing in the workspace; the Python never ran the plate off its default `theta` either.
+    let d = VkSpec::default();
+    for (theta, sigma) in [(d.theta, d.sigma), (0.25, 2.0), (0.5, 2.0), (1.0, 2.0)] {
+        for boundary in [Boundary::Supported, Boundary::Free] {
+            let vk_spec = VkSpec {
                 lx: 0.4,
                 ly: 0.4,
-                kappa: vk.p.lin.kappa,
-                rho: vk.p.rho_s,
+                young: 2.0e11,
+                thickness: 1e-3,
+                nu: 0.3,
+                rho: 7860.0,
                 fs: 48_000.0,
                 n: 16,
                 boundary: Some(boundary),
-                ..PlateSpec::default()
-            })
-            .expect("a valid plate"),
-        );
-        let u0 = bump(&p5.p, 1e-4);
-        let zero = vec![0.0; p5.p.n_live];
-        vk.set_state(&u0, &zero).expect("the Airy solve factors");
-        p5.set_state(&u0, &zero);
-        for step in 0..150 {
-            vk.step(None).expect("the solves succeed");
-            p5.step(None);
-            assert_eq!(vk.u, p5.u, "diverged at step {step}");
+                nonlinear: false,
+                theta,
+                sigma,
+                ..VkSpec::default()
+            };
+            let mut vk = VkPlate::new(VkParams::new(&vk_spec).expect("a valid plate"));
+            let mut p5 = Plate::new(
+                Params::new(&PlateSpec {
+                    lx: 0.4,
+                    ly: 0.4,
+                    kappa: vk.p.lin.kappa,
+                    rho: vk.p.rho_s,
+                    fs: 48_000.0,
+                    n: 16,
+                    boundary: Some(boundary),
+                    theta,
+                    sigma,
+                    ..PlateSpec::default()
+                })
+                .expect("a valid plate"),
+            );
+            let u0 = bump(&p5.p, 1e-4);
+            let zero = vec![0.0; p5.p.n_live];
+            vk.set_state(&u0, &zero).expect("the Airy solve factors");
+            p5.set_state(&u0, &zero);
+            for step in 0..150 {
+                vk.step(None).expect("the solves succeed");
+                p5.step(None);
+                assert_eq!(vk.u, p5.u, "theta {theta}: diverged at step {step}");
+            }
+            assert_eq!(vk.energy(), p5.energy(), "theta {theta}");
         }
-        assert_eq!(vk.energy(), p5.energy());
     }
 }
 

@@ -1,11 +1,13 @@
 //! Kirchhoff plate — models #5, #5b, #5o, #5of, #5g and #6, the whole of `plate.py`.
 //!
-//! Two classes live here because the suite binds them into one: `tests/test_vk_energy.py` and
-//! `tests/test_vk_free.py` each assert that a [`VkPlate`] with the coupling switched off is
-//! **bit-identical** to a [`Plate`], `array_equal` on the state at every one of 150 steps and `==`
-//! on the energy. A port that moved one and not the other would break that anchor for a reason
-//! having nothing to do with either model — §15.2's finding, reaching two classes in one file
-//! rather than four models across four.
+//! Two classes live here because the suite binds them into one: the retired
+//! `tests/test_vk_energy.py` and `tests/test_vk_free.py` each asserted that a [`VkPlate`] with the
+//! coupling switched off is **bit-identical** to a [`Plate`], `array_equal` on the state at every
+//! one of 150 steps and `==` on the energy. A port that moved one and not the other would break that
+//! anchor for a reason having nothing to do with either model — §15.2's finding, reaching two
+//! classes in one file rather than four models across four. The anchor is now
+//! `tests/plate.rs::a_linear_von_karman_plate_is_bit_identical_to_the_linear_plate`, at four
+//! `theta`s (retirement plan §40.4).
 //!
 //! # What the port moves, and what it does not
 //!
