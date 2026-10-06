@@ -33,6 +33,9 @@
 //! hand*. Both spellings are therefore carried here, as [`residual`] and [`scan_residual`], and
 //! they must not be merged: the scan's values decide **which brackets exist**, and one sign that
 //! flips is one `brentq` call that does not happen — at a slip event, a different branch.
+//! (Measured since, retirement plan §41.4: scanning with [`residual`] changed no bit on any probed
+//! rig or frozen viewer scene. The two must still stay apart; what that buys is now a claim about
+//! rigs nobody has run, not one any run has shown.)
 //!
 //! What §16.2 would predict and does *not* happen **on this machine**: `np.exp` on an array and
 //! `math.exp` on a scalar returned bit-identical results in 20,000 of 20,000 samples over the

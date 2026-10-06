@@ -5,8 +5,8 @@
 //! (`kappa = 0`), fixed-end 1 m string, `c = 200` m/s, `N = 100`, `lam = 0.9`, `theta = 0.28`,
 //! `sigma0 = 0.5`, `sigma1 = 0.05`, bowed at `0.13` of its length at `0.1` m/s with a peak friction
 //! of 1 N and a sharpness of 60 — which is **not** `bow.rs`'s rig (it bows at `0.2`, mostly at a
-//! sharpness of 100), so that file keeps its own bars and this one is new, as the stiff string's was
-//! (§32).
+//! sharpness of 100), so that file keeps its own bars and this one is new, as the stiff string's
+//! was (§32).
 //!
 //! Three groups, in the order the Python argued them:
 //!
@@ -15,8 +15,8 @@
 //!   residual; lossy, the inferred dissipation never runs backwards; a force-free bow is the bare
 //!   string bit for bit.
 //! - **Helmholtz motion** — what actually exercises the friction coupling: the sustained note sits
-//!   at the string's own `f1 = c / 2L`, does not move with the bow speed, grows with it, slips for a
-//!   fraction `beta` of each period, slips once per period, and swings to the two-slope slip
+//!   at the string's own `f1 = c / 2L`, does not move with the bow speed, grows with it, slips for
+//!   a fraction `beta` of each period, slips once per period, and swings to the two-slope slip
 //!   velocity `-v_bow (1 - beta) / beta`. Six distinct 2.5 s runs carry all six claims, so each is
 //!   simulated once and shared (`steady`).
 //! - **Stability** — friction is bounded, so nothing blows up anywhere in the playable space, and
@@ -591,7 +591,9 @@ fn balance_and_cost(rig: Rig, steps: usize) -> (f64, usize, usize) {
 #[test]
 fn the_balance_holds_off_the_default_theta() {
     // The admittance `a = A^{-1} e_i` is solved once, with the string's own `theta`. Built at any
-    // other `theta`, the correction and the velocity it reports disagree, and every carried bar,
+    // other `theta`, the correction and the velocity it reports still agree with each other (both
+    // come from the same `a`), but `a` is no longer the string's forced response, so the work the
+    // bow reports stops matching the energy the string gained — and every carried bar,
     // run at the default, cannot see it.
     for theta in [0.5, 1.0] {
         let (worst, _, fallbacks) = balance_and_cost(

@@ -13,7 +13,9 @@
 //! suite.** `residual` and `scan_residual` are two spellings of one expression, kept apart on
 //! purpose (§20.2); a maintainer "tidying" them into one call would move the scan's values by a
 //! last bit, change which brackets exist, and change a branch at a slip event — while every bar
-//! above stayed green. `the_two_residual_spellings_are_not_the_same_double` is the pin against
+//! above stayed green. (Retirement plan §41.4 measured the merge at the call site since: no bit
+//! changed on any probed rig or frozen viewer scene, so the branch is a possibility, not an
+//! observation.) `the_two_residual_spellings_are_not_the_same_double` is the pin against
 //! that. Unlike the mallet's `** 2` pin it needs no `#[inline(never)]`: LLVM may not reassociate
 //! floating-point multiplication without fast-math, which Rust does not enable, so the distinction
 //! survives `--release` on its own. It is still run in both profiles, because that is what the

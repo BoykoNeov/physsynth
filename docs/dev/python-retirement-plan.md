@@ -6851,12 +6851,15 @@ tests) and `frozen` corpora. Mapped by assertion, not name:
   regimes and the Helmholtz formula — all with the bow at `0.2` (and the work, loss and sweep bars at
   a sharpness of 100). The Python's rig is `0.13` and 60; the carried bars run there.
 - **Run by the viewer, coarser**: `physsynth-viewer/tests/bow.rs` checks the slip fraction against
-  `beta` at `0.13 / 0.2 / 0.25` with `force = 0.4`, one slip per period within 0.25, and the pitch
-  within 60 cents — on its own `N = 64`, 1 s scene with its own tolerance. So the Helmholtz claims
+  `beta` at `0.13 / 0.2 / 0.25` with `force = 0.4`, one slip per period within 0.25 (once, at its
+  default `force = 1` scene), and the pitch within 60 cents — on its own `N = 64`, 1 s scene with
+  its own tolerance. So the Helmholtz claims
   were not unrun natively; they were unrun at the Python's resolution and length.
 - **Carried as they stood**: the friction curve's shape (`bow.rs`, already sharper than the Python's
-  `np.isclose`), the refusals (variants), the snap.
-- **Sharpened**: the Helmholtz formula is `==`, not `np.isclose`; the balance bar also asserts the
+  `np.isclose`).
+- **Sharpened**: the refusals (variants already; now each message by the Python's word too) and
+  the snap (the node and its coordinate pinned, not only bounded); the Helmholtz formula is `==`,
+  not `np.isclose`; the balance bar also asserts the
   bracket was exercised; the force-free anchor also compares `u^{n-1}` and pins the node (13); the
   resonator test reads through the engine's `Resonator` trait (state length, pickup equal to the
   state's entry and nonzero, the timestep).
@@ -6906,7 +6909,7 @@ for every plant with two or fewer witnesses, and the guard that sees it now.
 | **H** the fallback counter not bumped | 3 | the fallback regimes (both files), the balance bar's exercised check |
 | **I** `newton_tol` replaced by the default | 0 | **0** → the cost ratio (**added**): 16,557 / 16,557 |
 | **J** the bracket scan spelled with the Newton residual | 0 | **0**, and no bit changes on any probed run (below) |
-| **K** the correction skipped when the force is zero | 0 | **0**, and no bit changes anywhere (below) |
+| **K** the correction skipped when the force is zero | 0 | **0**, and no bit changes on any probed run or frozen scene (below) |
 | **L** the force prefactor without `h` | 9 | balance, the fallback regimes, the slip bars |
 | **M** `g` without the 2 | 10 | balance, every Helmholtz bar |
 | **N** the bow node rounded down, not to nearest | 0 | the viewer freeze only → the snap bar (**added**) |
@@ -6935,10 +6938,13 @@ lossless rigs at `newton_tol = 1e-6` and `theta = 0.5, 1`. Five readings:
   Windows, saw both. The human chose a direct bar: a 120 × 120 sweep of `(v_free, seed)` through
   `solve_v_rel`, each fallback checked against an independent 4,000-point scan refined by bisection.
   Correct, 0 of 7,710 fallbacks take another root; planted, C reads 38 and D 408.
-- **N moves the bow for six positions in a hundred.** `position / h` lands a hair below the integer
-  for 0.29, 0.47, 0.57, 0.58, 0.59 and 0.94 (`0.29 / 0.01 = 28.999…96`), so rounding down would put
-  the bow one 1 cm cell short; none of the carried positions is one of them. The human chose the
-  snap bar over those six.
+- **N moves the bow by a cell, and how often depends on the grid.** At this rig's `N = 100` every
+  whole-centimetre position is already a node, so rounding down differs only where `position / h`
+  lands a hair below the integer — 0.29, 0.47, 0.57, 0.58, 0.59 and 0.94 (`0.29 / 0.01 =
+  28.999…96`), 6 of 99 — and none of the carried positions is one of them. At a spacing that does
+  not divide the position, such as the viewer's `N = 64`, it misplaces the bow for **48 of 99**
+  positions, which is why the frozen scenes saw it. The human chose the snap bar over the six (the
+  question quoted the 6-in-99 figure; the 48 was measured in §41.8).
 - **J, K and P are not gaps.** J (the scan spelled with the Newton residual) changed **no bit** on any
   probed run, and no binary in the workspace — the viewer freeze included — saw it. The pin
   `bow.rs::the_two_residual_spellings_are_not_the_same_double` guards the two *functions* staying
@@ -7003,3 +7009,45 @@ lossless rigs at `newton_tol = 1e-6` and `theta = 0.5, 1`. Five readings:
 The next batch is not chosen; the human picks. The 16 files, by family: the reed (`test_reed_*`, 3),
 the bore (`test_bore_*`, 4), the body (1), the room (`test_airbox_*`, 4), radiation (1), the
 resolution horizon (1), the spectrum detector (1) and the operators (1).
+
+### 41.8 Review fixes and CI
+
+Run 37501773623 on `e68ac12`, all five jobs green — the first Linux run of the new bars, and of the
+root-choice sweep's exact zero and the six shared notes' slip and pitch bars on glibc's arithmetic.
+
+| file | optimised | unoptimised |
+|---|---|---|
+| `bow_harness.rs` | 1.04 s | 9.11 s |
+
+The jobs took **10.9 minutes optimised and 11.6 unoptimised**; the previous run on `main`
+(37485042407, §40's docs commit) took 7.7 and 9.7. Inside each job the harness is 1.0 s and 9.1 s
+of it, so the growth is the runners (they vary by up to 1.6x between runs), not this file. CI runs
+without `--nocapture`, so it reports the passes, not the figures: Linux's fallback and onset counts
+are not recorded, and §41.1's to-the-digit agreement is a Windows claim.
+
+The advisor's read of the first commit found these, all fixed here:
+
+- **The root-choice bar's exact zero was checked at a finer grid.** The 400 × 400 probe that
+  preceded the bar reported 1 wrong pick in 86,428 fallbacks; the committed bar asserts 0 on
+  120 × 120. Re-run with the bar's own checker (4,000 points refined by bisection) at 400 × 400: **0
+  of 86,428**. The one was the probe's unrefined comparison (grid points 1.7e-4 apart, a near-tie
+  inside one cell), not a root the model's 512-point scan misses.
+- **N's reach was understated.** At this rig's `N = 100` rounding down moves the bow for 6 of 99
+  whole-centimetre positions; at the viewer's `N = 64` for **48 of 99** — measured, and the reason the
+  frozen scenes saw it. §41.4 and the memory note now say both.
+- **The `theta` guard's comment had the mechanism wrong.** Built at the wrong `theta`, the
+  correction and the velocity the bow reports still agree (both come from the same `a`); what breaks
+  is that `a` is no longer the string's own forced response, so the reported work stops matching the
+  energy gained. Rewritten.
+- **Which tolerance gap was seen by what was swapped** in `CLAUDE.md` and in `e68ac12`'s message:
+  the loose-tolerance exactness (B) was seen only by the viewer freeze, the tolerance being ignored
+  (I) by nothing. `CLAUDE.md` is corrected; the pushed message stands, corrected here.
+- **Prose**: §41.2 moves the refusals and the snap from "carried as they stood" to "sharpened" (both
+  gained assertions), and says the viewer checks slips per period once, at its default scene; §41.4's
+  row K says "any probed run or frozen scene", as its reading does.
+- **J and the headers now agree.** `bow.rs` (core source and test) said merging the two residual
+  spellings *would* change a branch at a slip; §41.4 measured that it changed no bit on any probed rig
+  or frozen scene. Both headers now say so, and keep the pin.
+- The binding's `step_reporting` comment no longer calls the retired parity file its live caller.
+  No bow plan document exists in `docs/dev/`, and `scientific-hurdles.md` names the bow only in its
+  aliasing row, which this batch does not touch.

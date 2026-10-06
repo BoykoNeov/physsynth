@@ -5,8 +5,9 @@
 //! This is the third model in the project that holds another Rust pyclass and corrects it once per
 //! step — after `PyReedBore` and `PyMalletMembrane` — and it follows both:
 //!
-//! * **`.string` is the object the caller passed, not a copy.** the retired bow tests called
-//!   `bow.string.set_state(...)` and `bow.string.energy()` and read `bow.string.fs` and `.N`, and `web/serialize.py` reads `.lam` and `.x`. So this type holds a
+//! * **`.string` is the object the caller passed, not a copy.** The retired bow tests called
+//!   `bow.string.set_state(...)` and `bow.string.energy()` and read `bow.string.fs` and `.N`,
+//!   and `web/serialize.py` reads `.lam` and `.x`. So this type holds a
 //!   `Py<PyDampedStiffString>` and drives the free functions in the core module.
 //! * **It requires a Rust `DampedStiffString`.** Handed the pure-Python `DampedStiffStringPy` it
 //!   raises `TypeError` rather than falling back — a Rust bow reporting Rust while bowing a Python
@@ -27,10 +28,10 @@
 //!
 //! # Every underscore-named attribute is exposed
 //!
-//! The retired `tests/test_bow_stability.py` read `bow._g` to re-derive `helmholtz_number`. §12.2's rule
-//! applies — a leading underscore is not a statement about the interface — so `_g`, `_a_vec`,
-//! `_a_full` and `_force_pref` are all getters rather than a judgement call about which of them
-//! somebody might mean.
+//! The retired `tests/test_bow_stability.py` read `bow._g` to re-derive `helmholtz_number`.
+//! §12.2's rule applies — a leading underscore is not a statement about the interface — so `_g`,
+//! `_a_vec`, `_a_full` and `_force_pref` are all getters rather than a judgement call about which
+//! of them somebody might mean.
 
 use numpy::PyArray1;
 use physsynth_core::bow as core;
@@ -188,7 +189,8 @@ impl PyBowedString {
         self.p.helmholtz_number
     }
 
-    /// `g = k a_i / (2 rho h)` — read by the retired `tests/test_bow_stability.py`, see the module header.
+    /// `g = k a_i / (2 rho h)` — read by the retired `tests/test_bow_stability.py`, see the module
+    /// header.
     #[getter]
     fn _g(&self) -> f64 {
         self.p.g
@@ -246,10 +248,10 @@ impl PyBowedString {
     ///
     /// **Not part of the Python model's interface** and deliberately so: §19.11 asked for the
     /// Newton iteration count and the fallback branch to be *compared* rather than assumed, and a
-    /// count nothing can read cannot be compared. `tests/test_rust_parity_bow.py` is the only
-    /// caller; the Python side reaches the same number by patching `_residual`, counting calls and
-    /// muting the bracket -- which is why the count is of evaluations rather than of accepted
-    /// steps (see `physsynth_core::bow::FrictionSolution`).
+    /// count nothing can read cannot be compared. The retired `tests/test_rust_parity_bow.py` was
+    /// its only caller; the Python side reached the same number by patching `_residual`,
+    /// counting calls and muting the bracket -- which is why the count is of evaluations rather
+    /// than of accepted steps (see `physsynth_core::bow::FrictionSolution`).
     fn step_reporting(&mut self, py: Python<'_>) -> PyResult<(usize, bool)> {
         // Take the handle first so nothing borrows `self.string` while the mutable borrow is live.
         let handle = self.string.clone_ref(py);

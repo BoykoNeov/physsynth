@@ -164,7 +164,7 @@ breakages, delete the file.
   bow-file witnesses → PROBED first (a temp test printing digests at default + off-default rigs: θ 0.5/1,
   newton_tol 1e-6, bow at 0.35) before calling anything a gap: A (admittance at default θ) seen by nothing
   (5th θ instance), B (power from Newton iterate) / I (newton_tol ignored) visible only off the default
-  tolerance, C/D (fallback root pick) and N (node floored; moves 6 of 99 positions) only by the Windows-exact
+  tolerance, C/D (fallback root pick) and N (node floored; 6 of 99 positions at N=100, 48 of 99 at the viewer's N=64) only by the Windows-exact
   viewer freeze → human chose all four guards (θ balance, loose-tol balance + cost ratio via `newton_evals`,
   a (v_free, seed) root-choice sweep vs an independent bisection scan, snap at 0.29/0.47/...). J (scan uses the
   Newton residual) and K (skip zero correction) changed NO bit anywhere → not gaps; P last digits only.
@@ -172,6 +172,10 @@ breakages, delete the file.
   nothing quick-skipped (slowest 0.42 s). Bash `start /b /wait x.bat` with `exit /b` leaves `cmd /K` at a
   prompt (looks like a hang) — end .bat files with `exit %errorlevel%`; a quoted `start ""` from bash
   mangles to `\"\"`. Recount functions with `grep -c "^def test_"` — I first said 19, it was 22.
+  CI 37501773623 green on e68ac12 (harness 1.04 s opt / 9.11 s unopt on Linux). Review: a probe's
+  1-in-86k "wrong root" was its own unrefined comparison (bar's refined checker: 0) — refine a checker
+  before quoting its exceptions; and measure a plant's reach at the OTHER grids in use (N 6/99 at N=100,
+  48/99 at the viewer's N=64).
 Remaining after §41: **16 physics files / 215 functions** (§24.1 count), no bow file left. Next batch not
 chosen — the user picks; a recommendation + "go with it" is an accepted answer. Re-derive the remaining list
 (§9's map is stale).
