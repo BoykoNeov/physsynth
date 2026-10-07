@@ -29,12 +29,14 @@
 //! check a bore's reflection, so under `PHYSSYNTH_RS=1` a Rust bore would be checked against a
 //! Rust-computed `R` — the shared-misreading shape the two-flag rule exists to prevent.
 //!
-//! It is safe here, and by measurement rather than by argument: the same flagged run executes
+//! It was safe there, and by measurement rather than by argument: the same flagged run executed
 //! `test_radiation.py::test_piston_resistance_matches_bessel_formula_away_from_the_limit`, which
-//! builds its expectation from `scipy.special.j1` **inside the test body** and requires agreement
-//! to `rel = 1e-12` at `ka ≈ 1.8`. The ruler is therefore checked against an unmoved reference in
-//! the very run that uses it. Observed agreement there: the transcription and Cephes differ by
-//! 7.9e-16 relative at that argument, four orders inside the bar.
+//! built its expectation from `scipy.special.j1` **inside the test body** and required agreement
+//! to `rel = 1e-12` at `ka ≈ 1.8`, so the ruler was checked against an unmoved reference in the
+//! very run that used it (observed: 7.9e-16 relative). That file is deleted (retirement plan §45);
+//! SciPy's `J1` and `R` at that point are frozen in `tests/oracles.rs`
+//! (`the_piston_matches_scipys_bessel_formula_away_from_the_limit`), both the 50-digit values
+//! correctly rounded.
 
 //! # A defect the port found, and the fix that followed — hurdles §14, closed 2026-09-03
 //!

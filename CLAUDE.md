@@ -123,8 +123,14 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    the spectrum detector and the body together (three files, all into existing native files),
    and §44 the room (four files; about twenty of its claims were already in `src/airbox.rs`'s own
    tests, several weaker than the Python's — NaN-dropping "worst of" folds, end-to-end drifts, one
-   probe node — and were sharpened); **2 physics files / 97 functions remain** — radiation and the
-   resolution horizon (§9's map is stale). §44's find was §42's again: the room reads `rho0`/`c0`
+   probe node — and were sharpened), and §45 radiation (one file, into the existing native
+   `radiation.rs`, 25 → 60, whose rigs had every mode at mass 1 and weight 1 — where `a²→a` and a
+   dropped `/m` are the identity — so the Python's mass-0.02 and weight-0.02 rigs were carried at
+   those values; the binding assembles its own loaded steps, so the comparison was a real
+   cross-check and matched to the digit); **1 physics file / 48 functions remains** — the
+   resolution horizon (§9's map is stale). §45 found the air a fourth time (16 of 23 `rho0`/`c0`
+   reads, enumerated by grep, unseen workspace-wide) and a restart that nothing checks; both
+   guarded at the human's call (density 0.9 / sound speed 380; a restart bar). §44's find was §42's again: the room reads `rho0`/`c0`
    in 26 places (the first count, 14, was only the reads planted — enumerate reads by grep, never
    from a plant list, §44.8) and every room the workspace builds uses standard air, so each could
    be hard-wired unseen; guarded at the human's call by four bars at density 0.9 / sound speed 380.

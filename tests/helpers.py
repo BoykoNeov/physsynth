@@ -11,16 +11,9 @@ from numpy.typing import NDArray
 
 from physsynth.analysis import modal
 from physsynth.analysis.horizon import pitch_horizon
-from physsynth.core.body import ModalBody
 from physsynth.core.membrane import Domain, Membrane
 from physsynth.core.plate import THETA_DEFAULT as PLATE_THETA_DEFAULT  # noqa: F401 (re-export)
 from physsynth.core.plate import Plate
-from physsynth.core.radiation import (
-    AirRadiation,
-    RadiatedBody,
-    RationalAirLoad,
-    ReactiveRadiatedBody,
-)
 from physsynth.core.string_damped import DampedStiffString
 from physsynth.core.string_stiff import THETA_DEFAULT
 
@@ -186,94 +179,3 @@ def make_plate(
     h = Lx / N
     fs = kappa / (mu * h * h)
     return Plate(Lx=Lx, Ly=Ly, kappa=kappa, rho=rho, fs=fs, N=N, sigma=sigma, theta=theta)
-
-
-# Modal body (body/radiation node): a few guitar-top-ish modes. fs is high (audio rate) so every
-# mode sits well under the modal CFL omega*k < 2.
-BODY_FREQS_DEFAULT = np.array([110.0, 196.0, 261.0, 440.0])  # Hz
-
-
-def make_body(
-    *,
-    freqs: np.ndarray = BODY_FREQS_DEFAULT,
-    fs: float = 48000.0,
-    sigmas: np.ndarray | float = 0.0,
-    masses: np.ndarray | float = 1.0,
-    phi: np.ndarray | float = 1.0,
-) -> ModalBody:
-    """Build a modal body (soundboard) at sample rate ``fs`` with the given modal set."""
-    return ModalBody(freqs=freqs, fs=fs, sigmas=sigmas, masses=masses, phi=phi)
-
-
-# Air radiation (the "air" node): a listener 1 m away in ambient air. fs matches the body defaults.
-RADIATION_DISTANCE_DEFAULT = 1.0  # m
-
-
-def make_radiation(
-    *,
-    fs: float = 48000.0,
-    distance: float = RADIATION_DISTANCE_DEFAULT,
-    retarded: bool = True,
-) -> AirRadiation:
-    """Build a monopole far-field radiation node at sample rate ``fs`` for a listener ``distance`` m
-    away (ambient-air ``rho0``/``c0`` defaults)."""
-    return AirRadiation(fs=fs, distance=distance, retarded=retarded)
-
-
-# Radiation load (batch 2): a modal body loaded by its own far-field radiation resistance. R here is
-# an ACOUSTIC resistance (Pa·s/m^3), sized so the body audibly sheds energy over a couple thousand
-# steps (moderate per-step R*G ~ 0.05) — the exact energy identity holds for any R, this just makes
-# the decay easy to see. The stability test overrides it with a deliberately enormous value.
-R_RADIATION_DEFAULT = 2000.0  # Pa·s/m^3
-
-
-def make_radiated_body(
-    *,
-    freqs: np.ndarray = BODY_FREQS_DEFAULT,
-    fs: float = 48000.0,
-    sigmas: np.ndarray | float = 0.0,
-    masses: np.ndarray | float = 1.0,
-    phi: np.ndarray | float = 1.0,
-    radiation: np.ndarray | float | None = None,
-    R: float = R_RADIATION_DEFAULT,
-) -> RadiatedBody:
-    """Build a modal body loaded by its own radiation resistance ``R`` (the back-reaction).
-
-    ``sigmas = 0`` (default) keeps the modes lossless so the *only* energy sink is the radiation
-    channel — then ``body.energy() + radiated_energy`` is conserved and ``radiated_energy`` accounts
-    for all the shed energy. ``R = 0`` decouples the air (bit-identical to :func:`make_body`)."""
-    body = ModalBody(
-        freqs=freqs, fs=fs, sigmas=sigmas, masses=masses, phi=phi, radiation=radiation
-    )
-    return RadiatedBody(body=body, R=R)
-
-
-# Frequency-dependent radiation load (batch 3): resistance R in PARALLEL with the radiation mass
-# M_a, the exact first-order (pulsating-sphere) impedance. The default M_a puts the trapezoid's
-# k R / (2 M_a) around 0.1 — the reactance is genuinely in play without being stiff. M_a = inf is
-# the constant-R load (batch 2, bit-identical); RationalAirLoad.from_sphere gives the physically
-# consistent pair for a given radius.
-M_A_RADIATION_DEFAULT = 0.2  # kg/m^4
-SPHERE_RADIUS_DEFAULT = 0.05  # m — a 5 cm pulsating sphere (ka = 1 at ~1.1 kHz)
-
-
-def make_reactive_body(
-    *,
-    freqs: np.ndarray = BODY_FREQS_DEFAULT,
-    fs: float = 48000.0,
-    sigmas: np.ndarray | float = 0.0,
-    masses: np.ndarray | float = 1.0,
-    phi: np.ndarray | float = 1.0,
-    radiation: np.ndarray | float | None = None,
-    R: float = R_RADIATION_DEFAULT,
-    M_a: float = M_A_RADIATION_DEFAULT,
-) -> ReactiveRadiatedBody:
-    """Build a modal body loaded by the rational (frequency-dependent) radiation impedance.
-
-    ``sigmas = 0`` (default) keeps the modes lossless so the air is the only channel and
-    ``body.energy() + stored + radiated`` is conserved. ``R = 0`` decouples the air entirely
-    (bit-identical to :func:`make_body`); ``M_a = inf`` collapses to :func:`make_radiated_body`."""
-    body = ModalBody(
-        freqs=freqs, fs=fs, sigmas=sigmas, masses=masses, phi=phi, radiation=radiation
-    )
-    return ReactiveRadiatedBody(body=body, load=RationalAirLoad(fs=fs, R=R, M_a=M_a))

@@ -697,6 +697,50 @@ fn the_piston_reaches_twice_the_free_space_monopole_in_the_rayleigh_limit() {
 }
 
 #[test]
+fn the_piston_matches_scipys_bessel_formula_away_from_the_limit() {
+    // Carried from `tests/test_radiation.py::test_piston_resistance_matches_bessel_formula_away_
+    // from_the_limit`, whose referee was `scipy.special.j1` — the one number in that file from
+    // outside this workspace. At omega = 2 pi 2000, a = 0.05 (ka = 1.83, well past the Rayleigh
+    // limit) SciPy gave J1(2 ka) = 0.06890692335471271 and R = 50607.51509132821, recorded
+    // 2026-10-07 (`W:\temp\claude\batch23\record.txt`); both are the 50-digit (mpmath) values
+    // correctly rounded, so the record is the truth and not just SciPy's opinion of it.
+    let (omega, a) = (2.0 * std::f64::consts::PI * 2000.0, 0.05);
+    let ka = omega * a / 343.0;
+    assert_eq!(ka, 1.8318324510727657);
+    assert!((j1(2.0 * ka) / 0.06890692335471271 - 1.0).abs() <= 1e-14);
+    let r = piston_radiation_resistance(omega, a, 1.2041, 343.0);
+    assert!(
+        (r / 50607.51509132821 - 1.0).abs() <= 1e-12,
+        "{r} vs SciPy's 50607.51509132821"
+    );
+}
+
+#[test]
+fn the_piston_honours_the_medium_it_is_given() {
+    // Retirement plan §45.4 (the human's call): every caller passed standard air, so a piston that
+    // ignored the density or sound speed it was handed passed the whole workspace. At a medium
+    // written here (density 0.9, sound speed 380), on both branches: the series well below the
+    // cutoff and the Bessel form at ka ~ 1.65, against the closed form in this medium.
+    let (rho0, c0, radius) = (0.9, 380.0, 0.05);
+    let scale = rho0 * c0 / (std::f64::consts::PI * radius * radius);
+    for f in [20.0, 2000.0] {
+        let omega = 2.0 * std::f64::consts::PI * f;
+        let ka = omega * radius / c0;
+        let bracket = if ka < PISTON_SERIES_CUTOFF_KA {
+            ka * ka / 2.0 - ka * ka * ka * ka / 12.0 + ka * ka * ka * ka * ka * ka / 144.0
+        } else {
+            1.0 - j1(2.0 * ka) / ka
+        };
+        let got = piston_radiation_resistance(omega, radius, rho0, c0);
+        assert!(
+            (got / (scale * bracket) - 1.0).abs() <= 1e-13,
+            "{f} Hz: {got} vs {}",
+            scale * bracket
+        );
+    }
+}
+
+#[test]
 fn the_pistons_two_branches_meet_at_their_threshold() {
     // This test asserted the OPPOSITE until 2026-09-03, deliberately: the shipped Python's series
     // cutoff sat at `ka = 1e-8`, three decades below where `1 - J1(2ka)/ka` becomes computable, and

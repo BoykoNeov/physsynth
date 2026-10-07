@@ -7813,3 +7813,235 @@ The advisor's read of the first commit found the air count wrong. Fixed here:
   3.1 s. §44.6 and the CI comment now say so.
 
 Counts after this section: `airbox_harness.rs` 21, workspace 1,710 optimised (`-Full`, all green).
+
+## 45. Phase C, carrying batch 23 — radiation
+
+Done 2026-10-07 (the human named it: "radiation (49 functions) - work on it"). One file, retired
+whole: `tests/test_radiation.py` — **49 functions, 69 pytest cases** — the air node's three tiers:
+the far-field read-out, the constant-resistance load, and the rational (pulsating-sphere) impedance
+with its loaded body. All four types were already native, and so were 25 bars in
+`crates/physsynth-core/tests/radiation.rs`, at `make_body`'s rig (four modes, every mass and every
+radiation weight 1). The batch extended that file rather than starting a harness (§30's precedent:
+same rig), and put the piston's two bars beside the analysis crate's own:
+
+- `crates/physsynth-core/tests/radiation.rs` — **25 → 60 tests**: 31 newly carried bars, the
+  constants pin, and 3 added at the human's call (§45.4); 11 of the existing 25 sharpened.
+- `crates/physsynth-analysis/tests/oracles.rs` — **+2**: the piston against SciPy's frozen `J1`, and
+  the piston in a medium that is not air (§45.4).
+
+**The binding assembles both loaded bodies' steps itself** from the free functions (`rank.advance`,
+`rank.correct`), while the native bars drive `RadiatedBody::step` and `ReactiveRadiatedBody::step` —
+the same situation as §42's bore, so the comparison below is a real cross-check of two assemblies.
+
+### 45.1 The comparison — every figure reproduced
+
+Recorded first, wheel reinstalled (`W:\temp\claude\batch23\record.txt`, `record.py` beside it).
+**Every figure matches to all printed digits**, including the energy read-outs of the four-mode
+rigs: the read-out's gains and outputs, the monopole's peak (relative gap exactly 0), the lossless
+drift (3.0640578805403406e-14) with its radiated and body energies, the bleed (body 0.03339872253380215
+of 6.159612530426195, radiated 6.126213807892383), both passivity runs' worst steps (−2.327459614773629e-11
+and +2.3274148404360742e-11 of the start; −4.951146246809817e-12 / +4.951224601900538e-12 for the
+rational load), the enormous-`R` drift and body ratio, every bit-identity rig's final state, both
+dense-solve rigs' final states (and `u_l`, `R_eff`), the four reactive identities' drifts and channels,
+the stored term's 1,507 rises in 2,999 steps, the three extreme rigs, the far-field balance
+(384.4316479904069 crossed against 384.43164799040676 booked — the same two numbers), the compact ratio
+(5.792588743234885), the pre-warp gaps, the sphere's far field, and `loaded_mode`'s 440 Hz answer
+(2719.9252306615836, 17.286661695849364) with the iteration it first converges at (7).
+
+The ten single-mode runs are the strongest part: each one's last displacement and its
+crossing-count frequency are **bit-identical** to the Python's, so the decay rates differ only by the
+fit, and the fit's transcription (the centred normal equation) sits within **7.3e-15** of
+`np.polyfit` (`the_decay_fit_reproduces_numpys_polyfit`, bar 1e-9, §33's form).
+
+The one family that is not to the digit is the measured impedance: the single-bin DFT is summed
+left to right natively and through `np.exp`/`np.sum` in the Python, so the two land 1.1e-15 to
+3.2e-15 (native) and 5e-17 to 4.5e-16 (Python) from the pre-warped closed form. The bar is 1e-11.
+
+Three independent referees were in the file: **SciPy's `J1`** (frozen; the recorded `J1(2ka)` and
+`R` are the 50-digit mpmath values correctly rounded), **`np.polyfit`** (transcribed and certified
+above), and **`np.linalg.solve`** in the two dense coupled-solve bars — replaced by
+`dense::lu_factor`/`lu_solve`, partial-pivoted elimination sharing nothing with the rank-1 path; the
+gap is 4.3e-19 to 6.5e-19 against the bar's 1e-13, as LAPACK's was (3.3e-19, 4.3e-19).
+
+### 45.2 What the existing native bars could not see
+
+The advisor's read before any writing (quoted to the human) named these; all were carried:
+
+- **The native rigs ran at mass 1 and radiation weight 1**, where `a^2 -> a` in `G`, a dropped `/m`
+  and a dropped `a` are each the identity. The Python's mass-0.02 rigs (the bit-identity and
+  dense-solve bars) and weight-0.02 rigs (the loaded mode) are carried at those values; `a^2 -> a`
+  is seen in this file only by the weight-0.02 bars.
+- **No lossy rig with a load.** The `(1 + sigma k)` factor in `G` and the correction is the identity
+  at `sigma = 0`; dropped from both, it is seen by the two dense-solve bars and, workspace-wide,
+  otherwise only by the viewer freeze (`frozen::airload`, `frozen::radbody`, exact on Windows only).
+- **Nothing native measured an impedance.** The pre-warp (`tan(omega k/2)`) dropped from
+  `impedance_discrete` is seen by exactly the two carried spectral bars, workspace-wide.
+- **Vacuous assertions**: "passive" asserted `radiated >= 0` rather than that it rises every step;
+  the reactive identity asserted `stored >= 0` (the Python: `> 0`); the bit-identity bars compared
+  neither `q_prev`, the pressure nor the energy.
+- **A comment claim with nothing under it**: `test_loaded_body_radiates_through_the_air` said
+  `pressure()` carries the load, and compared `radiate(loaded)` with `gain * loaded.pressure()` — the
+  same number twice. Now `pressure()` is compared with the second difference of the corrected states,
+  formed in the test, for both loaded bodies. Planted (`accel` left stale), workspace-wide this is
+  also seen by the `M_a = inf` reduction bar, the viewer's `airload` reduction bar and the viewer
+  freeze — so unlike §38's plate, it was not invisible before.
+- **Refusals**: a negative rate and distance for the read-out, a negative `M_a` and the `c0` half of
+  the medium check for the load, a negative mass for `loaded_mode`; and `FarFieldError`'s two
+  variants were not told apart.
+- **The air constants' only outside pin was the Python shim's two literals.** Now
+  `the_air_constants_are_standard_air_in_both_crates` asserts `1.2041` / `343.0` and that core's and
+  the analysis crate's copies agree.
+
+`radiate(source)` has **no analogue**: it is a binding method that duck-types on `pressure()` and
+calls `process`; natively it is `process(x.pressure())`.
+
+### 45.3 Every margin measured
+
+| bar | measured | bar | headroom |
+|---|---|---|---|
+| lossless drift, constant `R` / rational (5 pairs) | 3.1e-14 / ≤ 5.4e-14 | 1e-10 | ≥ 1,800x |
+| bleed: radiated against shed | 1.6e-15 | 1e-10 | 64,000x |
+| passivity, worst step (constant `R` / rational) | always falls by ≥ 2.3e-11 / 5.0e-12 of `E0` | +1e-12 | — |
+| enormous `R`, extreme `(R, M_a)` drifts | ≤ 3.4e-14 | 1e-10 | 3,000x |
+| dense coupled solve, 3 rigs | ≤ 6.5e-19 | 1e-13 | 150,000x |
+| measured impedance, 4 bins | ≤ 3.2e-15 | 1e-11 | 3,000x |
+| pre-warp ratios; gap at 2 kHz / 48 kHz | 4.007, 4.002; 2.74e-3 | (3.5, 4.5); (2e-3, 3.5e-3) | — |
+| warp at 4 MHz | 1.5e-7 | 1e-6 | 6.6x |
+| low-frequency gap against `2 (ka)^2` | `(ka)^2 / (1 + (ka)^2)` | `2 (ka)^2` | 2x (by construction) |
+| loaded mode: frequency / decay rate | ≤ 2.2e-5 / ≤ 4.8e-3 | 1e-3 / 0.02 | 45x / 4.1x |
+| partials against prediction (880 Hz worst) | 1.08% | 2% | 1.85x |
+| flat control: pitch (880 Hz worst) / top-mode rate | 5.6e-4 / 1.32 vs 4.99 | 2e-3 / < 0.1 × 49.9 | 3.6x / 3.8x |
+| far field balanced, driven sphere | 2.2e-16 | 1e-12 | 4,500x |
+| compact over sphere against `1 + (ka)^2` | 3.1e-4 | 0.02 | 64x |
+| stored term rises | 50% of steps | > 20% | 2.5x |
+| `polyfit` certificate | 7.3e-15 | 1e-9 | — |
+
+The two thin ones (partials, 1.85x; the low-frequency gap, which is exactly half its bar by
+construction) are the Python's own bars, carried unchanged.
+
+### 45.4 Sixty-one breakages, and the air again
+
+Planted one at a time in `src/radiation.rs` and the analysis crate's `src/radiation.rs`
+(`W:\temp\claude\batch23\mutate.py`; the core file is CRLF and the script converts), each run against
+`radiation`, `connection_body` and `body` (and `oracles` for the piston). **All 38 structural plants
+but two went red**: in the rank-1 dashpot `a^2 -> a`, `G` or the correction without `/m`, `(1 + sigma k)`
+dropped from both, `G` without `k/2`, the volume velocity without `a` or over `k`, either loaded step
+leaving `accel` stale, the radiated energy without `k`; in the rational load `R_eff` without its 2,
+`U` without the inertance branch, the midpoint `u_l` a full step, the radiated energy booked on `U`,
+the stored energy without its half, no pre-warp, a conjugated `s tau`, the loaded mode's rate
+without the added mass or its frequency without the square root, the last iterate returned, the far
+field over `r^2`, every pair accepted as a sphere, the sphere's `M_a` over `a^2`, a NaN mass
+accepted, `reset` keeping `u_l`, the timestep check never refusing, `G` halved; in the read-out the
+gain over `2 pi r`, a delay one sample long, half-away rounding, `reset` keeping the buffer, the
+monopole over `2 pi`, and both negative-parameter checks; in the piston `J1(ka)` and a `2 pi a^2` area.
+
+The two that stayed green: **`1 + s tau` → `1 - s tau`** is an equivalent mutant — `s` is purely
+imaginary, so `s tau` has a real part of exactly zero (replaced by a conjugated `s tau`, 10 red); and
+**`RadiatedBody::set_state` keeping the radiated channel**, re-run workspace-wide (103 binaries): seen
+by nothing — nothing restarts a body that has run. The motion is untouched; the conserved total would
+carry the old run's number.
+
+Re-planted workspace-wide (103 binaries) before any "only" was written: `a^2 -> a` (11 red — the
+viewer's `airload` file and freeze see it too), `(1 + sigma k)` (4: the two dense solves and two
+viewer freezes), the two stale-`accel` plants (7 and 6), no pre-warp (2, both carried here), the loaded
+mode's added mass and square root (5, 6), the last iterate (2, both here), every pair a sphere (1, here).
+
+**The air, a fourth model running.** Enumerated by grep, not from the plant list (§44.8): the core file
+reads `rho0`/`c0` **20 times** outside its tests (the monopole's two, the read-out's two checks, gain,
+travel time and two stored fields, the load's two checks, the sphere test's three, two stored fields,
+and `from_sphere`'s five) and the piston **3 times** (`ka`'s `c0`, the scale's `rho0` and `c0`). Each
+was hard-wired to its standard value: **16 of 23 stayed green**. The seven red were the four positivity
+checks (the refusal bars) and the read-out's travel time, which `the_delay_length_rounds_halves_to_even`
+reaches with `c0 = 1`. Probed by grep and three workspace-wide re-runs (the read-out's gain, the
+sphere's `R`, the piston's `ka`: 0 red in 103 binaries): every caller in the workspace — the viewer's
+`airload`, `radbody`, `body`, `platebody`, core's `airbox` and `connection_body`, `bore_harness` (whose
+`RHO0`/`C0` are `1.2041`/`343.0`) — passes standard air. The stored fields are read only by the binding.
+
+**The human chose guards for both gaps**: `the_read_out_honours_the_medium_it_is_given` and
+`the_sphere_load_honours_the_medium_it_is_given` (core) and `the_piston_honours_the_medium_it_is_given`
+(analysis) at density 0.9 and sound speed 380, written in the test, with the read-out's distance
+chosen so the delay itself differs (253 samples against standard air's 280); and
+`restarting_a_loaded_body_empties_its_air_channels` for both bodies, through `set_state` and `reset`.
+**Re-run: all 23 air plants and the restart plant red.** Each in the guard that reads it: the monopole's two and the read-out's gain, travel time and
+stored pair in `the_read_out_honours_the_medium_it_is_given` (the travel time also in the rounding
+bar), the two positivity checks of each tier in the refusal bars, the sphere's ten in
+`the_sphere_load_honours_the_medium_it_is_given`, the piston's three in `the_piston_honours_the_medium_it_is_given`, and the restart plant in
+`restarting_a_loaded_body_empties_its_air_channels`.
+
+### 45.5 The retirement rule, discharged
+
+| retired | native bar |
+|---|---|
+| `test_radiation.py::test_far_field_gain_is_exact` | `radiation.rs::the_gain_is_exact_and_the_read_out_is_the_gain_times_the_input` (equality, both) |
+| `…::test_monopole_amplitude_from_volume_velocity` | `a_prescribed_volume_velocity_radiates_the_closed_form_monopole_amplitude` |
+| `…::test_inverse_distance_law` | `pressure_falls_off_exactly_as_one_over_r` (existing, 1e-14) |
+| `…::test_retardation_is_an_exact_sample_delay` | `the_retardation_is_an_exact_amplitude_preserving_sample_delay`, residual bound added |
+| `…::test_wavefront_in_transit_is_silence` | `a_wavefront_in_transit_is_silence` |
+| `…::test_retarded_false_has_no_delay` | `an_unretarded_read_out_has_no_delay_line_at_all`, first output added |
+| `…::test_linearity` | `the_read_out_is_linear` |
+| `…::test_radiates_a_real_modal_body` | `a_real_modal_body_radiates_its_own_volume_acceleration` — against the states' second difference, not `pressure()` twice |
+| `…::test_reset_clears_the_delay_line` | `reset_empties_the_delay_line` (existing) |
+| `…::test_rejects_nonphysical_parameters` (6) | `the_read_out_refuses_every_non_physical_parameter`, the two negatives added, variants asserted |
+| `…::test_monopole_resistance_is_the_free_space_value` | `the_monopole_resistance_is_the_free_space_value` |
+| `…::test_piston_rayleigh_limit_is_twice_the_free_space_monopole` | `the_baffled_piston_is_twice_the_free_space_monopole_in_the_rayleigh_limit` (the two crates' functions) + analysis `oracles.rs::the_piston_reaches_twice_…` (the closed form) |
+| `…::test_piston_resistance_matches_bessel_formula_away_from_the_limit` | analysis `oracles.rs::the_piston_matches_scipys_bessel_formula_away_from_the_limit` — SciPy's `J1` and `R` frozen |
+| `…::test_energy_channel_is_conserved_for_a_lossless_body` | `the_energy_channel_is_conserved_for_a_lossless_body` (existing, same rig) |
+| `…::test_body_energy_bleeds_entirely_into_the_radiated_channel` | `the_body_bleeds_entirely_into_the_radiated_channel` |
+| `…::test_radiation_load_is_passive` | `the_radiation_load_is_passive` (the native one at `R = 1e9` asserted only `radiated >= 0`) |
+| `…::test_R_zero_is_bit_identical_to_a_bare_body` | `zero_resistance_is_bit_identical_to_a_bare_body`, at mass 0.02 too, `q_prev` added |
+| `…::test_unconditionally_stable_at_enormous_R` | `the_total_is_conserved_at_an_enormous_resistance` |
+| `…::test_loaded_body_radiates_through_the_air` | `the_loaded_pressure_is_the_corrected_volume_acceleration`, both loaded bodies |
+| `…::test_lossy_body_matches_the_exact_dense_coupled_solve` | `a_lossy_body_matches_the_exact_dense_coupled_solve` (`dense::lu_solve` as referee) |
+| `…::test_radiated_body_rejects_negative_R` | `a_negative_resistance_is_refused` (existing) |
+| `…::test_from_sphere_impedance_is_the_closed_form_monopole` | `the_spheres_impedance_is_the_closed_form_pulsating_monopole` |
+| `…::test_low_frequency_limit_is_the_batch2_monopole_resistance` | `the_low_frequency_limit_is_exactly_the_monopole_over_one_plus_ka_squared` |
+| `…::test_high_frequency_limit_saturates_at_the_plane_wave_resistance` | `the_high_frequency_limit_saturates_at_the_plane_wave_resistance` |
+| `…::test_constant_R_load_has_a_flat_impedance` | `a_constant_r_load_has_no_reactance_at_any_frequency`, the Python's three frequencies added |
+| `…::test_impedance_sweep_matches_the_prewarped_closed_form` | `the_measured_impedance_is_the_prewarped_closed_form` |
+| `…::test_the_prewarping_gap_is_the_honest_discretisation_error` | `the_prewarping_gap_is_second_order_and_its_size_is_known` |
+| `…::test_reactive_energy_identity_is_conserved_for_a_lossless_body` (4) | `the_three_way_energy_identity_holds_for_a_lossless_body`, the four pairs added, `stored > 0` (was `>= 0`) |
+| `…::test_the_air_stores_as_well_as_dissipates` | `the_air_stores_as_well_as_dissipates` |
+| `…::test_reactive_load_is_passive` | `the_reactive_load_is_passive` |
+| `…::test_unconditionally_stable_at_extreme_parameters` | `the_reactive_load_is_unconditionally_stable` |
+| `…::test_infinite_radiation_mass_is_bit_identical_to_the_constant_R_load` | `an_infinite_radiation_mass_is_bit_identical_to_the_constant_r_load`, at mass 0.02 too, every read-out |
+| `…::test_R_zero_with_reactance_is_bit_identical_to_a_bare_body` | `zero_resistance_is_bit_identical_to_a_bare_body_here_too`, at mass 0.02 too, pressure and energy |
+| `…::test_a_loaded_mode_matches_the_closed_form_in_both_parts_of_Z` (4) | `a_loaded_mode_matches_the_closed_form_in_both_parts_of_z` |
+| `…::test_higher_partials_radiate_better_and_die_first` | `higher_partials_radiate_better_and_die_first` |
+| `…::test_a_constant_R_load_cannot_bend_with_frequency` | `a_constant_r_load_cannot_bend_with_frequency` |
+| (the fit inside `_measure_single_mode`) | `the_decay_fit_reproduces_numpys_polyfit` — certificate, ten recorded rates |
+| `…::test_far_field_power_balances_the_booked_radiated_power` | `the_far_field_power_balances_a_driven_sphere_at_steady_state` (the Python's rig, 1e-12) |
+| `…::test_the_compact_read_out_overstates_the_far_field_of_a_finite_sphere` | `the_compact_read_out_overstates_a_finite_spheres_far_field_by_one_plus_ka_squared` |
+| `…::test_lossy_reactive_body_matches_the_exact_dense_coupled_solve` (2) | `a_lossy_reactive_body_matches_the_exact_dense_coupled_solve_at_two_rates` |
+| `…::test_the_discrete_impedance_converges_to_the_continuous_one` | `the_discrete_impedance_converges_to_the_continuous_one` |
+| `…::test_a_constant_R_load_has_no_added_mass` | `loaded_mode_reduces_to_the_constant_r_answer_when_there_is_no_mass` (existing, same numbers) |
+| `…::test_loaded_mode_rejects_a_nonphysical_mass` (2) | `loaded_mode_refuses_rather_than_returning_the_last_iterate`, mass −1 added |
+| `…::test_loaded_mode_rejects_a_nonpositive_frequency` | the same test (existing) |
+| `…::test_loaded_mode_refuses_to_return_an_unconverged_iterate` | `loaded_mode_is_refused_starved_and_converges_on_the_budget_its_callers_use` |
+| `…::test_rational_load_rejects_nonphysical_parameters` (8) | `the_load_refuses_every_non_physical_parameter`, fs −48000, `M_a` −1 and `c0` −1 added |
+| `…::test_from_sphere_rejects_a_nonpositive_radius` | the same test (existing) |
+| `…::test_a_timestep_mismatch_is_rejected` | `a_mismatched_timestep_is_refused_and_names_both_rates` (existing) |
+| `…::test_far_field_refuses_an_inconsistent_load_but_serves_a_sphere` | `an_arbitrary_pair_has_no_radius_and_refuses_the_far_field` (variant now asserted) + `a_sphere_serves_the_far_field_and_refuses_a_zero_distance` |
+| `…::test_reset_clears_the_auxiliary_state_and_the_channels` | `reset_clears_the_auxiliary_state_and_both_channels` |
+| (the shim's `RHO0_AIR` / `C0_AIR` literals) | `the_air_constants_are_standard_air_in_both_crates` |
+
+**Orphans removed from `tests/helpers.py`**, each grepped alone across `tests/`, `physsynth/` and
+`scripts/`: `make_body`, `make_radiation`, `make_radiated_body`, `make_reactive_body`,
+`BODY_FREQS_DEFAULT`, `RADIATION_DISTANCE_DEFAULT`, `R_RADIATION_DEFAULT`, `M_A_RADIATION_DEFAULT`,
+`SPHERE_RADIUS_DEFAULT`, and the `ModalBody`, `AirRadiation`, `RadiatedBody`, `RationalAirLoad` and
+`ReactiveRadiatedBody` imports (the one remaining importer of `helpers`, the horizon file, takes none of
+them). Comments that relied on the deleted file were updated in the analysis crate's `src/radiation.rs`
+(its piston-safety argument now points at the frozen SciPy bar) and the binding's `radiation.rs`
+(`_buf`); `connection_body.rs`'s header names it as history and stays.
+
+### 45.6 Cost and counts
+
+- **pytest 591 → 522**: the file's 69 cases; 522 passed.
+- **Native +37**: `radiation.rs` 25 → 60, analysis `oracles.rs` +2; workspace 1,710 → 1,747 optimised
+  (`scripts/cargo-test-nice.ps1 -Full`), all green.
+- **Unoptimised on one thread**: `radiation.rs` 0.36 s (60 tests), analysis `oracles.rs` 0.01 s. Both files stay in both profiles.
+- **1 physics file remains**, with **48** test functions by the §24.1 count (97 − 49): the resolution
+  horizon. No radiation file is left.
+
+### 45.7 What is next
+
+The last batch of phase C: `tests/test_resolution_horizon.py`, when the human says so.

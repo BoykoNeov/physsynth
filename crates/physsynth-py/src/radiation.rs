@@ -150,8 +150,9 @@ impl PyAirRadiation {
 
     /// The delay line, as a fresh array.
     ///
-    /// Private in the original and read there by `tests/test_radiation.py`, which asserts it is
-    /// all zeros after `reset()`. Nothing writes it, so unlike the body's three state buffers this
+    /// Private in the original and read there by `tests/test_radiation.py` (deleted, retirement plan
+    /// §45; the native `reset_empties_the_delay_line` reads `buf()`), which asserted it is all
+    /// zeros after `reset()`. Nothing writes it, so unlike the body's three state buffers this
     /// one does not have to be a Python-owned array — a copy is enough and cannot be
     /// accidentally aliased.
     #[getter]
