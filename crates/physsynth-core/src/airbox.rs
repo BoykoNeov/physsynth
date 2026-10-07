@@ -1337,10 +1337,11 @@ impl AirBox {
 mod tests {
     use super::*;
 
-    /// A room at a given **fraction of the CFL ceiling**, which is how `tests/helpers.py`'s
-    /// `make_airbox` is parameterized: `h` fixes the grid and the sample rate is solved for, so
-    /// `cfl = 1.0` sits exactly on `lambda = 1/sqrt(3)`. Spelling the fixtures this way rather
-    /// than in sample rates is what lets the bars below use the Python bars' own fixtures.
+    /// A room at a given **fraction of the CFL ceiling**, which is how the retired Python suite's
+    /// `make_airbox` was parameterized (retirement plan §44; `tests/airbox_harness.rs` keeps it):
+    /// `h` fixes the grid and the sample rate is solved for, so `cfl = 1.0` sits exactly on
+    /// `lambda = 1/sqrt(3)`. Spelling the fixtures this way rather than in sample rates is what
+    /// lets the bars below use the Python bars' own fixtures.
     fn params_at(l: [f64; 3], h: f64, cfl: f64, walls: [Wall; 6]) -> Params {
         let fs = C0_AIR * 3.0_f64.sqrt() / (cfl * h);
         Params::new(l, fs, h, walls, None, RHO0_AIR, C0_AIR).unwrap()
@@ -1365,6 +1366,36 @@ mod tests {
         [Wall::Rigid; 6]
     }
 
+    /// Largest of `xs`, and NaN if any is — `np.max`. `fold(_, f64::max)` drops a NaN, so a field
+    /// that blew up would read as small and pass every "worst of" bar below (§29's rule).
+    fn nan_max<I: IntoIterator<Item = f64>>(xs: I) -> f64 {
+        let mut m = f64::NEG_INFINITY;
+        for x in xs {
+            if x.is_nan() {
+                return f64::NAN;
+            }
+            m = m.max(x);
+        }
+        m
+    }
+
+    /// Relative spread of the conserved total over **every** step of a run, the Python's
+    /// `_drift` — not the end-to-end difference, which a total that wanders and comes back passes.
+    fn spread(b: &mut AirBox, steps: usize) -> f64 {
+        let e0 = b.energy();
+        let (mut lo, mut hi) = (e0, e0);
+        for _ in 0..steps {
+            b.step();
+            let e = b.energy();
+            if e.is_nan() {
+                return f64::NAN;
+            }
+            lo = lo.min(e);
+            hi = hi.max(e);
+        }
+        (hi - lo) / e0.abs()
+    }
+
     /// A cheap deterministic field, so `cargo test` needs no RNG dependency.
     fn noise(n: usize) -> Vec<f64> {
         let mut s: u64 = 0x2545_F491_4F6C_DD1D;
@@ -1383,7 +1414,9 @@ mod tests {
         let p = params(rigid());
         assert_eq!(p.n, [10, 8, 6]);
         assert_eq!(p.p_shape(), [11, 9, 7]);
-        assert!((p.lam - 0.9 * lambda_max()).abs() < 1e-15);
+        // The ceiling written here, not read off the model: a bar about a constant must not
+        // import it (§29.3), or a moved ceiling moves the bar with it.
+        assert!((p.lam - 0.9 / 3.0_f64.sqrt()).abs() < 1e-15);
         assert_eq!(p.source_index, [5, 4, 3]);
     }
 
@@ -1546,12 +1579,13 @@ mod tests {
     /// Max deviation of the field from `amp * mode_shape`, relative to the mode's own scale.
     fn mode_error(b: &AirBox, idx: [usize; 3], amp: f64) -> f64 {
         let mode = mode_shape(&b.p, idx);
-        let scale = mode.iter().fold(0.0f64, |m, &v| m.max(v.abs()));
-        let worst = b
-            .pressure
-            .iter()
-            .zip(mode.iter())
-            .fold(0.0f64, |m, (&p, &v)| m.max((p - amp * v).abs()));
+        let scale = nan_max(mode.iter().map(|v| v.abs()));
+        let worst = nan_max(
+            b.pressure
+                .iter()
+                .zip(mode.iter())
+                .map(|(&p, &v)| (p - amp * v).abs()),
+        );
         worst / scale
     }
 
@@ -1712,7 +1746,7 @@ mod tests {
             let mut peak = 0.0f64;
             for _ in 0..steps {
                 b.step();
-                peak = b.pressure.iter().fold(peak, |m, &v| m.max(v.abs()));
+                peak = nan_max(b.pressure.iter().map(|v| v.abs()).chain([peak]));
             }
             peaks.push(peak);
         }
@@ -1773,11 +1807,7 @@ mod tests {
             let mut b = AirBox::new(modal_room(cfl));
             let p0 = noise(b.p.n_nodes());
             b.set_state(&p0, None);
-            let e0 = b.energy();
-            for _ in 0..400 {
-                b.step();
-            }
-            let drift = (b.energy() - e0).abs() / e0.abs();
+            let drift = spread(&mut b, 400);
             assert!(drift < 1e-12, "cfl {cfl}: drift {drift:e}");
         }
     }
@@ -1795,11 +1825,7 @@ mod tests {
             let mut b = AirBox::new(params_at(l, 0.1, 0.9, rigid()));
             let p0 = noise(b.p.n_nodes());
             b.set_state(&p0, None);
-            let e0 = b.energy();
-            for _ in 0..400 {
-                b.step();
-            }
-            let drift = (b.energy() - e0).abs() / e0.abs();
+            let drift = spread(&mut b, 400);
             assert!(drift < 1e-12, "room {l:?}: drift {drift:e}");
         }
     }
@@ -1850,16 +1876,14 @@ mod tests {
             stiff.step();
             rigid_box.step();
         }
-        let scale = rigid_box
-            .pressure
-            .iter()
-            .fold(0.0f64, |m, &v| m.max(v.abs()));
-        let err = stiff
-            .pressure
-            .iter()
-            .zip(rigid_box.pressure.iter())
-            .fold(0.0f64, |m, (&x, &y)| m.max((x - y).abs()))
-            / scale;
+        let scale = nan_max(rigid_box.pressure.iter().map(|v| v.abs()));
+        let err = nan_max(
+            stiff
+                .pressure
+                .iter()
+                .zip(rigid_box.pressure.iter())
+                .map(|(&x, &y)| (x - y).abs()),
+        ) / scale;
         assert!(err < 1e-6, "a 1e12 wall is not nearly rigid: {err:e}");
     }
 

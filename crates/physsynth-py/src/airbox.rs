@@ -95,8 +95,8 @@ pub struct PyAirBox {
     cuts: Py<PyAny>,
     cut_cache: Option<CutCache>,
     /// The default injection node. It lives here rather than in `Params` because it is **written**
-    /// from outside: `tests/test_airbox_freefield.py` relocates the source with a plain
-    /// `box.source_index = box.node_index(centre)`. It is the fifteenth name across the seam and
+    /// from outside: the retired `tests/test_airbox_freefield.py` relocated the source with a plain
+    /// `box.source_index = box.node_index(centre)` (retirement plan §44 carried it natively). It is the fifteenth name across the seam and
     /// the only *public* one — the private-name grep that found the other fourteen could not see
     /// it, which is §29.1's "ask what a client does, not only what it reads" one door further on.
     source_index: [usize; 3],

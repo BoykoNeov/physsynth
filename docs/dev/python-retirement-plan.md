@@ -7569,3 +7569,200 @@ moves a bar:
   instrumentation was restored by copy and byte-compared, and the snapshot refreshed first.
 - Minor: the binding's `spectrum.rs` header said nothing calls `spectrum_parabolic_refine`; the
   Python wrapper `_parabolic_refine` still does, and it is the wrapper that has no caller. Reworded.
+
+## 44. Phase C, carrying batch 22 — the room
+
+Done 2026-10-07 (the human named it: "Room (air box) - work on it"). One family, four files, retired
+whole: `tests/test_airbox_energy.py`, `test_airbox_freefield.py`, `test_airbox_modal.py` and
+`test_airbox_scene.py` — **43 functions, 73 pytest cases** (17 + 5 + 12 + 9 functions; 30 + 8 + 23
++ 12 cases). The room was already native, and so were about twenty of these claims: §46 of the
+migration had put the modal tier, the free-field fit, the reductions and the energy bars into
+`crates/physsynth-core/src/airbox.rs`'s own `mod tests`, at the Python's rigs. What was not native
+went to three new files and one existing one:
+
+- `crates/physsynth-core/tests/airbox_harness.rs` — **20 tests** (17 carried, 3 added in §44.4 at
+  the human's call), at `make_airbox`'s rig: the 0.9 × 0.7 × 0.6 m room at `h = 0.1`, `N = (9, 7,
+  6)`, the rate solved as `fs = c0 sqrt(3) / (cfl h)` with `sqrt(3)` written in the test.
+- `crates/physsynth-core/tests/airbox_scene.rs` — **6 tests**, at `make_room_loaded_body`'s rig
+  (the same as `airbox_port.rs`'s `Fixture`): the arrival oracles and the two-instrument scene.
+- `crates/physsynth-core/tests/airbox_port_size.rs` — **3 tests**, the port's equivalent radius,
+  split from the scene file because it costs 98 s unoptimised (§44.6).
+- `crates/physsynth-core/tests/radiation.rs` — **+1**, the delay line emitting the closed-form
+  monopole of a pulse (the lumped half of the free-field cross-tier claim).
+
+The broadband initial field in the native rigs is a structureless xorshift hash, not NumPy's
+PCG64 — §15's rule: a bar on a broadband field is a claim about the class of fields. Those rigs
+therefore cannot reproduce the Python's figures digit for digit, and are not claimed to.
+
+### 44.1 The comparison
+
+Recorded first, wheel reinstalled (`W:\temp\claude\batch22\record.txt` and `record2.txt`,
+`record.py` beside them). **Every deterministic figure matches to all printed digits**: the source
+booking (injected 1.8666404292475734e-06 J, worst `|E|` 1.27e-21, ratio 6.8e-16, dissipated), the
+source on a wall node (injected 2.9858963472438723e-06 J, ratio **exactly 0.0**), the two sources
+(8.494324362826348e-06 J, `E` = −1.69e-21), the ceiling's `lambda` (0.5773502691896257 — one ulp
+below `1/sqrt(3)`), the three axial sweeps' and the oblique grid's worst residuals (5.6e-16, 4.4e-16,
+3.9e-16; 7.5e-16), the five tracked modes' frequencies and residuals (189.84778987270215 Hz …
+6.2e-14), the four reflection runs' incident and reflected peaks, the box against the bore (5.251028488146173e-14,
+last pickups 0.13521466985718467 and 0.13521466985717334), the lumped closed form (1.58e-15); and
+on the scene side the first-difference steps (7, 11, 15) with the bodies' state there, the port's
+`R_room` (42920.87372676204), the hands-back run (worst 1.01e-14, increments +1.16e-5 / −6.94e-6,
+190 of 399 negative, final radiated 3.3485746401442745e-4 J), both arrival runs (step 6 and 12,
+B's first nonzero `q` to every digit), the disjoint drift (6.05e-15) and the order runs' final `q`.
+
+The one estimator that is not to the digit is the port's equivalent radius: six values agree to
+14–15 significant figures (0.008746420680030504 against 0.00874642068003051). The Python takes
+`np.fft.rfft` of the whole record; the native bar sums the six bins `np.interp` reads directly, so
+the two differ by the FFT's rounding and nothing else. Every bar on it has percent-level headroom.
+
+### 44.2 What the existing native bars could not see
+
+The advisor's read before any writing (quoted to the human) named the gaps; all were carried:
+
+- **Four "worst of" helpers in `src/airbox.rs` dropped NaN** — `mode_error`, the windowed peaks,
+  the large-impedance error, through `fold(0.0, f64::max)`. A field that blew up read as small: the
+  "bounded just below the ceiling" bar would have passed a NaN room. Now `nan_max` (§29's rule).
+- **The grid-counts bar read the ceiling off the model** (`0.9 * lambda_max()`): now `0.9 /
+  sqrt(3)` written in the test (§29.3).
+- **The conservation bars compared the last step with the first**; the Python's `_drift` is the
+  spread over every step. The two existing bars now measure the spread, keeping their own `1e-12`;
+  the carried ones use the acceptance bar, `1e-10`. Neither number moved.
+- **The open-face bar spelled only `Wall::Open`**, on the small room. The Python also pinned `z0`
+  through an impedance of exactly `0.0`, which goes through `Wall::from_z` — the reduction itself.
+- **The mode-tracking bar watched one node of one mode** at `1e-11`; the Python watches the whole
+  field for five modes at `1e-12`. Carried, with the one-step eigenvector sweep over every axial index
+  (DC and Nyquist included) and the 27-mode oblique grid, neither of which existed natively.
+- **No native refusal bar** for four of the room's five `ParamError`s (only the CFL one had one), and no source on or next to a lossy
+  wall, no two-source step, no all-faces-lossy run, no open-face energy run.
+- **The scene's physical tier had no native counterpart at all.** `airbox_port.rs`'s own header says
+  every bar there passes a port whose free pressure is always zero. Plant EC below is that port: it
+  turns ten bars red, seven of them carried here.
+
+### 44.3 Every margin measured
+
+| bar | measured | bar | headroom |
+|---|---|---|---|
+| conservation, 4 rooms / 4 Courant numbers (every step) | ≤ 2.1e-15 | 1e-10 | 48,000x |
+| impedance wall ledger, 3 `zeta` | ≤ 1.4e-15 | 1e-10 | 70,000x |
+| stored energy rise per step | ≤ −2.9e-11 J (always falls) | +1e-18 J | — |
+| all six faces matched | 2.5e-15; drained 0.99999999999998 | 1e-10; > 0.9 | — |
+| source booking / on a wall / two sources | 6.8e-16 / 0.0 / 2.0e-16 | 1e-10 | ≥ 140,000x |
+| axial and oblique one-step residuals | ≤ 7.5e-16 | 1e-12 | 1,300x |
+| five modes over 500 steps, whole field | ≤ 6.2e-14 | 1e-12 | 16x |
+| wall reflection, worst `zeta` (1.0) | 0.0130 | 0.02 | 1.5x (the Python's bar) |
+| box vs bore, 4,000 steps | 5.25e-14 | 1e-12 | 19x |
+| lumped closed form | 1.58e-15 | 1e-14 | 6x |
+| scene drifts (hands back, arrivals, disjoint) | ≤ 1.0e-14 | 1e-10 | 10,000x |
+| point port `a_eff / h` | 0.3239, 0.3195 | (0.30, 0.34) | — |
+| point port shrink / spread port hold | 0.493 / 1.045 | (0.45, 0.55) / (0.95, 1.10) | — |
+| ball `5a/6`, compact room | 1.0034 | ± 0.05 | 15x |
+| `a_eff` across Courant number | 4.9e-5 | 1e-4 | 2.0x (the Python's bar) |
+
+The two thin ones are the Python's own and are carried unchanged: the reflection coefficient is a
+convergence-tier claim, and the Courant bar says "fifth significant figure", which 4.9e-5 is.
+
+### 44.4 Thirty-nine breakages, and the air
+
+Planted one at a time in `src/airbox.rs`, `airbox_port.rs` and `airbox_wrap.rs`
+(`W:\temp\claude\batch22\mutate.py`, `airbox_port.rs` is CRLF and the script converts), each run
+against the core library's tests and `airbox_harness`, `airbox_scene` (then whole), `airbox_port`
+and `radiation`. **All 25 structural plants went red**: the wall weight, the wall admittance's `h`,
+the edge admittances overwritten, an open face not pinned in the step or at the start, the wall flux
+at half rate, a zero impedance classified as a live wall, a source booked before the wall solve, only
+the last injection booked, the injection divided by `h^3`, a source booked at the old pressure, the
+same-time velocity energy, axis 0's weights shared, the start-up half-step dropped, the arcsine
+dropped, `f64::round` for half-to-even, `lambda_max` 1% up, the start-up velocity halved, and seven
+port plants (the wall closure skipped, `pbar` not centred, a port that reads nothing, uniform ball
+weights, `R_room` without its wall factor, the injection a step late, the minus face dropped).
+
+Five of them had only a carried bar as a witness in these files: the open face unpinned at the start,
+`Z = 0` classified as live, the source booked pre-solve, the last-injection-only booking, the
+`h^3` injection. (Not re-run workspace-wide, so this is a claim about these files only.) The start-up
+plant went red in the box-against-bore bar, as the advisor asked: that bar is the start-up's one
+independent witness, both models deriving `u^{1/2}` themselves.
+
+**The other fourteen are the air.** The room reads `rho0` or `c0` in fourteen places — the
+compliance gain (each), the wall closure's gain (each), the momentum step, the stored energy's
+compliance (each) and kinetic term, the discrete and the textbook frequencies, the start-up velocity,
+the port's view gain, and `R_room` (each). Each hard-wired to its standard value: **0 red** in these
+files. Probed rather than re-run: every room the workspace builds — every core test file
+(`airbox_cut`, `airbox_grid`, `airbox_port`, `airbox_surface`, `airbox_vk`, `connection_body`,
+`connection_plate`, `mallet_room_gong`, the new files) and the viewer's `airbox.rs` and `vkroom.rs`
+— passes `RHO0_AIR, C0_AIR`, so each plant is the identity at every call site and nothing anywhere
+could see it (§42's finding again, in a third model). The human chose guards: three tests at density 0.9 and
+sound speed 380, written in the test — the modes over the whole field plus the textbook frequency
+in closed form, the three energy channels with two lossy walls and a source, and the port's
+free-pressure read (bit-identical to the full array) and `R_room` (differential) in a lossy corner
+and inside. **Re-run: all fourteen red**, each in the guard that reads that constant.
+
+### 44.5 The retirement rule, discharged
+
+| retired | native bar |
+|---|---|
+| `test_airbox_energy.py::test_energy_conserved_rigid` (4) | `src/airbox.rs::energy_is_conserved_at_every_aspect_ratio`, now every step |
+| `…::test_energy_conserved_across_courant` (4) | `…::energy_is_conserved_at_every_courant_number`, now every step |
+| `…::test_energy_positive_and_no_source_or_loss_channel` | `airbox_harness.rs::with_no_source_and_no_loss_the_total_is_the_stored_energy_exactly` |
+| `…::test_impedance_wall_passive_and_booked` (3) | `an_impedance_wall_only_takes_and_books_every_joule` |
+| `…::test_every_face_absorbing_still_books` | `every_face_absorbing_still_books` |
+| `…::test_open_face_is_lossless` | `an_open_face_is_lossless` |
+| `…::test_source_booking_flat` | `a_source_driving_an_absorbing_room_books_flat`, the wall's channel asserted live |
+| `…::test_source_at_a_wall_node_books_correctly` | `a_source_on_a_lossy_wall_node_books_correctly`, the node asserted a wall node |
+| `…::test_multiple_injections_accumulate` | `two_injections_in_one_step_are_two_bookings` |
+| `…::test_rigid_token_is_bit_identical_to_infinite_impedance` | `src/airbox.rs::rigid_is_bit_identical_to_an_infinite_impedance` |
+| `…::test_open_token_pins_the_face_to_exactly_zero` | `an_open_token_and_a_zero_impedance_both_pin_their_face_to_exactly_zero` |
+| `…::test_large_impedance_approaches_rigid` | `src/airbox.rs::a_large_impedance_approaches_rigid`, NaN-safe |
+| `…::test_cfl_rejected_above_the_3d_ceiling`, `test_cfl_accepted_exactly_at_the_ceiling` | `the_cfl_ceiling_is_one_over_root_three_and_a_hair_past_it_is_refused` |
+| `…::test_bad_construction_refused` (6) | `a_non_physical_room_is_refused_with_the_originals_message` (3: variant and message); a 2-element room, `"squishy"` and `"x2"` are **types** (§14) — the viewer refuses `"squishy"` in `guards_and_budget_are_clean_error_payloads` |
+| `…::test_a_point_outside_the_room_is_refused_not_relocated` | `a_point_outside_the_room_is_refused_not_relocated`, the three messages exact |
+| `…::test_grid_snap_is_reported_not_hidden` | `the_grid_snap_is_reported_not_hidden` |
+| `test_airbox_freefield.py::test_free_field_reproduces_the_monopole_law` | `src/airbox.rs::the_free_field_reproduces_the_lumped_monopole_law` |
+| `…::test_free_field_gain_improves_with_refinement` | `…::the_free_field_gain_improves_with_refinement` |
+| `…::test_the_lumped_tier_agrees_with_the_same_closed_form` | `radiation.rs::the_retarded_read_out_emits_the_closed_form_monopole_of_a_pulse` |
+| `…::test_wall_reflection_coefficient` (4) | `a_wall_reflects_with_the_closed_form_coefficient` |
+| `…::test_quasi_1d_box_tracks_the_repo_bore` | `a_one_cell_thick_room_tracks_the_bore`, non-identity asserted |
+| `test_airbox_modal.py::test_every_axial_mode_is_an_exact_eigenvector` (3) | `every_axial_mode_is_an_exact_eigenvector` |
+| `…::test_every_oblique_mode_is_an_exact_eigenvector` | `every_oblique_mode_is_an_exact_eigenvector` |
+| `…::test_dc_mode_is_stationary` | `src/airbox.rs::the_dc_mode_is_stationary` |
+| `…::test_mode_tracks_its_predicted_amplitude` (5) | `five_modes_track_their_predicted_amplitude_over_the_whole_field` |
+| `…::test_two_modes_superpose_without_talking` | `src/airbox.rs::two_modes_superpose_without_talking` |
+| `…::test_converges_to_the_continuum_room_modes` (3) | `…::the_frequency_converges_to_the_continuum_room_at_order_two` |
+| `…::test_discrete_frequency_is_below_the_continuum_one` | `…::the_discrete_frequency_runs_flat_of_the_continuum_one` |
+| `…::test_axial_modes_are_dispersive_at_every_courant_number` | `…::axial_modes_are_dispersive_at_every_courant_number` |
+| `…::test_diagonal_modes_are_exact_at_the_ceiling` (4) | `…::diagonal_modes_are_exact_at_the_ceiling` |
+| `…::test_the_diagonal_is_the_grid_diagonal_not_l_equals_m` | `…::the_exact_direction_is_the_grid_diagonal_not_l_equals_m` (exact `0.0`) |
+| `…::test_ceiling_is_marginally_stable_and_energy_does_not_notice` | `…::the_ceiling_is_marginally_stable_and_the_energy_does_not_notice` (differences, §46) |
+| `…::test_bounded_just_below_the_ceiling` | `…::just_below_the_ceiling_the_field_is_bounded`, NaN-safe |
+| `test_airbox_scene.py::test_reflection_returns_at_the_round_trip_time` (3) | `airbox_scene.rs::the_reflection_returns_at_the_round_trip_time` |
+| `…::test_reflection_is_not_a_lumped_load` | `the_delay_scales_with_the_distance_which_no_lumped_load_can_do` |
+| `…::test_the_room_hands_energy_back` | `the_room_hands_energy_back` |
+| `…::test_second_body_moves_only_when_the_sound_arrives` (2) | `a_second_body_moves_exactly_when_the_sound_can_reach_it` |
+| `…::test_disjoint_ports_are_exactly_independent` | `disjoint_ports_conserve_the_scene_total` |
+| `…::test_port_solve_order_does_not_matter` | `the_port_solve_order_does_not_matter` |
+| `…::test_point_port_load_is_a_grid_quantity_and_the_spread_port_is_not` | `airbox_port_size.rs::a_point_ports_load_is_a_grid_quantity_and_a_spread_ports_is_not` |
+| `…::test_spread_port_matches_the_uniformly_injecting_ball` | `a_spread_port_is_the_uniformly_injecting_ball` |
+| `…::test_the_reactance_is_not_a_dispersion_artifact` | `the_reactance_is_not_a_dispersion_artifact` |
+
+**Orphans removed from `tests/helpers.py`**, each grepped alone across `tests/`: `make_airbox`,
+`airbox_noise`, `gaussian_pulse`, `make_room_loaded_body`, `room_scene_energy`, the ten
+`AIRBOX_*` constants, and the `AirBox`, `RoomLoadedBody`, `C0_AIR` and `RHO0_AIR` imports — the last
+two were kept by §42.5 for "the air box's helper", which is now gone. Comments naming the deleted
+files were updated in `src/airbox.rs`'s fixture note and the binding's `airbox.rs` (`source_index`);
+the binding's table of private names already says it is a snapshot.
+
+### 44.6 Cost and counts
+
+- **pytest 664 → 591**: the four files' 73 cases; 591 passed.
+- **Native +30**: workspace 1,679 → 1,709 optimised (`scripts/cargo-test-nice.ps1 -Full`), all
+  green; `airbox_harness.rs` 0 → 20, `airbox_scene.rs` 0 → 6, `airbox_port_size.rs` 0 → 3,
+  `radiation.rs` 24 → 25.
+- **Unoptimised on one thread**: `airbox_harness.rs` 3.4 s, `radiation.rs` 0.01 s, and the scene's
+  nine tests 98 s, almost all in the three equivalent-radius runs (rooms of up to 55,000 nodes for
+  about 2,000 steps). The human chose to split them out: `airbox_port_size.rs` (4.5 s optimised) is
+  on `rust-debug`'s `release_only` list; the six arrival and scene bars stay in both profiles.
+- **2 physics files remain**, with **97** test functions by the §24.1 count (140 − 43): radiation
+  (49) and the resolution horizon (48). No room file is left.
+
+### 44.7 What is next
+
+The next batch is not chosen; the human picks between the two families left, radiation and the
+resolution horizon.

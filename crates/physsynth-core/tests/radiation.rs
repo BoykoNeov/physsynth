@@ -88,6 +88,38 @@ fn the_retardation_is_an_exact_amplitude_preserving_sample_delay() {
     assert_eq!(out[delay], gain);
 }
 
+/// `tests/test_airbox_freefield.py::test_the_lumped_tier_agrees_with_the_same_closed_form` — the
+/// room's free-field bar (`src/airbox.rs`) fits the box to `p = rho0 Qdd(t - r/c0) / (4 pi r)`; this
+/// is the other half of that cross-tier claim. Fed a pulse's volume acceleration, the integer-sample
+/// delay line — a completely different construction — emits the same closed form, so the box and
+/// the lumped tier agree with each other via a law neither of them defines.
+#[test]
+fn the_retarded_read_out_emits_the_closed_form_monopole_of_a_pulse() {
+    let (fs, r) = (40000.0, 0.4);
+    let mut a = AirRadiation::new(AirParams::new(fs, r, RHO0_AIR, C0_AIR, true).unwrap());
+    let (gain, lat) = (a.params().gain, a.params().latency_samples);
+    assert_eq!(lat, 47); // r / c0 = 46.65 samples
+                         // `tests/helpers.py::gaussian_pulse(fs, 1400)`'s derivative: sigma = 1/(2 pi f0), centred 4
+                         // sigma in, amplitude 1e-3.
+    let sigma = 1.0 / (2.0 * std::f64::consts::PI * 1400.0);
+    let t0 = 4.0 * sigma;
+    let qdot = |t: f64| {
+        -1e-3 * (t - t0) / (sigma * sigma) * (-((t - t0) * (t - t0)) / (2.0 * sigma * sigma)).exp()
+    };
+    let out: Vec<f64> = (0..400).map(|n| a.process(qdot(n as f64 / fs))).collect();
+    let expect: Vec<f64> = (0..400)
+        .map(|n| gain * qdot(n as f64 / fs - lat as f64 / fs))
+        .collect();
+    let scale = expect.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+    // The wavefront-in-transit prologue is documented silence, while the closed form already has
+    // the pulse's leading tail arriving — so the comparison starts at the latency.
+    for n in lat..400 {
+        let err = (out[n] - expect[n]).abs();
+        assert!(err < 1e-14 * scale, "sample {n}: {:e}", err / scale);
+    }
+    assert!(out[..lat].iter().all(|&v| v == 0.0));
+}
+
 #[test]
 fn the_delay_length_rounds_halves_to_even() {
     // THE trap of this batch, and no energy bar can see it. `float.__round__` is half-to-even;

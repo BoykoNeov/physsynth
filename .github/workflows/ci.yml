@@ -246,8 +246,10 @@ jobs:
   # differently. `string_geometric_long` (the geometric string's long simulations, split from its
   # harness for this, the human's call, plan §35.7) holds frequency, rate and drift bars only.
   # `vk_plate_harness` (the gong plate, 160 s unoptimised against 6 s, the human's call, plan
-  # §40.6) checks no spelling and the model it drives has no `debug_assert!`. It
-  # is an exclusion on purpose: a new core test file lands
+  # §40.6) checks no spelling and the model it drives has no `debug_assert!`. `airbox_port_size`
+  # (the room port's equivalent radius, split from `airbox_scene` for this, 98 s unoptimised against
+  # 4.5 s, the human's call, plan §44.6) holds ratio and magnitude bars at percent-level headroom
+  # only. It is an exclusion on purpose: a new core test file lands
   # in both profiles by default, and a stale name here fails the step.
   rust-debug:
     name: Rust core, unoptimised (debug asserts, unfolded arithmetic)
@@ -261,7 +263,7 @@ jobs:
       - name: Core and analysis bars, unoptimised
         run: |
           release_only="connection_plate mallet_gong plate plate_grain plate_kirchhoff plate_free string_geometric_long"
-          release_only="$release_only vk_plate_harness"
+          release_only="$release_only vk_plate_harness airbox_port_size"
           for n in $release_only; do
             ls crates/physsynth-core/tests/$n.rs > /dev/null || { echo "no core test $n"; exit 1; }
           done

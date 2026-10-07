@@ -120,9 +120,15 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    plate, and §39 the mallet on a gong — **every contact file is gone** — and §40 the gong plate
    itself (six files, its bracket and Airy solve included), §41 the bowed string, and §42 the bore
    and the reed together (seven files; the reed's bars stand on the bore), and §43 the operators,
-   the spectrum detector and the body together (three files, all into existing native files);
-   **6 physics files / 140 functions remain** — the room (4), radiation and the resolution horizon
-   (§9's map is stale). §43's four finds, all guarded at the human's call or by precedent: a loss
+   the spectrum detector and the body together (three files, all into existing native files),
+   and §44 the room (four files; about twenty of its claims were already in `src/airbox.rs`'s own
+   tests, several weaker than the Python's — NaN-dropping "worst of" folds, end-to-end drifts, one
+   probe node — and were sharpened); **2 physics files / 97 functions remain** — radiation and the
+   resolution horizon (§9's map is stale). §44's find was §42's again: the room reads `rho0`/`c0`
+   in fourteen places and every room the workspace builds uses standard air, so each could be
+   hard-wired unseen; guarded at the human's call by three bars at density 0.9 / sound speed 380.
+   Its equivalent-radius bars cost 98 s unoptimised and were split into `airbox_port_size.rs`,
+   release-only (the human's call). §43's four finds, all guarded at the human's call or by precedent: a loss
    read 1% high (the Python's 2% decay bar passes it by design) and a `>=` → `>` in the peak
    separation, each seen only by the Windows-exact viewer freeze; the frequency axis reordered to
    `(1/d)/n`, seen by NOTHING — identical at every power-of-two length, so a bar at a power of two
