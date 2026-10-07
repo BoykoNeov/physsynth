@@ -129,7 +129,7 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    those values; the binding assembles its own loaded steps, so the comparison was a real
    cross-check and matched to the digit); **1 physics file / 48 functions remains** — the
    resolution horizon (§9's map is stale). §45 found the air a fourth time (16 of 23 `rho0`/`c0`
-   reads, enumerated by grep, unseen workspace-wide) and a restart that nothing checks; both
+   reads, enumerated by grep, unseen — grep of every call site + 3 workspace-wide re-runs) and a restart that nothing checks; both
    guarded at the human's call (density 0.9 / sound speed 380; a restart bar). §44's find was §42's again: the room reads `rho0`/`c0`
    in 26 places (the first count, 14, was only the reads planted — enumerate reads by grep, never
    from a plant list, §44.8) and every room the workspace builds uses standard air, so each could

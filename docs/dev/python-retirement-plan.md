@@ -7882,9 +7882,10 @@ The advisor's read before any writing (quoted to the human) named these; all wer
 - **A comment claim with nothing under it**: `test_loaded_body_radiates_through_the_air` said
   `pressure()` carries the load, and compared `radiate(loaded)` with `gain * loaded.pressure()` — the
   same number twice. Now `pressure()` is compared with the second difference of the corrected states,
-  formed in the test, for both loaded bodies. Planted (`accel` left stale), workspace-wide this is
-  also seen by the `M_a = inf` reduction bar, the viewer's `airload` reduction bar and the viewer
-  freeze — so unlike §38's plate, it was not invisible before.
+  formed in the test, for both loaded bodies. What else sees a stale `accel` was measured in
+  §45.8: for a defect BOTH bodies share, workspace-wide, only one viewer loudness-ordering bar and
+  the viewer freezes (exact on Windows only) — the per-body plants' other witnesses were this
+  batch's own pressure assertion and a twin bar.
 - **Refusals**: a negative rate and distance for the read-out, a negative `M_a` and the `c0` half of
   the medium check for the load, a negative mass for `loaded_mode`; and `FarFieldError`'s two
   variants were not told apart.
@@ -8045,3 +8046,40 @@ them). Comments that relied on the deleted file were updated in the analysis cra
 ### 45.7 What is next
 
 The last batch of phase C: `tests/test_resolution_horizon.py`, when the human says so.
+
+### 45.8 Review fixes and CI
+
+Run 37600003890 on `5650588`, all five jobs green (optimised Rust 6.4 min, unoptimised 13.7 min,
+the exact viewer freeze 4.5 min). The first Linux run of the batch's exact claims: the frozen
+`ka == 1.8318324510727657`, the 253-sample latency in a medium that is not air, the ten
+single-mode trajectories' last displacement against the Windows record (to 1e-15 of the
+amplitude, over 28,800 steps each), and `pressure()` equal to the second difference formed in the
+test. All are `+ - * /` or exact by construction, so a Linux red would have been a finding; none
+went red. The trigonometric bars (the measured impedance, the compact ratio, the driven far field)
+sit at least four orders inside their bars.
+
+| file | optimised (Linux) | unoptimised (Linux) |
+|---|---|---|
+| `radiation.rs` (60) | 0.05 s | 0.23 s |
+| analysis `oracles.rs` (36) | 0.00 s | 0.00 s |
+
+The advisor's read of the first commit found two things to correct, and one to measure:
+
+- **§45.2 credited the stale-`accel` defect's witnesses wrongly.** It said the defect "was not
+  invisible before", citing what saw the per-body plants. Of those, the `M_a = inf` reduction bar
+  went red only through the pressure assertion this batch added, and the viewer's zero-corner bar is
+  a twin (the rational load at zero corner against the constant-`R` body), which sees a defect in
+  one copy because the copies then disagree. Planted as ONE defect both loaded steps share and run
+  workspace-wide (103 binaries): **6 red** — this batch's
+  `the_loaded_pressure_is_the_corrected_volume_acceleration`, the viewer's
+  `the_radiation_weight_is_not_a_volume_control_and_the_peak_says_so` (a loudness-ordering claim
+  that happens to read the pressure) and four viewer freezes, exact on Windows only. §45.2 now says
+  so.
+- **"The stored fields are read only by the binding" came from a filtered grep** (lines with a
+  trailing `//` and paths containing `airbox`, `bore` or `reed` were dropped). Re-run unfiltered
+  (`\.rho0|\.c0|params\(\)\.(rho0|c0)` over every crate): the radiation types' stored pair is
+  read by the binding's four getters and this batch's guards, nothing else; every other hit is the
+  room's, the bore's, the reed's or the sympathetic strings' own `Params`. The claim stands, now
+  measured.
+- **`CLAUDE.md`'s "16 of 23 unseen workspace-wide"** compressed two kinds of evidence; it now says
+  grep of every call site plus three workspace-wide re-runs, as §45.4 does.
