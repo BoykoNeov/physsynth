@@ -8077,7 +8077,7 @@ The advisor's read of the first commit found two things to correct, and one to m
   so.
 - **"The stored fields are read only by the binding" came from a filtered grep** (lines with a
   trailing `//` and paths containing `airbox`, `bore` or `reed` were dropped). Re-run unfiltered
-  (`\.rho0|\.c0|params\(\)\.(rho0|c0)` over every crate): the radiation types' stored pair is
+  (`\.rho0\b|\.c0\b|params\(\)\.(rho0|c0)` over every crate): the radiation types' stored pair is
   read by the binding's four getters and this batch's guards, nothing else; every other hit is the
   room's, the bore's, the reed's or the sympathetic strings' own `Params`. The claim stands, now
   measured.
