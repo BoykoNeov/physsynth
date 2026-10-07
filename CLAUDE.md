@@ -126,9 +126,11 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    read 1% high (the Python's 2% decay bar passes it by design) and a `>=` → `>` in the peak
    separation, each seen only by the Windows-exact viewer freeze; the frequency axis reordered to
    `(1/d)/n`, seen by NOTHING — identical at every power-of-two length, so a bar at a power of two
-   cannot pin a spelling (it now runs at n = 1001); and a launched start whose velocity sign could
-   flip unseen, because every start in both suites was from rest. §42 found SEVEN parameters that had only ever run at
-   their defaults (sound speed, air density, reed mass, jet width, rest opening, the reed's air
+   cannot pin a spelling (it now runs at n = 1001), and the viewer, which does reach it (582 calls),
+   ships those frequencies rounded to 3 decimals, which absorbs a last bit; and a launched start whose velocity sign could
+   flip unseen — the one launched start compared the model with its own kernel, and the two share
+   the start-up, so nothing held a launch to physics (a twin again, finding #78). §42 found SEVEN
+   parameters that had only ever run at their defaults (sound speed, air density, reed mass, jet width, rest opening, the reed's air
    density, its solve tolerance) — each hard-wired passed the whole workspace and each is a real
    defect off the default — plus a far-field read-out and a solver seed seen only by the
    Windows-exact viewer freeze; all guarded at the human's call. Grep a model's fixtures for EVERY

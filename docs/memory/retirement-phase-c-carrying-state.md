@@ -210,12 +210,16 @@ breakages, delete the file.
   detect_peaks separation) only the Windows-exact viewer freeze; SE (`1/(n d)` → `(1/d)/n`) seen by NOTHING incl.
   the Python suite (wheel rebuilt with the plant — REINSTALL the clean wheel after!): identical at every
   power-of-two n, so a bar at a power of two cannot pin a spelling — new bar at n=1001, fs=8k with both
-  controls asserted different; BK (start-up `k v0` sign) nothing — every start in both suites from REST →
+  controls asserted different; BK (start-up `k v0` sign) nothing — the one launched start was a struct-vs-own-kernel TWIN (shared
+  `initial_state`), Python starts all from rest →
   launched-sine/centred-velocity bar (established start-up bar, added without asking). Human chose guards for
   BD (0.1% decay bar), SI (two tones exactly min_sep apart, sep spelled from the same axis), SE.
   pytest 689 → 664; workspace 1,667 → 1,679. Unopt cost negligible (spectrum 0.28 s). `printf` into a .bat
   turns `	`/`` in Windows paths into TAB/backspace — use forward slashes for the script path.
   Loose end: binding `spectrum_parabolic_refine` + `_parabolic_refine` wrapper have no caller now.
+  CI 37561004341 green on ea758c1 (spectrum 0.04/0.23 s Linux). Review: SE probed (print from rfftfreq
+  when spellings differ): 582 workspace calls reach it, 210 in the viewer freeze — blind because the viewer
+  ships frequencies rounded to 3 decimals. PROBE a zero-witness plant's REACH before describing it.
 Remaining after §43: **6 physics files / 140 functions** (§24.1 count): room `test_airbox_*` (4: energy 17,
 freefield 5, modal 12, scene 9), radiation (49), resolution horizon (48). Next batch not chosen — the user
 picks; a recommendation + "go with it" is an accepted answer.

@@ -9,7 +9,8 @@
 //! `parabolic_refine` is exposed under its private-looking name because that is what it is called
 //! on the Python side and what `tests/test_spectrum_detector.py` imported directly. That file is
 //! retired (retirement plan §43: the guard's bars are in `physsynth-analysis`'s
-//! `tests/spectrum.rs`), so nothing calls this export now; it goes when the binding does.
+//! `tests/spectrum.rs`), so the export's only caller is now the `_parabolic_refine` wrapper in
+//! `physsynth/analysis/spectrum.py`, which nothing calls; both go when the binding does.
 
 use numpy::PyArray1;
 use physsynth_analysis::spectrum;

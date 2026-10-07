@@ -7476,10 +7476,13 @@ The eight zero-witness plants were re-run **workspace-wide**:
   `(n, fs)` pair in three differs (158 of 500 searched). The existing axis bar ran at 44.1 kHz with
   n = 1024 — blind. A new bar at n = 1001, fs = 8 kHz pins the chain (7.992007992007991) and asserts
   that both the reordered and the tidy `fs/n` spellings differ there.
-- **BK**: every start in both suites was from rest. Launched from `q0 = 0` with velocity `V`, the
-  first step's centred velocity is `V` exactly and the mode is the discrete sine — the start-up
-  bar's velocity half, the fourth instance of an established bar, so added without asking and said
-  here.
+- **BK**: every start the Python suite made was from rest, and the one native launched start
+  (`the_free_functions_and_the_struct_agree`, `v0 = [0.1, -0.2]`) compares the struct with its own
+  kernels, which share `initial_state` — a twin, blind by construction (finding #78; corrected in
+  §43.8, the first draft said every start was from rest). Launched from `q0 = 0` with velocity
+  `V`, the first step's centred velocity is `V` exactly and the mode is the discrete sine — the
+  start-up bar's velocity half, the fourth instance of an established bar, so added without asking
+  and said here.
 
 All 23 re-run against the final files: **every one red in the three files** except BG, BH, BI and
 BJ, which stay covered elsewhere.
@@ -7530,3 +7533,39 @@ of the same kind).
 The next batch is not chosen; the human picks. The 6 files, by family: the room (`test_airbox_*`,
 4: energy 17, free field 5, modal 12, scene 9 functions), radiation (49) and the resolution horizon
 (48).
+
+### 43.8 Review fixes and CI
+
+Run 37561004341 on `ea758c1`, all five jobs green — the first Linux run of the two new exact
+claims, the 100 kHz miss list and the n = 1001 axis pin. Both are `+ − × ÷` only, so a Linux red
+would have been a finding, not a platform difference; neither went red.
+
+| file | optimised | unoptimised |
+|---|---|---|
+| `spectrum.rs` (analysis) | 0.04 s | 0.23 s |
+| `body.rs` (core) | 0.00 s | under 0.1 s |
+| `ops.rs` (core) | 0.00 s | 0.00 s |
+
+The advisor's read of the first commit found two claims wrong or unchecked, fixed here. Neither
+moves a bar:
+
+- **"Every start in both suites was from rest" was false.** `body.rs::the_free_functions_and_the_
+  struct_agree` launches with `v0 = [0.1, -0.2]`. It could not see BK because it compares the struct
+  with its own kernels, and the two share `initial_state` — the twin case again (finding #78). The
+  accurate lesson is narrower: the one launched start compared the model with itself, so nothing
+  held a launch to physics. Corrected in §43.4, `CLAUDE.md` and the batch memory.
+- **SE's reach was asserted, not probed**, and the Windows-exact freeze staying green under the plant
+  did not fit it. Probed by printing from `rfftfreq` whenever the two spellings differ, over the whole
+  workspace in release: **582 calls** reach a differing `(n, d)` — 210 in the viewer freeze, 277 in
+  the viewer's contact tests, 33 + 32 in its plate-body and body tests, 25 in its bore tests, 4 in
+  its horizon tests, and the new bar's own one. So the reorder does reach shipped code. The freeze is
+  blind to it by construction: every spectrum the viewer ships passes its frequencies through
+  `finite_list(.., Some(3))` (three decimals) and its centroids through `round_nd(.., 1)`, and a last
+  bit of a frequency does not survive either rounding, barring a value on a rounding tie. The new
+  bar therefore pins the function's contract rather than any digit the viewer displays today; the
+  question to the human said the reorder would change frequencies "nothing notices", which is true of
+  the unrounded values and overstated for what reaches the screen (§38's precedent). The guard
+  stands either way — it is one assertion, and the function's doc claims the spelling. The
+  instrumentation was restored by copy and byte-compared, and the snapshot refreshed first.
+- Minor: the binding's `spectrum.rs` header said nothing calls `spectrum_parabolic_refine`; the
+  Python wrapper `_parabolic_refine` still does, and it is the wrapper that has no caller. Reworded.
