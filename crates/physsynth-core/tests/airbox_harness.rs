@@ -336,6 +336,13 @@ fn a_non_physical_room_is_refused_with_the_originals_message() {
         z.to_string(),
         "wall 'x0': impedance Z must be >= 0, got -1.0."
     );
+
+    // The air is validated too — added with the non-standard-air guards (§44.8): the positivity
+    // check reads `rho0` and `c0` like everything else does.
+    for (rho0, c0) in [(-ODD_RHO0, ODD_C0), (ODD_RHO0, -ODD_C0), (0.0, ODD_C0)] {
+        let err = Params::new(ROOM, 12000.0, 0.1, rigid(), None, rho0, c0).unwrap_err();
+        assert_eq!(err, ParamError::NonPositiveScalar, "rho0 {rho0}, c0 {c0}");
+    }
 }
 
 /// `test_a_point_outside_the_room_is_refused_not_relocated` — snapping *within* the room is the
@@ -661,13 +668,23 @@ fn a_one_cell_thick_room_tracks_the_bore() {
 //    places the room or its port reads either constant could be hard-wired to the standard value
 //    and nothing would notice. These run the room at an air no fixture uses, so a constant read
 //    from the wrong place changes the answer. The values are written here, not taken from the model.
+//    §44.8: the first count, 14, was the reads that were planted; the room reads the two constants
+//    26 times (12 more in the positivity check, `lambda`, the stored `Params`, the port's view and
+//    the patch resistance), and every one of them is now planted and seen.
 
 const ODD_RHO0: f64 = 0.9;
 const ODD_C0: f64 = 380.0;
 
 fn odd_air(walls: [Wall; 6]) -> AirBox {
     let fs = ODD_C0 * 3.0f64.sqrt() / (CFL * H);
-    AirBox::new(Params::new(ROOM, fs, H, walls, None, ODD_RHO0, ODD_C0).unwrap())
+    let b = AirBox::new(Params::new(ROOM, fs, H, walls, None, ODD_RHO0, ODD_C0).unwrap());
+    // `lambda = c0 k / h`, so the rate solved above puts it at the same fraction of the ceiling.
+    assert!(
+        (b.p.lam - CFL / 3.0f64.sqrt()).abs() < 1e-15,
+        "lambda {}",
+        b.p.lam
+    );
+    b
 }
 
 /// The modal tier at a different air: the whole-field mode tracking (the compliance gain, the
@@ -785,6 +802,46 @@ fn the_port_reads_and_loads_the_room_at_a_non_standard_air() {
         assert!(
             (measured - want).abs() <= 1e-12 * want,
             "at {at:?}: measured {measured:.17e} vs R_room {want:.17e}"
+        );
+    }
+}
+
+/// The patch tier's per-node resistance at a different air — `R = k rho0 c0^2 / (2 W (1 + beta))`,
+/// which the surface ports form themselves, apart from `R_room`. Measured as what the room does:
+/// inject `q` at one node, step, and read that node's centered-pressure increment per unit `q`.
+/// Every node of a lossy face's edge row, so `W` and `beta` vary along it.
+#[test]
+fn the_patch_resistance_is_what_the_room_does_at_a_non_standard_air() {
+    use physsynth_core::airbox::PortInjection;
+    use physsynth_core::airbox_port::patch_resistance;
+    let lossy = [Wall::Impedance(impedance_from_zeta(1.0, ODD_RHO0, ODD_C0)); 6];
+    let mut room = odd_air(lossy);
+    let p0 = noise(room.p.n_nodes());
+    room.set_state(&p0, None);
+    for _ in 0..9 {
+        room.step();
+    }
+    let s = room.p.p_shape();
+    let nodes: [Vec<usize>; 3] = [(0..s[0]).collect(), vec![0; s[0]], vec![2; s[0]]];
+    let r = patch_resistance(&room.view(), &[&nodes[0], &nodes[1], &nodes[2]]);
+    for (m, &want) in r.iter().enumerate() {
+        let i = airbox::flat(s, nodes[0][m], nodes[1][m], nodes[2][m]);
+        let pbar_after = |q: f64| {
+            let mut b = room.clone();
+            let p_old = b.pressure[i];
+            b.pending_ports.push(PortInjection {
+                nodes: vec![i],
+                w: vec![1.0],
+                q,
+            });
+            b.step();
+            0.5 * (b.pressure[i] + p_old)
+        };
+        let u = 3.7e-4;
+        let measured = (pbar_after(u) - pbar_after(0.0)) / u;
+        assert!(
+            (measured - want).abs() <= 1e-12 * want,
+            "node {m}: measured {measured:.17e} vs R {want:.17e}"
         );
     }
 }

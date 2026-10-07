@@ -7580,13 +7580,13 @@ migration had put the modal tier, the free-field fit, the reductions and the ene
 `crates/physsynth-core/src/airbox.rs`'s own `mod tests`, at the Python's rigs. What was not native
 went to three new files and one existing one:
 
-- `crates/physsynth-core/tests/airbox_harness.rs` — **20 tests** (17 carried, 3 added in §44.4 at
-  the human's call), at `make_airbox`'s rig: the 0.9 × 0.7 × 0.6 m room at `h = 0.1`, `N = (9, 7,
+- `crates/physsynth-core/tests/airbox_harness.rs` — **21 tests** (17 carried, 4 added in §44.4 and
+  §44.8 at the human's call), at `make_airbox`'s rig: the 0.9 × 0.7 × 0.6 m room at `h = 0.1`, `N = (9, 7,
   6)`, the rate solved as `fs = c0 sqrt(3) / (cfl h)` with `sqrt(3)` written in the test.
 - `crates/physsynth-core/tests/airbox_scene.rs` — **6 tests**, at `make_room_loaded_body`'s rig
   (the same as `airbox_port.rs`'s `Fixture`): the arrival oracles and the two-instrument scene.
 - `crates/physsynth-core/tests/airbox_port_size.rs` — **3 tests**, the port's equivalent radius,
-  split from the scene file because it costs 98 s unoptimised (§44.6).
+  split from the scene file because it costs 95 s unoptimised (§44.6).
 - `crates/physsynth-core/tests/radiation.rs` — **+1**, the delay line emitting the closed-form
   monopole of a pulse (the lumped half of the free-field cross-tier claim).
 
@@ -7661,7 +7661,7 @@ The advisor's read before any writing (quoted to the human) named the gaps; all 
 The two thin ones are the Python's own and are carried unchanged: the reflection coefficient is a
 convergence-tier claim, and the Courant bar says "fifth significant figure", which 4.9e-5 is.
 
-### 44.4 Thirty-nine breakages, and the air
+### 44.4 Fifty-one breakages, and the air
 
 Planted one at a time in `src/airbox.rs`, `airbox_port.rs` and `airbox_wrap.rs`
 (`W:\temp\claude\batch22\mutate.py`, `airbox_port.rs` is CRLF and the script converts), each run
@@ -7681,19 +7681,20 @@ Five of them had only a carried bar as a witness in these files: the open face u
 plant went red in the box-against-bore bar, as the advisor asked: that bar is the start-up's one
 independent witness, both models deriving `u^{1/2}` themselves.
 
-**The other fourteen are the air.** The room reads `rho0` or `c0` in fourteen places — the
-compliance gain (each), the wall closure's gain (each), the momentum step, the stored energy's
+**The other fourteen are the air** — and they were not all of it (§44.8). The fourteen planted
+here: the compliance gain (each), the wall closure's gain (each), the momentum step, the stored energy's
 compliance (each) and kinetic term, the discrete and the textbook frequencies, the start-up velocity,
-the port's view gain, and `R_room` (each). Each hard-wired to its standard value: **0 red** in these
-files. Probed rather than re-run: every room the workspace builds — every core test file
+the port's view gain's `rho0`, and `R_room` (each). Each hard-wired to its standard value: **0 red** in
+these files. Probed rather than re-run: every room the workspace builds — every core test file
 (`airbox_cut`, `airbox_grid`, `airbox_port`, `airbox_surface`, `airbox_vk`, `connection_body`,
 `connection_plate`, `mallet_room_gong`, the new files) and the viewer's `airbox.rs` and `vkroom.rs`
 — passes `RHO0_AIR, C0_AIR`, so each plant is the identity at every call site and nothing anywhere
-could see it (§42's finding again, in a third model). The human chose guards: three tests at density 0.9 and
+could see it (§42's finding again, in a third model). The human chose guards: tests at density 0.9 and
 sound speed 380, written in the test — the modes over the whole field plus the textbook frequency
 in closed form, the three energy channels with two lossy walls and a source, and the port's
 free-pressure read (bit-identical to the full array) and `R_room` (differential) in a lossy corner
-and inside. **Re-run: all fourteen red**, each in the guard that reads that constant.
+and inside. **Re-run: all fourteen red**, each in the guard that reads that constant. The twelve reads this
+round missed, a fourth guard and their plants are §44.8.
 
 ### 44.5 The retirement rule, discharged
 
@@ -7752,13 +7753,15 @@ the binding's table of private names already says it is a snapshot.
 ### 44.6 Cost and counts
 
 - **pytest 664 → 591**: the four files' 73 cases; 591 passed.
-- **Native +30**: workspace 1,679 → 1,709 optimised (`scripts/cargo-test-nice.ps1 -Full`), all
-  green; `airbox_harness.rs` 0 → 20, `airbox_scene.rs` 0 → 6, `airbox_port_size.rs` 0 → 3,
+- **Native +31**: workspace 1,679 → 1,710 optimised (`scripts/cargo-test-nice.ps1 -Full`, 1,709 at
+  the first commit, +1 in §44.8), all green; `airbox_harness.rs` 0 → 21, `airbox_scene.rs` 0 → 6, `airbox_port_size.rs` 0 → 3,
   `radiation.rs` 24 → 25.
-- **Unoptimised on one thread**: `airbox_harness.rs` 3.4 s, `radiation.rs` 0.01 s, and the scene's
-  nine tests 98 s, almost all in the three equivalent-radius runs (rooms of up to 55,000 nodes for
-  about 2,000 steps). The human chose to split them out: `airbox_port_size.rs` (4.5 s optimised) is
-  on `rust-debug`'s `release_only` list; the six arrival and scene bars stay in both profiles.
+- **Unoptimised on one thread**: `airbox_harness.rs` 3.1 s, `radiation.rs` 0.01 s. The scene file
+  as first written took 98 s, almost all in the three equivalent-radius runs (rooms of up to 55,000
+  nodes for about 2,000 steps). The human chose to split them out: after the split
+  `airbox_port_size.rs` takes 95.0 s unoptimised and 4.5 s optimised and is on `rust-debug`'s
+  `release_only` list; `airbox_scene.rs`'s six arrival and scene bars take 0.23 s and stay in both
+  profiles.
 - **2 physics files remain**, with **97** test functions by the §24.1 count (140 − 43): radiation
   (49) and the resolution horizon (48). No room file is left.
 
@@ -7766,3 +7769,47 @@ the binding's table of private names already says it is a snapshot.
 
 The next batch is not chosen; the human picks between the two families left, radiation and the
 resolution horizon.
+
+### 44.8 Review fixes and CI
+
+Run 37573991599 on `b3cd54d`, all five jobs green (optimised Rust 10.2 min, unoptimised 11.3 min) —
+the first Linux run of the refusal and out-of-room messages (every float in them is a product
+`n * h`, printed by `py_float`) and of the bit-identity claims (the 2d+1 echo, the solve order, the
+port's local read against the full array). All are `+ − × ÷` or exact by construction, so a Linux
+red would have been a finding; none went red. The unoptimised job ran 20 + 6 + 25 tests of the new
+and extended files and skipped `airbox_port_size`, as the `release_only` list says.
+
+| file | optimised (Linux) | unoptimised (Linux) |
+|---|---|---|
+| `airbox_harness.rs` (20 at `b3cd54d`) | 0.25 s | 2.93 s |
+| `airbox_scene.rs` | 0.01 s | 0.14 s |
+| `airbox_port_size.rs` | 4.02 s | not run (release only) |
+| `radiation.rs` | 0.00 s | 0.01 s |
+
+The advisor's read of the first commit found the air count wrong. Fixed here:
+
+- **"Fourteen places" was the list of reads I had planted, not the list of reads.** The question to
+  the human, §44.4, `CLAUDE.md`, the batch memory and `b3cd54d`'s commit message all said the room
+  reads `rho0`/`c0` in fourteen places, and nothing had enumerated them. Grepped over the non-test
+  code of `airbox.rs`, `airbox_port.rs` and `airbox_wrap.rs` (and the other core files that touch a
+  room view — `connection.rs`, `mallet.rs`, `body.rs` — which read neither): **26 reads.** The twelve
+  not planted: the positivity check (each), `lambda = c0 k / h`, the call handing both into the
+  wall closure (each), the stored `Params` (each), the room's view handed to every port (each), the
+  port view's gain's `c0`, and `patch_resistance` (each) — the surface tier's per-node resistance,
+  which forms `k rho0 c0^2` separately from `R_room`. Planted one at a time against the same files
+  (plus `airbox_port_size`): before the fix every one is the identity at every call site, for the
+  §44.4 reason. The guards were extended under the human's same "add guards" answer: the refusal bar
+  now refuses a negative density, a negative sound speed and a zero density; every non-standard-air
+  room asserts its `lambda`; and a fourth guard measures `patch_resistance` as what the room does —
+  inject at one node of a lossy edge row, step, read that node's centred-pressure increment per unit
+  flow — at density 0.9 and sound speed 380. **All twelve red**: the positivity pair in the refusal
+  bar, `lambda` in four tests, the wall-closure call in the energy bar, the stored pair in four tests
+  each, the view pair in the port and patch guards, the port gain's `c0` in the port guard, and the
+  patch pair in the patch guard. The commit message of `b3cd54d` keeps the low number; this section
+  is the correction, and the human was told the first number was low.
+- **The cost prose set two files side by side as one.** "98 s unoptimised" was the whole scene file
+  before the split; "4.5 s optimised" was `airbox_port_size.rs` alone. Timed after the split on one
+  thread: `airbox_port_size.rs` 95.0 s unoptimised, `airbox_scene.rs` 0.23 s, `airbox_harness.rs`
+  3.1 s. §44.6 and the CI comment now say so.
+
+Counts after this section: `airbox_harness.rs` 21, workspace 1,710 optimised (`-Full`, all green).

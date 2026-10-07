@@ -125,8 +125,9 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    tests, several weaker than the Python's — NaN-dropping "worst of" folds, end-to-end drifts, one
    probe node — and were sharpened); **2 physics files / 97 functions remain** — radiation and the
    resolution horizon (§9's map is stale). §44's find was §42's again: the room reads `rho0`/`c0`
-   in fourteen places and every room the workspace builds uses standard air, so each could be
-   hard-wired unseen; guarded at the human's call by three bars at density 0.9 / sound speed 380.
+   in 26 places (the first count, 14, was only the reads planted — enumerate reads by grep, never
+   from a plant list, §44.8) and every room the workspace builds uses standard air, so each could
+   be hard-wired unseen; guarded at the human's call by four bars at density 0.9 / sound speed 380.
    Its equivalent-radius bars cost 98 s unoptimised and were split into `airbox_port_size.rs`,
    release-only (the human's call). §43's four finds, all guarded at the human's call or by precedent: a loss
    read 1% high (the Python's 2% decay bar passes it by design) and a `>=` → `>` in the peak
