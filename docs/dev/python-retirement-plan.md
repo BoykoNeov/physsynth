@@ -7365,3 +7365,168 @@ snapshot, and the snapshot predated the comment edits committed in `bfb55ef`, so
 the far-field plants silently reverted one committed comment in `bore.rs`. Caught by `git status`
 and the diff, restored from `HEAD`, and the snapshot refreshed. **Re-snapshot after any edit to
 a file the script plants in.**
+
+## 43. Phase C, carrying batch 21 — the operators, the spectrum detector and the body
+
+Done 2026-10-07 (the human took the recommendation, "go with your recommendation"). The three
+smallest families left were done as one batch, as in §37 and §42: three files, retired whole —
+`tests/test_operators.py`, `tests/test_spectrum_detector.py` and `tests/test_body.py`, **19
+functions, 25 pytest cases** (4 + 6 + 9 functions; 4 + 12 + 9 cases). Every model they test was
+already native, and each already had a native file, so nothing new was created: the bars went into
+`crates/physsynth-core/tests/ops.rs` (17, one test extended), `crates/physsynth-analysis/tests/
+spectrum.rs` (14 → 20) and `crates/physsynth-core/tests/body.rs` (14 → 20). Most of the Python's
+claims were already made natively; what follows is the part that was not, and the part where the
+native bar existed but was weaker than the Python one it stood beside.
+
+### 43.1 The comparison — every figure reproduced
+
+Recorded first, wheel reinstalled (`W:\temp\claude\batch21\record.txt`, `record.py` beside it).
+**Every figure matches to all printed digits**: the body's drift (6.79e-14) and starting energy
+(9.544960703326696 J), its lowest energy over 5,000 steps, the mass ratio (2.0 exactly), the σ = 8
+run's largest step up (+1.78e-15) and final energy, the decay ratio and its error (2.51e-5), the
+cosine's worst error (5.80e-17) and last sample, the pressure after one step; the detector's two
+witness corrections (−22.0959…, −4.3114…), the off-grid peak (196.09827230710118 Hz, 0.0023 bins),
+all six window probes and their slack, and the knife-edge sweep's misses. Nothing needed freezing:
+the only NumPy numbers in these files were `np.dot` of four exact products and the platform
+transcendentals of closed forms the native bars evaluate themselves.
+
+### 43.2 What the existing native bars could not see
+
+The advisor's read before any writing (quoted to the human) listed ten gaps; all ten were carried:
+
+- **`inner` was checked only for properties every scaling of it has** — symmetry, `norm2 ==
+  inner(f, f)`, non-negativity, zero on zero. An inner product without its `h`, or with `h²`, passed.
+  Now asserted against the definition and the recorded values (`-0.035`, `0.14250000000000002`).
+- **Every native body energy bar ran at unit masses**, and the unforced step never reads `m`, so an
+  energy that forgot or squared the masses conserved perfectly. Carried: doubling the masses doubles
+  the energy.
+- **No native decay-rate bar existed**, and the lossy bar's closing line compared `previous` with
+  `body.energy()` — the same number — so it asserted nothing. Fixed to "the bank lost energy".
+- **The native frequency bar counted zero crossings and read `ω` and `k` off the model** — blind to
+  a start-up phase error (§30.4) and to a constant moved in the model (§29.3). The Python's exact
+  discrete cosine to 1e-14 is carried with `ω` and `k` computed in the test; the old bar now
+  computes them too.
+- **The refiner's ±½-bin bar is satisfied by a refiner pinned to bin centres.** Carried: a real Hann
+  spectrum of a tone 0.4 bins off-grid must be refined to a tenth of a bin.
+- **The six-probe window-containment bar had no native counterpart**; carried (tightest slack 2.32
+  Hz, 1.2 bins, at the 137 Hz probe that used to escape).
+- **`next_pow2`'s equivalence with the float spelling was "asserted on the Python side"** — a
+  comment that became false at deletion. Carried, and aimed at the shipped `next_pow2` rather than
+  at two Python spellings of it; the float referee is now the platform's `log2`, which decides
+  nothing it could get wrong (the deciding inputs are exact powers of two).
+- **The zero-margin separation comparison was natively asserted only where it clears.** Carried:
+  the sweep must keep finding misses, recorded exactly (at 100 kHz, 1 + 4(k − 4) misses at nfft =
+  2^k, nowhere else — the axis is `+ − × ÷` only, so this is a cross-machine claim). The random-rate
+  search swaps NumPy's PCG64 for a SplitMix64 hash (§15: the claim is "some rate exists").
+- **The NaN bar had no control**: a detector answering NaN to everything passed it. The Python's
+  in-range 220 Hz probe, in the same call, is carried (with the native file's structureless hash for
+  the noise).
+- **The witnesses' old corrections were not recomputed natively**; now they are.
+
+The trap the advisor flagged held: at the Python's σ = 8 rig the energy rises by +1.78e-15 on one
+step, so the strict `e <= previous` of the native lossy bar would go red there. The carried bar keeps
+the Python's `1e-12 · e0`.
+
+### 43.3 Every margin measured
+
+| bar | measured | bar | headroom |
+|---|---|---|---|
+| Python rig drift, 20,000 steps | 6.8e-14 | 1e-10 | 1,500x |
+| σ = 8 largest step up | +1.8e-15 | 1e-12 · 9.54 J | 5,400x |
+| decay vs 2σ (Python's) | 2.5e-5 | 0.02 | 800x |
+| decay vs 2σ (added, §43.4) | 2.5e-5 | 1e-3 | 40x |
+| exact discrete cosine | 5.8e-17 | 1e-14 | 170x |
+| launched sine / centred velocity (added) | 2.5e-17 / 1.5e-16 rel | 1e-14 / 1e-14 rel | 400x / 66x |
+| off-grid peak | 0.0023 bins | 0.1 bins | 43x |
+| window containment, 137 Hz probe | 2.32 Hz slack | — | 1.2 bins |
+| exactly-at-the-limit peak pair (added) | 2.8e-7 bins | 1e-3 bins | 3,500x |
+
+### 43.4 Twenty-three breakages
+
+Planted one at a time in `body.rs`, `ops.rs` and `spectrum.rs` (`W:\temp\claude\batch21\mutate.py`,
+snapshot refreshed after the one source edit). Against the three files: **15 red at once**, every
+one by a carried bar or the old ones — masses dropped or squared in the energy (the mass bar), loss
+dropped (three bars), the start-up's ½ dropped (the cosine), ω 1e-6 high (cosine, dispersion), the
+start-up acceleration zeroed (the existing pressure bar), `inner` without `h` or with `h²`, the
+refiner pinned (the off-grid bar), the guard removed or swapped for a curvature sign (the witnesses
+and the window bar), `next_pow2` doubled above 2^24 (only the 2^k ± 1 sweep), the empty window
+answering a bin, every window answering NaN, a window twice as wide.
+
+The eight zero-witness plants were re-run **workspace-wide**:
+
+| plant | witnesses | verdict |
+|---|---|---|
+| BG `k` hard-wired to 48 kHz | 148 | covered |
+| BI the drive ignores the mass | 49 | covered |
+| BJ the bridge read-out weighted by `a` | 7 (connection, air load) | covered |
+| BH the pressure weighted by `phi` | 3 (an air-load physics bar) | covered |
+| BD the loss read 1% high | **only the Windows-exact viewer freeze** (6) | guard, the human's call |
+| SI the separation compared with `>` | **only the Windows-exact viewer freeze** (2) | guard, the human's call |
+| SE `val` reordered to `(1/d)/n` | **nothing** — workspace and the Python suite, wheel rebuilt with the plant | guard, the human's call |
+| BK the start-up's `k v0` sign flipped | **nothing** | start-up bar (§30.4 precedent) |
+
+- **BD**: the Python's 2% bar passes a 1% loss error by design. A second assertion at 0.1% (40x the
+  measured error) now sees it.
+- **SI**: two pure tones on exact padded bins, 400 bins apart, asked to be at least exactly that far
+  apart (spelled from the same axis, so gap and threshold are one float) — both kept; under `>` a
+  sidelobe five bins away takes the second slot.
+- **SE** is equivalent wherever the detector itself runs: for a power-of-two `n`, `1/(n d)` and
+  `(1/d)/n` are the same float, so the reorder changes nothing `magnitude_spectrum` returns. But the
+  viewer's panels and five harnesses call `rfftfreq` at the record's own length, where about one
+  `(n, fs)` pair in three differs (158 of 500 searched). The existing axis bar ran at 44.1 kHz with
+  n = 1024 — blind. A new bar at n = 1001, fs = 8 kHz pins the chain (7.992007992007991) and asserts
+  that both the reordered and the tidy `fs/n` spellings differ there.
+- **BK**: every start in both suites was from rest. Launched from `q0 = 0` with velocity `V`, the
+  first step's centred velocity is `V` exactly and the mode is the discrete sine — the start-up
+  bar's velocity half, the fourth instance of an established bar, so added without asking and said
+  here.
+
+All 23 re-run against the final files: **every one red in the three files** except BG, BH, BI and
+BJ, which stay covered elsewhere.
+
+### 43.5 The retirement rule, discharged
+
+| retired | native bar |
+|---|---|
+| `test_operators.py::test_inner_and_norm_match_definition` | `ops.rs::the_inner_product_is_the_energy_bookkeeping_it_claims_to_be`, now with the values |
+| `…::test_forward_difference_exact_on_linear_ramp` | `forward_difference_is_exact_on_a_linear_ramp` (same `h`) |
+| `…::test_second_difference_exact_eigenvector` | `second_difference_has_the_exact_discrete_eigenvector` (1e-9 absolute; the Python's `allclose` carried `rtol = 1e-5`, ~2.5e-3 here) |
+| `…::test_second_difference_exact_on_quadratic` | `second_difference_is_exact_on_a_quadratic` |
+| `test_spectrum_detector.py::test_the_refiner_declines_a_bin_that_is_not_a_peak` (2) | `the_refiner_declines_a_bin_that_is_not_a_peak`, old corrections recomputed |
+| `…::test_a_genuine_peak_is_still_refined_below_the_bin_grid` | `a_genuine_peak_off_the_bin_grid_is_refined_to_a_tenth_of_a_bin` |
+| `…::test_a_measured_partial_never_leaves_the_window_it_was_asked_about` (6) | the same name, six probes |
+| `…::test_the_integer_fft_length_agrees_with_the_float_spelling_over_every_length` | the same name, aimed at `next_pow2` |
+| `…::test_the_peak_separation_comparison_sits_on_a_zero_margin_and_the_spelling_is_load_bearing` | `the_peak_separation_comparison_sits_on_a_zero_margin_and_stays_live`, misses recorded exactly |
+| `…::test_a_window_with_nothing_in_it_comes_back_as_not_a_number` | `a_window_off_the_end_of_the_spectrum_reports_nan_rather_than_a_wrong_answer`, control added |
+| `test_body.py::test_body_energy_conserved`, `test_body_energy_strictly_positive` | `the_python_rig_conserves_its_energy_and_never_reaches_zero` |
+| `…::test_body_energy_scales_with_mass` | `the_energy_is_linear_in_the_modal_masses` |
+| `…::test_body_passivity_monotonic` | `the_python_rig_is_passive_at_sigma_8`, the Python's tolerance |
+| `…::test_body_decay_rate_matches_2sigma` | `a_single_damped_mode_decays_at_twice_sigma`, plus the 0.1% bar |
+| `…::test_body_cfl_rejected` | `a_mode_above_the_modal_cfl_is_rejected_and_the_message_names_the_worst_one` |
+| `…::test_body_single_mode_is_exact_discrete_cosine` | `a_single_lossless_mode_is_the_exact_discrete_cosine` |
+| `…::test_body_bridge_and_pressure_readouts` | `the_bridge_read_outs_are_the_definitions`, `pressure_before_the_first_step_is_the_free_response_not_zero` |
+| `…::test_body_frequencies_must_be_positive` | `non_physical_parameters_are_rejected_in_the_originals_order`, the variant |
+
+**Orphan removed from `tests/helpers.py`**: `discrete_sho_frequency` (grepped alone; its only caller
+was `test_body.py`). `make_body` stays — `tests/test_radiation.py` uses it. Comments naming the
+deleted files were updated in `body.rs`'s header, `spectrum.rs`'s witness and `next_pow2` notes, the
+analysis crate's `next_pow2` doc (which still pointed at the long-deleted parity file) and the
+binding's `spectrum.rs` header. **Loose end**: the binding's `spectrum_parabolic_refine` and its
+Python wrapper `_parabolic_refine` now have no caller; they go with the binding (§27's loose end is
+of the same kind).
+
+### 43.6 Cost and counts
+
+- **pytest 689 → 664**: the three files' 25 cases; 664 passed.
+- **Native +12**: workspace 1,667 → 1,679 optimised (`scripts/cargo-test-nice.ps1 -Full`), all
+  green; `body.rs` 14 → 20, `spectrum.rs` 14 → 20, `ops.rs` 17 (one test extended).
+- **Both profiles**, nothing to weigh: unoptimised on one thread `spectrum.rs` 0.28 s (the 2^20
+  `log2` sweep), `body.rs` 0.04 s, `ops.rs` under 0.01 s.
+- **6 physics files remain**, with **140** test functions by the §24.1 count (159 − 19). No
+  operator, body or detector Python file is left.
+
+### 43.7 What is next
+
+The next batch is not chosen; the human picks. The 6 files, by family: the room (`test_airbox_*`,
+4: energy 17, free field 5, modal 12, scene 9 functions), radiation (49) and the resolution horizon
+(48).

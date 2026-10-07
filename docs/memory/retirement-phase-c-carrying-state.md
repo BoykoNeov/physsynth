@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-c-carrying-state
-description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-20 done by 2026-10-07 (plates, membrane, beam, every string, every contact file, the gong plate, the bow, the bore and reed); 9 files / 159 functions left"
+description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-21 done by 2026-10-07 (plates, membrane, beam, every string, every contact file, the gong plate, the bow, bore+reed, operators+detector+body); 6 files / 140 functions left"
 metadata:
   node_type: memory
   type: project
@@ -199,8 +199,25 @@ breakages, delete the file.
   x2 all passed; now compared every step. Check WHERE a bar's comparison happens, not just its tolerance.
   mutate.py restores from a snapshot: one taken before later edits silently REVERTS them — re-snapshot after
   any edit to a planted file (it reverted a committed comment; caught by git status).
-Remaining after §42: **9 physics files / 159 functions** (§24.1 count): body (1), room `test_airbox_*` (4),
-radiation (1), resolution horizon (1), spectrum detector (1), operators (1). Next batch not chosen — the user
+- §43 batch 21 (2026-10-07, human: "go with your recommendation" = the three small families together):
+  `test_operators.py` + `test_spectrum_detector.py` + `test_body.py` (19 fns / 25 cases) → EXISTING native
+  files: core `ops.rs` (17, inner's VALUE added), analysis `spectrum.rs` 14 → 20, core `body.rs` 14 → 20.
+  Every figure matched to the digit; nothing frozen. 10 gaps (advisor) carried: inner only had properties any
+  scaling has; body energy bars all at m = 1; no native decay bar and a DEAD line (`previous < body.energy()*1e3`,
+  same number); zero-crossing bar read omega/k off the model; ±½-bin refiner bar passes a pinned refiner; NaN
+  bar had no in-range control. 23 plants; 8 zero-witness re-run workspace-wide (~10 min each): BG/BH/BI/BJ
+  covered elsewhere; BD (loss 1% high — Python's 2% decay bar passes it BY DESIGN) and SI (`>=`→`>` in
+  detect_peaks separation) only the Windows-exact viewer freeze; SE (`1/(n d)` → `(1/d)/n`) seen by NOTHING incl.
+  the Python suite (wheel rebuilt with the plant — REINSTALL the clean wheel after!): identical at every
+  power-of-two n, so a bar at a power of two cannot pin a spelling — new bar at n=1001, fs=8k with both
+  controls asserted different; BK (start-up `k v0` sign) nothing — every start in both suites from REST →
+  launched-sine/centred-velocity bar (established start-up bar, added without asking). Human chose guards for
+  BD (0.1% decay bar), SI (two tones exactly min_sep apart, sep spelled from the same axis), SE.
+  pytest 689 → 664; workspace 1,667 → 1,679. Unopt cost negligible (spectrum 0.28 s). `printf` into a .bat
+  turns `	`/`` in Windows paths into TAB/backspace — use forward slashes for the script path.
+  Loose end: binding `spectrum_parabolic_refine` + `_parabolic_refine` wrapper have no caller now.
+Remaining after §43: **6 physics files / 140 functions** (§24.1 count): room `test_airbox_*` (4: energy 17,
+freefield 5, modal 12, scene 9), radiation (49), resolution horizon (48). Next batch not chosen — the user
 picks; a recommendation + "go with it" is an accepted answer.
 Loose end (from §27): `test_arpack_oracles_are_bit_reproducible`'s surviving free-plate half guards a
 helper whose only caller is the guard itself.

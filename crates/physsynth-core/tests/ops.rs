@@ -98,6 +98,17 @@ fn the_inner_product_is_the_energy_bookkeeping_it_claims_to_be() {
     assert_eq!(norm2(&f, h), inner(&f, &f, h));
     assert!(norm2(&f, h) >= 0.0);
     assert_eq!(norm2(&[0.0; 5], h), 0.0);
+
+    // And the VALUE, against the definition `h sum f_i g_i` -- carried from
+    // `tests/test_operators.py` (retirement plan §43). Everything above is a property any scaling
+    // of the sum also has: an inner product that dropped `h`, or used `h^2`, is still symmetric,
+    // still non-negative on the diagonal, and still zero on zero. The sums are exact here (-3.5 and
+    // 14.25), so the only rounding is the one multiply by `h`, and the recorded NumPy figures are
+    // reproduced exactly.
+    assert_eq!(inner(&f, &g, h), h * -3.5);
+    assert_eq!(norm2(&f, h), h * 14.25);
+    assert_eq!(inner(&f, &g, h), -0.035);
+    assert_eq!(norm2(&f, h), 0.142_500_000_000_000_02);
 }
 
 // -- the assembled operators ---------------------------------------------------------------------

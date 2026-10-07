@@ -119,8 +119,15 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    for both first, one comparison, one breakage round, one deletion), §38 the mallet on a
    plate, and §39 the mallet on a gong — **every contact file is gone** — and §40 the gong plate
    itself (six files, its bracket and Airy solve included), §41 the bowed string, and §42 the bore
-   and the reed together (seven files; the reed's bars stand on the bore); **9 physics files / 159
-   functions remain** (§9's map is stale). §42 found SEVEN parameters that had only ever run at
+   and the reed together (seven files; the reed's bars stand on the bore), and §43 the operators,
+   the spectrum detector and the body together (three files, all into existing native files);
+   **6 physics files / 140 functions remain** — the room (4), radiation and the resolution horizon
+   (§9's map is stale). §43's four finds, all guarded at the human's call or by precedent: a loss
+   read 1% high (the Python's 2% decay bar passes it by design) and a `>=` → `>` in the peak
+   separation, each seen only by the Windows-exact viewer freeze; the frequency axis reordered to
+   `(1/d)/n`, seen by NOTHING — identical at every power-of-two length, so a bar at a power of two
+   cannot pin a spelling (it now runs at n = 1001); and a launched start whose velocity sign could
+   flip unseen, because every start in both suites was from rest. §42 found SEVEN parameters that had only ever run at
    their defaults (sound speed, air density, reed mass, jet width, rest opening, the reed's air
    density, its solve tolerance) — each hard-wired passed the whole workspace and each is a real
    defect off the default — plus a far-field read-out and a solver seed seen only by the

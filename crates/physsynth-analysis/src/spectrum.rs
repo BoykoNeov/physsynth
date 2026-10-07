@@ -61,10 +61,10 @@ use std::f64::consts::PI;
 /// `log2` next to an integer would be a different FFT length and therefore a different spectrum,
 /// not a different last digit. Here it is integer arithmetic instead, which cannot round at all.
 ///
-/// That is a substitution, so it is measured rather than assumed: `tests/test_rust_parity_spectrum.py`
-/// checks the two spellings agree for **every** length from 1 to 2^20 and at each of `2^k - 1`,
-/// `2^k`, `2^k + 1` up to 2^31. They do, everywhere. The float path is safe on this range and the
-/// integer one is safe on every range, so the integer one is what runs.
+/// That is a substitution, so it is measured rather than assumed: the crate's
+/// `tests/spectrum.rs` checks the two spellings agree for **every** length from 1 to 2^20 and at
+/// each of `2^k - 1`, `2^k`, `2^k + 1` up to 2^31. They do, everywhere. The float path is safe on
+/// this range and the integer one is safe on every range, so the integer one is what runs.
 pub fn next_pow2(n: usize) -> usize {
     let m = n.max(2);
     // `(m - 1).next_power_of_two()` would be wrong for m already a power of two; this is the

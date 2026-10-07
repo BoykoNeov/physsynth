@@ -284,17 +284,6 @@ def make_reactive_body(
     return ReactiveRadiatedBody(body=body, load=RationalAirLoad(fs=fs, R=R, M_a=M_a))
 
 
-def discrete_sho_frequency(f: float, k: float) -> float:
-    """Exact discrete oscillation frequency (Hz) of the leapfrog SHO for a mode of ``f`` Hz.
-
-    The scheme ``q^{n+1} - 2q^n + q^{n-1} = -k^2 omega^2 q^n`` has solutions ``cos(Omega n k)`` with
-    ``sin(Omega k / 2) = omega k / 2``, i.e. ``Omega = (2/k) arcsin(omega k / 2)``. Approaches the
-    continuum ``f`` as ``omega k -> 0``; used as the modal oracle.
-    """
-    omega = 2.0 * np.pi * f
-    return float(np.arcsin(0.5 * omega * k) / (np.pi * k))
-
-
 # -- the 3-D air box (HANDOFF §12.H): the distributed tier of the air node ---------------
 #
 # A small, ordinary room. The default grid is deliberately tiny (0.9 x 0.7 x 0.6 m at h = 10 cm,
