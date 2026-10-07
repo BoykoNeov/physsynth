@@ -194,6 +194,11 @@ breakages, delete the file.
   pytest 786 → 689; workspace 1,614 → 1,667. Harness opt 1.7/1.5 s, unopt 33.5/7.7 s (1 thread): both
   profiles (human). The plan file and tests/bore.rs are CRLF in the working copy — edit with CRLF preserved.
   Bash heredoc with a Python body containing `'''` broke ("unexpected EOF"): write scripts with the Write tool.
+  CI 37549040451 green on bfb55ef (bore 0.55/17.6 s, reed 0.18/5.1 s Linux). Review: the far-field
+  integral bar compared only the LAST step, where U_out had decayed to 2e-10 of peak — sign flip, missing /k,
+  x2 all passed; now compared every step. Check WHERE a bar's comparison happens, not just its tolerance.
+  mutate.py restores from a snapshot: one taken before later edits silently REVERTS them — re-snapshot after
+  any edit to a planted file (it reverted a committed comment; caught by git status).
 Remaining after §42: **9 physics files / 159 functions** (§24.1 count): body (1), room `test_airbox_*` (4),
 radiation (1), resolution horizon (1), spectrum detector (1), operators (1). Next batch not chosen — the user
 picks; a recommendation + "go with it" is an accepted answer.

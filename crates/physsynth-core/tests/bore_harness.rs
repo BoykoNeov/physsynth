@@ -798,29 +798,37 @@ fn the_far_field_readout_is_clean() {
 #[test]
 fn the_far_field_readout_is_the_rate_of_the_bell_flow() {
     // The read-out is a volume ACCELERATION: integrated over a run it gives back the bell's
-    // outgoing volume velocity, which starts at zero. A read-out that stopped differencing (one
-    // dropped line) stays clean and nonzero, so neither neighbouring bar sees it; only the
-    // viewer's Windows-exact freeze did (§42.4, the human's call).
+    // outgoing volume velocity, which starts at zero — at EVERY step, not only the last. The
+    // first draft compared the two at the end of the run, where the flow has died back to ~2e-10
+    // of its peak, so a read-out with the wrong sign, without its `/ k` or doubled also matched
+    // (§42.8). Compared step by step, while the flow is large, the sign and the scale are pinned.
+    // A read-out that stopped differencing stays clean and nonzero, so neither neighbouring bar
+    // sees any of these; only the viewer's Windows-exact freeze saw the first (§42.4).
     let p = bell(200, 1.0, (End::Closed, End::Radiating), 650.0);
     let mut b = started(&p, &bump(&p, 0.3, 0.06));
     let mut integral = 0.0;
     let mut peak: f64 = 0.0;
+    let mut worst: f64 = 0.0;
     for _ in 0..steps(&p, 0.05) {
         b.step(None);
         integral += b.radiated_pressure() * p.k;
         peak = peak.max(b.u_out().abs());
+        let err = (integral - b.u_out()).abs();
+        worst = if err.is_nan() || worst.is_nan() {
+            f64::NAN
+        } else {
+            worst.max(err)
+        };
     }
-    let err = (integral - b.u_out()).abs();
     println!(
-        "integral {integral:e}, U_out {:e}, peak {peak:e}, err/peak {:e}",
-        b.u_out(),
-        err / peak
+        "peak U_out {peak:e}, worst |sum - U_out| / peak {:e}",
+        worst / peak
     );
     assert!(peak > 0.0, "the bell never moved any air");
     assert!(
-        err <= 1e-9 * peak,
-        "sum(dU/dt k) = {integral:e} is not U_out = {:e}",
-        b.u_out()
+        worst <= 1e-9 * peak,
+        "the integrated read-out strays from U_out by {:e} of its peak",
+        worst / peak
     );
 }
 

@@ -7160,7 +7160,7 @@ certifies the dense solve against it on all seven rigs the Python read (worst 1.
 | absurd `R`, peak pickup | 9.97e-4 | ≤ 2e-3 |
 | realistic / rigid bell odd-even ratio | 7.2e5 / 2.0e-7 | > 1e3 / < 1 |
 | far-field Nyquist fraction; against the raw node | 3.5e-4; 0.064 | < 1e-2; < 0.5 |
-| far-field integral against `U_out` (added) | 0 | ≤ 1e-9 peak |
+| far-field integral against `U_out`, worst step (added) | 4.9e-26 of peak | ≤ 1e-9 of peak |
 | piston `R / Z0` | 3.2e-4 | < 1e-3 |
 | reed balance, worst of 4 | 7.8e-15 | 1e-11 |
 | reed balance off the default reed and air (added) | 1.3e-14 | 1e-11 |
@@ -7180,7 +7180,7 @@ pitch lock, 2.8x — each reads the same deterministic figure the Python did. Of
 fallback bound is 2x by design (it guards an order-of-magnitude cost, 49 against 1,900) and the
 closed-form bar 2.5x.
 
-### 42.4 Thirty breakages
+### 42.4 Thirty-three breakages
 
 Planted one at a time with `W:\temp\claude\bore-reed\mutate.py` (snapshot, restore by copy,
 byte-compare, a per-plant time limit). "Red" counts `bore_harness`, `reed_harness`, `bore`, `reed`
@@ -7200,6 +7200,9 @@ and the core's unit tests; every plant with two or fewer witnesses was re-plante
 | **BI** hook after the radiating drain | 1 | `bore.rs`'s ordering bar only — a direct bar |
 | **BJ** divergence without the right wall's segment | 11 | identity, reflection, rigid bell, far field |
 | **BK** far-field read-out not differenced | 0 | the viewer freeze only → the integral bar (**added**) |
+| **BO** far-field read-out without `/ k` (§42.8) | 0 | the integral bar, step by step |
+| **BP** far-field read-out with its sign flipped (§42.8) | 0 | the same |
+| **BQ** far-field read-out doubled (§42.8) | 0 | the same |
 | **BL** CFL ceiling without its tolerance | 59 | everything at `lam = 1` |
 | **BM** right end a full cell | 1 | `bore.rs`'s weight bar, and the viewer's reflection bar and freeze |
 | **BN** viscous denominator `(1 + sk)` dropped | 3 | decay rate, both monotone bars |
@@ -7237,7 +7240,8 @@ rig and at `rho0 = 1.18`, `c0 = 340`, `mu = 0.05`, `width = 1.2e-2`, `H0 = 3e-4`
   only that the loose solve is measurably worse and still bounded.
 - **BK and RI were seen only by the viewer's freeze**, which is exact on Windows only. BK leaves a
   clean, nonzero signal that is the flow rather than its rate; the added bar integrates the read-out
-  and recovers the bell's outgoing flow exactly. RI leaves the physics unchanged to the last digits
+  and recovers the bell's outgoing flow exactly, at every step (the first draft compared only the
+  last step and was weaker than described — §42.8). RI leaves the physics unchanged to the last digits
   but takes the bracketed fallback 1,900 times instead of 49; the human chose a bound (< 100).
 - **RJ is not a gap, and an existing claim about it was false.** `reed.rs::the_stall_test_is_nan_true`
   said it pinned the `!(a < b)` spelling. Planted, `>=` iterates on NaN up to the cap and reaches the
@@ -7324,3 +7328,40 @@ reed header's "compared step for step in the parity file" now says where that co
 The next batch is not chosen; the human picks. The 9 files, by family: the body (1), the room
 (`test_airbox_*`, 4), radiation (1), the resolution horizon (1), the spectrum detector (1) and the
 operators (1).
+
+### 42.8 Review fixes and CI
+
+Run 37549040451 on `bfb55ef`, all five jobs green — the first Linux run of the new bars, of the
+closed-form spectrum certification and of the reed's exact balances on glibc's arithmetic.
+
+| file | optimised | unoptimised |
+|---|---|---|
+| `bore_harness.rs` | 0.55 s | 17.57 s |
+| `reed_harness.rs` | 0.18 s | 5.07 s |
+
+The jobs took **6.3 minutes optimised and 13.3 unoptimised**; the previous run on `main`
+(37503550881) took 10.9 and 11.6. The two files are 0.7 s and 22.6 s of that, so the swing is the
+runners (§41.8: up to 1.6x between runs), but the unoptimised job is now the longer of the two by
+the clock of this run — the first candidate for `release_only` remains `plate_outline.rs` (§28).
+CI runs without `--nocapture`, so the Linux fallback counts are not recorded: the bound passed, so
+both loud balance runs took the fallback fewer than 100 times on Linux, and nothing more is known.
+§42.1's to-the-digit agreement, the fallback step lists included, is a Windows claim.
+
+The advisor's read of the first commit found one bar weaker than described, fixed here:
+
+- **The far-field integral bar compared only the last step**, where the bell's outgoing flow has
+  died back to ~2e-10 of its peak (`U_out = -1.1e-19` against a peak of `4.9e-10`), inside a
+  tolerance of `1e-9 · peak = 4.9e-19`. A read-out with its sign flipped, without its `/ k` or
+  doubled therefore also matched. Planted against a copy of the first draft, all three stayed green
+  and only BK went red; the bar now compares the running integral with `U_out` after every step
+  (worst 4.9e-26 of the peak) and all four go red (§42.4's BK, BO, BP, BQ). It was described to
+  the human as an exact bookkeeping identity, which is what it now asserts.
+- **The reed's damping `q` is the eighth default-only parameter**, and was not in the question to
+  the human because the viewer's own reed sweep sees it (§42.4, RP) — said here so it does not
+  read as dropped.
+
+One hazard of the breakage script surfaced while doing it: it restores each planted file from a
+snapshot, and the snapshot predated the comment edits committed in `bfb55ef`, so restoring after
+the far-field plants silently reverted one committed comment in `bore.rs`. Caught by `git status`
+and the diff, restored from `HEAD`, and the snapshot refreshed. **Re-snapshot after any edit to
+a file the script plants in.**
