@@ -351,7 +351,7 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    *re-derive* it, and the human's condition for allowing it was that the numbers be frozen first.
    **`crates/physsynth-analysis/tests/reference/analysis_frozen.json` is where they live** (a
    Python file until retirement plan §47, phase F's first step) — 74 fixtures, 3,754 floats (the
-   "62 / 3,708" quoted for years predates the twelve horizon rows), recorded to the last digit from
+   "62 / 3,708" quoted here went stale on 2026-09-07, when the twelve horizon rows were added), recorded to the last digit from
    the Python implementation before it was deleted, asserted on every run by that crate's
    `tests/analysis_frozen.rs`. Its INPUTS are frozen too, as exact doubles — NumPy's seeded RNG,
    `sin` and `linspace` built several and nothing native can rebuild them — with every default of

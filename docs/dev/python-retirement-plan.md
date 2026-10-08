@@ -8425,8 +8425,9 @@ first of §46.7's items, and the one every later step stands on: the record of w
 Python analysis oracles said had to have a home that outlives Python before the binding can go.
 
 **What moved.** `tests/test_analysis_frozen.py` (78 pytest cases) with its two data modules,
-`tests/analysis_frozen_cases.py` and `tests/analysis_frozen_values.py`, deleted whole. In their
-place, in the analysis crate:
+`tests/analysis_frozen_cases.py` and `tests/analysis_frozen_values.py`, deleted whole — `28e1b71`
+is the last commit that holds them, and with the Python wrappers' signatures it is what
+reproduces the recorded inputs. In their place, in the analysis crate:
 
 - `crates/physsynth-analysis/tests/reference/analysis_frozen.json` — the record, one case per line.
 - `crates/physsynth-analysis/tests/analysis_frozen.rs` — **4 bars**: every case read through the
@@ -8437,13 +8438,14 @@ place, in the analysis crate:
 
 pytest 337 → 259 (exactly the 78 cases; the per-file count at `HEAD` was read from a worktree).
 
-### 47.1 The count was wrong for a month: 74 fixtures, not 62
+### 47.1 The count was stale from 2026-09-07: 74 fixtures, not 62
 
-Every document — CLAUDE.md, the six analysis shims' comment blocks, `ci.yml`, §46.7 — said "62
-fixtures, 3,708 floats". Counted from the data at the move: **74 rows, 3,754 recorded floats, 179
+CLAUDE.md said "62 fixtures, 3,708 floats"; the six analysis shims' comment blocks, `ci.yml` and
+§46.7 said 62. Counted from the data at the move: **74 rows, 3,754 recorded floats, 179
 recorded integers, 59 distinct functions** (33 modal, 12 horizon, 8 duffing, 7 damping, 6 spectrum,
-5 rotating wave, 3 dispersion). 62 was the number before the resolution-horizon plan §6 froze its
-twelve rows into the same file, and nothing re-derived it. The figure was repeated to the human in
+5 rotating wave, 3 dispersion). 62 was right when the record was made (`22432b6`, 2026-09-03) and
+went stale when the resolution-horizon plan §6 froze its twelve rows into the same file
+(`f9ffc60`, 2026-09-07); nothing re-derived it. The figure was repeated to the human in
 this batch's own proposal; the advisor caught it before any write-up quoted it. Every live reference
 now says 74 and points at the JSON; the historical sections that quote 62 are left as they were.
 
@@ -8480,8 +8482,9 @@ native side, as the Python built it on its own side.
 
 **The strongest check available:** the binding is the same Rust, and the inputs are the same
 doubles, so the native gap for each case should equal the gap the pytest path measured today, to
-the bit. It does — **74 of 74 identical** (wheel reinstalled first). 63 are exactly zero; the worst
-is 3.5e-15 (`duffing_frequency_shift`, the scar already on the record), then 7.3e-16 (the rotating
+the bit. It does — **74 of 74 identical** (wheel reinstalled first). Of the 67 rows that hold floats
+(seven hold none: five horizon rows and the two underdamped verdicts), 56 are exactly zero; the
+worst is 3.5e-15 (`duffing_frequency_shift`, the scar already on the record), then 7.3e-16 (the rotating
 wave), 5.2e-16 (the free circular plate's Λ list), 4.3e-16 (the history), 2.2e-16 (the circular
 membrane).
 
@@ -8526,10 +8529,14 @@ E and F are what the checksum is for; neither moves any answer past the bar.
   (§22 deleted both generators), and the guard's own failure message told a new oracle to get a
   native bar instead. A native "every `pub fn` has a row" would restate the same dead end at a
   larger number.
-- **The analysis shims stay.** `physsynth/analysis/*.py` are still imported by
-  `physsynth/core/radiation.py`, `physsynth/core/string_geometric.py`,
-  `physsynth/core/operators2d.py`, `tests/test_binding_surface.py` and `tests/test_stability.py`,
-  so they go with the rest of `physsynth/`, not here. Their comment blocks now point at the JSON.
+- **The analysis shims were left in place, and that is now an open question (§47.8).** The batch
+  first said they were still imported by three `physsynth/core/` modules; that came from a grep
+  that matched docstrings. Grepped for import LINES, nothing in `physsynth/` imports them, and
+  after this batch the only pytest code that reaches any of them is `tests/test_binding_surface.py`'s
+  three horizon-shim tests (`pitch_error_cents`, `pitch_horizon`). `modal`, `damping`,
+  `dispersion`, `duffing`, `spectrum` and `rotating_wave` — and five of `horizon`'s seven functions
+  — are imported by nothing that runs: the deleted file was what exercised all 59. Their comment
+  blocks now point at the JSON.
 - `tests/oracles.rs`' T60 bar keeps its own copy of one row, next to the round trips whose blind
   spot it covers (§33.4); its comment now names the JSON row.
 
@@ -8545,3 +8552,31 @@ the independent referee and must be recorded before the file goes; `tests/test_s
 `scripts/`' Python and `crates/physsynth-py/`.
 
 When the human says so.
+
+### 47.8 Review fixes and CI
+
+Run 37787576207 on `eb3390c`, all five jobs green (optimised Rust 8.7 min, unoptimised 12.3 min,
+the exact viewer freeze 2.9 min). It was the record's first run on Linux, and the first time
+anywhere that the inputs were NOT rebuilt by the running machine's own NumPy: every platform now
+reads the Windows-built doubles and feeds them to code linked against its own C library. All 74
+cases stayed inside the 1e-13 bar there. (The per-case gaps print only under `--nocapture`, so the
+Linux gaps were not read; the claim is the bar, not a bit-identity.)
+
+| file | optimised (Linux) | unoptimised (Linux) |
+|---|---|---|
+| analysis `analysis_frozen.rs` (4) | 0.68 s | 4.54 s |
+
+The advisor's read of the first commit found three things to correct, one to add, and CI to watch:
+
+- **"Stale for a month" / "quoted for years" were estimates.** Measured from git: the record is
+  `22432b6` (2026-09-03), the twelve horizon rows `f9ffc60` (2026-09-07), so "62" was stale from
+  2026-09-07 to this batch. CLAUDE.md, §47.1 and the memory note now give the dates.
+- **"Every document said 62 fixtures, 3,708 floats" was too wide**: only CLAUDE.md carried 3,708.
+- **"63 are exactly zero" counted seven rows that hold no float at all** (zero by construction).
+  Of the 67 rows that hold floats, 56 are exactly zero — counted from the saved per-case gaps.
+- **The shim claim that settled the deletion question was false.** "Still imported by three core
+  modules" came from a grep with unescaped dots that matched docstrings; grepped for import lines,
+  only three `test_binding_surface.py` tests reach any shim. §47.6 now says so, and whether to
+  delete `physsynth/analysis/` now is put to the human rather than decided here.
+- **The last commit holding the Python files**, `28e1b71`, is named in §47's opening, as §22 named
+  `17efb1e` for the generators.

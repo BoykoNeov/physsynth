@@ -75,8 +75,8 @@ The Python test and both data modules are deleted. The record is
 `crates/physsynth-analysis/tests/reference/analysis_frozen.json`, read by that crate's
 `tests/analysis_frozen.rs` (4 bars). Three things worth keeping:
 
-- **"62 fixtures, 3,708 floats" was stale for a month** — the horizon plan added 12 rows and nothing
-  re-derived the number. It is **74 rows, 3,754 floats, 179 ints, 59 functions**. Count from the
+- **"62 fixtures, 3,708 floats" was stale from 2026-09-07 (`f9ffc60`) to 2026-10-08** — the horizon
+  plan added 12 rows and nothing re-derived the number. It is **74 rows, 3,754 floats, 179 ints, 59 functions**. Count from the
   data, never from a document.
 - **Freeze the INPUTS, not only the answers, when moving a record across languages.** Several inputs
   were built by NumPy's seeded RNG, `sin`, `exp`, `linspace` — nothing native rebuilds them. They
