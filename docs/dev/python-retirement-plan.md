@@ -8121,8 +8121,13 @@ string material helper, and on purpose: that helper was a model computation, thi
 ### 46.1 The comparison — every figure reproduced
 
 Recorded first, wheel reinstalled (`W:\temp\claude\batch24\record.txt`, `record.py` beside it), and
-the native figures printed by a temporary test (`native_record.txt`). **Every figure matches to all
-printed digits**, including every root find: the 15 wave floors and their closed forms, the
+the native figures printed by a temporary test (`native_record.txt`). The first native print
+covered about half of the record, so a second pair (`record2.txt` / `native_record2.txt`, the
+Python run from the parent commit's files) covers the rest — the families' boundary margins, the
+tie-break, the fall sizes and runner-up ratios, the axial deviations, the hertz orders, the corner
+ratios, the ceiling's minimum, the axial rises, the membrane seam and the integer bars' headroom
+(§46.3) — compared number by number: **105 of 105 lines exactly equal**. So **every figure matches
+to all printed digits**, including every root find: the 15 wave floors and their closed forms, the
 stiffness shares, the explicit sweep (255, 131, 66, 48, 32, 24), the θ-string sweeps at κ = 0, 2, 8
 and their floors, the plate gaps (0.16788765871593903 to 0.9484144534539105), the pitch ratios, the
 grained diagonal deviations (worst 1.2212453270876722e-15), every grain's axial gap range and
@@ -8130,7 +8135,8 @@ grained diagonal deviations (worst 1.2212453270876722e-15), every grain's axial 
 of the 324 crossings comes to an integer (4.4036529896374077e-4), all ten cancellation-residual
 lists, all eleven corner flips and the flip's convergence list, the sharpest mode at the ceiling,
 the 20 collapse constants and the space-floor spread (3.863576125695545e-13). The built models
-agree too: the damped string's `k` = 1.953125e-5 and `θ` = 0.28, the membrane's `k` at the ceiling
+agree too (compared on screen in the session and not saved; `native_record2.txt` saves the same
+models' boundary figures): the damped string's `k` = 1.953125e-5 and `θ` = 0.28, the membrane's `k` at the ceiling
 (5.5242717280199026e-5, 2.7621358640099513e-5) and at λ = 0.6 (4.6874999999999994e-5 against the
 analytic path's 4.6875e-5).
 
@@ -8149,8 +8155,14 @@ grain crossing). Nothing was frozen.
 
 ### 46.2 What the existing native bars could not see
 
-- **The 27 existing bars were about the primitives.** None asked a scheme anything; every claim
-  about the string, plate, grained plate and membrane is new to the native side.
+- **The analysis crate's 27 existing bars were about the primitives.** None asked a scheme
+  anything, so the claims about the string, plate, grained plate and membrane are new to THAT
+  file — not to the workspace: `crates/physsynth-viewer/tests/horizon.rs` asserts at least four of
+  them through the payload builder (the explicit string in tune at λ = 1, refining its timestep
+  makes it worse, the θ string cannot pass its floor, the membrane's worst corner is axial at the
+  ceiling), and `plate_kirchhoff.rs`, `beam.rs` and `oracles.rs` derive bands from horizons. None of
+  those was credited in the table: the viewer's bars are claims about what the read-out REPORTS, and
+  the others use a horizon rather than asserting one.
 - **`pitch_horizon` had no length-mismatch refusal bar** (only `pitch_error_cents` did). Added:
   `the_horizon_refuses_mismatched_families_rather_than_zipping_them_short`.
 - **Two existing bars were weaker than the Python's.** `a_blocks_worst_mode_is_always_one_of_its_
@@ -8176,7 +8188,7 @@ grain crossing). Nothing was frozen.
 |---|---|---|---|
 | wave floor against its closed form (15) | −0.36 to −0.98 modes | within 1 mode | 0.02 mode at the worst (25 cents, N = 64) |
 | fraction of the grid, spread over four grids | 0.0049 | 1/128 = 0.0078 | 1.6x |
-| θ string by λ = 1/8 against its floor (κ = 2) | 18 against 19 | `>= floor - 1` | **0 — met exactly**, as in the Python |
+| θ string by λ = 1/8 against its floor (κ = 2) | 18 against 19 | `>= floor - 1` | 0 modes — met exactly, as in the Python |
 | canonical string's share of its grid | 11/256 = 4.3% | < 10% | 2.3x |
 | explicit string at λ = 1 against 8 × floor | 255 against 168 | `>` | 1.5x |
 | plate floor, `predicted − horizon` (24) | 0.168 to 0.948 | (0, 1] | 0.052 mode at the worst |
@@ -8200,6 +8212,14 @@ grain crossing). Nothing was frozen.
 | flip convergence, 16x grid step | 247x | > 50x | 4.9x |
 | membrane seam, analytic against built | 3.9e-13 cents | 1e-9 | 2,600x |
 | axial family, smallest rise | 0.0098 cents | > 0 | — |
+
+**What could move an integer bar is how far its boundary modes sit from the cents bound**, not the
+integer slack (the review's point): a different C library's last bit moves a mode's error by
+~1e-13 cents. Measured for the integer bars that sit closest (`record2.txt`, identical natively):
+the θ string's floor at κ = 2, N = 256 has its last mode inside **0.048 cents** under the bound and
+its first outside 0.58 over; the θ string at λ = 1/8, 0.46 / 0.15; at λ = 1, 0.087 / 0.95; the
+membrane's axial family at the ceiling, 0.97 / 0.35 (N = 64) and 0.14 / 0.54 (N = 128); the 25-cent
+wave floor at N = 64, 3.9 / 0.10. The tightest is eleven orders above a last bit.
 
 The thin ones are the Python's own bars, carried unchanged, and each is thin for a stated reason:
 the θ-string bar is an integer bar the recorded run sits on, the diagonal crossing's 2.2x is
@@ -8229,11 +8249,17 @@ orthotropic oracle, the grain dropped from the continuum one (4 to 7 each) — a
 plant was seen by `the_integer_horizon_is_the_floor_of_that_crossing_…` and the blocks; none by
 the identity bars, as §46.2 says.
 
-**θ, a fifth time.** The plate's θ in `discrete_plate_eigenfrequency` (at 1/4, or hard-wired to the
+**θ, a sixth time** (after §33, §34, §35, §40 and §41). The plate's θ in `discrete_plate_eigenfrequency` (at 1/4, or hard-wired to the
 default 0.28) and in `discrete_orthotropic_plate_eigenfrequency` (the same two) were each seen by
 exactly one bar, `the_orthotropic_oracles_reduce_to_the_isotropic_ones` — a twin, the two oracles
 held against each other. Planted as ONE defect both share (both hard-wired to 0.28) and run
-workspace-wide: **0 red in 101 binaries.** Every plate in the workspace is built at the default θ.
+workspace-wide: **0 red in 101 binaries.** The callers, enumerated by an unfiltered grep: every one
+that builds or reads a plate passes the default — core's plate tests, the analysis crate's horizon
+fixtures, and the viewer, whose frozen scenes put no plate at another θ (the freeze's only
+non-default θs are in `strings.json`); the analysis crate's limit bar passes θ = 0.5 where `k -> 0`
+and θ cannot matter; and the twin passes 0.5 to both. The cost stated to the human was checked
+after the fact: the viewer offers a θ slider on its plates (0.25 to 1), and its in-tune read-out
+passes the plate's own θ through these oracles, so a user who moves it would get a wrong limit.
 The stiff string's oracle hard-wired to 0.28 was probed the same way and is seen, structurally on
 every platform, by the viewer freeze's `theta_half` scene (the horizon's integer index moves 0 → 1
 and 4 → 6).
@@ -8356,3 +8382,38 @@ phase F's to take apart (§7's end state):
   `crates/physsynth-py/`.
 
 When the human says so.
+
+### 46.8 Review fixes and CI
+
+Run 37715044571 on `e0fd0d3`, all five jobs green (optimised Rust 8.5 min, unoptimised 13.3 min,
+the exact viewer freeze 4.8 min). The first Linux run of the batch's exact claims — the two axial
+corners equal with `assert_eq!`, `ceiling <= cancellation_courant(m, n)` with no tolerance, and every
+integer horizon, crossing floor and named witness — all held. The first two are exact by
+construction (addition commutes; `sqrt` and `/` are correctly rounded), so a Linux red would have
+been a finding; the integer bars sit at least 0.048 cents from their bound (§46.3).
+
+| file | optimised (Linux) | unoptimised (Linux) |
+|---|---|---|
+| analysis `horizon.rs` (65) | 0.01 s | 0.05 s |
+| core `horizon_models.rs` (7) | 0.06 s | 0.32 s |
+| core `plate_grain.rs` (20, the θ guard among them) | 7.45 s | release-only in CI (1.26 s for the guard locally) |
+
+The advisor's read of the first commit found five things to correct, and one to measure:
+
+- **"Every figure matches to all printed digits" was claimed on a native print that covered about
+  half the record**, and §46.3 quoted several of the uncovered figures as measured. A second
+  print-and-compare (`record2.txt` / `native_record2.txt`) now covers them: 105 of 105 lines
+  exactly equal. §46.1 says so, and says that the built models' first comparison was on screen only.
+- **"Every claim about the string, plate … is new to the native side" was false workspace-wide**:
+  the viewer's `tests/horizon.rs` asserts four of them through the read-out. §46.2 now scopes the
+  sentence to the analysis crate's file and says why those bars were not credited.
+- **"θ, a fifth time" was a miscount** — CLAUDE.md already called §41 the fifth. It is the sixth.
+- **"Every plate in the workspace is built at the default θ" was an inference.** The call sites were
+  enumerated by an unfiltered grep instead, and the viewer's frozen scenes read for their θ values;
+  §46.4 and the guard's comment now state what was measured, including "the only bar that saw either
+  plant alone" in place of "the one bar that read either oracle at another θ". The cost put to the
+  human was checked against the viewer and holds: it offers a plate θ slider (0.25 to 1) and its
+  read-out passes the plate's own θ.
+- **The integer bars' margin was stated as integer slack**, which says nothing about a different
+  C library. §46.3 now gives the boundary modes' distance from the cents bound (tightest 0.048
+  cents, eleven orders above a last bit).

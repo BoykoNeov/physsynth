@@ -529,14 +529,15 @@ fn stepped_frequency(plate: &mut Plate, phi: &[f64], steps: usize) -> f64 {
 
 #[test]
 fn both_frequency_oracles_read_the_theta_the_stepper_runs_at() {
-    // Added at the human's call (retirement plan §46.4). Every bar in the workspace built its plates
-    // at the default θ = 0.28, so `discrete_plate_eigenfrequency` and
-    // `discrete_orthotropic_plate_eigenfrequency` could BOTH ignore their `θ` and use 0.28 and all
-    // 101 test binaries stayed green: the one bar that read either oracle at another θ held them
-    // against EACH OTHER (`the_orthotropic_oracles_reduce_to_the_isotropic_ones`), which sees a
-    // defect in one copy and is blind to a defect both share — finding #78's twin again. The viewer
-    // and the horizon read-outs pass a plate's own θ through these, so the defect is a wrong in-tune
-    // limit for any plate run at a non-default θ.
+    // Added at the human's call (retirement plan §46.4). `discrete_plate_eigenfrequency` and
+    // `discrete_orthotropic_plate_eigenfrequency` could BOTH ignore their `θ` and use the default
+    // 0.28, and all 101 test binaries stayed green: of their callers (enumerated by an unfiltered
+    // grep), the ones that step or read a plate pass the default, the analysis crate's limit bar
+    // passes θ = 0.5 where `k -> 0` and θ cannot matter, and the only bar that saw either plant alone
+    // (`the_orthotropic_oracles_reduce_to_the_isotropic_ones`) holds the two oracles against EACH
+    // OTHER, which is blind to a defect both share — finding #78's twin again. The viewer offers a
+    // θ slider on its plates (0.25 to 1) and its in-tune read-out passes the plate's own θ through
+    // these, so the defect is a wrong in-tune limit for any plate run at a non-default θ.
     //
     // So each oracle is held against the plate ITSELF at four θs, the default among them: started on
     // an exact eigenmode at a large timestep (μ = 13, where `Qk²` is near one and θ moves the pitch

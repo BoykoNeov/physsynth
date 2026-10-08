@@ -133,10 +133,13 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    shim outlives it; `tests/helpers.py` deleted whole with its last importer). **Phase C's carrying
    is COMPLETE: no Python physics file remains** — what is left is phase F (§46.7: the frozen
    analysis record needs a native home, then the binding's own tests, the package guards, and the
-   binding). §46 found θ a fifth time: BOTH plate frequency oracles could ignore `θ` unseen
-   workspace-wide (every plate is built at the default; the one off-default bar was a twin of the
-   two oracles), now held to the plate's own stepped recurrence at four θs; and the monotone
-   flag's slack was seen only by the viewer freeze — both guarded at the human's call. §45 found the air a fourth time (16 of 23 `rho0`/`c0`
+   binding). §46 found θ a sixth time: BOTH plate frequency oracles could ignore `θ` unseen
+   workspace-wide (every caller that builds or reads a plate passes the default; the only bar that
+   saw either plant alone was a twin of the two oracles), now held to the plate's own stepped
+   recurrence at four θs; and the monotone flag's slack was seen only by the viewer freeze — both
+   guarded at the human's call. Its review: "every figure matches" needs a SAVED native print of
+   every figure quoted (the first covered half), and a cost told to the human is checked against
+   the viewer (it does offer plate θ). §45 found the air a fourth time (16 of 23 `rho0`/`c0`
    reads, enumerated by grep, unseen — grep of every call site + 3 workspace-wide re-runs) and a restart that nothing checks; both
    guarded at the human's call (density 0.9 / sound speed 380; a restart bar). §44's find was §42's again: the room reads `rho0`/`c0`
    in 26 places (the first count, 14, was only the reads planted — enumerate reads by grep, never

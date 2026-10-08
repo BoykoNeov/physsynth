@@ -264,11 +264,18 @@ breakages, delete the file.
   Every figure to the digit incl. all root finds — needed `π⁴` as PI*PI*PI*PI (np.pi**4; powi(4) is an
   ulp high), ceiling `1/sqrt(2)` not `√2/2`, FIRST-max argmax (Rust max_by = last). 32 plants: the
   monotone slack 1e-12→1e-3 seen only by viewer freeze (bool, all platforms); BOTH plate oracles' θ
-  hard-wired to 0.28 seen by NOTHING (101 binaries) — the only off-default bar was the iso-vs-ortho TWIN;
+  hard-wired to 0.28 seen by NOTHING (101 binaries) — the only bar that saw either plant ALONE was the
+  iso-vs-ortho TWIN (θ's SIXTH time — count against CLAUDE.md's list, §41 was the fifth);
   integer-horizon bars don't see a 1% k. Human chose guards for both: plate_grain.rs
   `both_frequency_oracles_read_the_theta_the_stepper_runs_at` (exact eigenmode at μ=13, frequency from the
   mode's own 3-term recurrence a⁺+a⁻=2cos(ωk)a — an exact, spectrum-free stepper measurement, ≤8.6e-14)
-  and a 1e-9-cent dip bar. pytest 522 → 337; workspace 1,747 → 1,793.
+  and a 1e-9-cent dip bar. pytest 522 → 337; workspace 1,747 → 1,793. Review (§46.8): "every figure
+  matches" was claimed after a native print covering HALF the record — print and SAVE every quoted
+  figure (record2/native_record2: 105/105 exact); "new to the native side" was false workspace-wide
+  (viewer horizon.rs asserts 4 family claims via the read-out) — scope claims to the file; "every
+  plate is built at the default θ" was an inference — enumerate call sites unfiltered and check the
+  viewer (it has a plate θ slider, so the cost told to the human held). Integer bars: measure the
+  boundary modes' cents headroom (tightest 0.048 cents), not the integer slack.
 **Phase C carrying is COMPLETE — no Python physics file remains.** Next is phase F (plan §46.7): the
 62-fixture analysis freeze needs a native home first, then binding-surface/ops2d/package/CI-guard tests,
 then `physsynth/`, `crates/physsynth-py`. The user picks; a recommendation + "go with it" is accepted.
