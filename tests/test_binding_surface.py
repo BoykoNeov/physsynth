@@ -1014,10 +1014,11 @@ def test_the_bridge_constructors_are_keyword_only():
 
 
 # The reference's refusal messages, FROZEN — recorded verbatim from the Python bodies immediately
-# before they were deleted, the way `tests/analysis_frozen_values.py` holds the analysis oracles'
-# numbers (plan §38). The old tests raised the same failure through both implementations and
-# compared the two strings; with one implementation left there is nothing to compare against
-# except what the reference actually said, so that is written down. The numbers inside them are
+# before they were deleted, the way the analysis oracles' numbers were held (plan §38; that record
+# is `crates/physsynth-analysis/tests/reference/analysis_frozen.json` since retirement plan §47).
+# The old tests raised the same failure through both implementations and compared the two
+# strings; with one implementation left there is nothing to compare against except what the
+# reference actually said, so that is written down. The numbers inside them are
 # part of the message and are kept deliberately: a refusal that stops reporting *which* bound was
 # exceeded is a worse refusal, and nothing else in the suite would notice.
 #
@@ -1299,8 +1300,9 @@ def test_the_operator_shim_takes_what_numpy_would():
 # `crates/physsynth-core/tests/horizon_models.rs`) except these three, which are about
 # `physsynth/analysis/horizon.py` itself: the Rust takes flat slices, so the shape logic -- ravel on
 # the way in, reshape on the way out -- and the `ValueError` a caller sees exist only in the shim.
-# `test_analysis_frozen.py` still drives that shim with 1-D families, so without the mesh test the
-# reshape is written and never run until the shim goes with the rest of `physsynth/`.
+# Nothing else drives that shim with a mesh (the frozen record that drove it with 1-D families
+# went native at retirement plan §47), so without the mesh test the reshape is written and never
+# run until the shim goes with the rest of `physsynth/`.
 
 
 def test_the_horizon_error_keeps_the_shape_it_was_given_including_a_mesh():

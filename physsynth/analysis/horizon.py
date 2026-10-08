@@ -20,7 +20,9 @@ package rather than a fixture. What that promotion had to answer, it answered:
   ``docs/dev/rust-migration-plan.md`` §44, and false of these seven functions: their Python bodies
   were live in ``tests/helpers.py`` right up to the commit that replaced them, so they were
   recorded first — the identical move §44 made. The enforcement contract covering the other 62
-  fixtures is untouched, and no amendment to it was needed.
+  fixtures is untouched, and no amendment to it was needed. (Both files have since moved out of
+  Python: the record and its reader are ``crates/physsynth-analysis/tests/analysis_frozen.rs``
+  and its ``reference/analysis_frozen.json``, retirement plan §47.)
 
 What §6 got right is that a native bar is wanted *as well*: the frozen record catches a
 transcription error, a wrong branch and a regression, and it cannot catch an error the Python made

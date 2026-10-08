@@ -66,11 +66,12 @@ __all__ = [
 #     caller passed into the contiguous float64 arrays and Python ints the binding requires. That
 #     is why this is a shim and not a row of re-exports, the way `airbox.py`'s wrapper tier and
 #     `operators2d.py` are shims for their own reasons.
-#   * what the Python implementation *said* is not lost. `tests/analysis_frozen_values.py` holds
-#     62 fixtures' worth of its answers, recorded to the last digit before it was deleted, and
-#     `tests/test_analysis_frozen.py` asserts them on every run. That is the human's condition on
-#     this deletion (plan §44) and it is the only remaining check of these oracles against a second
-#     implementation.
+#   * what the Python implementation *said* is not lost.
+#     `crates/physsynth-analysis/tests/reference/analysis_frozen.json` holds 74 fixtures' worth
+#     of its answers, recorded to the last digit before it was deleted, and that crate's
+#     `tests/analysis_frozen.rs` asserts them on every run (out of Python since retirement plan
+#     §47). That is the human's condition on this deletion (plan §44) and it is the only
+#     remaining check of these oracles against a second implementation.
 
 
 def _flat(a) -> NDArray[np.float64]:

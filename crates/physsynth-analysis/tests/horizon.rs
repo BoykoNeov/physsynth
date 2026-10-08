@@ -1,6 +1,7 @@
 //! The resolution horizon's own bars — the identities its docstrings claim, checked as maths.
 //!
-//! `tests/analysis_frozen_values.py` holds what the Python implementation in `tests/helpers.py`
+//! `tests/reference/analysis_frozen.json` (read by `analysis_frozen.rs`; a Python file until
+//! retirement plan §47) holds what the Python implementation in `tests/helpers.py`
 //! said about these seven functions before it was replaced, and that record catches a
 //! transcription error, a wrong branch and a regression. It cannot catch an error the Python made
 //! too — both sides would agree on the same wrong number and every horizon claim in the project

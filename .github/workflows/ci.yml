@@ -216,9 +216,10 @@ jobs:
       # files twice and calling the second run a different claim.
       #
       # What replaces the *other* half of that claim -- a Rust instrument checked against a second
-      # implementation -- is `tests/test_analysis_frozen.py`, which holds 62 fixtures' worth of
-      # what the Python oracles said, recorded to the last digit before they were deleted. It runs
-      # in `validate`, and needs no environment at all.
+      # implementation -- is `crates/physsynth-analysis/tests/analysis_frozen.rs`, which holds 74
+      # fixtures' worth of what the Python oracles said, recorded to the last digit before they
+      # were deleted (a Python test in `validate` until retirement plan §47). It runs with the
+      # rest of `cargo test --workspace`, in both profiles.
       #
       # The derivation that built this step's file list is worth keeping on the record even though
       # the step is gone, because the lesson outlived it: the obvious grep -- files importing

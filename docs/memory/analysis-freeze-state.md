@@ -1,6 +1,6 @@
 ---
 name: analysis-freeze-state
-description: "The analysis instrument was DELETED (2026-09-03) but its numbers were FROZEN first — 62 fixtures recorded from the Python before it went; `PHYSSYNTH_RS_ANALYSIS` is now a no-op and the two-flag rule is history"
+description: "The analysis instrument was DELETED (2026-09-03) but its numbers were FROZEN first — really 74 fixtures, not the 62 everyone quoted; since 2026-10-08 (§47) the record is native JSON in the analysis crate, INPUTS frozen too"
 metadata: 
   node_type: memory
   type: project
@@ -68,3 +68,22 @@ inputs (deterministic, no clock, no environment), `scripts/freeze_analysis.py` r
 
 See [[rust-deletion-phase-state]], [[spectrum-detector-guard]], [[rust-phase7-oracles-state]],
 [[rust-phase7-rotating-wave-state]], [[numpy-libm-cpu-dispatch]].
+
+## Moved native, 2026-10-08 (retirement plan §47, phase F step 1)
+
+The Python test and both data modules are deleted. The record is
+`crates/physsynth-analysis/tests/reference/analysis_frozen.json`, read by that crate's
+`tests/analysis_frozen.rs` (4 bars). Three things worth keeping:
+
+- **"62 fixtures, 3,708 floats" was stale for a month** — the horizon plan added 12 rows and nothing
+  re-derived the number. It is **74 rows, 3,754 floats, 179 ints, 59 functions**. Count from the
+  data, never from a document.
+- **Freeze the INPUTS, not only the answers, when moving a record across languages.** Several inputs
+  were built by NumPy's seeded RNG, `sin`, `exp`, `linspace` — nothing native rebuilds them. They
+  went in as exact doubles, with every Python-wrapper default written out (the shims that held the
+  defaults are going). The reader fails a case whose recorded argument it never read.
+- **Self-check that worked:** same Rust behind the binding + same input doubles ⇒ the native
+  per-case gap must equal pytest's to the bit. 74/74 did. A checksum over every double is the only
+  thing that sees a record parsed without `float_roundtrip` (a last bit is far inside the 1e-13 bar).
+
+The `__all__`-derived coverage guard was NOT carried: nothing can freeze a new oracle any more.

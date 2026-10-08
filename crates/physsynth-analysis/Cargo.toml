@@ -14,4 +14,9 @@ license.workspace = true
 [dependencies]
 
 [dev-dependencies]
-serde_json = "1"
+# `float_roundtrip` is load-bearing, as it is in core and the viewer: without it serde_json parses a
+# decimal to a neighbouring double, and `tests/analysis_frozen.rs` reads its record — inputs and
+# answers — as exact doubles. Asked for HERE rather than inherited, because a workspace build would
+# unify it in from core's dev-dependency while `cargo test -p physsynth-analysis` would not. The
+# record's checksum test is what notices if it goes.
+serde_json = { version = "1", features = ["float_roundtrip"] }

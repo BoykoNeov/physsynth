@@ -131,9 +131,11 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    analysis crate's `tests/horizon.rs` and the 7 that read a BUILT model into core's new
    `horizon_models.rs`; the shim's shape test relocated to `test_binding_surface.py`, since the
    shim outlives it; `tests/helpers.py` deleted whole with its last importer). **Phase C's carrying
-   is COMPLETE: no Python physics file remains** — what is left is phase F (§46.7: the frozen
-   analysis record needs a native home, then the binding's own tests, the package guards, and the
-   binding). §46 found θ a sixth time: BOTH plate frequency oracles could ignore `θ` unseen
+   is COMPLETE: no Python physics file remains** — what is left is phase F (§46.7). **Its first
+   step, the frozen analysis record's native home, is done (§47)**: the record and its inputs are
+   JSON in the analysis crate, 74 of 74 native gaps matched the pytest path's to the bit, and the
+   "62 fixtures" every document quoted was really 74. Next: the binding's own tests, the package
+   guards, and the binding (§47.7). §46 found θ a sixth time: BOTH plate frequency oracles could ignore `θ` unseen
    workspace-wide (every caller that builds or reads a plate passes the default; the only bar that
    saw either plant alone was a twin of the two oracles), now held to the plate's own stepped
    recurrence at four θs; and the monotone flag's slack was seen only by the viewer freeze — both
@@ -347,10 +349,16 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    model was read by a **Python ruler**, so a misreading shared by a model and its detector could
    not cancel (§36.4). That check was made and passed; what the deletion removed is the ability to
    *re-derive* it, and the human's condition for allowing it was that the numbers be frozen first.
-   **`tests/analysis_frozen_values.py` is where they live** — 62 fixtures, 3,708 floats, recorded
-   to the last digit from the Python implementation before it was deleted, asserted on every run by
-   `tests/test_analysis_frozen.py`, with the case list derived from each module's `__all__` so a new
-   oracle cannot be added unfrozen. It catches a transcription error, a wrong branch and a
+   **`crates/physsynth-analysis/tests/reference/analysis_frozen.json` is where they live** (a
+   Python file until retirement plan §47, phase F's first step) — 74 fixtures, 3,754 floats (the
+   "62 / 3,708" quoted for years predates the twelve horizon rows), recorded to the last digit from
+   the Python implementation before it was deleted, asserted on every run by that crate's
+   `tests/analysis_frozen.rs`. Its INPUTS are frozen too, as exact doubles — NumPy's seeded RNG,
+   `sin` and `linspace` built several and nothing native can rebuild them — with every default of
+   the deleted Python wrappers written out, and a checksum over every double notices a record read
+   without serde_json's `float_roundtrip`. The Python's derived guard (every `__all__` name has a
+   case) was not carried: no implementation is left to freeze a new oracle against, so a new
+   oracle gets a native bar instead. It catches a transcription error, a wrong branch and a
    regression; it cannot catch an error the Python made too — that is what
    `crates/physsynth-analysis/tests/` is for, and §37.11 is the precedent (a native bar found a
    544% defect the Python always had, which no parity test could).

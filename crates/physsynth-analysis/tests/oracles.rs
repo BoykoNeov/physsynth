@@ -230,9 +230,11 @@ fn the_t60_inversion_lands_on_the_pythons_recorded_answer() {
     // NOT carried from `test_damped_string.py`: added in §33.4 (the human's call). The two round
     // trips above spell the forward map with `t60_seconds_per_rate()` too, so a constant moved by
     // 1% cancels out of both, and the harness's simulated T60 bar is 4%; a 1% move was seen by
-    // nothing native in the workspace. This is the row `tests/analysis_frozen_values.py` recorded
-    // from the Python implementation before it was deleted (gap 0.0 at generation), at the frozen
-    // case's own arguments, against that file's 1e-13 relative bar.
+    // nothing native in the workspace. This is the `damping.loss_coefficients_from_T60` row of
+    // `reference/analysis_frozen.json`, recorded from the Python implementation before it was
+    // deleted (gap 0.0 at generation), at the frozen case's own arguments, against that record's
+    // 1e-13 relative bar. `analysis_frozen.rs` asserts the same row through the record; this copy
+    // sits next to the round trips whose blind spot it covers.
     let (g0, g1) = loss_coefficients_from_t60(200.0, 0.65, 0.7, 200.0, 6.0, 2000.0, 1.5)
         .expect("the frozen case is solvable");
     println!("sigma0 {g0:?}, sigma1 {g1:?}");

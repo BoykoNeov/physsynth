@@ -8417,3 +8417,131 @@ The advisor's read of the first commit found five things to correct, and one to 
 - **The integer bars' margin was stated as integer slack**, which says nothing about a different
   C library. §46.3 now gives the boundary modes' distance from the cents bound (tightest 0.048
   cents, eleven orders above a last bit).
+
+## 47. Phase F, step 1 — the frozen analysis record goes native
+
+Done 2026-10-08 (the human: "What is next" → the recommendation, "Go with your recommendation"). The
+first of §46.7's items, and the one every later step stands on: the record of what the deleted
+Python analysis oracles said had to have a home that outlives Python before the binding can go.
+
+**What moved.** `tests/test_analysis_frozen.py` (78 pytest cases) with its two data modules,
+`tests/analysis_frozen_cases.py` and `tests/analysis_frozen_values.py`, deleted whole. In their
+place, in the analysis crate:
+
+- `crates/physsynth-analysis/tests/reference/analysis_frozen.json` — the record, one case per line.
+- `crates/physsynth-analysis/tests/analysis_frozen.rs` — **4 bars**: every case read through the
+  native oracle, a checksum and count on the record itself, the gap-column canary, and the
+  underdamped predicate's margin sweep.
+- `crates/physsynth-analysis/Cargo.toml` — `serde_json` gained `float_roundtrip` on THIS crate's
+  dev-dependency (below).
+
+pytest 337 → 259 (exactly the 78 cases; the per-file count at `HEAD` was read from a worktree).
+
+### 47.1 The count was wrong for a month: 74 fixtures, not 62
+
+Every document — CLAUDE.md, the six analysis shims' comment blocks, `ci.yml`, §46.7 — said "62
+fixtures, 3,708 floats". Counted from the data at the move: **74 rows, 3,754 recorded floats, 179
+recorded integers, 59 distinct functions** (33 modal, 12 horizon, 8 duffing, 7 damping, 6 spectrum,
+5 rotating wave, 3 dispersion). 62 was the number before the resolution-horizon plan §6 froze its
+twelve rows into the same file, and nothing re-derived it. The figure was repeated to the human in
+this batch's own proposal; the advisor caught it before any write-up quoted it. Every live reference
+now says 74 and points at the JSON; the historical sections that quote 62 are left as they were.
+
+### 47.2 The inputs are frozen too, not only the answers
+
+The Python record held answers; its inputs were *rebuilt* by `analysis_frozen_cases.py` on every
+run. Natively that cannot be done: `SIGNAL_SHORT`, `SIGNAL_LONG`, `HESS_P` and `HESS_Z` draw on
+NumPy's seeded `default_rng(...).standard_normal`, the tones go through NumPy's own `sin` and `exp`
+(machine-dependent, ledger #28 and the libm memory), the grids through `linspace` and `meshgrid`,
+and `(2π·220)²` is a computed scalar. §15's escape — any structureless hash will do — does not
+apply: these are exact numbers at exact inputs, not a tolerance over a class of broadband fields.
+
+So the conversion (a one-off script, kept out of the repo) bound each case's arguments to its
+Python wrapper's signature **with every default applied** and wrote them as exact doubles: the
+circular membrane's `m_max`/`n_max` = 12, the root scan's `lam_max` = 14 and `scan` = 20000, the
+free circular plate's `n_max` = 8, `zero_pad_factor` = 2, `f_min` = 1, the null `search_hz` /
+`min_separation_hz`, the rotating wave's `time_discrete`, 8 continuation steps, `tol` 1e-14 and
+`maxiter` 50, `boundary = "closed-open"`, the grains at 1. Those defaults lived only in the shims,
+which are going, so they are now data. The inputs are what NumPy 2.4.6 built on the converting
+machine; they may differ in a last bit from the generating machine's, which is one more reason the
+bar stays the 1e-13 tolerance it always was.
+
+The native reader records every argument it reads and **fails a case whose recorded argument was
+never read** — otherwise a dispatch could pass a literal where the record holds a default, and the
+record would assert less than it looks like it does (plant G).
+
+### 47.3 What was compared, and how closely
+
+The Rust `flatten` is a transcription of the Python one: a structure string compared exactly (NumPy's
+`list(shape)` spelling, `af[5, 6]` included), integers and booleans compared exactly, floats to the
+amplitude-normalised 1e-13 bar. `iterations` is blanked to 0 in the rotating-wave answer exactly as
+the freeze blanked it (ledger #33). The rotating-wave history is computed from a wave solved on the
+native side, as the Python built it on its own side.
+
+**The strongest check available:** the binding is the same Rust, and the inputs are the same
+doubles, so the native gap for each case should equal the gap the pytest path measured today, to
+the bit. It does — **74 of 74 identical** (wheel reinstalled first). 63 are exactly zero; the worst
+is 3.5e-15 (`duffing_frequency_shift`, the scar already on the record), then 7.3e-16 (the rotating
+wave), 5.2e-16 (the free circular plate's Λ list), 4.3e-16 (the history), 2.2e-16 (the circular
+membrane).
+
+The gap fold names NaN: every recorded float is finite (asserted), so a non-finite answer is a
+failure in its own right, and the bar test is `rel.is_nan() || rel >= BAR` — a `max` fold drops a
+NaN wherever it sits (§44's pattern).
+
+### 47.4 The record guards itself
+
+A record that lost a row or had a digit edited would still be read and compared — against the wrong
+numbers. `the_record_is_the_one_that_was_frozen` pins the row count (74), the recorded float count
+(3,754), and an FNV-1a checksum over the little-endian bytes of every double in the file (each row's
+arguments in key order, then its answer; 21,678 doubles). The checksum is also the only thing that
+notices a record read **without `float_roundtrip`**: a decimal parsed to a neighbouring double moves
+an answer by one last bit, eleven orders inside the bar. The feature was requested on the analysis
+crate's own dev-dependency, because a workspace build unifies it in from core while
+`cargo test -p physsynth-analysis` would not.
+
+### 47.5 Breakages planted
+
+Each applied alone, the test built and run, the file restored by copy (never `git checkout --`):
+
+| plant | caught by |
+|---|---|
+| A `duffing_frequency_shift` × (1 + 1e-12) | the case comparison (9.97e-13 against the 1e-13 bar) |
+| B circular-membrane degeneracy 2 → 3 | the case comparison, integers |
+| C the free circular plate's last root dropped | the case comparison, structure (three cases) |
+| D the rotating wave's `iterations` left unblanked | the case comparison, integers (both cases) |
+| E a recorded answer edited by 8e-13 absolute | the checksum only (1e-15 relative, under the bar) |
+| F `float_roundtrip` removed, built with `-p` | the checksum only |
+| G a recorded default (`scan`) replaced by a literal | the unread-argument check (three cases) |
+| H a NaN written into the magnitude spectrum | the non-finite check (both spectrum cases) |
+| I `t60_seconds_per_rate` × (1 + 1e-12) | the case comparison (`loss_coefficients_from_T60`) |
+
+E and F are what the checksum is for; neither moves any answer past the bar.
+
+### 47.6 What was not carried, and what stays
+
+- **The derived coverage guard** (every name in each `physsynth.analysis` module's `__all__` has a
+  frozen case) was not carried. Its population was the Python package, which is going, and its
+  purpose had already lapsed: a freeze needs a second implementation to record and none is left
+  (§22 deleted both generators), and the guard's own failure message told a new oracle to get a
+  native bar instead. A native "every `pub fn` has a row" would restate the same dead end at a
+  larger number.
+- **The analysis shims stay.** `physsynth/analysis/*.py` are still imported by
+  `physsynth/core/radiation.py`, `physsynth/core/string_geometric.py`,
+  `physsynth/core/operators2d.py`, `tests/test_binding_surface.py` and `tests/test_stability.py`,
+  so they go with the rest of `physsynth/`, not here. Their comment blocks now point at the JSON.
+- `tests/oracles.rs`' T60 bar keeps its own copy of one row, next to the round trips whose blind
+  spot it covers (§33.4); its comment now names the JSON row.
+
+Timings, this machine: the new file 0.70 s optimised, 4.3 s unoptimised.
+
+### 47.7 What is next
+
+§46.7's list, less this item: `tests/test_binding_surface.py` (92 cases) — read its survivors with an
+outside referent (NumPy's pairwise sum, SciPy's sparse product) for anything worth carrying;
+`tests/test_rust_parity_ops2d.py` (159 cases) — the 2-D builders against SciPy, whose numbers are
+the independent referee and must be recorded before the file goes; `tests/test_stability.py` and
+`tests/test_ci_workflow.py` (4 each); then `physsynth/`, `conftest.py`, `pyproject.toml`,
+`scripts/`' Python and `crates/physsynth-py/`.
+
+When the human says so.

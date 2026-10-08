@@ -19,6 +19,8 @@
 //!   plan §44 and false of these seven functions, whose Python bodies were live in
 //!   `tests/helpers.py` right up to the commit that replaced them. They were frozen first, the
 //!   same move §44 made, so the enforcement contract covering the other 62 fixtures is untouched.
+//!   (That Python file and its record moved here at retirement plan §47, as
+//!   `tests/analysis_frozen.rs` and `tests/reference/analysis_frozen.json`.)
 //!
 //! The prose that justifies each of these — the measured constants, the corner argument, the
 //! isotropy caveats — lives in full in `physsynth/analysis/horizon.py`, which is what a caller

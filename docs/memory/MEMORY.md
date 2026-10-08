@@ -55,9 +55,9 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 - [Retirement phase A](retirement-phase-a-state.md) — flag GONE; banded deleted; default suite == old flagged; reconcile counts via a worktree
 - [Retirement phase E](retirement-phase-e-state.md) — 36 scripts + viz gone; sweep → Cargo example; convergence edge is a last-bit event
 - [Retirement phase D](retirement-phase-d-state.md) — DONE: Python viewer deleted; freeze exact on Windows only (Linux: 158/588 last-bit), structure elsewhere; browser check = Cargo example
-- [Phase C carrying](retirement-phase-c-carrying-state.md) — ALL 24 batches done (last: the horizon, 2026-10-08); no Python physics left → phase F next; carry the SWEEP; PROBE zero-witness plants; plant a defect SHARED by twins
+- [Phase C carrying](retirement-phase-c-carrying-state.md) — ALL 24 batches done (last: the horizon, 2026-10-08); no Python physics left → phase F (step 1 done, §47); carry the SWEEP; PROBE zero-witness plants; plant a defect SHARED by twins
 - [Viewer stays Python](viewer-stays-python.md) — SUPERSEDED (viewer is Rust since D7); only coverage proves a line runs, not a grep
-- [Analysis freeze](analysis-freeze-state.md) — 62 fixtures frozen from the Python before it was deleted
+- [Analysis freeze](analysis-freeze-state.md) — really 74 fixtures; native JSON since §47 (phase F step 1), inputs frozen too
 - [Deletion phase](rust-deletion-phase-state.md) — all 11 units gone, 23,396 lines, zero physics bars retired
 - [Deletion: the beam](rust-deletion-beam-state.md) — an empty `parametrize` collects as a SKIP; delete a drained table
 - [Airbox native bars](rust-airbox-native-bars.md) — the audit read a directory, not the runner
