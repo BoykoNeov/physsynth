@@ -13,6 +13,7 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 - [Port reclaim modus operandi](port-reclaim-modus-operandi.md) — reclaim a busy port only from a stale run of THIS program
 - [Rust tests: parallel + nice](rust-tests-parallel-nice.md) — `scripts/cargo-test-nice.ps1`; QUICK lane default (24 s vs Python 45 s), `-Full` before commit; never RUSTC_BOOTSTRAP near cargo
 - [Unphysical params are a feature](unphysical-params-are-a-feature.md) — effective-coefficient APIs that permit odd combos; realism via helpers
+- [Unapplied CLAUDE.md audit](claude-md-audit-unapplied.md) — 2026-10-05 audit kept in docs/private/ (git-excluded); never commit
 
 ## Rust migration and Python retirement
 
