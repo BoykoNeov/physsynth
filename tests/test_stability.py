@@ -3,7 +3,10 @@
 - physsynth.core imports no plotting/audio library (CLAUDE.md non-negotiable #4).
 - The core pulls in nothing outside its allowlist, and nothing from a sibling layer.
 - No module in physsynth.core chooses between two implementations of a class.
-- Every ARPACK call in the tests pins its start vector.
+
+The guard that every ARPACK call in the tests pinned its start vector was deleted with
+``tests/helpers.py`` (retirement plan §46): no Python test calls ``eigsh`` any more, so it
+scanned an empty population, and the helper its message named was going too.
 
 The ideal string's stability and construction guards (criterion 4) that opened this file went
 native with the rest of its harness (retirement plan §31): they are in
@@ -311,40 +314,4 @@ def test_core_does_not_import_sibling_layers():
     result = _run_core_probe(body)
     assert result.returncode == 0, (
         f"core imported a sibling layer (must not): {result.stdout.strip()}"
-    )
-
-
-# -- the ARPACK start vector is pinned everywhere (rust-migration-plan.md Sec 7) ----------------
-#
-# `eigsh` without `v0` draws a RANDOM start vector, so the oracle it computes is not reproducible
-# run to run. Measured on the free-free beam: elastic eigenvalues wobble ~1e-12 relative, their
-# eigenvectors ~5e-11, and the two rigid-body modes come back as an arbitrary basis of the {1, x}
-# nullspace (~1e-1 apart). An eigenvector fed to `set_state` is an INITIAL CONDITION, so that is a
-# different trajectory, not a last-digit difference -- and it would read as a port bug. The test
-# below asserts the pin cannot be lost by adding a call site, which is the shape of guard Sec 17.6
-# and Sec 23.7 record going quietly empty. A second test used to assert the property itself, by
-# solving twice through a helper and comparing; the beam's half went with its helper (retirement
-# plan §30) and the free plate's half with the last (§34), whose only caller was that test.
-
-
-def test_every_eigsh_call_in_the_tests_pins_v0():
-    import ast
-    import pathlib
-
-    here = pathlib.Path(__file__).parent
-    unpinned = []
-    for path in sorted(here.glob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            fn = node.func
-            name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
-            if name != "eigsh":
-                continue
-            if not any(kw.arg == "v0" for kw in node.keywords):
-                unpinned.append(f"{path.name}:{node.lineno}")
-    assert not unpinned, (
-        "eigsh called without a pinned v0 (use helpers.arpack_v0), so the oracle is not "
-        f"reproducible run to run: {', '.join(unpinned)}"
     )

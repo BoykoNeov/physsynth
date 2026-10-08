@@ -28,9 +28,9 @@ into an assembly unnoticed. Plan §40.5 posed it; §43 records what it cost.
 # What is left here, and why each thing had to stay
 
 * ``Boundary`` and ``Domain`` — type aliases with no runtime implementation.
-* ``THETA_DEFAULT`` — a measured default with its reasoning, read by ``tests/helpers.py``. The
-  number is also ``physsynth_core::plate::THETA_DEFAULT``; the Rust carries the value, this
-  carries why it is not 1/4.
+* ``THETA_DEFAULT`` — a measured default with its reasoning, read by
+  ``tests/test_binding_surface.py``. The number is also ``physsynth_core::plate::THETA_DEFAULT``;
+  the Rust carries the value, this carries why it is not 1/4.
 * ``GrainSpec`` — kept because **the Rust side constructs it**. ``grain_ratios_from_material`` is
   implemented in the crate and reaches back through
   ``py.import("physsynth.core.plate").getattr("GrainSpec")``, which is a dependency running Rust →

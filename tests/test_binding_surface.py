@@ -433,9 +433,9 @@ def test_the_biharmonic_setter_refuses_what_is_not_that_operator():
 #
 # Every θ-scheme model takes `theta` with a default, and the default lives in TWO places: the Rust
 # constructor's signature and a Python module constant that callers read. Nothing held them
-# together. `tests/helpers.py` passes `theta` explicitly on every construction, so the binding's own
-# default is never exercised by the physics suite at all -- it could drift to any value and the
-# whole suite would stay green.
+# together. `tests/helpers.py` passed `theta` explicitly on every construction (it was deleted at
+# retirement plan §46), so the binding's own default was never exercised by the physics suite at
+# all -- it could have drifted to any value and the whole suite would have stayed green.
 #
 # The Python side is now one constant for the strings and the beam (`string_stiff.THETA_DEFAULT`,
 # which `beam.py` re-exports rather than re-declaring as its pre-deletion body did) and a second,
@@ -1291,3 +1291,41 @@ def test_the_operator_shim_takes_what_numpy_would():
         out = operators.delta_xx(field, 1.0)
         expected = np.asarray(field, dtype=float)
         assert np.array_equal(out, expected[2:] - 2.0 * expected[1:-1] + expected[:-2])
+
+
+# -- the horizon shim: what `test_resolution_horizon.py` left (retirement plan §46) ---------------
+#
+# That file's 48 tests went native (`crates/physsynth-analysis/tests/horizon.rs` and
+# `crates/physsynth-core/tests/horizon_models.rs`) except these three, which are about
+# `physsynth/analysis/horizon.py` itself: the Rust takes flat slices, so the shape logic -- ravel on
+# the way in, reshape on the way out -- and the `ValueError` a caller sees exist only in the shim.
+# `test_analysis_frozen.py` still drives that shim with 1-D families, so without the mesh test the
+# reshape is written and never run until the shim goes with the rest of `physsynth/`.
+
+
+def test_the_horizon_error_keeps_the_shape_it_was_given_including_a_mesh():
+    from physsynth.analysis.horizon import pitch_error_cents
+
+    ratio = np.array([[1.0, 1.001], [0.999, 1.0]])
+    got = pitch_error_cents(100.0 * ratio, np.full((2, 2), 100.0))
+    assert got.shape == (2, 2), f"a 2x2 mesh came back as {got.shape}"
+    flat = pitch_error_cents(100.0 * ratio.ravel(), np.full(4, 100.0))
+    assert np.array_equal(got.ravel(), flat), "the mesh answer is not the flat answer, reshaped"
+
+    scalar = pitch_error_cents(np.float64(110.0), np.float64(100.0))
+    assert scalar.shape == (), f"a pair of scalars came back as {scalar.shape}"
+
+
+@pytest.mark.parametrize("bad", [0.0, -1.0])
+def test_the_horizon_shim_refuses_a_non_positive_bound(bad):
+    from physsynth.analysis.horizon import pitch_horizon
+
+    with pytest.raises(ValueError):
+        pitch_horizon([100.0], [100.0], bad)
+
+
+def test_the_horizon_shim_refuses_mismatched_families_rather_than_broadcasting():
+    from physsynth.analysis.horizon import pitch_horizon
+
+    with pytest.raises(ValueError):
+        pitch_horizon([100.0, 200.0], [100.0], 5.0)

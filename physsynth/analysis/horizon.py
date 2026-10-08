@@ -141,7 +141,11 @@ def mode_family(kind: str, count: int) -> list[tuple[int, int]]:
     takes ``(N, mu)`` and hands back "the horizon" hides the geometry and the boundary condition
     in its body, and answers about the wrong model without saying so. That one function is the
     reason this module has seven members and not eight: it stayed in ``tests/helpers.py``, where a
-    hardcoded default string is a fixture rather than a lie.
+    hardcoded default string is a fixture rather than a lie, and when that file was deleted
+    (retirement plan §46) it moved into the two Rust test files that use it --
+    ``crates/physsynth-analysis/tests/horizon.rs`` and
+    ``crates/physsynth-core/tests/horizon_models.rs`` -- as a test fixture again, never into a
+    library.
 
     Assumes a **square** domain: on ``Lx != Ly`` the ``(m, 1)`` and ``(1, n)`` families stop being
     degenerate and are two different measurements, so ask for each separately.

@@ -8083,3 +8083,276 @@ The advisor's read of the first commit found two things to correct, and one to m
   measured.
 - **`CLAUDE.md`'s "16 of 23 unseen workspace-wide"** compressed two kinds of evidence; it now says
   grep of every call site plus three workspace-wide re-runs, as §45.4 does.
+
+## 46. Phase C, carrying batch 24 — the resolution horizon, and phase C's carrying is complete
+
+Done 2026-10-08 (the human: "What is next" → the recommendation, "Yes"). One file, retired whole:
+`tests/test_resolution_horizon.py` — **48 functions, 188 pytest cases** — where each scheme stops
+being in tune: the implicit θ-scheme, whose time and space errors compound onto a floor no sample
+rate passes, and the explicit leapfrog, whose sharp time error cancels the spatial droop at one
+Courant number. With it went `tests/helpers.py`, whose last importer it was. **No Python physics
+file is left.**
+
+All seven primitives were already native (`crates/physsynth-analysis/src/horizon.rs`, promoted out
+of `tests/helpers.py` by the resolution-horizon plan §6), with 27 bars in the analysis crate's
+`tests/horizon.rs`, and so was every `modal` oracle the file read. The bars split by what each one
+reads:
+
+- `crates/physsynth-analysis/tests/horizon.rs` — **27 → 65**: the Python's 41 bars that ask only
+  `modal`'s closed-form dispersion relations (§30's precedent: extend the file at the same subject).
+  37 are new bars, the mismatch refusal among them (§46.2); three were already there in substance;
+  the shape test was relocated (below). The 65th is the monotone guard (§46.4).
+- `crates/physsynth-core/tests/horizon_models.rs` — **new, 7 bars**: the ones that read a BUILT
+  model's `k`, `h`, `θ` or `c` (the damped string, the plate, the membrane). They read the native
+  `Params` and go no further — nothing in the file stepped a model — through §24.2's test-only
+  dependency on the analysis crate.
+- `tests/test_binding_surface.py` — **+3 Python tests, relocated, not carried**: the mesh/scalar
+  shape test and the two refusals as a caller sees them. The reshape and the `ValueError` exist only
+  in the Python shim `physsynth/analysis/horizon.py`, which outlives this batch
+  (`test_analysis_frozen.py` drives it), so §14's partial-retirement rule applies: a test stays
+  while its referent does.
+
+`spatial_operator_horizon` was **not** ported into the library. `tests/helpers.py` and the shim's
+docstring record why it stayed a fixture (it hard-codes the canonical string, so in the library it
+would answer about the default string whatever the caller meant — resolution-horizon plan §7.7), so
+it is a test-local fixture in each of the two Rust files. This is the opposite of §34's port of the
+string material helper, and on purpose: that helper was a model computation, this one is a fixture.
+
+### 46.1 The comparison — every figure reproduced
+
+Recorded first, wheel reinstalled (`W:\temp\claude\batch24\record.txt`, `record.py` beside it), and
+the native figures printed by a temporary test (`native_record.txt`). **Every figure matches to all
+printed digits**, including every root find: the 15 wave floors and their closed forms, the
+stiffness shares, the explicit sweep (255, 131, 66, 48, 32, 24), the θ-string sweeps at κ = 0, 2, 8
+and their floors, the plate gaps (0.16788765871593903 to 0.9484144534539105), the pitch ratios, the
+grained diagonal deviations (worst 1.2212453270876722e-15), every grain's axial gap range and
+`gap·N` tail, the diagonal crossing's worst relative gap (4.566531030692546e-13), the nearest any
+of the 324 crossings comes to an integer (4.4036529896374077e-4), all ten cancellation-residual
+lists, all eleven corner flips and the flip's convergence list, the sharpest mode at the ceiling,
+the 20 collapse constants and the space-floor spread (3.863576125695545e-13). The built models
+agree too: the damped string's `k` = 1.953125e-5 and `θ` = 0.28, the membrane's `k` at the ceiling
+(5.5242717280199026e-5, 2.7621358640099513e-5) and at λ = 0.6 (4.6874999999999994e-5 against the
+analytic path's 4.6875e-5).
+
+Three spellings were chosen to make that true rather than found afterwards, and each is in the
+file's header: `π⁴` as `PI * PI * PI * PI` (what `np.pi**4` returns, 97.40909103400242; `powi(4)`
+squares twice and lands an ulp higher), the 2-D ceiling as `1.0 / 2.0_f64.sqrt()` (the Python's
+spelling, an ulp from the file's existing `√2/2`), and every argmax as the FIRST maximum, as
+`np.argmax` and Python's `max` return it (Rust's `max_by` returns the last, and the axial corners
+`(M, 1)` and `(1, M)` are exact twins).
+
+**There was no outside referee in this file.** Every NumPy call was elementwise arithmetic or a
+`log2`/`sin` the native side reproduces to the digit, and `scipy.optimize.brentq` is already
+transcribed line for line in `physsynth-core/src/root.rs`; the bars pass its defaults explicitly
+(`xtol = 2e-12`, `rtol = 8.881784197001252e-16`, 100 iterations, and the Python's own `1e-12` in the
+grain crossing). Nothing was frozen.
+
+### 46.2 What the existing native bars could not see
+
+- **The 27 existing bars were about the primitives.** None asked a scheme anything; every claim
+  about the string, plate, grained plate and membrane is new to the native side.
+- **`pitch_horizon` had no length-mismatch refusal bar** (only `pitch_error_cents` did). Added:
+  `the_horizon_refuses_mismatched_families_rather_than_zipping_them_short`.
+- **Two existing bars were weaker than the Python's.** `a_blocks_worst_mode_is_always_one_of_its_
+  corners` accepts any corner where the Python named the diagonal one, and
+  `the_ceiling_is_the_minimum_of_this_function_over_the_whole_spectrum` says nothing about WHO
+  attains the ceiling where the Python asserted "the diagonal and nothing else". Both are carried as
+  their own bars beside the existing ones.
+- **The grain identities are about the test's own formula.** `ortho_space_ratio` and
+  `ortho_crossing` form `q_disc / q_cont` in the test from the axis eigenvalues alone, so a grain
+  mis-wired in `modal.rs` cannot break the diagonal identity the docstring says it pins. What holds
+  the library's two orthotropic oracles to that formula is
+  `the_integer_horizon_is_the_floor_of_that_crossing_…` (and the blocks and the corner rule, which go
+  through `ortho_family_frequencies`). The plants below confirm it: every grain plant in `modal.rs`
+  was seen, never by the identity bars.
+- **The eigsh guard had nothing left to guard.** `test_stability.py`'s
+  `test_every_eigsh_call_in_the_tests_pins_v0` scanned `tests/*.py` for `eigsh` calls; there are
+  none, and its message named `helpers.arpack_v0`, deleted here. Deleted by the guard-at-zero rule
+  (CLAUDE.md: deleted, or re-derived over a wider population — there is no wider Python population).
+
+### 46.3 Every margin measured
+
+| bar | measured | bar | headroom |
+|---|---|---|---|
+| wave floor against its closed form (15) | −0.36 to −0.98 modes | within 1 mode | 0.02 mode at the worst (25 cents, N = 64) |
+| fraction of the grid, spread over four grids | 0.0049 | 1/128 = 0.0078 | 1.6x |
+| θ string by λ = 1/8 against its floor (κ = 2) | 18 against 19 | `>= floor - 1` | **0 — met exactly**, as in the Python |
+| canonical string's share of its grid | 11/256 = 4.3% | < 10% | 2.3x |
+| explicit string at λ = 1 against 8 × floor | 255 against 168 | `>` | 1.5x |
+| plate floor, `predicted − horizon` (24) | 0.168 to 0.948 | (0, 1] | 0.052 mode at the worst |
+| plate families agree in index: distance to a boundary | ≥ 0.0438 cents | > 0.02 | 2.2x |
+| plate pitch ratio at the floor against 2 | ≤ 0.0325 | < 0.05 | 1.5x |
+| plate diagonal `sinc²` identity | 2.2e-16 | 1e-14 | 45x |
+| grained diagonal `sinc²` identity | ≤ 1.2e-15 | 1e-14 | 8x |
+| grained diagonal crossing, relative | ≤ 4.6e-13 | 1e-12 | 2.2x |
+| grained axial crossing gap | −0.199 to +0.399 modes | `|gap| < 0.5` | 1.25x |
+| grained axial gap's sign, thinnest | 0.0011 modes (spruce) | ≠ 0, signed | — |
+| a crossing's distance to an integer (324) | ≥ 4.4e-4 modes | `floor` exact | — |
+| `gap·N` tail, max/min | ≤ 1.0038 | < 1.02 | 5x on the excess |
+| hertz `gap·m²`, max/min / residual at m = 80 | ≤ 1.019 / ≤ 0.69 cents | < 1.05 / < 1 | 2.6x / 1.45x |
+| grained space floor, spread over three grains | 3.9e-13 cents | 1e-12 | 2.6x |
+| collapse constants, max/min (20) | 1.0232 | < 1.05 | 2.2x on the excess |
+| corner rule, worst over corner (5 blocks) | 1.199 to 1.283 | > 1.15 | — |
+| diagonal cancellation residual | ≤ 4.3e-8 | 1e-6 | 23x |
+| off-diagonal residual: coarsest / finest / ratio | ≤ 1.6e-4 / ≤ 2.5e-6 / ≥ 62.1 | 3e-3 / 3e-5 / > 40 | 19x / 12x / 1.55x |
+| sharpest mode at the ceiling | 4.4e-10 cents | < 1e-8 | 23x |
+| corner flip at N = 512 | ≤ 3.0e-5 | 2e-4 | 6.7x |
+| flip convergence, 16x grid step | 247x | > 50x | 4.9x |
+| membrane seam, analytic against built | 3.9e-13 cents | 1e-9 | 2,600x |
+| axial family, smallest rise | 0.0098 cents | > 0 | — |
+
+The thin ones are the Python's own bars, carried unchanged, and each is thin for a stated reason:
+the θ-string bar is an integer bar the recorded run sits on, the diagonal crossing's 2.2x is
+`brentq`'s `xtol` against crossings of 1 to 30, and the space-floor spread's 2.6x is three grain
+weightings of one ratio differing in their last bits, read through `log2`. That last one is the only bar here that depends on a transcendental's
+last bit, and it reproduced exactly; on a C library whose `log2` differs it is the one to look at
+first.
+
+### 46.4 Thirty-two breakages, two gaps, both guarded
+
+Planted one at a time (`W:\temp\claude\batch24\mutate.py`; the original bytes restored from memory
+in a `finally`, never through git), each run against the analysis crate's `horizon`, `modal` and
+`oracles` and core's `horizon_models`. Results in `mutate_targeted.txt`.
+
+**In the primitives** (`src/horizon.rs`): the last-inside reading in place of the prefix (2 red),
+the monotone flag always true (3), the sinc power ignored (8), the block's tie-break reversed (3),
+the block weight over `ρ` rather than `ρ²` (1, the existing dip bar), the Courant number's `n⁴`
+weighted (5) — all red. **The monotone slack loosened from 1e-12 to 1e-3 cents: 0 red**, and
+workspace-wide (101 binaries) only the viewer's `frozen::membrane` and `frozen::strings`, which
+compare the flag as a bool on every platform.
+
+**In `modal.rs`**: the axis eigenvalue scaled by 1e-6 (5), the stiff-string oracle's θ at 1/4 (1),
+the stretched partials' `Bn²` as `Bn` (4), the explicit string's frequency (3), the rectangle's
+`sy` read as `sx` (16), the membrane's discrete (5) and continuum (2) frequencies, the plate's
+continuum frequency (1), and the five grain plants — cross term once and axes swapped in each
+orthotropic oracle, the grain dropped from the continuum one (4 to 7 each) — all red. Every grain
+plant was seen by `the_integer_horizon_is_the_floor_of_that_crossing_…` and the blocks; none by
+the identity bars, as §46.2 says.
+
+**θ, a fifth time.** The plate's θ in `discrete_plate_eigenfrequency` (at 1/4, or hard-wired to the
+default 0.28) and in `discrete_orthotropic_plate_eigenfrequency` (the same two) were each seen by
+exactly one bar, `the_orthotropic_oracles_reduce_to_the_isotropic_ones` — a twin, the two oracles
+held against each other. Planted as ONE defect both share (both hard-wired to 0.28) and run
+workspace-wide: **0 red in 101 binaries.** Every plate in the workspace is built at the default θ.
+The stiff string's oracle hard-wired to 0.28 was probed the same way and is seen, structurally on
+every platform, by the viewer freeze's `theta_half` scene (the horizon's integer index moves 0 → 1
+and 4 → 6).
+
+**The built models' own parameters** (`k` off 1% and θ stored as 1/4, in the damped string and the
+plate) were seen by none of the seven `horizon_models` bars — an integer horizon does not move for
+a 1% timestep — and workspace-wide by 19, 57, 81 and 133 tests. The membrane's `k` off by 1e-4 was
+seen by three of them (the diagonal-only bar's `diagonal == n - 1` is exact).
+
+**The human chose guards for both gaps** (asked in plain words, recommendation first):
+
+- `crates/physsynth-core/tests/plate_grain.rs::both_frequency_oracles_read_the_theta_the_stepper_runs_at`
+  — an isotropic and a grained plate at θ = 0.25, 0.28, 0.5 and 1.0, each started on an exact
+  eigenmode at μ = 13 (where `Qk²` is near one), its STEPPED frequency read off the mode's own
+  three-term recurrence (`a⁺ + a⁻ = 2 cos(ωk) a`, least squares over 400 steps — no spectrum and
+  nothing either oracle computes) and held to the oracle at the plate's own θ. Measured ≤ 8.6e-14
+  relative against a 1e-9 bar, and a control asserts every non-default θ moves the pitch (≥ 0.49%,
+  bar 0.1%). It lives with the grained plate because that file already holds both oracles and the
+  exact sine fields.
+- `crates/physsynth-analysis/tests/horizon.rs::a_genuine_dip_far_below_a_cent_is_still_reported_as_not_monotone`
+  — a curve dipping by 1e-9 cents must read non-monotone; with the existing last-bit bar it holds
+  the slack between ~2.5e-13 and 1e-9 cents.
+
+Re-planted against them (`mutate_guards.txt`): the slack at 1e-3 and at 1e-8, each θ plant alone
+and the shared one — **all red**, each in its guard.
+
+### 46.5 The retirement rule, discharged
+
+`A` is `crates/physsynth-analysis/tests/horizon.rs`, `C` is `crates/physsynth-core/tests/horizon_models.rs`,
+`S` is `tests/test_binding_surface.py`.
+
+| retired | native bar |
+|---|---|
+| `test_resolution_horizon.py::test_an_exact_scheme_has_no_horizon_to_state` | `A::a_curve_that_never_leaves_the_bound_resolves_every_mode_it_was_given` (existing; same claim, horizon = all and monotone) |
+| `…::test_the_prefix_reading_is_conservative_and_says_so_when_the_curve_is_not_monotone` | `A::the_prefix_and_the_last_mode_inside_differ_exactly_where_the_flag_says_so` (the Python's fixture, `last_inside == 4` asserted) |
+| `…::test_a_non_positive_bound_is_refused` (2) | `A::a_nonpositive_cents_bound_is_refused` (existing; 0, −1 and NaN) + `S::test_the_horizon_shim_refuses_a_non_positive_bound` (the `ValueError` a caller sees) |
+| `…::test_mismatched_families_are_refused_rather_than_broadcast` | `A::the_horizon_refuses_mismatched_families_rather_than_zipping_them_short` (NEW: only `pitch_error_cents` had one) + `S::test_the_horizon_shim_refuses_mismatched_families_rather_than_broadcasting` |
+| `…::test_the_error_keeps_the_shape_it_was_given_including_a_mesh` | `S::test_the_horizon_error_keeps_the_shape_it_was_given_including_a_mesh` — relocated, not carried: the reshape exists only in the Python shim |
+| `…::test_the_wave_space_floor_matches_its_closed_form` (15) | `A::the_wave_space_floor_matches_its_closed_form` |
+| `…::test_the_wave_space_floor_is_a_fraction_of_the_GRID_and_not_a_frequency` | `A::the_wave_space_floor_is_a_fraction_of_the_grid_and_not_a_frequency` |
+| `…::test_stiffness_lowers_the_floor_because_the_biharmonic_errs_at_fourth_power` | `A::stiffness_lowers_the_floor_because_the_biharmonic_errs_at_fourth_power` |
+| `…::test_the_theta_string_horizon_rises_with_the_sample_rate_and_then_STOPS` (3) | `C::the_theta_string_horizon_rises_with_the_sample_rate_and_then_stops` (the built string's `k` and `θ`) |
+| `…::test_the_canonical_theta_string_resolves_under_a_tenth_of_its_grid_and_stops_early` | `C::the_canonical_theta_string_resolves_under_a_tenth_of_its_grid_and_stops_early` |
+| `…::test_the_plate_is_space_limited_at_every_sample_rate_the_suite_uses` | `C::the_plate_is_space_limited_at_every_sample_rate_the_suite_uses` (the built plate's `h`, `k`, `θ`) |
+| `…::test_the_explicit_string_beats_its_own_space_floor_at_lambda_one` | `A::the_explicit_string_beats_its_own_space_floor_at_lambda_one` |
+| `…::test_refining_the_explicit_timestep_makes_the_string_WORSE` | `A::refining_the_explicit_timestep_makes_the_string_worse` |
+| `…::test_the_membranes_cancellation_is_DIAGONAL_ONLY` (2) | `C::the_membranes_cancellation_is_diagonal_only` (the built membrane's `h`, `c`, `k`) |
+| `…::test_both_membrane_families_converge_to_the_same_space_floor` | `C::both_membrane_families_converge_to_the_same_space_floor` |
+| `…::test_the_plate_diagonal_family_IS_the_strings_spatial_droop_SQUARED` (2) | `A::the_plate_diagonal_family_is_the_strings_spatial_droop_squared` |
+| `…::test_the_plates_space_floor_is_the_strings_at_HALF_the_cents_bound` | `A::a_plate_resolves_the_same_share_of_its_grid_as_a_string_at_half_the_cents` + `A::the_published_grid_fractions_are_what_the_plan_quotes` (both existing; the same five bounds and bar, and 0.059250 to 1e-5) |
+| `…::test_the_plate_space_floor_matches_its_closed_form` (24) | `A::the_plate_space_floor_matches_its_closed_form` |
+| `…::test_the_plates_two_families_agree_in_INDEX_unlike_the_membranes` (12) | `A::the_plates_two_families_agree_in_index_unlike_the_membranes` |
+| `…::test_a_finite_timestep_breaks_the_family_tie_toward_the_AXIAL_one` | `A::a_finite_timestep_breaks_the_family_tie_toward_the_axial_one` |
+| `…::test_the_plates_families_differ_by_a_factor_of_two_in_PITCH` (3) | `A::the_plates_families_differ_by_a_factor_of_two_in_pitch` |
+| `…::test_the_sorted_2d_spectrum_is_not_monotone_so_its_prefix_is_not_a_horizon` (2) | `A::the_sorted_2d_spectrum_is_not_monotone_so_its_prefix_is_not_a_horizon` |
+| `…::test_a_2d_blocks_worst_mode_is_its_DIAGONAL_corner` (2) | `A::a_2d_blocks_worst_mode_is_its_diagonal_corner` |
+| `…::test_the_grained_diagonal_droop_is_sinc_SQUARED_FOR_ANY_GRAIN` (8) | `A::the_grained_diagonal_droop_is_sinc_squared_for_any_grain` |
+| `…::test_the_axial_deviation_from_sinc_squared_takes_THE_SIGN_OF_THE_CROSS_TERM` (8) | `A::the_axial_deviation_from_sinc_squared_takes_the_sign_of_the_cross_term` |
+| `…::test_the_grained_DIAGONAL_crossing_IS_the_closed_form_with_nothing_left_over` (4) | `A::the_grained_diagonal_crossing_is_the_closed_form_with_nothing_left_over` |
+| `…::test_the_grained_AXIAL_crossing_stays_within_half_a_mode_and_closes_like_one_over_N` (4) | `A::the_grained_axial_crossing_stays_within_half_a_mode_and_closes_like_one_over_n` |
+| `…::test_the_integer_horizon_is_the_FLOOR_of_that_crossing_which_is_where_a_one_mode_bar_BREAKS` | `A::the_integer_horizon_is_the_floor_of_that_crossing_which_is_where_a_one_mode_bar_breaks` |
+| `…::test_the_closed_form_STOPS_BEING_AN_UPPER_BOUND_once_the_plate_has_a_grain` | `A::the_closed_form_stops_being_an_upper_bound_once_the_plate_has_a_grain` |
+| `…::test_the_two_axial_families_sit_a_ROOT_STIFFNESS_apart_in_HERTZ` (2) | `A::the_two_axial_families_sit_a_root_stiffness_apart_in_hertz` |
+| `…::test_a_grained_blocks_worst_mode_is_STILL_its_diagonal_corner` (6) | `A::a_grained_blocks_worst_mode_is_still_its_diagonal_corner` |
+| `…::test_a_blocks_worst_error_is_grain_blind_IN_SPACE_and_not_at_a_finite_TIMESTEP` | `A::a_blocks_worst_error_is_grain_blind_in_space_and_not_at_a_finite_timestep` |
+| `…::test_the_corner_rule_breaks_at_EXACTLY_minus_one_over_m_max_squared` (5) | `A::the_corner_rule_breaks_at_exactly_minus_one_over_m_max_squared` |
+| `…::test_the_analytic_membrane_path_agrees_with_a_BUILT_membrane` | `C::the_analytic_membrane_path_agrees_with_a_built_membrane` |
+| `…::test_the_membranes_space_floor_is_the_STRINGS_and_not_the_plates_HALF` | `A::the_membranes_space_floor_is_the_strings_and_not_the_plates_half` |
+| `…::test_the_space_only_corner_rule_TRANSFERS_from_the_plate_UNCHANGED` (5) | `A::the_space_only_corner_rule_transfers_from_the_plate_unchanged` (the existing `a_blocks_worst_mode_is_always_one_of_its_corners` accepts any corner; this names the diagonal one) |
+| `…::test_the_DIAGONAL_cancellation_number_is_an_IDENTITY_at_EVERY_grid` (4) | `A::the_diagonal_cancellation_number_is_an_identity_at_every_grid` |
+| `…::test_every_OFF_DIAGONAL_mode_has_its_OWN_cancellation_courant_number` (6) | `A::every_off_diagonal_mode_has_its_own_cancellation_courant_number` |
+| `…::test_the_2d_CFL_ceiling_IS_the_minimum_cancellation_number_over_the_SPECTRUM` | `A::the_2d_cfl_ceiling_is_attained_by_the_diagonal_and_by_nothing_else` (the existing minimum bar says nothing about WHO attains it) |
+| `…::test_no_mode_is_ever_SHARP_on_a_stable_membrane` | `A::no_mode_is_ever_sharp_on_a_stable_membrane_and_the_measurement_agrees` |
+| `…::test_the_string_is_the_same_formula_with_the_SECOND_AXIS_DROPPED` | `C::the_string_is_the_same_formula_with_the_second_axis_dropped` |
+| `…::test_a_membrane_blocks_worst_mode_is_ALWAYS_a_CORNER` (5) | `A::a_membrane_blocks_worst_mode_is_always_a_corner` |
+| `…::test_the_corner_claim_ALSO_holds_when_the_model_is_asked_rather_than_the_expansion` (11) | `A::the_corner_claim_also_holds_when_the_model_is_asked_rather_than_the_expansion` |
+| `…::test_the_membrane_blocks_worst_corner_FLIPS_at_one_over_root_M_squared_plus_one` (11) | `A::the_membrane_blocks_worst_corner_flips_at_one_over_root_m_squared_plus_one` |
+| `…::test_the_corner_flip_CONVERGES_to_the_closed_form_like_one_over_N_squared` | `A::the_corner_flip_converges_to_the_closed_form_like_one_over_n_squared` |
+| `…::test_the_flip_is_BELOW_the_ceiling_for_every_block_so_the_worst_corner_is_AXIAL` (11) | `A::the_flip_is_below_the_ceiling_for_every_block_so_the_worst_corner_is_axial` |
+| `…::test_the_TWO_axial_corners_are_EXACTLY_degenerate` (4) | `A::the_two_axial_corners_are_exactly_degenerate` |
+| `…::test_the_membranes_axial_family_is_MONOTONE_so_a_block_horizon_MEANS_something` (5) | `A::the_membranes_axial_family_is_monotone_so_a_block_horizon_means_something` |
+
+**Deleted with the file**: `tests/helpers.py` whole — every name in it grepped alone across
+`tests/`, `physsynth/` and `scripts/` first, and `test_resolution_horizon.py` was the last importer
+of each — and `test_stability.py::test_every_eigsh_call_in_the_tests_pins_v0` (§46.2). Comments
+that named `tests/helpers.py` as a live file were updated (the shim `physsynth/analysis/horizon.py`,
+`physsynth/core/plate.py`, `conftest.py`, `tests/test_binding_surface.py`); history that names it
+stays history.
+
+### 46.6 Cost and counts
+
+- **pytest 522 → 337**: the file's 188 cases out, the three relocated shim tests in (4 cases), the
+  eigsh guard out; 337 passed.
+- **Native +46**: analysis `horizon.rs` 27 → 65 (37 carried, the mismatch refusal among them, and
+  the monotone guard), core `horizon_models.rs` new with 7, `plate_grain.rs` +1 (the θ guard);
+  workspace 1,747 → 1,793 optimised (`scripts/cargo-test-nice.ps1 -Full`), all green.
+- **Single thread**: `horizon.rs` 0.02 s optimised / 0.10 s unoptimised (65 tests), `horizon_models.rs`
+  0.05 s / 0.31 s, the θ guard 1.26 s unoptimised — against 6.2 s for the Python file. All stay in
+  both profiles.
+- **No Python physics file remains.** Phase C's carrying is complete.
+
+### 46.7 What is next
+
+Phase C's carrying work is done: every Python test that asserted physics has a native bar, and no
+model is implemented only in the binding (§20). What is left in Python is not physics, and it is
+phase F's to take apart (§7's end state):
+
+- `tests/test_analysis_frozen.py` with `analysis_frozen_values.py` / `analysis_frozen_cases.py` —
+  62 fixtures of what the deleted Python oracles said, asserted against the Rust instrument through
+  the binding. The record itself must outlive Python: it needs a native home (the analysis crate's
+  tests reading the same numbers) before the binding can go.
+- `tests/test_binding_surface.py` (42 functions) — properties of the binding itself, which go when
+  it goes; its survivors from parity files that still have an outside referent (NumPy's pairwise
+  sum, SciPy's sparse product) are the ones to read for anything worth carrying.
+- `tests/test_rust_parity_ops2d.py` (10) — the 2-D builders against SciPy and the outline's
+  portability margin.
+- `tests/test_stability.py` (4) and `tests/test_ci_workflow.py` (4) — guards on the Python package
+  and on the workflow file's own steps.
+- Then `physsynth/`, `conftest.py`, `pyproject.toml`, `scripts/`' Python, and
+  `crates/physsynth-py/`.
+
+When the human says so.

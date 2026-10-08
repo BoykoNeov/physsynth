@@ -127,8 +127,16 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    `radiation.rs`, 25 → 60, whose rigs had every mode at mass 1 and weight 1 — where `a²→a` and a
    dropped `/m` are the identity — so the Python's mass-0.02 and weight-0.02 rigs were carried at
    those values; the binding assembles its own loaded steps, so the comparison was a real
-   cross-check and matched to the digit); **1 physics file / 48 functions remains** — the
-   resolution horizon (§9's map is stale). §45 found the air a fourth time (16 of 23 `rho0`/`c0`
+   cross-check and matched to the digit), and §46 the resolution horizon (48 functions, 41 into the
+   analysis crate's `tests/horizon.rs` and the 7 that read a BUILT model into core's new
+   `horizon_models.rs`; the shim's shape test relocated to `test_binding_surface.py`, since the
+   shim outlives it; `tests/helpers.py` deleted whole with its last importer). **Phase C's carrying
+   is COMPLETE: no Python physics file remains** — what is left is phase F (§46.7: the frozen
+   analysis record needs a native home, then the binding's own tests, the package guards, and the
+   binding). §46 found θ a fifth time: BOTH plate frequency oracles could ignore `θ` unseen
+   workspace-wide (every plate is built at the default; the one off-default bar was a twin of the
+   two oracles), now held to the plate's own stepped recurrence at four θs; and the monotone
+   flag's slack was seen only by the viewer freeze — both guarded at the human's call. §45 found the air a fourth time (16 of 23 `rho0`/`c0`
    reads, enumerated by grep, unseen — grep of every call site + 3 workspace-wide re-runs) and a restart that nothing checks; both
    guarded at the human's call (density 0.9 / sound speed 380; a restart bar). §44's find was §42's again: the room reads `rho0`/`c0`
    in 26 places (the first count, 14, was only the reads planted — enumerate reads by grep, never

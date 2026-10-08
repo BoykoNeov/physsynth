@@ -1,8 +1,10 @@
 """Root conftest.
 
 Its mere presence puts the repository root on ``sys.path`` (pytest prepend import mode), so
-``import physsynth`` works without an editable install. Test files additionally import the
-sibling ``tests/helpers.py`` module (the ``tests`` directory is added to the path for each test).
+``import physsynth`` works without an editable install. Test files can also import a sibling
+module from ``tests/`` (the ``tests`` directory is added to the path for each test), which
+``analysis_frozen_cases`` and ``analysis_frozen_values`` rely on; ``tests/helpers.py``, the shared
+fixture module, was deleted with the last physics file (retirement plan §46).
 
 It also pins the BLAS thread count **inside xdist workers only** -- see below.
 """

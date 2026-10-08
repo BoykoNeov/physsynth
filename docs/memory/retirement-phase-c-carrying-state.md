@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-c-carrying-state
-description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — batches 1-21 done by 2026-10-07 (plates, membrane, beam, every string, every contact file, the gong plate, the bow, bore+reed, operators+detector+body); 6 files / 140 functions left"
+description: "Phase C CARRYING batches (retire a Python physics file whose model is already native) — ALL 24 done by 2026-10-08 (… the room, radiation, the resolution horizon); no Python physics file left; next is phase F"
 metadata:
   node_type: memory
   type: project
@@ -220,11 +220,58 @@ breakages, delete the file.
   CI 37561004341 green on ea758c1 (spectrum 0.04/0.23 s Linux). Review: SE probed (print from rfftfreq
   when spellings differ): 582 workspace calls reach it, 210 in the viewer freeze — blind because the viewer
   ships frequencies rounded to 3 decimals. PROBE a zero-witness plant's REACH before describing it.
-Remaining after §43: **6 physics files / 140 functions** (§24.1 count): room `test_airbox_*` (4: energy 17,
-freefield 5, modal 12, scene 9), radiation (49), resolution horizon (48). Next batch not chosen — the user
-picks; a recommendation + "go with it" is an accepted answer.
-Loose end (from §27): `test_arpack_oracles_are_bit_reproducible`'s surviving free-plate half guards a
-helper whose only caller is the guard itself.
+- §44 batch 22 (2026-10-07, human: "Room (air box) - work on it"): `test_airbox_{energy,freefield,modal,scene}.py`
+  (43 fns / 73 cases) → ~20 claims ALREADY in core `src/airbox.rs` `mod tests` (§46 of migration) + NEW
+  `airbox_harness.rs` (20 = 17 + 3 air guards), `airbox_scene.rs` (6), `airbox_port_size.rs` (3, CI release_only:
+  98 s unopt, the human's call to SPLIT so the cheap scene bars keep both profiles) + 1 in `radiation.rs`.
+  Existing src bars sharpened: NaN-dropping `fold(0.0,f64::max)` → `nan_max` (4 helpers), `lambda_max()` read →
+  literal, end-to-end drift → every-step spread (kept their 1e-12). Every deterministic figure to the digit;
+  noise rigs not comparable (xorshift vs PCG64, §15); a_eff to 14-15 digits (direct 6-bin DFT vs np.fft).
+  39 plants: 25 structural all red (5 only by carried bars in these files); 14 rho0/c0 hard-wired = 0 red,
+  PROBED by grep (every room in workspace + viewer built with RHO0_AIR, C0_AIR → identity at every call site,
+  no ws run needed) → human chose 3 guards at rho0 0.9 / c0 380 → all 14 red. pytest 664 → 591; workspace
+  1,679 → 1,709. Bash `start /b /wait $(cygpath -w exe)` with a SPACE in the path HANGS (unquoted) — use a
+  .bat that cd's; TaskStop the bash task (it killed the tree). `cargo fmt` turns a CRLF test file into LF (fine).
+  `ruff format --check` fails on 17 untouched files at HEAD too — CI runs only `ruff check`.
+  §44.8 (advisor): I told the human "14 places" — that was my PLANT LIST, not the reads. Grep found 26
+  (positivity check, lambda, wall_closure call, stored Params, room view, port gain c0, patch_resistance);
+  12 more plants, a 4th guard (patch R measured off the room) + lambda assert + air refusals → all red.
+  ENUMERATE READS BY GREP before quoting a count; never count from your own plant list. Harness 21,
+  workspace 1,710. CI 37573991599 green on b3cd54d (port_size 4.0 s opt, skipped unopt as intended).
+- §45 batch 23 (2026-10-07, human: "radiation (49 functions) - work on it"): `test_radiation.py` (49 fns / 69
+  cases) → EXTENDED core `radiation.rs` 25 → 60 (same rig as make_body; 31 carried, constants pin, 3 guards;
+  11 existing sharpened) + analysis `oracles.rs` +2 (SciPy J1/R frozen — checked = 50-digit mpmath rounded;
+  piston off-default air). Binding assembles its own loaded steps → real cross-check: every figure to the
+  digit, single-mode trajectories bit-identical; polyfit transcription 7.3e-15; np.linalg.solve referee →
+  core `dense::lu_solve` (gap 6.5e-19). Native rigs were all mass 1 / weight 1 (a²→a, /m dropped = identity)
+  → carry the Python's 0.02 rigs at their values. 61 plants: TG (1+sτ→1−sτ) EQUIVALENT (s pure imaginary)
+  → replaced by conj; SK (RadiatedBody::set_state keeps radiated) seen by nothing (103 binaries); 16 of 23
+  air reads (grep: 20 core + 3 piston) seen by nothing — every caller incl. bore_harness passes standard
+  air → human chose guards (0.9 / 380) + restart bar → all 24 red. (1+σk) dropped: only the new dense-solve
+  bars + Windows-exact viewer freezes. Python `write_text` on Windows writes CRLF into an LF .rs — use
+  write_bytes / newline. pytest 591 → 522; workspace 1,710 → 1,747; unopt 0.36 s (both profiles).
+  CI 37600003890 green on 5650588 (radiation 0.05/0.23 s Linux). Review: credited a stale-accel plant to
+  witnesses that were my OWN new assertion + a TWIN bar — plant the defect SHARED by both copies before
+  crediting (6 red: new bar, 1 viewer loudness bar, 4 Windows-exact freezes); and a `grep -v` exclusion
+  filter is not an enumeration — re-grep unfiltered before writing "read only by X".
+- §46 batch 24 (2026-10-08, human: "What is next" → "Yes"): `test_resolution_horizon.py` (48 fns / 188
+  cases) → analysis `tests/horizon.rs` EXTENDED 27 → 65 (41 analytic bars: 37 new incl. a pitch_horizon
+  mismatch refusal, 3 credited, shape test relocated) + NEW core `horizon_models.rs` (7: the bars that read
+  a BUILT model's k/h/θ/c — via `Params::new`, no stepping) + `tests/test_binding_surface.py` +3 (shim's
+  reshape + ValueErrors: the shim outlives the batch → relocate, §14). `spatial_operator_horizon` stays a
+  test fixture (duplicated in both files), NOT ported — opposite of §34 on purpose. `tests/helpers.py`
+  deleted whole (last importer); the eigsh-v0 guard deleted (zero population, named the dead helper).
+  Every figure to the digit incl. all root finds — needed `π⁴` as PI*PI*PI*PI (np.pi**4; powi(4) is an
+  ulp high), ceiling `1/sqrt(2)` not `√2/2`, FIRST-max argmax (Rust max_by = last). 32 plants: the
+  monotone slack 1e-12→1e-3 seen only by viewer freeze (bool, all platforms); BOTH plate oracles' θ
+  hard-wired to 0.28 seen by NOTHING (101 binaries) — the only off-default bar was the iso-vs-ortho TWIN;
+  integer-horizon bars don't see a 1% k. Human chose guards for both: plate_grain.rs
+  `both_frequency_oracles_read_the_theta_the_stepper_runs_at` (exact eigenmode at μ=13, frequency from the
+  mode's own 3-term recurrence a⁺+a⁻=2cos(ωk)a — an exact, spectrum-free stepper measurement, ≤8.6e-14)
+  and a 1e-9-cent dip bar. pytest 522 → 337; workspace 1,747 → 1,793.
+**Phase C carrying is COMPLETE — no Python physics file remains.** Next is phase F (plan §46.7): the
+62-fixture analysis freeze needs a native home first, then binding-surface/ops2d/package/CI-guard tests,
+then `physsynth/`, `crates/physsynth-py`. The user picks; a recommendation + "go with it" is accepted.
 
 **Rules these batches set:**
 - pytest count rule: a drop of (cases + 1) NO LONGER holds — `test_xdist_groups.py` is gone (§36);

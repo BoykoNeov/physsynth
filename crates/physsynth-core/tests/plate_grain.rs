@@ -505,6 +505,111 @@ fn the_time_stepper_rings_at_the_grained_frequency() {
     );
 }
 
+/// The frequency the STEPPER runs an exact eigenmode at, read off the mode's own recurrence.
+///
+/// On an exact eigenvector the θ-scheme is the three-term recurrence `a⁺ + a⁻ = 2c a` in the mode's
+/// amplitude, with `c = cos(ωk)`. So `c` is a least-squares fit over the run's triples and `ω` is
+/// `acos(c)/k` — no spectrum, no window, nothing the frequency oracles compute. It is what the plate
+/// ACTUALLY rings at, to rounding.
+fn stepped_frequency(plate: &mut Plate, phi: &[f64], steps: usize) -> f64 {
+    let norm2: f64 = phi.iter().map(|v| v * v).sum();
+    let amplitude = |pl: &Plate| pl.u.iter().zip(phi).map(|(u, f)| u * f).sum::<f64>() / norm2;
+    let mut a = vec![amplitude(plate)];
+    for _ in 0..steps {
+        plate.step(None);
+        a.push(amplitude(plate));
+    }
+    let (mut num, mut den) = (0.0, 0.0);
+    for w in a.windows(3) {
+        num += w[1] * (w[0] + w[2]);
+        den += 2.0 * w[1] * w[1];
+    }
+    (num / den).acos() / (2.0 * PI * plate.p.k)
+}
+
+#[test]
+fn both_frequency_oracles_read_the_theta_the_stepper_runs_at() {
+    // Added at the human's call (retirement plan §46.4). Every bar in the workspace built its plates
+    // at the default θ = 0.28, so `discrete_plate_eigenfrequency` and
+    // `discrete_orthotropic_plate_eigenfrequency` could BOTH ignore their `θ` and use 0.28 and all
+    // 101 test binaries stayed green: the one bar that read either oracle at another θ held them
+    // against EACH OTHER (`the_orthotropic_oracles_reduce_to_the_isotropic_ones`), which sees a
+    // defect in one copy and is blind to a defect both share — finding #78's twin again. The viewer
+    // and the horizon read-outs pass a plate's own θ through these, so the defect is a wrong in-tune
+    // limit for any plate run at a non-default θ.
+    //
+    // So each oracle is held against the plate ITSELF at four θs, the default among them: started on
+    // an exact eigenmode at a large timestep (μ = 13, where `Qk²` is near one and θ moves the pitch
+    // by percents), its stepped frequency must be the oracle's at the plate's own θ. Measured: every
+    // one of the 16 cases agrees to <= 8.6e-14 relative (bar 1e-9); θ = 0.5 moves the isotropic
+    // (1,1) 8.8% from the default's pitch, and the nearest θ, 0.25, still moves every mode by
+    // >= 0.49% (the orthotropic (1,1); control bar 0.1%).
+    let (n, mu) = (16, 13.0);
+    for theta in [0.25, 0.28, 0.5, 1.0] {
+        for (g, oracle) in [(ISOTROPIC, "isotropic"), (G_STRONG, "orthotropic")] {
+            for (m, nn) in [(1, 1), (2, 1)] {
+                let p = Params::new(&PlateSpec {
+                    theta,
+                    ..spec(n, mu, 0.0, (1.0, 1.0), g)
+                })
+                .expect("an admissible plate");
+                let lam_x = dirichlet_axis_eigenvalue(m as f64, p.lx, p.h);
+                let lam_y = dirichlet_axis_eigenvalue(nn as f64, p.ly, p.h);
+                let predicted = if oracle == "isotropic" {
+                    discrete_plate_eigenfrequency(lam_x + lam_y, p.kappa, p.k, p.theta)
+                } else {
+                    discrete_orthotropic_plate_eigenfrequency(
+                        lam_x,
+                        lam_y,
+                        p.kappa,
+                        p.k,
+                        p.theta,
+                        p.grain_x,
+                        p.grain_cross,
+                        p.grain_y,
+                    )
+                    .unwrap()
+                };
+                let at_default = if oracle == "isotropic" {
+                    discrete_plate_eigenfrequency(lam_x + lam_y, p.kappa, p.k, THETA)
+                } else {
+                    discrete_orthotropic_plate_eigenfrequency(
+                        lam_x,
+                        lam_y,
+                        p.kappa,
+                        p.k,
+                        THETA,
+                        p.grain_x,
+                        p.grain_cross,
+                        p.grain_y,
+                    )
+                    .unwrap()
+                };
+                let phi = sine_field(&p, m, nn);
+                let u0: Vec<f64> = phi.iter().map(|v| v * 1e-3).collect();
+                let mut plate = started(p, &u0);
+                let stepped = stepped_frequency(&mut plate, &phi, 400);
+                let gap = (stepped - predicted).abs() / predicted;
+                assert!(
+                    gap < 1e-9,
+                    "{oracle} ({m},{nn}) at theta = {theta}: the plate rings at {stepped:.12} Hz, \
+                     the oracle says {predicted:.12} Hz ({gap:.2e} apart)"
+                );
+                // The control asserts that it differs: at μ = 13 a θ other than the default must
+                // move the pitch, or the bar above could not see an oracle stuck at 0.28.
+                if theta != THETA {
+                    let moved = (stepped - at_default).abs() / stepped;
+                    assert!(
+                        moved > 1e-3,
+                        "{oracle} ({m},{nn}): theta = {theta} moved the pitch only {moved:.2e} \
+                         from the default's — the rig cannot tell theta apart"
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn a_grained_plate_conserves_its_energy() {
     // B stays symmetric (the cross term is a product of two commuting symmetric factors), and the
