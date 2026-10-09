@@ -623,3 +623,131 @@ fn the_string_bridge_body_air_load_drives_the_room() {
     // The room's own three-channel identity still closes while an external chain drives it.
     assert!(room.energy().abs() / room.injected.abs() < 1e-9);
 }
+
+// -- carried from `tests/test_binding_surface.py` (retirement plan §48) ---------------------------
+
+/// A deterministic stream in `[lo, hi)`. The crate's dependency list is empty by policy.
+fn draws(state: &mut u64, n: usize, lo: f64, hi: f64) -> Vec<f64> {
+    (0..n)
+        .map(|_| {
+            *state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            lo + (hi - lo) * (((*state >> 11) as f64) / ((1u64 << 53) as f64))
+        })
+        .collect()
+}
+
+fn left_to_right(a: &[f64]) -> f64 {
+    let mut r = 0.0;
+    for &x in a {
+        r += x;
+    }
+    r
+}
+
+/// `beta_b = k^2 sum_i phi_i^2 / m_i` is `reduce::sum`, which no other fixture can tell.
+///
+/// Every body in the workspace has four or five modes, and below eight terms `np.sum` IS a
+/// left-to-right loop (§30.2), so the two spellings agree on every bridge any other bar builds. At
+/// twelve modes they need not, and the fixture is SEARCHED for a body where they do not (§26.6):
+/// a hand-picked one lands in the agreeing majority and the bar asserts nothing. That
+/// `reduce::sum` is NumPy's own blocking is `tests/reductions.rs`' business; this pins that the
+/// bridge uses it. Carried from the binding's test, which compared `beta_b` with `np.sum` directly.
+#[test]
+fn the_inverse_modal_mass_sum_is_the_pairwise_blocking() {
+    let m_modes = 12;
+    let fx = Fixture::default();
+    // The timestep the bridge will share, so the search asks the question the bar asks: do the
+    // two spellings still differ once multiplied by `k^2`?
+    let k = fx.string().params().k;
+    let mut state = 20_260_831u64;
+    let mut witness = None;
+    for draw in 0..4000 {
+        let phi = draws(&mut state, m_modes, 0.4, 1.8);
+        let masses = draws(&mut state, m_modes, 0.005, 0.05);
+        let terms: Vec<f64> = phi.iter().zip(&masses).map(|(p, m)| p * p / m).collect();
+        if k * k * physsynth_core::reduce::sum(&terms) != k * k * left_to_right(&terms) {
+            println!("witness at draw {draw}");
+            witness = Some((phi, masses, terms));
+            break;
+        }
+    }
+    let (phi, masses, terms) = witness.expect("no witness at twelve modes -- the bar is vacuous");
+
+    let freqs: Vec<f64> = (0..m_modes)
+        .map(|i| 110.0 + (900.0 - 110.0) * i as f64 / (m_modes - 1) as f64)
+        .collect();
+    let body = ModalBody::new(
+        BodyParams::new(freqs, fx.fs(), vec![0.0; m_modes], masses, phi, None).unwrap(),
+    );
+    let br = StringBodyBridge::new(fx.string(), body, 2000.0).expect("inside the guard");
+    assert_eq!(br.timestep(), k);
+    assert_eq!(
+        br.beta_b(),
+        k * k * physsynth_core::reduce::sum(&terms),
+        "beta_b is not the pairwise sum of phi^2 / m"
+    );
+    assert_ne!(
+        br.beta_b(),
+        k * k * left_to_right(&terms),
+        "the witness cannot tell the two spellings apart through k^2"
+    );
+}
+
+/// The reference's refusal texts, as `tests/test_binding_surface.py` froze them from the Python
+/// bodies before they were deleted (rust-migration plan §49), held now against the core's own
+/// messages at the same fixture: N = 48 at lambda = 0.9, so `k = 9.375e-05`, and the mismatched
+/// body at 1.1 times the rate. The bound inside the "unstable" message comes out of an
+/// eigensolver, so only its prose is frozen and the number is required to be a finite positive
+/// float; the other three are frozen whole. The plate bridge's three and the sympathetic set's
+/// four are in their own files.
+#[test]
+fn the_refusals_read_as_the_reference_wrote_them() {
+    let fx = Fixture {
+        n: 48,
+        ..Fixture::default()
+    };
+    let err = StringBodyBridge::new(fx.string(), body_at(fx.fs() * 1.1, 0.0), 1.0).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "string and body must share a timestep (got k=9.375e-05 vs 8.523e-05); build them at \
+         the same fs."
+    );
+    let clamped = IdealString::new(
+        StringParams::new(
+            L_DEFAULT,
+            T_DEFAULT,
+            RHO_DEFAULT,
+            fx.fs(),
+            fx.n,
+            0.0,
+            Some((Boundary::Fixed, Boundary::Fixed)),
+        )
+        .unwrap(),
+    );
+    let err = StringBodyBridge::new(clamped, fx.body(), 1.0).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "the string's right end must be 'free' to attach a body bridge (build it with \
+         boundary=('fixed', 'free'))."
+    );
+    let err = StringBodyBridge::new(fx.string(), fx.body(), -1.0).unwrap_err();
+    assert_eq!(err.to_string(), "bridge stiffness K must be >= 0.");
+
+    let text = StringBodyBridge::new(fx.string(), fx.body(), 1e7)
+        .unwrap_err()
+        .to_string();
+    let (prefix, suffix) = (
+        "connection unstable: k^2 * lambda_max(A) = ",
+        " >= 4. Reduce K, raise fs, or increase the body/string end mass.",
+    );
+    assert!(
+        text.starts_with(prefix) && text.ends_with(suffix),
+        "the prose drifted: {text}"
+    );
+    let bound: f64 = text[prefix.len()..text.len() - suffix.len()]
+        .parse()
+        .expect("the bound is still reported as a number");
+    assert!(bound.is_finite() && bound > 0.0, "{text}");
+}

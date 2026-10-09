@@ -408,3 +408,92 @@ fn the_free_beam_bending_energy_is_the_curvature_norm() {
         "bending energy {quad} vs curvature norm {want}"
     );
 }
+
+// -- carried from `tests/test_binding_surface.py` (retirement plan §48) ---------------------------
+
+fn usizes(v: &serde_json::Value) -> Vec<usize> {
+    v.as_array()
+        .expect("an array")
+        .iter()
+        .map(|x| x.as_u64().expect("an index") as usize)
+        .collect()
+}
+
+fn doubles(v: &serde_json::Value) -> Vec<f64> {
+    v.as_array()
+        .expect("an array")
+        .iter()
+        .map(|x| x.as_f64().expect("a number"))
+        .collect()
+}
+
+#[test]
+fn the_biharmonic_is_scipys_own_product_of_the_second_difference() {
+    // The bars above hold `B` to `D2 @ D2` at 1e-12 and to its stencil at 1e-6; this holds it to
+    // the BIT, against the library the deleted Python body called. `B`'s entries are genuine
+    // three-term sums, so the association is a claim, and SciPy's SMMP kernel is the referee:
+    // `(D2 @ D2).tocsr()` with `sum_duplicates` and `sort_indices`, recorded from the crate's own
+    // `D2` at eight sizes and two lengths (a tidy `h = 1/N`, and a 0.65 m string where `1/(h*h)`
+    // rounds differently) into `reference/scipy_biharmonic.json` before the binding went. The
+    // recorded `D2` is checked first, so a moved `D2` and a moved product are told apart.
+    let rec: serde_json::Value =
+        serde_json::from_str(include_str!("reference/scipy_biharmonic.json")).expect("the record");
+    let cases = rec["cases"].as_array().expect("the cases");
+    assert_eq!(cases.len(), 16, "the record changed shape");
+    for case in cases {
+        let n = case["n"].as_u64().expect("N") as usize;
+        let length = case["length"].as_f64().expect("L");
+        let h = length / n as f64;
+        assert_eq!(
+            h,
+            case["h"].as_f64().expect("h"),
+            "N = {n}, L = {length}: h"
+        );
+
+        let d2 = second_difference_matrix(n, h);
+        assert_eq!(
+            d2.indptr(),
+            usizes(&case["d2_indptr"]),
+            "N = {n}, L = {length}: D2"
+        );
+        assert_eq!(
+            d2.indices(),
+            usizes(&case["d2_indices"]),
+            "N = {n}, L = {length}: D2"
+        );
+        assert_eq!(
+            d2.data(),
+            doubles(&case["d2_data"]),
+            "N = {n}, L = {length}: D2's values"
+        );
+
+        let b = biharmonic_matrix(n, h);
+        let shape = usizes(&case["shape"]);
+        assert_eq!(
+            (b.nrows(), b.ncols()),
+            (shape[0], shape[1]),
+            "N = {n}, L = {length}"
+        );
+        assert_eq!(
+            b.indptr(),
+            usizes(&case["indptr"]),
+            "N = {n}, L = {length}: B's rows"
+        );
+        assert_eq!(
+            b.indices(),
+            usizes(&case["indices"]),
+            "N = {n}, L = {length}: B's columns"
+        );
+        let want = doubles(&case["data"]);
+        let worst = b
+            .data()
+            .iter()
+            .zip(&want)
+            .fold(0.0f64, |m, (a, w)| m.max((a - w).abs() / w.abs()));
+        assert_eq!(
+            b.data(),
+            want,
+            "B(N = {n}, L = {length}) is not SciPy's D2 @ D2; worst relative gap {worst:.3e}"
+        );
+    }
+}

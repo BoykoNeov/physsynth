@@ -13,7 +13,8 @@ Three things stay, and none of them is a shim:
   set them, and ``LAM_LONG_WARN``'s in particular is the longest single piece of reasoning in this
   package. ``LAM_LONG_WARN`` was read by ``tests/test_geometric_energy.py`` until retirement plan
   §35 carried it to ``crates/physsynth-core/tests/string_geometric_harness.rs`` (and by the Python
-  viewer until §23.19); ``NEWTON_MAXITER_DEFAULT`` by ``physsynth/analysis/rotating_wave.py``.
+  viewer until §23.19); ``NEWTON_MAXITER_DEFAULT`` by ``physsynth/analysis/rotating_wave.py`` until
+  retirement plan §48 deleted that shim.
 * ``GeometricState``, and this one is load-bearing in a direction the migration did not expect:
   **the Rust class constructs it.** ``crates/physsynth-py/src/string_geometric.rs`` does
   ``py.import("physsynth.core.string_geometric").getattr("GeometricState")`` to build what

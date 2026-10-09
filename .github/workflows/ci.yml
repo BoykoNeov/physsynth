@@ -209,11 +209,12 @@ jobs:
       # `PHYSSYNTH_RS` alone left the *instrument measuring the models* in Python, which is the
       # separation §36.4 built the second flag for.
       #
-      # `physsynth/analysis/` has no Python body any more, so `PHYSSYNTH_RS_ANALYSIS` selects
-      # between one implementation and itself. The step it gated became a strict subset of the
-      # whole-suite flagged job, and since phase A (retirement plan §21) of the plain `validate` run, which
-      # run those 65 files against exactly the same Rust detector. Keeping it would be running 65
-      # files twice and calling the second run a different claim.
+      # `physsynth/analysis/` had no Python body any more (and is itself deleted since retirement
+      # plan §48), so `PHYSSYNTH_RS_ANALYSIS` selected between one implementation and itself. The
+      # step it gated became a strict subset of the whole-suite flagged job, and since phase A
+      # (retirement plan §21) of the plain `validate` run, which run those 65 files against exactly
+      # the same Rust detector. Keeping it would be running 65 files twice and calling the second
+      # run a different claim.
       #
       # What replaces the *other* half of that claim -- a Rust instrument checked against a second
       # implementation -- is `crates/physsynth-analysis/tests/analysis_frozen.rs`, which holds 74

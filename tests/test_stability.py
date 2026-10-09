@@ -1,8 +1,13 @@
 """The headless-core invariant and the Python package's import and dependency guards.
 
 - physsynth.core imports no plotting/audio library (CLAUDE.md non-negotiable #4).
-- The core pulls in nothing outside its allowlist, and nothing from a sibling layer.
+- The core pulls in nothing outside its allowlist.
 - No module in physsynth.core chooses between two implementations of a class.
+
+The guard that the core imported no SIBLING layer (``physsynth.analysis``, ``physsynth.io``)
+was deleted at retirement plan §48, when the last sibling went: both names then referred to
+nothing, so it passed asserting nothing. The native crates' ``tests/deps.rs`` hold the
+separation that outlives it.
 
 The guard that every ARPACK call in the tests pinned its start vector was deleted with
 ``tests/helpers.py`` (retirement plan §46): no Python test calls ``eigsh`` any more, so it
@@ -301,17 +306,3 @@ def test_no_module_chooses_between_two_implementations():
             f"{module.__name__} defines the reference alias(es) {sorted(leftovers)} -- either a "
             "Python reference implementation came back, or an alias outlived its body"
         )
-
-
-def test_core_does_not_import_sibling_layers():
-    # The dependency arrow points one way: analysis/io depend on core, never the reverse.
-    body = (
-        "bad={'physsynth.analysis','physsynth.io'};"
-        "hit=sorted(m for m in sys.modules if any(m==b or m.startswith(b+'.') for b in bad));"
-        "print(','.join(hit));"
-        "sys.exit(1 if hit else 0)"
-    )
-    result = _run_core_probe(body)
-    assert result.returncode == 0, (
-        f"core imported a sibling layer (must not): {result.stdout.strip()}"
-    )

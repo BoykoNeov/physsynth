@@ -134,8 +134,13 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    is COMPLETE: no Python physics file remains** — what is left is phase F (§46.7). **Its first
    step, the frozen analysis record's native home, is done (§47)**: the record and its inputs are
    JSON in the analysis crate, 74 of 74 native gaps matched the pytest path's to the bit, and the
-   "62 fixtures" every document quoted was really 74. Next: the binding's own tests, the package
-   guards, and the binding (§47.7). §46 found θ a sixth time: BOTH plate frequency oracles could ignore `θ` unseen
+   "62 fixtures" every document quoted was really 74. **Step 2 (§48)** carried
+   `test_binding_surface.py`'s outside referees — NumPy's `np.sum`/`np.dot` and SciPy's `D2 @ D2`,
+   recorded first into `crates/physsynth-core/tests/reference/` — and deleted `physsynth/analysis/`
+   (its horizon prose moved into `horizon.rs` first). `reduce.rs`' own tests pin the blocking's
+   structure and could not see a wrong combine order or block size; the body bridge's and the sympathetic
+   sums were seen by nothing native. The binding's own properties stay until the binding goes.
+   Next (§48.6): the 2-D builders against SciPy, the package guards, and the binding. §46 found θ a sixth time: BOTH plate frequency oracles could ignore `θ` unseen
    workspace-wide (every caller that builds or reads a plate passes the default; the only bar that
    saw either plant alone was a twin of the two oracles), now held to the plate's own stepped
    recurrence at four θs; and the monotone flag's slack was seen only by the viewer freeze — both

@@ -1632,3 +1632,39 @@ fn the_chain_margins_reproduce_the_binding() {
         );
     }
 }
+
+/// The reference's three plate-bridge refusal texts, frozen by `tests/test_binding_surface.py`
+/// from the deleted Python bodies (rust-migration plan §49) and held now against the core: a
+/// string at N = 48, lambda = 0.9 (`k = 9.375e-05`) on an `N = 8` supported plate, 49 live
+/// nodes. The margin comes out of a sparse solve, so only its prose is frozen; see
+/// `connection_body.rs`' twin of this bar for the body bridge's four.
+#[test]
+fn the_refusals_read_as_the_reference_wrote_them() {
+    let fs = (200.0f64 / 0.005).sqrt() * 48.0 / 0.9;
+    let s = || free_string(1.0, 200.0, 48, fs, 0.0);
+    let p = |rate: f64| grid_plate(1.0, 20.0, 2.0, 8, rate, 0.0, PB::Supported);
+    let err = StringPlateBridge::new(s(), p(fs * 1.1), 1.0, None).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "string and plate must share a timestep (got k=9.375e-05 vs 8.523e-05); build them at \
+         the same fs."
+    );
+    let err = StringPlateBridge::new(s(), p(fs), 1.0, Some(1_000_000)).unwrap_err();
+    assert_eq!(err.to_string(), "drive_index 1000000 out of range [0, 49).");
+
+    let text = StringPlateBridge::new(s(), p(fs), 1e9, None)
+        .unwrap_err()
+        .to_string();
+    let (prefix, suffix) = (
+        "connection unstable: stability margin = ",
+        " >= 1. Reduce K, raise fs, or increase the string/plate node mass.",
+    );
+    assert!(
+        text.starts_with(prefix) && text.ends_with(suffix),
+        "the prose drifted: {text}"
+    );
+    let margin: f64 = text[prefix.len()..text.len() - suffix.len()]
+        .parse()
+        .expect("the margin is still reported as a number");
+    assert!(margin.is_finite() && margin > 0.0, "{text}");
+}

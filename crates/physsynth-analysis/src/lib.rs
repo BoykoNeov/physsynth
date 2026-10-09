@@ -1,4 +1,7 @@
-//! Measurement — the Rust edition of `physsynth/analysis`.
+//! Measurement — the Rust edition of `physsynth/analysis`, and since retirement plan §48 the only
+//! one: the Python package, by then a row of shims over this crate, was deleted with its last
+//! caller. The two-flag argument below is HISTORY — both flags are gone (rust-migration plan §44,
+//! retirement plan §21) — and is kept because the separation it protected still holds.
 //!
 //! The sibling of `physsynth-core`, and deliberately not part of it. The core *produces*
 //! trajectories; this crate *measures* them, and the two are separated here for the same reason

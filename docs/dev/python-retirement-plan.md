@@ -8580,3 +8580,151 @@ The advisor's read of the first commit found three things to correct, one to add
   delete `physsynth/analysis/` now is put to the human rather than decided here.
 - **The last commit holding the Python files**, `28e1b71`, is named in §47's opening, as §22 named
   `17efb1e` for the generators.
+
+## 48. Phase F, step 2 — the binding file's outside referees go native, and `physsynth/analysis/` goes
+
+Done 2026-10-09 (the human: "What is next" → step 1 plus the open shim question; "Yes, they should
+go. Now go"). The second of §46.7's items, scoped the way §46.7 wrote it: `tests/test_binding_surface.py`
+holds **properties of the binding**, which go when the binding goes, and a handful of tests whose
+referee is a library that is going too — NumPy's `np.sum` and `np.dot`, SciPy's sparse product.
+Those are the ones a Python deletion would lose, so they were recorded and carried; the rest of the
+file stays until `crates/physsynth-py/` does. With the human's answer to §47.8's open question, the
+Python analysis package went in the same batch. `0e13285` is the last commit holding either.
+
+**What moved.**
+
+| from `test_binding_surface.py` | cases | to (`crates/physsynth-core/tests/`) |
+|---|---|---|
+| `test_the_modal_inverse_mass_sum_is_numpys_pairwise_blocking` | 1 | `connection_body.rs`, `the_inverse_modal_mass_sum_is_the_pairwise_blocking` |
+| `test_the_shared_bridge_force_sum_is_numpys_pairwise_blocking` | 1 | `connection.rs`, `the_shared_bridge_force_is_the_pairwise_sum_of_the_string_forces` |
+| `test_the_inner_product_agrees_with_numpys_dot_to_the_group_a_target` | 4 | `reductions.rs`, same name |
+| `test_the_biharmonic_is_scipys_own_product_of_the_second_difference` | 16 | `ops.rs`, same name |
+| the three horizon-shim tests | 4 | deleted with the shim (§48.4) |
+
+And from `tests/test_stability.py`, `test_core_does_not_import_sibling_layers` (1), deleted rather
+than carried: its two names were `physsynth.analysis` and `physsynth.io`, and once the first went
+neither referred to anything, so it would have passed asserting nothing — a guard that reaches zero
+is deleted or widened, never left. The separation it guarded outlives it in both native crates'
+`tests/deps.rs`, whose allowlists are empty.
+
+pytest 259 → 232: `test_binding_surface.py` 92 → 66 (22 carried + 4 shim), `test_stability.py`
+4 → 3. Read per file from a worktree at `HEAD`, collected without `-q`.
+
+New native bars, all in `physsynth-core`:
+
+- `tests/reductions.rs` (3, new file) — `reduce::sum` against NumPy's `np.sum` **to the bit** at 25
+  lengths × 8 seeds (1 to 4,641: below eight, one block, the 128/129 edge, recursion six deep) and 24
+  strided views; the control that 87 of the 200 contiguous sums differ from a left-to-right loop,
+  every one at eight terms or more; `ops::inner` against `h * np.dot` at the Group A 1e-13.
+- `ops.rs` +1 — `biharmonic_matrix` against SciPy's `(D2 @ D2).tocsr()` **to the bit**, 16 grids,
+  the recorded `D2` checked first so a moved `D2` and a moved product are told apart.
+- `connection_body.rs` +2, `connection.rs` +2, `connection_plate.rs` +1 — the two pairwise-sum
+  spellings, and the reference's eleven refusal texts against the core's (§48.3).
+
+Two records, in `crates/physsynth-core/tests/reference/`, one case per line:
+`numpy_reductions.json` and `scipy_biharmonic.json` (NumPy 2.4.6, SciPy 1.17.1, wheel reinstalled).
+
+### 48.1 Why NumPy's sums had to be recorded, when `src/reduce.rs` already has six tests
+
+`reduce.rs`' own tests pin the blocking's **structure** — below eight a plain loop, the ragged tail
+into the combined result, the split rounded down to a multiple of eight — each against a deliberate
+mis-transcription. None of them can say the structure is **NumPy's**: a transcription wrong in a way
+none of those three spells passes all six (§48.5's plant A is one). Until this batch the only
+comparison with `np.sum` itself ran through the binding, two bridges deep.
+
+The inputs are not stored. They are an LCG both languages rebuild bit for bit — u64 wrapping
+arithmetic, `(s >> 11) / 2^53`, then `2u - 1`, every step exact — so only NumPy's answers are
+frozen, with each vector's first and last element as a canary: a generator that stopped agreeing
+fails as a generator, before any sum is compared. Mixed signs, because a positive-only stream
+separates the spellings less often. No checksum, unlike §47.4: the sums and the matrix are compared
+with `==`, so an edited digit or a misparsed decimal already fails.
+
+`np.dot` is held at a tolerance and stays one. `ddot` fuses its multiply-add and OpenBLAS picks the
+kernel by CPU (finding #14), so the recorded value is a fact about the recording machine; the
+binding's test asserted 1e-13, and the measured worst gap at the recording was 1.8e-15 (`n = 1025`,
+`<f, f>`).
+
+### 48.2 The two model spellings, searched rather than picked
+
+Every body in the workspace has four or five modes and every sympathetic set two or three strings;
+below eight terms `np.sum` IS a left-to-right loop (§30.2), so on every other fixture the two
+spellings are one computation. The carried bars build where they are not: a twelve-mode body whose
+`phi` and masses are drawn until `k² · reduce::sum` differs from `k² · left_to_right` (the search
+includes the `k²`, so it asks the bar's own question; the first draw is a witness), and an
+eight-string set whose per-step forces differ in their two sums on 297 of 600 steps. The set's body
+is held to a bare body driven by the pairwise sum, and a second bare body driven by the plain loop
+must NOT track — the control that keeps the first assertion from being vacuous.
+
+### 48.3 The refusal texts: ten verbatim, one has no native analogue
+
+The binding test froze eleven of the reference's refusal messages before the Python bodies went
+(rust-migration plan §49). They pin the BINDING's own copies, in `crates/physsynth-py/src/
+connection.rs`, and stay with it. Checked against the CORE's messages at the same fixtures (a string
+at `N = 48`, λ = 0.9, so `k = 9.375e-05`; the mismatched part at 1.1 × the rate), ten match the
+reference word for word, the timestep's three-significant-figure exponent included. The eleventh
+cannot: the reference reported a wrong-length `Ks` by its NumPy shape, "(got (1,) for 2 strings)",
+and a `Vec` has a length; the core says "got 1". That is §14's rule — a refusal about the shape of a
+Python argument has no native analogue — so the native bar asserts the native wording and says why.
+The two messages that carry an eigensolver's or a sparse solve's number are frozen as prose, the
+number required to parse as a finite positive float, as the binding test did. Where the core's
+existing bars checked these messages with `contains`, the new ones check the whole string.
+
+### 48.4 `physsynth/analysis/` deleted, and its prose kept
+
+Eight files, 935 lines, all shims over the binding: nothing that runs imported them but the three
+horizon-shim tests (§47.6), which went with them. One of them held prose that existed nowhere else:
+`horizon.py`'s docstrings were the long form `crates/physsynth-analysis/src/horizon.rs` pointed at
+("lives in full in `physsynth/analysis/horizon.py`"). Moved before the deletion, paragraph by
+paragraph: the family-mixing warning and the factor of nine, 5.925% against 8.378%, "two root finds,
+so a tolerance", why `mode_family` is index-side only and the `spatial_operator_horizon` story, the
+implicit-diagonal / explicit-axial worst corner, the `grain_cross > -1/m_max²` bound, the `arcsin`
+exactness on the diagonal, and the plan links. `rotating_wave.py`'s measured defaults and field docs
+were checked and are already in `rotating_wave.rs`; the other five shims were coercion and a
+repeated comment block. The rotating wave's non-convergence warning text, raised from the shim's
+frame, goes with the shim — §36 had already moved its assertion to the `converged` flag.
+
+What the deletion leaves dangling, on purpose: the binding still exports the analysis entry points
+(`crates/physsynth-py/src/analysis.rs`, `spectrum.rs`, `rotating_wave.rs`), now with no Python
+caller. They go with the binding; editing a crate that is about to be deleted buys nothing.
+
+### 48.5 Breakages planted
+
+Each applied alone, the whole workspace built and run (`scripts/cargo-test-nice.ps1 -Full`), the
+source restored by reverse replacement (never `git checkout --`); `git diff` on `src/` empty after
+every one. "Viewer freeze" is `crates/physsynth-viewer/tests/frozen.rs`, exact on Windows only.
+
+| plant | caught by |
+|---|---|
+| A `reduce::sum`'s eight accumulators combined left to right, not as a balanced tree | `reductions.rs` (the sum), both model-spelling bars, the viewer freeze — **not** `reduce.rs`' own six tests |
+| B the recursion's split not rounded down to a multiple of eight | `reductions.rs`, `reduce.rs`' split test, the viewer freeze |
+| C NumPy's block size 128 → 64 | `reductions.rs` and the viewer freeze only — `reduce.rs`' tests blind |
+| D `beta_b` as a plain loop | `the_inverse_modal_mass_sum_is_the_pairwise_blocking` only, workspace-wide |
+| E the set's shared force as a plain loop | `the_shared_bridge_force_is_the_pairwise_sum_of_the_string_forces` only, workspace-wide |
+| F `Csr::matmul` contracting in descending order | **not the new `ops.rs` bar** — see below; the viewer freeze (plate, gong and room scenes) only |
+| G `ops::inner` accumulated in single precision | `reductions.rs`' dot bar, and about fifty energy and chain bars in core and the viewer |
+| H the timestep printed to four figures | the two new refusal bars only (the old ones matched `contains("timestep")`) |
+| I `B` written down as its stencil, `c / h⁴` | the new `ops.rs` bar and the viewer freeze (`d2` scene) only |
+
+A, C, D and E are what the batch was for: before it, A and C were seen natively by the Windows-only
+viewer freeze and nothing else (the binding test saw them through Python), and D and E by nothing in
+the workspace at all — the binding test was their only witness.
+
+**F is an equivalent mutant on `B`, not a gap in the bar.** Every entry of `D2 @ D2` is a sum whose
+terms read the same in both directions — `a + b + a` on the diagonal, `b·a + a·b` beside it — so
+reversing the contraction changes no bit of `B`, and the SciPy bar correctly stays green. It does
+move the 2-D operators, whose sums are not palindromes, and there the only native witness is the
+viewer freeze. Those are exactly the builders `tests/test_rust_parity_ops2d.py` holds against SciPy,
+which is the next step's subject (§48.6); plant I is the one that shows the `B` bar is live.
+
+### 48.6 What is next
+
+§47.7's list, less this item: `tests/test_rust_parity_ops2d.py` (159 cases) — the 2-D builders
+against SciPy, whose numbers must be recorded before the file goes; `tests/test_stability.py` (3)
+and `tests/test_ci_workflow.py` (4); then the rest of `test_binding_surface.py` (66, binding
+properties) with `physsynth/`, `conftest.py`, `pyproject.toml`, `scripts/`' Python and
+`crates/physsynth-py/`. For the ops2d step: plant F above is the defect its record must be able
+to see natively, so re-run it there. For whichever step deletes `test_binding_surface.py`:
+`test_ci_workflow.py`'s two named positive controls are that file, so they are deleted or re-aimed in
+the same commit.
+
+When the human says so.

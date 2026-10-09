@@ -658,3 +658,124 @@ fn a_string_at_the_courant_limit_is_rejected() {
     assert_eq!(err, ConnectionError::LambdaAtLimit(0));
     assert!(err.to_string().contains("must run at lambda < 1"), "{err}");
 }
+
+// -- carried from `tests/test_binding_surface.py` (retirement plan §48) ---------------------------
+
+fn left_to_right(a: &[f64]) -> f64 {
+    let mut r = 0.0;
+    for &x in a {
+        r += x;
+    }
+    r
+}
+
+/// `body.step(sum_j F_j)` reaches the next timestep, so the sum's spelling is the trajectory.
+///
+/// Every other set in the workspace has two or three strings, and below eight terms `np.sum` IS a
+/// left-to-right loop (§30.2), so no other bar can tell `reduce::sum` from a plain loop here. At
+/// eight strings it can. Two BARE bodies are driven alongside the set, one with each spelling of
+/// the same per-step forces: the one that tracks the set's own body says which spelling is inside
+/// it, and the one that does not is the control that keeps the first from being vacuous. That
+/// `reduce::sum` is NumPy's blocking is `tests/reductions.rs`' business.
+#[test]
+fn the_shared_bridge_force_is_the_pairwise_sum_of_the_string_forces() {
+    let j_strings = 8;
+    let mut state = 20_260_831u64;
+    let ks: Vec<f64> = (0..j_strings)
+        .map(|_| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            300.0 + 600.0 * (((state >> 11) as f64) / ((1u64 << 53) as f64))
+        })
+        .collect();
+    let f = Fixture {
+        n: 48,
+        k: ks,
+        ..Fixture::default()
+    }
+    .strings(j_strings)
+    .tensions(
+        (0..j_strings)
+            .map(|j| T_DEFAULT * (1.0 + 0.03 * j as f64))
+            .collect(),
+    );
+    let mut symp = f.make();
+    for j in 0..j_strings {
+        pluck(&mut symp, j, 1e-3 * (1.0 + 0.1 * j as f64));
+    }
+    let mut pairwise = f.body();
+    let mut naive = f.body();
+    let mut differing = 0;
+    for _ in 0..600 {
+        let forces = symp.connection_forces();
+        let (total, plain) = (physsynth_core::reduce::sum(&forces), left_to_right(&forces));
+        differing += usize::from(total != plain);
+        symp.step();
+        pairwise.step(total);
+        naive.step(plain);
+    }
+    println!("the two sums differ on {differing}/600 steps at eight strings");
+    assert!(
+        differing > 0,
+        "eight strings never put the two sums apart -- the bar would pass a plain loop"
+    );
+    assert_eq!(
+        symp.body().q(),
+        pairwise.q(),
+        "the set's body did not follow the pairwise sum of the string forces"
+    );
+    assert_ne!(
+        symp.body().q(),
+        naive.q(),
+        "the control tracked too: the two spellings never reached the body apart, so the \
+         assertion above is vacuous on this fixture"
+    );
+}
+
+/// The reference's four refusal texts for the set, frozen by `tests/test_binding_surface.py` from
+/// the deleted Python body (rust-migration plan §49) and held now against the core, at a string of
+/// N = 48 and lambda = 0.9 (`k = 9.375e-05`).
+///
+/// Three are the reference's words exactly. The fourth is NOT, and cannot be: the reference
+/// reported a wrong-length `Ks` by its NumPy **shape**, "(got (1,) for 2 strings)", and a `Vec` has
+/// a length, not a shape. That is §14's rule — a refusal about the shape of a Python argument has
+/// no native analogue — so the native wording, "got 1", is what is asserted, and this comment is
+/// where the difference is recorded.
+#[test]
+fn the_refusals_read_as_the_reference_wrote_them() {
+    let f = Fixture {
+        n: 48,
+        ..Fixture::default()
+    };
+    let one = || vec![f.string(0)];
+    let err = SympatheticStrings::new(vec![], f.body(), vec![]).unwrap_err();
+    assert_eq!(err.to_string(), "need at least one string.");
+    let err =
+        SympatheticStrings::new(vec![f.string(0), f.string(1)], f.body(), vec![1.0]).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Ks must have one stiffness per string (got 1 for 2 strings)."
+    );
+    let err = SympatheticStrings::new(one(), f.body(), vec![-1.0]).unwrap_err();
+    assert_eq!(err.to_string(), "every bridge stiffness K must be >= 0.");
+
+    let n_modes = BODY_FREQS_DEFAULT.len();
+    let slow_body = ModalBody::new(
+        body::Params::new(
+            BODY_FREQS_DEFAULT.to_vec(),
+            f.fs() * 1.1,
+            vec![0.0; n_modes],
+            vec![BODY_MASS_DEFAULT; n_modes],
+            vec![1.0; n_modes],
+            None,
+        )
+        .unwrap(),
+    );
+    let err = SympatheticStrings::new(one(), slow_body, vec![1.0]).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "string 0 and the body must share a timestep (got k=9.375e-05 vs 8.523e-05); build them \
+         at the same fs."
+    );
+}

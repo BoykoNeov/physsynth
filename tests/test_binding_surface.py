@@ -534,6 +534,10 @@ def test_the_strings_and_the_beam_share_one_theta_and_the_plate_deliberately_doe
 # What moved here is the other kind, and three of them got *stronger* on the way rather than
 # weaker: a claim of the form "Rust agrees with Python about this reduction" becomes "Rust agrees
 # with **NumPy** about this reduction", which is the thing the transcription was actually copying.
+# Two of those three -- the inverse modal mass sum and the shared bridge force, both `np.sum` --
+# went native at retirement plan §48, against NumPy's own sums recorded first
+# (`crates/physsynth-core/tests/reductions.rs`, and one bar each in `connection_body.rs` and
+# `connection.rs`). The third, the `np.dot` count, is about the binding and stays.
 
 _L_STRING = 1.0
 _T_STRING = 200.0
@@ -605,13 +609,6 @@ def _vk_bridge(boundary="supported", *, nonlinear=True, K=3000.0):
         plate=_conn_vk_plate(boundary, nonlinear=nonlinear),
         K=K,
     )
-
-
-def _left_to_right(values):
-    total = 0.0
-    for v in values:
-        total += float(v)
-    return total
 
 
 # -- the three SciPy names the binding reads off `connection`'s namespace ------------------------
@@ -713,92 +710,6 @@ def test_the_steps_reaction_reaches_a_held_reference():
 
 
 # -- which reductions were transcribed, and which were not ---------------------------------------
-
-
-def test_the_modal_inverse_mass_sum_is_numpys_pairwise_blocking():
-    """``beta_b = k^2 sum_i phi_i^2 / m_i`` is ``reduce::sum``, and no shipped fixture can tell.
-
-    §30.2's cutoff makes this decidable by counting: below **eight** terms ``np.sum`` IS a
-    left-to-right loop whatever the values, and every body in this repo has four or five modes. So
-    the transcription is unexercised by the whole suite, and the fixture is *searched* rather than
-    picked (§26.6) — a hand-picked one lands in the agreeing majority and the test goes green
-    having compared two spellings that happen to coincide.
-
-    Unit 10 made this **stronger** rather than weaker. It used to read ``py.beta_b == rs.beta_b``,
-    which asserts the two implementations agree; it now reads ``rs.beta_b == np.sum(...)``, which
-    asserts the thing the transcription was copying. The Python reference could have been wrong
-    about NumPy's blocking and this test would have passed.
-    """
-    rng = np.random.default_rng(20260831)
-    for m_modes, expect_witness in ((5, False), (12, True)):
-        witness = None
-        agreed = 0
-        for _ in range(4000):
-            phi = rng.uniform(0.4, 1.8, m_modes)
-            masses = rng.uniform(0.005, 0.05, m_modes)
-            terms = phi * phi / masses
-            if _left_to_right(terms) == float(np.sum(terms)):
-                agreed += 1
-            elif witness is None:
-                witness = (phi.copy(), masses.copy())
-        if not expect_witness:
-            assert agreed == 4000, (
-                f"M={m_modes} is below NumPy's pairwise cutoff, so np.sum must BE the "
-                f"left-to-right loop -- it differed in {4000 - agreed} draws"
-            )
-            continue
-
-        assert witness is not None, (
-            f"no witness at M={m_modes} -- this test would then assert nothing (§23.5)"
-        )
-        phi, masses = witness
-        freqs = np.linspace(110.0, 900.0, m_modes)
-        rs = _modal_bridge(phi=phi, masses=masses, freqs=freqs, K=2000.0)
-        terms = phi * phi / masses
-        assert rs.beta_b == rs.k * rs.k * float(np.sum(terms)), (
-            "the Rust sum is not NumPy's pairwise blocking"
-        )
-        assert rs.beta_b != rs.k * rs.k * _left_to_right(terms), (
-            "the witness search found a fixture the two spellings cannot be told apart on"
-        )
-        print(f"beta_b at the witness: {rs.beta_b!r}")
-
-
-def test_the_shared_bridge_force_sum_is_numpys_pairwise_blocking():
-    """``body.step(force=sum_j F_j)`` reaches the next timestep, so this sum must be exact.
-
-    Same blind spot as the test above, from the other end: every sympathetic rig in the repo has
-    two or three strings, and the cutoff is eight. Reconstructed without a Python twin by driving
-    two **bare** bodies alongside the coupler with the two spellings of the same sum — the one
-    that tracks the coupler's body says which spelling is inside it, and the one that does not is
-    the negative control that keeps the first from being vacuous.
-    """
-    j_strings = 8
-    symp = _sympathetic(j_strings)
-    fs = _conn_fs()
-    pairwise = _conn_body(fs=fs)
-    naive = _conn_body(fs=fs)
-    differing = 0
-    for _ in range(600):
-        forces = np.asarray(symp.connection_forces())
-        total_np = float(np.sum(forces))
-        total_ltr = _left_to_right(forces)
-        differing += total_np != total_ltr
-        symp.step()
-        pairwise.step(force=total_np)
-        naive.step(force=total_ltr)
-    assert differing > 0, (
-        f"J={j_strings} never put np.sum and a left-to-right loop apart -- this test would then "
-        "pass on a port that transcribed the sum wrongly"
-    )
-    print(f"sum(forces) differs from a left-to-right loop on {differing}/600 steps at J=8")
-    assert np.array_equal(np.asarray(symp.body.q), np.asarray(pairwise.q)), (
-        "the coupler's body did not follow `np.sum` of the per-string forces"
-    )
-    assert not np.array_equal(np.asarray(symp.body.q), np.asarray(naive.q)), (
-        "the negative control tracked too -- the two spellings never reached the body apart, so "
-        "the assertion above is vacuous on this fixture"
-    )
 
 
 def test_the_two_dot_products_are_not_transcribed(monkeypatch):
@@ -1014,8 +925,11 @@ def test_the_bridge_constructors_are_keyword_only():
 
 
 # The reference's refusal messages, FROZEN — recorded verbatim from the Python bodies immediately
-# before they were deleted, the way the analysis oracles' numbers were held (plan §38; that record
-# is `crates/physsynth-analysis/tests/reference/analysis_frozen.json` since retirement plan §47).
+# before they were deleted (and held against the CORE's own messages too since retirement plan
+# §48, in `crates/physsynth-core/tests/connection*.rs`: ten verbatim, and the `Ks` count, which
+# the reference printed as a NumPy shape, in its native wording). These pin the BINDING's copies.
+# They were held the way the analysis oracles' numbers were (plan §38; that record is
+# `crates/physsynth-analysis/tests/reference/analysis_frozen.json` since retirement plan §47).
 # The old tests raised the same failure through both implementations and compared the two
 # strings; with one implementation left there is nothing to compare against except what the
 # reference actually said, so that is written down. The numbers inside them are
@@ -1172,23 +1086,16 @@ def test_an_explicit_none_drive_index_is_the_omitted_one():
 # the correctness they guarded is asserted natively in `crates/physsynth-core/tests/ops.rs`
 # against what each operator is supposed to BE (exact on polynomials, exact discrete eigenpairs,
 # `B = D2 D2`, the free beam's rigid-body nullspace). The ones below had a referent that is not
-# being deleted -- NumPy's slicing, NumPy's `dot`, SciPy's sparse product, or the binding itself --
-# and two of them are sharper for being re-aimed at it: "Rust agrees with a Python transcription of
-# `D2 @ D2`" becomes "Rust agrees with SciPy's own `D2 @ D2`".
-
-OPS_SIZES = [2, 3, 4, 5, 8, 16, 33, 64]
-
+# being deleted -- NumPy's slicing, NumPy's `dot`, SciPy's sparse product, or the binding itself.
+# The two whose referent was NumPy's `dot` and SciPy's `D2 @ D2` went native at retirement plan
+# §48, with the library's answers recorded first (`crates/physsynth-core/tests/reductions.rs` and
+# `ops.rs`); what is left here is about the binding's own entry points.
 
 def _ops_fields(n_nodes, seed=20260826):
     """A smooth field and a random one: a sign slip can cancel in the first, not the second."""
     x = np.linspace(0.0, 1.0, n_nodes)
     rng = np.random.default_rng(seed)
     return [np.sin(3.0 * np.pi * x) + 0.4 * x * x, rng.standard_normal(n_nodes)]
-
-
-def _ops_rebuild(triplets):
-    data, indices, indptr, shape = triplets
-    return sparse.csr_matrix((data, indices, indptr), shape=shape)
 
 
 def test_the_two_first_differences_are_the_same_function():
@@ -1214,53 +1121,11 @@ def test_a_too_short_field_yields_numpys_empty_slice_rather_than_a_panic():
             assert getattr(physsynth_rs, name)(u, 0.5).shape == u[need - 1 :].shape == (0,)
 
 
-@pytest.mark.parametrize("n_nodes", [4, 17, 129, 1025])
-def test_the_inner_product_agrees_with_numpys_dot_to_the_group_a_target(n_nodes):
-    # `h * np.dot` goes through BLAS, which accumulates in an order no portable loop reproduces,
-    # so this is a tolerance (the plan's Group A 1e-13), not a bit. The comparand was always NumPy;
-    # the deleted transcription was one line wrapped around it.
-    h = 1.0 / (n_nodes - 1)
-    f, g = _ops_fields(n_nodes)
-    for a, b in ((f, g), (g, f), (f, f)):
-        rs, ref = physsynth_rs.inner(a, b, h), float(h * np.dot(a, b))
-        assert abs(rs - ref) <= 1e-13 * max(abs(rs), abs(ref), 1e-300)
-    rs, ref = physsynth_rs.norm2(f, h), float(h * np.dot(f, f))
-    assert abs(rs - ref) <= 1e-13 * max(abs(rs), abs(ref))
-    assert rs >= 0.0
-
-
 def test_inner_is_exactly_norm2_when_the_operands_coincide():
     # Not a tautology across the boundary: `norm2` is a separate binding entry point, and the two
     # would drift apart if it ever grew its own summation.
     f = _ops_fields(65)[0]
     assert physsynth_rs.inner(f, f, 0.01) == physsynth_rs.norm2(f, 0.01)
-
-
-@pytest.mark.parametrize("n", OPS_SIZES)
-@pytest.mark.parametrize("length", [1.0, 0.65])
-def test_the_biharmonic_is_scipys_own_product_of_the_second_difference(n, length):
-    """The one that paid for the whole parity file, re-aimed at the library it was copying.
-
-    ``B = D2 @ D2``, so its entries are genuine three-term sums and its boundary-adjacent diagonal
-    (``5/h^4``, not ``6/h^4``) is produced by the product rather than written down. The deleted
-    Python body was that product in SciPy; here SciPy computes it from the binding's own ``D2`` and
-    the binding's ``B`` must match it value for value. Both a tidy ``h = 1/N`` and a 0.65 m string,
-    where ``1/(h*h)`` rounds differently. Stored order is normalised away: SciPy's SMMP kernel
-    returns unsorted columns, the crate returns canonical ones, and both are the same matrix.
-    """
-    h = length / n
-    d2 = _ops_rebuild(physsynth_rs.second_difference_matrix_csr(n, h))
-    rs = _ops_rebuild(physsynth_rs.biharmonic_matrix_csr(n, h))
-    sp = (d2 @ d2).tocsr()
-    for m in (rs, sp):
-        m.sum_duplicates()
-        m.sort_indices()
-    assert rs.shape == sp.shape and rs.nnz == sp.nnz
-    assert np.array_equal(rs.indptr, sp.indptr) and np.array_equal(rs.indices, sp.indices)
-    assert np.array_equal(rs.data, sp.data), (
-        f"B(N={n}, L={length}) is not SciPy's D2 @ D2; worst |delta| = "
-        f"{np.abs(rs.data - sp.data).max():.3e}"
-    )
 
 
 @pytest.mark.parametrize("n", [-1, 0, 1])
@@ -1292,42 +1157,3 @@ def test_the_operator_shim_takes_what_numpy_would():
         out = operators.delta_xx(field, 1.0)
         expected = np.asarray(field, dtype=float)
         assert np.array_equal(out, expected[2:] - 2.0 * expected[1:-1] + expected[:-2])
-
-
-# -- the horizon shim: what `test_resolution_horizon.py` left (retirement plan §46) ---------------
-#
-# That file's 48 tests went native (`crates/physsynth-analysis/tests/horizon.rs` and
-# `crates/physsynth-core/tests/horizon_models.rs`) except these three, which are about
-# `physsynth/analysis/horizon.py` itself: the Rust takes flat slices, so the shape logic -- ravel on
-# the way in, reshape on the way out -- and the `ValueError` a caller sees exist only in the shim.
-# Nothing else drives that shim with a mesh (the frozen record that drove it with 1-D families
-# went native at retirement plan §47), so without the mesh test the reshape is written and never
-# run until the shim goes with the rest of `physsynth/`.
-
-
-def test_the_horizon_error_keeps_the_shape_it_was_given_including_a_mesh():
-    from physsynth.analysis.horizon import pitch_error_cents
-
-    ratio = np.array([[1.0, 1.001], [0.999, 1.0]])
-    got = pitch_error_cents(100.0 * ratio, np.full((2, 2), 100.0))
-    assert got.shape == (2, 2), f"a 2x2 mesh came back as {got.shape}"
-    flat = pitch_error_cents(100.0 * ratio.ravel(), np.full(4, 100.0))
-    assert np.array_equal(got.ravel(), flat), "the mesh answer is not the flat answer, reshaped"
-
-    scalar = pitch_error_cents(np.float64(110.0), np.float64(100.0))
-    assert scalar.shape == (), f"a pair of scalars came back as {scalar.shape}"
-
-
-@pytest.mark.parametrize("bad", [0.0, -1.0])
-def test_the_horizon_shim_refuses_a_non_positive_bound(bad):
-    from physsynth.analysis.horizon import pitch_horizon
-
-    with pytest.raises(ValueError):
-        pitch_horizon([100.0], [100.0], bad)
-
-
-def test_the_horizon_shim_refuses_mismatched_families_rather_than_broadcasting():
-    from physsynth.analysis.horizon import pitch_horizon
-
-    with pytest.raises(ValueError):
-        pitch_horizon([100.0, 200.0], [100.0], 5.0)

@@ -57,6 +57,7 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 - [Retirement phase E](retirement-phase-e-state.md) — 36 scripts + viz gone; sweep → Cargo example; convergence edge is a last-bit event
 - [Retirement phase D](retirement-phase-d-state.md) — DONE: Python viewer deleted; freeze exact on Windows only (Linux: 158/588 last-bit), structure elsewhere; browser check = Cargo example
 - [Phase C carrying](retirement-phase-c-carrying-state.md) — ALL 24 batches done (last: the horizon, 2026-10-08); no Python physics left → phase F (step 1 done, §47); carry the SWEEP; PROBE zero-witness plants; plant a defect SHARED by twins
+- [Phase F](retirement-phase-f-state.md) — step 2 done (§48): binding file's NumPy/SciPy referees native, analysis shims gone; next ops2d vs SciPy
 - [Viewer stays Python](viewer-stays-python.md) — SUPERSEDED (viewer is Rust since D7); only coverage proves a line runs, not a grep
 - [Analysis freeze](analysis-freeze-state.md) — really 74 fixtures; native JSON since §47 (phase F step 1), inputs frozen too
 - [Deletion phase](rust-deletion-phase-state.md) — all 11 units gone, 23,396 lines, zero physics bars retired
