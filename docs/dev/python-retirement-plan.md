@@ -8661,7 +8661,7 @@ The binding test froze eleven of the reference's refusal messages before the Pyt
 (rust-migration plan §49). They pin the BINDING's own copies, in `crates/physsynth-py/src/
 connection.rs`, and stay with it. Checked against the CORE's messages at the same fixtures (a string
 at `N = 48`, λ = 0.9, so `k = 9.375e-05`; the mismatched part at 1.1 × the rate), ten match the
-reference word for word, the timestep's three-significant-figure exponent included. The eleventh
+reference word for word, the timestep's four-significant-figure exponent (`9.375e-05`) included. The eleventh
 cannot: the reference reported a wrong-length `Ks` by its NumPy shape, "(got (1,) for 2 strings)",
 and a `Vec` has a length; the core says "got 1". That is §14's rule — a refusal about the shape of a
 Python argument has no native analogue — so the native bar asserts the native wording and says why.
@@ -8674,8 +8674,12 @@ existing bars checked these messages with `contains`, the new ones check the who
 Eight files, 935 lines, all shims over the binding: nothing that runs imported them but the three
 horizon-shim tests (§47.6), which went with them. One of them held prose that existed nowhere else:
 `horizon.py`'s docstrings were the long form `crates/physsynth-analysis/src/horizon.rs` pointed at
-("lives in full in `physsynth/analysis/horizon.py`"). Moved before the deletion, paragraph by
-paragraph: the family-mixing warning and the factor of nine, 5.925% against 8.378%, "two root finds,
+("lives in full in `physsynth/analysis/horizon.py`"). Moved before the deletion — and then checked
+sentence by sentence against `git show 0e13285:physsynth/analysis/horizon.py`, which found two
+passages the scripted move had dropped from `cancellation_courant` (why the CFL ceiling is the
+minimum over the whole spectrum, `t² + (1 − t)²` at `t = 1/2`, without which "hence `λ ≤ 1/√2`"
+rests on the diagonal alone; and "every mode is flat, or exact") and three short phrases elsewhere,
+all restored in the review commit. What moved: the family-mixing warning and the factor of nine, 5.925% against 8.378%, "two root finds,
 so a tolerance", why `mode_family` is index-side only and the `spatial_operator_horizon` story, the
 implicit-diagonal / explicit-axial worst corner, the `grain_cross > -1/m_max²` bound, the `arcsin`
 exactness on the diagonal, and the plan links. `rotating_wave.py`'s measured defaults and field docs
@@ -8702,12 +8706,14 @@ every one. "Viewer freeze" is `crates/physsynth-viewer/tests/frozen.rs`, exact o
 | E the set's shared force as a plain loop | `the_shared_bridge_force_is_the_pairwise_sum_of_the_string_forces` only, workspace-wide |
 | F `Csr::matmul` contracting in descending order | **not the new `ops.rs` bar** — see below; the viewer freeze (plate, gong and room scenes) only |
 | G `ops::inner` accumulated in single precision | `reductions.rs`' dot bar, and about fifty energy and chain bars in core and the viewer |
-| H the timestep printed to four figures | the two new refusal bars only (the old ones matched `contains("timestep")`) |
+| H the timestep printed to five significant figures | the two new refusal bars only (the old ones matched `contains("timestep")`) |
 | I `B` written down as its stencil, `c / h⁴` | the new `ops.rs` bar and the viewer freeze (`d2` scene) only |
 
-A, C, D and E are what the batch was for: before it, A and C were seen natively by the Windows-only
-viewer freeze and nothing else (the binding test saw them through Python), and D and E by nothing in
-the workspace at all — the binding test was their only witness.
+A, C, D and E are what the batch was for. Before it, A was seen natively only by the Windows-only
+viewer freeze (and in Python by the binding test, through the twelve-term `beta_b`); C by the
+viewer freeze and by **nothing in Python either** — halving the block size moves only sums longer
+than 64 terms, and the binding test's sums had twelve and eight; D and E by nothing in the
+workspace at all, the binding test their only witness.
 
 **F is an equivalent mutant on `B`, not a gap in the bar.** Every entry of `D2 @ D2` is a sum whose
 terms read the same in both directions — `a + b + a` on the diagonal, `b·a + a·b` beside it — so
@@ -8728,3 +8734,36 @@ to see natively, so re-run it there. For whichever step deletes `test_binding_su
 the same commit.
 
 When the human says so.
+
+### 48.7 Review fixes and CI
+
+Run 37869829784 on `2c8df0a`, all five jobs green (optimised Rust 10.7 min, unoptimised 12.2 min,
+the exact viewer freeze 4.6 min). The records' first run off the recording machine: every bit-exact
+claim held on Linux — 224 NumPy sums, 16 SciPy matrices, both searched model witnesses — as it
+should, being IEEE addition and multiplication in a written-down order, with no library function
+in the path. The four dot products stayed inside 1e-13 (the per-case gaps are not printed, so the
+claim is the bar, not a bit-identity).
+
+| file | optimised (Linux) | unoptimised (Linux) |
+|---|---|---|
+| core `reductions.rs` (3, new) | 0.00 s | 0.00 s |
+| core `ops.rs` (18) | 0.00 s | 0.00 s |
+| core `connection.rs` (20) | 0.35 s | 4.42 s |
+| core `connection_body.rs` (24) | 0.20 s | 2.36 s |
+| core `connection_plate.rs` (49) | 13.83 s | release-only in CI |
+
+The advisor's read of the first commit found four things to correct:
+
+- **"The binding test saw them through Python" was false for plant C.** Halving the block size moves
+  only sums longer than 64 terms; the binding test's had twelve and eight. §48.5 now separates A
+  (seen in Python) from C (seen only by the Windows-only viewer freeze).
+- **`9.375e-05` has four significant figures, not three** (`py_exp(x, 3)` is three digits after the
+  point), so plant H moved it to five. §48.3 and the plant table corrected.
+- **The horizon prose was moved by script, not diffed.** Re-read sentence by sentence against
+  `git show 0e13285:physsynth/analysis/horizon.py`: `cancellation_courant` had lost the `t² + (1 −
+  t)²` argument — without it the doc's "hence `λ ≤ 1/√2 ≤ cancellation_courant`" rests on the
+  diagonal value alone, which does not prove it — and "every mode is flat, or exact"; three shorter
+  phrases (the "same quantity" of cents and rate suppression, "a block's horizon is some corner
+  family's", the leading prefix as the conservative reading) were missing too. All restored.
+- **The memory note said the human "agreed to that scope".** What the human approved was step 1 as
+  it was described to them; the note now says that.

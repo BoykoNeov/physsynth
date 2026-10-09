@@ -49,8 +49,8 @@ const SCIPY_RTOL: f64 = 8.881_784_197_001_252e-16;
 /// Signed per-mode pitch error in cents — negative means the scheme is flat.
 ///
 /// `1200 log₂(f_discrete / f_continuum)`, elementwise. Cents because every threshold worth arguing
-/// about is perceptual, and because it puts the θ-scheme's rate suppression `S` and its pitch
-/// error in the same units through `cents = 600 log₂ S`
+/// about is perceptual, and because it makes the two mechanisms comparable: the θ-scheme's rate
+/// suppression `S` and its pitch error are the *same* quantity through `cents = 600 log₂ S`
 /// (`docs/dev/theta-loss-compensation-plan.md` §2).
 pub fn pitch_error_cents(f_discrete: &[f64], f_continuum: &[f64]) -> Result<Vec<f64>, String> {
     if f_discrete.len() != f_continuum.len() {
@@ -69,11 +69,12 @@ pub fn pitch_error_cents(f_discrete: &[f64], f_continuum: &[f64]) -> Result<Vec<
 
 /// `(horizon, monotone)` — how many *leading* modes are within `cents` of the continuum.
 ///
-/// The count is a leading prefix, not "the last mode that happens to be inside", and those differ
-/// exactly when the error curve is not monotone. So the predicate travels with the number: a
-/// caller that sees `monotone == false` knows the integer is hiding something. Never collapse the
-/// pair back to the integer without reading the flag — the same way `VKPlate` reports *which*
-/// failure it had rather than only that it failed.
+/// The count is a leading prefix — the number of modes from the first such that every one of them
+/// is inside the bound — deliberately the conservative reading rather than "the last mode that
+/// happens to be inside", and those differ exactly when the error curve is not monotone. So the
+/// predicate travels with the number: a caller that sees `monotone == false` knows the integer is
+/// hiding something. Never collapse the pair back to the integer without reading the flag — the
+/// same way `VKPlate` reports *which* failure it had rather than only that it failed.
 ///
 /// `f_discrete` is what the scheme's own dispersion relation says mode *m* will ring at;
 /// `f_continuum` is the closed-form physical answer. Both must be ordered by mode index and must
@@ -181,10 +182,12 @@ pub fn mode_family(kind: &str, count: i64) -> Result<Vec<(i64, i64)>, String> {
 /// Every `(m, n)` with `1 <= m, n <= m_max`, ordered by continuum frequency (`m² + n²`).
 ///
 /// A block is the 2-D shape a "the first few modes are in tune" claim actually asserts, and it is
-/// not a family: the error is not monotone along it, so a prefix over it is not a horizon. What
+/// not a family: the error is not monotone along it (the plan's §8), so a prefix over it is not a
+/// horizon. What
 /// makes it readable is that its worst mode is a *corner* — [`block_weight`] dips at
 /// `n* = m·√(√2 − 1) ≈ 0.6436 m`, strictly inside `(0, m)`, so the maximum over a block never sits
-/// inside it. (On the *integer* grid that minimum is only reachable from `m = 3` up: at `m = 2` the
+/// inside it. A block's horizon is then some corner family's horizon, and a family does have a
+/// prefix. (On the *integer* grid that minimum is only reachable from `m = 3` up: at `m = 2` the
 /// minimiser is 1.287 and the nearest index below it is the edge. The corner argument is about the
 /// maximum and is untouched by that; `tests/horizon.rs` asserts it rather than assuming it.)
 ///
@@ -234,11 +237,17 @@ pub fn mode_block(m_max: i64) -> Result<Vec<(i64, i64)>, String> {
 /// `1 + (a²/6)(λ² ρ² − w)` with `a = π/2N`, `ρ² = m² + n²` and `w` the [`block_weight`]. So they
 /// cancel at `λ² = (m⁴ + n⁴)/(m² + n²)²`, which is what this returns.
 ///
-/// Three consequences, none of them a fixture: it is `1/√2` on the diagonal for every `m`, which
-/// *is* the 2-D CFL ceiling; hence `λ ≤ 1/√2 ≤ cancellation_courant(m, n)` for every mode, so on a
-/// stable membrane no mode is ever sharp; and it rises toward 1 along the axial family, which is
-/// above the ceiling and therefore unreachable — which is why the ceiling buys the diagonal family
-/// the entire grid and the axial family nothing (`docs/dev/resolution-horizon-plan.md` §4.1, §10).
+/// Three consequences, and none of them is a fixture (`docs/dev/resolution-horizon-plan.md` §10):
+///
+/// * it is `1/√2` on the **diagonal** `m = n` for every `m`, and that is exactly the 2-D CFL
+///   ceiling. The membrane's "magic Courant number" is not a coincidence of the stability bound:
+///   the returned `λ²` is `t² + (1 − t)²` with `t = m²/ρ²`, which is minimised at `t = 1/2`, so the
+///   ceiling **is** the minimum of this function over the whole spectrum;
+/// * hence `λ ≤ 1/√2 ≤ cancellation_courant(m, n)` for every mode, so on a stable membrane **no
+///   mode is ever sharp** — every one of them is flat, or (the diagonal, at the ceiling) exact;
+/// * it rises toward `1` along the **axial** family `(m, 1)`, which is above the ceiling and
+///   therefore unreachable. That is why the ceiling buys the diagonal family the entire grid and
+///   the axial family nothing (§4.1).
 ///
 /// `n = 0` spells the 1-D degenerate case — no second axis, so `ρ² = m²` and `w = m²` — and the
 /// formula returns exactly `1.0` for every `m`. That is the 1-D CFL limit, and it is why an ideal

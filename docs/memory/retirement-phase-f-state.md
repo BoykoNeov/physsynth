@@ -16,7 +16,7 @@ one step per "go" from the human.
   whose referee is a leaving library (NumPy `np.sum`/`np.dot`, SciPy `D2 @ D2`) were recorded into
   `crates/physsynth-core/tests/reference/{numpy_reductions,scipy_biharmonic}.json` and carried
   (`tests/reductions.rs`, `ops.rs`, `connection*.rs`). Binding properties stay until the binding
-  goes (the human agreed to that scope). `physsynth/analysis/` deleted (the human: "they should
+  goes (that was the scope the human approved when step 1 was described to them). `physsynth/analysis/` deleted (the human: "they should
   go"); `horizon.py`'s long prose moved into `horizon.rs` first. pytest 259 → 232.
 
 **Lessons worth keeping:**
@@ -28,6 +28,8 @@ one step per "go" from the human.
 - Reversing a sparse product's contraction is an EQUIVALENT mutant on `B = D2@D2` (every entry's
   terms are palindromes) — it moves the 2-D operators instead, seen only by the viewer freeze.
   The ops2d step's record must catch it (§48.5 plant F).
+- A scripted prose move is not a diff: re-read the deleted file sentence by sentence (the review
+  found two dropped passages).
 - When a guard's population goes to zero (sibling-layer import check), delete it.
 - `test_ci_workflow.py`'s two named positive controls ARE `test_binding_surface.py`: whichever step
   deletes that file must re-aim or delete them in the same commit.
