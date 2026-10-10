@@ -42,9 +42,11 @@ use crate::string_stiff::{dot, THETA_DEFAULT};
 pub const THETA: f64 = THETA_DEFAULT;
 
 /// A construction-time rejection. Every variant's `Display` is the Python original's message
-/// verbatim. The two loss messages are held to it by `tests/string_stiff.rs`'s
-/// `construction_rejects_in_pythons_order`; `tests/string_damped_harness.rs` holds the
-/// variant each of ten bad calls gets.
+/// verbatim. The two loss messages' text is held by `tests/string_stiff.rs`'s
+/// `construction_rejects_in_pythons_order`, and `sigma0`'s also by the viewer's
+/// `tests/strings.rs`; `tests/string_damped_harness.rs` holds the VARIANT each of ten bad
+/// calls gets. A planted change to `NegativeKappa`'s text turned nothing red, native or Python
+/// (retirement plan §50.5), so that text is held to the Python's by nothing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParamError {
     /// One of `L`, `T`, `rho`, `fs` was not positive.

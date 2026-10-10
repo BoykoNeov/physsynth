@@ -122,9 +122,9 @@ fn run_lines(text: &str) -> Vec<RunLine<'_>> {
 /// A length limit tells the two shapes apart without asserting anything about content. Measured at
 /// §50: the longest `run:` block line is 120 characters (`rust-debug`'s first `release_only=`
 /// line), and the joined lines §24 found were 300 to 850. The Python's limit was 120 with `>`,
-/// so that line sat exactly on it and the next test name added there would have tripped it; 160
-/// leaves the legitimate lines room and the joined ones nowhere to hide. A join of two SHORT lines
-/// is under any limit; this catches the shape that was actually found.
+/// so that line sat exactly on it and the next test name added there would have tripped it. 160
+/// leaves the legitimate lines room and is still about half the shortest join found. A join of two
+/// SHORT lines is under any limit; this catches the shape that was actually found, not every join.
 const RUN_LINE_LIMIT: usize = 160;
 
 /// `(line number, length)` of every `run:` block line over the limit.

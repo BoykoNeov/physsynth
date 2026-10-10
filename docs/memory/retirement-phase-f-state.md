@@ -31,8 +31,10 @@ one step per "go" from the human.
 - A scripted prose move is not a diff: re-read the deleted file sentence by sentence (the review
   found two dropped passages).
 - When a guard's population goes to zero (sibling-layer import check), delete it.
-- `test_ci_workflow.py`'s two named positive controls ARE `test_binding_surface.py`: whichever step
-  deletes that file must re-aim or delete them in the same commit.
+- (RESOLVED at §50: `test_ci_workflow.py` is gone. Its successor `ci_workflow.rs` has two controls
+  that are literal workflow lines — `-p physsynth-viewer --test frozen` and, inside a `run: |`
+  block, `cargo test -p physsynth-analysis --tests`. The workflow edit at the last step must keep
+  them or re-aim the controls in the same commit.)
 
 - **Step 3 (§49, 2026-10-10):** `tests/test_rust_parity_ops2d.py` deleted; SciPy recorded into
   `crates/physsynth-core/tests/reference/scipy_ops2d.json` (Airy B_F right product, corner-average
@@ -65,6 +67,8 @@ one step per "go" from the human.
 - Write each native check as a function over text and plant into text inside the test: the
   plants become permanent self-tests.
 - A `--test $n` operand is a query too — skip `$`/`*` in the operand, not only the token.
+- "Only X holds this" must be PLANTED workspace-wide: the ideal string's message text was
+  held by two viewer tests the grep never looked at (§50.5).
 
 **Next (§50.4), the last step:** `test_binding_surface.py`, `physsynth/`, `conftest.py`,
 `pyproject.toml`, `scripts/nicepytest.py`, `crates/physsynth-py/`, and the `validate`/`lint` jobs +

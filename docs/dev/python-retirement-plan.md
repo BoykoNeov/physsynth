@@ -8939,9 +8939,8 @@ of escaping between an editor and the file can turn the needle into the thing it
 **Stale references fixed in the same commit.** The `ParamError` doc comments in
 `string_{ideal,stiff,damped,nonlinear}.rs` and a comment in `tests/string_stiff.rs` said
 `test_stability.py` matches on the messages' text; that stopped being true at §31. They now name
-the native test that holds each text — and say where none does: `tests/string_ideal.rs` holds the
-VARIANT each bad call gets and only the CFL message's text, and the damped string's text is held
-for its two loss messages only (in `tests/string_stiff.rs`). `portability-contract.md`'s
+the tests that hold each text, as measured by planting a change into it (§50.5; the first
+draft wrote them from a grep and missed two viewer tests). `portability-contract.md`'s
 Enforcement table (which still listed a test deleted at §48) is rewritten around the three
 `deps.rs` files. `string_stiff.py`'s docstring said a guard phase A deleted still reads its
 `biharmonic_matrix` re-export; nothing has since.
@@ -8994,8 +8993,38 @@ Each plant failed exactly the one test named, and no other.
 The last step, phase F's end: `tests/test_binding_surface.py` (67, with the moved identity guard),
 `physsynth/`, `conftest.py`, `pyproject.toml`, `scripts/`' Python (`nicepytest.py`) and
 `crates/physsynth-py/`, and with them the workflow's `validate` and `lint` jobs and the `rust`
-job's Python steps. `ci_workflow.rs` is the guard on that edit. Read first: the binding's four
+job's Python steps. `ci_workflow.rs` is the guard on that edit, and its two positive controls are LITERAL workflow
+lines that edit must keep or re-aim in the same commit: `cargo test --release -p physsynth-viewer
+--test frozen` on a run line (the `frozen-windows` job), and `cargo test -p physsynth-analysis
+--tests` inside a `run: |` block (`rust-debug`). Read first: the binding's four
 reach-backs into Python (`grep -rn 'import("physsynth' crates/physsynth-py/src/`), which go with
 it, and every document that tells a reader to `pip install` the wheel or run `pytest`.
 
 When the human says so.
+
+### 50.5 Review fixes and CI
+
+Run 38051378344 on `37e1a83`, all five jobs green (optimised Rust 10.9 min, unoptimised 13.3 min,
+the exact viewer freeze 4.3 min, the Python suite 1.1 min). `ci_workflow.rs`'s first run off the
+recording machine: 7 passed in both profiles, 0.00 s each — so the controls matched the workflow
+as checked out on Linux, not only on Windows.
+
+The advisor's read of the first commit found three things to correct:
+
+- **The new `ParamError` comments had been written from a grep, not a plant.** Planted: one
+  character in the ideal string's `NonPositive` text and one in the damped string's
+  `NegativeKappa` text, whole workspace in release plus the Python suite on a rebuilt wheel, then
+  reverted by exact replacement (`git diff src/` empty, wheel rebuilt clean). The ideal string's
+  change turned **two viewer tests** red — `tests/strings.rs`'s
+  `refusal_messages_are_the_references_word_for_word` and the `strings` scene of `tests/frozen.rs`
+  — so the first comment's "the text only of the CFL message" was false: the viewer shows these
+  messages to its user and holds that one word for word. The damped string's change turned
+  **nothing** red, native or Python. Both comments now say what was planted and what it hit. The
+  damped `NegativeKappa` text being held to nothing is a gap the plant found; it is a message, not
+  physics, and is put to the human rather than guarded.
+- **Memory held a stale instruction** (re-aim `test_ci_workflow.py`'s controls when
+  `test_binding_surface.py` goes); the file is gone. Resolved in both copies, and §50.4 now names
+  the two literal workflow lines `ci_workflow.rs`'s controls stand on.
+- **`RUN_LINE_LIMIT`'s comment overclaimed** ("the joined ones nowhere to hide") a sentence before
+  admitting a join of two short lines passes. It now says 160 is about half the shortest join
+  found, and that it catches that shape, not every join.
