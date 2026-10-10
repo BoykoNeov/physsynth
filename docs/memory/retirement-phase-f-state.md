@@ -1,11 +1,11 @@
 ---
 name: retirement-phase-f-state
-description: "Phase F (take Python apart, retirement plan §47+) — step 1 frozen analysis record native (§47); step 2 (2026-10-09, §48) binding-file outside referees carried + physsynth/analysis deleted; next ops2d vs SciPy"
+description: "Phase F (take Python apart, retirement plan §47+) — step 1 analysis record native (§47); step 2 binding-file referees (§48); step 3 (2026-10-10, §49) ops2d vs SciPy recorded + file deleted; next the package guards"
 metadata:
   node_type: memory
   type: project
   originSessionId: af072a4b-7d15-4a58-93c7-e6a5a9448efa
-  modified: 2026-10-09T01:26:44.528Z
+  modified: 2026-10-10T07:43:42.310Z
 ---
 
 Phase F of `docs/dev/python-retirement-plan.md` = deleting what is left of Python, in §46.7's order,
@@ -34,5 +34,22 @@ one step per "go" from the human.
 - `test_ci_workflow.py`'s two named positive controls ARE `test_binding_surface.py`: whichever step
   deletes that file must re-aim or delete them in the same commit.
 
-**Next (§48.6):** `tests/test_rust_parity_ops2d.py` (159) against SciPy — record SciPy first; then
-stability/ci guards; then the rest with `crates/physsynth-py/`. Related: [[retirement-phase-c-carrying-state]], [[rust-tests-parallel-nice]].
+- **Step 3 (§49, 2026-10-10):** `tests/test_rust_parity_ops2d.py` deleted; SciPy recorded into
+  `crates/physsynth-core/tests/reference/scipy_ops2d.json` (Airy B_F right product, corner-average
+  scatter, SuperLU on the 16 small grids, FNV fingerprints of `L @ L` + free-plate K). Human's
+  calls: SuperLU small grids only (2.7 MB otherwise); big-grid backward error release-only
+  (`ops2d_airy_large.rs`); F's other targets guarded by fingerprints. pytest 232 → 73.
+
+**Lessons from step 3:**
+- A plant's reach must be PROBED, not reasoned: fingerprint every builder instance before/after
+  (a per-word FNV was too weak — hash per BYTE). §48 said F moves "the 2-D operators"; it also moved
+  `L @ L` on staircased rims and the guitar free plate's K, which the Python file never tested.
+- A canary taken after masking can be constant (a rim node is always 0) — keep the raw draw.
+- A quoted measured minimum may be from a WIDER survey than the test's sweep (1.9e7 vs 4.686e9):
+  re-run the old test to read its own number before quoting it.
+- SciPy's left-associated Gram differs only because its intermediate is descending; natively both
+  bracketings contract ascending → the parentheses plant is an equivalent mutant.
+- Bash-tool heredocs break on apostrophes/backslashes here: write edit scripts with Write, run them.
+
+**Next (§49.5):** `test_stability.py` (3) + `test_ci_workflow.py` (4); then the rest with
+`crates/physsynth-py/`. Related: [[retirement-phase-c-carrying-state]], [[rust-tests-parallel-nice]].

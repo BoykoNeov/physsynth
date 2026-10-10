@@ -65,7 +65,9 @@ def test_every_test_file_the_workflow_names_exists(workflow_lines):
     `tests/test_binding_surface.py` is spelled out literally in the `rust` job and is permanent
     (it holds the binding's own properties, not a comparison, so no deletion removes it). Finding
     that one token proves the scan works, cannot drain, and is a stronger statement than any
-    threshold -- the floor below is kept only as a cheap sanity bound.
+    threshold. A floor of two tokens stood beside it as a sanity bound until retirement plan §49
+    took `test_rust_parity_ops2d.py` out of the workflow and left the control as the only literal
+    name -- a floor of one restates the control, so it was deleted rather than lowered.
     """
     named = [
         token
@@ -83,10 +85,6 @@ def test_every_test_file_the_workflow_names_exists(workflow_lines):
         "the scan did not find `tests/test_binding_surface.py`, which the `rust` job names "
         "literally and permanently -- so the scan has stopped matching and this guard is "
         f"checking nothing. It found: {sorted(set(named))}"
-    )
-    assert len(named) >= 2, (
-        f"only {len(named)} test-file tokens found in the workflow -- see the docstring for why "
-        "this bound is a sanity check rather than the real assertion"
     )
     missing = sorted({t for t in named if not (REPO_ROOT / t).is_file()})
     assert not missing, f"the workflow names test files that do not exist: {missing}"

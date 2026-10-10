@@ -8767,3 +8767,109 @@ The advisor's read of the first commit found four things to correct:
   family's", the leading prefix as the conservative reading) were missing too. All restored.
 - **The memory note said the human "agreed to that scope".** What the human approved was step 1 as
   it was described to them; the note now says that.
+
+## 49. Phase F, step 3 — the 2-D builders against SciPy, and `test_rust_parity_ops2d.py` goes
+
+Done 2026-10-10 (the human: "What is next" → this step; "Start it"). The first item of §48.6's
+list. `tests/test_rust_parity_ops2d.py` (159 cases) is **deleted**; every test in it is carried,
+and where its referee was SciPy, SciPy's answers were recorded first into
+`crates/physsynth-core/tests/reference/scipy_ops2d.json` (NumPy 2.4.6, SciPy 1.17.1, wheel
+reinstalled; 602 KB, one case per line). `8aadf62` is the last commit holding the Python file.
+pytest 232 → 73.
+
+**What moved.**
+
+| from `test_rust_parity_ops2d.py` | cases | to (`crates/physsynth-core/tests/`) |
+|---|---|---|
+| `test_the_grid_endpoints_are_exact` | 9 | `ops2d.rs`, `the_grid_hits_both_endpoints_exactly`, now over the same 9 sizes |
+| `test_inner2d_is_exactly_norm2_when_the_operands_coincide` | 1 | `ops2d.rs`, `the_squared_norm_is_the_inner_product_with_itself_past_the_pairwise_cutoff` (64 terms; the existing native check had 3, below `np.sum`'s eight) |
+| `test_the_comparison_margin_is_wide_for_every_real_outline` | 64 | `ops2d.rs`, `every_real_outline_clears_the_rim_comparison_by_far_more_than_a_last_bit`, the whole 2 × 4 × 8 sweep |
+| `test_the_degenerate_lens_is_the_exception_and_sits_on_the_rim` | 1 | `ops2d.rs`, same name |
+| `test_the_rust_product_is_canonical_before_anything_sorts_it` | 5 | `ops2d.rs`, `every_two_dimensional_builder_emits_ascending_rows` — the core half; "before the shim sorts" was a binding property and goes with the binding |
+| `test_the_collocated_and_centered_differences_are_not_the_same_matrix` | 45 | `ops2d.rs`, same name, the full 9 × 5 sweep |
+| `test_the_transposed_corner_average_is_the_same_sum_either_way` | 2 | `ops2d_scipy.rs`, `the_corner_averages_transpose_is_scipys_scatter` — SciPy's CSC scatter recorded, 2 grids × 8 vectors |
+| `test_the_gram_association_is_a_different_sum_and_this_finds_the_witness` | 1 | `ops2d_scipy.rs`, `the_airy_operator_is_scipys_right_associated_gram_product` — SciPy's right product on the 16 grids, bit for bit, the crate's clamped `D2`s recorded and checked first |
+| `test_the_airy_solve_is_the_measured_superlu_tolerance` | 21 | `ops2d_scipy.rs`, `the_airy_solve_is_superlus_to_the_measured_tolerance` (the 16 grids, SuperLU recorded); the other 5 are held to their backward error instead (§49.1) |
+| `test_both_airy_solves_are_backward_stable_so_the_gap_is_conditioning` | 10 | `ops2d_scipy.rs` (SuperLU's recorded answers and the crate's, all 16 grids) and `ops2d_airy_large.rs` (the crate's, the 5 large grids) |
+
+The inputs are §48.1's LCG (u64 wrapping, `(s >> 11) / 2^53`, `2u − 1`) with first and last
+elements as canaries — NumPy's `default_rng` normals cannot be rebuilt natively. The first draft
+of the record kept the source's first element *after* zeroing the rim, which is a rim node on every
+grid and so always `0.0`: a canary that could not fail. It keeps the raw draw now.
+
+New: `tests/ops2d_scipy.rs` (5 tests), `tests/ops2d_airy_large.rs` (1), and `tests/airy_fixture/`
+(the generator, the area weight and the backward error the two share). `ops2d.rs` 46 → 51 tests.
+
+### 49.1 The two human calls
+
+- **SuperLU's answers on the 16 small grids only.** All 21 grids × 3 sources would have been
+  2.7 MB more; the 16 are 145 KB. On the five large grids (up to 160 × 128) the forward comparison
+  mostly documented the `N⁴` growth of the gap; what certifies a solve is its backward error, and
+  that is now asserted there instead. Re-measured on the LCG sources, the worst gap is **0.193** of
+  `airy_solve_tol` (the retired test's "~8x slack" was fitted on NumPy normals; this is ~5x), and
+  SuperLU's backward error is at most 4.3e-16 on every grid.
+- **The large-grid backward error is release-only** (116 s unoptimised, ~15 s optimised), split
+  into its own file the way `airbox_port_size` was (§44.6) and added to `rust-debug`'s
+  `release_only`. It pins no spelling; the same bar runs on the 16 recorded grids in both profiles.
+
+### 49.2 The outline margin: 4.686e9 ulps, not 1.9e7
+
+The retired test's comment quoted a minimum margin of 1.9e7 ulps over its sweep. Over **this**
+sweep both the native carry and the Python test itself (run on 2026-10-10 before the deletion)
+read **4.686e9** — the same double, at `Lx = 0.15`, `N = 24`, the default outline. The 1.9e7 is
+the minimum over the wider 130-configuration survey `guitar_mask`'s doc cites, not over these 64.
+The native comment now says which is which. `guitar_half_width` was already the scalar libm on both
+sides (the shim calls the binding), so this is not NumPy's margin against libm's. The carried grid
+helper now uses `Plate::new`'s own spellings (`py_round`, `linspace0`), so it measures the shipped
+model's grid rather than a third one.
+
+### 49.3 Breakages planted
+
+Each applied alone by exact string replacement and reverted the same way (never `git checkout --`),
+the whole workspace run each time, `git diff` on `src/` empty after every one.
+
+| plant | caught by |
+|---|---|
+| F `Csr::matmul` contracting in descending order | the new Airy bar (`B_F 8x8 h=0.0375: 2 of 501 entries differ`) and the new builders bar; before them, the Windows-only viewer freeze alone (`vk`, `vkroom`, `plate`, `browser5d`) |
+| L `AiryStressSolver::new` left-associated | **nothing, correctly** — an equivalent mutant: no bit moves anywhere, viewer freeze included |
+| T `transpose` filling each row in descending order | the new lemma, Airy and ascending-rows bars, among 241 failures workspace-wide |
+| C the collocated difference keeping its end rows | the new 9 × 5 sweep, and two existing `ops2d.rs` bars |
+
+**F was §48.5's open item, and it is closed — but it reached further than §48.5 said.** A probe
+fingerprinting 152 builder instances before and after F found it moves, besides the Airy operator
+on its two witness grids: the masked biharmonic `L @ L` on staircased guitar outlines (and on the
+6 × 5 rectangle at `h = 0.037`), and the free guitar plate's stiffness on most guitar sizes.
+Natively only the viewer freeze saw those, and it compares values on Windows alone. At the human's
+call, SciPy's own products for six of those cases were recorded as **fingerprints** (a 64-bit
+FNV-1a of the canonical CSR, the mask's fingerprint checked first) rather than full matrices — a
+failure names the matrix, not the entry. For the free plate the recorder transcribes the factors
+off `free_plate_stiffness_from_mask` and assembles `K` with SciPy's products; all six equalled the
+crate's to the bit before anything was written. All six move under F (the probe), and the bar went
+red under F.
+
+**L is equivalent here, which is not what the retired test implied.** SciPy's two bracketings
+differ because its left-associated intermediate comes back with **descending** rows (all 16 grids),
+so it contracts in the other order. The crate's `Csr` cannot store a descending row (`from_rows`
+sorts), so both of its bracketings contract ascending and, on these values, round the same. What
+the recorded left-associated values pin natively is therefore the contraction ORDER — F — and the
+test now says so instead of claiming to pin the parentheses.
+
+### 49.4 The CI guard that lost its floor
+
+`tests/test_ci_workflow.py::test_every_test_file_the_workflow_names_exists` asserted at least two
+literal `tests/*.py` tokens in the workflow beside its named positive control,
+`test_binding_surface.py`. With this file gone from the `rust` job the control is the only name
+left, and a floor of one restates it, so the floor was **deleted** rather than lowered (a guard
+that reaches its population's end is deleted or widened, never left). The existence check and the
+control stay until `test_binding_surface.py` goes.
+
+### 49.5 What is next
+
+§48.6's list, less this item: `tests/test_stability.py` (3) and `tests/test_ci_workflow.py` (4);
+then the rest of `test_binding_surface.py` (66) with `physsynth/`, `conftest.py`, `pyproject.toml`,
+`scripts/`' Python and `crates/physsynth-py/`. `physsynth/core/operators2d.py` stays until then —
+`membrane.py` imports it and `test_stability.py` guards its surface. Whichever step deletes
+`test_binding_surface.py` deletes or re-aims `test_ci_workflow.py`'s two positive controls in the
+same commit.
+
+When the human says so.

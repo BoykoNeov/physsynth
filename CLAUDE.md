@@ -140,7 +140,12 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    (its horizon prose moved into `horizon.rs` first). `reduce.rs`' own tests pin the blocking's
    structure and could not see a wrong combine order or block size; the body bridge's and the sympathetic
    sums were seen by nothing native. The binding's own properties stay until the binding goes.
-   Next (§48.6): the 2-D builders against SciPy, the package guards, and the binding. §46 found θ a sixth time: BOTH plate frequency oracles could ignore `θ` unseen
+   **Step 3 (§49)** recorded SciPy's 2-D answers (`reference/scipy_ops2d.json`: the Airy
+   operator, the corner-average scatter, SuperLU on 16 grids, and fingerprints of `L @ L` and the
+   free plate's `K`) and deleted `tests/test_rust_parity_ops2d.py`. A product contracting in
+   descending order moved the masked biharmonic and the guitar plate's stiffness with only the
+   Windows-only viewer freeze seeing it, now guarded (the human's call); the Airy operator's
+   parentheses are an equivalent mutant natively. Next (§49.5): the package guards, then the binding. §46 found θ a sixth time: BOTH plate frequency oracles could ignore `θ` unseen
    workspace-wide (every caller that builds or reads a plate passes the default; the only bar that
    saw either plant alone was a twin of the two oracles), now held to the plate's own stepped
    recurrence at four θs; and the monotone flag's slack was seen only by the viewer freeze — both

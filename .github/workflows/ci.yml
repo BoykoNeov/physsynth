@@ -173,16 +173,17 @@ jobs:
           grep -m1 'model name' /proc/cpuinfo || true
           python -c "import numpy; numpy.show_runtime()"
 
-      # The binding's own properties, and the 2-D builders held against SciPy.
+      # The binding's own properties.
       #
       # This step was "Rust vs Python parity", and its list DRAINED one file per deletion (plan
       # section 39's units). Phase A (retirement plan §21) took the last two comparisons, operators
       # and banded, so nothing here compares two implementations any more. What is left:
       # `test_binding_surface.py`, the properties of the BINDING that neither a physics bar nor a
-      # native Rust bar can see (buffer lifetime, what `state` hands out, PyO3's argument mapping),
-      # and `test_rust_parity_ops2d.py`, whose Python side went with unit 5 and which now measures
-      # the Rust builders against SciPy's own sparse products and the guitar outline's margin. Both
-      # also run in `validate`; they run again here for `-rP`, whose reports are the point.
+      # native Rust bar can see (buffer lifetime, what `state` hands out, PyO3's argument mapping).
+      # It also runs in `validate`; it runs again here for `-rP`, whose reports are the point.
+      # `test_rust_parity_ops2d.py` (the 2-D builders against SciPy) stood beside it until
+      # retirement plan §49 recorded SciPy's answers into `crates/physsynth-core/tests/
+      # reference/scipy_ops2d.json` and carried every test into `ops2d.rs` and `ops2d_scipy.rs`.
       #
       # `tests/test_rust_parity.py` itself went with unit 8 (plan section 45). Emptying a list
       # rather than deleting the file would have left a `parametrize` over nothing, which COLLECTS
@@ -192,7 +193,7 @@ jobs:
       # module-level `pytest.importorskip`, so a failed or missing install SKIPS them and the
       # step exits 0 having asserted nothing at all -- a guard that passes quietly is the failure
       # it exists to catch, one level down.
-      - name: Binding surface and the 2-D builders against SciPy
+      - name: Binding surface
         run: |
           python -c "import physsynth_rs; print(physsynth_rs.__file__)"
           # `-rP` prints the captured stdout of tests that PASSED. Several of these measure a
@@ -200,8 +201,7 @@ jobs:
           # about the machine (plan 22.1); without this the reports are discarded on exactly
           # the runs where they are the news.
           pytest --durations=10 -rP \
-            tests/test_binding_surface.py \
-            tests/test_rust_parity_ops2d.py
+            tests/test_binding_surface.py
 
       # PHASE 7'S SUCCESS CONDITION STOOD HERE and is retired with unit 10 and unit 11
       # (plan §44). It ran the instrument's 65 client files with BOTH flags set, because that was
@@ -251,7 +251,10 @@ jobs:
   # §40.6) checks no spelling and the model it drives has no `debug_assert!`. `airbox_port_size`
   # (the room port's equivalent radius, split from `airbox_scene` for this, 95 s unoptimised
   # against 4.5 s optimised, the human's call, plan §44.6) holds ratio and magnitude bars at
-  # percent-level headroom only. It is an exclusion on purpose: a new core test file lands
+  # percent-level headroom only. `ops2d_airy_large` (the Airy solve's backward error on the five
+  # large grids, split from `ops2d_scipy` for this, 116 s unoptimised against ~15 s, the human's
+  # call, retirement plan §49) pins no spelling, and the same bar runs on the 16 recorded grids in
+  # both profiles. It is an exclusion on purpose: a new core test file lands
   # in both profiles by default, and a stale name here fails the step.
   rust-debug:
     name: Rust core, unoptimised (debug asserts, unfolded arithmetic)
@@ -265,7 +268,7 @@ jobs:
       - name: Core and analysis bars, unoptimised
         run: |
           release_only="connection_plate mallet_gong plate plate_grain plate_kirchhoff plate_free string_geometric_long"
-          release_only="$release_only vk_plate_harness airbox_port_size"
+          release_only="$release_only vk_plate_harness airbox_port_size ops2d_airy_large"
           for n in $release_only; do
             ls crates/physsynth-core/tests/$n.rs > /dev/null || { echo "no core test $n"; exit 1; }
           done

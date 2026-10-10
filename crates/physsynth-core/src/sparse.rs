@@ -319,7 +319,7 @@ impl Csr {
     /// SciPy's `csr - csr` computes `a - b` at every position either operand occupies, treating a
     /// missing entry as `0.0`, and drops results that are exactly zero. Both are reproduced: the
     /// arithmetic because `0.0 - b` is what a missing left entry contributes, the zero-dropping
-    /// because `nnz` is compared against SciPy's in the parity tests.
+    /// because `nnz` is compared against SciPy's recorded products.
     ///
     /// SciPy picks between two kernels here — a canonical merge when both operands have sorted,
     /// duplicate-free rows and a linked-list merge otherwise — and the two disagree on the *order*
@@ -554,8 +554,11 @@ impl Csr {
     /// runs over row `j` of `other` ascending. That is what SciPy's SMMP kernel does, and floating
     /// point makes it part of the definition rather than an implementation detail: `(p + 4p) + p`
     /// and `(p + p) + 4p` are different numbers in general. Checked against SciPy at six grid
-    /// sizes, the resulting `data` is bit-identical — which is why the parity test asserts equality
-    /// rather than a tolerance.
+    /// sizes, the resulting `data` is bit-identical — which is why the tests against SciPy's
+    /// recorded products (`tests/ops.rs`, `tests/ops2d_scipy.rs`) assert equality rather than a
+    /// tolerance. Contracting in descending order instead changes no bit of the 1-D `D2 @ D2`
+    /// (every entry's terms read the same both ways) but does move the Airy operator, the masked
+    /// biharmonic on a staircased rim and the free plate's stiffness (retirement plan §49).
     ///
     /// Entries that cancel to exactly zero are dropped, as SciPy's kernel drops them, so the two
     /// sides agree on `nnz` as well as on the values.
@@ -783,7 +786,7 @@ mod tests {
         let b = Csr::from_rows(2, 3, vec![vec![(1, 2.0), (2, -3.0)], vec![(0, 7.0)]]);
         let s = a.add(&b);
         // Row 0: 1 from a alone, 2 from b alone, and 3 + (-3) which cancels and is not stored --
-        // SciPy's kernel drops it too, and the parity tests compare nnz.
+        // SciPy's kernel drops it too, and the recorded products pin nnz.
         assert_eq!(s.indices(), &[0, 1, 0, 1]);
         assert_eq!(s.data(), &[1.0, 2.0, 7.0, 5.0]);
         assert_eq!(s.nnz(), 4);

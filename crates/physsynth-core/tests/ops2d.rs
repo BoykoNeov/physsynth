@@ -5,8 +5,9 @@
 //! that the membrane's whole energy argument rests on `L` being symmetric — a masked 5-point
 //! Laplacian is a principal submatrix of a symmetric operator, so it stays symmetric however ugly
 //! the staircased rim gets — and a builder that quietly broke that symmetry would still produce a
-//! plausible drum. `tests/test_rust_parity_membrane.py` covers agreement with SciPy; this file
-//! covers the properties that make the model correct in the first place.
+//! plausible drum. Agreement with SciPy's own sparse products and solve is held in
+//! `tests/ops2d_scipy.rs`, against answers recorded before SciPy left (retirement plan §49); this
+//! file covers the properties that make the model correct in the first place.
 
 use physsynth_core::eig::symmetric_eigenvalues;
 use physsynth_core::ops2d::{
@@ -18,6 +19,7 @@ use physsynth_core::ops2d::{
     Mask, VonKarmanBracket,
 };
 use physsynth_core::plate::linspace0;
+use physsynth_core::radiation::py_round;
 use physsynth_core::sparse::Csr;
 use std::f64::consts::PI;
 
@@ -76,6 +78,15 @@ fn the_grid_hits_both_endpoints_exactly() {
     // First column of the last row.
     assert_eq!(y[10 * 11], 0.15);
     assert_eq!(h, 2.0 * 0.15 / 10.0);
+    // ... at every size the retired `test_rust_parity_ops2d.py` swept, even and odd: an even N
+    // puts a node at the origin and an odd one does not. The endpoint is OVERWRITTEN, as
+    // `np.linspace` does; computing `n * h - half` would miss by an ulp at most of these, and that
+    // ulp decides rim membership.
+    for n in [2usize, 3, 4, 5, 8, 15, 16, 33, 40] {
+        let (x, y, _) = grid_coords(n, 0.15);
+        assert_eq!((x[0], x[n]), (-0.15, 0.15), "N={n}: first row");
+        assert_eq!((y[0], y[n * (n + 1)]), (-0.15, 0.15), "N={n}: first column");
+    }
 }
 
 #[test]
@@ -182,35 +193,147 @@ fn the_two_dimensional_inner_product_carries_the_cell_area() {
     assert!(norm2_2d(&f, h) > 0.0);
 }
 
+#[test]
+fn the_squared_norm_is_the_inner_product_with_itself_past_the_pairwise_cutoff() {
+    // The case above is three terms long, below the eight at which `np.sum`'s blocking starts and
+    // where every spelling of a sum is one loop. The retired binding test asked it at 64 -- eight
+    // blocks -- so a norm that took a different reduction from the inner product is visible here
+    // and not there.
+    let f = pseudorandom(64, 7);
+    assert_eq!(norm2_2d(&f, 0.5), inner2d(&f, &f, 0.5));
+}
+
 // --- the guitar outline (model #5g's geometry) ---------------------------------------------
 
 /// The `(nrows, ncols)` node grid a guitar plate builds on: `x` from the centre line, `y` from the
-/// neck end, cells square, and `Ly` snapped to a whole number of them exactly as `plate.py` does.
+/// neck end, cells square, and `Ly` snapped to a whole number of them — in `Plate::new`'s own
+/// spellings (`py_round`, `linspace0`, `v - 0.5 * lx`), so a margin measured here is the shipped
+/// model's margin and not a third grid's.
 fn guitar_grid(lx: f64, ly_asked: f64, n: usize) -> (Vec<f64>, Vec<f64>, f64, usize, usize) {
     let h = lx / (n as f64);
-    let ny = ((ly_asked / h).round() as usize).max(1);
+    let ny = (py_round(ly_asked / h) as i64).max(1) as usize;
     let ly = (ny as f64) * h;
+    let (xs, ys) = (linspace0(lx, n + 1), linspace0(ly, ny + 1));
     let (nrows, ncols) = (ny + 1, n + 1);
     let mut x = Vec::with_capacity(nrows * ncols);
     let mut y = Vec::with_capacity(nrows * ncols);
-    for j in 0..nrows {
-        for i in 0..ncols {
-            // np.linspace: `i * step`, with the final entry overwritten by the endpoint.
-            let xi = if i == n {
-                lx
-            } else {
-                (i as f64) * (lx / (n as f64))
-            };
-            let yj = if j == ny {
-                ly
-            } else {
-                (j as f64) * (ly / (ny as f64))
-            };
+    for &yj in &ys {
+        for &xi in &xs {
             x.push(xi - 0.5 * lx);
             y.push(yj);
         }
     }
     (x, y, ly, nrows, ncols)
+}
+
+/// `np.spacing` for a positive finite double: the gap to the next one up, read off the bit pattern
+/// (`f64::next_up` is newer than the crate's MSRV).
+fn ulp(x: f64) -> f64 {
+    assert!(x > 0.0 && x.is_finite());
+    f64::from_bits(x.to_bits() + 1) - x
+}
+
+/// Every interior node's distance from `guitar_mask`'s strict `|x| < half`, in ulps of `half`,
+/// with `half` spelled as the mask spells it (`scale * guitar_half_width(y / length, ..)`).
+///
+/// The division by an ulp is only meaningful while `half` stays a normal double — the ulp of 0.0
+/// is 5e-324 and would turn every margin into an infinity that passes a lower bar while asserting
+/// nothing. So the smallest interior `|half|` is asserted rather than assumed (8.7e-6 over this
+/// sweep, measured by the retired Python).
+fn margin_in_ulps(lx: f64, ly: f64, n: usize, waist: f64, asym: f64) -> Vec<f64> {
+    let (x, y, ly_snapped, _, _) = guitar_grid(lx, ly, n);
+    let scale = guitar_scale(lx, waist, asym);
+    let mut out = Vec::new();
+    for (&xv, &yv) in x.iter().zip(&y) {
+        let t = yv / ly_snapped;
+        if !(t > 0.0 && t < 1.0) {
+            continue;
+        }
+        let half = (scale * guitar_half_width(t, waist, asym)).abs();
+        assert!(
+            half > 1e-300,
+            "`half` reaches {half:e} on this outline -- an ulp is no longer a meaningful \
+             denominator and the margin bar would pass on infinities"
+        );
+        out.push((xv.abs() - half).abs() / ulp(half));
+    }
+    out
+}
+
+/// The outlines that ship: the plate's defaults, the guitar fixtures, the viewer's long narrow
+/// plate, the first point of its waist sweep and a negative `asym`. The degenerate lens
+/// `(0.0, 0.0)` is NOT here — it is the one outline a last bit can move, and has its own test.
+const REAL_OUTLINES: [(f64, f64); 4] = [(0.42, 0.30), (0.97, 0.30), (0.88, 0.0), (0.60, -0.30)];
+
+#[test]
+fn every_real_outline_clears_the_rim_comparison_by_far_more_than_a_last_bit() {
+    // How much room a last bit of `sin` has before it moves a node. `half` is built from the
+    // platform's `sin`, and a node a few ulps from the rim is a node whose existence depends on
+    // the machine that built the mask -- and a mask with one node fewer conserves energy just as
+    // well, so no physics bar would notice. Carried from `test_rust_parity_ops2d.py`, the full
+    // 2 x 4 x 8 sweep.
+    //
+    // The bar is 1e6 ulps. The minimum over THIS sweep is 4.686e9 (Lx = 0.15, N = 24, the default
+    // outline), the same double the retired Python read on 2026-10-10; its comment quoted 1.9e7,
+    // which is the minimum over the wider 130-configuration survey `guitar_mask`'s doc cites, not
+    // over these 64. Either way the claim is "a last bit cannot move this node", not "the margin
+    // is what it was", so a merely tighter fixture passes and only a marginal one fails.
+    let mut smallest = f64::INFINITY;
+    for (lx, ly) in [(0.37, 0.48), (0.15, 0.70)] {
+        for (waist, asym) in REAL_OUTLINES {
+            for n in [8usize, 16, 24, 32, 33, 48, 64, 96] {
+                let m = margin_in_ulps(lx, ly, n, waist, asym)
+                    .into_iter()
+                    .fold(f64::INFINITY, f64::min);
+                assert!(
+                    m > 1e6,
+                    "Lx={lx} waist={waist} asym={asym} N={n}: the closest node clears the \
+                     outline by only {m:.3e} ulps of `half`, so a last bit of `sin` could move it"
+                );
+                smallest = smallest.min(m);
+            }
+        }
+    }
+    eprintln!("smallest margin over the sweep: {smallest:.3e} ulps");
+}
+
+#[test]
+fn the_degenerate_lens_is_the_exception_and_sits_on_the_rim() {
+    // The outline the margin bar above does NOT cover, pinned as a node rather than a statistic. A
+    // plain lens is `0.5 Lx sin(pi t)`: at t = 1/6 that is `0.25 Lx` in real arithmetic and the
+    // N = 32 grid puts a node exactly there, so which side of a strict `<` it lands on is decided
+    // by the last bit of one `sin`. At t = 1/2 `sin` returns exactly 1.0 and the node is exactly
+    // ON the rim. Reachable: the viewer's waist sweep starts at `waist = 0.0`.
+    let (lx, n) = (0.37, 32usize);
+    let (x, y, ly, _, ncols) = guitar_grid(lx, 0.48, n);
+    let scale = guitar_scale(lx, 0.0, 0.0);
+    let half = |p: usize| scale * guitar_half_width(y[p] / ly, 0.0, 0.0);
+
+    let p = flat(7, 8, ncols);
+    assert!(((y[p] / ly) - 1.0 / 6.0).abs() <= 1e-15 / 6.0);
+    assert_eq!(x[p].abs(), 0.0925);
+    let hp = half(p);
+    assert!(
+        (x[p].abs() - hp).abs() <= 4.0 * ulp(hp),
+        "the lens's rim node is no longer within a few ulps of the outline"
+    );
+
+    // The widest point: `scale` is `0.5 Lx` exactly (the sampled peak is `sin(pi/2) == 1.0`), and
+    // the bounding-box node is `0.5 Lx` from the centre line, so the two are the same double.
+    let row = (0..y.len() / ncols)
+        .min_by(|&a, &b| {
+            let (ta, tb) = (y[a * ncols] / ly, y[b * ncols] / ly);
+            (ta - 0.5).abs().total_cmp(&(tb - 0.5).abs())
+        })
+        .unwrap();
+    assert_eq!(y[row * ncols] / ly, 0.5);
+    assert_eq!(half(row * ncols), 0.185);
+    assert_eq!(x[row * ncols].abs(), 0.185);
+
+    // ... and the margin function above reads exactly zero here, which is what proves it can see
+    // a node on the rim at all.
+    let m = margin_in_ulps(lx, 0.48, n, 0.0, 0.0);
+    assert_eq!(m.into_iter().fold(f64::INFINITY, f64::min), 0.0);
 }
 
 #[test]
@@ -421,8 +544,9 @@ fn the_shipped_guitar_produces_spikes_and_pruning_removes_them_all() {
 // --- the matrices (Phase 5 batch 2) ----------------------------------------------------------
 //
 // What these assert is the same thing the geometry bars above assert: the properties that make the
-// operator correct, not agreement with a stored number. `tests/test_rust_parity_ops2d.py` covers
-// the bit-for-bit agreement with SciPy. Two of them are different in kind and are marked as such —
+// operator correct, not agreement with a stored number. `tests/ops2d_scipy.rs` holds the Airy
+// operator, the corner average, the Airy solve, the masked biharmonic and the free plate's
+// stiffness against SciPy's recorded answers. Two of them are different in kind and are marked as such —
 // they pin an *arithmetic spelling* rather than a physical property, and both are written to fail
 // if the witness they search for does not exist, because a spelling test that finds nothing is a
 // test that asserted nothing (plan §23.5, and §17.2 for why that has happened here before).
@@ -866,6 +990,55 @@ fn the_five_one_d_differences_carry_the_stencils_they_claim() {
     for i in 0..n {
         assert_eq!(a.get(i, i), 0.5);
         assert_eq!(a.get(i, i + 1), 0.5);
+    }
+}
+
+#[test]
+fn the_collocated_and_centered_differences_are_not_the_same_matrix() {
+    // The pair the module is most likely to confuse: the same interior stencil, and the ONLY
+    // difference is whether the two end rows exist. Both are symmetric, both annihilate constants
+    // on the interior, and the bracket's identity survives either because rim-vanishing fields
+    // never weigh those rows. Carried at the retired binding test's full 9 x 5 sweep.
+    for n in [2usize, 3, 4, 5, 8, 9, 16, 17, 32] {
+        for h in [0.1, 0.0625, 0.0375, 1.0 / 3.0, 0.006] {
+            let (coll, cent) = (collocated_d2_1d(n, h), centered_d2_1d(n, h));
+            assert_eq!(coll.nnz() + 4, cent.nnz(), "n={n} h={h}");
+            assert_eq!(
+                coll.indptr()[0],
+                coll.indptr()[1],
+                "n={n} h={h}: row 0 must be EMPTY, not zero-valued"
+            );
+        }
+    }
+}
+
+#[test]
+fn every_two_dimensional_builder_emits_ascending_rows() {
+    // A CSR matvec sums a row in STORED order, and the plates form `B u` twice per step, so a
+    // builder that emitted its rows out of order would change the shipped trajectory. Carried from
+    // the binding test that read the triplets before anything on the Python side could sort them;
+    // the half of that claim that was about the BINDING goes with the binding. Read off the
+    // indices, not taken from `has_sorted_indices`, which would be the builder vouching for itself.
+    // The grids are the plate family's, plus one where `1/h^2` is exact and one where it is not.
+    for (nx, ny, h) in [
+        (6usize, 5usize, 0.037),
+        (8, 8, 0.05),
+        (12, 9, 0.0125),
+        (16, 16, 0.03125),
+        (20, 13, 0.1 / 7.0),
+    ] {
+        let (b, _) = biharmonic_from_mask(&rectangle_mask(nx, ny), h);
+        let (o, _) = orthotropic_biharmonic(nx, ny, h, 1.3, 0.9, 1.1);
+        let (k, _, _) = free_plate_stiffness(nx, ny, h, 0.3, 1.0, 1.0, None, None);
+        for (name, m) in [("biharmonic", &b), ("orthotropic", &o), ("free plate", &k)] {
+            for r in 0..m.nrows() {
+                let row = &m.indices()[m.indptr()[r]..m.indptr()[r + 1]];
+                assert!(
+                    row.windows(2).all(|w| w[0] < w[1]),
+                    "{name} {nx}x{ny}: row {r} is not strictly ascending"
+                );
+            }
+        }
     }
 }
 

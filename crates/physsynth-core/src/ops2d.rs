@@ -861,7 +861,8 @@ pub fn avg_d1_1d(n: usize) -> Csr {
 /// here, and the reason is worth one line because it is a lemma rather than a measurement: a CSC
 /// matvec accumulates each output entry over increasing column index, and a sorted-CSR row gather
 /// accumulates over increasing column index, so the two coincide for every canonically-stored
-/// matrix. Measured 0 differing entries in 21,780 at four grids, as predicted (plan section 27.3).
+/// matrix. Measured 0 differing entries in 21,780 at four grids, as predicted (plan section 27.3),
+/// and held against SciPy's recorded scatter in `tests/ops2d_scipy.rs` (retirement plan §49).
 #[derive(Debug, Clone)]
 pub struct VonKarmanBracket {
     nx: usize,

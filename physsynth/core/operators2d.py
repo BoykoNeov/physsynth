@@ -70,9 +70,9 @@ __all__ = [
 # around it. The reference documentation — the stencils, the mask convention, the four orthotropic
 # constants, why the biharmonic is `L @ L` and the free-plate stiffness is a Gram product, and
 # which of these come back in canonical column order — is the doc comment on the Rust item, and
-# `crates/physsynth-analysis/tests/` plus `tests/test_rust_parity_ops2d.py` are where each is
-# asserted. Deliberately not paraphrased here: a second prose copy of a stencil is a second thing
-# that can be wrong.
+# `crates/physsynth-core/tests/ops2d.rs` plus `ops2d_scipy.rs` (SciPy's answers, recorded at
+# retirement plan §49) are where each is asserted. Deliberately not paraphrased here: a second
+# prose copy of a stencil is a second thing that can be wrong.
 
 
 def _csr2d(triplets: tuple) -> sparse.csr_matrix:

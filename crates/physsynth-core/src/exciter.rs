@@ -19,8 +19,8 @@
 //! call **`cos`**, and NumPy does not use the platform libm for that — it has vectorised
 //! implementations with their own (~1 ulp) error budget. So the raised cosines are the first
 //! kernels in this port whose agreement rests on two transcendental implementations matching, the
-//! way `delta_xxxx`'s rests on two `pow`s (plan §10.3). `tests/test_rust_parity_ops2d.py`
-//! measures it rather than assuming it.
+//! way `delta_xxxx`'s rests on two `pow`s (plan §10.3). That agreement was measured, not assumed,
+//! while a NumPy side existed to measure it against; both sides of that comparison are gone now.
 
 /// A rejected excitation. `Display` reproduces the Python original's message verbatim, because
 /// the suite matches on the text.
