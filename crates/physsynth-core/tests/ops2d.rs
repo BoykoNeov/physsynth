@@ -274,10 +274,11 @@ fn every_real_outline_clears_the_rim_comparison_by_far_more_than_a_last_bit() {
     // 2 x 4 x 8 sweep.
     //
     // The bar is 1e6 ulps. The minimum over THIS sweep is 4.686e9 (Lx = 0.15, N = 24, the default
-    // outline), the same double the retired Python read on 2026-10-10; its comment quoted 1.9e7,
-    // which is the minimum over the wider 130-configuration survey `guitar_mask`'s doc cites, not
-    // over these 64. Either way the claim is "a last bit cannot move this node", not "the margin
-    // is what it was", so a merely tighter fixture passes and only a marginal one fails.
+    // outline), the same double the retired Python read on 2026-10-10. Its comment quoted 1.9e7,
+    // and so does `guitar_mask`'s doc, but nothing reproduces that figure: over this sweep it is
+    // 4.686e9, and over `plate_outline.rs`'s 80 recorded configurations it is 9.87e7 (Lx = 0.15,
+    // waist 0.97, N = 20). Either way the claim is "a last bit cannot move this node", not "the
+    // margin is what it was", so a merely tighter fixture passes and only a marginal one fails.
     let mut smallest = f64::INFINITY;
     for (lx, ly) in [(0.37, 0.48), (0.15, 0.70)] {
         for (waist, asym) in REAL_OUTLINES {

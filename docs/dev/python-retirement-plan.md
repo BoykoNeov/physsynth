@@ -8816,9 +8816,12 @@ New: `tests/ops2d_scipy.rs` (5 tests), `tests/ops2d_airy_large.rs` (1), and `tes
 
 The retired test's comment quoted a minimum margin of 1.9e7 ulps over its sweep. Over **this**
 sweep both the native carry and the Python test itself (run on 2026-10-10 before the deletion)
-read **4.686e9** — the same double, at `Lx = 0.15`, `N = 24`, the default outline. The 1.9e7 is
-the minimum over the wider 130-configuration survey `guitar_mask`'s doc cites, not over these 64.
-The native comment now says which is which. `guitar_half_width` was already the scalar libm on both
+read **4.686e9** — the same double, at `Lx = 0.15`, `N = 24`, the default outline. **Nothing
+reproduces 1.9e7**, though `guitar_mask`'s doc quotes it too (over "130 shipped configurations"):
+`plate_outline.rs`'s 80 recorded configurations read **9.87e7** at the least (`Lx = 0.15`,
+waist 0.97, `N = 20`). Its source is unknown — perhaps a measurement taken with NumPy's
+vectorised `sin` before the scalar-libm spelling, but that is not checked. The native comment
+quotes the two figures that were measured. `guitar_half_width` was already the scalar libm on both
 sides (the shim calls the binding), so this is not NumPy's margin against libm's. The carried grid
 helper now uses `Plate::new`'s own spellings (`py_round`, `linspace0`), so it measures the shipped
 model's grid rather than a third one.
@@ -8845,7 +8848,10 @@ FNV-1a of the canonical CSR, the mask's fingerprint checked first) rather than f
 failure names the matrix, not the entry. For the free plate the recorder transcribes the factors
 off `free_plate_stiffness_from_mask` and assembles `K` with SciPy's products; all six equalled the
 crate's to the bit before anything was written. All six move under F (the probe), and the bar went
-red under F.
+red under F. The guitar masks pass through the platform's `sin` before they are fingerprinted, so
+their margins were measured too: 8.0e10 ulps at the least (the narrow plate, `N = 16`), and the
+degenerate lens at `N = 16` clears its rim by 1.9e13, because its rows miss the `t = 1/6` and
+`t = 1/2` nodes that make it marginal at `N = 32`.
 
 **L is equivalent here, which is not what the retired test implied.** SciPy's two bracketings
 differ because its left-associated intermediate comes back with **descending** rows (all 16 grids),
@@ -8873,3 +8879,35 @@ then the rest of `test_binding_surface.py` (66) with `physsynth/`, `conftest.py`
 same commit.
 
 When the human says so.
+
+### 49.6 Review fixes and CI
+
+Run 38035448264 on `27738da`, all five jobs green (optimised Rust 6.4 min, unoptimised 13.5 min,
+the exact viewer freeze 4.5 min). The record's first run off the recording machine: every bit-exact
+claim held on Linux — the 16 Airy operators and their `D2`s, the 16 corner-average products, and
+all six builder fingerprints, masks included (each guitar mask passes through the platform's `sin`
+first; see the margins in §49.3). `rust-debug` accepted `ops2d_airy_large` in `release_only`.
+
+| file | optimised (Linux) | unoptimised (Linux) |
+|---|---|---|
+| core `ops2d.rs` (51) | 0.11 s | 0.40 s |
+| core `ops2d_scipy.rs` (5, new) | 0.02 s | 0.22 s |
+| core `ops2d_airy_large.rs` (1, new) | 2.88 s | release-only in CI |
+
+The 116 s that made `ops2d_airy_large` release-only (§49.1) is a local Windows measurement,
+unoptimised; the "~15 s optimised" beside it was local too, taken with other binaries running, and
+Linux ran the file in 2.88 s. CI never runs it unoptimised, so there is no Linux figure for that.
+
+The advisor's read of the first commit found three things to correct:
+
+- **The 1.9e7 had been given a source it does not have.** §49.2 first called it the minimum over
+  `guitar_mask`'s 130-configuration survey; nothing measured that. Measured instead: 9.87e7 over
+  `plate_outline.rs`'s 80 recorded configurations. §49.2 and the native comment now say the
+  figure's source is unknown and quote the two that were measured.
+- **The builder fingerprints' masks had no margin on record.** Two of the five guitar cases lie
+  outside the 64-case sweep (the lens at `N = 16`, the narrow plate at `Ly = 0.8`), and a mask
+  fingerprint is exact only while no node sits near the rim. Measured: 8.0e10 ulps at the least,
+  the lens 1.9e13. Now in §49.3 and the test's comment.
+- **`exciter.rs` gained an unverified historical claim** (that the raised cosines' agreement with
+  NumPy "was measured"). It now points at `tests/exciter.rs`, where the cosines are held to their
+  shape.

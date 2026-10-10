@@ -329,7 +329,11 @@ fn hex(v: &Value, key: &str) -> u64 {
 #[test]
 fn the_masked_biharmonic_and_the_free_plate_stiffness_are_scipys_products() {
     // The builders a descending contraction moves that nothing else native saw off Windows. The
-    // mask is checked first, so a moved outline and a moved product fail separately.
+    // mask is checked first, so a moved outline and a moved product fail separately. The masks go
+    // through the platform's `sin`, so their fingerprints are exact only because no node is near
+    // the rim: the five guitar cases clear it by 8.0e10 ulps of the half-width at the least (the
+    // narrow plate at N = 16) and the lens at N = 16 by 1.9e13 -- its rows miss the t = 1/6 and
+    // t = 1/2 nodes that make it marginal at N = 32.
     let rec = record();
     let cases = rec["builders"].as_array().expect("builder cases");
     assert_eq!(cases.len(), 6);
