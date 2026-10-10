@@ -8911,3 +8911,91 @@ The advisor's read of the first commit found three things to correct:
 - **`exciter.rs` gained an unverified historical claim** (that the raised cosines' agreement with
   NumPy "was measured"). It now points at `tests/exciter.rs`, where the cosines are held to their
   shape.
+
+## 50. Phase F, step 4 — the package guards, and `test_stability.py` and `test_ci_workflow.py` go
+
+Done 2026-10-10 (the human: "What is next" → this step; "Yes"). The next item of §49.5's list.
+Both files are **deleted**; `c6f41d0` is the last commit holding them. Neither guarded physics:
+one guarded the Python package, the other the workflow file. The question for each test was
+whether its job outlives Python. pytest 73 → 67 (−3 −4, +1 moved); the native workspace 1,824
+passed, nothing skipped.
+
+**What happened to each test.**
+
+| test | went | why |
+|---|---|---|
+| `test_stability.py::test_core_is_headless` | deleted | a blocklist on what importing the Python shims pulls in; the shims go at the next step, and the crates' `tests/deps.rs` hold the rule where the dependency tree is visible |
+| `test_stability.py::test_core_dependency_allowlist` | deleted | the same, as an allowlist; core's and analysis's `deps.rs` are empty allowlists, the viewer's names `serde_json` and forbids the binding by name |
+| `test_stability.py::test_no_module_chooses_between_two_implementations` | **moved** verbatim to the end of `tests/test_binding_surface.py` | the shims and the binding go TOGETHER at the next step, and the binding reads four shims back by name; deleting the identity claim one step early would leave it unasserted for the interval with every test green, the gap `half_deleted_bodies` existed to close (CLAUDE.md). It dies with the shims. |
+| `test_ci_workflow.py::test_no_line_contains_a_literal_backslash_n` | carried to `crates/physsynth-core/tests/ci_workflow.rs` | the workflow outlives Python, and the next step edits it more than any before |
+| `test_ci_workflow.py::test_no_run_block_line_is_a_swallowed_continuation` | carried, **with a positive control it never had** and a new limit (§50.2) | as above |
+| `test_ci_workflow.py::test_every_test_file_the_workflow_names_exists` | carried, **widened** (§50.1) | its population was one token, `tests/test_binding_surface.py`, which the next step deletes |
+| `test_ci_workflow.py::test_every_test_file_guards_its_extension_import` | deleted | after this step its population is one file, which is also its own control, and that file goes next |
+
+The native file runs each check twice: on the real workflow, and on planted text where it must
+fire (four self-tests). The backslash is built from its code point, as the Python did, so no round
+of escaping between an editor and the file can turn the needle into the thing it looks for.
+
+**Stale references fixed in the same commit.** The `ParamError` doc comments in
+`string_{ideal,stiff,damped,nonlinear}.rs` and a comment in `tests/string_stiff.rs` said
+`test_stability.py` matches on the messages' text; that stopped being true at §31. They now name
+the native test that holds each text — and say where none does: `tests/string_ideal.rs` holds the
+VARIANT each bad call gets and only the CFL message's text, and the damped string's text is held
+for its two loss messages only (in `tests/string_stiff.rs`). `portability-contract.md`'s
+Enforcement table (which still listed a test deleted at §48) is rewritten around the three
+`deps.rs` files. `string_stiff.py`'s docstring said a guard phase A deleted still reads its
+`biharmonic_matrix` re-export; nothing has since.
+
+### 50.1 The two human calls
+
+- **The "every named file exists" check is widened, not deleted.** It now reads every repository
+  path and every `cargo test -p <crate> --test <file>` target in the workflow's run lines (block
+  and one-line), skipping shell comment lines (the workflow's history comments name deleted files
+  on purpose) and any token holding `$` or `*` (a query, not a name — including the operand of
+  `targets="$targets --test $n"`). Its named control is the pair `-p physsynth-viewer --test
+  frozen`, the `frozen-windows` job's whole purpose. After the next step the workflow may name no
+  repository path at all; the path classification is then held by the planted-text self-test, and
+  the tokenizer by the control.
+- **No guard on I/O inside the core's own source.** The crate rule sees dependencies, not
+  `std::fs`, `std::net` or `println!` in `physsynth-core/src/`. None appears (grep, 2026-10-10);
+  the Python guard never looked there either, so this is not a regression. Recorded as a known gap
+  in `portability-contract.md`.
+
+### 50.2 The line limit was sitting on its own boundary
+
+The Python's limit was 120 characters with `>`, and its comment said the longest legitimate line
+was "well under" it. Measured: the longest `run:` block line is **exactly 120** — `rust-debug`'s
+first `release_only=` line — so the next test name added there would have tripped it with a
+message blaming a swallowed continuation. The joined lines §24 found were 300 to 850. The native
+limit is **160**. A join of two short lines is under any limit; the check catches the shape that
+was actually found, and the comment now says so.
+
+The swallowed-continuation check also had **no positive control**: if the `run: |` detection
+broke, it scanned nothing and passed. The native one asserts the scanner saw `cargo test -p
+physsynth-analysis --tests` inside a block.
+
+### 50.3 Breakages planted
+
+Each written into the real `.github/workflows/ci.yml` alone, the native file run, the workflow
+restored from a backup copy (`cmp`-identical after the round, never `git checkout --`).
+
+| plant | caught by |
+|---|---|
+| A a literal backslash-`n` appended to the binding-surface `pytest` line | `no_line_contains_a_literal_backslash_n` |
+| B `rust-debug`'s two `release_only=` lines joined with `; ` | `no_run_block_line_is_a_swallowed_continuation` |
+| C `--test frozen` renamed `--test frozen_renamed` | `every_path_and_test_target_the_workflow_names_exists`, at its control (the run stops there; a missing target is the planted-text self-test's) |
+| D `tests/test_binding_surface.py` renamed in the `rust` job | `every_path_and_test_target_the_workflow_names_exists` |
+| E every `run: \|` rewritten `run: >` (no block is found) | `no_run_block_line_is_a_swallowed_continuation`, by the new control |
+
+Each plant failed exactly the one test named, and no other.
+
+### 50.4 What is next
+
+The last step, phase F's end: `tests/test_binding_surface.py` (67, with the moved identity guard),
+`physsynth/`, `conftest.py`, `pyproject.toml`, `scripts/`' Python (`nicepytest.py`) and
+`crates/physsynth-py/`, and with them the workflow's `validate` and `lint` jobs and the `rust`
+job's Python steps. `ci_workflow.rs` is the guard on that edit. Read first: the binding's four
+reach-backs into Python (`grep -rn 'import("physsynth' crates/physsynth-py/src/`), which go with
+it, and every document that tells a reader to `pip install` the wheel or run `pytest`.
+
+When the human says so.

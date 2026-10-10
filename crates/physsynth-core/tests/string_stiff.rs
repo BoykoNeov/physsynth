@@ -308,8 +308,9 @@ fn the_inharmonicity_constant_uses_the_squaring_path() {
 
 #[test]
 fn construction_rejects_in_pythons_order() {
-    // The messages are matched on by `tests/test_stability.py`, and the ORDER matters: a call that
-    // is wrong in two ways must report the fault Python reports.
+    // The messages are the Python originals' verbatim, and this is what holds them to it (it was
+    // `tests/test_stability.py` until retirement plan §31). The ORDER matters too: a call that is
+    // wrong in two ways must report the fault Python reports.
     let bad = |l, t, rho, fs, n, kappa, sigma, theta, ok| {
         stiff::Params::new(l, t, rho, fs, n, kappa, sigma, theta, ok)
             .expect_err("must be rejected")

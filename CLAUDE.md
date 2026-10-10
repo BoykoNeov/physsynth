@@ -145,7 +145,12 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    free plate's `K`) and deleted `tests/test_rust_parity_ops2d.py`. A product contracting in
    descending order moved the masked biharmonic and the guitar plate's stiffness with only the
    Windows-only viewer freeze seeing it, now guarded (the human's call); the Airy operator's
-   parentheses are an equivalent mutant natively. Next (§49.5): the package guards, then the binding. §46 found θ a sixth time: BOTH plate frequency oracles could ignore `θ` unseen
+   parentheses are an equivalent mutant natively. **Step 4 (§50)** deleted `test_stability.py` and
+   `test_ci_workflow.py`: the shim identity guard MOVED into `test_binding_surface.py` (it dies with
+   the shims, not before), and the workflow checks went native as
+   `crates/physsynth-core/tests/ci_workflow.rs` — the named-file check widened to `cargo --test`
+   targets (the human's call), the line limit 120 → 160 (a legitimate line sat exactly on 120).
+   Next (§50.4): the binding, the shims and the Python CI jobs, all at once. §46 found θ a sixth time: BOTH plate frequency oracles could ignore `θ` unseen
    workspace-wide (every caller that builds or reads a plate passes the default; the only bar that
    saw either plant alone was a twin of the two oracles), now held to the plate's own stepped
    recurrence at four θs; and the monotone flag's slack was seen only by the viewer freeze — both

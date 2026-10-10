@@ -59,7 +59,7 @@ use crate::sparse::Csr;
 pub const THETA_DEFAULT: f64 = 0.28;
 
 /// A construction-time rejection. Every variant's `Display` is the Python original's message
-/// verbatim, because `tests/test_stability.py` matches on the text.
+/// verbatim, held to it by `tests/string_stiff.rs`'s `construction_rejects_in_pythons_order`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParamError {
     /// One of `L`, `T`, `rho`, `fs` was not positive.

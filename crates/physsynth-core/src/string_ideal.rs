@@ -61,7 +61,8 @@ impl Boundary {
 }
 
 /// A construction-time rejection. Every variant's `Display` is the Python original's message
-/// verbatim, because `tests/test_stability.py` matches on the text.
+/// verbatim. `tests/string_ideal.rs` holds the VARIANT each bad call gets, and the text only
+/// of the CFL message; `tests/test_stability.py` matched the rest until retirement plan §31.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParamError {
     /// One of `L`, `T`, `rho`, `fs` was not positive.

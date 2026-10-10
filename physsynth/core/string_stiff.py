@@ -11,8 +11,9 @@ What stays here is ``Boundary`` (a `Literal`), ``THETA_DEFAULT`` — which the o
 θ-scheme strings **and the beam** import *from this module*; the plate is the one exception and
 says why in its own header (it carries the reasoning for the number while the Rust carries the
 value) — and the ``biharmonic_matrix`` re-export, which ``tests/test_stability.py``'s
-captured-binding guard reaches as ``string_stiff.biharmonic_matrix`` to prove the operator swap
-landed before this module was imported.
+captured-binding guard reached as ``string_stiff.biharmonic_matrix`` to prove the operator swap
+landed before this module was imported. Phase A deleted that guard (retirement plan §21), and
+nothing has read the re-export since; it goes with this module.
 
 Headless: no I/O, no graphics.
 """

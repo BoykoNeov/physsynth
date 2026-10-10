@@ -65,13 +65,22 @@ would not have fixed the thing we were worried about.
 - **Deterministic:** same inputs → same outputs. Cross-language agreement to ~1e-15 is one of our
   strongest correctness checks, and it only works if the Python side is reproducible.
 
-## Enforcement (`tests/test_stability.py`)
+## Enforcement
 
-| Test | Guards |
-|------|--------|
-| `test_core_is_headless` | Blocklist of common offenders (matplotlib, audio, GUI) — named, with a clear failure message. |
-| `test_core_dependency_allowlist` | **No deps beyond the numeric stack:** importing every `core/` submodule must add *no* third-party package outside a **hardcoded allowlist** — `numpy`, `scipy`, plus the compiled-extension runtime baggage that stack unavoidably drags in (`charset_normalizer`, `cython_runtime`, and the per-build hash-suffixed `…__mypyc` runtime, matched by its `__mypyc` suffix). Underscore-private plumbing (`_csparsetools`, editable-install finders, …) is excluded by convention. A real leak — `torch`/`requests`/`PIL`/`sounddevice` — fails the test. Auto-discovers new submodules, so it catches *any* future leak. If a new platform's scipy drags in a name not yet listed, add it to `_CORE_DEP_ALLOWLIST` (a deliberate, reviewed edit — that visibility is the point of hardcoding). |
-| `test_core_does_not_import_sibling_layers` | `core/` must not import `physsynth.viz` / `analysis` / `io` — enforces the one-way dependency arrow. |
+The Python guards (`tests/test_stability.py`) are gone: retirement plan §50 deleted the file when
+the Python package was down to re-export shims. What enforces the contract now is in the crates,
+where the dependency tree is visible rather than hidden inside one compiled extension module.
+
+| Guard | Holds |
+|-------|-------|
+| `crates/physsynth-core/tests/deps.rs` | **The core depends on nothing.** Its transitive normal and build dependencies, read from `cargo metadata`, must sit inside a hardcoded allowlist that is empty today — adding a crate is a reviewed edit here in the same commit as `Cargo.toml`. A second list names the forbidden categories outright (async runtimes, HTTP, logging, CLI, serde, audio backends, GUI toolkits, plugin frameworks). A self-test proves dev-dependencies are excluded, so the walk is the right graph. |
+| `crates/physsynth-analysis/tests/deps.rs` | The same rule, also with an empty list, for the measuring instrument: the core's guard is scoped to its own package, so a new crate inherits none of its enforcement. |
+| `crates/physsynth-viewer/tests/deps.rs` | The viewer's allowlist — the two physics crates, `serde_json` and what it pulls, nothing else — for the one crate whose job is I/O. Its forbidden list names the binding: the viewer is what made the binding deletable, so it must never come to depend on it. |
+
+**What the crate rule does not see.** It is a rule about *dependencies*. The core's own source
+could still use the standard library's file, network or console calls (`std::fs`, `std::net`,
+`println!`) and nothing would fail. None appears today (checked at §50); a guard for it was
+offered and declined (the human's call, 2026-10-10), so it is a known gap, not an oversight.
 
 ## When we *do* port
 

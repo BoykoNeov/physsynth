@@ -72,7 +72,7 @@ pub const MAX_BRACKET_EXPANSIONS: usize = 40;
 pub const BRENTQ_RTOL: f64 = 8.9e-16;
 
 /// A construction-time rejection. Every variant's `Display` is the Python original's message
-/// verbatim, because `tests/test_stability.py` matches on the text.
+/// verbatim, held to it by `tests/string_nonlinear.rs`'s `rejections_carry_the_python_messages`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParamError {
     /// One of `L`, `T`, `rho`, `fs` was not positive.

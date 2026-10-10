@@ -23,6 +23,7 @@ exclusion that read it.
 """
 
 import importlib
+import pkgutil
 
 import numpy as np
 import pytest
@@ -622,7 +623,7 @@ def test_the_scipy_names_the_binding_reads_are_still_scipys():
     faithful transcription of a reference that called its own module globals, and what makes
     §24.4's shared-factorization manoeuvre available on this file.
 
-    Nothing else can say this. ``test_stability.py``'s ``deleted_bodies`` loop asserts
+    Nothing else can say this. The ``deleted_bodies`` loop at the end of this file asserts
     ``module.X is physsynth_rs.X`` for every name a deletion leaves behind, and these three are
     not Rust objects, so they fall straight through it. They also carry ``noqa: F401``, which is
     the only thing standing between them and ``ruff check --fix`` — and their disappearance would
@@ -1157,3 +1158,196 @@ def test_the_operator_shim_takes_what_numpy_would():
         out = operators.delta_xx(field, 1.0)
         expected = np.asarray(field, dtype=float)
         assert np.array_equal(out, expected[2:] - 2.0 * expected[1:-1] + expected[:-2])
+
+# -- the shims are the Rust objects ---------------------------------------------------------------
+#
+# Moved here from `tests/test_stability.py` at retirement plan §50, when that file was deleted. The
+# shims in `physsynth/core/` and the binding go TOGETHER, at phase F's last step, and the binding
+# reads four of them back by name (`airbox`, `connection`, `plate`, `string_geometric`): deleting
+# this guard one step early would leave the identity claim unasserted for the whole interval with
+# every test still green, which is the gap `half_deleted_bodies` once existed to close. It dies
+# with the shims, in this file, which is where a property that lives only as long as the binding
+# belongs.
+
+
+def test_no_module_chooses_between_two_implementations():
+    # The guard that stood here for the whole migration was `test_the_rust_swap_matches_the_
+    # environment`: `PHYSSYNTH_RS=1 pytest` claimed to run the suite against Rust, nothing in the
+    # tests mentioned Rust, so a mistyped variable or a swap landing after its clients' imports
+    # would have been green while testing Python. Phase A (python-retirement-plan §21) deleted the
+    # last three modules that read the flag -- `operators` and `exciter` lost their Python bodies,
+    # `banded` went whole -- so there is no second implementation for the environment to select,
+    # and the guard's three flag-shaped halves went with it rather than being left empty:
+    #
+    #   * the `_USE_RUST` reader tuple (operators, exciter, banded) had nothing left to read;
+    #   * `ported_expected`, the `<name>_py` FUNCTION table, had no aliases left to derive over;
+    #   * the `if expected_rust:` captured-binding block compared names that are now one object
+    #     with nothing to mis-order -- `string_stiff.biharmonic_matrix is operators.biharmonic_
+    #     matrix`, `reed.Bore is bore.Bore` and the rest had become `x is x` (§42.4's rule).
+    #
+    # What survives is the claim those halves were approximating, WIDENED to the package: no
+    # module in `physsynth.core` reads the flag or keeps a reference alias, and each public name
+    # that is a Rust object is the Rust object.
+    from physsynth.core import (
+        airbox,
+        beam,
+        body,
+        bore,
+        bow,
+        collision,
+        connection,
+        exciter,
+        mallet,
+        membrane,
+        operators,
+        operators2d,
+        plate,
+        radiation,
+        reed,
+        string_damped,
+        string_geometric,
+        string_ideal,
+        string_nonlinear,
+        string_stiff,
+    )
+
+    # The names each module must resolve to the Rust object, listed BY HAND: a deletion is a
+    # reviewed edit, and a name that quietly stopped being a re-export must fail here.
+    deleted_bodies = {
+        string_ideal: {"IdealString"},
+        membrane: {"Membrane"},
+        # `MalletPlate` was never written in Python at all; a model born in Rust must not be able
+        # to slip in without the same claim.
+        mallet: {"MalletMembrane", "MalletPlate", "MalletWall"},
+        bore: {"Bore"},
+        reed: {"ReedBore", "bernoulli_flow"},
+        body: {"ModalBody"},
+        radiation: {
+            "AirRadiation",
+            "RadiatedBody",
+            "RationalAirLoad",
+            "ReactiveRadiatedBody",
+            "monopole_radiation_resistance",
+            "piston_radiation_resistance",
+        },
+        # The module keeps three SciPy names that this loop cannot speak about, because they are
+        # not Rust objects; their guard is above, in
+        # `test_the_scipy_names_the_binding_reads_are_still_scipys`.
+        connection: {
+            "StringBodyBridge",
+            "StringPlateBridge",
+            "StringVKPlateBridge",
+            "SympatheticStrings",
+        },
+        # The seams are included because `airbox_wrap.rs` reads them off this module's namespace
+        # by name, and a wrong one there is a silently different seam.
+        airbox: {
+            "AirBox",
+            "InteriorSurfacePort",
+            "RoomLoadedBody",
+            "RoomLoadedMembrane",
+            "RoomLoadedPlate",
+            "RoomLoadedVKPlate",
+            "RoomPort",
+            "RoomSuspendedMembrane",
+            "RoomSuspendedPlate",
+            "RoomSuspendedVKPlate",
+            "SurfacePort",
+            "_MembraneSurface",
+            "_PlateSurface",
+            "_VKPlateSurface",
+            "impedance_from_zeta",
+        },
+        string_stiff: {"StiffString"},
+        string_damped: {"DampedStiffString"},
+        string_nonlinear: {"TensionModulatedString"},
+        string_geometric: {"GeometricString"},
+        bow: {"BowedString", "friction_smooth", "friction_smooth_deriv"},
+        collision: {
+            "BarrierString",
+            "contact_potential",
+            "contact_force_elastic",
+            "contact_stiffness",
+            "contact_force_dg",
+            "contact_force_total",
+            "solve_contact",
+        },
+        # `GrainSpec` stays Python because the Rust helper CONSTRUCTS it, reaching back through
+        # `py.import("physsynth.core.plate")`.
+        plate: {"Plate", "VKPlate", "grain_ratios_from_material"},
+        beam: {"FreeBeam"},
+        operators2d: {"VonKarmanBracket", "AiryStressSolver"},
+        # Phase A. The binding's signatures are the deleted body's, keywords and defaults included,
+        # so these are bare re-exports.
+        exciter: {"triangular_pluck", "raised_cosine", "raised_cosine_2d"},
+    }
+    for module, names in deleted_bodies.items():
+        for name in sorted(names):
+            assert getattr(module, name) is getattr(physsynth_rs, name), (
+                f"{module.__name__}.{name} must be the Rust object"
+            )
+
+    # The DELEGATING modules, where the inverse is the claim. The binding hands every matrix back
+    # as CSR triplets -- a Rust crate cannot construct a `scipy.sparse.csr_matrix` -- so each
+    # builder stays a Python function that puts a matrix back around the result, and `operators`
+    # also coerces its inputs to what NumPy would have accepted. Asserting `is physsynth_rs.<name>`
+    # would be asserting that the shim had been bypassed and a caller was being handed a 4-tuple.
+    delegating = {
+        operators2d: {
+            "grid_coords", "rectangle_mask", "disk_mask", "guitar_half_width", "guitar_scale",
+            "guitar_mask", "guitar_area", "live_cells", "cells_per_node", "prune_to_area_carrying",
+            "laplacian_from_mask", "biharmonic_from_mask", "_dirichlet_interior_d2_1d",
+            "orthotropic_biharmonic", "free_plate_stiffness", "free_plate_stiffness_from_mask",
+            "_collocated_d2_1d", "_forward_d1_1d", "_centered_d2_1d", "_clamped_d2_1d",
+            "_avg_d1_1d", "embed", "inner2d", "norm2_2d",
+        },
+        operators: set(operators.__all__),
+    }
+    for module, names in delegating.items():
+        for name in sorted(names):
+            fn = getattr(module, name)
+            assert fn is not getattr(physsynth_rs, name.lstrip("_"), None), (
+                f"`{module.__name__}.{name}` is the Rust function itself -- the delegating "
+                "wrapper has been bypassed"
+            )
+            assert getattr(fn, "__module__", None) == module.__name__, (
+                f"`{module.__name__}.{name}` is no longer defined in this module ({fn!r}) -- the "
+                "wrapper is the module's whole remaining body and cannot be re-exported away"
+            )
+    # `collision`'s underscored names, and the one that must NOT be a bare re-export.
+    for name in ("_contact_force_total_deriv", "_force_total_vec", "_deriv_total_vec"):
+        assert getattr(collision, name) is getattr(physsynth_rs, name[1:]), (
+            f"`collision.{name}` must be the Rust function -- the underscored spelling is the one "
+            "the model and the mallet reach for"
+        )
+    assert collision.solve_contact_vector is not physsynth_rs.solve_contact_vector, (
+        "`collision.solve_contact_vector` must stay a Python wrapper: `stacklevel=2` on its "
+        "non-convergence warning cannot mean the same thing from inside an extension module"
+    )
+
+    # The package-wide half, DERIVED rather than listed: `pkgutil` reads the directory, so a module
+    # added tomorrow is in the population without anyone remembering it (ledger #67). Before phase
+    # A the flag check covered a three-module tuple and the alias check covered the modules in
+    # `deleted_bodies`; both now cover everything, which is what makes them worth more at zero.
+    all_core_modules = [
+        importlib.import_module(f"physsynth.core.{info.name}")
+        for info in pkgutil.iter_modules(physsynth.core.__path__)
+        if not info.ispkg
+    ]
+    # Named POSITIVE CONTROLS rather than a floor (finding #61): an `iter_modules` over the wrong
+    # path yields nothing, and every assertion below would then pass over an empty list.
+    for named in (connection, plate, string_ideal, operators):
+        assert named in all_core_modules, (
+            f"`{named.__name__}` is not in the scanned set, so `pkgutil.iter_modules` is not "
+            "reaching `physsynth/core/` and this guard is checking nothing"
+        )
+    for module in all_core_modules:
+        assert not hasattr(module, "_USE_RUST"), (
+            f"{module.__name__} reads PHYSSYNTH_RS again -- the flag chose between two "
+            "implementations, and phase A left one"
+        )
+        leftovers = [a for a in dir(module) if a.endswith("Py") or a.endswith("_py")]
+        assert not leftovers, (
+            f"{module.__name__} defines the reference alias(es) {sorted(leftovers)} -- either a "
+            "Python reference implementation came back, or an alias outlived its body"
+        )

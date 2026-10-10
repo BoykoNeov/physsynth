@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-f-state
-description: "Phase F (take Python apart, retirement plan §47+) — step 1 analysis record native (§47); step 2 binding-file referees (§48); step 3 (2026-10-10, §49) ops2d vs SciPy recorded + file deleted; next the package guards"
+description: "Phase F (take Python apart, retirement plan §47+) — steps 1-3 (§47-§49) record the leaving libraries' answers natively; step 4 (2026-10-10, §50) the package guards gone, CI checks native in ci_workflow.rs; next and LAST: binding + shims + Python CI jobs"
 metadata:
   node_type: memory
   type: project
@@ -51,5 +51,22 @@ one step per "go" from the human.
   bracketings contract ascending → the parentheses plant is an equivalent mutant.
 - Bash-tool heredocs break on apostrophes/backslashes here: write edit scripts with Write, run them.
 
-**Next (§49.5):** `test_stability.py` (3) + `test_ci_workflow.py` (4); then the rest with
-`crates/physsynth-py/`. Related: [[retirement-phase-c-carrying-state]], [[rust-tests-parallel-nice]].
+- **Step 4 (§50, 2026-10-10):** `test_stability.py` + `test_ci_workflow.py` deleted. The shim
+  identity guard MOVED into `test_binding_surface.py` (shims and binding die together; deleting it a
+  step early leaves the claim unasserted). Three workflow checks → `crates/physsynth-core/tests/
+  ci_workflow.rs`; the named-file check WIDENED to `cargo -p X --test Y` targets, control = the
+  viewer freeze pair (the human's call). No guard on `std::fs`/`println!` in core src (declined,
+  known gap, in `portability-contract.md`). pytest 73 → 67.
+
+**Lessons from step 4:**
+- Measure a limit's margin before carrying it: the "well under 120" line limit had a legitimate
+  line at exactly 120. Raised to 160.
+- A carried scan needs a positive control even if the original had none (the run-block scanner).
+- Write each native check as a function over text and plant into text inside the test: the
+  plants become permanent self-tests.
+- A `--test $n` operand is a query too — skip `$`/`*` in the operand, not only the token.
+
+**Next (§50.4), the last step:** `test_binding_surface.py`, `physsynth/`, `conftest.py`,
+`pyproject.toml`, `scripts/nicepytest.py`, `crates/physsynth-py/`, and the `validate`/`lint` jobs +
+the `rust` job's Python steps. Related: [[retirement-phase-c-carrying-state]],
+[[rust-tests-parallel-nice]].
