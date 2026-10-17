@@ -1,10 +1,11 @@
 //! The elliptic functions' own bars — identities, degenerate limits, and published digits.
 //!
-//! Same discipline as `bessel.rs`: a parity test proves this agrees with SciPy, and these prove it
-//! is right. The Jacobian functions are especially worth checking against their identities rather
-//! than against a table, because the AGM descent is a loop whose output looks plausible for a wide
-//! range of wrong loop bounds — `sn² + cn² = 1` holds trivially by construction (both come from one
-//! `φ`), but `dn² + m·sn² = 1` and the addition-free period relation do not.
+//! Same discipline as `bessel.rs`: a parity test proved this agreed with SciPy (until the Python
+//! went, retirement plan §44), and these prove it is right. The Jacobian functions are especially
+//! worth checking against their identities rather than against a table, because the AGM descent is
+//! a loop whose output looks plausible for a wide range of wrong loop bounds — `sn² + cn² = 1`
+//! holds trivially by construction (both come from one `φ`), but `dn² + m·sn² = 1` and the
+//! addition-free period relation do not.
 
 use physsynth_analysis::elliptic::{ellipj, ellipk};
 use std::f64::consts::PI;

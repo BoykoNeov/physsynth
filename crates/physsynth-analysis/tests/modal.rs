@@ -159,7 +159,8 @@ fn the_beam_roots_are_the_published_ones_and_solve_their_own_equation() {
     // And they approach (2i+1)π/2, which is what tells a reader the branch is right — a solver
     // that skipped a bracket would land every root one asymptote too far along.
     //
-    // Note the direction is *not* asserted, and `modal.py`'s docstring overstates it: it says the
+    // Note the direction is *not* asserted, and `modal.py`'s docstring overstated it (the text
+    // carried onto `free_free_beam_beta_l` now says so): it said the
     // roots tend to (2i+1)π/2 "from above", which is true of the first (4.73004 > 4.71239) and
     // false of the second (7.85320 < 7.85398). The approach alternates and is quick — by the third
     // root the two agree to five decimals. Only the proximity is a real claim.
@@ -195,7 +196,8 @@ fn the_beam_frequencies_are_the_roots_squared_and_the_discrete_form_reaches_them
 #[test]
 fn the_free_disk_reproduces_its_derived_lambdas_and_respects_its_own_bound() {
     // ν = 0.3: 5.35833 (n=2), 9.00314 (n=0), 12.43899 (n=3), 20.47455 (n=1), 21.83516 (n=4) --
-    // derived in `modal.py`'s docstring rather than cited, since the plate tables are paywalled.
+    // derived (on `free_circular_plate_lambda_roots`, carried from `modal.py`'s docstring) rather
+    // than cited, since the plate tables are paywalled.
     let (lam, nodal) = free_circular_plate_lambdas(0.3, 7, 8).unwrap();
     assert!((lam[0] - 5.358_33).abs() < 1e-4, "fundamental = {}", lam[0]);
     assert_eq!(nodal[0], 2, "the fundamental is the two-diameter saddle");

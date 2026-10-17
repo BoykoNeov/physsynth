@@ -50,8 +50,9 @@
 //! * Newton's step on a zero is `J/J'`, and near the root `J → 0` while `J'` does not, so the
 //!   error in the root is `|ΔJ| / |J'|` — again absolute over a bounded slope.
 //!
-//! So every native bar below and every parity assertion in `tests/test_rust_parity_analysis.py`
-//! is absolute, with the relative figure reported alongside and never required. Ledger #30.
+//! So every native bar below, and every parity assertion `tests/test_rust_parity_analysis.py`
+//! made until it was deleted (retirement plan §44), is absolute, with the relative figure reported
+//! alongside and never required. Ledger #30.
 //!
 //! # The algorithms, and why these three
 //!

@@ -19,8 +19,9 @@
 //! Both hold at once because the crate a function is *implemented* in and the flag its Python name
 //! is *swapped* by are different questions. `physsynth-py` depended on both crates, so the binding
 //! could expose an analysis-crate function under a core-flagged name without either crate
-//! depending on the other (the flag went at retirement plan §21, the binding at §51). That is the whole trick, and it is written here because the arrangement reads like
-//! a flag violation until the sentence above is in front of you.
+//! depending on the other (the flag went at retirement plan §21, the binding at §51). That is the
+//! whole trick, and it is written here because the arrangement reads like a flag violation until
+//! the sentence above is in front of you.
 //!
 //! # What makes swapping it under the model flag safe
 //!
@@ -52,7 +53,8 @@
 //! same mistake, and both sides were computing the same cancellation faithfully.
 //!
 //! The port shipped it unchanged first, because changing a physics number inside a porting batch is
-//! not a port; the fix landed separately, on both sides in one commit, once the human had called it.
+//! not a port; the fix landed separately, on both sides in one commit, once the human had called
+//! it.
 //!
 //! **The fix.** Three terms of the bracket's own Taylor series, `(ka)^2/2 - (ka)^4/12 +
 //! (ka)^6/144`, in Horner form, below `ka = 3e-2`. Measured against a 60-digit reference over
@@ -66,10 +68,10 @@
 //!
 //! **What the fix does and does not make exact, measured rather than assumed.** The series is
 //! `+ - * /` only — no `powi`, no library call — so IEEE-754 pins it: over 3,000 values below the
-//! cutoff the two languages are **bit-identical, 0 differing**, and the parity file asserts that as
-//! equality. The *direct* branch is not and cannot be, because it runs through two different `J1`
-//! implementations (Cephes on one side, Miller recurrence on the other): 1,444 of 3,000 values
-//! above the cutoff differ, worst 9.8e-13 relative.
+//! cutoff the two languages were **bit-identical, 0 differing**, and the parity file asserted that
+//! as equality until the Python went. The *direct* branch is not and cannot be, because it runs
+//! through two different `J1` implementations (Cephes on one side, Miller recurrence on the other):
+//! 1,444 of 3,000 values above the cutoff differ, worst 9.8e-13 relative.
 //!
 //! That figure is larger than the ~1e-16 the two `J1`s themselves differ by, and the factor is the
 //! point of the threshold. At `ka = 3e-2` the bracket is `4.5e-4`, so the subtraction still

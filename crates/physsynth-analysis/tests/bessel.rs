@@ -1,10 +1,11 @@
 //! The special functions' own bars, asserted without an interpreter in the room.
 //!
-//! These are not parity tests — `tests/test_rust_parity_analysis.py` compares this code against
-//! SciPy. These assert that the code is *right on its own terms*, which is the half a parity test
-//! cannot reach: two implementations can agree beautifully and both be wrong, and a hand-rolled
-//! Bessel routine is exactly the kind of thing that agrees with nothing until it is checked against
-//! the definition.
+//! These are not parity tests — `tests/test_rust_parity_analysis.py` compared this code against
+//! SciPy until it was deleted with the Python bodies (retirement plan §44; the Python's answers on
+//! the freeze's own 74 fixtures are in `tests/analysis_frozen.rs`). These assert that the code is
+//! *right on its own terms*, which is the half a parity test cannot reach: two implementations can
+//! agree beautifully and both be wrong, and a hand-rolled Bessel routine is exactly the kind of
+//! thing that agrees with nothing until it is checked against the definition.
 //!
 //! So `J` is checked against its own differential equation, its recurrence, the normalising
 //! identity it is built on, its small-argument series, and published digits; `I` against the same

@@ -2,27 +2,67 @@
 //!
 //! Model #3's money test: a frequency-dependent loss term gives every mode its own decay rate, and
 //! the per-mode `g_m` predicted here is what a run's measured envelope is compared against. Five
-//! test files stand on it, and `spatial_eigenvalue_p2` alone is imported by four of the string
-//! family's suites directly.
+//! Python test files stood on it, and `spatial_eigenvalue_p2` alone was imported by four of the
+//! string family's suites directly.
+//!
+//! The Python module's docstrings were the physics, and this header documented only what the
+//! translation had to decide. The Python bodies went at deletion 7 (`b1d37c8`) and the package at
+//! retirement plan §48, so the derivations are carried here — the module docstring under "The
+//! physics", each function's on the item of the same name — verbatim from `b1d37c8^`, save for
+//! cross-references respelled natively (retirement plan §53).
+//!
+//! # The physics
+//!
+//! Frequency-dependent damping oracles for the damped stiff string (model #3, HANDOFF §5 row 3).
+//!
+//! The damped stiff string adds a frequency-dependent loss term `+2 sigma1 u_txx` to model #2:
+//!
+//! ```text
+//! u_tt = c^2 u_xx - kappa^2 u_xxxx - 2 sigma0 u_t + 2 sigma1 u_txx.
+//! ```
+//!
+//! In the modal domain `delta_xx -> -p^2` so the loss becomes a velocity term with a
+//! mode-dependent coefficient: a mode decays in **energy** as `exp(-2 sigma_eff t)` with
+//! `sigma_eff = sigma0 + sigma1 * (wavenumber)^2` — high modes die faster, the physically-correct
+//! ordering real strings have (and model #2's frequency-*independent* loss got backwards).
+//!
+//! This module is the single source of truth for that decay relation, in three layers:
+//!
+//! - the **continuum** rate `2 sigma_eff` from the true wavenumber `beta = m pi / L` — the physics
+//!   the scheme should approach as the grid refines;
+//! - the **discrete** per-step energy factor `g_m` of the implicit theta-scheme — the *exact*
+//!   thing a simulated single mode decays by, the tight test oracle. It includes the
+//!   theta-scheme's `1/(1+theta Q k^2)` rate-suppression (the model #2 artifact), so the per-mode
+//!   decay test stays tight without pretending the artifact is gone;
+//! - the **T60 -> (sigma0, sigma1)** inversion — a luthier specifies decay times, this returns the
+//!   loss coefficients (continuum mapping; the round-trip lands a few % off, a documented demo).
+//!
+//! Independent of the core (an oracle must not depend on the code it validates; in the Python,
+//! pure NumPy). See `docs/dev/damped-string-plan.md`.
 //!
 //! # The one thing here that is not arithmetic
 //!
 //! `discrete_damped_mode_rate` takes a logarithm, and everything else in the file is `+ - * / √`.
-//! So the exactness story is short: the decay *ratio* `g = c/a` is exact — both sides build it out
-//! of four IEEE-754 operations from the same inputs — and the *rate* `-ln(g)/k` is a tolerance
+//! So the exactness story is short: the decay *ratio* `g = c/a` is exact — both sides built it out
+//! of four IEEE-754 operations from the same inputs — and the *rate* `-ln(g)/k` was a tolerance
 //! port, because `np.log` is NumPy's own CPU-dispatched kernel and `f64::ln` is the platform's.
-//! The parity file asserts the first as equality and the second at 1e-15 relative, which is the
-//! same split plan §36 drew through `spectrum.py` — exact on the axis that decides, tolerant on the
-//! axis that is measured.
+//! The parity file asserted the first as equality and the second at 1e-15 relative until it was
+//! deleted with the Python bodies (plan §44), which is the same split plan §36 drew through
+//! `spectrum.py` — exact on the axis that decides, tolerant on the axis that is measured.
 //!
 //! `discrete_damped_mode_is_underdamped` returns a **bool**, which by §25's rule is a discrete
 //! output and would need a margin measured before it could be ported. It has one, and it is not
-//! tight: `b² - 4ac < 0` is compared over the configurations the suite builds and the discriminant
-//! is never within eleven orders of magnitude of zero — the underdamped and overdamped regimes are
-//! separated by a factor of `k²Q` that is either much less or much more than one, never near it.
-//! The bar is stated in the parity file as agreement on the predicate, not on the discriminant.
+//! tight: `b² - 4ac < 0` was compared over the configurations the suite built and the
+//! discriminant was never within eleven orders of magnitude of zero — the underdamped and
+//! overdamped regimes are separated by a factor of `k²Q` that is either much less or much more
+//! than one, never near it. The parity file's bar was agreement on the predicate, not on the
+//! discriminant.
 
 /// Seconds of decay per unit rate for a 60 dB drop: `3 ln 10 ≈ 6.9078`. `T60 = this / σ_eff`.
+///
+/// A 60 dB amplitude drop is a factor 10^-3; amplitude ~ exp(-sigma_eff t), so
+/// exp(-sigma_eff T60) = 10^-3  =>  T60 = 3 ln(10) / sigma_eff. (Energy, being amplitude^2, drops
+/// 60 dB in T60/2, but T60 is conventionally an amplitude/level figure — keep it amplitude-based.)
 ///
 /// `3.0 * ln(10)`, evaluated the way the original evaluates it, so the constant is whatever that
 /// product rounds to rather than a transcribed decimal.
@@ -30,7 +70,11 @@ pub fn t60_seconds_per_rate() -> f64 {
     3.0 * 10.0f64.ln()
 }
 
-/// Positive eigenvalue `p² = (4/h²)sin²(mπ/2N)` of the discrete second difference on mode `m`.
+/// Discrete eigenvalue `p^2 = (4/h^2) sin^2(m pi / 2N)` of `-delta_xx` for mode `m`.
+///
+/// `sin(m pi x / L)` is an exact eigenvector of the second-difference matrix with eigenvalue
+/// `-p^2` (and of the biharmonic `(delta_xx)^2` with `+p^4`). Tends to the continuum
+/// `beta^2 = (m pi / L)^2` as `h -> 0`.
 pub fn spatial_eigenvalue_p2(n: i64, h: f64, m: i64) -> f64 {
     (4.0 / (h * h))
         * (m as f64 * std::f64::consts::PI / (2 * n) as f64)
@@ -38,7 +82,13 @@ pub fn spatial_eigenvalue_p2(n: i64, h: f64, m: i64) -> f64 {
             .powi(2)
 }
 
-/// Continuum modal loss rate `2(σ₀ + σ₁β²)` with `β = mπ/L`.
+/// Continuum **energy** decay rate `2 sigma_eff = 2(sigma0 + sigma1 beta_m^2)` (1/s).
+///
+/// `E_m(t) ~ E_m(0) exp(-rate * t)` with `beta_m = m pi / L` the true wavenumber. `kappa` is
+/// unused here (the loss rate depends on the wavenumber, not the stiffness; stiffness enters only
+/// via the oscillation frequency) — kept in the signature so callers pass the full parameter set
+/// symmetrically with the discrete oracle. The discrete scheme approaches this as the grid
+/// refines.
 pub fn modal_loss_rate_continuum(
     _c: f64,
     l: f64,
@@ -53,8 +103,12 @@ pub fn modal_loss_rate_continuum(
 
 /// The three coefficients of the per-mode quadratic `a z² + b z + c = 0`, plus `Q`.
 ///
-/// Inserting `u^n = z^n sin(mπx/L)` into the damped θ-scheme gives this quadratic in the
-/// amplification factor. Returned as a tuple so the decay, the rate and the underdamped predicate
+/// From `u^n = z^n sin(m pi x / L)` in the implicit theta-scheme with both loss terms:
+/// `a = 1 + theta k^2 Q + sigma_eff k`, `b = -2 + (1-2theta) k^2 Q`,
+/// `cc = 1 + theta k^2 Q - sigma_eff k`, with `Q = c^2 p^2 + kappa^2 p^4` and
+/// `sigma_eff = sigma0 + sigma1 p^2`.
+///
+/// Returned as a tuple so the decay, the rate and the underdamped predicate
 /// all read the *same* three numbers — the original factors it out for that reason and the port
 /// keeps the factoring, because recomputing them per caller is a place two spellings could drift.
 #[allow(clippy::too_many_arguments)]
@@ -80,7 +134,19 @@ fn decay_roots_ac(
     (a, b, cc, q)
 }
 
-/// Per-step decay factor `g = c/a` of mode `m` — the ratio the envelope test measures.
+/// Exact per-step **energy** decay factor `g_m = cc/a` of mode `m` (implicit theta-scheme).
+///
+/// For an underdamped mode the two roots are a complex-conjugate pair with `|z|^2 = cc/a`, so the
+/// energy (amplitude squared) is multiplied by
+///
+/// ```text
+/// g_m = (1 + theta k^2 Q - sigma_eff k) / (1 + theta k^2 Q + sigma_eff k)  in (0, 1]
+/// ```
+///
+/// every step (`E_m(t) = E_m(0) g_m^(t/k)`). This is the *exact* thing a simulated single mode
+/// decays by — the tight test oracle. It keeps the theta-scheme's `1/(1+theta Q k^2)` factor (the
+/// model #2 high-mode rate-suppression), so the test is tight without claiming that artifact is
+/// gone. `sigma0 = sigma1 = 0` gives `g_m = 1` (lossless).
 #[allow(clippy::too_many_arguments)]
 pub fn discrete_damped_mode_decay(
     c: f64,
@@ -97,10 +163,16 @@ pub fn discrete_damped_mode_decay(
     cc / a
 }
 
-/// Continuous decay rate `-ln(g)/k` (s⁻¹), or `+∞` when `g ≤ 0`.
+/// Per-second **energy** decay rate `Gamma_m = -(1/k) ln g_m` (1/s); 0 when lossless.
 ///
-/// A non-positive `g` means the mode has been damped past a sign flip and is no longer a clean
-/// exponential; the original returns `inf` there rather than a NaN so the caller can see it.
+/// Tends to the continuum `2(sigma0 + sigma1 beta^2)` as `k, h -> 0`. Not monotone in `m`
+/// forever: the numerator grows like `p^2` but the `1/(1+theta Q k^2)` denominator like `p^4`
+/// with stiffness, so the rate turns over at very high modes (see
+/// `docs/dev/damped-string-plan.md`).
+///
+/// Returns `+∞` when `g ≤ 0`. A non-positive `g` means the mode has been damped past a sign flip
+/// and is no longer a clean exponential; the original returned `inf` there rather than a NaN so
+/// the caller can see it.
 #[allow(clippy::too_many_arguments)]
 pub fn discrete_damped_mode_rate(
     c: f64,
@@ -120,7 +192,11 @@ pub fn discrete_damped_mode_rate(
     -g.ln() / k
 }
 
-/// Whether mode `m` oscillates rather than creeping — `b² - 4ac < 0`.
+/// True if mode `m` is underdamped (complex-conjugate roots, `b^2 - 4 a cc < 0`).
+///
+/// The `g_m = cc/a` energy oracle assumes a clean oscillatory decay; a heavily overdamped mode
+/// has two distinct real roots and is not a single exponential. Tests pick modes where this
+/// holds.
 #[allow(clippy::too_many_arguments)]
 pub fn discrete_damped_mode_is_underdamped(
     c: f64,
@@ -137,14 +213,27 @@ pub fn discrete_damped_mode_is_underdamped(
     b * b - 4.0 * a * cc < 0.0
 }
 
-/// Solve for `(σ₀, σ₁)` from two `(frequency, T60)` targets.
+/// Invert two `(frequency, T60)` targets to `(sigma0, sigma1)` (continuum mapping).
 ///
-/// `σ_eff(f) = T60_SECONDS_PER_RATE / T60`, and `β²(ω)` comes from the continuum dispersion
-/// relation — for a stiff string the positive root of `κ²β⁴ + c²β² - ω² = 0`, and for `κ = 0` the
-/// degenerate `ω²/c²`. Two targets give a 2×2 system with one solution.
+/// A luthier specifies decay times; this returns the loss coefficients. With amplitude decay
+/// `exp(-sigma_eff t)` a 60 dB drop takes `T60 = T60_SECONDS_PER_RATE / sigma_eff`
+/// ([`t60_seconds_per_rate`]), so `sigma_eff(f) = T60_SECONDS_PER_RATE / T60`. Using
+/// `beta^2(omega)` from the continuum dispersion `omega^2 = c^2 beta^2 + kappa^2 beta^4` gives
+/// the linear system
 ///
-/// Refuses a pair implying negative loss, which is what "T60 rising with frequency" asks for and
-/// which no passive string can do.
+/// ```text
+/// [1, beta1^2; 1, beta2^2] @ [sigma0; sigma1] = [sigma_eff1; sigma_eff2].
+/// ```
+///
+/// **Pick targets with T60 decreasing in frequency** (`f2 > f1` and `T60_2 < T60_1`) so
+/// `sigma0, sigma1 >= 0`. This is a *continuum* inversion: a simulation decays at the discrete
+/// rate (with the theta-factor), so the round-trip lands a few % off — a physics demo, not a
+/// tight test. Refuses (`Err`) if the targets are degenerate (equal frequencies) or imply a
+/// negative coefficient.
+///
+/// `beta^2` is the positive root of `κ²β⁴ + c²β² - ω² = 0`, and for `κ = 0` the degenerate
+/// `ω²/c²`. Negative loss is what "T60 rising with frequency" asks for, and no passive string
+/// can do it.
 pub fn loss_coefficients_from_t60(
     c: f64,
     _l: f64,

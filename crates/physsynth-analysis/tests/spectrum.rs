@@ -1,10 +1,11 @@
 //! The detector's own bars, asserted without an interpreter in the room.
 //!
-//! These are not parity tests — `tests/test_rust_parity_spectrum.py` compares this code against
-//! NumPy. These assert that the code is *right on its own terms*, which is the half a parity test
-//! cannot reach: two implementations can agree beautifully and both be wrong, and a hand-written
-//! FFT is exactly the kind of thing that agrees with nothing until it is checked against the
-//! definition.
+//! These are not parity tests — `tests/test_rust_parity_spectrum.py` compared this code against
+//! NumPy until it was deleted with the Python bodies (retirement plan §44; the Python's answers on
+//! the freeze's own 74 fixtures are in `tests/analysis_frozen.rs`). These assert that the code is
+//! *right on its own terms*, which is the half a parity test cannot reach: two implementations can
+//! agree beautifully and both be wrong, and a hand-written FFT is exactly the kind of thing that
+//! agrees with nothing until it is checked against the definition.
 //!
 //! So the FFT is checked against a directly evaluated DFT and against Parseval; the detector is
 //! checked against signals whose partials are known by construction; and the guard that this whole

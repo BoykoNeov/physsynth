@@ -5,6 +5,109 @@
 //! string rotates to round-off; that is the sharpest statement this project makes about model #10,
 //! and it is the reason a 602-line BVP solver lives in an analysis package.
 //!
+//! The Python module's docstrings were the physics, and this header documented only what the
+//! translation had to decide. The Python bodies went at deletion 7 (`b1d37c8`) and the package at
+//! retirement plan §48, so the derivations are carried here — the module docstring under "The
+//! physics", the constants', fields' and functions' on the items of the same name — verbatim from
+//! `b1d37c8^`, save for cross-references respelled natively and SciPy plumbing dated (retirement
+//! plan §53). The Python's non-convergence `RuntimeWarning` has no native counterpart: natively a
+//! failed continuation reports [`RotatingWave::converged`] `== false` and nothing is printed.
+//!
+//! # The physics
+//!
+//! Rotating-wave relative equilibrium of the geometrically-exact string (model #10, Tier B).
+//!
+//! **The one exact frequency oracle model #10 has**, and the only escape from its Tier C "measure
+//! the residual, do not promise cents" taxonomy. Where model #9's tension is a spatial *scalar* —
+//! which is what buys it an exact elliptic Duffing oracle — model #10 promotes the tension to a
+//! **field**, and every closed form degrades to a limit. Every one but this one.
+//!
+//! **The ansatz.** A helix spinning rigidly about the string axis:
+//!
+//! ```text
+//! u(x,t) = phi(x) cos(Omega t),    w(x,t) = phi(x) sin(Omega t),    v(x,t) = psi(x)
+//! ```
+//!
+//! solves the **full** nonlinear PDE exactly — no truncation, no small-slope assumption — because
+//! the transverse amplitude `r^2 = u_x^2 + w_x^2 = phi'(x)^2 (cos^2 + sin^2) = phi'(x)^2` is
+//! **time-independent**. The potential sees the two polarizations *only* through `r^2`, so the
+//! whole nonlinearity goes static: the local stretch `Lambda`, the tension field, and the
+//! longitudinal forcing are all frozen. The string is bent into a fixed helical shape and spun.
+//!
+//! That is also **exactly why** the core's `GeometricString::longitudinal_energy` has nothing to
+//! do: a circular polarization does not pump the longitudinal field at all, where a planar one
+//! pumps it at `2 Omega` (phantom partials). This module is what sharpens that claim — Tier A/3's
+//! discriminator — from *orders of magnitude apart* to **bit-zero longitudinal kinetic energy**.
+//!
+//! **What it is an oracle FOR, stated honestly.** Two different claims, and blurring them is the
+//! trap:
+//!
+//! 1. **Scheme-consistency (exact, ~1e-15).** Seeded from a converged BVP the *discrete* scheme
+//!    rotates rigidly forever. This certifies that the discrete-gradient scheme admits an exact
+//!    discrete relative equilibrium and that this solver finds it. It is **not** a claim about
+//!    physics — the scheme is being checked against its own equations.
+//! 2. **Physics: the mechanism behind Tier C/8 (a limit).** The Kirchhoff-Carrier prediction
+//!    `Omega = sqrt(omega0^2 + eps R^2)` ([`crate::duffing::kc_mode_coefficients`], with
+//!    `EA_#9 <-> a = EA - T0`, and `eps R^2` unhalved because a circular mode's stretch is **2x**
+//!    a planar mode's time-average) assumes `phi` is a *sine*. It is not. A rigid helix is
+//!    stretched **non-uniformly** — most near the nodes, where `phi'` is largest — so `T(x)` is
+//!    non-uniform and the true `phi` is a deformed sine. [`RotatingWave::shape_residual`] measures
+//!    that deformation, and it *is* the reason the KC frequency is wrong. The residual gets a
+//!    **mechanism**, not just an amplitude scaling.
+//!
+//! **The equations.** With `q = (u_x, w_x, v_x)`, `a = EA - T0`, and the nonlinear excess
+//! `V_nl = a[r^2/2 + 1 + v_x - Lambda]`, substituting the ansatz into the continuum PDE gives:
+//!
+//! ```text
+//! -rho Omega^2 phi = ( T(x) phi' )' ,     T(x) = T0 + a chi(x),   chi = 1 - 1/Lambda
+//! d/dx [ dV/dv_x ] = 0    <=>    EA psi' + a (1 - (1 + psi')/Lambda) = const
+//! ```
+//!
+//! the second being the plan's `dV/dv_x = const`: the longitudinal field is in **static
+//! equilibrium** against a frozen transverse load. On the grid the discrete divergence `Gm` has
+//! exactly the constants in its kernel, so the discrete second equation reproduces the continuum
+//! statement *as a statement*, not merely to O(h^2).
+//!
+//! **The two time-discrete factors — the crux of this module.** The oracle would be worthless at
+//! 1e-15 if it solved the continuum-time BVP, because the scheme does not. Substituting the
+//! *discrete* rotating wave `u_j^n = phi_j cos(Omega n k)` into the theta-scheme gives two
+//! factors, and a naive port drops the second:
+//!
+//! - `delta_tt -> -s` with `s = (4/k^2) sin^2(Omega k / 2)` — and the theta-average
+//!   `theta u+ + (1-2theta) u^n + theta u-` contributes `(1 - theta k^2 s)`. Familiar from
+//!   [`crate::modal::discrete_stiff_mode_frequency`].
+//! - The discrete gradient pairs `q^{n+1}` against `q^{n-1}` — it spans **2k**, not `k` — so its
+//!   midpoint `qbar = (q+ + q-)/2` picks up `cos(Omega k)` on the *transverse* strains:
+//!   `ubar_x = phi' cos(Omega n k) cos(Omega k)`. Hence the DG force carries a factor
+//!   `cos(Omega k) = 1 - k^2 s / 2`.
+//!
+//! Both factors are **linear in `s`**, which is why `s` (not `Omega`) is the natural unknown. The
+//! longitudinal row carries **neither**: `psi` is static, so its theta-average is `psi` for any
+//! `theta`, and its DG component is time-independent. Set `time_discrete: false` to drop both and
+//! get the semi-discrete (continuous-time) BVP — the difference between the two is the scheme's
+//! temporal dispersion, which is what must be kept *out* of the Tier C/8 comparison.
+//!
+//! **The Jacobian is not symmetric, and that is not a bug.** The reduced (phi, psi) system looks
+//! variational — its cell blocks are the Hessian of `V_nl` on the **planar** strain slice
+//! `(p, 0, z)` (see [`planar_hessian_cells`]), which is symmetric. But `cos(Omega k)` multiplies
+//! the transverse row *only*, so `dF_phi/dpsi = cos(Omega k) dF_psi/dphi`: symmetric only as
+//! `k -> 0`. Solved with a general sparse LU ([`crate::sparse_lu`]; `splu` in the Python),
+//! exactly as the core solves its own non-symmetric DG Jacobian.
+//!
+//! **Degeneracy required.** The rotating wave needs `kappa_u == kappa_w`: the `u` and `w` rows
+//! must be the *same* equation for one `phi` to serve both. On a non-degenerate string
+//! (`GeometricString::is_degenerate` false — the configuration that *whirls*) no rigid rotation
+//! exists. This module takes a single `kappa` for that reason.
+//!
+//! Independent of the core (an oracle must not depend on the code it validates), so the operators
+//! are rebuilt here rather than imported. `theta` is required rather than defaulted — the
+//! frequency depends on it, so the caller must pass the resonator's own, as
+//! [`crate::modal::discrete_stiff_mode_frequency`] also demands.
+//!
+//! See `docs/dev/geometrically-exact-string-plan.md` (Tier B, decision #5).
+//!
+//! # The port
+//!
 //! It is the package's only member that solves a nonlinear system — Newton on a sparse Jacobian,
 //! wrapped in an eight-step amplitude continuation — and therefore its only member of the
 //! migration plan's **Group D**, the sparse-LU models. Two measurements were taken before a line
@@ -44,18 +147,19 @@
 //! The lesson is the general one, and it cost a wrong sentence in this header to learn:
 //! **a margin measured at one fixture is a claim about one fixture.**
 //!
-//! Two things *are* claimed across every fixture tried, and the parity file asserts both:
+//! Two things *were* claimed across every fixture tried, and the parity file asserted both until
+//! it was deleted with the Python bodies (plan §44):
 //!
 //! * **`converged` agrees in 126 of 126.** Eighteen fixtures fail to converge, and they are the
 //!   same eighteen on both sides. That is the one flag a caller is told to branch on, so it is the
 //!   one that has to agree.
 //! * **Among the converged, `Ω`, `s`, `φ`, `ψ` and the tension field agree to ~1e-14 or better.**
 //!
-//! Where the BVP does *not* converge the two implementations produce different answers and the
-//! parity file asserts nothing about them beyond the flag. That is not a dodge: `converged == false`
-//! means "the helix is not a relative equilibrium; do not treat this as physics". It is also the
-//! same lesson `docs/dev/scientific-hurdles.md` §6 landed on the same day — **a margin measured in
-//! the converged regime says nothing about the failing one.** There the iteration path *is* the
+//! Where the BVP does *not* converge the two implementations produced different answers and the
+//! parity file asserted nothing about them beyond the flag. That is not a dodge: `converged ==
+//! false` means "the helix is not a relative equilibrium; do not treat this as physics". It is also
+//! the same lesson `docs/dev/scientific-hurdles.md` §6 landed on the same day — **a margin measured
+//! in the converged regime says nothing about the failing one.** There the iteration path *is* the
 //! answer rather than a means to it, so the two paths are free to diverge, and they do.
 //!
 //! **What this licenses:** a tolerance port with a wide budget, and no need to chase SuperLU's
@@ -109,50 +213,72 @@ use crate::sparse::Csr;
 use crate::sparse_lu::{SparseLu, DIAG_PIVOT_THRESH};
 
 /// Amplitude-continuation steps from the linear mode up to the requested amplitude.
+///
+/// The `R -> 0` seed (a sine at the theta-scheme's linear frequency) is exact only in the limit,
+/// and the mode shape deforms as `R` grows. Stepping the amplitude and reusing each solution as the
+/// next seed is what keeps Newton in its basin at amplitudes where the deformation is large.
 pub const CONTINUATION_STEPS_DEFAULT: usize = 8;
 
 /// **Relative** convergence bar on the Newton *step*, not on the residual.
 ///
 /// The residual's three blocks carry different units — a transverse force density, a longitudinal
 /// force density and a displacement — so a single max-norm bar on it would be a unit-mixing
-/// accident. The step is compared against the solution's own scale, which is unit-free per block.
+/// accident. The step is compared against the solution's own scale, which is unit-free per block
+/// and is what Newton's quadratic convergence makes a proxy for the error.
 pub const NEWTON_TOL_DEFAULT: f64 = 1e-14;
 
-/// Cap on Newton iterations per continuation step. Reaching it reports `converged == false`.
+/// Cap on Newton iterations per continuation step. Reaching it reports `converged == false`; it
+/// never silently renders. (The Python also raised a `RuntimeWarning`; natively there is none.)
 pub const NEWTON_MAXITER_DEFAULT: usize = 50;
 
 /// A converged rotating-wave relative equilibrium: the helix, its stretch, its frequency.
 ///
 /// Field for field the Python `RotatingWave` NamedTuple, plus [`Self::failed_step`] and
-/// [`Self::failed_amplitude`], which carry what the Python side needs to raise its non-convergence
-/// warning with the same text. The Python tuple is immutable and no caller assigns to it or calls
-/// `_replace` (grepped over `tests/`, `scripts/` and `web/serialize.py`), so the binding exposes
-/// getters only.
+/// [`Self::failed_amplitude`], which carried what the Python side needed to raise its
+/// non-convergence warning with the same text, and now say where a starved continuation stopped.
 #[derive(Clone, Debug)]
 pub struct RotatingWave {
-    /// Transverse profile on the **full grid** `(N+1)`, zero at both clamped ends.
+    /// Transverse profile on the **full grid** `(N+1)` (m), zero at both clamped ends.
+    ///
+    /// The helix is `u = phi cos(Omega t)`, `w = phi sin(Omega t)`. A *deformed* sine — see
+    /// [`Self::shape_residual`].
     pub phi: Vec<f64>,
-    /// Longitudinal profile on the **full grid** `(N+1)`. **Static, and nonzero.**
+    /// Longitudinal profile on the **full grid** `(N+1)` (m), zero at both clamped ends.
+    ///
+    /// **Static, and nonzero.** The helix holds a fixed longitudinal stretch against the frozen
+    /// transverse load. Do not test the rotating wave by asserting `v == 0`; assert that `v` does
+    /// not *move* (zero longitudinal kinetic energy).
     pub psi: Vec<f64>,
     /// Angular frequency (rad/s) of the rotation.
     pub omega: f64,
     /// `Omega / (2 pi)` (Hz).
     pub frequency: f64,
-    /// The scheme's `s = (4/k²) sin²(Ωk/2)` — the unknown solved for.
+    /// The scheme's `s = (4/k^2) sin^2(Omega k / 2)` (rad^2/s^2) — the unknown solved for.
+    ///
+    /// Equals `Omega^2` exactly when `time_discrete` is false. Both time-discrete factors are
+    /// linear in this variable, which is why it, and not `Omega`, is the natural unknown.
     pub s: f64,
-    /// The imposed modal amplitude `R` (m).
+    /// The imposed modal amplitude `R` (m) — `phi`'s projection onto `sin(m pi x / L)`.
     pub amplitude: f64,
-    /// The mode number continued up from.
+    /// The mode number `m` continued up from.
     pub mode: usize,
-    /// Per-cell `Lambda` `(N)` — the frozen stretch field.
+    /// Per-cell `Lambda` `(N)` — the frozen stretch field. `1` at rest.
     pub stretch_ratio: Vec<f64>,
     /// Per-cell axial tension `EA Lambda - a` (N) `(N)` — **non-uniform**, which is the point.
+    ///
+    /// A rigid helix is stretched most near the nodes, where `phi'` is largest. That
+    /// non-uniformity is exactly what a Kirchhoff-Carrier tension (a single scalar) cannot
+    /// represent, and it is the mechanism behind [`Self::shape_residual`] and Tier C/8's breakage.
     pub tension: Vec<f64>,
     /// `max|phi - R sin(m pi x / L)| / max|phi|` — the deviation from a sine.
+    ///
+    /// **The physics payoff of this module.** `-> 0` with amplitude; grows as the helix stretches
+    /// non-uniformly. This is *why* [`kc_circular_frequency`] is wrong, and reporting it turns
+    /// Tier C/8's frequency residual from a bare number into a mechanism.
     pub shape_residual: f64,
     /// Total Newton iterations summed over the continuation.
     pub iterations: usize,
-    /// Whether every continuation step converged.
+    /// Whether every continuation step converged. Never render a false one as physics.
     pub converged: bool,
     /// Whether the scheme's `(1 - theta k² s)` and `cos(Omega k)` factors were included.
     pub time_discrete: bool,
@@ -214,10 +340,18 @@ fn operators(n_cells: usize, h: f64) -> (Csr, Csr, Csr) {
 /// `(Lambda, chi, d)` per cell from planar strains `p = phi'`, `z = psi'`.
 ///
 /// `chi = 1 - 1/Lambda` and `d = Lambda - 1 - z`, both through the **cancellation-free**
-/// rearrangements the core uses. Both are `O(strain)` quantities assembled from `O(1)` ones, and
-/// musical strings run at strain 1e-4 .. 1e-3; evaluating them literally would converge this BVP to
-/// a root of a slightly *different* equation than the one the core steps, and the seeded helix
-/// would shed the difference into the longitudinal field.
+/// rearrangements the core uses (`physsynth_core::string_geometric`'s stretch terms):
+///
+/// ```text
+/// Lambda - 1     = (z (2 + z) + p^2) / (Lambda + 1)
+/// Lambda - 1 - z = p^2 / (Lambda + 1 + z)
+/// ```
+///
+/// This is not tidiness and not duplicated code for its own sake: both are `O(strain)` quantities
+/// assembled from `O(1)` ones, and musical strings run at strain 1e-4 .. 1e-3. Evaluating them
+/// literally would converge this BVP to a root of a *slightly different* equation than the one the
+/// core steps, and the seeded helix would then shed that difference into the longitudinal field —
+/// the 1e-15 gate would fail for a reason unrelated to the physics.
 fn stretch(p: &[f64], z: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
     let n = p.len();
     let mut lam = Vec::with_capacity(n);
@@ -244,14 +378,22 @@ fn stretch(p: &[f64], z: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
 
 /// `(H_pp, H_pz, H_zz)`: the Hessian of `V_nl` on the **planar** strain slice, per cell.
 ///
-/// The helix is three-dimensional but its reduced `(phi, psi)` system linearises on the planar
-/// slice `q = (p, 0, z)`, because `V_nl` sees the polarizations only through `r² = p²`. Three
-/// entries survive, and the third simplifies exactly through `(1+z)² - Lambda² = -p²`:
+/// The rotating wave's linearisation. Although the helix is fully three-dimensional, its reduced
+/// `(phi, psi)` system linearises on the *planar* slice `q = (p, 0, z)`: `V_nl` sees the
+/// polarizations only through `r^2 = p^2 (cos^2 + sin^2) = p^2`, which is the same value the
+/// planar strain `(p, 0, z)` produces. So the 2x2 reduced block is the full 3x3 Hessian with the
+/// `w` row and column struck out:
 ///
 /// ```text
-/// H_pp = a (chi + p² / Lambda³)
-/// H_pz = a p (1 + z) / Lambda³
-/// H_zz = -a p² / Lambda³
+/// H = a [ chi I3 + m m^T / Lambda^3 - e3 e3^T ] ,   m = (u_x, w_x, 1 + v_x)
+/// ```
+///
+/// Three entries survive, and the third simplifies exactly — `(1+z)^2 - Lambda^2 = -p^2`:
+///
+/// ```text
+/// H_pp = a (chi + p^2 / Lambda^3)
+/// H_pz = a p (1 + z) / Lambda^3
+/// H_zz = a ((1+z)^2 / Lambda^3 - 1/Lambda) = -a p^2 / Lambda^3
 /// ```
 ///
 /// That last identity written literally is a difference of `O(1)` terms and is catastrophic at
@@ -288,10 +430,16 @@ pub fn planar_hessian_cells(p: &[f64], z: &[f64], a: f64) -> (Vec<f64>, Vec<f64>
 /// [`solve_rotating_wave`], and it breaks by mode-shape deformation
 /// ([`RotatingWave::shape_residual`]).
 ///
-/// Note the missing half: a *planar* mode's stretch averages to `R²p²L/4`, a circular mode's to
-/// `R²p²L/2` — exactly twice, and constant rather than pulsing, because `cos² + sin² = 1`. So the
-/// tension shift is the full `eps R²` with no factor of `1/2`, and this is *not* the planar Duffing
-/// frequency at the same `R`.
+/// Take `(omega0_sq, eps)` from [`crate::duffing::kc_mode_coefficients`] with
+/// `EA = a = EA_#10 - T0` (mind the identification) and the **discrete**
+/// `p2 = spatial_eigenvalue_p2(...)` ([`crate::damping::spatial_eigenvalue_p2`]), so the only
+/// thing left to explain is the shape.
+///
+/// **Note the missing half.** For a *planar* mode the stretch `I ~ cos^2(Omega t)` averages to
+/// `R^2 p^2 L / 4`; a circular mode's is `R^2 p^2 L / 2` — **exactly twice**, and constant rather
+/// than pulsing, because `cos^2 + sin^2 = 1`. So the tension shift is the full `eps R^2` with no
+/// factor of `1/2`, and this is *not* the same expression as the planar Duffing frequency
+/// ([`crate::duffing::duffing_frequency`]) evaluated at the same `R`.
 pub fn kc_circular_frequency(omega0_sq: f64, eps: f64, amplitude: f64) -> Result<f64, String> {
     let val = omega0_sq + eps * amplitude * amplitude;
     if val <= 0.0 {
@@ -305,8 +453,16 @@ pub fn kc_circular_frequency(omega0_sq: f64, eps: f64, amplitude: f64) -> Result
 /// Assign these straight onto the resonator's fields — do **not** route them through `set_state`,
 /// whose `y^{-1}` is a second-order Taylor start: consistent but not exact, so it would seed an
 /// `O(k³)` history error that the helix sheds into the longitudinal field. The whole 1e-15 claim
-/// lives in this function. `fs` must be the resonator's own, since `Omega` was solved for at that
-/// `k` when `time_discrete`.
+/// lives in this function.
+///
+/// The exact history is just the ansatz evaluated at `n = 0` and `n = -1`:
+///
+/// ```text
+/// u^0 = phi,              w^0 = 0,                v^0 = psi
+/// u^-1 = phi cos(Omega k), w^-1 = -phi sin(Omega k), v^-1 = psi
+/// ```
+///
+/// `fs` must be the resonator's own (`Omega` was solved for at that `k`, if `time_discrete`).
 #[allow(clippy::type_complexity)]
 pub fn rotating_wave_history(
     wave: &RotatingWave,
@@ -330,21 +486,46 @@ pub fn rotating_wave_history(
 }
 
 /// Everything [`solve_rotating_wave`] needs, mirroring `GeometricString`'s own parameters.
+///
+/// They must match the resonator the result will seed — `theta`, `fs` and `n_cells` included,
+/// since the frequency depends on all three.
 #[derive(Clone, Copy, Debug)]
 pub struct BvpParams {
+    /// The string, exactly as the resonator was built: length (m).
     pub l: f64,
+    /// Tension `T0` (N).
     pub t: f64,
+    /// Linear density (kg/m).
     pub rho: f64,
+    /// Axial stiffness (N). `EA < T` is refused (see [`solve_rotating_wave`]).
     pub ea: f64,
+    /// Sample rate (Hz).
     pub fs: f64,
+    /// Cells `N`.
     pub n_cells: usize,
+    /// The resonator's own theta.
     pub theta: f64,
+    /// The modal amplitude `R` (m): `phi`'s projection onto `sin(m pi x / L)`, normalised so that
+    /// `R` means what it means in [`crate::duffing::kc_mode_coefficients`]. Chosen over
+    /// `max|phi|` precisely so the Tier C/8 comparison against [`kc_circular_frequency`] is
+    /// amplitude-consistent.
     pub amplitude: f64,
+    /// Mode number `m` to continue up from (the linear sine the helix deforms away from). The
+    /// Python defaulted it to 1.
     pub mode: usize,
+    /// Bending stiffness, applied to **both** polarizations: a rotating wave exists only on a
+    /// degenerate (`kappa_u == kappa_w`) string. The Python defaulted it to 0.
     pub kappa: f64,
+    /// Include the scheme's `(1 - theta k^2 s)` and `cos(Omega k)` factors (the Python's
+    /// default). Required for the seeded helix to rotate rigidly to machine precision. Pass
+    /// `false` for the semi-discrete BVP, whose `Omega` carries no temporal dispersion — the
+    /// honest comparison for Tier C/8.
     pub time_discrete: bool,
+    /// Continuation steps ([`CONTINUATION_STEPS_DEFAULT`]).
     pub continuation_steps: usize,
+    /// A **relative** bar on the Newton step ([`NEWTON_TOL_DEFAULT`]).
     pub tol: f64,
+    /// Newton iterations per continuation step ([`NEWTON_MAXITER_DEFAULT`]).
     pub maxiter: usize,
 }
 
@@ -363,6 +544,12 @@ fn interleave_permutation(n_int: usize) -> Vec<usize> {
 }
 
 /// Solve the rotating-wave BVP for `(phi, psi, Omega)` by amplitude continuation.
+///
+/// Returns the converged helix; check [`RotatingWave::converged`].
+///
+/// Refuses (`Err`) on non-physical parameters, `EA < T` (softening: outside this oracle's scope),
+/// a `mode` outside `1 .. N-1`, or a rotation past Nyquist (`Omega k > pi`, where the discrete
+/// `s` no longer maps back to a frequency).
 pub fn solve_rotating_wave(p: &BvpParams) -> Result<RotatingWave, String> {
     if p.l.min(p.t).min(p.rho).min(p.fs).min(p.ea) <= 0.0 {
         return Err("L, T, rho, fs, EA must all be positive.".to_string());

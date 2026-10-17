@@ -1,6 +1,6 @@
 //! Complete and Jacobian elliptic functions — the Duffing oracle's exact solution.
 //!
-//! `analysis/duffing.py` is the exact solution of `q'' + ω₀²q + εq³ = 0`, which is what makes the
+//! [`crate::duffing`] is the exact solution of `q'' + ω₀²q + εq³ = 0`, which is what makes the
 //! tension-modulated string (model #9) and the geometrically exact string (model #10) testable
 //! against something other than themselves. Two SciPy names carry it: `ellipk(m)`, the quarter
 //! period, and `ellipj(u, m)`, whose `cn` *is* the waveform. Both are transcribed here for the
@@ -9,7 +9,8 @@
 //! percentage-level and would absorb the shift without a word.
 //!
 //! Both use SciPy's *parameter* convention: `m = k²`, not the modulus `k`. Getting that wrong is
-//! not a rounding error, it is a different function, and `duffing.py`'s own docstring says so.
+//! not a rounding error, it is a different function, and
+//! [`crate::duffing::duffing_elliptic_parameter`]'s doc (carried from `duffing.py`) says so.
 //!
 //! # Measured against SciPy before this was written
 //!

@@ -2,30 +2,47 @@
 //!
 //! A Hann-windowed FFT plus parabolic interpolation on the log-magnitude spectrum, which is how
 //! every modal test in this project asks where a partial actually is before comparing it to an
-//! analytic oracle. Fifteen test files stand on it.
+//! analytic oracle. Fifteen Python test files stood on it.
+//!
+//! The Python module's docstrings were the physics, and this header documented only what the
+//! translation had to decide. The Python bodies went at deletion 7 (`b1d37c8`) and the package at
+//! retirement plan §48; the module docstring is carried below under "The method" and the
+//! functions' remarks the native docs lacked onto the items of the same name, verbatim from
+//! `b1d37c8^` save for cross-references respelled natively (retirement plan §53). The figures in
+//! [`parabolic_refine`]'s witness (-22.1 bins, -502 Hz) were measured on the Python detector.
+//!
+//! # The method
+//!
+//! Spectral partial detection for validating modal frequencies.
+//!
+//! A Hann-windowed FFT plus parabolic interpolation on the log-magnitude spectrum recovers partial
+//! frequencies to well under a cent for long, stationary records — accurate enough to check the
+//! FDTD output against the analytic harmonic series.
+//!
+//! No plotting (this is analysis, not viz). In the Python, pure NumPy.
 //!
 //! # What is exact here and what is not, and why the line falls where it does
 //!
-//! This is the first module in the migration whose two halves have *different* answers, and the
+//! This was the first module in the migration whose two halves had *different* answers, and the
 //! split is not the usual one between a reduction and a step. It is between two axes:
 //!
 //! * **The frequency axis is exact.** `freqs`, `df`, the search-window bounds, `min_separation_hz`
 //!   and every comparison between them are built from `+ - * /` alone, which IEEE-754 specifies
 //!   exactly, so a transcription reproduces them bit for bit on any machine. That matters more
-//!   than it sounds: measured over the 17 real `detect_peaks` calls the suite makes, the greedy
-//!   separation test compares two quantities that are **exactly equal** — candidate peaks sitting
-//!   precisely four bins apart against a threshold of precisely four bins — so its margin is
-//!   *zero*, and the `>=` is decided by whether `i*val - c*val` happens to land on `4.0*val`.
+//!   than it sounds: measured over the 17 real `detect_peaks` calls the Python suite made, the
+//!   greedy separation test compares two quantities that are **exactly equal** — candidate peaks
+//!   sitting precisely four bins apart against a threshold of precisely four bins — so its margin
+//!   is *zero*, and the `>=` is decided by whether `i*val - c*val` happens to land on `4.0*val`.
 //!
-//!   Note what is and is not claimed there, because the first draft of the parity test claimed the
-//!   wrong thing. The gap does **not** always clear: at 100 kHz with `nfft = 16` it comes out short
-//!   and the candidate is rejected. So this is a live comparison whose answer changes with the
-//!   sample rate, and what a port must guarantee is not the outcome but that both sides reach the
-//!   *same* outcome — which follows from the axis being bit-identical, and only while the chain is
-//!   transcribed rather than tidied. `fs/nfft` is not `1.0/(nfft*(1.0/fs))`: at this project's own
-//!   rates the two agree at every power-of-two size, but searched over random rates they differ for
-//!   about one pair in eight. Tidying it would leave the port accidentally correct here and wrong
-//!   elsewhere.
+//!   Note what is and is not claimed there, because the first draft of the parity test (deleted
+//!   with the Python bodies, plan §44) claimed the wrong thing. The gap does **not** always clear:
+//!   at 100 kHz with `nfft = 16` it comes out short and the candidate is rejected. So this is a
+//!   live comparison whose answer changes with the sample rate, and what a port must guarantee is
+//!   not the outcome but that both sides reach the *same* outcome — which follows from the axis
+//!   being bit-identical, and only while the chain is transcribed rather than tidied. `fs/nfft` is
+//!   not `1.0/(nfft*(1.0/fs))`: at this project's own rates the two agree at every power-of-two
+//!   size, but searched over random rates they differ for about one pair in eight. Tidying it would
+//!   leave the port accidentally correct here and wrong elsewhere.
 //!
 //! * **The magnitude axis is a tolerance port, and deliberately so.** Three things on it are
 //!   library kernels that no transcription reaches: NumPy's `cos` inside the Hann window (its own
@@ -50,7 +67,9 @@
 //! clears by ten orders of magnitude more than a rounding can move it. That is the whole licence
 //! for porting a discrete-output module without bit-identical arithmetic, and if a future fixture
 //! ever puts two partials within 3e-4 of each other in magnitude inside one search window, the
-//! licence expires and the parity file is where that will show up.
+//! licence expires. The parity file that would have shown it is gone (plan §44); what remains of
+//! the Python's answers is `tests/analysis_frozen.rs`, on the freeze's own fixtures only, so a new
+//! fixture that close needs its margin measured by hand.
 
 use std::f64::consts::PI;
 
@@ -277,6 +296,10 @@ pub fn rfft_mag(x: &[f64]) -> Vec<f64> {
 
 /// `(freqs, magnitude, nfft)` of the DC-removed, Hann-windowed signal.
 ///
+/// Zero-padding (`zero_pad_factor`, rounded up to a power of two; the Python defaulted it to 2,
+/// which [`measure_partials_near`] and [`detect_peaks`] pass) densifies the bin grid, which
+/// improves the parabolic-interpolation estimate; it does not add real resolution.
+///
 /// The mean is a plain left-to-right sum, **not** NumPy's pairwise one, and that is a deliberate
 /// refusal rather than an oversight. `reduce::sum` next door exists precisely to make a ported
 /// `np.sum` bit-identical (plan §31.2), and it would work here — but it would buy a bit-identical
@@ -324,12 +347,15 @@ pub struct SpectrumOut {
 /// on the window's own edge — a bin with no peak under it. Fitting a parabola through three
 /// near-collinear log-magnitudes there makes the curvature vanish and the correction diverge: the
 /// witness that prompted the guard moved -22.1 bins from bin 4, i.e. a "refined" frequency of
-/// **-502 Hz**, which became a NaN out of `modal.cents` and a 500 in the viewer.
+/// **-502 Hz**, which became a NaN out of `modal.cents` and a 500 in the viewer. The quieter form
+/// of the same fault extrapolates to a *positive* frequency outside the window — the wrong
+/// partial, checked by nothing.
 ///
 /// Note which guard it has to be. Both real witnesses were **concave**, so testing the sign of the
-/// denominator catches neither. The property that makes the interpolation meaningful, and that
-/// bounds `|delta| <= 1/2`, is that `i` is a genuine local maximum. A non-peak bin gets its honest
-/// bin centre back.
+/// denominator catches neither (`a=3, b=2, c=0` is concave, decreasing, and still moves the
+/// estimate 1.5 bins). The property that makes the interpolation meaningful, and that bounds
+/// `|delta| <= 1/2`, is that `i` is a genuine local maximum. A non-peak bin gets its honest bin
+/// centre back. See `tests/spectrum.rs`.
 ///
 /// This is not a hypothetical branch being carried across for completeness: over the dependent
 /// suite the guard fires on **14 of 384** real calls, and 17 of those calls take an edge argmax.
@@ -359,8 +385,10 @@ pub fn parabolic_refine(mag: &[f64], i: usize, fs: f64, nfft: usize) -> f64 {
 
 /// Measure the partial frequencies nearest each value in `expected`; NaN where the window is empty.
 ///
-/// `search_hz` defaults to 40% of the lowest expected frequency — 40% of the harmonic spacing,
-/// which keeps each window clear of its neighbours.
+/// For every expected frequency, the magnitude peak within `±search_hz` is located and refined by
+/// parabolic interpolation ([`parabolic_refine`]). `search_hz` defaults (`None`) to 40% of the
+/// lowest expected frequency — 40% of the harmonic spacing, which keeps each window clear of its
+/// neighbours. Returns one value per `expected` entry.
 pub fn measure_partials_near(
     signal: &[f64],
     fs: f64,
@@ -401,7 +429,9 @@ pub fn measure_partials_near(
 /// Blindly detect the `n_peaks` strongest spectral peaks above `f_min`, ascending in Hz.
 ///
 /// Uses no prior knowledge of where partials should be — the independent cross-check that the
-/// detector finds a harmonic series on its own.
+/// detector finds a harmonic series on its own. `min_separation_hz` greedily suppresses weaker
+/// peaks closer than that to an already-selected stronger one, which rejects window sidelobes
+/// around a strong tone (`None`: 4 raw FFT bins, ~one Hann main-lobe half-width).
 ///
 /// **The sort is a stable descending sort, where NumPy's is `argsort` reversed and unstable.** The
 /// two agree exactly when no two candidate magnitudes are equal, and that is a measured

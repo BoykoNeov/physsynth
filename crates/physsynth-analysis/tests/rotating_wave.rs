@@ -66,7 +66,7 @@ fn the_reference_helix_matches_the_python_module() {
     // a per-fixture fact rather than a property of the port. This fixture is one of the stable
     // ones -- a relative 1e-10 perturbation of the Newton step leaves it at 24 -- and pinning it
     // here catches a transcription that changed the continuation's path while still landing on the
-    // right root. The parity file deliberately does NOT assert it.
+    // right root. The parity file (deleted at plan §44) deliberately did NOT assert it.
     assert_eq!(w.iterations, 24, "the continuation's total Newton count");
     assert!(
         rel(w.omega, 637.660_275_181_959_4) < 1e-12,
@@ -547,8 +547,8 @@ fn the_pythons_refusals_name_what_they_refuse() {
 #[test]
 fn a_starved_continuation_reports_that_it_did_not_converge() {
     // Carried from `test_non_convergence_warns_and_is_reported`: one continuation step straight to
-    // a large amplitude with one iteration. The RuntimeWarning's prose lives in the binding and
-    // goes with it; what the solver owes a caller is the flag, so that a shape which merely came
+    // a large amplitude with one iteration. The RuntimeWarning's prose lived in the binding and
+    // went with it; what the solver owes a caller is the flag, so that a shape which merely came
     // back is never mistaken for a helix.
     let wave = solve_rotating_wave(&BvpParams {
         amplitude: 0.05,

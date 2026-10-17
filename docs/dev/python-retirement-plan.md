@@ -9241,4 +9241,74 @@ cites, so nothing is lost there.
 
 ### 52.2 What is next
 
-At the human's call: the analysis crate's derivations (§52.1), the same method.
+At the human's call: the analysis crate's derivations (§52.1), the same method. Done at §53.
+
+## 53. The analysis crate's derivations come back — §52's method, one crate over
+
+Done 2026-10-18 (the human: "what is next" → this batch; "yes"; then **fix the stale lines too**,
+below). §52.1 found it: `physsynth/analysis/` lost its docstrings at deletion 7 (`b1d37c8`), and
+§48 moved only `horizon.py`'s prose before deleting the package. Six modules' derivations are now
+in `crates/physsynth-analysis/src/`, carried from `b1d37c8^` the same way as §52 (option 3: every
+module docstring, plus the item docstrings that carry a derivation or a remark the Rust lacked).
++1,046 / −191 lines over fourteen files, comments only.
+
+**Inventory, and the blind spot in §52's.** The `ast` docstring walk scored 797 of 835 docstring
+lines below 50% word-5-gram coverage. It cannot see two kinds of text, and both held derivations
+here (the closing review caught it before writing): **attribute docstrings** — a bare string after
+an assignment, which `ast.get_docstring` never returns (`rotating_wave.py`'s three constants and
+every `RotatingWave` field, among them `psi`'s "assert that `v` does not *move*, not `v == 0`" and
+`shape_residual`'s "this is *why* the KC frequency is wrong") — and **`#` comment blocks**
+(`damping.py`'s T60 derivation with its amplitude-versus-energy convention, `modal.py`'s four-probe
+rationale for the free orthotropic plate). Walk every string expression and comment run, not only
+docstrings. The "Rust swap" footers were already in the Rust headers (each port wrote its own).
+
+**Faithful, then checked against today's tree.** Each carried claim about a test or a behaviour was
+checked natively before it went in:
+
+- `free_free_beam_betaL`'s roots tend to `(2i+1)π/2` "from above" — false for the second root, as
+  `tests/modal.rs` already said. Carried **corrected**, with the original wording quoted; the test
+  comment now points at the corrected text.
+- `stiff_dispersion_frequencies` said the curve "droops *more* steeply" and then that the phase
+  velocity rises. The rise is true (`physsynth-core/tests/string_stiff_harness.rs` asserts `v_p/c`
+  above 1 and increasing at `λ = 0.8`); the droop clause is dropped and the drop is stated.
+- "The tests assert all three" (the free disk's self-checks): true — rigid-body annihilation and the
+  Rayleigh quotient in core's `tests/plate_outline.rs`, the saddle bound in `tests/modal.rs`. The
+  orthotropic→isotropic reduction (`tests/modal.rs`) and the helix's bit-zero longitudinal motion
+  (`string_geometric_helix.rs`) likewise.
+- The non-convergence `RuntimeWarning` was **not** carried: natively there is none; `converged`
+  and `failed_step` report it (§52's mallet-warning case again).
+- Figures measured on the Python implementation are labelled so in the provenance notes: the free
+  disk's pair splittings, the coupling form's agreement across grids, `parabolic_refine`'s
+  -22.1-bin witness. Closed-form numbers (`24√0.35`, the 8.18% overshoot) are not measurements.
+- No intra-doc link reaches `physsynth-core` (`tests/deps.rs` forbids the edge): `GeometricString`,
+  `grain_ratios_from_material`, `free_beam_stiffness`, `string_nonlinear` are code spans. Python
+  keyword defaults are said to be the Python's; `solve_rotating_wave`'s parameter notes went onto
+  `BvpParams`' fields, which had no docs, and its Raises section onto the function.
+- Every plan document the text cites exists (`git ls-files`), with the sections it names.
+
+**Pointers.** `tests/modal.rs`' free-disk test ("derived in `modal.py`'s docstring") and
+`elliptic.rs`' two mentions of `duffing.py` now point at the restored Rust items.
+
+**The stale lines — the human's call, asked before writing.** Present-tense claims about the
+deleted parity files and the binding, across the analysis crate, are now past tense with the plan
+section that deleted them: `modal.rs`, `damping.rs`, `spectrum.rs` and `rotating_wave.rs` headers
+("the parity file asserts", "fourteen test files import this module", the binding "exposes getters
+only"), `bessel.rs`, `radiation.rs`, and the openings of `tests/bessel.rs`, `tests/elliptic.rs`,
+`tests/spectrum.rs` and two comments in `tests/rotating_wave.rs`. `dispersion.rs`' whole header was
+the Python import-time hazard of a swap that no longer exists; it is now a five-line history note.
+`spectrum.rs`' "if a fixture ever ties … the parity file is where that will show up" now says what
+replaced it: the frozen record covers its own fixtures only, so such a fixture needs its margin
+measured by hand. One pre-existing 171-character line in `radiation.rs` was rewrapped with its
+paragraph.
+
+**Mechanics.** Every literal block is a ```` ```text ```` fence (`cargo test --doc`: still 0
+doctests). A scratch rewrapper reflowed the paragraphs an edit pushed past 100 columns; it also
+reflowed an aligned comment table in `spectrum.rs`' FFT, which was put back by hand — a rewrapper
+must skip anything already longer than the limit before the edit. `cargo doc -p physsynth-analysis`:
+the same two pre-existing warnings, none new. fmt and clippy (`-D warnings`) clean.
+`cargo-test-nice.ps1 -Full`: 1,824 passed, unchanged.
+
+### 53.1 What is next
+
+Nothing queued. The retirement plan has no remaining named work; the next direction is the human's
+call (HANDOFF §12's horizon).
