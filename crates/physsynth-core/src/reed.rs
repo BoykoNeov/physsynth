@@ -8,6 +8,10 @@
 //! so it is carried below, under "The physics", verbatim from `6c23a45^` save for its
 //! cross-references, which now point at the native items.
 //!
+//! **The measured figures in the carried text are the Python implementation's.** They were
+//! measured before the port and have not been re-measured on this one; re-measure, and save
+//! the native print, before quoting any of them as a Rust result.
+//!
 //! # The physics
 //!
 //! This closes the `exciter -> resonator` loop for wind instruments: a **dynamic reed** valve

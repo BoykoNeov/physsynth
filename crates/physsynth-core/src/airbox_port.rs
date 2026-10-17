@@ -11,6 +11,10 @@
 //! cross-references. Where the text says the port "registers itself with the room", read the
 //! native ownership described on [`RoomPort`]. The room's own physics is [`crate::airbox`]'s.
 //!
+//! **The measured figures in the carried text are the Python implementation's.** They were
+//! measured before the port and have not been re-measured on this one; re-measure, and save
+//! the native print, before quoting any of them as a Rust result.
+//!
 //! # Why the ports go before the wrappers
 //!
 //! `airbox.py` has three tiers: the room (ported in plan §30), the ports, and six `RoomLoaded*` /
@@ -702,9 +706,10 @@ fn index_repr(i: [usize; 3]) -> String {
 /// injected|` goes from **exactly 0.00e+00** to **18% of the channel** (12.9% on a free plate). A
 /// wrong `R` does not leak energy; it creates it on one side and destroys the same amount on the
 /// other. The tests that catch it are the *cross-ledger* identity `radiated == injected` and the
-/// differential measurement `test_R_room_is_what_the_room_does`, never the conserved total.
+/// differential measurement (natively `tests/airbox_port.rs`'
+/// `r_room_is_what_the_room_actually_does`), never the conserved total.
 ///
-/// **Point port versus spread port — a measured non-convergence.** `radius=None` puts the whole
+/// **Point port versus spread port — a measured non-convergence.** `radius: None` puts the whole
 /// volume velocity on one node. That is exact and perfectly conservative, and its *magnitude* is a
 /// property of the grid rather than of the physics: the port behaves as a pulsating sphere of
 /// equivalent radius `~ h / 3.1` (measured `a_eff / h` = 0.324, 0.320, 0.317 on three grids), which
@@ -1683,7 +1688,7 @@ macro_rules! patch_accessors {
 /// `N_plate = 8, 16, 24, 32`, wandering rather than shrinking. Bilinear spreading (each surface
 /// node's area distributed over the four surrounding air nodes with weights summing to 1) leaves
 /// **0** unfed at every ratio and is 10x to 100x flatter at every one: 0.082, 0.062, 0.051, 0.031
-/// over the same refinements, decreasing. That is what ships, and `spreading="nearest"` exists
+/// over the same refinements, decreasing. That is what ships, and [`Spreading::Nearest`] exists
 /// **only** as its measured negative control.
 ///
 /// **How flat, exactly — because "partition of unity" promises more than it delivers.** Bilinear's
@@ -1730,8 +1735,8 @@ macro_rules! patch_accessors {
 /// mode at 3.0e-15. Six different room widths with the plate centred, spanning two grid alignments,
 /// all sit at rounding: **grid commensurability is not the criterion, centring is.** And there is
 /// no tolerance band — the leak is *linear* in the offset over four decades (`delta/h_air = 1e-6`
-/// gives 1.0e-07), so "approximately centred" is not approximately silent. Hence the origin
-/// **defaults to centred in the face**. The asymmetric case is not a defect to hide: a room that
+/// gives 1.0e-07), so "approximately centred" is not approximately silent. Hence an omitted origin
+/// (`None`) **is centred in the face**. The asymmetric case is not a defect to hide: a room that
 /// re-excites a surface's *shape*, converting an acoustically silent mode into a radiating one at
 /// the 1-3% level, is one more thing no one-port can represent at all.
 ///

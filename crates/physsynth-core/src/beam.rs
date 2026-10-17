@@ -6,6 +6,10 @@
 //! so it is carried below, under "The physics", verbatim from `74af04b^` save for two sentences
 //! about SciPy that are now spelled natively.
 //!
+//! **The measured figures in the carried text are the Python implementation's.** They were
+//! measured before the port and have not been re-measured on this one; re-measure, and save
+//! the native print, before quoting any of them as a Rust result.
+//!
 //! # The physics
 //!
 //! The 1D rehearsal of the free-edge Chladni plate (HANDOFF §5 row 5;

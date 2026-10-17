@@ -10,6 +10,10 @@
 //! native items of those names, each verbatim save for its cross-references and for references to
 //! Python attributes, which now name the quantity instead.
 //!
+//! **The measured figures in the carried text are the Python implementation's.** They were
+//! measured before the port and have not been re-measured on this one; re-measure, and save
+//! the native print, before quoting any of them as a Rust result.
+//!
 //! # The physics
 //!
 //! A vibrating body pushes air; at a listening distance `r` a microphone hears a **radiated

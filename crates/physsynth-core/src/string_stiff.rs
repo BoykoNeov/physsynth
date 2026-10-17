@@ -7,6 +7,10 @@
 //! it is carried below, under "The physics", verbatim from `f6a3a3c^` save for its
 //! cross-references, which now point at the native items.
 //!
+//! **The measured figures in the carried text are the Python implementation's.** They were
+//! measured before the port and have not been re-measured on this one; re-measure, and save
+//! the native print, before quoting any of them as a Rust result.
+//!
 //! # The physics
 //!
 //! Implements HANDOFF section 5 model #2 (see `docs/dev/stiff-string-plan.md`). PDE:

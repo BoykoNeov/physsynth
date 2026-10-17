@@ -7,6 +7,10 @@
 //! convention actually were — is carried below, under "The physics", verbatim from `6c23a45^` save
 //! for its cross-references and its closing line about NumPy and SciPy.
 //!
+//! **The measured figures in the carried text are the Python implementation's.** They were
+//! measured before the port and have not been re-measured on this one; re-measure, and save
+//! the native print, before quoting any of them as a Rust result.
+//!
 //! # The physics
 //!
 //! A soft mallet (a lumped mass `M`) strikes a [`crate::membrane::Membrane`] at a point, the
@@ -209,9 +213,11 @@ pub fn check_common(
 pub struct Params {
     /// Mallet mass `M` (kg).
     pub mass: f64,
-    /// Felt stiffness `K` (N/m^alpha).
+    /// Felt stiffness `K` (N/m^alpha). The contact frequency `sqrt(K/M)` sets the temporal
+    /// resolution the strike needs.
     pub stiffness: f64,
-    /// Felt exponent `alpha >= 1`.
+    /// Felt exponent `alpha >= 1` (`1` is a linear felt, the closed-form-oracle case; `~2-3` is
+    /// real felt). Any `alpha >= 1` conserves energy.
     pub alpha: f64,
     /// Hunt-Crossley damping `lam_h >= 0`.
     pub lam_h: f64,

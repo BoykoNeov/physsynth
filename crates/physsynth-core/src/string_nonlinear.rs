@@ -10,6 +10,10 @@
 //! its paragraph on the stretch reduction, which described the Python's summation helper and now
 //! points at the sections after it.
 //!
+//! **The measured figures in the carried text are the Python implementation's.** They were
+//! measured before the port and have not been re-measured on this one; re-measure, and save
+//! the native print, before quoting any of them as a Rust result.
+//!
 //! # The physics
 //!
 //! The **string family's nonlinearity**, and the direct analog of model #6's von Karman plate: a
@@ -238,7 +242,8 @@ pub struct Params {
     pub n: usize,
     /// Stiffness coefficient `sqrt(E I / rho)` (m^2/s).
     pub kappa: f64,
-    /// Axial stiffness (N) — the nonlinearity. `0` is model #3, bit-for-bit.
+    /// Axial stiffness (N) — the nonlinearity. `0` is model #3, bit-for-bit. The governing ratio
+    /// is `EA/T` (see [`string_coefficients_from_material`]); real strings sit at `EA/T ~ 150-600`.
     pub ea: f64,
     /// Frequency-independent loss.
     pub sigma0: f64,
@@ -246,7 +251,8 @@ pub struct Params {
     pub sigma1: f64,
     /// Time-averaging weight of the **linear** operator, in `(0, 1]`.
     pub theta: f64,
-    /// Relative tolerance of the scalar tension solve.
+    /// Relative tolerance of the scalar tension solve. Energy drift is proportional to it (the
+    /// machine-precision self-certification, absent a closed form for general motion).
     pub tension_tol: f64,
     /// Wave speed `sqrt(T / rho)` (m/s).
     pub c: f64,

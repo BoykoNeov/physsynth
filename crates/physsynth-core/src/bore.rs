@@ -7,6 +7,10 @@
 //! physics", verbatim from `6c23a45^`; its cross-references now point at the native items, and its
 //! closing line about NumPy and SciPy is spelled natively.
 //!
+//! **The measured figures in the carried text are the Python implementation's.** They were
+//! measured before the port and have not been re-measured on this one; re-measure, and save
+//! the native print, before quoting any of them as a Rust result.
+//!
 //! # The physics
 //!
 //! The first **acoustic** resonator of the `exciter -> resonator -> body` abstraction and the
@@ -107,7 +111,8 @@
 //! exactly** in `U_out propto (p_end^{n+1} + p_end^n)`, so every validated quantity — the radiated
 //! energy, the far-field read-out [`Bore::radiated_pressure`] `= dU_out/dt`, and any **interior**
 //! pickup — is clean. Read the far field from `U_out`/[`Bore::radiated_pressure`], never the raw
-//! terminating node, and place spectral pickups in the interior (node 1), as the batch-1 tests do.
+//! terminating node, and place spectral pickups in the interior (node 1), as the bore's own tests
+//! do.
 //!
 //! **Webster from day one.** `S(x)` is carried as node/segment arrays throughout, so a cylinder
 //! (constant `S`) is just the constant case; a cone or flare (a bell, a saxophone) is a *different

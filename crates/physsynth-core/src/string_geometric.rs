@@ -16,6 +16,10 @@
 //! `allow_softening` on the native items of those names. (Three constants' docstrings had already
 //! been carried at §51.)
 //!
+//! **The measured figures in the carried text are the Python implementation's.** They were
+//! measured before the port and have not been re-measured on this one; re-measure, and save
+//! the native print, before quoting any of them as a Rust result.
+//!
 //! # The physics
 //!
 //! The string family's **exact** geometry, and the model that discharges the two claims model #9
@@ -474,7 +478,10 @@ pub struct Params {
     pub fs: f64,
     /// Number of spatial segments.
     pub n: usize,
-    /// Axial stiffness `EA` (N).
+    /// Axial stiffness `EA` (N) — required, and the defining parameter. `EA = T` is exactly
+    /// linear (the regression anchor). The governing ratio is `EA/T = (c_long/c)^2`; real strings
+    /// sit at `EA/T ~ 150-600` (see [`crate::string_nonlinear::string_coefficients_from_material`],
+    /// but mind `EA_#9 <-> (EA - T0)_#10`).
     pub ea: f64,
     /// Transverse stiffness of the `u` polarization.
     pub kappa: f64,
@@ -486,7 +493,10 @@ pub struct Params {
     pub sigma0: f64,
     /// Frequency-dependent transverse loss.
     pub sigma1: f64,
-    /// Frequency-independent longitudinal loss.
+    /// Frequency-independent longitudinal loss. Omitted at construction, both longitudinal losses
+    /// inherit the transverse values, so the constructor makes no silent physics claim. **Real
+    /// strings damp longitudinal motion far less than transverse** — that is a setting to opt into
+    /// (pass `0.0`), not a default.
     pub sigma0_long: f64,
     /// Frequency-dependent longitudinal loss.
     pub sigma1_long: f64,

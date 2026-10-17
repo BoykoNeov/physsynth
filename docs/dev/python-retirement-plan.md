@@ -9168,8 +9168,7 @@ yet had been reworded into the Rust item docs at the port; some had not — the 
 the tree nowhere. Asked mid-batch (a side note flagged the growth), the human chose **option 3**:
 every module docstring, plus only the class and method docstrings that carry a **derivation**
 (a proof, an equation worked through, a measured argument); parameter remarks were carried only
-where the Rust said nothing equivalent, and the beam's, bore's and reed's few were already in by
-then.
+where the Rust said nothing equivalent (finished in the follow-up below).
 
 **How it was carried.**
 
@@ -9208,6 +9207,26 @@ and none new (one new link, to `from_sphere`, was fixed: it lives on `LoadParams
 `cargo fmt --check` and `cargo clippy --workspace --all-targets -D warnings` clean.
 `cargo-test-nice.ps1 -Full`: 1,824 passed, unchanged. A grep for "the docstring is the physics"
 across all three crates finds only the past-tense provenance lines.
+
+**Follow-up the same day (the closing review and a side note).** Faithful to its source is not
+the same as true in today's tree, so three things were checked after the first commit:
+
+- **The figures are labelled.** Every measured number in the carried text (drifts, error sizes,
+  counts) was measured on the Python implementation and none was re-measured on the Rust. Each
+  restored section's provenance note now says so, with the rule §46 set: re-measure and save the
+  native print before quoting one as a Rust result.
+- **Pointers that no longer resolve were respelled.** The retired `test_R_room_is_what_the_room_does`
+  now names its native successor (`tests/airbox_port.rs`' `r_room_is_what_the_room_actually_does`);
+  "the batch-1 tests" became the bore's own tests; the Python spellings `radius=None`,
+  `spreading="nearest"` and "origin defaults to centred" became `radius: None`,
+  [`Spreading::Nearest`] and "an omitted origin (`None`) is centred" — what `RoomPort::new` and
+  `SurfacePort::new` actually take. All eight `docs/dev/*-plan.md` paths the text cites exist
+  (`git ls-files`); "the tests assert it" (softening) holds natively.
+- **The parameter pass was finished.** It had been done only for the beam, bore and reed. Added for
+  the tension string (`EA`'s ratio, `tension_tol`'s drift), the geometric string (`EA`, the
+  longitudinal losses' inheritance — `Option` natively, so true) and the mallet (the contact
+  frequency, the felt exponent). The mallet's "a warning fires if under-resolved" was **not**
+  carried: the native mallet has no such warning.
 
 ### 52.1 Found, and put to the human rather than carried
 
