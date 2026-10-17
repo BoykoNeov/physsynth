@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-f-state
-description: "Phase F DONE 2026-10-17 (§51): Python at zero — binding, shims, last test file, Python CI gone; beam θ now shares the string's; next = restore six lost derivations from git history"
+description: "Phase F DONE 2026-10-17 (§51): Python at zero — binding, shims, last test file, Python CI gone; beam θ now shares the string's; next = restore ten lost derivations from git history"
 metadata:
   node_type: memory
   type: project
@@ -81,11 +81,11 @@ one step per "go" from the human.
 
 **Lessons from step 5:**
 - Read every shim AGAINST the Rust file it points to: a Rust header saying "the Python docstring
-  is the physics" means the deletion loses the derivation. Six headers (beam, bore, reed,
-  radiation, airbox_port, string_geometric) already point at docstrings cut in Sept 2026.
+  is the physics" means the deletion loses the derivation. TEN headers (first counted six by a
+  phrase grep — read the line after EVERY "Port of" header) point at docstrings cut in Sept 2026.
 - `sed s/X/Y/` on a plan file hits every earlier section with the same boilerplate line
   ("When the human says so." is in §46–§50): address a line by number.
 
-**Next (the human's call, §51.2):** restore those six derivations from git history into the
+**Next (the human's call, §51.2):** restore those ten derivations from git history into the
 Rust headers. Related: [[retirement-phase-c-carrying-state]],
 [[rust-tests-parallel-nice]].

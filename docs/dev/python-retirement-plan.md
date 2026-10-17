@@ -9087,12 +9087,16 @@ and were carried into the Rust source, verbatim where they were the physics:
 `connection.rs`' "the arithmetic is the binding's, deliberately" said its reason "expires with the
 binding"; it now says the reason has expired.
 
-**A pre-existing gap the read found, not fixed here.** Six Rust headers still say the physics is
-in the Python docstring — `beam.rs`, `bore.rs`, `reed.rs`, `radiation.rs`, `airbox_port.rs` and
-`string_geometric.rs` (lines 7, ~537, ~619). Those docstrings were cut to "the implementation is
-Rust; that module's header is now the only copy" at the deletion units (§40–§49, 2026-09), so the
-derivations they point at have been in git history only since then, not since this step. Put to the
-human (§51.2).
+**A pre-existing gap the read found, not fixed here.** Ten Rust module headers in
+`physsynth-core/src` still say the physics is in the Python docstring — `airbox_port.rs`,
+`beam.rs`, `bore.rs`, `mallet.rs`, `radiation.rs`, `reed.rs`, `string_stiff.rs`,
+`string_damped.rs`, `string_nonlinear.rs` and `string_geometric.rs` (the last also at two item
+docs, "see the Python docstring"). Those docstrings were cut to "the implementation is Rust; that
+module's header is now the only copy" at the deletion units (§40–§49, 2026-09), so each side
+points at the other and the derivations have been in git history only since then, not since this
+step. The first count was **six**, from a phrase grep; reading the line after every "Port of" /
+"Python original" header in both crates found the other four (the review's correction). The
+analysis crate's headers say "transcribed" and hand nothing off. Put to the human (§51.2).
 
 **Other edits.** `Cargo.toml`'s comment no longer describes the crates as mirroring the Python
 layout. Present-tense mentions of the binding in `lib.rs`, `membrane.rs`, `airbox_wrap.rs`,
@@ -9134,13 +9138,13 @@ So the plate's default and the `auto` default were already held natively; only t
   string's value is pinned by `string_stiff_harness.rs`. The plate keeps its own copy, on purpose.
 - **The damped string's `NegativeKappa` message stays unguarded** (§50.5's open question): wording,
   not physics. A known gap.
-- **The six headers that point at deleted Python docstrings get their derivations back**, from
+- **The ten headers that point at deleted Python docstrings get their derivations back**, from
   git history, as the next batch — the move made here for the air box.
 - The untracked `__pycache__` folders that kept `physsynth/` and `tests/` on disk were deleted.
 
 ### 51.3 What is next
 
 Phase F is done and the retirement plan's deletion work with it: nothing in the tree is Python.
-Next, at the human's call: restore the six derivations (§51.2). A developer's own Python
+Next, at the human's call: restore the ten derivations (§51.2). A developer's own Python
 environments may still hold an editable `physsynth` install and a `physsynth_rs` wheel pointing at
 deleted code; they are outside the repo and were left alone.
