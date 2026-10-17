@@ -5,13 +5,13 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 ## Working rules & preferences
 
 - [Commit & push at batch end](commit-push-at-batch-end.md) — batch end → memory+docs, commit, push; "commit" always pushes
-- [Parity files run UNFLAGGED](parity-files-run-unflagged.md) — SUPERSEDED by phase A: no flag exists; still reinstall the wheel first
-- [Respect ruff line length](respect-ruff-line-length.md) — ≤100 chars in the FIRST draft; CI fails fast on `ruff check .`
+- [Parity files run UNFLAGGED](parity-files-run-unflagged.md) — HISTORY: no flag (phase A), no wheel or pytest (§51)
+- [Respect line length](respect-ruff-line-length.md) — ≤100 chars in the FIRST draft; was ruff (Python gone §51), still the Rust convention
 - [Gate commit on lint exit](gate-commit-on-lint-exit.md) — lint in its own step; a `| grep` swallows clippy's failure and a red commit gets pushed
 - [Destructive undo discipline](destructive-undo-discipline.md) — never undo a temp edit with `git checkout --`; it discarded a whole batch
 - [Identify processes before killing](identify-processes-before-killing.md) — read the command line first; the user runs their own Python here
 - [Port reclaim modus operandi](port-reclaim-modus-operandi.md) — reclaim a busy port only from a stale run of THIS program
-- [Rust tests: parallel + nice](rust-tests-parallel-nice.md) — `scripts/cargo-test-nice.ps1`; QUICK lane default (24 s vs Python 45 s), `-Full` before commit; never RUSTC_BOOTSTRAP near cargo
+- [Rust tests: parallel + nice](rust-tests-parallel-nice.md) — `scripts/cargo-test-nice.ps1`; QUICK lane default, `-Full` before commit; the only test run since §51; never RUSTC_BOOTSTRAP near cargo
 - [Unphysical params are a feature](unphysical-params-are-a-feature.md) — effective-coefficient APIs that permit odd combos; realism via helpers
 - [Unapplied CLAUDE.md audit](claude-md-audit-unapplied.md) — 2026-10-05 audit kept in docs/private/ (git-excluded); never commit
 
@@ -45,7 +45,7 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 - [Rust Phase 7 spectrum](rust-phase7-spectrum-state.md) — the analysis flag swaps the instrument, not the model
 - [Rust Phase 7 oracles](rust-phase7-oracles-state.md) — a native bar found a 544% defect the Python always had
 - [Rust Phase 7 rotating-wave](rust-phase7-rotating-wave-state.md) — translation OVER; a one-fixture margin is one claim
-- [Python retirement](python-retirement-state.md) — both carve-outs REVERSED 2026-09-07; Python to ZERO kills 19k lines of Rust
+- [Python retirement](python-retirement-state.md) — DONE 2026-10-17 (§51): Python at zero; started 2026-09-07 when both carve-outs were reversed
 - [Retirement batch 1](python-retirement-batch1-state.md) — the HOLE: models living only in the doomed binding
 - [Retirement batch 2](rust-retirement-batch2-state.md) — the hole is 16 classes / 3 files; order forced: ports → wrappers → bridges
 - [Retirement batch 3](rust-retirement-batch3-state.md) — port tier done; a SHAPE refusal becomes a type, a VALUE one stays
@@ -57,7 +57,7 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 - [Retirement phase E](retirement-phase-e-state.md) — 36 scripts + viz gone; sweep → Cargo example; convergence edge is a last-bit event
 - [Retirement phase D](retirement-phase-d-state.md) — DONE: Python viewer deleted; freeze exact on Windows only (Linux: 158/588 last-bit), structure elsewhere; browser check = Cargo example
 - [Phase C carrying](retirement-phase-c-carrying-state.md) — ALL 24 batches done (last: the horizon, 2026-10-08); no Python physics left → phase F (step 1 done, §47); carry the SWEEP; PROBE zero-witness plants; plant a defect SHARED by twins
-- [Phase F](retirement-phase-f-state.md) — step 4 done (§50): package guards gone, CI-file checks native; measure a limit's margin; next and LAST the binding
+- [Phase F](retirement-phase-f-state.md) — DONE (§51): binding + shims + Python CI gone; read each shim against its Rust header; next: restore six lost derivations
 - [Viewer stays Python](viewer-stays-python.md) — SUPERSEDED (viewer is Rust since D7); only coverage proves a line runs, not a grep
 - [Analysis freeze](analysis-freeze-state.md) — really 74 fixtures; native JSON since §47 (phase F step 1), inputs frozen too
 - [Deletion phase](rust-deletion-phase-state.md) — all 11 units gone, 23,396 lines, zero physics bars retired
@@ -68,7 +68,7 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 - [CI flagged-suite collapse](ci-flagged-suite-collapse.md) — HISTORY: flagged job gone at phase A; filter AFTER a computed split
 - [NumPy libm CPU dispatch](numpy-libm-cpu-dispatch.md) — NumPy's own transcendentals: bit-identity depends on the CI machine
 - [CI runner variance](ci-runner-variance.md) — runners vary ~1.6x; compare within a job
-- [Test suite performance](test-suite-performance.md) — Python split REMOVED 2026-09-29 (one job); xdist groups + `slow` GONE (§36); never pass `-q`
+- [Test suite performance](test-suite-performance.md) — HISTORY since §51 (no Python suite); CI wall-clock never comparable across runs
 
 ## Models
 

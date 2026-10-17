@@ -1,12 +1,17 @@
 ---
 name: test-suite-performance
-description: "The validation suite's cost, why it is BULK-bound and not bottleneck-bound, the sharded gate and its two guards, and why CI wall-clock cannot be compared across runs"
+description: "HISTORY since §51 (no Python suite); the old pytest suite's cost, bulk-bound lesson, shards, and why CI wall-clock cannot be compared across runs (still true)"
 metadata:
   node_type: memory
   type: project
   originSessionId: aae47a22-23c6-4ed1-8713-4f9ae587e626
   modified: 2026-10-05T20:20:26.447Z
 ---
+
+**UPDATE 2026-10-17 (retirement plan §51): the Python suite is GONE.** No pytest, no `validate` or
+`lint` job, no `conftest.py`. Everything below about pytest, xdist, shards, BLAS threads and `-q` is
+HISTORY. The live gate is CI's `rust` (release), `rust-debug` and `frozen-windows` jobs; locally
+[[rust-tests-parallel-nice]]. The cross-run wall-clock rule ([[ci-runner-variance]]) still holds.
 
 **UPDATE 2026-10-05 (Rust side, commits 473f68d + 42b2d2d):** local Rust runs go through
 `scripts/cargo-test-nice.ps1` — see [[rust-tests-parallel-nice]]. Full `--workspace --release`

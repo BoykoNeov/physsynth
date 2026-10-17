@@ -9000,7 +9000,7 @@ lines that edit must keep or re-aim in the same commit: `cargo test --release -p
 reach-backs into Python (`grep -rn 'import("physsynth' crates/physsynth-py/src/`), which go with
 it, and every document that tells a reader to `pip install` the wheel or run `pytest`.
 
-When the human says so.
+Done — §51.
 
 ### 50.5 Review fixes and CI
 
@@ -9028,3 +9028,119 @@ The advisor's read of the first commit found three things to correct:
 - **`RUN_LINE_LIMIT`'s comment overclaimed** ("the joined ones nowhere to hide") a sentence before
   admitting a join of two short lines passes. It now says 160 is about half the shortest join
   found, and that it catches that shape, not every join.
+
+## 51. Phase F, step 5 — the binding, the shims and the Python CI jobs: Python is at zero
+
+Done 2026-10-17 (the human: "what is next" → this step; "go"). The last item of §50.4's list, and
+the end of phase F. **Deleted:** `tests/test_binding_surface.py` (67 tests, with the shim identity
+guard §50 moved there), `physsynth/` (23 tracked files, 1,562 lines of shims), `conftest.py`,
+`pyproject.toml`, `scripts/nicepytest.py` and `crates/physsynth-py/` (the PyO3 binding, 28 files),
+and with them the workflow's `validate` and `lint` jobs and the `rust` job's three Python steps.
+`9e0a3b2` is the last commit holding any of it. The workspace is three crates, and `Cargo.lock`
+went from 36 packages to 14: the binding and the 21 third-party crates only it pulled, pyo3 and
+numpy among them. pytest 67 → 0, and nothing collects it any more. The native workspace is
+unchanged at 1,824 passed.
+
+**The binding crate had no Rust tests of its own** (`grep '#\[test\]\|#\[cfg(test)\]'` over its
+`src/`: none), so `cargo test --workspace` lost no target by its deletion — the check §46 found an
+audit can skip by reading a directory instead of the runner.
+
+**What happened to each test.** None of the 67 asserted physics that no native bar holds; that is
+what three phases of carrying left behind, and why the file was this step's rather than an earlier
+one's. Each was read for whether its referent outlives the binding.
+
+| tests | went | why |
+|---|---|---|
+| `state` is a copy; `set_state` takes a list; a held `.u` is a snapshot; a write through `.u` reaches the string; the arrays can be replaced (5) | deleted | properties of the NumPy buffers the binding handed to Python; a Rust caller owns its `Vec`s |
+| omitted vs explicit-`None` boundary, seven classes × 2; the plate's `domain` (15) | deleted | PyO3's `Option<Option<_>>` arms; natively a boundary is an enum and cannot be `None` |
+| branch-only plate attributes; plate state buffers settable because the room wrote them; `couple_outcome` derived on read (2) | deleted | the binding's getters and setters; natively `outcome()` is a function of the step's fields, held by `plate.rs`' `Capped`/`Expansive` bars |
+| `couple_method` default `auto` and its spelling; `auto` spends nothing on Newton until the sweeps fail; both methods reach one root; the solve count (4) | deleted | the binding's keyword default and its hand-filled diagnostics block (§9.5's fork); the physics is `plate.rs`' `auto_is_bit_identical_to_picard…`, the rescue bar at its line ~1700 and `the_solve_count_is_the_cost_both_methods_can_be_read_on`. **The default itself** — `VkSpec::default()` choosing `Auto` — see §51.2 |
+| the biharmonic setter keeps its order; refuses a non-operator (2) | deleted | a setter that existed for `test_plate_modal.py`; natively the order-preserving constructor is `sparse.rs`' and `plate_kirchhoff.rs` injects through it |
+| the binding's θ default is its module's constant (5); the strings and the beam share one θ and the plate deliberately does not (1) | deleted | the binding's signature defaults and the Python modules' definition sites. **The values** — see §51.2 |
+| the SciPy names `connection.py` kept; the guard reads its solver at call time (2) | deleted | the binding's reach-back into a Python namespace |
+| the bridge reaction written through the live buffer; a held reference across `step` (2) | deleted | buffer identity, as above |
+| the binding's two `np.dot` calls are not transcribed (1) | deleted | a claim about which reductions the binding left to NumPy; with no NumPy there is no such seam |
+| the bridge never looks at its collaborator's type; every attribute the reference assigned stays writable (4); a replaced force vector reaches the plate (1) | deleted | duck typing and descriptors; natively the slot is the `BridgeBody` / `BridgePlate` trait (§19, §20) |
+| the bridge constructors are keyword-only (1); the eleven refusals verbatim (11); an explicit `None` drive index is the omitted one (1) | deleted | the binding's copies of the messages; the core's own are held verbatim by `connection*.rs` since §48 |
+| the two first differences are one function; a too-short field yields NumPy's empty slice; `inner == norm2`; a too-coarse grid is refused by the `_csr` entry points; the binding returns triplets; the operator shim coerces like NumPy (8) | deleted | binding entry points; `ops.rs` holds `delta_x_backward == delta_x_forward` and `norm2 == inner` natively |
+| `test_no_module_chooses_between_two_implementations` (1) | deleted | it guarded the shims, which are gone; §50 moved it here so it would die with them and not before |
+
+**The prose that had to move first.** A deleted module is not empty (CLAUDE.md), so every shim was
+read before the `git rm`, against the Rust module it pointed at. Four passages had no other copy
+and were carried into the Rust source, verbatim where they were the physics:
+
+- `airbox.py`'s module docstring, **the air box's whole physics write-up** — the Yee layout, the
+  leapfrog, the 3-D CFL and the defective corner mode at the ceiling, the cross-time energy, the
+  one wall closure, the soft source, the Thevenin port, the cost. `airbox.rs`' header said "the
+  reference docstrings there are the physics; this module documents only what the translation had
+  to decide", so deleting the shim alone would have left the room with no derivation in the tree.
+  Now under `airbox.rs`' "The physics", with a note that its "still deferred" list predates the
+  surface ports.
+- `string_geometric.py`'s three constants' docstrings — `LAM_LONG_WARN`'s two-edges table and its
+  reasoning (the longest single piece of reasoning in the package), `NEWTON_TOL_DEFAULT`'s
+  "an absolute bar is a trap" and the five-decade measurement.
+- `connection.py`'s "why explicit is exact here" — the one-linear-leapfrog argument for the
+  three-way energy split, and why the 2-DOF CFL estimate is necessary but not sufficient.
+- `plate.py`'s θ reasoning, its `Domain` note (a supported curved plate is the membrane squared),
+  and `GrainSpec`'s five-ratios note.
+
+`connection.rs`' "the arithmetic is the binding's, deliberately" said its reason "expires with the
+binding"; it now says the reason has expired.
+
+**A pre-existing gap the read found, not fixed here.** Six Rust headers still say the physics is
+in the Python docstring — `beam.rs`, `bore.rs`, `reed.rs`, `radiation.rs`, `airbox_port.rs` and
+`string_geometric.rs` (lines 7, ~537, ~619). Those docstrings were cut to "the implementation is
+Rust; that module's header is now the only copy" at the deletion units (§40–§49, 2026-09), so the
+derivations they point at have been in git history only since then, not since this step. Put to the
+human (§51.2).
+
+**Other edits.** `Cargo.toml`'s comment no longer describes the crates as mirroring the Python
+layout. Present-tense mentions of the binding in `lib.rs`, `membrane.rs`, `airbox_wrap.rs`,
+`analysis/radiation.rs` (two) and `string_stiff_harness.rs` now say it was deleted. Both `deps.rs`
+comments: core's no longer says the workspace contains the binding; the viewer's `NEVER` list keeps
+`physsynth-py`, `pyo3` and `numpy` by name, so that bringing Python back into the viewer is an
+argument rather than a line in a manifest. `README.md`'s layout, setup and test sections are
+rewritten for a Rust-only tree; `CLAUDE.md` item 3 opens with the done-state and marks the rest
+history; `.gitignore` keeps only the Python cache patterns a pre-§51 working copy still has on disk.
+
+**The workflow.** `ci_workflow.rs`' two controls are untouched (`cargo test --release -p
+physsynth-viewer --test frozen` in `frozen-windows`, `cargo test -p physsynth-analysis --tests` in
+`rust-debug`'s block). The `rust` job is renamed "Rust (compile, lint, native bars)". The nightly
+`schedule:` existed to run the second Python interpreter; it is kept, and its comment now says it
+re-runs the push jobs so a runner-image change shows up on a day nobody pushed.
+
+### 51.1 Breakages planted
+
+The binding file held three claims about *values* whose native holders were not known: the beam's
+and the plate's θ default, and the gong plate's default iteration (`auto`). Each was planted in
+`physsynth-core/src` alone after the deletion was committed locally, the whole workspace run
+(`cargo-test-nice.ps1 -Full`), and the plant reverted by exact replacement with the tree checked
+clean (never `git checkout --`).
+
+| plant | caught by |
+|---|---|
+| `beam::THETA_DEFAULT` 0.28 → 0.3 | **nothing** — 1,824 passed. Every test that reads it imports it (§29.3), and since the binding went nothing outside the tests reads it at all: the viewer has no beam panel |
+| `plate::THETA_DEFAULT` 0.28 → 0.3 | 11 tests: `connection_plate.rs` (2, the margins recorded off the binding), `mallet_gong.rs` (3) and six scenes of the viewer freeze (`browser5d`, `browser5e`, `browser6b`, `platebody`, `vk`, `vkroom`) |
+| `VkSpec::default()`'s method `Auto` → `Picard` | `plate.rs`' `the_method_defaults_to_auto_and_a_bad_spelling_is_refused` |
+
+So the plate's default and the `auto` default were already held natively; only the binding's
+*copies* of them died with it.
+
+### 51.2 The human's calls
+
+- **The beam shares the string family's θ** rather than keeping its own `0.28`
+  (`beam::THETA_DEFAULT = crate::string_stiff::THETA_DEFAULT`), which is what the Python did and
+  what the deleted ast test asserted. A drift becomes impossible rather than detected, and the
+  string's value is pinned by `string_stiff_harness.rs`. The plate keeps its own copy, on purpose.
+- **The damped string's `NegativeKappa` message stays unguarded** (§50.5's open question): wording,
+  not physics. A known gap.
+- **The six headers that point at deleted Python docstrings get their derivations back**, from
+  git history, as the next batch — the move made here for the air box.
+- The untracked `__pycache__` folders that kept `physsynth/` and `tests/` on disk were deleted.
+
+### 51.3 What is next
+
+Phase F is done and the retirement plan's deletion work with it: nothing in the tree is Python.
+Next, at the human's call: restore the six derivations (§51.2). A developer's own Python
+environments may still hold an editable `physsynth` install and a `physsynth_rs` wheel pointing at
+deleted code; they are outside the repo and were left alone.

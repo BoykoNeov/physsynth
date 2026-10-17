@@ -1,6 +1,6 @@
 ---
 name: retirement-phase-f-state
-description: "Phase F (take Python apart, retirement plan §47+) — steps 1-3 (§47-§49) record the leaving libraries' answers natively; step 4 (2026-10-10, §50) the package guards gone, CI checks native in ci_workflow.rs; next and LAST: binding + shims + Python CI jobs"
+description: "Phase F DONE 2026-10-17 (§51): Python at zero — binding, shims, last test file, Python CI gone; beam θ now shares the string's; next = restore six lost derivations from git history"
 metadata:
   node_type: memory
   type: project
@@ -70,7 +70,22 @@ one step per "go" from the human.
 - "Only X holds this" must be PLANTED workspace-wide: the ideal string's message text was
   held by two viewer tests the grep never looked at (§50.5).
 
-**Next (§50.4), the last step:** `test_binding_surface.py`, `physsynth/`, `conftest.py`,
-`pyproject.toml`, `scripts/nicepytest.py`, `crates/physsynth-py/`, and the `validate`/`lint` jobs +
-the `rust` job's Python steps. Related: [[retirement-phase-c-carrying-state]],
+- **Step 5 (§51, 2026-10-17): DONE — Python is at zero.** Deleted the binding crate, `physsynth/`,
+  `tests/test_binding_surface.py` (67 binding-property tests, none holding physics), `conftest.py`,
+  `pyproject.toml`, `nicepytest.py`, CI `validate`/`lint` and the `rust` job's Python steps.
+  Native 1,824 passed before and after. Binding crate had NO `#[test]`s (checked). Prose with no
+  other copy carried first: `airbox.py`'s whole physics docstring (airbox.rs said "the reference
+  docstrings there are the physics"), `LAM_LONG_WARN` etc. Plants: plate θ default and `VkSpec`
+  `auto` default already held natively; beam θ held by NOTHING → the human: beam now IS
+  `string_stiff::THETA_DEFAULT`. Damped `NegativeKappa` message: left unguarded (the human).
+
+**Lessons from step 5:**
+- Read every shim AGAINST the Rust file it points to: a Rust header saying "the Python docstring
+  is the physics" means the deletion loses the derivation. Six headers (beam, bore, reed,
+  radiation, airbox_port, string_geometric) already point at docstrings cut in Sept 2026.
+- `sed s/X/Y/` on a plan file hits every earlier section with the same boilerplate line
+  ("When the human says so." is in §46–§50): address a line by number.
+
+**Next (the human's call, §51.2):** restore those six derivations from git history into the
+Rust headers. Related: [[retirement-phase-c-carrying-state]],
 [[rust-tests-parallel-nice]].

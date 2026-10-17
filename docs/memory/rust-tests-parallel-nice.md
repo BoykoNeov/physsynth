@@ -1,6 +1,6 @@
 ---
 name: rust-tests-parallel-nice
-description: "Run Rust tests via scripts/cargo-test-nice.ps1 — parallel binaries, BelowNormal, one canonical build; QUICK lane by default (skip list), -Full before commit; goal = Rust faster than Python"
+description: "Run Rust tests via scripts/cargo-test-nice.ps1 — parallel binaries, BelowNormal, one canonical build; QUICK lane by default (skip list), -Full before commit; the only test run since §51"
 metadata:
   node_type: memory
   type: feedback
@@ -20,7 +20,7 @@ cores; at normal priority it starves the human's own work (see [[test-suite-perf
 - Edit loop: `powershell -NoProfile -File scripts\cargo-test-nice.ps1` = QUICK lane, skips what
   `scripts\quick-skip.txt` lists (71 tests + 44 frozen scenes over 2 CPU-s each). **Before a
   commit: `-Full`.** CI never reads the skip list.
-- Measured 2026-10-05, quiet box: quick 24.5 s, full 94 s, Python suite 45 s. Rebuild after a
+- Measured 2026-10-05, quiet box: quick 24.5 s, full 94 s (Python suite then 45 s; deleted at §51). Rebuild after a
   physsynth-core edit ~33-37 s on top (unavoidable: every test binary links the library).
 - Narrow with `-Filter '<regex over package/target>'` (picks binaries to RUN); never `cargo test
   -p …` — a different package set re-resolves serde_json's `float_roundtrip` = separate build.

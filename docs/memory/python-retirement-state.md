@@ -1,12 +1,16 @@
 ---
 name: python-retirement-state
-description: "The human reversed both Python carve-outs 2026-09-07 — Python goes to ZERO; killing it also kills 19k lines of RUST (the pyo3 binding), and a third of the 2,713 tests evaporates rather than ports"
+description: "DONE 2026-10-17 (§51). The human reversed both Python carve-outs 2026-09-07 — Python goes to ZERO; killing it also kills 19k lines of RUST (the pyo3 binding), and a third of the 2,713 tests evaporates rather than ports"
 metadata: 
   node_type: memory
   type: project
   originSessionId: 9458bd92-fbc0-4375-9531-e3beb4b28d3a
   modified: 2026-09-07T20:23:10.659Z
 ---
+
+**DONE 2026-10-17 (retirement plan §51): Python IS at zero.** The binding crate, the shims, the last
+test file and the Python CI jobs went in one step; see [[retirement-phase-f-state]]. The rest of this
+note is the 2026-09-07 starting picture.
 
 **2026-09-07, the human's call: Python goes to ZERO in this repo.** This reverses two of the
 human's own earlier decisions — `rust-migration-plan.md` §35.4 ("the test suite's move to native

@@ -72,8 +72,14 @@ use crate::sparse::Csr;
 use crate::sparse_lu::{SparseLu, SparseLuError};
 
 /// Time-averaging weight — a hair above the minimal `1/4`, the project-wide theta inherited from
-/// the stiff string. `physsynth.core.beam.THETA_DEFAULT`.
-pub const THETA_DEFAULT: f64 = 0.28;
+/// the stiff string.
+///
+/// The string family's own constant, not a copy of its number (the human's call, retirement plan
+/// §51). This used to declare `0.28` itself, and once the Python that re-exported the string's
+/// constant was deleted nothing held the two together: planted at `0.3`, the whole workspace stayed
+/// green, because every test that reads it imports it and nothing outside the tests reads it. The
+/// plate is the one theta-scheme model that keeps its own copy, on purpose ([`crate::plate`]).
+pub const THETA_DEFAULT: f64 = crate::string_stiff::THETA_DEFAULT;
 
 /// A construction-time rejection. Every variant's `Display` is the Python original's message
 /// verbatim: the binding raises it as the `ValueError`'s text, and `tests/beam.rs` pins the

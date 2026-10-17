@@ -1,11 +1,15 @@
 ---
 name: respect-ruff-line-length
-description: "Keep every Python line ≤100 chars from the first draft (ruff E501; CI runs `ruff check .`) — never write over-length lines and reflow them after"
+description: "Keep every line ≤100 chars from the first draft — was ruff E501 on Python (gone 2026-10-17, §51); the same width is the Rust source convention. Never reflow after"
 metadata: 
   node_type: memory
   type: feedback
   originSessionId: 2cabff3c-9fbb-420e-9f6c-1bbbf8a6d6a5
 ---
+
+**UPDATE 2026-10-17 (retirement plan §51):** there is no Python and no ruff job any more. The width rule
+stands for Rust: the crates keep code and `//!`/`///` comments at ≤ 100 characters (rustfmt does not
+wrap comments, so nothing enforces it — draft within it). The history below is about Python.
 
 When writing or editing ANY Python in this repo, keep every line ≤ 100 characters in the **first draft** — including docstrings and comments. This codebase is deliberately docstring-heavy, which is exactly where over-length lines slip in. The ruff config (`pyproject.toml`) selects `E` (incl. E501) at `line-length = 100`, and CI runs `ruff check .` as a hard gate that fails fast, *before* the test step.
 
