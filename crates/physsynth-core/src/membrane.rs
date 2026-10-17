@@ -486,9 +486,9 @@ pub fn energy(u: &[f64], u_prev: &[f64], p: &Params) -> f64 {
 
 /// A discretized membrane resonator, owning its own state.
 ///
-/// The Rust caller's view and what `cargo test` exercises. The Python binding does **not** wrap
-/// this: its buffers have to be Python objects so a reference held across a step stays valid (see
-/// `physsynth-py`), so it owns NumPy arrays and calls the kernels above directly.
+/// The Rust caller's view and what `cargo test` exercises. The Python binding (deleted at
+/// retirement plan §51) did **not** wrap this: its buffers had to be Python objects so a reference
+/// held across a step stayed valid, so it owned NumPy arrays and called the kernels above directly.
 #[derive(Debug, Clone)]
 pub struct Membrane {
     params: Params,

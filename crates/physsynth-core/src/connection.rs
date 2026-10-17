@@ -63,7 +63,39 @@
 //! can be run side by side on the same fixture and compared bit for bit, which is the only
 //! independent check available on a port whose Python acceptance suite is being retired in the
 //! same batch. `reduce::sum` reproduces NumPy's pairwise blocking, and it is the reduction that
-//! reaches the next timestep through `body.step(force)`.
+//! reaches the next timestep through `body.step(force)`. The binding went at retirement plan §51,
+//! so that reason has expired; the spelling is kept as it is rather than re-chosen.
+//!
+//! # Why explicit is exact here (not a compromise)
+//!
+//! Carried from the Python module's docstring when it was deleted (retirement plan §51). A string
+//! clamped at the nut and **free at the right end** is loaded there by a linear spring of stiffness
+//! `K` connecting the string-end displacement `u_b = u[N]` to the body's driving-point displacement
+//! `w_b = sum_i phi_i q_i`. The spring stores `E_conn = 1/2 K eta^2` with stretch
+//! `eta = u_b - w_b`; it pulls the string end with `-F` and the body with `+F`, where `F = K eta`
+//! (Newton's third law).
+//!
+//! The string, the body, and this spring together form *one linear leapfrog*
+//! `x^{n+1} = 2x^n - x^{n-1} - k^2 M^{-1} S x^n` (`S` symmetric, the spring contributing the
+//! rank-1 block `K a a^T` with `a = [.. +1 (end) .. -phi_i (modes) ..]`). A linear leapfrog
+//! conserves the cross-time energy
+//!
+//! ```text
+//! H^n = 1/2 (delta_t- x)^T M (delta_t- x)  +  1/2 (x^n)^T S x^{n-1}
+//! ```
+//!
+//! *exactly* for any stable `k`. That `H` splits cleanly into `E_string + E_body + E_conn` with
+//! `E_conn = 1/2 K eta^n eta^{n-1}` (the spring block of `1/2 (x^n)^T S x^{n-1}`) — so the
+//! three-way energy decomposition is a rigorous identity, not a seam. No implicit solve is needed
+//! (that was for the *nonlinear* von Kármán coupling); a linear spring is conserved explicitly.
+//!
+//! Being explicit, the connection has a CFL. The isolated end-mass + body 2-DOF estimate
+//! `K (beta_s + beta_b) < 4` (`beta_s = 2 k^2 / (rho h)` the string end-node inverse mass from its
+//! `h/2` half-cell weight, `beta_b = k^2 sum_i phi_i^2 / m_i`) is kept only as a diagnostic — it
+//! is *necessary but not sufficient*, because the spring is a rank-1 perturbation that lifts the
+//! top coupled eigenvalue above both parts' isolated maxima (empirically the system can blow up at
+//! half that bound). The string's own Nyquist mode already sits near the ceiling at `lambda = 1`,
+//! so coupling has the most headroom below it; run the string at `lambda < 1`.
 //!
 //! # The stability guard
 //!

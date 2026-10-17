@@ -479,8 +479,8 @@ fn the_nine_invalid_parameter_sets_are_rejected() {
             base(l, t, rho, n, 0.0, 0.0, 1.5, true),
             ParamError::BadTheta(1.5),
         ),
-        // `boundary="clamped"`: the STRING parse lives only in the binding and retires with it
-        // (`crates/physsynth-py/src/string_stiff.rs::boundary_ok`). What the core owns is the
+        // `boundary="clamped"`: the STRING parse lived only in the binding and retired with it
+        // (`crates/physsynth-py/src/string_stiff.rs::boundary_ok`, §51). What the core owns is the
         // refusal of an unusable boundary, which it takes as `boundary_ok = false`.
         (
             "boundary not supported",

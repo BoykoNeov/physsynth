@@ -56,6 +56,13 @@ use crate::sparse::Csr;
 use crate::sparse_lu::{SparseLu, SparseLuError};
 
 /// A hair above `1/4` — near the minimal-dispersion weight, with a positivity margin.
+///
+/// From the Python module, deleted at retirement plan §51: theta below 1/4 is only conditionally
+/// stable; theta in (0, 1] keeps `A` SPD (genuinely implicit). The default sits a hair above 1/4
+/// (accuracy first) so the energy has a small positivity margin while staying near the
+/// minimal-dispersion theta = 1/4 -- inherited from the stiff string. The plate declares its own
+/// copy rather than importing [`crate::string_stiff::THETA_DEFAULT`], on purpose: it is the plate's
+/// number to change.
 pub const THETA_DEFAULT: f64 = 0.28;
 
 /// Which edge condition the plate carries.
@@ -68,6 +75,11 @@ pub enum Boundary {
 }
 
 /// The plate's outline, orthogonal to its boundary condition.
+///
+/// `Circle` and `Guitar` are staircased onto the Cartesian grid and offered on the FREE branch
+/// only: a *supported* curved plate would be free to add (`B = L * L` already takes any mask) and
+/// would be a model surface with no content, since its spectrum is exactly the membrane's squared
+/// on the same outline. See `docs/dev/guitar-plate-plan.md` §2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Domain {
     /// Every plate the core built before model #5g.
@@ -94,8 +106,15 @@ impl Domain {
 /// Everything [`Params`] needs from a material: `kappa`, the areal density, and five ratios.
 ///
 /// `rho_s` is the **areal** density, and it is returned named for the reason the Python original
-/// gives: the material density fed in is a *volume* density, and passing that straight through to
-/// the plate leaves every frequency right and every energy wrong by a factor of the thickness.
+/// gave: the material density fed in is a *volume* density, and passing that straight through to
+/// the plate leaves every frequency right and every energy wrong by a factor of the thickness —
+/// the class of error no energy ledger and no modal oracle can catch.
+///
+/// **Five ratios, not three, since model #5of** (carried from the Python `GrainSpec`, deleted at
+/// retirement plan §51). `grain_cross` is what the *supported* branch needs; `grain_coupling` and
+/// `grain_torsion` are the two halves of it that a *free* edge can tell apart, and are what the
+/// free branch needs. `grain_cross == grain_coupling + 2*grain_torsion` by construction — the two
+/// are not independent, they are the same material seen through two boundaries.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GrainSpec {
     /// `sqrt(D_x / rho_s)` (m^2/s).

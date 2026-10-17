@@ -77,16 +77,73 @@ use crate::sparse::Csr;
 use crate::sparse_lu::{SparseLu, SparseLuError, DIAG_PIVOT_THRESH};
 use crate::string_stiff::dot;
 
-/// Relative tolerance on the max-norm of the Newton residual — `NEWTON_TOL_DEFAULT`.
+// The three constants' longer docs are the Python module's, carried verbatim when it was deleted
+// (retirement plan §51): they are the record of the measurements that set the numbers.
+
+/// **Relative** tolerance on the max-norm of the Newton update residual.
+///
+/// Unit-free: the bar is `newton_tol * max|Y_seed|`, following model #9's normalized tension solve
+/// ("so `tension_tol` is a unit-free relative bar"). An **absolute** bar here is a trap -- the
+/// residual scales with the displacement, so a fixed `1e-14` is `1e-11` relative on a 1 mm string
+/// and lands the drift at `2e-10`, *over* the `1e-10` gate, while looking like a tight number.
+/// Measured: drift is proportional to this over five decades.
 pub const NEWTON_TOL_DEFAULT: f64 = 1e-15;
 
-/// Cap on damped-Newton iterations per step — `NEWTON_MAXITER_DEFAULT`.
+/// Cap on damped-Newton iterations per step. Reaching it warns; it never silently renders.
 pub const NEWTON_MAXITER_DEFAULT: i64 = 60;
 
-/// Warn when `lam_long = c_long k / h` exceeds this — `LAM_LONG_WARN`.
+/// Warn when `lam_long = c_long k / h` exceeds this. **The one guard with no CFL behind it.**
 ///
-/// The one guard in the project with no CFL behind it: the scheme is unconditionally stable here,
-/// so this is an *accuracy* bar and it warns rather than rejects.
+/// Every other explicit scheme in this project rejects `lam > 1` because the scheme is *unstable*
+/// above it. This one is an **accuracy** bar on an unconditionally stable scheme, which is exactly
+/// what makes it dangerous: nothing throws, nothing violates, and the model quietly returns
+/// nonsense.
+///
+/// **There are two edges here, not one, and they are a factor of two apart.** Re-measured
+/// 2026-09-03 by `scripts/sweep_geometric_lam_long.py` (since 2026-09-28
+/// `crates/physsynth-core/examples/geometric_lam_long.rs`) over nine `(N, amplitude, IC)` cells --
+/// plucked and mode-3, `N` 16 to 32, amplitudes to 1e-2 -- with the Newton iteration counter read
+/// beside the drift rather than the drift alone:
+///
+/// ```text
+/// lam_long <= 2    conserves ~1e-13 .. 1e-15, no step exhausts newton_maxiter
+/// lam_long ~ 4     the CONVERGENCE edge: steps begin to exhaust newton_maxiter (<= 4 in 7 of 9
+///                  cells on the Python implementation, 6 of 9 on Rust -- a last-bit event, so
+///                  quote it as "about 4", never per cell; scientific-hurdles.md section 6)
+/// lam_long  5-10   the ENERGY edge, case-dependent: drift breaks 1e-10 and runs to 1e+5
+/// ```
+///
+/// Between the two the solve stalls on up to a fifth of its steps and the energy *still* conserves
+/// to ~1e-15 -- so in that band the model's primary bug detector is blind, and blind in the
+/// safe-looking direction (`docs/dev/scientific-hurdles.md` section 8 is the other place in this
+/// project where a flat energy is not a stability certificate). An earlier version of this table
+/// gave a single row per `lam_long` and so read as one threshold; its `= 4` was the convergence
+/// edge and its `1e+3` drift was the energy edge, two cells apart.
+///
+/// The bar sits at 1 rather than the measured-safe 2 to mirror this project's "tune toward
+/// lambda = 1" rule, and to keep 4x of margin on the *convergence* edge -- which, now that the two
+/// are separated, is what the 4x is margin against. It **warns rather than rejects**:
+/// `lam_long = 2` demonstrably conserves, so a hard bar would forbid working configurations -- and
+/// the regime above is worth being able to *study*, just not to trust. Because
+/// `c_long/c = sqrt(EA/T0) ~ 22` at realistic stiffness, the familiar transverse `lam = 0.5` lands
+/// at `lam_long ~ 11`: this warning will fire on the parameters a reader of models #1-#9 would
+/// reach for first. That is its whole purpose.
+///
+/// **Not raised at `EA == T0`** (`a == 0`), regardless of `lam_long`. There the three fields
+/// decouple and the model *is* the damped stiff string three times over -- which does not warn
+/// about its own `lambda` either. The exemption is load-bearing rather than tidy: the `EA = T0`
+/// bit-identity anchor sits at `lam_long == 1.0` **exactly**, flush against this bar, so without it
+/// a float wobble would fire a spurious warning on this model's single most important regression
+/// test.
+///
+/// **The bar is one-sided, and mind the flip.** It reads `lam_long` because the *longitudinal*
+/// field is the fast one -- but only while `EA > T0`. Below the anchor `c_long < c`, the
+/// **transverse** field becomes the fast one and plain `lam` governs instead; this bar then says
+/// nothing useful, and a caller who resolves `lam_long` on a softening string is under-resolving
+/// the wave that actually sets the timestep (measured: `EA/T0 = 1/200` at `lam_long = 0.5` means
+/// `lam = 7` and the Newton Jacobian goes singular, while the same string at `lam = 0.5` conserves
+/// to 1e-13). Softening is a deliberate opt-in (see `allow_softening`), so this is documented
+/// rather than branched on.
 pub const LAM_LONG_WARN: f64 = 1.0;
 
 /// Armijo's sufficient-decrease constant, and the cap on backtracking halvings.

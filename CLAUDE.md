@@ -20,6 +20,15 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    yet.~~ **SUPERSEDED 2026-08-26 (the human's call):** Python is being retired entirely — core,
    analysis *and* the test suite — in favour of **Rust**, gradually and model by model.
 
+   **DONE 2026-10-17 (retirement plan §51): there is no Python.** The binding crate
+   (`crates/physsynth-py`), the `physsynth` package, the last test file, `conftest.py`,
+   `pyproject.toml` and the Python CI jobs went in one step. **Everything below in this item is
+   HISTORY** — accurate about how the port was done; where it says the wheel is required, says to
+   run `pytest` or `ruff`, or names a file under `physsynth/` or `tests/`, that is the state before
+   §51. Validation is `cargo test --workspace --release` (CI's `rust` job), its unoptimised half
+   (`rust-debug`) and the exact viewer freeze (`frozen-windows`); locally,
+   `scripts/cargo-test-nice.ps1` (`-Full` before a commit).
+
    **AMENDED 2026-09-07 (the human's call): Python goes to ZERO, and both carve-outs below are
    REVERSED.** The test suite is no longer "elective" (plan §35.4) and the viewer backend no
    longer stays Python (plan §35.5's route (b)). Both were the human's calls and both are now
@@ -150,7 +159,8 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    the shims, not before), and the workflow checks went native as
    `crates/physsynth-core/tests/ci_workflow.rs` — the named-file check widened to `cargo --test`
    targets (the human's call), the line limit 120 → 160 (a legitimate line sat exactly on 120).
-   Next (§50.4): the binding, the shims and the Python CI jobs, all at once. §46 found θ a sixth time: BOTH plate frequency oracles could ignore `θ` unseen
+   **Step 5 (§51) was the last: the binding, the shims and the Python CI jobs went at once, and
+   Python is at zero.** §46 found θ a sixth time: BOTH plate frequency oracles could ignore `θ` unseen
    workspace-wide (every caller that builds or reads a plate passes the default; the only bar that
    saw either plant alone was a twin of the two oracles), now held to the plate's own stepped
    recurrence at four θs; and the monotone flag's slack was seen only by the viewer freeze — both
@@ -293,7 +303,7 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    (`crates/physsynth-core/examples/`). What is left in `scripts/` runs the suite or checks the
    viewer, and goes with them.
 
-   Seven things about the state this leaves:
+   Seven things about the state this left (history since §51 deleted all of it):
 
    - **The wheel is now REQUIRED**, everywhere. A deleted model's module is an unconditional
      `from physsynth_rs import X`, so `pip install ./crates/physsynth-py` is a precondition for
@@ -351,10 +361,9 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
      `splu`. A deletion also **changes which tests share a process**, so it surfaces order- and
      process-dependent defects that are not yours (ledger #44, #46).
 
-   `cargo test --workspace` runs the native bars and the Cargo dependency allowlists. Plain `pytest`
-   is the one Python run: measured at phase A, the old flagged suite (1,920 passed) and the new
-   default one (1,940, the difference reconciled case by case) exercise the same code. Reinstall the
-   wheel before believing any number — nothing can tell a stale wheel from a fresh one.
+   `cargo test --workspace` runs the native bars and the Cargo dependency allowlists, and since §51
+   it is the only run. (Until then plain `pytest` was the one Python run, against a wheel that had
+   to be reinstalled before any number was believed.)
 
    **There are NO flags now, and the second one's job was handed to a file.** `PHYSSYNTH_RS` swapped
    the *models* until phase A. `PHYSSYNTH_RS_ANALYSIS` swapped the *instrument that measures them* and is read by

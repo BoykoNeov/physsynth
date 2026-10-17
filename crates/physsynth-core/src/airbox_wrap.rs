@@ -142,8 +142,9 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 #[derive(Debug, Clone)]
 pub struct RoomLoadedBody {
     /// The resonator. Public because the bridges above this tier read the body's modal surface
-    /// directly and Rust has no attribute fallback to delegate through; see the module header of
-    /// `crates/physsynth-py/src/airbox_wrap.rs` for what the reference got for free here.
+    /// directly and Rust has no attribute fallback to delegate through; the module header of
+    /// `crates/physsynth-py/src/airbox_wrap.rs` (deleted at retirement plan §51, in git history)
+    /// says what the reference got for free here.
     pub body: ModalBody,
     /// The terminal into the room.
     pub port: RoomPort,

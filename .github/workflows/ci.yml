@@ -5,107 +5,27 @@ on:
     branches: [main, master]
   pull_request:
   schedule:
-    # Nightly, 04:00 UTC — this is where the SECOND interpreter is covered (see the matrix below).
+    # Nightly, 04:00 UTC. It was where the SECOND Python interpreter was covered; with the Python
+    # gone (retirement plan §51) it re-runs the same jobs as a push, which is still how a change in
+    # the runner image, rather than in the code, shows up on a day nobody pushed.
     - cron: "0 4 * * *"
   workflow_dispatch:
 
 # What sets this workflow's wall (measured 2026-09-29, run 36489946068)
 # ---------------------------------------------------------------------
-# The Python suite used to be split over three runners (2026-08-17), because it was ~15 min of
-# bulk-bound simulation. The deletions moved that simulation into Rust: the three shards ran
-# 41 s, 41 s and 86 s of tests, so the split bought nothing and cost two runners, a planning job,
-# a partition script with its cost table and self-test, and a reconciliation step. It is ONE job
-# again, and every guard that existed only for the split went with it rather than being left to
-# guard a partition of one.
-#
 # The wall was the `rust` job, ~19 min, and ~10 of that was its UNOPTIMISED pass -- of which ~8
 # was the viewer crate re-rendering whole scenes in debug. That pass is now its own job
 # (`rust-debug`) and covers the crates whose tests the both-profiles rule is about. See there.
+#
+# There is no Python job. The validation harness (`validate`), the lint job (`lint`, ruff) and the
+# `rust` job's binding-surface steps went with the last of the Python at retirement plan §51: every
+# model, oracle and check they ran is in the `cargo test` runs below.
 jobs:
-  validate:
-    name: Validation harness (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    strategy:
-      # Do not cancel 3.12 because 3.11 went red: when the two disagree, the disagreement IS the
-      # finding, and cancelling one hides it.
-      fail-fast: false
-      matrix:
-        # Pushes and PRs pay for one interpreter and the nightly pays for both. This is pure-numeric
-        # code whose failures have never once been interpreter-specific (the one real split in this
-        # repo's history was Windows vs Linux, an axis the matrix does not even cover).
-        # fromJSON is required: a matrix value must be an ARRAY, and the ternary yields a string.
-        python-version: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["3.11","3.12"]' || '["3.12"]') }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@1.98.0
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target"
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
-          cache-dependency-path: pyproject.toml
-
-      # THE WHEEL IS INSTALLED HERE, and this job stopped being the pure-Python baseline on
-      # 2026-09-03. That is a decision (the human's, plan 39.6 route 1), not a convenience: with
-      # `physsynth/core/string_ideal.py` reduced to a re-export of `physsynth_rs`, there is no
-      # pure-Python path left to run, and a job that skipped what it could not import would report
-      # green while asserting nothing about the model. See plan 39.6 for the two rejected routes.
-      #
-      # This job was paired with `rust-harness` -- the same shards with `PHYSSYNTH_RS=1` -- and the
-      # pair split a physics regression from a port regression while any module still had a Python
-      # body to run here. This comment said the distinction would end when the last body went, "at
-      # which point these two jobs are the same run and one of them should be removed". Phase A
-      # (python-retirement-plan §21) deleted the last three and the flag with them, so
-      # `rust-harness` is gone and this is the one run of the suite.
-      - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-          pip install ./crates/physsynth-py
-
-      # `-n auto` = one worker per available core (4 on a standard runner; `nproc` is echoed so the
-      # divisor is on the record next to the numbers it divides).
-      # No `--dist loadgroup`: the last `xdist_group` pins went with the whirl and phantom files
-      # (retirement plan §36), so the default scheduling is the whole story. conftest.py pins each worker to a single BLAS thread so the pool does not oversubscribe.
-      #
-      # NO `-q` HERE. `pyproject.toml` already sets `addopts = "-q"`, so passing it again makes it
-      # `-qq`, which suppresses the `N passed in …` summary entirely — a green run and a red run
-      # then end the same way on screen. Verified both ways on 2026-08-10.
-      #
-      # `--durations=25` is free (it only reports what pytest already timed), and it is how to see
-      # the job going chain-bound: when one file's setup approaches the job's own wall, the fix
-      # moves inside that file.
-      - name: Run validation harness
-        run: |
-          echo "cores: $(nproc)"
-          pytest -n auto --durations=25
-
-  # The Rust migration's gate (docs/dev/rust-migration-plan.md).
-  #
-  # A SEPARATE job, deliberately not a step inside `validate`: the native bars and the
-  # binding's own properties are a different question from the Python suite, and keeping them
-  # apart keeps the answer legible when one goes red and the other does not.
-  #
-  # Two things are checked, in increasing order of what they cost to discover:
-  #   1. the crates compile, are formatted, and pass clippy;
-  #   2. `cargo test` — the native physics bars, plus the Cargo dependency allowlist that is the
-  #      Rust half of the portability contract (plan §2.2).
-  #
-  # There used to be a third: the EXISTING Python tests, unmodified, run against the Rust model via
-  # `PHYSSYNTH_RS` -- first as twenty-one per-batch steps here, then as the whole-suite
-  # `rust-harness` job (plan §35.7), which was the migration's actual success condition. Phase A of
-  # the retirement plan (§21) deleted the last Python bodies and the flag with them, so the plain
-  # `validate` job now runs exactly what `rust-harness` ran: measured before the deletion, the
-  # flagged suite minus the parity files was 1,920 passed, and after it the unflagged suite is
-  # 1,940 -- the 20 reconciled per file (§21.1: +28 harvested into the binding-surface file, -8
-  # from guards over the deleted machinery). One run of the suite, not two identical ones.
+  # The native gate: the crates compile, are formatted, pass clippy, and pass `cargo test` -- the
+  # physics bars, the frozen references, and the Cargo dependency allowlists that are the Rust half
+  # of the portability contract (`docs/dev/rust-migration-plan.md` §2.2).
   rust:
-    name: Rust core (compile, native bars, binding surface)
+    name: Rust (compile, lint, native bars)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -131,102 +51,13 @@ jobs:
           cargo fmt --all --check
           cargo clippy --workspace --all-targets -- -D warnings
 
-      # Runs `crates/physsynth-core/tests/` — the native energy/passivity/modal bars, and the
-      # dependency allowlist. No interpreter involved, so a failure here is the physics or the
-      # crate graph, never the binding.
-      #
-      # The WHOLE suite runs in `--release`: that is the codegen the wheel ships, and it is the
-      # profile where a test pinning an arithmetic spelling can go vacuous (plan §17.2, §23.5 —
+      # The WHOLE workspace runs in `--release`: that is the codegen the viewer ships, and it is the
+      # profile where a test pinning an arithmetic spelling can go vacuous (plan §17.2, §23.5 --
       # LLVM folds a literal exponent, so the pin compares a value with itself). The debug half of
-      # that rule is the `rust-debug` job below, which runs in parallel with this one.
+      # that rule is the `rust-debug` job below, which runs in parallel with this one. The viewer's
+      # frozen payloads run here in structure-only mode; the exact comparison is `frozen-windows`.
       - name: Native validation + dependency allowlist
         run: cargo test --workspace --release
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: pyproject.toml
-
-      # `physsynth` and `physsynth-rs` are two distributions on purpose (see
-      # crates/physsynth-py/pyproject.toml): the pure-Python side stays installable on its own, so
-      # the baseline it defines stays available. The wheel is abi3-py311, so this 3.12 job builds
-      # and exercises the same binary a developer's 3.13/3.14 does.
-      #
-      # `pip install ./crates/physsynth-py` looks like it should not work -- the crate has a path
-      # dependency on `../physsynth-core`, which is outside the directory being installed. It does:
-      # pip builds a local directory IN TREE, so the relative path resolves and the compile lands
-      # in the shared workspace `target/` that the cache step above restored. Verified 2026-08-26,
-      # with and without build isolation. Do not "fix" this into a copy-out-and-build.
-      - name: Install both sides
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-          pip install ./crates/physsynth-py
-
-      - name: Record what decides the last bit
-        # NumPy carries its own vectorised transcendentals, dispatched by CPU feature, while
-        # the Rust port calls libm -- so which agreement claims below can hold is a property
-        # of this machine. Two runs of identical code disagreed on 2026-08-27 (plan 22).
-        # When one of them next goes red, this is the first thing to compare.
-        run: |
-          grep -m1 'model name' /proc/cpuinfo || true
-          python -c "import numpy; numpy.show_runtime()"
-
-      # The binding's own properties.
-      #
-      # This step was "Rust vs Python parity", and its list DRAINED one file per deletion (plan
-      # section 39's units). Phase A (retirement plan §21) took the last two comparisons, operators
-      # and banded, so nothing here compares two implementations any more. What is left:
-      # `test_binding_surface.py`, the properties of the BINDING that neither a physics bar nor a
-      # native Rust bar can see (buffer lifetime, what `state` hands out, PyO3's argument mapping).
-      # It also runs in `validate`; it runs again here for `-rP`, whose reports are the point.
-      # `test_rust_parity_ops2d.py` (the 2-D builders against SciPy) stood beside it until
-      # retirement plan §49 recorded SciPy's answers into `crates/physsynth-core/tests/
-      # reference/scipy_ops2d.json` and carried every test into `ops2d.rs` and `ops2d_scipy.rs`.
-      #
-      # `tests/test_rust_parity.py` itself went with unit 8 (plan section 45). Emptying a list
-      # rather than deleting the file would have left a `parametrize` over nothing, which COLLECTS
-      # AS A SKIP: a green log asserting nothing.
-      #
-      # The bare `import` first is not belt-and-braces. Every file below opens with a
-      # module-level `pytest.importorskip`, so a failed or missing install SKIPS them and the
-      # step exits 0 having asserted nothing at all -- a guard that passes quietly is the failure
-      # it exists to catch, one level down.
-      - name: Binding surface
-        run: |
-          python -c "import physsynth_rs; print(physsynth_rs.__file__)"
-          # `-rP` prints the captured stdout of tests that PASSED. Several of these measure a
-          # separation and report it rather than asserting a number that would be a claim
-          # about the machine (plan 22.1); without this the reports are discarded on exactly
-          # the runs where they are the news.
-          pytest --durations=10 -rP \
-            tests/test_binding_surface.py
-
-      # PHASE 7'S SUCCESS CONDITION STOOD HERE and is retired with unit 10 and unit 11
-      # (plan §44). It ran the instrument's 65 client files with BOTH flags set, because that was
-      # the only configuration in which a Rust detector measured a Rust model -- everywhere else,
-      # `PHYSSYNTH_RS` alone left the *instrument measuring the models* in Python, which is the
-      # separation §36.4 built the second flag for.
-      #
-      # `physsynth/analysis/` had no Python body any more (and is itself deleted since retirement
-      # plan §48), so `PHYSSYNTH_RS_ANALYSIS` selected between one implementation and itself. The
-      # step it gated became a strict subset of the whole-suite flagged job, and since phase A
-      # (retirement plan §21) of the plain `validate` run, which run those 65 files against exactly
-      # the same Rust detector. Keeping it would be running 65 files twice and calling the second
-      # run a different claim.
-      #
-      # What replaces the *other* half of that claim -- a Rust instrument checked against a second
-      # implementation -- is `crates/physsynth-analysis/tests/analysis_frozen.rs`, which holds 74
-      # fixtures' worth of what the Python oracles said, recorded to the last digit before they
-      # were deleted (a Python test in `validate` until retirement plan §47). It runs with the
-      # rest of `cargo test --workspace`, in both profiles.
-      #
-      # The derivation that built this step's file list is worth keeping on the record even though
-      # the step is gone, because the lesson outlived it: the obvious grep -- files importing
-      # `physsynth.analysis` -- was WRONG BY 43 FILES, since `tests/helpers.py` imports the
-      # instrument and measures on its callers' behalf. 27 files matched; 65 actually reached. A
-      # derived list is only as honest as the reachability it models (ledger #32).
 
   # The UNOPTIMISED half of "run it in both profiles", in parallel with `rust` rather than after it.
   #
@@ -282,21 +113,6 @@ jobs:
           cargo test -p physsynth-analysis --tests
           cargo test -p physsynth-core $targets
 
-  # Lint only. This job used to pay a Rust compile and a wheel install, because it also counted the
-  # suite's collected tests per shard to prove the split dropped nothing; with one Python job there
-  # is nothing to reconcile, and ruff needs neither.
-  lint:
-    name: Lint (ruff)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Lint (ruff)
-        run: |
-          pip install ruff
-          ruff check .
 
   # The web viewer's payloads, against the Python viewer's own outputs frozen before it was deleted
   # (`crates/physsynth-viewer/tests/frozen.rs`, retirement plan §23.19). EXACT agreement is a claim

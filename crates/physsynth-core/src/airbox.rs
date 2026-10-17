@@ -1,8 +1,144 @@
 //! The 3-D air box — a rectangular room of air on a Yee grid (HANDOFF §12.H).
 //!
-//! Port of the `AirBox` half of `physsynth/core/airbox.py`, the largest file in the project. The
-//! reference docstrings there are the physics; this module documents only what the translation had
-//! to decide.
+//! Port of the `AirBox` half of `physsynth/core/airbox.py`, the largest file in the project. That
+//! module's docstring was the physics, and this one documented only what the translation had to
+//! decide; the docstring is carried below verbatim, under "The physics", because the Python file
+//! was deleted with the last of the Python (retirement plan §51). Its "still deferred" list is as
+//! of the room's second batch: the surface ports and the wrappers that mount a plate or a membrane
+//! in the room have landed since ([`crate::airbox_port`], [`crate::airbox_wrap`]).
+//!
+//! # The physics
+//!
+//! The **distributed** tier of the `exciter -> resonator -> body/radiation` abstraction's air node.
+//! [`crate::radiation`] models the air as a **lumped port**: one volume-velocity terminal, one
+//! impedance, one listening distance. That is enough for "how loud, how damped, how far", and
+//! structurally cannot represent anything that depends on *where you are* — room modes, the finite
+//! travel time across a space, the comb filtering of a direct sound against its reflections, more
+//! than one listener, or any source that is not compact. This module is that missing dimension (all
+//! three of them), and its headline claim is a **cross-tier** one:
+//!
+//! ```text
+//! the distributed air *contains* the lumped air as its free-field limit.
+//! ```
+//!
+//! Put the walls far enough away, drive an `AirBox` and an
+//! [`crate::radiation::AirRadiation`] from the same source, and inside the window before
+//! the first reflection arrives the box reproduces the monopole law
+//! `p = rho0 Q''(t - r/c0) / (4 pi r)` — measured, not asserted. Then bring the walls in and get
+//! everything the lumped tier cannot.
+//!
+//! **The physics — the bore's Yee cell, one dimension up.** Same two first-order conservation laws
+//! as [`crate::bore`], now with a vector velocity and no area profile:
+//!
+//! ```text
+//! rho0 du/dt = -grad p           (momentum / Euler)
+//! dp/dt      = -rho0 c0^2 div u  (continuity / mass)
+//! ```
+//!
+//! **State layout — node-centered pressure, face-centered velocity.** `p` lives at the
+//! `(Nx+1)(Ny+1)(Nz+1)` grid nodes *including the walls*; `u_x` on the `Nx(Ny+1)(Nz+1)` faces
+//! between neighbouring nodes in `x` (and likewise `u_y`, `u_z`), half a timestep offset in time.
+//! This is the bore's layout tensored up, chosen over the cell-centered convention common in room
+//! acoustics for one reason: **the bore's boundary machinery transfers unchanged.** A rigid wall is
+//! the `h/2` half-cell trapezoidal node weight and needs no ghost stencil; an impedance wall is the
+//! bore's radiating-end 1x1 collapse. Both are already proven in this repo. Uniform spacing `h` in
+//! all three directions is **required**, not a convenience: an anisotropic grid breaks the
+//! isotropic CFL and the tensor-cosine exactness the modal oracle rests on.
+//!
+//! **Leapfrog, with the adjoint pairing that makes the bore conserve**:
+//!
+//! ```text
+//! u_x^{n+1/2} = u_x^{n-1/2} - (k / (rho0 h)) (p_{i+1} - p_i)^n      [and y, z]
+//! p^{n+1}     = p^n - k rho0 c0^2 div(u^{n+1/2})
+//! ```
+//!
+//! `lambda = c0 k / h <= 1/sqrt(3)` (the 3-D CFL); asserted at construction, rejected otherwise.
+//! Unlike the 1-D string there is **no dispersionless lambda** — the fact the membrane batch
+//! recorded for 2-D, one dimension worse. Do not tune toward the ceiling as if it were the string's
+//! `lambda = 1`, because at `lambda = 1/sqrt(3)` exactly the reward and the price arrive together:
+//!
+//! * **The reward.** A mode whose wavevector lies along the grid **diagonal** — meaning
+//!   `l/Nx = m/Ny = n/Nz`, which on a cube is just `l = m = n` — comes out at the *exact continuum*
+//!   frequency (measured to 1e-16). Nothing else is exact at any `lambda`; axis-aligned propagation
+//!   stays dispersive by ~0.4% per index everywhere.
+//! * **The price.** The corner mode's dispersion argument `lambda sqrt(3)` reaches exactly 1, i.e.
+//!   `omega_d k = pi`, and there the leapfrog's amplification matrix is **defective**. Broadband
+//!   content then grows *linearly* in time (measured: peak amplitude x15 by 1000 steps, x88 by
+//!   6000, with successive ratios tracking `1 + 1/n` — secular, not exponential). The energy
+//!   identity survives this untouched, because the discrete energy is only positive
+//!   **semi**-definite at the ceiling: the potential and kinetic terms grow together with
+//!   cancelling signs, so `E` stays flat while the field does not. **A flat energy is therefore not
+//!   a stability certificate at `lambda = lambda_max`** — the one place in this repo where that is
+//!   true.
+//!
+//! So `lambda = 1/sqrt(3)` is *marginally* stable, and construction allows it deliberately (it is
+//! the textbook CFL, and the diagonal exactness is a genuine reason to want it). For any run with
+//! broadband content, stay strictly below: `0.9/sqrt(3)` is the default the test helpers use.
+//!
+//! **Energy — the cross-time product, in 3-D.** With the tensor-trapezoid node weight
+//! `W_ijk = wx_i wy_j wz_k` (`w = h` interior, `h/2` at a wall, so an edge node carries
+//! `h (h/2) (h/2)` and a corner `h^3/8`):
+//!
+//! ```text
+//! E^n = 1/2 sum_nodes (W / (rho0 c0^2)) (p^n)^2
+//!     + 1/2 rho0 sum_faces W_face u^{n+1/2} u^{n-1/2}
+//! ```
+//!
+//! The velocity term is the **cross-time product** of the staggered variable, never the same-time
+//! square — the string/bore lesson, and the reason a lossless run conserves to machine precision
+//! instead of oscillating. It telescopes to exactly zero change per step because the divergence
+//! uses the transpose of the gradient the momentum uses, and the weights cancel in the pairing.
+//!
+//! **One wall closure, three boundary types.** At a wall node the outward normal velocity is
+//! `u_n = pbar / Z` with `pbar = (p^{n+1} + p^n)/2` — **centered**, i.e. implicit, the standing
+//! VK/bow/radiation-load lesson. Substituted into that node's divergence it collapses to a scalar:
+//!
+//! ```text
+//! p^{n+1} = (p_rigid - beta p^n) / (1 + beta),    beta = k rho0 c0^2 / (2 Z w_wall)
+//! ```
+//!
+//! where `p_rigid` is the force-free rigid-wall update and `w_wall = h/2`. A node on an **edge or
+//! corner touches two or three walls and simply sums their beta** (admittances add) — still 1x1, no
+//! coupled solve anywhere. The two ideal ends fall out of the same line, and are this batch's entry
+//! in the family's reduction ledger (alongside `R=0` -> bare body, `M_a=inf` -> `RadiatedBody`,
+//! `sigma_1=0` -> model #2, `nonlinear=False` -> #5):
+//!
+//! ```text
+//! Z = inf  =>  beta = 0    =>  exactly the rigid update (bit-identical) ;
+//! Z = 0    =>  beta = inf  =>  p^{n+1} = 0, the open (pressure-release) face.
+//! ```
+//!
+//! The same telescoping then leaves exactly the wall flux, `E^{n+1} - E^n = -k sum_wallnodes A_node
+//! pbar^2 / Z <= 0`, so `E` alone is monotone and `E + dissipated` is flat. Note that a
+//! locally-reacting `Z = rho0 c0` wall is matched at **normal incidence only** — obliquely it
+//! reflects. It is a passive, closed-form-checkable absorber, not an anechoic chamber; the
+//! free-field read-out is protected by *windowing*, never by absorption.
+//!
+//! **Source.** A **soft** (transparent) point source of volume velocity `q` (m^3/s), the continuity
+//! equation's own source term: `p_src += k rho0 c0^2 q / W_src` folded into the pressure update. It
+//! injects `integral p q dt`, booked on `injected_energy`, so the conserved statement is
+//! `E + dissipated - injected = const` — what `energy` returns. A *hard* source (assigning
+//! `p`) would not be passive and is not offered.
+//!
+//! **The room pushes back (batch 2): the port.** `inject` is a *read-out* source — it drives the
+//! room and the room does not load it, exactly the position [`crate::radiation::AirRadiation`]
+//! occupied in radiation batch 1. `RoomPort` and `RoomLoadedBody` close that loop. Within one step
+//! an injection changes the pressure at its own nodes and nowhere else (propagation waits for the
+//! next momentum sub-step), so the room seen from a port is a **Thevenin source**, `pbar =
+//! pbar_free + R_room q`: a known open-circuit pressure carrying the room's whole history
+//! *including every reflection*, in series with one positive constant. The body's rank-1 solve then
+//! closes in a **single division**, and because `1 + G R_room >= 1` it is unconditionally passive —
+//! no CFL of its own, no stability guard. The payoff is the thing no lumped `R(omega)` can produce
+//! at any order: a **delayed echo** loading the body, rather than a decaying exponential. Still
+//! deferred: PML, HRTF/ambisonics, scattering objects and non-rectangular geometry, viscothermal
+//! air absorption, moving ports, overlapping ports, and the distributed *area* coupling (a body
+//! radiating from every node rather than through one port).
+//!
+//! **Cost is a design constraint here, for the first time in this repo.** At `fs = 44.1 kHz` the
+//! CFL forces `h >= sqrt(3) c0 / fs ~ 1.35 cm`, so a 1 m^3 room is ~74^3 nodes and one second of
+//! audio is 44100 steps — minutes, not seconds. The modal oracles are rate-independent and run on
+//! ~10x8x6 grids where they are free; genuinely audio-rate rooms belong in a diagnose script, not a
+//! test suite. # The translation
 //!
 //! Node-centered pressure on `(Nx+1)(Ny+1)(Nz+1)` nodes, face-centered velocity on the
 //! `Nx(Ny+1)(Nz+1)` (and `y`, `z`) faces between them, half a timestep offset in time — the
@@ -49,9 +185,9 @@
 //!
 //! # Two discrete outputs, and one transcendental
 //!
-//! `N = int(round(L / h))` and `node_index` are **decisions**, not numbers (§25.2): a wrong one is a
-//! different room or a different source location, and every energy bar passes. Python's `round` is
-//! half-to-**even** and Rust's `f64::round` is half-away-from-zero, so both go through
+//! `N = int(round(L / h))` and `node_index` are **decisions**, not numbers (§25.2): a wrong one is
+//! a different room or a different source location, and every energy bar passes. Python's `round`
+//! is half-to-**even** and Rust's `f64::round` is half-away-from-zero, so both go through
 //! `round_ties_even` — the scar `membrane` and `radiation` already carry.
 //!
 //! `mode_shape` is a tensor cosine, and §22.1 makes `np.cos` a claim about the runner's CPU. It

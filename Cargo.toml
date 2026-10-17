@@ -1,19 +1,20 @@
 # Rust workspace — see `docs/dev/rust-migration-plan.md`.
 #
 # Three crates, and the split is the portability contract expressed as a crate graph (plan §2.2).
-# It mirrors the Python package layout one-for-one, deliberately: `physsynth/core`,
-# `physsynth/analysis` and the binding that exposes them.
+# It began as a mirror of the Python package layout — `physsynth/core`, `physsynth/analysis` and a
+# PyO3 binding that exposed them — and the binding, `physsynth-py`, was deleted with the last of the
+# Python (retirement plan §51). The viewer took its place as the crate that drives the physics.
 #
 #   physsynth-core      the headless DSP core. Depends on NOTHING of ours and (per the allowlist in
 #                       `crates/physsynth-core/tests/deps.rs`) on essentially nothing of anyone's.
-#                       No I/O, no logging, no Python, no plugin framework.
+#                       No I/O, no logging, no plugin framework.
 #   physsynth-analysis  measurement of what the core produces. Depends on nothing — not even on the
 #                       core, because it consumes trajectories as slices and knows no model. Its
 #                       own `tests/deps.rs` holds its own allowlist empty; a new crate inheriting
 #                       the contract by proximity rather than by a test would be a silent gap,
 #                       since that test is scoped to one package by name.
-#   physsynth-py        the PyO3 binding. Depends on both; neither depends on it. Temporary by
-#                       construction — deleted when the last model finishes the §1 ritual.
+#   physsynth-viewer    the web viewer's server: renders scenes to JSON over `std::net`. The one
+#                       crate whose job is I/O, and its `tests/deps.rs` allows JSON and nothing else.
 #
 # `Cargo.lock` IS committed. This repo's acceptance bars are numeric and its CI compares runs
 # across machines; a floating dependency resolution is exactly the kind of invisible variable the
@@ -23,7 +24,6 @@ resolver = "2"
 members = [
     "crates/physsynth-core",
     "crates/physsynth-analysis",
-    "crates/physsynth-py",
     "crates/physsynth-viewer",
 ]
 

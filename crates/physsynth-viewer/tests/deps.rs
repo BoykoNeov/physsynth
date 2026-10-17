@@ -37,9 +37,11 @@ const ALLOWED: &[&str] = &[
 
 /// Names that must never appear, whatever the allowlist says.
 ///
-/// The binding is here by name: the viewer is what makes the binding deletable, so it must never
-/// come to depend on it. The rest are what a server is tempted by — an async runtime, an HTTP
-/// framework, a logging facade.
+/// The binding is here by name: the viewer is what made the binding deletable, so it could never
+/// be allowed to depend on it. The binding is gone (retirement plan §51) and the three names stay,
+/// so that bringing Python back into the viewer is an argument rather than a line in a manifest.
+/// The rest are what a server is tempted by — an async runtime, an HTTP framework, a logging
+/// facade.
 const NEVER: &[&str] = &[
     "physsynth-py",
     "pyo3",

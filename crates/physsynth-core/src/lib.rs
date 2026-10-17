@@ -70,13 +70,14 @@
 //! # The shape every resonator here shares
 //!
 //! Each model splits into three pieces, and the split is what lets the same physics serve both a
-//! native Rust caller and the temporary Python binding without being written twice:
+//! native Rust caller and the Python binding (deleted at retirement plan §51) without being written
+//! twice:
 //!
 //! - **Parameters** — a validated, immutable struct (`string_ideal::Params`). All the derived
 //!   quantities (`c`, `h`, `k`, `lam`) and every construction-time rejection live here.
 //! - **Kernels** — free functions over `&[f64]` slices. They own no state and allocate only what
-//!   they return, so the caller decides where the buffers live. This is the piece the binding
-//!   reaches for, because *its* buffers have to be Python objects (see `physsynth-py`).
+//!   they return, so the caller decides where the buffers live. This was the piece the binding
+//!   reached for, because *its* buffers had to be Python objects.
 //! - **A native owning struct** (`string_ideal::IdealString`) — parameters plus `Vec<f64>` state,
 //!   for Rust callers and for `cargo test`. It is a thin buffer-management shell over the kernels.
 //!

@@ -1,20 +1,9 @@
-# Python
+# Python's caches. The project has no Python since retirement plan §51; these stay ignored because
+# a working copy from before then still has them on disk.
 __pycache__/
 *.py[cod]
-*.egg-info/
-.eggs/
-build/
-dist/
-.venv/
-venv/
-env/
-
-# Test / tooling caches
 .pytest_cache/
 .ruff_cache/
-.mypy_cache/
-.coverage
-htmlcov/
 
 # Editors / OS
 .vscode/

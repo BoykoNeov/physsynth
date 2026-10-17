@@ -13,66 +13,47 @@ closed-form physics**, not judged by ear.
 - **Validation is code, not listening.** Every resonator exposes `energy()`. A lossless run must keep
   `max|Eⁿ − E⁰| / E⁰ < 1e-10`; a lossy run must decrease monotonically. Detected partials are checked
   against analytic oracles (e.g. `fₙ = n·c/(2L)` for the ideal string).
-- **Headless core.** `physsynth/core/` is pure NumPy/SciPy — no audio I/O, no plotting. Visualization
+- **Headless core.** `crates/physsynth-core` has no I/O, no plotting and no dependencies. Visualization
   and (future) wrappers depend on the core, never the reverse, so the physics ports cleanly later.
 - **Unifying abstraction:** `exciter → resonator (± nonlinear coupling) → body/radiation`.
 
 ## Layout
 
 ```
-physsynth/
-  core/        # headless DSP: operators, resonators, exciters, engine (no I/O, no graphics)
-  analysis/    # analytic oracles (modal frequencies) + spectral partial detection
-web/static/    # the viewer's browser front-end (served by crates/physsynth-viewer)
-tests/         # validation harness: energy, modal, convergence, stability
-scripts/       # the low-priority pytest wrapper
-crates/        # the Rust core, analysis, viewer backend and Python binding; examples under crates/*/examples/
-docs/dev/      # per-feature dev-docs (plan / context / tasks)
+crates/
+  physsynth-core/      # headless DSP: operators, resonators, exciters, engine (no I/O, no graphics)
+  physsynth-analysis/  # analytic oracles (modal frequencies) + spectral partial detection
+  physsynth-viewer/    # the web viewer's server; examples under crates/*/examples/
+web/static/            # the viewer's browser front-end (served by crates/physsynth-viewer)
+scripts/               # the low-priority, parallel test runner and its quick-lane skip list
+docs/dev/              # per-feature dev-docs (plan / context / tasks)
 ```
+
+There is no Python. The project was prototyped in Python (NumPy/SciPy) and moved to Rust model by
+model; the last of the Python — the binding crate, its package and its test suite — was deleted at
+`docs/dev/python-retirement-plan.md` §51. Where a Python test's truth came from NumPy or SciPy, those
+libraries' answers were recorded first and are asserted from `crates/*/tests/reference/`.
 
 ## Setup
 
-```bash
-python -m venv .venv
-. .venv/Scripts/activate        # Windows; use .venv/bin/activate on POSIX
-pip install -e ".[dev]"
-```
-
-(NumPy/SciPy/Matplotlib/pytest may already be present in your global Python; the editable install
-just wires up the `physsynth` package and dev extras.)
+A Rust toolchain (the version CI pins is in `.github/workflows/ci.yml`). Nothing else.
 
 ## Run the validation suite
 
 ```bash
-pytest                  # full harness
-pytest -n 8             # same tests, spread across cores (needs pytest-xdist)
+cargo test --workspace --release       # everything, as CI's main job runs it
 ```
 
-There is no fast lane any more. `-m "not slow"` used to skip the geometric string's whirl and
-phantom files, the last tests to carry the `slow` mark; their bars are native now
-(`crates/physsynth-core/tests/string_geometric_{whirl,phantom}.rs`, retirement plan §36), and the
-mark went with them. For the same reason nothing needs `--dist loadgroup`: the per-worker
-`xdist_group` pins were for those two files' expensive shared runs.
+The physics bars, the frozen references and the dependency allowlists are all `cargo test` targets
+under `crates/*/tests/`. A new test file needs no registration to be run by CI.
 
-Prefer the parallel form for a whole-suite run and the plain form when debugging a single test,
-where worker startup is pure overhead and the serial run gets the full multi-threaded BLAS
-(measurably faster per test).
+On Windows, `scripts/cargo-test-nice.ps1` runs the same build at below-normal priority with the
+test binaries side by side, so the desktop stays usable. By default it is a QUICK lane that leaves
+out the slowest tests listed in `scripts/quick-skip.txt`; `-Full` runs everything, as CI does:
 
-Pick the worker count deliberately rather than reaching for `-n auto`: `auto` takes one worker per
-*logical* core, which oversubscribes a hyperthreaded desktop that is also doing other work. `-n 8`
-is the configuration actually measured here. CI uses `-n auto` because its runners are small and
-otherwise idle.
-
-A new test file needs no registration to be run by CI: the `validate` job runs plain `pytest`
-over the whole of `tests/`, in one job. (It was split over three runners until 2026-09-29; once
-the models moved to Rust the whole suite took about three minutes and the split bought nothing.)
-
-A parallel run saturates every core, which makes the rest of the desktop sluggish. To keep working
-while it runs, prefix any invocation with the priority wrapper — it forwards its arguments to pytest
-unchanged, and the xdist workers inherit the lowered priority:
-
-```bash
-python scripts/nicepytest.py -n 8
+```powershell
+powershell -File scripts/cargo-test-nice.ps1          # quick lane
+powershell -File scripts/cargo-test-nice.ps1 -Full    # before a commit
 ```
 
 ## Measurements outside the test suite
@@ -119,7 +100,7 @@ Complete and validated:
   conservative Picard resonator, validation, pitch-glide/energy-exchange diagnostics, and Part 6 the
   **free-edge cymbal/gong** — energy-conserving nonlinear coupling on a free rectangle, with the
   crash cascade and curved-Chladni modes).
-- **Tension-modulated string** — #9, the **string family's nonlinearity** (`core/string_nonlinear.py`):
+- **Tension-modulated string** — #9, the **string family's nonlinearity** (`crates/physsynth-core/src/string_nonlinear.rs`):
   displacing a string *stretches* it, raising tension, raising pitch — hit it hard and the note starts
   sharp and glides down (+80 % measured). Kirchhoff–Carrier: the tension `T₀+(EA/2L)∫u_x²` is a scalar
   functional of the whole state, so the quartic potential needs a conservative *implicit* scheme (model
@@ -134,7 +115,7 @@ Complete and validated:
   resonance and the mode disintegrates *while energy is conserved to 1e-13* (physics, not a blow-up:
   refinement-invariant onset and unstable modes). Planar modal exchange only — out-of-plane whirling
   and true phantom partials need a geometrically-exact (two-polarization / longitudinal) string.
-- **Geometrically-exact string** — #10 (`core/string_geometric.py`), which **pays both of those
+- **Geometrically-exact string** — #10 (`crates/physsynth-core/src/string_geometric.rs`), which **pays both of those
   debts**. Three coupled fields — two transverse polarizations `u`, `w` and the longitudinal `v` —
   with the exact stretch `Λ=√((1+v_x)²+u_x²+w_x²)`, so tension is a **field**, not #9's scalar
   functional. `EA=T₀` is model #3 bit-for-bit ×3; a discrete gradient on `mean(Λ)` (*not* `Λ(mean)`)
@@ -162,7 +143,7 @@ Complete and validated:
     as **`√Δ`** (verified by re-crossing it), and — the sharpest claim in the model — **only the
     *soft* plane whirls**: same string, same amplitude, same seed, **76.3× vs 1.00×**. All of it
     while energy is flat to 1e-12, which is what separates a whirl from a blow-up.
-  - **The rotating wave** (`analysis/rotating_wave.py`) — the model's *one* exact oracle, and its
+  - **The rotating wave** (`crates/physsynth-analysis/src/rotating_wave.rs`) — the model's *one* exact oracle, and its
     escape from "measure the residual, don't promise cents". A helix `u=φcosΩt`, `w=φsinΩt`, `v=ψ(x)`
     solves the full nonlinear PDE **exactly**: `r²=φ'²` is time-independent, so the stretch, the
     tension field and the longitudinal forcing all freeze — the string is bent into a fixed shape and
@@ -175,7 +156,7 @@ Complete and validated:
     **`(4/3)×` the shape deformation**, a ratio that holds across `EA/T` and mode number. The whole
     discrepancy is a tension field whose spread along `x` is **0.5 % of its own rise**: that is why
     KC is a *good* oracle, and why it is still the wrong one.
-- **Bowed string** — the first continuous **nonlinear exciter** (`core/bow.py`): a friction bow on
+- **Bowed string** — the first continuous **nonlinear exciter** (`crates/physsynth-core/src/bow.rs`): a friction bow on
   a damped string, closing the `exciter →` leg of the abstraction. Stick-slip via the smooth
   friction curve `Φ(v)=F·√(2a)·v·e^{-av²+½}`, evaluated at the *centered* relative velocity — so the
   force is implicit and reduces to one scalar equation (rank-1 driving-point admittance `a=A⁻¹eᵢ`,
@@ -185,12 +166,12 @@ Complete and validated:
   motion** (one slip per period, slip fraction = β, bow-speed-independent pitch, amplitude ∝ bow
   speed) and the **Schelleng** min/max-force playability wedge.
 - **Body / radiation** — the third node of `exciter → resonator → body/radiation`: a **modal body**
-  (bank of damped oscillators, `core/body.py`) coupled to a string *terminus* through an
-  **energy-conserving bridge** (`core/connection.py`). The linear spring makes the whole system one
+  (bank of damped oscillators, `crates/physsynth-core/src/body.rs`) coupled to a string *terminus* through an
+  **energy-conserving bridge** (`crates/physsynth-core/src/connection.rs`). The linear spring makes the whole system one
   leapfrog, so `E_string + E_body + E_conn` is conserved to machine precision (explicit, exact — no
   implicit solve); an exact coupled-eigenvalue guard bounds the spring stiffness. Radiated pressure
   is read out as `Σ aᵢ q̈ᵢ` (monopole ∝ volume acceleration).
-- **Air / radiation** — the last node of the chain (`core/radiation.py`), in three tiers. A
+- **Air / radiation** — the last node of the chain (`crates/physsynth-core/src/radiation.rs`), in three tiers. A
   free-space **monopole read-out** (`AirRadiation`) turns the body's volume acceleration into the
   far-field `ρ₀Q″(t − r/c₀)/(4πr)` with an exact integer-sample retardation. A **radiation load**
   (`RadiatedBody`) lets the air push back — a passive rank-1 dashpot solved by one scalar
@@ -208,7 +189,7 @@ Complete and validated:
   The payoff is what a constant `R` structurally cannot do: high partials radiate better and die
   first, at `α = a²·Re Z_a/(2m_eff)`, while the **reactance** adds mass and drops the pitch — both
   measured against the closed form to better than 2%.
-- **The 3-D air box** — the **distributed** tier above all three (`core/airbox.py`): a room of
+- **The 3-D air box** — the **distributed** tier above all three (`crates/physsynth-core/src/airbox.rs`): a room of
   actual air on a Yee grid, node-centred pressure and face-centred velocity, which is the bore's
   1-D cell tensored up so its boundary machinery transfers unchanged. A lumped port has one
   terminal, one impedance, one distance, and so cannot represent room modes, travel time, comb
@@ -312,7 +293,7 @@ Complete and validated:
   dependence at all. Drop the cut and keep the `∓q` pair and what is left is a legal, perfectly
   conservative dipole *source* whose decay **diverges** from the real plate's under grid refinement
   (5.2×, 19.3×, 40.8×) — which is what proves the obstacle is not a refinement of the source.
-- **Acoustic bore** *(wind leg, batch 1 of 3)* — the first **acoustic** resonator (`core/bore.py`):
+- **Acoustic bore** *(wind leg, batch 1 of 3)* — the first **acoustic** resonator (`crates/physsynth-core/src/bore.rs`):
   the 1D air column of a clarinet, a staggered pressure/volume-velocity leapfrog of Webster's horn
   equation. Energy-first — the trapezoidal `h/2` half-cell closes a rigid wall (no ghost stencil,
   the free-beam lesson) and the **cross-time** `Uⁿ⁺¹ᐟ² Uⁿ⁻¹ᐟ²` product conserves energy to machine

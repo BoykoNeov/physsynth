@@ -10,8 +10,9 @@
 //! # What is checked, and what is deliberately not
 //!
 //! Only `physsynth-core`'s own transitive **normal** and **build** dependencies. Not the
-//! workspace's — the workspace also contains `physsynth-py`, which pulls pyo3, numpy, syn, libc
-//! and thirty more, so a workspace-scoped check would pass while proving nothing at all. And not
+//! workspace's — the workspace contained `physsynth-py` until retirement plan §51, which pulled
+//! pyo3, numpy, syn, libc and thirty more, and still contains the viewer, which pulls a JSON
+//! stack — so a workspace-scoped check would pass while proving nothing at all. And not
 //! dev-dependencies: `serde_json` is here to parse `cargo metadata` for this very test, which is
 //! the Rust equivalent of pytest being installed. The exclusion is *self-testing* — the last
 //! assertion below fails if `serde_json` ever shows up in the walked set, which is what would

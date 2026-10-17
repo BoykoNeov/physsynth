@@ -17,9 +17,9 @@
 //!   `piston_radiation_resistance` keeps swapping on `PHYSSYNTH_RS` with the rest of its file.
 //!
 //! Both hold at once because the crate a function is *implemented* in and the flag its Python name
-//! is *swapped* by are different questions. `physsynth-py` depends on both crates, so the binding
-//! can expose an analysis-crate function under a core-flagged name without either crate depending
-//! on the other. That is the whole trick, and it is written here because the arrangement reads like
+//! is *swapped* by are different questions. `physsynth-py` depended on both crates, so the binding
+//! could expose an analysis-crate function under a core-flagged name without either crate
+//! depending on the other (the flag went at retirement plan §21, the binding at §51). That is the whole trick, and it is written here because the arrangement reads like
 //! a flag violation until the sentence above is in front of you.
 //!
 //! # What makes swapping it under the model flag safe
@@ -98,8 +98,8 @@ pub const C0_AIR: f64 = 343.0;
 /// direct form's own noisy region (~5e-12 around `ka = 3e-3 .. 1e-2`) rather than at the crossover,
 /// which is what buys the last order of magnitude.
 ///
-/// Must equal `PISTON_SERIES_CUTOFF_KA` in `physsynth/core/radiation.py`; a parity test compares
-/// the two functions across the seam and would go red if they drifted apart.
+/// The Python module that kept its own copy of this number is gone (retirement plan §51), so this
+/// is the only one.
 pub const PISTON_SERIES_CUTOFF_KA: f64 = 3e-2;
 
 /// Baffled circular-piston (half-space) **acoustic** radiation resistance, Pa*s/m^3.
