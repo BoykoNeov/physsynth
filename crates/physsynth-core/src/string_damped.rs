@@ -1,22 +1,62 @@
 //! Damped stiff string — theta-scheme FDTD with frequency-dependent loss (model #3).
 //!
-//! Port of `physsynth/core/string_damped.py`, HANDOFF §5:
+//! Port of `physsynth/core/string_damped.py`, HANDOFF §5. That module's docstring was the physics
+//! and this header documented only what the translation had to decide. The docstring was cut to a
+//! shim by deletion 5 (`f6a3a3c`) and the shim went with the last of the Python (retirement plan
+//! §51), so it is carried below, under "The physics", verbatim from `f6a3a3c^` save for its
+//! cross-references, which now point at the native items.
+//!
+//! # The physics
+//!
+//! Implements HANDOFF section 5 model #3 (see `docs/dev/damped-string-plan.md`). PDE:
 //!
 //! ```text
 //! u_tt = c^2 u_xx - kappa^2 u_xxxx - 2 sigma0 u_t + 2 sigma1 u_txx
 //! ```
 //!
-//! Model #2 plus the `+2 sigma1 u_txx` term, which damps a mode at a rate proportional to its
-//! wavenumber squared — the ordering real strings have, and the cure for model #2's *backwards*
-//! high-frequency under-damping. It costs exactly one extra block in the update matrix
+//! This is model #2 (the stiff string) plus a **frequency-dependent** loss term `+2 sigma1 u_txx`.
+//! In the modal domain `delta_xx -> -p^2`, so the new term damps a mode at a rate proportional to
+//! its wavenumber squared: a mode's **energy** decays as `exp(-2 sigma_eff t)` with
 //!
 //! ```text
-//! A = (1 + sigma0 k) I - theta k^2 L - sigma1 k D2
+//! sigma_eff(m) = sigma0 + sigma1 * (wavenumber)^2.
 //! ```
 //!
-//! and one extra right-hand-side term. The stored energy is model #2's, unchanged: both losses
-//! enter only its *rate of change*, and both are dissipative by summation by parts, so passivity is
-//! unconditional. The Python module's docstring is the reference for the physics.
+//! `sigma0` (model #2's frequency-independent `sigma`, renamed here) damps every mode equally;
+//! `sigma1` makes high partials die faster -- the physically-correct ordering real strings have,
+//! and the cure for model #2's *backwards* high-frequency under-damping.
+//!
+//! **Scheme.** The conservative operator `L = c^2 delta_xx - kappa^2 delta_xxxx` is
+//! theta-time-averaged (as model #2); both loss terms use a centered time difference `delta_t.`.
+//! Rearranged, each step is one banded SPD solve with the constant matrix
+//!
+//! ```text
+//! A = (1 + sigma0 k) I - theta k^2 L - sigma1 k D2     (pentadiagonal, SPD, factored once)
+//! ```
+//!
+//! where `D2` is the second-difference matrix. Adding `sigma1` costs exactly one extra block in `A`
+//! (and one RHS term); the banded Cholesky ([`crate::banded`]) carries over unchanged. `sigma1 = 0`
+//! skips both terms -> bit-for-bit [`crate::string_stiff::StiffString`]. Unconditionally stable for
+//! `theta >= 1/4` (so `lambda = c k / h > 1` is admissible, like model #2).
+//!
+//! **Boundary: simply supported** (`u = 0`, `u_xx = 0`); the biharmonic block is `(delta_xx)^2` so
+//! `sin(m pi x / L)` stays an exact discrete eigenvector and the modal / decay harness carries on.
+//!
+//! **Energy is the model #2 energy, unchanged.** The loss terms never enter the stored mechanical
+//! energy `E^n` -- only its rate of change. Both discrete losses are dissipative by SBP (`-2
+//! sigma0 ||delta_t. u||^2 - 2 sigma1 ||delta_x+ delta_t. u||^2 <= 0`), so the energy is reused
+//! verbatim and passivity (monotone decrease) is automatic:
+//!
+//! ```text
+//! E^n = rho [ 1/2 ||delta_t- u^n||^2
+//!             + (theta/2)(P(u^n,u^n) + P(u^{n-1},u^{n-1})) + (1/2 - theta) P(u^n,u^{n-1}) ]
+//! ```
+//!
+//! with `P(f,g) = <-L f, g> = c^2 <delta_x+ f, delta_x+ g> + kappa^2 <delta_xx f, delta_xx g> >=
+//! 0`, evaluated through the *same* matrix `L` used in the update.
+//!
+//! Headless: the banded Cholesky is [`crate::banded`] (in the Python, SciPy's). No I/O, no
+//! plotting.
 //!
 //! # This is deliberately a near-copy of [`crate::string_stiff`]
 //!

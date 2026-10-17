@@ -1,18 +1,120 @@
 //! Acoustic bore — the 1-D air column of a wind instrument (Webster's horn equation).
 //!
 //! Port of `physsynth/core/bore.py`, the wind leg's resonator and the first **acoustic** model in
-//! the project. Pressure `p` lives on `N + 1` integer nodes, volume velocity `U = S v` on the `N`
-//! half-nodes between them and half a timestep offset in time — a Yee cell in one dimension:
+//! the project. That module's docstring was the physics and this header documented only what the
+//! translation had to decide. The docstring was cut to a shim by deletions 2–4 (`6c23a45`) and the
+//! shim went with the last of the Python (retirement plan §51), so it is carried below, under "The
+//! physics", verbatim from `6c23a45^`; its cross-references now point at the native items, and its
+//! closing line about NumPy and SciPy is spelled natively.
+//!
+//! # The physics
+//!
+//! The first **acoustic** resonator of the `exciter -> resonator -> body` abstraction and the
+//! opening of the wind/brass breadth leg (HANDOFF §12.A). It models the pressure/flow wave in a
+//! tube of (possibly varying) cross-section `S(x)` — Webster's horn equation — with an
+//! energy-conserving staggered finite-difference scheme, the acoustic analogue of the ideal string.
+//!
+//! **State on a staggered grid (a Yee cell in 1D).** Acoustic pressure `p` lives at the `N + 1`
+//! integer nodes `x_l = l h`; volume velocity `U = S v` (cross-section times particle velocity)
+//! lives at the `N` half-nodes `x_{l+1/2}` *between* them, and half a timestep offset in time. The
+//! two first-order conservation laws (lossless) are
 //!
 //! ```text
-//! U_{l+1/2}^{n+1/2} = U^{n-1/2} - (k S_{l+1/2} / (rho0 h)) (p_{l+1}^n - p_l^n)
-//! p_l^{n+1}         = p_l^n - (k rho0 c0^2 / (w_l S_l)) (U_{l+1/2}^{n+1/2} - U_{l-1/2}^{n+1/2})
+//! dp/dt = -(rho0 c0^2 / S) dU/dx ,        (continuity / mass)
+//! dU/dt = -(S / rho0)      dp/dx ,        (momentum / Euler)
 //! ```
 //!
-//! Pressure updates from the divergence of the velocity, velocity from the gradient of the
-//! pressure — the same difference operator and its transpose, which is exactly what makes the
-//! discrete energy telescope. The reference docstring in `bore.py` is the physics; this module
-//! documents only what the translation had to decide.
+//! discretized as the leapfrog
+//!
+//! ```text
+//! U_{l+1/2}^{n+1/2} = U_{l+1/2}^{n-1/2} - (k S_{l+1/2} / (rho0 h)) (p_{l+1}^n - p_l^n),
+//! p_l^{n+1}         = p_l^n - (k rho0 c0^2 / (w_l S_l)) (U_{l+1/2}^{n+1/2} - U_{l-1/2}^{n+1/2}).
+//! ```
+//!
+//! Pressure updates from the *divergence* of the velocity; velocity updates from the *gradient* of
+//! the pressure — the same difference matrix `G` and its transpose. That adjoint pairing is exactly
+//! what makes the discrete energy conserve (below). `lambda = c0 k / h <= 1` (CFL); `lambda = 1` is
+//! the dispersionless sweet spot (the closed-open tube then reflects exactly).
+//!
+//! **Energy-first boundaries (the free-beam lesson, again).** With pressure DOFs carrying the
+//! **trapezoidal** node weight `w_l` (`h` interior, `h/2` at a wall), the discrete energy
+//!
+//! ```text
+//! E^n = 1/2 sum_l (w_l S_l / (rho0 c0^2)) (p_l^n)^2
+//!     + 1/2 sum_j (h rho0 / S_{j})     U_j^{n+1/2} U_j^{n-1/2}
+//! ```
+//!
+//! telescopes to **zero** change per step — algebraically, independent of the weights — because
+//! continuity uses `G^T` against the same `G` momentum uses. The *velocity* term is the
+//! **cross-time product** `U^{n+1/2} U^{n-1/2}` of the staggered variable (never the same-time
+//! square): the same "do not collapse the two time levels" trick as the string's potential term,
+//! and the reason a lossless run conserves to machine precision. A **rigid/closed** wall (`U = 0`
+//! just outside) needs *no* ghost stencil — it is the `h/2` half-cell at that node, which the
+//! trapezoidal weight supplies, mirroring the free beam's end masses. An **open**
+//! (pressure-release) end pins `p = 0` (Dirichlet); it carries no energy and its flux `p U = 0`, so
+//! an ideal open end is **lossless** (perfect, sign-flipped reflection — it radiates nothing yet;
+//! the passively-lossy bell impedance is the next batch).
+//!
+//! **The clarinet signature.** A **closed-open** cylinder resonates at the **odd** harmonics `f_n =
+//! (2n - 1) c0 / (4 L)` (quarter-wave: pressure antinode at the reed wall, node at the open end) —
+//! the model-specific correctness oracle here, the way stick-slip was for the bow and Chladni for
+//! the plate. An **open-open** tube gives the full series `f_n = n c0 / (2 L)`.
+//!
+//! **Loss / passivity.** An optional viscous term `-2 sigma U` (a **frequency-independent** drag on
+//! the air column) damps only the velocity; the continuum balance `dE/dt = -[p U]_boundary - 2
+//! sigma int (rho0/S) U^2 <= 0` is monotone, so `sigma > 0` makes the discrete energy decrease
+//! monotonically (passivity) and a single mode decays at `2 sigma`. `sigma = 0` is bit-for-bit the
+//! lossless scheme. This is a **placeholder** loss for the passivity test — the same role the ideal
+//! string's flat `sigma` played before model #3 — **not** the physical viscothermal wall loss
+//! (which scales as `sqrt(omega)`, Zwikker–Kosten); realistic frequency-dependent tube losses come
+//! later.
+//!
+//! **The radiating bell (batch 2) — how sound leaves.** An ideal open end reflects perfectly and
+//! radiates nothing. A real bell/open end presents a **radiation impedance**: the resistive part
+//! `R` (acoustic, Pa·s/m³) relates the end pressure to the volume velocity leaving the tube,
+//! `p_end = R U_out`. That single resistor is exactly the [`crate::radiation::RadiatedBody`]
+//! pattern — a rank-1, unconditionally-passive dashpot — moved onto a boundary node. The
+//! terminating node stays a live **half-cell** DOF (like a rigid wall), drained by `U_out` taken at
+//! the **centered** end pressure `p_bar = (p^{n+1} + p^n)/2` so `U_out = p_bar / R` (implicit, the
+//! VK/ bow/radiation-load lesson). Because the coupling is one scalar the implicit solve collapses
+//! to a **1×1** equation for the end node,
+//!
+//! ```text
+//! p_end^{n+1} = (a p_rigid - b p_end^n) / (a + b),   a = C_end / k,  b = 1 / (2 R),
+//! ```
+//!
+//! where `p_rigid` is the force-free rigid-wall step. The discrete energy then telescopes to
+//! `E^{n+1} - E^n = -k p_bar U_out = -k R U_out^2 <= 0`, and that shed power is booked into
+//! [`Bore::radiated_energy`] so `E_bore + radiated_energy` is conserved to machine precision (the
+//! passivity money test — the acoustic dual of the `sigma` channel and of `RadiatedBody`). Since
+//! `a + b > 0` for any `R > 0` the solve is never singular: the load is **unconditionally
+//! passive**, no stability guard beyond the interior CFL. `R` interpolates the two ideal ends — `R
+//! -> infinity` recovers the rigid **closed** wall (no radiation), `R -> 0` the pressure-release
+//! **open** end — with a real, physical, energy-shedding bell in between. The independent oracle
+//! (the batch-2 analogue of the odd-harmonic signature) is the pressure **reflection coefficient**
+//! `r = (R - Z0) / (R + Z0)` (`Z0 = rho0 c0 / S` the tube's characteristic acoustic impedance): a
+//! pulse hitting the end sheds the fraction `1 - r^2 = 4 R Z0 / (R + Z0)^2` of its energy to the
+//! far field, and a **matched** load `R = Z0` (`r = 0`) is anechoic — it absorbs everything. `R` is
+//! constant across frequency here (evaluate a representative value from
+//! [`crate::radiation::monopole_radiation_resistance`] / the analysis crate's
+//! `piston_radiation_resistance` at the fundamental); the frequency- dependent radiation
+//! *reactance* (the end correction, `propto sqrt(omega)`) is a later batch, the same placeholder
+//! philosophy as `sigma`.
+//!
+//! **Overdamped end node (a cosmetic Nyquist artifact, by design).** At a realistic bell `R << Z0`
+//! the drain `b = 1/(2R)` dwarfs the node compliance `a = C_end/k`, so the update is `p_end^{n+1} ~
+//! -p_end^n` — the *raw* end-node pressure carries a marginal Nyquist ripple. It **cancels
+//! exactly** in `U_out propto (p_end^{n+1} + p_end^n)`, so every validated quantity — the radiated
+//! energy, the far-field read-out [`Bore::radiated_pressure`] `= dU_out/dt`, and any **interior**
+//! pickup — is clean. Read the far field from `U_out`/[`Bore::radiated_pressure`], never the raw
+//! terminating node, and place spectral pickups in the interior (node 1), as the batch-1 tests do.
+//!
+//! **Webster from day one.** `S(x)` is carried as node/segment arrays throughout, so a cylinder
+//! (constant `S`) is just the constant case; a cone or flare (a bell, a saxophone) is a *different
+//! area profile*, not a different solver.
+//!
+//! Headless: no dependencies (the modal-oracle operator, [`Params::pressure_operator`], is a
+//! [`crate::sparse::Csr`]; in the Python it was SciPy sparse).
 //!
 //! # This is the first model in the crate whose step takes a caller's hook
 //!
@@ -150,15 +252,21 @@ pub struct Params {
     pub fs: f64,
     /// Number of segments; `N + 1` pressure nodes and `N` velocity half-nodes.
     pub n: usize,
-    /// Bore radius (m).
+    /// Bore radius (m) for a cylinder; the cross-section is `S = pi radius^2`. Constant here (the
+    /// cylinder case); a cone/flare is the same solver with a non-constant area profile.
     pub radius: f64,
-    /// Left-end termination.
+    /// Left-end termination. The default pair `(Closed, Open)` is the ideal (lossless) clarinet.
     pub bc_left: End,
     /// Right-end termination.
     pub bc_right: End,
-    /// Viscous loss coefficient in the `-2 sigma U` drag.
+    /// Viscous loss coefficient (>= 0) in the `-2 sigma U` drag on the air column. `0` is
+    /// lossless (energy conserved); `> 0` makes the energy decrease monotonically (passivity).
     pub sigma: f64,
-    /// Radiation resistance of a `"radiating"` end (Pa·s/m³).
+    /// Radiation resistance `R` (acoustic, Pa·s/m³) of any `"radiating"` end — the rank-1 passive
+    /// dashpot that lets sound leave. `R -> infinity` recovers a rigid wall, `R -> 0` a
+    /// pressure-release open end; a matched `R = Z0 = rho0 c0 / S` is anechoic. Must be `> 0` when
+    /// an end radiates (`0` when no end does). A representative value is the analysis crate's
+    /// `piston_radiation_resistance` at the fundamental.
     pub r_bell: f64,
     /// Air density (kg/m³).
     pub rho0: f64,
@@ -363,7 +471,8 @@ impl Params {
     ///
     /// `G` is the `N x (N+1)` gradient with `-1` at column `j` and `+1` at column `j+1`. The
     /// scheme eliminates `U` to `C d_tt p = -k^2 L p`, so the generalized eigenvalues of `(L, C)`
-    /// restricted to [`Self::dof`] are `omega^2`.
+    /// restricted to [`Self::dof`] (the free, non-open nodes) are `omega^2` (continuum), which the
+    /// modal oracle maps through the leapfrog dispersion to the discrete frequency.
     ///
     /// The product is associated `(G^T @ Minv) @ G`, which is how Python's left-to-right `@` chain
     /// associates it, and [`Csr::matmul`] accumulates in ascending order of the contracted index
@@ -650,9 +759,10 @@ impl Bore {
 
     /// Set the initial pressure field (and optional half-node volume velocity).
     ///
-    /// Starts from rest by default: `U^{1/2}` is taken as one consistent momentum half-step from
-    /// `p^0`, so a single-mode pressure IC oscillates cleanly and the initial energy is exactly the
-    /// acoustic potential. Also resets the far-field channel for a fresh run.
+    /// Starts from rest by default (`U^{-1/2} = 0`): `U^{1/2}` is taken as one consistent momentum
+    /// half-step from `p^0`, so a single-mode pressure IC oscillates cleanly and the initial energy
+    /// is exactly the acoustic potential `1/2 sum C_l (p^0_l)^2`. A nonzero `u0` seeds `U^{-1/2}`.
+    /// Also resets the far-field channel for a fresh run.
     ///
     /// # Panics
     /// If `p0` does not have `N + 1` entries or `u0` does not have `N`.
@@ -674,7 +784,9 @@ impl Bore {
     /// Advance one timestep: pressure from the current velocity, then velocity from it.
     ///
     /// `source` is applied to the freshly-updated pressure field after the open-end pin and before
-    /// the radiating drain — the ordering the module header calls load-bearing.
+    /// the radiating drain — the ordering the module header calls load-bearing. It modifies the
+    /// field in place; the bore stays agnostic to what drives it. A reed feeds volume flow into
+    /// node 0's half-cell here ([`crate::reed`]). `None` is bit-for-bit the un-driven bore.
     pub fn step(&mut self, source: Option<Source<'_>>) {
         let mut p_next = vec![0.0; self.p.nodes()];
         pressure_into(
@@ -725,6 +837,9 @@ impl Bore {
     }
 
     /// Far-field monopole read-out: the bell's net volume acceleration `dU_out/dt` (m³/s²).
+    ///
+    /// [`crate::radiation::AirRadiation`] reads exactly this, to turn the radiating end into a
+    /// listener's pressure.
     ///
     /// Computed from the outgoing volume velocity, whose Nyquist part has cancelled, so it is
     /// clean even though the raw terminating node carries the cosmetic ripple. `0` when no end

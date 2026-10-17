@@ -2,8 +2,106 @@
 //!
 //! Port of `physsynth/core/reed.py`, the acoustic dual of the bowed string: a dynamic reed valve
 //! driven by a steady mouth pressure self-oscillates against a [`crate::bore::Bore`], turning a
-//! constant breath into a clarinet. The reference docstring in `reed.py` is the physics; this
-//! module documents only what the translation had to decide.
+//! constant breath into a clarinet. That module's docstring was the physics and this header
+//! documented only what the translation had to decide. The docstring was cut to a shim by
+//! deletions 2–4 (`6c23a45`) and the shim went with the last of the Python (retirement plan §51),
+//! so it is carried below, under "The physics", verbatim from `6c23a45^` save for its
+//! cross-references, which now point at the native items.
+//!
+//! # The physics
+//!
+//! This closes the `exciter -> resonator` loop for wind instruments: a **dynamic reed** valve
+//! driven by a steady mouth pressure `p_m` self-oscillates against the air column of a
+//! [`crate::bore::Bore`], turning a constant breath into a sustained tone — the clarinet. It is the
+//! mirror of the bow (a constant bow speed self-oscillates the string into Helmholtz motion), and
+//! it reuses every lesson the bow and the von-Kármán plate taught: an *implicit*, centered
+//! nonlinearity solved to a **scalar** each step, an energy **balance** (not conservation — the
+//! mouth is active), and machine-precision telescoping as the money test.
+//!
+//! **The physical model (Bilbao §9; Chatziioannou & van Walstijn; Dalmont/Kergomard).** The reed is
+//! a damped harmonic oscillator whose tip displacement `y` opens/closes a channel of rest height
+//! `H0`; the instantaneous opening is `H = H0 + y`. It is **inward-striking**: a positive pressure
+//! drop across the reed `dp = p_m - p0` (mouth minus mouthpiece) pushes the reed *closed*, so
+//!
+//! ```text
+//! mu (y'' + g y' + wr^2 y) = -dp ,          H = H0 + y ,          (reed, per unit area)
+//! ```
+//!
+//! with `mu` the reed's areal mass, `wr` its resonance and `g = wr / Q` its damping. Statically the
+//! reed shuts (`H -> 0`, `y = -H0`) at the **closing pressure** `p_closing = mu wr^2 H0` — the
+//! natural pressure scale (the control is `gamma = p_m / p_closing`). Air jets through the open
+//! channel by Bernoulli, and the moving reed sweeps its own volume, so the total flow **into the
+//! bore** at the mouthpiece node is
+//!
+//! ```text
+//! U = U_B - Sr y' ,     U_B = w H^+ sign(dp) sqrt(2 |dp| / rho) ,   H^+ = max(H, 0) .
+//! ```
+//!
+//! `U_B` is the nonlinear jet (a passive resistor: `dp U_B >= 0` always); `-Sr y'` is the reed's
+//! volume sweep (`Sr` the effective reed area — the **same** area that the pressure acts on, which
+//! is exactly what makes the coupling reactive/lossless below). Blowing hard enough that the
+//! descending branch of `U_B(dp)` overcomes the losses makes the whole thing oscillate — the
+//! clarinet.
+//!
+//! **Why the reed-sweep flow is not optional.** Include `-Sr y'` and the reed-force work and the
+//! bore sweep-flow work are the *same* reactive term with opposite sign — they cancel exactly,
+//! leaving a clean, sign-definite energy budget. Drop it and that term floats free and the balance
+//! is lost. The sweep is what makes the coupling energy-consistent, so `Sr` must be the one area
+//! shared by the pressure force and the sweep.
+//!
+//! **Discrete scheme — the bow pattern, made two-field.** The reed is a centered leapfrog (`y''`
+//! and the `g y'` damping centered, the spring `wr^2 y` explicit at `n` — the string's cross-time
+//! potential), and the bore is its staggered p/U leapfrog. They couple only through the mouthpiece
+//! half-cell node 0. The nonlinearity is evaluated at the **centered** pressure drop `dp_bar =
+//! p_m - (p0^{n+1} + p0^n)/2` and the **centered** reed velocity `y' = (y^{n+1} - y^{n-1}) / 2k` —
+//! the *same* two quantities appear in the reed force and the bore injection, so the reactive
+//! coupling telescopes to machine precision (the von-Kármán/bow centering lesson; an off-center
+//! pressure leaks O(k) energy). The reed's linear response is affine in `dp_bar`, so eliminating
+//! `y^{n+1}` collapses the whole implicit step to **one scalar equation** for `dp_bar` (the bow's
+//! rank-1 move):
+//!
+//! ```text
+//! D dp_bar = C0const + p_pref0 U_B(dp_bar) ,
+//! ```
+//!
+//! with `U_B` the only nonlinear term. Following the advisor's simplification, the **opening**
+//! `H^+` is frozen explicit at `n` (it only scales the passive conductance, never the reactive
+//! coupling), so the scalar residual carries a single `sqrt` cusp and no clamp kink — it is
+//! strictly **monotone** in `dp_bar` (unique root), solved by a continuation-seeded Newton with a
+//! guaranteed bracketing fallback (the `sqrt` gives infinite slope at `dp = 0`, so the fallback
+//! fires more than the bow's did).
+//!
+//! **The node-0 half-cell injection.** The flow enters node 0's continuity `C0 dp0/dt = ... + U`,
+//! so the pressure gain per step is `(k / C0) U` with `C0` the **half-cell** capacitance (`h/2`
+//! node weight — the trapezoidal wall weight the bore already carries). Getting that `C0` right is
+//! the node-0 gotcha: the wrong capacitance rescales the injected flow and the energy balance
+//! drifts. The reed rides on the bore's `"closed"` end (a live half-cell DOF, like a rigid wall),
+//! and the injection is applied **inside** [`crate::bore::Bore::step`] between the pressure and
+//! momentum sub-steps (the `source` hook) so the velocity `U^{n+3/2}` sees the corrected node
+//! pressure — the same ordering the radiating bell obeys.
+//!
+//! **Validation is an energy *balance* (the exciter money test).** The reed *stores* energy (it is
+//! a mass-spring, unlike the bow's memoryless friction), so the conserved quantity is `E = E_bore +
+//! E_reed`, and the exact discrete identity is
+//!
+//! ```text
+//! E^n - E^0 = mouth_work - jet_loss - reed_damp_work   (+ any bore loss/radiation),
+//! ```
+//!
+//! every dissipation channel sign-definite: `jet_loss = sum k dp_bar U_B >= 0` (Bernoulli),
+//! `reed_damp_work = sum k mu Sr g y'^2 >= 0` (reed damping), `mouth_work = sum k p_m U` (the
+//! breath, the *active* input). Unlike the bow (memoryless, so its balance is
+//! residual-*independent* — force applied and booked from one number), the reed's two-field
+//! coupling ties the bore node and the booked flow together only *at* the root: the per-step error
+//! is `k p_bar R / p_pref0`, **linear in the scalar residual** `R`. So the balance both **requires
+//! and verifies** a converged solve each step; it is machine precision because `newton_tol ~ 1e-10`
+//! keeps `R` tiny (loosen it and the balance degrades in proportion). Lossless bore -> the identity
+//! holds to ~1e-14. **But balance passes on a dead (wrong-sign) reed that rings down**, so the
+//! independent oracle is the *signature*: self-sustained oscillation above a blowing threshold,
+//! locked near the bore's `c/4L` with **odd** harmonics (the clarinet), decaying below threshold.
+//!
+//! Headless: delegates the air column to [`crate::bore::Bore`] and the scalar fallback to
+//! [`crate::root::brentq`] (in the Python, SciPy's `brentq`).
 //!
 //! # This is the first ported model whose step is not a formula
 //!
@@ -142,21 +240,29 @@ pub fn bernoulli_flow(dp: f64, opening: f64, width: f64, rho: f64) -> f64 {
 pub struct Params {
     /// Timestep, taken from the bore.
     pub k: f64,
-    /// Reed resonance (Hz).
+    /// Reed resonance (Hz), `wr = 2 pi f_reed`. A clarinet reed sits ~2-3 kHz, well above the bore
+    /// fundamental (the bore, not the reed, sets the pitch — an *inward-striking* reed). Must
+    /// satisfy `wr k < 2` (trivially true at the bore's oversampled rate).
     pub f_reed: f64,
-    /// Reed quality factor.
+    /// Reed quality factor; the damping rate is `g = wr / q_reed`. Clarinet reeds are heavily
+    /// lip-damped (`q ~ 3-5`).
     pub q_reed: f64,
-    /// Reed areal mass (kg/m²).
+    /// Reed areal mass (kg/m²). With `f_reed` and `H0` it fixes the closing pressure
+    /// `p_closing = mu wr^2 H0` — the pressure scale of the instrument.
     pub mu: f64,
     /// Effective reed area (m²) — the one area that both feels the pressure and sweeps volume.
+    /// The energy identity requires it to be one shared area (see the module header).
     pub sr: f64,
-    /// Effective channel width (m) for the Bernoulli jet.
+    /// Effective channel width `w` (m) for the Bernoulli jet `U_B = w H^+ ...`.
     pub width: f64,
-    /// Reed rest opening (m).
+    /// Reed rest opening (m): the channel height at `y = 0` (no blowing). The reed beats shut when
+    /// `H0 + y <= 0` (a hard flow clamp; the true contact *force* is deferred, HANDOFF §12).
     pub h0: f64,
     /// Air density, taken from the bore.
     pub rho: f64,
-    /// Convergence tolerance on the scalar residual (Pa).
+    /// Convergence tolerance on the scalar residual (Pa), `1e-10` by default. The energy balance
+    /// is exact only up to this residual (per-step error `k p_bar R / p_pref0`), so keep it
+    /// tight — loosening it degrades the balance in proportion.
     pub newton_tol: f64,
     /// Max safeguarded-Newton iterations before the bracketed fallback.
     pub newton_maxiter: usize,
@@ -270,7 +376,9 @@ impl Params {
 /// between steps — that is how an attack is played.
 #[derive(Debug, Clone, PartialEq)]
 pub struct State {
-    /// Steady mouth (blowing) pressure `p_m` (Pa) — the control input.
+    /// Steady mouth (blowing) pressure `p_m` (Pa) — the control input. Oscillation needs it above a
+    /// threshold fraction of the reed's closing pressure (`gamma = p_m / p_closing`; the clarinet
+    /// speaks around `gamma ~ 1/3`). Change it between steps for an attack.
     pub p_mouth: f64,
     /// Reed tip displacement `y^n` (m).
     pub y: f64,
@@ -336,7 +444,9 @@ impl State {
             + (((0.5 * p.mr) * p.wr) * p.wr) * (self.y * self.y_prev)
     }
 
-    /// Dimensionless blowing pressure `gamma = p_mouth / p_closing` — the clarinet control.
+    /// Dimensionless blowing pressure `gamma = p_mouth / p_closing` — the clarinet control. The
+    /// reed beats shut statically at `gamma = 1`; the note speaks around the small-oscillation
+    /// threshold `gamma ~ 1/3` (Dalmont/Kergomard).
     pub fn gamma(&self, p: &Params) -> f64 {
         self.p_mouth / p.p_closing
     }
@@ -516,9 +626,17 @@ pub fn commit(p: &Params, s: &mut State) {
 
 /// A bore blown through a dynamic single reed.
 ///
-/// The Rust caller's view and what `cargo test` exercises. The Python binding does **not** wrap
-/// this: its bore has to be the *Python object* the caller passed, so that `reed.bore.energy()`
-/// reaches the same instance. It holds a handle to a `PyBore` and calls the free functions above.
+/// The bore's **left** end must be closed (the mouthpiece is a live half-cell DOF the reed
+/// drives); the far end is typically open (ideal) or radiating (a sounding bell). A little loss (a
+/// radiating bell or `sigma > 0`) lets the note settle into a steady regime instead of growing
+/// without bound. The natural pickup is the **mouthpiece pressure**
+/// ([`Self::mouthpiece_pressure`]), the mouth side of the reed, whose waveform goes square-ish as
+/// the note speaks; the bore's own read-outs give any interior node and, with a radiating end, the
+/// bell's far field.
+///
+/// (Until retirement plan §51 the Python binding did not wrap this type: its bore had to be the
+/// *Python object* the caller passed, so it held a handle to that and called the free functions
+/// above.)
 #[derive(Debug, Clone)]
 pub struct ReedBore {
     p: Params,

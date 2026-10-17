@@ -1,8 +1,15 @@
 //! The port tier of `physsynth/core/airbox.py` — a room's two-way terminals.
 //!
 //! Port of `RoomPort`, `_PatchPort`, `SurfacePort` and `InteriorSurfacePort`, plus the two module
-//! helpers they share (`_face_axes`, `_free_pressure_nodes`). The reference docstrings there are
-//! the physics; this module documents only what the translation had to decide.
+//! helpers they share (`_face_axes`, `_free_pressure_nodes`). The reference docstrings were the
+//! physics and this header documented only what the translation had to decide. They were deleted
+//! with the room's first half (deletion 9, `58654e5`), so their derivations are carried from
+//! `58654e5^` onto the native items of the same names: the three port classes' docstrings on
+//! [`RoomPort`], [`SurfacePort`] and [`InteriorSurfacePort`] (their parameter lists left out — the
+//! native constructors and fields carry those — and their notes kept), and the method docstrings
+//! that carry a derivation on the native methods and helpers. Each is verbatim save for its
+//! cross-references. Where the text says the port "registers itself with the room", read the
+//! native ownership described on [`RoomPort`]. The room's own physics is [`crate::airbox`]'s.
 //!
 //! # Why the ports go before the wrappers
 //!
@@ -183,6 +190,12 @@ pub type Nodes = [Vec<usize>; 3];
 /// Replicates `AirBox.step`'s order exactly: divergence, then the wall closure. The three axis
 /// contributions accumulate in axis order into a running `div` that starts at `0.0`, which is the
 /// reference's `div += ...` and matters because `0.0 + (-0.0)` is `+0.0`.
+///
+/// The local divergence read is bit-identical to the full-array divergence followed by the closure,
+/// on low **and** high faces alike (the `idx < N` / `idx > 0` branches are different code paths and
+/// both are exercised), for every wall type *except* an `open` face — where [`AirBox::step`] pins
+/// `p = 0` and this read does not. Ports touching an open face are refused at construction, so the
+/// identity holds by construction rather than by luck.
 pub fn free_pressure_nodes(view: &RoomView<'_>, nodes: &[&[usize]; 3]) -> Vec<f64> {
     let count = nodes[0].len();
     let shape = view.node_shape();
@@ -646,6 +659,94 @@ fn index_repr(i: [usize; 3]) -> String {
 /// * **Unsticking.** `AirBox::set_state` cannot write `_queued_at = -1` into ports it does not
 ///   hold, so it bumps `AirBox::epoch` and the port compares against it. See
 ///   [`RoomPort::require_ready`].
+///
+/// A port is a set of grid nodes with normalized volume weights `w_n` (summing to 1). It answers
+/// exactly one question, and answers it as a *linear scalar relation*: if a volume velocity `q` is
+/// injected here this step, what centered pressure `pbar` will the injector feel?
+///
+/// ```text
+/// pbar = pbar_free + R_room q
+/// ```
+///
+/// [`RoomPort::free_pressure`] is `pbar_free`, the open-circuit term — what the port would feel
+/// with `q = 0`, carrying the room's entire history *including every reflection off every wall*.
+/// [`RoomPort::r_room`] is the constant internal resistance. Together they are everything a coupled
+/// solver needs, which is why the body's load collapses to one division
+/// ([`crate::airbox_wrap::RoomLoadedBody`]) instead of a field solve.
+///
+/// **Why it is only two numbers.** Within a single step an injection changes the pressure at its
+/// own nodes and nowhere else: [`AirBox::step`] adds the source term node-locally to `p^{n+1}`, and
+/// propagation to the neighbours waits for the *next* momentum sub-step. So the room is
+/// linear-in-`q` with a diagonal instantaneous response, and
+///
+/// ```text
+/// R_room = sum_n w_n^2 k rho0 c0^2 / (2 W_n (1 + beta_n))
+/// ```
+///
+/// where the `2` is the centered (trapezoidal) pressure, `W_n` the tensor-trapezoid node weight,
+/// and `(1 + beta_n)` the **wall closure denominator**. That last factor is easy to omit — the
+/// naive `k rho0 c0^2 / (2 W)` is right at every interior node — and it matters as soon as a port
+/// is mounted on a lossy wall: `step()` injects *before* it closes the wall, so the injection is
+/// divided by `1 + beta` along with everything else, and `R_room` must say so.
+///
+/// **What omitting it costs is NOT an energy leak, and this repo's primary bug detector cannot see
+/// it.** Corrected on measurement (the area-coupling batch §6.1,
+/// `docs/dev/air-box-area-coupling-plan.md`): the body's energy identity telescopes to `-k pbar U`
+/// for *whatever* `pbar` was used in the force, and the room's identity is exact for *whatever*
+/// injection it received, so the scene total is the sum of two separately-exact identities and
+/// stays flat even when the pressure the body was pushed by and the pressure the room developed are
+/// different numbers. Measured here on batch 3's distributed port, whose `R_j` is this same
+/// constant per node — the factor dropped on a lossy mounting wall (`zeta = 3`, mean `beta =
+/// 0.173`), 300 steps: the scene total drifts **4.9e-15, which is SMALLER than the correct run's
+/// 2.0e-14** — green either way, and not even in the suspicious direction — while `|radiated -
+/// injected|` goes from **exactly 0.00e+00** to **18% of the channel** (12.9% on a free plate). A
+/// wrong `R` does not leak energy; it creates it on one side and destroys the same amount on the
+/// other. The tests that catch it are the *cross-ledger* identity `radiated == injected` and the
+/// differential measurement `test_R_room_is_what_the_room_does`, never the conserved total.
+///
+/// **Point port versus spread port — a measured non-convergence.** `radius=None` puts the whole
+/// volume velocity on one node. That is exact and perfectly conservative, and its *magnitude* is a
+/// property of the grid rather than of the physics: the port behaves as a pulsating sphere of
+/// equivalent radius `~ h / 3.1` (measured `a_eff / h` = 0.324, 0.320, 0.317 on three grids), which
+/// at low frequency is an added **mass** loading the body. Refining `h` therefore makes the
+/// artifact *worse*, not better — it halves the equivalent radius and doubles the load (measured
+/// ratios 0.493 and 0.496 across two halvings). A ball of fixed `radius` does not move: 1.045 and
+/// 1.038 over the same halvings, a factor of twenty less grid-sensitive. **So use a point port for
+/// structural tests, where only exactness matters, and a spread port whenever the magnitude of the
+/// coupling is meant to mean something.** `radius` has no default so that choice is always made,
+/// never inherited.
+///
+/// A spread port's absolute size is the **uniformly injecting ball**, whose equivalent shell radius
+/// is `5a/6` — the classic **6/5** shape factor, the same one as the mean potential of a uniformly
+/// charged sphere — and *not* a pulsating shell of radius `a`. Confirmed to 0.3% in a room large
+/// enough for the port to be compact. Read that caveat as a real one: the same measurement in a
+/// room only 10x the port reads 8.6% high, and that excess is the **room's** own reactance rather
+/// than the port's (measured ratios to `5a/6` of 1.086, 1.040, 1.003, 0.977 for rooms of 0.5, 0.7,
+/// 1.0 and 1.4 m). The number is insensitive to the Courant number to five significant figures, so
+/// it is a static near-field quantity and not a dispersion artifact.
+///
+/// **Notes**
+/// **An open face is refused, and the energy report cannot catch why.** An `"open"` (`Z = 0`) face
+/// pins `p = 0`, so a port on it has `pbar_free = 0` and `R_room = 0`: the body radiates into a
+/// short circuit. Measured over 400 steps, `injected` and `acoustic` are *exactly* zero and the
+/// conserved total drifts 8.6e-15. The run is perfectly conservative and completely silent — the
+/// physics is exactly right and exactly useless — so this project's primary bug detector is
+/// structurally blind to it and a construction-time refusal is the only place to catch it.
+///
+/// **Overlap is refused for a reason that is also the reason N instruments work.** Two ports
+/// sharing a node are not independent within a step: A's injection changes B's `pbar`, so B solved
+/// against a pressure that never occurred and the two ledgers stop matching (measured 3.6e-2 drift,
+/// against 7.1e-15 for disjoint ports in the same room). Disjointness is exactly the condition that
+/// makes the cheap per-port scalar solve *exact*. A simultaneous `(I + G R) U` solve with the
+/// cross-resistance matrix would handle overlap and is passive too, but it needs one central object
+/// owning every port — which is precisely what makes a per-instrument
+/// [`crate::connection::StringBodyBridge`] chain impossible. The hazard is real because of
+/// **snapping**: two ports 5 mm apart on a 13.5 mm grid are one port.
+///
+/// **Do not mix [`AirBox::inject`] with ports** in a run whose energy you intend to assert on. That
+/// source's work lands in the room's `injected` book with no port ledger to cancel it, so `sum_j
+/// inst_j.energy() + room.energy()` is no longer the conserved total (it picks up the source's
+/// contribution). Ports and the read-out source are both fine, just not in one ledger.
 #[derive(Debug, Clone)]
 pub struct RoomPort {
     index: [usize; 3],
@@ -778,6 +879,10 @@ impl RoomPort {
     }
 
     /// The port's discrete volume `sum_n W_n` (m^3) — the staircased ball, made visible.
+    ///
+    /// Compare against `4 pi a^3 / 3`: the wobble as whole nodes fall in or out of the ball is the
+    /// membrane batch's staircase and it is this port's accuracy floor (measured -4.6%, +1.5% on
+    /// two grids), not a defect of the scheme.
     pub fn volume(&self, room: &AirBox) -> f64 {
         let view = room.view();
         let vals: Vec<f64> = self.flat.iter().map(|&f| view.node_w[f]).collect();
@@ -785,6 +890,16 @@ impl RoomPort {
     }
 
     /// The open-circuit centered pressure `pbar_free` this port would feel with `q = 0`.
+    ///
+    /// `O(port nodes)`: the divergence at a node needs only the six faces touching it, so this
+    /// never touches the whole field. It replicates [`AirBox::step`]'s order exactly — divergence,
+    /// **then** the wall closure — and must be read *before* `room.step()`, from the stored
+    /// `u^{n+1/2}`.
+    ///
+    /// It deliberately ignores other ports' queued injections. For **disjoint** ports that is not
+    /// an approximation: a queued injection at another node cannot reach this node within the step,
+    /// so including it would change nothing — while for overlapping ports (refused at construction)
+    /// reading it would make the solve *asymmetric* rather than merely wrong.
     pub fn free_pressure(&self, room: &AirBox) -> f64 {
         let view = room.view();
         let cols = [&self.nodes[0][..], &self.nodes[1][..], &self.nodes[2][..]];
@@ -810,6 +925,10 @@ impl RoomPort {
     }
 
     /// Queue this port's volume velocity `q` (m^3/s) for the room's next `AirBox::step`.
+    ///
+    /// Node `n` receives the share `w_n q`. The room books the work at its own post-closure
+    /// centered pressure — never at a number handed back from here, which is what keeps the two
+    /// ledgers an independent check on each other rather than a tautology.
     pub fn inject(&mut self, room: &mut AirBox, q: f64) -> Result<(), PortError> {
         self.require_ready(room)?;
         room.pending_ports.push(crate::airbox::PortInjection {
@@ -831,6 +950,14 @@ impl RoomPort {
 ///
 /// A rigid or lossy room short-circuits: `_open` is all false and the reference's `np.any` is the
 /// same early return.
+///
+/// An `open` (`Z = 0`) face pins `p = 0`, so `pbar_free` and every `R_j` are exactly zero: the
+/// surface radiates into a short circuit, perfectly conservative and completely silent, and the
+/// energy report is structurally blind to it. There is a **second, independent** reason here:
+/// [`free_pressure_nodes`]' local read does not pin `p = 0` where [`AirBox::step`] does, so a patch
+/// touching an open face is the one case where the local read stops being bit-identical to the
+/// full-array closure (measured 4.3e-04, against exactly 0.0 everywhere else). Refusing makes that
+/// identity hold by construction rather than by luck.
 fn touched_open_faces(p: &crate::airbox::Params, nodes: &Nodes) -> Vec<String> {
     if !p.open.iter().any(|&o| o) {
         return Vec::new();
@@ -1049,6 +1176,39 @@ pub fn load_matrix(t: &Csr, r: &[f64], scale: f64) -> Csr {
 /// and last; and their union. For a rectangle this reduces to the bounding box by construction,
 /// and for a staircased disk it is the difference between refusing at every resolution and refusing
 /// at none. Returns `(unfed, footprint size)`.
+///
+/// Counts air nodes **under** the footprint that no surface node reaches. With bilinear spreading
+/// this is 0 at every grid ratio measured, so the refusal rarely fires — and it still ships,
+/// because a surface coarse enough to skip whole air cells is a real thing to refuse. Note the
+/// condition is a **count of unfed nodes**, not an inequality on `h_surface/h_air`: at ratio 0.909,
+/// comfortably inside the naive inequality, nearest-node still left half the footprint unfed.
+///
+/// **"Under the footprint" is span-wise, not a bounding box** — which it was until the membrane
+/// batch, and which quietly assumed every surface is a *rectangle*. The required set is now: per
+/// reached air-node row, the columns between that row's own first and last reached column; per
+/// reached column, the rows between its own first and last; and their **union**. For a rectangle
+/// every row spans the same columns and every column the same rows, so this reduces to the bounding
+/// box **by construction** — batches 3 and 4 are unmoved.
+///
+/// The new set is *contained* in the old one's outer bound and *contains* the old one itself (the
+/// coordinate box is inset by up to one node per side), so it refuses everything the box refused
+/// and counts a few more nodes when it does — measured 20 against 17 at `h_surface/h_air = 2.02`.
+/// **The verdict boundary does not move**: swept over a rectangle at 1.01, 1.21, 1.35, 1.52, 1.73,
+/// 2.02, 2.42, 3.03, both criteria change their mind between the same two spacings. Where that
+/// boundary *sits* depends on alignment and not only on the ratio — a differently-placed patch put
+/// it in (2.02, 2.24] — which is the same reason this is a count of unfed nodes and not an
+/// inequality on `h_surface/h_air`.
+///
+/// The bounding box was not a conservative approximation, it was the **wrong set**. A staircased
+/// *disk* — model #4's circular domain, i.e. a drumhead — has bbox corners about `0.41 R` from the
+/// nearest live node, so they are unreachable by construction and the refusal fired at *every*
+/// resolution, getting worse under refinement: 20, 48 and 40 unfed nodes at `N = 40, 56, 72`, on
+/// both port tiers. Those corners are not under the surface at all. Span-wise, the same disks leave
+/// **zero** unfed at `N = 24 … 96`.
+///
+/// What this does still refuse, and honestly so, is a surface with an interior *hole* — an annulus
+/// spans its own gap row-wise. No resonator in this repo has one; if one arrives, this is the line
+/// that has to learn about it, and the refusal names the shape rather than hiding it.
 pub fn footprint_unfed(i0: &[usize], i1: &[usize], n1: usize) -> (usize, usize) {
     let stride = n1 + 1;
     let mut spans: Vec<usize> = Vec::new();
@@ -1412,6 +1572,14 @@ macro_rules! patch_accessors {
             /// The **radiating** area `sum_n area_n` (m^2) — which is not the bounding rectangle.
             ///
             /// Reads `areas` live rather than from a cache, so zeroing it works.
+            ///
+            /// A simply-supported plate's rim nodes are dead: they do not move, so they displace no
+            /// volume, and the total comes out at exactly `((N-1)/N)^2 Lx Ly` (measured 0.5625,
+            /// 0.7656, 0.8403, 0.8789, 0.9184 at `N = 4, 8, 12, 16, 24`). That shortfall is
+            /// **physics, not a defect** — but it means any comparison against a closed form for a
+            /// piston of area `Lx Ly` is wrong by that factor at coarse `N`, so the number is
+            /// reported ([`RoomPort::volume`]'s precedent). A free plate has no dead rim and comes
+            /// out at exactly `Lx Ly`.
             pub fn net_area(&self) -> f64 {
                 reduce::sum(&self.patch.areas)
             }
@@ -1442,6 +1610,166 @@ macro_rules! patch_accessors {
 /// `T^T diag(R) T`, so a mode that moves the same net volume as another can still radiate a
 /// completely different field. Built as a value the caller owns, with the room passed at each
 /// call — the shape the retirement's second batch chose and this tier inherits.
+///
+/// [`RoomPort`] is a *one-port*: it couples through exactly one scalar, the net volume velocity
+/// `U = sum_i a_i q_i'`, and hands back exactly one scalar pressure. That is the right shape for a
+/// [`crate::body::ModalBody`], whose radiation weights *are* its surface collapsed to a point. It
+/// is the wrong shape for a **grid** resonator, which has a real surface with a real shape on it —
+/// and the difference is not a refinement but a whole physical effect that every lumped tier in
+/// this repo predicts to be **exactly zero**:
+///
+/// ```text
+/// a surface radiates according to the **shape** of its motion, not only its net volume
+/// displacement — so a mode with zero net volume velocity, which every one-port here calls
+/// silent, is not.
+/// ```
+///
+/// That is the **acoustic short circuit**. An even-index mode of a simply supported plate —
+/// `(2,1)`, `(2,2)`, `(4,2)` — has `+` and `-` regions displacing *exactly* cancelling volumes
+/// (`sum_i sin(m pi i/N) = 0` identically for even `m`, so `U = 0` to rounding and not merely
+/// small). What actually happens is that each patch of surface pushes on the air *locally*, and the
+/// cancellation is only as complete as the acoustic wavelength's ability to bridge a `+` region and
+/// its `-` neighbour. Below coincidence the cancellation is nearly complete and the radiation comes
+/// from the edges; above it the surface pattern is supersonic and radiates freely. A one-port has
+/// no length scale on its surface, so no `R(omega)` reproduces this at any order — the same
+/// structural argument as batch 2's delayed echo, one tier further in.
+///
+/// **The room's instantaneous response is diagonal, so the load is `T^T R T`.** Batch 2 read "an
+/// injection changes the pressure at its own node and nowhere else within a step" as a Thevenin
+/// source at *a* node. The stronger reading is that the room's instantaneous response over *any*
+/// set of nodes is **diagonal** — no cross-resistance at any separation, including one cell
+/// (measured: off-diagonal exactly `0.00e+00` at interior, lossy-wall and lossy-edge patches
+/// alike). So with
+///
+/// * `T` the **volume-weight matrix** `(n_patch x n_surface)`, `q = T v` in m^3/s,
+/// * `R = diag(R_j)`, `R_j = k rho0 c0^2 / (2 W_j (1 + beta_j))` — [`RoomPort::r_room`]'s constant
+///   per node, wall-closure denominator included,
+/// * `pbar = pbar_free + R q` a **vector** Thevenin relation,
+///
+/// reciprocity carries the pressure back as `f = -T^T pbar` (the same structural fact
+/// [`crate::radiation::RadiatedBody`] leans on when it reuses its read-out weights as coupling
+/// weights), and the unknown part of the load is `-(1/2k) T^T R T u^{n+1}`: a constant, symmetric,
+/// positive-semidefinite, sparse matrix times the unknown. It **folds into the resonator's own
+/// factorization** — nothing new is solved (see [`crate::airbox_wrap::RoomGrid`]). The family's
+/// ladder, complete: [`crate::radiation::RadiatedBody`] scalar `R` -> one division;
+/// [`crate::radiation::RationalAirLoad`] `R_eff` + one aux state -> one division; [`RoomPort`]
+/// scalar `R_room` with a rich `pbar_free` -> one division; **this** diagonal `R` with a matrix `T`
+/// -> absorbed into the resonator's LU. Batch 2 *is* the rank-1 case: put every surface node on one
+/// air node and `T` becomes `w 1^T`, `T^T R T` the rank-1 `R_room w w^T`, and Sherman-Morrison is
+/// what inverting `A + rank-1` gives instead of refactoring. Passivity is unconditional and for a
+/// better reason than before — `T^T R T` is PSD because `R_j >= 0`, so the loaded matrix is SPD for
+/// every timestep, every grid, every patch, and can never be singular.
+///
+/// **The sign convention is part of the API, and it is local.** Positive surface displacement is
+/// along the room's **inward normal at** [`SurfacePort::face`] — `+z` for `z0`, `-z` for `z1`, and
+/// so on — so an outward-moving surface *compresses* the air at its own face. Hence `T` is
+/// entrywise non-negative on all six walls and **no inward normal appears in the code at all**.
+/// This is not cosmetic: a consistent sign flip in `T`/`T^T` is invisible to every energetic
+/// quantity in the batch — `T^T R T` is sign-invariant, so the load matrix, the solve and
+/// `radiated_energy` all come out **bit-identical** while the room's field is inverted (measured).
+/// The alternative convention, "positive displacement along the global axis", needs an explicit
+/// per-face sign, and getting it wrong on three of the six faces is a perfectly passive, perfectly
+/// conservative, perfectly green simulation of a plate pushing the wrong way. The local convention
+/// disarms the trap instead of testing around it. (Its only detector is the sign of the surface
+/// pressure on the **first** step: a six-step read gave the *wrong* answer in the prototype because
+/// the plate's own half period was five steps.)
+///
+/// **Bilinear spreading, and the argument that decides it is COVERAGE — the symmetry argument does
+/// not survive measurement.** `T` must (a) conserve volume exactly, (b) be usable as `T^T` for the
+/// pressure, and (c) leave no air node in the footprint unfed. Nearest-node assignment satisfies
+/// (a) and (b) and fails (c): at `h_surface/h_air = 1.21` it leaves footprint nodes unfed, which
+/// this class refuses. Where it does construct, its interior assigned area per air node is lumpy at
+/// the grid scale and **does not converge** — measured spread 0.83, 1.03, 0.64, 0.46 `h_air^2` at
+/// `N_plate = 8, 16, 24, 32`, wandering rather than shrinking. Bilinear spreading (each surface
+/// node's area distributed over the four surrounding air nodes with weights summing to 1) leaves
+/// **0** unfed at every ratio and is 10x to 100x flatter at every one: 0.082, 0.062, 0.051, 0.031
+/// over the same refinements, decreasing. That is what ships, and `spreading="nearest"` exists
+/// **only** as its measured negative control.
+///
+/// **How flat, exactly — because "partition of unity" promises more than it delivers.** Bilinear's
+/// interior assignment is `h_air^2` *exactly* (measured 5e-16 … 2e-15) when `h_air/h_surface` is an
+/// **integer**, and only then. Off an integer it ripples, and not monotonically in the ratio: 2.93
+/// gives 0.0077 while the finer 4.40 gives 0.0207. Poisson summation says why — the periodised hat
+/// sum has Fourier coefficients `sinc^2(pi k h_air/h_surface)`, whose `k`-th term vanishes exactly
+/// when `k h_air/h_surface` is a nonzero integer, so which harmonics cancel depends on the ratio's
+/// arithmetic rather than on its size. The residual is a small ripple in the source's *amplitude*
+/// across the surface, it shrinks under refinement, and it is the accuracy floor of this coupling —
+/// worth knowing before reading a radiated magnitude as physics.
+///
+/// **What was expected to decide it, and what was actually found.** The plan for this batch argued
+/// from *reflection equivariance* — that bilinear's load matrix is mirror-symmetric at every offset
+/// while nearest-node's is not. Measured here (two independent routes: the defect of `T^T R T`
+/// under the surface's own mirror permutation, and the defect of `T` itself under that mirror
+/// composed with the air grid's), **bilinear's equivariance is not offset-independent.** It holds
+/// exactly when `S = 2 (surface centre) / h_air` is an **integer** — defect 1.0e-15 there — and
+/// fails smoothly otherwise, 1.6e-01 … 3.8e-01 across sixteen offsets spanning one air cell,
+/// peaking at the half-cell offset. The algebra says the same thing: the surface's mirror sends
+/// node `i` to a cell fraction `frac(S - t_i)`, which equals the `1 - f_i` that reverses a bilinear
+/// weight pair *only* for integral `S`. Nearest-node's equivariance is patchier still, and the way
+/// it fails is the tell: it is exact at an **even** `S` (measured `0.00e+00`) and breaks at an
+/// **odd** one (5.2e-01), because there the surface's own centre node lands exactly on a rounding
+/// tie, which round-half-to-even resolves the same way from both directions. So nearest-node's
+/// symmetry is an accident of alignment and of the rounding rule; bilinear's is a property of the
+/// geometry.
+///
+/// **Two consequences, and neither weakens the design.** First, centring is load-bearing for *two*
+/// independent reasons rather than one — it is what makes `S` integral and the load matrix
+/// equivariant at all, on top of the scene-symmetry argument below. Second, the coupled monopole
+/// leak does **not** discriminate the two operators: with the surface centred, an even plate mode's
+/// `|U|/A` stays at rounding (1.3e-14 … 3.3e-13 over 200 steps) under *both* spreadings at
+/// `N_plate = 8, 16, 24`. What breaks the zero is the **scene**, not the spreading operator —
+/// measured 2.3e-01 for a plate off-centre by `h_air/3` and 7.4e-02 for a centred plate in a room
+/// made asymmetric in the mode's own axis, against 7.2e-14 centred and symmetric.
+///
+/// **The zero is a property of the whole SCENE, not of the surface or the spreading operator.**
+/// Equivariance of the load is necessary and *not* sufficient, because the load is only half the
+/// coupling: the incoming `T^T pbar_free` is the **room's** field, so an antisymmetric surface mode
+/// stays silent only if the room is mirror-symmetric about that mode's own antisymmetry plane. A
+/// **perfectly centred** plate in a room made asymmetric *in x* (lossy `x0`, rigid `x1`) leaks
+/// 3.5e-02 — the largest figure in the study — while the same asymmetry in *y* leaves a `(2,1)`
+/// mode at 3.0e-15. Six different room widths with the plate centred, spanning two grid alignments,
+/// all sit at rounding: **grid commensurability is not the criterion, centring is.** And there is
+/// no tolerance band — the leak is *linear* in the offset over four decades (`delta/h_air = 1e-6`
+/// gives 1.0e-07), so "approximately centred" is not approximately silent. Hence the origin
+/// **defaults to centred in the face**. The asymmetric case is not a defect to hide: a room that
+/// re-excites a surface's *shape*, converting an acoustically silent mode into a radiating one at
+/// the 1-3% level, is one more thing no one-port can represent at all.
+///
+/// **A baffled surface needs no new boundary machinery, and that is algebra rather than a
+/// measurement.** A soft injection of `q = A_n v` at a **wall** node *is* the moving-wall (piston)
+/// condition, not an approximation of it: the wall node's divergence is `u_face/w_z` with `w_z =
+/// h/2`, so a wall moving at `v` adds `k rho0 c0^2 v/(h/2)`, while a soft source `q = h^2 v` into
+/// `W = h^3/2` adds `k rho0 c0^2 (h^2 v)/(h^3/2)` — and `h^2/(h^3/2) = 1/(h/2)`, so these are the
+/// same number identically, on every wall type. Note the two expressions divide by `W` and by `w_z`
+/// in different orders, so an implementation written the other way would agree to machine precision
+/// and **not** bit-for-bit; this repo's bit-identity claims are load-bearing and that one could not
+/// be cashed.
+///
+/// **Notes**
+/// **Why the rim of the face is refused rather than clipped.** Clipping the stencil at the face
+/// boundary (`np.clip(i0 + di, 0, N)`) folds a node's outboard weight back onto the boundary node.
+/// The weights still sum to 1, so volume is still conserved and **every ledger stays green while
+/// the source geometry is quietly wrong** — the same failure shape as the sign flip above.
+/// [`crate::airbox::node_index`] already refuses to relocate an out-of-room point rather than
+/// snapping it; this matches. The refusal is stated on the *stencil*: every air node that receives
+/// weight must be strictly interior to the face. That has a second, load-bearing consequence — a
+/// node on the face's rim also touches a second wall, so it carries half the node weight `W` and
+/// the **sum** of two wall admittances in `beta`. `R_j` would stop being uniform across the patch,
+/// and with it the `T^T R T = R (T^T T)` identity the offset-independent equivariance rests on. The
+/// refusal is therefore what keeps the symmetry argument true, not merely what keeps the geometry
+/// tidy. It also means a legal patch can only ever touch its own mounting face.
+///
+/// **The acoustic source is up to one air cell larger than the surface**, because bilinear
+/// legitimately spreads onto the nodes just outboard of the surface's rectangle. The disjointness
+/// check therefore uses the **actual node set**, never the footprint.
+///
+/// **A lossy mounting wall is a test configuration, not a recommended one.** Patch nodes keep the
+/// mounting wall's impedance: [`AirBox::step`] divides the injection by `1 + beta` whether one
+/// likes it or not, so `R_j` must say so, and the result is physically a piston in an *absorbing*
+/// baffle — consistent, passive, and the only way to pin the `(1 + beta)` factor (which the
+/// radiation leg left unpinned twice in its history). But such a wall absorbs **through the
+/// surface's own footprint**, i.e. it models a plate porous to the wall behind it. A **rigid**
+/// mounting wall is the true infinite baffle and is the sane default.
 #[derive(Debug, Clone)]
 pub struct SurfacePort {
     patch: Patch,
@@ -1454,6 +1782,95 @@ pub struct SurfacePort {
 /// The same patch, mounted on a velocity plane rather than a wall: it blocks the faces it occupies
 /// (a rigid, zero-thickness partition registered with the room) and injects `-q` on the low node
 /// plane and `+q` on the high one, so the two sides are one object and the dipole is exact.
+///
+/// [`SurfacePort`] mounts a surface flush in a wall. The wall then does the rest: it is the
+/// textbook infinite baffle, the surface's back face is unloaded, and the surface is — for all the
+/// room can tell — a **source**, a patch of wall that moves. This class takes the wall away. The
+/// surface hangs *in* the room, radiates from **both** faces, and is driven by the pressure
+/// **jump** across it.
+///
+/// That is not batch 3 with a sign. A source adds sound to a room; an **object** also *removes*
+/// paths through it, and does so whether or not it is moving. Every instrument in the free-plate
+/// family — the suspended cymbal of model #5b, the gong of #6 — is physically an object hanging in
+/// air, so [`crate::airbox_wrap::RoomGrid`] models a loudspeaker cone or a soundboard in a cabinet
+/// honestly and a cymbal dishonestly.
+///
+/// **The implementation news is better than the area-coupling plan feared.** That plan budgeted for
+/// new boundary machinery — "putting the plate on a plane of velocity faces and replacing their
+/// momentum update with the plate's motion". Measured, prescribing the face velocity and injecting
+/// a `-q`/`+q` pair on the two node planes straddling the plane are **the same arithmetic**:
+///
+/// ```text
+/// node (i,j,m)  divergence term  +u_face / w_z   ->  dp = -k rho0 c0^2 u_face / w_z
+/// a soft source q at that node                   ->  dp = +k rho0 c0^2 q / W,  W = A_face w_z
+/// ```
+///
+/// and `A_face * w_z = W` identically, so with `q = A_face u_face` the two agree term for term,
+/// with the sign flipping between the planes. **The only new machinery is the cut** —
+/// [`AirBox::add_cut`], zeroing `u` on the faces under the surface. The port protocol, the
+/// injection weights and the `injected` ledger are batch 3's, unchanged. (Batch 1's step ordering
+/// paid for batch 3 the same way — "a soft injection at a wall node *is* the moving-wall
+/// condition"; this is that lesson one geometry further.)
+///
+/// **The load is `2 T^T R T`, and the room's response is diagonal on both planes.** With `T` the
+/// volume-weight matrix (surface -> **face**), `q = T v` the per-face volume velocity, and the
+/// injection weights `(-q, +q)` on planes `m` and `m+1`:
+///
+/// ```text
+/// pbar_lo = pbar_free_lo  -  R q
+/// pbar_hi = pbar_free_hi  +  R q
+/// f       = -T^T (pbar_hi - pbar_lo)  =  -T^T d_free  -  2 T^T R T v
+/// ```
+///
+/// with the **same** `R_j = k rho0 c0^2 / (2 W_j (1 + beta_j))` on both planes — which is what the
+/// rim refusals below are for. So the load is exactly *twice* the one-sided load on the same `T`
+/// and `R`, still constant, symmetric, PSD and sparse, so it still folds into the resonator's own
+/// sparse LU with nothing new solved. The family's ladder gains its last rung:
+/// [`crate::radiation::RadiatedBody`] scalar `R` -> one division;
+/// [`crate::radiation::RationalAirLoad`] `R_eff` + one aux state -> one division; [`RoomPort`]
+/// scalar `R_room` -> one division; [`SurfacePort`] diagonal `R` with a matrix `T` -> absorbed into
+/// the LU; **this**, the same, doubled.
+///
+/// **The factor 2 must be earned by measurement, not by construction.** `assert load_matrix == 2 *
+/// one_sided` is not a test — it re-checks arithmetic this file just wrote. Two realistic ways to
+/// get it wrong are blind to *different* ledgers: a `1x` inside the factorization only leaves
+/// `|radiated - injected|` at rounding (4.5e-16) while the scene drifts (1.8e-02), and a consistent
+/// `1x` ("I forgot the plate has two faces") leaves the scene flat to 2.4e-14 while the ledgers
+/// disagree by 1.8x. **So the money test is not sufficient either** — the guard that catches both
+/// is the coupled residual at two timesteps, against the room's own post-closure pressure jump.
+///
+/// **The sign convention is different from batch 3's, and it is load-bearing.** [`SurfacePort`] can
+/// make the inward normal disappear by defining positive displacement *along* it, which is why no
+/// inward normal appears in that code at all. An interior plane has two sides and no inward normal,
+/// so this class must choose: **positive surface displacement is along the plane's own axis**
+/// (`+x`/`+y`/`+z`), so the `index+1` plane is the one a positive velocity compresses. Flip the
+/// `-q`/`+q` order **and** the jump direction together and every energetic quantity is
+/// *bit-identical* — the load matrix, the solve, the pressure jump and `radiated_energy` — while
+/// the room's field is exactly inverted and the plate is anti-driven by it: passive, conservative,
+/// green, and pushing the wrong way. (Flip only one of the two and the conserved total does catch
+/// it.) The detector is the sign of the room's own pressure on the **first** step.
+///
+/// **The obstacle is up to one air cell larger than the surface, and that is the honest choice.**
+/// The cut is the **support of** `T`, not the surface's footprint. It has to be: the identity above
+/// holds only where a face carrying `q` is also cut, so a face with `q` and no cut is a phantom
+/// patch — and clipping `T` instead is exactly the "volume conserved, ledgers green, geometry
+/// quietly wrong" failure batch 3 refuses. [`InteriorSurfacePort::blocked_area`] reports the cost.
+///
+/// **A legal interior surface always has a diffraction path around it**, and that is a corollary
+/// rather than a limitation to hide: the rim refusal means a port can never span a full
+/// cross-section, so it can never seal the room. [`AirBox::add_cut`] provides the sealing version,
+/// which is what the sub-room modal oracle uses.
+///
+/// **Notes**
+/// **There is no open-face refusal here, and that is provable rather than an omission.** The
+/// in-plane rim refusal keeps every patch node strictly interior on both in-plane axes, and the
+/// `index` refusal does the same along the normal — so an interior patch cannot touch any wall,
+/// open or otherwise, and [`SurfacePort`]'s two reasons for that refusal cannot arise.
+///
+/// **Cut-face disjointness is a genuinely new failure mode, not an inherited one.** Two ports can
+/// have disjoint *node* sets and overlapping *cuts*, because the node sets live on different planes
+/// while the cuts can share one. That is why [`AirBox::add_cut`] is additive and why a port records
+/// its own face set.
 #[derive(Debug, Clone)]
 pub struct InteriorSurfacePort {
     patch: Patch,
@@ -1763,11 +2180,24 @@ impl InteriorSurfacePort {
     }
 
     /// The **cut** area (m^2) — `face_count * h^2`, and not [`Self::net_area`].
+    ///
+    /// The obstacle is the support of `T`, so it is up to one air cell larger than the surface in
+    /// each direction. Reported rather than discovered. Two things to know before blaming a
+    /// radiated number on it: under air-grid refinement the ratio to the moving surface's own
+    /// bounding rectangle is non-monotone (the node count is a rounding of the footprint) and
+    /// trends to 1; and on a **supported** plate the moving surface is the *live* footprint, so the
+    /// clamped rim is not part of the obstacle at all — the free plate is the configuration where
+    /// the obstacle and the physical plate coincide, which is also the one a suspended object is.
     pub fn blocked_area(&self, room: &AirBox) -> f64 {
         self.nodes_lo[0].len() as f64 * scalar_pow(room.p.h, 2.0)
     }
 
     /// The open-circuit centered pressure on the **low** and **high** node planes, `O(patch)`.
+    ///
+    /// Batch 3's contract, twice: read *before* `room.step()`, from the stored `u^{n+1/2}`. The
+    /// shared local read needs no cut-awareness — on the two straddling planes the face between
+    /// them is cut, i.e. `u = 0`, which the read picks up from the stored array like any other
+    /// value. See [`free_pressure_nodes`].
     pub fn free_pressure(&self, room: &AirBox) -> (Vec<f64>, Vec<f64>) {
         let view = room.view();
         let lo = &self.nodes_lo;
@@ -1779,6 +2209,13 @@ impl InteriorSurfacePort {
     }
 
     /// Queue the **per-face** volume-velocity vector `q` (m^3/s) as a `-q` / `+q` pair.
+    ///
+    /// `-q` goes to the node plane at [`InteriorSurfacePort::face_index`] and `+q` to the one above
+    /// it, which is the sign convention of the class docstring: a positive velocity along the
+    /// plane's own axis compresses the air it moves toward. Both are ordinary soft injections
+    /// ([`AirBox::inject`]'s own source term, vectorized), so the room books the work at its own
+    /// post-closure pressure from both planes and the two ledgers stay an independent check on each
+    /// other: their sum is `k q . (pbar_hi - pbar_lo)`, exactly the port's own channel.
     pub fn inject(&mut self, room: &mut AirBox, q: &[f64]) -> Result<(), PortError> {
         let faces = self.nodes_lo[0].len();
         if q.len() != faces {

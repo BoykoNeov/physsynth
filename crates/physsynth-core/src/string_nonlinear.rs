@@ -1,17 +1,115 @@
 //! Tension-modulated string — the Kirchhoff–Carrier nonlinearity (model #9).
 //!
-//! Port of `physsynth/core/string_nonlinear.py`. Model #3 plus a state-dependent tension:
+//! Port of `physsynth/core/string_nonlinear.py`. That module's docstring was the physics — why the
+//! nonlinear excess alone is averaged at `theta = 1/2` (so that `EA = 0` stays bit-for-bit model
+//! #3), why the discrete-gradient tension collapses to a plain midpoint with no `0/0` branch, and
+//! why single-mode motion is *dynamically* unstable above `dT/T0 ~ 3` — and this header documented
+//! only what the translation had to decide. The docstring was cut to a shim by deletion 5
+//! (`f6a3a3c`) and the shim went with the last of the Python (retirement plan §51), so it is
+//! carried below, under "The physics", verbatim from `f6a3a3c^` save for its cross-references and
+//! its paragraph on the stretch reduction, which described the Python's summation helper and now
+//! points at the sections after it.
+//!
+//! # The physics
+//!
+//! The **string family's nonlinearity**, and the direct analog of model #6's von Karman plate: a
+//! geometric (not material) nonlinearity with a **quartic** potential, validated energy-first.
+//! Models #1-3 are strictly linear -- pluck twice as hard, get exactly twice the amplitude at
+//! exactly the same pitch. Real strings don't: displacing a string *stretches* it, which raises its
+//! tension, which raises its pitch. Hit one hard and the note starts sharp and glides down as it
+//! decays.
+//!
+//! PDE (model #3 plus a state-dependent tension):
 //!
 //! ```text
 //! rho u_tt = T(t) u_xx - rho kappa^2 u_xxxx - 2 rho sigma0 u_t + 2 rho sigma1 u_txx
-//! T(t) = T0 + (EA/2L) I,   I = integral u_x^2 dx        ("the stretch")
+//! T(t) = T0 + (EA/2L) I,        I = integral_0^L u_x^2 dx        ("the stretch")
 //! ```
 //!
-//! Displacing a string stretches it, which raises its tension, which raises its pitch — so a hard
-//! pluck starts sharp and glides down. The Python module's docstring is the reference for the
-//! physics: why the nonlinear excess alone is averaged at `theta = 1/2` (so that `EA = 0` stays
-//! bit-for-bit model #3), why the discrete-gradient tension collapses to a plain midpoint with no
-//! `0/0` branch, and why single-mode motion is *dynamically* unstable above `dT/T0 ~ 3`.
+//! `I >= 0` always, so tension only ever **rises**: transverse motion cannot un-stretch a string.
+//! Hardening, never softening. The nonlinearity is cubic in `u` (`I` quadratic, times `u_xx`), so
+//! it vanishes as `u -> 0`, recovering model #3 -- and `EA = 0` recovers it **bit-for-bit**.
+//!
+//! **Scheme -- the split (why EA=0 is bit-identical).** Exact conservation of the nonlinear
+//! potential requires the tension term at `theta = 1/2` (`mu_t. u = (u^{n+1} + u^{n-1})/2`), but
+//! model #3 averages its operator at `theta ~ 0.28`. Moving the *whole* tension term to `mu_t`
+//! would make `EA=0` a theta=1/2 wave term against model #3's theta=0.28 -- **not** bit-identical,
+//! losing the family's regression anchor. So split `T_eff = T0 + dT` and average only the nonlinear
+//! **excess** at theta=1/2. The two pieces telescope independently, so this costs nothing:
+//!
+//! ```text
+//! delta_tt u = L.(theta u^{n+1} + (1-2theta) u^n + theta u^{n-1})   <- model #3, verbatim
+//!              + (dT/rho) D2 (u^{n+1} + u^{n-1})/2                  <- NEW, theta=1/2 (mu_t)
+//!              - 2 sigma0 delta_t. u + 2 sigma1 delta_t.(delta_xx u)
+//!
+//! dT = (EA/4L) (I^{n+1} + I^{n-1})     [ = (EA/2L) * mean stretch ]
+//! ```
+//!
+//! **The tension is the discrete gradient -- and it is a plain midpoint.** The energy-conserving
+//! choice is `T_eff = 2 (V(I+) - V(I-))/(I+ - I-)` with `V(I) = (T0/2) I + (EA/8L) I^2`. Because
+//! `V` is **quadratic in I**, that collapses *exactly* to `2 V'(Ibar)` at the mean stretch -- no
+//! limit, no `0/0`, no Taylor branch. (Contrast [`crate::collision`]'s `[DG]`, whose 0/0 machinery
+//! exists for the mallet's *power-law* potential. Do not import it here.)
+//!
+//! **Solve.** `dT` is one scalar, so the step is a **scalar root-find** (the bow's shape, not
+//! model #6's vector Picard). With `beta = k^2 dT / (2 rho) >= 0`:
+//!
+//! ```text
+//! (A0 - beta D2) u^{n+1} = rhs0 + beta D2 u^{n-1}
+//! ```
+//!
+//! `A0` is model #3's SPD pentadiagonal matrix and `rhs0` its RHS, both verbatim; `-D2` is SPD and
+//! `beta >= 0`, so `A` stays SPD and the banded Cholesky ([`crate::banded`]) carries over. `A`
+//! depends on `dT`, so the prefactorization is lost -- one banded refactor per residual evaluation
+//! (O(n), offline; the human took this over the faster SAV/quadratisation route, which would
+//! conserve a *modified* numerical energy rather than the physical one -- see the plan doc).
+//!
+//! **Energy.**
+//!
+//! ```text
+//! E^n = [ model #3's E^n ]  +  (EA/16L) ( (I^n)^2 + (I^{n-1})^2 )
+//! ```
+//!
+//! The nonlinear term is the **two-time half-average** -- model #6's odd/even lesson (a
+//! single-level `V_nl(I^n)` is a 2-step invariant and oscillates spuriously). Here it is *derived*:
+//! by SBP `h <D2(u+ + u-), u+ - u-> = -(I+ - I-)`, so the nonlinear power is exactly
+//! `-delta_t.[(EA/8L) I^2]`, which `delta_t+` of the term above cancels identically. Lossless ->
+//! conserved to machine precision; lossy -> monotone decreasing (both losses are model #3's,
+//! dissipative by SBP, and neither enters E).
+//!
+//! **Boundary: simply supported** -- and that is what buys the oracle. `sin(m pi x / L)` stays an
+//! exact discrete eigenvector of `D2` *and* the biharmonic `(delta_xx)^2`, while `I` depends on the
+//! state only through the amplitude squared. So `A(beta) s = (lambda0 + beta p^2) s` for **any**
+//! tension, and a single-mode state maps to a single-mode state: the scheme collapses onto a 1-DOF
+//! Duffing oscillator with a closed-form elliptic frequency (the analysis crate's `duffing` module)
+//! -- a closed-form nonlinear oracle, which model #6 never had.
+//!
+//! **But single-mode motion is *dynamically unstable* above a pump threshold** (measured, and NOT a
+//! bug -- see the plan doc). The collapse above is exact **in exact arithmetic**; in floating
+//! point, roundoff seeds the other modes, and as the tension pumps at twice the mode frequency
+//! those grow: sit in parametric (Mathieu) resonance tongues and grow **exponentially** once
+//! `dT/T0` exceeds ~3. Energy stays conserved to ~1e-13 throughout -- the motion redistributes
+//! across modes rather than blowing up, which is exactly how you tell physics from a numerical
+//! artifact (it is also invariant under grid/timestep refinement: same onset time, same unstable
+//! modes). Consequences:
+//!
+//! - Purity is **structural per step** and holds at any amplitude -- test it over a short run.
+//! - Purity **persists indefinitely only below threshold**; above it the mode audibly disintegrates
+//!   into its neighbours. That modal energy exchange is a *feature* -- a linear string cannot do
+//!   it.
+//! - The Duffing frequency oracle is only meaningful while the motion is still single-mode.
+//!
+//! This is the **planar** modal-exchange instability. It is *not* the out-of-plane whirling
+//! instability of real strings, which needs two transverse polarizations -- this model has one.
+//!
+//! **The stretch reduction.** `I` is a dot product, and *which order it is summed in* is part of
+//! this model in a way it is not for models #1-3: it is inside the tension solve's residual, so a
+//! last-bit difference does not stay a last bit -- it changes how many iterations the root-find
+//! takes. The measurement, and the spelling the port settled on, are this header's next two
+//! sections.
+//!
+//! Headless: the banded Cholesky is [`crate::banded`] and the root-find [`crate::root::brentq`] (in
+//! the Python, SciPy's). No I/O, no plotting. See `docs/dev/tension-modulated-string-plan.md`.
 //!
 //! # What makes this model different from every string ported before it
 //!

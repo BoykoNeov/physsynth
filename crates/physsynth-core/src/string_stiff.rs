@@ -1,22 +1,57 @@
 //! Stiff transverse string — implicit theta-scheme FDTD, simply supported (model #2).
 //!
-//! Port of `physsynth/core/string_stiff.py`, HANDOFF §5:
+//! Port of `physsynth/core/string_stiff.py`, HANDOFF §5. That module's docstring was the physics —
+//! the energy form, and why the biharmonic block is built as `(delta_xx)^2` — and this header
+//! documented only what the translation had to decide. The docstring was cut to a shim by
+//! deletion 5 (`f6a3a3c`) and the shim went with the last of the Python (retirement plan §51), so
+//! it is carried below, under "The physics", verbatim from `f6a3a3c^` save for its
+//! cross-references, which now point at the native items.
+//!
+//! # The physics
+//!
+//! Implements HANDOFF section 5 model #2 (see `docs/dev/stiff-string-plan.md`). PDE:
 //!
 //! ```text
-//! u_tt = c^2 u_xx - kappa^2 u_xxxx - 2 sigma u_t,   c^2 = T/rho,  kappa^2 = E I / rho
+//! u_tt = c^2 u_xx - kappa^2 u_xxxx - 2 sigma u_t,    c^2 = T/rho,  kappa^2 = E I / rho
 //! ```
 //!
-//! The whole spatial operator `L = c^2 delta_xx - kappa^2 delta_xxxx` is time-averaged with a theta
-//! weight, so each step is one back-substitution against a constant pentadiagonal SPD matrix
+//! The bending term `-kappa^2 u_xxxx` stretches the partials off the harmonic series (piano-like
+//! inharmonicity `f_n = n f0 sqrt(1 + B n^2)`, `B = pi^2 kappa^2 / (c^2 L^2)`). Treating it
+//! explicitly would force a brutal `kappa^2 k^2 / h^4` CFL, so the *whole* spatial operator `L =
+//! c^2 delta_xx - kappa^2 delta_xxxx` is time-averaged with a theta weight:
 //!
 //! ```text
-//! A = (1 + sigma k) I - theta k^2 L
+//! delta_tt u = L (theta u^{n+1} + (1-2 theta) u^n + theta u^{n-1}) - 2 sigma delta_t. u
 //! ```
 //!
-//! factored once at construction by [`crate::banded`]. There is no CFL limit: `theta >= 1/4` is
-//! unconditionally stable, so `lam` is reported and never rejected. The Python module's docstring
-//! is the reference for the physics, the energy form and why the biharmonic block is built as
-//! `(delta_xx)^2`.
+//! which is unconditionally stable for `theta >= 1/4` (so `theta` is a pure accuracy knob, not a
+//! stability one). Rearranged, each step is one banded SPD solve with the constant matrix
+//!
+//! ```text
+//! A = (1 + sigma k) I - theta k^2 L      (pentadiagonal, factored once at construction).
+//! ```
+//!
+//! **Boundary: simply supported** (`u = 0` and `u_xx = 0`). Building `L`'s biharmonic block as
+//! `(delta_xx)^2` (see [`crate::ops::biharmonic_matrix`]) bakes in both conditions and keeps `sin(m
+//! pi x / L)` an *exact* discrete eigenvector, so the modal / dispersion harness carries over
+//! unchanged. `kappa = 0` recovers the implicit wave scheme -- which is **not** the explicit
+//! [`crate::string_ideal::IdealString`] (a different, still-validated scheme; it is not even exact
+//! at `lambda = 1`).
+//!
+//! **Energy** (theta-dependent; reduces to the ideal string's cross-time form at `theta = 0`):
+//!
+//! ```text
+//! E^n = rho [ 1/2 ||delta_t- u^n||^2
+//!             + (theta/2)(P(u^n,u^n) + P(u^{n-1},u^{n-1})) + (1/2 - theta) P(u^n,u^{n-1}) ]
+//! ```
+//!
+//! with `P(f,g) = <-L f, g> = c^2 <delta_x+ f, delta_x+ g> + kappa^2 <delta_xx f, delta_xx g> >= 0`
+//! (summation by parts). `P` is evaluated through the *same* matrix `L` used in the update, so the
+//! conservation `E^{n+1} = E^n` is an exact algebraic identity (machine precision lossless;
+//! monotone decreasing at `e^{-2 sigma t}` lossy).
+//!
+//! Headless: the banded Cholesky is [`crate::banded`] (in the Python, SciPy's). No I/O, no
+//! plotting.
 //!
 //! # Why this is a separate module from [`crate::string_damped`], which is nearly the same code
 //!

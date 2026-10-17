@@ -1,15 +1,77 @@
 //! Free-free Euler–Bernoulli beam — implicit theta-scheme FDTD (model #5b-pre).
 //!
-//! Port of `physsynth/core/beam.py`, HANDOFF §5 row 5. The Python module's docstring is the
-//! reference for the physics: the energy-first operator pair `(K, W)` from
-//! [`crate::ops::free_beam_stiffness`], the free-end closure that comes from the `h/2` mass cells
-//! rather than from hand-written stencil rows, the theta time-average that removes the `kappa² k² /
-//! h⁴` CFL, and the energy form the update and [`energy`] share exactly.
+//! Port of `physsynth/core/beam.py`, HANDOFF §5 row 5. That module's docstring was the physics and
+//! this header documented only what the translation had to decide. The docstring was cut to a shim
+//! by deletion 8 (`74af04b`) and the shim went with the last of the Python (retirement plan §51),
+//! so it is carried below, under "The physics", verbatim from `74af04b^` save for two sentences
+//! about SciPy that are now spelled natively.
+//!
+//! # The physics
+//!
+//! The 1D rehearsal of the free-edge Chladni plate (HANDOFF §5 row 5;
+//! `docs/dev/plate-free-edge-plan.md` Part 0). It isolates the *free-boundary* flexural stencil and
+//! the energy-first operator symmetry **without** the 2D corners or Poisson's ratio, and — unlike
+//! every prior resonator — has a genuine **closed-form** modal oracle (`cos(βL)·cosh(βL) = 1`) to
+//! validate that stencil against.
+//!
+//! PDE — **bending only, free-free** (transverse displacement `u(x, t)` on `[0, L]`, both ends
+//! free):
 //!
 //! ```text
-//! W delta_tt u = -kappa^2 K (theta u^{n+1} + (1 - 2 theta) u^n + theta u^{n-1}) - 2 sigma W delta_t. u
-//! A = (1 + sigma k) W + theta k^2 kappa^2 K        (SPD, because W is)
+//! u_tt = -kappa² u_xxxx - 2 sigma u_t,    kappa² = E I / (rho A)  (same kappa as the stiff string)
 //! ```
+//!
+//! The free-free natural BCs are zero bending moment `u_xx = 0` and zero shear `u_xxx = 0` at both
+//! ends. Because every node — including the two ends — is an unknown, the simply-supported trick of
+//! squaring a *Dirichlet* Laplacian ([`crate::string_stiff`], [`crate::plate`]) does **not** apply:
+//! there is no clamped rim and no exact `sin` eigenvector. Instead the operator is built **from the
+//! energy** (Bilbao's free bar): a symmetric stiffness `K` and a diagonal trapezoidal mass `W` from
+//! [`crate::ops::free_beam_stiffness`], with
+//!
+//! ```text
+//! ∫(u_xx)² dx ≈ uᵀ K u,    K = h · D2ᵀ D2  (nullspace exactly {1, x}),
+//! W = diag(h/2, h, …, h, h/2).
+//! ```
+//!
+//! The natural BCs and the rigid-body nullspace `{1, x}` fall out *by construction*; the free-end
+//! closure is supplied by the `h/2` mass cells, not by hand-coded stencil rows (see the operator).
+//!
+//! Treating `∇⁴` explicitly forces a brutal `kappa² k² / h⁴` CFL (`mu = kappa k / h² <= 1/4`), so
+//! the spatial operator is time-averaged with a theta weight (as for the stiff string / plate):
+//!
+//! ```text
+//! W δ_tt u = -kappa² K (theta u^{n+1} + (1-2 theta) u^n + theta u^{n-1}) - 2 sigma W δ_t. u
+//! ```
+//!
+//! unconditionally stable for `theta >= 1/4` (no CFL limit). Rearranged, each step is one sparse
+//! SPD solve with the constant matrix
+//!
+//! ```text
+//! A = (1 + sigma k) W + theta k² kappa² K        (SPD because W is, even though K is only PSD).
+//! ```
+//!
+//! `A` is factored once ([`crate::sparse_lu`]) and back-substituted each step, as the plate's is.
+//! (In the Python both were `scipy.sparse.linalg.splu`, and the beam was where the plate's `splu`
+//! path was de-risked.)
+//!
+//! **Energy** (theta-dependent; the W/K generalization of the stiff string / plate form):
+//!
+//! ```text
+//! E^n = rho [ 1/2 (δ_t- u)ᵀ W (δ_t- u)
+//!             + kappa²·( (theta/2)(uⁿᵀ K uⁿ + uⁿ⁻¹ᵀ K uⁿ⁻¹) + (1/2 - theta) uⁿᵀ K uⁿ⁻¹ ) ]
+//! ```
+//!
+//! evaluated through the **same** `K, W` as the update, so `E^{n+1} = E^n` is an exact algebraic
+//! identity (machine precision lossless; monotone decreasing at `e^{-2 sigma t}` lossy). The `h`
+//! quadrature weights live inside `K` and `W` (no extra scalar `h` as in the SS string).
+//!
+//! > **Damping caveat (same as the plate, broad).** The theta-time-average makes
+//! > frequency-independent loss effectively frequency-*dependent*: mode decays at `2 sigma (1 -
+//! > theta Q k²)` with `Q = kappa²·mu` (4th-power across the whole spectrum), so the under-damping
+//! > bites mid-spectrum. Passivity still holds unconditionally; only the *rate* above low modes is
+//! > wrong. Cure = a later frequency-dependent-loss model.
+//!
+//! Headless: no I/O, no plotting.
 //!
 //! # Why this file is Phase 4 and what it was sent to find out
 //!
@@ -137,17 +199,21 @@ impl std::error::Error for ParamError {}
 pub struct Params {
     /// Length (m).
     pub l: f64,
-    /// Linear density `rho A` (kg/m).
+    /// Linear density `rho A` (kg/m). Scales the energy (Joules) but not the frequencies.
     pub rho: f64,
-    /// Sample rate (Hz).
+    /// Sample rate (Hz). **No CFL limit** (unconditionally stable for `theta >= 1/4`) — coarse
+    /// grids and large timesteps the explicit beam could not run are fine.
     pub fs: f64,
-    /// Number of spatial segments; every one of the `n + 1` nodes is an unknown.
+    /// Number of spatial segments; every one of the `n + 1` nodes is an unknown (both ends free),
+    /// unlike the clamped/supported strings.
     pub n: usize,
-    /// Stiffness coefficient `sqrt(E I / (rho A))` (m^2/s).
+    /// Stiffness coefficient `sqrt(E I / (rho A))` (m^2/s). Larger `kappa` -> higher modes.
     pub kappa: f64,
-    /// Frequency-independent loss coefficient.
+    /// Frequency-independent loss coefficient for the `-2 sigma u_t` term; `0` is lossless. See
+    /// the broad damping caveat in the module header.
     pub sigma: f64,
-    /// Time-averaging weight in `(0, 1]`.
+    /// Time-averaging weight in `(0, 1]`. `>= 1/4` is unconditionally stable; a smaller theta is
+    /// more accurate (less numerical dispersion) but only conditionally stable.
     pub theta: f64,
     /// Grid spacing `L / N` (m).
     pub h: f64,

@@ -9148,3 +9148,78 @@ Phase F is done and the retirement plan's deletion work with it: nothing in the 
 Next, at the human's call: restore the ten derivations (§51.2). A developer's own Python
 environments may still hold an editable `physsynth` install and a `physsynth_rs` wheel pointing at
 deleted code; they are outside the repo and were left alone.
+
+## 52. The derivations come back — ten headers, and the items they pointed at
+
+Done 2026-10-17 (the human: "what is next" → this batch; "yes"; then **option 3** of three, below).
+§51.2's call. Ten `physsynth-core/src` headers said the physics was in a Python docstring that had
+been cut to a shim at the deletion units (§40–§49) and whose shim §51 deleted. Each derivation is
+now in the Rust, carried from the last revision that held it in full: `74af04b^` (beam),
+`6c23a45^` (bore, reed, mallet, radiation), `f6a3a3c^` (the four theta-scheme strings) and
+`58654e5^` (the port tier of `airbox.py`). +1,690 / −93 lines over eleven files, comments only.
+
+**The scope grew once, and the human chose where it stopped.** Inventorying every docstring in the
+ten source files (an `ast` walk, scratch-only) and scoring each against all Rust comment text by
+word 5-grams showed the module docstrings were only part of it: `mallet.rs` and `radiation.rs`
+pointed at *class* docstrings, `airbox_port.rs` at four classes with no module text of their own,
+and `string_geometric.rs` at two *function* docstrings by line. Most method docstrings scored low
+yet had been reworded into the Rust item docs at the port; some had not — the geometric string's
+`energy_floor` proof (the null Lagrangian, the inadmissible relaxed state, the Jensen step) was in
+the tree nowhere. Asked mid-batch (a side note flagged the growth), the human chose **option 3**:
+every module docstring, plus only the class and method docstrings that carry a **derivation**
+(a proof, an equation worked through, a measured argument); parameter remarks were carried only
+where the Rust said nothing equivalent, and the beam's, bore's and reed's few were already in by
+then.
+
+**How it was carried.**
+
+- A scratch converter turned reST into rustdoc: `` ``x`` `` → `` `x` ``, `:class:`/`:meth:` → a
+  code span or an intra-doc link that resolves natively, every indented literal block → a
+  ```` ```text ```` fence (an indented block in rustdoc is a Rust doctest — `cargo test --doc` still
+  reports 0 doctests), NumPy `Parameters` sections dropped where the native fields carry them, and
+  rewrapping to 100 columns that never starts a line with a list or heading marker.
+- **Verbatim, except for plumbing.** Sentences about NumPy, SciPy (`splu`, `cholesky_banded`,
+  `brentq`), Python attributes and the binding were respelled natively or dated ("in the Python,
+  …"). The tension string's paragraph on the stretch reduction described `portable.dot`; it is
+  replaced by a pointer to the header sections that already tell that story natively. The
+  geometric string's `allow_softening` note linked a Claude memory by its slug; that became the
+  rule it names.
+- **Checked word by word.** Every carried block was diffed against its source docstring at word
+  level, markup stripped; every difference that remains is a deliberate substitution (listed by
+  the scratch tool, read by hand). The air box precedent of §51 was the model.
+- Where a Rust item already reworded the derivation (the beam's start-up, most of the bore's and
+  reed's methods, the tension string's bracket argument and material helper), nothing was added.
+  Where the carried text and an existing Rust paragraph said the same thing (`dg_force`,
+  `dg_jacobian`), the Rust paragraph went and its translation-only remainder was kept.
+- Two stale present-tense mentions of the binding, inside docs this batch rewrote (`reed.rs`'
+  `ReedBore`, `radiation.rs`' `RadiatedBody`), now say it was deleted. Others elsewhere were left.
+
+**Where each went.** Module docstrings: a `# The physics` section in each header, after a provenance
+paragraph naming the revision. The geometric string's `energy_floor` and `apply_Ainv` docstrings
+have no native item to sit on and are two header subsections. Class and method derivations sit on
+the native item of the same name — radiation's three load classes and five methods, the port
+tier's three port classes (their parameter lists left out, their notes kept) and nine methods and
+helpers, the geometric string's stretch terms, discrete gradient, Jacobian, Newton solve, energy
+density, `tension`, `is_degenerate`, `nonlinear_energy`, `set_state` (its name-clash warning holds
+natively: `v0` is a displacement there and a velocity on models #1–#3) and `allow_softening`.
+
+**Checks.** `cargo doc` for core and analysis: the same six pre-existing warnings in other files
+and none new (one new link, to `from_sphere`, was fixed: it lives on `LoadParams` natively).
+`cargo fmt --check` and `cargo clippy --workspace --all-targets -D warnings` clean.
+`cargo-test-nice.ps1 -Full`: 1,824 passed, unchanged. A grep for "the docstring is the physics"
+across all three crates finds only the past-tense provenance lines.
+
+### 52.1 Found, and put to the human rather than carried
+
+**The analysis crate lost the same kind of text, and it is outside this batch.** `physsynth/
+analysis/` was deleted at §48 with only `horizon.py`'s prose moved. Scored the same way (from
+`b1d37c8^`), `modal.py` (18 docstrings of 9–43 lines, the free circular plate's frequency
+equation and its three self-checks among them — `tests/modal.rs:198` still says it is "derived in
+`modal.py`'s docstring"), `duffing.py`, `damping.py`, `dispersion.py` and `rotating_wave.py` hold
+roughly 600–700 lines of derivation whose Rust copies score 1–35% — most likely reworded in part,
+some lost outright. `elliptic.rs:12` cites `duffing.py`'s docstring too, but states the point it
+cites, so nothing is lost there.
+
+### 52.2 What is next
+
+At the human's call: the analysis crate's derivations (§52.1), the same method.

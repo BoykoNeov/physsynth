@@ -112,6 +112,14 @@ pub const PISTON_SERIES_CUTOFF_KA: f64 = 3e-2;
 /// The spelling is deliberate: `+ - * /` and nothing else. `ka.powi(4)` would be repeated
 /// multiplication here and `ka ** 4` a `pow` call in Python, and plan §12 measured those
 /// disagreeing in 1,400 of 3,998 cases. Written this way, both languages round identically.
+///
+/// `R_a(ka) = (rho0 c0 / S) [1 - J1(2ka)/(ka)]`, `S = pi a^2`, wavenumber `k = omega / c0`
+/// (Rayleigh's classic result; `J1` the first-order Bessel function). As `ka -> 0` the bracket `->
+/// (ka)^2/2` so `R_a -> rho0 omega^2 / (2 pi c0)` — the half-space monopole, exactly **twice** the
+/// free-space monopole (`physsynth_core::radiation::monopole_radiation_resistance`) (a baffle
+/// radiates into `2 pi`, not `4 pi`). Offered as the closed-form `R_a(ka)` modeling oracle; the
+/// default load uses the free-space monopole to stay consistent with batch 1. Divided by `S^2` from
+/// the more commonly tabulated *mechanical* piston resistance `rho0 c S [1 - J1(2ka)/(ka)]`.
 pub fn piston_radiation_resistance(omega: f64, radius: f64, rho0: f64, c0: f64) -> f64 {
     let ka = omega * radius / c0;
     let s = PI * radius * radius;

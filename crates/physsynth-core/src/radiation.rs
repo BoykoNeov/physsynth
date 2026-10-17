@@ -2,9 +2,51 @@
 //!
 //! Port of `physsynth/core/radiation.py`, in the three tiers the original builds in that order: a
 //! read-out ([`AirRadiation`]), a constant-resistance load ([`RadiatedBody`]), and the exact
-//! first-order rational impedance ([`RationalAirLoad`] driving [`ReactiveRadiatedBody`]). The
-//! reference docstrings in `radiation.py` are the physics; this module documents only what the
-//! translation had to decide.
+//! first-order rational impedance ([`RationalAirLoad`] driving [`ReactiveRadiatedBody`]). That
+//! module's docstrings were the physics and this header documented only what the translation had
+//! to decide. They were cut to a shim by deletions 2–4 (`6c23a45`) and the shim went with the last
+//! of the Python (retirement plan §51), so they are carried from `6c23a45^`: the module docstring
+//! below, under "The physics", and the derivations in the class and method docstrings on the
+//! native items of those names, each verbatim save for its cross-references and for references to
+//! Python attributes, which now name the quantity instead.
+//!
+//! # The physics
+//!
+//! A vibrating body pushes air; at a listening distance `r` a microphone hears a **radiated
+//! pressure**. This module is the first, lumped tier of that air node (the human's scope decision:
+//! *lumped passive impedance*, built read-out-first). It turns the body's monopole source strength
+//! — its net **volume acceleration** `Q'' = d²/dt² ∫ w dA` (already exposed project-wide as the
+//! bodies' `pressure()` read-out) — into the far-field pressure of a **simple source (monopole)**
+//! in free space:
+//!
+//! ```text
+//! p_far(t, r) = rho0 / (4 pi r) * Q''(t - r / c0) .
+//! ```
+//!
+//! That is the exact free-space Green's-function solution for a compact source whose size is small
+//! against the wavelength: the pressure is the volume *acceleration* scaled by `rho0 / (4 pi r)`
+//! and retarded by the travel time `r / c0` (the wavefront takes `r / c0` seconds to reach the
+//! listener). [`AirRadiation`] itself carries no new state on the body and **no back-reaction**: it
+//! is a pure output transform, so the body radiates "for free" and its own energy balance is
+//! untouched — hence it deliberately has no `energy()` (it stores and dissipates none). The passive
+//! **radiation load** (the air *damping* the body, with radiated power `P_rad = R U²` accounted as
+//! an energy channel and a closed-form `R_a` oracle) is the separate [`RadiatedBody`] below — batch
+//! 2, the back-reaction.
+//!
+//! **Why this is still validatable without energy** (the project rule is closed-form checks, not
+//! ears): a prescribed sinusoidal volume velocity `U(t) = U0 sin(omega t)` has volume acceleration
+//! `Q'' = U0 omega cos(omega t)`, so the monopole radiates a tone of amplitude `|p_far| = rho0
+//! omega U0 / (4 pi r)` — an exact amplitude/phase oracle — and the pressure falls off as `1 / r`
+//! (the inverse-distance law) with a pure `r / c0` delay. Those are the tests.
+//!
+//! The retardation is applied as an **integer-sample** delay line (`round(r / c0 * fs)` samples),
+//! so the amplitude is preserved *exactly* (a fractional/interpolating delay would act as a mild
+//! low-pass and blur the amplitude oracle); the sub-sample residual is exposed as the retardation
+//! residual for honesty. Turn retardation off for the pure instantaneous gain (the delay is
+//! inaudible latency for a single source, but matters once several sources are summed at one
+//! listener).
+//!
+//! Headless: no dependencies.
 //!
 //! # This is where bit-identity leaves the toolkit, and it is not a solver that took it
 //!
@@ -69,6 +111,14 @@ pub const RHO0_AIR: f64 = 1.2041;
 pub const C0_AIR: f64 = 343.0;
 
 /// Free-space acoustic radiation resistance of a compact monopole, `rho0 omega^2 / (4 pi c0)`.
+///
+/// `R_a(omega) = rho0 omega^2 / (4 pi c0)`. This is the resistive part of the free-space monopole
+/// load: a body radiating a volume velocity `U` (m³/s) into free space hands the far field `P_rad =
+/// R_a U^2` watts. It is the exact passive dual of the batch-1 free-space (`4 pi`) read-out — same
+/// geometry, same `rho0`/`c0`. Acoustic (per-volume-velocity) units, **not** the mechanical `rho0 c
+/// pi a^2` resistance (which multiplies a *surface* velocity and is `S^2` larger). Note the `∝
+/// omega^2` frequency dependence: the constant-`R` [`RadiatedBody`] evaluates this at one reference
+/// frequency; true per-mode spectral shaping is a later, frequency-dependent batch.
 pub fn monopole_radiation_resistance(omega: f64, rho0: f64, c0: f64) -> f64 {
     rho0 * omega * omega / (4.0 * PI * c0)
 }
@@ -353,8 +403,45 @@ pub fn refresh_accel(q: &[f64], q_prev: &[f64], q_nm1: &[f64], k: f64, out: &mut
 
 /// A modal body loaded by a constant radiation resistance — the passive back-reaction.
 ///
-/// The owning struct is for native callers and `cargo test`; the binding drives the free functions
-/// above against Python-owned arrays, as everywhere else in this crate.
+/// (Until retirement plan §51 the Python binding did not use this owning struct: it drove the
+/// free functions above against Python-owned arrays, as everywhere else in this crate.)
+///
+/// Batch 1 read the body's monopole out "for free"; here the air pushes back. The radiation
+/// presents a resistance `R` (acoustic, Pa·s/m³) to the body's net **volume velocity** `U = sum_i
+/// a_i q_i'` (the same weights `a_i` that read the volume acceleration also couple the uniform
+/// back-pressure `R U` into each mode, by reciprocity), so the air removes power `P_rad = R U^2`
+/// and hands it to the far field. That lost energy is tracked as the radiated energy (`= integral
+/// P_rad dt`), giving the passivity identity
+///
+/// ```text
+/// E_body^n  +  integral_0^n P_rad dt  =  const      (lossless body, any R >= 0),
+/// ```
+///
+/// the radiation analogue of the `sigma`-damping energy channel — a closed-form check, not ears.
+/// `R = 0` is **bit-identical** to a bare [`crate::body::ModalBody`].
+///
+/// **Why this is a rank-1 *implicit* dashpot (and why that matters).** The load force on mode `i`
+/// is `-a_i R U` with `U` the **centered** volume velocity `a^T (q^{n+1} - q^{n-1}) / (2k)`,
+/// centered (implicit), exactly like the body's own `2 sigma q'` term, which is what makes the
+/// discrete dissipation `k R U^2` provably non-negative (an explicit one-sided `U` goes unstable at
+/// large `R`). Because the coupling is a single scalar `U`, the implicit solve collapses to one
+/// scalar (Sherman–Morrison): take the force-free step `q~^{n+1} = ModalBody::step(force)`, read
+/// its free centered velocity `U_free`, then
+///
+/// ```text
+/// U = U_free / (1 + R G) ,      G = (k/2) sum_i a_i^2 / (m_i (1 + sigma_i k)) ,
+/// ```
+///
+/// and correct each mode `q_i^{n+1} = q~_i - [k^2 a_i / (m_i (1 + sigma_i k))] R U`. The corrected
+/// state's centered volume velocity is exactly this `U` (`U_free - R U G = U`), so the energy
+/// increment `k R U^2` telescopes to machine precision. Since `1 + R G >= 1` for any `R >= 0` the
+/// solve is never singular: the load is **unconditionally** passive — no CFL, no stability guard
+/// (unlike the bridge springs, whose rank-1 block can go *negative*). Mirrors the bow's rank-1
+/// scalar solve, but linear (no Newton).
+///
+/// Being a drop-in for [`crate::body::ModalBody`] (it delegates every read accessor), it also slots
+/// straight into a [`crate::connection::StringBodyBridge`] as the body, so the full instrument
+/// chain conserves `E_string + E_body + E_conn + integral P_rad` with no edit to it.
 #[derive(Debug, Clone)]
 pub struct RadiatedBody {
     body: body::ModalBody,
@@ -642,6 +729,69 @@ impl std::fmt::Display for LoadedModeError {
 impl std::error::Error for LoadedModeError {}
 
 /// The air as a first-order positive-real impedance: a resistance in parallel with an inertance.
+///
+/// Batch 2's [`RadiatedBody`] loads a body with a single constant resistance `R`; real air is
+/// frequency-dependent (`R_a(omega) = rho0 omega^2 / (4 pi c0)` for a free-space monopole), so a
+/// constant over-damps the low modes and under-damps the high ones. The fix needs **no filter
+/// approximation**: the exact acoustic radiation impedance of a **pulsating sphere** of radius `a`
+/// is already a first-order rational function of `j omega`,
+///
+/// ```text
+/// Z_a(j omega) = (rho0 c0 / S) * j k a / (1 + j k a) ,    S = 4 pi a^2 ,  k = omega / c0 ,
+/// ```
+///
+/// which is exactly a resistance in **parallel** with an acoustic inertance:
+///
+/// ```text
+/// Z_a = R * j omega tau / (1 + j omega tau) ,
+/// R = rho0 c0 / S ,   M_a = rho0 / (4 pi a) ,   tau = M_a / R = a / c0 .
+/// ```
+///
+/// `M_a` is the classic **radiation mass** — air dragged along but not radiated. The circuit
+/// reading *is* the numerical scheme: the volume velocity splits, `U = U_R + U_L`, with `p = R
+/// U_R = M_a dU_L/dt`. The resistor branch is radiated (lost to the far field), the inertance
+/// branch is stored (returned later). That split makes the frequency dependence **passive by
+/// construction** — the network is the proof, so there is no positive-realness check to pass and no
+/// stability guard to tune.
+///
+/// Two closed-form anchors bracket it, and the first one is batch 2's own helper:
+///
+/// | limit | `Re Z_a` | anchor |
+/// |---|---|---|
+/// | `ka -> 0` | `rho0 omega^2 / (4 pi c0)` | exactly [`monopole_radiation_resistance`] |
+/// | `ka -> oo` | `rho0 c0 / S` | plane-wave (fully loaded) saturation |
+///
+/// so this class does not supersede the batch-2 helper — it *contains* it as its low-frequency
+/// limit. `Im Z_a` peaks at `ka = 1`.
+///
+/// **Parameters are the effective coefficients** `(R, M_a)`, independently, **not** a radius.
+/// Besides being the general first-order load (reusable for a fitted horn/piston termination), it
+/// is the only parameterisation that can reach `M_a -> infinity` at fixed `R` — the
+/// constant-resistance load, i.e. batch 2 exactly. A sphere ties `M_a` to `R` and cannot.
+/// [`LoadParams::from_sphere`] is the physically-consistent constructor for those who want the
+/// radius.
+///
+/// **Discretisation: trapezoid on the inertance, which is the bilinear transform.** With `L^- =
+/// U_L^{n-1/2}` known,
+///
+/// ```text
+/// M_a (U_L^{n+1/2} - U_L^{n-1/2}) / k = p^n ,   U_L^n = (U_L^{n+1/2} + U_L^{n-1/2}) / 2 ,
+/// p^n = R (U^n - U_L^n)   ==>   p = R_eff (U - L^-) ,  R_eff = R / (1 + k R / (2 M_a)) .
+/// ```
+///
+/// So on the body's side the whole batch is `R -> R_eff` plus a known offset `L^-` — batch 2's
+/// scalar Sherman-Morrison solve is untouched in shape. Because `R_eff` lies in `[0, R]` for every
+/// `M_a > 0`, `1 + R_eff G >= 1` still holds: the solve is never singular, so the load is
+/// **unconditionally passive** at any `R`, any `M_a`, any `k`. No CFL, no guard.
+///
+/// The exact discrete impedance is `Z_a` evaluated at the **pre-warped** frequency `s = (2j / k)
+/// tan(omega k / 2)` ([`RationalAirLoad::impedance_discrete`]), not at `j omega` — that is the
+/// bilinear transform's signature, and comparing a measured sweep to [`RationalAirLoad::impedance`]
+/// instead shows a growing `O((omega k)^2)` error that looks like a scheme bug but is not.
+///
+/// **The radiation mass.** Acoustic radiation mass / inertance (kg/m⁴), `> 0`. Default `inf` — the
+/// constant-resistance load, **bit-identical** to [`RadiatedBody`] (in IEEE arithmetic `k R / (2
+/// inf) = 0` and `p / inf = 0`, so `R_eff = R` exactly and the auxiliary state stays exactly zero).
 #[derive(Debug, Clone)]
 pub struct RationalAirLoad {
     p: LoadParams,
@@ -683,6 +833,17 @@ impl RationalAirLoad {
     ///
     /// Forming `u*` first and multiplying by `R_eff` — rather than any algebraically equal
     /// alternative — is what keeps `M_a = inf` bit-identical to [`RadiatedBody`].
+    ///
+    /// `u_free` is the body's force-free centered volume velocity and `G` its scalar driving-point
+    /// factor `(k/2) sum_i a_i^2 / (m_i (1 + sigma_i k))`; the coupled scalar
+    ///
+    /// ```text
+    /// u* = (u_free - L^-) / (1 + R_eff G) ,   p = R_eff u* ,   U = u* + L^-
+    /// ```
+    ///
+    /// is exact (the last identity because `u*(1 + R_eff G) = u_free - L^-`). `G = 0` is the
+    /// **prescribed-velocity drive** — a rigid piston moving at `U = u_free` regardless of the load
+    /// — which is how the impedance oracle drives this object standalone.
     pub fn solve(&self, u_free: f64, g: f64) -> (f64, f64) {
         let u_star = (u_free - self.u_l) / (1.0 + self.p.r_eff * g);
         let p = self.p.r_eff * u_star;
@@ -690,6 +851,11 @@ impl RationalAirLoad {
     }
 
     /// Advance the auxiliary state on an accepted `(p, U)` and book the energy split.
+    ///
+    /// The inertance branch takes `U_L` (stored, returned later); the resistor branch takes `U_R =
+    /// U - U_L` (radiated, gone). The trapezoid makes the stored increment exactly `k p U_L^n` and
+    /// the dissipated one exactly `k R U_R^2 >= 0`, and together they equal the `k p U^n` the body
+    /// sheds — so the three-way identity telescopes to machine precision.
     pub fn commit(&mut self, p: f64, u: f64) {
         let u_l_mid = self.u_l + 0.5 * self.p.k * p / self.p.m_a;
         let u_r = u - u_l_mid;
@@ -719,11 +885,20 @@ impl RationalAirLoad {
     }
 
     /// The air's whole share: stored plus radiated.
+    ///
+    /// Unlike batch 2's purely dissipative channel this air can also *give back*, so the stored
+    /// term is genuinely new structure — a wrong reactance shows up as drift in the identity
+    /// `E_body + air.energy() = const`.
     pub fn energy(&self) -> f64 {
         self.stored_energy() + self.radiated_energy
     }
 
     /// Continuous acoustic impedance `Z_a(j omega) = R j omega tau / (1 + j omega tau)`.
+    ///
+    /// The physics. `Re Z -> rho0 omega^2 / (4 pi c0)` as `omega tau -> 0` (agreeing with
+    /// [`monopole_radiation_resistance`] for a sphere-consistent load) and `-> R` as `omega tau ->
+    /// inf`. Constant-`R` loads (`M_a = inf`) return `R` at every frequency — which is precisely
+    /// batch 2's approximation, stated.
     pub fn impedance(&self, omega: f64) -> C64 {
         if self.p.tau.is_infinite() {
             return (self.saturated(), 0.0);
@@ -771,6 +946,28 @@ impl RationalAirLoad {
     /// the one caller, catches the `ValueError` and censors the point), and quietly making a
     /// message more informative during a port is how a port stops being a port. It is a cosmetic
     /// bug in the Python original and belongs in a fix there, applied to both sides at once.
+    ///
+    /// A single mode `m q'' + m omega0^2 q = -a p` driven against this load, with `p = Z_a U` and
+    /// `U = a q'`, becomes (at `q' = j omega q`)
+    ///
+    /// ```text
+    /// [m + a^2 Im Z_a(omega) / omega] q''  +  a^2 Re Z_a(omega) q'  +  m omega0^2 q  =  0 ,
+    /// ```
+    ///
+    /// so the air does **two** things and the batch needs both to be right:
+    ///
+    /// * the **reactance** is an *added mass* `m_add = a^2 Im Z_a / omega` — the body gets heavier
+    ///   and its pitch drops (a constant-`R` load cannot: its `Im Z` is zero);
+    /// * the **resistance** damps it at `alpha = a^2 Re Z_a / (2 m_eff)`, evaluated at the
+    ///   *shifted* frequency.
+    ///
+    /// Both depend on the frequency they shift, so this solves the fixed point `omega_eff = omega0
+    /// sqrt(m / m_eff(omega_eff))` by iteration — to `tol`, and it **raises** rather than silently
+    /// returning the last iterate if that is not reached.
+    ///
+    /// This is a weak-loading result: valid while `alpha << omega`, with a residual second order in
+    /// that ratio (~1% at `alpha / omega ~ 1%`). It is a *modeling* oracle, independent of the
+    /// time-stepping scheme — it reads only `impedance`.
     pub fn loaded_mode(
         &self,
         omega0: f64,
@@ -813,6 +1010,21 @@ impl RationalAirLoad {
     /// Far-field pressure at `r` from the sphere's own surface pressure, `(a / r) p_load`.
     ///
     /// `p_load` of `None` reads the last committed load pressure.
+    ///
+    /// **Not** the batch-1 read-out, and the difference is a trap worth stating. [`AirRadiation`]
+    /// is the `a -> 0` compact-source limit `rho0 Q'' / (4 pi r)`; a *finite* sphere additionally
+    /// low-passes the far field by `1 / (1 + j k a)`, so a naive power balance against batch 1
+    /// misses by `1 / (1 + (ka)^2)` — which reads as a bug and is not one. With this form the
+    /// balance is **exact at every `ka`**, because `S |Z_a|^2 / (rho0 c0) == Re Z_a` identically:
+    ///
+    /// ```text
+    /// 4 pi r^2 <p_far^2> / (rho0 c0)  ==  <R U_R^2>   =   the booked radiated power.
+    /// ```
+    ///
+    /// The pure travel delay `(r - a) / c0` is *not* applied (it is latency, not level — hand the
+    /// result to [`AirRadiation`] if you want the delay line). Requires a sphere-consistent load: a
+    /// general `(R, M_a)` pair has no radius, and this read-out is the one place where that
+    /// interpretation is genuinely needed, so it refuses rather than guessing.
     pub fn far_field_pressure(
         &self,
         distance: f64,
@@ -855,6 +1067,33 @@ pub fn timestep_mismatch(load_fs: f64, body_k: f64) -> String {
 }
 
 /// A modal body loaded by the frequency-dependent radiation impedance.
+///
+/// Batch 2's [`RadiatedBody`] is the purely **resistive** load; what is new here is the
+/// **reactance** — the radiation mass — which is what turns one number into `Z_a(omega)`. The
+/// audible consequence is the one a constant `R` cannot produce: high partials radiate better and
+/// die first, at the per-mode rate `alpha_i = a_i^2 Re Z_a(omega_i) / (2 m_i)`.
+///
+/// Structurally it is batch 2 with the load pressure generalised from `p = R U` to `p = R_eff (U -
+/// L^-)` (see [`RationalAirLoad`]), so the same rank-1 scalar Sherman-Morrison solve carries it:
+///
+/// ```text
+/// q~^{n+1} = ModalBody::step(force)                    (force-free advance)
+/// U_free   = a^T (q~^{n+1} - q^{n-1}) / (2 k)         (its centered volume velocity)
+/// p, U     = load.solve(U_free, G) ,   G = (k/2) sum_i a_i^2 / (m_i (1 + sigma_i k))
+/// q^{n+1}  = q~^{n+1} - p * [k^2 a_i / (m_i (1 + sigma_i k))]
+/// ```
+///
+/// and the energy identity gains a **stored** term alongside the dissipated one:
+///
+/// ```text
+/// E_body  +  1/2 M_a (U_L^{n+1/2})^2  +  integral R U_R^2 dt  =  const     (lossless modes).
+/// ```
+///
+/// Passivity is unconditional (`1 + R_eff G >= 1` for every `R >= 0`, `M_a > 0`, `k`), so there is
+/// still no CFL and no guard. Two exact reductions pin it: `R = 0` is bit-identical to a bare
+/// [`crate::body::ModalBody`], and `M_a = inf` is bit-identical to [`RadiatedBody`] at the same
+/// `R`. Like batch 2 it delegates every read accessor, so it drops straight into a
+/// [`crate::connection::StringBodyBridge`] as the body with no edit to the bridge.
 #[derive(Debug, Clone)]
 pub struct ReactiveRadiatedBody {
     body: body::ModalBody,

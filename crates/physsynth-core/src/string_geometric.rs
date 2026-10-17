@@ -4,7 +4,230 @@
 //! last model in `physsynth/core/` outside `connection`, `airbox` and `analysis/`. Three fields
 //! `(u, w, v)` share one implicit theta-scheme; what couples them is an **energy-conserving
 //! discrete gradient** of the exact stretch potential, solved by a damped Newton iteration on
-//! `3(N-1)` unknowns. The Python docstring is the reference for the physics.
+//! `3(N-1)` unknowns.
+//!
+//! That module's docstrings were the physics and this header documented only what the translation
+//! had to decide. They were cut to a shim by deletion 5 (`f6a3a3c`) and the shim went with the last
+//! of the Python (retirement plan §51), so they are carried from `f6a3a3c^`: the module docstring
+//! below, under "The physics", verbatim save for its cross-references; the `energy_floor` and
+//! `apply_Ainv` docstrings as the two sections after it, since neither has a native item to sit
+//! on; and the derivations on the stretch terms, the discrete gradient, its Jacobian, the Newton
+//! solve, the energy density, `tension`, `is_degenerate`, `nonlinear_energy`, `set_state` and
+//! `allow_softening` on the native items of those names. (Three constants' docstrings had already
+//! been carried at §51.)
+//!
+//! # The physics
+//!
+//! The string family's **exact** geometry, and the model that discharges the two claims model #9
+//! ([`crate::string_nonlinear::TensionModulatedString`]) explicitly refuses to make: **piano
+//! phantom partials** and **out-of-plane whirling**. Both refusals have the same root cause --
+//! model #9 has *one field*. Kirchhoff-Carrier collapses the tension to a **spatial scalar**
+//! `T(t) = T0 + (EA/2L) I`, which is precisely what makes it (a) blind to longitudinal dynamics and
+//! (b) planar. This model keeps the tension a **local field** and carries all three components:
+//!
+//! ```text
+//! r(x, t) = ( x + v(x,t),  u(x,t),  w(x,t) )     v = longitudinal, u/w = the two polarizations
+//! ```
+//!
+//! with `x` the coordinate in the **rest (already tensioned)** configuration.
+//!
+//! **The potential is exact, not a truncation.** With `q = (u_x, w_x, v_x)` the local strain and
+//!
+//! ```text
+//! Lambda(q) = |dr/dx| = sqrt( (1 + v_x)^2 + u_x^2 + w_x^2 )     the local STRETCH RATIO
+//! ```
+//!
+//! the stored energy density is (see the plan doc for the pre-stress derivation):
+//!
+//! ```text
+//! V(q) = (T0/2)(u_x^2 + w_x^2) + (EA/2) v_x^2
+//!        + a * [ (u_x^2 + w_x^2)/2 + 1 + v_x - Lambda ]              a = EA - T0
+//!        \____ LINEAR: model #3's theta-scheme ____/  \__ NONLINEAR EXCESS: DG, theta=1/2 __/
+//! ```
+//!
+//! The **nonlinearity coefficient is** `a = EA - T0`, so `EA = T0` is **exactly linear** -- three
+//! decoupled waves, and the `u` polarization is then **bit-for-bit**
+//! [`crate::string_damped::DampedStiffString`]. That is this model's regression anchor, the direct
+//! analog of model #9's `EA = 0`.
+//!
+//! Expanding the excess for small slopes (`r^2 = u_x^2 + w_x^2`) shows **the two claims as two
+//! terms**:
+//!
+//! ```text
+//! V_nl = a * [ r^2 v_x / 2  +  r^4 / 8  + ... ]
+//!             \_________/     \______/
+//!              PHANTOM         model #9's KC quartic, recovered LOCALLY (u_x^4) rather
+//!              PARTIALS        than spatially averaged (I^2/L). The KC<->GE distinction.
+//! ```
+//!
+//! `r^2 v_x/2` is quadratic in transverse times linear in longitudinal: two transverse partials at
+//! `f_i`, `f_j` drive the **longitudinal** field at `f_i +- f_j`. That term *is* phantom partials,
+//! and it is **structurally absent** from model #9, which has no `v`.
+//!
+//! **Parameterisation.** `c = sqrt(T0/rho)` for **both** polarizations (the tension is isotropic by
+//! construction); `c_long = sqrt(EA/rho)`. The governing ratio is `EA/T0 = (c_long/c)^2` --
+//! *literally* model #9's ratio, so [`crate::string_nonlinear::string_coefficients_from_material`]
+//! carries over. **But mind the identification `EA_#9 <-> (EA - T0)_#10`**: cross-model KC checks
+//! show a ~0.2-0.7 % offset (`T0/EA ~ 1/150 .. 1/600`). That is the identification, not a
+//! discrepancy -- do not chase it.
+//!
+//! **The discrete gradient -- closed form, and NO 0/0 branch.** `V` is not quadratic (unlike
+//! model #9), so a genuine discrete gradient is required: `<gradbar V, q+ - q-> = V(q+) - V(q-)`
+//! exactly. It has a closed form, via two exact facts:
+//!
+//! 1. `g = Lambda^2` is **quadratic** in `q`, so the midpoint rule is exact: `<grad g(qbar), q+ -
+//!    q-> = g+ - g-`.
+//! 2. The square-root difference quotient **rationalizes**: `(sqrt(g+) - sqrt(g-)) / (g+ - g-) = 1
+//!    / (Lambda+ + Lambda-)` -- exactly, no limit, no Taylor.
+//!
+//! Chaining them collapses the whole thing to one substitution:
+//!
+//! > **The exact DG is the CONTINUUM gradient at the midpoint strain `qbar`, with the single
+//! > replacement `Lambda(qbar) -> Lambdabar = (Lambda+ + Lambda-)/2`. mean(Lambda), NOT
+//! > Lambda(mean).**
+//!
+//! ```text
+//! gradbar V_nl = a * ( chi * ubar_x,  chi * wbar_x,  chi * (1 + vbar_x) - vbar_x )
+//! chi = 1 - 1/Lambdabar = (Lambdabar - 1)/Lambdabar          the mean strain-ratio
+//! ```
+//!
+//! `chi = 0` at rest, `> 0` stretched (hardening), `< 0` slack. **`mean(Lambda)` vs `Lambda(mean)`
+//! is the single highest-risk line in this model**: the naive midpoint's DG error *shrinks with
+//! amplitude* (measured 1.4e-2 -> 1.3e-5 -> 1.8e-8 as strain goes 0.1 -> 0.01 -> 0.001), so it
+//! looks *nearly right* in every qualitative test -- right glide, right spectrum -- and fails
+//! **only** the energy gate.
+//!
+//! Contrast the family: models #7/#8 need [`crate::collision`]'s `[DG]` 0/0 Taylor branch
+//! (power-law potential, genuinely 0/0 in the quiet region); model #9 needs no DG at all (quadratic
+//! `V` -> midpoint collapse). Model #10 sits between: a real DG, but **exactly regular** -- the
+//! denominator is `Lambda+ + Lambda- ~ 2` for any physical configuration (`Lambda` is a *stretch
+//! ratio*; `Lambda -> 0` means an element crushed to zero length). **Do not import `[DG]`** --
+//! there is no 0/0 here to protect against.
+//!
+//! **The split (why `EA = T0` stays bit-identical).** Model #9's trick, verbatim. The excess needs
+//! theta=1/2 to telescope, but model #3 averages its operator at theta ~ 0.28. Split, and average
+//! only the **excess** at theta=1/2 -- the pieces telescope independently, so it is free:
+//!
+//! ```text
+//! rho delta_tt u = L_u . (theta u+ + (1-2theta) u^n + theta u-)          <- model #3, VERBATIM
+//!                  - 2 rho sigma0 delta_t. u + 2 rho sigma1 delta_t.(delta_xx u)
+//!                  + delta_x-[ gradbar V_nl ]_u                          <- NEW, theta=1/2 (DG)
+//! rho delta_tt w = (same, with kappa_w)
+//! rho delta_tt v = EA delta_xx(theta v+ + (1-2theta) v^n + theta v-)
+//!                  - 2 rho sigma0_long delta_t. v + 2 rho sigma1_long delta_t.(delta_xx v)
+//!                  + delta_x-[ gradbar V_nl ]_v                          <- no kappa: no bending
+//! ```
+//!
+//! `L_u = c^2 delta_xx - kappa_u^2 delta_xxxx`, `L_w = c^2 delta_xx - kappa_w^2 delta_xxxx`. **The
+//! detuning lives there and nowhere else**: `c` is shared and `gradbar V_nl` sees the polarizations
+//! only through `r^2 = u_x^2 + w_x^2`, so `kappa_u != kappa_w` splits **only the linear operator**
+//! and the geometric nonlinearity stays exactly isotropic.
+//!
+//! **Energy.**
+//!
+//! ```text
+//! E^n = [ model #3's theta-form, per field, with each field's own L ]
+//!       + (1/2) ( Vnl(q^n) + Vnl(q^{n-1}) )
+//! ```
+//!
+//! The nonlinear term is the **two-time half-average** -- model #6/#9's odd/even lesson, here
+//! *derived*: by the SBP adjoint pair `<delta_x- F, y> = -<F, delta_x+ y>`, the DG identity makes
+//! the nonlinear power exactly `-delta_t+[ (Vnl^n + Vnl^{n-1})/2 ]`.
+//!
+//! **The energy floor is 0, and that is less obvious than it looks.** Measured against the natural
+//! (zero-tension) length `Lambda0 = a/EA`, the potential is exactly:
+//!
+//! ```text
+//! V(q) = (EA/2)(Lambda - Lambda0)^2 - T0^2/(2 EA) - T0 v_x
+//! ```
+//!
+//! The `-T0 v_x` null Lagrangian telescopes to `T0 (v_N - v_0) = 0` at fixed ends and drops from
+//! the sum, but the pre-stress density `T0^2/(2 EA)` survives on every cell -- which tempts the
+//! conclusion `E >= -L T0^2/(2 EA)` (a string relaxed everywhere). **That state is inadmissible**:
+//! relaxing every element needs `v_x = -T0/EA` throughout, i.e. `v_N - v_0 != 0`, and both ends are
+//! clamped. Imposing the constraint, `Lambda >= 1 + v_x` gives `mean(Lambda) >= 1`, and Jensen
+//! makes the square term dominate the pre-stress term exactly:
+//!
+//! ```text
+//! =>  E >= 0,   with equality iff Lambda == 1 everywhere and the string is at rest.
+//! ```
+//!
+//! `-L T0^2/(2 EA)` is the floor for a **free** string -- relevant only if a free end is ever
+//! added. See "The energy floor, in full" below. Structural only at theta=1/2 (the split's two
+//! averaging rules recombine into `h sum V` only there); at theta ~ 0.28 it is an empirical bar. If
+//! it is ever hit, **distinguish bug from physics via `min Lambda`**: a slack element (negative
+//! [`tension`] -> buckling) is *real physics* -- measured, the scheme conserves energy to 1e-12
+//! straight through local slackness -- not a scheme artifact.
+//!
+//! **Resolve the longitudinal field: `lam_long = c_long k / h` governs, and nothing enforces it.**
+//! The scheme is unconditionally stable, so there is no CFL to violate and no error to raise -- but
+//! `c_long/c = sqrt(EA/T0)` is ~22 at realistic `EA/T0`, so the familiar `lam = 0.5` silently means
+//! `lam_long = 11`. Measured: `lam_long <= 2` conserves to ~1e-12 on every hard case tried; by
+//! `lam_long >= 4` the Newton solve stops converging and drift explodes to 1e+3 .. 1e+5. *Stable is
+//! not accurate.* Oversample (CLAUDE.md's rule for nonlinearities) and check [`Params::lam_long`].
+//!
+//! **Solve.** Vector Newton on `3(N-1)` unknowns `[u+; w+; v+]`. `gradbar V_nl` is **local per
+//! cell**, so the Jacobian `J = A0 - (k^2/rho) delta_x- D_cell delta_x+` has `D_cell`
+//! block-diagonal (3x3 per cell) and is **sparse**. A sparse LU ([`crate::sparse_lu`]), not the
+//! banded Cholesky: the DG Jacobian is **not symmetric** (a discrete gradient is not the gradient
+//! of anything -- `D_cell` pairs a midpoint `mbar` against a plus-level `n+`). Damped Newton +
+//! Armijo; `newton_tol` is exposed and **drift is proportional to it** -- the self-certification,
+//! absent a closed form for general motion. **Uniqueness is deliberately not gated** (bow /
+//! model #9 precedent): *any* root conserves energy exactly, since the telescoping needs only the
+//! DG identity.
+//!
+//! **Bending is added linearly** (Euler-Bernoulli, per polarization), *not* geometrically-exact.
+//! This is honestly a "stiff geometrically-exact string", not a Timoshenko/Cosserat rod.
+//!
+//! Headless: the sparse LU is [`crate::sparse_lu`] and the banded Cholesky [`crate::banded`] (in
+//! the Python, SciPy's). No I/O, no plotting. See `docs/dev/geometrically-exact-string-plan.md`.
+//!
+//! ## The energy floor, in full
+//!
+//! The lower bound on the energy is **zero**, attained only at rest.
+//!
+//! Written out because the number is not the obvious one and the derivation is worth pinning -- it
+//! went wrong here in *both* directions before it went right. Measure the potential against the
+//! natural (zero-tension) length `Lambda0 = a/EA`:
+//!
+//! ```text
+//! V(q) = (EA/2)(Lambda - Lambda0)^2 - T0^2/(2 EA) - T0 v_x        (exact, any sign of a)
+//! ```
+//!
+//! The `-T0 v_x` term is a **null Lagrangian**: it sums to `T0 (v_N - v_0) = 0` at fixed ends. The
+//! pre-stress density `T0^2/(2 EA)` does *not* vanish -- it survives on every cell, which is what
+//! tempts the conclusion `E >= -L T0^2/(2 EA)`, the energy of a string relaxed everywhere. **That
+//! state is inadmissible here**: relaxing every element needs `v_x = -T0/EA` throughout, hence
+//! `v_N - v_0 = -L T0/EA != 0` -- the string would have to shorten, and both ends are clamped.
+//!
+//! Imposing the constraint instead: `Lambda >= 1 + v_x` always (the root only *adds* transverse
+//! length), so `mean(Lambda) >= 1 + mean(v_x) = 1`. Jensen then gives `mean((Lambda -
+//! Lambda0)^2) >= (mean(Lambda) - Lambda0)^2 >= (1 - Lambda0)^2`, whose weight `(EA/2) L (1 -
+//! Lambda0)^2` is *exactly* the pre-stress term. They cancel:
+//!
+//! ```text
+//! E >= 0,    equality iff Lambda == 1 everywhere and the string is at rest.
+//! ```
+//!
+//! So `-L T0^2/(2 EA)` is the floor for a **free** string, where the null Lagrangian no longer
+//! telescopes -- worth remembering if a free end is ever added. Note this bounds the *continuum*
+//! potential; the discrete `E` pairs a cross-time theta-form against a same-time nonlinear
+//! half-average, so at `theta ~ 0.28` the bar is empirical, structural only at `theta = 1/2`.
+//!
+//! ## Why there is no `apply_ainv`
+//!
+//! There is no `apply_ainv` on this model -- **the one-step response is state-dependent**.
+//!
+//! Model #3 exposes `A^{-1}`'s action so a coupled element (e.g. [`crate::bow::BowedString`]) can
+//! precompute a *constant* driving-point admittance `a = A^{-1} e_i`.
+//!
+//! The reason it fails here is **not** model #9's. There, `A` itself moves with the tension every
+//! step. Here `A3` is genuinely **constant** -- the nonlinearity is a force on the RHS, not a term
+//! in the matrix. But the string's one-step response to an injected force is still *not* `A3^{-1}`:
+//! the DG force couples all three fields implicitly at `n+1`, so the true admittance is the inverse
+//! of the **Newton Jacobian**, which is state-dependent (and not symmetric). A precomputed `A3^{-1}
+//! e_i` would be silently wrong by exactly the nonlinearity one came here for. Coupling an exciter
+//! needs a joint solve -- deliberately out of scope; see the plan doc.
 //!
 //! # What is new here, and it is one thing: the ordering in front of the sparse LU
 //!
@@ -274,6 +497,29 @@ pub struct Params {
     /// Newton iteration cap.
     pub newton_maxiter: usize,
     /// Whether `EA < T` was explicitly permitted.
+    ///
+    /// Permit `EA < T`. **Off by default -- but the line it draws is materials, not stability.**
+    ///
+    /// `EA < T` makes `Lambda0 = (EA - T0)/EA` negative, and `Lambda0` is *both* the minimizer of
+    /// `V` *and* the natural-length ratio of an element (see the module header's energy floor for
+    /// why it is the same number). A negative natural length is not a thing a real material has:
+    /// the string would be pre-stretched from an unstretched state shorter than nothing.
+    ///
+    /// **What it is not is unstable, and an earlier version of this docstring said otherwise.** The
+    /// claim was that `EA_n = EA - T0 < 0` leaves the potential unbounded below. It does not: the
+    /// identity in the module header's energy floor holds for **either sign** of `a`, `EA > 0` is
+    /// separately enforced, so `(EA/2)(Lambda - Lambda0)^2 >= 0` regardless -- and the same Jensen
+    /// step gives `E >= 0` at `a < 0` too. A softening string cannot even go slack (`tension = EA
+    /// Lambda - a = EA Lambda + |a| > 0` for every `Lambda > 0`, where a *hardening* one genuinely
+    /// can). Measured, plucked, at `EA/T0` from `1/2` down to `1/200`: drift ~1e-13, `E` positive,
+    /// `min(tension) ~ T0`. So the energy floor and the drift gate are **not** void with the hatch
+    /// open -- both still hold, and the tests assert it.
+    ///
+    /// The hatch therefore reads the way the project's rule that unphysical parameter combinations
+    /// are a feature asks, from the other side: the surface `(T, rho, kappa, EA)` stays mutually
+    /// unconstrained, and the *unphysical* corner is opt-in rather than forbidden. **Resolution
+    /// flips here**: below `EA = T0` the longitudinal wave is the slow one, so resolve `lam`, not
+    /// [`Params::lam_long`] (see [`LAM_LONG_WARN`]).
     pub allow_softening: bool,
     /// Transverse wave speed `sqrt(T / rho)` (m/s).
     pub c: f64,
@@ -591,10 +837,31 @@ pub fn stretch_ratio(q: &[f64]) -> Vec<f64> {
 /// `(Lambda, Lambda-1, Lambda-(1+v_x), r^2, Lambda+1+v_x)` per cell, free of cancellation.
 ///
 /// `_stretch_terms`. The two rearrangements' bad regions are complementary, so the `denom > 1.0`
-/// branch is exact everywhere rather than a tolerance — see the Python docstring, which is the
-/// derivation. This is *not* the mallet's 0/0 Taylor branch: nothing here is genuinely 0/0 in the
+/// branch is exact everywhere rather than a tolerance — the derivation follows. This is *not* the
+/// mallet's 0/0 Taylor branch: nothing here is genuinely 0/0 in the
 /// physical region, and the branch predicate is a comparison against `1.0` on a quantity that sits
 /// at `~2` for every physical element.
+///
+/// **Why this exists (a real defect, measured).** Both `Lambda - 1` and `Lambda - (1+v_x)` are
+/// `O(strain)` or `O(strain^2)` quantities assembled from `O(1)` ones, so evaluating them literally
+/// destroys relative accuracy exactly where the model is used: musical strings run at strain `~1e-4
+/// .. 1e-3`. Measured on the raw forms, the DG identity's relative error degraded `4e-16 -> 7e-8`
+/// as strain went `0.5 -> 1e-3` -- i.e. **worse the more realistic the string**, and within one
+/// digit of the energy gate.
+///
+/// The cure is the *same* rationalization the discrete gradient itself rests on:
+///
+/// ```text
+/// Lambda - 1       = (v_x (2 + v_x) + r^2) / (Lambda + 1)
+/// Lambda - (1+v_x) = r^2 / (Lambda + 1 + v_x)
+/// ```
+///
+/// The first is **unconditionally safe** (`Lambda + 1 >= 1` always). The second degenerates (0/0)
+/// only for an **inverted** element (`1 + v_x < 0` with `r = 0`, i.e. compressed through zero
+/// length) -- and that is precisely the region where the plain subtraction has no cancellation at
+/// all (there `Lambda ~ -(1+v_x)`, so the difference is `O(1)`). The two forms' bad regions are
+/// **complementary**, so the branch below is exact everywhere, not a tolerance. This is *not*
+/// model #7/#8's `[DG]` 0/0 Taylor branch: nothing here is genuinely 0/0 in the physical region.
 pub struct StretchTerms {
     /// `Lambda`.
     pub lam: Vec<f64>,
@@ -647,8 +914,23 @@ pub fn stretch_terms(q: &[f64]) -> StretchTerms {
 
 /// The exact discrete gradient `gradbar V_nl` per cell, three rows of `N` — `_dg_force`.
 ///
-/// `<gradbar V_nl, q+ - q-> = V_nl(q+) - V_nl(q-)` exactly. Passing the same strains twice gives
-/// the plain continuum gradient, which is how [`initial_previous`] uses it.
+/// `<gradbar V_nl, q+ - q-> = V_nl(q+) - V_nl(q-)` **exactly**. It is the continuum gradient at
+/// `qbar` with the single replacement `Lambda(qbar) -> Lambdabar = mean(Lambda)`. Passing the same
+/// strains twice therefore yields the plain **continuum** gradient -- which is exactly how
+/// [`initial_previous`] uses it.
+///
+/// **`mean(Lambda)`, NOT `Lambda(mean)`.** The naive midpoint's error shrinks with amplitude, so it
+/// passes every qualitative test and fails only the energy gate.
+///
+/// Written in the cancellation-free variables of [`stretch_terms`], using two exact rearrangements
+/// of the same expression:
+///
+/// ```text
+/// chi = (Lambdabar - 1)/Lambdabar  with  Lambdabar - 1     = mean(Lambda^m - 1)
+/// [.]_v = (Lambdabar - 1 - vbar_x)/Lambdabar   with the numerator = mean(Lambda^m - 1 -
+///         v_x^m)   -- both means are exact because Lambdabar and vbar_x are themselves
+///         means, so the per-level stable forms carry straight through.
+/// ```
 pub fn dg_force(q_plus: &[f64], q_minus: &[f64], a: f64) -> Vec<f64> {
     let n = q_plus.len() / 3;
     let sp = stretch_terms(q_plus);
@@ -668,17 +950,36 @@ pub fn dg_force(q_plus: &[f64], q_minus: &[f64], a: f64) -> Vec<f64> {
 
 /// `d(gradbar V_nl)/d q+` as a `3N x 3N` matrix of diagonal blocks — `_dg_jacobian`.
 ///
-/// Per cell `a [ (chi/2) I3 - (1/2) e_v e_v^T + (1/(2 Lambdabar^2)) mbar (n+)^T ]`, except that
-/// the `(v,v)` entry is assembled cancellation-free as
-/// `-a (d+ (1 + vbar_x) + dbar Lambda+) / (2 Lambda+ Lambdabar^2)` with `d = Lambda - (1 + v_x)`
-/// from [`stretch_terms`] — the literal spelling cancels two `O(1)` terms to an `O(strain^2)`
-/// remainder and loses accuracy like `1/strain^2` (5.8e-5 relative at strain 1e-4). See the
-/// Python docstring for the derivation; both sides spell it identically. **It is not
-/// symmetric**, which is why the Newton solve uses a sparse LU and not the banded Cholesky the
-/// rest of this family uses — and why this is the first Group D matrix in the project that is not
-/// SPD, so [`DIAG_PIVOT_THRESH`]'s justification ("every Group D matrix is SPD") no longer covers
-/// it. What covers it instead is measured: the diagonal is ~8x the off-diagonal row sum at every
-/// grid size and amplitude the suite builds, so the threshold is never close to firing.
+/// Per cell this is `a [ (chi/2) I3 - (1/2) e_v e_v^T + (1/(2 Lambdabar^2)) mbar (n+)^T ]` with
+/// `mbar = (ubar_x, wbar_x, 1 + vbar_x)` and `n+ = (u_x+, w_x+, 1 + v_x+)/Lambda+`.
+///
+/// **It is not symmetric** -- `mbar` is a midpoint quantity while `n+` is a plus-level one. A
+/// discrete gradient is not the gradient of anything, which is exactly why the Newton solve uses a
+/// sparse LU ([`crate::sparse_lu`]) and not the banded Cholesky the rest of this family uses.
+///
+/// **The `(v,v)` entry is assembled cancellation-free.** Written literally it is `chi/2 - 1/2 +
+/// (1+vbar_x)(1+v_x+)/(2 Lambdabar^2 Lambda+)`: two `O(1)` terms that cancel to an `O(strain^2)`
+/// remainder, so its relative error grows like `1/strain^2` -- measured against a 60-digit
+/// reference, `3.9e-11` at strain `0.1`, `1.2e-6` at `1e-3` and `5.8e-5` at `1e-4`, *worse the more
+/// realistic the string* (the pathology [`stretch_terms`] cures for the residual). Using
+/// `Lambdabar - 1 = mean(Lambda - 1)` the three terms collapse exactly to
+/// `((1+vbar_x)(1+v_x+)/Lambda+ - Lambdabar) / (2 Lambdabar^2)`, and with `d = Lambda - (1 + v_x)`
+/// (the stable third output of [`stretch_terms`], `dbar = mean(d)`) the numerator is exactly `-(d+
+/// (1+vbar_x) + dbar Lambda+) / Lambda+`, so:
+///
+/// ```text
+/// J_vv = -a (d+ (1 + vbar_x) + dbar Lambda+) / (2 Lambda+ Lambdabar^2)
+/// ```
+///
+/// which holds ~1e-15 relative at every strain. At `q+ == q-` it is `-a r^2/(2 Lambda^3)`, half the
+/// continuum Hessian, as the rotating-wave cross-check asserts. Only the Newton iteration is
+/// steered by this matrix (the residual defines the root), so the fix changes how fast the solve
+/// converges, never where. The Python spelled the `(v,v)` entry identically.
+///
+/// Not being symmetric also makes this the first Group D matrix in the project that is not SPD,
+/// so [`DIAG_PIVOT_THRESH`]'s justification ("every Group D matrix is SPD") no longer covers it.
+/// What covers it instead is measured: the diagonal is ~8x the off-diagonal row sum at every grid
+/// size and amplitude the suite builds, so the threshold is never close to firing.
 pub fn dg_jacobian(q_plus: &[f64], q_minus: &[f64], a: f64) -> Csr {
     let n = q_plus.len() / 3;
     let sp = stretch_terms(q_plus);
@@ -735,6 +1036,20 @@ pub fn dg_jacobian(q_plus: &[f64], q_minus: &[f64], a: f64) -> Csr {
 /// `h sum_c V_nl(q_c)` (J) — the nonlinear **excess** only. `_nl_density`.
 ///
 /// Reduced left to right, declining `np.sum`'s pairwise blocking (see the module header).
+///
+/// `V_nl(q) = a [ (u_x^2 + w_x^2)/2 + 1 + v_x - Lambda ]`, and `V_nl(0) = 0` exactly (at rest
+/// `Lambda = 1`). The linear part lives in the theta-form, per the split.
+///
+/// Evaluated through the cancellation-free rearrangement (see [`stretch_terms`]):
+///
+/// ```text
+/// V_nl = a r^2 ((Lambda - 1) + v_x) / (2 (Lambda + 1 + v_x))
+/// ```
+///
+/// which is exact and keeps full **relative** accuracy on a quantity that is `O(strain^3)` -- the
+/// literal expression is a difference of `O(1)` terms and was the accuracy limiter on the energy
+/// gate at musical amplitudes. Leading order this is `a r^2 v_x / 2`: the phantom term, visible
+/// directly in the formula.
 pub fn nl_density(q: &[f64], a: f64, h: f64) -> f64 {
     if a == 0.0 {
         return 0.0;
@@ -757,6 +1072,12 @@ pub fn nl_density(q: &[f64], a: f64, h: f64) -> f64 {
 ///
 /// A **field**, which is the whole point of model #10: model #9's Kirchhoff-Carrier tension is a
 /// spatial scalar, and that collapse is exactly what makes it blind to longitudinal dynamics.
+///
+/// Exactly `T0` at rest (`Lambda = 1`), and **linear in `Lambda`**. Goes **negative** (compression
+/// -> buckling) when `Lambda < (EA - T0)/EA = 1/(1 + eps0)`, i.e. when an element is squeezed below
+/// its natural length. Unlike model #9 -- where `I >= 0` forces the tension to only ever *rise* --
+/// a geometrically-exact string genuinely can go slack, and that is real physics, not a bug.
+/// Cross-check it against the energy floor (the module header) before suspecting the scheme.
 pub fn tension(q: &[f64], ea: f64, a: f64) -> Vec<f64> {
     stretch_ratio(q).iter().map(|&l| ea * l - a).collect()
 }
@@ -873,6 +1194,27 @@ pub struct NewtonReport {
 /// having (module header). The convergence test is on `max|r|`, an order-independent reduction;
 /// the Armijo test is on `r . r`, which is a sum, and §20.3's question is answered in the module
 /// header.
+///
+/// Residual `F(Y) = A3 Y - rhs0 - (k^2/rho) delta_x-[ gradbar V_nl(delta_x+ Y, q^{n-1}) ]`. Note
+/// the DG depends on `y^{n+1}` and `y^{n-1}` only -- never on `y^n`; that is the discrete-gradient
+/// structure, and it is what telescopes.
+///
+/// Seeded with the **linear** (force-free) solve against the prefactored factors -- `A3` is
+/// constant here, unlike model #9's, so that seed is free and is the exact answer whenever the
+/// nonlinearity is weak.
+///
+/// **The convergence bar is RELATIVE** (`newton_tol * max|Y_seed|`), model #9's unit-free idiom.
+/// This is not fussiness: the residual scales with the displacement, so an absolute bar silently
+/// loosens as the string gets quieter, and it is the **energy drift's floor** -- measured drift
+/// tracks it proportionally over five decades (`1e-12 -> 8e-9`, `1e-16 -> 2e-12`), because the DG
+/// force is exact only *at* the root. A run that decays under damping keeps its relative bar
+/// automatically; at exact rest the residual is exactly `0.0` (`gradbar V_nl(0, 0) == 0`
+/// identically) and the seed is the answer.
+///
+/// **Uniqueness is deliberately not gated** (the [`crate::bow::BowedString`] and model #9
+/// precedent): *any* root conserves energy exactly, since the telescoping needs only the DG
+/// identity `<gradbar V, q+ - q-> = V(q+) - V(q-)`. Non-uniqueness would be a branch-selection
+/// question, not a correctness one.
 pub fn solve_newton(
     rhs: &[Vec<f64>; 3],
     u_prev: &[f64],
@@ -983,6 +1325,14 @@ pub fn potential(fn_: &[f64], fp: &[f64], op: &Csr, p: &Params) -> f64 {
 }
 
 /// The nonlinear excess part of `E^n` — the **two-time half-average**. `nonlinear_energy`.
+///
+/// The **two-time half-average** `(Vnl(q^n) + Vnl(q^{n-1}))/2` -- model #6/#9's odd/even lesson,
+/// here *derived* rather than certified after the fact (a single-level `Vnl(q^n)` is a 2-step
+/// invariant and oscillates spuriously).
+///
+/// **Sign-indefinite** (the `r^2 v_x/2` term), unlike model #9's, so report `abs()` of its fraction
+/// of the energy in energy tests: a nonlinearity bug *hides* at small amplitude, where the test
+/// merely re-runs the linear scheme (model #6's lesson).
 pub fn nonlinear_energy(
     u: &[f64],
     w: &[f64],
@@ -1074,6 +1424,18 @@ impl GeometricString {
     }
 
     /// Set the three displacement fields and their optional velocities — `set_state`.
+    ///
+    /// **Warning — a name clash with models #1-3/#9.** There, `set_state(u0, v0)`'s `v0` is the
+    /// initial **velocity**. Here `v` is the **longitudinal displacement field**, so `v0` is a
+    /// *displacement* and the velocities are `dots`. Porting a call from model #3 without renaming
+    /// silently injects a longitudinal displacement where a transverse velocity was meant.
+    ///
+    /// Uses the lossless consistent second-order start `y^{-1} = y^0 - k ydot^0 + (k^2/2) ytt^0`,
+    /// with `ytt^0` including the **nonlinear** force at `t = 0` (the *continuum* gradient at `q^0`
+    /// -- at a single time level there is no DG) so a single eigenmode starts as a clean discrete
+    /// Duffing cosine. `EA = T` skips that term -> model #3's start exactly. All three components
+    /// are clamped at both ends. Under damping the start is only *consistent* (not exact), as in
+    /// model #3.
     pub fn set_state(&mut self, u0: &[f64], w0: &[f64], v0: &[f64], dots: &[Vec<f64>; 3]) {
         let mut u = u0.to_vec();
         let mut w = w0.to_vec();
@@ -1211,6 +1573,16 @@ impl GeometricString {
     /// A **discrete** output (§25.2), and the comparison is an exact `==` on two constructor
     /// arguments rather than on anything computed, so there is no margin to measure: the two
     /// implementations agree by construction or not at all.
+    ///
+    /// **A degenerate string provably cannot whirl.** `w -> -w` is a reflection symmetry, so a
+    /// planar initial condition stays *bit-exactly* planar forever; and an out-of-plane
+    /// perturbation is only **marginal**, never exponential -- `dw = u(t)` is an exact solution of
+    /// the out-of-plane variational equation (it is the rotation generator), so one Floquet
+    /// multiplier is `+1`, and the conserved Wronskian forces the other to `+1` too. The second
+    /// solution grows only *secularly* (linear in `t`), proportional to injected angular momentum.
+    /// Exponential whirling (Gough 1984, threshold `eps A^2 ~ dw0^2`) needs `kappa_u != kappa_w`.
+    /// There is likewise **no universal precession rate**: rotational symmetry forces `omega_w =
+    /// omega_u` exactly, at any amplitude.
     pub fn is_degenerate(&self) -> bool {
         self.p.kappa_u == self.p.kappa_w
     }

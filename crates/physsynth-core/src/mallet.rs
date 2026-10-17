@@ -1,8 +1,77 @@
 //! Mallet-membrane collision — model #7, and the batch that finishes Phase 2.
 //!
-//! `docs/dev/rust-migration-plan.md` §17. The Python original is `physsynth/core/mallet.py`; its
-//! class docstrings are the reference for the physics and the sign convention, and they are not
-//! repeated here.
+//! `docs/dev/rust-migration-plan.md` §17. The Python original was `physsynth/core/mallet.py`. Its
+//! docstrings were the reference for the physics and the sign convention and were not repeated
+//! here; they were cut to a shim by deletions 2–4 (`6c23a45`) and the shim went with the last of
+//! the Python (retirement plan §51), so the module docstring — where the physics and the sign
+//! convention actually were — is carried below, under "The physics", verbatim from `6c23a45^` save
+//! for its cross-references and its closing line about NumPy and SciPy.
+//!
+//! # The physics
+//!
+//! A soft mallet (a lumped mass `M`) strikes a [`crate::membrane::Membrane`] at a point, the
+//! drum/timpani gesture. Unlike the bow (a *memoryless* nonlinear exciter whose correctness is an
+//! energy *balance*), the mallet is a **mass in one-sided nonlinear contact**: it stores kinetic
+//! energy `½M v_H²` and — through the felt — **potential** energy `φ(η)`. So the money test flips
+//! back to strict **conservation**:
+//!
+//! ```text
+//! H^n = E_membrane^n  +  ½ M (δ_t- z_H^n)²  +  ½ ( φ(η^n) + φ(η^{n-1}) )  =  const
+//! ```
+//!
+//! (lossless, elastic felt), and monotone **decreasing** once the membrane loses energy or the felt
+//! is hysteretic. See `docs/dev/hammer-collision-plan.md`.
+//!
+//! **Geometry / sign convention.** `z_H` is the mallet position and `u_S` the head surface at the
+//! contact node, in a common `+z` (up) frame; the mallet comes from above. The **penetration** is
+//!
+//! ```text
+//! η = u_S − z_H        (η > 0  ⟺  the mallet tip has dipped below the head surface, i.e. contact)
+//! ```
+//!
+//! The felt is a one-sided nonlinear spring with **contact potential** and (repulsive, `≥ 0`) force
+//!
+//! ```text
+//! φ(η) = (K / (α+1)) [η]₊^(α+1) ,      φ'(η) = K [η]₊^α ,      [η]₊ = max(η, 0)
+//! ```
+//!
+//! pushing the mallet up (`M z_H'' = +φ'`) and the head down (`ρ u_tt = elastic − φ'/h²`).
+//!
+//! **Energy-conserving force = the discrete gradient (Chatziioannou–van Walstijn).** Evaluating
+//! `φ'` at a single point drifts the energy at `O(k²)` (the trap model #6 taught us). Instead the
+//! force is the *discrete gradient* of the potential,
+//!
+//! ```text
+//! f = ( φ(η^{n+1}) − φ(η^{n-1}) ) / ( η^{n+1} − η^{n-1} )                    [DG]
+//!   → φ'( ½(η^{n+1}+η^{n-1}) )              when |η^{n+1} − η^{n-1}| < η_tol   (removable 0/0),
+//! ```
+//!
+//! which makes the contact power telescope *exactly*: `f · δ_t·η = δ_t· φ`. The `η_tol` branch is
+//! mandatory — `[DG]` is a genuine `0/0` in the quiet/stick regions and NaNs without it.
+//!
+//! **Hunt–Crossley/Stulov hysteresis (passivity, not conservation).** An optional
+//! velocity-dependent, penetration-gated damping `f_hyst = λ_h ⟦η⟧₊^α · δ_t·η` (`⟦η⟧ =
+//! ½(η^{n+1}+η^{n-1})`) models the lossy felt. It is **not** potential-derived; dissipation
+//! `f_hyst·δ_t·η = λ_h⟦η⟧₊^α(δ_t·η)² ≥ 0` is sign-definite, so it only ever *removes* energy.
+//! `λ_h = 0` recovers the conservative scheme.
+//!
+//! **The coupling reduces to one scalar equation (the bow shape).** Both DOFs are linear in `f`
+//! except through the contact, so with the membrane's **local** admittance (it is *explicit*, so a
+//! node force touches only that node next step) and the mallet's,
+//!
+//! ```text
+//! η^{n+1} = η_free^{n+1} − g f(η^{n+1}) ,   g = g_s + g_H ,
+//! g_s = k² / (ρ h² (1+σk))   (membrane node) ,   g_H = k² / M   (mallet) .
+//! ```
+//!
+//! The residual `r(η) = η − η_free + g f(η)` is **monotone increasing** (convex potential ⇒ `f`
+//! non-decreasing), so there is a unique root — a safeguarded Newton seeded by continuation, with a
+//! guaranteed bracketed fallback, converges cleanly (no multivalued branch, unlike the bow). `f` is
+//! applied *exactly* (local membrane correction + closed-form mallet update), so the reported
+//! energy is machine-precision regardless of the Newton residual.
+//!
+//! Headless: delegates the field solve to the membrane, and the contact root-find to
+//! [`crate::collision::solve_contact`]. No I/O, no plotting.
 //!
 //! # What is left to port, and what therefore any divergence means
 //!
