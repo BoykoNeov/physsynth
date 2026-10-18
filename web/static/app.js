@@ -531,13 +531,24 @@ const DOMAIN_LABELS = { membrane: "Domain", mallet: "Drum shape", geometric: "Re
 const CONTROL_OPTS = {
   plate: [["physical", "Physics — κ, ρ, μ, σ"],
           ["musical", "Musical — material, pitch or thickness, ring times"]],
+  // The drum's domain select already means circle / rectangle (membrane mapping plan §6); the
+  // mallet page builds its drum the same way.
+  membrane: [["physical", "Physics — T, ρ, λ, σ"],
+             ["musical", "Musical — head, pitch or tension, ring times"]],
+  mallet: [["physical", "Physics — T, ρ, λ, σ"],
+           ["musical", "Musical — head, pitch or tension, ring times"]],
 };
 
+// The models whose drum takes the head-and-pitch musical controls.
+const DRUM_MODELS = ["membrane", "mallet"];
+
 // Whether model m's musical controls are on: the damped string carries them on its domain select,
-// the plate on its controls select.
+// the plate and the drums on the controls select.
 function musicalOn(m) {
   if (m === "damped") return domainSel.value === "musical";
-  if (m === "plate") return !!controlsSel && controlsSel.value === "musical";
+  if (m === "plate" || DRUM_MODELS.includes(m)) {
+    return !!controlsSel && controlsSel.value === "musical";
+  }
   return false;
 }
 
@@ -711,10 +722,15 @@ function updateVisibility() {
   // shared pitch slider never inherits a plate's thickness mode.
   const plateMusical = m === "plate" && musical;
   const byPitch = !plateMusical || $("plate-set-by").value === "pitch";
-  showParam("f0", byPitch);
   showParam("thickness_mm", !byPitch);
   const custom = plateMusical && $("plate-material").value === "custom";
   ["custom_E_gpa", "custom_nu", "custom_density"].forEach((k) => showParam(k, custom));
+  // The drum's, the same way: tension or pitch, and the custom density only for "custom".
+  const drumMusical = DRUM_MODELS.includes(m) && musical;
+  const byTension = drumMusical && $("drum-set-by").value === "tension";
+  showParam("tension", byTension);
+  showParam("custom_rho", drumMusical && $("drum-head").value === "custom");
+  showParam("f0", byPitch && !byTension);
 }
 
 // Re-range sliders to the current model's caps/defaults (see MODEL_RANGES). Merges _default with the
@@ -827,6 +843,11 @@ function updateLambdaHint() {
     const fs = param("fs");
     hint.textContent = `fs = ${Math.round(fs)} Hz  (oversample the nonlinearity: higher = truer, `
       + `more cost; κ is derived from E, e, ν, ρ)`;
+    hint.style.color = "var(--muted)";
+  } else if ((m === "membrane" || m === "mallet") && musicalOn(m)) {
+    hint.textContent = "λ is a read-out here: the head and the pitch (or tension) set the wave "
+      + "speed, and fs is the sample-rate slider. The second loss tightens the 2-D CFL to "
+      + "λ² + 4σ₁k/h² ≤ ½; a refusal says so.";
     hint.style.color = "var(--muted)";
   } else if (m === "membrane" || m === "mallet") {
     const lam = param("lambda");
@@ -1400,8 +1421,9 @@ if (domainSel) domainSel.addEventListener("change", () => {
   updateLambdaHint();
   scheduleAuto();
 });
-// The plate's control set and its material selects re-gate the panel and re-render.
-for (const sel of [controlsSel, $("plate-material"), $("plate-set-by"), $("plate-grain")]) {
+// The control set and the plate's and the drum's selects re-gate the panel and re-render.
+for (const sel of [controlsSel, $("plate-material"), $("plate-set-by"), $("plate-grain"),
+                   $("drum-head"), $("drum-set-by")]) {
   if (sel) sel.addEventListener("change", () => {
     updateVisibility();
     updateLambdaHint();
@@ -1436,6 +1458,12 @@ function gatherParams() {
     p.set_by = $("plate-set-by").value;
     const grain = $("plate-grain").value;
     if (grain) p.grain = grain;
+  }
+  // The drum's control set and its two selects, likewise for the drums only.
+  if (DRUM_MODELS.includes(modelSel.value) && controlsSel) {
+    p.controls = controlsSel.value;
+    p.head = $("drum-head").value;
+    p.set_by = $("drum-set-by").value;
   }
   for (const k in sliders) p[k] = +sliders[k].value * (scaleOf[k] || 1);
   if (nonlinearChk) p.nonlinear = nonlinearChk.checked;
@@ -1501,6 +1529,7 @@ function b64ToUint8(b64) {
 // "allow and warn", parameter-mapping plan §3). Raw numbers from the server, formatted here.
 function showTuning(data) {
   if (data.model === "plate") { showPlateTuning(data); return; }
+  if (DRUM_MODELS.includes(data.model)) { showDrumTuning(data); return; }
   const hint = $("tuning-hint");
   if (!hint) return;
   const t = data.tuning;
@@ -1530,6 +1559,27 @@ function showPlateTuning(data) {
     + `σ₁ = ${g(t.sigma1)}, μ = ${t.mu}. Anchor ${g(t.anchor_frequency)} Hz. ${t.message} `
     + `Ring times: ${rings}. (${t.source})`;
   hint.style.color = t.crowded ? "var(--accent-2)" : "var(--muted)";
+}
+
+// The drum's musical read-out (membrane mapping plan §6): what the head and the targets mapped to
+// — the tension, the wave speed, both losses, λ — and the ring times of the partials the two
+// targets do not pin.
+function showDrumTuning(data) {
+  const hint = $("drum-tuning-hint");
+  if (!hint) return;
+  const t = data.tuning;
+  if (!t) { hint.textContent = ""; return; }
+  const g = (x) => Number(x).toPrecision(4);
+  const how = t.set_by === "pitch"
+    ? `for f₀ = ${g(t.f0_target)} Hz the head needs ${g(t.tension)} N/m`
+    : `at ${g(t.tension)} N/m it sounds f₀ = ${g(t.f0)} Hz`;
+  const rings = (t.partials || []).map((q) => `${g(q.f)} Hz → ${g(q.t60)} s`).join(", ");
+  hint.textContent = `→ ${t.head} (${g(t.rho)} kg/m²): ${how}. c = ${g(t.c)} m/s, `
+    + `σ₀ = ${g(t.sigma0)}, σ₁ = ${g(t.sigma1)}, λ = ${t.lambda}. Anchor `
+    + `${g(t.anchor_frequency)} Hz. ${t.message} Ring times: ${rings}. (${t.source})`;
+  // Not amber when crowded, unlike the plate's: the drum is exact either way, and a round head's
+  // anchor nearly always has a near-twin from the staircase splitting a pair.
+  hint.style.color = "var(--muted)";
 }
 
 function applyPayload(data) {
@@ -6032,6 +6082,12 @@ renderBtn.addEventListener("click", render);
 // ── boot ────────────────────────────────────────────────────────────────────────────────────
 // Optional deep-link: ?model=membrane&domain=circle preselects the model/domain before the first
 // render (also what the headless-browser verification drives).
+// The deep link's `set_by` is the plate's thickness-or-pitch select, or a drum's tension-or-pitch
+// one — the same request key, a different select per model.
+function setBySelId() {
+  return DRUM_MODELS.includes(modelSel.value) ? "drum-set-by" : "plate-set-by";
+}
+
 function applyUrlParams() {
   const q = new URLSearchParams(location.search);
   const m = q.get("model");
@@ -6044,8 +6100,8 @@ function applyUrlParams() {
   // and the headless check.
   const c = q.get("controls");
   if (c && controlsSel && [...controlsSel.options].some((o) => o.value === c)) controlsSel.value = c;
-  for (const [key, id] of [["material", "plate-material"], ["set_by", "plate-set-by"],
-                           ["grain", "plate-grain"]]) {
+  for (const [key, id] of [["material", "plate-material"], ["set_by", setBySelId()],
+                           ["grain", "plate-grain"], ["head", "drum-head"]]) {
     const v = q.get(key), sel = $(id);
     if (v !== null && sel && [...sel.options].some((o) => o.value === v)) sel.value = v;
   }
@@ -6073,8 +6129,8 @@ function applyUrlSliders() {
     if (key === "model" || key === "domain") return;
     // The plate's selects, set by applyUrlParams; a value no option carries is reported, not
     // swallowed (the rule above, for a select).
-    const selId = { controls: "controls", material: "plate-material", set_by: "plate-set-by",
-                    grain: "plate-grain" }[key];
+    const selId = { controls: "controls", material: "plate-material", set_by: setBySelId(),
+                    grain: "plate-grain", head: "drum-head" }[key];
     if (selId) {
       const sel = $(selId);
       if (!sel || sel.value !== raw) notes.push(`${key}: ${raw} is not an option here`);

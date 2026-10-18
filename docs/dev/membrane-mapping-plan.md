@@ -441,3 +441,50 @@ Bars, `crates/physsynth-core/tests/membrane_tuning.rs` (seven):
 **Plants, all red:** `σ₀`/`σ₁` swapped into the membrane; the lossless pitch used for `c²`; the
 rectangle's `x` eigenvalues on the `y` axis; the anchor farthest from `f_ref`; a 20 dB ring time;
 the tension without the density; the film density 1395.
+
+---
+
+## 12. Part 4 result — the drum and mallet pages (2026-10-18)
+
+`crates/physsynth-viewer/src/membrane.rs`: a drum request with `controls: "musical"` is built by
+`build_musical` from `head` (a core head name, or `custom` with `custom_rho`), `set_by` (`pitch`
+with `f0`, or `tension` with `tension`), `t60_low`, `t60_high`, `f_ref`, `sample_rate`, plus the
+existing `domain`, `radius` or `Lx`/`Ly`, and `N`. Its `T`, `rho`, `lambda`, `sigma` are ignored;
+`lambda` is a read-out, the loss-tightened bound refusing through core. The payload gains a `tuning`
+block (head, source, how it was set, tension, `ρ`, `c`, `σ₀`, `σ₁`, the fundamental and the anchor
+in the scheme, the anchor's margin, `λ`, the lowest eight partials' pitch and ring time); the
+energy verdict drops the single-rate `2σ` line under `σ₁ > 0`. The animation run's membrane is a
+clone of the freshly built one, so the mapping runs once; on the physical path that is the same
+membrane, and the freeze is unchanged.
+
+`mallet.rs` builds its drum through `build_membrane`, so the musical path came with it: `Info`
+carries `σ₁` and the musical record, the lossless verdict needs `σ₁ = 0` too, and the payload
+carries the same `tuning` block.
+
+Front-end: `CONTROL_OPTS` gains the membrane and the mallet; `musicalOn` answers for both through
+the controls select; the shared musical group (pitch, ring times, reference, sample rate) shows for
+them; a **Drum head** group (head menu, set-by select, tension slider, custom density slider)
+replaces the Physical group, `λ` and the loss slider; the read-out names the mapped physics and the
+partials' ring times. The deep link's `set_by` goes to the drum's select on a drum page and the
+plate's elsewhere; `head` is new. Two headless cases: `membrane_musical`, `mallet_musical`.
+
+The coverage guard's `BORN_AFTER_THE_FREEZE` gains `controls:physical` and `controls:musical` for
+both models, covered by `tests/membrane_musical.rs`.
+
+Bars, `crates/physsynth-viewer/tests/membrane_musical.rs` (ten), every musical key off the server's
+fallback: built from the targets, not the decoy sliders (`λ` read out from the mapped wave speed);
+the rendered audio sounds `f0` (circle and rectangle) through the detector; the run's first and
+last energy equal a core membrane built from the mapping and struck the same way; musical keys
+leave a physical request byte-identical (both pages); set by tension reads the pitch out just flat
+of the continuum `f₀₁`; the energy verdict without the single-rate line; eight refusals; the head
+menu is core's list plus `custom`; a custom density; the mallet striking a musical drum sounds `f0`.
+
+**Plants, all red:** `σ₁` dropped from the built drum; a fixed density for every head; the switch
+never matching; `t60_low` misspelled.
+
+**Headless browser check:** 9/9 green on every drum, mallet and musical case (`membrane_musical`
+and `mallet_musical` new). The check itself learned the drum's read-out: it had demanded the
+plate's read-out from every `controls=musical` case, and failed both drum cases until it read
+`drum-tuning-hint` for the drum pages. The drum read-out is not coloured amber for a crowded anchor
+as the plate's is: the drum is exact either way, and a round head's anchor nearly always has a
+near-twin from the staircase splitting a pair.

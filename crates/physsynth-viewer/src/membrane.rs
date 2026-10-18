@@ -14,15 +14,22 @@ use physsynth_core::engine::simulate;
 use physsynth_core::exciter::raised_cosine_2d;
 use physsynth_core::fmt::py_float;
 use physsynth_core::membrane::{self as mem, Domain, Membrane};
+use physsynth_core::membrane_tuning::{
+    head, lowest_modes, mode_frequency, mode_t60, tune_membrane, Geometry, MembraneTuning, SetBy,
+    Targets, HEADS,
+};
 use serde_json::{json, Value};
 
 use crate::energy::{energy_block, EnergyOpts};
 use crate::horizon::{grid2d_block, horizon_none, Grid2dScheme, HORIZON_STAIRCASE};
+use crate::plate::is_musical;
 use crate::py::{
-    b64f32, b64u8, finite_list, int, max_abs, num, py_int, py_repr, py_str, round_int, round_nd,
+    b64f32, b64u8, finite_list, int, max_abs, num, py_int, py_repr, py_str, repr_str, round_int,
+    round_nd,
 };
 use crate::string::{
-    construction, int_at_least_one, ANIM_WIN_MAX, FRAMES_PER_PERIOD, MAX_FRAMES, N_MIN, SPEED_MAX,
+    construction, int_at_least_one, ANIM_WIN_MAX, FRAMES_PER_PERIOD, MAX_FRAMES, MUSICAL_FS_MAX,
+    MUSICAL_FS_MIN, N_MIN, SPEED_MAX,
 };
 use crate::tension::pooled_spectrum;
 use crate::{fnum, resample_normalize, Refusal, AUDIO_FS};
@@ -112,8 +119,25 @@ pub struct Built {
     pub fs: f64,
     /// Loss.
     pub sigma: f64,
+    /// Frequency-dependent loss — non-zero only on the musical path.
+    pub sigma1: f64,
     /// Snapped geometry.
     pub geom: Geom,
+    /// What the musical controls built it from; `None` on the physical path.
+    pub musical: Option<Musical>,
+}
+
+/// What a musical-controls drum was built from, for its `tuning` block.
+#[derive(Debug, Clone)]
+pub struct Musical {
+    /// The mapping's result.
+    pub tuning: MembraneTuning,
+    /// The targets it met.
+    pub targets: Targets,
+    /// The head's name as requested (`custom` for the slider).
+    pub head: String,
+    /// Where the head's numbers come from.
+    pub source: &'static str,
 }
 
 /// `_build_membrane`.
@@ -125,6 +149,9 @@ pub fn build_membrane(p: &Value) -> Result<Built, Refusal> {
             "domain must be 'circle' or 'rectangle', got {}.",
             crate::py::repr_str(&domain)
         )));
+    }
+    if is_musical(p) {
+        return build_musical(p, &domain);
     }
     let t = fnum(p, "T", 200.0)?;
     let rho = fnum(p, "rho", 0.005)?;
@@ -218,8 +245,197 @@ pub fn build_membrane(p: &Value) -> Result<Built, Refusal> {
         c,
         fs,
         sigma,
+        sigma1: 0.0,
         geom,
+        musical: None,
     })
+}
+
+/// The musical-controls drum (`docs/dev/membrane-mapping-plan.md` §6): a head, a size, a grid, a
+/// sample rate and either a tension or a pitch, plus two ring times, mapped by [`tune_membrane`].
+/// The request's `T`, `rho`, `lambda` and `sigma` are ignored here; `lambda` becomes a read-out,
+/// held to the loss-tightened CFL bound by the core.
+fn build_musical(p: &Value, domain: &str) -> Result<Built, Refusal> {
+    let nv = p.get("N").cloned().unwrap_or(json!(80));
+    let n = py_int(&nv)
+        .map_err(|_| Refusal::Param(format!("N must be an integer, got {}.", py_repr(&nv))))?;
+    if !(N_MIN..=MEMBRANE_N_MAX).contains(&n) {
+        return Err(Refusal::Param(format!(
+            "N must be in [{N_MIN}, {MEMBRANE_N_MAX}] for the membrane, got {n}."
+        )));
+    }
+    let fs = fnum(p, "sample_rate", 44100.0)?;
+    if !(MUSICAL_FS_MIN..=MUSICAL_FS_MAX).contains(&fs) {
+        return Err(Refusal::Param(format!(
+            "sample_rate must be in [{}, {}] Hz, got {}.",
+            pf(MUSICAL_FS_MIN),
+            pf(MUSICAL_FS_MAX),
+            pf(fs)
+        )));
+    }
+    let geometry = if domain == "circle" {
+        let radius = fnum(p, "radius", 0.5)?;
+        if radius <= 0.0 {
+            return Err(Refusal::Param(format!(
+                "radius must be positive, got {}.",
+                pf(radius)
+            )));
+        }
+        Geometry {
+            domain: Domain::Circle,
+            lx: 0.0,
+            ly: 0.0,
+            radius,
+            n,
+            fs,
+        }
+    } else {
+        let lx = fnum(p, "Lx", 1.0)?;
+        let ly = fnum(p, "Ly", 1.0)?;
+        if py_min2(lx, ly) <= 0.0 {
+            return Err(Refusal::Param("Lx, Ly must both be positive.".into()));
+        }
+        Geometry {
+            domain: Domain::Rectangle,
+            lx,
+            ly,
+            radius: 0.0,
+            n,
+            fs,
+        }
+    };
+    let name = p
+        .get("head")
+        .and_then(Value::as_str)
+        .unwrap_or("single-ply 7.5 mil")
+        .to_owned();
+    let (rho, source) = if name == "custom" {
+        (fnum(p, "custom_rho", 0.26)?, "custom areal density")
+    } else {
+        let h = head(&name).ok_or_else(|| {
+            let names: Vec<&str> = HEADS.iter().map(|h| h.name).collect();
+            Refusal::Param(format!(
+                "head must be one of {} or 'custom', got {}.",
+                names.join(", "),
+                repr_str(&name)
+            ))
+        })?;
+        (h.areal_density(), h.source)
+    };
+    let set_by = match p.get("set_by").and_then(Value::as_str).unwrap_or("pitch") {
+        "pitch" => SetBy::Pitch(fnum(p, "f0", 220.0)?),
+        "tension" => SetBy::Tension(fnum(p, "tension", 2000.0)?),
+        other => {
+            return Err(Refusal::Param(format!(
+                "set_by must be 'pitch' or 'tension', got {}.",
+                repr_str(other)
+            )))
+        }
+    };
+    let targets = Targets {
+        set_by,
+        t60_low: fnum(p, "t60_low", 2.0)?,
+        t60_high: fnum(p, "t60_high", 0.5)?,
+        f_ref: fnum(p, "f_ref", 2000.0)?,
+    };
+    let tuning =
+        tune_membrane(&geometry, rho, &targets).map_err(|e| Refusal::Param(e.to_string()))?;
+    let params = tuning.params.clone();
+    let n_live = params.n_live();
+    if n_live > MEMBRANE_NLIVE_MAX {
+        return Err(Refusal::Param(format!(
+            "this geometry has {n_live} interior nodes (> {MEMBRANE_NLIVE_MAX}); reduce N or use \
+             a less extreme aspect ratio."
+        )));
+    }
+    let geom = match params.domain {
+        Domain::Circle => Geom::Circle {
+            radius: geometry.radius,
+        },
+        Domain::Rectangle => Geom::Rectangle {
+            lx: params.lx.expect("a rectangle has Lx"),
+            ly: params.ly.expect("a rectangle has Ly"),
+        },
+    };
+    Ok(Built {
+        c: params.c,
+        fs,
+        sigma: params.sigma,
+        sigma1: params.sigma1,
+        geom,
+        res: Membrane::new(params),
+        musical: Some(Musical {
+            tuning,
+            targets,
+            head: name,
+            source,
+        }),
+    })
+}
+
+/// How many partials the `tuning` block reports pitch and ring time for.
+pub const TUNING_PARTIALS: usize = 8;
+
+/// Below this relative gap to its nearest neighbour the anchor is called crowded.
+pub const CROWDED_ANCHOR: f64 = 0.01;
+
+/// The `tuning` block of a musical-controls drum: what was asked, what it mapped to, and what the
+/// partials the mapping does not pin do (their pitch and ring time in the scheme).
+pub fn tuning_block(p: &mem::Params, m: &Musical) -> Result<Value, Refusal> {
+    let (tu, tg) = (&m.tuning, &m.targets);
+    let (k, s, c2) = (p.k, p.sigma * p.k, p.c * p.c);
+    let modes = lowest_modes(p, TUNING_PARTIALS).map_err(|e| Refusal::Param(e.to_string()))?;
+    let partials: Vec<Value> = modes
+        .iter()
+        .filter_map(|&mu| {
+            let (x, y) = (c2 * k * k * mu, 2.0 * p.sigma1 * k * mu);
+            let f = mode_frequency(s, x, y, k)?;
+            Some(json!({
+                "f": num(round_nd(f, 3)),
+                "t60": num(round_nd(mode_t60(s, y, k), 4)),
+            }))
+        })
+        .collect();
+    let crowded = tu.anchor_margin < CROWDED_ANCHOR;
+    let mut message = "The simulated drum meets the pitch and both ring times exactly — the loss \
+                       follows the same modes as the stiffness, staircased rim included."
+        .to_owned();
+    if crowded {
+        message.push_str(&format!(
+            " The anchor partial ({} Hz) has a neighbour within {:.2} %, which rings almost \
+             alike.",
+            pf(round_nd(tu.anchor_frequency, 1)),
+            100.0 * tu.anchor_margin
+        ));
+    }
+    let (set_by, f0_target, tension_target) = match tg.set_by {
+        SetBy::Pitch(f) => ("pitch", num(f), Value::Null),
+        SetBy::Tension(t) => ("tension", Value::Null, num(t)),
+    };
+    Ok(json!({
+        "head": m.head,
+        "source": m.source,
+        "set_by": set_by,
+        "f0_target": f0_target,
+        "tension_target": tension_target,
+        "tension": num(round_nd(tu.tension, 3)),
+        "rho": num(round_nd(p.rho, 6)),
+        "c": num(round_nd(p.c, 4)),
+        "sigma0": num(round_nd(tu.sigma0, 6)),
+        "sigma1": num(round_nd(tu.sigma1, 9)),
+        "f0": num(round_nd(tu.f0, 3)),
+        "t60_low": num(tg.t60_low),
+        "t60_high": num(tg.t60_high),
+        "f_ref": num(tg.f_ref),
+        "anchor_frequency": num(round_nd(tu.anchor_frequency, 3)),
+        "anchor_margin": num(round_nd(tu.anchor_margin, 5)),
+        "exact": true,
+        "crowded": crowded,
+        "sample_rate": num(p.fs),
+        "lambda": num(round_nd(p.lam, 4)),
+        "partials": partials,
+        "message": message,
+    }))
 }
 
 /// `_discrete_eigenfreqs`: the lowest discrete eigenfrequencies (Hz), from `eigsh(-L)` mapped
@@ -408,8 +624,11 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
     }
 
     let mut b = build_membrane(p)?;
-    let (c, fs, sigma, geom) = (b.c, b.fs, b.sigma, b.geom);
+    let (c, fs, sigma, sigma1, geom) = (b.c, b.fs, b.sigma, b.sigma1, b.geom);
     let n_live = b.res.params().n_live();
+    // The animation run's membrane: a clone of this one at rest, so a musical drum's mapping runs
+    // once. On the physical path it is the very membrane a second build makes.
+    let fresh = b.res.clone();
 
     let n_audio = round_int(audio_dur * fs).max(1);
     let n_anim_est = round_int(anim_win * fs).max(1);
@@ -455,7 +674,7 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
     }
 
     // -- the animation run: a fresh membrane, a short window, a fundamental-resolving stride
-    let mut anim = build_membrane(p)?.res;
+    let mut anim = fresh;
     excite(&mut anim)?;
     let mut anim_stride = round_int((fs / f1) / fpp as f64).max(1);
     let n_anim = anim_stride.max(round_int(anim_win * fs));
@@ -488,7 +707,23 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
         Geom::Rectangle { lx, ly } => (lx, ly),
     };
     let lam = b.res.params().lam;
-    Ok(json!({
+    // A frequency-dependent loss decays each mode at its own rate, so the single `2 sigma` oracle
+    // line would be a fitted lie; only a musical drum carries one.
+    let energy = energy_block(
+        &audio_run.time,
+        &audio_run.energy,
+        sigma == 0.0 && sigma1 == 0.0,
+        2.0 * sigma,
+        EnergyOpts {
+            no_decay_oracle: sigma1 > 0.0,
+            ..EnergyOpts::default()
+        },
+    );
+    let tuning = match &b.musical {
+        Some(m) => Some(tuning_block(b.res.params(), m)?),
+        None => None,
+    };
+    let mut payload = json!({
         "model": "membrane",
         "horizon": horizon_block(&geom, b.res.params(), "the membrane"),
         "domain": geom.domain(),
@@ -515,8 +750,7 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
             "peak": num(peak),
             "n": int(audio48.len() as i64),
         },
-        "energy": energy_block(&audio_run.time, &audio_run.energy, sigma == 0.0, 2.0 * sigma,
-                               EnergyOpts::default()),
+        "energy": energy,
         "meta": {
             "c": num(round_nd(c, 3)),
             "f1": num(round_nd(f1, 3)),
@@ -524,5 +758,9 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
             "n_frames": int(nf as i64),
             "spectrum": modal_spectrum_block(pickup, fs, &f_disc, &f_cont, "membrane"),
         },
-    }))
+    });
+    if let Some(t) = tuning {
+        payload["tuning"] = t;
+    }
+    Ok(payload)
 }

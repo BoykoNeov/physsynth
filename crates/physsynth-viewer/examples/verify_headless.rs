@@ -74,6 +74,7 @@ const PROBE: &str = r"
     urlNotes: (window.__urlParamNotes || []).join(' | '),
     tuning: (document.getElementById('tuning-hint') || {}).textContent || '',
     plateTuning: (document.getElementById('plate-tuning-hint') || {}).textContent || '',
+    drumTuning: (document.getElementById('drum-tuning-hint') || {}).textContent || '',
     hzMark: window.__horizonMark || null,
     warm: warm, cool: cool, bg: bg, other: other, total: d.length / 4,
   });
@@ -92,6 +93,18 @@ const CASES: &[(&str, &str)] = &[
     ("membrane_rect", "model=membrane&domain=rectangle"),
     ("mallet_circle", "model=mallet&domain=circle"),
     ("mallet_rect", "model=mallet&domain=rectangle"),
+    // The drum's musical controls (membrane mapping plan §6): a cited head set by pitch on the
+    // round drum, and the mallet striking a drum set by tension.
+    (
+        "membrane_musical",
+        "model=membrane&domain=circle&controls=musical&head=single-ply%2010%20mil&N=48\
+         &f0=160&f_ref=900&audio_duration=0.5",
+    ),
+    (
+        "mallet_musical",
+        "model=mallet&domain=circle&controls=musical&head=two-ply%207%20%2B%207%20mil\
+         &set_by=tension&tension=3000&N=40&f_ref=900&audio_duration=0.4",
+    ),
     ("string_ideal", "model=ideal"),
     ("string_stiff", "model=stiff"),
     ("string_damped", "model=damped"),
@@ -590,8 +603,9 @@ fn run_case(
     };
     // The plate's musical read-out names the thickness, the mapped stiffness and the partials'
     // ring times; a free plate's also says how far from exact it is.
+    let musical = query.contains("controls=musical");
     let plate_tuning = probe["plateTuning"].as_str().unwrap_or("");
-    let plate_tuning_ok = if query.contains("controls=musical") {
+    let plate_tuning_ok = if musical && query.contains("model=plate") {
         plate_tuning.contains(" mm")
             && plate_tuning.contains("κ =")
             && plate_tuning.contains("Ring times")
@@ -599,12 +613,23 @@ fn run_case(
     } else {
         plate_tuning.is_empty()
     };
-    let tuning_ok = tuning_ok && plate_tuning_ok;
-    let tuning = if plate_tuning.is_empty() {
-        tuning
+    // The drum's names the tension, the wave speed and the partials' ring times, and says the
+    // simulated drum meets the targets exactly (membrane mapping plan §6) — the mallet's too.
+    let drum_tuning = probe["drumTuning"].as_str().unwrap_or("");
+    let drum = query.contains("model=membrane") || query.contains("model=mallet");
+    let drum_tuning_ok = if musical && drum {
+        drum_tuning.contains("N/m")
+            && drum_tuning.contains("c =")
+            && drum_tuning.contains("Ring times")
+            && drum_tuning.contains("exactly")
     } else {
-        plate_tuning
+        drum_tuning.is_empty()
     };
+    let tuning_ok = tuning_ok && plate_tuning_ok && drum_tuning_ok;
+    let tuning = [plate_tuning, drum_tuning]
+        .into_iter()
+        .find(|s| !s.is_empty())
+        .unwrap_or(tuning);
     let status = probe["status"].as_str().unwrap_or("");
     let ok = status.starts_with("ok")
         && tuning_ok

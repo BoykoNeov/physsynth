@@ -713,6 +713,10 @@ const BORN_AFTER_THE_FREEZE: &[(&str, &str, &str)] = &[
     ("damped", "musical", "tests/string_musical.rs"),
     ("plate", "controls:physical", "tests/plate_musical.rs"),
     ("plate", "controls:musical", "tests/plate_musical.rs"),
+    ("membrane", "controls:physical", "tests/membrane_musical.rs"),
+    ("membrane", "controls:musical", "tests/membrane_musical.rs"),
+    ("mallet", "controls:physical", "tests/membrane_musical.rs"),
+    ("mallet", "controls:musical", "tests/membrane_musical.rs"),
 ];
 
 /// The population comes from the model list and from the front-end's own domain table, so a scene

@@ -16,8 +16,8 @@ use serde_json::{json, Value};
 
 use crate::energy::{energy_block, EnergyOpts};
 use crate::membrane::{
-    build_membrane, decimate_field_mask, discrete_eigenfreqs, horizon_block, xy_to_frac, Geom,
-    N_MEMBRANE_MODES,
+    build_membrane, decimate_field_mask, discrete_eigenfreqs, horizon_block, tuning_block,
+    xy_to_frac, Geom, Musical, N_MEMBRANE_MODES,
 };
 use crate::py::{
     b64f32, b64u8, finite_list, int, linspace_idx, max_abs, np_mean, num, py_int, py_repr,
@@ -59,6 +59,10 @@ pub struct Info {
     pub steps_per_contact: f64,
     /// Whether that is at least 8.
     pub resolved: bool,
+    /// The head's frequency-dependent loss — non-zero only for a musical drum.
+    pub sigma1: f64,
+    /// What the musical controls built the drum from; `None` on the physical path.
+    pub musical: Option<Musical>,
 }
 
 /// `_build_mallet`: the struck membrane, at rest, plus the contact quantities.
@@ -77,6 +81,7 @@ pub fn build_mallet(p: &Value) -> Result<(MalletMembrane, f64, f64, f64, Geom, I
     }
     let b = build_membrane(p)?;
     let (c, fs, sigma, geom) = (b.c, b.fs, b.sigma, b.geom);
+    let (sigma1, musical) = (b.sigma1, b.musical.clone());
 
     let mass = fnum(p, "mass", 0.02)?;
     let stiffness = fnum(p, "stiffness", 5.0e4)?;
@@ -157,6 +162,8 @@ pub fn build_mallet(p: &Value) -> Result<(MalletMembrane, f64, f64, f64, Geom, I
         strike_fy: round_nd(fy, 4),
         steps_per_contact: round_nd(steps_per_contact, 1),
         resolved: steps_per_contact >= 8.0,
+        sigma1,
+        musical,
     };
     Ok((mallet, c, fs, sigma, geom, info))
 }
@@ -349,7 +356,7 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
         ));
     }
     let time: Vec<f64> = (0..=n).map(|i| i as f64 / fs).collect();
-    let lossless = sigma == 0.0 && lam_h == 0.0;
+    let lossless = sigma == 0.0 && lam_h == 0.0 && info.sigma1 == 0.0;
     let ke0 = 0.5 * info.mass * scalar_pow(info.strike_velocity, 2.0);
     let contact = contact_block(&time, &mvel, &head_e, &force, &in_contact, ke0, &info);
 
@@ -384,7 +391,11 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
         Geom::Circle { radius } => (2.0 * radius, 2.0 * radius),
         Geom::Rectangle { lx, ly } => (lx, ly),
     };
-    Ok(json!({
+    let tuning = match &info.musical {
+        Some(m) => Some(tuning_block(mp, m)?),
+        None => None,
+    };
+    let mut payload = json!({
         "model": "mallet",
         "horizon": horizon_block(&geom, mp, "the struck membrane"),
         "domain": geom.domain(),
@@ -422,5 +433,9 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
             "n_frames": int(nf as i64),
             "spectrum": contact,
         },
-    }))
+    });
+    if let Some(t) = tuning {
+        payload["tuning"] = t;
+    }
+    Ok(payload)
 }

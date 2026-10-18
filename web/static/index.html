@@ -49,7 +49,7 @@
         </label>
         <!-- The plate's CONTROL SET (plate mapping plan §7). Its own select because the plate's
              domain select already means supported / free / guitar. Filled from CONTROL_OPTS. -->
-        <label class="field" data-show="plate" style="margin-top:8px">
+        <label class="field" data-show="plate membrane mallet" style="margin-top:8px">
           <span>Controls</span>
           <select id="controls"></select>
         </label>
@@ -58,7 +58,7 @@
       <!-- The bore joins this group for L alone. Its medium is AIR — ρ₀ and c₀ are properties of
            the medium, not tunable the way string tension is — so ρ needs an explicit list that
            leaves the bore out, rather than the blanket "every model in this fieldset" it had. -->
-      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk bore reed" data-hide-musical="plate">
+      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk bore reed" data-hide-musical="plate membrane mallet">
         <legend>Physical</legend>
         <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet" data-hide-domain="musical"></div>
         <div class="slider" data-param="rho" data-min="0.001" data-max="0.02" data-step="0.0005" data-val="0.005" data-unit="kg/m²" data-fixed="4" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk" data-hide-musical="plate"></div>
@@ -73,7 +73,7 @@
            SHARED with the plate's musical controls (plate mapping plan §7): pitch, both ring times,
            the reference and the sample rate mean the same there. data-musical shows the group only
            when that model's musical controls are on. -->
-      <fieldset class="group" data-musical="damped plate">
+      <fieldset class="group" data-musical="damped plate membrane mallet">
         <legend>Musical controls</legend>
         <div class="slider" data-param="f0" data-min="27.5" data-max="1000" data-step="0.1" data-val="110" data-unit="Hz" data-fixed="1"></div>
         <div class="slider" data-param="inharmonicity" data-min="0" data-max="0.02" data-step="0.0001" data-val="0.0001" data-fixed="4" data-show="damped"></div>
@@ -128,6 +128,35 @@
         <p class="hint" id="plate-tuning-hint"></p>
       </fieldset>
 
+      <!-- The drum's own musical controls (membrane mapping plan §6): a head (clear polyester film,
+           by ply construction — Remo's product pages, DuPont's film density — or a custom areal
+           density), and whether the tension or the pitch is the input; the other is read out. The
+           head's density and the worked-out tension replace ρ and T, which hide; λ is a read-out.
+           The mallet page builds its drum the same way. -->
+      <fieldset class="group" data-musical="membrane mallet">
+        <legend>Drum head</legend>
+        <label class="field">
+          <span>head</span>
+          <select id="drum-head">
+            <option value="single-ply 3 mil">single-ply 3 mil</option>
+            <option value="single-ply 7.5 mil">single-ply 7.5 mil</option>
+            <option value="single-ply 10 mil">single-ply 10 mil</option>
+            <option value="two-ply 7 + 7 mil">two-ply 7 + 7 mil</option>
+            <option value="custom">custom (areal density)</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>set by</span>
+          <select id="drum-set-by">
+            <option value="pitch">pitch (tension worked out)</option>
+            <option value="tension">tension (pitch read out)</option>
+          </select>
+        </label>
+        <div class="slider" data-param="tension" data-min="100" data-max="10000" data-step="10" data-val="2000" data-unit="N/m" data-fixed="0"></div>
+        <div class="slider" data-param="custom_rho" data-min="0.02" data-max="2" data-step="0.01" data-val="0.26" data-unit="kg/m²" data-fixed="2"></div>
+        <p class="hint" id="drum-tuning-hint"></p>
+      </fieldset>
+
       <fieldset class="group" data-show="membrane mallet plate vk">
         <legend>Geometry</legend>
         <div class="slider" data-param="radius" data-min="0.2" data-max="1.0" data-step="0.05" data-val="0.5" data-unit="m" data-domain="circle"></div>
@@ -138,7 +167,7 @@
       <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret bore reed body platebody radbody airload airbox membrane mallet plate vk">
         <legend>Discretization</legend>
         <div class="slider" data-param="N"      data-min="16"  data-max="512" data-step="1"    data-val="128" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret bore reed body platebody radbody airload airbox membrane mallet plate vk"></div>
-        <div class="slider" data-param="lambda" data-min="0.5" data-max="2.0" data-step="0.01" data-val="1.0" data-show="ideal stiff damped tension bow sympathetic jawari juari fret body platebody radbody airload membrane mallet" data-hide-domain="musical"></div>
+        <div class="slider" data-param="lambda" data-min="0.5" data-max="2.0" data-step="0.01" data-val="1.0" data-show="ideal stiff damped tension bow sympathetic jawari juari fret body platebody radbody airload membrane mallet" data-hide-domain="musical" data-hide-musical="membrane mallet"></div>
         <div class="slider" data-param="mu"     data-min="0.25" data-max="32" data-step="0.25" data-val="1.0" data-fixed="2" data-show="plate" data-hide-musical="plate"></div>
         <div class="slider" data-param="fs"     data-min="8000" data-max="96000" data-step="1000" data-val="32000" data-unit="Hz" data-fixed="0" data-show="vk"></div>
         <!-- The geometric string's knob is lam_long, NOT lambda, and that inversion is the model's
@@ -433,9 +462,9 @@
         <p class="hint" id="mallet-hint"></p>
       </fieldset>
 
-      <fieldset class="group" data-show="ideal stiff membrane mallet plate vk">
+      <fieldset class="group" data-show="ideal stiff membrane mallet plate vk" data-hide-musical="plate membrane mallet">
         <legend>Loss</legend>
-        <div class="slider" data-param="sigma" data-min="0" data-max="20" data-step="0.1" data-val="0" data-hide-musical="plate"></div>
+        <div class="slider" data-param="sigma" data-min="0" data-max="20" data-step="0.1" data-val="0" data-hide-musical="plate membrane mallet"></div>
       </fieldset>
 
       <!-- The jawari appears here for sigma0 ONLY. sigma1 is deliberately fixed at 0 server-side and
