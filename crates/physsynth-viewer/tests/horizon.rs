@@ -431,6 +431,7 @@ fn every_refusal_names_its_mechanism_not_just_its_absence() {
         ("platebody", "spring-coupled bridge"),
         ("airbox", "direction-dependent"),
         ("vkroom", "direction-dependent"),
+        ("drumroom", "in vacuo"),
     ];
     let table: BTreeSet<&str> = HORIZON_ABSENT.iter().map(|(k, _)| *k).collect();
     let named: BTreeSet<&str> = keywords.iter().map(|(k, _)| *k).collect();

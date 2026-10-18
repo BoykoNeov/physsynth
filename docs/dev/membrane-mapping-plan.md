@@ -4,7 +4,8 @@
 (`docs/dev/parameter-mapping-plan.md`) and the three linear plates
 (`docs/dev/plate-mapping-plan.md`) have musical controls; §12 names the membrane as still raw.
 
-**Status: planned 2026-10-18.**
+**Status: DONE 2026-10-18** (§9–§14): the membrane's loss `σ₁`, `membrane_tuning`, the drum and
+mallet pages' musical controls, and the drum-in-a-room page.
 
 **The human's three decisions, 2026-10-18:**
 
@@ -488,3 +489,126 @@ plate's read-out from every `controls=musical` case, and failed both drum cases 
 `drum-tuning-hint` for the drum pages. The drum read-out is not coloured amber for a crowded anchor
 as the plate's is: the drum is exact either way, and a round head's anchor nearly always has a
 near-twin from the staircase splitting a pair.
+
+---
+
+## 13. Part 5 design — the drum-in-a-room page (2026-10-18, advisor-reviewed)
+
+Model key `drumroom`; `domain` = mounting (`baffled`, `suspended`); a `walls` select (`absorbing`
+default, `rigid`); the `controls` switch. Built on `RoomGrid<MembraneSeam>` and the gong page's
+3-D slice and dual-pane drawing. The room sets `fs` (`h_air` slider, 3-D CFL 0.9), so the page
+hides both `λ` and the sample-rate slider and the server ignores `sample_rate`; the head and
+targets are parsed by the drum page's code (one spelling), handed the room's `fs`. A stability
+refusal there says to refine the air grid, not to raise `fs`.
+
+- **Walls, as Part 0:** absorbing = `Wall::Impedance(ρ₀c₀)` on every face but the baffle, which
+  stays rigid; all six absorb when suspended. Rigid = all six rigid.
+- **The per-mode read-out** projects the head onto its lowest in-vacuo modes every step. A
+  degenerate pair is one two-dimensional mode: its two channels' power spectra are summed before a
+  peak is picked, so the solver's basis inside the pair cannot reach the payload. Each mode is
+  searched only in a window around its in-vacuo partial, excluding lower modes' peaks; two peaks
+  of similar height there read **split** (both reported), none reads **unresolved**.
+- **The shift is room − twin:** the bare membrane, no room, same projection, duration and search
+  (cheap), so the detector's bias cancels. The mapping's exact values are the target column.
+- **Ring time in the room** is reported only where the run decays by at least 6 dB and the fit is
+  clean; rigid walls return energy (beating) and say so. A target longer than the air allows is
+  said in words. The head's kept energy is always reported.
+- **The coverage guard** gains a model-level exemption naming its covering test file (a new model
+  has no frozen case and must never get one recorded from Rust); planted removal goes red.
+- **Bars assert ratios and orderings** (absorbing walls): a heavier head shifts less; hung shifts
+  more than baffled; two room sizes agree far better absorbing than rigid. Plus `radiated ==
+  injected` to `1e-12`, a passive scene total, both control sets, keys off every fallback, the
+  pair-rotation invariance, the walls menu built option by option, refusals (CFL with loss on the
+  air's `fs`, the footprint ceiling, a head that does not fit the face).
+- **Plants:** the air load dropped; walls ignored; mount ignored; `σ₁` dropped; the pair basis
+  rotated; the peak search unbounded.
+- Default render a few seconds: cube ~0.48 m, `N` 24, 0.35 s; caps as the gong page's.
+
+## 14. Part 5 result — the drum-in-a-room page (2026-10-18)
+
+`crates/physsynth-viewer/src/drumroom.rs`, model key `drumroom`, built as §13 says, with four
+changes the measurements forced (each found by running the page's read-out on real scenes before
+writing a bar, then confirmed by an advisor review):
+
+- **A pair the grid splits is one mode, measured member by member.** The square grid splits a
+  circle's `cos 2θ`/`sin 2θ` pair by its staircase rim, by an amount that depends on `N` alone and
+  not monotonically: 3 cents at the default `N` 24, but 54 at `N` 12, 46 at 10, 25 at 16. Read as
+  two modes, the windows between them were 3 cents wide; read as one, power-summed, the twin itself
+  read "split" at 0.35 s. So eigenvalues within 4 % of a group's first join it
+  (`DRUMROOM_PAIR_TOL`), and a group whose members differ is measured one member at a time: the room
+  is a cube centred on the head, so the two members, of different symmetry, do not mix, and each
+  channel holds one frequency. The shift is the members' mean; both are reported. A truly
+  degenerate pair is still power-summed.
+- **The head's grid starts at `N` 10, not 8.** At `N` 8 and 9 the split is 2.4 and 4.8 %, against a
+  gap of 7.3 % to the next distinct mode at `N` 8 — no tolerance sits safely between. From 10 up
+  the split is at most 3.2 % and the gap at least 7.8 %. A unit test checks the grouping
+  (1, 2, 2, 1, 2, 2) at every `N` the page allows.
+- **The window starts where the lower mode landed in the room.** Hung, the air lowers the (0,2)
+  mode by ~150 cents, past its in-vacuo neighbour the (2,1) pair (7 % below): the in-vacuo window
+  missed it and read "unresolved". Below, a mode's room window now starts at the previous group's
+  measured room peak; above, it ends at the next group's in-vacuo frequency, which the air only
+  lowers. A channel whose strongest peak lies outside its window reads **outside window**, with
+  that peak's frequency, rather than the window's best. With this, the earlier "one mode moves less
+  hung than baffled" (−40 against −96 cents) was the window's artefact: every mode now shifts more
+  hung.
+- **The ring-time fit stops 25 dB down.** A fast-decaying mode's channel falls in a straight line
+  to about −40 dB, then flattens onto the slower modes' leakage; the whole-run fit read that bend as
+  "beats". The fit now covers the first `DRUMROOM_FIT_DEPTH_DB` = 25 dB.
+
+**What the page measures (absorbing walls, `N` 24, 0.35 s; ~5 s a render).**
+
+| scene | fundamental's shift | next modes |
+|---|---|---|
+| physical default (T 3000, ρ 0.26, lossless), baffled | −273 c | −156, −104, −92, −76, −72 |
+| the same, hung | −390 c | −223, −150, −149, −109, −103 |
+| musical, 7.5 mil head, f₀ 200, baffled | −265 c | −144, −96, −96, −71, −69 |
+| musical, two-ply 7 + 7 mil, baffled | −151 c | −80, −53, −53, −39, −38 |
+| musical, 7.5 mil, hung | −374 c | −209, −140, −135, −101, −92 |
+
+The twin lands on the scheme's in-vacuo values within 0.1 cents on every mode (the bar; typically
+0.02), and its ring times on the mapping's targets. In the room the musical fundamental's ring
+time falls from 3.0 s to 0.19 s set in a wall and 0.74 s hung: one face radiating fully against
+two partly cancelling. A mode can also ring *longer* in the room (e.g. 1.62 → 1.82 s): the air's mass lowers the decay rate
+in the same proportion it lowers the frequency squared, so the head's own loss rings longer.
+
+**A core flaw found on the way, recorded, not fixed.** At `N` 34 the disk mask is not symmetric
+under a quarter turn: six nodes at (±8, ±15) cells from the centre lie exactly on the circle
+(8² + 15² = 17²), and the strict `<` in `ops2d::disk_mask`, on coordinates computed as
+`i·h − R`, keeps some and drops others by a last bit. So at `N` 34 the (1,1) and (3,1) pairs split
+by 0.17 %, where every other `N` keeps them exactly degenerate. Other Pythagorean radii (`N` 10, 20,
+26, 30, 40) happen to round symmetrically. Fixing it moves the frozen viewer references for every
+round drum at `N` 34, so it is the human's call; the room page is unaffected (its grouping
+tolerates it, and its unit test runs `N` 34).
+
+**Bars** (`crates/physsynth-viewer/tests/drumroom.rs`, 12; two unit tests in `src/drumroom.rs`):
+the twin on the scheme and the air lowering every mode; the fundamental's shift in semitones, hung
+past baffled; a heavier head shifted less; rigid walls keeping the energy that absorbing ones let
+go; the seam's two ledgers equal to `1e-12`, a lossless scene conserved to `1e-10` in any room and a
+lossy one passive; the physical head reading every key off its default against an independently
+built scheme; the musical head hitting its pitch and both ring times in vacuo at the room's `fs`,
+with a decoy `sample_rate` and decoy physics; the air shortening the fundamental's ring; a grid
+pair measured member by member; a mode the air moves past its neighbour still found; every
+mounting and wall building; the refusals (`N` 9, a head too fast for the air's `fs` — physical and
+musical — the node and work budgets, a head wider than the room, `air_h` and `σ` out of range).
+
+Dropped from §13: the pair-rotation bar. A degenerate pair's single channel holds the pair's one
+frequency whatever the basis, so "first vector only" changes no peak and no ring time unless the
+strike sits on that vector's nodal line, which the solver's arbitrary basis does not let a bar
+place — an equivalent mutant for every strike a test could choose. "Two room sizes agree better
+absorbing than rigid" became the kept-energy ordering, which is defined.
+
+**The page.** `web/static/`: the model option, the mounting select, the controls select, a walls
+select, the server's ranges (`MODEL_RANGES.drumroom`, with `T` and `radius` reset in `_default`
+so a switch away cannot leave them on this page's ranges), a live hint with the room's size,
+`fs`, cost and both refusals, a `λ` hint at the room's `fs`, the gong page's dual pane (round head
+on the left, three room slices on the right) and a "What the air does" panel — a bar per mode,
+the cents it moved, the ring times in the read-out line. Deep links take `walls` and `head`. The
+resolution strip says why it quotes none (`HORIZON_DRUMROOM`). The browser check gained two cases
+(the default; a musical two-ply head hung in a rigid room on a coarser air grid): 7/7 with the
+three gong-room and two drum cases re-run.
+
+**Plants** (13, each red, each restored byte-identical): the air's density near zero; walls
+ignored; mount ignored; `σ₁` dropped from the musical head; the room window back to in-vacuo;
+member-by-member measurement off; the fit over the whole run; the pair tolerance at 2 %; the
+"outside window" check off; `N`'s floor back to 8; `T` hard-wired; the `air_h` advice dropped;
+the head-does-not-fit message dropped. And the freeze guard's model exemption removed: red.

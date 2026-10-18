@@ -29,7 +29,7 @@
 | 9 | The conserved total is blind to a wrong coupling constant; `radiated == injected` is blind to half of them | every coupled scene | Accounted for — three detectors, jointly (§9) |
 | 10 | Aliasing around every nonlinearity | bow, reed, mallet, VK plate, both nonlinear strings | Mitigated by oversampling; no anti-aliased scheme (§10) |
 | 11 | Twenty ARPACK oracles were not bit-reproducible run to run | `analysis/modal.py` | Fixed in §24.9 — kept here as the pattern (§11) |
-| 12 | Raw physics is not a musician's interface (parameter mapping) | `string_tuning`, `plate_tuning`; the viewer's damped string and plates | **Started 2026-10-18** for the damped string (five musical targets, met exactly by the *simulated* string at two partials, the drift of the rest reported and warned) and the same day for the three linear plates (material, thickness or pitch, two ring times — exact on the supported plate, ≤ 0.05 cents on the free ones; a new loss term `σ₁`). The membrane, the von Kármán plate and the other strings are still raw (§12) |
+| 12 | Raw physics is not a musician's interface (parameter mapping) | `string_tuning`, `plate_tuning`, `membrane_tuning`; the viewer's damped string, plates and drums | **Started 2026-10-18** for the damped string (five musical targets, met exactly by the *simulated* string at two partials, the drift of the rest reported and warned) and the same day for the three linear plates (material, thickness or pitch, two ring times — exact on the supported plate, ≤ 0.05 cents on the free ones; a new loss term `σ₁`). The drum followed the same day (a cited head, pitch or tension, two ring times — exact on both shapes; a new loss `σ₁`; a drum-in-a-room page showing the air lower it 2.7–3.9 semitones). The von Kármán plate and the other strings are still raw (§12) |
 | 13 | Which models can ever run in real time | engine, room | Deferred, and now decoupled from the language (§13) |
 | 14 | `piston_radiation_resistance`'s `ka < 1e-8` series threshold was about three decades too small: just above it the direct form cancelled catastrophically and was 544% wrong | `core/radiation.py` | **Fixed 2026-09-03** — three Taylor terms below `ka = 3e-2`; worst error 5.24 → 6.7e-13 (§14) |
 | 15 | No model states where its own answer stops being in tune, and the boundary is much lower than anyone assumed | every resonator | **Measured 2026-09-06** — two families with opposite signs (implicit errors compound into a hard floor at ~8% of the grid; explicit errors cancel at the magic Courant number), the plate is space-limited at every `fs` the suite uses, and the membrane's ceiling cancellation is **diagonal-only**; the 2-D plate's band was **derived 2026-09-07** by splitting its spectrum by mode family, the **orthotropic** plate measured the same day — one floor in mode index, per-direction only in hertz — and the **membrane's block** the same day too: the 2-D CFL ceiling **is** the minimum over the spectrum of each mode's own cancellation Courant number, so no mode is ever sharp, and a block's worst corner **flips** below the ceiling for every block — the plate's corner rule is inverted on a membrane, not weakened (§15) |
@@ -569,8 +569,30 @@ carries forward:
   ring time (the continuum law `p² = ω/κ` is a supported-plate identity, wrong for the free twist) —
   unlike the string, where it was close at the fundamental.
 
-Every other model is still raw: the membrane, the von Kármán plate, the strings other than the
-damped one. Smoothing a moving control belongs to the real-time stage.
+**2026-10-18, the third piece: the drum** (`docs/dev/membrane-mapping-plan.md`, the human's calls:
+both shapes, cited heads with a tension-or-pitch switch, the drum and mallet pages, and a new
+drum-in-a-room page). `crates/physsynth-core/src/membrane_tuning.rs` maps a head (clear polyester
+film by ply construction — Remo's product pages, DuPont's film density — or a custom areal
+density), the drum's size, a pitch or a tension, and two ring times onto the membrane. What
+carries forward:
+
+- **The membrane needed the plate's model change.** It now has an explicit `2σ₁ L δ_t− u` loss
+  (`membrane::Params::sigma1`) with its energy correction, skipped at `σ₁ = 0` so every existing
+  drum and the viewer freeze are bit-identical. Being explicit, it tightens the 2-D bound to
+  `λ² + 4σ₁k/h² ≤ ½`, refused past it.
+- **Exact on both shapes**, the staircased circle included: the loss operator is `−L` itself, so
+  it shares every mode with the stiffness and the per-mode recurrence inverts exactly (worst
+  `5.7e-9` cents over 64 round trips).
+- **The textbook mapping is 10–25 cents flat on the round drum**, from the staircase rim — the
+  plate's lesson again, unlike the string.
+- **The air is not part of the tuning, and the room page shows by how much.** Targets are met in
+  vacuo; in a room the air's mass lowers the drum a few semitones — the fundamental 2.7 set in a
+  wall, 3.9 hung, a heavy two-ply head about half that — and radiation shortens its ring time
+  15-fold baffled. Tuning *through* the air is open: it needs the coupled system's modes, which
+  the room's size and walls change.
+
+Every other model is still raw: the von Kármán plate and the strings other than the damped one.
+Smoothing a moving control belongs to the real-time stage.
 
 ## 13. Which models are real-time — deferred, decoupled
 

@@ -320,7 +320,10 @@ lesson: a bound measured where the effect is hidden is worse than no bound).
   Started 2026-10-18 for the damped string (`docs/dev/parameter-mapping-plan.md`,
   `docs/dev/scientific-hurdles.md` §12), and the same day for the three linear plates — material,
   size, thickness or pitch, two ring times (`docs/dev/plate-mapping-plan.md`), which also gave the
-  plate a frequency-dependent loss `σ₁`. Smoothing stays a real-time-stage concern.
+  plate a frequency-dependent loss `σ₁`. The drum followed the same day — a cited head, pitch or
+  tension, two ring times, exact on both shapes (`docs/dev/membrane-mapping-plan.md`) — with a
+  drum-in-a-room page that shows how far the air moves a drum tuned in vacuo. Smoothing stays a
+  real-time-stage concern.
 - **CPU budget x polyphony.** A single FDTD plate can saturate a core. *Which* models are polyphonic
   is settled in §11.3a (field models per instance, strings per voice); what remains here is the
   budget — voice counts and stealing — which is a real-time-stage concern, not one for now.

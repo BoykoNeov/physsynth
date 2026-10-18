@@ -41,15 +41,16 @@
             <option value="plate">Kirchhoff plate (2D) — rectangle, or a guitar outline (#5g)</option>
             <option value="vk">von Kármán plate (nonlinear)</option>
             <option value="vkroom">Gong/cymbal in a 3-D ROOM — radiation that CHANGES mid-strike</option>
+            <option value="drumroom">Drum in a 3-D ROOM — what the air does to its pitch and ring</option>
           </select>
         </label>
-        <label class="field" data-show="membrane mallet plate vk geometric sympathetic bore reed platebody tension airbox vkroom damped" style="margin-top:8px">
+        <label class="field" data-show="membrane mallet plate vk geometric sympathetic bore reed platebody tension airbox vkroom drumroom damped" style="margin-top:8px">
           <span id="domain-label">Domain</span>
           <select id="domain"></select>
         </label>
         <!-- The plate's CONTROL SET (plate mapping plan §7). Its own select because the plate's
              domain select already means supported / free / guitar. Filled from CONTROL_OPTS. -->
-        <label class="field" data-show="plate membrane mallet" style="margin-top:8px">
+        <label class="field" data-show="plate membrane mallet drumroom" style="margin-top:8px">
           <span>Controls</span>
           <select id="controls"></select>
         </label>
@@ -58,10 +59,10 @@
       <!-- The bore joins this group for L alone. Its medium is AIR — ρ₀ and c₀ are properties of
            the medium, not tunable the way string tension is — so ρ needs an explicit list that
            leaves the bore out, rather than the blanket "every model in this fieldset" it had. -->
-      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk bore reed" data-hide-musical="plate membrane mallet">
+      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk bore reed drumroom" data-hide-musical="plate membrane mallet drumroom">
         <legend>Physical</legend>
-        <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet" data-hide-domain="musical"></div>
-        <div class="slider" data-param="rho" data-min="0.001" data-max="0.02" data-step="0.0005" data-val="0.005" data-unit="kg/m²" data-fixed="4" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk" data-hide-musical="plate"></div>
+        <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet drumroom" data-hide-domain="musical"></div>
+        <div class="slider" data-param="rho" data-min="0.001" data-max="0.02" data-step="0.0005" data-val="0.005" data-unit="kg/m²" data-fixed="4" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk drumroom" data-hide-musical="plate"></div>
         <div class="slider" data-param="L"   data-min="0.25" data-max="2.0"  data-step="0.05"  data-val="1.0"   data-unit="m" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox bore reed"></div>
       </fieldset>
 
@@ -73,14 +74,14 @@
            SHARED with the plate's musical controls (plate mapping plan §7): pitch, both ring times,
            the reference and the sample rate mean the same there. data-musical shows the group only
            when that model's musical controls are on. -->
-      <fieldset class="group" data-musical="damped plate membrane mallet">
+      <fieldset class="group" data-musical="damped plate membrane mallet drumroom">
         <legend>Musical controls</legend>
         <div class="slider" data-param="f0" data-min="27.5" data-max="1000" data-step="0.1" data-val="110" data-unit="Hz" data-fixed="1"></div>
         <div class="slider" data-param="inharmonicity" data-min="0" data-max="0.02" data-step="0.0001" data-val="0.0001" data-fixed="4" data-show="damped"></div>
         <div class="slider" data-param="t60_low" data-min="0.1" data-max="20" data-step="0.1" data-val="3" data-unit="s" data-fixed="1"></div>
         <div class="slider" data-param="t60_high" data-min="0.05" data-max="10" data-step="0.05" data-val="0.8" data-unit="s" data-fixed="2"></div>
         <div class="slider" data-param="f_ref" data-min="200" data-max="8000" data-step="50" data-val="2000" data-unit="Hz" data-fixed="0"></div>
-        <div class="slider" data-param="sample_rate" data-min="8000" data-max="192000" data-step="100" data-val="44100" data-unit="Hz" data-fixed="0"></div>
+        <div class="slider" data-param="sample_rate" data-min="8000" data-max="192000" data-step="100" data-val="44100" data-unit="Hz" data-fixed="0" data-show="damped plate membrane mallet"></div>
         <p class="hint" id="tuning-hint" data-domain="musical"></p>
       </fieldset>
 
@@ -133,7 +134,7 @@
            density), and whether the tension or the pitch is the input; the other is read out. The
            head's density and the worked-out tension replace ρ and T, which hide; λ is a read-out.
            The mallet page builds its drum the same way. -->
-      <fieldset class="group" data-musical="membrane mallet">
+      <fieldset class="group" data-musical="membrane mallet drumroom">
         <legend>Drum head</legend>
         <label class="field">
           <span>head</span>
@@ -157,16 +158,16 @@
         <p class="hint" id="drum-tuning-hint"></p>
       </fieldset>
 
-      <fieldset class="group" data-show="membrane mallet plate vk">
+      <fieldset class="group" data-show="membrane mallet plate vk drumroom">
         <legend>Geometry</legend>
-        <div class="slider" data-param="radius" data-min="0.2" data-max="1.0" data-step="0.05" data-val="0.5" data-unit="m" data-domain="circle"></div>
+        <div class="slider" data-param="radius" data-min="0.2" data-max="1.0" data-step="0.05" data-val="0.5" data-unit="m" data-domain="circle baffled suspended"></div>
         <div class="slider" data-param="Lx" data-min="0.1" data-max="2.0" data-step="0.05" data-val="1.0" data-unit="m" data-domain="rectangle supported free guitar"></div>
         <div class="slider" data-param="Ly" data-min="0.1" data-max="2.0" data-step="0.05" data-val="0.8" data-unit="m" data-domain="rectangle supported free guitar"></div>
       </fieldset>
 
-      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret bore reed body platebody radbody airload airbox membrane mallet plate vk">
+      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret bore reed body platebody radbody airload airbox membrane mallet plate vk drumroom">
         <legend>Discretization</legend>
-        <div class="slider" data-param="N"      data-min="16"  data-max="512" data-step="1"    data-val="128" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret bore reed body platebody radbody airload airbox membrane mallet plate vk"></div>
+        <div class="slider" data-param="N"      data-min="16"  data-max="512" data-step="1"    data-val="128" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret bore reed body platebody radbody airload airbox membrane mallet plate vk drumroom"></div>
         <div class="slider" data-param="lambda" data-min="0.5" data-max="2.0" data-step="0.01" data-val="1.0" data-show="ideal stiff damped tension bow sympathetic jawari juari fret body platebody radbody airload membrane mallet" data-hide-domain="musical" data-hide-musical="membrane mallet"></div>
         <div class="slider" data-param="mu"     data-min="0.25" data-max="32" data-step="0.25" data-val="1.0" data-fixed="2" data-show="plate" data-hide-musical="plate"></div>
         <div class="slider" data-param="fs"     data-min="8000" data-max="96000" data-step="1000" data-val="32000" data-unit="Hz" data-fixed="0" data-show="vk"></div>
@@ -354,17 +355,28 @@
                half of the claim: the cone integer CHANGES (measured 11/24/35/46/58) and keeps
                matching. Off-axis is the point — on an axis the Euclidean and Manhattan paths
                coincide and the claim would be untestable. -->
-      <fieldset class="group" data-show="airbox vkroom">
+      <fieldset class="group" data-show="airbox vkroom drumroom">
         <legend>The room — grid, walls, mic</legend>
-        <div class="slider" data-param="room_size"     data-min="0.5"  data-max="2.5"  data-step="0.05"  data-val="1.0"  data-unit="× (1.2·0.9·0.8 m)" data-fixed="2" data-show="airbox vkroom"></div>
-        <div class="slider" data-param="air_h"         data-min="0.02" data-max="0.10" data-step="0.005" data-val="0.03" data-unit="m" data-fixed="3" data-show="airbox vkroom"></div>
+        <!-- The drum in a room's walls (membrane mapping plan §13): its domain select already
+             carries the mounting. Absorbing is the characteristic impedance on every face but the
+             baffle, the free-field stand-in that lets the shift be the air's and not the room's. -->
+        <label class="field" data-show="drumroom">
+          <span>walls</span>
+          <select id="drumroom-walls">
+            <option value="absorbing">absorbing (Z = ρ₀c₀) — the sound leaves</option>
+            <option value="rigid">rigid — the sound stays and comes back</option>
+          </select>
+        </label>
+        <div class="slider" data-param="room_size"     data-min="0.5"  data-max="2.5"  data-step="0.05"  data-val="1.0"  data-unit="× (1.2·0.9·0.8 m)" data-fixed="2" data-show="airbox vkroom drumroom"></div>
+        <div class="slider" data-param="air_h"         data-min="0.02" data-max="0.10" data-step="0.005" data-val="0.03" data-unit="m" data-fixed="3" data-show="airbox vkroom drumroom"></div>
         <div class="slider" data-param="air_cfl"       data-min="0.3"  data-max="0.99" data-step="0.01"  data-val="0.9"  data-unit="× 1/√3" data-fixed="2" data-show="airbox"></div>
         <div class="slider" data-param="wall_zeta"     data-min="0.1"  data-max="50"   data-step="0.1"   data-val="3.0"  data-unit="ζ = Z/ρ₀c₀" data-fixed="1" data-show="airbox vkroom" data-domain="absorbing baffled suspended"></div>
-        <div class="slider" data-param="mic_position"  data-min="0.15" data-max="1.0"  data-step="0.01"  data-val="0.8"  data-fixed="2" data-show="airbox vkroom"></div>
-        <div class="slider" data-param="slice_position" data-min="0"   data-max="1"    data-step="0.01"  data-val="0.5"  data-fixed="2" data-show="airbox vkroom"></div>
+        <div class="slider" data-param="mic_position"  data-min="0.15" data-max="1.0"  data-step="0.01"  data-val="0.8"  data-fixed="2" data-show="airbox vkroom drumroom"></div>
+        <div class="slider" data-param="slice_position" data-min="0"   data-max="1"    data-step="0.01"  data-val="0.5"  data-fixed="2" data-show="airbox vkroom drumroom"></div>
         <div class="slider" data-param="plate_N" data-min="8" data-max="16" data-step="1" data-val="16" data-fixed="0" data-show="vkroom"></div>
         <p class="hint" id="airbox-hint"></p>
         <p class="hint" id="vkroom-hint"></p>
+        <p class="hint" id="drumroom-hint" data-show="drumroom"></p>
       </fieldset>
 
       <!-- The guitar outline (model #5g). Two knobs, and `waist` is the one the batch is about:
@@ -462,9 +474,9 @@
         <p class="hint" id="mallet-hint"></p>
       </fieldset>
 
-      <fieldset class="group" data-show="ideal stiff membrane mallet plate vk" data-hide-musical="plate membrane mallet">
+      <fieldset class="group" data-show="ideal stiff membrane mallet plate vk drumroom" data-hide-musical="plate membrane mallet drumroom">
         <legend>Loss</legend>
-        <div class="slider" data-param="sigma" data-min="0" data-max="20" data-step="0.1" data-val="0" data-hide-musical="plate membrane mallet"></div>
+        <div class="slider" data-param="sigma" data-min="0" data-max="20" data-step="0.1" data-val="0" data-hide-musical="plate membrane mallet drumroom"></div>
       </fieldset>
 
       <!-- The jawari appears here for sigma0 ONLY. sigma1 is deliberately fixed at 0 server-side and
@@ -500,14 +512,14 @@
         <div class="slider" data-param="pickup_position" data-min="0.02" data-max="0.98" data-step="0.01" data-val="0.1" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret bore"></div>
       </fieldset>
 
-      <fieldset class="group" data-show="membrane mallet plate vk">
+      <fieldset class="group" data-show="membrane mallet plate vk drumroom">
         <legend>Strike &amp; pickup (x, y)</legend>
         <div class="slider" data-param="pluck_x"     data-min="0.1" data-max="0.9" data-step="0.01" data-val="0.4"></div>
         <div class="slider" data-param="pluck_y"     data-min="0.1" data-max="0.9" data-step="0.01" data-val="0.55"></div>
         <!-- The mallet is a point contact — no strike WIDTH — so this pluck-shape slider is hidden for it. -->
-        <div class="slider" data-param="pluck_width" data-min="0.1" data-max="0.9" data-step="0.01" data-val="0.45" data-show="membrane plate vk"></div>
-        <div class="slider" data-param="pickup_x"    data-min="0.1" data-max="0.9" data-step="0.01" data-val="0.65"></div>
-        <div class="slider" data-param="pickup_y"    data-min="0.1" data-max="0.9" data-step="0.01" data-val="0.6"></div>
+        <div class="slider" data-param="pluck_width" data-min="0.1" data-max="0.9" data-step="0.01" data-val="0.45" data-show="membrane plate vk drumroom"></div>
+        <div class="slider" data-param="pickup_x"    data-min="0.1" data-max="0.9" data-step="0.01" data-val="0.65" data-show="membrane mallet plate vk"></div>
+        <div class="slider" data-param="pickup_y"    data-min="0.1" data-max="0.9" data-step="0.01" data-val="0.6" data-show="membrane mallet plate vk"></div>
         <p class="hint" data-show="vk" id="vk-strike-hint"></p>
       </fieldset>
 
@@ -516,7 +528,7 @@
         <!-- No audio_duration for the geometric string: it is the viewer's one viz-only model. See
              the note under the canvas — resolving its longitudinal wave forces fs ≈ 22× a normal
              string's, so a second of sound is ~10 minutes of compute. -->
-        <div class="slider" data-param="audio_duration"   data-min="0.2" data-max="6"    data-step="0.1"  data-val="2.0" data-unit="s" data-show="ideal stiff damped tension bow sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk bore reed vkroom"></div>
+        <div class="slider" data-param="audio_duration"   data-min="0.2" data-max="6"    data-step="0.1"  data-val="2.0" data-unit="s" data-show="ideal stiff damped tension bow sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk bore reed vkroom drumroom"></div>
         <!-- Hidden for the phantom regime: its window is fixed physics, not a preference. At 0.05 s
              the weakest phantom (2f₁) sits inside its neighbours' leakage skirts and is mislocated
              by 0.52 Hz (vs 0.039 Hz at 0.10 s), collapsing its margin to f₂ from 170× to 8×. -->

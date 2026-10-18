@@ -53,6 +53,11 @@ pub const HORIZON_ROOM: &str = "a 3-D room's dispersion is direction-dependent, 
 membrane's but with more directions, and what is recorded for it is the lattice light cone and \
 the defective corner mode at the CFL ceiling rather than a pitch horizon (plan section 5). The \
 string in the same scene is bridge-coupled, so it has none to quote either.";
+/// Refusal: the drum in a room.
+pub const HORIZON_DRUMROOM: &str = "the drum in a room's read-out IS its pitch comparison: each \
+mode in the room against the same head in vacuo. The in-vacuo head's own resolution horizon is the \
+membrane page's; quoted here against the continuum, it would mix the air's shift into the grid's \
+dispersion (membrane mapping plan section 14).";
 /// The fallback for a model key in neither table.
 pub const HORIZON_GENERIC: &str = "this scene has no closed-form modal reference to compare \
 against, so no resolution horizon is quoted for it (docs/dev/resolution-horizon-plan.md section \
@@ -60,7 +65,7 @@ against, so no resolution horizon is quoted for it (docs/dev/resolution-horizon-
 
 /// Every model key whose builder does not compute a block, and why. With the builders that do,
 /// this partitions the model list the front-end offers (a test derives that list from the markup).
-pub const HORIZON_ABSENT: [(&str, &str); 11] = [
+pub const HORIZON_ABSENT: [(&str, &str); 12] = [
     ("tension", HORIZON_NONLINEAR),
     ("geometric", HORIZON_NONLINEAR),
     ("bore", HORIZON_BORE),
@@ -72,6 +77,7 @@ pub const HORIZON_ABSENT: [(&str, &str); 11] = [
     ("platebody", HORIZON_COUPLED),
     ("airbox", HORIZON_ROOM),
     ("vkroom", HORIZON_ROOM),
+    ("drumroom", HORIZON_DRUMROOM),
 ];
 
 /// The refusal a model key gets when its builder set none.

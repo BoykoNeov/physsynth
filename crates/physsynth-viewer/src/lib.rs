@@ -30,6 +30,7 @@ pub mod body;
 pub mod bore;
 pub mod bow;
 pub mod contact;
+pub mod drumroom;
 pub mod energy;
 pub mod geometric;
 pub mod horizon;
@@ -55,7 +56,7 @@ use serde_json::{json, Value};
 pub const AUDIO_FS: f64 = 48_000.0;
 
 /// Every model key the front-end offers, and whether its builder has been ported.
-pub const MODELS: [(&str, bool); 22] = [
+pub const MODELS: [(&str, bool); 23] = [
     ("ideal", true),
     ("stiff", true),
     ("damped", true),
@@ -78,6 +79,7 @@ pub const MODELS: [(&str, bool); 22] = [
     ("airload", true),
     ("airbox", true),
     ("vkroom", true),
+    ("drumroom", true),
 ];
 
 /// Why a request produced no scene.
@@ -161,6 +163,7 @@ fn build_payload(p: &Value) -> Result<Value, Refusal> {
         _ if model == "platebody" => platebody::build_payload(p),
         _ if model == "airbox" => airbox::build_payload(p),
         _ if model == "vkroom" => vkroom::build_payload(p),
+        _ if model == "drumroom" => drumroom::build_payload(p),
         _ if model == "jawari" => contact::build_payload_jawari(p),
         _ if model == "juari" => contact::build_payload_juari(p),
         _ if model == "fret" => contact::build_payload_fret(p),

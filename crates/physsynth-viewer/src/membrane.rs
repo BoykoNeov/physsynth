@@ -304,6 +304,39 @@ fn build_musical(p: &Value, domain: &str) -> Result<Built, Refusal> {
             fs,
         }
     };
+    let musical = musical_from_request(p, &geometry)?;
+    let params = musical.tuning.params.clone();
+    let n_live = params.n_live();
+    if n_live > MEMBRANE_NLIVE_MAX {
+        return Err(Refusal::Param(format!(
+            "this geometry has {n_live} interior nodes (> {MEMBRANE_NLIVE_MAX}); reduce N or use \
+             a less extreme aspect ratio."
+        )));
+    }
+    let geom = match params.domain {
+        Domain::Circle => Geom::Circle {
+            radius: geometry.radius,
+        },
+        Domain::Rectangle => Geom::Rectangle {
+            lx: params.lx.expect("a rectangle has Lx"),
+            ly: params.ly.expect("a rectangle has Ly"),
+        },
+    };
+    Ok(Built {
+        c: params.c,
+        fs,
+        sigma: params.sigma,
+        sigma1: params.sigma1,
+        geom,
+        res: Membrane::new(params),
+        musical: Some(musical),
+    })
+}
+
+/// The head and the targets of a musical-controls request, mapped onto `geometry` — the one
+/// spelling of these keys, shared by the drum page (which reads its sample rate from the request)
+/// and the drum-in-a-room page (where the room sets it).
+pub fn musical_from_request(p: &Value, geometry: &Geometry) -> Result<Musical, Refusal> {
     let name = p
         .get("head")
         .and_then(Value::as_str)
@@ -339,37 +372,12 @@ fn build_musical(p: &Value, domain: &str) -> Result<Built, Refusal> {
         f_ref: fnum(p, "f_ref", 2000.0)?,
     };
     let tuning =
-        tune_membrane(&geometry, rho, &targets).map_err(|e| Refusal::Param(e.to_string()))?;
-    let params = tuning.params.clone();
-    let n_live = params.n_live();
-    if n_live > MEMBRANE_NLIVE_MAX {
-        return Err(Refusal::Param(format!(
-            "this geometry has {n_live} interior nodes (> {MEMBRANE_NLIVE_MAX}); reduce N or use \
-             a less extreme aspect ratio."
-        )));
-    }
-    let geom = match params.domain {
-        Domain::Circle => Geom::Circle {
-            radius: geometry.radius,
-        },
-        Domain::Rectangle => Geom::Rectangle {
-            lx: params.lx.expect("a rectangle has Lx"),
-            ly: params.ly.expect("a rectangle has Ly"),
-        },
-    };
-    Ok(Built {
-        c: params.c,
-        fs,
-        sigma: params.sigma,
-        sigma1: params.sigma1,
-        geom,
-        res: Membrane::new(params),
-        musical: Some(Musical {
-            tuning,
-            targets,
-            head: name,
-            source,
-        }),
+        tune_membrane(geometry, rho, &targets).map_err(|e| Refusal::Param(e.to_string()))?;
+    Ok(Musical {
+        tuning,
+        targets,
+        head: name,
+        source,
     })
 }
 

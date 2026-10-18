@@ -354,6 +354,19 @@ const MODEL_RANGES = {
             mic_position: { min: 0.15, max: 1.0, step: 0.01, fixed: 2, val: 0.75 },
             w_over_e: { min: 0.05, max: 3.0, step: 0.05, fixed: 2, val: 3.0, unit: "×e" },
             audio_duration: { min: 0.02, max: 0.3, step: 0.01, fixed: 2, val: 0.12 } },
+  // The drum in a room (membrane mapping plan §13): the server's own ranges. N's floor of 10 is
+  // measured — below it the grid splits the (2,1) pair too far to be read as one mode — and the
+  // 0.35 s default is the shortest run whose spectrum resolves the grid's split pairs (~3 Hz).
+  // The default renders in ~5 s.
+  drumroom: { T: { min: 200, max: 10000, step: 10, fixed: 0, val: 3000, unit: "N/m" },
+              rho: { min: 0.05, max: 1.0, step: 0.01, fixed: 2, val: 0.26, unit: "kg/m²" },
+              radius: { min: 0.05, max: 0.3, step: 0.01, fixed: 2, val: 0.12, unit: "m" },
+              N: { min: 10, max: 40, val: 24 },
+              sigma: { val: 0 },
+              room_size: { min: 0.3, max: 0.8, step: 0.01, fixed: 2, val: 0.48, unit: "m cube" },
+              air_h: { min: 0.010, max: 0.025, step: 0.0005, fixed: 4, val: 0.0165, unit: "m" },
+              mic_position: { min: 0.15, max: 1.0, step: 0.01, fixed: 2, val: 0.75 },
+              audio_duration: { min: 0.05, max: 1.0, step: 0.05, fixed: 2, val: 0.35 } },
   // Regime-level ranges, keyed "model:domain" and merged AFTER the model spec (see
   // applyModelRanges). The phantom regime is the first customer and needs both: κ = 8 is its
   // microscope (the geometric model defaults κ = 0, which is a HARMONIC string — every phantom
@@ -385,6 +398,11 @@ const MODEL_RANGES = {
               // at 3.0 (vk's own ceiling is 6.0) and a vkroom → airbox switch would leave the
               // room at a 0.35 m cube on a 9 mm grid — legal for neither.
               w_over_e: { min: 0.1, max: 6, step: 0.1, fixed: 1, val: 2.0, unit: "×e" },
+              // The drum in a room re-ranges T and the radius (index.html's homes are the strings'
+              // and the drum's); without these a drumroom → membrane switch would leave a 0.12 m
+              // drum on a 0.3 m ceiling and the strings on a 3000 N tension.
+              T: { min: 20, max: 800, step: 1, fixed: 0, val: 200, unit: "N" },
+              radius: { min: 0.2, max: 1.0, step: 0.05, fixed: 2, val: 0.5, unit: "m" },
               room_size: { min: 0.5, max: 2.5, step: 0.05, fixed: 2, val: 1.0,
                            unit: "× (1.2·0.9·0.8 m)" },
               air_h: { min: 0.02, max: 0.10, step: 0.005, fixed: 3, val: 0.03, unit: "m" },
@@ -459,7 +477,7 @@ const MODEL_RANGES = {
 // Secondary select repurposed per model: geometry (membrane), boundary (plate / von Kármán) or
 // REGIME (the geometric string — three claims, one string, cheapest first).
 const DOMAIN_MODELS = ["membrane", "mallet", "plate", "vk", "geometric", "sympathetic", "bore",
-                       "reed", "platebody", "tension", "airbox", "vkroom", "damped"];
+                       "reed", "platebody", "tension", "airbox", "vkroom", "drumroom", "damped"];
 const DOMAIN_OPTS = {
   // The damped string's select carries the CONTROL SET, not a physical regime. Physics leads so a
   // returning user finds the sliders they had; "musical" maps pitch and ring times onto T, κ, σ₀,
@@ -487,6 +505,10 @@ const DOMAIN_OPTS = {
   // is noise, so it is refused rather than shipped under this batch's headline.
   vkroom: [["suspended", "Hung cymbal — radiates BOTH faces (#6)"],
            ["baffled", "Gong flush in a wall — baffled (#6)"]],
+  // The drum in a room's select is its MOUNTING too (membrane mapping plan §13). Baffled leads: it
+  // is the smaller shift of the two (~3.9 semitones flat hung, ~2.7 set in a wall, measured).
+  drumroom: [["baffled", "Set in a wall — baffled (one face radiates)"],
+             ["suspended", "Hung in mid-air — both faces radiate"]],
   // The tension string's two regimes are two sides of ONE threshold. Duffing leads: it is the
   // measurable, oracle-backed claim, and it is only honest BELOW the tongue — which is exactly what
   // `parametric` crosses. The server-side dT/T0 ceiling that refuses the Duffing panel is not
@@ -522,7 +544,7 @@ const DOMAIN_LABELS = { membrane: "Domain", mallet: "Drum shape", geometric: "Re
                         damped: "Controls",
                         // not "Boundary": the boundary is PINNED to free here and
                         // the select carries the mounting instead.
-                        vkroom: "Mounting" };
+                        vkroom: "Mounting", drumroom: "Mounting" };
 
 // A second secondary select, for a model whose `domain` select already carries something else:
 // the plate's CONTROL SET (plate mapping plan §7) — its domain means supported / free / guitar.
@@ -537,10 +559,13 @@ const CONTROL_OPTS = {
              ["musical", "Musical — head, pitch or tension, ring times"]],
   mallet: [["physical", "Physics — T, ρ, λ, σ"],
            ["musical", "Musical — head, pitch or tension, ring times"]],
+  // In the room the ROOM sets the sample rate, so λ is a read-out in both sets.
+  drumroom: [["physical", "Physics — T, ρ, σ"],
+             ["musical", "Musical — head, pitch or tension, ring times (met in vacuo)"]],
 };
 
-// The models whose drum takes the head-and-pitch musical controls.
-const DRUM_MODELS = ["membrane", "mallet"];
+// The models whose drum takes the head-and-pitch musical controls (the drum in a room among them).
+const DRUM_MODELS = ["membrane", "mallet", "drumroom"];
 
 // Whether model m's musical controls are on: the damped string carries them on its domain select,
 // the plate and the drums on the controls select.
@@ -844,6 +869,21 @@ function updateLambdaHint() {
     hint.textContent = `fs = ${Math.round(fs)} Hz  (oversample the nonlinearity: higher = truer, `
       + `more cost; κ is derived from E, e, ν, ρ)`;
     hint.style.color = "var(--muted)";
+  } else if (m === "drumroom") {
+    // The room sets fs, so the head's λ falls out of its wave speed and grid; the physical set can
+    // show it live, the musical set only after the server has worked out the tension.
+    const fs = 343 * Math.sqrt(3) / (0.9 * param("air_h"));
+    const hHead = 2 * param("radius") / param("N");
+    if (musicalOn(m)) {
+      hint.textContent = `λ is a read-out: the head and the pitch set the wave speed and the ROOM `
+        + `sets fs = ${fmt(Math.round(fs))} Hz. A refusal says when the head is too fast for it.`;
+      hint.style.color = "var(--muted)";
+    } else {
+      const lam = Math.sqrt(param("T") / param("rho")) / (fs * hHead);
+      hint.textContent = `λ = c·k/h = ${lam.toFixed(3)} at the ROOM's fs = ${fmt(Math.round(fs))} `
+        + `Hz  (2D CFL: λ ≤ 1/√2 ≈ 0.71 — refine air_h or coarsen N past it)`;
+      hint.style.color = lam > 0.7071 ? "var(--bad)" : "var(--muted)";
+    }
   } else if ((m === "membrane" || m === "mallet") && musicalOn(m)) {
     hint.textContent = "λ is a read-out here: the head and the pitch (or tension) set the wave "
       + "speed, and fs is the sample-rate slider. The second loss tightens the 2-D CFL to "
@@ -1267,6 +1307,29 @@ function updateLambdaHint() {
       vrHint.textContent = "";
     }
   }
+  // The drum in a room's: the room, its cost and its two refusals before a render is spent. The
+  // bare twin of the head costs nothing next to the room.
+  const drHint = $("drumroom-hint");
+  if (drHint) {
+    if (m === "drumroom") {
+      const h = param("air_h"), size = param("room_size");
+      const fs = 343 * Math.sqrt(3) / (0.9 * h);
+      const nr = Math.max(1, Math.round(size / h));
+      const nodes = (nr + 1) ** 3;
+      const steps = Math.round(param("audio_duration") * fs);
+      const work = nodes * steps;
+      const overNodes = nodes > 300000, overWork = work > 2.0e9;
+      drHint.textContent =
+        `room ${(nr * h).toFixed(3)} m cube (snapped) · ${nr}³ = ${fmt(nodes)} nodes · fs = `
+        + `${fmt(Math.round(fs))} Hz, set by the ROOM · ${fmt(steps)} steps → `
+        + `${work.toExponential(2)} node-steps · + a bare twin of the head, the control`
+        + (overNodes ? "  — REFUSED: over 300k nodes" : "")
+        + (overWork ? "  — REFUSED: over the 2e9 work budget" : "");
+      drHint.style.color = (overNodes || overWork) ? "var(--bad)" : "var(--muted)";
+    } else {
+      drHint.textContent = "";
+    }
+  }
   const bdHint = $("body-hint");
   if (bdHint) {
     if (m === "body") {
@@ -1450,6 +1513,8 @@ function gatherParams() {
   // explicitly rather than having the backend sniff `domain`, which carries a stale value from
   // whichever model was selected last.
   if (modelSel.value === "airbox") p.walls = domainSel.value;
+  // The drum in a room: its domain select carries the MOUNTING, so the walls have their own.
+  if (modelSel.value === "drumroom") p.walls = $("drumroom-walls").value;
   // The plate's control set and its three selects, sent for the plate only so no other model's
   // request changes. An empty grain means "let the server choose" (along a guitar's length).
   if (modelSel.value === "plate" && controlsSel) {
@@ -1622,7 +1687,8 @@ function applyPayload(data) {
   isParam = data.regime === "parametric";
   // Plate-as-body: the plate heatmap is the main (dims = 2) field, loaded above; the string strip is
   // a SECOND 1D buffer drawn on top by drawPlateBody. Same frame count/times (one simulation).
-  isVKRoom = data.model === "vkroom";
+  // The drum in a room rides the gong's path wholesale: a dims-2 head that ALSO carries a room.
+  isVKRoom = data.model === "vkroom" || data.model === "drumroom";
   roomFrames = null; roomSliceCvs = null; roomNFrames = 0;
   if (isVKRoom && data.room_frames) {
     const rf = data.room_frames;
@@ -2925,7 +2991,8 @@ function drawVKRoomField(idx) {
   g.strokeStyle = "rgba(255,255,255,.18)"; g.lineWidth = 1;
   g.strokeRect(px + 0.5, py + 0.5, side - 1, side - 1);
   g.fillStyle = "rgba(255,255,255,.65)"; g.font = "11px ui-monospace,monospace";
-  g.fillText("plate — the shape that radiates", pad, pad + 11);
+  g.fillText(payload.model === "drumroom" ? "drum head — struck, then loaded by the air"
+    : "plate — the shape that radiates", pad, pad + 11);
 
   // -- the room: three named orthogonal slices, on their own clock ------------------------------
   if (!roomSliceCvs || !roomFrames || roomNFrames === 0) return;
@@ -3417,6 +3484,64 @@ function drawVKRoomClaim() {
   });
 }
 
+
+// One bar per mode, hanging from zero: the measured shift in cents (the air only ever lowers). A
+// mode the read-out could not pin — a split, a peak outside its window — gets no bar and says why;
+// the ring times ride the readout, because "too little decay" is an answer too, not a gap.
+function drawDrumRoomAir() {
+  const g = partialsCv.getContext("2d");
+  const W = partialsCv.width, H = partialsCv.height, padL = 40, padB = 30, top = 16, padR = 10;
+  g.clearRect(0, 0, W, H);
+  const out = $("partials-readout");
+  const air = payload.meta && payload.meta.air;
+  if (!air || !air.modes || !air.modes.length) { if (out) out.textContent = ""; return; }
+  const modes = air.modes, n = modes.length;
+  const shifts = modes.map((m) => m.shift_cents);
+  const lo = Math.min(-100, ...shifts.filter((s) => s != null)) * 1.15;
+  const slot = (W - padL - padR) / n;
+  const X = (i) => padL + (i + 0.5) * slot;
+  const Y = (c) => top + (c / lo) * (H - top - padB);
+
+  g.strokeStyle = "rgba(255,255,255,.08)"; g.lineWidth = 1;
+  g.fillStyle = "rgba(255,255,255,.45)"; g.font = "10px ui-monospace,monospace";
+  for (let c = 0; c >= lo; c -= 100) {
+    g.beginPath(); g.moveTo(padL, Y(c)); g.lineTo(W - padR, Y(c)); g.stroke();
+    if (c % 200 === 0) g.fillText(`${c}`, 4, Y(c) + 3);
+  }
+  const why = (pk) => (pk.status === "split" ? "split" : pk.status === "outside window"
+    ? "outside" : pk.status === "unresolved" ? "no peak" : "");
+  modes.forEach((m, i) => {
+    const s = m.shift_cents, x = X(i), bw = Math.min(28, slot * 0.6);
+    if (s != null) {
+      g.fillStyle = "#4cc2ff";
+      g.fillRect(x - bw / 2, Y(0), bw, Y(s) - Y(0));
+      g.fillStyle = "rgba(255,255,255,.75)";
+      g.fillText(`${Math.round(s)}`, x - 10, Math.min(Y(s) + 12, H - padB - 2));
+    } else {
+      g.fillStyle = "#ff9f6e";
+      g.fillText(why(m.room.peak) || why(m.twin.peak) || "—", x - 14, Y(0) + 14);
+    }
+    g.fillStyle = "rgba(255,255,255,.55)";
+    g.fillText(`${Math.round(m.target.f)}`, x - 10, H - padB + 12);
+    g.fillText(m.multiplicity > 1 ? "×2" : "", x - 6, H - padB + 23);
+  });
+  g.fillText("Hz", 4, H - padB + 12);
+
+  if (!out) return;
+  const ring = (r) => (r.t60 != null ? `${r.t60.toFixed(3)} s` : r.why);
+  const rows = modes.map((m) => {
+    const tgt = m.target.t60 != null ? `${m.target.t60.toFixed(3)} s` : "lossless";
+    const f = (pk) => (pk.f2 !== undefined ? `${pk.f.toFixed(1)}/${pk.f2.toFixed(1)}`
+      : pk.f !== undefined ? pk.f.toFixed(1) : "—");
+    const grid = m.grid_split_cents > 0
+      ? ` (grid splits it ${m.grid_split_cents.toFixed(1)} c)` : "";
+    return `${m.target.f.toFixed(1)} Hz${grid}: in vacuo ${f(m.twin.peak)} Hz, ring `
+      + `${ring(m.twin.ring)} (target ${tgt}) → in the room ${f(m.room.peak)} Hz, ring `
+      + `${ring(m.room.ring)}`;
+  });
+  out.textContent = `${payload.tier}, ${payload.walls} walls — the head keeps `
+    + `${(100 * air.head_energy_kept).toFixed(2)} % of its energy. ` + rows.join(" · ");
+}
 
 function drawAirBoxArrival() {
   const g = partialsCv.getContext("2d");
@@ -3985,6 +4110,15 @@ function drawDiagnostics() {
   // plate with its nonlinearity switched off. This is the one observable that separates them —
   // the obvious one (radiated energy per window, off the port's own books) does not, because the
   // room's own build-up moves it by as much as the effect does.
+  // The drum in a room's panel: what the air did to each mode, measured — the room's peak against
+  // a bare twin of the same head, struck the same way. The targets are met in vacuo (the human's
+  // call, plan §13), so the twin sits on them and every cent here is the air's.
+  if (payload.model === "drumroom") {
+    partialsTitle.firstChild.textContent = "What the air does ";
+    partialsSub.textContent = "per mode: the room's pitch against the same head in vacuo (cents)";
+    drawDrumRoomAir();
+    return;
+  }
   if (payload.model === "vkroom") {
     partialsTitle.firstChild.textContent = "Radiation shape ";
     partialsSub.textContent =
@@ -6101,7 +6235,8 @@ function applyUrlParams() {
   const c = q.get("controls");
   if (c && controlsSel && [...controlsSel.options].some((o) => o.value === c)) controlsSel.value = c;
   for (const [key, id] of [["material", "plate-material"], ["set_by", setBySelId()],
-                           ["grain", "plate-grain"], ["head", "drum-head"]]) {
+                           ["grain", "plate-grain"], ["head", "drum-head"],
+                           ["walls", "drumroom-walls"]]) {
     const v = q.get(key), sel = $(id);
     if (v !== null && sel && [...sel.options].some((o) => o.value === v)) sel.value = v;
   }
@@ -6130,7 +6265,7 @@ function applyUrlSliders() {
     // The plate's selects, set by applyUrlParams; a value no option carries is reported, not
     // swallowed (the rule above, for a select).
     const selId = { controls: "controls", material: "plate-material", set_by: setBySelId(),
-                    grain: "plate-grain", head: "drum-head" }[key];
+                    grain: "plate-grain", head: "drum-head", walls: "drumroom-walls" }[key];
     if (selId) {
       const sel = $(selId);
       if (!sel || sel.value !== raw) notes.push(`${key}: ${raw} is not an option here`);

@@ -717,7 +717,20 @@ const BORN_AFTER_THE_FREEZE: &[(&str, &str, &str)] = &[
     ("membrane", "controls:musical", "tests/membrane_musical.rs"),
     ("mallet", "controls:physical", "tests/membrane_musical.rs"),
     ("mallet", "controls:musical", "tests/membrane_musical.rs"),
+    ("drumroom", "baffled", "tests/drumroom.rs"),
+    ("drumroom", "suspended", "tests/drumroom.rs"),
+    ("drumroom", "controls:physical", "tests/drumroom.rs"),
+    ("drumroom", "controls:musical", "tests/drumroom.rs"),
 ];
+
+/// Whole MODELS born after the Python viewer was deleted, for the same reason as
+/// [`BORN_AFTER_THE_FREEZE`]: no frozen case can name them, and recording one from today's Rust
+/// would be a snapshot, not a check. Each names the test file that covers it; the guard below holds
+/// an entry to a model the viewer still offers and that no frozen case already covers.
+///
+/// - `drumroom` is the drum in a room (membrane mapping plan §13), the human's call on
+///   2026-10-18; `drumroom.rs` holds its twin against the in-vacuo scheme and its room off it.
+const MODELS_BORN_AFTER_THE_FREEZE: &[(&str, &str)] = &[("drumroom", "tests/drumroom.rs")];
 
 /// The population comes from the model list and from the front-end's own domain table, so a scene
 /// or a regime cannot ship unfrozen. A case covers a domain only by NAMING it: a request that
@@ -746,7 +759,20 @@ fn every_model_and_every_domain_the_viewer_offers_is_frozen() {
             }
         }
     }
-    let want: BTreeSet<String> = MODELS.iter().map(|(m, _)| (*m).to_owned()).collect();
+    let mut want: BTreeSet<String> = MODELS.iter().map(|(m, _)| (*m).to_owned()).collect();
+    for &(m, covered_by) in MODELS_BORN_AFTER_THE_FREEZE {
+        assert!(want.remove(m), "exempt model {m} is no longer offered");
+        assert!(
+            !models.contains(m),
+            "exempt model {m} has a frozen case; drop the exemption"
+        );
+        assert!(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join(covered_by)
+                .exists(),
+            "exempt model {m} names {covered_by}, which does not exist"
+        );
+    }
     assert_eq!(
         want.difference(&models).collect::<Vec<_>>(),
         Vec::<&String>::new(),

@@ -191,6 +191,15 @@ const CASES: &[(&str, &str)] = &[
         "vkroom_coarse",
         "model=vkroom&plate_N=8&audio_duration=0.02",
     ),
+    // The drum in a room (membrane mapping plan §14): the gong's dual pane with a ROUND masked
+    // head, and the air read-out panel. The physical head set in a wall at the default 0.35 s
+    // (~5 s), and a musical head hung in absorbing air on a coarser room.
+    ("drumroom", "model=drumroom"),
+    (
+        "drumroom_musical_hung",
+        "model=drumroom&domain=suspended&controls=musical&head=two-ply%207%20%2B%207%20mil\
+         &f0=180&f_ref=900&t60_low=1.5&t60_high=0.5&air_h=0.02&walls=rigid",
+    ),
 ];
 
 // -- a minimal HTTP GET and WebSocket client over std::net ----------------------------------------
@@ -616,7 +625,9 @@ fn run_case(
     // The drum's names the tension, the wave speed and the partials' ring times, and says the
     // simulated drum meets the targets exactly (membrane mapping plan §6) — the mallet's too.
     let drum_tuning = probe["drumTuning"].as_str().unwrap_or("");
-    let drum = query.contains("model=membrane") || query.contains("model=mallet");
+    let drum = query.contains("model=membrane")
+        || query.contains("model=mallet")
+        || query.contains("model=drumroom");
     let drum_tuning_ok = if musical && drum {
         drum_tuning.contains("N/m")
             && drum_tuning.contains("c =")
@@ -625,7 +636,12 @@ fn run_case(
     } else {
         drum_tuning.is_empty()
     };
-    let tuning_ok = tuning_ok && plate_tuning_ok && drum_tuning_ok;
+    // The drum in a room's panel says, per mode, where the head sat in vacuo and where the room
+    // put it; a panel left blank or showing another model's read-out is a failure.
+    let diag2 = probe["diag2"].as_str().unwrap_or("");
+    let air_ok = !query.contains("model=drumroom")
+        || (diag2.contains("in vacuo") && diag2.contains("in the room"));
+    let tuning_ok = tuning_ok && plate_tuning_ok && drum_tuning_ok && air_ok;
     let tuning = [plate_tuning, drum_tuning]
         .into_iter()
         .find(|s| !s.is_empty())
