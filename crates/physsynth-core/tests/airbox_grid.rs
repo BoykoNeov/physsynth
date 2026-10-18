@@ -657,6 +657,67 @@ fn no_air_load_reproduces_the_bare_plate() {
     }
 }
 
+/// The same reduction with the plate's frequency-dependent loss on (`docs/dev/plate-mapping-plan.md`
+/// §2). The seam reassembles `A` itself and takes its right-hand side from `plate::step_rhs`, so a
+/// seam that dropped the `σ₁` half of `A` would run a different scheme from the bare plate's and
+/// this equality would break; at `σ₁ = 0` (the bar above) the two halves are absent together.
+#[test]
+fn no_air_load_reproduces_the_bare_plate_with_its_frequency_dependent_loss() {
+    let lossy = |boundary: Boundary| {
+        let spec = PlateSpec {
+            lx: PLATE_L,
+            ly: PLATE_L,
+            kappa: PLATE_KAPPA,
+            rho: PLATE_RHO,
+            fs: FS,
+            n: 8,
+            sigma: 1.0,
+            sigma1: 0.01,
+            boundary: Some(boundary),
+            domain: Some(Domain::Rectangle),
+            ..PlateSpec::default()
+        };
+        Plate::new(plate::Params::new(&spec).expect("a legal plate"))
+    };
+    for mount in MOUNTS {
+        for boundary in BOUNDARIES {
+            let mut room = surface_room(rigid());
+            let seam = PlateSeam::new(lossy(boundary));
+            let mut inst = match mount {
+                Mount::Baffled => {
+                    RoomGrid::baffled(seam, &mut room, "z0", None, Spreading::Bilinear)
+                }
+                Mount::Suspended => RoomGrid::suspended(
+                    seam,
+                    &mut room,
+                    "z",
+                    DIPOLE_INDEX,
+                    None,
+                    Spreading::Bilinear,
+                ),
+            }
+            .expect("a legal mounted plate");
+            let mut bare = lossy(boundary);
+            zero_the_load(&mut inst);
+            let n_live = inst.seam.n_live();
+            let force: Vec<f64> = (0..n_live).map(|i| 1e-3 * noise(1, i)).collect();
+            let u0 = plate_bump(&bare.p, 1e-3);
+            let zero = vec![0.0; n_live];
+            bare.set_state(&u0, &zero);
+            inst.set_state(&u0, &zero);
+            for _ in 0..60 {
+                bare.step(Some(&force));
+                inst.step(&mut room, Some(&force)).expect("a legal step");
+                room.step();
+            }
+            assert_eq!(
+                inst.seam.plate.u, bare.u,
+                "{mount:?}/{boundary:?}: a zero load must be BIT-identical to the bare plate"
+            );
+        }
+    }
+}
+
 /// Disconnect a wrapper's coupling: `T = 0`, `T^T R T = 0`, and the factorization rebuilt.
 ///
 /// The reference did this by assigning empty SciPy matrices onto two public port slots and then

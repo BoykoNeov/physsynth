@@ -46,9 +46,10 @@
 use crate::fmt::{py_float, py_general};
 use crate::krylov;
 use crate::ops2d::{
-    biharmonic_from_mask, disk_mask, embed, free_plate_stiffness_from_mask, guitar_area,
-    guitar_half_width, guitar_mask, guitar_scale, laplacian_from_mask, orthotropic_biharmonic,
-    prune_to_area_carrying, rectangle_mask, AiryStressSolver, Mask, VonKarmanBracket,
+    biharmonic_from_mask, disk_mask, embed, free_gradient_form, free_plate_stiffness_from_mask,
+    guitar_area, guitar_half_width, guitar_mask, guitar_scale, laplacian_from_mask,
+    orthotropic_biharmonic, prune_to_area_carrying, rectangle_mask, AiryStressSolver, Mask,
+    VonKarmanBracket,
 };
 use crate::pyfloat::scalar_pow;
 use crate::radiation::py_round;
@@ -310,6 +311,8 @@ pub enum ParamError {
     TooFewSegments,
     /// `sigma < 0`.
     NegativeSigma,
+    /// `sigma1 < 0`, or not finite.
+    NegativeSigma1,
     /// `theta` outside `(0, 1]`.
     BadTheta(f64),
     /// The boundary argument was neither spelling.
@@ -387,6 +390,10 @@ impl std::fmt::Display for ParamError {
                 write!(f, "N must be >= 2 (need at least one interior node).")
             }
             ParamError::NegativeSigma => write!(f, "sigma (loss) must be >= 0."),
+            ParamError::NegativeSigma1 => write!(
+                f,
+                "sigma1 (frequency-dependent loss) must be finite and >= 0."
+            ),
             ParamError::BadTheta(t) => {
                 write!(f, "theta must be in (0, 1], got {}.", py_float(*t))
             }
@@ -523,6 +530,10 @@ pub struct PlateSpec {
     pub n: i64,
     /// Frequency-independent loss.
     pub sigma: f64,
+    /// Frequency-dependent loss `σ₁` (m²/s), the `2 σ₁ Δ u_t` term: a mode's decay rate grows by
+    /// `σ₁` times its Laplacian eigenvalue, so in proportion to its frequency. Born after the
+    /// Python plate (`docs/dev/plate-mapping-plan.md` §2); `0` builds exactly today's plate.
+    pub sigma1: f64,
     /// Time-averaging weight in `(0, 1]`.
     pub theta: f64,
     /// `None` when the caller could not make sense of the boundary it was handed.
@@ -558,6 +569,7 @@ impl Default for PlateSpec {
             fs: 0.0,
             n: 0,
             sigma: 0.0,
+            sigma1: 0.0,
             theta: THETA_DEFAULT,
             boundary: Some(Boundary::Supported),
             domain: Some(Domain::Rectangle),
@@ -597,6 +609,8 @@ pub struct Params {
     pub ny: usize,
     /// Frequency-independent loss.
     pub sigma: f64,
+    /// Frequency-dependent loss (m²/s).
+    pub sigma1: f64,
     /// Time-averaging weight.
     pub theta: f64,
     /// Which edge condition.
@@ -643,6 +657,9 @@ pub struct Params {
     pub mass: Option<Csr>,
     /// `W`'s diagonal; empty on the supported branch, where the mass is the scalar `h^2`.
     pub w: Vec<f64>,
+    /// The loss form [`loss_form`] — `Some` only when `sigma1 > 0`, so a plate without the term
+    /// carries nothing it does not use.
+    pub loss: Option<Csr>,
     /// Number of unknowns.
     pub n_live: usize,
     /// How many staircase spikes `prune_to_area_carrying` removed.
@@ -696,6 +713,9 @@ impl Params {
         }
         if spec.sigma < 0.0 {
             return Err(ParamError::NegativeSigma);
+        }
+        if !(spec.sigma1 >= 0.0 && spec.sigma1.is_finite()) {
+            return Err(ParamError::NegativeSigma1);
         }
         if !(spec.theta > 0.0 && spec.theta <= 1.0) {
             return Err(ParamError::BadTheta(spec.theta));
@@ -876,6 +896,15 @@ impl Params {
                 .scaled(1.0 + sk)
                 .add(&stiffness.scaled(coeff)),
         };
+        // ... + sigma1 k G, positive semidefinite, so A stays SPD. SKIPPED at sigma1 = 0 rather
+        // than added at zero weight: that keeps A's stored pattern, and so its factorization and
+        // every plate trajectory built before the term existed, exactly as they were.
+        let loss =
+            (spec.sigma1 > 0.0).then(|| build_loss_form(boundary, laplacian.as_ref(), &mask));
+        let a = match &loss {
+            Some(g) => a.add(&g.scaled(spec.sigma1 * k)),
+            None => a,
+        };
         let lu = SparseLu::factor(&a).map_err(ParamError::NotFactorable)?;
 
         Ok(Params {
@@ -887,6 +916,7 @@ impl Params {
             n,
             ny,
             sigma: spec.sigma,
+            sigma1: spec.sigma1,
             theta: spec.theta,
             boundary,
             domain,
@@ -910,6 +940,7 @@ impl Params {
             stiffness,
             mass,
             w,
+            loss,
             n_live,
             n_pruned,
             prune_depth_max,
@@ -918,6 +949,27 @@ impl Params {
             area_deficit,
             lu,
         })
+    }
+}
+
+/// The positive semidefinite form the frequency-dependent loss dissipates through, in the units
+/// of the branch's own mass: `−L` on the supported branch (unit mass), the cell-assembled
+/// gradient form [`free_gradient_form`] on the free one (mass `W`). Either way `M⁻¹G` is `−Δ`.
+///
+/// Public, and built whatever `sigma1` is, because a client that maps musical targets onto the
+/// plate needs each mode's loss eigenvalue before it knows `sigma1` (plan §3). The supported `−L`
+/// shares every eigenvector with `B = L·L` (and with the grained Kronecker `B`), so each mode
+/// stays a mode; the free form does not, and couples the modes weakly (plan §9).
+pub fn loss_form(p: &Params) -> Csr {
+    build_loss_form(p.boundary, p.laplacian.as_ref(), &p.mask)
+}
+
+fn build_loss_form(boundary: Boundary, laplacian: Option<&Csr>, mask: &Mask) -> Csr {
+    match boundary {
+        Boundary::Supported => laplacian
+            .expect("the supported branch assembles L")
+            .scaled(-1.0),
+        Boundary::Free => free_gradient_form(mask),
     }
 }
 
@@ -1096,6 +1148,8 @@ pub fn step_rhs(u: &[f64], u_prev: &[f64], f_ext: Option<&[f64]>, p: &Params) ->
     let c_now = (1.0 - 2.0 * p.theta) * k2;
     let c_prev = p.theta * k2;
     let force_den = p.force_denominator();
+    let s1k = p.sigma1 * p.k;
+    let g_prev = p.loss.as_ref().map(|g| g.matvec(u_prev));
     (0..p.n_live)
         .map(|i| {
             let lop_u = -kappa2 * su[i];
@@ -1110,6 +1164,12 @@ pub fn step_rhs(u: &[f64], u_prev: &[f64], f_ext: Option<&[f64]>, p: &Params) ->
                         + c_prev * lop_prev
                         + sk * (p.w[i] * u_prev[i])
                 }
+            };
+            // The loss's old half, `+ sigma1 k G u^-`: the new half is inside `A`. Absent, not
+            // zero-weighted, when `sigma1 = 0` (see `Params::new`).
+            let base = match &g_prev {
+                Some(g) => base + s1k * g[i],
+                None => base,
             };
             match f_ext {
                 Some(f) => base + k2 * f[i] / force_den,

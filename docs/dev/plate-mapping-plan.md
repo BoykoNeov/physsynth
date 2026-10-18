@@ -4,8 +4,8 @@
 (`docs/dev/parameter-mapping-plan.md`) gave the damped string pitch, inharmonicity and two ring
 times; §12 named the plate's "size / thickness / material" vocabulary as the next candidate.
 
-**Status: Part 0 DONE 2026-10-18** (§9); the human chose the Laplacian loss the same day. Part 1
-next.
+**Status: Parts 0–1 DONE 2026-10-18** (§9, §10); the human chose the Laplacian loss the same day.
+Part 2 (materials) next.
 
 **The human's four decisions, 2026-10-18:**
 
@@ -319,3 +319,36 @@ with 4 s at 110 Hz and 1 s at 1.65 kHz it gives 0.14 s at 5 kHz where the linear
 **The human's call, 2026-10-18: the Laplacian loss** (ring time falling in proportion to
 frequency). The free branches' inexactness is reported and held to stated tolerances by the bars;
 the tilt damping is documented, not removed.
+
+---
+
+## 10. Part 1 result — the loss term (2026-10-18)
+
+`PlateSpec::sigma1` / `Params::sigma1`, refused when negative or non-finite (`NegativeSigma1`);
+`Params::loss` holds the form only when `σ₁ > 0`; `plate::loss_form` builds it for any plate
+(`−L` supported, `ops2d::free_gradient_form` free). `A` gains `σ₁kG`, `step_rhs` gains `σ₁kGu⁻`,
+both absent at `σ₁ = 0`. `airbox_wrap::theta_matrix` carries the same term.
+
+Bars, `crates/physsynth-core/tests/plate_loss.rs` (nine) and one in `tests/airbox_grid.rs`:
+
+- every supported Navier mode follows its scalar recurrence with `σ₀ + σ₁λ`, `λ` from the 1-D
+  Dirichlet eigenvalues written in the test, to `1e-9` — isotropic and grained, `θ ∈ {0.28, 0.5,
+  1}`, three modes; the same run without `σ₁` misses by `> 1e-3`;
+- the energy books close to `1e-10` on all three branches at two `θ`s, the free gradient form
+  re-assembled in the test; `σ₁`'s own share of the work is asserted above 5 % of the start;
+- `σ₁` alone is passive on all three branches;
+- a free translation keeps its speed (`1e-9`), a tilt loses energy — the documented behaviour;
+- a free mode follows its Rayleigh-quotient recurrence: worst `4.5e-5` (guitar, mode 15) against
+  a `1e-4` bar, `≥ 0.09` without `σ₁`;
+- refusals; the form carried only when used; the start-up is the lossless Taylor step either way;
+- the mallet's influence column still reproduces a forced step (`1e-14`);
+- a room-mounted plate with no air load is bit-identical to the bare plate with `σ₁ > 0`.
+
+**Plants, all red:** the right-hand-side half dropped, sign-flipped, or applied to `u` not `u⁻`;
+the `A` half dropped or doubled; the supported form `+L`; the free form doubled, missing its
+`y`-edges, or with rows not summing to zero; the room seam dropping its `A` half. The `A`-half
+plants were re-run against `plate_loss.rs` alone (the room bar catches them too, and stops cargo
+before the rest) — red there as well.
+
+`σ₁ = 0` leaves everything as it was: the full suite, including the 588-request viewer freeze, is
+green unchanged (1,850 tests).

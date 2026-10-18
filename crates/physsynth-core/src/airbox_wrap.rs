@@ -467,7 +467,14 @@ fn theta_matrix(p: &plate::Params) -> Csr {
         Boundary::Supported => Csr::identity(p.n_live),
         Boundary::Free => p.mass.clone().expect("the free branch assembles W"),
     };
-    left.scaled(1.0 + sk).add(&p.stiffness.scaled(coeff))
+    let a = left.scaled(1.0 + sk).add(&p.stiffness.scaled(coeff));
+    // The frequency-dependent loss's new half, as `plate::Params::new` adds it: the seam takes its
+    // right-hand side from `plate::step_rhs`, which carries the old half, so dropping this one
+    // would run a scheme that is neither the plate's nor passive. Absent when `sigma1 = 0`.
+    match &p.loss {
+        Some(g) => a.add(&g.scaled(p.sigma1 * p.k)),
+        None => a,
+    }
 }
 
 /// The per-node areas a plate spreads onto the air: `h^2` everywhere supported, the lumped

@@ -702,6 +702,51 @@ pub fn free_plate_stiffness(
     )
 }
 
+/// The free plate's gradient form `G`, with `uᵀ G u ≈ ∫|∇u|²` — the operator its
+/// frequency-dependent loss `2 σ₁ Δ u_t` dissipates through (`docs/dev/plate-mapping-plan.md` §2).
+///
+/// Assembled on the live cells, the quadrature `free_plate_stiffness_from_mask` uses for `K` and
+/// `W`: each live cell hands each of its four edges half a weight, so `G = Σ_e w_e (e_a − e_b)
+/// (e_a − e_b)ᵀ` with `w_e` = (live cells on the edge) / 2 — `1` inside, `1/2` on the rim. The
+/// cell's `h²` area and the `1/h²` of a squared difference cancel, so `G` carries no `h`; `W⁻¹G`
+/// is then the free-edge (natural boundary) Laplacian with the sign flipped.
+///
+/// Symmetric positive semidefinite, rows summing to zero: a rigid **translation** is not damped. A
+/// rigid tilt is (`xᵀ G x` is the plate's area) — plan §9 measured it and the human accepted it.
+/// Does not share eigenvectors with `K`, so the loss couples the free plate's modes weakly; the
+/// supported plate uses `−L` instead, which does.
+pub fn free_gradient_form(mask: &Mask) -> Csr {
+    let (nrows, ncols) = (mask.nrows(), mask.ncols());
+    let n_live = mask.n_live();
+    let index_map = mask.index_map();
+    let cells = live_cells(mask);
+    let (cr, cc) = (nrows.saturating_sub(1), ncols.saturating_sub(1));
+    let mut rows: Vec<std::collections::BTreeMap<usize, f64>> =
+        vec![std::collections::BTreeMap::new(); n_live];
+    let node = |j: usize, i: usize| index_map[j * ncols + i] as usize;
+    for j in 0..cr {
+        for i in 0..cc {
+            if !cells[j * cc + i] {
+                continue;
+            }
+            for (a, b) in [
+                (node(j, i), node(j, i + 1)),
+                (node(j + 1, i), node(j + 1, i + 1)),
+                (node(j, i), node(j + 1, i)),
+                (node(j, i + 1), node(j + 1, i + 1)),
+            ] {
+                // Halves of 1 add exactly, so the assembly order cannot reach a stored value.
+                *rows[a].entry(a).or_insert(0.0) += 0.5;
+                *rows[b].entry(b).or_insert(0.0) += 0.5;
+                *rows[a].entry(b).or_insert(0.0) -= 0.5;
+                *rows[b].entry(a).or_insert(0.0) -= 0.5;
+            }
+        }
+    }
+    let rows = rows.into_iter().map(|r| r.into_iter().collect()).collect();
+    Csr::from_rows(n_live, n_live, rows)
+}
+
 // --- the nonlinear plate's 1-D differences ------------------------------------------------------
 //
 // Five one-axis operators that `VonKarmanBracket` and `AiryStressSolver` lift onto the grid with
