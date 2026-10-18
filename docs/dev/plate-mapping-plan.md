@@ -4,7 +4,7 @@
 (`docs/dev/parameter-mapping-plan.md`) gave the damped string pitch, inharmonicity and two ring
 times; §12 named the plate's "size / thickness / material" vocabulary as the next candidate.
 
-**Status: PLANNED 2026-10-18** — Part 0 next.
+**Status: Part 0 DONE 2026-10-18** (§9) — the loss-operator choice is with the human.
 
 **The human's four decisions, 2026-10-18:**
 
@@ -262,3 +262,52 @@ gains a musical-plate case per branch.
 - **Part 6 — docs:** hurdle §12, HANDOFF §8, memory.
 
 Commit and push at each part's end, `scripts/cargo-test-nice.ps1 -Full` before each.
+
+---
+
+## 9. Part 0 result (2026-10-18)
+
+Probe: a scratch crate depending on core by path, nothing in the repo changed. It builds the real
+`plate::Params`, adds §2's loss operator (`−L` supported; the cell-assembled Dirichlet energy `G`
+free), inverts the three targets of §3 with each mode's loss taken as its Rayleigh quotient
+`φᵀGφ`, then finds the scheme's **own** root nearest each target by nonlinear inverse iteration
+on `T(z) = z²A − zR₁ + R₀` (dense, complex) — no time-stepping, no projection. Eleven plates
+(supported square, rectangle and spruce; free square, near-square `0.5 × 0.52`, rectangle and
+spruce; guitar at waist 0.20, 0.42, 0.60 and in spruce), `N ∈ {12, 16, 20}`,
+`fs ∈ {44.1k, 96k}`, `θ ∈ {0.25, 0.28, 0.5, 1}`, `f0 ∈ {110, 330}`, three loss levels
+(`T60` pairs `(4, 1)`, `(1, 0.2)`, `(0.3, 0.05)` s), `f_ref ∈ {6, 15} × f0`; 2,294 runs (anchors
+past 40 % of the grid's top mode skipped).
+
+- **Supported — exact, grain included.** The commutator `‖LB − BL‖` is `0` isotropically and
+  `≤ 5e-18` relative with spruce grain (`orthotropic_biharmonic` is a Kronecker build, so it
+  shares `L`'s eigenvectors). Worst miss over every supported run: mode 1's pitch `1.3e-8`
+  cents, its T60 `1.5e-10`, the anchor's T60 `1.7e-11`.
+- **Free and guitar — not exact, far below hearing.** Relative commutator `2e-3`–`1.2e-2`
+  (shrinking with `N`). Worst miss: mode 1's pitch **0.05 cents** (guitar, `N = 12`; 0.013 on the
+  free rectangles), its T60 `4.5e-5`; the anchor's T60 **0.3 %** (free spruce, an anchor in a
+  near-degenerate pair: margin to the next mode `≤ 1.2e-3`), `≤ 4e-4` everywhere else. The error
+  grows with the loss (light / mid / heavy, free square: `2.6e-7`, `8.6e-7`, `1.4e-5`) — the
+  second-order behaviour expected of a first-order (Rayleigh) inversion, except inside clusters.
+  Audibility thresholds are ~5 cents (the string batch's warning) and several percent in decay
+  time, so the margin is ~100× in pitch and ~10× in ring time at the very worst.
+- **The textbook mapping misses a lot.** Supported: mode 1 is **5–17 cents** flat-or-sharp
+  (coarser grids worse) and the anchor's T60 **5–11 %** off. Free square (Leissa's 13.468 and the
+  continuum loss law `σ = σ₀ + σ₁ ω/κ`): **8–21 cents** and **27–30 %** in T60 — the continuum
+  law's `p² = ω/κ` is a supported-plate identity, wrong for the free plate's twist fundamental.
+  Unlike the string (0.25 cents at the fundamental), the correction pays at the **fundamental**
+  as well as at the anchor.
+- **Rigid tilt is damped by `σ₁`.** Translation is in `G`'s null space; a tilt is not. A tilt's
+  loss rate is **0.39–0.91×** mode 1's (`σ₁` part), so a struck free plate's slow rotation stops
+  where today it drifts on (with `σ₀ = 0`). Mode 1 does not couple to the tilt on the rectangles
+  (symmetry: `0.000`); on the guitar the normalized coupling is up to **0.15**. The net momentum
+  an elastic vibration hands the tilt over its whole decay is zero (`d/dt (tᵀWu̇) = −σ₁ tᵀGu̇`
+  integrates to `−σ₁ tᵀG Δu`, and the elastic `Δu` returns to zero), so this is a sub-audio
+  effect on the rigid motion, not on the partials.
+- **Rigid modes skip cleanly by count:** the gap `β₄ / max|β₁..₃|` is `≥ 2e10` everywhere.
+
+**The decision this hands the human:** keep §2's Laplacian loss (ring time falling in proportion
+to frequency, the constant-loss-factor law of metals and Bilbao's standard; free and guitar plates
+inexact by ≤ 0.05 cents and ≤ 0.3 % in T60, reported; tilt damped), or a stiffness-proportional
+loss (exact on every plate, rigid motion untouched; ring time falling as frequency **squared** —
+with 4 s at 110 Hz and 1 s at 1.65 kHz it gives 0.14 s at 5 kHz where the linear law gives
+0.38 s, and 2.4 s at 800 Hz against 1.7 s).
