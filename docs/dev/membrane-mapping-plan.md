@@ -402,3 +402,42 @@ test and the rectangle's eigenvalues closed form:
 **Plants, all red** (a copy of the file restored after each, compared byte for byte): the term on
 `u` alone; at half strength; with its sign flipped; the energy correction dropped; its sign
 flipped; the bound not checked.
+
+---
+
+## 11. Parts 2 and 3 result — heads and the mapping (2026-10-18)
+
+`crates/physsynth-core/src/membrane_tuning.rs`: `HEADS` (four clear polyester-film heads by ply
+construction — single-ply 3, 7.5 and 10 mil, two-ply 7 + 7 mil), each `areal_density()` =
+`FILM_DENSITY · t`. Sources: Remo's product pages for the constructions (Ambassador Hazy Snare Side,
+Diplomat, Ambassador, Emperor — accessed 2026-10-18) and DuPont's *Mylar* typical-properties sheet
+for the film density, 1.390 g/cm³ (ASTM D1505). The makers' pages say "film" without naming it;
+PET is assumed. Clear heads only — a coating or a collar adds mass the table does not carry.
+
+`tune_membrane(geometry, rho, targets)` → `MembraneTuning` (the built `Params` with both losses,
+the tension, `σ₀`, `σ₁`, the fundamental and the anchor in the scheme, the anchor's margin, both
+modes' `μ`). `SetBy::Pitch` or `SetBy::Tension`. The rectangle's eigenvalues come from the closed
+form, the circle's from `eigsh_shift_invert` (three near zero, ten around the anchor). The two
+ring-time equations give `(σ₀, σ₁)` by a 2×2 whichever is set; set by pitch, mode 1's pitch
+equation then gives `c²` with the losses in. The tuned membrane is built through `with_sigma1`, so
+the loss-tightened bound refuses as `TuningError::Membrane(LossCflViolated)`.
+
+Bars, `crates/physsynth-core/tests/membrane_tuning.rs` (seven):
+
+- every head retyped from its plies and 1.390 g/cm³; names unique; sources named;
+- **64 round trips** read back from the running scheme (rectangles 0.30 and 0.45 m, circles 0.12
+  and 0.33 m; `N ∈ {30, 56}`, `fs ∈ {44.1k, 96k}`, two heads, set by pitch and by a tension 10 %
+  off the pitch run's): worst **`5.7e-9` cents** and **`4.9e-12`** in ring time, against bars of
+  `1e-6` and `1e-7`;
+- the anchor is the partial nearest `f_ref`, three references on each shape;
+- **struck** round head through the analysis crate's detector: the mapped drum `−0.0002` cents
+  from 180 Hz; the textbook mapping (`c` from `j₀₁`) on the same grid `−25.0` cents;
+- two heads at the same targets: same wave speed and losses, tension and energy in the ratio of
+  their densities, the energy bit-identical to the raw constructor's membrane;
+- set by pitch, then by its tension: the pitch back to `1e-9` cents;
+- refusals: the anchor at the fundamental, `f_ref` past Nyquist, both ends of the high ring
+  time's range (and just inside each tunes), non-positive inputs, the plain CFL, the loss CFL.
+
+**Plants, all red:** `σ₀`/`σ₁` swapped into the membrane; the lossless pitch used for `c²`; the
+rectangle's `x` eigenvalues on the `y` axis; the anchor farthest from `f_ref`; a 20 dB ring time;
+the tension without the density; the film density 1395.

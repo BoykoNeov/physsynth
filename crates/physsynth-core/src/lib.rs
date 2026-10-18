@@ -106,6 +106,7 @@ pub mod fmt;
 pub mod krylov;
 pub mod mallet;
 pub mod membrane;
+pub mod membrane_tuning;
 pub mod ops;
 pub mod ops2d;
 pub mod plate;
