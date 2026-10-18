@@ -509,8 +509,8 @@ every plate case and `string_damped_musical` (the shared group) — 8/8 green.
 
   Now a grained supported plate reads `B` itself and takes the orthotropic Navier markers, a grained
   free plate gets no tabulated marker (none exists), and the sweep carries the four free-branch
-  constants. Isotropic plates take their old code paths, so the freeze is unchanged. Three bars, each
-  planted red.
+  constants. Isotropic plates take their old code paths, so the freeze is unchanged. Three bars,
+  each planted red.
 
 `tests/plate_musical.rs` has thirteen bars. Full suite green (1,876); headless 3/3 on the musical
 and guitar cases.
