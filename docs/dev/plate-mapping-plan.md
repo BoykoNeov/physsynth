@@ -4,8 +4,8 @@
 (`docs/dev/parameter-mapping-plan.md`) gave the damped string pitch, inharmonicity and two ring
 times; §12 named the plate's "size / thickness / material" vocabulary as the next candidate.
 
-**Status: Parts 0–2 DONE 2026-10-18** (§9–§11); the human chose the Laplacian loss the same day.
-Part 3 (the mapping) next.
+**Status: Parts 0–3 DONE 2026-10-18** (§9–§12); the human chose the Laplacian loss the same day.
+Part 4 (viewer backend) next.
 
 **The human's four decisions, 2026-10-18:**
 
@@ -375,3 +375,44 @@ green unchanged (1,850 tests).
   round trip; refusals; sources and unique names.
 - **Plants, all red:** `ν` not rotated; a volume density handed out; either footnote dropped;
   `E_L`/`E_R` swapped.
+
+---
+
+## 12. Part 3 result — the mapping (2026-10-18)
+
+`plate_tuning::tune_plate(geometry, material, grain, targets)` → `PlateTuning` (material at the
+tuned thickness, `σ₀`, `σ₁`, the fundamental's and the anchor's frequencies in the scheme, the
+anchor's margin to its neighbours, both modes' `β` and `λ`, and `exact`). `SetBy::Pitch` or
+`SetBy::Thickness`; `PlateTuning::apply` writes it into a spec. Supported modes come from the closed
+form (no solve); free ones from `eigsh_shift_invert` — four near a small negative shift (three rigid
+motions skipped by count, with a `10⁶` gap check) and eight around the anchor's stiffness.
+
+**Mode 1 alone fixes the stiffness.** Its two equations involve only its own `(X, Y)`, so the 3×3
+of §3 splits: a 2×2 for mode 1, then one product equation for the anchor's `Y`, then a 2×2 for
+`(σ₀, σ₁)`.
+
+**A refusal found by the bars: the high ring time has a range.** With the loss rising in proportion
+to `λ`, fixing `t60_low` bounds `t60_high` on both sides — shortest at `σ₀ = 0`, longest at
+`σ₁ = 0` — and the refusal (`HighRingTimeOutOfRange`) names both ends. The long end lies a little
+**above** `t60_low` (the scheme suppresses a high mode's decay rate, hurdle §4). On the free
+rectangle at 180 Hz with 2.5 s low, the anchor near 1.5 kHz can ring no shorter than 0.93 s: the
+free plate's twist fundamental has a large loss eigenvalue for its frequency, so its `λ` ratio to the
+anchor is smaller than the frequency ratio.
+
+Bars, `tests/plate_tuning.rs` (six more, thirteen in all):
+
+- **supported, 96 fixtures** (steel, spruce both ways; `N ∈ {12, 20}`, `fs ∈ {44.1k, 96k}`, four
+  `θ`, both directions): both anchors read back from the running scheme — worst `1.3e-7` cents and
+  `2e-11` in T60 — and the anchor is the partial nearest `f_ref`;
+- **free and guitar** (steel, spruce along `y`; `θ ∈ {0.28, 1}`): worst `1.9e-4` cents, `1.9e-6`
+  in T60, against Part 0's worst-case 0.1 cents / 1 %;
+- **struck** brass plate through the analysis crate's detector: both anchors within `5e-4` cents;
+- **textbook control**: the continuum `f₁₁` stiffness is **15 cents** flat where the mapping lands
+  at `1e-10`;
+- thickness round trip (set by pitch → `t` → set by `t` gives the pitch back, `1e-10`);
+- refusals, including both ends of the ring-time range landing on the one-loss plates.
+
+**Plants, all red:** `σ₀`/`σ₁` swapped in `apply`; `θ` hard-wired; the continuum `λ`; the anchor
+chosen farthest from `f_ref`; a rigid motion taken as mode 1; a 20 dB ring time; the lossless pitch
+in place of the 2×2; the thickness from `κ²`; the free `λ` doubled; `σ₀`'s sign. (The material
+plants of §11 re-ran with them, red.)
