@@ -490,3 +490,27 @@ preset list plus `custom`.
 **Headless browser check:** two new cases, `plate_musical` (brass, supported, set by pitch) and
 `plate_musical_guitar` (Sitka spruce guitar top, so the read-out must say it is not exact); with
 every plate case and `string_damped_musical` (the shared group) — 8/8 green.
+
+**Review fixes (2026-10-18, before calling the batch done):**
+
+- **The viewer bars sent the server's own fallbacks** for every musical key (f0 220, ring times
+  2 / 0.5, f_ref 2000, 44.1 kHz, θ 0.28, steel), so a misspelled key or a hard-wired `θ` would have
+  passed them all — CLAUDE.md's first rule. Every value moved off its fallback; planted, a
+  misspelled `t60_low` and a hard-wired `θ` both go red now.
+- **Two inputs had no bar:** the custom material's three sliders and an explicit grain. Each now has
+  one against core `tune_plate`, the grain one on the worked-out thickness (spruce along `x` and
+  `y` differ by more than 5 %). Planted (a misspelled custom density, `grain: y` read as `x`): red.
+- **The viewer had never built a grained plate, and three read-outs assumed it never would:**
+  - the supported plate's discrete modes squared the Laplacian's eigenvalues (`B = L·L`);
+  - the continuum markers used the isotropic Navier law (and the free square's isotropic Leissa
+    table);
+  - the guitar's waist sweep rebuilt each plate from `nu` alone, so a spruce top's crossing panel
+    described an isotropic one.
+
+  Now a grained supported plate reads `B` itself and takes the orthotropic Navier markers, a grained
+  free plate gets no tabulated marker (none exists), and the sweep carries the four free-branch
+  constants. Isotropic plates take their old code paths, so the freeze is unchanged. Three bars, each
+  planted red.
+
+`tests/plate_musical.rs` has thirteen bars. Full suite green (1,876); headless 3/3 on the musical
+and guitar cases.

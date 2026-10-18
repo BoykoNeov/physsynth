@@ -112,6 +112,19 @@ pub fn discrete_eigenfreqs(p: &pl::Params, k_request: usize) -> Result<Vec<f64>,
             if k < 1 {
                 return Ok(Vec::new());
             }
+            // A grained plate's B is not L·L, so its frequencies are not functions of the
+            // Laplacian eigenvalue: read B itself. Born with the musical controls (plate mapping
+            // plan §14) — before them the viewer never built a grained plate.
+            if !p.grain_is_isotropic {
+                let pairs = eigsh_shift_invert(&p.stiffness, None, 0.0, k).map_err(eig_err)?;
+                return Ok(sorted(
+                    pairs
+                        .values
+                        .iter()
+                        .map(|&v| modal::discrete_beam_eigenfrequency(v, p.kappa, p.k, p.theta))
+                        .collect(),
+                ));
+            }
             let neg_l = p
                 .laplacian
                 .as_ref()
@@ -165,12 +178,31 @@ fn continuum(p: &pl::Params, n_modes: usize) -> Vec<f64> {
             let modes: Vec<(i64, i64)> = (1..=nm)
                 .flat_map(|m| (1..=nm).map(move |n| (m, n)))
                 .collect();
-            let mut f = sorted(modal::rectangular_plate_freqs(p.kappa, p.lx, p.ly, &modes));
+            // A grained plate (the musical controls' woods) takes the orthotropic Navier law.
+            let freqs = if p.grain_is_isotropic {
+                modal::rectangular_plate_freqs(p.kappa, p.lx, p.ly, &modes)
+            } else {
+                match modal::orthotropic_plate_freqs(
+                    p.kappa,
+                    p.lx,
+                    p.ly,
+                    &modes,
+                    p.grain_x,
+                    p.grain_cross,
+                    p.grain_y,
+                ) {
+                    Ok(f) => f,
+                    Err(_) => return Vec::new(),
+                }
+            };
+            let mut f = sorted(freqs);
             f.truncate(n_modes);
             f
         }
         Boundary::Free => {
-            if (p.lx - p.ly).abs() > 0.02 * p.lx.max(p.ly) {
+            // Leissa's table is the ISOTROPIC free square; a grained free plate has no tabulated
+            // reference, so it gets none rather than an isotropic one for a different plate.
+            if !p.grain_is_isotropic || (p.lx - p.ly).abs() > 0.02 * p.lx.max(p.ly) {
                 return Vec::new();
             }
             let a2 = p.lx * p.ly;
@@ -691,21 +723,47 @@ fn guitar_claim_block(
     let mut parities: Vec<f64> = Vec::new();
     let mut row_waists: Vec<f64> = Vec::new();
     for &w in &waists {
-        let Ok(q) = make_plate(
-            shipped.lx,
-            shipped.ly,
-            shipped.kappa,
-            shipped.rho,
-            fs_sweep,
-            n_sweep,
-            0.0,
-            Boundary::Free,
-            shipped.nu,
-            shipped.theta,
-            Domain::Guitar,
-            w,
-            shipped.asym,
-        ) else {
+        let swept = if shipped.grain_is_isotropic {
+            make_plate(
+                shipped.lx,
+                shipped.ly,
+                shipped.kappa,
+                shipped.rho,
+                fs_sweep,
+                n_sweep,
+                0.0,
+                Boundary::Free,
+                shipped.nu,
+                shipped.theta,
+                Domain::Guitar,
+                w,
+                shipped.asym,
+            )
+        } else {
+            // A grained top (the musical controls' woods) sweeps as ITSELF: the free branch's
+            // four constants carried over, not an isotropic plate at its derived nu.
+            pl::Params::new(&PlateSpec {
+                lx: shipped.lx,
+                ly: shipped.ly,
+                kappa: shipped.kappa,
+                rho: shipped.rho,
+                fs: fs_sweep,
+                n: n_sweep,
+                theta: shipped.theta,
+                boundary: Some(Boundary::Free),
+                domain: Some(Domain::Guitar),
+                waist: w,
+                asym: shipped.asym,
+                grain_x: shipped.grain_x,
+                grain_y: shipped.grain_y,
+                grain_coupling: Some(shipped.grain_coupling),
+                grain_torsion: Some(shipped.grain_torsion),
+                ..PlateSpec::default()
+            })
+            .map(Plate::new)
+            .map_err(construction)
+        };
+        let Ok(q) = swept else {
             continue; // this waist staircases into two plates on the sweep's grid
         };
         let qp = &q.p;

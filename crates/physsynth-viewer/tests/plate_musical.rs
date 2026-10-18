@@ -11,8 +11,19 @@ use common::{base_params, decode_f32, f, ok, sim};
 use physsynth_analysis::spectrum::measure_partials_near;
 use physsynth_core::exciter::raised_cosine_2d;
 use physsynth_core::plate::{Boundary, Domain, Params, Plate, PlateSpec};
-use physsynth_core::plate_tuning::{preset, tune_plate, GrainAlong, SetBy, Targets};
+use physsynth_core::plate_tuning::{preset, tune_plate, GrainAlong, Material, SetBy, Targets};
 use serde_json::{json, Value};
+
+// Every musical key OFF the server's fallback (`build_musical`'s defaults are f0 220, t60 2 / 0.5,
+// f_ref 2000, sample_rate 44100, theta 0.28, steel, 2 mm): a misspelled key or a hard-wired theta
+// reads the fallback, and a request that sent the fallback could not tell (CLAUDE.md's first rule
+// for a bar).
+const FS: f64 = 48000.0;
+const THETA: f64 = 0.5;
+const F0: f64 = 196.0;
+const T60_LOW: f64 = 2.7;
+const T60_HIGH: f64 = 0.65;
+const F_REF: f64 = 1700.0;
 
 /// A musical plate request, with the physics keys set to values the mapping must ignore.
 fn musical(overrides: Value) -> Value {
@@ -20,9 +31,9 @@ fn musical(overrides: Value) -> Value {
         "model": "plate", "domain": "supported", "controls": "musical",
         // Decoys: a musical build that read any of these would be a different plate.
         "kappa": 5.0, "rho": 0.9, "mu": 0.7, "sigma": 4.0, "nu": 0.1,
-        "Lx": 0.6, "Ly": 0.45, "N": 40, "theta": 0.28,
-        "material": "steel", "set_by": "pitch", "f0": 220.0, "thickness_mm": 2.0,
-        "t60_low": 2.0, "t60_high": 0.5, "f_ref": 2000.0, "sample_rate": 44100.0,
+        "Lx": 0.6, "Ly": 0.45, "N": 40, "theta": THETA,
+        "material": "brass", "set_by": "pitch", "f0": F0, "thickness_mm": 2.5,
+        "t60_low": T60_LOW, "t60_high": T60_HIGH, "f_ref": F_REF, "sample_rate": FS,
         "audio_duration": 1.5,
     }));
     common::merge(&mut p, overrides);
@@ -33,12 +44,22 @@ fn geometry(boundary: Boundary, domain: Domain, lx: f64, ly: f64, n: i64) -> Pla
     PlateSpec {
         lx,
         ly,
-        fs: 44100.0,
+        fs: FS,
         n,
-        theta: 0.28,
+        theta: THETA,
         boundary: Some(boundary),
         domain: Some(domain),
         ..PlateSpec::default()
+    }
+}
+
+/// The targets `musical()` sends, set by pitch.
+fn targets() -> Targets {
+    Targets {
+        set_by: SetBy::Pitch(F0),
+        t60_low: T60_LOW,
+        t60_high: T60_HIGH,
+        f_ref: F_REF,
     }
 }
 
@@ -52,14 +73,9 @@ fn the_musical_plate_builds_from_the_targets_not_the_sliders() {
     let t = &payload["tuning"];
     let want = tune_plate(
         &geometry(Boundary::Supported, Domain::Rectangle, 0.6, 0.45, 40),
-        &preset("steel").unwrap().material,
+        &preset("brass").unwrap().material,
         GrainAlong::X,
-        &Targets {
-            set_by: SetBy::Pitch(220.0),
-            t60_low: 2.0,
-            t60_high: 0.5,
-            f_ref: 2000.0,
-        },
+        &targets(),
     )
     .unwrap();
     assert!((f(&t["kappa"]) - want.material.kappa).abs() < 1e-6, "{t}");
@@ -67,10 +83,11 @@ fn the_musical_plate_builds_from_the_targets_not_the_sliders() {
     assert!((f(&t["sigma0"]) - want.sigma0).abs() < 1e-6);
     assert!((f(&t["sigma1"]) - want.sigma1).abs() < 1e-8);
     assert_eq!(t["exact"], true);
-    assert_eq!(f(&payload["fs_sim"]), 44100.0);
+    assert_eq!(t["material"], "brass");
+    assert_eq!(f(&payload["fs_sim"]), FS);
     // mu is a read-out of the MAPPED stiffness here, not the slider's 0.7
     let h = 0.6 / 40.0;
-    let mu = want.material.kappa / 44100.0 / (h * h);
+    let mu = want.material.kappa / FS / (h * h);
     assert!((f(&payload["mu"]) - mu).abs() < 1e-5, "{}", payload["mu"]);
 }
 
@@ -78,12 +95,13 @@ fn the_musical_plate_builds_from_the_targets_not_the_sliders() {
 fn the_struck_plate_sounds_the_pitch_asked_for() {
     // The rendered audio, through the analysis crate's detector — the output, not the report.
     for (domain, material, n, f0) in [
-        ("supported", "steel", 40, 220.0),
+        ("supported", "steel", 40, 233.0),
         ("guitar", "sitka spruce", 30, 140.0),
     ] {
         let payload = ok(&musical(json!({
             "domain": domain, "material": material, "N": n, "f0": f0,
-            "Lx": 0.4, "Ly": 0.5, "f_ref": 1500.0, "t60_high": 0.9,
+            "Lx": 0.4, "Ly": 0.5, "f_ref": 1500.0, "t60_high": 1.3,
+            "waist": 0.35, "asym": 0.2,
         })));
         let audio: Vec<f64> = decode_f32(payload["audio"]["b64"].as_str().unwrap())
             .into_iter()
@@ -109,12 +127,7 @@ fn the_energy_is_the_areal_densitys() {
         &geometry(Boundary::Supported, Domain::Rectangle, 0.6, 0.45, 40),
         &preset("aluminium").unwrap().material,
         GrainAlong::X,
-        &Targets {
-            set_by: SetBy::Pitch(220.0),
-            t60_low: 2.0,
-            t60_high: 0.5,
-            f_ref: 2000.0,
-        },
+        &targets(),
     )
     .unwrap();
     let mut spec = geometry(Boundary::Supported, Domain::Rectangle, 0.6, 0.45, 40);
@@ -146,7 +159,7 @@ fn the_energy_is_the_areal_densitys() {
     // payload that built from the targets but dropped sigma1 (or misplaced sigma0) differs here.
     let values = payload["energy"]["value"].as_array().unwrap();
     let times = payload["energy"]["time"].as_array().unwrap();
-    let steps = (f(times.last().unwrap()) * 44100.0).round() as usize;
+    let steps = (f(times.last().unwrap()) * FS).round() as usize;
     for _ in 0..steps {
         pl.step(None);
     }
@@ -186,7 +199,7 @@ fn musical_keys_do_not_touch_the_physical_plate() {
 #[test]
 fn set_by_thickness_reads_the_pitch_out() {
     let payload = ok(&musical(
-        json!({"set_by": "thickness", "thickness_mm": 3.0}),
+        json!({"set_by": "thickness", "thickness_mm": 3.0, "material": "steel"}),
     ));
     let t = &payload["tuning"];
     assert_eq!(t["set_by"], "thickness");
@@ -252,7 +265,7 @@ fn unreachable_settings_come_back_as_clean_errors() {
         (json!({"f_ref": 150.0}), "picks the fundamental"),
         (json!({"f0": 0.0}), "f0 must be positive"),
         (
-            json!({"N": 80, "Lx": 1.0, "Ly": 1.0, "sample_rate": 8000.0, "f0": 300.0}),
+            json!({"N": 80, "Lx": 1.0, "Ly": 1.0, "sample_rate": 8000.0, "f0": 300.0, "t60_high": 1.5}),
             "too coarse in time",
         ),
     ];
@@ -287,4 +300,132 @@ fn the_material_menu_is_the_cores_preset_list() {
         .collect();
     want.push("custom");
     assert_eq!(menu, want);
+}
+
+#[test]
+fn custom_constants_build_the_plate_they_describe() {
+    // Off every default: E 150 GPa, nu 0.27, rho 6100 (the server falls back to 100, 0.3, 5000).
+    let payload = ok(&musical(json!({
+        "material": "custom", "custom_E_gpa": 150.0, "custom_nu": 0.27, "custom_density": 6100.0,
+    })));
+    let t = &payload["tuning"];
+    let want = tune_plate(
+        &geometry(Boundary::Supported, Domain::Rectangle, 0.6, 0.45, 40),
+        &Material::Isotropic {
+            e: 150.0e9,
+            nu: 0.27,
+            rho: 6100.0,
+        },
+        GrainAlong::X,
+        &targets(),
+    )
+    .unwrap();
+    assert_eq!(t["material"], "custom");
+    assert!(
+        (f(&t["thickness_mm"]) - want.thickness * 1e3).abs() < 1e-4,
+        "{t}"
+    );
+    assert!((f(&t["rho_s"]) - want.material.rho_s).abs() < 1e-6, "{t}");
+}
+
+#[test]
+fn an_explicit_grain_is_the_grain_the_plate_gets() {
+    // The worked-out thickness depends on which way spruce's grain runs on a 0.6 x 0.45 plate, so
+    // a server that ignored `grain` (and took the rectangle's default, x) would be caught.
+    let thickness = |grain: &str| {
+        let p = ok(&musical(
+            json!({"material": "sitka spruce", "grain": grain}),
+        ));
+        assert_eq!(p["tuning"]["grain"], grain);
+        f(&p["tuning"]["thickness_mm"])
+    };
+    let (along_x, along_y) = (thickness("x"), thickness("y"));
+    let core = |along| {
+        tune_plate(
+            &geometry(Boundary::Supported, Domain::Rectangle, 0.6, 0.45, 40),
+            &preset("sitka spruce").unwrap().material,
+            along,
+            &targets(),
+        )
+        .unwrap()
+        .thickness
+            * 1e3
+    };
+    assert!((along_y - core(GrainAlong::Y)).abs() < 1e-4, "{along_y}");
+    assert!((along_x - core(GrainAlong::X)).abs() < 1e-4, "{along_x}");
+    assert!(
+        (along_x / along_y - 1.0).abs() > 0.05,
+        "the grain made no difference"
+    );
+}
+
+#[test]
+fn a_grained_supported_plates_spectrum_markers_are_the_orthotropic_ones() {
+    // Before the musical controls the viewer never built a grained plate, and two read-outs
+    // assumed it never would: the discrete modes squared the Laplacian's eigenvalues (B = L·L), and
+    // the continuum markers used the isotropic Navier law.
+    let payload = ok(&musical(json!({"material": "sugar maple", "grain": "y"})));
+    let t = &payload["tuning"];
+    let s = &payload["meta"]["spectrum"];
+    // The lowest discrete mode IS the mapped fundamental (lossless; the loss's pull is ~1e-8).
+    let f1 = f(&s["modes_discrete"][0]);
+    assert!(
+        (f1 / F0 - 1.0).abs() < 1e-5,
+        "discrete f1 {f1} against the target {F0}"
+    );
+    // The continuum markers: the orthotropic Navier law at the mapped kappa and the grain.
+    let m = physsynth_core::plate_tuning::plate_material(
+        &preset("sugar maple").unwrap().material,
+        GrainAlong::Y,
+        f(&t["thickness_mm"]) * 1e-3,
+    )
+    .unwrap();
+    let ly = f(&payload["grid"]["extent_y"]);
+    let modes: Vec<(i64, i64)> = (1..=6).flat_map(|a| (1..=6).map(move |b| (a, b))).collect();
+    let mut want = physsynth_analysis::modal::orthotropic_plate_freqs(
+        m.kappa,
+        0.6,
+        ly,
+        &modes,
+        m.grain_x,
+        m.grain_cross.unwrap(),
+        m.grain_y,
+    )
+    .unwrap();
+    want.sort_by(f64::total_cmp);
+    let got = s["modes_continuum"].as_array().unwrap();
+    assert!(!got.is_empty());
+    for (g, w) in got.iter().zip(&want) {
+        assert!(
+            (f(g) - w).abs() < 1e-3 * w,
+            "continuum marker {} against {w}",
+            f(g)
+        );
+    }
+}
+
+#[test]
+fn a_grained_guitars_waist_sweep_sweeps_the_same_top() {
+    // The sweep rebuilds the plate at each waist; it must carry the grain, or a spruce top's
+    // crossing panel describes an isotropic one. At a waist the sweep samples, on the shipped grid,
+    // the sweep's row is the shipped plate — so its f1 must equal the shipped plate's own.
+    let w: f64 = 0.88 * 8.0 / 23.0; // the sweep's ninth waist, linspace(0, 0.88, 24)
+    let payload = ok(&musical(json!({
+        "domain": "guitar", "material": "western redcedar", "N": 30, "Lx": 0.4, "Ly": 0.5,
+        "waist": w, "asym": 0.2, "f0": 150.0, "f_ref": 1200.0, "t60_high": 1.4,
+        "audio_duration": 0.2,
+    })));
+    let claim = &payload["meta"]["claim"];
+    let you = f(&claim["you"]["f1"]);
+    let row = claim["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| (f(&r["waist"]) - (w * 1e4).round() / 1e4).abs() < 1e-9)
+        .expect("the sweep samples this waist");
+    assert!(
+        (f(&row["f1"]) - you).abs() < 2e-3,
+        "sweep f1 {} against the shipped plate's {you}",
+        row["f1"]
+    );
 }
