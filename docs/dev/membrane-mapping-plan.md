@@ -264,3 +264,98 @@ head (low `c/c₀`) radiates little, a tight one more.
 - **Part 6 — docs:** hurdle §12, HANDOFF §8, memory.
 
 Commit and push at each part's end, `scripts/cargo-test-nice.ps1 -Full` before each.
+
+---
+
+## 9. Part 0 result (2026-10-18)
+
+Probe: a scratch crate depending on core and analysis by path, nothing in the repo changed. It
+adds §2's term to a copy of the step (calling core's own `step_numerator_into` and then the
+backward-difference `2σ₁kL(u − u⁻)`), runs it on real `membrane::Params`, and mounts real heads in
+`RoomGrid<MembraneSeam>`.
+
+- **The recurrence is the scheme.** A run started in one exact mode (rectangle: `sin·sin`;
+  circle: `eigsh_shift_invert` on `−L`) follows §3's per-mode recurrence to `1.3e-10` cents in
+  pitch and `7e-13` in ring time, both shapes, three modes each.
+- **The energy books close only with the correction.** Struck, `σ₀ = 1.5`, `σ₁ = 2e-4`: per-step
+  balance `2.9e-15` (rectangle), `3.6e-15` (circle) of the start, monotone; `σ₁`'s own share of
+  the work is 15 % of the start. Without the correction term the balance misses by `4e-6`–`7e-6`
+  of the start — far above rounding, so a dropped correction is visible to the balance bar.
+- **`σ₁ = 0` leaves the state bit-identical** to core's `Membrane::step` (500 steps).
+- **The stability bound is right, and the sufficient form is tight.** The exact limit is
+  `c²k²μ_max + 4σ₁kμ_max ≤ 4`; at `0.999×` it a run decays, at `1.001×` it grows by `10¹⁴`–`10¹⁵`
+  over 20k steps. The sufficient `λ² + 4σ₁k/h² ≤ ½` (`μ_max ≤ 8/h²`) gives away only
+  0.16–0.28 % of `σ₁` (`μ_max h²` is 7.98–7.996). The refusal uses the sufficient form.
+- **The inversion is exact on both shapes.** 192 admissible fixtures (rectangles 0.30 and
+  0.45 m, circles 0.12 and 0.33 m; `N ∈ {30, 60}`, `fs ∈ {44.1k, 96k}`, `f0 ∈ {80, 220}`, three
+  loss levels, anchors near 3× and 8× the fundamental): worst `1e-8` cents and `5e-12` in ring
+  time, read back from the recurrence; a run on every eighth rectangle agrees to `4e-9`.
+- **The loss's own pitch shift is small at musical losses** (0.001–0.04 cents for the modes
+  measured), so the plant "lossless pitch used for `c²`" needs a heavy loss to go red.
+- **The frequency law, in numbers** (4 s at 110 Hz, 1 s at 1 kHz): the drum's law gives 3.2 s at
+  300 Hz, 0.31 s at 2 kHz, 0.14 s at 3 kHz, 0.05 s at 5 kHz; the plate's linear law would give
+  2.4, 0.54, 0.37, 0.23 s. Highs die fast — the price of a local operator.
+- **The textbook mapping misses the round drum by 10–25 cents flat** (`c` from `j₀₁`: 25 cents
+  at `N = 40`, 16 at 60, 14 at 80, 10 at 100) — the staircase rim. Ring times off by 0.3–2.5 %.
+  The rectangle's textbook miss is small (1.2 cents at `N = 30`, 0.1 at 80). The round drum is
+  where this batch pays.
+- **The circle's spectrum has near-degenerate clusters.** Exact pairs (the `m ≥ 1` cos/sin twins)
+  come out as multiplicity 2; the grid also splits some pairs and brings unrelated modes close —
+  smallest relative gaps `4.6e-5` to `6.7e-4` in frequency, between 2× and 5× the fundamental. An
+  anchor inside such a cluster is still exact (each mode has its own `μ`), and its neighbour rings
+  within a hair of it; the margin is reported.
+
+**The room** (rigid walls, `fs = 40 kHz`, `h_air = 16.5 mm`, round head 0.12 m, 0.26 kg/m²,
+`T = 3000 N/m`, `N = 24`, 0.4 s). Every peak listed, not one detector window — a ±40 % window
+first reported "+560 cents" by picking a different peak.
+
+| room (m) | mount | fundamental | shift | wall-clock |
+|---|---|---|---|---|
+| in vacuo | — | 337.0 Hz | — | — |
+| 0.46 × 0.46 × 0.15 | baffled | 315.3 Hz | −115 c | 1.7 s |
+| 0.46 × 0.46 × 0.15 | suspended | 256.8 Hz | −470 c | 1.8 s |
+| 0.66 × 0.66 × 0.40 | baffled | 290.1 Hz | −260 c | 8.2 s |
+| 0.66 × 0.66 × 0.40 | suspended | 265.4 Hz | −413 c | 8.1 s |
+| 0.99 × 0.86 × 0.73 | baffled | 289.1 Hz *and* 232.0 Hz | −267 c / −640 c | 39.0 s |
+| 0.99 × 0.86 × 0.73 | suspended | 272.5 Hz | −370 c | 38.8 s |
+
+In the largest room the baffled head's fundamental **splits in two** around a room resonance — the
+head and the room share the note, so "the drum's pitch in the room" is not one number there.
+Cost grows as the room's volume over `h³`: ~4 s, ~20 s, ~100 s per second of sound.
+
+**Each mode labelled** (the head projected on its in-vacuo eigenvectors, the peak of each modal
+coordinate — the table above lists the six biggest peaks, which are not modes). Mode 0 is the
+fundamental; modes 1–2 the first cos/sin pair; shifts in cents from the in-vacuo partial.
+
+| head (N/m) | room | walls | mount | mode 0 | modes 1–2 | modes 3–4 | head energy kept |
+|---|---|---|---|---|---|---|---|
+| 1000 | 0.46 | rigid | baffled | +63 | −178 | −100 | 0.93 |
+| 3000 | 0.46 | rigid | baffled | −115 | −661 | −99…−116 | 0.81 |
+| 8000 | 0.46 | rigid | baffled | −209 | −198 | −116…−137 | 0.53 |
+| 3000 | 0.46 | absorbing | baffled | −250 | −153 | −104 | 0.02 |
+| 3000 | 0.66 | absorbing | baffled | −293 | −159 | −105 | 0.02 |
+| 3000 | 0.46 | absorbing | suspended | −442 | −231 | −152 | 0.02 |
+| 3000 | 0.66 | absorbing | suspended | −391 | −222 | −149 | 0.12 |
+| 8000 | 0.46 | absorbing | baffled | −265 | −176 | −124 | 0.00 |
+| 8000 | 0.66 | absorbing | baffled | −283 | −173 | −122 | 0.00 |
+
+(Absorbing: `Wall::Impedance(ρ₀c₀)` on every face but the baffle, which stays rigid.)
+
+- **Rigid walls: the room's resonances set the note.** Shifts jump by mode and by room size
+  (modes 1–2 at −661 cents next to −99 for modes 3–4; a slack head's fundamental pushed *up*
+  63 cents by the small sealed room). Not a property of the drum.
+- **Absorbing walls: the shift belongs to the drum.** Two room sizes agree within 1–6 cents above
+  the fundamental and within 40–50 cents at it (the rigid baffle and oblique incidence still
+  reflect). The air lowers the fundamental by **2½–4½ semitones** (baffled about −2½ to −3,
+  suspended about −4) and the higher modes by one to two — mass loading of a light head, both
+  faces when suspended. The order of the in-vacuo partials survives.
+- **Radiation damping dominates once the walls absorb:** the head keeps 2 % of its energy over
+  0.4 s at 3000 N/m (≈ a 1.4 s ring time from the air alone) and none at 8000. With rigid walls
+  the energy comes back from the room and the head keeps 53–93 %. Either way the air, not `σ₀`
+  or `σ₁`, can set the ring time; a target longer than the air allows cannot be met.
+- **The room's sample rate does not bite §2's bound.** At 40 kHz the 0.12 m head (`N = 24`) runs at
+  `λ ≈ 0.27`, so `σ₁` may reach `≈ 0.43 m²/s`; the mapped `σ₁` for musical ring times is
+  `~1e-3`.
+- **So "targets met before the air" would leave the room drum 1–5 semitones flat**, and with
+  absorbing walls its ring times bounded by radiation. §7.3's mapping question is the page's main
+  decision.
