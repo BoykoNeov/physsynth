@@ -29,7 +29,7 @@
 | 9 | The conserved total is blind to a wrong coupling constant; `radiated == injected` is blind to half of them | every coupled scene | Accounted for — three detectors, jointly (§9) |
 | 10 | Aliasing around every nonlinearity | bow, reed, mallet, VK plate, both nonlinear strings | Mitigated by oversampling; no anti-aliased scheme (§10) |
 | 11 | Twenty ARPACK oracles were not bit-reproducible run to run | `analysis/modal.py` | Fixed in §24.9 — kept here as the pattern (§11) |
-| 12 | Raw physics is not a musician's interface (parameter mapping) | none yet | Deferred (§12) |
+| 12 | Raw physics is not a musician's interface (parameter mapping) | `string_tuning`; the viewer's damped string | **Started 2026-10-18** for the damped string: five musical targets, met exactly by the *simulated* string at two partials, the drift of the rest reported and warned. Every other model is still raw (§12) |
 | 13 | Which models can ever run in real time | engine, room | Deferred, and now decoupled from the language (§13) |
 | 14 | `piston_radiation_resistance`'s `ka < 1e-8` series threshold was about three decades too small: just above it the direct form cancelled catastrophically and was 544% wrong | `core/radiation.py` | **Fixed 2026-09-03** — three Taylor terms below `ka = 3e-2`; worst error 5.24 → 6.7e-13 (§14) |
 | 15 | No model states where its own answer stops being in tune, and the boundary is much lower than anyone assumed | every resonator | **Measured 2026-09-06** — two families with opposite signs (implicit errors compound into a hard floor at ~8% of the grid; explicit errors cancel at the magic Courant number), the plate is space-limited at every `fs` the suite uses, and the membrane's ceiling cancellation is **diagonal-only**; the 2-D plate's band was **derived 2026-09-07** by splitting its spectrum by mode family, the **orthotropic** plate measured the same day — one floor in mode index, per-direction only in hertz — and the **membrane's block** the same day too: the 2-D CFL ceiling **is** the minimum over the spectrum of each mode's own cancellation Courant number, so no mode is ever sharp, and a block's worst corner **flips** below the ceiling for every block — the plate's corner rule is inverted on a membrane, not weakened (§15) |
@@ -518,12 +518,31 @@ The pattern to keep: **an oracle that is not bit-reproducible reads as a cross-l
 discrepancy the first time someone tightens a comparison**, so every randomised or iterative
 oracle takes a seed or a start vector, and every new one is checked by running it twice.
 
-## 12. Parameter mapping — deferred
+## 12. Parameter mapping — started for the damped string
 
-Raw physics (Young's modulus, tension, `σ₀/σ₁`, `EA`) is not a musician's interface. The
-`loss_coefficients_from_T60` helper is the only mapping in the tree. HANDOFF §8 budgets "real
-work" for it and §12D proposes learning it; nothing is scheduled. It becomes urgent at the viewer
-sandbox (§12G) and at the plugin, not before.
+Raw physics (Young's modulus, tension, `σ₀/σ₁`, `EA`) is not a musician's interface. HANDOFF §8
+budgets "real work" for it and §12D proposes learning it.
+
+**2026-10-18, the first piece** (`docs/dev/parameter-mapping-plan.md`, the human's call):
+`crates/physsynth-core/src/string_tuning.rs` maps pitch, inharmonicity, two ring times and a
+reference frequency onto model #3's `T, κ, σ₀, σ₁`, and the viewer's damped string has a
+"musical" control set built on it. What carries forward:
+
+- **The inversion is exact and closed-form, not fitted.** Each mode of a θ-scheme string is a root
+  pair of a two-step recurrence whose coefficients are linear in that mode's stiffness and loss, so
+  a `(pitch, T60)` target fixes one mode exactly, and two anchors fix four coefficients. Read back
+  from the simulation: `3.4e-10` in pitch, `1.1e-8` in T60 over 108 fixtures.
+- **Exact at two partials only** — the fundamental and the one nearest the reference. The rest
+  drift where §4 and §15 put them (up to ~47 cents between the anchors on a coarse grid). The
+  human's call: build anyway, report the drift, warn past 5 cents.
+- **The textbook mapping** (`c = 2Lf₀`, `loss_coefficients_from_t60`) is within a few cents on the
+  fundamental and up to 163 cents and 18 % in T60 off at the high anchor — the correction's payoff
+  is the brightness.
+- **A harmonic target (`B = 0`) maps to `κ > 0`**: the grid and the θ average flatten high modes,
+  and the anchor needs stiffness to hold it up.
+
+Every other model is still raw; the plate's "size / thickness / material" vocabulary is the next
+candidate. Smoothing a moving control belongs to the real-time stage.
 
 ## 13. Which models are real-time — deferred, decoupled
 

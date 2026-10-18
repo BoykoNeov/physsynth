@@ -4,6 +4,11 @@
 2026-10-18 on the human's call. HANDOFF §8 budgets "real work" for it; §12D proposes learning it.
 This batch does the first, hand-derived piece for one model.
 
+**Status: DONE 2026-10-18** — Parts 0–5. Core `string_tuning.rs` and its bars
+(`crates/physsynth-core/tests/string_tuning.rs`), the viewer's `musical` domain on the damped
+string (`crates/physsynth-viewer/tests/string_musical.rs`), the headless browser case
+`string_damped_musical`. §9 records what the batch found.
+
 **The human's three decisions, 2026-10-18:**
 
 1. **Instrument: the damped stiff string (model #3)** first. Plates and the membrane come later.
@@ -203,3 +208,38 @@ one mode, projects every step onto it, and reads `r` and `φ` back from the recu
 - **Part 5 — docs:** hurdle §12 updated, HANDOFF §8's mapping line, memory.
 
 Commit and push at each part's end, `scripts/cargo-test-nice.ps1 -Full` before each.
+
+---
+
+## 9. What the batch found (2026-10-18)
+
+- **Round trip:** both anchors read back from the simulation to `3.4e-10` (pitch) and `1.1e-8`
+  (T60) over 108 fixtures; a plucked string's detected anchors within 0.003 cents. Off-anchor
+  pitches from `mode_frequency` match the simulation to `1e-8`, so the drift read-out is the
+  scheme's own.
+- **Plants, core** (`tests/string_tuning.rs`): swapped `σ₀/σ₁`, hard-wired `θ`, flipped `B`,
+  continuum `p²`, anchor `M + 1`, `k = fs`, a 20 dB T60, a lossless forward pitch, a 50-cent
+  horizon — all nine red. The tenth, the plain `r·r − 1` in place of `exp_m1`, changes ~1e-11 and
+  turns nothing red; the code comment says it is a precision choice, not a pinned one.
+- **Plants, viewer** (`tests/string_musical.rs`): the `κ` slider read in place of the mapped one,
+  `f₁ = c/2L`, the partial overlay ignoring the targets, the domain never matching — all red. The
+  first was caught only by the rendered pluck, not by the `tuning` block's equality with core: the
+  block reports what was *mapped*, so a build that ignores the mapping still reports it correctly.
+  A wiring bar has to listen to the output.
+- **The physics domain is untouched:** a damped request carrying every musical key but
+  `domain: "physical"` serializes byte-for-byte as one without them, and the 588-request freeze is
+  green unchanged.
+- **A slider grid is a value filter.** The sample-rate slider first stepped by 1,000 Hz from 8,000,
+  so its 44,100 default silently became 44,000 — seen only by the headless browser check's status
+  line. Every default must sit on its slider's step grid.
+- **Two read-outs, two references.** The viewer's existing resolution strip measures the string
+  against the *continuum* string with the mapped coefficients; the tuning hint measures it against
+  the *target* law. They answer different questions and can name different horizons (4 vs 2 modes
+  on the warning case).
+- **The first domain born after the freeze.** `frozen.rs`' coverage guard requires every domain
+  the front-end offers to be named by a frozen case — and the freeze is the deleted Python's own
+  answers, so no new domain can ever have one. The human's call, 2026-10-18: a named exemption,
+  `BORN_AFTER_THE_FREEZE`, each entry naming the test file that covers it, and the guard holding
+  the list honest (an entry must still be offered, must not shadow a frozen case, and its file must
+  exist — each planted and seen red). Recording today's Rust into the freeze was declined: it
+  would turn the Python's answers into a snapshot of the code they exist to check.
