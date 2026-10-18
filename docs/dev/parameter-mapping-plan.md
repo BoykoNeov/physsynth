@@ -93,8 +93,12 @@ The mapping returns `Err` with a plain reason, never a silently wrong string, wh
 - any input non-positive or non-finite.
 
 The resolution horizon (hurdle §15) is **reported**, not refused: the payload says up to which
-partial the non-anchor modes stay within ±5 cents of the stretched law. Whether an anchor above
-that horizon should refuse is a Part 0 question, put to the human with the measurements.
+partial the non-anchor modes stay within ±5 cents of the stretched law, and the worst drift.
+
+**The human's call after Part 0, 2026-10-18: allow and warn.** An anchor above the horizon builds
+the string anyway; the viewer shows a warning with the worst in-between drift in cents. Refusing
+was declined (it blocks settings outright), and so was choosing a finer `N` automatically (it
+makes renders slower without the user choosing it).
 
 ---
 
@@ -156,7 +160,38 @@ shows the derived physics values read-only underneath. The browser check
 
 ---
 
-## 7. Order of work
+## 7. Part 0 result (2026-10-18)
+
+Probe: a scratch crate depending on core and analysis by path, nothing in the repo changed. 1,296
+configurations — `L ∈ {0.65, 1}`, `ρ ∈ {0.005, 0.0012}`, `fs ∈ {44.1k, 96k}`, `N ∈ {64, 128,
+256}`, `θ ∈ {0.25, 0.28, 0.5, 1}`, `f0 ∈ {82.4, 220, 440}`, `B ∈ {0, 1e-4, 1e-2}`, `(T60_low,
+T60_high) ∈ {(4, 1), (1, 0.2)}`, `f_ref = 2 kHz`. Each run starts `DampedStiffString` in exactly
+one mode, projects every step onto it, and reads `r` and `φ` back from the recurrence.
+
+- **The §2 inversion is exact to the measurement.** Worst relative error over all runs and both
+  anchors: frequency `5.5e-10`, T60 `1.8e-8`; no configuration refused. The measurement matters: a
+  plain least-squares fit of `a_{n+1} = α a_n + β a_{n−1}` read `2.2e-7` / `2.6e-5`, because at
+  `φ ≈ 0.005` the two regressors are nearly collinear. Regressing the second difference on
+  `(a_n, a_n − a_{n−1})` instead, and taking `log r` through `ln_1p`, removed three decades. Part 2's
+  bar must use the well-conditioned form.
+- **The textbook mapping is close on the fundamental and wrong at the anchor.** Fundamental: median
+  0.25 cents flat, worst 3.3; T60 median 0.02 %, worst 0.4 %. Anchor: worst −163 cents and +18 %
+  T60 (`N = 64`, `θ = 1`, `f0 = 82.4`, anchor mode 24). The correction's payoff is the high
+  anchor, i.e. the brightness. Part 2's control bar must pick a fixture where the textbook miss is
+  well above measurement (the best case missed by only 0.02 cents).
+- **Off-anchor drift** (modes between the fundamental and the anchor, against the stretched law):
+
+  | `N` | anchor above the 5-cent horizon | worst in-between drift |
+  |---|---|---|
+  | 64 | 150 / 432 | 46.8 cents |
+  | 128 | 66 / 432 | 32.4 cents |
+  | 256 | 36 / 432 | 29.0 cents |
+
+  Worst at a low, stiff note on a coarse grid. This is what the human ruled "allow and warn" (§3).
+
+---
+
+## 8. Order of work
 
 - **Part 0 — probe** (Rust, scratch crate under `W:\temp\claude`, nothing in the repo): confirm the
   §2 inversion round-trips through `DampedStiffString` to rounding across the §5.3 grid; measure the
