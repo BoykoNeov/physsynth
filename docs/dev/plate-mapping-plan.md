@@ -64,8 +64,8 @@ construction. The energy is unchanged; the **balance** (energy drop = dissipated
 to rounding) is the bar.
 
 **Why the Laplacian and not the stiffness.** For a plate `ω ≈ κ p²`, so `σ_m = σ₀ + σ₁ p²` grows
-*linearly* with frequency — the standard choice (Bilbao, *Numerical Sound Synthesis*, the plate chapter). A loss
-proportional to the stiffness would grow as `ω²`.
+*linearly* with frequency — the standard choice (Bilbao, *Numerical Sound Synthesis*, the plate
+chapter). A loss proportional to the stiffness would grow as `ω²`.
 
 **Where the Laplacian comes from, per branch:**
 
