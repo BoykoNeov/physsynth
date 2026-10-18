@@ -4,8 +4,8 @@
 (`docs/dev/parameter-mapping-plan.md`) gave the damped string pitch, inharmonicity and two ring
 times; §12 named the plate's "size / thickness / material" vocabulary as the next candidate.
 
-**Status: Parts 0–4 DONE 2026-10-18** (§9–§13); the human chose the Laplacian loss the same day.
-Part 5 (front-end and the coverage guard) next.
+**Status: Parts 0–5 DONE 2026-10-18** (§9–§14); the human chose the Laplacian loss the same day.
+Part 6 (docs) next.
 
 **The human's four decisions, 2026-10-18:**
 
@@ -453,3 +453,40 @@ dropped; the switch never matching.
 
 **Moved to Part 5:** the coverage guard's extension. It reads `app.js`, and the musical select does
 not exist until the front-end adds it, so the guard and the select land together.
+
+---
+
+## 14. Part 5 result — the front-end and the coverage guard (2026-10-18)
+
+`web/static/`: a second select, **Controls**, shown for the plate and filled from a new
+`CONTROL_OPTS` table (`physical` / `musical`). `musicalOn(model)` answers for both models that have
+musical controls (the damped string through its domain select, the plate through this one), and
+two new gates use it: `data-musical` shows a group only when that model's musical controls are on,
+`data-hide-musical` hides a physics slider then (OR-ed onto the earlier passes for an element they
+rewrite, recomputed for one they never touch — the latch the `data-hide-domain` pass once had).
+
+- The string's musical group (pitch, both ring times, the reference, the sample rate) is **shared**
+  with the plate; inharmonicity stays string-only.
+- A **Plate material** group: material (the core's preset names plus `custom`), grain (`auto`, `x`,
+  `y`), set by (pitch / thickness), a thickness slider, and three custom-constant sliders. The
+  input that is not set hides; the custom sliders show only for `custom`. In musical mode the
+  plate's `κ`, `ρ`, `μ`, `ν`, `σ` and the then-empty Physical group hide.
+- The read-out under the group: the material and grain, the thickness (or the pitch it gives), `κ`,
+  `ρ_s`, both losses, `μ`, the anchor, how exact the simulated plate is, the ring times of the first
+  eight partials, and the source.
+- A deep link takes `controls`, `material`, `set_by`, `grain`; a value no option carries is reported
+  in the page's own notes, which the headless check fails on.
+- `fieldset.group` gets `min-width: 0` and its selects `width: 100%`: a wide option text had pushed
+  the group past the panel — seen only on the headless screenshot.
+
+**The coverage guard** (`tests/frozen.rs`) now reads `CONTROL_OPTS` as well as `DOMAIN_OPTS`, naming
+the plate's options `controls:physical` and `controls:musical`; both are in `BORN_AFTER_THE_FREEZE`,
+covered by `tests/plate_musical.rs` (the physical one by its byte-identity bar). Planted — the
+musical exemption removed — it goes red naming the pair.
+
+`tests/plate_musical.rs` gains a ninth bar: the material menu in `index.html` is exactly the core's
+preset list plus `custom`.
+
+**Headless browser check:** two new cases, `plate_musical` (brass, supported, set by pitch) and
+`plate_musical_guitar` (Sitka spruce guitar top, so the read-out must say it is not exact); with
+every plate case and `string_damped_musical` (the shared group) — 8/8 green.

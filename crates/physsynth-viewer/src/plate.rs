@@ -1080,9 +1080,9 @@ fn tuning_block(p: &pl::Params, m: &Musical) -> Result<Value, Refusal> {
         .collect();
     let crowded = tu.anchor_margin < CROWDED_ANCHOR;
     let mut message = if tu.exact {
-        "the simulated plate meets the pitch and both ring times exactly.".to_owned()
+        "The simulated plate meets the pitch and both ring times exactly.".to_owned()
     } else {
-        "free edges couple the modes slightly: the simulated plate meets the targets to within \
+        "Free edges couple the modes slightly: the simulated plate meets the targets to within \
          about 0.05 cents and 0.3 % in ring time."
             .to_owned()
     };

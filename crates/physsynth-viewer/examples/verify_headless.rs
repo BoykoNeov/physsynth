@@ -73,6 +73,7 @@ const PROBE: &str = r"
                 + document.getElementById('horizon-line').textContent),
     urlNotes: (window.__urlParamNotes || []).join(' | '),
     tuning: (document.getElementById('tuning-hint') || {}).textContent || '',
+    plateTuning: (document.getElementById('plate-tuning-hint') || {}).textContent || '',
     hzMark: window.__horizonMark || null,
     warm: warm, cool: cool, bg: bg, other: other, total: d.length / 4,
   });
@@ -110,6 +111,17 @@ const CASES: &[(&str, &str)] = &[
     ("string_parametric", "model=tension&domain=parametric"),
     ("string_bow", "model=bow"),
     ("plate_supported", "model=plate&domain=supported"),
+    // The plate's musical controls (plate mapping plan §7): a cited metal set by pitch on the
+    // supported plate, and a spruce guitar top — a free plate, so the read-out says it is not exact.
+    (
+        "plate_musical",
+        "model=plate&domain=supported&controls=musical&material=brass&N=40&audio_duration=0.5",
+    ),
+    (
+        "plate_musical_guitar",
+        "model=plate&domain=guitar&controls=musical&material=sitka%20spruce&N=24&f0=140\
+         &f_ref=1200&t60_high=1.5&audio_duration=0.3",
+    ),
     ("plate_free", "model=plate&domain=free"),
     // The only 2-D field with a NON-CONVEX mask: what a headless render sees and a payload test
     // cannot is the outline actually painted â masked exterior, both bouts, the waist between.
@@ -575,6 +587,23 @@ fn run_case(
         tuning.contains("Exact at f₀") && tuning.contains("cents")
     } else {
         true
+    };
+    // The plate's musical read-out names the thickness, the mapped stiffness and the partials'
+    // ring times; a free plate's also says how far from exact it is.
+    let plate_tuning = probe["plateTuning"].as_str().unwrap_or("");
+    let plate_tuning_ok = if query.contains("controls=musical") {
+        plate_tuning.contains(" mm")
+            && plate_tuning.contains("κ =")
+            && plate_tuning.contains("Ring times")
+            && (!query.contains("domain=guitar") || plate_tuning.contains("0.05 cents"))
+    } else {
+        plate_tuning.is_empty()
+    };
+    let tuning_ok = tuning_ok && plate_tuning_ok;
+    let tuning = if plate_tuning.is_empty() {
+        tuning
+    } else {
+        plate_tuning
     };
     let status = probe["status"].as_str().unwrap_or("");
     let ok = status.starts_with("ok")

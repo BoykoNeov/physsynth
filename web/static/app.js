@@ -8,6 +8,7 @@
 const $ = (id) => document.getElementById(id);
 const modelSel = $("model");
 const domainSel = $("domain");
+const controlsSel = $("controls");
 const renderBtn = $("render");
 const autoRender = $("autorender");
 const statusEl = $("status");
@@ -50,6 +51,8 @@ const LABELS = {
   radiation_R: "radiation R", air_corner: "air corner f_c", radiation_weight: "radiation a",
   f0: "pitch f₀", inharmonicity: "inharmonicity B", t60_low: "ring time, f₀",
   t60_high: "ring time, high", f_ref: "“high” means", sample_rate: "sample rate",
+  thickness_mm: "thickness", custom_E_gpa: "Young's modulus E", custom_nu: "Poisson ν",
+  custom_density: "density ρ",
 };
 
 // Per-model slider re-ranging (min/max/step/fixed/val) applied on model switch. The backend mirrors
@@ -521,6 +524,37 @@ const DOMAIN_LABELS = { membrane: "Domain", mallet: "Drum shape", geometric: "Re
                         // the select carries the mounting instead.
                         vkroom: "Mounting" };
 
+// A second secondary select, for a model whose `domain` select already carries something else:
+// the plate's CONTROL SET (plate mapping plan §7) — its domain means supported / free / guitar.
+// frozen.rs's coverage guard reads this table as well as DOMAIN_OPTS, so a control set cannot ship
+// without a test that covers it.
+const CONTROL_OPTS = {
+  plate: [["physical", "Physics — κ, ρ, μ, σ"],
+          ["musical", "Musical — material, pitch or thickness, ring times"]],
+};
+
+// Whether model m's musical controls are on: the damped string carries them on its domain select,
+// the plate on its controls select.
+function musicalOn(m) {
+  if (m === "damped") return domainSel.value === "musical";
+  if (m === "plate") return !!controlsSel && controlsSel.value === "musical";
+  return false;
+}
+
+function populateControls(model) {
+  const opts = CONTROL_OPTS[model];
+  if (!opts || !controlsSel) return;
+  const prev = controlsSel.value;
+  controlsSel.innerHTML = opts.map(([v, l]) => `<option value="${v}">${l}</option>`).join("");
+  if (opts.some(([v]) => v === prev)) controlsSel.value = prev;
+}
+
+// Show or hide one slider's row by its parameter name.
+function showParam(name, show) {
+  const row = document.querySelector(`.slider[data-param="${name}"]`);
+  if (row) row.hidden = !show;
+}
+
 const sliders = {};      // param -> <input>
 const updaters = {};     // param -> fn() that refreshes its value label
 const fixedOf = {};      // param -> decimal places for the value label (re-rangeable)
@@ -658,6 +692,29 @@ function updateVisibility() {
     const regimeHides = usesDomain && el.dataset.hideDomain.split(" ").includes(d);
     el.hidden = modelHides || domainHides || regimeHides;
   });
+  // The musical gates, last. data-musical shows a group only when that model's musical controls
+  // are on (the damped string's domain, the plate's controls select). data-hide-musical hides a
+  // physics slider then — OR-ed onto the passes above for an element they rewrite every time, and
+  // recomputed from scratch for one they never touch (the latch the data-hide-domain pass found).
+  const musical = musicalOn(m);
+  document.querySelectorAll("[data-musical]").forEach((el) => {
+    el.hidden = !(musical && el.dataset.musical.split(" ").includes(m));
+  });
+  document.querySelectorAll("[data-hide-musical]").forEach((el) => {
+    const hide = musical && el.dataset.hideMusical.split(" ").includes(m);
+    const rewritten = el.hasAttribute("data-show") || el.hasAttribute("data-domain")
+      || el.hasAttribute("data-hide-domain");
+    el.hidden = hide || (rewritten && el.hidden);
+  });
+  // The plate's musical group: the input that is NOT set is read out, so its slider hides, and the
+  // custom constants show only for "custom". Reset to shown off the plate, so the damped string's
+  // shared pitch slider never inherits a plate's thickness mode.
+  const plateMusical = m === "plate" && musical;
+  const byPitch = !plateMusical || $("plate-set-by").value === "pitch";
+  showParam("f0", byPitch);
+  showParam("thickness_mm", !byPitch);
+  const custom = plateMusical && $("plate-material").value === "custom";
+  ["custom_E_gpa", "custom_nu", "custom_density"].forEach((k) => showParam(k, custom));
 }
 
 // Re-range sliders to the current model's caps/defaults (see MODEL_RANGES). Merges _default with the
@@ -756,6 +813,10 @@ function updateLambdaHint() {
   if (m === "damped" && domainSel.value === "musical") {
     hint.textContent = "λ is a read-out here: the pitch sets the wave speed, and fs is the "
       + "sample-rate slider. Raise N or fs to keep more partials on the target law.";
+    hint.style.color = "var(--muted)";
+  } else if (m === "plate" && musicalOn(m)) {
+    hint.textContent = "μ is a read-out here: the material and the pitch (or thickness) set κ, and "
+      + "fs is the sample-rate slider. A low μ is costly; μ above 32 is refused as too coarse.";
     hint.style.color = "var(--muted)";
   } else if (m === "plate") {
     const mu = param("mu");
@@ -1325,6 +1386,7 @@ function onControlChange(name) {
 
 modelSel.addEventListener("change", () => {
   populateDomain(modelSel.value);
+  populateControls(modelSel.value);
   prevDomain = domainSel ? domainSel.value : null;
   applyModelRanges();
   updateVisibility();
@@ -1338,6 +1400,14 @@ if (domainSel) domainSel.addEventListener("change", () => {
   updateLambdaHint();
   scheduleAuto();
 });
+// The plate's control set and its material selects re-gate the panel and re-render.
+for (const sel of [controlsSel, $("plate-material"), $("plate-set-by"), $("plate-grain")]) {
+  if (sel) sel.addEventListener("change", () => {
+    updateVisibility();
+    updateLambdaHint();
+    scheduleAuto();
+  });
+}
 const nonlinearChk = $("nonlinear");
 if (nonlinearChk) nonlinearChk.addEventListener("change", scheduleAuto);
 const seedVelChk = $("seed-velocity");
@@ -1358,6 +1428,15 @@ function gatherParams() {
   // explicitly rather than having the backend sniff `domain`, which carries a stale value from
   // whichever model was selected last.
   if (modelSel.value === "airbox") p.walls = domainSel.value;
+  // The plate's control set and its three selects, sent for the plate only so no other model's
+  // request changes. An empty grain means "let the server choose" (along a guitar's length).
+  if (modelSel.value === "plate" && controlsSel) {
+    p.controls = controlsSel.value;
+    p.material = $("plate-material").value;
+    p.set_by = $("plate-set-by").value;
+    const grain = $("plate-grain").value;
+    if (grain) p.grain = grain;
+  }
   for (const k in sliders) p[k] = +sliders[k].value * (scaleOf[k] || 1);
   if (nonlinearChk) p.nonlinear = nonlinearChk.checked;
   if (seedVelChk) p.seed_velocity = seedVelChk.checked;
@@ -1421,6 +1500,7 @@ function b64ToUint8(b64) {
 // The musical domain's read-out: what the targets mapped to, and the drift warning (the human's
 // "allow and warn", parameter-mapping plan §3). Raw numbers from the server, formatted here.
 function showTuning(data) {
+  if (data.model === "plate") { showPlateTuning(data); return; }
   const hint = $("tuning-hint");
   if (!hint) return;
   const t = data.tuning;
@@ -1430,6 +1510,26 @@ function showTuning(data) {
     + `σ₁ = ${g(t.sigma1)}, λ = ${data.lambda}. Exact at f₀ and at partial ${t.anchor} `
     + `(${g(t.f_anchor)} Hz). ${t.warn ? "⚠ " : ""}${t.message}`;
   hint.style.color = t.warn ? "var(--accent-2)" : "var(--muted)";
+}
+
+// The plate's musical read-out (plate mapping plan §7): what the material and targets mapped to,
+// how exactly the simulated plate meets them, and the ring times of the partials the two targets
+// do not pin. Their pitch drift is the horizon strip's job, not repeated here.
+function showPlateTuning(data) {
+  const hint = $("plate-tuning-hint");
+  if (!hint) return;
+  const t = data.tuning;
+  if (!t) { hint.textContent = ""; return; }
+  const g = (x) => Number(x).toPrecision(4);
+  const how = t.set_by === "pitch"
+    ? `for f₀ = ${g(t.f0_target)} Hz the plate must be ${g(t.thickness_mm)} mm thick`
+    : `at ${g(t.thickness_mm)} mm it sounds f₀ = ${g(t.f0)} Hz`;
+  const rings = (t.partials || []).map((q) => `${g(q.f)} Hz → ${g(q.t60)} s`).join(", ");
+  hint.textContent = `→ ${t.material}${t.grain ? `, grain along ${t.grain}` : ""}: ${how}. `
+    + `κ = ${g(t.kappa)} m²/s, ρ_s = ${g(t.rho_s)} kg/m², σ₀ = ${g(t.sigma0)}, `
+    + `σ₁ = ${g(t.sigma1)}, μ = ${t.mu}. Anchor ${g(t.anchor_frequency)} Hz. ${t.message} `
+    + `Ring times: ${rings}. (${t.source})`;
+  hint.style.color = t.crowded ? "var(--accent-2)" : "var(--muted)";
 }
 
 function applyPayload(data) {
@@ -5937,8 +6037,18 @@ function applyUrlParams() {
   const m = q.get("model");
   if (m && [...modelSel.options].some((o) => o.value === m)) modelSel.value = m;
   populateDomain(modelSel.value);          // options depend on the (possibly just-set) model
+  populateControls(modelSel.value);
   const d = q.get("domain");
   if (d && domainSel && [...domainSel.options].some((o) => o.value === d)) domainSel.value = d;
+  // ?controls=musical, and the plate's three selects by their request keys, for the deep link
+  // and the headless check.
+  const c = q.get("controls");
+  if (c && controlsSel && [...controlsSel.options].some((o) => o.value === c)) controlsSel.value = c;
+  for (const [key, id] of [["material", "plate-material"], ["set_by", "plate-set-by"],
+                           ["grain", "plate-grain"]]) {
+    const v = q.get(key), sel = $(id);
+    if (v !== null && sel && [...sel.options].some((o) => o.value === v)) sel.value = v;
+  }
   // Seed the regime tracker so the FIRST domain change after a deep link knows what it is leaving.
   prevDomain = domainSel ? domainSel.value : null;
 }
@@ -5961,6 +6071,15 @@ function applyUrlSliders() {
   const notes = [];
   new URLSearchParams(location.search).forEach((raw, key) => {
     if (key === "model" || key === "domain") return;
+    // The plate's selects, set by applyUrlParams; a value no option carries is reported, not
+    // swallowed (the rule above, for a select).
+    const selId = { controls: "controls", material: "plate-material", set_by: "plate-set-by",
+                    grain: "plate-grain" }[key];
+    if (selId) {
+      const sel = $(selId);
+      if (!sel || sel.value !== raw) notes.push(`${key}: ${raw} is not an option here`);
+      return;
+    }
     if (key === "nonlinear" || key === "seed_velocity") {
       const chk = key === "nonlinear" ? nonlinearChk : seedVelChk;
       if (!chk) { notes.push(`${key}: no such control`); return; }

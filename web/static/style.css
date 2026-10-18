@@ -62,10 +62,13 @@ fieldset.group {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 10px 12px 4px;
+  min-width: 0;          /* a wide select must not stretch the group past the panel */
 }
 legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: 0 4px; }
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field span { color: var(--muted); font-size: 12px; }
+fieldset.group .field { margin: 4px 0 8px; }
+fieldset.group select { width: 100%; }
 select {
   background: var(--card); color: var(--ink);
   border: 1px solid var(--line); border-radius: 6px;

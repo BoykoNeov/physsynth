@@ -702,9 +702,17 @@ fn every_fixture_file_is_run() {
 ///   requests it equals are frozen in `strings.json`.
 /// - `damped:musical` is the musical control set (`string_tuning`), held by that same file through
 ///   the rendered pluck.
+/// - `plate:controls:physical` is the plate's original control set, named by a second select
+///   (`CONTROL_OPTS`, plate mapping plan §7); `plate_musical.rs` asserts that naming it, with every
+///   musical key riding along, changes no byte of the payload — and the unnamed requests are
+///   frozen in `plate.json`.
+/// - `plate:controls:musical` is the plate's musical control set (`plate_tuning`), held by that
+///   same file through the rendered audio and the run's own energy.
 const BORN_AFTER_THE_FREEZE: &[(&str, &str, &str)] = &[
     ("damped", "physical", "tests/string_musical.rs"),
     ("damped", "musical", "tests/string_musical.rs"),
+    ("plate", "controls:physical", "tests/plate_musical.rs"),
+    ("plate", "controls:musical", "tests/plate_musical.rs"),
 ];
 
 /// The population comes from the model list and from the front-end's own domain table, so a scene
@@ -724,6 +732,10 @@ fn every_model_and_every_domain_the_viewer_offers_is_frozen() {
             if let Some(d) = req.get(key).and_then(Value::as_str) {
                 seen.insert((m.clone(), d.to_owned()));
             }
+            // a model's second select (CONTROL_OPTS) is named as `controls:<value>`
+            if let Some(c) = req.get("controls").and_then(Value::as_str) {
+                seen.insert((m.clone(), format!("controls:{c}")));
+            }
             // a refusal does not count as covering a scene
             if case["expect"].get("error").is_none() {
                 models.insert(m);
@@ -740,8 +752,11 @@ fn every_model_and_every_domain_the_viewer_offers_is_frozen() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/static/app.js"),
     )
     .unwrap();
-    let offered = domain_opts(&app);
+    let mut offered = select_opts(&app, "DOMAIN_OPTS", "");
     assert!(offered.len() >= 25, "{offered:?}");
+    let controls = select_opts(&app, "CONTROL_OPTS", "controls:");
+    assert!(controls.len() >= 2, "{controls:?}");
+    offered.extend(controls);
     let mut exempt: BTreeSet<(String, String)> = BTreeSet::new();
     for &(m, d, covered_by) in BORN_AFTER_THE_FREEZE {
         let key = (m.to_owned(), d.to_owned());
@@ -771,12 +786,13 @@ fn every_model_and_every_domain_the_viewer_offers_is_frozen() {
     );
 }
 
-/// `DOMAIN_OPTS` in `app.js`, read as text: `model: [["value", "label"], ...]` entries up to the
-/// closing `};`. Comment lines are skipped.
-fn domain_opts(app: &str) -> BTreeSet<(String, String)> {
+/// A select table in `app.js` (`DOMAIN_OPTS`, `CONTROL_OPTS`), read as text: `model: [["value",
+/// "label"], ...]` entries up to the closing `};`, each value carrying `prefix`. Comment lines are
+/// skipped.
+fn select_opts(app: &str, table: &str, prefix: &str) -> BTreeSet<(String, String)> {
     let start = app
-        .find("const DOMAIN_OPTS = {")
-        .expect("DOMAIN_OPTS moved; this guard derives its population from it");
+        .find(&format!("const {table} = {{"))
+        .unwrap_or_else(|| panic!("{table} moved; this guard derives its population from it"));
     let body = &app[start..];
     let body = &body[..body.find("\n};").unwrap()];
     let mut out = BTreeSet::new();
@@ -795,7 +811,7 @@ fn domain_opts(app: &str) -> BTreeSet<(String, String)> {
         while let Some(i) = rest.find("[\"") {
             rest = &rest[i + 2..];
             let end = rest.find('"').unwrap();
-            out.insert((model.clone(), rest[..end].to_owned()));
+            out.insert((model.clone(), format!("{prefix}{}", &rest[..end])));
             rest = &rest[end..];
         }
     }

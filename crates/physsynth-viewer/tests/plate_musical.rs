@@ -263,3 +263,28 @@ fn unreachable_settings_come_back_as_clean_errors() {
         assert!(msg.contains(needle), "{bad}: {msg}");
     }
 }
+
+#[test]
+fn the_material_menu_is_the_cores_preset_list() {
+    // index.html lists the materials by hand; a preset added or renamed in core without the menu
+    // following would be unreachable from the browser, or a menu entry the server refuses.
+    let html = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/static/index.html"),
+    )
+    .unwrap();
+    let start = html
+        .find("<select id=\"plate-material\">")
+        .expect("the menu moved");
+    let body = &html[start..start + html[start..].find("</select>").unwrap()];
+    let menu: Vec<&str> = body
+        .split("<option value=\"")
+        .skip(1)
+        .map(|s| &s[..s.find('"').unwrap()])
+        .collect();
+    let mut want: Vec<&str> = physsynth_core::plate_tuning::PRESETS
+        .iter()
+        .map(|p| p.name)
+        .collect();
+    want.push("custom");
+    assert_eq!(menu, want);
+}
