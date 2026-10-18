@@ -12,6 +12,7 @@
 //! u^{n+1} = (2 u^n - (1 - sigma k) u^{n-1} + c^2 k^2 L u^n) / (1 + sigma k)
 //! ```
 //!
+//! plus, when `sigma1 > 0`, the frequency-dependent loss `+ 2 sigma1 Δ u_t` (§ below), and
 //! where `L` is the 5-point Laplacian restricted to the live nodes of a domain mask
 //! (`ops2d::laplacian_from_mask`). **Two domains share this one type via the mask**: a rectangle,
 //! whose `sin·sin` modes are exact and which is therefore the harness's unit test, and a circle —
@@ -37,6 +38,27 @@
 //! the 1-D case. And unlike 1-D there is **no dispersionless lambda**: the 5-point scheme is
 //! anisotropic at every Courant number, so tuning to the ceiling buys stability margin, not
 //! exactness.
+//!
+//! # The frequency-dependent loss, `sigma1`
+//!
+//! Born after the Python model (`docs/dev/membrane-mapping-plan.md` §2). Bilbao's second loss term
+//! in its **explicit** form, a backward difference in time:
+//!
+//! ```text
+//! delta_tt u = c^2 L u - 2 sigma delta_t. u + 2 sigma1 L delta_t- u
+//! numerator += 2 sigma1 k L (u^n - u^{n-1})
+//! ```
+//!
+//! The centred spelling the plate uses would put `-sigma1 k L` on `u^{n+1}` and give this model a
+//! solve; the backward difference leaves `u^{n+1}`'s coefficient at `(1 + sigma k)`, so the
+//! mallet's local driving-point admittance and the room seam's diagonal `A` stay true. It costs two
+//! things. The stability bound tightens to `lambda^2 + 4 sigma1 k / h^2 <= 1/2`
+//! ([`ParamError::LossCflViolated`]), and the stored energy gains a term,
+//! `- (sigma1 k / 2) <-L delta_t- u, delta_t- u>`, whose non-negativity is that bound — without it
+//! the books do not close. Each mode keeps a two-step recurrence whose loss is `sigma + sigma1 mu`
+//! (`mu` its eigenvalue of `-L`): ring time falling as frequency **squared**, since the loss
+//! operator is the stiffness operator. Everything `sigma1` adds is **skipped** at `sigma1 = 0`,
+//! not multiplied by zero, so every trajectory and energy that existed before it is bit-identical.
 //!
 //! # Operation order
 //!
@@ -94,6 +116,11 @@ pub enum ParamError {
     CflViolated(f64),
     /// The mask selected no unknowns — the grid is coarser than the shape.
     EmptyMask,
+    /// `sigma1 < 0`, or not finite.
+    NegativeSigma1,
+    /// `lambda^2 + 4 sigma1 k / h^2 > 1/2` — the bound the explicit `sigma1` term tightens. Carries
+    /// the left-hand side. Only a `sigma1 > 0` reaches it; `sigma1 = 0` keeps [`Self::CflViolated`].
+    LossCflViolated(f64),
 }
 
 impl std::fmt::Display for ParamError {
@@ -118,6 +145,15 @@ impl std::fmt::Display for ParamError {
             ParamError::EmptyMask => write!(
                 f,
                 "the domain mask has no interior (live) nodes; refine the grid."
+            ),
+            ParamError::NegativeSigma1 => write!(
+                f,
+                "sigma1 (frequency-dependent loss) must be finite and >= 0."
+            ),
+            ParamError::LossCflViolated(v) => write!(
+                f,
+                "CFL with loss violated: lambda^2 + 4*sigma1*k/h^2 = {v:.6} > 1/2. Lower sigma1 or \
+                 the wave speed, raise fs, or coarsen the grid (decrease N)."
             ),
         }
     }
@@ -169,6 +205,9 @@ pub struct Params {
     pub n: usize,
     /// Frequency-independent loss for the `-2 sigma u_t` term.
     pub sigma: f64,
+    /// Frequency-dependent loss for the `+2 sigma1 Δ u_t` term (m²/s); `0` unless
+    /// [`Params::with_sigma1`] set it.
+    pub sigma1: f64,
     /// Wave speed `sqrt(T / rho)` (m/s).
     pub c: f64,
     /// Timestep `1 / fs` (s).
@@ -289,6 +328,7 @@ impl Params {
             fs,
             n,
             sigma,
+            sigma1: 0.0,
             c,
             k,
             h,
@@ -302,6 +342,30 @@ impl Params {
             x,
             y,
         })
+    }
+
+    /// The same membrane with the frequency-dependent loss `sigma1` (see the module header).
+    ///
+    /// A setter rather than a tenth argument to [`Params::new`], whose call sites are many and
+    /// positional. `sigma1 = 0` returns the membrane unchanged, bound and all; `sigma1 > 0` is held
+    /// to the tightened bound `lambda^2 + 4 sigma1 k / h^2 <= 1/2`, with the same slack the plain
+    /// CFL check allows.
+    ///
+    /// # Errors
+    /// [`ParamError::NegativeSigma1`] for a negative or non-finite value;
+    /// [`ParamError::LossCflViolated`] past the bound.
+    pub fn with_sigma1(mut self, sigma1: f64) -> Result<Params, ParamError> {
+        if !(sigma1 >= 0.0 && sigma1.is_finite()) {
+            return Err(ParamError::NegativeSigma1);
+        }
+        if sigma1 > 0.0 {
+            let v = self.lam * self.lam + 4.0 * sigma1 * self.k / (self.h * self.h);
+            if v > 0.5 + LAMBDA_TOL {
+                return Err(ParamError::LossCflViolated(v));
+            }
+        }
+        self.sigma1 = sigma1;
+        Ok(self)
     }
 
     /// Number of unknowns.
@@ -398,8 +462,9 @@ pub fn step_into(u: &[f64], u_prev: &[f64], out: &mut [f64], p: &Params) {
     }
 }
 
-/// The step's **numerator** `2 u^n - (1 - sigma k) u^{n-1} + c^2 k^2 L u^n`, before the
-/// `(1 + sigma k)` division — written into `out`.
+/// The step's **numerator** `2 u^n - (1 - sigma k) u^{n-1} + c^2 k^2 L u^n`
+/// `[+ 2 sigma1 k L (u^n - u^{n-1})]`, before the `(1 + sigma k)` division — written into `out`.
+/// The bracket is the explicit frequency-dependent loss, present only when `sigma1 > 0`.
 ///
 /// Split out of [`step_into`] rather than copied, because it has a second caller with a different
 /// denominator: [`crate::airbox_wrap::MembraneSeam`] puts the air load *inside* an `A` matrix whose
@@ -423,6 +488,16 @@ pub fn step_numerator_into(u: &[f64], u_prev: &[f64], out: &mut [f64], p: &Param
 
     for i in 0..n {
         out[i] = (2.0 * u[i] - one_minus_sk * u_prev[i]) + c2k2 * lu[i];
+    }
+
+    // Absent, not zero-weighted, when `sigma1 = 0`: the line above is the whole step there.
+    if p.sigma1 > 0.0 {
+        let du: Vec<f64> = u.iter().zip(u_prev).map(|(a, b)| a - b).collect();
+        let ldu = p.l.matvec(&du);
+        let two_s1k = 2.0 * p.sigma1 * p.k;
+        for i in 0..n {
+            out[i] += two_s1k * ldu[i];
+        }
     }
 }
 
@@ -478,6 +553,20 @@ pub fn energy(u: &[f64], u_prev: &[f64], p: &Params) -> f64 {
     }
     let p_np = -h2 * dot;
     let potential = ((0.5 * p.c) * p.c) * p_np;
+
+    if p.sigma1 > 0.0 {
+        // `- (sigma1 k / 2) <-L delta_t- u, delta_t- u>`: the backward-difference loss's share of
+        // the stored energy (module header). Skipped at `sigma1 = 0`, so the sum above is then the
+        // whole energy, spelled as it always was.
+        let dt_u: Vec<f64> = (0..n).map(|i| (u[i] - u_prev[i]) / p.k).collect();
+        let l_dt = p.l.matvec(&dt_u);
+        let mut q = 0.0;
+        for i in 0..n {
+            q += l_dt[i] * dt_u[i];
+        }
+        let correction = (0.5 * p.sigma1 * p.k) * (h2 * q);
+        return p.rho * (kinetic + potential + correction);
+    }
 
     p.rho * (kinetic + potential)
 }

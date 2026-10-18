@@ -369,3 +369,36 @@ fundamental; modes 1–2 the first cos/sin pair; shifts in cents from the in-vac
 - **So "targets met before the air" would leave the room drum 1–5 semitones flat**, and with
   absorbing walls its ring times bounded by radiation. §7.3's mapping question is the page's main
   decision.
+
+---
+
+## 10. Part 1 result — the loss term (2026-10-18)
+
+`membrane::Params::sigma1`, set by `Params::with_sigma1` (refuses a negative or non-finite value,
+`NegativeSigma1`, and `λ² + 4σ₁k/h² > ½`, `LossCflViolated`; `σ₁ = 0` returns the membrane as it
+was, the plain CFL path untouched). `step_numerator_into` gains `2σ₁kL(u − u⁻)` and `energy` the
+correction `−(σ₁k/2)⟨−Lδ_t−u, δ_t−u⟩`, both skipped at `σ₁ = 0`. No client changed: the mallet
+steps through `Membrane::step`, the room seam's right-hand side is `step_numerator_into` and its
+energy `Membrane::energy`.
+
+Bars, `crates/physsynth-core/tests/membrane_loss.rs` (nine), `−L` re-applied from the mask in the
+test and the rectangle's eigenvalues closed form:
+
+- three rectangle modes follow their recurrence with `σ₀ + σ₁μ` to `1e-9` of the amplitude; the
+  same run without `σ₁` misses by `> 1e-4`;
+- the energy books close per step to `1e-10` of the start on both shapes, `σ₁`'s own work above
+  5 %; judged by the `σ₁ = 0` energy formula the same run misses by `> 1e-7` (the control);
+- `σ₁` alone is passive on both shapes;
+- `σ₁ = 0` is the old membrane bit for bit (state and energy), and a membrane exactly at the plain
+  CFL ceiling stays legal with `σ₁ = 0` and is refused with any `σ₁ > 0`;
+- the start-up is the lossless Taylor step either way;
+- the bound: accepted at `0.999×` the sufficient limit, refused at `1.001×`; the grid's top mode
+  stays bounded at `0.99×` the *exact* limit and grows past `10³` at `1.01×` (set by hand past the
+  refusal), the sufficient limit within 1 % below the exact one;
+- the struck drum's books (coupled total plus the head's `σ₁` work) close to `1e-10`;
+- the drum in a room, baffled and suspended: scene total plus the head's loss work flat to
+  `1e-10`, the port's two ledgers agree to `1e-12`.
+
+**Plants, all red** (a copy of the file restored after each, compared byte for byte): the term on
+`u` alone; at half strength; with its sign flipped; the energy correction dropped; its sign
+flipped; the bound not checked.
