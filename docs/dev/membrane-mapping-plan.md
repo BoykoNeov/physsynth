@@ -239,6 +239,16 @@ head (low `c/c₀`) radiates little, a tight one more.
   that corrects for the air. Not pre-decided beyond this batch.
 - Musical controls only, or the physical set too (the page is new; there is no freeze to keep).
 
+**The human's calls after Part 0 (2026-10-18):**
+
+1. **Tune the drum, show the air.** The musical targets are met by the drum in vacuo; the page
+   measures each mode's pitch and ring time in the room (the head projected on its in-vacuo modes,
+   §9) and shows the shift. One run, no iteration.
+2. **Walls: absorbing by default, rigid offered** — absorbing (`ζ = 1` on every face but a baffle)
+   is where the shift belongs to the drum; rigid lets the room's resonances take over.
+3. **Mounting: both,** in a wall (baffled) and hanging (suspended).
+4. **Controls: both, behind the switch** the drum and plate pages use.
+
 ---
 
 ## 8. Order of work
