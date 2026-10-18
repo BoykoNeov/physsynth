@@ -37,6 +37,9 @@ proportional (exact but highs die as f²).
 - The Bash tool fails on LONG heredocs ("unexpected EOF while looking for matching `''") — write the
   block with the Write tool to W:\temp\claude and `cat >>` it.
 - No Python even for doc edits (I slipped once; Python text mode wrote CRLF — git normalised it).
+- A new INPUT combination (here: grain in the viewer) breaks old read-outs that assumed it never
+  happens — grep every function that rebuilds or describes the object (spectrum markers, sweeps).
+- Viewer bars must send every key OFF the server fallback, or a misspelled key passes silently.
 
 Related: [[parameter-mapping-state]], [[theta-loss-lock-state]], [[resolution-horizon-state]],
 [[orthotropic-plate-state]], [[free-plate-state]], [[unphysical-params-are-a-feature]].
