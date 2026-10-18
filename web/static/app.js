@@ -48,6 +48,8 @@ const LABELS = {
   // frequency and airload's is the saturated plane-wave value, so any qualifier in a shared label
   // would be wrong for one of them. The per-model hint carries the meaning instead.
   radiation_R: "radiation R", air_corner: "air corner f_c", radiation_weight: "radiation a",
+  f0: "pitch f₀", inharmonicity: "inharmonicity B", t60_low: "ring time, f₀",
+  t60_high: "ring time, high", f_ref: "“high” means", sample_rate: "sample rate",
 };
 
 // Per-model slider re-ranging (min/max/step/fixed/val) applied on model switch. The backend mirrors
@@ -454,8 +456,13 @@ const MODEL_RANGES = {
 // Secondary select repurposed per model: geometry (membrane), boundary (plate / von Kármán) or
 // REGIME (the geometric string — three claims, one string, cheapest first).
 const DOMAIN_MODELS = ["membrane", "mallet", "plate", "vk", "geometric", "sympathetic", "bore",
-                       "reed", "platebody", "tension", "airbox", "vkroom"];
+                       "reed", "platebody", "tension", "airbox", "vkroom", "damped"];
 const DOMAIN_OPTS = {
+  // The damped string's select carries the CONTROL SET, not a physical regime. Physics leads so a
+  // returning user finds the sliders they had; "musical" maps pitch and ring times onto T, κ, σ₀,
+  // σ₁ server-side (parameter-mapping plan §6) and hides those four.
+  damped: [["physical", "Physics — T, κ, σ₀, σ₁"],
+           ["musical", "Musical — pitch, inharmonicity, ring times"]],
   membrane: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
   mallet: [["circle", "Circle (drumhead)"], ["rectangle", "Rectangle"]],
   // The plate's select gains a third value that carries a SHAPE where the other two carry a
@@ -509,6 +516,7 @@ const DOMAIN_OPTS = {
 const DOMAIN_LABELS = { membrane: "Domain", mallet: "Drum shape", geometric: "Regime",
                         sympathetic: "Regime", bore: "Far end", reed: "Far end",
                         platebody: "Body edge", tension: "Regime", airbox: "Walls",
+                        damped: "Controls",
                         // not "Boundary": the boundary is PINNED to free here and
                         // the select carries the mounting instead.
                         vkroom: "Mounting" };
@@ -745,7 +753,11 @@ function updateGuitarHint() {
 function updateLambdaHint() {
   const m = modelSel.value;
   const hint = $("lambda-hint");
-  if (m === "plate") {
+  if (m === "damped" && domainSel.value === "musical") {
+    hint.textContent = "λ is a read-out here: the pitch sets the wave speed, and fs is the "
+      + "sample-rate slider. Raise N or fs to keep more partials on the target law.";
+    hint.style.color = "var(--muted)";
+  } else if (m === "plate") {
     const mu = param("mu");
     hint.textContent = `μ = κ·k/h² = ${mu.toFixed(2)}  (implicit → no CFL; large μ is coarse-but-`
       + `stable, cost rises at LOW μ)`;
@@ -1406,8 +1418,23 @@ function b64ToUint8(b64) {
   return bytes;
 }
 
+// The musical domain's read-out: what the targets mapped to, and the drift warning (the human's
+// "allow and warn", parameter-mapping plan §3). Raw numbers from the server, formatted here.
+function showTuning(data) {
+  const hint = $("tuning-hint");
+  if (!hint) return;
+  const t = data.tuning;
+  if (!t) { hint.textContent = ""; return; }
+  const g = (x) => Number(x).toPrecision(4);
+  hint.textContent = `→ T = ${g(t.T)} N, κ = ${g(t.kappa)}, σ₀ = ${g(t.sigma0)}, `
+    + `σ₁ = ${g(t.sigma1)}, λ = ${data.lambda}. Exact at f₀ and at partial ${t.anchor} `
+    + `(${g(t.f_anchor)} Hz). ${t.warn ? "⚠ " : ""}${t.message}`;
+  hint.style.color = t.warn ? "var(--accent-2)" : "var(--muted)";
+}
+
 function applyPayload(data) {
   payload = data;
+  showTuning(data);
   dims = (data.frames && data.frames.dims) || 1;
   frames = b64ToFloat32(data.frames.b64);
   nFrames = data.frames.n_frames;

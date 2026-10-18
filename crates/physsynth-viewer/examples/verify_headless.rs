@@ -1,7 +1,7 @@
 //! Headless-browser check of the web viewer: what the page RENDERED, not what the server sent.
 //!
 //! The payload tests prove the data is right; this proves the page drew it. It drives a real Chrome
-//! over the DevTools protocol, loads the running viewer with a `?model=…&domain=…` deep link per
+//! over the DevTools protocol, loads the running viewer with a `?model=â¦&domain=â¦` deep link per
 //! case, waits for the page's own "ok" status, then reads the rendered read-outs and samples the
 //! main canvas's pixels (a byte-order bug paints background only, or uniform garbage). A screenshot
 //! is saved per case.
@@ -31,7 +31,7 @@
 //! `tests/deps.rs` walks only the dependencies the viewer SHIPS, so its whole tree would go
 //! unreviewed. What this needs is small: one handshake, masked text frames out, text frames in
 //! (possibly fragmented), and a pong for a ping. The same judgement as the server's: `std::net`,
-//! no framework (retirement plan §6.1, §23.19).
+//! no framework (retirement plan Â§6.1, Â§23.19).
 
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -69,9 +69,10 @@ const PROBE: &str = r"
     energy: document.getElementById('energy-readout').textContent,
     diag2: document.getElementById('partials-readout').textContent,
     horizon: (document.getElementById('horizon').hidden ? '(hidden)'
-              : document.getElementById('horizon-badge').textContent + ' — '
+              : document.getElementById('horizon-badge').textContent + ' â '
                 + document.getElementById('horizon-line').textContent),
     urlNotes: (window.__urlParamNotes || []).join(' | '),
+    tuning: (document.getElementById('tuning-hint') || {}).textContent || '',
     hzMark: window.__horizonMark || null,
     warm: warm, cool: cool, bg: bg, other: other, total: d.length / 4,
   });
@@ -79,7 +80,7 @@ const PROBE: &str = r"
 ";
 
 /// What the second diagnostic panel may have decided about the horizon. The vocabulary lives in
-/// two files — `markHorizon` in `web/static/app.js` emits it, this grades it — so
+/// two files â `markHorizon` in `web/static/app.js` emits it, this grades it â so
 /// `tests/front_end.rs` asserts the two agree; a reason this set does not know fails LOUDLY.
 const HORIZON_MARK_REASONS: &[&str] =
     &["refused", "whole-grid", "off-panel", "zero-modes", "drawn"];
@@ -97,6 +98,12 @@ const CASES: &[(&str, &str)] = &[
         "string_damped_lossy",
         "model=damped&sigma0=2&sigma1=0.0001&kappa=1",
     ),
+    // The musical controls (parameter-mapping plan §6), on the coarse low stiff string that
+    // WARNS: the read-out must name the mapped physics and the drift.
+    (
+        "string_damped_musical",
+        "model=damped&domain=musical&N=64&f0=82.4&inharmonicity=0.01&audio_duration=0.5",
+    ),
     ("string_tension", "model=tension"),
     // The tension string's second regime: the same string past its parametric threshold, where the
     // Duffing panel refuses to go. Two claim runs plus the tongue sweep.
@@ -105,7 +112,7 @@ const CASES: &[(&str, &str)] = &[
     ("plate_supported", "model=plate&domain=supported"),
     ("plate_free", "model=plate&domain=free"),
     // The only 2-D field with a NON-CONVEX mask: what a headless render sees and a payload test
-    // cannot is the outline actually painted — masked exterior, both bouts, the waist between.
+    // cannot is the outline actually painted â masked exterior, both bouts, the waist between.
     // N and mu are pinned low because the claim sweep is ~24 eigensolves on top of the audio run.
     (
         "plate_guitar",
@@ -140,14 +147,14 @@ const CASES: &[(&str, &str)] = &[
     ("radbody", "model=radbody"),
     ("airload", "model=airload"),
     // The first `dims: 3` field, shipped as a slice set. Plane buffers are C order (nv fastest), and
-    // a front-end decoding them u-fastest TRANSPOSES the picture — plausible banding, not an error.
+    // a front-end decoding them u-fastest TRANSPOSES the picture â plausible banding, not an error.
     // Only pixels catch that.
     ("airbox", "model=airbox"),
     // The only lossy wall, and the case that proves the zeta slider is reachable.
     ("airbox_absorbing", "model=airbox&domain=absorbing"),
     // A DUAL field pane, reusing the slice decode above in a pane no payload test looks at. Found
     // the hard way: `requestAnimationFrame` does not fire in a background tab, so a correct field
-    // reads as a blank canvas — this driver's own foregrounded load is what makes pixels mean
+    // reads as a blank canvas â this driver's own foregrounded load is what makes pixels mean
     // anything. Kept short: the default 0.12 s render is ~23 s.
     ("vkroom", "model=vkroom&audio_duration=0.02"),
     (
@@ -338,7 +345,7 @@ impl WebSocket {
     }
 }
 
-/// 16 bytes that differ between calls — a WebSocket key and mask need no more than that.
+/// 16 bytes that differ between calls â a WebSocket key and mask need no more than that.
 fn nonce() -> [u8; 16] {
     use std::hash::{BuildHasher, Hasher};
     let mut out = [0u8; 16];
@@ -415,7 +422,7 @@ impl Cdp {
 
 /// The first `page` target on the port, polling until `timeout` is up. Chrome on Windows can
 /// launch through a stub that hands off and exits, so the endpoint is the only thing that means
-/// the browser is up — never the launched process's exit.
+/// the browser is up â never the launched process's exit.
 fn devtools_page(timeout: Duration) -> Option<Value> {
     let end = Instant::now() + timeout;
     loop {
@@ -538,7 +545,7 @@ fn run_case(
 ) -> std::io::Result<bool> {
     cdp.cmd("Page.navigate", json!({"url": format!("{base}/?{query}")}))?;
     // Up to ~90 s: the phantom regime's fixed 0.10 s window at fs ~ 159 kHz is ~45 s of Newton
-    // steps. A case failing on "computing…" on a loaded machine is the wait, not the code — check
+    // steps. A case failing on "computingâ¦" on a loaded machine is the wait, not the code â check
     // the render time before suspecting anything else.
     for _ in 0..450 {
         let status = cdp.evaluate("document.getElementById('status').textContent")?;
@@ -562,8 +569,16 @@ fn run_case(
     // so a case can be asked for an answer, not a number.
     let horizon = probe["horizon"].as_str().unwrap_or("(hidden)");
     let (mark_ok, mark_note) = horizon_mark_ok(&probe["hzMark"], horizon);
+    // The musical domain's read-out must say what the targets mapped to; elsewhere it is empty.
+    let tuning = probe["tuning"].as_str().unwrap_or("");
+    let tuning_ok = if query.contains("domain=musical") {
+        tuning.contains("Exact at f₀") && tuning.contains("cents")
+    } else {
+        true
+    };
     let status = probe["status"].as_str().unwrap_or("");
     let ok = status.starts_with("ok")
+        && tuning_ok
         && painted > 2000
         && notes.is_empty()
         && horizon != "(hidden)"
@@ -574,6 +589,12 @@ fn run_case(
     println!("  energy   : {}", first_line(&probe["energy"]));
     println!("  diag2    : {}", first_line(&probe["diag2"]));
     println!("  horizon  : {horizon}");
+    if !tuning.is_empty() {
+        println!(
+            "  tuning   : {tuning}{}",
+            if tuning_ok { "" } else { "   <- MISSING" }
+        );
+    }
     println!(
         "  hz-mark  : {mark_note}{}",
         if mark_ok { "" } else { "   <- MISMATCH" }
@@ -704,7 +725,7 @@ fn run() -> i32 {
         None => {
             println!(
                 "could not reach a DevTools endpoint on :{PORT}. Start a browser yourself and \
-                 re-run — this will attach to it:\n  chrome --headless=new \
+                 re-run â this will attach to it:\n  chrome --headless=new \
                  --remote-debugging-port={PORT} --user-data-dir=<a fresh dir> about:blank"
             );
             2

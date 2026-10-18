@@ -16,6 +16,9 @@ use physsynth_core::string_damped::{self as damped, DampedStiffString};
 use physsynth_core::string_ideal::{self as ideal, Boundary, IdealString};
 use physsynth_core::string_nonlinear::{self as nonlinear, TensionModulatedString};
 use physsynth_core::string_stiff::{self as stiff, StiffString};
+use physsynth_core::string_tuning::{
+    partial_drift, stretched_partial, tune_damped_string, Targets, Tuning,
+};
 use serde_json::{json, Value};
 
 use crate::energy::{energy_block, EnergyOpts};
@@ -222,6 +225,9 @@ pub struct Built {
     pub fs: f64,
     pub sigma_zero: bool,
     pub oracle_2sigma: f64,
+    /// The musical targets and their mapping, when the damped string was built in the
+    /// `musical` domain (`build_musical`); `None` on every other path.
+    pub tuning: Option<(Tuning, Targets)>,
 }
 
 /// `min(a, b, c)` as Python's builtin does it — the first element unless a later one is `<` it,
@@ -235,6 +241,107 @@ fn py_min3(a: f64, b: f64, c: f64) -> f64 {
         m = c;
     }
     m
+}
+
+/// The musical domain's sample-rate range (Hz). In this domain `fs` is an input — the pitch fixes
+/// `c`, so the Courant number becomes a read-out — and the cap is the same cost guard `lambda`'s
+/// floor is on the physics path.
+pub const MUSICAL_FS_MIN: f64 = 8000.0;
+/// See [`MUSICAL_FS_MIN`].
+pub const MUSICAL_FS_MAX: f64 = 192_000.0;
+
+/// True when a damped-string request asks for musical controls (`domain: "musical"`).
+///
+/// Keyed on the domain, not on the presence of `f0`: the front-end sends every slider it has to
+/// every model, so a musical key's presence says nothing about what the user chose.
+pub fn is_musical(p: &Value) -> bool {
+    p.get("domain").and_then(Value::as_str) == Some("musical")
+}
+
+/// The damped string built from musical targets (`docs/dev/parameter-mapping-plan.md` §6).
+///
+/// `T`, `kappa`, `sigma0` and `sigma1` come from [`tune_damped_string`]; the request's own values
+/// of those keys and of `lambda` are ignored, though the shared prefix of [`build_resonator`]
+/// still parsed and range-checked them.
+fn build_musical(p: &Value, l: f64, rho: f64, n: i64) -> Result<Built, Refusal> {
+    let theta = fnum(p, "theta", 0.28)?;
+    let targets = Targets {
+        f0: fnum(p, "f0", 110.0)?,
+        inharmonicity: fnum(p, "inharmonicity", 1e-4)?,
+        t60_low: fnum(p, "t60_low", 3.0)?,
+        t60_high: fnum(p, "t60_high", 0.8)?,
+        f_ref: fnum(p, "f_ref", 2000.0)?,
+    };
+    let fs = fnum(p, "sample_rate", 44100.0)?;
+    if !(MUSICAL_FS_MIN..=MUSICAL_FS_MAX).contains(&fs) {
+        return Err(Refusal::Param(format!(
+            "sample_rate must be in [{}, {}] Hz, got {}.",
+            MUSICAL_FS_MIN,
+            MUSICAL_FS_MAX,
+            physsynth_core::fmt::py_float(fs)
+        )));
+    }
+    let tu = tune_damped_string(l, rho, fs, n as usize, theta, &targets)
+        .map_err(|e| Refusal::Param(e.to_string()))?;
+    let params = damped::Params::new(
+        l, tu.t, rho, fs, n, tu.kappa, tu.sigma0, tu.sigma1, theta, true,
+    )
+    .map_err(construction)?;
+    Ok(Built {
+        res: StringRes::Damped(DampedStiffString::new(params)),
+        c: tu.c,
+        l,
+        n,
+        fs,
+        sigma_zero: tu.sigma0 == 0.0 && tu.sigma1 == 0.0,
+        oracle_2sigma: 2.0 * tu.sigma0,
+        tuning: Some((tu, targets)),
+    })
+}
+
+/// The `tuning` block of a musical-domain payload: what was asked, what it maps to, and how far
+/// the partials the mapping does not pin drift (the human's "allow and warn", plan §3).
+fn tuning_block(b: &Built) -> Option<Value> {
+    let (tu, tg) = b.tuning.as_ref()?;
+    let StringRes::Damped(r) = &b.res else {
+        unreachable!("only the damped string is built from targets")
+    };
+    let theta = r.p.theta;
+    let d = partial_drift(b.l, b.n as usize, b.fs, theta, tu, tg);
+    let warn = d.warn(tu.anchor);
+    let message = if warn {
+        format!(
+            "partials {}-{} are not held to the target law: the worst, partial {}, is {:.1} \
+             cents off. A finer grid (N) or a higher sample rate brings them in.",
+            d.horizon + 1,
+            tu.anchor - 1,
+            d.worst_mode,
+            d.worst_between
+        )
+    } else {
+        format!(
+            "every partial up to the anchor is within {} cents of the target law.",
+            physsynth_core::string_tuning::HORIZON_CENTS
+        )
+    };
+    Some(json!({
+        "f0": num(tg.f0),
+        "inharmonicity": num(tg.inharmonicity),
+        "t60_low": num(tg.t60_low),
+        "t60_high": num(tg.t60_high),
+        "f_ref": num(tg.f_ref),
+        "anchor": int(tu.anchor as i64),
+        "f_anchor": num(round_nd(stretched_partial(tg.f0, tg.inharmonicity, tu.anchor), 3)),
+        "T": num(tu.t),
+        "kappa": num(tu.kappa),
+        "sigma0": num(tu.sigma0),
+        "sigma1": num(tu.sigma1),
+        "horizon": int(d.horizon as i64),
+        "worst_drift_cents": num(round_nd(d.worst_between, 2)),
+        "worst_drift_mode": int(d.worst_mode as i64),
+        "warn": warn,
+        "message": message,
+    }))
 }
 
 /// A core constructor's refusal, surfaced as `serialize.py`'s `except ValueError` did.
@@ -299,6 +406,7 @@ pub fn build_resonator(p: &Value) -> Result<Built, Refusal> {
                 fs,
                 sigma_zero: sigma == 0.0,
                 oracle_2sigma: 2.0 * sigma,
+                tuning: None,
             })
         }
         "stiff" => {
@@ -315,8 +423,10 @@ pub fn build_resonator(p: &Value) -> Result<Built, Refusal> {
                 fs,
                 sigma_zero: sigma == 0.0,
                 oracle_2sigma: 2.0 * sigma,
+                tuning: None,
             })
         }
+        "damped" if is_musical(p) => build_musical(p, l, rho, n),
         "damped" => {
             let s0 = fnum(p, "sigma0", 0.0)?;
             let s1 = fnum(p, "sigma1", 0.0)?;
@@ -333,6 +443,7 @@ pub fn build_resonator(p: &Value) -> Result<Built, Refusal> {
                 // The frequency-INDEPENDENT base rate; sigma1 adds a per-mode term on top.
                 sigma_zero: s0 == 0.0 && s1 == 0.0,
                 oracle_2sigma: 2.0 * s0,
+                tuning: None,
             })
         }
         "tension" => {
@@ -371,6 +482,7 @@ pub fn build_resonator(p: &Value) -> Result<Built, Refusal> {
                 fs,
                 sigma_zero: s0 == 0.0 && s1 == 0.0,
                 oracle_2sigma: 2.0 * s0,
+                tuning: None,
             })
         }
         "bow" => {
@@ -426,6 +538,7 @@ pub fn build_resonator(p: &Value) -> Result<Built, Refusal> {
                 fs,
                 sigma_zero: s0 == 0.0 && s1 == 0.0,
                 oracle_2sigma: 2.0 * s0,
+                tuning: None,
             })
         }
         other => Err(Refusal::Param(format!(
@@ -452,8 +565,21 @@ pub fn int_at_least_one(x: f64) -> Result<i64, Refusal> {
 }
 
 /// Detected-vs-analytic partials (cents error), on the full-rate pickup.
-fn partials_block(pickup: &[f64], fs: f64, model: &str, p: &Value, c: f64, l: f64) -> Value {
-    let analytic: Vec<f64> = if model == "stiff" || model == "damped" {
+fn partials_block(
+    pickup: &[f64],
+    fs: f64,
+    model: &str,
+    p: &Value,
+    c: f64,
+    l: f64,
+    targets: Option<&Targets>,
+) -> Value {
+    let analytic: Vec<f64> = if let Some(tg) = targets {
+        // The musical domain: the reference is the law the user asked for, not a kappa slider.
+        (1..=N_PARTIALS)
+            .map(|m| stretched_partial(tg.f0, tg.inharmonicity, m))
+            .collect()
+    } else if model == "stiff" || model == "damped" {
         // Already parsed once by the resonator build, so it cannot refuse here.
         let kappa = fnum(p, "kappa", 0.0).unwrap_or(0.0);
         modal::stiff_harmonic_frequencies(c, l, kappa, N_PARTIALS)
@@ -528,7 +654,8 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
 
     let mut b = build_resonator(p)?;
     let (c, l, n, fs) = (b.c, b.l, b.n, b.fs);
-    let f1_base = c / (2.0 * l);
+    // The musical domain's fundamental is its target; c / 2L ignores the stiffness it maps to.
+    let f1_base = b.tuning.as_ref().map_or(c / (2.0 * l), |(_, tg)| tg.f0);
     let pickup_idx = round_int(pickup_frac * n as f64).max(1).min(n - 1) as usize;
 
     // -- audio run: full duration, pickup, no snapshots
@@ -585,7 +712,7 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
         EnergyOpts::default(),
     );
     let horizon = string_block(&b.res.horizon_info(), &format!("the {model} string"));
-    Ok(json!({
+    let mut payload = json!({
         "model": model,
         "fs_sim": num(round_nd(fs, 3)),
         "lambda": num(round_nd(b.res.lam(), 6)),
@@ -613,7 +740,19 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
             "f1": num(round_nd(f1_base, 3)),
             "num_steps": int(n_audio),
             "n_frames": int(n_frames as i64),
-            "partials": partials_block(pickup, fs, &model, p, c, l),
+            "partials": partials_block(
+                pickup,
+                fs,
+                &model,
+                p,
+                c,
+                l,
+                b.tuning.as_ref().map(|(_, tg)| tg),
+            ),
         },
-    }))
+    });
+    if let Some(t) = tuning_block(&b) {
+        payload["tuning"] = t;
+    }
+    Ok(payload)
 }

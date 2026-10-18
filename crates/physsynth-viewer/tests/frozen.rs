@@ -691,9 +691,26 @@ fn every_fixture_file_is_run() {
     assert_eq!(tested, files);
 }
 
+/// Domains born AFTER the Python viewer was deleted, so no frozen case can name them: the freeze is
+/// the Python's own answers, and recording these from today's Rust would make it a snapshot of
+/// the code it exists to check. The human's call, 2026-10-18 (parameter-mapping plan §9). Each
+/// entry names the test file that covers it instead; the guard below holds the list to what the
+/// front-end offers, so an entry cannot outlive its domain or shadow a frozen case.
+///
+/// - `damped:physical` is the damped string's original control set under a name it did not have;
+///   `string_musical.rs` asserts that naming it changes no byte of the payload, and the unnamed
+///   requests it equals are frozen in `strings.json`.
+/// - `damped:musical` is the musical control set (`string_tuning`), held by that same file through
+///   the rendered pluck.
+const BORN_AFTER_THE_FREEZE: &[(&str, &str, &str)] = &[
+    ("damped", "physical", "tests/string_musical.rs"),
+    ("damped", "musical", "tests/string_musical.rs"),
+];
+
 /// The population comes from the model list and from the front-end's own domain table, so a scene
 /// or a regime cannot ship unfrozen. A case covers a domain only by NAMING it: a request that
 /// leaves the domain out runs whatever the default is, which is not a claim about any one of them.
+/// The one way past it is [`BORN_AFTER_THE_FREEZE`].
 #[test]
 fn every_model_and_every_domain_the_viewer_offers_is_frozen() {
     let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
@@ -725,7 +742,29 @@ fn every_model_and_every_domain_the_viewer_offers_is_frozen() {
     .unwrap();
     let offered = domain_opts(&app);
     assert!(offered.len() >= 25, "{offered:?}");
-    let missing: Vec<_> = offered.difference(&seen).collect();
+    let mut exempt: BTreeSet<(String, String)> = BTreeSet::new();
+    for &(m, d, covered_by) in BORN_AFTER_THE_FREEZE {
+        let key = (m.to_owned(), d.to_owned());
+        assert!(
+            offered.contains(&key),
+            "exempt {key:?} is no longer offered"
+        );
+        assert!(
+            !seen.contains(&key),
+            "exempt {key:?} has a frozen case; drop the exemption"
+        );
+        assert!(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join(covered_by)
+                .exists(),
+            "exempt {key:?} names {covered_by}, which does not exist"
+        );
+        exempt.insert(key);
+    }
+    let missing: Vec<_> = offered
+        .difference(&seen)
+        .filter(|k| !exempt.contains(*k))
+        .collect();
     assert!(
         missing.is_empty(),
         "domains no frozen case names: {missing:?}"
