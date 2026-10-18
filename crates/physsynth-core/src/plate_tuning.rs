@@ -594,6 +594,24 @@ const RIGID_MODES: usize = 3;
 /// How many modes around the anchor's stiffness the free plate's solve returns.
 const ANCHOR_CANDIDATES: usize = 8;
 
+/// The lowest `count` elastic modes of `p`, ascending — the three rigid motions skipped on the
+/// free branch. For a caller that reports what the mapping does to the partials it does not pin:
+/// each one's pitch and ring time are [`mode_frequency`] and [`mode_t60`] at
+/// `X = k² κ² β`, `Y = k (σ₀ + σ₁ λ)`.
+///
+/// # Errors
+/// [`TuningError::Modes`] when the free plate's solve fails.
+pub fn lowest_modes(p: &Params, count: usize) -> Result<Vec<ModeData>, TuningError> {
+    match p.boundary {
+        Boundary::Supported => Ok(supported_modes(p).into_iter().take(count).collect()),
+        Boundary::Free => {
+            let shift = -1e-3 * (13.0 / (p.lx * p.ly)).powi(2);
+            let all = free_modes(p, shift, RIGID_MODES + count)?;
+            Ok(all.into_iter().skip(RIGID_MODES).collect())
+        }
+    }
+}
+
 /// Map `targets` onto the plate `geometry` describes, built of `material` with its grain along
 /// `along`.
 ///

@@ -20,6 +20,10 @@ use physsynth_core::exciter::raised_cosine_2d;
 use physsynth_core::fmt::py_float;
 use physsynth_core::ops2d::{embed, guitar_mask, prune_to_area_carrying, Mask};
 use physsynth_core::plate::{self as pl, linspace0, Boundary, Domain, Plate, PlateSpec};
+use physsynth_core::plate_tuning::{
+    lowest_modes, mode_frequency, mode_t60, preset, tune_plate, GrainAlong, Material, PlateTuning,
+    SetBy, Targets, PRESETS,
+};
 use physsynth_core::pyfloat::scalar_pow;
 use physsynth_core::reduce::sum;
 use serde_json::{json, Map, Value};
@@ -34,7 +38,8 @@ use crate::py::{
     round_nd,
 };
 use crate::string::{
-    construction, int_at_least_one, ANIM_WIN_MAX, FRAMES_PER_PERIOD, MAX_FRAMES, N_MIN, SPEED_MAX,
+    construction, int_at_least_one, ANIM_WIN_MAX, FRAMES_PER_PERIOD, MAX_FRAMES, MUSICAL_FS_MAX,
+    MUSICAL_FS_MIN, N_MIN, SPEED_MAX,
 };
 use crate::{fnum, resample_normalize, Refusal, AUDIO_FS};
 
@@ -179,8 +184,166 @@ fn continuum(p: &pl::Params, n_modes: usize) -> Vec<f64> {
     }
 }
 
-/// `_build_plate`: the plate plus its sample rate.
-pub fn build_plate(p: &Value) -> Result<(Plate, f64), Refusal> {
+/// True when a plate request asks for musical controls (`controls: "musical"`).
+///
+/// Its own key, not `domain`: the plate's `domain` already means supported / free / guitar, and
+/// keyed on a value rather than on the presence of `f0`, because the front-end sends every slider
+/// it has to every model.
+pub fn is_musical(p: &Value) -> bool {
+    p.get("controls").and_then(Value::as_str) == Some("musical")
+}
+
+/// What a musical-controls plate was built from, for its `tuning` block.
+#[derive(Debug, Clone)]
+pub struct Musical {
+    /// The mapping's result.
+    pub tuning: PlateTuning,
+    /// The targets it met.
+    pub targets: Targets,
+    /// The material's name as requested (`custom` for the sliders).
+    pub material: String,
+    /// Where the material's numbers come from.
+    pub source: &'static str,
+    /// The grain direction, `None` for isotropic material.
+    pub grain: Option<GrainAlong>,
+}
+
+/// The musical-controls plate (`docs/dev/plate-mapping-plan.md` §7): material, size, grid, sample
+/// rate and either a thickness or a pitch, plus two ring times, mapped by [`tune_plate`]. The
+/// request's `kappa`, `rho`, `mu`, `sigma` and `nu` are ignored here — the material and the targets
+/// decide them — and `mu` becomes a read-out, still held to [`PLATE_MU_MAX`].
+fn build_musical(
+    p: &Value,
+    boundary: Boundary,
+    outline: Domain,
+    waist: f64,
+    asym: f64,
+) -> Result<(Plate, f64, Option<Musical>), Refusal> {
+    let lx = fnum(p, "Lx", 1.0)?;
+    let ly = fnum(p, "Ly", 1.0)?;
+    let theta = fnum(p, "theta", 0.28)?;
+    let nv = p.get("N").cloned().unwrap_or(json!(60));
+    let n = py_int(&nv)
+        .map_err(|_| Refusal::Param(format!("N must be an integer, got {}.", py_repr(&nv))))?;
+    if !(N_MIN..=PLATE_N_MAX).contains(&n) {
+        return Err(Refusal::Param(format!(
+            "N must be in [{N_MIN}, {PLATE_N_MAX}] for the plate, got {n}."
+        )));
+    }
+    if py_min(&[lx, ly]) <= 0.0 {
+        return Err(Refusal::Param("Lx, Ly must both be positive.".into()));
+    }
+    let fs = fnum(p, "sample_rate", 44100.0)?;
+    if !(MUSICAL_FS_MIN..=MUSICAL_FS_MAX).contains(&fs) {
+        return Err(Refusal::Param(format!(
+            "sample_rate must be in [{}, {}] Hz, got {}.",
+            pf(MUSICAL_FS_MIN),
+            pf(MUSICAL_FS_MAX),
+            pf(fs)
+        )));
+    }
+    let name = p
+        .get("material")
+        .and_then(Value::as_str)
+        .unwrap_or("steel")
+        .to_owned();
+    let (material, source) = if name == "custom" {
+        let material = Material::Isotropic {
+            e: fnum(p, "custom_E_gpa", 100.0)? * 1e9,
+            nu: fnum(p, "custom_nu", 0.3)?,
+            rho: fnum(p, "custom_density", 5000.0)?,
+        };
+        (material, "custom constants")
+    } else {
+        let pr = preset(&name).ok_or_else(|| {
+            let names: Vec<&str> = PRESETS.iter().map(|p| p.name).collect();
+            Refusal::Param(format!(
+                "material must be one of {} or 'custom', got {}.",
+                names.join(", "),
+                repr_str(&name)
+            ))
+        })?;
+        (pr.material, pr.source)
+    };
+    let default_grain = if outline == Domain::Guitar { "y" } else { "x" };
+    let along = match p
+        .get("grain")
+        .and_then(Value::as_str)
+        .unwrap_or(default_grain)
+    {
+        "x" => GrainAlong::X,
+        "y" => GrainAlong::Y,
+        other => {
+            return Err(Refusal::Param(format!(
+                "grain must be 'x' or 'y', got {}.",
+                repr_str(other)
+            )))
+        }
+    };
+    let set_by = match p.get("set_by").and_then(Value::as_str).unwrap_or("pitch") {
+        "pitch" => SetBy::Pitch(fnum(p, "f0", 220.0)?),
+        "thickness" => SetBy::Thickness(fnum(p, "thickness_mm", 2.0)? * 1e-3),
+        other => {
+            return Err(Refusal::Param(format!(
+                "set_by must be 'pitch' or 'thickness', got {}.",
+                repr_str(other)
+            )))
+        }
+    };
+    let targets = Targets {
+        set_by,
+        t60_low: fnum(p, "t60_low", 2.0)?,
+        t60_high: fnum(p, "t60_high", 0.5)?,
+        f_ref: fnum(p, "f_ref", 2000.0)?,
+    };
+    let geometry = PlateSpec {
+        lx,
+        ly,
+        fs,
+        n,
+        theta,
+        boundary: Some(boundary),
+        domain: Some(outline),
+        waist,
+        asym,
+        ..PlateSpec::default()
+    };
+    let tuning = tune_plate(&geometry, &material, along, &targets)
+        .map_err(|e| Refusal::Param(e.to_string()))?;
+    let mut spec = geometry;
+    tuning.apply(&mut spec);
+    let params = pl::Params::new(&spec).map_err(construction)?;
+    if params.n_live > PLATE_NLIVE_MAX {
+        return Err(Refusal::Param(format!(
+            "this geometry has {} interior nodes (> {PLATE_NLIVE_MAX}); reduce N or use a less \
+             extreme aspect ratio.",
+            params.n_live
+        )));
+    }
+    if params.mu > PLATE_MU_MAX {
+        return Err(Refusal::Param(format!(
+            "this pitch on this grid needs mu = {} (> {}): too coarse in time. Raise the sample \
+             rate or reduce N.",
+            pf(round_nd(params.mu, 3)),
+            pf(PLATE_MU_MAX)
+        )));
+    }
+    let grain = matches!(material, Material::Wood { .. }).then_some(along);
+    Ok((
+        Plate::new(params),
+        fs,
+        Some(Musical {
+            tuning,
+            targets,
+            material: name,
+            source,
+            grain,
+        }),
+    ))
+}
+
+/// `_build_plate`: the plate, its sample rate, and what musical controls built it from.
+pub fn build_plate(p: &Value) -> Result<(Plate, f64, Option<Musical>), Refusal> {
     let dv = p.get("domain").cloned().unwrap_or(json!("supported"));
     let domain = py_str(&dv);
     if !["supported", "free", "guitar"].contains(&domain.as_str()) {
@@ -216,6 +379,9 @@ pub fn build_plate(p: &Value) -> Result<(Plate, f64), Refusal> {
                 pf(asym)
             )));
         }
+    }
+    if is_musical(p) {
+        return build_musical(p, boundary, outline, waist, asym);
     }
     let kappa = fnum(p, "kappa", 20.0)?;
     let rho = fnum(p, "rho", 0.005)?;
@@ -264,7 +430,7 @@ pub fn build_plate(p: &Value) -> Result<(Plate, f64), Refusal> {
             plate.p.n_live
         )));
     }
-    Ok((plate, fs))
+    Ok((plate, fs, None))
 }
 
 /// `Plate(Lx=, Ly=, kappa=, rho=, fs=, N=, sigma=, boundary=, nu=, theta=, domain=, waist=,
@@ -721,7 +887,10 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
         )));
     }
 
-    let (mut res, fs) = build_plate(p)?;
+    let (mut res, fs, musical) = build_plate(p)?;
+    // The animation run's plate: a copy of the freshly built one rather than a second build, so a
+    // musical plate's mapping (and its mode solves) runs once.
+    let fresh = res.clone();
     let (lx, ly) = (res.p.lx, res.p.ly);
 
     let n_audio = round_int(audio_dur * fs).max(1);
@@ -767,7 +936,7 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
     }
 
     // -- the animation run: a fresh plate, a fundamental-resolving stride
-    let mut anim = build_plate(p)?.0;
+    let mut anim = fresh;
     excite(&mut anim)?;
     let mut anim_stride = round_int((fs / f1) / fpp as f64).max(1);
     let n_anim = anim_stride.max(round_int(anim_win * fs));
@@ -830,7 +999,23 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
         Boundary::Supported => "supported",
         Boundary::Free => "free",
     };
-    Ok(json!({
+    // A frequency-dependent loss decays each mode at its own rate, so the single `2 sigma` oracle
+    // line would be a fitted lie; only a musical plate carries one.
+    let energy = energy_block(
+        &audio_run.time,
+        &audio_run.energy,
+        rp.sigma == 0.0 && rp.sigma1 == 0.0,
+        2.0 * rp.sigma,
+        EnergyOpts {
+            no_decay_oracle: rp.sigma1 > 0.0,
+            ..EnergyOpts::default()
+        },
+    );
+    let tuning = match &musical {
+        Some(m) => Some(tuning_block(rp, m)?),
+        None => None,
+    };
+    let mut payload = json!({
         "model": "plate",
         "horizon": horizon_block(rp, "the plate"),
         "boundary": boundary,
@@ -858,8 +1043,88 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
             "peak": num(peak),
             "n": int(audio48.len() as i64),
         },
-        "energy": energy_block(&audio_run.time, &audio_run.energy, rp.sigma == 0.0,
-                               2.0 * rp.sigma, EnergyOpts::default()),
+        "energy": energy,
         "meta": meta,
+    });
+    if let Some(t) = tuning {
+        payload["tuning"] = t;
+    }
+    Ok(payload)
+}
+
+/// How many partials the `tuning` block reports pitch and ring time for.
+pub const TUNING_PARTIALS: usize = 8;
+
+/// Below this relative gap to its nearest neighbour the anchor is called crowded: on the free
+/// plates that is where the mapping's miss is largest (plan §9).
+pub const CROWDED_ANCHOR: f64 = 0.01;
+
+/// The `tuning` block of a musical-controls payload: what was asked, what it mapped to, and what
+/// the partials the mapping does not pin do. Their pitch drift is the horizon strip's business
+/// (plan §7: one drift read-out, not two); their ring times are only here.
+fn tuning_block(p: &pl::Params, m: &Musical) -> Result<Value, Refusal> {
+    let (tu, tg) = (&m.tuning, &m.targets);
+    let (k, theta, kappa2) = (p.k, p.theta, p.kappa * p.kappa);
+    let modes = lowest_modes(p, TUNING_PARTIALS).map_err(|e| Refusal::Param(e.to_string()))?;
+    let partials: Vec<Value> = modes
+        .iter()
+        .filter_map(|md| {
+            let x = k * k * kappa2 * md.beta;
+            let y = k * (tu.sigma0 + tu.sigma1 * md.lambda);
+            let f = mode_frequency(x, y, k, theta)?;
+            Some(json!({
+                "f": num(round_nd(f, 3)),
+                "t60": num(round_nd(mode_t60(x, y, k, theta), 4)),
+            }))
+        })
+        .collect();
+    let crowded = tu.anchor_margin < CROWDED_ANCHOR;
+    let mut message = if tu.exact {
+        "the simulated plate meets the pitch and both ring times exactly.".to_owned()
+    } else {
+        "free edges couple the modes slightly: the simulated plate meets the targets to within \
+         about 0.05 cents and 0.3 % in ring time."
+            .to_owned()
+    };
+    if crowded {
+        message.push_str(&format!(
+            " The anchor partial ({} Hz) sits within {:.1} % of another partial, where the \
+             ring-time target is least certain; moving f_ref picks a clearer one.",
+            pf(round_nd(tu.anchor_frequency, 1)),
+            100.0 * tu.anchor_margin
+        ));
+    }
+    let (set_by, f0_target, thickness_target) = match tg.set_by {
+        SetBy::Pitch(f) => ("pitch", num(f), Value::Null),
+        SetBy::Thickness(t) => ("thickness", Value::Null, num(round_nd(t * 1e3, 6))),
+    };
+    Ok(json!({
+        "material": m.material,
+        "source": m.source,
+        "grain": match m.grain {
+            Some(GrainAlong::X) => json!("x"),
+            Some(GrainAlong::Y) => json!("y"),
+            None => Value::Null,
+        },
+        "set_by": set_by,
+        "f0_target": f0_target,
+        "thickness_mm_target": thickness_target,
+        "thickness_mm": num(round_nd(tu.thickness * 1e3, 4)),
+        "rho_s": num(round_nd(tu.material.rho_s, 6)),
+        "kappa": num(round_nd(tu.material.kappa, 6)),
+        "sigma0": num(round_nd(tu.sigma0, 6)),
+        "sigma1": num(round_nd(tu.sigma1, 8)),
+        "f0": num(round_nd(tu.f0, 3)),
+        "t60_low": num(tg.t60_low),
+        "t60_high": num(tg.t60_high),
+        "f_ref": num(tg.f_ref),
+        "anchor_frequency": num(round_nd(tu.anchor_frequency, 3)),
+        "anchor_margin": num(round_nd(tu.anchor_margin, 4)),
+        "exact": tu.exact,
+        "crowded": crowded,
+        "sample_rate": num(p.fs),
+        "mu": num(round_nd(p.mu, 4)),
+        "partials": partials,
+        "message": message,
     }))
 }

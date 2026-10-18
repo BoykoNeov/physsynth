@@ -4,8 +4,8 @@
 (`docs/dev/parameter-mapping-plan.md`) gave the damped string pitch, inharmonicity and two ring
 times; §12 named the plate's "size / thickness / material" vocabulary as the next candidate.
 
-**Status: Parts 0–3 DONE 2026-10-18** (§9–§12); the human chose the Laplacian loss the same day.
-Part 4 (viewer backend) next.
+**Status: Parts 0–4 DONE 2026-10-18** (§9–§13); the human chose the Laplacian loss the same day.
+Part 5 (front-end and the coverage guard) next.
 
 **The human's four decisions, 2026-10-18:**
 
@@ -396,8 +396,8 @@ to `λ`, fixing `t60_low` bounds `t60_high` on both sides — shortest at `σ₀
 `σ₁ = 0` — and the refusal (`HighRingTimeOutOfRange`) names both ends. The long end lies a little
 **above** `t60_low` (the scheme suppresses a high mode's decay rate, hurdle §4). On the free
 rectangle at 180 Hz with 2.5 s low, the anchor near 1.5 kHz can ring no shorter than 0.93 s: the
-free plate's twist fundamental has a large loss eigenvalue for its frequency, so its `λ` ratio to the
-anchor is smaller than the frequency ratio.
+free plate's twist fundamental has a large loss eigenvalue for its frequency, so its `λ` ratio to
+the anchor is smaller than the frequency ratio.
 
 Bars, `tests/plate_tuning.rs` (six more, thirteen in all):
 
@@ -416,3 +416,40 @@ Bars, `tests/plate_tuning.rs` (six more, thirteen in all):
 chosen farthest from `f_ref`; a rigid motion taken as mode 1; a 20 dB ring time; the lossless pitch
 in place of the 2×2; the thickness from `κ²`; the free `λ` doubled; `σ₀`'s sign. (The material
 plants of §11 re-ran with them, red.)
+
+---
+
+## 13. Part 4 result — the viewer backend (2026-10-18)
+
+`crates/physsynth-viewer/src/plate.rs`: a plate request with `controls: "musical"` is built by
+`build_musical` from `material` (a preset name, or `custom` with `custom_E_gpa`, `custom_nu`,
+`custom_density`), `grain` (`x` / `y`; default `y` on the guitar, `x` elsewhere), `set_by`
+(`pitch` with `f0`, or `thickness` with `thickness_mm`), `t60_low`, `t60_high`, `f_ref` and
+`sample_rate`, plus the existing `Lx`, `Ly`, `N`, `theta`, `waist`, `asym`, `domain`. Its
+`kappa`, `rho`, `mu`, `sigma`, `nu` are ignored; `mu` is a read-out still held to `PLATE_MU_MAX`
+(a refusal that says to raise the sample rate or reduce `N`), and `PLATE_NLIVE_MAX` and
+`PLATE_WORK_MAX` apply unchanged. Custom material is isotropic only.
+
+- The payload gains a `tuning` block: material, source, grain, how it was set, thickness, `ρ_s`,
+  `κ`, `σ₀`, `σ₁`, the fundamental and the anchor in the scheme, the anchor's margin (`crowded`
+  below 1 %), `exact`, `mu`, and the pitch and ring time of the lowest eight partials
+  (`plate_tuning::lowest_modes`, new in core). Their pitch drift is left to the existing horizon
+  strip, as §7 decided.
+- The energy verdict: lossless only when both losses are zero, and the single-rate `2σ` oracle
+  line dropped when `σ₁ > 0` (each mode decays at its own rate).
+- The animation run's plate is now a clone of the freshly built one rather than a second build, so
+  the mapping runs once; on the physical path that is the same plate, and the freeze is unchanged.
+
+Bars, `crates/physsynth-viewer/tests/plate_musical.rs` (eight): built from the targets, not the
+decoy sliders (and `mu` read out from the mapped `κ`); the rendered audio sounds `f0` (supported
+steel, spruce guitar) through the analysis crate's detector; the run's **first and last energy**
+equal a core plate built from the mapping and struck the same way (the areal density, and both
+losses at the mapped stiffness); musical keys leave a physical request byte-identical; set by
+thickness reads the pitch out near the continuum `f₁₁`; a free plate says it is not exact and a
+wood reports its grain; the energy verdict without the single-rate oracle; eight refusals.
+
+**Plants, all red:** the slider `κ` read in place of the mapped one; a volume density; `σ₁`
+dropped; the switch never matching.
+
+**Moved to Part 5:** the coverage guard's extension. It reads `app.js`, and the musical select does
+not exist until the front-end adds it, so the guard and the select land together.
