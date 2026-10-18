@@ -539,10 +539,14 @@ writing a bar, then confirmed by an advisor review):
   is a cube centred on the head, so the two members, of different symmetry, do not mix, and each
   channel holds one frequency. The shift is the members' mean; both are reported. A truly
   degenerate pair is still power-summed.
-- **The head's grid starts at `N` 10, not 8.** At `N` 8 and 9 the split is 2.4 and 4.8 %, against a
-  gap of 7.3 % to the next distinct mode at `N` 8 — no tolerance sits safely between. From 10 up
-  the split is at most 3.2 % and the gap at least 7.8 %. A unit test checks the grouping
-  (1, 2, 2, 1, 2, 2) at every `N` the page allows.
+- **The head's grid starts at `N` 12, not 8.** At `N` 8 and 9 the split is 2.4 and 4.8 %, against
+  a gap of 7.3 % to the next distinct mode at `N` 8 — no tolerance sits safely between. At `N` 10
+  rim nodes at (3, 4) cells lie exactly on the circle, and the radius's *last bit* decides the
+  shape (0.12 and 0.05 + 0.005·14 differ): at some radii the pair splits 6.5 % against 9 % to the
+  next mode, at others the mask is not even square-symmetric and every pair splits. `N` 11 passed
+  every radius swept; 12 keeps a step of margin. A unit test checks the grouping
+  (1, 2, 2, 1, 2, 2) at every `N` the page allows and every radius it allows in 5 mm steps (1,479
+  eigensolves, ~50 s); the first version swept one radius and missed `N` 10 entirely.
 - **The window starts where the lower mode landed in the room.** Hung, the air lowers the (0,2)
   mode by ~150 cents, past its in-vacuo neighbour the (2,1) pair (7 % below): the in-vacuo window
   missed it and read "unresolved". Below, a mode's room window now starts at the previous group's
@@ -568,17 +572,21 @@ writing a bar, then confirmed by an advisor review):
 The twin lands on the scheme's in-vacuo values within 0.1 cents on every mode (the bar; typically
 0.02), and its ring times on the mapping's targets. In the room the musical fundamental's ring
 time falls from 3.0 s to 0.19 s set in a wall and 0.74 s hung: one face radiating fully against
-two partly cancelling. A mode can also ring *longer* in the room (e.g. 1.62 → 1.82 s): the air's mass lowers the decay rate
-in the same proportion it lowers the frequency squared, so the head's own loss rings longer.
+two partly cancelling. A mode can also ring *longer* in the room (e.g. 1.62 → 1.82 s): the air's
+mass lowers the decay rate in the same proportion it lowers the frequency squared, so the head's
+own loss rings longer.
 
-**A core flaw found on the way, recorded, not fixed.** At `N` 34 the disk mask is not symmetric
-under a quarter turn: six nodes at (±8, ±15) cells from the centre lie exactly on the circle
-(8² + 15² = 17²), and the strict `<` in `ops2d::disk_mask`, on coordinates computed as
-`i·h − R`, keeps some and drops others by a last bit. So at `N` 34 the (1,1) and (3,1) pairs split
-by 0.17 %, where every other `N` keeps them exactly degenerate. Other Pythagorean radii (`N` 10, 20,
-26, 30, 40) happen to round symmetrically. Fixing it moves the frozen viewer references for every
-round drum at `N` 34, so it is the human's call; the room page is unaffected (its grouping
-tolerates it, and its unit test runs `N` 34).
+**A core flaw found on the way, recorded, not fixed.** `ops2d::disk_mask` keeps a node when
+`x² + y² < R²` strictly, on coordinates computed as `i·h − R`. Where the rim radius in cells is the
+hypotenuse of a Pythagorean triple (5 = 3,4; 10; 13 = 5,12; 15; 17 = 8,15; …), nodes lie exactly on
+the circle and a last bit decides each one — so the round drum's shape depends on the radius's last
+bit, and in some cases is not even symmetric under a quarter turn (the (1,1) and (3,1) pairs then
+split by ~0.2 % where they should be degenerate). Swept for `N` 2–100: lopsided at `N` 34, 50, 68,
+74, 78, 100 for radius 0.12; at 34, 58, 68, 78 for 0.5; at every multiple of 10 (and 34, 58, 68)
+for 0.2. Of the frozen viewer references, **2** round-drum cases are affected (membrane, `N` 100,
+radius 0.2); the 40-odd others (radius 0.5 at `N` 40–101) are symmetric. Fixing it (a symmetric
+rim rule) would move those two and is the human's call. The room page sidesteps it with its `N`
+floor and its all-radii test.
 
 **Bars** (`crates/physsynth-viewer/tests/drumroom.rs`, 12; two unit tests in `src/drumroom.rs`):
 the twin on the scheme and the air lowering every mode; the fundamental's shift in semitones, hung
@@ -588,7 +596,7 @@ lossy one passive; the physical head reading every key off its default against a
 built scheme; the musical head hitting its pitch and both ring times in vacuo at the room's `fs`,
 with a decoy `sample_rate` and decoy physics; the air shortening the fundamental's ring; a grid
 pair measured member by member; a mode the air moves past its neighbour still found; every
-mounting and wall building; the refusals (`N` 9, a head too fast for the air's `fs` — physical and
+mounting and wall building; the refusals (`N` 11, a head too fast for the air's `fs` — physical and
 musical — the node and work budgets, a head wider than the room, `air_h` and `σ` out of range).
 
 Dropped from §13: the pair-rotation bar. A degenerate pair's single channel holds the pair's one
@@ -610,5 +618,17 @@ three gong-room and two drum cases re-run.
 **Plants** (13, each red, each restored byte-identical): the air's density near zero; walls
 ignored; mount ignored; `σ₁` dropped from the musical head; the room window back to in-vacuo;
 member-by-member measurement off; the fit over the whole run; the pair tolerance at 2 %; the
-"outside window" check off; `N`'s floor back to 8; `T` hard-wired; the `air_h` advice dropped;
-the head-does-not-fit message dropped. And the freeze guard's model exemption removed: red.
+"outside window" check off; `N`'s floor back to 8 (re-run against the floor of 12); `T`
+hard-wired; the `air_h` advice dropped; the head-does-not-fit message dropped. And the freeze
+guard's model exemption removed: red.
+
+**Follow-up the review found.** The room fieldset's ζ slider (`wall_zeta`) showed on this page:
+its `data-domain="… baffled suspended"` is the gong's, and the domain pass shows it whatever the
+model. The drum's absorbing walls are fixed at ζ = 1, so `updateVisibility` hides it for
+`drumroom`; the browser check now records the visible sliders and fails a `drumroom` case that
+shows ζ (planted: red). Still visible and unread: `animation_window` — shared with the gong and
+air-box pages, which do not read it either; left as it is.
+
+**A side effect on other pages.** `_default` now resets `T` (to 200 N) and `radius` (to 0.5 m) on
+every model switch — the leak-family rule, because this page re-ranges both. Before, a tension or
+radius set on one page survived a switch to another.

@@ -354,14 +354,14 @@ const MODEL_RANGES = {
             mic_position: { min: 0.15, max: 1.0, step: 0.01, fixed: 2, val: 0.75 },
             w_over_e: { min: 0.05, max: 3.0, step: 0.05, fixed: 2, val: 3.0, unit: "×e" },
             audio_duration: { min: 0.02, max: 0.3, step: 0.01, fixed: 2, val: 0.12 } },
-  // The drum in a room (membrane mapping plan §13): the server's own ranges. N's floor of 10 is
+  // The drum in a room (membrane mapping plan §13): the server's own ranges. N's floor of 12 is
   // measured — below it the grid splits the (2,1) pair too far to be read as one mode — and the
   // 0.35 s default is the shortest run whose spectrum resolves the grid's split pairs (~3 Hz).
   // The default renders in ~5 s.
   drumroom: { T: { min: 200, max: 10000, step: 10, fixed: 0, val: 3000, unit: "N/m" },
               rho: { min: 0.05, max: 1.0, step: 0.01, fixed: 2, val: 0.26, unit: "kg/m²" },
               radius: { min: 0.05, max: 0.3, step: 0.01, fixed: 2, val: 0.12, unit: "m" },
-              N: { min: 10, max: 40, val: 24 },
+              N: { min: 12, max: 40, val: 24 },
               sigma: { val: 0 },
               room_size: { min: 0.3, max: 0.8, step: 0.01, fixed: 2, val: 0.48, unit: "m cube" },
               air_h: { min: 0.010, max: 0.025, step: 0.0005, fixed: 4, val: 0.0165, unit: "m" },
@@ -756,6 +756,10 @@ function updateVisibility() {
   showParam("tension", byTension);
   showParam("custom_rho", drumMusical && $("drum-head").value === "custom");
   showParam("f0", byPitch && !byTension);
+  // The drum in a room shares the gong's mounting values, and the data-domain pass shows ζ for
+  // them regardless of model. Its absorbing walls are fixed at ζ = 1 (the free-field stand-in), so
+  // the slider would be a control the server never reads.
+  if (m === "drumroom") showParam("wall_zeta", false);
 }
 
 // Re-range sliders to the current model's caps/defaults (see MODEL_RANGES). Merges _default with the

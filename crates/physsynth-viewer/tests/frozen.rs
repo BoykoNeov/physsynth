@@ -708,6 +708,10 @@ fn every_fixture_file_is_run() {
 ///   frozen in `plate.json`.
 /// - `plate:controls:musical` is the plate's musical control set (`plate_tuning`), held by that
 ///   same file through the rendered audio and the run's own energy.
+/// - `membrane` and `mallet`, `controls:physical` / `controls:musical`, are the drum's two control
+///   sets (membrane mapping plan §6), held by `membrane_musical.rs` the same two ways.
+/// - `drumroom`'s two mountings and two control sets belong to a model with no frozen case at all
+///   ([`MODELS_BORN_AFTER_THE_FREEZE`]); `drumroom.rs` runs each of them.
 const BORN_AFTER_THE_FREEZE: &[(&str, &str, &str)] = &[
     ("damped", "physical", "tests/string_musical.rs"),
     ("damped", "musical", "tests/string_musical.rs"),
@@ -728,8 +732,10 @@ const BORN_AFTER_THE_FREEZE: &[(&str, &str, &str)] = &[
 /// would be a snapshot, not a check. Each names the test file that covers it; the guard below holds
 /// an entry to a model the viewer still offers and that no frozen case already covers.
 ///
-/// - `drumroom` is the drum in a room (membrane mapping plan §13), the human's call on
-///   2026-10-18; `drumroom.rs` holds its twin against the in-vacuo scheme and its room off it.
+/// - `drumroom` is the drum in a room (membrane mapping plan §13–§14). The human chose to build the
+///   page (2026-10-18); exempting a whole model extends their parameter-mapping plan §9 call for
+///   domains, and was put to them for veto with the batch. `drumroom.rs` holds its twin against
+///   the in-vacuo scheme and its room off it.
 const MODELS_BORN_AFTER_THE_FREEZE: &[(&str, &str)] = &[("drumroom", "tests/drumroom.rs")];
 
 /// The population comes from the model list and from the front-end's own domain table, so a scene

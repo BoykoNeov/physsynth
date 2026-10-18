@@ -73,9 +73,12 @@ pub const DRUMROOM_RADIUS_MIN: f64 = 0.05;
 pub const DRUMROOM_RADIUS_MAX: f64 = 0.30;
 /// Head grid default.
 pub const DRUMROOM_N_DEFAULT: i64 = 24;
-/// Head grid range. Not below 10: at `N` 8 and 9 the grid splits the (2,1) pair by 2.4 and 4.8 %,
-/// too close to the 7 % gap to the next distinct mode for [`DRUMROOM_PAIR_TOL`] to sit between.
-pub const DRUMROOM_N_MIN: i64 = 10;
+/// Head grid range. Not below 12, measured: at `N` 8 and 9 the grid splits the (2,1) pair by 2.4
+/// and 4.8 %, too close to the 7 % gap to the next distinct mode for [`DRUMROOM_PAIR_TOL`] to sit
+/// between; at `N` 10 rim nodes at (3, 4) cells lie exactly on the circle and the radius's last bit
+/// decides the shape — at some radii the pair splits 6.5 % against 9 %, at others the mask is not
+/// even square-symmetric. `N` 11 passed every radius swept; 12 keeps a step of margin.
+pub const DRUMROOM_N_MIN: i64 = 12;
 /// See [`DRUMROOM_N_MIN`].
 pub const DRUMROOM_N_MAX: i64 = 40;
 /// Audio default (s).
@@ -92,9 +95,10 @@ pub const DRUMROOM_MODES: usize = 6;
 const DRUMROOM_EIGS: usize = 14;
 /// Eigenvalues within this fraction of a group's first, in frequency, join it. The square grid
 /// splits a circle's `cos 2θ`/`sin 2θ` pair by its staircase rim, by an amount that depends on
-/// `N` alone and not monotonically (3 cents at the default `N`, 54 at `N` 12), while the next
-/// distinct mode stays more than 7 % above the pair's lower member. Every `N` the page allows
-/// is checked by `mod tests` below.
+/// `N` (and, through a last-bit rounding of rim nodes, slightly on the radius) and not
+/// monotonically (3 cents at the default `N`, 54 at `N` 12), while the next distinct mode stays
+/// more than 7 % above the pair's lower member. Every `N` the page allows, at three radii, is
+/// checked by `mod tests` below.
 pub const DRUMROOM_PAIR_TOL: f64 = 0.04;
 /// A second peak at least this fraction of the first, inside a mode's window, reads "split".
 pub const DRUMROOM_SPLIT_RATIO: f64 = 0.5;
@@ -1078,27 +1082,31 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
 mod tests {
     use super::*;
 
-    /// Every `N` the page allows groups the head's lowest modes as the circle's: (0,1), (1,1)
-    /// pair, (2,1) pair, (0,2), (3,1) pair, (1,2) pair — the grid's split of the (2,1) pair
-    /// inside one group, the (0,2) mode outside it.
+    /// Every `N` the page allows, at every radius it allows in 5 mm steps (the disk mask's rim
+    /// rounding depends on both, down to the radius's last bit), groups the head's lowest modes as
+    /// the circle's: (0,1), (1,1) pair, (2,1) pair, (0,2), (3,1) pair, (1,2) pair — the grid's
+    /// split of the (2,1) pair inside one group, the (0,2) mode outside it. The modes are `−L`'s,
+    /// which no tension changes; a low one keeps every small, fine head inside the CFL bound.
     #[test]
     fn every_allowed_grid_groups_the_modes_as_the_circle_does() {
-        for n in DRUMROOM_N_MIN..=DRUMROOM_N_MAX {
+        for (n, radius) in (DRUMROOM_N_MIN..=DRUMROOM_N_MAX)
+            .flat_map(|n| (0..=50).map(move |i| (n, 0.05 + 0.005 * f64::from(i))))
+        {
             let p = mem::Params::new(
                 Some(Domain::Circle),
-                3000.0,
+                100.0,
                 0.26,
                 40_000.0,
                 n,
                 None,
                 None,
-                Some(0.12),
+                Some(radius),
                 0.0,
             )
             .unwrap();
             let groups = mode_groups(&p).unwrap();
             let mult: Vec<usize> = groups.iter().map(|g| g.vectors.len()).collect();
-            assert_eq!(mult, [1, 2, 2, 1, 2, 2], "N = {n}");
+            assert_eq!(mult, [1, 2, 2, 1, 2, 2], "N = {n}, radius {radius}");
         }
     }
 

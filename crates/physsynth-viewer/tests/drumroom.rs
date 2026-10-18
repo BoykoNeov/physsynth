@@ -358,9 +358,9 @@ fn what_the_room_cannot_hold_is_refused_with_advice() {
             .unwrap_or_else(|| panic!("not refused: {e}"))
             .to_owned()
     };
-    // N 9 groups the grid-split pair wrongly; 10 is the floor
-    assert!(msg(json!({"N": 9})).contains("N must be in [10, 40]"));
-    assert!(msg(json!({"N": 41})).contains("N must be in [10, 40]"));
+    // N 11 and below group the grid-split pair wrongly at some radii; 12 is the floor
+    assert!(msg(json!({"N": 11})).contains("N must be in [12, 40]"));
+    assert!(msg(json!({"N": 41})).contains("N must be in [12, 40]"));
     // a head too fast for the air's sample rate: the advice is the air's grid
     let m = msg(json!({"T": 1.0e6, "rho": 0.05}));
     assert!(m.contains("CFL") && m.contains("air_h"), "{m}");

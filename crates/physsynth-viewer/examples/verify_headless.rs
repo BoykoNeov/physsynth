@@ -75,6 +75,8 @@ const PROBE: &str = r"
     tuning: (document.getElementById('tuning-hint') || {}).textContent || '',
     plateTuning: (document.getElementById('plate-tuning-hint') || {}).textContent || '',
     drumTuning: (document.getElementById('drum-tuning-hint') || {}).textContent || '',
+    sliders: [...document.querySelectorAll('.slider')].filter((e) => e.offsetParent !== null)
+      .map((e) => e.dataset.param).join(' '),
     hzMark: window.__horizonMark || null,
     warm: warm, cool: cool, bg: bg, other: other, total: d.length / 4,
   });
@@ -639,8 +641,11 @@ fn run_case(
     // The drum in a room's panel says, per mode, where the head sat in vacuo and where the room
     // put it; a panel left blank or showing another model's read-out is a failure.
     let diag2 = probe["diag2"].as_str().unwrap_or("");
+    let sliders = probe["sliders"].as_str().unwrap_or("");
     let air_ok = !query.contains("model=drumroom")
-        || (diag2.contains("in vacuo") && diag2.contains("in the room"));
+        || (diag2.contains("in vacuo") && diag2.contains("in the room")
+            // ζ is fixed at 1 here; a visible ζ slider would be a control the server never reads
+            && !sliders.split(' ').any(|s| s == "wall_zeta"));
     let tuning_ok = tuning_ok && plate_tuning_ok && drum_tuning_ok && air_ok;
     let tuning = [plate_tuning, drum_tuning]
         .into_iter()
@@ -657,6 +662,9 @@ fn run_case(
     println!("\n=== {name} ({query}) ===");
     println!("  status   : {status}");
     println!("  energy   : {}", first_line(&probe["energy"]));
+    if query.contains("model=drumroom") {
+        println!("  sliders  : {sliders}");
+    }
     println!("  diag2    : {}", first_line(&probe["diag2"]));
     println!("  horizon  : {horizon}");
     if !tuning.is_empty() {
