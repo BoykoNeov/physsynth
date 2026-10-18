@@ -4,8 +4,8 @@
 (`docs/dev/parameter-mapping-plan.md`) gave the damped string pitch, inharmonicity and two ring
 times; §12 named the plate's "size / thickness / material" vocabulary as the next candidate.
 
-**Status: Parts 0–1 DONE 2026-10-18** (§9, §10); the human chose the Laplacian loss the same day.
-Part 2 (materials) next.
+**Status: Parts 0–2 DONE 2026-10-18** (§9–§11); the human chose the Laplacian loss the same day.
+Part 3 (the mapping) next.
 
 **The human's four decisions, 2026-10-18:**
 
@@ -352,3 +352,26 @@ before the rest) — red there as well.
 
 `σ₁ = 0` leaves everything as it was: the full suite, including the 588-request viewer freeze, is
 green unchanged (1,850 tests).
+
+---
+
+## 11. Part 2 result — materials (2026-10-18)
+
+`crates/physsynth-core/src/plate_tuning.rs`: `Material` (isotropic, or quarter-sawn wood with
+`E_L, E_R, G_LR, ν_LR`), `PRESETS`, `plate_material(material, grain, t)` → `PlateMaterial`
+(`κ`, `ρ_s`, and the grain in the form each boundary takes, written by `apply`), and
+`thickness_for_kappa`. Isotropic material keeps the plate's isotropic path (`nu`, no grain).
+
+- **Sources.** Woods: USDA *Wood Handbook* FPL-GTR-190 (2010), Tables 5-1, 5-2, 5-3a — Sitka
+  and Engelmann spruce, western redcedar, sugar maple, coast Douglas-fir. Two handbook footnotes
+  applied: `E_L` = bending modulus + 10 % (shear), density = `SG · 1000 · 1.12` (specific gravity
+  is on volume at 12 % moisture). Metals and glass: Engineering ToolBox's Young's modulus,
+  Poisson's ratio and density tables; where those give a range the preset takes a value inside it
+  and says which (brass 110 GPa of 102–125, bronze 110 of 96–120, glass 70 of 50–90).
+- **The grain turns the Poisson ratio:** along `y` the major ratio is `ν_LR E_R / E_L`.
+- Bars, `tests/plate_tuning.rs` (seven): every preset builds every plate with its grain either
+  way; Sitka retyped from the handbook (both footnotes); the isotropic `κ` and `ρ_s = ρt` written
+  out; turning a wood's grain swaps `D_x` and `D_y` and keeps `H`, `D_1`, `D_xy`; the thickness
+  round trip; refusals; sources and unique names.
+- **Plants, all red:** `ν` not rotated; a volume density handed out; either footnote dropped;
+  `E_L`/`E_R` swapped.
