@@ -318,7 +318,9 @@ lesson: a bound measured where the effect is hidden is worse than no bound).
 - **Parameter mapping.** Raw physics (Young's modulus, tension, mode damping) is not musician-friendly.
   Budget real work for mapping ugly physical params to a few intuitive macros, with smoothing.
   Started 2026-10-18 for the damped string (`docs/dev/parameter-mapping-plan.md`,
-  `docs/dev/scientific-hurdles.md` §12); smoothing stays a real-time-stage concern.
+  `docs/dev/scientific-hurdles.md` §12), and the same day for the three linear plates — material,
+  size, thickness or pitch, two ring times (`docs/dev/plate-mapping-plan.md`), which also gave the
+  plate a frequency-dependent loss `σ₁`. Smoothing stays a real-time-stage concern.
 - **CPU budget x polyphony.** A single FDTD plate can saturate a core. *Which* models are polyphonic
   is settled in §11.3a (field models per instance, strings per voice); what remains here is the
   budget — voice counts and stealing — which is a real-time-stage concern, not one for now.

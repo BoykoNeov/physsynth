@@ -4,8 +4,8 @@
 (`docs/dev/parameter-mapping-plan.md`) gave the damped string pitch, inharmonicity and two ring
 times; §12 named the plate's "size / thickness / material" vocabulary as the next candidate.
 
-**Status: Parts 0–5 DONE 2026-10-18** (§9–§14); the human chose the Laplacian loss the same day.
-Part 6 (docs) next.
+**Status: DONE 2026-10-18** — Parts 0–6 (§9–§14); the human chose the Laplacian loss the same day.
+Nothing queued from this plan.
 
 **The human's four decisions, 2026-10-18:**
 

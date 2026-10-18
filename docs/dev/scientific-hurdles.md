@@ -29,7 +29,7 @@
 | 9 | The conserved total is blind to a wrong coupling constant; `radiated == injected` is blind to half of them | every coupled scene | Accounted for — three detectors, jointly (§9) |
 | 10 | Aliasing around every nonlinearity | bow, reed, mallet, VK plate, both nonlinear strings | Mitigated by oversampling; no anti-aliased scheme (§10) |
 | 11 | Twenty ARPACK oracles were not bit-reproducible run to run | `analysis/modal.py` | Fixed in §24.9 — kept here as the pattern (§11) |
-| 12 | Raw physics is not a musician's interface (parameter mapping) | `string_tuning`; the viewer's damped string | **Started 2026-10-18** for the damped string: five musical targets, met exactly by the *simulated* string at two partials, the drift of the rest reported and warned. Every other model is still raw (§12) |
+| 12 | Raw physics is not a musician's interface (parameter mapping) | `string_tuning`, `plate_tuning`; the viewer's damped string and plates | **Started 2026-10-18** for the damped string (five musical targets, met exactly by the *simulated* string at two partials, the drift of the rest reported and warned) and the same day for the three linear plates (material, thickness or pitch, two ring times — exact on the supported plate, ≤ 0.05 cents on the free ones; a new loss term `σ₁`). The membrane, the von Kármán plate and the other strings are still raw (§12) |
 | 13 | Which models can ever run in real time | engine, room | Deferred, and now decoupled from the language (§13) |
 | 14 | `piston_radiation_resistance`'s `ka < 1e-8` series threshold was about three decades too small: just above it the direct form cancelled catastrophically and was 544% wrong | `core/radiation.py` | **Fixed 2026-09-03** — three Taylor terms below `ka = 3e-2`; worst error 5.24 → 6.7e-13 (§14) |
 | 15 | No model states where its own answer stops being in tune, and the boundary is much lower than anyone assumed | every resonator | **Measured 2026-09-06** — two families with opposite signs (implicit errors compound into a hard floor at ~8% of the grid; explicit errors cancel at the magic Courant number), the plate is space-limited at every `fs` the suite uses, and the membrane's ceiling cancellation is **diagonal-only**; the 2-D plate's band was **derived 2026-09-07** by splitting its spectrum by mode family, the **orthotropic** plate measured the same day — one floor in mode index, per-direction only in hertz — and the **membrane's block** the same day too: the 2-D CFL ceiling **is** the minimum over the spectrum of each mode's own cancellation Courant number, so no mode is ever sharp, and a block's worst corner **flips** below the ceiling for every block — the plate's corner rule is inverted on a membrane, not weakened (§15) |
@@ -541,8 +541,36 @@ reference frequency onto model #3's `T, κ, σ₀, σ₁`, and the viewer's damp
 - **A harmonic target (`B = 0`) maps to `κ > 0`**: the grid and the θ average flatten high modes,
   and the anchor needs stiffness to hold it up.
 
-Every other model is still raw; the plate's "size / thickness / material" vocabulary is the next
-candidate. Smoothing a moving control belongs to the real-time stage.
+**2026-10-18, the second piece: the three linear plates** (`docs/dev/plate-mapping-plan.md`, the
+human's calls: all three plates, thickness or pitch behind a switch, a second loss term, woods with
+grain). `crates/physsynth-core/src/plate_tuning.rs` maps a material (cited presets — the USDA
+*Wood Handbook* for five woods, Engineering ToolBox for metals and glass — or custom), a grain
+direction, a size and either a thickness or a pitch, plus two ring times, onto the plate. What
+carries forward:
+
+- **The plate needed a model change first.** It had one loss coefficient, so one ring time. It now
+  has Bilbao's `2σ₁Δu_t` (`plate::PlateSpec::sigma1`), skipped at `σ₁ = 0` so every existing plate
+  and the viewer freeze are bit-identical. The human chose the Laplacian law (ring time falling in
+  proportion to frequency) over a stiffness-proportional one (exact everywhere, but highs dying as
+  frequency squared).
+- **Exact where the loss shares the modes, first-order where it does not.** The supported plate's
+  `−L` shares every eigenvector with `B` (grain included — a Kronecker build), so both anchors land
+  to rounding (`1.3e-7` cents over 96 fixtures). A free edge's gradient form does not; the loss
+  eigenvalue is then each mode's Rayleigh quotient, and the scheme's own roots miss by ≤ 0.05 cents
+  and ≤ 0.3 % in ring time (Part 0, worst inside a near-degenerate cluster). The free form also
+  damps a rigid **tilt**, sub-audio, accepted.
+- **One stiffness constant, so one free pitch.** Unlike the string's `c²` and `κ²`, the plate's
+  whole spectrum moves with `κ`; mode 1 fixes it, the anchor's pitch is whatever the geometry gives,
+  and only its ring time is a target.
+- **A fixed low ring time bounds the high one on both sides** (`σ₀ ≥ 0`, `σ₁ ≥ 0`); the refusal
+  names the range. On a free plate the twist fundamental's large loss eigenvalue makes the short end
+  bite early.
+- **The textbook mapping misses audibly at the fundamental here** — 5–21 cents and up to 30 % in
+  ring time (the continuum law `p² = ω/κ` is a supported-plate identity, wrong for the free twist) —
+  unlike the string, where it was close at the fundamental.
+
+Every other model is still raw: the membrane, the von Kármán plate, the strings other than the
+damped one. Smoothing a moving control belongs to the real-time stage.
 
 ## 13. Which models are real-time — deferred, decoupled
 

@@ -121,6 +121,7 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 - [Horizon promotion](horizon-promotion-state.md) — a deletion's constraint does not transfer to a move
 - [Spectrum detector guard](spectrum-detector-guard.md) — could return a NEGATIVE frequency; guard is local-max
 - [Parameter mapping](parameter-mapping-state.md) — damped string done 2026-10-18: invert the scheme's per-mode recurrence; exact at 2 partials, drift warned
+- [Plate mapping](plate-mapping-state.md) — plates done 2026-10-18: new loss σ₁; exact only where loss shares the modes; high T60 has a two-sided range
 
 ## Viewer
 

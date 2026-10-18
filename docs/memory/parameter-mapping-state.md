@@ -21,7 +21,7 @@ after Part 0 "allow and warn" for drift.
   byte-identical (bar asserts it); freeze untouched.
 - Headless case `string_damped_musical`.
 
-**Why:** next mapping batches (plate "size/thickness/material", other strings) should reuse the
+**Why:** next mapping batches (the plates were done the same day — [[plate-mapping-state]]; other strings) should reuse the
 pattern: invert the scheme's own per-mode recurrence, not the continuum.
 
 **How to apply:**
