@@ -30,6 +30,8 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
      rotating wave, Bessel and elliptic functions) and the resolution horizon. Its dependency list
      is empty too (its own `tests/deps.rs`); it shares core's root finder and sparse LU as
      `#[path]` includes of core's files, not as a dependency, so it cannot intra-doc-link into core.
+     A bar needing both crates lives in core's tests, through core's **test-only** dependency on
+     the analysis crate (retirement plan §24.2, the human's call).
    - `crates/physsynth-viewer` — the served viewer: `cargo run --release -p physsynth-viewer --
      serve`, serving the JavaScript front-end in `web/static/`. Every payload float goes through
      `py::num`, because `serde_json` turns NaN into `null` silently.
@@ -74,7 +76,7 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    - **A spelling cannot be pinned at a power of two** — a power-of-two length or constant makes
      the two spellings identical (§43).
    - A defect seen **only** by the Windows-exact viewer freeze is a gap: offer the human a bar of
-     its own (the answer has always been yes).
+     its own. They usually say yes, but not always (two guards were declined at §50 and §51).
 
    **Read before scoping work:** `docs/dev/rust-migration-findings.md` — eighty findings about
    when two computations agree to the bit; the questions to ask before writing an *exact*
@@ -83,9 +85,10 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    the history of the port, section by section.
 
 4. **Headless DSP core.** No I/O, no graphics inside the core (`crates/physsynth-core`). The
-   viewer, the analysis crate and any future wrapper depend on the core, never the reverse. Keeps
-   the physics portable to every host it may need (plugin, browser, embedded). The empty
-   dependency list is enforced; "no `std::fs`/`println!` in core" is not (a known gap, recorded in
+   viewer and any future wrapper depend on the core, never the reverse; the analysis crate depends
+   on nothing and shares core's files by `#[path]` (item 3). Keeps the physics portable to every
+   host it may need (plugin, browser, embedded). The empty dependency list is enforced; "no
+   `std::fs`/`println!` in core" is not (a known gap, recorded in
    `docs/dev/portability-contract.md`).
 5. **Unifying abstraction:** `exciter -> resonator (+- nonlinear coupling) -> body/radiation`.
    Adding a method = new resonator/exciter behind a stable interface.
