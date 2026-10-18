@@ -4,7 +4,8 @@
 (`docs/dev/parameter-mapping-plan.md`) gave the damped string pitch, inharmonicity and two ring
 times; §12 named the plate's "size / thickness / material" vocabulary as the next candidate.
 
-**Status: Part 0 DONE 2026-10-18** (§9) — the loss-operator choice is with the human.
+**Status: Part 0 DONE 2026-10-18** (§9); the human chose the Laplacian loss the same day. Part 1
+next.
 
 **The human's four decisions, 2026-10-18:**
 
@@ -100,8 +101,11 @@ cannot see a client that silently drops a non-zero `σ₁`. Found by grep, 2026-
   a bar asserts it (a struck plate with `σ₁ > 0` decays as the bare plate does).
 - `plate::initial_previous` ignores `σ₀` today (the start-up is the lossless Taylor step); `σ₁`
   is treated the same way, and the start-up bar says so.
-- The viewer's `platebody` (plate as a bridge body) and `connection` take a `Params` and are
-  audited in Part 1; each gets a line here.
+- `connection` (string ↔ plate bridge) steps the plate through `Plate::step`, so it carries the
+  term; its `plate_drive_compliance` is a stability guard on `G0 = M + (θ − ¼)k²κ²S`, where loss
+  does not enter (its own doc: a dissipative term enters the step operator, not `G0`).
+- `VkPlate` and the von Kármán room seam never see `σ₁`: `VkSpec` has no such field and builds its
+  linear part with `σ₁ = 0`. The viewer's `platebody` passes `sigma` only, so `σ₁ = 0` there too.
 
 ---
 
@@ -311,3 +315,7 @@ inexact by ≤ 0.05 cents and ≤ 0.3 % in T60, reported; tilt damped), or a sti
 loss (exact on every plate, rigid motion untouched; ring time falling as frequency **squared** —
 with 4 s at 110 Hz and 1 s at 1.65 kHz it gives 0.14 s at 5 kHz where the linear law gives
 0.38 s, and 2.4 s at 800 Hz against 1.7 s).
+
+**The human's call, 2026-10-18: the Laplacian loss** (ring time falling in proportion to
+frequency). The free branches' inexactness is reported and held to stated tolerances by the bars;
+the tilt damping is documented, not removed.
