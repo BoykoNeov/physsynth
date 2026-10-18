@@ -1,11 +1,11 @@
 ---
 name: retirement-phase-f-state
-description: "Phase F DONE 2026-10-17 (§51): Python at zero — binding, shims, last test file, Python CI gone; beam θ now shares the string's; next = restore ten lost derivations from git history"
+description: "Phase F DONE 2026-10-17 (§51): Python at zero; §52 restored core's lost derivations, §53 (2026-10-18) the analysis crate's; nothing queued after"
 metadata:
   node_type: memory
   type: project
   originSessionId: af072a4b-7d15-4a58-93c7-e6a5a9448efa
-  modified: 2026-10-10T07:43:42.310Z
+  modified: 2026-10-17T22:40:50.887Z
 ---
 
 Phase F of `docs/dev/python-retirement-plan.md` = deleting what is left of Python, in §46.7's order,
@@ -86,6 +86,45 @@ one step per "go" from the human.
 - `sed s/X/Y/` on a plan file hits every earlier section with the same boilerplate line
   ("When the human says so." is in §46–§50): address a line by number.
 
-**Next (the human's call, §51.2):** restore those ten derivations from git history into the
-Rust headers. Related: [[retirement-phase-c-carrying-state]],
-[[rust-tests-parallel-nice]].
+- **§52 (2026-10-17): the ten derivations are back**, from `74af04b^`/`6c23a45^`/`f6a3a3c^`/
+  `58654e5^`. Scope = the human's **option 3**: every module docstring + only class/method
+  docstrings carrying a DERIVATION (proofs, worked equations, measured arguments) onto the native
+  item of the same name; parameter remarks only where Rust said nothing. +1,690 lines, comments.
+
+**Lessons from §52:**
+- A header saying "the docstring is the physics" can mean CLASS or FUNCTION docstrings, not the
+  module's: inventory every docstring (`ast` walk) and score each against Rust comments by word
+  5-grams before scoping. A low score often means reworded, not lost — read before carrying.
+- reST → rustdoc: an indented block is a DOCTEST — fence every literal as ```` ```text ````.
+  Rewrap never starting a line with `- `/`#`/`>`/`1. `. Word-diff each block vs its source.
+- `cargo doc` already has 6 warnings (other files), so `-D warnings` fails on HEAD: compare the
+  warning list before/after instead.
+- Git Bash rewrites any argv starting with `//` (e.g. `//!`) — `MSYS_NO_PATHCONV=1` plus `W:/`
+  paths. Some src files are CRLF in the worktree; tools must normalise. `python -I` ignores
+  `PYTHONIOENCODING` — use `-X utf8`.
+- Scope grew mid-batch; the human wanted it surfaced as a choice, not one sentence.
+- Faithful ≠ true today: carried text quotes PYTHON-measured figures (label them as such, re-measure
+  before citing as Rust) and names retired pytests / Python kwargs (respell to native). Harvest
+  `test_\w+`, `*.py|*.md`, kwargs from the added lines and check each (§52 follow-up, `0ad5018`).
+- Under `MSYS_NO_PATHCONV=1`, `cmd //c` is NOT converted and opens an interactive prompt that
+  hangs forever — unset it before the below-normal `cmd //v:on //c` wrapper.
+
+- **§53 (2026-10-18): the analysis crate's derivations are back** (`b1d37c8^`, six modules,
+  comments only), plus — the human's call, asked up front — every present-tense mention of the
+  deleted parity files / binding in the analysis crate made past tense; `dispersion.rs`' Python
+  import-hazard header shrunk to a history note.
+
+**Lessons from §53:**
+- `ast.get_docstring` misses ATTRIBUTE docstrings (bare string after an assignment: constants,
+  NamedTuple fields) and `#` comment blocks — both held derivations. Walk every string `Expr` and
+  every comment run.
+- A carried docstring can be WRONG, not just stale: "roots from above" (false for root 2) and a
+  self-contradicting "droops"/"rises". Check each behavioural claim against a native test; carry
+  the corrected text and say what changed.
+- Analysis crate may not intra-doc-link into core (`tests/deps.rs`): code spans only.
+- A rewrap script must skip lines that were already over the limit before the edit — it flattened
+  an aligned comment table in `spectrum.rs`' FFT.
+- "N Python test files import this" counts are stale the day the Python goes.
+
+**Next:** nothing queued — the retirement plan has no named work left; the direction is the
+human's (HANDOFF §12). Related: [[retirement-phase-c-carrying-state]], [[rust-tests-parallel-nice]].

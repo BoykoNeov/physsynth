@@ -7,13 +7,13 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 - [Commit & push at batch end](commit-push-at-batch-end.md) — batch end → memory+docs, commit, push; "commit" always pushes
 - [Parity files run UNFLAGGED](parity-files-run-unflagged.md) — HISTORY: no flag (phase A), no wheel or pytest (§51)
 - [Respect line length](respect-ruff-line-length.md) — ≤100 chars in the FIRST draft; was ruff (Python gone §51), still the Rust convention
-- [Gate commit on lint exit](gate-commit-on-lint-exit.md) — lint in its own step; a `| grep` swallows clippy's failure and a red commit gets pushed
+- [Gate commit on lint exit](gate-commit-on-lint-exit.md) — lint in its own step (fmt, clippy, and since 2026-10-18 `cargo doc -D warnings`); a `| grep` swallows the failure
 - [Destructive undo discipline](destructive-undo-discipline.md) — never undo a temp edit with `git checkout --`; it discarded a whole batch
 - [Identify processes before killing](identify-processes-before-killing.md) — read the command line first; the user runs their own Python here
 - [Port reclaim modus operandi](port-reclaim-modus-operandi.md) — reclaim a busy port only from a stale run of THIS program
 - [Rust tests: parallel + nice](rust-tests-parallel-nice.md) — `scripts/cargo-test-nice.ps1`; QUICK lane default, `-Full` before commit; the only test run since §51; never RUSTC_BOOTSTRAP near cargo
 - [Unphysical params are a feature](unphysical-params-are-a-feature.md) — effective-coefficient APIs that permit odd combos; realism via helpers
-- [Unapplied CLAUDE.md audit](claude-md-audit-unapplied.md) — 2026-10-05 audit kept in docs/private/ (git-excluded); never commit
+- [CLAUDE.md audit](claude-md-audit-unapplied.md) — APPLIED and its folder DELETED 2026-10-18 (439 → 127 lines); keep the text code comments cite
 
 ## Rust migration and Python retirement
 
@@ -57,7 +57,7 @@ One line per memory — a hook to decide relevance, not the content. Open the fi
 - [Retirement phase E](retirement-phase-e-state.md) — 36 scripts + viz gone; sweep → Cargo example; convergence edge is a last-bit event
 - [Retirement phase D](retirement-phase-d-state.md) — DONE: Python viewer deleted; freeze exact on Windows only (Linux: 158/588 last-bit), structure elsewhere; browser check = Cargo example
 - [Phase C carrying](retirement-phase-c-carrying-state.md) — ALL 24 batches done (last: the horizon, 2026-10-08); no Python physics left → phase F (step 1 done, §47); carry the SWEEP; PROBE zero-witness plants; plant a defect SHARED by twins
-- [Phase F](retirement-phase-f-state.md) — DONE (§51): binding + shims + Python CI gone; read each shim against its Rust header; next: restore ten lost derivations
+- [Phase F](retirement-phase-f-state.md) — DONE (§51); §52/§53 restored lost derivations (core, analysis); attribute docstrings hide from `ast`; nothing queued
 - [Viewer stays Python](viewer-stays-python.md) — SUPERSEDED (viewer is Rust since D7); only coverage proves a line runs, not a grep
 - [Analysis freeze](analysis-freeze-state.md) — really 74 fixtures; native JSON since §47 (phase F step 1), inputs frozen too
 - [Deletion phase](rust-deletion-phase-state.md) — all 11 units gone, 23,396 lines, zero physics bars retired

@@ -1,24 +1,26 @@
 ---
 name: claude-md-audit-unapplied
-description: "An UNAPPLIED 2026-10-05 audit of this project's CLAUDE.md (325 → 180 lines, 13 stale statements) is kept in docs/private/, git-excluded — never commit it"
+description: "The 2026-10-05 CLAUDE.md audit was APPLIED 2026-10-18 (439 → 127 lines) and its folder DELETED the same day at the human's request; CLAUDE.md text that code comments cite must survive edits"
 metadata:
   node_type: memory
   type: project
-  originSessionId: caf7a610-33f2-4885-afd7-81f4946e66ef
-  modified: 2026-10-08T15:42:25.227Z
+  originSessionId: 46d96f22-0d6c-475d-8a10-35209504793c
+  modified: 2026-10-18T06:48:58.952Z
 ---
 
-`docs/private/claude-md-audit-2026-10-05/` holds a prompt audit of the project CLAUDE.md made on
-2026-10-05: `audit-report.md` (findings), `CLAUDE.md.diff` / `CLAUDE.md.proposed` (the rewrite),
-`CLAUDE.md.orig` (the file as audited), `CLAUDE.md.copy`. Nothing in it was ever applied — on
-2026-10-08 CLAUDE.md was still the long diary version it proposed cutting. Moved out of
-`W:\temp\claude` during a temp cleanup, at the human's choice ("keep, not committed").
+A prompt audit of the project CLAUDE.md, made 2026-10-05 and kept git-excluded under
+`docs/private/`, was **applied 2026-10-18** (the human: "your call on what to apply"). Its prepared
+diff was NOT used — it predated phases C–F and still named `physsynth/core/`, pytest and a Python
+frozen file. The finding table was used as a checklist and the file rewritten against today's
+text: item 3 went from a ~390-line migration diary to a short "Rust, no Python" item; #4 names the
+crate; HANDOFF §11's Python decision marked superseded by the human's 2026-08-26 call.
 
-**Why:** it names private paths under the user profile and reviews the user's global CLAUDE.md, and
-this repo is public. The folder is excluded through `.git/info/exclude` (`/docs/private/`), not
-`.gitignore`, so the exclusion is local to this clone.
+**Folder deleted 2026-10-18** at the human's request ("delete it"); `docs/private/` is gone too.
+The `/docs/private/` line in `.git/info/exclude` was left in place — harmless, and still keeps any
+future private notes out of this public repo.
 
-**How to apply:** if the human asks to slim or refresh CLAUDE.md, start from this report — but its
-line numbers and several findings predate phases C–F, so re-check each against the current file.
-Never `git add -f` anything under `docs/private/`. The copy is named `CLAUDE.md.copy`, not
-`CLAUDE.md`, so it is never loaded as instructions.
+**Why:** a record that the audit is done, so nobody goes looking for it or re-runs it from memory.
+
+**How to apply:** never `git add -f` anything under `docs/private/` if it comes back. Nothing reads
+CLAUDE.md programmatically (checked 2026-10-18); code comments cite its 1e-10 bar, "do not
+tighten", closed-form validation, oversampling and "#4" — keep those when editing it.
