@@ -1,8 +1,8 @@
 # Parameter mapping, part three — musical controls for the drum
 
 `docs/dev/scientific-hurdles.md` §12, third piece. The damped string
-(`docs/dev/parameter-mapping-plan.md`) and the three linear plates (`docs/dev/plate-mapping-plan.md`)
-have musical controls; §12 names the membrane as still raw.
+(`docs/dev/parameter-mapping-plan.md`) and the three linear plates
+(`docs/dev/plate-mapping-plan.md`) have musical controls; §12 names the membrane as still raw.
 
 **Status: planned 2026-10-18.**
 
@@ -94,8 +94,8 @@ clients are untouched. It goes **inside `step_numerator_into`**, so `step_into`,
 operator gives a linear law here. Part 0 puts numbers on it.
 
 **Nothing that exists may move.** `σ₁ = 0` leaves every membrane, mallet and room trajectory, and
-the 588-request viewer freeze, bit-identical: the term is skipped, not zero-multiplied. `Params::new`
-is positional with nine arguments and many call sites; `σ₁` arrives as a setter
+the 588-request viewer freeze, bit-identical: the term is skipped, not zero-multiplied.
+`Params::new` is positional with nine arguments and many call sites; `σ₁` arrives as a setter
 (`Params::with_sigma1`) that re-checks the bound, not a tenth argument.
 
 **Clients that rebuild the step must carry `σ₁` or refuse it.** Grep, 2026-10-18:
