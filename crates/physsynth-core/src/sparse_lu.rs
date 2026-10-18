@@ -424,7 +424,7 @@ impl SparseLu {
     /// because a column sweep is the order a reader can follow from the code — there is no
     /// reduction here whose associativity is in question.
     ///
-    /// It walks the factors as [`Runs`], which is what makes it fast (1.75x measured on the
+    /// It walks the factors as `Runs`, which is what makes it fast (1.75x measured on the
     /// viewer's default 60 x 60 plate, 0.56 -> 0.32 ms, where the solve is ~80% of the implicit
     /// step) and changes no bit: every `x[i]` receives the same
     /// subtractions in the same column order as the CSC loop it replaced. `tests` below holds

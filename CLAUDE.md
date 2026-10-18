@@ -16,395 +16,77 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
    real-time is a later port.
 2. **Energy-based / passive numerical methods** (Bilbao framework) are the foundation. Chosen for
    provable stability, measurable fidelity, and a path to nonlinear models (gongs/cymbals).
-3. ~~**Prototype in Python (NumPy/SciPy).** Julia acceptable if the human prefers. Not C++/JUCE
-   yet.~~ **SUPERSEDED 2026-08-26 (the human's call):** Python is being retired entirely — core,
-   analysis *and* the test suite — in favour of **Rust**, gradually and model by model.
+3. **Rust, and no Python.** The project was prototyped in Python (NumPy/SciPy); on 2026-08-26 the
+   human chose to retire Python entirely — models, analysis, viewer *and* test suite — in favour of
+   Rust, and on 2026-10-17 it reached zero (`docs/dev/python-retirement-plan.md` §51). Do not
+   bring Python back, not even for a script or a plot: where a diagnostic used to draw a figure,
+   Rust emits the data instead.
 
-   **DONE 2026-10-17 (retirement plan §51): there is no Python.** The binding crate
-   (`crates/physsynth-py`), the `physsynth` package, the last test file, `conftest.py`,
-   `pyproject.toml` and the Python CI jobs went in one step. **Everything below in this item is
-   HISTORY** — accurate about how the port was done; where it says the wheel is required, says to
-   run `pytest` or `ruff`, or names a file under `physsynth/` or `tests/`, that is the state before
-   §51. Validation is `cargo test --workspace --release` (CI's `rust` job), its unoptimised half
-   (`rust-debug`) and the exact viewer freeze (`frozen-windows`); locally,
-   `scripts/cargo-test-nice.ps1` (`-Full` before a commit).
+   **Where things live.**
+   - `crates/physsynth-core` — every model, operator, solver, room, port and bridge. Its
+     dependency list stays **empty** (enforced by `tests/deps.rs`; the portability contract,
+     `docs/dev/portability-contract.md`).
+   - `crates/physsynth-analysis` — the oracles (spectrum, modal, damping, dispersion, Duffing,
+     rotating wave, Bessel and elliptic functions) and the resolution horizon. Its dependency list
+     is empty too (its own `tests/deps.rs`); it shares core's root finder and sparse LU as
+     `#[path]` includes of core's files, not as a dependency, so it cannot intra-doc-link into core.
+   - `crates/physsynth-viewer` — the served viewer: `cargo run --release -p physsynth-viewer --
+     serve`, serving the JavaScript front-end in `web/static/`. Every payload float goes through
+     `py::num`, because `serde_json` turns NaN into `null` silently.
 
-   **AMENDED 2026-09-07 (the human's call): Python goes to ZERO, and both carve-outs below are
-   REVERSED.** The test suite is no longer "elective" (plan §35.4) and the viewer backend no
-   longer stays Python (plan §35.5's route (b)). Both were the human's calls and both are now
-   unset by the human — do not quote either back as a constraint. The plan is
-   `docs/dev/python-retirement-plan.md`: ~58,300 lines of Python go, and with them
-   `crates/physsynth-py` — 19,024 lines of **Rust** that exist only to talk to Python. **Not all of
-   that 19,024 is deletable, and the plan said it was** (§11, found on the first phase-C batch,
-   2026-09-08): three of its files are the ONLY implementation of models this project ships, put
-   there because they are polymorphic over their collaborators through Python duck typing. They
-   have to be **re-homed into a surviving crate before the binding can go**, which is phase C work
-   by another name and is not in the plan's test-count estimate.
+   **How validation runs.** `cargo test --workspace --release` (CI's `rust` job, which also runs
+   `fmt`, `clippy -D warnings` and `cargo doc` with warnings denied); the unoptimised half
+   (`rust-debug`: core and analysis, because a debug build fires `debug_assert!` and does not let
+   LLVM fold a literal exponent, so a test pinning an arithmetic *spelling* only means something
+   there); and the exact viewer freeze (`frozen-windows`). Locally:
+   `scripts/cargo-test-nice.ps1` (`-Full` before a commit). `cargo test` also runs the
+   `mod tests` blocks inside `src/` — count those when asking what covers a module.
 
-   **§11 counted them by hand and undercounted** — §13.1 derives the list instead (every
-   `#[pyclass]` minus every core `pub struct`/`pub enum`, then clear the case-spelling false
-   positives) and it is **sixteen classes across three files**, not fourteen across two. The file
-   §11 missed, `airbox_port.rs`, is the tier the other two stand on, so the porting order is
-   **forced rather than chosen: ports, then wrappers, then bridges** — each tier's slots take the
-   tier below as arguments. §12 (`SympatheticStrings`), §13 (`RoomPort` + `RoomLoadedBody`, which
-   also turned the native `AirBox` from a shell into a full room) and §14 (`SurfacePort` +
-   `InteriorSurfacePort`, which had to give the room a **partial cut** first — the callee again)
-   are the three done, and with §14 the **port tier is complete**: the hole is down to eleven
-   classes across two files, the six grid wrappers plus three surface adapters, and the three
-   bridges. §14 also sets two things that will recur: a refusal about the **shape of a Python
-   argument** has no native analogue (it becomes a type) while one about a **value** does, and a
-   test file can now retire in PART — a test goes when its referent is the ported class, and stays
-   when it drives a caller that has not been ported. §15 then retired `tests/test_airbox_cut.py`
-   whole against the cut primitive §14 had to build, and recorded the one place this migration's
-   exactness discipline does **not** apply: a bar asserting a tolerance on a *broadband* field is a
-   claim about the class of fields, so replacing NumPy's PCG64 with any structureless hash is
-   correct rather than sloppy. **§16 then took the LINEAR half of the wrapper tier** (split in two,
-   the human's call): the ordinary plate and the drumhead, four of the six wrappers and two of the
-   three seams, re-homed as **one generic `RoomGrid<S>`** rather than six transcriptions — Python has
-   no generics, which is the only reason the reference had six. `tests/test_airbox_membrane.py` went
-   whole and two more files went to one test each, so **the hole is now SIX**: the von Kármán seam
-   with its two wrappers, and the three bridges. Five things §16 settles that outlive it: (a)
-   **§13.1's derive has expired as a measure of what is LEFT** — it is a name join, and a port is now
-   allowed to be a better shape than its original, so read it with §16.7's re-homing table; (b) a
-   reduction that provably **does not feed back** (measured, not argued: 200 steps with every state
-   array bit-identical while the ledger differs at 1e-16) takes the crate's **read-out** spelling and
-   matches the room it must agree with, not the `ddot` that is about to stop existing; (c) an
-   **operand-order note is load-bearing only when the constant is not a power of two** — pinning
-   `(2 R) q` over `2 (R q)` pins nothing, and a mutation proved it changes no digit anywhere; (d)
-   **`np.allclose` keeps `rtol=1e-5` when you pass only `atol`**, so a translated bar reading
-   `atol=1e-18` was never an absolute claim — read every carried `allclose` for the tolerance it did
-   not write down; (e) two more "no analogue" verdicts, of different kinds — a test that works by
-   **replacing a live object's methods** has none once the object is a value, and a test asserting an
-   attribute is **absent** becomes a type. **§17 finished the wrapper tier**: the von Kármán seam is a
-   third seam of the same generic (`VkSeam`, one provided `GridSeam::advance` absorbing the fact that
-   its solve iterates), `tests/test_airbox_vk.py` 26 -> 9, and over 8 scenes × 120 steps every state
-   array **and every per-step iteration count** matched the binding to the bit — the many-solves-per-
-   step loop did not break SuperLU agreement. It also found a piece of the hole **no class count
-   could see**: `MalletVKPlate`'s gong-in-a-room *mode* lives only in the binding, inside an existing
-   class. **§18 took that mode** as its own native type, `MalletVkRoom` (a `RoomGrid<VkSeam>` plus a
-   generation stamp `RoomGrid::refactor` bumps, in place of the binding's pointer check), and
-   `tests/test_mallet_room_gong.py` retired **whole**: six scenes matched the binding to the bit in
-   every state quantity and count; the native bare mallet's hand-written commit was §17.1's drift
-   a second time; and the retired tangent bar could not see its own defect, because a bar that
-   asserts a *difference* from a twin differing in two ways certifies neither (finding #78).
-   **The hole is now only the three bridges** (§18.7), and **§19 took the first of them**:
-   `StringBodyBridge<B>` is native, generic over a `BridgeBody` trait that the four bodies its slot
-   took all implement, with the room as the trait's associated `Room` type (`()` in free air, the
-   `AirBox` when mounted) handed through `step` rather than owned. `tests/test_connection.py`
-   retired whole. **§20 took the other two as ONE generic `StringPlateBridge<P: BridgePlate>`** —
-   the binding's two classes differed in one attribute name (`rho` vs `rho_s`), which natively is
-   `BridgePlate::linear()`, the von Kármán plate's `lin` already carrying the areal density — and
-   six Python files retired whole. **The hole is CLOSED: nothing is implemented only in the
-   binding** (the binding's own copies stay until the viewer stops calling them). A Python
-   **plotting island** was chosen and withdrawn the same day: there is none, the plotting
-   capability leaves, and where a diagnostic drew a figure Rust emits the data instead. The
-   JavaScript front-end (`web/static/`) is not Python and is not in scope. **The rest of this
-   item is now HISTORY** — accurate about how the port was done, no longer a statement of where
-   the project is going.
+   **Frozen references** — answers from libraries and code that no longer exist here, recorded
+   before they went. They catch a transcription error, a wrong branch and a regression; they
+   cannot catch an error the original made too, which is what the physics bars are for.
+   - `crates/physsynth-core/tests/reference/` — NumPy, SciPy and LAPACK answers.
+   - `crates/physsynth-analysis/tests/reference/analysis_frozen.json` — the deleted Python
+     analysis, 74 fixtures, its inputs frozen as exact doubles too.
+   - `crates/physsynth-viewer/tests/frozen.rs` — the Python viewer's payloads for 588 requests.
+     **Exact only on `x86_64-pc-windows-msvc`** (the C library's `sin`/`exp`/`ln` differ in last
+     bits on Linux); elsewhere it checks structure only.
+   - Reading any frozen float needs `serde_json`'s `float_roundtrip` feature.
 
-   **Phase D, the viewer, is DONE (2026-09-28, retirement plan §23; D7 is §23.19).** The served
-   viewer is `crates/physsynth-viewer`: `simulate_to_payload` plus a `std::net` server (`cargo run
-   --release -p physsynth-viewer -- serve`) serving `web/static/`. `web/serialize.py`, `web/server.py`
-   and `tests/test_web_backend.py` are **deleted**; all 338 of that file's tests are carried
-   (`docs/dev/viewer-test-accounting.md`). What replaced the live Python reference is
-   `crates/physsynth-viewer/tests/frozen.rs`: the Python's own payloads for 588 requests, frozen as
-   a digest that keeps every value exact. **Exactness there is a claim about the platform**: a
-   GitHub Windows runner reproduced all 588 to the bit, the Linux runner differed in 158 (last bits
-   through the C library's `sin`/`exp`/`ln`, grown to ~1e-6 by the parametric scene). So the file
-   compares everything on `x86_64-pc-windows-msvc` (the `frozen-windows` CI job) and only structure
-   — keys, types, lengths, ints, strings — elsewhere. The browser check is
-   `cargo run --release -p physsynth-viewer --example verify_headless` (server running); it closes
-   its Chrome through the DevTools port, never by name. Every payload float goes through `py::num`,
-   because `serde_json` turns NaN into `null` silently.
+   The browser check is `cargo run --release -p physsynth-viewer --example verify_headless` with
+   the server running; it closes its Chrome through the DevTools port, never by name.
 
-   **Phase C's CARRYING batches began 2026-09-29 (retirement plan §24)** — retiring a Python
-   physics file whose model is already native: read each test's assertions, write or find the
-   native bar, plant breakages to prove the bars live, delete. §25 did the supported grained
-   plate, §26 the plain plate, §27 the free plate, §28 the guitar/disk — **every plate family's
-   Python suite is gone** — §29 the membrane, §30 the beam, §31 the ideal string, §32 the stiff
-   string, §33 the damped string, §34 the tension-modulated string, and §35–§36 the geometric
-   string in two halves — **every string family's Python suite is gone** — and §37 the barrier,
-   the jawari and the mallet on a drumhead, two batches done together at the human's request (bars
-   for both first, one comparison, one breakage round, one deletion), §38 the mallet on a
-   plate, and §39 the mallet on a gong — **every contact file is gone** — and §40 the gong plate
-   itself (six files, its bracket and Airy solve included), §41 the bowed string, and §42 the bore
-   and the reed together (seven files; the reed's bars stand on the bore), and §43 the operators,
-   the spectrum detector and the body together (three files, all into existing native files),
-   and §44 the room (four files; about twenty of its claims were already in `src/airbox.rs`'s own
-   tests, several weaker than the Python's — NaN-dropping "worst of" folds, end-to-end drifts, one
-   probe node — and were sharpened), and §45 radiation (one file, into the existing native
-   `radiation.rs`, 25 → 60, whose rigs had every mode at mass 1 and weight 1 — where `a²→a` and a
-   dropped `/m` are the identity — so the Python's mass-0.02 and weight-0.02 rigs were carried at
-   those values; the binding assembles its own loaded steps, so the comparison was a real
-   cross-check and matched to the digit), and §46 the resolution horizon (48 functions, 41 into the
-   analysis crate's `tests/horizon.rs` and the 7 that read a BUILT model into core's new
-   `horizon_models.rs`; the shim's shape test relocated to `test_binding_surface.py`, since the
-   shim outlives it; `tests/helpers.py` deleted whole with its last importer). **Phase C's carrying
-   is COMPLETE: no Python physics file remains** — what is left is phase F (§46.7). **Its first
-   step, the frozen analysis record's native home, is done (§47)**: the record and its inputs are
-   JSON in the analysis crate, 74 of 74 native gaps matched the pytest path's to the bit, and the
-   "62 fixtures" every document quoted was really 74. **Step 2 (§48)** carried
-   `test_binding_surface.py`'s outside referees — NumPy's `np.sum`/`np.dot` and SciPy's `D2 @ D2`,
-   recorded first into `crates/physsynth-core/tests/reference/` — and deleted `physsynth/analysis/`
-   (its horizon prose moved into `horizon.rs` first). `reduce.rs`' own tests pin the blocking's
-   structure and could not see a wrong combine order or block size; the body bridge's and the sympathetic
-   sums were seen by nothing native. The binding's own properties stay until the binding goes.
-   **Step 3 (§49)** recorded SciPy's 2-D answers (`reference/scipy_ops2d.json`: the Airy
-   operator, the corner-average scatter, SuperLU on 16 grids, and fingerprints of `L @ L` and the
-   free plate's `K`) and deleted `tests/test_rust_parity_ops2d.py`. A product contracting in
-   descending order moved the masked biharmonic and the guitar plate's stiffness with only the
-   Windows-only viewer freeze seeing it, now guarded (the human's call); the Airy operator's
-   parentheses are an equivalent mutant natively. **Step 4 (§50)** deleted `test_stability.py` and
-   `test_ci_workflow.py`: the shim identity guard MOVED into `test_binding_surface.py` (it dies with
-   the shims, not before), and the workflow checks went native as
-   `crates/physsynth-core/tests/ci_workflow.rs` — the named-file check widened to `cargo --test`
-   targets (the human's call), the line limit 120 → 160 (a legitimate line sat exactly on 120).
-   **Step 5 (§51) was the last: the binding, the shims and the Python CI jobs went at once, and
-   Python is at zero.** §46 found θ a sixth time: BOTH plate frequency oracles could ignore `θ` unseen
-   workspace-wide (every caller that builds or reads a plate passes the default; the only bar that
-   saw either plant alone was a twin of the two oracles), now held to the plate's own stepped
-   recurrence at four θs; and the monotone flag's slack was seen only by the viewer freeze — both
-   guarded at the human's call. Its review: "every figure matches" needs a SAVED native print of
-   every figure quoted (the first covered half), and a cost told to the human is checked against
-   the viewer (it does offer plate θ). §45 found the air a fourth time (16 of 23 `rho0`/`c0`
-   reads, enumerated by grep, unseen — grep of every call site + 3 workspace-wide re-runs) and a restart that nothing checks; both
-   guarded at the human's call (density 0.9 / sound speed 380; a restart bar). §44's find was §42's again: the room reads `rho0`/`c0`
-   in 26 places (the first count, 14, was only the reads planted — enumerate reads by grep, never
-   from a plant list, §44.8) and every room the workspace builds uses standard air, so each could
-   be hard-wired unseen; guarded at the human's call by four bars at density 0.9 / sound speed 380.
-   Its equivalent-radius bars cost 98 s unoptimised and were split into `airbox_port_size.rs`,
-   release-only (the human's call). §43's four finds, all guarded at the human's call or by precedent: a loss
-   read 1% high (the Python's 2% decay bar passes it by design) and a `>=` → `>` in the peak
-   separation, each seen only by the Windows-exact viewer freeze; the frequency axis reordered to
-   `(1/d)/n`, seen by NOTHING — identical at every power-of-two length, so a bar at a power of two
-   cannot pin a spelling (it now runs at n = 1001), and the viewer, which does reach it (582 calls),
-   ships those frequencies rounded to 3 decimals, which absorbs a last bit; and a launched start whose velocity sign could
-   flip unseen — the one launched start compared the model with its own kernel, and the two share
-   the start-up, so nothing held a launch to physics (a twin again, finding #78). §42 found SEVEN
-   parameters that had only ever run at their defaults (sound speed, air density, reed mass, jet width, rest opening, the reed's air
-   density, its solve tolerance) — each hard-wired passed the whole workspace and each is a real
-   defect off the default — plus a far-field read-out and a solver seed seen only by the
-   Windows-exact viewer freeze; all guarded at the human's call. Grep a model's fixtures for EVERY
-   parameter's range, not only `θ`. Its eigenvalue referee was a closed form, and there ARPACK
-   (relatively accurate at the bottom of the spectrum) beat LAPACK (accurate to `eps·λ_max`) — the
-   reverse of §24. And an existing native test claimed to pin a spelling it could not see (the
-   reed's NaN stall test): a "this pins X" comment is a claim to plant, too. §41 found four gaps, all guarded at the
-   human's call: the admittance built at the default `θ` (seen by nothing — every bar ran at the
-   default, a fifth time), the balance's exactness at a loose solve tolerance (only the viewer
-   freeze) and the tolerance itself (seen by nothing), the fallback's root choice and the bow's
-   node rounding (only the Windows-exact viewer freeze). Before calling a zero-witness plant a gap,
-   PROBE it: print trajectory digests at the default AND off-default rigs — two of §41's zeros
-   changed no bit anywhere and are not gaps. §40 found two defects the workspace could not see, both guarded at
-   the human's call: the plate's constructor dropping the caller's `θ` (step and energy then agree
-   on the wrong θ, so conservation is blind — the bit-identity anchor now runs at three θs), and
-   the start dropping the membrane force (seen only by the Windows-exact viewer freeze — §35's
-   time-symmetric start bar now pins it). Two of its plants HANG tests instead of failing them, so
-   a breakage round needs a per-plant time limit; and a plant that changes no bit (an equivalent
-   mutant) is not a gap. §39 carried into the existing native file (the Python's
-   fixture was its fixture, save the plate's solve method — so every carried rig asserts no
-   fallback, which makes the two one trajectory), reproduced every figure to the digit, and found
-   one gap: the step's iteration count could drop its first solve unseen (a read-out, no motion);
-   the human chose a bar (a miss must report exactly a bare step's work). §38 found two defects
-   NOTHING in the workspace saw, both guarded at the human's call: a strike that corrects the
-   plate's displacement but leaves its stored acceleration stale (the radiated attack wrong by up
-   to 3x through the contact, exact after it; the energy never reads `accel`), and a mallet seeded
-   against the wrong node (invisible from rest; it moves only the reported starting state and the
-   solver's seed, not the strike — the question to the human overstated it). §37's one find: a felt stiffness read 1% high in force
-   AND potential conserves perfectly and was seen only by the Windows-exact viewer freeze, so the
-   applied force is now pinned to the felt law at the test's own `K` (the barrier's equivalent,
-   the static-equilibrium oracle, was the only thing that saw the same defect there). §36 (whirl, phantom, rotating wave) found nothing
-   unseen; its bars that spin a helix need the core model AND the analysis BVP, so they live in
-   core through §24.2's test-only dependency, and it took the `slow` mark, the `xdist_group` pins
-   and their now-unfailable guard file with it (the human's call). §35 found the θ blind spot a third time (guarded the same way),
-   a start-up whose NONLINEAR force could be dropped unseen (a time-symmetry bar now pins it: from
-   rest the first step must mirror the start), longitudinal losses that could be routed to the
-   wrong field unseen (guarded, the human's call), and a cross-model bar too loose to see the
-   nonlinearity it tested (now a pitch-RISE comparison, the human's call); its long simulations
-   are a separate optimised-only file. §34 ported the string material helper into core (its tests had nowhere else to go),
-   and its θ was blind exactly as §33's was, guarded the same way; there, unlike §30–§33, a
-   physics bar (the Richardson run against the exact Duffing waveform) already saw both start-up
-   plants, so no start-up bar was added. §33 found three defects NOTHING in the workspace saw — the damped string's `θ` hard-coded
-   to its default in the energy or the step (every test ran at the default), and the T60 constant
-   moved 1% (it cancels from both round trips) — and the human chose to guard both, the second by
-   carrying the analysis freeze's recorded row natively. §32 reproduced every
-   Python figure to the digit, and found §30's start-up blind spot again: a dropped ½ in `u⁻¹` was
-   seen only by two copies, the stiff↔damped twin anchor and the viewer freeze, until an exact
-   eigenmode start-up bar was added — a copy going red says two numbers differ, not which is wrong. §31 had no outside referee to freeze, and
-   showed why a carried sweep matters: every energy bar in the string's own native file ran at
-   λ = 1, so an energy spelled with `(h/k)²` for `c²` — identical at λ = 1 — passed all of them
-   and was seen only by the chains built on the string and the viewer freeze (re-plant a "nothing
-   else catches it" claim WORKSPACE-wide before writing it). §30 froze a truth stronger than LAPACK (the 50-digit Rayleigh
-   quotient of LAPACK's eigenvector), found the native Krylov solver's error is `eps·mu_max` PLUS
-   1e-10 relative (neither alone is a bar), and found a start-up defect nothing in the workspace
-   could see. §29 set a rule: **a bar about a constant must not import the constant**
-   (the CFL bars read the ceiling from the model, so a moved ceiling moved the bar). §28
-   froze outside referees into `crates/physsynth-core/tests/reference/` — which needs serde_json's
-   `float_roundtrip` to read a float back exactly.
-   §26 carried three tests whose SUBJECT was SciPy by transcribing SciPy's kernel into the test and
-   certifying it against SciPy's recorded output — a referee that is leaving can be replaced, not
-   only dropped. §25 added two
-   rules: everything else in a Python test already runs through the Rust binding, so **only the
-   NumPy/SciPy numbers are independent referees** — those are what must be recorded; and a
-   **control must assert that it differs** from its subject, or it can silently assert nothing
-   (the Python ledger control did). Two rules §24 set: where a Python test's truth came from
-   SciPy's eigensolvers, **record SciPy's numbers before deleting** — and record them with LAPACK's
-   dense solve, because ARPACK at the test's own shift was the least accurate solver in the room
-   (7e-7 off, §24.3); and a bar needing both crates lives in `physsynth-core`'s tests through a
-   **test-only** dependency on `physsynth-analysis` (the human's call, §24.2).
+   **Writing a bar — what ~24 carrying batches taught** (§ = the retirement plan):
+   - **Run every parameter off its default.** Grep a model's fixtures for each parameter's range.
+     A `θ` dropped or hard-wired passed the whole workspace six times (§33–§46); so did the air's
+     density and sound speed (§44, §45) and seven wind-instrument parameters (§42).
+   - **A bar about a constant must not import the constant** (§29).
+   - **A control must assert that it differs from its subject** (§25). A bar asserting a difference
+     from a twin that differs in two ways certifies neither (finding #78), and a twin comparison
+     going red says two numbers differ, not which is wrong (§32).
+   - **Prove a bar is live by planting the defect it is for.** Re-plant any "nothing else catches
+     it" claim workspace-wide before writing it down (§31, §50.5); a "this pins X" comment is a
+     claim to plant too (§42). Before calling a plant nobody catches a gap, probe it — a plant
+     that changes no bit anywhere is an equivalent mutant, not a gap (§40, §41). Plants can hang
+     a test, so give each one a time limit (§40).
+   - **A start-up needs its own bar.** Several first-step defects were invisible to every
+     conservation bar (§30, §32, §35).
+   - **A spelling cannot be pinned at a power of two** — a power-of-two length or constant makes
+     the two spellings identical (§43).
+   - A defect seen **only** by the Windows-exact viewer freeze is a gap: offer the human a bar of
+     its own (the answer has always been yes).
 
-   **REVERSED 2026-09-07, see above.** ~~One exception, 2026-09-03 (the human's call):~~ the
-   **viewer backend stays Python** and talks
-   to Rust through the binding — `web/serialize.py` is a serializer, not a model, and there is no
-   Rust HTTP server to write (plan §35.5 closes it, and strikes §5's Phase 8). **The audit §35.5
-   left open is DONE (plan §50, 2026-09-06), and it closed as a coverage question rather than a
-   gate**: with every Python body already deleted, a name the binding does not expose is an
-   `AttributeError` in the viewer *today*, so the only thing left to prove was that each reach
-   actually **runs**. It does. `web/serialize.py` is 94% covered by `tests/test_web_backend.py`,
-   and a reach set derived over both packages (29 modules, 633 attribute names, 680 candidate
-   lines) leaves three dark lines — two defensive branches unreachable from any call site, one a
-   name collision. The one *live* gap it found was the bow's empty settle window (a short render
-   captures `bow.state` at step 0), now tested. The viewer reaches six private names on Rust
-   objects — `_stretch`, `_bridge_displacement`, `_support`, `_b`, `_open_left`, `_open_right` —
-   and writes six state arrays on the geometric string; all are exposed on purpose, most with a
-   doc comment in the Rust source naming the viewer. **The migration has no remaining named work.**
-   See `docs/dev/rust-migration-plan.md`; it also supersedes the portability contract's
-   "Python stays the reference oracle" clause and absorbs HANDOFF §9's Phase 5.
-   **State (2026-09-05): translation is over and DELETION is FINISHED.** Every model, operator,
-   solver, room, port, wrapper and bridge has a Rust implementation (`crates/physsynth-core` +
-   `crates/physsynth-py`), and all six of `analysis/`'s modules — `spectrum`, `modal`, `damping`,
-   `dispersion`, `duffing`, `rotating_wave`, plus the Bessel and elliptic functions they stand on —
-   are in a **third crate**, `crates/physsynth-analysis`.
+   **Read before scoping work:** `docs/dev/rust-migration-findings.md` — eighty findings about
+   when two computations agree to the bit; the questions to ask before writing an *exact*
+   assertion follow its index. The open *scientific* problems are in
+   `docs/dev/scientific-hurdles.md`. `docs/dev/rust-migration-plan.md` and the retirement plan are
+   the history of the port, section by section.
 
-   **All twenty-three Python model bodies are GONE** — 23,396 lines, **eleven of eleven**
-   deletion units, and not one physics bar retired. Plan **§39** is the audit that made the order
-   computable (eleven units, from the reference-alias graph) and **§40–§49** are the deletions. Read
-   §39's tables before touching one again — but **§39.3's "zero native bars" for `airbox` was
-   measured wrong** and §46 corrects it: the module carried nineteen `#[test]`s in `mod tests`
-   blocks *inside* `src/`, which `cargo test --workspace` runs exactly like the files under
-   `tests/`, and the audit had run `ls crates/physsynth-core/tests/`. §46 closed the remaining gap
-   with eighteen more, so unit 6's blocker was cleared and **§47–§48 deleted it, in halves (the
-   human's call)**: the room and three ports first with the whole four-file parity family, then the
-   seven wrappers, two mixins and three seams. `airbox.py` is **4,112 -> 245 lines**, the largest
-   deletion of the migration, and the second half retired **no test file at all**.
-
-   **§49 deleted the last one**, `physsynth/core/connection.py`, **973 -> 74 lines**. §39.3 had
-   filed it under a blocker it called permanent, and that conflated two questions: it is true that
-   `connection` can never have a *native* bar (it lives only in the binding crate, so a
-   `physsynth-core` test cannot reach it), and that is **not** a reason its body cannot be deleted
-   — the airbox wrapper tier was under the identical blocker and §48 deleted it, with the physics
-   asserted by Python tests running against Rust, which is what §39.5 says a body-deletion actually
-   retires. **`PHYSSYNTH_RS` can no longer change which model a run exercises.** After §49 it still
-   swapped `operators`, `exciter` and `banded`, none of them a resonator; **retirement plan §21
-   (phase A, 2026-09-28) removed those three swaps and the flag with them** — `banded.py` and its
-   binding deleted whole, `exciter` three re-exports, `operators` delegating wrappers (CSR rebuild
-   plus input coercion). Nothing reads `PHYSSYNTH_RS`, and the `rust-harness` CI job is gone.
-   **Phase E (§22, same day)** deleted 36 of `scripts/`'s 41 files and `physsynth/viz/`; matplotlib
-   is no longer a dependency, and the one measurement kept is a Cargo example
-   (`crates/physsynth-core/examples/`). What is left in `scripts/` runs the suite or checks the
-   viewer, and goes with them.
-
-   Seven things about the state this left (history since §51 deleted all of it):
-
-   - **The wheel is now REQUIRED**, everywhere. A deleted model's module is an unconditional
-     `from physsynth_rs import X`, so `pip install ./crates/physsynth-py` is a precondition for
-     `pytest` to *collect*, not just to pass. The `validate` and `rust` CI jobs install it (the
-     human's call, §39.6 route 1); `validate` is therefore no longer a pure-Python baseline, and
-     nothing is. (`checks` installed it too, to count collected tests per shard; since 2026-09-29
-     the suite is one job, that job is `lint`, and it needs neither Rust nor the wheel.)
-   - **A deleted module is not empty.** Three things survive every time — types with no runtime
-     implementation (`Literal`, `Callable`, `Protocol`, `NamedTuple`), measured constants *with their
-     docstrings*, and re-exports of names defined elsewhere but reached through this module. And the
-     binding **depends on Python** in four places (`grep -rn 'import("physsynth' crates/physsynth-py/src/`):
-     `GeometricState` and `GrainSpec` are constructed *by Rust*, and `airbox` / `connection` have
-     their namespaces read at call time. Run that grep before deleting anything (§41.2).
-   - **A module deleted in HALVES needs its own table.** `deleted_bodies` asserts three things at
-     once — no `_USE_RUST`, no `<Name>Py` aliases, and each name *is* the Rust object — and a
-     half-deleted module satisfies only the third, so it cannot be added and the identity claim
-     would go unasserted for the whole interval between the two commits with every test still
-     green. `half_deleted_bodies` in `tests/test_stability.py` is that table; it merges back into
-     `deleted_bodies` at §48 (ledger #60).
-   - **A guard that reaches zero is deleted, or re-derived over a WIDER population — never left
-     empty.** Three tables hit zero and took three different exits. `tests/test_rust_parity.py`'s
-     `STILL_HAVE_A_PYTHON_TWIN` and `half_deleted_bodies` were **deleted**, because an empty
-     `parametrize` collects as a *skip* and an empty dict iterates zero times — green, and
-     asserting nothing (ledger #52, #60). `expected_classes` was **widened**: its derive stopped
-     reading a hand-written tuple at all and now reads the package (`pkgutil.iter_modules`, 23
-     modules), so the claim became "no module in `physsynth.core` chooses between two
-     implementations of a class any more" — worth more at zero than it was at four. Widening the
-     tuple *by hand* would only have restated the hole at a larger number (ledger #67). Phase A
-     (retirement plan §21.4) took the same two exits again: `ported_expected`, the `_USE_RUST`
-     reader tuple and the `if expected_rust:` capture block were **deleted**, and the flag and alias
-     checks were **widened** to every module `pkgutil` finds; the guard is now
-     `test_no_module_chooses_between_two_implementations`. `REMAINING_PARITY_FAMILY` and the
-     `--exclude-parity` option it guarded are gone with the flagged job that needed them.
-   - **`tests/test_binding_surface.py` is where a parity file's survivors go**, and a parity file
-     is **harvested, not dropped**: 26 of `connection`'s 36 tests outlived their twin, and three
-     got *sharper* by being re-aimed at what the transcription was actually copying — "Rust agrees
-     with Python about `np.sum`" became "Rust agrees with **NumPy**", and a trajectory comparison
-     for the reduction that must *not* be transcribed became a **count of the binding's `np.dot`
-     calls** (ledger #64, #65). Only a comparison with no referent outside the twin really dies.
-     But **freezing a message is not the same move**: a parity test compared full strings on ONE
-     machine while asserting only a substring of the prose, so writing the literal down promotes
-     every digit to a cross-machine claim. Freeze the prose, leave a placeholder where a LAPACK or
-     a sparse LU printed a number (ledger #68).
-   - **Two `ruff --fix` hazards live in every shim**, both silent until something outside the file
-     asks for a name. A re-export is an unused import, so **`__all__` is load-bearing** — without
-     it `--fix` deletes the module's whole public surface (#66). And residue that is *not* a Rust
-     object falls straight through `deleted_bodies`' identity loop: `connection.py` keeps `sparse`,
-     `spsolve` and `splu` solely because `connection.rs` reads them off its namespace, and they
-     need their own guard for **presence and reachability separately** (#63, §49.2).
-   - **A deletion reaches modules it does not contain.** §43 is the case: `airbox.py` *re-derives*
-     the plate's system matrix and factors it, and four of its reduction anchors are `array_equal`,
-     so moving the plate's solver to Rust on the default path broke 15 tests in three modules
-     outside the unit. That dependency has no import and no shared name — the tell is an
-     `array_equal` in a test on a module you are not deleting, and the fix was one rebinding of
-     `splu`. A deletion also **changes which tests share a process**, so it surfaces order- and
-     process-dependent defects that are not yours (ledger #44, #46).
-
-   `cargo test --workspace` runs the native bars and the Cargo dependency allowlists, and since §51
-   it is the only run. (Until then plain `pytest` was the one Python run, against a wheel that had
-   to be reinstalled before any number was believed.)
-
-   **There are NO flags now, and the second one's job was handed to a file.** `PHYSSYNTH_RS` swapped
-   the *models* until phase A. `PHYSSYNTH_RS_ANALYSIS` swapped the *instrument that measures them* and is read by
-   nothing since units 10 and 11 were deleted (plan §44) — `physsynth/analysis/` has one
-   implementation. The separation it protected is worth understanding rather than forgetting,
-   because it is what makes the acceptance run mean anything: with only the model flag set, a Rust
-   model was read by a **Python ruler**, so a misreading shared by a model and its detector could
-   not cancel (§36.4). That check was made and passed; what the deletion removed is the ability to
-   *re-derive* it, and the human's condition for allowing it was that the numbers be frozen first.
-   **`crates/physsynth-analysis/tests/reference/analysis_frozen.json` is where they live** (a
-   Python file until retirement plan §47, phase F's first step) — 74 fixtures, 3,754 floats (the
-   "62 / 3,708" quoted here went stale on 2026-09-07, when the twelve horizon rows were added), recorded to the last digit from
-   the Python implementation before it was deleted, asserted on every run by that crate's
-   `tests/analysis_frozen.rs`. Its INPUTS are frozen too, as exact doubles — NumPy's seeded RNG,
-   `sin` and `linspace` built several and nothing native can rebuild them — with every default of
-   the deleted Python wrappers written out, and a checksum over every double notices a record read
-   without serde_json's `float_roundtrip`. The Python's derived guard (every `__all__` name has a
-   case) was not carried: no implementation is left to freeze a new oracle against, so a new
-   oracle gets a native bar instead. It catches a transcription error, a wrong branch and a
-   regression; it cannot catch an error the Python made too — that is what
-   `crates/physsynth-analysis/tests/` is for, and §37.11 is the precedent (a native bar found a
-   544% defect the Python always had, which no parity test could).
-   The crate-versus-flag distinction that used to sit here is still true and still worth knowing:
-   `piston_radiation_resistance` is *implemented* in the analysis crate (the core crate's dependency
-   list must stay empty, so it cannot reach a Bessel function) while its Python name lives in a
-   `core/` module. **The crate a function is implemented in and the module its name lives in are
-   separate questions** (§37.7).
-   **Before scoping any batch, read `docs/dev/rust-migration-findings.md`** — the **eighty**
-   findings about when two implementations agree to the bit, when they cannot, and what a
-   *deletion* breaks that a port does not (fed-back reductions, libm vs NumPy's own
-   transcendentals, LLVM's constant fold, `np.sum`'s pairwise cutoff, descriptors that take a
-   write away, anchors that bind two classes into one batch, clients that re-derive a model's
-   arithmetic, and reflective tests that are really claims about how a model stores its
-   attributes).
-   They lived here verbatim until 2026-09-02 and moved so this file could be what its first line
-   says it is; the questions to ask before writing an exact assertion are listed at its top.
-   The open *scientific* problems — as opposed to porting ones — are in
-   `docs/dev/scientific-hurdles.md`.
-
-4. **Headless DSP core.** No I/O, no graphics inside `core/`. Viz and wrappers depend on the core,
-   never the reverse. Keeps the physics portable to C++/Rust later.
+4. **Headless DSP core.** No I/O, no graphics inside the core (`crates/physsynth-core`). The
+   viewer, the analysis crate and any future wrapper depend on the core, never the reverse. Keeps
+   the physics portable to every host it may need (plugin, browser, embedded). The empty
+   dependency list is enforced; "no `std::fs`/`println!` in core" is not (a known gap, recorded in
+   `docs/dev/portability-contract.md`).
 5. **Unifying abstraction:** `exciter -> resonator (+- nonlinear coupling) -> body/radiation`.
    Adding a method = new resonator/exciter behind a stable interface.
 
@@ -415,8 +97,9 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
   run decreases monotonically), modal frequencies vs analytic oracle, convergence order. These tests
   exist and pass before any new model is added.
 - **Do not tighten the `1e-10` acceptance bar.** The gap to the ~`1e-15` typically observed is
-  deliberate headroom: this harness is the acceptance contract for the eventual native port, which
-  must reproduce these numbers under a different compiler and BLAS. Tiers and rationale in §6.1.
+  deliberate headroom: this harness is the acceptance contract every implementation must meet
+  under a different compiler, platform and BLAS (the viewer freeze already differs in last bits
+  between Windows and Linux). Tiers and rationale in `HANDOFF.md` §6.1.
 - **Energy report is mandatory** on every resonator — it is the primary bug detector.
 - When `E^n` drifts in a lossless run, suspect the boundary handling (summation-by-parts) first.
 - Assert `lambda = c*k/h <= 1` for explicit schemes; reject construction otherwise. Tune toward
@@ -426,14 +109,16 @@ starting with one done deeply, expanding in breadth and depth. Interactive, beau
 
 ## Start here
 
-The first deliverable is the **ideal-string solver + validation harness** (HANDOFF.md §10). The
-deliverable is the string *plus the rig that measures its deviation from theory* — not just a string.
-Acceptance criteria are in §10.
+The first milestone — the ideal string *plus the rig that measures its deviation from theory*
+(`HANDOFF.md` §10) — was done long ago, and that pattern is how every model since was added: a
+model ships with its validation harness, not after it. Nothing is queued. Direction is the
+human's, drawn from `HANDOFF.md` §12 and `docs/dev/scientific-hurdles.md`.
 
 ## Open decisions — all closed (2026-08-10)
 
-HANDOFF.md §11's five decisions are settled and kept there as a decision record: Python; explicit
-*and* implicit (θ-scheme from the stiff string on); polyphony is per-instance for field models and
-per-voice for strings (§11.3a, budget half deferred to Phase 5); the web viewer was the first viz
-target; tolerances stand as they are (§6.1). New open questions go to the human as before — but do
-not re-open these five.
+HANDOFF.md §11's five decisions are settled and kept there as a decision record. The first
+(Python) was superseded by the human's own call on 2026-08-26 — see item 3. The other four stand:
+explicit *and* implicit (θ-scheme from the stiff string on); polyphony is per-instance for field
+models and per-voice for strings (§11.3a, budget half deferred to Phase 5); the web viewer was the
+first viz target; tolerances stand as they are (§6.1). New open questions go to the human as
+before — but do not re-open these.

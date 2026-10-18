@@ -465,7 +465,7 @@ impl SympatheticStrings {
         string_internal(&self.strings[j], x)
     }
 
-    /// The diagonal mass `M` of the coupled system, in the DOF order [`apply_a`] uses.
+    /// The diagonal mass `M` of the coupled system, in the DOF order [`Self::apply_a`] uses.
     ///
     /// `rho h` per interior string node, `rho h / 2` at the free end — the half cell the
     /// trapezoidal node weights give it, and the reason the end node's spring term carries a
@@ -486,8 +486,8 @@ impl SympatheticStrings {
 
     /// The coupled operator, mass-symmetrized: `M^1/2 A M^-1/2`, row-major.
     ///
-    /// Built column by column from [`apply_a`], so it is the operator the integrator uses and not
-    /// a second derivation of it. Symmetric by construction of the discretization — see
+    /// Built column by column from [`Self::apply_a`], so it is the operator the integrator uses
+    /// and not a second derivation of it. Symmetric by construction of the discretization — see
     /// [`crate::eig`]'s header — and asserted so in `tests/connection.rs`.
     pub fn symmetrized_operator(&self) -> Vec<f64> {
         symmetrize(self.dofs(), &self.mass_diagonal(), |x| self.apply_a(x))

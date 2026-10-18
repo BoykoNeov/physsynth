@@ -698,7 +698,7 @@ impl GridSeam for MembraneSeam {
 /// * **The commit rolls two histories and six read-outs**, and it does so through
 ///   [`VkPlate::record`] -- the very method the bare plate's own step commits through. The
 ///   binding's seam once kept its own list of assignments and missed two of them.
-/// * **The force is added outside the plate's `step_rhs`**, by [`add_f_ext`], because the linear
+/// * **The force is added outside the plate's `step_rhs`**, by `add_f_ext`, because the linear
 ///   right-hand side a von Karman plate exposes carries no force. So the equality of this seam's
 ///   force path with [`PlateSeam`]'s is a measured fact, asserted with `sigma > 0` and a live
 ///   `f_ext`, not a consequence of sharing code.

@@ -10,7 +10,7 @@
 >
 > **How to use it.** Read the index before scoping any batch, and open the finding whose hook
 > matches the shape of the work. The questions to ask before writing an *exact* assertion are
-> collected at the end.
+> collected right after the index.
 
 ## Index — one line per finding
 

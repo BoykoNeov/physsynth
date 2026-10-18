@@ -696,7 +696,7 @@ fn for_slab<F: FnMut(usize)>(shape: [usize; 3], axis: usize, plane: usize, mut f
 
 /// Index of the grid node nearest `point`, or `None` if it lies outside the room.
 ///
-/// A **discrete** output: [`py_round`], not `f64::round`. See the module header.
+/// A **discrete** output: `py_round`, not `f64::round`. See the module header.
 pub fn node_index(point: [f64; 3], h: f64, n: [usize; 3]) -> Option<[usize; 3]> {
     let raw = [
         py_round(point[0] / h) as i64,

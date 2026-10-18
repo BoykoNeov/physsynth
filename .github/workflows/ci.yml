@@ -46,10 +46,13 @@ jobs:
         with:
           workspaces: ". -> target"
 
+      # `cargo doc` with warnings denied: a doc link to a private or renamed item is otherwise a
+      # warning nobody reads. Seven of them had piled up by 2026-10-18 (fixed then).
       - name: Format and lint
         run: |
           cargo fmt --all --check
           cargo clippy --workspace --all-targets -- -D warnings
+          RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
       # The WHOLE workspace runs in `--release`: that is the codegen the viewer ships, and it is the
       # profile where a test pinning an arithmetic spelling can go vacuous (plan §17.2, §23.5 --

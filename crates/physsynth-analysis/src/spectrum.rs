@@ -215,7 +215,7 @@ fn fft_in_place(re: &mut [f64], im: &mut [f64]) {
 /// [`magnitude_spectrum`] zero-pads to a power of two, so its bins are not `rfft(x)`'s whenever
 /// `x.len()` is not one; the viewer's brightness and band panels take `rfft` of the raw record, so
 /// they need a transform of any length. Power-of-two lengths go straight through
-/// [`fft_in_place`]. Every other length uses **Bluestein's** identity `nk = (n² + k² - (k-n)²)/2`,
+/// `fft_in_place`. Every other length uses **Bluestein's** identity `nk = (n² + k² - (k-n)²)/2`,
 /// which turns the DFT into a circular convolution with the chirp `exp(-i pi k²/n)` that the
 /// power-of-two FFT evaluates. Two details decide its accuracy:
 ///

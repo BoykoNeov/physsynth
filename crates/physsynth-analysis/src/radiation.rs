@@ -6,24 +6,25 @@
 //! is that phase, and this is the hole closed. §14's own words: "a file's Bessel call does not drag
 //! the file into Phase 7; it drags the call."
 //!
-//! # Why it lives in the *analysis* crate while its Python stays in `core/`
+//! # Why it lives in the *analysis* crate while its Python stayed in `core/`
 //!
-//! Two constraints that look like they conflict and do not:
+//! Two constraints that looked like they conflicted and did not:
 //!
 //! * `physsynth-core`'s dependency list is empty and must stay empty (plan §2.2, the portability
 //!   contract), so it cannot reach [`crate::bessel`] — a core→analysis edge would also be a cycle,
 //!   since `modal` reaches core's Brent transcription the other way.
-//! * `CLAUDE.md` is explicit that **no `core/` module goes behind the analysis flag**. So
-//!   `piston_radiation_resistance` keeps swapping on `PHYSSYNTH_RS` with the rest of its file.
+//! * `CLAUDE.md` said, while the flags existed, that **no `core/` module goes behind the
+//!   analysis flag**. So `piston_radiation_resistance` kept swapping on `PHYSSYNTH_RS` with the
+//!   rest of its file.
 //!
-//! Both hold at once because the crate a function is *implemented* in and the flag its Python name
+//! Both held at once because the crate a function is *implemented* in and the flag its Python name
 //! is *swapped* by are different questions. `physsynth-py` depended on both crates, so the binding
 //! could expose an analysis-crate function under a core-flagged name without either crate
 //! depending on the other (the flag went at retirement plan §21, the binding at §51). That is the
 //! whole trick, and it is written here because the arrangement reads like a flag violation until
 //! the sentence above is in front of you.
 //!
-//! # What makes swapping it under the model flag safe
+//! # What made swapping it under the model flag safe
 //!
 //! There is a real question underneath: `tests/test_bore_radiation.py` (retired at retirement
 //! plan §42; its bars are in `physsynth-core/tests/bore_harness.rs`) used this resistance to
