@@ -89,6 +89,20 @@ by zero, when `σ₁ = 0` — `A`'s sparsity pattern (and hence its factorizatio
 today, and no `0.0 · x` reaches a `-0.0` or a NaN. Of the 66 `PlateSpec` literals, all but two
 files use `..Default::default()`; `mallet.rs` and `mallet_plate_harness.rs` get the field by hand.
 
+**Clients that rebuild the step must carry `σ₁` or refuse it** — the `σ₁ = 0` bit-identity bar
+cannot see a client that silently drops a non-zero `σ₁`. Found by grep, 2026-10-18:
+
+- `airbox_wrap::theta_matrix` rebuilds `A` from `plate::Params` for the room seam (both the
+  linear and the von Kármán seam). It takes the right-hand side from `plate::step_rhs`, so with
+  `σ₁ > 0` it would carry the term on one side and not the other. **Carries it** (one shared
+  spelling of `A`, which `theta_matrix`'s own doc already insists on).
+- `mallet::PlateParams` uses the plate's own factorization and `step_rhs` — carries it for free;
+  a bar asserts it (a struck plate with `σ₁ > 0` decays as the bare plate does).
+- `plate::initial_previous` ignores `σ₀` today (the start-up is the lossless Taylor step); `σ₁`
+  is treated the same way, and the start-up bar says so.
+- The viewer's `platebody` (plate as a bridge body) and `connection` take a `Params` and are
+  audited in Part 1; each gets a line here.
+
 ---
 
 ## 3. The inversion — exact, linear, three unknowns
@@ -136,7 +150,12 @@ engineering table for the rest), with the citation beside the table in code.
 
 - **Grain direction.** The guitar's length runs along `y` (`guitar_mask(…, ly, lx, …)`), and a
   top's grain runs along its length, so the woods enter with `E_x = E_R`, `E_y = E_L` there. The
-  rectangles take a grain-direction choice (along `x` or `y`).
+  rectangles take a grain-direction choice (along `x` or `y`). **Turning the grain turns the
+  Poisson ratio too:** `grain_ratios_from_material` takes the major ratio `ν_xy`, which with the
+  grain along `y` is `ν_RL = ν_LR E_R / E_L`, not `ν_LR`. Passed unrotated, spruce's
+  `1 − ν_xy ν_yx` goes negative and the plate is refused as inadmissible. A plant.
+- **Grain and an isotropic `σ₁` scatter the ring times.** Two partials at the same pitch can have
+  different `λ_m`, so the off-anchor ring-time read-out is a scatter, not a curve.
 - **Free branch with grain** needs the split (`grain_coupling`, `grain_torsion`), which
   `grain_ratios_from_material` returns; isotropic material keeps the `nu` path.
 - **Areal density is the trap** `GrainSpec`'s doc names: passing `ρ_v` where `ρ_s` belongs leaves
@@ -169,7 +188,8 @@ Every bar runs the simulation, never the mapping's algebra backwards.
 
 **Plants** (each red, each time-limited): swap `σ₀`/`σ₁`; drop the `σ₁` term from `A` but not the
 right-hand side (and the reverse); continuum `λ_m`; anchor `M ± 1`; a rigid mode taken as mode 1;
-`ρ_v` passed as `ρ_s`; `E_L`/`E_R` swapped; hard-wired `θ`; `k = fs`.
+`ρ_v` passed as `ρ_s`; `E_L`/`E_R` swapped; `ν` not rotated with the grain; hard-wired `θ`;
+`k = fs`.
 
 ---
 
@@ -212,11 +232,28 @@ gains a musical-plate case per branch.
 
 ## 8. Order of work
 
-- **Part 0 — probe** (scratch crate under `W:\temp\claude`, nothing in the repo): (a) `σ₀`-only
-  inversion at mode 1 through the real `Plate` on all three branches — exact where the loss is
-  proportional to the mass, which `σ₀` is; (b) a scratch copy of the step with §2's term, the
-  supported branch exact, and the free branches' first-order error measured over a grid of
-  loss, `N`, outline and material; (c) the textbook miss. Anything surprising goes to the human.
+- **Part 0 — probe** (scratch crate under `W:\temp\claude`, nothing in the repo):
+  - (a) `σ₀`-only inversion at mode 1 through the real `Plate` on all three branches — exact
+    where the loss is proportional to the mass, which `σ₀` is.
+  - (b) Two cheap checks first: does `L` commute with the **grained** supported `B` (built by
+    `orthotropic_biharmonic`, not `L·L` — if not, "exact on supported" holds only isotropically);
+    how far from commuting are `W⁻¹K` and `W⁻¹G` on the free branches.
+  - (c) The free branches' error **measured on the scheme's own root** — the quadratic
+    eigenproblem's root nearest the target, by inverse iteration on small dense grids — not by
+    projecting a run onto a `(K, W)` mode, which mixes neighbour leakage into the answer. Stress
+    the worst case: anchors inside dense mode clusters, near-square rectangles, the guitar near
+    its waist crossing. Coupling between near-equal modes is first order, not second.
+  - (d) Rigid tilt: `x` and `y` are not in `G`'s null space, so `σ₁` damps a tilt and a strike
+    pumps energy into it. Measure how much.
+  - (e) Which textbook miss is well above measurement — mode 1's pitch (one `κ`, likely tiny) or
+    the anchor's ring time. The control differs per plate: `f₁₁` supported, Leissa's table for
+    the free square, nothing for the guitar.
+  - The result goes to the human as **two columns** — Laplacian loss (constant loss factor,
+    inexact on free edges, damps tilt) against stiffness-proportional loss (exact everywhere,
+    rigid motion untouched, ring time falling as frequency squared). Not pre-decided.
+  - Choose `M` from the **lossless** spectrum and record its margin to the next mode (a discrete
+    output). Skip the rigid modes by count — three, after `count_components == 1` — with a check
+    on the gap above them, not by a threshold.
 - **Part 1 — model:** `σ₁` on `Plate` (both branches, the free Laplacian), its bars (§5.1).
 - **Part 2 — materials:** the cited preset tables.
 - **Part 3 — mapping:** the helper, both directions, refusals, bars §5.2–7, plants.
