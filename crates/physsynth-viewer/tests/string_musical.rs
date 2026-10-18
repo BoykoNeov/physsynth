@@ -104,7 +104,7 @@ fn a_coarse_low_stiff_string_warns_with_the_number() {
     let worst = f(&t["worst_drift_cents"]);
     assert!(worst > 15.0 && worst < 35.0, "{worst}");
     let msg = t["message"].as_str().unwrap();
-    assert!(msg.contains("cents off"), "{msg}");
+    assert!(msg.contains("drift off the target law"), "{msg}");
 }
 
 #[test]

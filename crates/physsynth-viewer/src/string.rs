@@ -311,12 +311,10 @@ fn tuning_block(b: &Built) -> Option<Value> {
     let warn = d.warn(tu.anchor);
     let message = if warn {
         format!(
-            "partials {}-{} are not held to the target law: the worst, partial {}, is {:.1} \
-             cents off. A finer grid (N) or a higher sample rate brings them in.",
-            d.horizon + 1,
-            tu.anchor - 1,
-            d.worst_mode,
-            d.worst_between
+            "partials between f0 and partial {} drift off the target law, up to {:.1} cents \
+             (partial {}); in tune only up to partial {}. A finer grid (N) or a higher sample \
+             rate brings them in.",
+            tu.anchor, d.worst_between, d.worst_mode, d.horizon
         )
     } else {
         format!(
