@@ -106,7 +106,11 @@ fn the_bow_defaults_to_a_rate_its_work_budget_holds() {
     assert_eq!(f(&ok(&p)["fs_sim"]), 22050.0);
     let at_44k = sim(&bow(json!({"audio_duration": 2.0, "sample_rate": 44100.0})));
     let msg = at_44k["error"]["message"].as_str().unwrap();
-    assert!(msg.contains("work budget"), "{msg}");
+    // and it names the lever this control set has: the sample rate, not the grid
+    assert!(
+        msg.contains("work budget") && msg.contains("Lower audio_duration or the sample rate"),
+        "{msg}"
+    );
 }
 
 #[test]
@@ -274,6 +278,15 @@ fn unrepresentable_musical_requests_come_back_as_clean_errors() {
             "sample_rate must be in",
         ),
         (bow(json!({"force": 9.0})), "force must be in"),
+        // the musical refusals name the controls this set shows, not EA or N
+        (
+            tension(json!({"amplitude": 0.06})),
+            "choose a thinner or softer string",
+        ),
+        (
+            tension(json!({"f0": 55.0, "audio_duration": 1.2})),
+            "Lower audio_duration or the sample rate",
+        ),
     ];
     for (req, needle) in cases {
         let payload = sim(&req);

@@ -289,9 +289,15 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
 
     let n_audio = round_int(audio_dur * fs).max(1);
     if n_audio > BOW_WORK_MAX {
+        // With musical controls fs is a slider and the biggest lever (string mapping plan §10).
+        let fix = if target_f0.is_some() {
+            "audio_duration or the sample rate"
+        } else {
+            "N or audio_duration"
+        };
         return Err(Refusal::Param(format!(
-            "work budget exceeded ({} steps > {}): every step runs a friction root-find. Lower N \
-             or audio_duration.",
+            "work budget exceeded ({} steps > {}): every step runs a friction root-find. Lower \
+             {fix}.",
             commas(n_audio),
             commas(BOW_WORK_MAX)
         )));
@@ -369,9 +375,12 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
     Ok(payload)
 }
 
-/// What the musical bow page says beside its pitch read-out (string mapping plan §9): the offset
-/// it shows is the bow and the grid together, not the bow's pull alone.
-pub const BOW_PITCH_NOTE: &str = "The tuned string's own fundamental is exact. A bowed note's \
-     period is set by the whole series of partials, and the ones between the two the mapping pins \
-     drift with the grid, so the bowed pitch sits a few cents off and moves with N and the sample \
-     rate as well as with the bow.";
+/// What the musical bow page says beside its pitch read-out (string mapping plan §9, §11). Only
+/// what was measured: the offset moves with the grid as well as with the bow. A first draft
+/// blamed the drift of the partials between the two the mapping pins; the probe falsified it
+/// (they stay within 3 cents at every setting tried, and the setting with the least drift bows
+/// furthest off).
+pub const BOW_PITCH_NOTE: &str =
+    "The tuned string's own fundamental is exact. The bowed note sits \
+     a few cents off it, and the offset moves with N and the sample rate as well as with the bow; \
+     what sets it is not established.";

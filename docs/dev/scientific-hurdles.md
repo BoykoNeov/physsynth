@@ -625,10 +625,11 @@ and a gauge). `string_tuning::tune_tension_string` takes steel, nylon or gut and
 Nylon's modulus is Lynch-Aird and Woodhouse's stress fit, evaluated at the tuned stress. What
 carries forward:
 
-- **The bowed note is not the string's mode 1.** A bowed period is set by the whole series, and
-  the partials between the two the mapping pins drift with the grid. So the same tuned 110 Hz
-  string bows 13 cents flat at 44.1 kHz and 4 cents sharp at 22.05 kHz. The page says so; it does
-  not call the offset the bow's pull.
+- **The bowed note is not the string's mode 1, and its offset moves with the grid.** The same
+  tuned 110 Hz string bows 13 cents flat at 44.1 kHz and 4 cents sharp at 22.05 kHz. What sets
+  the offset is open: the partials between the two the mapping pins stay within 3 cents at every
+  setting tried, and the one with the least drift bows furthest off (plan §11). The page reports
+  the offset and says its cause is not established.
 - **The tension string's gauge sets how far a pluck starts sharp, not where it settles.** A 3 mm
   pluck starts 0.6–41 cents sharp across the presets; the settled note is exact (≤ 3e-8 cents).
 

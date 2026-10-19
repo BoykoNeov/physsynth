@@ -468,13 +468,21 @@ pub fn build_payload_duffing_with(p: &Value, periods: f64) -> Result<Value, Refu
         + duffing::duffing_frequency_shift(amplitude, w0sq, eps).map_err(Refusal::Construction)?
             / (2.0 * PI);
 
+    // With musical controls EA comes from the gauge and fs is a slider, so the refusals name those
+    // (string mapping plan §10); the physics wording is the reference's and stays as it was.
+    let musical = tuning.is_some();
     let dt = dt_over_t(res.p.ea, amplitude, p2, res.p.t);
     if dt > TENSION_DT_MAX {
+        let fix = if musical {
+            "the amplitude, or choose a thinner or softer string"
+        } else {
+            "the amplitude or EA"
+        };
         return Err(Refusal::Param(format!(
             "dT/T0 = {dt:.2} exceeds {} — above this the single mode is parametrically unstable \
              and breaks up into its neighbours, so the Duffing shift stops describing the motion. \
              (The breakup is real, energy-conserving physics; it wants a panel of its own.) Lower \
-             the amplitude or EA.",
+             {fix}.",
             pf(TENSION_DT_MAX)
         )));
     }
@@ -483,9 +491,16 @@ pub fn build_payload_duffing_with(p: &Value, periods: f64) -> Result<Value, Refu
     let n_audio_req = round_int(audio_dur * fs).max(1);
     let work = n_audio_req + 2 * n_measure + round_int(anim_win * fs);
     if work > TENSION_WORK_MAX {
+        // N does not change the step count when fs is a slider; a low pitch lengthens the
+        // measurement runs, which the sample rate also scales.
+        let fix = if musical {
+            "audio_duration or the sample rate"
+        } else {
+            "N or audio_duration"
+        };
         return Err(Refusal::Param(format!(
             "work budget exceeded ({} steps > {}): every step runs a tension root-find (~176 µs \
-             at N=128). Lower N or audio_duration.",
+             at N=128). Lower {fix}.",
             commas(work),
             commas(TENSION_WORK_MAX)
         )));

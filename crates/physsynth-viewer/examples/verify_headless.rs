@@ -132,6 +132,14 @@ const CASES: &[(&str, &str)] = &[
         "string_bow_musical",
         "model=bow&controls=musical&N=100&f0=110&audio_duration=1",
     ),
+    // Both pages exactly as a user first meets them: every slider at its default. The tension
+    // string's defaults sit near its 60,000-step budget, so a default that drifts past it shows
+    // here as a refusal rather than in a user's first click.
+    ("string_bow_musical_defaults", "model=bow&controls=musical"),
+    (
+        "string_tension_musical_defaults",
+        "model=tension&controls=musical",
+    ),
     (
         "string_tension_musical",
         "model=tension&domain=duffing&controls=musical&string_material=steel&N=64&L=0.65\

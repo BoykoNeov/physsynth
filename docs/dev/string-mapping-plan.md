@@ -140,10 +140,9 @@ Probe: a scratch crate under `W:\temp\claude` depending on core and analysis by 
 - **The bowed note is not the string's mode 1, and the offset moves with the grid.** In clean
   one-slip motion it reads −13.3 to +7.7 cents off the tuned pitch. It is stable to 0.02 cents
   from a 0.5 s to a 6 s window, so it is not the detector. But the same 110 Hz string reads −13.3
-  cents at 44.1 kHz and +3.9 cents at 22.05 kHz (`N = 100` both). A bowed (Helmholtz) note's
-  period is set by the whole series, and the partials between the two anchors drift with the grid
-  (the damped plan's §7 drift). So the read-out is "the bow and the grid together", and the page
-  must say so, not "the bow's pull".
+  cents at 44.1 kHz and +3.9 cents at 22.05 kHz (`N = 100` both). So the page must not call the
+  offset "the bow's pull". *What sets it is not established* — §11 falsified the first
+  explanation offered here.
 - Clean bowing is not guaranteed at the defaults: 196 Hz, `N = 100`, 1 N gives two slips a period.
   That is the physics page's behaviour too (Schelleng's window), already labelled there.
 - **The work budget bites.** The page caps a run at 60,000 friction steps. At 44.1 kHz that is
@@ -197,8 +196,10 @@ the damped string's `domain` key); the tension string adds `string_material` and
 reviewer flagged is gone. Held by `crates/physsynth-viewer/tests/bow_tension_musical.rs` (ten
 bars) and two headless browser cases, `string_bow_musical` and `string_tension_musical`.
 
-- **The bow** plays +3.9 cents off its 110 Hz target in the payload bar (+3.5 in the browser at
-  22,050 Hz). The read-out says why: the bow and the grid together, not the bow alone.
+- **The bow** plays +3.9 cents off its 110 Hz target, in the payload bar and in the browser at
+  22,050 Hz (a first browser run read +3.5: it had snapped to 22,100 Hz, below). The read-out
+  says the offset moves with N and the sample rate as well as the bow, and that its cause is not
+  established (§11).
 - **The tension page measures exactly what the physics page measures** on the mapped string, to
   1e-9 in every spectrum field: its `T`, `rho`, `EA` and `kappa` typed into the physics sliders,
   with `lambda` chosen so `fs` matches. That twin is the wiring bar. A 3 mm steel pluck starts
@@ -218,3 +219,32 @@ bars) and two headless browser cases, `string_bow_musical` and `string_tension_m
   lossless flag ignored; `rho` from the slider; `EA` from the slider; the tension page keyed on
   `domain`; the bow's 44.1 kHz default; the musical bow built as a plain string; the parametric
   regime allowing musical controls; the gauge block dropped.
+
+## 11. The bowed offset's first explanation, falsified (2026-10-19)
+
+§9 first said the bowed offset came from the partials between the two anchors drifting with the
+grid. The reviewer asked for the check, and the probe (each partial's pitch from
+`string_tuning::mode_frequency`, the 110 Hz string of §9, cents from the target law) says no:
+
+| fs, N | bowed offset | worst drift, partials 2–17 | partials 21 / 30 / 40 |
+|---|---|---|---|
+| 44.1 kHz, 100 | −13.3 c | +1.1 c | −2.0 / −18.0 / −62 c |
+| 22.05 kHz, 100 | +3.9 c | +3.0 c | −5.4 / −45.6 / −143 c |
+| 44.1 kHz, 64 | −5.9 c | +3.1 c | −5.6 / −48.4 / −158 c |
+
+The in-between partials stay within about 3 cents everywhere, and the setting with the least
+drift bows furthest off. The partials above the anchor do fall flat with the grid, but nothing
+here shows they set the offset either. The page, this plan, the hurdles register and the memory
+now say only what was measured: the offset moves with `N` and the sample rate as well as with the
+bow, and what sets it is not established.
+
+**Follow-ups the same day (the reviewer's points):**
+
+- In musical mode, two refusals named controls that are hidden there. The tension page's
+  stability refusal said "lower EA"; it now says to lower the amplitude or choose a thinner or
+  softer string. Both work-budget refusals said "lower N"; with the sample rate fixed, N does not
+  change the step count, so they now name the audio length or the sample rate. The physics wording
+  is unchanged byte for byte (the freeze holds the refusals).
+- Two headless cases load each page with every slider at its default:
+  `string_bow_musical_defaults` and `string_tension_musical_defaults`. The tension page's defaults
+  sit at 56,000 of its 60,000 steps; both render.
