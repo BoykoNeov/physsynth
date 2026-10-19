@@ -248,3 +248,28 @@ bow, and what sets it is not established.
 - Two headless cases load each page with every slider at its default:
   `string_bow_musical_defaults` and `string_tension_musical_defaults`. The tension page's defaults
   sit at 56,000 of its 60,000 steps; both render.
+
+## 12. The human's two answers on stress, 2026-10-19
+
+The reviewer found that the material sliders can tune a string far outside what its cited data
+supports. Asked, the human chose **warn and keep running** for both cases:
+
+1. **Nylon's modulus outside the stress the paper measured.** The 2017 paper's own
+   tension-modulation example runs from 30 MPa (about 3 GPa) to 220 MPa (nearly 11 GPa). Outside
+   that range the fit is an extrapolation, and the read-out says so.
+2. **A string tuned past its material's breaking stress.** Cited limits:
+   - steel music wire: 2,450 MPa ultimate tensile strength (MakeItFrom, ASTM A228);
+   - gut and nylon: about 280 MPa. Lynch-Aird & Woodhouse, "The sound of a harp string"
+     (euphonics.org, 2023), Fig. 1: the top gut harp strings run at about 275 MPa, "very close to
+     their breaking stress limit", and "the breaking stress limit for nylon strings is fairly
+     similar to that for gut". An approximate figure, read from a plot, and stated as such.
+
+   The simulation still runs. It is a model, and a model string does not snap.
+
+**Built the same day.** `StringMaterial` carries `breaking_mpa` and its source, and nylon's
+`Modulus::StressFit` carries `measured_mpa: (30, 220)`. `GaugeTuning` reports
+`modulus_extrapolated` and `past_breaking`. The viewer's gauge block turns them into plain-words
+warnings, and the read-out shows them in amber. Two core bars and one viewer bar cover them; the
+viewer bar is a nylon string at 1 kHz, past both limits and still rendered. Three plants (the
+range never checked, the breaking stress compared in pascals, the range compared in pascals) each
+turned a bar red.

@@ -260,6 +260,37 @@ fn musical_keys_do_not_touch_the_physical_tension_string() {
 }
 
 #[test]
+fn stress_past_the_data_or_the_breaking_point_is_warned_and_still_rendered() {
+    // The human's call (plan §12): warn, keep running. A nylon string at 1 kHz on 0.65 m runs at
+    // about 1,800 MPa — past nylon's ~280 MPa breaking stress and far outside the 30–220 MPa its
+    // stiffness was measured at.
+    let hot = ok(&tension(
+        json!({"string_material": "nylon", "f0": 1000.0, "f_ref": 4000.0,
+                                 "amplitude": 0.001}),
+    ));
+    let g = &hot["tuning"]["gauge"];
+    assert_eq!(g["modulus_extrapolated"], true, "{g}");
+    assert_eq!(g["past_breaking"], true, "{g}");
+    let w: Vec<&str> = g["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(w.len(), 2, "{w:?}");
+    assert!(w[0].contains("outside the 30–220 MPa"), "{}", w[0]);
+    assert!(
+        w[1].contains("would break") && w[1].contains("280 MPa"),
+        "{}",
+        w[1]
+    );
+    assert!(hot["audio"]["n"].as_i64().unwrap() > 0);
+    // The ordinary steel string of the other bars carries neither.
+    let calm = ok(&tension(json!({})));
+    assert_eq!(calm["tuning"]["gauge"]["warnings"], json!([]));
+}
+
+#[test]
 fn unrepresentable_musical_requests_come_back_as_clean_errors() {
     let cases = [
         (

@@ -485,6 +485,35 @@ fn bow_on(
     BowedString::new(string, bow_position, v_bow, force, sharp, 1e-13, 60).map_err(construction)
 }
 
+/// The tension string's stress warnings, in plain words — the human's "warn, keep running" for a
+/// fit used outside its data and for a string past its breaking stress (string mapping plan §12).
+fn stress_warnings(g: &Gauge) -> Vec<String> {
+    let mpa = g.g.stress / 1e6;
+    let mut out = Vec::new();
+    if let physsynth_core::string_tuning::Modulus::StressFit {
+        measured_mpa: (lo, hi),
+        ..
+    } = g.material.modulus
+    {
+        if g.g.modulus_extrapolated {
+            out.push(format!(
+                "this {} string runs at {mpa:.0} MPa, outside the {lo:.0}–{hi:.0} MPa its \
+                 stiffness was measured at, so E = {:.1} GPa is an extrapolation of the fit.",
+                g.material.name,
+                g.g.youngs / 1e9
+            ));
+        }
+    }
+    if g.g.past_breaking {
+        out.push(format!(
+            "a real {} string would break at this pitch: {mpa:.0} MPa is past its {:.0} MPa ({}). \
+             The model still sounds; a shorter string or a lower pitch is a real one.",
+            g.material.name, g.material.breaking_mpa, g.material.breaking_source
+        ));
+    }
+    out
+}
+
 /// The `tuning` block of a musical payload: what was asked, what it maps to, and how far the
 /// partials the mapping does not pin drift (the human's "allow and warn", parameter-mapping plan
 /// §3). The tension string adds its gauge.
@@ -535,6 +564,10 @@ pub(crate) fn tuning_block(b: &Built) -> Option<Value> {
             "gauge_kappa": num(g.g.gauge_kappa),
             "gauge_inharmonicity": num(g.g.gauge_inharmonicity),
             "source": g.material.source,
+            "breaking_mpa": num(g.material.breaking_mpa),
+            "modulus_extrapolated": g.g.modulus_extrapolated,
+            "past_breaking": g.g.past_breaking,
+            "warnings": stress_warnings(g),
         });
     }
     Some(block)

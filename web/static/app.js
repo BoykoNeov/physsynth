@@ -1673,8 +1673,10 @@ function showTuning(data) {
       + `kg/m, EA = ${g(gauge.EA / 1000)} kN (E = ${g(gauge.E_gpa)} GPa at `
       + `${g(gauge.stress_mpa)} MPa); its own bending stiffness alone would give B = `
       + `${g(gauge.gauge_inharmonicity)}.${start} (${gauge.source})`;
+    // Plan §12: a fit used outside its data, or a string past its breaking stress — warned, run.
+    for (const w of gauge.warnings || []) text += ` ⚠ ${w}`;
   }
-  // The bow (plan §9): the bowed pitch against the tuned one, and why it is off.
+  // The bow (plan §9, §11): the bowed pitch against the tuned one; its cause is not established.
   if (t.bow_note) {
     const sp = data.meta && data.meta.spectrum;
     const bowed = sp && sp.pitch_cents !== null && sp.pitch_cents !== undefined
@@ -1683,7 +1685,8 @@ function showTuning(data) {
     text += `${bowed} ${t.bow_note}`;
   }
   hint.textContent = text;
-  hint.style.color = t.warn ? "var(--accent-2)" : "var(--muted)";
+  const stressWarn = !!(t.gauge && t.gauge.warnings && t.gauge.warnings.length);
+  hint.style.color = t.warn || stressWarn ? "var(--accent-2)" : "var(--muted)";
 }
 
 // The plate's musical read-out (plate mapping plan §7): what the material and targets mapped to,

@@ -319,6 +319,73 @@ fn a_hard_pluck_settles_onto_the_target() {
     );
 }
 
+// -- the stress warnings (plan §12: warn, never refuse) -----------------------------------------
+
+/// A plain string's stress is `T / A = density c^2` with `c = 2 L f0` near enough, so it depends
+/// on the material, the length and the pitch, not on the gauge.
+fn stress_case(material: &'static str, l: f64, f0: f64) -> GaugeTuning {
+    let fx = Fixture {
+        material,
+        diameter: 0.5e-3,
+        l,
+        fs: 96000.0,
+        n: 64,
+        theta: 0.28,
+        t: targets(f0, 1e-4, 3.0, 0.8, 4.0 * f0),
+    };
+    tune(&fx).expect("a stress warning never refuses")
+}
+
+#[test]
+fn nylon_is_flagged_outside_the_stress_its_fit_was_measured_at() {
+    // The 2017 paper's own example spans 30 to 220 MPa (plan §12).
+    for &(l, f0, inside) in &[
+        (0.65, 196.0, true),  // ~70 MPa
+        (0.65, 82.4, false),  // ~12 MPa: below the data
+        (1.0, 1000.0, false), // ~4,300 MPa: far above it
+    ] {
+        let g = stress_case("nylon", l, f0);
+        let mpa = g.stress / 1e6;
+        assert_eq!(
+            g.modulus_extrapolated,
+            !(30.0..=220.0).contains(&mpa),
+            "nylon at {mpa:.0} MPa"
+        );
+        assert_eq!(g.modulus_extrapolated, !inside, "nylon at {mpa:.0} MPa");
+    }
+    // A fixed modulus is never an extrapolation, at any stress.
+    assert!(!stress_case("steel", 1.0, 1000.0).modulus_extrapolated);
+    assert!(!stress_case("gut", 0.65, 82.4).modulus_extrapolated);
+}
+
+#[test]
+fn a_string_tuned_past_its_breaking_stress_is_flagged_and_still_built() {
+    // Steel music wire 2,450 MPa; gut and nylon about 280 MPa (plan §12).
+    for &(material, l, f0, breaks) in &[
+        ("steel", 0.65, 400.0, false), // ~2,100 MPa
+        ("steel", 0.65, 440.0, true),  // ~2,550 MPa
+        ("gut", 0.65, 196.0, false),   // ~86 MPa
+        ("gut", 0.65, 440.0, true),    // ~430 MPa
+        ("nylon", 0.65, 440.0, true),  // ~350 MPa
+    ] {
+        let g = stress_case(material, l, f0);
+        let limit = match material {
+            "steel" => 2450.0,
+            _ => 280.0,
+        };
+        let mpa = g.stress / 1e6;
+        assert_eq!(g.past_breaking, mpa > limit, "{material} at {mpa:.0} MPa");
+        assert_eq!(g.past_breaking, breaks, "{material} at {mpa:.0} MPa");
+    }
+    for m in STRING_MATERIALS {
+        assert!(
+            !m.breaking_source.is_empty(),
+            "{} has no breaking source",
+            m.name
+        );
+    }
+}
+
 // -- the table and the refusals ---------------------------------------------------------------
 
 #[test]
@@ -349,6 +416,8 @@ fn a_bad_gauge_or_material_is_refused_by_name() {
         density,
         modulus,
         source: "",
+        breaking_mpa: 1000.0,
+        breaking_source: "",
     };
     assert_eq!(
         run(&custom(0.0, Modulus::Fixed(1e9)), 1e-3),
@@ -363,6 +432,7 @@ fn a_bad_gauge_or_material_is_refused_by_name() {
         a: -100.0,
         b: 0.0,
         c: 0.0,
+        measured_mpa: (0.0, 1e9),
     };
     assert_eq!(
         run(&custom(1000.0, neg), 1e-3),

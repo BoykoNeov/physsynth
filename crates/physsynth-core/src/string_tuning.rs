@@ -424,6 +424,9 @@ pub enum Modulus {
         b: f64,
         /// Per kg/m³ of density (GPa m³/kg).
         c: f64,
+        /// The stress range (MPa) the fit's data covers; outside it the fit is an extrapolation,
+        /// which the human chose to warn about, not refuse (string mapping plan §12).
+        measured_mpa: (f64, f64),
     },
 }
 
@@ -432,7 +435,19 @@ impl Modulus {
     pub fn at(&self, stress: f64, density: f64) -> f64 {
         match *self {
             Modulus::Fixed(e) => e,
-            Modulus::StressFit { a, b, c } => (a + b * (stress * 1e-6) + c * density) * 1e9,
+            Modulus::StressFit { a, b, c, .. } => (a + b * (stress * 1e-6) + c * density) * 1e9,
+        }
+    }
+
+    /// True when `stress` (Pa) lies outside the range a fit was measured over. A fixed modulus is
+    /// never an extrapolation.
+    pub fn extrapolated(&self, stress: f64) -> bool {
+        match *self {
+            Modulus::Fixed(_) => false,
+            Modulus::StressFit {
+                measured_mpa: (lo, hi),
+                ..
+            } => !(lo..=hi).contains(&(stress * 1e-6)),
         }
     }
 }
@@ -448,23 +463,40 @@ pub struct StringMaterial {
     pub modulus: Modulus,
     /// Where the values come from.
     pub source: &'static str,
+    /// The stress (MPa) past which a real string of this material breaks — a warning, never a
+    /// refusal: a model string does not snap (string mapping plan §12).
+    pub breaking_mpa: f64,
+    /// Where the breaking stress comes from.
+    pub breaking_source: &'static str,
 }
 
 /// Lynch-Aird & Woodhouse, "Mechanical Properties of Nylon Harp Strings", *Materials* 10 (2017)
 /// 497. Table 1 gives the unstretched densities (1067–1159 kg/m³ in two groups); Eq. 19 the
 /// tension-modulation modulus of the lower-density group, `r² = 0.983`. One string's modulus runs
-/// from about 4 to over 10 GPa across its stress range, so no fixed value would serve.
+/// from about 4 to over 10 GPa across its stress range, so no fixed value would serve. Its own
+/// tension-modulation example spans 30 MPa (about 3 GPa) to 220 MPa (nearly 11 GPa), the range
+/// [`Modulus::StressFit::measured_mpa`] carries.
 const NYLON_SRC: &str = "Lynch-Aird & Woodhouse, Materials 10 (2017) 497: Table 1, Eq. 19";
+
+/// Lynch-Aird & Woodhouse, "The sound of a harp string" (euphonics.org, 2023), Fig. 1: the top gut
+/// harp strings run at about 275 MPa, "very close to their breaking stress limit", and "the
+/// breaking stress limit for nylon strings is fairly similar to that for gut". So about 280 MPa
+/// for both — read from a plot, an approximate figure.
+const HARP_BREAKING_SRC: &str =
+    "Lynch-Aird & Woodhouse, The sound of a harp string (2023), Fig. 1: about 280 MPa";
 
 /// The materials a caller can name (plan §9). Plain, unwound strings only: a wound string's mass
 /// sits in its winding and its `EA` in its core, which one density and one modulus cannot carry.
 pub const STRING_MATERIALS: &[StringMaterial] = &[
-    // MakeItFrom's ASTM A228 music-wire page (cold-worked): 190 GPa, 7.8 g/cm³.
+    // MakeItFrom's ASTM A228 music-wire page (cold-worked): 190 GPa, 7.8 g/cm³, ultimate tensile
+    // strength 2,450 MPa.
     StringMaterial {
         name: "steel",
         density: 7800.0,
         modulus: Modulus::Fixed(190.0e9),
         source: "MakeItFrom, ASTM A228 music wire",
+        breaking_mpa: 2450.0,
+        breaking_source: "MakeItFrom, ASTM A228 music wire: ultimate tensile strength 2,450 MPa",
     },
     // The lower-density group of Table 1 (1072–1097 kg/m³), whose fit Eq. 19 is.
     StringMaterial {
@@ -474,8 +506,11 @@ pub const STRING_MATERIALS: &[StringMaterial] = &[
             a: 32.0,
             b: 0.0353,
             c: -0.0269,
+            measured_mpa: (30.0, 220.0),
         },
         source: NYLON_SRC,
+        breaking_mpa: 280.0,
+        breaking_source: HARP_BREAKING_SRC,
     },
     // Lynch-Aird & Woodhouse, "Comparison of Mechanical Properties of Natural Gut and Synthetic
     // Polymer Harp Strings", Materials 11 (2018) 2160: Table 1's gut densities are 1320–1325
@@ -485,6 +520,8 @@ pub const STRING_MATERIALS: &[StringMaterial] = &[
         density: 1322.0,
         modulus: Modulus::Fixed(6.0e9),
         source: "Lynch-Aird & Woodhouse, Materials 11 (2018) 2160: Table 1, and its cited range",
+        breaking_mpa: 280.0,
+        breaking_source: HARP_BREAKING_SRC,
     },
 ];
 
@@ -510,6 +547,12 @@ pub struct GaugeTuning {
     pub gauge_kappa: f64,
     /// The inharmonicity that bending stiffness gives, `pi^2 kappa^2 / (c^2 L^2)` — a read-out.
     pub gauge_inharmonicity: f64,
+    /// True when [`GaugeTuning::youngs`] came from a fit outside the stress it was measured over
+    /// — a warning, not a refusal (string mapping plan §12).
+    pub modulus_extrapolated: bool,
+    /// True when the tuned stress is past the material's breaking stress — a warning, not a
+    /// refusal: a model string does not snap (plan §12).
+    pub past_breaking: bool,
 }
 
 /// Map a material, a diameter and musical targets onto model #9 (module header).
@@ -552,5 +595,7 @@ pub fn tune_tension_string(
         stress,
         gauge_kappa: co.kappa,
         gauge_inharmonicity: PI * PI * co.kappa * co.kappa / (tuning.c * tuning.c * l * l),
+        modulus_extrapolated: material.modulus.extrapolated(stress),
+        past_breaking: stress * 1e-6 > material.breaking_mpa,
     })
 }
