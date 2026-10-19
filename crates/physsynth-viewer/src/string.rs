@@ -17,8 +17,9 @@ use physsynth_core::string_ideal::{self as ideal, Boundary, IdealString};
 use physsynth_core::string_nonlinear::{self as nonlinear, TensionModulatedString};
 use physsynth_core::string_stiff::{self as stiff, StiffString};
 use physsynth_core::string_tuning::{
-    partial_drift, stretched_partial, string_material, tune_damped_string, tune_tension_string,
-    GaugeTuning, StringMaterial, Targets, Tuning,
+    ideal_mode_frequency, mode_frequency, partial_drift, stretched_partial, string_material,
+    tune_damped_string, tune_flexible_string, tune_ideal_string, tune_tension_string,
+    FlexibleTuning, GaugeTuning, IdealTuning, StringMaterial, Targets, Tuning, HORIZON_CENTS,
 };
 use serde_json::{json, Value};
 
@@ -233,14 +234,25 @@ pub struct Built {
 
 /// What a string built from musical targets carries into its payload's `tuning` block.
 pub struct Musical {
-    /// The damped mapping's coefficients — the tension string's too, in its gentle limit.
-    pub tuning: Tuning,
-    /// What was asked.
+    /// What the mapping gave.
+    pub map: Mapped,
+    /// What was asked. The ideal and flexible strings take a pitch and one ring time; their
+    /// targets carry `inharmonicity = 0` (the harmonic law) and both ring times equal.
     pub targets: Targets,
     /// The theta the string was built with, which the drift read-out needs.
     pub theta: f64,
     /// The tension string's material and gauge; `None` for the damped string and the bow.
     pub gauge: Option<Gauge>,
+}
+
+/// Which mapping built the string (string mapping plan §1).
+pub enum Mapped {
+    /// The damped string's, the bow's and (gentle limit) the tension string's: two anchors.
+    Damped(Tuning),
+    /// The ideal string at `lambda = 1`: the pitch and every partial's ring time exact.
+    Ideal(IdealTuning),
+    /// The barrier pages' flexible string: mode 1 exact.
+    Flexible(FlexibleTuning),
 }
 
 /// The tension string's material, diameter (m) and what they gave.
@@ -290,7 +302,7 @@ pub const DIAMETER_MM_MAX: f64 = 1.5;
 pub fn is_musical(p: &Value) -> bool {
     let key = match model_of(p).as_str() {
         "damped" => "domain",
-        "bow" | "tension" => "controls",
+        "bow" | "tension" | "ideal" | "jawari" | "juari" | "fret" => "controls",
         _ => return false,
     };
     p.get(key).and_then(Value::as_str) == Some("musical")
@@ -435,12 +447,102 @@ fn build_musical(
         sigma_zero: s0 == 0.0 && s1 == 0.0,
         oracle_2sigma: 2.0 * s0,
         tuning: Some(Musical {
-            tuning: tu,
+            map: Mapped::Damped(tu),
             targets,
             theta,
             gauge,
         }),
     })
+}
+
+/// The pitch and the one ring time the ideal and flexible strings take (`f0`, `t60_low`), as
+/// targets on the harmonic law.
+fn one_ring_targets(p: &Value) -> Result<Targets, Refusal> {
+    let f0 = fnum(p, "f0", 110.0)?;
+    let t60 = fnum(p, "t60_low", 3.0)?;
+    Ok(Targets {
+        f0,
+        inharmonicity: 0.0,
+        t60_low: t60,
+        t60_high: t60,
+        f_ref: f0,
+    })
+}
+
+/// The ideal string from a pitch and a ring time at `lambda = 1` (string mapping plan §2, §13):
+/// the sample rate follows the pitch, the human's call. The request's `T`, `sigma` and `lambda`
+/// are ignored, though the shared prefix of [`build_resonator`] still parsed and checked them.
+fn build_musical_ideal(p: &Value, l: f64, rho: f64, n: i64) -> Result<Built, Refusal> {
+    let targets = one_ring_targets(p)?;
+    let tu = tune_ideal_string(l, rho, n as usize, targets.f0, targets.t60_low)
+        .map_err(|e| Refusal::Param(e.to_string()))?;
+    let params = ideal::Params::new(
+        l,
+        tu.t,
+        rho,
+        tu.fs,
+        n,
+        tu.sigma,
+        Some((Boundary::Fixed, Boundary::Fixed)),
+    )
+    .map_err(construction)?;
+    Ok(Built {
+        res: StringRes::Ideal(IdealString::new(params)),
+        c: tu.c,
+        l,
+        n,
+        fs: tu.fs,
+        sigma_zero: tu.sigma == 0.0,
+        oracle_2sigma: 2.0 * tu.sigma,
+        tuning: Some(Musical {
+            map: Mapped::Ideal(tu),
+            targets,
+            theta: 0.0,
+            gauge: None,
+        }),
+    })
+}
+
+/// The barrier pages' flexible string from a pitch, a ring time and the sample-rate slider
+/// (string mapping plan §13) — `(tension, sigma0, fs, wave speed, the musical record)`. The page
+/// builds its own string from them; its `lambda` becomes a read-out, refused at 1 or above as the
+/// physics path refuses it (the contact solve needs headroom below the Nyquist mode).
+pub(crate) fn flexible_musical(
+    p: &Value,
+    l: f64,
+    rho: f64,
+    n: i64,
+    theta: f64,
+) -> Result<(f64, f64, f64, f64, Musical), Refusal> {
+    let targets = one_ring_targets(p)?;
+    let fs = fnum(p, "sample_rate", 44100.0)?;
+    if !(MUSICAL_FS_MIN..=MUSICAL_FS_MAX).contains(&fs) {
+        return Err(Refusal::Param(format!(
+            "sample_rate must be in [{}, {}] Hz, got {}.",
+            MUSICAL_FS_MIN,
+            MUSICAL_FS_MAX,
+            physsynth_core::fmt::py_float(fs)
+        )));
+    }
+    let tu = tune_flexible_string(l, rho, fs, n as usize, theta, targets.f0, targets.t60_low)
+        .map_err(|e| Refusal::Param(e.to_string()))?;
+    if tu.lam >= 1.0 {
+        return Err(Refusal::Param(format!(
+            "this pitch on N = {n} needs lambda = {:.2} at {} Hz, and the contact solve needs \
+             lambda < 1 (headroom below the string's Nyquist mode): raise the sample rate above \
+             {:.0} Hz, lower N, or lower the pitch.",
+            tu.lam,
+            physsynth_core::fmt::py_float(fs),
+            (fs * tu.lam).ceil()
+        )));
+    }
+    let musical = Musical {
+        map: Mapped::Flexible(tu),
+        targets,
+        theta,
+        gauge: None,
+    };
+    Ok((tu.t, tu.sigma0, fs, tu.c, musical))
 }
 
 /// The bow's force, speed and friction sharpness, range-checked — `(force, v_bow, sharpness)`.
@@ -518,9 +620,97 @@ fn stress_warnings(g: &Gauge) -> Vec<String> {
 /// partials the mapping does not pin drift (the human's "allow and warn", parameter-mapping plan
 /// §3). The tension string adds its gauge.
 pub(crate) fn tuning_block(b: &Built) -> Option<Value> {
-    let m = b.tuning.as_ref()?;
-    let (tu, tg) = (&m.tuning, &m.targets);
-    let d = partial_drift(b.l, b.n as usize, b.fs, m.theta, tu, tg);
+    Some(tuning_block_for(b.tuning.as_ref()?, b.l, b.n, b.fs))
+}
+
+/// The partials an ideal or flexible read-out judges against `m f0`: up to the 16th, below the
+/// scheme's own top mode.
+const HARMONIC_READOUT_PARTIALS: usize = 16;
+
+/// How far the partials of an ideal or flexible string sit from `m f0`: the highest partial up to
+/// which every one is within [`HORIZON_CENTS`], and the worst signed drift among partials
+/// `2..=`[`HARMONIC_READOUT_PARTIALS`] — `(horizon, worst_cents, worst_mode)`.
+fn harmonic_drift(f0: f64, n: i64, freq: impl Fn(usize) -> Option<f64>) -> (usize, f64, usize) {
+    let (mut horizon, mut worst, mut worst_mode) = (0usize, 0.0f64, 0usize);
+    for m in 1..n.max(1) as usize {
+        let Some(f) = freq(m) else { break };
+        let c = 1200.0 * (f / (m as f64 * f0)).log2();
+        if horizon == m - 1 && c.abs() <= HORIZON_CENTS {
+            horizon = m;
+        }
+        if (2..=HARMONIC_READOUT_PARTIALS).contains(&m) && c.abs() > worst.abs() {
+            worst = c;
+            worst_mode = m;
+        }
+    }
+    (horizon, worst, worst_mode)
+}
+
+/// The ideal or flexible string's `tuning` block (string mapping plan §13): one ring time, the
+/// harmonic law as the reference, and which way the partials above `f0` lean.
+fn harmonic_tuning_block(m: &Musical, l: f64, n: i64, fs: f64) -> Value {
+    let f0 = m.targets.f0;
+    let reach = HARMONIC_READOUT_PARTIALS.min((n - 1).max(1) as usize);
+    let (kind, t, sigma, lam, (horizon, worst, worst_mode), why) = match &m.map {
+        Mapped::Ideal(tu) => (
+            "ideal",
+            tu.t,
+            tu.sigma,
+            1.0,
+            harmonic_drift(f0, n, |k| {
+                ideal_mode_frequency(n as usize, tu.fs, tu.sigma, k)
+            }),
+            "a heavily damped string's low partials are pulled down further than its high ones \
+             — physics, not the grid; a longer ring time brings them in.",
+        ),
+        Mapped::Flexible(tu) => (
+            "flexible",
+            tu.t,
+            tu.sigma0,
+            tu.lam,
+            harmonic_drift(f0, n, |k| {
+                mode_frequency(l, n as usize, fs, m.theta, tu.c, 0.0, tu.sigma0, 0.0, k)
+            }),
+            "the grid flattens the partials above the fundamental; a finer grid (N) or a higher \
+             sample rate brings them in.",
+        ),
+        Mapped::Damped(_) => unreachable!("the damped mappings have their own block"),
+    };
+    let warn = horizon < reach;
+    let message = if warn {
+        format!(
+            "the partials above f0 run {} of m·f0, up to {worst:+.1} cents (partial {worst_mode}); \
+             in tune only up to partial {horizon}: {why}",
+            if worst > 0.0 { "sharp" } else { "flat" }
+        )
+    } else {
+        format!("every partial up to {reach} is within {HORIZON_CENTS} cents of m·f0.")
+    };
+    json!({
+        "kind": kind,
+        "f0": num(f0),
+        "t60": num(m.targets.t60_low),
+        "T": num(t),
+        "sigma0": num(sigma),
+        "fs": num(fs),
+        "lambda": num(lam),
+        "horizon": int(horizon as i64),
+        "worst_drift_cents": num(round_nd(worst, 2)),
+        "worst_drift_mode": int(worst_mode as i64),
+        "warn": warn,
+        "message": message,
+    })
+}
+
+/// [`tuning_block`] for a musical record outside a [`Built`] — the barrier pages build their own
+/// strings (`contact.rs`).
+pub(crate) fn tuning_block_for(m: &Musical, l: f64, n: i64, fs: f64) -> Value {
+    let tu = match &m.map {
+        Mapped::Damped(tu) => tu,
+        _ => return harmonic_tuning_block(m, l, n, fs),
+    };
+    let tg = &m.targets;
+    let d = partial_drift(l, n as usize, fs, m.theta, tu, tg);
     let warn = d.warn(tu.anchor);
     let message = if warn {
         format!(
@@ -570,7 +760,7 @@ pub(crate) fn tuning_block(b: &Built) -> Option<Value> {
             "warnings": stress_warnings(g),
         });
     }
-    Some(block)
+    block
 }
 
 /// A core constructor's refusal, surfaced as `serialize.py`'s `except ValueError` did.
@@ -626,6 +816,7 @@ fn build_resonator_with(p: &Value, lossless: bool) -> Result<Built, Refusal> {
     let fs = c * n as f64 / (l * lam);
 
     match model.as_str() {
+        "ideal" if is_musical(p) => build_musical_ideal(p, l, rho, n),
         "ideal" => {
             let sigma = fnum(p, "sigma", 0.0)?;
             let params = ideal::Params::new(

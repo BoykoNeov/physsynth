@@ -33,8 +33,8 @@ use crate::py::{
     py_repr, py_str, round_int, round_nd,
 };
 use crate::string::{
-    construction, damped_info, int_at_least_one, ANIM_WIN_MAX, FRAMES_PER_PERIOD, MAX_FRAMES,
-    N_MIN, SPEED_MAX,
+    construction, damped_info, flexible_musical, int_at_least_one, is_musical, tuning_block_for,
+    Musical, ANIM_WIN_MAX, FRAMES_PER_PERIOD, MAX_FRAMES, N_MIN, SPEED_MAX,
 };
 use crate::tension::{interp_zero_cross_frequency, mode1_shape};
 use crate::{fnum, resample_normalize, Refusal, AUDIO_FS};
@@ -180,6 +180,43 @@ fn check_lambda(lam: f64) -> Result<(), Refusal> {
         )));
     }
     Ok(())
+}
+
+/// The string's tension, loss, sample rate and wave speed — `(T, sigma0, fs, c, musical)`. From
+/// the physics sliders (`lambda` sets `fs`), or, with musical controls, from a pitch, one ring time
+/// and the sample-rate slider (string mapping plan §13), the string still `kappa = 0`, `sigma1 = 0`.
+/// The physics arithmetic is the reference's, unchanged.
+#[allow(clippy::type_complexity)]
+fn string_setup(
+    p: &Value,
+    l: f64,
+    t: f64,
+    rho: f64,
+    lam: f64,
+    sigma0: f64,
+    n: i64,
+) -> Result<(f64, f64, f64, f64, Option<Musical>), Refusal> {
+    if is_musical(p) {
+        let (t, sigma0, fs, c, m) = flexible_musical(p, l, rho, n, THETA_DEFAULT)?;
+        return Ok((t, sigma0, fs, c, Some(m)));
+    }
+    let c = (t / rho).sqrt();
+    let fs = c * n as f64 / (l * lam);
+    Ok((t, sigma0, fs, c, None))
+}
+
+/// The payload, with a `tuning` block when the string was built from musical controls.
+fn with_tuning(
+    musical: Option<&Musical>,
+    l: f64,
+    n: i64,
+    fs: f64,
+    mut payload: Value,
+) -> Result<Value, Refusal> {
+    if let Some(m) = musical {
+        payload["tuning"] = tuning_block_for(m, l, n, fs);
+    }
+    Ok(payload)
 }
 
 /// A lossless-bridge damped string (`kappa = 0`, `sigma1 = 0`, theta at its default).
@@ -333,6 +370,8 @@ fn jawari_profile(x: &[f64], l: f64, width_frac: f64, depth: f64, clearance: f64
 
 /// What `_build_jawari` reports beside the barrier string.
 struct JawInfo {
+    /// The musical record when the string was built from a pitch and a ring time (plan §13).
+    musical: Option<Musical>,
     c: f64,
     l: f64,
     n: i64,
@@ -389,8 +428,7 @@ fn build_jawari(p: &Value, clearance: f64) -> Result<(BarrierString, JawInfo), R
             pf(sigma0)
         )));
     }
-    let c = (t / rho).sqrt();
-    let fs = c * n as f64 / (l * lam);
+    let (t, sigma0, fs, c, musical) = string_setup(p, l, t, rho, lam, sigma0, n)?;
     let string = damped_string(l, t, rho, fs, n, sigma0)?;
     let lam_s = string.p.lam;
     let barrier = jawari_profile(&string.p.grid(), l, width_frac, depth, clearance);
@@ -399,6 +437,7 @@ fn build_jawari(p: &Value, clearance: f64) -> Result<(BarrierString, JawInfo), R
     Ok((
         bar,
         JawInfo {
+            musical,
             c,
             l,
             n,
@@ -710,31 +749,37 @@ pub fn build_payload_jawari(p: &Value) -> Result<Value, Refusal> {
         })
         .collect();
     let x = jaw.string.p.grid();
-    Ok(json!({
-        "model": "jawari",
-        "horizon": string_block(&damped_info(&jaw.string), "the string under the jawari"),
-        "fs_sim": num(round_nd(fs, 3)),
-        "lambda": num(round_nd(info.lam, 6)),
-        "grid": {"x": finite_list(&x, Some(6)), "barrier": finite_list(&barrier_on_grid(&jaw), None)},
-        "frames": com.frames,
-        "frame_times": com.frame_times,
-        "wrap_frames": wrap_grid,
-        "anim_dt": num(stride as f64 / fs),
-        "playback_speed": num(f.playback_speed),
-        "field_amp": num(com.field_amp),
-        "audio": com.audio,
-        "energy": energy_block(&com.energy_time, &run.e, info.sigma0 == 0.0, 2.0 * info.sigma0,
-                               EnergyOpts::default()),
-        "meta": {
-            "c": num(round_nd(c, 3)),
-            "f1": num(round_nd(f1, 3)),
-            "num_steps": int(n_steps),
-            "n_frames": int(run.frames.len() as i64),
-            "probe_x": num(round_nd(x[pickup_idx], 4)),
-            "bridge_span": num(round_nd(info.width_frac * l, 4)),
-            "spectrum": shimmer_block(&run, &clean_run, fs, f1, &info, f.amplitude),
-        },
-    }))
+    with_tuning(
+        info.musical.as_ref(),
+        l,
+        n,
+        fs,
+        json!({
+            "model": "jawari",
+            "horizon": string_block(&damped_info(&jaw.string), "the string under the jawari"),
+            "fs_sim": num(round_nd(fs, 3)),
+            "lambda": num(round_nd(info.lam, 6)),
+            "grid": {"x": finite_list(&x, Some(6)), "barrier": finite_list(&barrier_on_grid(&jaw), None)},
+            "frames": com.frames,
+            "frame_times": com.frame_times,
+            "wrap_frames": wrap_grid,
+            "anim_dt": num(stride as f64 / fs),
+            "playback_speed": num(f.playback_speed),
+            "field_amp": num(com.field_amp),
+            "audio": com.audio,
+            "energy": energy_block(&com.energy_time, &run.e, info.sigma0 == 0.0, 2.0 * info.sigma0,
+                                   EnergyOpts::default()),
+            "meta": {
+                "c": num(round_nd(c, 3)),
+                "f1": num(round_nd(f1, 3)),
+                "num_steps": int(n_steps),
+                "n_frames": int(run.frames.len() as i64),
+                "probe_x": num(round_nd(x[pickup_idx], 4)),
+                "bridge_span": num(round_nd(info.width_frac * l, 4)),
+                "spectrum": shimmer_block(&run, &clean_run, fs, f1, &info, f.amplitude),
+            },
+        }),
+    )
 }
 
 // == the juari =====================================================================================
@@ -746,6 +791,8 @@ fn juari_snap(frac: f64, n: i64) -> i64 {
 
 /// What `_build_juari` reports.
 struct JuaInfo {
+    /// The musical record when the string was built from a pitch and a ring time (plan §13).
+    musical: Option<Musical>,
     c: f64,
     l: f64,
     n: i64,
@@ -788,8 +835,7 @@ fn build_juari(p: &Value, node: i64, reach: bool) -> Result<(BarrierString, JuaI
             n - 1
         )));
     }
-    let c = (t / rho).sqrt();
-    let fs = c * n as f64 / (l * lam);
+    let (t, sigma0, fs, c, musical) = string_setup(p, l, t, rho, lam, sigma0, n)?;
     let string = damped_string(l, t, rho, fs, n, sigma0)?;
     let lam_s = string.p.lam;
     let mut barrier = vec![f64::NEG_INFINITY; string.p.nodes()];
@@ -798,6 +844,7 @@ fn build_juari(p: &Value, node: i64, reach: bool) -> Result<(BarrierString, JuaI
     Ok((
         bar,
         JuaInfo {
+            musical,
             c,
             l,
             n,
@@ -1030,40 +1077,48 @@ pub fn build_payload_juari(p: &Value) -> Result<Value, Refusal> {
         .iter()
         .map(|&i| int(i64::from(run.n_contact[i] > 0.0)))
         .collect();
-    Ok(json!({
-        "model": "juari",
-        "horizon": string_block(&damped_info(&main_bar.string), "the string under the thread"),
-        "fs_sim": num(round_nd(fs, 3)),
-        "lambda": num(round_nd(info.lam, 6)),
-        "grid": {
-            "x": finite_list(&x, Some(6)),
-            "thread_node": int(sel_node),
-            "thread_x": num(round_nd(x[sel_node as usize], 6)),
-        },
-        "frames": com.frames,
-        "frame_times": com.frame_times,
-        "contact_frames": contact_frames,
-        "anim_dt": num(stride as f64 / fs),
-        "playback_speed": num(f.playback_speed),
-        "field_amp": num(com.field_amp),
-        "audio": com.audio,
-        "energy": energy_block(&com.energy_time, &run.e, info.sigma0 == 0.0, 2.0 * info.sigma0,
-                               EnergyOpts::default()),
-        "meta": {
-            "c": num(round_nd(c, 3)),
-            "f1": num(round_nd(f1, 3)),
-            "num_steps": int(n_steps),
-            "n_frames": int(run.frames.len() as i64),
-            "probe_x": num(round_nd(x[pickup_idx], 4)),
-            "spectrum": sig,
-        },
-    }))
+    with_tuning(
+        info.musical.as_ref(),
+        l,
+        n,
+        fs,
+        json!({
+            "model": "juari",
+            "horizon": string_block(&damped_info(&main_bar.string), "the string under the thread"),
+            "fs_sim": num(round_nd(fs, 3)),
+            "lambda": num(round_nd(info.lam, 6)),
+            "grid": {
+                "x": finite_list(&x, Some(6)),
+                "thread_node": int(sel_node),
+                "thread_x": num(round_nd(x[sel_node as usize], 6)),
+            },
+            "frames": com.frames,
+            "frame_times": com.frame_times,
+            "contact_frames": contact_frames,
+            "anim_dt": num(stride as f64 / fs),
+            "playback_speed": num(f.playback_speed),
+            "field_amp": num(com.field_amp),
+            "audio": com.audio,
+            "energy": energy_block(&com.energy_time, &run.e, info.sigma0 == 0.0, 2.0 * info.sigma0,
+                                   EnergyOpts::default()),
+            "meta": {
+                "c": num(round_nd(c, 3)),
+                "f1": num(round_nd(f1, 3)),
+                "num_steps": int(n_steps),
+                "n_frames": int(run.frames.len() as i64),
+                "probe_x": num(round_nd(x[pickup_idx], 4)),
+                "spectrum": sig,
+            },
+        }),
+    )
 }
 
 // == the fret ======================================================================================
 
 /// What `_build_fret` reports.
 struct FretInfo {
+    /// The musical record when the string was built from a pitch and a ring time (plan §13).
+    musical: Option<Musical>,
     c: f64,
     l: f64,
     n: i64,
@@ -1121,8 +1176,7 @@ fn build_fret(p: &Value, out_of_reach: bool) -> Result<(BarrierString, FretInfo)
             pf(sigma0)
         )));
     }
-    let c = (t / rho).sqrt();
-    let fs = c * n as f64 / (l * lam);
+    let (t, sigma0, fs, c, musical) = string_setup(p, l, t, rho, lam, sigma0, n)?;
     let string = damped_string(l, t, rho, fs, n, sigma0)?;
     let lam_s = string.p.lam;
     let depth = if out_of_reach { 1.0 } else { clearance };
@@ -1144,6 +1198,7 @@ fn build_fret(p: &Value, out_of_reach: bool) -> Result<(BarrierString, FretInfo)
     Ok((
         bar,
         FretInfo {
+            musical,
             c,
             l,
             n,
@@ -1536,19 +1591,25 @@ pub fn build_payload_fret(p: &Value) -> Result<Value, Refusal> {
         "spectrum".into(),
         signature_block(&run.base.pickup, &ctrl_run.base.pickup, fs, f1, &info),
     );
-    Ok(json!({
-        "model": "fret",
-        "horizon": string_block(&damped_info(&bar.string), "the fretted string"),
-        "fs_sim": num(round_nd(fs, 3)),
-        "lambda": num(round_nd(info.lam, 6)),
-        "grid": {"x": finite_list(&x, Some(6)), "barrier": finite_list(&barrier_on_grid(&bar), None)},
-        "frames": com.frames,
-        "frame_times": com.frame_times,
-        "anim_dt": num(stride as f64 / fs),
-        "playback_speed": num(f.playback_speed),
-        "field_amp": num(com.field_amp),
-        "audio": com.audio,
-        "energy": energy,
-        "meta": meta,
-    }))
+    with_tuning(
+        info.musical.as_ref(),
+        l,
+        n,
+        fs,
+        json!({
+            "model": "fret",
+            "horizon": string_block(&damped_info(&bar.string), "the fretted string"),
+            "fs_sim": num(round_nd(fs, 3)),
+            "lambda": num(round_nd(info.lam, 6)),
+            "grid": {"x": finite_list(&x, Some(6)), "barrier": finite_list(&barrier_on_grid(&bar), None)},
+            "frames": com.frames,
+            "frame_times": com.frame_times,
+            "anim_dt": num(stride as f64 / fs),
+            "playback_speed": num(f.playback_speed),
+            "field_amp": num(com.field_amp),
+            "audio": com.audio,
+            "energy": energy,
+            "meta": meta,
+        }),
+    )
 }

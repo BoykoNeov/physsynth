@@ -583,7 +583,17 @@ const CONTROL_OPTS = {
         ["musical", "Musical — pitch, inharmonicity, ring times"]],
   tension: [["physical", "Physics — T, κ, EA, σ₀, σ₁"],
             ["musical", "Musical — string gauge, settled pitch, ring times (Duffing)"]],
+  // The ideal string keeps λ = 1 and the sample rate follows the pitch (string mapping plan §8.2);
+  // the barrier pages' flexible string takes the sample-rate slider (plan §13). One ring time each.
+  ideal: [["physical", "Physics — T, ρ, λ, σ"],
+          ["musical", "Musical — pitch, ring time (λ = 1, fs follows the pitch)"]],
+  jawari: [["physical", "Physics — T, ρ, λ, σ₀"], ["musical", "Musical — pitch, ring time"]],
+  juari: [["physical", "Physics — T, ρ, λ, σ₀"], ["musical", "Musical — pitch, ring time"]],
+  fret: [["physical", "Physics — T, ρ, λ, σ₀"], ["musical", "Musical — pitch, ring time"]],
 };
+
+// The strings whose musical controls are a pitch and ONE ring time (string mapping plan §13).
+const ONE_RING_MODELS = ["ideal", "jawari", "juari", "fret"];
 
 // The models whose drum takes the head-and-pitch musical controls (the drum in a room among them).
 const DRUM_MODELS = ["membrane", "mallet", "drumroom"];
@@ -597,7 +607,8 @@ const WOODS = ["sitka spruce", "engelmann spruce", "western redcedar", "sugar ma
 // the plate and the drums on the controls select.
 function musicalOn(m) {
   if (m === "damped") return domainSel.value === "musical";
-  if (m === "plate" || m === "vk" || m === "bow" || DRUM_MODELS.includes(m)) {
+  if (m === "plate" || m === "vk" || m === "bow" || ONE_RING_MODELS.includes(m)
+      || DRUM_MODELS.includes(m)) {
     return !!controlsSel && controlsSel.value === "musical";
   }
   if (m === "tension") {
@@ -893,8 +904,12 @@ function updateGuitarHint() {
 function updateLambdaHint() {
   const m = modelSel.value;
   const hint = $("lambda-hint");
-  if ((m === "damped" && domainSel.value === "musical")
-      || ((m === "bow" || m === "tension") && musicalOn(m))) {
+  if (m === "ideal" && musicalOn(m)) {
+    hint.textContent = "λ = 1 here, the scheme's exact setting: the pitch sets the wave speed and "
+      + "the sample rate follows it (2·f₀·N). Every partial is in tune when the ring is long.";
+    hint.style.color = "var(--muted)";
+  } else if ((m === "damped" && domainSel.value === "musical")
+      || ((m === "bow" || m === "tension" || ONE_RING_MODELS.includes(m)) && musicalOn(m))) {
     hint.textContent = "λ is a read-out here: the pitch sets the wave speed, and fs is the "
       + "sample-rate slider. Raise N or fs to keep more partials on the target law.";
     hint.style.color = "var(--muted)";
@@ -1580,7 +1595,8 @@ function gatherParams() {
     p.set_by = $("drum-set-by").value;
   }
   // The bow's and the tension string's control set, and the tension string's material.
-  if ((modelSel.value === "bow" || modelSel.value === "tension") && controlsSel) {
+  if ((modelSel.value === "bow" || modelSel.value === "tension"
+       || ONE_RING_MODELS.includes(modelSel.value)) && controlsSel) {
     p.controls = controlsSel.value;
     if (modelSel.value === "tension") p.string_material = $("string-material").value;
   }
@@ -1658,6 +1674,17 @@ function showTuning(data) {
   const t = data.tuning;
   if (!t) { hint.textContent = ""; return; }
   const g = (x) => Number(x).toPrecision(4);
+  // The ideal and flexible strings (plan §13): a pitch and one ring time on the harmonic law.
+  if (t.kind === "ideal" || t.kind === "flexible") {
+    const how = t.kind === "ideal"
+      ? `fs = ${fmt(t.fs)} Hz follows the pitch so that λ = 1; the pitch and EVERY partial's `
+        + `ring time are exact`
+      : `λ = ${g(t.lambda)}; the pitch and ring time are exact at f₀`;
+    hint.textContent = `→ T = ${g(t.T)} N, σ = ${g(t.sigma0)}. ${how}. `
+      + `${t.warn ? "⚠ " : ""}${t.message}`;
+    hint.style.color = t.warn ? "var(--accent-2)" : "var(--muted)";
+    return;
+  }
   let text = `→ T = ${g(t.T)} N, κ = ${g(t.kappa)}, σ₀ = ${g(t.sigma0)}, `
     + `σ₁ = ${g(t.sigma1)}, λ = ${data.lambda}. Exact at f₀ and at partial ${t.anchor} `
     + `(${g(t.f_anchor)} Hz). ${t.warn ? "⚠ " : ""}${t.message}`;

@@ -308,3 +308,29 @@ Seven plants each turned a bar red: the loss without its `tanh`; `c` over `N + 1
 half angle doubled; the loss dropped from the mode pitch; `ln 10` dropped from the ring time; the
 flexible loss not divided by `k`; mode 2's eigenvalue in place of mode 1's. The file runs in 1 s
 optimised and 13.5 s unoptimised.
+
+**Parts 3–4, the pages.** The ideal page and the three barrier pages take `controls: "musical"`
+with a pitch and one ring time (`f0`, `t60_low`). The ideal string runs at `λ = 1` with its
+sample rate following the pitch (2·f₀·N). The barrier pages take the sample-rate slider, and their
+`λ` read-out is refused at 1 or above, as the physics path refuses it, with the sample rate that
+would do. `string.rs`' `Musical` now carries a `Mapped` (damped, ideal or flexible). The barrier
+pages share one `string_setup`, whose physics arithmetic is the reference's: the full exact
+freeze of `contact.json` is unchanged. Held by
+`crates/physsynth-viewer/tests/ideal_contact_musical.rs` (eight bars) and two headless cases,
+`string_ideal_musical` and `jawari_musical`.
+
+- **Each barrier page in musical mode is its physics page on the mapped string**, to 1e-9 in every
+  payload field (float32 renderings aside). The pages keep their internal fundamental at the
+  physics path's `c / 2L`, which sits within a fraction of a cent of the target. Using the exact
+  target there moved display-only numbers (the spectrum's range, the animation stride) and broke
+  the twin for no physical gain.
+- **The ideal page's energy decays at 6 ln 10 / T60** to 1.4e-6, which proves the loss it plays is
+  the mapped one. Found by a plant: a build reading the `sigma` slider passed every other bar,
+  because they listened to pitch and the loss barely moves pitch. The damped batch's lesson again:
+  a wiring bar must listen to the output, and to the output the mapping sets.
+- **A jawari at `N = 64`** warns that its partials above the fundamental run flat of m·f₀, up to
+  −55 cents at the 16th. Its physics page has the same flattening; the musical page says so.
+- **Plants, viewer:** the ideal string's loss from the slider (caught only after the energy bar
+  was added); its sample rate from the lossless law; the barrier pages never musical; the
+  `λ ≥ 1` refusal removed; the tuning block dropped; the wrong θ; the barrier pages keyed on
+  `domain`. All seven turn a bar red.

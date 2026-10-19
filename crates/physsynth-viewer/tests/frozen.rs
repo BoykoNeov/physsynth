@@ -721,6 +721,12 @@ fn every_fixture_file_is_run() {
 ///   naming the physical set with musical keys riding along changes no byte (the unnamed requests
 ///   are frozen in `d2.json`), and the musical sets through what each page plays — the bowed
 ///   pitch, and the tension page measured against the physics page on the mapped string.
+/// - `ideal`, `jawari`, `juari` and `fret`, `controls:physical` / `controls:musical`, are the ideal
+///   string's and the barrier pages' two control sets (string mapping plan §13), held by
+///   `ideal_contact_musical.rs` the same two ways: the physical set with musical keys riding along
+///   changes no byte (the unnamed requests are frozen in `strings.json` and `contact.json`), and
+///   the musical sets through what each page plays — the ideal page's partials, and each barrier
+///   page against its physics page on the mapped string.
 const BORN_AFTER_THE_FREEZE: &[(&str, &str, &str)] = &[
     ("damped", "physical", "tests/string_musical.rs"),
     ("damped", "musical", "tests/string_musical.rs"),
@@ -748,6 +754,42 @@ const BORN_AFTER_THE_FREEZE: &[(&str, &str, &str)] = &[
         "controls:musical",
         "tests/bow_tension_musical.rs",
     ),
+    (
+        "ideal",
+        "controls:physical",
+        "tests/ideal_contact_musical.rs",
+    ),
+    (
+        "ideal",
+        "controls:musical",
+        "tests/ideal_contact_musical.rs",
+    ),
+    (
+        "jawari",
+        "controls:physical",
+        "tests/ideal_contact_musical.rs",
+    ),
+    (
+        "jawari",
+        "controls:musical",
+        "tests/ideal_contact_musical.rs",
+    ),
+    (
+        "juari",
+        "controls:physical",
+        "tests/ideal_contact_musical.rs",
+    ),
+    (
+        "juari",
+        "controls:musical",
+        "tests/ideal_contact_musical.rs",
+    ),
+    (
+        "fret",
+        "controls:physical",
+        "tests/ideal_contact_musical.rs",
+    ),
+    ("fret", "controls:musical", "tests/ideal_contact_musical.rs"),
 ];
 
 /// Whole MODELS born after the Python viewer was deleted, for the same reason as
