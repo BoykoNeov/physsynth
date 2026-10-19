@@ -410,7 +410,7 @@ fn the_refusals() {
 }
 
 /// The notes the scan follows are real notes, read off the run. Two ways of following a root from
-/// one scan point to the next went wrong in plants (plan §16) and only these fixtures saw them:
+/// one scan point to the next went wrong in plants (plan §16) that this file's other bars missed:
 ///
 /// - **By rank in the band, not by nearness.** On the 3000 N/m body, 269.09 Hz lies just above
 ///   the ceiling of the 261 Hz body mode raised by the spring (the hybrid levels off at 267.9 Hz):

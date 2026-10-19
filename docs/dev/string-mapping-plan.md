@@ -537,8 +537,9 @@ one-step map `Phi`, built from `step()`:
   213.6 Hz (it plays a 99.7 %-string note there, at `f_cl = 243.65`).
 - **Coverage:** on the two hardest rigs (the 3000 N/m body, the radiating body) over 40–570 Hz and
   five ring times, 470 tunings: no `Unconverged`, no mid-way refusal; every outcome is a tuning or
-  an honest refusal (below the guard's wall, a ring longer than the air allows, a ring shorter
-  than a mostly-body note can reach).
+  a refusal (below the guard's wall, a ring longer than the air allows, a ring shorter than a
+  mostly-body note can reach). *Not every refusal is honest:* a "ring too short" can miss a
+  tuning that only heavy loss reaches (below, the plants that survived).
 - **Plants the first bars missed** (re-checked 2026-10-19, after the commit): three changes to how
   a note is followed survived `tests/coupled_tuning.rs`. Against the probe's reduced sweep (the
   two hardest rigs, 47 semitones from 40 Hz, five ring times):
