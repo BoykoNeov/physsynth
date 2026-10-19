@@ -309,3 +309,27 @@ fn a_centred_cymbal_strike_says_it_cannot_reach_the_lowest_tone() {
         "{r}"
     );
 }
+
+#[test]
+fn past_the_measured_rows_only_the_column_that_already_broke_is_refused() {
+    // A 16 mm steel gong 0.4 m square has f₁ ≈ 480 Hz; at 8 kHz f₁·k ≈ 0.06, past the table's last
+    // row (0.05). There the strike-6 column had already broken, so it is refused; a gentle strike
+    // settled at 0.05 and nothing past it was measured, so the table makes no claim and the run
+    // goes ahead under its own first-failure stop and work cap.
+    let gong = |w: f64| {
+        sim(&base_params(json!({
+            "model": "vk", "domain": "supported", "E": 2.0e11, "e": 0.016, "nu": 0.3,
+            "rho": 7800.0, "Lx": 0.4, "Ly": 0.4, "N": 12, "fs": 8000.0, "w_over_e": w,
+            "audio_duration": 0.05, "animation_window": 0.01,
+        })))
+    };
+    let gentle = gong(1.0);
+    assert!(gentle.get("error").is_none(), "{}", gentle["error"]);
+    let f1 = f(&gentle["meta"]["f1"]);
+    assert!(
+        f1 / 8000.0 > 0.05,
+        "the gong is not past the last row: f₁ = {f1}"
+    );
+    let msg = message(&gong(6.0));
+    assert!(msg.contains("past the measured edge"), "{msg}");
+}

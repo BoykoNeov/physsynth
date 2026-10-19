@@ -80,12 +80,33 @@ const GONG_STRIKE: [f64; 4] = [1.0, 2.0, 4.0, 6.0];
 /// the margin a prediction from the table carries.
 const GONG_LOSSLESS_RISE: f64 = 1.6;
 
-/// Solves per step the table predicts for a gong at `f0k` struck `strike` thicknesses deep, or
-/// `None` where it does not settle (or lies past the measured rows).
-fn gong_cost(f0k: f64, strike: f64) -> Option<f64> {
-    let row = GONG_F0K.iter().position(|&r| f0k <= r)?;
-    let col = GONG_STRIKE.iter().position(|&c| strike <= c)?;
-    GONG_SOLVES[row][col]
+/// What [`GONG_SOLVES`] says about one gong.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Predicted {
+    /// Every step settles, at about this many solves each.
+    Cost(f64),
+    /// A step does not settle — measured, or past the last row in a column that already broke
+    /// there (the cost rises on both axes, so a broken cell stays broken further out).
+    Broken,
+    /// Past the last measured row in a column that still settled: no claim either way. The run's
+    /// own guard (`Guard`) is all that stands there.
+    Unmeasured,
+}
+
+/// What the table predicts for a gong at `f0k` struck `strike` thicknesses deep (`strike` is held
+/// to [`VK_WOVERE_MAX`], the last column, before this is asked).
+fn gong_cost(f0k: f64, strike: f64) -> Predicted {
+    let col = GONG_STRIKE
+        .iter()
+        .position(|&c| strike <= c)
+        .unwrap_or(GONG_STRIKE.len() - 1);
+    match GONG_F0K.iter().position(|&r| f0k <= r) {
+        Some(row) => GONG_SOLVES[row][col].map_or(Predicted::Broken, Predicted::Cost),
+        None => match GONG_SOLVES[GONG_F0K.len() - 1][col] {
+            None => Predicted::Broken,
+            Some(_) => Predicted::Unmeasured,
+        },
+    }
 }
 
 fn pf(x: f64) -> String {
@@ -517,41 +538,52 @@ fn spectrum_block(pickup: &[f64], fs: f64, f_lin: &[f64], f0: f64) -> Value {
     })
 }
 
-/// The gong's pre-run guard (plan §11.4): the table's solves per step at the lowest mode's `f₁`,
-/// or a refusal naming a sample rate, and a strike, that would settle within [`VK_SOLVE_MAX`].
-/// `dur` is the audio and animation together (s).
-fn gong_guard(f1: f64, fs: f64, strike: f64, n_live: usize, dur: f64) -> Result<f64, Refusal> {
-    let fits = |fs: f64, strike: f64| -> Option<f64> {
-        let s = gong_cost(f1 / fs, strike)?;
-        (n_live as f64 * dur * fs * s * GONG_LOSSLESS_RISE <= VK_SOLVE_MAX).then_some(s)
+/// The gong's pre-run guard (plan §11.4): the table's solves per step at the lowest mode's `f₁`
+/// (`None` where the table makes no claim, left to the run's own guard), or a refusal naming a
+/// sample rate, and a strike, that would pass. `dur` is the audio and animation together (s).
+fn gong_guard(
+    f1: f64,
+    fs: f64,
+    strike: f64,
+    n_live: usize,
+    dur: f64,
+) -> Result<Option<f64>, Refusal> {
+    let work = |fs: f64, s: f64| n_live as f64 * dur * fs * s * GONG_LOSSLESS_RISE;
+    // `Some(prediction)` when the guard lets this gong run.
+    let passes = |fs: f64, strike: f64| -> Option<Option<f64>> {
+        match gong_cost(f1 / fs, strike) {
+            Predicted::Cost(s) => (work(fs, s) <= VK_SOLVE_MAX).then_some(Some(s)),
+            Predicted::Unmeasured => Some(None),
+            Predicted::Broken => None,
+        }
     };
-    if let Some(s) = fits(fs, strike) {
-        return Ok(s);
+    if let Some(p) = passes(fs, strike) {
+        return Ok(p);
     }
     let why = match gong_cost(f1 / fs, strike) {
-        None => format!(
-            "is past the measured edge where a step stops settling (f₁·k = {:.4}; plan §11.1)",
-            f1 / fs
-        ),
-        Some(s) => format!(
+        Predicted::Cost(s) => format!(
             "would need about {:.0}M node-solves with Newton rescuing its steps, over the \
              ~{:.0}M budget",
-            n_live as f64 * dur * fs * s * GONG_LOSSLESS_RISE / 1e6,
+            work(fs, s) / 1e6,
             VK_SOLVE_MAX / 1e6
+        ),
+        _ => format!(
+            "is past the measured edge where a step stops settling (f₁·k = {:.4}; plan §11.1)",
+            f1 / fs
         ),
     };
     let mut fixes = Vec::new();
     let first = (fs / 1000.0).floor() as i64 + 1;
     if let Some(f) = (first..=(VK_FS_MAX / 1000.0) as i64)
         .map(|i| i as f64 * 1000.0)
-        .find(|&f| fits(f, strike).is_some())
+        .find(|&f| passes(f, strike).is_some())
     {
         fixes.push(format!("raise fs to {} Hz", pf(f)));
     }
     if let Some(&c) = GONG_STRIKE
         .iter()
         .rev()
-        .find(|&&c| c < strike && fits(fs, c).is_some())
+        .find(|&&c| c < strike && passes(fs, c).is_some())
     {
         fixes.push(format!("strike at most {} thicknesses", pf(c)));
     }
@@ -704,7 +736,11 @@ fn cost_block(
     nonlinear: bool,
 ) -> Value {
     let per_step = audio.solves as f64 / steps.max(1) as f64;
-    let gentle = gong_cost(f0k.max(GONG_F0K[0]), 1.0).unwrap_or(GONG_SOLVES[4][0].unwrap_or(19.0));
+    // Past the last row the strike-1 column is unmeasured; its last measured cell is the floor.
+    let gentle = match gong_cost(f0k, 1.0) {
+        Predicted::Cost(s) => s,
+        _ => GONG_SOLVES[GONG_F0K.len() - 1][0].unwrap_or(1.0),
+    };
     let multiple = per_step / gentle;
     let message = if !nonlinear {
         "the coupling is off: one linear solve a step.".to_owned()
@@ -891,13 +927,7 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
     // will pass the budget, before a step is paid for. The cymbal cannot be predicted; it is
     // stopped as it runs (`Guard`).
     let predicted = if nonlinear && boundary == Boundary::Supported {
-        Some(gong_guard(
-            f1_lin,
-            fs,
-            w_over_e,
-            vk.p.lin.n_live,
-            audio_dur + anim_win,
-        )?)
+        gong_guard(f1_lin, fs, w_over_e, vk.p.lin.n_live, audio_dur + anim_win)?
     } else {
         None
     };
@@ -1079,14 +1109,14 @@ mod tests {
                 }
             }
         }
-        assert_eq!(gong_cost(0.004, 3.0), GONG_SOLVES[1][2]);
-        assert_eq!(gong_cost(0.0001, 0.5), GONG_SOLVES[0][0]);
-        assert_eq!(gong_cost(0.026, 5.0), None);
-        assert_eq!(
-            gong_cost(0.06, 1.0),
-            None,
-            "past the last row is unmeasured"
-        );
+        assert_eq!(gong_cost(0.004, 3.0), Predicted::Cost(17.5));
+        assert_eq!(gong_cost(0.0001, 0.5), Predicted::Cost(8.0));
+        assert_eq!(gong_cost(0.026, 5.0), Predicted::Broken);
+        // Past the last row: a column that broke there stays broken; one that settled is no claim.
+        assert_eq!(gong_cost(0.06, 6.0), Predicted::Broken);
+        assert_eq!(gong_cost(0.06, 5.0), Predicted::Broken);
+        assert_eq!(gong_cost(0.06, 4.0), Predicted::Unmeasured);
+        assert_eq!(gong_cost(0.06, 1.0), Predicted::Unmeasured);
     }
 
     fn little_gong(boundary: Boundary) -> VkPlate {

@@ -568,9 +568,14 @@ apply to the physical page too (§8.8 answer 3), where only a refusal may change
   (nonlinear, supported) is read off §11.1's table at its conservative corner — `f₁·k` from the
   page's own lowest discrete mode — and refused before it runs where a step would not settle, or
   where the table's cost × 1.6 (the lossless rise, §11.3) passes the new cap, naming the sample
-  rate and the strike that would fit. Then every nonlinear run, both boundaries, is stopped at its
-  first unsettled step and charged against `VK_SOLVE_MAX` = 2 × `VK_WORK_MAX` node-solves (the
-  old budget's own promise, kept by counting), refusing with what to change.
+  rate and the strike that would fit. Past the last measured row (`f₁·k` > 0.05) only the column
+  that had already broken there (strike above 4) is refused; the gentler columns settled at 0.05
+  and nothing past it was measured, so the table makes no claim and the run's own guard decides
+  (a first draft refused them all as "past the measured edge" — untrue, and it would have refused
+  physical requests that run today; caught at review, now a bar and a plant). Then every
+  nonlinear run, both boundaries, is stopped at its first unsettled step and charged against
+  `VK_SOLVE_MAX` = 2 × `VK_WORK_MAX` node-solves (the old budget's own promise, kept by
+  counting), refusing with what to change.
 - **The energy verdict** drops the single-rate `2σ` oracle line when `σ₁ > 0`.
 
 Front-end (`web/static/`): `CONTROL_OPTS` gains `vk`; the shared musical group and the plate's
@@ -582,18 +587,26 @@ and the cost.
 The frozen gong replies are untouched (the freeze's 588 requests pass exactly): every frozen gong
 request sits far inside the table and settled on every step. `controls:physical` and
 `controls:musical` for `vk` are in `BORN_AFTER_THE_FREEZE`, held by
-`crates/physsynth-viewer/tests/vk_musical.rs` (11 bars: the starting energy against a core gong
+`crates/physsynth-viewer/tests/vk_musical.rs` (12 bars: the starting energy against a core gong
 built from the mapping, the gentle and hard pitch, the gong's start and settle, the cymbal's
 settle and its centred-strike message, physical bytes unchanged with musical keys, the energy
-verdict, set by thickness, refusals, the gong refused before it runs on both control sets, the
-cymbal stopped at its first failed step) and two unit bars in `vk.rs` (the table's corner and
-monotonicity; the work cap stops a run, counted). Headless cases `vk_musical` and
+verdict, set by thickness, refusals, the gong refused before it runs on both control sets, a
+gentle gong past the last row let through, the cymbal stopped at its first failed step) and two
+unit bars in `vk.rs` (the table's corner, its monotonicity and its three answers; the work cap
+stops a run, counted). Headless cases `vk_musical` and
 `vk_musical_cymbal`.
 
 Plants (each time-limited, the source restored from a copy): the first-failure stop removed (red
 after 372 s — the work cap stopped the broken cymbal instead, with the wrong message); a broken
 table cell marked safe; the late window replaced by the whole run; a decoy density read in musical
 mode (5 red); `σ₁` dropped after the mapping. Each red.
+
+**What the work cap means in time** (read off §11's runs: wall-clock ÷ steps × solves × live
+nodes): rescued runs cost 0.08–0.5 µs per node-solve on this machine, so `VK_SOLVE_MAX`'s 4e9
+node-solves is roughly 5–35 minutes at most. A broken step costs ~6 µs per counted node-solve at
+`N` 32 (its line search does work the count does not see), which is why the first unsettled step
+stops the run rather than the cap. The machine's speed moved ~6× between runs (§8.5), so these
+are a scale, not a promise.
 
 **Found on the way:** a cymbal's tuned pitch is its lowest elastic mode, a twist; a strike near
 the centre barely excites it, so the note the musician sets is quiet unless the strike is off the
