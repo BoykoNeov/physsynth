@@ -110,6 +110,7 @@ fn make_room(fs: f64, walls: [Wall; 6]) -> AirBox {
 struct Vk {
     boundary: Boundary,
     sigma: f64,
+    sigma1: f64,
     nonlinear: bool,
     n: i64,
     fs: f64,
@@ -123,6 +124,7 @@ impl Default for Vk {
         Vk {
             boundary: Boundary::Supported,
             sigma: 0.0,
+            sigma1: 0.0,
             nonlinear: true,
             n: 8,
             fs: FS,
@@ -145,6 +147,7 @@ impl Vk {
             fs: self.fs,
             n: self.n,
             sigma: self.sigma,
+            sigma1: self.sigma1,
             theta: plate::THETA_DEFAULT,
             boundary: Some(self.boundary),
             nonlinear: self.nonlinear,

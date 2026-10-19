@@ -1456,6 +1456,11 @@ pub struct VkSpec {
     pub n: i64,
     /// Frequency-independent loss.
     pub sigma: f64,
+    /// Frequency-dependent loss `σ₁` (m²/s), forwarded to the linear half untouched — the plate's
+    /// own term (`PlateSpec::sigma1`), so the gong gets a second ring time. Born after the Python
+    /// gong (`docs/dev/vk-mapping-plan.md` §2); `0` builds exactly today's gong. A negative value
+    /// is the linear half's refusal, `VkParamError::Linear`.
+    pub sigma1: f64,
     /// Time-averaging weight.
     pub theta: f64,
     /// `None` when the caller could not make sense of the boundary it was handed.
@@ -1483,6 +1488,7 @@ impl Default for VkSpec {
             fs: 0.0,
             n: 0,
             sigma: 0.0,
+            sigma1: 0.0,
             theta: THETA_DEFAULT,
             boundary: Some(Boundary::Supported),
             nonlinear: true,
@@ -1593,6 +1599,7 @@ impl VkParams {
             fs: spec.fs,
             n: spec.n,
             sigma: spec.sigma,
+            sigma1: spec.sigma1,
             theta: spec.theta,
             boundary: Some(boundary),
             domain: Some(Domain::Rectangle),

@@ -6,7 +6,7 @@ and the drum (`docs/dev/membrane-mapping-plan.md`) have musical controls; §12 n
 plate (model #6, the supported gong and the free-edge cymbal) as still raw.
 
 **Status: PLANNED 2026-10-18; Part 0 (probe) DONE 2026-10-19** (§8); the human's four answers
-to it in §8.8. Part 1 next.
+to it in §8.8. Part 1 (`VkSpec::sigma1`) DONE 2026-10-19 (§9); Part 2 next.
 
 **The human's four decisions, 2026-10-18:**
 
@@ -360,4 +360,37 @@ and, by §8.5, would run for hours. Not measured end to end — read off the bud
 
 The guard is a prediction from `f0·k`, the strike, `N` and the boundary, built from a measured
 table. Before Part 3 writes it: the gong's grid dependence, and a second size and metal to test
-the `f0·k` claim (§8.5). Status: Part 1 next.
+the `f0·k` claim (§8.5).
+
+---
+
+## 9. Part 1 result (2026-10-19) — `VkSpec::sigma1`
+
+`VkSpec` gains `sigma1` (default `0`), forwarded to the linear half's `PlateSpec` and nowhere
+else; a negative value is the linear half's refusal (`VkParamError::Linear`). The one hand-built
+`VkSpec` without `..default()` (`tests/airbox_vk.rs`'s rig) carries it as a field. No other code
+changed: every client already steps through `p.lin`.
+
+Bars, `crates/physsynth-core/tests/vk_loss.rs` (the loss work is the file's own: `σ₁` and
+`ρ_s = ρ_v e` are its constants, `−L` and the free gradient form re-applied from the mask):
+
+- `σ₁` reaches `lin` (bits), `σ₀` does not move, `σ₁ = 0` builds no loss form, `σ₁ < 0` is
+  refused.
+- A linear gong with `σ₁` is the plate with `σ₁`, bit for bit, both boundaries, 200 steps.
+- The books close at a membrane share ≥ 50 %, both boundaries × Picard, Newton, `Auto`, 1 500
+  steps: ≤ 6.9e-13 of `E0`, share 0.57–0.64, `σ₁` work 4.3e-2 (supported) and 0.26 (free) of `E0`.
+- `σ₁` alone is passive (no rise past 1e-14 `E0`), both boundaries; it takes 3.2e-2 and 0.27.
+- The mallet-gong's books close with `σ₁` (the shipped gong and mallet, `σ₁` 1e-2): 2.95e-12, `σ₁` work 7.8e-3, share 0.032.
+- The string ↔ gong bridge's books close with `σ₁`, both boundaries: ≤ 2.0e-13, `σ₁` work 0.75.
+- The gong in a room: the scene's books close with `σ₁`, both boundaries, baffled and suspended,
+  and the port's ledgers agree: ≤ 9.2e-14, `σ₁` work 0.38–0.45.
+
+Plants (each time-limited, the source restored from a copy):
+
+- `σ₁` not forwarded to `lin`: all seven red.
+- `σ₁` forwarded with `σ₀` leaked into it (`σ₁ + 1e-4 σ₀`): the three bars on the gong itself red;
+  the four client bars run at `σ₀ = 0` and cannot see it, by design (each is about a client).
+- The room seam's `theta_matrix` dropping `σ₁kG`: only the room bar red — the one bar that sees
+  the seam.
+
+Status: Part 2 (the mapping) next.
