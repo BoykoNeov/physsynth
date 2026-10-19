@@ -325,7 +325,11 @@ lesson: a bound measured where the effect is hidden is worse than no bound).
   drum-in-a-room page that shows how far the air moves a drum tuned in vacuo. The gong and the
   cymbal followed on 2026-10-19 — a metal, the settled pitch or the thickness, two ring times, a
   hard strike's start and settle read out, and the page guarded where the coupled solve cannot
-  settle (`docs/dev/vk-mapping-plan.md`). Smoothing stays a real-time-stage concern.
+  settle (`docs/dev/vk-mapping-plan.md`). The other strings followed the same day — the bow, the
+  tension string from a cited material and gauge, the ideal string (sample rate following the
+  pitch), the three barrier pages and the stiff string (`docs/dev/string-mapping-plan.md`); the
+  strings on a body or a bridge and the geometric string are still raw. Smoothing stays a
+  real-time-stage concern.
 - **CPU budget x polyphony.** A single FDTD plate can saturate a core. *Which* models are polyphonic
   is settled in §11.3a (field models per instance, strings per voice); what remains here is the
   budget — voice counts and stealing — which is a real-time-stage concern, not one for now.
