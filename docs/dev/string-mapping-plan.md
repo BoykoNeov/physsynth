@@ -545,10 +545,18 @@ one-step map `Phi`, built from `step()`:
   - *Following by rank in the band, not by nearness* changed 37 outcomes. At 269.09 Hz on the
     3000 N/m body it returned a 0.71-share "note" at `f_cl = 471.5` that does not exist (the band
     there holds 257.2 and 300.0 Hz): near `f_cl = 470` the 118 Hz note leaves the band's lower
-    edge and every note above it changes rank, so a jump looked like a crossing. It also turned
-    that pitch's 0.05 s refusal into a tuning. The real solver is right there: over all 32 scan
-    points one root crosses 269.09 Hz, the mostly-body one (share 0.064, `f_cl = 265.2`); the
-    hybrid under the 261 Hz body mode levels off at 267.9 Hz and never reaches it.
+    edge and every note above it changes rank, so a jump looked like a crossing. Lossless, the
+    real solver is right there: over all 32 scan points one root crosses 269.09 Hz, the
+    mostly-body one (share 0.064, `f_cl = 265.2`); the hybrid under the 261 Hz body mode levels
+    off at 267.9 Hz and never reaches it.
+  - **But the same plant found a tuning the real solver misses.** At 269.09 Hz and 0.05 s the
+    real solver refuses (`RingTooShort`, shortest 0.446 s: the share-0.064 note it follows from
+    the lossless crossing cannot ring faster). The plant returned `f_cl = 425.92`,
+    `sigma = 256.06`, and the one-step map there confirms it: a note at 269.0869 Hz ringing
+    0.05000 s with share 0.54 (beside a 265.2 Hz note ringing 0.072 s). No lossless crossing
+    leads to it — the heavy loss itself puts a note on the target at a tension where the lossless
+    band has none — so a search that starts from the lossless crossings cannot find it. **Open,
+    for the human:** the ring-time search covers only notes that reach the target lossless.
   - *Following without the radius the change in loss predicts* changed 4: a 0.05 s ring at
     100.79, 134.54, 226.27 and 427.15 Hz was refused as too short where the real solver tunes.
   - *The bracket's root guess taken at one end instead of interpolated* changed 4 lines, all a
@@ -556,5 +564,5 @@ one-step map `Phi`, built from `step()`:
     bar is written for it.
 
   New bar `the_followed_notes_are_real_notes`: 269.09 Hz lossless tunes, plays the target off the
-  run, share under 0.1 at `f_cl = 265.2`; its 0.05 s ring is refused as too short; 100.79 Hz at
+  run, share under 0.1 at `f_cl = 265.2`; 100.79 Hz at
   0.05 s tunes and rings it off the run. CI's unoptimised lane ran the file in 113 s before it.

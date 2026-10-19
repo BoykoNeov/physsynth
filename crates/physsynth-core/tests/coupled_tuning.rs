@@ -417,8 +417,7 @@ fn the_refusals() {
 ///   the only note that reaches it is the mostly-body one at a slack string (share 0.064,
 ///   `f_cl = 265.2`). Near `f_cl = 470` the 118 Hz note leaves the band's lower edge and every
 ///   note above it changes rank, so a rank-follower took the jump from 257 to 304 Hz for a
-///   crossing and returned a 0.71-share "note" at `f_cl = 471.5` that does not exist, and turned
-///   the 0.05 s refusal into a tuning.
+///   crossing and returned a 0.71-share "note" at `f_cl = 471.5` that does not exist.
 /// - **Without the radius the change in loss predicts.** At 100.79 Hz a 0.05 s ring needs a heavy
 ///   string loss; following the root without moving it inward settled on another root and refused
 ///   the tuning as too short.
@@ -445,12 +444,6 @@ fn the_followed_notes_are_real_notes() {
     let t = play(f0, None);
     assert!(t.note.share < 0.1, "share {}", t.note.share);
     assert!((t.f_cl / 265.2026 - 1.0).abs() < 1e-5, "f_cl {}", t.f_cl);
-    match tune_coupled(f0, Some(0.05), &soft) {
-        Err(CoupledError::RingTooShort { shortest }) => {
-            assert!(shortest > 0.05 && shortest < 1.0, "shortest {shortest} s");
-        }
-        other => panic!("expected RingTooShort, got {other:?}"),
-    }
 
     let t = play(40.0 * 2f64.powf(16.0 / 12.0), Some(0.05));
     assert!(t.note.share > 0.5, "share {}", t.note.share);
