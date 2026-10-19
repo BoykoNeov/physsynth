@@ -125,6 +125,18 @@ const CASES: &[(&str, &str)] = &[
     // Duffing panel refuses to go. Two claim runs plus the tongue sweep.
     ("string_parametric", "model=tension&domain=parametric"),
     ("string_bow", "model=bow"),
+    // The bow's and the tension string's musical controls (string mapping plan §7): the bow on a
+    // tuned string, whose read-out names the bowed pitch; the tension string from a steel gauge,
+    // whose read-out names what the gauge gave and where the pluck started.
+    (
+        "string_bow_musical",
+        "model=bow&controls=musical&N=100&f0=110&audio_duration=1",
+    ),
+    (
+        "string_tension_musical",
+        "model=tension&domain=duffing&controls=musical&string_material=steel&N=64&L=0.65\
+         &f0=196&amplitude=0.003&audio_duration=0.3",
+    ),
     ("plate_supported", "model=plate&domain=supported"),
     // The plate's musical controls (plate mapping plan §7): a cited metal set by pitch on the
     // supported plate, and a spruce guitar top — a free plate, so the read-out says it is not exact.
@@ -623,6 +635,15 @@ fn run_case(
     let tuning = probe["tuning"].as_str().unwrap_or("");
     let tuning_ok = if query.contains("domain=musical") {
         tuning.contains("Exact at f₀") && tuning.contains("cents")
+    } else if query.contains("controls=musical") && query.contains("model=bow") {
+        tuning.contains("Exact at f₀") && tuning.contains("moves with N")
+            // the bow's 22.05 kHz default must sit on the sample-rate slider's grid, or the page
+            // quietly runs another rate (it ran 22,100 Hz on a 100 Hz step, 2026-10-19)
+            && probe["status"].as_str().unwrap_or("").contains("fs_sim 22,050 Hz")
+    } else if query.contains("controls=musical") && query.contains("model=tension") {
+        tuning.contains("Exact at f₀")
+            && tuning.contains("EA =")
+            && tuning.contains("settles on f₀")
     } else {
         true
     };

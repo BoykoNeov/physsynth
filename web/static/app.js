@@ -52,7 +52,7 @@ const LABELS = {
   f0: "pitch f₀", inharmonicity: "inharmonicity B", t60_low: "ring time, f₀",
   t60_high: "ring time, high", f_ref: "“high” means", sample_rate: "sample rate",
   thickness_mm: "thickness", custom_E_gpa: "Young's modulus E", custom_nu: "Poisson ν",
-  custom_density: "density ρ",
+  custom_density: "density ρ", diameter_mm: "diameter",
 };
 
 // Per-model slider re-ranging (min/max/step/fixed/val) applied on model switch. The backend mirrors
@@ -92,7 +92,10 @@ const MODEL_RANGES = {
   // physics; lambda = 0.9 keeps a hair of headroom below the Nyquist mode for the coupled solve.
   bow: { N: { max: 256, val: 100 }, lambda: { max: 1.0, val: 0.9 }, kappa: { val: 0.0 },
          sigma0: { val: 0.5 }, sigma1: { max: 0.2, step: 0.005, fixed: 3, val: 0.05 },
-         pickup_position: { val: 0.33 }, audio_duration: { max: 3, val: 2 } },
+         pickup_position: { val: 0.33 }, audio_duration: { max: 3, val: 2 },
+         // Musical controls only (string mapping plan §9): the 60,000-step budget holds the 2 s
+         // default run at 22.05 kHz, not at 44.1. _default puts it back off this page.
+         sample_rate: { val: 22050 } },
   membrane: { N: { max: 100, val: 80 }, lambda: { max: 0.7, val: 0.6 },
               audio_duration: { max: 2, val: 1.5 } },
   // Mallet → drum (model #7): the membrane heatmap path, but the head starts at REST and a lumped
@@ -413,6 +416,8 @@ const MODEL_RANGES = {
               plate_N: { min: 8, max: 16, step: 1, fixed: 0, val: 16 },
               // The gong's musical page sets the shared pitch to 100 Hz; index.html's home is 110.
               f0: { val: 110 },
+              // The bow's musical page sets the shared sample rate to 22.05 kHz; the home is 44.1.
+              sample_rate: { val: 44100 },
               kappa: { min: 0, max: 8, step: 0.05, fixed: 2, val: 1.0 },
               rho: { min: 0.001, max: 0.02, step: 0.0005, fixed: 4, val: 0.005, unit: "kg/m²" },
               amplitude: { min: 0.001, max: 0.06, step: 0.001, fixed: 3, val: 0.001 },
@@ -571,6 +576,13 @@ const CONTROL_OPTS = {
   // musical set takes a metal and the SETTLED pitch: a harder strike starts above it.
   vk: [["physical", "Physics — E, e, ν, ρ, σ"],
        ["musical", "Musical — metal, settled pitch or thickness, ring times"]],
+  // The bow's string and the tension string (string mapping plan §7): `controls`, not `domain`,
+  // because the tension string's domain is its regime. The tension string's pitch is the SETTLED
+  // note, and its musical set is for the Duffing regime only (the parametric one is lossless).
+  bow: [["physical", "Physics — T, κ, σ₀, σ₁"],
+        ["musical", "Musical — pitch, inharmonicity, ring times"]],
+  tension: [["physical", "Physics — T, κ, EA, σ₀, σ₁"],
+            ["musical", "Musical — string gauge, settled pitch, ring times (Duffing)"]],
 };
 
 // The models whose drum takes the head-and-pitch musical controls (the drum in a room among them).
@@ -585,8 +597,11 @@ const WOODS = ["sitka spruce", "engelmann spruce", "western redcedar", "sugar ma
 // the plate and the drums on the controls select.
 function musicalOn(m) {
   if (m === "damped") return domainSel.value === "musical";
-  if (m === "plate" || m === "vk" || DRUM_MODELS.includes(m)) {
+  if (m === "plate" || m === "vk" || m === "bow" || DRUM_MODELS.includes(m)) {
     return !!controlsSel && controlsSel.value === "musical";
+  }
+  if (m === "tension") {
+    return !!controlsSel && controlsSel.value === "musical" && domainSel.value === "duffing";
   }
   return false;
 }
@@ -878,7 +893,8 @@ function updateGuitarHint() {
 function updateLambdaHint() {
   const m = modelSel.value;
   const hint = $("lambda-hint");
-  if (m === "damped" && domainSel.value === "musical") {
+  if ((m === "damped" && domainSel.value === "musical")
+      || ((m === "bow" || m === "tension") && musicalOn(m))) {
     hint.textContent = "λ is a read-out here: the pitch sets the wave speed, and fs is the "
       + "sample-rate slider. Raise N or fs to keep more partials on the target law.";
     hint.style.color = "var(--muted)";
@@ -1518,7 +1534,7 @@ if (domainSel) domainSel.addEventListener("change", () => {
 });
 // The control set and the plate's and the drum's selects re-gate the panel and re-render.
 for (const sel of [controlsSel, $("plate-material"), $("plate-set-by"), $("plate-grain"),
-                   $("drum-head"), $("drum-set-by")]) {
+                   $("drum-head"), $("drum-set-by"), $("string-material")]) {
   if (sel) sel.addEventListener("change", () => {
     updateVisibility();
     updateLambdaHint();
@@ -1562,6 +1578,11 @@ function gatherParams() {
     p.controls = controlsSel.value;
     p.head = $("drum-head").value;
     p.set_by = $("drum-set-by").value;
+  }
+  // The bow's and the tension string's control set, and the tension string's material.
+  if ((modelSel.value === "bow" || modelSel.value === "tension") && controlsSel) {
+    p.controls = controlsSel.value;
+    if (modelSel.value === "tension") p.string_material = $("string-material").value;
   }
   for (const k in sliders) p[k] = +sliders[k].value * (scaleOf[k] || 1);
   if (nonlinearChk) p.nonlinear = nonlinearChk.checked;
@@ -1626,6 +1647,9 @@ function b64ToUint8(b64) {
 // The musical domain's read-out: what the targets mapped to, and the drift warning (the human's
 // "allow and warn", parameter-mapping plan §3). Raw numbers from the server, formatted here.
 function showTuning(data) {
+  // The shared read-out shows whenever its group does (any musical page), so it is cleared before
+  // a page with a read-out of its own takes over — else a previous string's text would linger.
+  if ($("tuning-hint")) $("tuning-hint").textContent = "";
   if (data.model === "plate") { showPlateTuning(data); return; }
   if (data.model === "vk") { showVkTuning(data); return; }
   if (DRUM_MODELS.includes(data.model)) { showDrumTuning(data); return; }
@@ -1634,9 +1658,31 @@ function showTuning(data) {
   const t = data.tuning;
   if (!t) { hint.textContent = ""; return; }
   const g = (x) => Number(x).toPrecision(4);
-  hint.textContent = `→ T = ${g(t.T)} N, κ = ${g(t.kappa)}, σ₀ = ${g(t.sigma0)}, `
+  let text = `→ T = ${g(t.T)} N, κ = ${g(t.kappa)}, σ₀ = ${g(t.sigma0)}, `
     + `σ₁ = ${g(t.sigma1)}, λ = ${data.lambda}. Exact at f₀ and at partial ${t.anchor} `
     + `(${g(t.f_anchor)} Hz). ${t.warn ? "⚠ " : ""}${t.message}`;
+  // The tension string (string mapping plan §5): what the gauge gave, and what the pluck did.
+  const gauge = t.gauge;
+  if (gauge) {
+    const sp = data.meta && data.meta.spectrum;
+    const start = sp && sp.shift_cents !== null && sp.shift_cents !== undefined
+      ? ` A ${fmt(param("amplitude") * 1000)} mm pluck starts ${sp.shift_cents >= 0 ? "+" : ""}`
+        + `${Number(sp.shift_cents).toFixed(1)} cents sharp and settles on f₀.`
+      : "";
+    text += ` ${gauge.material} ${Number(gauge.diameter_mm).toFixed(2)} mm: ρ = ${g(gauge.rho)} `
+      + `kg/m, EA = ${g(gauge.EA / 1000)} kN (E = ${g(gauge.E_gpa)} GPa at `
+      + `${g(gauge.stress_mpa)} MPa); its own bending stiffness alone would give B = `
+      + `${g(gauge.gauge_inharmonicity)}.${start} (${gauge.source})`;
+  }
+  // The bow (plan §9): the bowed pitch against the tuned one, and why it is off.
+  if (t.bow_note) {
+    const sp = data.meta && data.meta.spectrum;
+    const bowed = sp && sp.pitch_cents !== null && sp.pitch_cents !== undefined
+      ? ` Bowed: ${sp.pitch_cents >= 0 ? "+" : ""}${Number(sp.pitch_cents).toFixed(1)} cents.`
+      : " Not clean one-slip bowing, so no bowed pitch is read.";
+    text += `${bowed} ${t.bow_note}`;
+  }
+  hint.textContent = text;
   hint.style.color = t.warn ? "var(--accent-2)" : "var(--muted)";
 }
 
@@ -6293,7 +6339,7 @@ function applyUrlParams() {
   if (c && controlsSel && [...controlsSel.options].some((o) => o.value === c)) controlsSel.value = c;
   for (const [key, id] of [["material", "plate-material"], ["set_by", setBySelId()],
                            ["grain", "plate-grain"], ["head", "drum-head"],
-                           ["walls", "drumroom-walls"]]) {
+                           ["walls", "drumroom-walls"], ["string_material", "string-material"]]) {
     const v = q.get(key), sel = $(id);
     if (v !== null && sel && [...sel.options].some((o) => o.value === v)) sel.value = v;
   }
@@ -6322,7 +6368,8 @@ function applyUrlSliders() {
     // The plate's selects, set by applyUrlParams; a value no option carries is reported, not
     // swallowed (the rule above, for a select).
     const selId = { controls: "controls", material: "plate-material", set_by: setBySelId(),
-                    grain: "plate-grain", head: "drum-head", walls: "drumroom-walls" }[key];
+                    grain: "plate-grain", head: "drum-head", walls: "drumroom-walls",
+                    string_material: "string-material" }[key];
     if (selId) {
       const sel = $(selId);
       if (!sel || sel.value !== raw) notes.push(`${key}: ${raw} is not an option here`);

@@ -33,7 +33,10 @@ use crate::py::{
     commas, dot, finite_list, int, linspace_idx, max_abs, norm, np_mean, num, opt_num, py_float,
     py_int, py_repr, py_str, repr_str, round_int, round_nd,
 };
-use crate::string::{build_resonator, int_at_least_one, Frames, ANIM_WIN_MAX, MAX_FRAMES};
+use crate::string::{
+    build_resonator, build_resonator_lossless, int_at_least_one, tuning_block, Frames,
+    ANIM_WIN_MAX, MAX_FRAMES,
+};
 use crate::string::{FRAMES_PER_PERIOD, SPEED_MAX};
 use crate::{fnum, resample_normalize, Refusal, AUDIO_FS};
 
@@ -152,6 +155,16 @@ pub fn regime(p: &Value) -> Result<String, Refusal> {
 /// The `tension` key: either regime.
 pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
     if regime(p)? == "parametric" {
+        if crate::string::is_musical(p) {
+            // String mapping plan §5: the parametric regime is lossless on purpose, so two
+            // ring-time targets would be silently ignored.
+            return Err(Refusal::Param(
+                "musical controls are for the Duffing regime: the parametric regime runs \
+                 lossless on purpose, so the ring times would be ignored. Switch the regime to \
+                 Duffing or the controls to physics."
+                    .into(),
+            ));
+        }
         build_payload_parametric(p)
     } else {
         build_payload_duffing(p)
@@ -226,7 +239,7 @@ pub fn measure_mode1(p: &Value, amplitude: f64, periods: f64) -> Result<Mode1Run
     let mut q = p.clone();
     q["sigma0"] = json!(0.0);
     q["sigma1"] = json!(0.0);
-    let b = build_resonator(&q)?;
+    let b = build_resonator_lossless(&q)?;
     let (fs, l, c) = (b.fs, b.l, b.c);
     let mut res = b.res.into_tension();
     let shape = mode1_shape(res.p.n);
@@ -442,6 +455,7 @@ pub fn build_payload_duffing_with(p: &Value, periods: f64) -> Result<Value, Refu
     let b = build_resonator(p)?;
     let (c, l, n, fs) = (b.c, b.l, b.n, b.fs);
     let (sigma_zero, oracle_2sigma) = (b.sigma_zero, b.oracle_2sigma);
+    let tuning = tuning_block(&b);
     let mut res = b.res.into_tension();
     let pickup_idx = round_int(pickup_frac * n as f64).max(1).min(n - 1) as usize;
 
@@ -528,7 +542,7 @@ pub fn build_payload_duffing_with(p: &Value, periods: f64) -> Result<Value, Refu
     );
     let spectrum = spectrum_block(p, pickup, fs, w0sq, eps, amplitude, periods)?;
 
-    Ok(json!({
+    let mut payload = json!({
         "model": "tension",
         "fs_sim": num(round_nd(fs, 3)),
         "lambda": num(round_nd(res.p.lam, 6)),
@@ -554,7 +568,11 @@ pub fn build_payload_duffing_with(p: &Value, periods: f64) -> Result<Value, Refu
             "EA_over_T": num(round_nd(res.p.ea_over_t, 3)),
             "nonlinear_fraction": num(round_nd(nl_fraction, 6)),
         },
-    }))
+    });
+    if let Some(t) = tuning {
+        payload["tuning"] = t;
+    }
+    Ok(payload)
 }
 
 // == the parametric regime ========================================================================

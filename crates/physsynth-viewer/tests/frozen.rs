@@ -716,6 +716,11 @@ fn every_fixture_file_is_run() {
 ///   plan §6), held by `vk_musical.rs` the plate's two ways: naming the physical set with musical
 ///   keys riding along changes no byte (its unnamed requests are frozen in `vk.json`), and the
 ///   musical set is held through the run's own energy and pitch.
+/// - `bow` and `tension`, `controls:physical` / `controls:musical`, are the bowed string's and the
+///   tension string's two control sets (string mapping plan §7), held by `bow_tension_musical.rs`:
+///   naming the physical set with musical keys riding along changes no byte (the unnamed requests
+///   are frozen in `d2.json`), and the musical sets through what each page plays — the bowed
+///   pitch, and the tension page measured against the physics page on the mapped string.
 const BORN_AFTER_THE_FREEZE: &[(&str, &str, &str)] = &[
     ("damped", "physical", "tests/string_musical.rs"),
     ("damped", "musical", "tests/string_musical.rs"),
@@ -731,6 +736,18 @@ const BORN_AFTER_THE_FREEZE: &[(&str, &str, &str)] = &[
     ("drumroom", "controls:musical", "tests/drumroom.rs"),
     ("vk", "controls:physical", "tests/vk_musical.rs"),
     ("vk", "controls:musical", "tests/vk_musical.rs"),
+    ("bow", "controls:physical", "tests/bow_tension_musical.rs"),
+    ("bow", "controls:musical", "tests/bow_tension_musical.rs"),
+    (
+        "tension",
+        "controls:physical",
+        "tests/bow_tension_musical.rs",
+    ),
+    (
+        "tension",
+        "controls:musical",
+        "tests/bow_tension_musical.rs",
+    ),
 ];
 
 /// Whole MODELS born after the Python viewer was deleted, for the same reason as

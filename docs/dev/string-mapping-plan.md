@@ -188,3 +188,33 @@ loss of precision (155 s before), so it stays in CI's debug lane.
 Nylon's modulus is a strong function of stress (4 to over 10 GPa on one string), so a fixed value
 would be wrong for every string but one. The fit is evaluated at the tuned stress `T/A`. That is
 possible because the tension the mapping returns does not depend on `EA`.
+
+## 10. Slice 1, Parts 3–4: the two pages (2026-10-19)
+
+The bow and the tension string take `controls: "musical"` (`string.rs`' `is_musical`, which keeps
+the damped string's `domain` key); the tension string adds `string_material` and `diameter_mm`.
+`Built::tuning` is now a `Musical` struct carrying its own `theta`, so the `unreachable!` the
+reviewer flagged is gone. Held by `crates/physsynth-viewer/tests/bow_tension_musical.rs` (ten
+bars) and two headless browser cases, `string_bow_musical` and `string_tension_musical`.
+
+- **The bow** plays +3.9 cents off its 110 Hz target in the payload bar (+3.5 in the browser at
+  22,050 Hz). The read-out says why: the bow and the grid together, not the bow alone.
+- **The tension page measures exactly what the physics page measures** on the mapped string, to
+  1e-9 in every spectrum field: its `T`, `rho`, `EA` and `kappa` typed into the physics sliders,
+  with `lambda` chosen so `fs` matches. That twin is the wiring bar. A 3 mm steel pluck starts
+  +12.3 cents sharp and the settled note sits 0.0035 cents off 196 Hz.
+- **Found:** at that gentle pluck both pages read the start shift 2.7 % below the Duffing closed
+  form (1.403 Hz against 1.443). The physics page's bars run a 2 cm pluck, where the shift is
+  ~20 times larger. This is the page's 12-period measurement, not the wiring, so no musical bar
+  bounds it.
+- **Found:** the bow's 22,050 Hz default was not on the sample-rate slider's 100 Hz grid, and
+  the browser quietly ran 22,100 Hz. That is the damped batch's "a slider grid is a value
+  filter" again. The step is now 50 Hz (22,050, 44,100, 48,000 and 96,000 all on it), and the
+  headless case asserts the rate.
+- **The shared read-out paragraph** was gated on the damped string's domain, so it would have
+  stayed hidden on both new pages. The gate is gone (its group is already musical-only), and
+  the paragraph is cleared before a page with its own read-out draws.
+- **Plants, viewer** (each turned a bar red): the bow's reference pitch from the `κ` slider; the
+  lossless flag ignored; `rho` from the slider; `EA` from the slider; the tension page keyed on
+  `domain`; the bow's 44.1 kHz default; the musical bow built as a plain string; the parametric
+  regime allowing musical controls; the gauge block dropped.

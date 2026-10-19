@@ -17,7 +17,8 @@ use physsynth_core::string_ideal::{self as ideal, Boundary, IdealString};
 use physsynth_core::string_nonlinear::{self as nonlinear, TensionModulatedString};
 use physsynth_core::string_stiff::{self as stiff, StiffString};
 use physsynth_core::string_tuning::{
-    partial_drift, stretched_partial, tune_damped_string, Targets, Tuning,
+    partial_drift, stretched_partial, string_material, tune_damped_string, tune_tension_string,
+    GaugeTuning, StringMaterial, Targets, Tuning,
 };
 use serde_json::{json, Value};
 
@@ -225,9 +226,28 @@ pub struct Built {
     pub fs: f64,
     pub sigma_zero: bool,
     pub oracle_2sigma: f64,
-    /// The musical targets and their mapping, when the damped string was built in the
-    /// `musical` domain (`build_musical`); `None` on every other path.
-    pub tuning: Option<(Tuning, Targets)>,
+    /// The musical targets and their mapping, when the string was built from musical controls
+    /// (`build_musical`); `None` on every physics path.
+    pub tuning: Option<Musical>,
+}
+
+/// What a string built from musical targets carries into its payload's `tuning` block.
+pub struct Musical {
+    /// The damped mapping's coefficients — the tension string's too, in its gentle limit.
+    pub tuning: Tuning,
+    /// What was asked.
+    pub targets: Targets,
+    /// The theta the string was built with, which the drift read-out needs.
+    pub theta: f64,
+    /// The tension string's material and gauge; `None` for the damped string and the bow.
+    pub gauge: Option<Gauge>,
+}
+
+/// The tension string's material, diameter (m) and what they gave.
+pub struct Gauge {
+    pub material: &'static StringMaterial,
+    pub diameter: f64,
+    pub g: GaugeTuning,
 }
 
 /// `min(a, b, c)` as Python's builtin does it — the first element unless a later one is `<` it,
@@ -250,20 +270,83 @@ pub const MUSICAL_FS_MIN: f64 = 8000.0;
 /// See [`MUSICAL_FS_MIN`].
 pub const MUSICAL_FS_MAX: f64 = 192_000.0;
 
-/// True when a damped-string request asks for musical controls (`domain: "musical"`).
+/// The bow's musical sample-rate default. Its page caps a run at 60,000 friction steps
+/// ([`crate::bow::BOW_WORK_MAX`]), which holds the page's 2 s default run at 22.05 kHz and not at
+/// 44.1 kHz (string mapping plan §9).
+pub const BOW_MUSICAL_FS_DEFAULT: f64 = 22050.0;
+/// The tension string's diameter range in musical mode (mm): a plain string from a thin treble to
+/// a thick unwound bass.
+pub const DIAMETER_MM_MIN: f64 = 0.1;
+/// See [`DIAMETER_MM_MIN`].
+pub const DIAMETER_MM_MAX: f64 = 1.5;
+
+/// True when a string request asks for musical controls.
 ///
-/// Keyed on the domain, not on the presence of `f0`: the front-end sends every slider it has to
-/// every model, so a musical key's presence says nothing about what the user chose.
+/// The damped string names them on its `domain` select (the first musical page); the bow and the
+/// tension string on `controls`, because the tension string's `domain` is already its regime
+/// (string mapping plan §7). Keyed on the select, not on the presence of `f0`: the front-end
+/// sends every slider it has to every model, so a musical key's presence says nothing about what
+/// the user chose.
 pub fn is_musical(p: &Value) -> bool {
-    p.get("domain").and_then(Value::as_str) == Some("musical")
+    let key = match model_of(p).as_str() {
+        "damped" => "domain",
+        "bow" | "tension" => "controls",
+        _ => return false,
+    };
+    p.get(key).and_then(Value::as_str) == Some("musical")
 }
 
-/// The damped string built from musical targets (`docs/dev/parameter-mapping-plan.md` §6).
+/// The tension string's material and gauge from the request (`string_material`, `diameter_mm`).
+fn gauge_of(
+    p: &Value,
+    l: f64,
+    fs: f64,
+    n: i64,
+    theta: f64,
+    targets: &Targets,
+) -> Result<Gauge, Refusal> {
+    let name = p
+        .get("string_material")
+        .map_or_else(|| "steel".to_owned(), crate::py::py_str);
+    let material = string_material(&name).ok_or_else(|| {
+        Refusal::Param(format!(
+            "string_material must be one of steel, nylon, gut; got {}.",
+            crate::py::repr_str(&name)
+        ))
+    })?;
+    let mm = fnum(p, "diameter_mm", 0.5)?;
+    if !(DIAMETER_MM_MIN..=DIAMETER_MM_MAX).contains(&mm) {
+        return Err(Refusal::Param(format!(
+            "diameter_mm must be in [{DIAMETER_MM_MIN}, {DIAMETER_MM_MAX}] mm, got {}.",
+            physsynth_core::fmt::py_float(mm)
+        )));
+    }
+    let diameter = mm * 1e-3;
+    let g = tune_tension_string(material, diameter, l, fs, n as usize, theta, targets)
+        .map_err(|e| Refusal::Param(e.to_string()))?;
+    Ok(Gauge {
+        material,
+        diameter,
+        g,
+    })
+}
+
+/// A string built from musical targets: the damped string (`docs/dev/parameter-mapping-plan.md`
+/// §6), the bow's string and the tension string (`docs/dev/string-mapping-plan.md`).
 ///
-/// `T`, `kappa`, `sigma0` and `sigma1` come from [`tune_damped_string`]; the request's own values
-/// of those keys and of `lambda` are ignored, though the shared prefix of [`build_resonator`]
-/// still parsed and range-checked them.
-fn build_musical(p: &Value, l: f64, rho: f64, n: i64) -> Result<Built, Refusal> {
+/// `T`, `kappa`, `sigma0` and `sigma1` come from [`tune_damped_string`] — through
+/// [`tune_tension_string`] for the tension string, whose `rho` and `EA` come from its gauge. The
+/// request's own values of those keys and of `lambda` are ignored, though the shared prefix of
+/// [`build_resonator`] still parsed and range-checked them. `lossless` zeroes both mapped losses,
+/// for the tension page's single-mode measurements (its physics path zeroes the keys instead).
+fn build_musical(
+    p: &Value,
+    model: &str,
+    l: f64,
+    rho: f64,
+    n: i64,
+    lossless: bool,
+) -> Result<Built, Refusal> {
     let theta = fnum(p, "theta", 0.28)?;
     let targets = Targets {
         f0: fnum(p, "f0", 110.0)?,
@@ -272,7 +355,12 @@ fn build_musical(p: &Value, l: f64, rho: f64, n: i64) -> Result<Built, Refusal> 
         t60_high: fnum(p, "t60_high", 0.8)?,
         f_ref: fnum(p, "f_ref", 2000.0)?,
     };
-    let fs = fnum(p, "sample_rate", 44100.0)?;
+    let fs_default = if model == "bow" {
+        BOW_MUSICAL_FS_DEFAULT
+    } else {
+        44100.0
+    };
+    let fs = fnum(p, "sample_rate", fs_default)?;
     if !(MUSICAL_FS_MIN..=MUSICAL_FS_MAX).contains(&fs) {
         return Err(Refusal::Param(format!(
             "sample_rate must be in [{}, {}] Hz, got {}.",
@@ -281,33 +369,129 @@ fn build_musical(p: &Value, l: f64, rho: f64, n: i64) -> Result<Built, Refusal> 
             physsynth_core::fmt::py_float(fs)
         )));
     }
-    let tu = tune_damped_string(l, rho, fs, n as usize, theta, &targets)
-        .map_err(|e| Refusal::Param(e.to_string()))?;
-    let params = damped::Params::new(
-        l, tu.t, rho, fs, n, tu.kappa, tu.sigma0, tu.sigma1, theta, true,
-    )
-    .map_err(construction)?;
+    let gauge = if model == "tension" {
+        Some(gauge_of(p, l, fs, n, theta, &targets)?)
+    } else {
+        None
+    };
+    let (rho, tu) = match &gauge {
+        Some(g) => (g.g.rho, g.g.tuning),
+        None => (
+            rho,
+            tune_damped_string(l, rho, fs, n as usize, theta, &targets)
+                .map_err(|e| Refusal::Param(e.to_string()))?,
+        ),
+    };
+    let (s0, s1) = if lossless {
+        (0.0, 0.0)
+    } else {
+        (tu.sigma0, tu.sigma1)
+    };
+    let res = match (model, &gauge) {
+        ("tension", Some(g)) => {
+            let ea = g.g.ea;
+            if ea > crate::tension::TENSION_EA_MAX {
+                return Err(Refusal::Param(format!(
+                    "this gauge gives EA = {ea:.0} N, above the page's {:.0} N; choose a \
+                     thinner string or a softer material.",
+                    crate::tension::TENSION_EA_MAX
+                )));
+            }
+            let params = nonlinear::Params::new(
+                l,
+                tu.t,
+                rho,
+                fs,
+                n,
+                tu.kappa,
+                ea,
+                s0,
+                s1,
+                theta,
+                nonlinear::TENSION_TOL_DEFAULT,
+                true,
+            )
+            .map_err(construction)?;
+            StringRes::Tension(TensionModulatedString::new(params))
+        }
+        _ => {
+            let params = damped::Params::new(l, tu.t, rho, fs, n, tu.kappa, s0, s1, theta, true)
+                .map_err(construction)?;
+            let string = DampedStiffString::new(params);
+            if model == "bow" {
+                let settings = bow_settings(p)?;
+                StringRes::Bow(Box::new(bow_on(p, string, settings)?))
+            } else {
+                StringRes::Damped(string)
+            }
+        }
+    };
     Ok(Built {
-        res: StringRes::Damped(DampedStiffString::new(params)),
+        res,
         c: tu.c,
         l,
         n,
         fs,
-        sigma_zero: tu.sigma0 == 0.0 && tu.sigma1 == 0.0,
-        oracle_2sigma: 2.0 * tu.sigma0,
-        tuning: Some((tu, targets)),
+        sigma_zero: s0 == 0.0 && s1 == 0.0,
+        oracle_2sigma: 2.0 * s0,
+        tuning: Some(Musical {
+            tuning: tu,
+            targets,
+            theta,
+            gauge,
+        }),
     })
 }
 
-/// The `tuning` block of a musical-domain payload: what was asked, what it maps to, and how far
-/// the partials the mapping does not pin drift (the human's "allow and warn", plan §3).
-fn tuning_block(b: &Built) -> Option<Value> {
-    let (tu, tg) = b.tuning.as_ref()?;
-    let StringRes::Damped(r) = &b.res else {
-        unreachable!("only the damped string is built from targets")
-    };
-    let theta = r.p.theta;
-    let d = partial_drift(b.l, b.n as usize, b.fs, theta, tu, tg);
+/// The bow's force, speed and friction sharpness, range-checked — `(force, v_bow, sharpness)`.
+fn bow_settings(p: &Value) -> Result<(f64, f64, f64), Refusal> {
+    use crate::bow as b;
+    let force = fnum(p, "force", b::BOW_FORCE_DEFAULT)?;
+    let v_bow = fnum(p, "v_bow", b::BOW_V_DEFAULT)?;
+    let sharp = fnum(p, "sharpness", b::BOW_SHARPNESS_DEFAULT)?;
+    let pf = physsynth_core::fmt::py_float;
+    if !(0.0..=b::BOW_FORCE_MAX).contains(&force) {
+        return Err(Refusal::Param(format!(
+            "force must be in [0, {}] N, got {}.",
+            pf(b::BOW_FORCE_MAX),
+            pf(force)
+        )));
+    }
+    if !(0.0 < v_bow && v_bow <= b::BOW_V_MAX) {
+        return Err(Refusal::Param(format!(
+            "v_bow must be in (0, {}] m/s, got {}.",
+            pf(b::BOW_V_MAX),
+            pf(v_bow)
+        )));
+    }
+    if !(0.0 < sharp && sharp <= b::BOW_SHARPNESS_MAX) {
+        return Err(Refusal::Param(format!(
+            "sharpness must be in (0, {}], got {}.",
+            pf(b::BOW_SHARPNESS_MAX),
+            pf(sharp)
+        )));
+    }
+    Ok((force, v_bow, sharp))
+}
+
+/// A bow on `string` at the request's position, with `settings` from [`bow_settings`].
+fn bow_on(
+    p: &Value,
+    string: DampedStiffString,
+    (force, v_bow, sharp): (f64, f64, f64),
+) -> Result<BowedString, Refusal> {
+    let bow_position = fnum(p, "bow_position", crate::bow::BOW_POSITION_DEFAULT)?;
+    // `BowedString`'s own defaults for the Newton solve: tol 1e-13, 60 iterations.
+    BowedString::new(string, bow_position, v_bow, force, sharp, 1e-13, 60).map_err(construction)
+}
+
+/// The `tuning` block of a musical payload: what was asked, what it maps to, and how far the
+/// partials the mapping does not pin drift (the human's "allow and warn", parameter-mapping plan
+/// §3). The tension string adds its gauge.
+pub(crate) fn tuning_block(b: &Built) -> Option<Value> {
+    let m = b.tuning.as_ref()?;
+    let (tu, tg) = (&m.tuning, &m.targets);
+    let d = partial_drift(b.l, b.n as usize, b.fs, m.theta, tu, tg);
     let warn = d.warn(tu.anchor);
     let message = if warn {
         format!(
@@ -322,7 +506,7 @@ fn tuning_block(b: &Built) -> Option<Value> {
             physsynth_core::string_tuning::HORIZON_CENTS
         )
     };
-    Some(json!({
+    let mut block = json!({
         "f0": num(tg.f0),
         "inharmonicity": num(tg.inharmonicity),
         "t60_low": num(tg.t60_low),
@@ -339,7 +523,21 @@ fn tuning_block(b: &Built) -> Option<Value> {
         "worst_drift_mode": int(d.worst_mode as i64),
         "warn": warn,
         "message": message,
-    }))
+    });
+    if let Some(g) = &m.gauge {
+        block["gauge"] = json!({
+            "material": g.material.name,
+            "diameter_mm": num(round_nd(g.diameter * 1e3, 4)),
+            "rho": num(g.g.rho),
+            "EA": num(g.g.ea),
+            "E_gpa": num(round_nd(g.g.youngs / 1e9, 4)),
+            "stress_mpa": num(round_nd(g.g.stress / 1e6, 3)),
+            "gauge_kappa": num(g.g.gauge_kappa),
+            "gauge_inharmonicity": num(g.g.gauge_inharmonicity),
+            "source": g.material.source,
+        });
+    }
+    Some(block)
 }
 
 /// A core constructor's refusal, surfaced as `serialize.py`'s `except ValueError` did.
@@ -350,6 +548,17 @@ pub(crate) fn construction<E: std::fmt::Display>(e: E) -> Refusal {
 /// Construct a fresh string from params. The check order is the reference's, because a request
 /// that is wrong in two ways must be refused for the same one.
 pub fn build_resonator(p: &Value) -> Result<Built, Refusal> {
+    build_resonator_with(p, false)
+}
+
+/// [`build_resonator`] with both losses zeroed on a musical build — the tension page's lossless
+/// single-mode measurements. Its physics path zeroes the `sigma` keys itself, so this changes
+/// nothing there.
+pub fn build_resonator_lossless(p: &Value) -> Result<Built, Refusal> {
+    build_resonator_with(p, true)
+}
+
+fn build_resonator_with(p: &Value, lossless: bool) -> Result<Built, Refusal> {
     let model = model_of(p);
     let l = fnum(p, "L", 1.0)?;
     let t = fnum(p, "T", 200.0)?;
@@ -424,7 +633,9 @@ pub fn build_resonator(p: &Value) -> Result<Built, Refusal> {
                 tuning: None,
             })
         }
-        "damped" if is_musical(p) => build_musical(p, l, rho, n),
+        "damped" | "bow" | "tension" if is_musical(p) => {
+            build_musical(p, &model, l, rho, n, lossless)
+        }
         "damped" => {
             let s0 = fnum(p, "sigma0", 0.0)?;
             let s1 = fnum(p, "sigma1", 0.0)?;
@@ -487,47 +698,12 @@ pub fn build_resonator(p: &Value) -> Result<Built, Refusal> {
             use crate::bow as b;
             let s0 = fnum(p, "sigma0", b::BOW_SIGMA0_DEFAULT)?;
             let s1 = fnum(p, "sigma1", b::BOW_SIGMA1_DEFAULT)?;
-            let force = fnum(p, "force", b::BOW_FORCE_DEFAULT)?;
-            let v_bow = fnum(p, "v_bow", b::BOW_V_DEFAULT)?;
-            let sharp = fnum(p, "sharpness", b::BOW_SHARPNESS_DEFAULT)?;
-            let pf = physsynth_core::fmt::py_float;
-            if !(0.0..=b::BOW_FORCE_MAX).contains(&force) {
-                return Err(Refusal::Param(format!(
-                    "force must be in [0, {}] N, got {}.",
-                    pf(b::BOW_FORCE_MAX),
-                    pf(force)
-                )));
-            }
-            if !(0.0 < v_bow && v_bow <= b::BOW_V_MAX) {
-                return Err(Refusal::Param(format!(
-                    "v_bow must be in (0, {}] m/s, got {}.",
-                    pf(b::BOW_V_MAX),
-                    pf(v_bow)
-                )));
-            }
-            if !(0.0 < sharp && sharp <= b::BOW_SHARPNESS_MAX) {
-                return Err(Refusal::Param(format!(
-                    "sharpness must be in (0, {}], got {}.",
-                    pf(b::BOW_SHARPNESS_MAX),
-                    pf(sharp)
-                )));
-            }
+            let settings = bow_settings(p)?;
             let kappa = fnum(p, "kappa", 0.0)?;
             let theta = fnum(p, "theta", 0.28)?;
             let sp = damped::Params::new(l, t, rho, fs, n, kappa, s0, s1, theta, true)
                 .map_err(construction)?;
-            let bow_position = fnum(p, "bow_position", b::BOW_POSITION_DEFAULT)?;
-            // `BowedString`'s own defaults for the Newton solve: tol 1e-13, 60 iterations.
-            let bowed = BowedString::new(
-                DampedStiffString::new(sp),
-                bow_position,
-                v_bow,
-                force,
-                sharp,
-                1e-13,
-                60,
-            )
-            .map_err(construction)?;
+            let bowed = bow_on(p, DampedStiffString::new(sp), settings)?;
             Ok(Built {
                 res: StringRes::Bow(Box::new(bowed)),
                 c,
@@ -653,7 +829,7 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
     let mut b = build_resonator(p)?;
     let (c, l, n, fs) = (b.c, b.l, b.n, b.fs);
     // The musical domain's fundamental is its target; c / 2L ignores the stiffness it maps to.
-    let f1_base = b.tuning.as_ref().map_or(c / (2.0 * l), |(_, tg)| tg.f0);
+    let f1_base = b.tuning.as_ref().map_or(c / (2.0 * l), |m| m.targets.f0);
     let pickup_idx = round_int(pickup_frac * n as f64).max(1).min(n - 1) as usize;
 
     // -- audio run: full duration, pickup, no snapshots
@@ -745,7 +921,7 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
                 p,
                 c,
                 l,
-                b.tuning.as_ref().map(|(_, tg)| tg),
+                b.tuning.as_ref().map(|m| &m.targets),
             ),
         },
     });

@@ -23,8 +23,8 @@ use crate::energy::{energy_block, EnergyOpts};
 use crate::horizon::string_block;
 use crate::py::{commas, finite_list, int, np_mean, num, py_int, py_repr, round_int, round_nd};
 use crate::string::{
-    build_resonator, damped_info, int_at_least_one, Frames, ANIM_WIN_MAX, FRAMES_PER_PERIOD,
-    MAX_FRAMES, SPEED_MAX,
+    build_resonator, damped_info, int_at_least_one, tuning_block, Frames, ANIM_WIN_MAX,
+    FRAMES_PER_PERIOD, MAX_FRAMES, SPEED_MAX,
 };
 use crate::{fnum, resample_normalize, Refusal, AUDIO_FS};
 
@@ -273,11 +273,19 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
     let b = build_resonator(p)?;
     let (c, l, n, fs) = (b.c, b.l, b.n, b.fs);
     let (sigma_zero, oracle_2sigma) = (b.sigma_zero, b.oracle_2sigma);
+    let tuning = tuning_block(&b);
+    let target_f0 = b.tuning.as_ref().map(|m| m.targets.f0);
     let mut bow = b.res.into_bow();
     let pickup_idx = round_int(pickup_frac * n as f64).max(1).min(n - 1) as usize;
-    // The string's own fundamental — the pitch the bow locks to.
-    let kappa = fnum(p, "kappa", 0.0)?;
-    let f1 = modal::stiff_harmonic_frequencies(c, l, kappa, 1)[0];
+    // The string's own fundamental — the pitch the bow locks to. With musical controls it is the
+    // target, which the mapped string's mode 1 meets exactly.
+    let f1 = match target_f0 {
+        Some(f0) => f0,
+        None => {
+            let kappa = fnum(p, "kappa", 0.0)?;
+            modal::stiff_harmonic_frequencies(c, l, kappa, 1)[0]
+        }
+    };
 
     let n_audio = round_int(audio_dur * fs).max(1);
     if n_audio > BOW_WORK_MAX {
@@ -322,7 +330,7 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
             ..EnergyOpts::default()
         },
     );
-    Ok(json!({
+    let mut payload = json!({
         "model": "bow",
         "horizon": string_block(&damped_info(&bow.string), "the bowed string"),
         "fs_sim": num(round_nd(fs, 3)),
@@ -353,5 +361,17 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
             "helmholtz_number": num(round_nd(bow.p.helmholtz_number, 3)),
             "fallbacks": int(bow.s.fallbacks as i64),
         },
-    }))
+    });
+    if let Some(mut t) = tuning {
+        t["bow_note"] = json!(BOW_PITCH_NOTE);
+        payload["tuning"] = t;
+    }
+    Ok(payload)
 }
+
+/// What the musical bow page says beside its pitch read-out (string mapping plan §9): the offset
+/// it shows is the bow and the grid together, not the bow's pull alone.
+pub const BOW_PITCH_NOTE: &str = "The tuned string's own fundamental is exact. A bowed note's \
+     period is set by the whole series of partials, and the ones between the two the mapping pins \
+     drift with the grid, so the bowed pitch sits a few cents off and moves with N and the sample \
+     rate as well as with the bow.";

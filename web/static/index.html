@@ -50,7 +50,7 @@
         </label>
         <!-- The plate's CONTROL SET (plate mapping plan §7). Its own select because the plate's
              domain select already means supported / free / guitar. Filled from CONTROL_OPTS. -->
-        <label class="field" data-show="plate membrane mallet drumroom vk" style="margin-top:8px">
+        <label class="field" data-show="plate membrane mallet drumroom vk bow tension" style="margin-top:8px">
           <span>Controls</span>
           <select id="controls"></select>
         </label>
@@ -61,8 +61,8 @@
            leaves the bore out, rather than the blanket "every model in this fieldset" it had. -->
       <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk bore reed drumroom" data-hide-musical="plate membrane mallet drumroom vk">
         <legend>Physical</legend>
-        <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet drumroom" data-hide-domain="musical"></div>
-        <div class="slider" data-param="rho" data-min="0.001" data-max="0.02" data-step="0.0005" data-val="0.005" data-unit="kg/m²" data-fixed="4" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk drumroom" data-hide-musical="plate"></div>
+        <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet drumroom" data-hide-domain="musical" data-hide-musical="bow tension"></div>
+        <div class="slider" data-param="rho" data-min="0.001" data-max="0.02" data-step="0.0005" data-val="0.005" data-unit="kg/m²" data-fixed="4" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk drumroom" data-hide-musical="plate tension"></div>
         <div class="slider" data-param="L"   data-min="0.25" data-max="2.0"  data-step="0.05"  data-val="1.0"   data-unit="m" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox bore reed"></div>
       </fieldset>
 
@@ -74,15 +74,32 @@
            SHARED with the plate's musical controls (plate mapping plan §7): pitch, both ring times,
            the reference and the sample rate mean the same there. data-musical shows the group only
            when that model's musical controls are on. -->
-      <fieldset class="group" data-musical="damped plate membrane mallet drumroom vk">
+      <fieldset class="group" data-musical="damped bow tension plate membrane mallet drumroom vk">
         <legend>Musical controls</legend>
         <div class="slider" data-param="f0" data-min="27.5" data-max="1000" data-step="0.1" data-val="110" data-unit="Hz" data-fixed="1"></div>
-        <div class="slider" data-param="inharmonicity" data-min="0" data-max="0.02" data-step="0.0001" data-val="0.0001" data-fixed="4" data-show="damped"></div>
+        <div class="slider" data-param="inharmonicity" data-min="0" data-max="0.02" data-step="0.0001" data-val="0.0001" data-fixed="4" data-show="damped bow tension"></div>
         <div class="slider" data-param="t60_low" data-min="0.1" data-max="20" data-step="0.1" data-val="3" data-unit="s" data-fixed="1"></div>
         <div class="slider" data-param="t60_high" data-min="0.05" data-max="10" data-step="0.05" data-val="0.8" data-unit="s" data-fixed="2"></div>
         <div class="slider" data-param="f_ref" data-min="200" data-max="8000" data-step="50" data-val="2000" data-unit="Hz" data-fixed="0"></div>
-        <div class="slider" data-param="sample_rate" data-min="8000" data-max="192000" data-step="100" data-val="44100" data-unit="Hz" data-fixed="0" data-show="damped plate membrane mallet"></div>
-        <p class="hint" id="tuning-hint" data-domain="musical"></p>
+        <div class="slider" data-param="sample_rate" data-min="8000" data-max="192000" data-step="50" data-val="44100" data-unit="Hz" data-fixed="0" data-show="damped bow tension plate membrane mallet"></div>
+        <p class="hint" id="tuning-hint"></p>
+      </fieldset>
+
+      <!-- The tension string's gauge (string mapping plan §5, §9): a plain string's material —
+           cited steel, nylon and gut — and its diameter set the linear density and the axial
+           stiffness EA, which hide; the musical controls above set the rest. The pitch is the SETTLED note:
+           a hard pluck starts sharp and glides onto it, by an amount the gauge sets. -->
+      <fieldset class="group" data-musical="tension">
+        <legend>String gauge</legend>
+        <label class="field">
+          <span>material</span>
+          <select id="string-material">
+            <option value="steel">steel (music wire)</option>
+            <option value="nylon">nylon</option>
+            <option value="gut">gut</option>
+          </select>
+        </label>
+        <div class="slider" data-param="diameter_mm" data-min="0.1" data-max="1.5" data-step="0.01" data-val="0.5" data-unit="mm" data-fixed="2"></div>
       </fieldset>
 
       <!-- The plate's own musical controls: a material (cited presets — Wood Handbook woods,
@@ -168,7 +185,7 @@
       <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret bore reed body platebody radbody airload airbox membrane mallet plate vk drumroom">
         <legend>Discretization</legend>
         <div class="slider" data-param="N"      data-min="16"  data-max="512" data-step="1"    data-val="128" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret bore reed body platebody radbody airload airbox membrane mallet plate vk drumroom"></div>
-        <div class="slider" data-param="lambda" data-min="0.5" data-max="2.0" data-step="0.01" data-val="1.0" data-show="ideal stiff damped tension bow sympathetic jawari juari fret body platebody radbody airload membrane mallet" data-hide-domain="musical" data-hide-musical="membrane mallet"></div>
+        <div class="slider" data-param="lambda" data-min="0.5" data-max="2.0" data-step="0.01" data-val="1.0" data-show="ideal stiff damped tension bow sympathetic jawari juari fret body platebody radbody airload membrane mallet" data-hide-domain="musical" data-hide-musical="membrane mallet bow tension"></div>
         <div class="slider" data-param="mu"     data-min="0.25" data-max="32" data-step="0.25" data-val="1.0" data-fixed="2" data-show="plate" data-hide-musical="plate"></div>
         <div class="slider" data-param="fs"     data-min="8000" data-max="96000" data-step="1000" data-val="32000" data-unit="Hz" data-fixed="0" data-show="vk"></div>
         <!-- The geometric string's knob is lam_long, NOT lambda, and that inversion is the model's
@@ -184,7 +201,7 @@
         <legend>Stiffness &amp; material</legend>
         <!-- κ is hidden in the whirl regime: only the SOFT plane whirls (the tongue needs δ > 0, so
              the driven polarization must be the lower one), which forces κ_u = 0 server-side. -->
-        <div class="slider" data-param="kappa" data-min="0" data-max="8"   data-step="0.05" data-val="1.0" data-unit="m²/s" data-show="stiff damped tension bow geometric plate" data-hide-domain="whirl musical" data-hide-musical="plate"></div>
+        <div class="slider" data-param="kappa" data-min="0" data-max="8"   data-step="0.05" data-val="1.0" data-unit="m²/s" data-show="stiff damped tension bow geometric plate" data-hide-domain="whirl musical" data-hide-musical="plate bow tension"></div>
         <div class="slider" data-param="theta" data-min="0.25" data-max="1" data-step="0.01" data-val="0.28" data-show="stiff damped tension bow geometric plate"></div>
         <div class="slider" data-param="nu"    data-min="0" data-max="0.45" data-step="0.01" data-val="0.3" data-show="plate vk" data-hide-musical="plate"></div>
         <div class="slider" data-param="E"     data-min="50" data-max="400" data-step="10" data-val="200" data-unit="GPa" data-scale="1e9" data-fixed="0" data-show="vk"></div>
@@ -204,7 +221,7 @@
       <fieldset class="group" data-show="tension geometric jawari juari fret">
         <legend>Nonlinearity</legend>
         <div class="slider" data-param="amplitude" data-min="0.001" data-max="0.06" data-step="0.001" data-val="0.02" data-unit="m" data-fixed="3" data-show="tension geometric jawari juari fret" data-hide-domain="whirl parametric"></div>
-        <div class="slider" data-param="EA" data-min="0" data-max="200" data-step="5" data-val="100" data-unit="kN" data-scale="1e3" data-fixed="0" data-show="tension geometric"></div>
+        <div class="slider" data-param="EA" data-min="0" data-max="200" data-step="5" data-val="100" data-unit="kN" data-scale="1e3" data-fixed="0" data-show="tension geometric" data-hide-musical="tension"></div>
         <!-- SHARED by the geometric whirl and the tension string's parametric regime, and it lives
              here rather than in either regime's own box because it is one physical coordinate: the
              driven mode's tension excess. The amplitude is set by ΔT/T₀, never by A directly — A is a
@@ -484,7 +501,7 @@
            the flat-loss decay oracle the energy panel reports (measured 2.77 against a 1.00 oracle)
            and buys nothing — the shimmer is a sigma1 = 0 result. sigma0 GATES the verdict: 0 gives
            conservation drift through the curved wrap, > 0 passivity + the 2·sigma0 oracle. -->
-      <fieldset class="group" data-show="damped tension bow geometric jawari juari fret" data-hide-domain="musical">
+      <fieldset class="group" data-show="damped tension bow geometric jawari juari fret" data-hide-domain="musical" data-hide-musical="bow tension">
         <legend>Loss (frequency-dependent)</legend>
         <div class="slider" data-param="sigma0" data-min="0" data-max="20"   data-step="0.1"   data-val="1.0"></div>
         <div class="slider" data-param="sigma1" data-min="0" data-max="0.01" data-step="0.0001" data-val="0.002" data-fixed="4" data-show="damped tension bow geometric"></div>
