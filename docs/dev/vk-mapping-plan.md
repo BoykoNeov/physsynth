@@ -380,7 +380,8 @@ Bars, `crates/physsynth-core/tests/vk_loss.rs` (the loss work is the file's own:
 - The books close at a membrane share ≥ 50 %, both boundaries × Picard, Newton, `Auto`, 1 500
   steps: ≤ 6.9e-13 of `E0`, share 0.57–0.64, `σ₁` work 4.3e-2 (supported) and 0.26 (free) of `E0`.
 - `σ₁` alone is passive (no rise past 1e-14 `E0`), both boundaries; it takes 3.2e-2 and 0.27.
-- The mallet-gong's books close with `σ₁` (the shipped gong and mallet, `σ₁` 1e-2): 2.95e-12, `σ₁` work 7.8e-3, share 0.032.
+- The mallet-gong's books close with `σ₁` (the shipped gong and mallet, `σ₁` 1e-2): 2.95e-12 of
+  `E0`, `σ₁` work 7.8e-3, membrane share 0.032.
 - The string ↔ gong bridge's books close with `σ₁`, both boundaries: ≤ 2.0e-13, `σ₁` work 0.75.
 - The gong in a room: the scene's books close with `σ₁`, both boundaries, baffled and suspended,
   and the port's ledgers agree: ≤ 9.2e-14, `σ₁` work 0.38–0.45.
