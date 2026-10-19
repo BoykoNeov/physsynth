@@ -5,7 +5,8 @@
 and the drum (`docs/dev/membrane-mapping-plan.md`) have musical controls; §12 names the von Kármán
 plate (model #6, the supported gong and the free-edge cymbal) as still raw.
 
-**Status: PLANNED 2026-10-18.** Part 0 next.
+**Status: PLANNED 2026-10-18; Part 0 (probe) DONE 2026-10-19** (§8) — four decisions to the
+human before Part 1.
 
 **The human's four decisions, 2026-10-18:**
 
@@ -219,3 +220,129 @@ coverage guard: `controls:physical` and `controls:musical` for `vk` go into
 - **Part 4 — docs:** hurdle §12, HANDOFF §8, memory.
 
 Commit and push at each part's end, `scripts/cargo-test-nice.ps1 -Full` before each.
+
+---
+
+## 8. Part 0 result (2026-10-19)
+
+Scratch crate under `W:\temp\claude` (deleted at the batch's end); `σ₁` set by rebuilding a
+`VkParams`' public `lin` with it. Steel unless named, `N` 20, `couple_max_iter` 50,
+`couple_method` `Auto`.
+
+### 8.1 (a) The second loss term through the coupled step — works as planned
+
+Steel 0.4 × 0.35 m, 48 kHz, `σ₀` 1.5, `σ₁` 2e-3, both boundaries, both methods. The loss balance
+(energy lost per step against the two loss terms' work) closes to the last bits, with the
+membrane carrying over half the energy:
+
+| boundary | strike | membrane share | worst balance, Picard | worst balance, Newton |
+|---|---|---|---|---|
+| supported | 4.5 e | 64 % | 1.39e-13 | 3.96e-14 |
+| free | 3 e | 57 % | 2.59e-14 | 7.01e-13 |
+
+No step failed to settle. Part 1 needs nothing beyond §2.
+
+### 8.2 (b), (c) The settled note is met exactly in the gentle limit — both boundaries
+
+The bend above the target grows as the strike's square: ≈ 7.6e-5 cents at 1e-3 e, 7.6e-3 at 1e-2,
+0.76 at 0.1, 12–23 at 0.5 (supported, steel 0.4 m at 200 Hz: `e` 6.66 mm, `σ₀` 1.396, `σ₁`
+7.37e-3). At 1e-3 e the ring time is off by ≈ 3e-8 relative; the linear control reads ≈ 1e-9
+cents. The cymbal (bronze, brass; mode 1 and the anchor read by projection onto the scheme's own
+free modes) gives ≈ 1e-4 cents and ≈ 1e-7 in ring time at 1e-3 e. **The bars can run the
+nonlinearity on at 1e-3 e** and assert the targets to ≈ 1e-3 cents and 1e-6 in ring time.
+(Eigen-solver note: a shift exactly at an eigenvalue does not converge — shift at `0.999 β`.)
+
+### 8.3 (d) The bend at a fixed strike depends on outline, `ν`, grid and `f0·k` only
+
+At strikes 1, 2, 4 e (200 Hz, 32 kHz): steel 0.4 m and 0.25 m agree to every printed digit
+(+101.816, +310.845, +734.606 cents). Brass and aluminium (`ν` ≈ 0.33) bend 1–2 % less, glass
+(`ν` 0.22) ≈ 3 % more. A 0.4 × 0.3 outline bends much less at small strikes (+85 against +102 c).
+`f0·k` from 0.0005 to 0.0125 moves the bend 312.6 → 308.8 c; `N` 12 → 32 moves it 314.8 → 309.4 c.
+
+### 8.4 (e) The read-out — early and late windows; the cymbal only after it settles
+
+Lossy (2 s / 0.4 s), target 200 Hz; cents above the target in 50 ms windows starting at:
+
+| | 0 | 50 | 100 | 200 | 400 | 600 | 800 | 950 ms | whole run |
+|---|---|---|---|---|---|---|---|---|---|
+| supported 2 e, pickup | +277 | +219 | +166 | +95 | +26 | +7 | +2 | +0 | +58 |
+| supported 4 e, pickup | +658 | +532 | +436 | +286 | +101 | +28 | +7 | +3 | +169 |
+| free 2 e, pickup | +2480 | +1458 | +1087 | +1031 | +1018 | +1017 | +1017 | +1017 | +1156 |
+| free 2 e, mode 1 | +2764 | +1548 | +543 | −16 | −9 | −14 | −4 | +0 | |
+| free 4 e, mode 1 | +2374 | +393 | −35 | −88 | +2 | −7 | +3 | +8 | |
+
+- **The gong:** the pickup's zero crossings and the mode-1 projection agree to a few cents (the
+  4 e start: +658 against +654); an early window gives where the note starts, a late one shows it
+  settling onto the target. The whole-run figure the page shows today (+58 c) is neither.
+- **The cymbal:** the pickup locks onto a higher tone (+1017 c) for the whole run, so a pickup
+  read-out names the wrong tone. Projected onto the lowest free mode, the tone settles within
+  ≈ ±20 c after ≈ 200 ms (±90 c at 4 e); before that there is no single pitch — the crash.
+
+### 8.5 (f) Cost — three classes, and the cymbal's depends on the grid
+
+Each case is classed by whether its steps settle, not by wall-clock (the machine's speed moved
+≈ 6× between runs for the same work):
+
+- **clean** — the fast method settles every step on its own (≈ 6–20 linear solves per step);
+- **rescued** — Newton takes over on some or all steps and every step still settles; the answer
+  is right and slower (tens to hundreds of solves per step, most of them early in the sound);
+- **broken** — some steps never settle (≈ 9 000–23 000 solves per step, *minutes* per step at
+  `N` 32); the answer is not a solution of the scheme.
+
+Runs stopped after 20 unsettled steps or 2 minutes; a case stopped by the clock with no unsettled
+step is classed by what it had done. Steel 0.4 m set by pitch, ring times 2 s / 1 s, 0.5 s of
+sound; `f0·k` is pitch ÷ sample rate.
+
+**The gong (supported), `N` 20,** strikes 2 and 6 e:
+
+| `f0·k` | ≤ 0.0083 | 0.0125 | 0.0167 | 0.025 | 0.05 |
+|---|---|---|---|---|---|
+| strike 2 | clean | clean | clean | clean | clean |
+| strike 6 | clean | rescued (26–49 steps) | rescued (524) | rescued (809–1 496) | **broken** |
+
+**The cymbal (free), `N` 20,** strikes 1, 2 and 6 e:
+
+| `f0·k` | ≤ 0.0031 | 0.0042 | 0.0063 | 0.0083 | 0.0125 | 0.0167 | ≥ 0.025 |
+|---|---|---|---|---|---|---|---|
+| strike 1 | clean | clean | clean | clean | rescued | rescued | **broken** |
+| strike 2 | clean | clean | clean | rescued | rescued | **broken** | **broken** |
+| strike 6 | rescued | rescued | **broken** | **broken** | **broken** | **broken** | **broken** |
+
+**The cymbal against the grid** (32 kHz):
+
+| case | `N` 12 | 16 | 20 | 24 | 32 |
+|---|---|---|---|---|---|
+| 200 Hz (`f0·k` 0.0063), strike 2 | clean | clean | clean | rescued | rescued |
+| 200 Hz, strike 6 | broken | broken | broken | broken | broken |
+| 400 Hz (0.0125), strike 2 | rescued | rescued | rescued | **broken** | **broken** |
+| 400 Hz, strike 6 | broken | broken | broken | broken | broken |
+
+Readings:
+
+- Pairs with the same `f0·k` line up in both tables (16 kHz / 800 Hz and 32 kHz / 1600 Hz broke
+  alike; 16 kHz / 400 and 32 kHz / 800 needed alike hundreds of rescues). With §8.3's
+  separability, **the trouble is a function of `f0·k`, the strike, the grid and the boundary** —
+  evidence from steel 0.4 m only, a hypothesis until a second size and metal are run.
+- **The grid matters for the cymbal**, finer being worse. The gong's grid dependence is not swept.
+- Refusing on the run is too late: at `N` 32 one unsettled step took 4–6 minutes. A guard must
+  predict from the settings.
+- One case was refused by the mapping, not the solver: 1600 Hz at 16 kHz cannot have a 1 s high
+  ring time (the anchor's range there is 1.4–7.0 s) — the plate batch's two-sided range.
+
+### 8.6 A hazard on today's page — older than this batch
+
+`crates/physsynth-viewer/src/vk.rs`'s work budget assumes the worst step is 50 fast sweeps
+(`n_live × steps × couple_max_iter ≤ 2e9`); it does not count Newton's rescue, and a broken step
+costs ≈ 400× that. Today's physical page reaches the broken region: the free plate with `e` 20 mm
+(≈ 400 Hz), strike 2, 32 kHz, `N` 32, 1 s, is under the budget (≈ 1.1e3 × 3.2e4 × 50 ≈ 1.8e9)
+and, by §8.5, would run for hours. Not measured end to end — read off the budget and the table.
+
+### 8.7 Decisions this forces (to the human)
+
+1. **The guard's shape** — refuse what is predicted *broken*; for *rescued*, warn with a cost
+   estimate or refuse; whether to name the sample rate that would fit.
+2. **The cymbal's read-out** — its start is a crash, so no starting bend: show "settles onto the
+   note after ≈ X ms" instead, or show nothing for it and the start/settle pair for the gong only.
+3. **The hazard of §8.6** — guard the physical page too (the same rule, from the same table), or
+   leave it as it is.
+4. **The musical page's default pitch** — today's defaults (steel 0.4 m, 1 mm) sit near 30 Hz.
