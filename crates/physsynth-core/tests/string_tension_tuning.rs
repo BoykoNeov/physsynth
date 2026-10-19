@@ -12,8 +12,8 @@
 
 use physsynth_core::string_nonlinear::{Params, TensionModulatedString, TENSION_TOL_DEFAULT};
 use physsynth_core::string_tuning::{
-    string_material, tune_tension_string, GaugeTuning, Modulus, StringMaterial, Targets,
-    TuningError, STRING_MATERIALS,
+    mode_frequency, string_material, tune_tension_string, GaugeTargets, GaugeTuning, Modulus,
+    StringMaterial, TuningError, STRING_MATERIALS,
 };
 use std::f64::consts::PI;
 
@@ -36,13 +36,12 @@ struct Fixture {
     fs: f64,
     n: usize,
     theta: f64,
-    t: Targets,
+    t: GaugeTargets,
 }
 
-fn targets(f0: f64, b: f64, t60_low: f64, t60_high: f64, f_ref: f64) -> Targets {
-    Targets {
+fn targets(f0: f64, t60_low: f64, t60_high: f64, f_ref: f64) -> GaugeTargets {
+    GaugeTargets {
         f0,
-        inharmonicity: b,
         t60_low,
         t60_high,
         f_ref,
@@ -137,10 +136,10 @@ fn zero_cross_freq(sig: &[f64], fs: f64) -> f64 {
 fn fixtures() -> Vec<Fixture> {
     let mut v = Vec::new();
     for &material in &["steel", "nylon", "gut"] {
-        for &(diameter, l, f0, b) in &[
-            (0.25e-3, 0.65, 330.0, 1e-5),
-            (1.0e-3, 0.65, 110.0, 1e-3),
-            (0.5e-3, 0.33, 440.0, 0.0),
+        for &(diameter, l, f0) in &[
+            (0.25e-3, 0.65, 330.0),
+            (1.0e-3, 0.65, 110.0),
+            (0.5e-3, 0.33, 440.0),
         ] {
             for &(fs, n, theta) in &[(44100.0, 64, 0.28), (48000.0, 128, 0.5), (96000.0, 96, 1.0)] {
                 v.push(Fixture {
@@ -150,7 +149,7 @@ fn fixtures() -> Vec<Fixture> {
                     fs,
                     n,
                     theta,
-                    t: targets(f0, b, 4.0, 0.9, 2500.0),
+                    t: targets(f0, 4.0, 0.9, 2500.0),
                 });
             }
         }
@@ -161,33 +160,92 @@ fn fixtures() -> Vec<Fixture> {
 // -- the round trip ---------------------------------------------------------------------------
 
 #[test]
-fn a_gentle_pluck_plays_both_anchors_on_every_material() {
-    let (mut worst_f, mut worst_t60) = (0.0f64, 0.0f64);
+fn a_gentle_pluck_plays_its_pitch_and_both_ring_times_on_every_material() {
+    // Exact: the fundamental's pitch and ring time, the anchor's ring time. The anchor's PITCH is
+    // the gauge's (plan §15) — a read-out, which must be what the simulation plays.
+    let (mut worst_f, mut worst_t60, mut worst_read) = (0.0f64, 0.0f64, 0.0f64);
     for fx in fixtures() {
         let g = tune(&fx).expect("each fixture is representable");
-        let anchor = g.tuning.anchor;
-        let law = |m: usize| {
-            let mf = m as f64;
-            mf * fx.t.f0
-                * ((1.0 + fx.t.inharmonicity * mf * mf) / (1.0 + fx.t.inharmonicity)).sqrt()
-        };
-        for &(m, t60) in &[(1, fx.t.t60_low), (anchor, fx.t.t60_high)] {
-            let mut s = build(&fx, &g, true);
-            let steps = (0.06 * fx.fs) as usize;
-            let (f, t) = fit(&mode_series(&mut s, m, GENTLE, steps), 1.0 / fx.fs);
-            let (ef, et) = ((f / law(m) - 1.0).abs(), (t / t60 - 1.0).abs());
-            worst_f = worst_f.max(ef);
-            worst_t60 = worst_t60.max(et);
-            assert!(
-                ef < F_TOL && et < T60_TOL,
-                "{} d={} mode {m}: f {f} vs {}, T60 {t} vs {t60}",
-                fx.material,
-                fx.diameter,
-                law(m)
-            );
-        }
+        let tu = &g.tuning;
+        let anchor = tu.anchor;
+        let steps = (0.06 * fx.fs) as usize;
+        let mut s = build(&fx, &g, true);
+        let (f1, t1) = fit(&mode_series(&mut s, 1, GENTLE, steps), 1.0 / fx.fs);
+        let (fm, tm) = fit(&mode_series(&mut s, anchor, GENTLE, steps), 1.0 / fx.fs);
+        let read = mode_frequency(
+            fx.l, fx.n, fx.fs, fx.theta, tu.c, tu.kappa, tu.sigma0, tu.sigma1, anchor,
+        )
+        .unwrap();
+        let ef = (f1 / fx.t.f0 - 1.0).abs();
+        let et = (t1 / fx.t.t60_low - 1.0)
+            .abs()
+            .max((tm / fx.t.t60_high - 1.0).abs());
+        let er = (fm / read - 1.0).abs();
+        (worst_f, worst_t60, worst_read) = (worst_f.max(ef), worst_t60.max(et), worst_read.max(er));
+        assert!(
+            ef < F_TOL && et < T60_TOL && er < F_TOL,
+            "{} d={}: f1 {f1}, T60 {t1}/{tm}, anchor {anchor} at {fm} vs read-out {read}",
+            fx.material,
+            fx.diameter
+        );
     }
-    println!("gentle round trip: worst pitch {worst_f:.2e}, worst T60 {worst_t60:.2e}");
+    println!(
+        "gentle round trip: pitch {worst_f:.2e}, ring times {worst_t60:.2e}, anchor read-out \
+         {worst_read:.2e}"
+    );
+}
+
+#[test]
+fn a_thicker_gauge_stretches_the_overtones_further() {
+    // The gauge sets the stretch (plan §15): the same steel note on a thicker string has a larger
+    // inharmonicity and plays its anchor further sharp of m f0.
+    let fx = |d: f64| Fixture {
+        material: "steel",
+        diameter: d,
+        l: 0.65,
+        fs: 96000.0,
+        n: 128,
+        theta: 0.28,
+        t: targets(110.0, 3.0, 0.8, 2000.0),
+    };
+    let sharp = |d: f64| {
+        let f = fx(d);
+        let g = tune(&f).unwrap();
+        let tu = &g.tuning;
+        let mut s = build(&f, &g, true);
+        let (fm, _) = fit(&mode_series(&mut s, tu.anchor, GENTLE, 3000), 1.0 / f.fs);
+        (g.gauge_inharmonicity, cents(fm, tu.anchor as f64 * 110.0))
+    };
+    // "High" means the partial nearest f_ref on the string's OWN stretched law: on a thick string
+    // that is several partials below the harmonic count (a plant picking it on m f0 survived the
+    // round trip, which measures whichever anchor it is handed).
+    let thick_fx = fx(1.0e-3);
+    let g = tune(&thick_fx).unwrap();
+    let b = g.gauge_inharmonicity;
+    let law = |m: usize| {
+        let mf = m as f64;
+        mf * 110.0 * ((1.0 + b * mf * mf) / (1.0 + b)).sqrt()
+    };
+    let nearest = (2..thick_fx.n)
+        .min_by(|&x, &y| (law(x) - 2000.0).abs().total_cmp(&(law(y) - 2000.0).abs()))
+        .unwrap();
+    assert_eq!(g.tuning.anchor, nearest, "B {b}");
+    assert!(
+        nearest < 2000 / 110,
+        "the stretched anchor {nearest} is the harmonic count"
+    );
+    let (thin, thick) = (sharp(0.3e-3), sharp(1.0e-3));
+    println!(
+        "110 Hz steel: 0.3 mm B {:.2e} anchor {:+.1} c; 1.0 mm B {:.2e} anchor {:+.1} c",
+        thin.0, thin.1, thick.0, thick.1
+    );
+    assert!(thick.0 > 5.0 * thin.0, "B {} vs {}", thick.0, thin.0);
+    assert!(
+        thick.1 > thin.1 + 20.0,
+        "anchor {} vs {} cents",
+        thick.1,
+        thin.1
+    );
 }
 
 // -- the gauge --------------------------------------------------------------------------------
@@ -202,7 +260,7 @@ fn steel_and_gut_take_their_density_and_modulus_from_the_gauge() {
             fs: 44100.0,
             n: 100,
             theta: 0.28,
-            t: targets(196.0, 1e-4, 3.0, 0.8, 2000.0),
+            t: targets(196.0, 3.0, 0.8, 2000.0),
         };
         let g = tune(&fx).unwrap();
         let area = PI * 0.3e-3 * 0.3e-3;
@@ -219,10 +277,11 @@ fn steel_and_gut_take_their_density_and_modulus_from_the_gauge() {
         );
         let b = PI * PI * kappa2 / (g.tuning.c * g.tuning.c * 0.65 * 0.65);
         assert!(rel(g.gauge_inharmonicity, b) < 1e-13, "{name}: gauge B");
-        // The gauge's stiffness is a read-out, not imposed: the mapped kappa answers the target B.
+        // The gauge's stiffness IS the string's (plan §15).
         assert!(
-            rel(g.tuning.kappa, g.gauge_kappa) > 1e-3,
-            "{name}: kappa was imposed"
+            rel(g.tuning.kappa * g.tuning.kappa, kappa2) < 1e-13,
+            "{name}: kappa {} is not the gauge's",
+            g.tuning.kappa
         );
     }
 }
@@ -236,7 +295,7 @@ fn nylon_stiffens_with_stress_by_the_cited_fit() {
         fs: 44100.0,
         n: 100,
         theta: 0.28,
-        t: targets(f0, 1e-4, 3.0, 0.8, 2500.0),
+        t: targets(f0, 3.0, 0.8, 2500.0),
     };
     let (lo, hi) = (tune(&fx(196.0)).unwrap(), tune(&fx(392.0)).unwrap());
     for g in [&lo, &hi] {
@@ -245,6 +304,11 @@ fn nylon_stiffens_with_stress_by_the_cited_fit() {
         assert!((g.youngs / e - 1.0).abs() < 1e-14, "E {} vs {e}", g.youngs);
         let area = PI * 0.4e-3 * 0.4e-3;
         assert!((g.rho / (1080.0 * area) - 1.0).abs() < 1e-14);
+        // Solved around each other: the stiffness is the modulus's at the tuned stress, and the
+        // stress is the tuned string's.
+        let kappa2 = g.youngs * 0.4e-3 * 0.4e-3 / (4.0 * 1080.0);
+        assert!((g.tuning.kappa * g.tuning.kappa / kappa2 - 1.0).abs() < 1e-13);
+        assert!((g.stress / (1080.0 * g.tuning.c * g.tuning.c) - 1.0).abs() < 1e-13);
     }
     // The control differs from its subject: an octave up is four times the stress, and stiffer.
     assert!(
@@ -281,7 +345,7 @@ fn a_hard_pluck_starts_sharp_by_what_the_gauge_gives() {
         fs: 44100.0,
         n: 64,
         theta: 0.28,
-        t: targets(196.0, 1e-4, 3.0, 0.8, 2000.0),
+        t: targets(196.0, 3.0, 0.8, 2000.0),
     };
     let (steel, gut) = (fx("steel"), fx("gut"));
     let (gs, gg) = (tune(&steel).unwrap(), tune(&gut).unwrap());
@@ -301,7 +365,7 @@ fn a_hard_pluck_settles_onto_the_target() {
         fs: 44100.0,
         n: 64,
         theta: 0.28,
-        t: targets(196.0, 1e-4, 1.0, 0.3, 2000.0),
+        t: targets(196.0, 1.0, 0.3, 2000.0),
     };
     let g = tune(&fx).unwrap();
     let mut s = build(&fx, &g, true);
@@ -331,7 +395,7 @@ fn stress_case(material: &'static str, l: f64, f0: f64) -> GaugeTuning {
         fs: 96000.0,
         n: 64,
         theta: 0.28,
-        t: targets(f0, 1e-4, 3.0, 0.8, 4.0 * f0),
+        t: targets(f0, 3.0, 0.8, 4.0 * f0),
     };
     tune(&fx).expect("a stress warning never refuses")
 }
@@ -402,7 +466,7 @@ fn every_material_is_named_cited_and_found() {
 #[test]
 fn a_bad_gauge_or_material_is_refused_by_name() {
     let steel = string_material("steel").unwrap();
-    let t = targets(196.0, 1e-4, 3.0, 0.8, 2000.0);
+    let t = targets(196.0, 3.0, 0.8, 2000.0);
     let run = |m: &StringMaterial, d: f64| tune_tension_string(m, d, 0.65, 44100.0, 64, 0.28, &t);
     for d in [0.0, -1e-3, f64::NAN, f64::INFINITY] {
         assert_eq!(
@@ -438,10 +502,22 @@ fn a_bad_gauge_or_material_is_refused_by_name() {
         run(&custom(1000.0, neg), 1e-3),
         Err(TuningError::NonPositive("Young's modulus"))
     );
-    // A target the damped string cannot meet is the damped mapping's refusal, passed through.
-    let low_ref = targets(196.0, 1e-4, 3.0, 0.8, 150.0);
+    let low_ref = targets(196.0, 3.0, 0.8, 150.0);
     assert_eq!(
         tune_tension_string(steel, 1e-3, 0.65, 44100.0, 64, 0.28, &low_ref),
         Err(TuningError::RefNotAboveFundamental)
     );
+    // A gauge too stiff for its pitch: bending alone would sound mode 1 above 30 Hz on 0.1 m, so
+    // no positive tension gives it.
+    let thud = targets(30.0, 3.0, 0.8, 1000.0);
+    assert_eq!(
+        tune_tension_string(steel, 1.5e-3, 0.1, 44100.0, 64, 0.28, &thud),
+        Err(TuningError::NoWaveSpeed)
+    );
+    // A high ring time longer than the low one allows needs a negative loss.
+    let rising = targets(196.0, 1.0, 5.0, 2000.0);
+    assert!(matches!(
+        tune_tension_string(steel, 0.5e-3, 0.65, 44100.0, 64, 0.28, &rising),
+        Err(TuningError::RisingDecay { .. })
+    ));
 }

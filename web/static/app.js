@@ -1690,9 +1690,13 @@ function showTuning(data) {
     hint.style.color = t.warn ? "var(--accent-2)" : "var(--muted)";
     return;
   }
+  // With a gauge (plan §15) the stiffness is the string's own: exact at f₀, and at the anchor
+  // only its ring time — its pitch is where the gauge puts it.
+  const exact = t.gauge
+    ? `Exact at f₀, and partial ${t.anchor} rings exactly as long as asked.`
+    : `Exact at f₀ and at partial ${t.anchor} (${g(t.f_anchor)} Hz).`;
   let text = `→ T = ${g(t.T)} N, κ = ${g(t.kappa)}, σ₀ = ${g(t.sigma0)}, `
-    + `σ₁ = ${g(t.sigma1)}, λ = ${data.lambda}. Exact at f₀ and at partial ${t.anchor} `
-    + `(${g(t.f_anchor)} Hz). ${t.warn ? "⚠ " : ""}${t.message}`;
+    + `σ₁ = ${g(t.sigma1)}, λ = ${data.lambda}. ${exact} ${t.warn ? "⚠ " : ""}${t.message}`;
   // The tension string (string mapping plan §5): what the gauge gave, and what the pluck did.
   const gauge = t.gauge;
   if (gauge) {
@@ -1703,8 +1707,9 @@ function showTuning(data) {
       : "";
     text += ` ${gauge.material} ${Number(gauge.diameter_mm).toFixed(2)} mm: ρ = ${g(gauge.rho)} `
       + `kg/m, EA = ${g(gauge.EA / 1000)} kN (E = ${g(gauge.E_gpa)} GPa at `
-      + `${g(gauge.stress_mpa)} MPa); its own bending stiffness alone would give B = `
-      + `${g(gauge.gauge_inharmonicity)}.${start} (${gauge.source})`;
+      + `${g(gauge.stress_mpa)} MPa); its bending stiffness stretches the overtones as B = `
+      + `${g(gauge.gauge_inharmonicity)}, and partial ${t.anchor} sounds where that puts it `
+      + `(${g(t.f_anchor)} Hz).${start} (${gauge.source})`;
     // Plan §12: a fit used outside its data, or a string past its breaking stress — warned, run.
     for (const w of gauge.warnings || []) text += ` ⚠ ${w}`;
   }

@@ -19,7 +19,7 @@ use physsynth_core::string_stiff::{self as stiff, StiffString};
 use physsynth_core::string_tuning::{
     ideal_mode_frequency, mode_frequency, partial_drift, stiff_mode_t60, stretched_partial,
     string_material, tune_damped_string, tune_flexible_string, tune_ideal_string,
-    tune_stiff_string, tune_tension_string, FlexibleTuning, GaugeTuning, IdealTuning,
+    tune_stiff_string, tune_tension_string, FlexibleTuning, GaugeTargets, GaugeTuning, IdealTuning,
     StringMaterial, Targets, Tuning, HORIZON_CENTS,
 };
 use serde_json::{json, Value};
@@ -338,7 +338,14 @@ fn gauge_of(
         )));
     }
     let diameter = mm * 1e-3;
-    let g = tune_tension_string(material, diameter, l, fs, n as usize, theta, targets)
+    // The gauge sets the stretch (plan §15): the request's inharmonicity is not read here.
+    let gt = GaugeTargets {
+        f0: targets.f0,
+        t60_low: targets.t60_low,
+        t60_high: targets.t60_high,
+        f_ref: targets.f_ref,
+    };
+    let g = tune_tension_string(material, diameter, l, fs, n as usize, theta, &gt)
         .map_err(|e| Refusal::Param(e.to_string()))?;
     Ok(Gauge {
         material,
@@ -364,7 +371,7 @@ fn build_musical(
     lossless: bool,
 ) -> Result<Built, Refusal> {
     let theta = fnum(p, "theta", 0.28)?;
-    let targets = Targets {
+    let mut targets = Targets {
         f0: fnum(p, "f0", 110.0)?,
         inharmonicity: fnum(p, "inharmonicity", 1e-4)?,
         t60_low: fnum(p, "t60_low", 3.0)?,
@@ -386,7 +393,10 @@ fn build_musical(
         )));
     }
     let gauge = if model == "tension" {
-        Some(gauge_of(p, l, fs, n, theta, &targets)?)
+        let g = gauge_of(p, l, fs, n, theta, &targets)?;
+        // The partials follow the gauge's law, which the read-out and the overlay judge against.
+        targets.inharmonicity = g.g.gauge_inharmonicity;
+        Some(g)
     } else {
         None
     };

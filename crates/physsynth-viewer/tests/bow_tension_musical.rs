@@ -12,7 +12,7 @@ mod common;
 
 use common::{base_params, f, ok, sim};
 use physsynth_core::string_tuning::{
-    string_material, tune_damped_string, tune_tension_string, Targets,
+    string_material, tune_damped_string, tune_tension_string, GaugeTargets, Targets,
 };
 use serde_json::{json, Value};
 
@@ -135,8 +135,21 @@ fn the_musical_tension_string_builds_from_its_gauge_and_targets() {
     let payload = ok(&tension(json!({})));
     let t = &payload["tuning"];
     let steel = string_material("steel").unwrap();
-    let want =
-        tune_tension_string(steel, 0.5e-3, 0.65, 44100.0, 64, 0.28, &targets(196.0)).unwrap();
+    let want = tune_tension_string(
+        steel,
+        0.5e-3,
+        0.65,
+        44100.0,
+        64,
+        0.28,
+        &GaugeTargets {
+            f0: 196.0,
+            t60_low: 3.0,
+            t60_high: 0.8,
+            f_ref: 2000.0,
+        },
+    )
+    .unwrap();
     assert_eq!(f(&t["T"]), want.tuning.t);
     assert_eq!(f(&t["kappa"]), want.tuning.kappa);
     assert_eq!(f(&t["sigma0"]), want.tuning.sigma0);

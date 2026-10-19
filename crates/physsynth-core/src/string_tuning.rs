@@ -56,11 +56,11 @@
 //! # The tension string: a material and a gauge (`docs/dev/string-mapping-plan.md` §5, §9)
 //!
 //! Model #9 is model #3 plus an axial stiffness `EA`, and at `EA = 0` it *is* model #3 bit for bit;
-//! a gentle pluck feels no `EA` at all. So [`tune_tension_string`] is an adapter: a material and a
-//! diameter give the linear density and `EA`, and [`tune_damped_string`] does the rest. The pitch
+//! a gentle pluck feels no `EA` at all. So [`tune_tension_string`] works on model #3's per-mode
+//! recurrence: a material and a diameter give the linear density, `EA` **and the bending stiffness
+//! `kappa`** (the human's call, plan §15 — the overtones stretch as that gauge's would). The pitch
 //! met is the **settled** note — a hard pluck starts sharp and glides onto it, by an amount the
-//! gauge sets. The inharmonicity stays a free target (the human's call, plan §8.4); the bending
-//! stiffness the gauge alone implies is returned beside the mapped `kappa`, not imposed.
+//! gauge sets.
 
 use crate::string_nonlinear::string_coefficients_from_material;
 use std::f64::consts::{LN_10, PI};
@@ -543,9 +543,10 @@ pub struct GaugeTuning {
     pub youngs: f64,
     /// The string's stress `T / (pi r^2)` (Pa).
     pub stress: f64,
-    /// The bending stiffness the gauge alone implies, `sqrt(E I / rho)` (m²/s) — a read-out.
+    /// The gauge's bending stiffness `sqrt(E I / rho)` (m²/s) — the string's `kappa` (plan §15).
     pub gauge_kappa: f64,
-    /// The inharmonicity that bending stiffness gives, `pi^2 kappa^2 / (c^2 L^2)` — a read-out.
+    /// The inharmonicity that stiffness gives, `pi^2 kappa^2 / (c^2 L^2)`: the stretched law the
+    /// partials follow and the anchor is picked on.
     pub gauge_inharmonicity: f64,
     /// True when [`GaugeTuning::youngs`] came from a fit outside the stress it was measured over
     /// — a warning, not a refusal (string mapping plan §12).
@@ -555,7 +556,34 @@ pub struct GaugeTuning {
     pub past_breaking: bool,
 }
 
-/// Map a material, a diameter and musical targets onto model #9 (module header).
+/// What a musician sets for the tension string: no inharmonicity — the gauge sets it (plan §15).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GaugeTargets {
+    /// The settled pitch of the fundamental (Hz).
+    pub f0: f64,
+    /// Ring time of the fundamental (s).
+    pub t60_low: f64,
+    /// Ring time at the anchor, the partial nearest `f_ref` (s).
+    pub t60_high: f64,
+    /// Where "high" is measured (Hz); must lie above `f0`.
+    pub f_ref: f64,
+}
+
+/// How many times the stress-dependent modulus and the tension are solved around each other
+/// before the last pass is taken. A fixed modulus settles on the second pass; nylon's fit moves
+/// the stiffness so little per pass that a handful suffice (string_tension_tuning.rs pins it).
+const GAUGE_ITERATIONS: usize = 100;
+
+/// Map a material, a diameter and musical targets onto model #9 (module header; plan §15).
+///
+/// The gauge fixes the linear density, `EA` and the bending stiffness `kappa^2 = E r^2 / (4
+/// density)`. Mode 1's `(f0, T60_low)` gives `(X_1, Y_1)` by the per-mode 2x2, so `c^2 = X_1 / (k^2
+/// p_1^2) - kappa^2 p_1^2`; for nylon, whose modulus depends on the stress `density c^2`, the two
+/// are solved around each other. At the anchor `M` the stiffness is now known, so `X_M` is too,
+/// and the ring time alone fixes `Y_M` through the root product, `Y = (1 + theta X)(1 - r^2) / (1 +
+/// r^2)`; `(sigma0, sigma1)` follow from `Y_1` and `Y_M`. Exact: the fundamental's pitch and ring
+/// time and the anchor's ring time. The anchor's **pitch** is the gauge's — a read-out, on the
+/// stretched law of [`GaugeTuning::gauge_inharmonicity`].
 ///
 /// `material` comes from [`STRING_MATERIALS`] or is built by the caller; `diameter` is in metres.
 /// The result's `rho`, `ea` and `tuning`'s `t`, `kappa`, `sigma0`, `sigma1` complete a
@@ -568,24 +596,92 @@ pub fn tune_tension_string(
     fs: f64,
     n: usize,
     theta: f64,
-    targets: &Targets,
+    targets: &GaugeTargets,
 ) -> Result<GaugeTuning, TuningError> {
-    if !(diameter > 0.0 && diameter.is_finite()) {
-        return Err(TuningError::NonPositive("diameter"));
+    for (name, v) in [
+        ("diameter", diameter),
+        ("density", material.density),
+        ("L", l),
+        ("fs", fs),
+        ("f0", targets.f0),
+        ("t60_low", targets.t60_low),
+        ("t60_high", targets.t60_high),
+        ("f_ref", targets.f_ref),
+    ] {
+        if !(v > 0.0 && v.is_finite()) {
+            return Err(TuningError::NonPositive(name));
+        }
     }
-    if !(material.density > 0.0 && material.density.is_finite()) {
-        return Err(TuningError::NonPositive("density"));
+    if !(theta > 0.0 && theta <= 1.0) {
+        return Err(TuningError::BadTheta(theta));
+    }
+    if n < 3 {
+        return Err(TuningError::TooFewSegments);
+    }
+    if targets.f_ref <= targets.f0 {
+        return Err(TuningError::RefNotAboveFundamental);
     }
     let radius = 0.5 * diameter;
     let area = PI * radius * radius;
     let rho = material.density * area;
-    let tuning = tune_damped_string(l, rho, fs, n, theta, targets)?;
-    let stress = tuning.t / area;
-    let youngs = material.modulus.at(stress, material.density);
-    if !(youngs > 0.0 && youngs.is_finite()) {
-        return Err(TuningError::NonPositive("Young's modulus"));
+    let k = 1.0 / fs;
+    let (x1, y1) = mode_xy(targets.f0, targets.t60_low, k, theta, 1)?;
+    let p1 = mode_p2(l, n, 1);
+    let q1 = x1 / (k * k);
+
+    // The stiffness at a stress, and the wave speed mode 1's pitch then leaves.
+    let solve = |stress: f64| -> Result<(f64, f64, f64), TuningError> {
+        let youngs = material.modulus.at(stress, material.density);
+        if !(youngs > 0.0 && youngs.is_finite()) {
+            return Err(TuningError::NonPositive("Young's modulus"));
+        }
+        let kappa2 = youngs * radius * radius / (4.0 * material.density);
+        let c2 = (q1 - kappa2 * p1 * p1) / p1;
+        if c2.is_nan() || c2 <= 0.0 {
+            return Err(TuningError::NoWaveSpeed);
+        }
+        Ok((youngs, kappa2, c2))
+    };
+    let mut stress = material.density * q1 / p1;
+    let (mut youngs, mut kappa2, mut c2) = solve(stress)?;
+    for _ in 0..GAUGE_ITERATIONS {
+        let next = material.density * c2;
+        if next == stress {
+            break;
+        }
+        stress = next;
+        (youngs, kappa2, c2) = solve(stress)?;
     }
-    let co = string_coefficients_from_material(youngs, radius, material.density, tuning.t)
+    let stress = material.density * c2;
+    let c = c2.sqrt();
+    let inharmonicity = PI * PI * kappa2 / (c2 * l * l);
+
+    let anchor = anchor_mode(targets.f0, inharmonicity, targets.f_ref, n);
+    let pm = mode_p2(l, n, anchor);
+    let xm = k * k * (c2 * pm + kappa2 * pm * pm);
+    // Y = (1 + theta X)(1 - r^2)/(1 + r^2), with 1 - r^2 = -expm1(2 ln r) kept to its digits.
+    let ln_r = -3.0 * k * LN_10 / targets.t60_high;
+    let r2m1 = (2.0 * ln_r).exp_m1();
+    let ym = (1.0 + theta * xm) * (-r2m1) / (2.0 + r2m1);
+    let sigma1 = (ym - y1) / (k * (pm - p1));
+    let sigma0 = y1 / k - sigma1 * p1;
+    if sigma0 < 0.0 || sigma1 < 0.0 {
+        return Err(TuningError::RisingDecay { sigma0, sigma1 });
+    }
+    let t = c2 * rho;
+    let tuning = Tuning {
+        t,
+        kappa: kappa2.sqrt(),
+        sigma0,
+        sigma1,
+        c,
+        lam: c * k * n as f64 / l,
+        anchor,
+    };
+    if mode_frequency(l, n, fs, theta, c, tuning.kappa, sigma0, sigma1, anchor).is_none() {
+        return Err(TuningError::Unreachable { mode: anchor });
+    }
+    let co = string_coefficients_from_material(youngs, radius, material.density, t)
         .map_err(|_| TuningError::NonPositive("Young's modulus"))?;
     Ok(GaugeTuning {
         tuning,
@@ -594,7 +690,7 @@ pub fn tune_tension_string(
         youngs,
         stress,
         gauge_kappa: co.kappa,
-        gauge_inharmonicity: PI * PI * co.kappa * co.kappa / (tuning.c * tuning.c * l * l),
+        gauge_inharmonicity: inharmonicity,
         modulus_extrapolated: material.modulus.extrapolated(stress),
         past_breaking: stress * 1e-6 > material.breaking_mpa,
     })

@@ -128,9 +128,11 @@ the reported block.
    exact; the audio is resampled to 48 kHz as the page already does.
 3. **Attachments: tune the string alone and show the shift** — the drum-in-vacuo precedent.
 4. **`EA` from a material and a gauge**: cited presets (steel, nylon, gut) and a diameter give the
-   linear density and `EA` through `string_coefficients_from_material`. The inharmonicity stays a
-   free target; the bending stiffness the gauge alone would imply is read out beside the `κ` the
-   mapping chose, not imposed.
+   linear density and `EA` through `string_coefficients_from_material`.
+
+   *Correction, 2026-10-19:* the first build also kept the inharmonicity a free target, with the
+   gauge's own bending stiffness only read out. That was the agent's choice, wrongly recorded here
+   as the human's. Asked, **the human chose the gauge to set the bending stiffness too** (§15).
 
 ## 9. Slice 1, Part 0 result (2026-10-19)
 
@@ -380,3 +382,33 @@ case `string_stiff_musical`.
   energy bar holds only because there every mode shares one rate.
 - **Plants, viewer:** σ from the slider, κ from the slider, the page keyed on `domain`, the anchor
   ring time dropped. All four red.
+
+## 15. The gauge sets the stretch too (2026-10-19, the human's call)
+
+A side note pointed out that §8.4's "the inharmonicity stays a free target" was the agent's
+choice, recorded as the human's. Asked, the human chose **the gauge to set the bending stiffness
+too**: a thick steel string now stretches its overtones as a real one would, and the tension page
+has no inharmonicity slider.
+
+**The mapping** (`tune_tension_string`, now taking `GaugeTargets`: pitch, two ring times, the
+reference). The gauge fixes `κ² = E r² / (4 ρ_v)`. Mode 1's `(f0, T60_low)` gives `(X₁, Y₁)`, so
+`c² = X₁/(k² p₁²) − κ² p₁²`; nylon's modulus depends on the stress `ρ_v c²`, so the two are
+solved around each other. At the anchor the stiffness is now known, so `X_M` is too, and the ring
+time alone fixes `Y_M = (1 + θX_M)(1 − r²)/(1 + r²)`. Then `(σ₀, σ₁)` follow from `Y₁` and `Y_M`.
+
+- **Exact:** the fundamental's pitch and ring time, and the anchor's ring time (round trip: pitch
+  1.9e-12, ring times 1.7e-11). The anchor's **pitch** is the gauge's, a read-out that matches the
+  simulation to 3.6e-11. "High" is the partial nearest `f_ref` on the string's own stretched law.
+- **What it changes:** a 110 Hz steel string's 18th-ish partial runs +25 cents sharp on 0.3 mm
+  wire and +270 cents on 1 mm wire (B = 1.6e-4 against 1.7e-3).
+- **New refusals:** a gauge too stiff for its pitch (bending alone would sound mode 1 above the
+  target: no positive tension), and a high ring time longer than the low one allows.
+- **Plants:** no nylon iteration; the diameter as the radius in κ; θ dropped from the anchor's
+  root product; κ ignored in `c²`; the anchor picked on the harmonic law. The last one **survived**
+  the round trip, which measures whichever anchor it is handed, until a bar pinned the anchor to
+  the stretched law. All five are red now.
+- **A consequence on the page:** with the gauge's own κ, the grid's flattening of the high
+  partials is no longer absorbed. The free κ of the first build quietly compensated for it, holding
+  the anchor on the target law. The default tension page now warns that partials between f0 and
+  the anchor run up to 25 cents flat of the gauge's stretched law (in tune to partial 7, `N =
+  128`). A finer grid or a higher sample rate brings them in, as the warning says.
