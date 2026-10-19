@@ -497,7 +497,7 @@ the table's. Its strike is always mode (1,1), so width and position do not reach
 | 0.003, 6 | rescued 37 | **B** | **B** | rescued 27 | rescued 34 | rescued 37 | **B** | **B** |
 | 0.006, 2 | clean 22 | **B** | **B** | clean 17 | clean 19 | clean 23 | **B** | rescued 31 |
 | 0.006, 4 | rescued 66 | **B** | **B** | rescued 28 | rescued 42 | rescued 83 | **B** | **B** |
-| 0.0125, 1 | rescued 110 | **B** | **B** | clean 30 | rescued 50 | rescued 198+ | **B** | resc. 567 |
+| 0.0125, 1 | resc. 110 | **B** | **B** | clean 30 | rescued 50 | rescued 198+ | **B** | resc. 567 |
 
 Every broken cymbal case here failed on its **first** step. The strike's width and the outline
 each move the cymbal from clean to broken at an `f0·k` the table calls safe, so no table that can
