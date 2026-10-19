@@ -721,6 +721,10 @@ fn every_fixture_file_is_run() {
 ///   naming the physical set with musical keys riding along changes no byte (the unnamed requests
 ///   are frozen in `d2.json`), and the musical sets through what each page plays — the bowed
 ///   pitch, and the tension page measured against the physics page on the mapped string.
+/// - `stiff`, `controls:physical` / `controls:musical`, are the stiff string's two control sets
+///   (string mapping plan §14), held by `stiff_musical.rs` the same two ways: the physical set
+///   with musical keys riding along changes no byte (the unnamed requests are frozen in
+///   `strings.json`), and the musical set through its rendered partials and its energy's decay.
 /// - `ideal`, `jawari`, `juari` and `fret`, `controls:physical` / `controls:musical`, are the ideal
 ///   string's and the barrier pages' two control sets (string mapping plan §13), held by
 ///   `ideal_contact_musical.rs` the same two ways: the physical set with musical keys riding along
@@ -754,6 +758,8 @@ const BORN_AFTER_THE_FREEZE: &[(&str, &str, &str)] = &[
         "controls:musical",
         "tests/bow_tension_musical.rs",
     ),
+    ("stiff", "controls:physical", "tests/stiff_musical.rs"),
+    ("stiff", "controls:musical", "tests/stiff_musical.rs"),
     (
         "ideal",
         "controls:physical",

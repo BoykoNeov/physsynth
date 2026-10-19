@@ -17,9 +17,10 @@ use physsynth_core::string_ideal::{self as ideal, Boundary, IdealString};
 use physsynth_core::string_nonlinear::{self as nonlinear, TensionModulatedString};
 use physsynth_core::string_stiff::{self as stiff, StiffString};
 use physsynth_core::string_tuning::{
-    ideal_mode_frequency, mode_frequency, partial_drift, stretched_partial, string_material,
-    tune_damped_string, tune_flexible_string, tune_ideal_string, tune_tension_string,
-    FlexibleTuning, GaugeTuning, IdealTuning, StringMaterial, Targets, Tuning, HORIZON_CENTS,
+    ideal_mode_frequency, mode_frequency, partial_drift, stiff_mode_t60, stretched_partial,
+    string_material, tune_damped_string, tune_flexible_string, tune_ideal_string,
+    tune_stiff_string, tune_tension_string, FlexibleTuning, GaugeTuning, IdealTuning,
+    StringMaterial, Targets, Tuning, HORIZON_CENTS,
 };
 use serde_json::{json, Value};
 
@@ -249,6 +250,9 @@ pub struct Musical {
 pub enum Mapped {
     /// The damped string's, the bow's and (gentle limit) the tension string's: two anchors.
     Damped(Tuning),
+    /// The stiff string's: pitch and ring time at mode 1, pitch at the anchor (one loss, so the
+    /// anchor's ring time is a read-out — plan §14).
+    Stiff(Tuning),
     /// The ideal string at `lambda = 1`: the pitch and every partial's ring time exact.
     Ideal(IdealTuning),
     /// The barrier pages' flexible string: mode 1 exact.
@@ -302,7 +306,7 @@ pub const DIAMETER_MM_MAX: f64 = 1.5;
 pub fn is_musical(p: &Value) -> bool {
     let key = match model_of(p).as_str() {
         "damped" => "domain",
-        "bow" | "tension" | "ideal" | "jawari" | "juari" | "fret" => "controls",
+        "bow" | "tension" | "ideal" | "stiff" | "jawari" | "juari" | "fret" => "controls",
         _ => return false,
     };
     p.get(key).and_then(Value::as_str) == Some("musical")
@@ -503,6 +507,54 @@ fn build_musical_ideal(p: &Value, l: f64, rho: f64, n: i64) -> Result<Built, Ref
     })
 }
 
+/// The stiff string from a pitch, an inharmonicity, ONE ring time and a reference frequency, at
+/// the sample-rate slider (string mapping plan §3, §14). The request's `T`, `kappa`, `sigma` and
+/// `lambda` are ignored, though the shared prefix of [`build_resonator`] still parsed them.
+fn build_musical_stiff(p: &Value, l: f64, rho: f64, n: i64) -> Result<Built, Refusal> {
+    let theta = fnum(p, "theta", 0.28)?;
+    let f0 = fnum(p, "f0", 110.0)?;
+    let inharmonicity = fnum(p, "inharmonicity", 1e-4)?;
+    let t60 = fnum(p, "t60_low", 3.0)?;
+    let f_ref = fnum(p, "f_ref", 2000.0)?;
+    let fs = fnum(p, "sample_rate", 44100.0)?;
+    if !(MUSICAL_FS_MIN..=MUSICAL_FS_MAX).contains(&fs) {
+        return Err(Refusal::Param(format!(
+            "sample_rate must be in [{}, {}] Hz, got {}.",
+            MUSICAL_FS_MIN,
+            MUSICAL_FS_MAX,
+            physsynth_core::fmt::py_float(fs)
+        )));
+    }
+    let tu = tune_stiff_string(l, rho, fs, n as usize, theta, f0, inharmonicity, t60, f_ref)
+        .map_err(|e| Refusal::Param(e.to_string()))?;
+    let params = stiff::Params::new(l, tu.t, rho, fs, n, tu.kappa, tu.sigma0, theta, true)
+        .map_err(construction)?;
+    // The anchor's ring time is what one loss leaves it; the targets carry it as their high ring
+    // time so the read-out reports the truth, not a request (plan §14).
+    let targets = Targets {
+        f0,
+        inharmonicity,
+        t60_low: t60,
+        t60_high: stiff_mode_t60(l, n as usize, fs, theta, &tu, tu.anchor),
+        f_ref,
+    };
+    Ok(Built {
+        res: StringRes::Stiff(StiffString::new(params)),
+        c: tu.c,
+        l,
+        n,
+        fs,
+        sigma_zero: tu.sigma0 == 0.0,
+        oracle_2sigma: 2.0 * tu.sigma0,
+        tuning: Some(Musical {
+            map: Mapped::Stiff(tu),
+            targets,
+            theta,
+            gauge: None,
+        }),
+    })
+}
+
 /// The barrier pages' flexible string from a pitch, a ring time and the sample-rate slider
 /// (string mapping plan §13) — `(tension, sigma0, fs, wave speed, the musical record)`. The page
 /// builds its own string from them; its `lambda` becomes a read-out, refused at 1 or above as the
@@ -674,7 +726,9 @@ fn harmonic_tuning_block(m: &Musical, l: f64, n: i64, fs: f64) -> Value {
             "the grid flattens the partials above the fundamental; a finer grid (N) or a higher \
              sample rate brings them in.",
         ),
-        Mapped::Damped(_) => unreachable!("the damped mappings have their own block"),
+        Mapped::Damped(_) | Mapped::Stiff(_) => {
+            unreachable!("the two-anchor mappings have their own block")
+        }
     };
     let warn = horizon < reach;
     let message = if warn {
@@ -705,8 +759,9 @@ fn harmonic_tuning_block(m: &Musical, l: f64, n: i64, fs: f64) -> Value {
 /// [`tuning_block`] for a musical record outside a [`Built`] — the barrier pages build their own
 /// strings (`contact.rs`).
 pub(crate) fn tuning_block_for(m: &Musical, l: f64, n: i64, fs: f64) -> Value {
-    let tu = match &m.map {
-        Mapped::Damped(tu) => tu,
+    let (tu, stiff) = match &m.map {
+        Mapped::Damped(tu) => (tu, false),
+        Mapped::Stiff(tu) => (tu, true),
         _ => return harmonic_tuning_block(m, l, n, fs),
     };
     let tg = &m.targets;
@@ -743,6 +798,10 @@ pub(crate) fn tuning_block_for(m: &Musical, l: f64, n: i64, fs: f64) -> Value {
         "warn": warn,
         "message": message,
     });
+    if stiff {
+        // One loss: the anchor rings as long as the scheme leaves it (plan §14).
+        block["anchor_t60"] = num(stiff_mode_t60(l, n as usize, fs, m.theta, tu, tu.anchor));
+    }
     if let Some(g) = &m.gauge {
         block["gauge"] = json!({
             "material": g.material.name,
@@ -840,6 +899,7 @@ fn build_resonator_with(p: &Value, lossless: bool) -> Result<Built, Refusal> {
                 tuning: None,
             })
         }
+        "stiff" if is_musical(p) => build_musical_stiff(p, l, rho, n),
         "stiff" => {
             let sigma = fnum(p, "sigma", 0.0)?;
             let kappa = fnum(p, "kappa", 0.0)?;

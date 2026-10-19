@@ -750,3 +750,130 @@ pub fn tune_flexible_string(
         lam: c * k * n as f64 / l,
     })
 }
+
+// == the stiff string: one loss, an inharmonicity =================================================
+
+/// Map a pitch, an inharmonicity and ONE ring time onto model #2 (the stiff string, one `sigma`)
+/// — string mapping plan §3, §14.
+///
+/// Model #2 is model #3 at `sigma1 = 0`: the same theta-scheme matrix `(1 + sigma k) I - theta k^2
+/// L`. So mode 1's `(f0, T60)` gives `(X_1, Y)` by [`tune_damped_string`]'s 2x2, and `Y = sigma k`
+/// is then the same for EVERY mode. At the anchor `M` only the pitch is a target, and with `Y`
+/// known, `cos(phi) = (2 - (1 - 2 theta) X) / (2 sqrt((1 + theta X)^2 - Y^2))` is one equation in
+/// `X_M`. Squared, it is the quadratic
+///
+/// ```text
+/// (beta^2 - 4 C theta^2) X^2 - (4 beta + 8 C theta) X + 4 (sin^2 phi + C Y^2) = 0,
+/// beta = 1 - 2 theta,   C = cos^2 phi
+/// ```
+///
+/// and a root is the anchor's only if `X > 0` and `2 - beta X` has the sign of `cos(phi)`.
+/// **Exactly one ever qualifies.** Lossless, `cos(phi)` falls strictly as `X` rises (its derivative
+/// is `-1 / (2 (1 + theta X)^2)`), so each pitch has one stiffness and the squaring's other root
+/// belongs to the mirrored branch; the probe found one valid root in all 1,686 representable
+/// configurations of 1,728 and two in none (plan §14). Were two ever to qualify, the mapping
+/// refuses rather than guesses.
+///
+/// The returned [`Tuning`] has `sigma1 = 0`, so [`mode_frequency`] and [`partial_drift`] read it as
+/// model #2. The anchor's ring time is not a target — one `sigma` leaves it to the scheme, which
+/// lengthens it up the series (hurdle §4) — and [`stiff_mode_t60`] reports it.
+#[allow(clippy::too_many_arguments)]
+pub fn tune_stiff_string(
+    l: f64,
+    rho: f64,
+    fs: f64,
+    n: usize,
+    theta: f64,
+    f0: f64,
+    inharmonicity: f64,
+    t60: f64,
+    f_ref: f64,
+) -> Result<Tuning, TuningError> {
+    for (name, v) in [
+        ("L", l),
+        ("rho", rho),
+        ("fs", fs),
+        ("f0", f0),
+        ("t60", t60),
+        ("f_ref", f_ref),
+    ] {
+        if !(v > 0.0 && v.is_finite()) {
+            return Err(TuningError::NonPositive(name));
+        }
+    }
+    if !(theta > 0.0 && theta <= 1.0) {
+        return Err(TuningError::BadTheta(theta));
+    }
+    if n < 3 {
+        return Err(TuningError::TooFewSegments);
+    }
+    if f_ref <= f0 {
+        return Err(TuningError::RefNotAboveFundamental);
+    }
+    let b = inharmonicity;
+    let anchor = anchor_mode(f0, b, f_ref, n);
+    let ma = anchor as f64;
+    if !(b.is_finite() && 1.0 + b > 0.0 && 1.0 + b * ma * ma > 0.0) {
+        return Err(TuningError::BadInharmonicity);
+    }
+
+    let k = 1.0 / fs;
+    let (x1, y) = mode_xy(f0, t60, k, theta, 1)?;
+    let phi = 2.0 * PI * stretched_partial(f0, b, anchor) * k;
+    let (s, cs) = (phi.sin(), phi.cos());
+    let c2 = cs * cs;
+    let beta = 1.0 - 2.0 * theta;
+    let qa = beta * beta - 4.0 * c2 * theta * theta;
+    let qb = -(4.0 * beta + 8.0 * c2 * theta);
+    // 4 - 4 C (1 - Y^2), spelled as 4 (sin^2 phi + C Y^2) so a low anchor keeps its digits.
+    let qc = 4.0 * (s * s + c2 * y * y);
+    let disc = qb * qb - 4.0 * qa * qc;
+    if disc < 0.0 {
+        return Err(TuningError::Unreachable { mode: anchor });
+    }
+    // The cancellation-free pair: q = -(qb + sign(qb) sqrt(disc)) / 2, roots q / qa and qc / q.
+    let q = -0.5 * (qb + qb.signum() * disc.sqrt());
+    let valid: Vec<f64> = [q / qa, qc / q]
+        .into_iter()
+        .filter(|&x| x > 0.0 && x.is_finite() && (2.0 - beta * x).signum() == cs.signum())
+        .collect();
+    let &[xm] = valid.as_slice() else {
+        return Err(TuningError::Unreachable { mode: anchor });
+    };
+
+    let (q1, qm) = (x1 / (k * k), xm / (k * k));
+    let (p1, pm) = (mode_p2(l, n, 1), mode_p2(l, n, anchor));
+    let det = p1 * pm * (pm - p1);
+    let c2w = (q1 * pm * pm - qm * p1 * p1) / det;
+    let kappa2 = (qm * p1 - q1 * pm) / det;
+    if c2w.is_nan() || c2w <= 0.0 {
+        return Err(TuningError::NoWaveSpeed);
+    }
+    if kappa2 < 0.0 {
+        return Err(TuningError::ShrinkingPartials);
+    }
+    let c = c2w.sqrt();
+    Ok(Tuning {
+        t: c2w * rho,
+        kappa: kappa2.sqrt(),
+        sigma0: y / k,
+        sigma1: 0.0,
+        c,
+        lam: c * k * n as f64 / l,
+        anchor,
+    })
+}
+
+/// The ring time (s) model #2 gives mode `m` — what one `sigma` leaves the anchor (a read-out).
+///
+/// `r^2 = cc / a = (1 + theta X - Y) / (1 + theta X + Y)` for that mode, and a 60 dB fall takes
+/// `-6 k ln 10 / ln(r^2)`.
+pub fn stiff_mode_t60(l: f64, n: usize, fs: f64, theta: f64, tuning: &Tuning, m: usize) -> f64 {
+    let k = 1.0 / fs;
+    let p2 = mode_p2(l, n, m);
+    let x = k * k * (tuning.c * tuning.c * p2 + tuning.kappa * tuning.kappa * p2 * p2);
+    let y = k * (tuning.sigma0 + tuning.sigma1 * p2);
+    let u = 1.0 + theta * x;
+    let ln_r2 = (-2.0 * y / (u + y)).ln_1p();
+    -6.0 * k * LN_10 / ln_r2
+}

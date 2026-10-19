@@ -587,6 +587,10 @@ const CONTROL_OPTS = {
   // the barrier pages' flexible string takes the sample-rate slider (plan §13). One ring time each.
   ideal: [["physical", "Physics — T, ρ, λ, σ"],
           ["musical", "Musical — pitch, ring time (λ = 1, fs follows the pitch)"]],
+  // The stiff string has one loss: its ring time is the fundamental's, and the anchor's is read
+  // out (plan §14).
+  stiff: [["physical", "Physics — T, κ, σ"],
+          ["musical", "Musical — pitch, inharmonicity, one ring time"]],
   jawari: [["physical", "Physics — T, ρ, λ, σ₀"], ["musical", "Musical — pitch, ring time"]],
   juari: [["physical", "Physics — T, ρ, λ, σ₀"], ["musical", "Musical — pitch, ring time"]],
   fret: [["physical", "Physics — T, ρ, λ, σ₀"], ["musical", "Musical — pitch, ring time"]],
@@ -607,7 +611,7 @@ const WOODS = ["sitka spruce", "engelmann spruce", "western redcedar", "sugar ma
 // the plate and the drums on the controls select.
 function musicalOn(m) {
   if (m === "damped") return domainSel.value === "musical";
-  if (m === "plate" || m === "vk" || m === "bow" || ONE_RING_MODELS.includes(m)
+  if (m === "plate" || m === "vk" || m === "bow" || m === "stiff" || ONE_RING_MODELS.includes(m)
       || DRUM_MODELS.includes(m)) {
     return !!controlsSel && controlsSel.value === "musical";
   }
@@ -909,7 +913,8 @@ function updateLambdaHint() {
       + "the sample rate follows it (2·f₀·N). Every partial is in tune when the ring is long.";
     hint.style.color = "var(--muted)";
   } else if ((m === "damped" && domainSel.value === "musical")
-      || ((m === "bow" || m === "tension" || ONE_RING_MODELS.includes(m)) && musicalOn(m))) {
+      || ((m === "bow" || m === "tension" || m === "stiff" || ONE_RING_MODELS.includes(m))
+          && musicalOn(m))) {
     hint.textContent = "λ is a read-out here: the pitch sets the wave speed, and fs is the "
       + "sample-rate slider. Raise N or fs to keep more partials on the target law.";
     hint.style.color = "var(--muted)";
@@ -1595,7 +1600,7 @@ function gatherParams() {
     p.set_by = $("drum-set-by").value;
   }
   // The bow's and the tension string's control set, and the tension string's material.
-  if ((modelSel.value === "bow" || modelSel.value === "tension"
+  if ((modelSel.value === "bow" || modelSel.value === "tension" || modelSel.value === "stiff"
        || ONE_RING_MODELS.includes(modelSel.value)) && controlsSel) {
     p.controls = controlsSel.value;
     if (modelSel.value === "tension") p.string_material = $("string-material").value;
@@ -1702,6 +1707,11 @@ function showTuning(data) {
       + `${g(gauge.gauge_inharmonicity)}.${start} (${gauge.source})`;
     // Plan §12: a fit used outside its data, or a string past its breaking stress — warned, run.
     for (const w of gauge.warnings || []) text += ` ⚠ ${w}`;
+  }
+  // The stiff string (plan §14): one loss, so the anchor's ring time is what the scheme leaves it.
+  if (t.anchor_t60 !== undefined) {
+    text += ` One loss, so partial ${t.anchor} rings ${g(t.anchor_t60)} s — a read-out, not a `
+      + `target.`;
   }
   // The bow (plan §9, §11): the bowed pitch against the tuned one; its cause is not established.
   if (t.bow_note) {

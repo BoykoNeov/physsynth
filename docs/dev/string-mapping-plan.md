@@ -334,3 +334,46 @@ freeze of `contact.json` is unchanged. Held by
   was added); its sample rate from the lossless law; the barrier pages never musical; the
   `λ ≥ 1` refusal removed; the tuning block dropped; the wrong θ; the barrier pages keyed on
   `domain`. All seven turn a bar red.
+
+## 14. Slice 3: the stiff string (2026-10-19)
+
+**Part 0 probe** (1,728 configurations: two strings, four grids, θ ∈ {0.25, 0.28, 0.5, 1},
+`f0 ∈ {55, 220, 880}`, `B ∈ {0, 1e-4, 1e-2}`, three ring times, two reference frequencies). Mode
+1's `(f0, T60)` gives `(X₁, Y)` by the damped 2×2. With `Y = σk` then known, the anchor's pitch
+alone gives `X_M` through §3's quadratic:
+
+- **Exactly one valid root** in all 1,686 representable configurations; **two in none**. The other
+  42 have no valid root at all: the anchor's pitch is past the scheme's ceiling (θ = 1 caps a pitch
+  below fs/6). The same "unreachable" refusal as the damped string's.
+- **Why one:** lossless, `cos φ` falls strictly as `X` rises (its derivative is
+  `−1/(2(1 + θX)²)`), so each pitch has one stiffness. The squaring's second root belongs to the
+  mirrored branch. The sign test is load-bearing: a plant that dropped it let that root through,
+  and two bars went red.
+
+**Part 1, core:** `string_tuning::tune_stiff_string` (returns a `Tuning` with `σ₁ = 0`, so the
+drift read-out reads it as model #2) and `stiff_mode_t60` (the anchor's ring time, a read-out).
+Held by `crates/physsynth-core/tests/string_stiff_tuning.rs` over 72 fixtures:
+
+- fundamental pitch to 8.3e-11 and ring time to 1.0e-9, anchor pitch to 1.5e-12, and the anchor
+  ring-time read-out matching the simulation to 1.0e-9;
+- the textbook mapping 164 cents flat at the anchor (82.4 Hz, θ = 1, N = 64), the corrected one
+  exact;
+- the refusals, including the θ = 1 ceiling, which is reachable at θ = 1/4.
+
+Six plants turned bars red: the sign test dropped, the anchor solved lossless, `β`'s sign flipped,
+the anchor's eigenvalue off by one mode, θ dropped from the ring-time read-out, σ halved. The file
+runs in 1.8 s optimised and 26 s unoptimised.
+
+**Parts 3–4, the page.** `stiff` takes `controls: "musical"`: pitch, inharmonicity, one ring time,
+the reference and the sample rate. The read-out names the anchor's ring time as what one loss
+leaves it. Held by `crates/physsynth-viewer/tests/stiff_musical.rs` (five bars) and the headless
+case `string_stiff_musical`.
+
+- **The wiring bar is a twin again:** the musical page's energy decay and every detected partial
+  equal the physics page's on the mapped string, to 1e-9.
+- **Found:** the first draft asserted that the energy panel's decay fit equals the fundamental's
+  ring time. It read 1.98/s against 6.91/s. On this scheme one σ decays mode `m` at
+  `2σ/(1 + θX_m)` (hurdle §4), so a pluck's energy falls at a blend of rates. The ideal string's
+  energy bar holds only because there every mode shares one rate.
+- **Plants, viewer:** σ from the slider, κ from the slider, the page keyed on `domain`, the anchor
+  ring time dropped. All four red.

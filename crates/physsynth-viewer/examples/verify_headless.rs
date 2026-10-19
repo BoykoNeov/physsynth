@@ -139,6 +139,7 @@ const CASES: &[(&str, &str)] = &[
     // The ideal string and a barrier page with musical controls (string mapping plan §13): the
     // ideal one at its defaults (its sample rate follows the pitch), the jawari on its own grid.
     ("string_ideal_musical", "model=ideal&controls=musical"),
+    ("string_stiff_musical", "model=stiff&controls=musical"),
     (
         "jawari_musical",
         "model=jawari&controls=musical&N=64&f0=110&audio_duration=0.24",
@@ -655,6 +656,8 @@ fn run_case(
             // the bow's 22.05 kHz default must sit on the sample-rate slider's grid, or the page
             // quietly runs another rate (it ran 22,100 Hz on a 100 Hz step, 2026-10-19)
             && probe["status"].as_str().unwrap_or("").contains("fs_sim 22,050 Hz")
+    } else if query.contains("controls=musical") && query.contains("model=stiff") {
+        tuning.contains("Exact at f₀") && tuning.contains("One loss")
     } else if query.contains("controls=musical") && query.contains("model=ideal") {
         tuning.contains("λ = 1") && tuning.contains("EVERY partial")
     } else if query.contains("controls=musical") && query.contains("model=jawari") {
