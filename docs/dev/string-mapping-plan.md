@@ -10,15 +10,18 @@ takes raw physics. This plan covers them, sorted by how much new derivation each
 
 ## 1. The pages, and the string each one is built on
 
-| page (`model`) | string underneath | loss terms | what a musical mapping can pin |
-|---|---|---|---|
-| `ideal` | #1, explicit, `λ ≤ 1` | one `σ` | pitch, one ring time — **every** partial exact at `λ = 1` |
-| `stiff` | #2, θ-scheme, `κ` | one `σ` | pitch, inharmonicity, one ring time (mode 1 only) |
-| `bow` | #3 (`damped::Params`) | `σ₀`, `σ₁` | `tune_damped_string` as is; the bow's pull on the pitch read out |
-| `tension` | #9 = #3 + `EA` | `σ₀`, `σ₁` | `tune_damped_string` in the gentle limit (`EA = 0` is #3 bit for bit) |
-| `jawari`, `juari`, barrier | #3 with `κ = 0`, `σ₁ = 0` | one `σ₀` | pitch and one ring time at mode 1 |
-| `sympathetic`, `body`, `platebody`, `radbody` | #1 on a bridge or body | one `σ` | the string alone; the coupling's shift read out (or corrected — §8) |
-| `geometric` | #10, own `Params`, Newton | four | separate batch (§6) |
+- **`ideal`** — model #1, explicit, `λ ≤ 1`, one `σ`. Pitch and one ring time; **every**
+  partial exact at `λ = 1`.
+- **`stiff`** — #2, θ-scheme with `κ`, one `σ`. Pitch, inharmonicity, one ring time (mode 1 only).
+- **`bow`** — #3 (`damped::Params`), `σ₀` and `σ₁`. `tune_damped_string` as is; the bow's pull on
+  the pitch read out.
+- **`tension`** — #9 = #3 + `EA`, `σ₀` and `σ₁`. `tune_damped_string` in the gentle limit (`EA = 0`
+  is #3 bit for bit).
+- **`jawari`, `juari`, barrier** — #3 with `κ = 0`, `σ₁ = 0`, one `σ₀`. Pitch and one ring time at
+  mode 1.
+- **`sympathetic`, `body`, `platebody`, `radbody`** — #1 on a bridge or a body, one `σ`. The string
+  alone; the coupling's shift read out (§8).
+- **`geometric`** — #10, its own `Params`, Newton, four losses. A separate batch (§6).
 
 ## 2. The ideal string (#1) — exact everywhere, by a special case
 
@@ -125,3 +128,63 @@ the reported block.
    linear density and `EA` through `string_coefficients_from_material`. The inharmonicity stays a
    free target; the bending stiffness the gauge alone would imply is read out beside the `κ` the
    mapping chose, not imposed.
+
+## 9. Slice 1, Part 0 result (2026-10-19)
+
+Probe: a scratch crate under `W:\temp\claude` depending on core and analysis by path.
+
+**The bow.** `tune_damped_string`'s string under the page's default bow (position 0.13, 0.1 m/s,
+1 N, sharpness 60), 15 fixtures (`f₀ ∈ {110, 196, 440}`, three ring-time pairs, `fs ∈ {22.05k,
+44.1k}`, `N ∈ {64, 100}`) and a force sweep:
+
+- **The bowed note is not the string's mode 1, and the offset moves with the grid.** In clean
+  one-slip motion it reads −13.3 to +7.7 cents off the tuned pitch. It is stable to 0.02 cents
+  from a 0.5 s to a 6 s window, so it is not the detector. But the same 110 Hz string reads −13.3
+  cents at 44.1 kHz and +3.9 cents at 22.05 kHz (`N = 100` both). A bowed (Helmholtz) note's
+  period is set by the whole series, and the partials between the two anchors drift with the grid
+  (the damped plan's §7 drift). So the read-out is "the bow and the grid together", and the page
+  must say so, not "the bow's pull".
+- Clean bowing is not guaranteed at the defaults: 196 Hz, `N = 100`, 1 N gives two slips a period.
+  That is the physics page's behaviour too (Schelleng's window), already labelled there.
+- **The work budget bites.** The page caps a run at 60,000 friction steps. At 44.1 kHz that is
+  1.36 s, below the page's 2 s default audio, so a musical bow at the shared sample-rate default
+  would be refused out of the box.
+
+**The tension string** (`ρ` and `EA` from a gauge, the rest from `tune_damped_string`; three
+materials, four strings each, `fs = 44.1k`, `N = 128`, `θ = 0.28`):
+
+- **Exact in the gentle limit**, as predicted: a 1e-7 m single mode with the mapped losses reads
+  ≤ 2.8e-8 cents and ≤ 1e-11 in ring time off its targets. `EA` does not touch the linear string.
+- **The start shift is what a gauge makes it.** A 1 mm pluck starts 0.1–4.7 cents sharp; 3 mm,
+  0.6–41 cents; 1 cm, 7–372 cents (a thick steel string). The page's `dT/T₀ ≤ 4.45` guard was never
+  reached here.
+- **The gauge's own inharmonicity** spans 1.7e-6 (thin nylon) to 1.8e-3 (1 mm steel). The
+  mapping's default target (1e-4) is far from either end. That is the read-out §8.4 asked for.
+
+**Presets** (the build's citations):
+
+| material | density (kg/m³) | Young's modulus | source |
+|---|---|---|---|
+| steel (music wire) | 7800 | 190 GPa | [a] |
+| nylon | 1080 | `32.0 + 0.0353 σ − 0.0269 ρ` GPa, `σ` in MPa | [b] |
+| gut | 1322 | 6.0 GPa | [c] |
+
+- [a] MakeItFrom, ASTM A228 music wire (cold-worked).
+- [b] Lynch-Aird & Woodhouse, *Materials* 10 (2017) 497: Eq. 19, and Table 1's lower-density
+  group.
+- [c] Lynch-Aird & Woodhouse, *Materials* 11 (2018) 2160: Table 1, and the 5.5–6.5 GPa range
+  they cite.
+
+**Part 1 done (core), 2026-10-19.** `string_tuning::tune_tension_string` and `STRING_MATERIALS`,
+held by `crates/physsynth-core/tests/string_tension_tuning.rs`, seven bars. Every material plays
+both anchors to within 4.3e-11 in pitch and 3.5e-11 in ring time. A 3 mm pluck at 196 Hz on a
+0.6 mm string starts +12.7 cents sharp on steel and +2.4 on gut; steel's settles onto its target
+to 1e-5 cents. Eight plants (the diameter used as the radius, a density off by 1e-4, the stress
+in Pa in nylon's fit, the fit's sign, the gauge's `κ` imposed, `π²` dropped from the gauge's
+inharmonicity, `EA` dropped, the stress over the wrong area) each turned a bar red. The file runs
+in 35 s unoptimised, after the round trip was cut from 0.25 s to 0.06 s of simulation with no
+loss of precision (155 s before), so it stays in CI's debug lane.
+
+Nylon's modulus is a strong function of stress (4 to over 10 GPa on one string), so a fixed value
+would be wrong for every string but one. The fit is evaluated at the tuned stress `T/A`. That is
+possible because the tension the mapping returns does not depend on `EA`.

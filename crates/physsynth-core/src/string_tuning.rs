@@ -52,7 +52,17 @@
 //! The textbook mapping — `c = 2 L f0 / sqrt(1 + B)`, `kappa = sqrt(B) c L / pi`, and
 //! `physsynth-analysis`'s continuum `loss_coefficients_from_t60` — is what this improves on. It is
 //! close on the fundamental and wrong at the anchor; the plan's §7 has the numbers.
+//!
+//! # The tension string: a material and a gauge (`docs/dev/string-mapping-plan.md` §5, §9)
+//!
+//! Model #9 is model #3 plus an axial stiffness `EA`, and at `EA = 0` it *is* model #3 bit for bit;
+//! a gentle pluck feels no `EA` at all. So [`tune_tension_string`] is an adapter: a material and a
+//! diameter give the linear density and `EA`, and [`tune_damped_string`] does the rest. The pitch
+//! met is the **settled** note — a hard pluck starts sharp and glides onto it, by an amount the
+//! gauge sets. The inharmonicity stays a free target (the human's call, plan §8.4); the bending
+//! stiffness the gauge alone implies is returned beside the mapped `kappa`, not imposed.
 
+use crate::string_nonlinear::string_coefficients_from_material;
 use std::f64::consts::{LN_10, PI};
 
 /// The drift, in cents, inside which a partial counts as in tune for [`partial_drift`].
@@ -396,4 +406,151 @@ pub fn partial_drift(
         worst_between,
         worst_mode,
     }
+}
+
+// == the tension string: a material and a gauge ==================================================
+
+/// How a string material's Young's modulus is known.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Modulus {
+    /// One value (Pa), independent of how hard the string is pulled.
+    Fixed(f64),
+    /// Nylon's stress-dependent fit (Lynch-Aird & Woodhouse 2017, Eq. 19): `E = a + b σ + c ρ` GPa
+    /// with `σ` the string's stress in MPa and `ρ` its density in kg/m³.
+    StressFit {
+        /// Constant term (GPa).
+        a: f64,
+        /// Per MPa of stress (GPa/MPa).
+        b: f64,
+        /// Per kg/m³ of density (GPa m³/kg).
+        c: f64,
+    },
+}
+
+impl Modulus {
+    /// Young's modulus (Pa) at stress `stress` (Pa) for a material of density `density` (kg/m³).
+    pub fn at(&self, stress: f64, density: f64) -> f64 {
+        match *self {
+            Modulus::Fixed(e) => e,
+            Modulus::StressFit { a, b, c } => (a + b * (stress * 1e-6) + c * density) * 1e9,
+        }
+    }
+}
+
+/// A string material a caller can name.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StringMaterial {
+    /// The name a caller selects it by.
+    pub name: &'static str,
+    /// Volumetric density (kg/m³).
+    pub density: f64,
+    /// Young's modulus.
+    pub modulus: Modulus,
+    /// Where the values come from.
+    pub source: &'static str,
+}
+
+/// Lynch-Aird & Woodhouse, "Mechanical Properties of Nylon Harp Strings", *Materials* 10 (2017)
+/// 497. Table 1 gives the unstretched densities (1067–1159 kg/m³ in two groups); Eq. 19 the
+/// tension-modulation modulus of the lower-density group, `r² = 0.983`. One string's modulus runs
+/// from about 4 to over 10 GPa across its stress range, so no fixed value would serve.
+const NYLON_SRC: &str = "Lynch-Aird & Woodhouse, Materials 10 (2017) 497: Table 1, Eq. 19";
+
+/// The materials a caller can name (plan §9). Plain, unwound strings only: a wound string's mass
+/// sits in its winding and its `EA` in its core, which one density and one modulus cannot carry.
+pub const STRING_MATERIALS: &[StringMaterial] = &[
+    // MakeItFrom's ASTM A228 music-wire page (cold-worked): 190 GPa, 7.8 g/cm³.
+    StringMaterial {
+        name: "steel",
+        density: 7800.0,
+        modulus: Modulus::Fixed(190.0e9),
+        source: "MakeItFrom, ASTM A228 music wire",
+    },
+    // The lower-density group of Table 1 (1072–1097 kg/m³), whose fit Eq. 19 is.
+    StringMaterial {
+        name: "nylon",
+        density: 1080.0,
+        modulus: Modulus::StressFit {
+            a: 32.0,
+            b: 0.0353,
+            c: -0.0269,
+        },
+        source: NYLON_SRC,
+    },
+    // Lynch-Aird & Woodhouse, "Comparison of Mechanical Properties of Natural Gut and Synthetic
+    // Polymer Harp Strings", Materials 11 (2018) 2160: Table 1's gut densities are 1320–1325
+    // kg/m³, and gut's modulus is flat in stress, inside the 5.5–6.5 GPa the paper cites.
+    StringMaterial {
+        name: "gut",
+        density: 1322.0,
+        modulus: Modulus::Fixed(6.0e9),
+        source: "Lynch-Aird & Woodhouse, Materials 11 (2018) 2160: Table 1, and its cited range",
+    },
+];
+
+/// Look a material up by name.
+pub fn string_material(name: &str) -> Option<&'static StringMaterial> {
+    STRING_MATERIALS.iter().find(|m| m.name == name)
+}
+
+/// The tension string's coefficients from a material, a gauge and the musical targets.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GaugeTuning {
+    /// What [`tune_damped_string`] gave: `T`, `kappa`, `sigma0`, `sigma1`, the anchor.
+    pub tuning: Tuning,
+    /// Linear density (kg/m), `density * pi r^2`.
+    pub rho: f64,
+    /// Axial stiffness (N), `E pi r^2`.
+    pub ea: f64,
+    /// Young's modulus used (Pa) — for nylon, its value at [`GaugeTuning::stress`].
+    pub youngs: f64,
+    /// The string's stress `T / (pi r^2)` (Pa).
+    pub stress: f64,
+    /// The bending stiffness the gauge alone implies, `sqrt(E I / rho)` (m²/s) — a read-out.
+    pub gauge_kappa: f64,
+    /// The inharmonicity that bending stiffness gives, `pi^2 kappa^2 / (c^2 L^2)` — a read-out.
+    pub gauge_inharmonicity: f64,
+}
+
+/// Map a material, a diameter and musical targets onto model #9 (module header).
+///
+/// `material` comes from [`STRING_MATERIALS`] or is built by the caller; `diameter` is in metres.
+/// The result's `rho`, `ea` and `tuning`'s `t`, `kappa`, `sigma0`, `sigma1` complete a
+/// [`crate::string_nonlinear::Params::new`] call.
+#[allow(clippy::too_many_arguments)]
+pub fn tune_tension_string(
+    material: &StringMaterial,
+    diameter: f64,
+    l: f64,
+    fs: f64,
+    n: usize,
+    theta: f64,
+    targets: &Targets,
+) -> Result<GaugeTuning, TuningError> {
+    if !(diameter > 0.0 && diameter.is_finite()) {
+        return Err(TuningError::NonPositive("diameter"));
+    }
+    if !(material.density > 0.0 && material.density.is_finite()) {
+        return Err(TuningError::NonPositive("density"));
+    }
+    let radius = 0.5 * diameter;
+    let area = PI * radius * radius;
+    let rho = material.density * area;
+    let tuning = tune_damped_string(l, rho, fs, n, theta, targets)?;
+    let stress = tuning.t / area;
+    let youngs = material.modulus.at(stress, material.density);
+    if !(youngs > 0.0 && youngs.is_finite()) {
+        return Err(TuningError::NonPositive("Young's modulus"));
+    }
+    let co = string_coefficients_from_material(youngs, radius, material.density, tuning.t)
+        .map_err(|_| TuningError::NonPositive("Young's modulus"))?;
+    Ok(GaugeTuning {
+        tuning,
+        rho,
+        ea: co.ea,
+        youngs,
+        stress,
+        gauge_kappa: co.kappa,
+        gauge_inharmonicity: PI * PI * co.kappa * co.kappa / (tuning.c * tuning.c * l * l),
+    })
 }
