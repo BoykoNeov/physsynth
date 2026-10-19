@@ -5,8 +5,8 @@
 and the drum (`docs/dev/membrane-mapping-plan.md`) have musical controls; §12 names the von Kármán
 plate (model #6, the supported gong and the free-edge cymbal) as still raw.
 
-**Status: PLANNED 2026-10-18; Part 0 (probe) DONE 2026-10-19** (§8) — four decisions to the
-human before Part 1.
+**Status: PLANNED 2026-10-18; Part 0 (probe) DONE 2026-10-19** (§8); the human's four answers
+to it in §8.8. Part 1 next.
 
 **The human's four decisions, 2026-10-18:**
 
@@ -346,3 +346,18 @@ and, by §8.5, would run for hours. Not measured end to end — read off the bud
 3. **The hazard of §8.6** — guard the physical page too (the same rule, from the same table), or
    leave it as it is.
 4. **The musical page's default pitch** — today's defaults (steel 0.4 m, 1 mm) sit near 30 Hz.
+
+### 8.8 The human's answers (2026-10-19)
+
+1. **Refuse and warn:** refuse what is predicted *broken*; run *rescued* with a warning and a
+   rough time estimate; in both, name a sample rate that would fit.
+2. **Gong: start and settle; cymbal: settle.** The gong reads where the note starts and how it
+   glides onto the target (early and late windows); the cymbal reads "settles onto the note after
+   ≈ X ms", from the lowest free mode's projection.
+3. **The same guard on the physical page,** so neither set of controls can hold the server for
+   hours.
+4. **Default pitch 100 Hz.**
+
+The guard is a prediction from `f0·k`, the strike, `N` and the boundary, built from a measured
+table. Before Part 3 writes it: the gong's grid dependence, and a second size and metal to test
+the `f0·k` claim (§8.5). Status: Part 1 next.
