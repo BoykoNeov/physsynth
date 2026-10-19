@@ -496,9 +496,11 @@ even if it is the quieter one; the page shows the louder neighbour too, its pitc
 the string's motion each note carries. (Not chosen: the two notes straddling the target at equal
 strength; refusing inside the bands.)
 
-*The agent's reading of it, to confirm or override:* every coupled note in the page's band that
-can reach the target is tried, and the one carrying the larger share of the string's motion wins.
-Outside the gaps this is simply the strongest note, so one rule covers both cases.
+*The agent's reading of it:* every coupled note in the page's band that can reach the target is
+tried, and the one carrying the larger share of the string's motion wins. Outside the gaps this is
+simply the strongest note, so one rule covers both cases. **Confirmed by the human, 2026-10-19**
+(not chosen: staying on the same note as the slider moves, so the tension never jumps; listing the
+candidates on the page for the player to pick).
 
 **The human's fourth answer, 2026-10-19: the ring time is exact too.** The core build showed the
 second answer's "approximate" understated it: the string's loss acts only on its share of the
