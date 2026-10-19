@@ -363,6 +363,9 @@ The guard is a prediction from `f0·k`, the strike, `N` and the boundary, built 
 table. Before Part 3 writes it: the gong's grid dependence, and a second size and metal to test
 the `f0·k` claim (§8.5).
 
+**Superseded for the cymbal (§11, 2026-10-19), pending the human's answer:** no table predicts it;
+the gong keeps the prediction.
+
 ---
 
 ## 9. Part 1 result (2026-10-19) — `VkSpec::sigma1`
@@ -436,4 +439,101 @@ The remaining plants of §5 belong to the page (the late window replaced by the 
 Part 1 (`σ₁` not forwarded, §9). The page's work-budget refusal at the mapped thickness is
 Part 3's, with the guard of §8.8.
 
-Status: Part 3 (the page) next.
+---
+
+## 11. Part 3 probe — the guard's evidence (2026-10-19)
+
+Each case: the first 3 000 steps (stopped at 20 unsettled steps or 90 s), steel set by pitch,
+ring times 2 s / 1 s, the page's strike (mode (1,1) on the gong; a raised cosine on the cymbal,
+centred, width 0.28 of the side), 32 kHz. Classes as §8.5; the figure is linear solves per step.
+`B` is broken (a step never settled).
+
+### 11.1 The base table — `f0·k` × strike × `N`
+
+**The gong** — the same class at `N` 12, 20 and 32 in every cell, and solves per step within 15 %:
+
+| `f0·k` | strike 1 | 2 | 4 | 6 |
+|---|---|---|---|---|
+| 0.003 | clean 8 | clean 9 | clean 13 | clean 16–17 |
+| 0.006 | clean 9 | clean 12 | clean 17 | clean 24 |
+| 0.0125 | clean 12 | clean 15–16 | clean 25 | rescued 40–42 |
+| 0.025 | clean 15 | clean 21 | rescued 41–44 | rescued 104–128 |
+| 0.05 | clean 19 | clean 32 | rescued 139–154 | **B** |
+
+**The cymbal** — the grid matters (finer is worse):
+
+| `f0·k` | `N` | strike 1 | 2 | 4 | 6 |
+|---|---|---|---|---|---|
+| 0.003 | 12 | clean 11 | clean 15 | rescued 22 | rescued 37 |
+| | 20 | clean 12 | clean 15 | rescued 23 | rescued 37 |
+| | 32 | clean 13 | clean 16 | rescued 25 | rescued 44 |
+| 0.006 | 12 | clean 14 | clean 19 | rescued 44 | **B** |
+| | 20 | clean 15 | clean 22 | rescued 66 | **B** |
+| | 32 | rescued 35 | rescued 130 | **B** | **B** |
+| 0.0125 | 12 | clean 20 | rescued 49 | **B** | **B** |
+| | 20 | rescued 110 | rescued ≥ 1 700 | **B** | **B** |
+| | 32 | **B** | **B** | **B** | **B** |
+| 0.025 | 12 | rescued 998 | **B** | **B** | **B** |
+| | 20, 32 | **B** | **B** | **B** | **B** |
+| 0.05 | all | **B** | **B** | **B** | **B** |
+
+**Invariance** (`N` 20; steel 0.4 m at 32 kHz against bronze 0.25 m at 32 kHz, steel at 96 kHz
+and glass 0.6 m at 16 kHz): the gong's class held in all three cells tested; the cymbal's in two
+of three, glass (`ν` 0.22) broke where the others were rescued at (0.0125, strike 2).
+
+### 11.2 One axis moved — the gong holds, the cymbal does not
+
+`N` 20. **The gong** at six cells along its boundary, with `ν` 0 and 0.45 and an outline of
+`Ly = 2.5 Lx` and `0.5 Lx`: the class never moved, and solves per step stayed within 0.7–1.4×
+the table's. Its strike is always mode (1,1), so width and position do not reach it.
+
+**The cymbal** at five cells along its boundary. Columns: (a) the table's strike; (b) width 0.1;
+(c) width 0.1 at (0.15, 0.15); (d) the page's default strike, width 0.45 at (0.4, 0.55); (e) `ν` 0;
+(f) `ν` 0.45; (g) `Ly = 2.5 Lx`; (h) `Ly = 0.5 Lx`.
+
+| `f0·k`, strike | (a) | (b) | (c) | (d) | (e) | (f) | (g) | (h) |
+|---|---|---|---|---|---|---|---|---|
+| 0.003, 4 | rescued 23 | **B** | **B** | clean 19 | rescued 21 | rescued 23 | **B** | rescued 38 |
+| 0.003, 6 | rescued 37 | **B** | **B** | rescued 27 | rescued 34 | rescued 37 | **B** | **B** |
+| 0.006, 2 | clean 22 | **B** | **B** | clean 17 | clean 19 | clean 23 | **B** | rescued 31 |
+| 0.006, 4 | rescued 66 | **B** | **B** | rescued 28 | rescued 42 | rescued 83 | **B** | **B** |
+| 0.0125, 1 | rescued 110 | **B** | **B** | clean 30 | rescued 50 | rescued 198+ | **B** | resc. 567 |
+
+Every broken cymbal case here failed on its **first** step. The strike's width and the outline
+each move the cymbal from clean to broken at an `f0·k` the table calls safe, so no table that can
+be measured covers it.
+
+### 11.3 Lossless, a full second
+
+| case | class | solves per step | against its first 3 000 steps |
+|---|---|---|---|
+| cymbal 0.003, strike 4 | rescued (9 steps) | 31.9 | 1.4× |
+| cymbal 0.006, strike 2 | rescued (4 steps) | 27.3 | 1.3× (clean early) |
+| gong 0.025, strike 6 | rescued (24 794 of 28 292 steps, stopped at 300 s) | 177 | 1.6× |
+
+Without loss the cost **rises** through the run, so the first steps' cost is not a ceiling
+(§8.5's "most of them early in the sound" holds only with loss).
+
+### 11.4 What this means for the guard
+
+- **The gong:** a table works — `f0·k` × strike, independent of `N`, `ν` and the outline in the
+  range measured — refusing broken cells before the run and pricing the rescued ones, with the
+  lossless rise of 11.3 as a margin.
+- **The cymbal:** no prediction. Proposed instead: stop at the first step that does not settle,
+  and cap the run's total work in solves (deterministic, unlike wall-clock), refusing with what
+  to change. A cymbal refusal then arrives after one failed step: ≈ 0.3 s at `N` 12, ≈ 10–15 s at
+  `N` 20, 1.5–6 minutes at `N` 32. To the human with that cost before it is built.
+
+### 11.5 What rescues a narrow cymbal strike
+
+Width 0.1, `N` 20 unless named — each lever alone turns a broken case into a settling one:
+
+- **A lower `f0·k`** (a higher sample rate, or a lower pitch): strike 2 is rescued at 0.001 and
+  clean at 0.0005; strike 4 rescued at 0.001.
+- **A gentler strike:** at 0.003, strike 1 rescued, strike 0.5 clean.
+- **A wider strike:** at 0.003 and strike 2, width 0.15 rescued, 0.2 clean; at strike 4, widths
+  0.2 and 0.3 rescued.
+- **A coarser grid:** at 0.003 and strike 2, `N` 16 and 12 rescued — but `N` 12 at strike 4
+  still broke (on its third step, not its first).
+
+So a cymbal refusal can name all four, the sample rate among them.
