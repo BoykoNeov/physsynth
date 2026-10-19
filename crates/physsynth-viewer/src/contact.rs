@@ -184,7 +184,8 @@ fn check_lambda(lam: f64) -> Result<(), Refusal> {
 
 /// The string's tension, loss, sample rate and wave speed — `(T, sigma0, fs, c, musical)`. From
 /// the physics sliders (`lambda` sets `fs`), or, with musical controls, from a pitch, one ring time
-/// and the sample-rate slider (string mapping plan §13), the string still `kappa = 0`, `sigma1 = 0`.
+/// and the sample-rate slider (string mapping plan §13), the string still `kappa = 0` and
+/// `sigma1 = 0`.
 /// The physics arithmetic is the reference's, unchanged.
 #[allow(clippy::type_complexity)]
 fn string_setup(
@@ -759,7 +760,10 @@ pub fn build_payload_jawari(p: &Value) -> Result<Value, Refusal> {
             "horizon": string_block(&damped_info(&jaw.string), "the string under the jawari"),
             "fs_sim": num(round_nd(fs, 3)),
             "lambda": num(round_nd(info.lam, 6)),
-            "grid": {"x": finite_list(&x, Some(6)), "barrier": finite_list(&barrier_on_grid(&jaw), None)},
+            "grid": {
+                "x": finite_list(&x, Some(6)),
+                "barrier": finite_list(&barrier_on_grid(&jaw), None),
+            },
             "frames": com.frames,
             "frame_times": com.frame_times,
             "wrap_frames": wrap_grid,
@@ -1601,7 +1605,10 @@ pub fn build_payload_fret(p: &Value) -> Result<Value, Refusal> {
             "horizon": string_block(&damped_info(&bar.string), "the fretted string"),
             "fs_sim": num(round_nd(fs, 3)),
             "lambda": num(round_nd(info.lam, 6)),
-            "grid": {"x": finite_list(&x, Some(6)), "barrier": finite_list(&barrier_on_grid(&bar), None)},
+            "grid": {
+                "x": finite_list(&x, Some(6)),
+                "barrier": finite_list(&barrier_on_grid(&bar), None),
+            },
             "frames": com.frames,
             "frame_times": com.frame_times,
             "anim_dt": num(stride as f64 / fs),

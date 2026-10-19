@@ -189,7 +189,8 @@ fn each_barrier_page_in_musical_mode_is_its_physics_page_on_the_mapped_string() 
 #[test]
 fn musical_keys_do_not_touch_the_physical_barrier_pages() {
     for (model, extra) in barrier_cases() {
-        // lambda 0.4, the pages' own default: the shared base's 1.0 is refused by the contact solve.
+        // lambda 0.4, the pages' own default: the shared base's 1.0 is refused by the contact
+        // solve.
         let mut plain = base_params(json!({"model": model, "lambda": 0.4}));
         common::merge(&mut plain, extra.clone());
         let mut noisy = plain.clone();
