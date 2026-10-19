@@ -712,6 +712,10 @@ fn every_fixture_file_is_run() {
 ///   sets (membrane mapping plan §6), held by `membrane_musical.rs` the same two ways.
 /// - `drumroom`'s two mountings and two control sets belong to a model with no frozen case at all
 ///   ([`MODELS_BORN_AFTER_THE_FREEZE`]); `drumroom.rs` runs each of them.
+/// - `vk`, `controls:physical` / `controls:musical`, are the gong's two control sets (vk mapping
+///   plan §6), held by `vk_musical.rs` the plate's two ways: naming the physical set with musical
+///   keys riding along changes no byte (its unnamed requests are frozen in `vk.json`), and the
+///   musical set is held through the run's own energy and pitch.
 const BORN_AFTER_THE_FREEZE: &[(&str, &str, &str)] = &[
     ("damped", "physical", "tests/string_musical.rs"),
     ("damped", "musical", "tests/string_musical.rs"),
@@ -725,6 +729,8 @@ const BORN_AFTER_THE_FREEZE: &[(&str, &str, &str)] = &[
     ("drumroom", "suspended", "tests/drumroom.rs"),
     ("drumroom", "controls:physical", "tests/drumroom.rs"),
     ("drumroom", "controls:musical", "tests/drumroom.rs"),
+    ("vk", "controls:physical", "tests/vk_musical.rs"),
+    ("vk", "controls:musical", "tests/vk_musical.rs"),
 ];
 
 /// Whole MODELS born after the Python viewer was deleted, for the same reason as

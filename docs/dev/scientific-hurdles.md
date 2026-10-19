@@ -29,7 +29,7 @@
 | 9 | The conserved total is blind to a wrong coupling constant; `radiated == injected` is blind to half of them | every coupled scene | Accounted for — three detectors, jointly (§9) |
 | 10 | Aliasing around every nonlinearity | bow, reed, mallet, VK plate, both nonlinear strings | Mitigated by oversampling; no anti-aliased scheme (§10) |
 | 11 | Twenty ARPACK oracles were not bit-reproducible run to run | `analysis/modal.py` | Fixed in §24.9 — kept here as the pattern (§11) |
-| 12 | Raw physics is not a musician's interface (parameter mapping) | `string_tuning`, `plate_tuning`, `membrane_tuning`; the viewer's damped string, plates and drums | **Started 2026-10-18** for the damped string (five musical targets, met exactly by the *simulated* string at two partials, the drift of the rest reported and warned) and the same day for the three linear plates (material, thickness or pitch, two ring times — exact on the supported plate, ≤ 0.05 cents on the free ones; a new loss term `σ₁`). The drum followed the same day (a cited head, pitch or tension, two ring times — exact on both shapes; a new loss `σ₁`; a drum-in-a-room page showing the air lower it 2.7–3.9 semitones). The von Kármán plate and the other strings are still raw (§12) |
+| 12 | Raw physics is not a musician's interface (parameter mapping) | `string_tuning`, `plate_tuning`, `membrane_tuning`; the viewer's damped string, plates and drums | **Started 2026-10-18** for the damped string (five musical targets, met exactly by the *simulated* string at two partials, the drift of the rest reported and warned) and the same day for the three linear plates (material, thickness or pitch, two ring times — exact on the supported plate, ≤ 0.05 cents on the free ones; a new loss term `σ₁`). The drum followed the same day (a cited head, pitch or tension, two ring times — exact on both shapes; a new loss `σ₁`; a drum-in-a-room page showing the air lower it 2.7–3.9 semitones). The gong and the cymbal followed on 2026-10-19 (a metal, the *settled* pitch or the thickness, two ring times — exact as a strike tends to zero; a hard strike's start and settle read out; the page guarded where the solve cannot settle). The other strings are still raw (§12) |
 | 13 | Which models can ever run in real time | engine, room | Deferred, and now decoupled from the language (§13) |
 | 14 | `piston_radiation_resistance`'s `ka < 1e-8` series threshold was about three decades too small: just above it the direct form cancelled catastrophically and was 544% wrong | `core/radiation.py` | **Fixed 2026-09-03** — three Taylor terms below `ka = 3e-2`; worst error 5.24 → 6.7e-13 (§14) |
 | 15 | No model states where its own answer stops being in tune, and the boundary is much lower than anyone assumed | every resonator | **Measured 2026-09-06** — two families with opposite signs (implicit errors compound into a hard floor at ~8% of the grid; explicit errors cancel at the magic Courant number), the plate is space-limited at every `fs` the suite uses, and the membrane's ceiling cancellation is **diagonal-only**; the 2-D plate's band was **derived 2026-09-07** by splitting its spectrum by mode family, the **orthotropic** plate measured the same day — one floor in mode index, per-direction only in hertz — and the **membrane's block** the same day too: the 2-D CFL ceiling **is** the minimum over the spectrum of each mode's own cancellation Courant number, so no mode is ever sharp, and a block's worst corner **flips** below the ceiling for every block — the plate's corner rule is inverted on a membrane, not weakened (§15) |
@@ -591,8 +591,35 @@ carries forward:
   15-fold baffled. Tuning *through* the air is open: it needs the coupled system's modes, which
   the room's size and walls change.
 
-Every other model is still raw: the von Kármán plate and the strings other than the damped one.
-Smoothing a moving control belongs to the real-time stage.
+**2026-10-19, the fourth piece: the gong and the cymbal** (`docs/dev/vk-mapping-plan.md`, the
+human's calls: the pitch you set is the **settled** note, the strike stays "how hard", one page,
+the cymbal tuned too). `plate_tuning::tune_vk_plate` is a thin adapter over the plate's mapping —
+the gentle-strike gong *is* its linear half — handing back `E`, `ν` and the volume density the
+gong takes. What carries forward:
+
+- **The gong needed the plate's loss term, and only had to be handed it**: `VkSpec::sigma1`,
+  forwarded to the linear half, which every coupled solver, the mallet, the bridge and the room
+  seam already step through; the books close at a membrane share over half (≤ 7e-13 of `E0`).
+- **Exact in the gentle limit, and the residual is the bend**: struck at 1e-4 thicknesses the
+  nonlinear gong reads 2.6e-6 cents and 6.6e-9 in ring time; at 1e-3, 100× that — the bend grows
+  as the strike's square.
+- **The bend at a fixed strike depends on the outline, `ν`, the grid and `f₀k` only** — not on
+  the metal's stiffness, its density or the size (identical to nine digits across 0.25–0.6 m and
+  two metals given one `ν`), so one strike setting bends every gong alike.
+- **A hard strike starts above the note and glides onto it** (+195 cents falling to +0.7 within
+  0.56 s on a lossy steel gong); the page reads an early and a late window. The cymbal has no
+  starting pitch — its pickup locks onto a higher tone through the whole crash — so it reads when
+  its lowest mode settles; that mode is a **twist**, which a centred strike cannot excite at all.
+- **The cost wall is predictable for the gong and not for the cymbal.** The gong's class (clean,
+  rescued by Newton, or broken) depends on `f₀k` and the strike only — the same across grids,
+  `ν` and outlines — so the page refuses its broken settings before running. The cymbal's moves
+  from clean to broken with the strike's width or the outline at an `f₀k` the table calls safe,
+  and every broken cymbal failed on its **first** step, so it is stopped there; a counted work cap
+  stops the rest. The old page budget never counted Newton's rescue and admitted settings that
+  would have run for hours; both control sets are guarded now.
+
+Every other model is still raw: the strings other than the damped one. Smoothing a moving
+control belongs to the real-time stage.
 
 ## 13. Which models are real-time — deferred, decoupled
 

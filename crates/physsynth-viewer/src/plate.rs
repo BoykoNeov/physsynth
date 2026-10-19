@@ -158,7 +158,7 @@ pub fn discrete_eigenfreqs(p: &pl::Params, k_request: usize) -> Result<Vec<f64>,
 }
 
 /// `eigsh(K, k, M=W, sigma=<negative>)` on a free plate, ascending.
-fn free_modes(p: &pl::Params, k: usize) -> Result<Eigenpairs, Refusal> {
+pub fn free_modes(p: &pl::Params, k: usize) -> Result<Eigenpairs, Refusal> {
     let w = p
         .mass
         .as_ref()

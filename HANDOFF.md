@@ -322,8 +322,10 @@ lesson: a bound measured where the effect is hidden is worse than no bound).
   size, thickness or pitch, two ring times (`docs/dev/plate-mapping-plan.md`), which also gave the
   plate a frequency-dependent loss `σ₁`. The drum followed the same day — a cited head, pitch or
   tension, two ring times, exact on both shapes (`docs/dev/membrane-mapping-plan.md`) — with a
-  drum-in-a-room page that shows how far the air moves a drum tuned in vacuo. Smoothing stays a
-  real-time-stage concern.
+  drum-in-a-room page that shows how far the air moves a drum tuned in vacuo. The gong and the
+  cymbal followed on 2026-10-19 — a metal, the settled pitch or the thickness, two ring times, a
+  hard strike's start and settle read out, and the page guarded where the coupled solve cannot
+  settle (`docs/dev/vk-mapping-plan.md`). Smoothing stays a real-time-stage concern.
 - **CPU budget x polyphony.** A single FDTD plate can saturate a core. *Which* models are polyphonic
   is settled in §11.3a (field models per instance, strings per voice); what remains here is the
   budget — voice counts and stealing — which is a real-time-stage concern, not one for now.

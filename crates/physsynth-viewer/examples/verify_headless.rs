@@ -147,6 +147,20 @@ const CASES: &[(&str, &str)] = &[
     ),
     ("vk_supported", "model=vk&domain=supported"),
     ("vk_free", "model=vk&domain=free"),
+    // The gong's musical controls (vk mapping plan §6): a brass gong set by its settled pitch,
+    // whose read-out names the thickness, what the strike did to the note and what the run cost;
+    // and a bronze cymbal set by thickness, struck off its centre lines and read from its lowest
+    // tone.
+    (
+        "vk_musical",
+        "model=vk&domain=supported&controls=musical&material=brass&f0=120&N=16\
+         &audio_duration=0.5",
+    ),
+    (
+        "vk_musical_cymbal",
+        "model=vk&domain=free&controls=musical&material=bronze&set_by=thickness\
+         &thickness_mm=1.5&N=16&audio_duration=0.3&pluck_x=0.3&pluck_y=0.3",
+    ),
     // The geometric string's four regimes: every step a 3-field Newton solve at ~22x a normal
     // string's fs. The first three ship no audio, so `painted` is their whole verdict; `phantom`
     // measures the bridge force, and at ~45 s it is the slowest render in the viewer.
@@ -621,6 +635,13 @@ fn run_case(
             && plate_tuning.contains("κ =")
             && plate_tuning.contains("Ring times")
             && (!query.contains("domain=guitar") || plate_tuning.contains("0.05 cents"))
+    } else if musical && query.contains("model=vk") {
+        // The gong's: the thickness and its metal's constants, what the strike did, what it cost.
+        plate_tuning.contains(" mm")
+            && plate_tuning.contains("E =")
+            && plate_tuning.contains("The strike")
+            && plate_tuning.contains("Cost:")
+            && plate_tuning.contains("Ring times")
     } else {
         plate_tuning.is_empty()
     };

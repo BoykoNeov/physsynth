@@ -5,9 +5,9 @@
 and the drum (`docs/dev/membrane-mapping-plan.md`) have musical controls; §12 names the von Kármán
 plate (model #6, the supported gong and the free-edge cymbal) as still raw.
 
-**Status: PLANNED 2026-10-18; Part 0 (probe) DONE 2026-10-19** (§8); the human's four answers
-to it in §8.8. Part 1 (`VkSpec::sigma1`) DONE 2026-10-19 (§9); Part 2 (`tune_vk_plate`) DONE
-2026-10-19 (§10); Part 3 next.
+**Status: DONE 2026-10-19.** Part 0 (probe, §8; the human's four answers in §8.8), Part 1
+(`VkSpec::sigma1`, §9), Part 2 (`tune_vk_plate`, §10), the guard's probe (§11; the human's answer
+in §11.6), Part 3 (the page, §12) and Part 4 (`scientific-hurdles.md` §12, `HANDOFF.md` §8).
 
 **The human's four decisions, 2026-10-18:**
 
@@ -537,3 +537,64 @@ Width 0.1, `N` 20 unless named — each lever alone turns a broken case into a s
   still broke (on its third step, not its first).
 
 So a cymbal refusal can name all four, the sample rate among them.
+
+### 11.6 The human's answer (2026-10-19)
+
+**Stop on the first failure.** The cymbal's render starts and stops at its first step that does
+not settle, refusing with what to change (a wider or gentler strike, a coarser grid, a higher
+sample rate); a cap on the run's total work in solves stops a run that would take hours; a slow
+but settling cymbal is reported with its result. The gong keeps the prediction of §11.4. Both
+apply to the physical page too (§8.8 answer 3), where only a refusal may change a reply.
+
+---
+
+## 12. Part 3 result (2026-10-19) — the page
+
+`crates/physsynth-viewer/src/vk.rs`:
+
+- **`controls: musical`** builds the gong from a metal or glass (or custom isotropic constants),
+  the outline, `N`, `fs`, the settled pitch or the thickness, and two ring times, through
+  `tune_vk_plate`; `E`, `e`, `nu`, `rho`, `sigma` are ignored there. The payload gains
+  `controls`, a `tuning` block (thickness, `E`, `ν`, the volume density, both losses, the
+  settled `f0`, the anchor and its margin, `exact`, eight partials' pitch and ring time), a
+  `strike_readout` and a `cost` block. A request without `controls: musical` takes the old path.
+- **The strike read-out.** The gong: the pickup's pitch over an early and a late window of
+  `max(40 ms, 4 periods)`, in cents from the settled note. The cymbal: the time after which every
+  window of its lowest elastic mode's projection stays within 25 cents of the note — unless that
+  mode holds under 1 % of the strike's shape, when it says so (the mode is a twist, odd about both
+  centre lines: a centred strike puts none there and read +54 cents of leakage; the page's
+  default off-centre strike puts 3.2 % there and reads the settle cleanly).
+- **The guard, both control sets.** The old work budget stays first, unchanged. Then the gong
+  (nonlinear, supported) is read off §11.1's table at its conservative corner — `f₁·k` from the
+  page's own lowest discrete mode — and refused before it runs where a step would not settle, or
+  where the table's cost × 1.6 (the lossless rise, §11.3) passes the new cap, naming the sample
+  rate and the strike that would fit. Then every nonlinear run, both boundaries, is stopped at its
+  first unsettled step and charged against `VK_SOLVE_MAX` = 2 × `VK_WORK_MAX` node-solves (the
+  old budget's own promise, kept by counting), refusing with what to change.
+- **The energy verdict** drops the single-rate `2σ` oracle line when `σ₁ > 0`.
+
+Front-end (`web/static/`): `CONTROL_OPTS` gains `vk`; the shared musical group and the plate's
+material group show on the gong's musical page with the woods and the grain hidden; `E`, `e`, `ν`,
+`ρ`, `σ` hide; the strike and `fs` stay; `f0` defaults to 100 Hz there (and `_default` puts the
+shared slider back at 110 Hz elsewhere); `showVkTuning` prints the mapping, the strike read-out
+and the cost.
+
+The frozen gong replies are untouched (the freeze's 588 requests pass exactly): every frozen gong
+request sits far inside the table and settled on every step. `controls:physical` and
+`controls:musical` for `vk` are in `BORN_AFTER_THE_FREEZE`, held by
+`crates/physsynth-viewer/tests/vk_musical.rs` (11 bars: the starting energy against a core gong
+built from the mapping, the gentle and hard pitch, the gong's start and settle, the cymbal's
+settle and its centred-strike message, physical bytes unchanged with musical keys, the energy
+verdict, set by thickness, refusals, the gong refused before it runs on both control sets, the
+cymbal stopped at its first failed step) and two unit bars in `vk.rs` (the table's corner and
+monotonicity; the work cap stops a run, counted). Headless cases `vk_musical` and
+`vk_musical_cymbal`.
+
+Plants (each time-limited, the source restored from a copy): the first-failure stop removed (red
+after 372 s — the work cap stopped the broken cymbal instead, with the wrong message); a broken
+table cell marked safe; the late window replaced by the whole run; a decoy density read in musical
+mode (5 red); `σ₁` dropped after the mapping. Each red.
+
+**Found on the way:** a cymbal's tuned pitch is its lowest elastic mode, a twist; a strike near
+the centre barely excites it, so the note the musician sets is quiet unless the strike is off the
+centre lines (the read-out says so).

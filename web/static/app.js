@@ -138,9 +138,12 @@ const MODEL_RANGES = {
     pluck_x: { val: 0.25 }, pluck_y: { val: 0.35 },
     audio_duration: { max: 2, val: 1 },
   },
+  // f0 is the musical controls' SETTLED pitch here, 100 Hz by the human's call (vk mapping plan
+  // §8.8); _default puts the shared slider back at index.html's 110 off this page.
   vk: { N: { min: 8, max: 32, val: 20 },
         rho: { min: 2000, max: 12000, step: 100, fixed: 0, val: 7800, unit: "kg/m³" },
-        Lx: { val: 0.3 }, Ly: { val: 0.3 }, audio_duration: { max: 1, val: 0.5 } },
+        Lx: { val: 0.3 }, Ly: { val: 0.3 }, audio_duration: { max: 1, val: 0.5 },
+        f0: { val: 100 } },
   // The slowest model in the viewer, and irreducibly so: fs is forced ~22x a normal string's by the
   // longitudinal wave (lam_long <= 1) and every step is a 3-field vector Newton solve, so N is capped
   // at 32 and defaults to 16 — the grid the whirl rig uses, where the tongue is refinement-invariant.
@@ -408,6 +411,8 @@ const MODEL_RANGES = {
               air_h: { min: 0.02, max: 0.10, step: 0.005, fixed: 3, val: 0.03, unit: "m" },
               wall_zeta: { min: 0.1, max: 50, step: 0.1, fixed: 1, val: 3.0 },
               plate_N: { min: 8, max: 16, step: 1, fixed: 0, val: 16 },
+              // The gong's musical page sets the shared pitch to 100 Hz; index.html's home is 110.
+              f0: { val: 110 },
               kappa: { min: 0, max: 8, step: 0.05, fixed: 2, val: 1.0 },
               rho: { min: 0.001, max: 0.02, step: 0.0005, fixed: 4, val: 0.005, unit: "kg/m²" },
               amplitude: { min: 0.001, max: 0.06, step: 0.001, fixed: 3, val: 0.001 },
@@ -562,16 +567,25 @@ const CONTROL_OPTS = {
   // In the room the ROOM sets the sample rate, so λ is a read-out in both sets.
   drumroom: [["physical", "Physics — T, ρ, σ"],
              ["musical", "Musical — head, pitch or tension, ring times (met in vacuo)"]],
+  // The gong's domain select already means supported gong / free cymbal (vk mapping plan §6). Its
+  // musical set takes a metal and the SETTLED pitch: a harder strike starts above it.
+  vk: [["physical", "Physics — E, e, ν, ρ, σ"],
+       ["musical", "Musical — metal, settled pitch or thickness, ring times"]],
 };
 
 // The models whose drum takes the head-and-pitch musical controls (the drum in a room among them).
 const DRUM_MODELS = ["membrane", "mallet", "drumroom"];
 
+// The plate material menu's woods (`plate_tuning::PRESETS`'s orthotropic entries), which the gong's
+// musical controls hide: the von Kármán plate is isotropic only.
+const WOODS = ["sitka spruce", "engelmann spruce", "western redcedar", "sugar maple",
+               "douglas-fir"];
+
 // Whether model m's musical controls are on: the damped string carries them on its domain select,
 // the plate and the drums on the controls select.
 function musicalOn(m) {
   if (m === "damped") return domainSel.value === "musical";
-  if (m === "plate" || DRUM_MODELS.includes(m)) {
+  if (m === "plate" || m === "vk" || DRUM_MODELS.includes(m)) {
     return !!controlsSel && controlsSel.value === "musical";
   }
   return false;
@@ -745,11 +759,20 @@ function updateVisibility() {
   // The plate's musical group: the input that is NOT set is read out, so its slider hides, and the
   // custom constants show only for "custom". Reset to shown off the plate, so the damped string's
   // shared pitch slider never inherits a plate's thickness mode.
-  const plateMusical = m === "plate" && musical;
+  const plateMusical = (m === "plate" || m === "vk") && musical;
   const byPitch = !plateMusical || $("plate-set-by").value === "pitch";
   showParam("thickness_mm", !byPitch);
   const custom = plateMusical && $("plate-material").value === "custom";
   ["custom_E_gpa", "custom_nu", "custom_density"].forEach((k) => showParam(k, custom));
+  // The gong and the cymbal are isotropic (the core refuses a wood): no woods and no grain there.
+  const vkMusical = m === "vk" && musical;
+  const grainField = $("plate-grain") && $("plate-grain").closest(".field");
+  if (grainField) grainField.hidden = vkMusical;
+  const matSel = $("plate-material");
+  if (matSel) {
+    for (const o of matSel.options) o.hidden = o.disabled = vkMusical && WOODS.includes(o.value);
+    if (vkMusical && WOODS.includes(matSel.value)) matSel.value = "steel";
+  }
   // The drum's, the same way: tension or pitch, and the custom density only for "custom".
   const drumMusical = DRUM_MODELS.includes(m) && musical;
   const byTension = drumMusical && $("drum-set-by").value === "tension";
@@ -867,6 +890,11 @@ function updateLambdaHint() {
     const mu = param("mu");
     hint.textContent = `μ = κ·k/h² = ${mu.toFixed(2)}  (implicit → no CFL; large μ is coarse-but-`
       + `stable, cost rises at LOW μ)`;
+    hint.style.color = "var(--muted)";
+  } else if (m === "vk" && musicalOn(m)) {
+    hint.textContent = `fs = ${Math.round(param("fs"))} Hz. The metal and the settled pitch (or `
+      + "thickness) set E, e, ν, ρ and both losses. A setting the solve cannot settle is refused "
+      + "— the gong before it runs, the cymbal at its first failed step — with what to change.";
     hint.style.color = "var(--muted)";
   } else if (m === "vk") {
     const fs = param("fs");
@@ -1519,9 +1547,10 @@ function gatherParams() {
   if (modelSel.value === "airbox") p.walls = domainSel.value;
   // The drum in a room: its domain select carries the MOUNTING, so the walls have their own.
   if (modelSel.value === "drumroom") p.walls = $("drumroom-walls").value;
-  // The plate's control set and its three selects, sent for the plate only so no other model's
-  // request changes. An empty grain means "let the server choose" (along a guitar's length).
-  if (modelSel.value === "plate" && controlsSel) {
+  // The plate's control set and its three selects, sent for the plate and the gong only so no other
+  // model's request changes. An empty grain means "let the server choose" (along a guitar's
+  // length); the gong ignores it.
+  if ((modelSel.value === "plate" || modelSel.value === "vk") && controlsSel) {
     p.controls = controlsSel.value;
     p.material = $("plate-material").value;
     p.set_by = $("plate-set-by").value;
@@ -1598,6 +1627,7 @@ function b64ToUint8(b64) {
 // "allow and warn", parameter-mapping plan §3). Raw numbers from the server, formatted here.
 function showTuning(data) {
   if (data.model === "plate") { showPlateTuning(data); return; }
+  if (data.model === "vk") { showVkTuning(data); return; }
   if (DRUM_MODELS.includes(data.model)) { showDrumTuning(data); return; }
   const hint = $("tuning-hint");
   if (!hint) return;
@@ -1628,6 +1658,29 @@ function showPlateTuning(data) {
     + `σ₁ = ${g(t.sigma1)}, μ = ${t.mu}. Anchor ${g(t.anchor_frequency)} Hz. ${t.message} `
     + `Ring times: ${rings}. (${t.source})`;
   hint.style.color = t.crowded ? "var(--accent-2)" : "var(--muted)";
+}
+
+// The gong's and the cymbal's musical read-out (vk mapping plan §6): what the metal and the
+// targets mapped to — met in the gentle-strike limit — then what the strike did to the note and
+// what the run cost. Amber when Newton had to rescue steps: correct, but slow.
+function showVkTuning(data) {
+  const hint = $("plate-tuning-hint");
+  if (!hint) return;
+  const t = data.tuning;
+  if (!t) { hint.textContent = ""; return; }
+  const g = (x) => Number(x).toPrecision(4);
+  const how = t.set_by === "pitch"
+    ? `for a settled f₀ = ${g(t.f0_target)} Hz it must be ${g(t.thickness_mm)} mm thick`
+    : `at ${g(t.thickness_mm)} mm it settles at f₀ = ${g(t.f0)} Hz`;
+  const rings = (t.partials || []).map((q) => `${g(q.f)} Hz → ${g(q.t60)} s`).join(", ");
+  const strike = data.strike_readout ? ` The strike ${data.strike_readout.message}` : "";
+  const cost = data.cost ? ` Cost: ${data.cost.message}` : "";
+  hint.textContent = `→ ${t.material}: ${how}. E = ${g(t.E_gpa)} GPa, ν = ${t.nu}, `
+    + `ρ = ${g(t.rho)} kg/m³, σ₀ = ${g(t.sigma0)}, σ₁ = ${g(t.sigma1)}. Anchor `
+    + `${g(t.anchor_frequency)} Hz. ${t.message}${strike}${cost} Ring times: ${rings}. `
+    + `(${t.source})`;
+  const rescued = data.cost && data.cost.rescued_steps > 0;
+  hint.style.color = rescued || t.crowded ? "var(--accent-2)" : "var(--muted)";
 }
 
 // The drum's musical read-out (membrane mapping plan §6): what the head and the targets mapped to

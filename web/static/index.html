@@ -50,7 +50,7 @@
         </label>
         <!-- The plate's CONTROL SET (plate mapping plan §7). Its own select because the plate's
              domain select already means supported / free / guitar. Filled from CONTROL_OPTS. -->
-        <label class="field" data-show="plate membrane mallet drumroom" style="margin-top:8px">
+        <label class="field" data-show="plate membrane mallet drumroom vk" style="margin-top:8px">
           <span>Controls</span>
           <select id="controls"></select>
         </label>
@@ -59,7 +59,7 @@
       <!-- The bore joins this group for L alone. Its medium is AIR — ρ₀ and c₀ are properties of
            the medium, not tunable the way string tension is — so ρ needs an explicit list that
            leaves the bore out, rather than the blanket "every model in this fieldset" it had. -->
-      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk bore reed drumroom" data-hide-musical="plate membrane mallet drumroom">
+      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk bore reed drumroom" data-hide-musical="plate membrane mallet drumroom vk">
         <legend>Physical</legend>
         <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet drumroom" data-hide-domain="musical"></div>
         <div class="slider" data-param="rho" data-min="0.001" data-max="0.02" data-step="0.0005" data-val="0.005" data-unit="kg/m²" data-fixed="4" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk drumroom" data-hide-musical="plate"></div>
@@ -74,7 +74,7 @@
            SHARED with the plate's musical controls (plate mapping plan §7): pitch, both ring times,
            the reference and the sample rate mean the same there. data-musical shows the group only
            when that model's musical controls are on. -->
-      <fieldset class="group" data-musical="damped plate membrane mallet drumroom">
+      <fieldset class="group" data-musical="damped plate membrane mallet drumroom vk">
         <legend>Musical controls</legend>
         <div class="slider" data-param="f0" data-min="27.5" data-max="1000" data-step="0.1" data-val="110" data-unit="Hz" data-fixed="1"></div>
         <div class="slider" data-param="inharmonicity" data-min="0" data-max="0.02" data-step="0.0001" data-val="0.0001" data-fixed="4" data-show="damped"></div>
@@ -89,7 +89,7 @@
            Engineering ToolBox metals and glass — or custom isotropic constants), which way a wood's
            grain runs, and whether the thickness or the pitch is the input; the other is read out.
            The material's stiffness and density replace κ and ρ, which hide; μ becomes a read-out. -->
-      <fieldset class="group" data-musical="plate">
+      <fieldset class="group" data-musical="plate vk">
         <legend>Plate material</legend>
         <label class="field">
           <span>material</span>
@@ -180,7 +180,7 @@
         <p class="hint" id="lambda-hint"></p>
       </fieldset>
 
-      <fieldset class="group" data-show="stiff damped tension bow geometric plate vk">
+      <fieldset class="group" data-show="stiff damped tension bow geometric plate vk" data-hide-musical="vk">
         <legend>Stiffness &amp; material</legend>
         <!-- κ is hidden in the whirl regime: only the SOFT plane whirls (the tongue needs δ > 0, so
              the driven polarization must be the lower one), which forces κ_u = 0 server-side. -->
@@ -474,7 +474,7 @@
         <p class="hint" id="mallet-hint"></p>
       </fieldset>
 
-      <fieldset class="group" data-show="ideal stiff membrane mallet plate vk drumroom" data-hide-musical="plate membrane mallet drumroom">
+      <fieldset class="group" data-show="ideal stiff membrane mallet plate vk drumroom" data-hide-musical="plate membrane mallet drumroom vk">
         <legend>Loss</legend>
         <div class="slider" data-param="sigma" data-min="0" data-max="20" data-step="0.1" data-val="0" data-hide-musical="plate membrane mallet drumroom"></div>
       </fieldset>
