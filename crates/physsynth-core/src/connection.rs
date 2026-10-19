@@ -89,6 +89,13 @@
 //! three-way energy decomposition is a rigorous identity, not a seam. No implicit solve is needed
 //! (that was for the *nonlinear* von Kármán coupling); a linear spring is conserved explicitly.
 //!
+//! A lossy string keeps the books too, because the spring's pull on the end node is divided by
+//! the string's own `1 + sigma k` (`end_correction`). Until 2026-10-19 it was not: the string
+//! step divided everything else by that factor and the pull was subtracted afterwards, so the
+//! string felt `(1 + sigma k) F` while the body felt `F`. Every frozen fixture runs a lossless
+//! string, where the division is by exactly `1.0`, so none of them moved. The bar is
+//! `tests/connection_lossy_string.rs`: total plus the scheme's own dissipation is constant.
+//!
 //! Being explicit, the connection has a CFL. The isolated end-mass + body 2-DOF estimate
 //! `K (beta_s + beta_b) < 4` (`beta_s = 2 k^2 / (rho h)` the string end-node inverse mass from its
 //! `h/2` half-cell weight, `beta_b = k^2 sum_i phi_i^2 / m_i`) is kept only as a diagnostic — it
@@ -371,7 +378,7 @@ impl SympatheticStrings {
             let s = &mut self.strings[j];
             s.step();
             let last = s.u.len() - 1;
-            s.u[last] -= self.beta_s[j] * f;
+            s.u[last] -= end_correction(s, self.beta_s[j], f);
         }
         // The body feels the scalar sum, and that sum reaches the next timestep — the case where
         // the reduction is part of the trajectory rather than a read-out.
@@ -503,6 +510,17 @@ impl SympatheticStrings {
         let a = self.symmetrized_operator();
         eig::symmetric_max_eigenvalue(&a, n).map_err(ConnectionError::Eigen)
     }
+}
+
+/// The spring's pull on a string's free end node over one step: `beta_s F / (1 + sigma k)`.
+///
+/// The string's own step divides its update by `1 + sigma k`; the pull has to be divided by the
+/// same factor, or a lossy string feels `(1 + sigma k) F` while the body feels `F` and the books
+/// stop closing (module header). Lossless, the division is by exactly `1.0`: bit-identical to the
+/// original's `beta_s * F`.
+fn end_correction(s: &IdealString, beta_s: f64, f: f64) -> f64 {
+    let p = s.params();
+    (beta_s * f) / (1.0 + p.sigma * p.k)
 }
 
 /// A string's `-(c^2/h^2) * second_diff([0, x])[1:]` — the internal block of every bridge's
@@ -927,7 +945,7 @@ impl<B: BridgeBody> StringBodyBridge<B> {
         let f = self.connection_force();
         self.string.step();
         let last = self.string.u.len() - 1;
-        self.string.u[last] -= self.beta_s * f;
+        self.string.u[last] -= end_correction(&self.string, self.beta_s, f);
         self.body.step(room, f)?;
         self.n += 1;
         Ok(())
@@ -1370,7 +1388,7 @@ impl<P: BridgePlate> StringPlateBridge<P> {
         let f = self.connection_force();
         self.string.step();
         let last = self.string.u.len() - 1;
-        self.string.u[last] -= self.beta_s * f;
+        self.string.u[last] -= end_correction(&self.string, self.beta_s, f);
         self.f_ext[self.drive_index] = f;
         self.plate.step(room, &self.f_ext)?;
         self.n += 1;

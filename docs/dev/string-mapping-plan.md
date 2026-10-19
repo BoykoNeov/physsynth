@@ -7,7 +7,8 @@ takes raw physics. This plan covers them, sorted by how much new derivation each
 **Status: slices 1–3 DONE 2026-10-19** (§9–§14): the bow, the tension string, the ideal string,
 the three barrier pages and the stiff string all have musical controls. Next batch, per §8.1:
 the four coupled ideal pages (`sympathetic`, `body`, `platebody`, `radbody`); after it, the
-geometric string (§6).
+geometric string (§6). **Slice 4 started 2026-10-19 (§16):** the probe overturned §4's premise, and
+the human chose to tune through the coupling.
 
 ---
 
@@ -22,8 +23,9 @@ geometric string (§6).
   is #3 bit for bit).
 - **`jawari`, `juari`, barrier** — #3 with `κ = 0`, `σ₁ = 0`, one `σ₀`. Pitch and one ring time at
   mode 1.
-- **`sympathetic`, `body`, `platebody`, `radbody`** — #1 on a bridge or a body, one `σ`. The string
-  alone; the coupling's shift read out (§8).
+- **`sympathetic`, `body`, `platebody`, `radbody`** — #1 on a bridge or a body, *fixed/free and
+  lossless* (`σ = 0` hard-coded on all four), `λ < 1` required. The first draft of this line said
+  "one `σ`" and "the string alone; the shift read out": both wrong, see §16.
 - **`geometric`** — #10, its own `Params`, Newton, four losses. A separate batch (§6).
 
 ## 2. The ideal string (#1) — exact everywhere, by a special case
@@ -70,6 +72,10 @@ tuned exactly. What attaches to it moves the pitch:
 **Default (pending §8.3): tune the string alone and report the shift**, as the drum was tuned in
 vacuo and the air's pull shown on its own page. Correcting *through* the attachment needs the
 coupled system's modes, as the drum-in-air question does.
+
+*Overturned for the four coupled ideal pages (§16):* their bodies weigh about what the string does,
+so "a little" is 2–13 semitones, and at some pitches the note splits. The human chose to tune
+through the coupling there. §8.3 still stands for the bow and the buzzing bridges.
 
 ## 5. The tension string (#9) — the settled note
 
@@ -412,3 +418,74 @@ time alone fixes `Y_M = (1 + θX_M)(1 − r²)/(1 + r²)`. Then `(σ₀, σ₁)`
   the anchor on the target law. The default tension page now warns that partials between f0 and
   the anchor run up to 25 cents flat of the gauge's stretched law (in tune to partial 7, `N =
   128`). A finer grid or a higher sample rate brings them in, as the warning says.
+
+## 16. Slice 4: the coupled ideal pages — probe, and the human's two answers (2026-10-19)
+
+**What the four pages build** (`body.rs`, `radbody.rs`, `sympathetic.rs`, `platebody.rs`): an
+ideal string, fixed at the nut and free at the far end, with `σ = 0` hard-coded, on a bridge spring
+to a body. The body's modal mass (0.02 kg) is about the string's own `ρL`, chosen so the body
+"genuinely reacts". `λ < 1` is required: at `λ = 1` the spring pushes the Nyquist mode unstable.
+
+**Part 0 probe** (a scratch crate under `W:\temp\claude`; the pages' defaults, `N = 100`,
+`λ = 0.9`, pitches 55–440 Hz). The coupled lossless operator is the core's own
+`symmetrized_operator`, and each eigenvalue `μ` plays at `cos(2πfk) = 1 − k²μ/2`. That matches the
+body page's own `terminus_f1` read-out to about 0.1 Hz at every pitch.
+
+- **The shift is not small.** At the body page's spring (8000 N/m), a string whose clamped note is
+  100 Hz plays at 90.8 Hz (−168 cents); 196 Hz plays −253 c, 440 Hz −432 c. The plate page moves
+  further and in both directions: 100 Hz plays +268 c on the free plate, 440 Hz −1309 c.
+- **At some pitches the note splits.** Near a body resonance two or three coupled modes share the
+  string's motion (shares 0.30 / 0.42 / 0.24 at 262 Hz), a wolf note: no single note is "the" one.
+- **The two-string page** has one clean note: the antisymmetric mode keeps the bridge still, so it
+  is a string on a spring to ground (100 Hz → −43 c at 8000 N/m, −208 c at 1500 N/m).
+- **The stability guard refuses** low pitches at stiff springs (55 Hz at 8000 N/m).
+- The radiating page has no played-pitch read-out at all.
+
+**The human's two answers** (asked with the numbers above):
+
+1. **The pitch slider sets the note the instrument plays.** Tension is solved so the coupled
+   system plays the target. Where the note splits, the page shows both notes and their strengths
+   rather than pretending there is one. The plate page comes last: it needs its own calculation.
+2. **Ring time: add a string loss.** Musical mode gets a ring-time slider that puts loss on the
+   string itself; the physics pages are unchanged. The ring time is approximate, because the body's
+   loss adds to it unevenly across notes.
+
+**The agent's calls, not the human's** (to be confirmed or overridden):
+
+- "The note" is the coupled mode carrying the largest share of the string's motion, in the band
+  the page already uses for `terminus_f1`.
+- On the two-string page that is the bridge-still mode; both notes a single pluck sounds are shown.
+  `detune` stays a tension ratio from string A's tuned tension.
+- In a split region the page renders (it does not refuse) and names both notes.
+- The radiating page's `R` sweep holds the mapped `T` and `σ`; it runs at its own fixed `N`, so its
+  string is slightly off pitch, and the page says so.
+
+**Method (reviewer, 2026-10-19).** The integrator's own one-step map, built column by column from
+`step()` as `symmetrize` is built from `apply_a`, so every loss is included. The lossless symmetric
+solve locates and selects the mode; complex shift-invert on the map refines its damped `z`
+(pitch `arg z / 2πk`, decay `ln|z| / k`).
+
+**Part 0, the reviewer's four checks:**
+
+- **A lossy string broke every bridge's books — fixed.** The string step divides its update by
+  `1 + σk` and the spring's pull on the end node was subtracted afterwards, undivided, so the
+  string felt `(1 + σk) F` while the body felt `F`. Total plus the scheme's own dissipation missed
+  by 1.5e-4 of `E0` at `σ = 5` and 7e-4 at `σ = 69` (body loss alone: 5e-14). The suite never saw
+  it: its lossy-string bars ask only for a monotone decrease, which held. Now
+  `connection::end_correction` divides the pull too, in all three bridges; lossless, that is a
+  division by exactly `1.0`, so no frozen fixture moved (full suite, 1990 tests, green). The bar is
+  `crates/physsynth-core/tests/connection_lossy_string.rs`: the books close to 1e-10 on the modal
+  body, the radiating body, two strings with *different* losses, and both plates. Plants: the
+  undivided pull (all four red); every string divided by the first string's loss (the two-string
+  bar red).
+- **The one-step map is right and cheap.** Its damped `z` predicts a simulation started on that
+  mode to 5e-13. Loss pulls the pitch by cents (90.773 → 90.658 Hz, −2.2 c, at `σ = 35` with body
+  loss 20), so the refinement matters. Building the two-string map (410 × 410) took 6 ms and the
+  refinement 15 ms. **Trap:** a Rayleigh-quotient iteration from an arbitrary start converged to
+  the wrong mode on two strings; start from the lossless eigenvector, fixed shift first.
+- **The strongest note rises with `T` between jumps** (no decrease over 728 steps of 5 cents), but
+  it **jumps over gaps**: at the body page's spring, 99.5 → 125.1, 181 → 223 and 239 → 290 Hz. About
+  11 of the 36 semitones between 61 and 500 Hz can never be the strongest note. The gaps are the
+  split regions, and they are wide.
+- **The guard is a wall below:** at 8000 N/m it refuses every clamped target under 61 Hz; at
+  3000 N/m none in 40–500 Hz.
