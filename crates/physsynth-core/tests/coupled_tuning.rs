@@ -409,6 +409,53 @@ fn the_refusals() {
     }
 }
 
+/// The notes the scan follows are real notes, read off the run. Two ways of following a root from
+/// one scan point to the next went wrong in plants (plan §16) and only these fixtures saw them:
+///
+/// - **By rank in the band, not by nearness.** On the 3000 N/m body, 269.09 Hz lies just above
+///   the ceiling of the 261 Hz body mode raised by the spring (the hybrid levels off at 267.9 Hz):
+///   the only note that reaches it is the mostly-body one at a slack string (share 0.064,
+///   `f_cl = 265.2`). Near `f_cl = 470` the 118 Hz note leaves the band's lower edge and every
+///   note above it changes rank, so a rank-follower took the jump from 257 to 304 Hz for a
+///   crossing and returned a 0.71-share "note" at `f_cl = 471.5` that does not exist, and turned
+///   the 0.05 s refusal into a tuning.
+/// - **Without the radius the change in loss predicts.** At 100.79 Hz a 0.05 s ring needs a heavy
+///   string loss; following the root without moving it inward settled on another root and refused
+///   the tuning as too short.
+#[test]
+fn the_followed_notes_are_real_notes() {
+    let soft = body_rig(3000.0, 0.0);
+    let play = |f0: f64, t60: Option<f64>| {
+        let t = tune_coupled(f0, t60, &soft).expect("tunes");
+        let mut r = soft(t.f_cl, t.sigma).unwrap();
+        let (f, rings, residual) = played(&mut r, t.root, t.note.f, 99, 3000);
+        assert!(residual < 1e-9, "{f0}: the start was not one mode");
+        assert!(((f - f0) / f0).abs() < 1e-9, "{f0}: plays {f} Hz");
+        if let Some(target) = t60 {
+            assert!(
+                ((rings - target) / target).abs() < 1e-6,
+                "{f0}: rings {rings} s"
+            );
+        }
+        t
+    };
+
+    // The probe sweep's semitone grid, so a plant's recorded outcome is this fixture's.
+    let f0 = 40.0 * 2f64.powf(33.0 / 12.0);
+    let t = play(f0, None);
+    assert!(t.note.share < 0.1, "share {}", t.note.share);
+    assert!((t.f_cl / 265.2026 - 1.0).abs() < 1e-5, "f_cl {}", t.f_cl);
+    match tune_coupled(f0, Some(0.05), &soft) {
+        Err(CoupledError::RingTooShort { shortest }) => {
+            assert!(shortest > 0.05 && shortest < 1.0, "shortest {shortest} s");
+        }
+        other => panic!("expected RingTooShort, got {other:?}"),
+    }
+
+    let t = play(40.0 * 2f64.powf(16.0 / 12.0), Some(0.05));
+    assert!(t.note.share > 0.5, "share {}", t.note.share);
+}
+
 /// The cases a lossless reference got wrong (plan §16): the radiating body between its air-moved
 /// modes, where the lossless operator's 213.6 Hz note does not exist, and the plain body beside a
 /// resonance with a very short ring. Each must tune, and play and ring its targets off the run.
