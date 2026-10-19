@@ -567,3 +567,26 @@ one-step map `Phi`, built from `step()`:
   New bar `the_followed_notes_are_real_notes`: 269.09 Hz lossless tunes, plays the target off the
   run, share under 0.1 at `f_cl = 265.2`; 100.79 Hz at
   0.05 s tunes and rings it off the run. CI's unoptimised lane ran the file in 113 s before it.
+
+**The missed ring-time tunings, scoped (2026-10-19, probe `scope`, `scope2`, `solve2d`).** On
+every "ring too short" refusal of the reduced sweep (16) and the bars' asserted ones, the notes
+on the target pitch were found at 40 loss levels `q = sigma k` from 0 to 0.5. Except at 100 Hz
+for 1e-4 s (shortest anywhere 0.0003 s: a genuine refusal up to the loss cap), some tension and
+loss always puts a note on the target that rings *faster* than asked, so the refusals are
+suspect. The mechanism, at 269.09 Hz: past `q ~ 2.6e-3` a *pair* of new notes appears on the
+target together at a much tighter string (`f_cl` 420–430) — none of them grows out of a lossless
+crossing — and one rings exactly 0.05 s at `q = 2.7053e-3`. Solved (Newton on tension and loss)
+and read back off the run, to ~1e-12 in pitch and 4e-12 in ring time:
+
+| target | solver | tuning that exists | share | tension vs lossless |
+|---|---|---|---|---|
+| 269.09 Hz, 0.05 s | refuses | `f_cl` 425.92, `sigma` 256.06 | 0.54 | +8.2 semitones |
+| 113.1 Hz, 0.05 s | refuses | `f_cl` 134.89, `sigma` 194.38 | 0.71 | +6.7 semitones |
+| 201.6 Hz, 0.05 s | refuses | `f_cl` 294.11, `sigma` 253.39 | 0.55 | +9.0 semitones |
+
+So `the_hard_cases_tune_and_play` asserts two refusals that are wrong as the fourth answer
+reads. The "ring too short" refusal was the agent's addition, not one of the human's answers.
+**Open, for the human:** search every tension and loss (the tension can jump many semitones as the
+ring time moves; an estimated ~1,300 spectra a tuning, ~12 s on the body page, ~80 s on two
+strings — unmeasured), or keep the tension the pitch chose and only add loss (refusing, with a
+message that another tension could ring it).
