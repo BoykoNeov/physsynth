@@ -590,3 +590,10 @@ reads. The "ring too short" refusal was the agent's addition, not one of the hum
 ring time moves; an estimated ~1,300 spectra a tuning, ~12 s on the body page, ~80 s on two
 strings — unmeasured), or keep the tension the pitch chose and only add loss (refusing, with a
 message that another tension could ring it).
+
+**The human's fifth answer, 2026-10-19: search every tension and loss.** Whenever any tension and
+string loss plays the pitch and rings the time, the tuning is found, and the note with the most
+string movement wins; the tension may jump many semitones as the ring time moves, and the search
+is slower. (Not chosen: keep the tension the pitch chose and refuse with a hint; keep it and offer
+the tighter tuning behind a button.) The "ring too short" refusal is then only for a ring no
+tension and loss within the scheme's cap can reach.
