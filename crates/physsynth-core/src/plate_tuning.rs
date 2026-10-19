@@ -47,10 +47,18 @@
 //! not, and `λ_m` is the mode's Rayleigh quotient — first-order exact. Plan §9 measured the miss
 //! through the scheme's own roots: ≤ 0.05 cents in pitch, ≤ 0.3 % in ring time, the worst inside a
 //! near-degenerate cluster. [`PlateTuning::exact`] says which a caller has.
+//!
+//! # The gong and the cymbal
+//!
+//! [`tune_vk_plate`] is a thin adapter for the von Kármán plate (`docs/dev/vk-mapping-plan.md`):
+//! its linear half is this module's plate, so the targets are met in the gentle-strike limit and a
+//! harder strike starts above them. It hands back `E`, `ν` and the **volume** density, which is
+//! what the gong takes — the areal-density trap above, in the other direction.
 
 use crate::eigs::{eigsh_shift_invert, EigsError};
 use crate::plate::{
-    grain_ratios_from_material, loss_form, Boundary, MaterialError, ParamError, Params, PlateSpec,
+    grain_ratios_from_material, loss_form, Boundary, Domain, MaterialError, ParamError, Params,
+    PlateSpec, VkSpec,
 };
 use std::f64::consts::{LN_10, PI};
 
@@ -461,6 +469,8 @@ pub enum TuningError {
         /// The longest (s), at `σ₁ = 0`.
         longest: f64,
     },
+    /// A wood was handed to the von Kármán plate, which is isotropic only.
+    NotIsotropic,
 }
 
 impl std::fmt::Display for TuningError {
@@ -494,6 +504,10 @@ impl std::fmt::Display for TuningError {
                 "t60_high = {asked} s is out of reach: with this fundamental's ring time the anchor \
                  can ring between {shortest:.4} s and {longest:.4} s (a passive loss that rises \
                  with frequency)."
+            ),
+            TuningError::NotIsotropic => write!(
+                f,
+                "the gong and the cymbal are isotropic: pick a metal or glass, not a wood."
             ),
         }
     }
@@ -764,5 +778,79 @@ pub fn tune_plate(
         fundamental: fund,
         anchor,
         exact: p.boundary == Boundary::Supported,
+    })
+}
+
+// -- the von Kármán plate -------------------------------------------------------------------------
+
+/// What a [`VkSpec`] needs to meet a set of targets, and the plate mapping behind it.
+///
+/// The gong takes its material as `E`, `ν` and the **volume** density and derives `κ`, `ρ_s` and
+/// the membrane coefficient itself, so this hands back those rather than the plate's `κ` and
+/// `ρ_s`: writing [`PlateMaterial::rho_s`] where `rho_v` belongs leaves every pitch right and every
+/// energy, and the bend's onset, wrong by the thickness.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VkTuning {
+    /// The linear plate's mapping: pitch, anchor and both losses, met in the gentle-strike limit.
+    pub plate: PlateTuning,
+    /// Young's modulus (Pa).
+    pub young: f64,
+    /// Poisson's ratio.
+    pub nu: f64,
+    /// Volume density (kg/m³).
+    pub rho_v: f64,
+}
+
+impl VkTuning {
+    /// Write the material, the thickness and both losses into `spec`.
+    pub fn apply(&self, spec: &mut VkSpec) {
+        spec.young = self.young;
+        spec.nu = self.nu;
+        spec.rho = self.rho_v;
+        spec.thickness = self.plate.thickness;
+        spec.sigma = self.plate.sigma0;
+        spec.sigma1 = self.plate.sigma1;
+    }
+}
+
+/// Map `targets` onto the von Kármán plate `geometry` describes, built of the isotropic
+/// `material` (`docs/dev/vk-mapping-plan.md` §3).
+///
+/// With the coupling off the gong *is* its linear half, so the gentle-strike gong is the plate
+/// [`tune_plate`] inverts: this builds the [`PlateSpec`] geometry `VkParams::new` would give that
+/// half (`lx, ly, n, fs, θ`, the boundary, a rectangle) and calls it. The pitch and ring times are
+/// therefore met as a strike tends to zero — exactly on the supported gong, to first order on the
+/// free cymbal ([`PlateTuning::exact`]); a harder strike starts higher and glides down onto them.
+///
+/// The gong re-derives `κ` from `E e³ / 12(1 − ν²)` in its own spelling, which can differ from
+/// [`plate_material`]'s in the last bit; the mapping's exactness is to rounding either way.
+///
+/// `geometry`'s material, thickness and losses are ignored and come back in the result.
+///
+/// # Errors
+/// [`TuningError::NotIsotropic`] for a wood, and any of [`tune_plate`]'s.
+pub fn tune_vk_plate(
+    geometry: &VkSpec,
+    material: &Material,
+    targets: &Targets,
+) -> Result<VkTuning, TuningError> {
+    let Material::Isotropic { e, nu, rho } = *material else {
+        return Err(TuningError::NotIsotropic);
+    };
+    let plate = PlateSpec {
+        lx: geometry.lx,
+        ly: geometry.ly,
+        fs: geometry.fs,
+        n: geometry.n,
+        theta: geometry.theta,
+        boundary: geometry.boundary,
+        domain: Some(Domain::Rectangle),
+        ..PlateSpec::default()
+    };
+    Ok(VkTuning {
+        plate: tune_plate(&plate, material, GrainAlong::X, targets)?,
+        young: e,
+        nu,
+        rho_v: rho,
     })
 }

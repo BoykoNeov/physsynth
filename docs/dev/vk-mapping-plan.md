@@ -6,7 +6,8 @@ and the drum (`docs/dev/membrane-mapping-plan.md`) have musical controls; §12 n
 plate (model #6, the supported gong and the free-edge cymbal) as still raw.
 
 **Status: PLANNED 2026-10-18; Part 0 (probe) DONE 2026-10-19** (§8); the human's four answers
-to it in §8.8. Part 1 (`VkSpec::sigma1`) DONE 2026-10-19 (§9); Part 2 next.
+to it in §8.8. Part 1 (`VkSpec::sigma1`) DONE 2026-10-19 (§9); Part 2 (`tune_vk_plate`) DONE
+2026-10-19 (§10); Part 3 next.
 
 **The human's four decisions, 2026-10-18:**
 
@@ -394,4 +395,45 @@ Plants (each time-limited, the source restored from a copy):
 - The room seam's `theta_matrix` dropping `σ₁kG`: only the room bar red — the one bar that sees
   the seam.
 
-Status: Part 2 (the mapping) next.
+---
+
+## 10. Part 2 result (2026-10-19) — `tune_vk_plate`
+
+`crates/physsynth-core/src/plate_tuning.rs` gains `VkTuning` (the `PlateTuning`, plus `E`, `ν`
+and the volume density; `apply` writes those, the thickness and both losses into a `VkSpec`),
+`tune_vk_plate(geometry: &VkSpec, material, targets)` (a wood is `TuningError::NotIsotropic`;
+otherwise the gong's linear geometry handed to `tune_plate`) and the new error variant.
+
+Bars, `crates/physsynth-core/tests/vk_tuning.rs`, every one a run of the nonlinear gong:
+
+- Supported round trip, every metal × both set-by modes × (`N` 12, 32 kHz), (20, 32 kHz),
+  (12, 96 kHz), a 0.4 × 0.31 outline, mode 1 and the anchor at 1e-4 thicknesses: worst 2.6e-6
+  cents and 6.6e-9 in ring time (bars 1e-4 and 1e-6). At 1e-3 thicknesses the miss is 100×
+  larger (2.6e-4, 6.6e-7) — the bend, as the strike's square; the mapping itself is exact.
+- Free round trip, bronze and glass, both set-by modes: 2.2e-5 cents, 3.2e-7 (the free plate's
+  bars, 0.1 cents and 1 %).
+- A 2 e strike on a tuned steel gong (200 Hz, 0.6 s / 0.3 s), 40 ms windows at 0, 120, 280, 560
+  ms: +194.8, +17.5, +1.1, +0.7 cents — starts above the note and settles onto it.
+- The bend at 2 e: steel 0.4 m, steel 0.25 m and brass given steel's `ν` at 0.6 m all read
+  +263.648113 cents; real brass +259.787895 (1.5 % less).
+- `apply` against a gong written out by hand from the preset's own `E`, `ν`, `ρ`: the same energy
+  bits after 50 steps, both boundaries, every metal; the thickness set by pitch, fed back, plays
+  the pitch to 1e-9 cents.
+- Refusals: a wood, `f_ref` at the fundamental, a high ring time out of range, a pitch out of
+  reach.
+
+Plants (each time-limited, the source restored from a copy):
+
+| plant | red |
+|---|---|
+| `ρ_s` written where `ρ_v` belongs | 5 of 6 |
+| `σ₀` and `σ₁` swapped in `apply` | 5 of 6 |
+| `ν` hard-wired to 0.3 in `apply` | 3 of 6 |
+| the thickness from another material's `κ` (E + 1 %) | 3 of 6 |
+| the coupling off in the bars' gong | 4 of 6 |
+
+The remaining plants of §5 belong to the page (the late window replaced by the whole run) and
+Part 1 (`σ₁` not forwarded, §9). The page's work-budget refusal at the mapped thickness is
+Part 3's, with the guard of §8.8.
+
+Status: Part 3 (the page) next.
