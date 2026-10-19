@@ -273,3 +273,38 @@ warnings, and the read-out shows them in amber. Two core bars and one viewer bar
 viewer bar is a nylon string at 1 kHz, past both limits and still rendered. Three plants (the
 range never checked, the breaking stress compared in pascals, the range compared in pascals) each
 turned a bar red.
+
+## 13. Slice 2: the ideal string and the flexible string (2026-10-19)
+
+**Part 0 probe** (48 configurations: `f0 ∈ {27.5, 110, 440, 1000}`, `N ∈ {16, 64, 128, 512}`,
+`T60 ∈ {0.1, 1, 10}`). The reviewer's equation for the ideal string at `λ = 1`,
+`cos(2π f0 k) = cos(π/N) cosh(a k)`, `a = 3 ln 10 / T60`, solved for the time step:
+
+- **Exact everywhere.** The fundamental's pitch and every partial's ring time read back from the
+  simulation to 3e-11 or better, with `λ = 1` to the last printed digit. No setting needs a
+  refusal: the root always exists, so the string is never too damped to sound.
+- **The partials above the fundamental run SHARP with loss**, not flat as first estimated. The
+  fundamental is pinned, and a damped oscillator's frequency falls by a larger share at a low
+  pitch than at a high one. At 27.5 Hz they run +98 to +128 cents sharp with a 0.1 s ring, +1.4
+  cents with 1 s, and nothing measurable with 10 s. This is physics, not the scheme.
+- **The audio path's sample-rate rounding** (the resampler takes `round(fs)`) costs up to 0.6
+  cents at the lowest rates (`fs ≈ 880 Hz`: a 27.5 Hz note on 16 segments) and under 0.04 above
+  14 kHz. It is the shared audio path's, left as it is and noted here.
+
+**Part 1, core:** `string_tuning::tune_ideal_string` (bisection on the time step, written through
+half-angles so the difference near `cos = 1` keeps its digits), `ideal_mode_frequency`, and
+`tune_flexible_string` for the barrier pages' `κ = 0`, `σ₁ = 0` string (mode 1 only, the damped
+mapping's per-mode solve). Held by `crates/physsynth-core/tests/string_ideal_tuning.rs`:
+
+- the ideal round trip over 54 fixtures: pitch to 5.7e-13, every partial's ring time (modes 1, 3
+  and `N/2`) to 5.4e-9;
+- the sharp partials read from the simulation, matching `ideal_mode_frequency` to 1e-8;
+- the textbook ideal string (`c = 2 L f0`, `σ = 3 ln 10 / T60`) 149 cents flat on a 0.1 s thud at
+  27.5 Hz, the corrected one exact;
+- the flexible round trip over 72 fixtures, pitch to 2.7e-12, ring time to 1.9e-11;
+- the refusals.
+
+Seven plants each turned a bar red: the loss without its `tanh`; `c` over `N + 1` segments; the
+half angle doubled; the loss dropped from the mode pitch; `ln 10` dropped from the ring time; the
+flexible loss not divided by `k`; mode 2's eigenvalue in place of mode 1's. The file runs in 1 s
+optimised and 13.5 s unoptimised.

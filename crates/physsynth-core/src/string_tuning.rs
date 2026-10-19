@@ -599,3 +599,154 @@ pub fn tune_tension_string(
         past_breaking: stress * 1e-6 > material.breaking_mpa,
     })
 }
+
+// == the ideal string, at lambda = 1 ==============================================================
+
+/// The ideal string's coefficients from a pitch and a ring time (string mapping plan §2, §13).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IdealTuning {
+    /// Tension (N), `rho c^2`.
+    pub t: f64,
+    /// The loss coefficient (1/s).
+    pub sigma: f64,
+    /// The sample rate the string runs at (Hz): it follows the pitch, so that `lambda = 1`.
+    pub fs: f64,
+    /// Wave speed (m/s), `L / (N k)`.
+    pub c: f64,
+}
+
+/// Map a pitch and a ring time onto model #1 at `lambda = 1` — the human's call (plan §8.2): the
+/// grid stays at its exact setting and the sample rate follows the pitch.
+///
+/// The explicit scheme's loss is the centred `1 +- sigma k` of model #3, so mode `m` obeys the
+/// damped string's recurrence at `theta = 0`. At `lambda = 1`, `k^2 c^2 p_m^2 = 4 sin^2(m pi/2N)`,
+/// and the root pair gives
+///
+/// ```text
+/// r^2 = (1 - sigma k) / (1 + sigma k)                (the same for EVERY mode)
+/// cos(phi_m) = cos(m pi / N) cosh(a k),   a = 3 ln 10 / T60,   sigma k = tanh(a k)
+/// ```
+///
+/// So the ring time is met by every partial exactly, and the fundamental's pitch fixes the time
+/// step `k` through `cos(2 pi f0 k) = cos(pi / N) cosh(a k)` — one equation in one unknown, solved
+/// by bisection on `(0, 1/(2 f0 N)]`, where it always has a root (the left side starts above the
+/// right and ends below it). Then `fs = 1/k`, `c = L/(N k)`, `T = rho c^2`, `sigma = tanh(a k)/k`.
+///
+/// Lossless, every partial is exactly harmonic. With loss the fundamental is pinned and the
+/// partials above it run **sharp** of `m f0`: a damped oscillator's frequency falls by a larger
+/// share at a low pitch than at a high one, which is physics, not the scheme (plan §13). The
+/// residual is what [`ideal_mode_frequency`] reports.
+pub fn tune_ideal_string(
+    l: f64,
+    rho: f64,
+    n: usize,
+    f0: f64,
+    t60: f64,
+) -> Result<IdealTuning, TuningError> {
+    for (name, v) in [("L", l), ("rho", rho), ("f0", f0), ("t60", t60)] {
+        if !(v > 0.0 && v.is_finite()) {
+            return Err(TuningError::NonPositive(name));
+        }
+    }
+    if n < 2 {
+        return Err(TuningError::TooFewSegments);
+    }
+    let a = 3.0 * LN_10 / t60;
+    let half = (PI / (2.0 * n as f64)).sin();
+    let (s2, c1) = (half * half, 1.0 - 2.0 * half * half);
+    // cos(2 pi f0 k) - cos(pi/N) cosh(a k), spelled through half-angles so that near cos = 1 the
+    // difference keeps its digits: 1 - cos x = 2 sin^2(x/2), cosh y - 1 = 2 sinh^2(y/2).
+    let g = |k: f64| {
+        let sp = (PI * f0 * k).sin();
+        let sh = (0.5 * a * k).sinh();
+        2.0 * s2 - 2.0 * sp * sp - 2.0 * c1 * sh * sh
+    };
+    let (mut lo, mut hi) = (0.0f64, 1.0 / (2.0 * f0 * n as f64));
+    loop {
+        let mid = 0.5 * (lo + hi);
+        if mid <= lo || mid >= hi {
+            break;
+        }
+        if g(mid) > 0.0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let k = 0.5 * (lo + hi);
+    let c = l / (n as f64 * k);
+    Ok(IdealTuning {
+        t: rho * c * c,
+        sigma: (a * k).tanh() / k,
+        fs: 1.0 / k,
+        c,
+    })
+}
+
+/// The pitch (Hz) model #1 gives mode `m` at `lambda = 1` with loss `sigma` — or `None` past the
+/// modes that oscillate.
+pub fn ideal_mode_frequency(n: usize, fs: f64, sigma: f64, m: usize) -> Option<f64> {
+    let k = 1.0 / fs;
+    let y = sigma * k;
+    // cos(phi) = cos(m pi/N) / sqrt(1 - y^2): from cc/a = r^2 and -b/a = 2 r cos(phi).
+    let cos_phi = (m as f64 * PI / n as f64).cos() / (1.0 - y * y).sqrt();
+    if cos_phi.abs() >= 1.0 {
+        return None;
+    }
+    Some(cos_phi.acos() / (2.0 * PI * k))
+}
+
+// == the flexible string of the contact pages: mode 1 only ========================================
+
+/// A flexible (`kappa = 0`), singly damped (`sigma1 = 0`) theta-scheme string from a pitch and a
+/// ring time — the string the barrier pages (jawari, juari, fret) build (plan §1).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FlexibleTuning {
+    /// Tension (N).
+    pub t: f64,
+    /// The loss coefficient (1/s).
+    pub sigma0: f64,
+    /// Wave speed (m/s).
+    pub c: f64,
+    /// Courant number `c k / h` — a read-out.
+    pub lam: f64,
+}
+
+/// Map a pitch and a ring time onto a flexible model #3 string, exact at mode 1.
+///
+/// One mode, two unknowns (`c^2`, `sigma0`), and the same 2x2 per-mode solve as
+/// [`tune_damped_string`]: mode 1's `(X, Y)` from its `(f0, T60)`, then `c^2 = X / (k^2 p_1^2)` and
+/// `sigma0 = Y / k`. Every partial shares `sigma0` but not its ring time — the theta average
+/// lengthens it up the series (hurdle §4) — and the partials above mode 1 fall flat of `m f0` by
+/// the scheme's dispersion; [`mode_frequency`] reports both.
+pub fn tune_flexible_string(
+    l: f64,
+    rho: f64,
+    fs: f64,
+    n: usize,
+    theta: f64,
+    f0: f64,
+    t60: f64,
+) -> Result<FlexibleTuning, TuningError> {
+    for (name, v) in [("L", l), ("rho", rho), ("fs", fs), ("f0", f0), ("t60", t60)] {
+        if !(v > 0.0 && v.is_finite()) {
+            return Err(TuningError::NonPositive(name));
+        }
+    }
+    if !(theta > 0.0 && theta <= 1.0) {
+        return Err(TuningError::BadTheta(theta));
+    }
+    if n < 2 {
+        return Err(TuningError::TooFewSegments);
+    }
+    let k = 1.0 / fs;
+    let (x, y) = mode_xy(f0, t60, k, theta, 1)?;
+    let c2 = x / (k * k * mode_p2(l, n, 1));
+    let c = c2.sqrt();
+    Ok(FlexibleTuning {
+        t: rho * c2,
+        sigma0: y / k,
+        c,
+        lam: c * k * n as f64 / l,
+    })
+}
