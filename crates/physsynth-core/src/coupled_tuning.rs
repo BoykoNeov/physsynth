@@ -363,6 +363,8 @@ pub fn tune_coupled<R: Coupled>(
         return Err(CoupledError::BadPitch(f0));
     }
     if let Some(t) = t60 {
+        // Negated so that a NaN ring time, which compares false against everything, is refused.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
         if !(t > 0.0) {
             return Err(CoupledError::BadRingTime(t));
         }
@@ -731,6 +733,7 @@ fn bracket(
 ///
 /// # Errors
 /// [`CoupledError::Unconverged`] if the inverse iteration fails.
+#[allow(clippy::type_complexity)]
 pub fn damped_mode<R: Coupled>(
     r: &mut R,
     z_guess: (f64, f64),
