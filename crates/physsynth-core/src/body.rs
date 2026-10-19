@@ -413,6 +413,20 @@ impl ModalBody {
         self.n
     }
 
+    /// Set both time levels `q^n` and `q^{n-1}` directly; resets the step count.
+    ///
+    /// For a caller that needs the one-step map itself — `coupled_tuning` builds it column by
+    /// column from [`Self::step`] — where [`Self::set_state`]'s consistent start would derive
+    /// `q^{n-1}` from a velocity instead.
+    ///
+    /// # Panics
+    /// If `q` or `q_prev` do not have `M` entries.
+    pub fn set_levels(&mut self, q: &[f64], q_prev: &[f64]) {
+        self.q.copy_from_slice(q);
+        self.q_prev.copy_from_slice(q_prev);
+        self.n = 0;
+    }
+
     /// Set the initial modal displacement and velocity; resets the step count.
     ///
     /// # Panics

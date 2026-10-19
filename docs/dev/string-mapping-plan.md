@@ -489,3 +489,51 @@ solve locates and selects the mode; complex shift-invert on the map refines its 
   split regions, and they are wide.
 - **The guard is a wall below:** at 8000 N/m it refuses every clamped target under 61 Hz; at
   3000 N/m none in 40–500 Hz.
+
+**The human's third answer, 2026-10-19** (asked with the gap numbers above): **in a split band,
+the target note is played.** The tension puts one of the coupled notes exactly on the target,
+even if it is the quieter one; the page shows the louder neighbour too, its pitch and how much of
+the string's motion each note carries. (Not chosen: the two notes straddling the target at equal
+strength; refusing inside the bands.)
+
+*The agent's reading of it, to confirm or override:* every coupled note in the page's band that
+can reach the target is tried, and the one carrying the larger share of the string's motion wins.
+Outside the gaps this is simply the strongest note, so one rule covers both cases.
+
+**The human's fourth answer, 2026-10-19: the ring time is exact too.** The core build showed the
+second answer's "approximate" understated it: the string's loss acts only on its share of the
+note, so at 100 Hz on the 8000 N/m body a 1.5 s setting rang 3.1 s. Asked, the human chose to
+solve the tension and the string's loss together, so the played note rings exactly the time set,
+and to refuse when the body or the air alone already make it die faster than that.
+
+**Part 1, core (2026-10-19): `coupled_tuning`.** `tune_coupled(f0, t60, build)` returns the
+tension (as the clamped fundamental `f_cl`), the string's loss, the played note (pitch, ring time,
+string share) and the other notes in the page's band. Everything is read off the integrator's
+one-step map `Phi`, built from `step()`:
+
+- **The damped spectrum is the reference, not the lossless operator.** A first build selected
+  modes by the guard's symmetric operator. On the radiating body at its default `R = 133` that is
+  no guide: plucked at the tension the lossless operator said sounds 213.6 Hz, the instrument
+  sounded only 189 Hz in that range, and two lossless modes refined to one damped root (so a
+  neighbour list could name a note twice). 34 of 282 radiating-body tunings failed, every one of
+  202–254 Hz. So `eig::general_eigenvalues` (balance, Hessenberg, Francis double-shift QR; LAPACK's
+  `30 n` sweep budget, because EISPACK's 30 per eigenvalue failed on a lossless map whose roots
+  all share one modulus) computes `Phi`'s whole spectrum: 9 ms at 208 states, 60 ms at 410.
+  Held by `crates/physsynth-core/tests/eig_general.rs` against seven exact spectra.
+- **Selection:** 32 scan points over `f_cl`, the band's roots followed from point to point,
+  every crossing of the target solved, the largest string share (mass-weighted `|x^n|^2`) kept.
+- **The ring time is not monotone in the string's loss.** Beside a resonance the note is mostly
+  body; more string loss pushes it further onto the (lossless) body and its decay *peaks*
+  (113.1 Hz on the 3000 N/m body: share 0.11, shortest ring 0.37 s). So the loss is scanned (25
+  points to the cap `sigma k = 1/2`) before the Newton, and a target past the peak is refused
+  with the shortest ring that is possible.
+- **Following a note** uses the whole spectrum and takes the root nearest the predicted one (the
+  last root, moved to the radius the change in loss predicts); an inverse iteration from a
+  prediction settled on the wrong root once.
+- **Accuracy**, read off the integrator started on the solved mode (a strided recurrence fit):
+  pitch within 2.5e-12 and ring time within 1e-6 on every fixture, including the radiating body at
+  213.6 Hz (it plays a 99.7 %-string note there, at `f_cl = 243.65`).
+- **Coverage:** on the two hardest rigs (the 3000 N/m body, the radiating body) over 40–570 Hz and
+  five ring times, 470 tunings: no `Unconverged`, no mid-way refusal; every outcome is a tuning or
+  an honest refusal (below the guard's wall, a ring longer than the air allows, a ring shorter
+  than a mostly-body note can reach).

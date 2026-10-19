@@ -393,3 +393,299 @@ fn ql(d: &mut [f64], e: &mut [f64], n: usize, mut z: Option<&mut [f64]>) -> Resu
     }
     Ok(())
 }
+
+// == the general (unsymmetric) eigenvalue problem =================================================
+//
+// The header's "an unsymmetric solver would answer a question the operator does not pose" held
+// for the stability guard, and still does. It stopped holding for `coupled_tuning`: a lossy
+// coupled string's one-step map is not similar to anything symmetric, and on the radiating body
+// the air's rank-1 dashpot moves its modes so far that the lossless operator is no guide to which
+// damped mode is which (a string plucked at a tension the lossless operator says sounds 213.6 Hz
+// sounds nothing there; string mapping plan §16). So the map's whole spectrum is computed here.
+//
+// Numerical Recipes §11.5-11.6, the EISPACK arrangement: balance (`balanc`), reduce to upper
+// Hessenberg by stabilized elementary similarity transforms (`elmhes`), then the Francis
+// double-shift QR (`hqr`), with LAPACK `dlahqr`'s budget rather than EISPACK's: an exceptional shift
+// every ten sweeps on one eigenvalue, and 30 n sweeps in all. EISPACK's 30 per eigenvalue failed on a
+// lossless one-step map, whose roots all sit on the unit circle and so share one modulus, which is
+// what makes the unshifted part of QR converge slowly. Eigenvalues only; a caller that wants a
+// vector refines it by inverse iteration.
+
+/// Eigenvalues of a real (unsymmetric) matrix, as `(re, im)` pairs in no particular order. A
+/// complex pair appears as both conjugates.
+///
+/// `a` is row-major `n * n`.
+///
+/// # Errors
+/// [`EigError::BadShape`] if `a.len() != n * n`; [`EigError::NotConverged`] if the QR iteration
+/// spends `30 n` sweeps in all (a NaN in the matrix does that).
+pub fn general_eigenvalues(a: &[f64], n: usize) -> Result<Vec<(f64, f64)>, EigError> {
+    if a.len() != n * n {
+        return Err(EigError::BadShape);
+    }
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    let mut m = a.to_vec();
+    balance(&mut m, n);
+    hessenberg(&mut m, n);
+    hqr(&mut m, n)
+}
+
+/// `balanc`: scale rows and columns by powers of two so that each row and its column have
+/// comparable norms. Exact (powers of two), and it shrinks the norm the QR's roundoff scales with.
+fn balance(a: &mut [f64], n: usize) {
+    const RADIX: f64 = 2.0;
+    let sqrdx = RADIX * RADIX;
+    let mut done = false;
+    while !done {
+        done = true;
+        for i in 0..n {
+            let (mut r, mut c) = (0.0, 0.0);
+            for j in 0..n {
+                if j != i {
+                    c += a[j * n + i].abs();
+                    r += a[i * n + j].abs();
+                }
+            }
+            if c != 0.0 && r != 0.0 {
+                let mut g = r / RADIX;
+                let mut f = 1.0;
+                let s = c + r;
+                while c < g {
+                    f *= RADIX;
+                    c *= sqrdx;
+                }
+                g = r * RADIX;
+                while c > g {
+                    f /= RADIX;
+                    c /= sqrdx;
+                }
+                if (c + r) / f < 0.95 * s {
+                    done = false;
+                    let g = 1.0 / f;
+                    for j in 0..n {
+                        a[i * n + j] *= g;
+                    }
+                    for j in 0..n {
+                        a[j * n + i] *= f;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// `elmhes`: reduce to upper Hessenberg form by Gaussian elimination with pivoting, a similarity
+/// transform. The multipliers `elmhes` leaves below the subdiagonal are cleared on the way out, so
+/// the QR never reads them.
+fn hessenberg(a: &mut [f64], n: usize) {
+    for m in 1..n.saturating_sub(1) {
+        let mut x = 0.0f64;
+        let mut i = m;
+        for j in m..n {
+            if a[j * n + m - 1].abs() > x.abs() {
+                x = a[j * n + m - 1];
+                i = j;
+            }
+        }
+        if i != m {
+            for j in m - 1..n {
+                a.swap(i * n + j, m * n + j);
+            }
+            for j in 0..n {
+                a.swap(j * n + i, j * n + m);
+            }
+        }
+        if x != 0.0 {
+            for i in m + 1..n {
+                let mut y = a[i * n + m - 1];
+                if y != 0.0 {
+                    y /= x;
+                    a[i * n + m - 1] = y;
+                    for j in m..n {
+                        a[i * n + j] -= y * a[m * n + j];
+                    }
+                    for j in 0..n {
+                        a[j * n + m] += y * a[j * n + i];
+                    }
+                }
+            }
+        }
+    }
+    for i in 2..n {
+        for j in 0..i - 1 {
+            a[i * n + j] = 0.0;
+        }
+    }
+}
+
+/// `hqr`: the eigenvalues of an upper Hessenberg matrix by the Francis double-shift QR. The matrix
+/// is destroyed.
+fn hqr(a: &mut [f64], n: usize) -> Result<Vec<(f64, f64)>, EigError> {
+    let sign = |a: f64, b: f64| if b >= 0.0 { a.abs() } else { -a.abs() };
+    let mut wr = vec![0.0; n];
+    let mut wi = vec![0.0; n];
+    let mut anorm = 0.0;
+    for i in 0..n {
+        for j in i.saturating_sub(1)..n {
+            anorm += a[i * n + j].abs();
+        }
+    }
+    let mut nn = n as isize - 1;
+    let mut budget = 30 * n.max(10);
+    let mut t = 0.0;
+    while nn >= 0 {
+        let nu = nn as usize;
+        let mut its = 0;
+        loop {
+            // A single small subdiagonal element splits the matrix.
+            let mut l = nu;
+            while l >= 1 {
+                let mut s = a[(l - 1) * n + l - 1].abs() + a[l * n + l].abs();
+                if s == 0.0 {
+                    s = anorm;
+                }
+                if a[l * n + l - 1].abs() + s == s {
+                    a[l * n + l - 1] = 0.0;
+                    break;
+                }
+                l -= 1;
+            }
+            let mut x = a[nu * n + nu];
+            if l == nu {
+                // One root.
+                wr[nu] = x + t;
+                wi[nu] = 0.0;
+                nn -= 1;
+                break;
+            }
+            let mut y = a[(nu - 1) * n + nu - 1];
+            let mut w = a[nu * n + nu - 1] * a[(nu - 1) * n + nu];
+            if l == nu - 1 {
+                // Two roots.
+                let p = 0.5 * (y - x);
+                let q = p * p + w;
+                let z = q.abs().sqrt();
+                x += t;
+                if q >= 0.0 {
+                    let z = p + sign(z, p);
+                    wr[nu - 1] = x + z;
+                    wr[nu] = x + z;
+                    if z != 0.0 {
+                        wr[nu] = x - w / z;
+                    }
+                    wi[nu - 1] = 0.0;
+                    wi[nu] = 0.0;
+                } else {
+                    wr[nu - 1] = x + p;
+                    wr[nu] = x + p;
+                    wi[nu - 1] = -z;
+                    wi[nu] = z;
+                }
+                nn -= 2;
+                break;
+            }
+            if budget == 0 {
+                return Err(EigError::NotConverged(nu));
+            }
+            if its > 0 && its % 10 == 0 {
+                // The exceptional shift.
+                t += x;
+                for i in 0..=nu {
+                    a[i * n + i] -= x;
+                }
+                let s = a[nu * n + nu - 1].abs() + a[(nu - 1) * n + nu - 2].abs();
+                x = 0.75 * s;
+                y = x;
+                w = -0.4375 * s * s;
+            }
+            its += 1;
+            budget -= 1;
+            // The shift, and two consecutive small subdiagonal elements.
+            let mut m = nu - 2;
+            let (mut p, mut q, mut r);
+            loop {
+                let z = a[m * n + m];
+                let rr = x - z;
+                let ss = y - z;
+                p = (rr * ss - w) / a[(m + 1) * n + m] + a[m * n + m + 1];
+                q = a[(m + 1) * n + m + 1] - z - rr - ss;
+                r = a[(m + 2) * n + m + 1];
+                let s = p.abs() + q.abs() + r.abs();
+                p /= s;
+                q /= s;
+                r /= s;
+                if m == l {
+                    break;
+                }
+                let u = a[m * n + m - 1].abs() * (q.abs() + r.abs());
+                let v = p.abs()
+                    * (a[(m - 1) * n + m - 1].abs() + z.abs() + a[(m + 1) * n + m + 1].abs());
+                if u + v == v {
+                    break;
+                }
+                m -= 1;
+            }
+            for i in m + 2..=nu {
+                a[i * n + i - 2] = 0.0;
+                if i != m + 2 {
+                    a[i * n + i - 3] = 0.0;
+                }
+            }
+            // The double QR step on rows l..=nu and columns m..=nu.
+            for k in m..nu {
+                if k != m {
+                    p = a[k * n + k - 1];
+                    q = a[(k + 1) * n + k - 1];
+                    r = 0.0;
+                    if k != nu - 1 {
+                        r = a[(k + 2) * n + k - 1];
+                    }
+                    x = p.abs() + q.abs() + r.abs();
+                    if x != 0.0 {
+                        p /= x;
+                        q /= x;
+                        r /= x;
+                    }
+                }
+                let s = sign((p * p + q * q + r * r).sqrt(), p);
+                if s != 0.0 {
+                    if k == m {
+                        if l != m {
+                            a[k * n + k - 1] = -a[k * n + k - 1];
+                        }
+                    } else {
+                        a[k * n + k - 1] = -s * x;
+                    }
+                    p += s;
+                    x = p / s;
+                    y = q / s;
+                    let z = r / s;
+                    q /= p;
+                    r /= p;
+                    for j in k..=nu {
+                        let mut pp = a[k * n + j] + q * a[(k + 1) * n + j];
+                        if k != nu - 1 {
+                            pp += r * a[(k + 2) * n + j];
+                            a[(k + 2) * n + j] -= pp * z;
+                        }
+                        a[(k + 1) * n + j] -= pp * y;
+                        a[k * n + j] -= pp * x;
+                    }
+                    let mmin = if nu < k + 3 { nu } else { k + 3 };
+                    for i in l..=mmin {
+                        let mut pp = x * a[i * n + k] + y * a[i * n + k + 1];
+                        if k != nu - 1 {
+                            pp += z * a[i * n + k + 2];
+                            a[i * n + k + 2] -= pp * r;
+                        }
+                        a[i * n + k + 1] -= pp * q;
+                        a[i * n + k] -= pp;
+                    }
+                }
+            }
+        }
+    }
+    Ok(wr.into_iter().zip(wi).collect())
+}
