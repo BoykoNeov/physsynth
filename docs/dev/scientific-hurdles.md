@@ -29,7 +29,7 @@
 | 9 | The conserved total is blind to a wrong coupling constant; `radiated == injected` is blind to half of them | every coupled scene | Accounted for — three detectors, jointly (§9) |
 | 10 | Aliasing around every nonlinearity | bow, reed, mallet, VK plate, both nonlinear strings | Mitigated by oversampling; no anti-aliased scheme (§10) |
 | 11 | Twenty ARPACK oracles were not bit-reproducible run to run | `analysis/modal.py` | Fixed in §24.9 — kept here as the pattern (§11) |
-| 12 | Raw physics is not a musician's interface (parameter mapping) | `string_tuning`, `plate_tuning`, `membrane_tuning`; the viewer's damped string, plates and drums | **Started 2026-10-18** for the damped string (five musical targets, met exactly by the *simulated* string at two partials, the drift of the rest reported and warned) and the same day for the three linear plates (material, thickness or pitch, two ring times — exact on the supported plate, ≤ 0.05 cents on the free ones; a new loss term `σ₁`). The drum followed the same day (a cited head, pitch or tension, two ring times — exact on both shapes; a new loss `σ₁`; a drum-in-a-room page showing the air lower it 2.7–3.9 semitones). The gong and the cymbal followed on 2026-10-19 (a metal, the *settled* pitch or the thickness, two ring times — exact as a strike tends to zero; a hard strike's start and settle read out; the page guarded where the solve cannot settle). The bowed string and the tension string followed the same day (the bow on a tuned string, its bowed pitch read out; the tension string from a cited material and gauge, its *settled* note exact). The plain, stiff and buzzing-bridge strings are next; the strings on a body or a bridge, and the whirling string, are still raw (§12) |
+| 12 | Raw physics is not a musician's interface (parameter mapping) | `string_tuning`, `plate_tuning`, `membrane_tuning`; the viewer's damped string, plates and drums | **Started 2026-10-18** for the damped string (five musical targets, met exactly by the *simulated* string at two partials, the drift of the rest reported and warned) and the same day for the three linear plates (material, thickness or pitch, two ring times — exact on the supported plate, ≤ 0.05 cents on the free ones; a new loss term `σ₁`). The drum followed the same day (a cited head, pitch or tension, two ring times — exact on both shapes; a new loss `σ₁`; a drum-in-a-room page showing the air lower it 2.7–3.9 semitones). The gong and the cymbal followed on 2026-10-19 (a metal, the *settled* pitch or the thickness, two ring times — exact as a strike tends to zero; a hard strike's start and settle read out; the page guarded where the solve cannot settle). The bowed string and the tension string followed the same day (the bow on a tuned string, its bowed pitch read out; the tension string from a cited material and gauge, its *settled* note exact). The ideal string, the stiff string and the three barrier pages followed the same day (the ideal string exact at every partial's ring time, its sample rate following the pitch; the stiff string's anchor stiffness from a one-root quadratic). The strings on a body or a bridge, and the whirling string, are still raw (§12) |
 | 13 | Which models can ever run in real time | engine, room | Deferred, and now decoupled from the language (§13) |
 | 14 | `piston_radiation_resistance`'s `ka < 1e-8` series threshold was about three decades too small: just above it the direct form cancelled catastrophically and was 544% wrong | `core/radiation.py` | **Fixed 2026-09-03** — three Taylor terms below `ka = 3e-2`; worst error 5.24 → 6.7e-13 (§14) |
 | 15 | No model states where its own answer stops being in tune, and the boundary is much lower than anyone assumed | every resonator | **Measured 2026-09-06** — two families with opposite signs (implicit errors compound into a hard floor at ~8% of the grid; explicit errors cancel at the magic Courant number), the plate is space-limited at every `fs` the suite uses, and the membrane's ceiling cancellation is **diagonal-only**; the 2-D plate's band was **derived 2026-09-07** by splitting its spectrum by mode family, the **orthotropic** plate measured the same day — one floor in mode index, per-direction only in hertz — and the **membrane's block** the same day too: the 2-D CFL ceiling **is** the minimum over the spectrum of each mode's own cancellation Courant number, so no mode is ever sharp, and a block's worst corner **flips** below the ceiling for every block — the plate's corner rule is inverted on a membrane, not weakened (§15) |
@@ -633,9 +633,26 @@ carries forward:
 - **The tension string's gauge sets how far a pluck starts sharp, not where it settles.** A 3 mm
   pluck starts 0.6–41 cents sharp across the presets; the settled note is exact (≤ 3e-8 cents).
 
-Every other model is still raw: the plain, stiff and buzzing-bridge strings (this plan's slices 2
-and 3), the strings on a body or a bridge, and the whirling string. Smoothing a moving
-control belongs to the real-time stage.
+**2026-10-19, the sixth piece: the ideal string, the barrier pages and the stiff string** (the
+same plan, slices 2 and 3). What carries forward:
+
+- **The ideal string is exact everywhere, with its sample rate following the pitch** (the human's
+  call: `λ = 1` kept). One equation in the time step pins the pitch, and every partial shares the
+  ring time. With a short ring the partials above the fundamental run *sharp* of m·f₀, up to
+  +128 cents at a 0.1 s thud on 27.5 Hz: a damped oscillator's frequency falls by a larger share
+  at a low pitch. Physics, not the grid; the page warns.
+- **The stiff string's anchor is a quadratic with one valid root.** One loss leaves the anchor's
+  ring time to the scheme (a read-out). Lossless, the pitch falls strictly as stiffness rises, so
+  the squaring's second root is spurious, and its sign test is load-bearing (planted, red).
+- **A wiring bar must hear what the mapping sets.** The ideal page's pitch bars could not hear its
+  loss; a plant reading the loss slider passed them all. On the ideal string the energy decay is
+  that check, because every mode shares one rate. On the theta-scheme strings it is not: one σ
+  decays mode `m` at `2σ/(1 + θX_m)`, so a pluck's energy falls at a blend (1.98/s against the
+  fundamental's 6.91/s). There, the musical page against its physics twin on the mapped string,
+  to 1e-9, is the bar.
+
+Every other model is still raw: the strings on a body or a bridge (the next batch) and the
+whirling string. Smoothing a moving control belongs to the real-time stage.
 
 ## 13. Which models are real-time — deferred, decoupled
 

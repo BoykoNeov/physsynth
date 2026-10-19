@@ -4,7 +4,10 @@
 the plates, the drum, the gong and the cymbal have musical controls; every other string page still
 takes raw physics. This plan covers them, sorted by how much new derivation each needs.
 
-**Status: PLANNED 2026-10-19 — the human answered §8 the same day; slice 1 next.** Nothing built.
+**Status: slices 1–3 DONE 2026-10-19** (§9–§14): the bow, the tension string, the ideal string,
+the three barrier pages and the stiff string all have musical controls. Next batch, per §8.1:
+the four coupled ideal pages (`sympathetic`, `body`, `platebody`, `radbody`); after it, the
+geometric string (§6).
 
 ---
 
