@@ -29,7 +29,7 @@
 | 9 | The conserved total is blind to a wrong coupling constant; `radiated == injected` is blind to half of them | every coupled scene | Accounted for — three detectors, jointly (§9) |
 | 10 | Aliasing around every nonlinearity | bow, reed, mallet, VK plate, both nonlinear strings | Mitigated by oversampling; no anti-aliased scheme (§10) |
 | 11 | Twenty ARPACK oracles were not bit-reproducible run to run | `analysis/modal.py` | Fixed in §24.9 — kept here as the pattern (§11) |
-| 12 | Raw physics is not a musician's interface (parameter mapping) | `string_tuning`, `plate_tuning`, `membrane_tuning`; the viewer's damped string, plates and drums | **Started 2026-10-18** for the damped string (five musical targets, met exactly by the *simulated* string at two partials, the drift of the rest reported and warned) and the same day for the three linear plates (material, thickness or pitch, two ring times — exact on the supported plate, ≤ 0.05 cents on the free ones; a new loss term `σ₁`). The drum followed the same day (a cited head, pitch or tension, two ring times — exact on both shapes; a new loss `σ₁`; a drum-in-a-room page showing the air lower it 2.7–3.9 semitones). The gong and the cymbal followed on 2026-10-19 (a metal, the *settled* pitch or the thickness, two ring times — exact as a strike tends to zero; a hard strike's start and settle read out; the page guarded where the solve cannot settle). The other strings are still raw (§12) |
+| 12 | Raw physics is not a musician's interface (parameter mapping) | `string_tuning`, `plate_tuning`, `membrane_tuning`; the viewer's damped string, plates and drums | **Started 2026-10-18** for the damped string (five musical targets, met exactly by the *simulated* string at two partials, the drift of the rest reported and warned) and the same day for the three linear plates (material, thickness or pitch, two ring times — exact on the supported plate, ≤ 0.05 cents on the free ones; a new loss term `σ₁`). The drum followed the same day (a cited head, pitch or tension, two ring times — exact on both shapes; a new loss `σ₁`; a drum-in-a-room page showing the air lower it 2.7–3.9 semitones). The gong and the cymbal followed on 2026-10-19 (a metal, the *settled* pitch or the thickness, two ring times — exact as a strike tends to zero; a hard strike's start and settle read out; the page guarded where the solve cannot settle). The bowed string and the tension string followed the same day (the bow on a tuned string, its bowed pitch read out; the tension string from a cited material and gauge, its *settled* note exact). The plain, stiff and buzzing-bridge strings are next; the strings on a body or a bridge, and the whirling string, are still raw (§12) |
 | 13 | Which models can ever run in real time | engine, room | Deferred, and now decoupled from the language (§13) |
 | 14 | `piston_radiation_resistance`'s `ka < 1e-8` series threshold was about three decades too small: just above it the direct form cancelled catastrophically and was 544% wrong | `core/radiation.py` | **Fixed 2026-09-03** — three Taylor terms below `ka = 3e-2`; worst error 5.24 → 6.7e-13 (§14) |
 | 15 | No model states where its own answer stops being in tune, and the boundary is much lower than anyone assumed | every resonator | **Measured 2026-09-06** — two families with opposite signs (implicit errors compound into a hard floor at ~8% of the grid; explicit errors cancel at the magic Courant number), the plate is space-limited at every `fs` the suite uses, and the membrane's ceiling cancellation is **diagonal-only**; the 2-D plate's band was **derived 2026-09-07** by splitting its spectrum by mode family, the **orthotropic** plate measured the same day — one floor in mode index, per-direction only in hertz — and the **membrane's block** the same day too: the 2-D CFL ceiling **is** the minimum over the spectrum of each mode's own cancellation Courant number, so no mode is ever sharp, and a block's worst corner **flips** below the ceiling for every block — the plate's corner rule is inverted on a membrane, not weakened (§15) |
@@ -618,7 +618,22 @@ gong takes. What carries forward:
   stops the rest. The old page budget never counted Newton's rescue and admitted settings that
   would have run for hours; both control sets are guarded now.
 
-Every other model is still raw: the strings other than the damped one. Smoothing a moving
+**2026-10-19, the fifth piece: the bowed string and the tension string**
+(`docs/dev/string-mapping-plan.md`, slice 1 of three; the human's calls: the solo strings first,
+the string alone tuned and what is attached to it read out, the tension string set by a material
+and a gauge). `string_tuning::tune_tension_string` takes steel, nylon or gut and a diameter.
+Nylon's modulus is Lynch-Aird and Woodhouse's stress fit, evaluated at the tuned stress. What
+carries forward:
+
+- **The bowed note is not the string's mode 1.** A bowed period is set by the whole series, and
+  the partials between the two the mapping pins drift with the grid. So the same tuned 110 Hz
+  string bows 13 cents flat at 44.1 kHz and 4 cents sharp at 22.05 kHz. The page says so; it does
+  not call the offset the bow's pull.
+- **The tension string's gauge sets how far a pluck starts sharp, not where it settles.** A 3 mm
+  pluck starts 0.6–41 cents sharp across the presets; the settled note is exact (≤ 3e-8 cents).
+
+Every other model is still raw: the plain, stiff and buzzing-bridge strings (this plan's slices 2
+and 3), the strings on a body or a bridge, and the whirling string. Smoothing a moving
 control belongs to the real-time stage.
 
 ## 13. Which models are real-time — deferred, decoupled
