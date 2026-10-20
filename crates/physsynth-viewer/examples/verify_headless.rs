@@ -75,6 +75,7 @@ const PROBE: &str = r"
     tuning: (document.getElementById('tuning-hint') || {}).textContent || '',
     plateTuning: (document.getElementById('plate-tuning-hint') || {}).textContent || '',
     drumTuning: (document.getElementById('drum-tuning-hint') || {}).textContent || '',
+    lambdaHint: (document.getElementById('lambda-hint') || {}).textContent || '',
     sliders: [...document.querySelectorAll('.slider')].filter((e) => e.offsetParent !== null)
       .map((e) => e.dataset.param).join(' '),
     hzMark: window.__horizonMark || null,
@@ -647,6 +648,29 @@ fn horizon_mark_ok(mark: &Value, horizon: &str) -> (bool, String) {
     (true, note)
 }
 
+/// The models whose step really is implicit, the only ones the grid hint's fallback may call so.
+/// The reed (an explicit λ = 1 step) and the gong in a room (the room sets fs) fell through to it
+/// and read "implicit scheme — no CFL limit" over a λ slider they do not have.
+const IMPLICIT_HINT_MODELS: &[&str] = &[
+    "stiff", "damped", "tension", "bow", "jawari", "juari", "fret",
+];
+
+/// The grid hint names what limits this page's step, and never calls an explicit step implicit.
+fn lambda_hint_ok(query: &str, hint: &str) -> bool {
+    let model = query
+        .strip_prefix("model=")
+        .and_then(|q| q.split('&').next())
+        .unwrap_or("");
+    if hint.contains("implicit scheme") && !IMPLICIT_HINT_MODELS.contains(&model) {
+        return false;
+    }
+    match model {
+        "reed" => hint.contains("explicit") && hint.contains("wr·k < 2"),
+        "vkroom" => hint.contains("set by the ROOM"),
+        _ => true,
+    }
+}
+
 /// A musical request on one of the strings on a bridge.
 fn musical_coupled(query: &str) -> bool {
     query.contains("controls=musical")
@@ -780,6 +804,8 @@ fn run_case(
         || (diag2.contains("in vacuo") && diag2.contains("in the room")
             // ζ is fixed at 1 here; a visible ζ slider would be a control the server never reads
             && !sliders.split(' ').any(|s| s == "wall_zeta"));
+    let lambda_hint = probe["lambdaHint"].as_str().unwrap_or("");
+    let lambda_hint_ok = lambda_hint_ok(query, lambda_hint);
     let tuning_ok = tuning_ok && plate_tuning_ok && drum_tuning_ok && air_ok;
     let tuning = [plate_tuning, drum_tuning]
         .into_iter()
@@ -788,6 +814,7 @@ fn run_case(
     let status = probe["status"].as_str().unwrap_or("");
     let ok = status.starts_with("ok")
         && tuning_ok
+        && lambda_hint_ok
         && painted > 2000
         && notes.is_empty()
         && horizon != "(hidden)"
@@ -799,6 +826,10 @@ fn run_case(
     if query.contains("model=drumroom") {
         println!("  sliders  : {sliders}");
     }
+    println!(
+        "  grid hint: {lambda_hint}{}",
+        if lambda_hint_ok { "" } else { "   <- WRONG" }
+    );
     println!("  diag2    : {}", first_line(&probe["diag2"]));
     println!("  horizon  : {horizon}");
     if !tuning.is_empty() {

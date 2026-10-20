@@ -1031,6 +1031,31 @@ function updateLambdaHint() {
       + `buys the SAMPLE RATE too, so cost per second of audio ~ N². One transit = L/c₀ = `
       + `${(1e3 * L / 343).toFixed(2)} ms, four times shorter than the period of f₁.`;
     hint.style.color = "var(--muted)";
+  } else if (m === "reed") {
+    // The bore's explicit λ = 1 step with the reed's own leapfrog at the mouth, which needs
+    // wr·k < 2: at λ = 1, k = L/(c₀N), so N > wr·L/(2c₀) — the server's refusal, in its words.
+    // Musical: the L slider is hidden and the search finds the tube, shorter than c₀/4f₀ (the reed
+    // pulls flat), so only the floor on fs is known before the render — no bound painted red.
+    const N = param("N"), wr = 2 * Math.PI * param("f_reed");
+    if (musicalOn(m)) {
+      hint.textContent = `λ = 1 (pinned, explicit) → fs = c₀N/L on the tube the search finds, `
+        + `shorter than c₀/4f₀, so fs > 4·N·f₀ = ${fmt(Math.round(4 * N * param("f0")))} Hz. The `
+        + `reed's own vibration needs wr·k < 2 on every tube tried; a refusal names the N.`;
+      hint.style.color = "var(--muted)";
+    } else {
+      const L = param("L"), wk = wr * L / (343 * N);
+      hint.textContent = `λ = 1 (pinned, explicit) → fs = c₀N/L = ${fmt(Math.round(343 * N / L))} `
+        + `Hz. The reed's own vibration needs wr·k < 2: wr·k = ${wk.toFixed(3)}`
+        + (wk >= 2 ? ` — REFUSED, raise N to at least ${Math.floor(wr * L / 686) + 1}` : "")
+        + ".";
+      hint.style.color = wk >= 2 ? "var(--bad)" : "var(--muted)";
+    }
+  } else if (m === "vkroom") {
+    // The room sets fs (3-D CFL at 0.9 of 1/√3), as on the drum in a room; the plate has no λ.
+    const fs = 343 * Math.sqrt(3) / (0.9 * param("air_h"));
+    hint.textContent = `fs = ${fmt(Math.round(fs))} Hz, set by the ROOM (air_h). The plate's `
+      + `Picard solve needs it: air_h is capped at 12.5 mm, coarser stops converging.`;
+    hint.style.color = "var(--muted)";
   } else if (m === "sympathetic") {
     const lam = param("lambda");
     hint.textContent = `λ = c·k/h = ${lam.toFixed(2)}  (must be < 1: the bridge spring pushes the `
@@ -1592,6 +1617,8 @@ function onControlChange(name) {
   // so the near-21.5k hint must track the bridge_stiffness slider (the fret/jawari precedent — the
   // one warning that must fire BEFORE a render is paid for, or an over-stiff K just errors out).
   if (name === "bridge_stiffness") updateLambdaHint();
+  // The room pages' fs follows air_h (and the drum's λ its radius); the reed's limit, f_reed.
+  if (name === "air_h" || name === "radius" || name === "f_reed") updateLambdaHint();
   scheduleAuto();
 }
 

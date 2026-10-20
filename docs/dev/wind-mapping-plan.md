@@ -219,3 +219,22 @@ with a 0.3 s bell at N = 64.
 Bars (`wind_musical.rs`): a loud buzz warned (+9.6 dB), a quiet one in hearing not (−36.9 dB at
 11.6 kHz), a loud one above hearing not (−15 dB at 31 kHz); the refusal's N and f_reed each
 played. Plants: no hearing check, no level check, N one short — each red.
+
+## 8. The two loose ends (2026-10-20)
+
+**The grid hint — fixed.** The reed page (and the gong in a room) fell through the hint's last
+branch, meant for the implicit strings, and printed "λ = 1.00 (implicit scheme — no CFL limit)"
+with a λ read from a slider neither page has. The reed now says its step is explicit at λ = 1,
+gives `fs = c0 N/L` and the reed's `wr·k < 2` in the refusal's own terms (red, naming the N,
+when it fails); in musical mode, where the search picks the tube, only the floor `fs > 4 N f0`
+is stated. The gong in a room names the room's `fs`. `air_h`, `radius` and `f_reed` now refresh
+the hint (the drum in a room's went stale when `air_h` moved). Bar: `verify_headless` reads the
+hint on every case — "implicit scheme" only on the seven models whose step is implicit, the
+reed's and the room's own words on theirs. Planted (both branches removed): 3/3 cases red.
+Not covered: the red refusal line, which no case renders (a refused render fails the check).
+
+**The buzz — stays a warning** (the human, 2026-10-20). Its cause: the tube's only loss is
+frequency-independent (`bore.rs` says the √ω wall loss is not modelled), and the bell reflects
+every frequency alike, so the tube's resonances ring up to `fs/2` as long as the note does and
+the reed's beating keeps them fed. Offered and declined: a √ω wall loss (new physics; reworks the
+closed forms), raising N in musical mode (cost ~N²), filtering the output (hides it).
