@@ -3,13 +3,16 @@
 //! The bore's mapping is held by core's `tests/bore_tuning.rs`, which reads the one-step map and
 //! the render. What is held here is the wiring, judged by what the page PLAYS: its measured
 //! partials against the odd series of the target, its ring time off the energy it has shed, and
-//! the musical page as the physics page fed the mapped tube.
+//! the musical page as the physics page fed the mapped tube. The reed's search is held by core's
+//! `tests/reed_tuning.rs`; here, its page plays the pitch to another ear, its bell is the one the
+//! FOUND tube needs, and each refusal says what to change.
 
 mod common;
 
-use common::{f, ok, sim};
+use common::{decode_f32, f, ok, sim};
 use physsynth_core::wind_tuning::tune_bore;
 use serde_json::{json, Value};
+use std::f64::consts::{LN_10, PI};
 
 /// The page's speed of sound, written out, not imported.
 const C0: f64 = 343.0;
@@ -187,4 +190,182 @@ fn the_budget_refusal_names_the_highest_pitch_that_fits() {
         "{msg}"
     );
     ok(&bore(json!({"f0": 195.0, "N": 256, "audio_duration": 1.5})));
+}
+
+// -- the reed ---------------------------------------------------------------------------------
+
+/// A reed request with every reed parameter off the page's defaults, and decoys a musical build
+/// must not read: `L = 1.5` and a bell `10^-1`.
+fn reed(overrides: Value) -> Value {
+    let mut p = json!({
+        "model": "reed", "controls": "musical", "domain": "radiating",
+        "N": 100, "L": 1.5, "bell_ratio_exp": -1.0,
+        "f0": 196.0, "t60_low": 3.0,
+        "gamma": 0.6, "f_reed": 2200.0, "q_reed": 5.0,
+        "audio_duration": 0.6, "animation_window": 0.02, "playback_speed": 0.02,
+    });
+    common::merge(&mut p, overrides);
+    p
+}
+
+/// The Hann-windowed Fourier peak within 3 % of `f0`: a grid, then a golden section. Not the
+/// page's reader, which is an autocorrelation.
+fn fourier_peak(x0: &[f64], fs: f64, f0: f64) -> f64 {
+    let n = x0.len();
+    let m = x0.iter().sum::<f64>() / n as f64;
+    let x: Vec<f64> = x0
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (v - m) * (0.5 - 0.5 * (2.0 * PI * i as f64 / (n - 1) as f64).cos()))
+        .collect();
+    let power = |fr: f64| {
+        let w = 2.0 * PI * fr / fs;
+        let (mut re, mut im) = (0.0, 0.0);
+        for (i, v) in x.iter().enumerate() {
+            re += v * (w * i as f64).cos();
+            im -= v * (w * i as f64).sin();
+        }
+        re * re + im * im
+    };
+    let (lo, hi) = (0.97 * f0, 1.03 * f0);
+    let step = (hi - lo) / 60.0;
+    let best =
+        (0..=60)
+            .map(|j| lo + step * j as f64)
+            .fold(lo, |b, fr| if power(fr) > power(b) { fr } else { b });
+    let (mut a, mut b) = (best - step, best + step);
+    let g = 0.5 * (5f64.sqrt() - 1.0);
+    for _ in 0..50 {
+        let (c, d) = (b - g * (b - a), a + g * (b - a));
+        if power(c) > power(d) {
+            b = d;
+        } else {
+            a = c;
+        }
+    }
+    0.5 * (a + b)
+}
+
+#[test]
+fn musical_keys_do_not_touch_the_physical_reed() {
+    for domain in ["radiating", "open"] {
+        let mut named = reed(json!({"controls": "physical", "domain": domain, "L": 0.6}));
+        let a = ok(&named);
+        for k in ["controls", "f0", "t60_low"] {
+            named.as_object_mut().unwrap().remove(k);
+        }
+        assert_eq!(a, ok(&named), "{domain}");
+        assert!(a.get("tuning").is_none());
+    }
+}
+
+/// What the page plays, heard by an ear that is not the page's: the rendered audio's last 40 %.
+/// A build that read the decoy L would play near 57 Hz.
+#[test]
+fn the_musical_reed_plays_its_pitch_to_another_ear() {
+    for (domain, f0) in [("radiating", 196.0), ("open", 130.81)] {
+        let payload = ok(&reed(json!({"domain": domain, "f0": f0})));
+        let t = &payload["tuning"];
+        assert!((1200.0 * (f(&t["played"]) / f0).log2()).abs() < 0.1, "{t}");
+        // The search tuned the rig the page renders: its last run and the render read alike, to
+        // the bit.
+        assert_eq!(t["render_played"], t["played"], "{t}");
+        assert!(f(&t["pull_cents"]) < 0.0, "the reed pulls flat: {t}");
+        let audio: Vec<f64> = decode_f32(payload["audio"]["b64"].as_str().unwrap())
+            .into_iter()
+            .map(f64::from)
+            .collect();
+        let tail = &audio[(0.6 * audio.len() as f64) as usize..];
+        let heard = fourier_peak(tail, f(&payload["audio"]["fs"]), f0);
+        let c = 1200.0 * (heard / f0).log2();
+        assert!(
+            c.abs() < 1.0,
+            "{domain} {f0}: the audio sounds {heard} Hz ({c:+.3} cents)"
+        );
+        assert_eq!(payload["meta"]["speaks"], true);
+        // The odd-harmonic panel sits on the note played, not on the tube's own c0/4L.
+        let marker = f(&payload["meta"]["spectrum"]["markers"][0]);
+        assert!(
+            (marker - f(&t["played"])).abs() < 1e-3,
+            "{marker} vs {}",
+            t["played"]
+        );
+    }
+}
+
+/// The bell belongs to the tube the search FOUND (plan §6): `R/Z0 = tanh(3 ln10 L / (c0 T60))`
+/// at the payload's own L — not at `c0 / 4 f0`, which the reed's pull makes ~4 % too long here.
+/// The twin below cannot see this: it reads the same number the page built.
+#[test]
+fn the_reed_bell_is_built_for_the_tube_the_search_found() {
+    let payload = ok(&reed(json!({})));
+    let t = &payload["tuning"];
+    let l = f(&t["L"]);
+    let want = (3.0 * LN_10 * l / (C0 * 3.0)).tanh();
+    assert!((f(&t["r_ratio"]) / want - 1.0).abs() < 1e-12, "{t}");
+    assert!((f(&payload["meta"]["r_ratio"]) / want - 1.0).abs() < 1e-12);
+    // The control: the unpulled tube's bell is another number.
+    let unpulled = (3.0 * LN_10 * (C0 / (4.0 * 196.0)) / (C0 * 3.0)).tanh();
+    assert!((unpulled / want - 1.0).abs() > 1e-3);
+}
+
+#[test]
+fn the_musical_reed_is_the_physics_reed_on_the_found_tube() {
+    for domain in ["radiating", "open"] {
+        let musical = ok(&reed(json!({"domain": domain})));
+        let t = musical["tuning"].clone();
+        let mut twin = reed(json!({"controls": "physical", "domain": domain, "L": t["L"]}));
+        if domain == "radiating" {
+            twin["bell_ratio_exp"] = json!(f(&t["r_ratio"]).log10());
+        }
+        let mut stripped = musical.clone();
+        stripped.as_object_mut().unwrap().remove("tuning");
+        let mut physics = ok(&twin);
+        // The harmonic and beating panels are anchored on the played note in musical mode and on
+        // c0/4L in physics, so they are the one place the twins differ by design.
+        for p in [&mut stripped, &mut physics] {
+            let meta = p["meta"].as_object_mut().unwrap();
+            meta.remove("spectrum");
+            meta.remove("beating");
+        }
+        assert_close(&stripped, &physics, 1e-9, domain);
+    }
+}
+
+#[test]
+fn the_open_reed_reads_no_ring_time() {
+    let a = ok(&reed(json!({"domain": "open"})));
+    let b = ok(&reed(json!({"domain": "open", "t60_low": 1e6})));
+    assert_eq!(a, b);
+    assert_eq!(a["tuning"]["t60"], Value::Null);
+}
+
+#[test]
+fn a_reed_refusal_says_what_to_change() {
+    let cases = [
+        (json!({"gamma": 0.2}), "blow harder"),
+        (json!({"f0": 800.0}), "out of this reed's reach"),
+        (
+            json!({"f0": 45.0, "audio_duration": 0.2, "gamma": 0.51, "f_reed": 2500.0}),
+            "too short to read a note this low",
+        ),
+        (
+            json!({"f0": 440.0, "gamma": 0.36, "f_reed": 3500.0, "q_reed": 8.0, "N": 64,
+                   "audio_duration": 0.2, "t60_low": 40.0}),
+            "does not play the tube's note",
+        ),
+        (
+            json!({"f0": 400.0, "N": 256, "audio_duration": 1.0}),
+            // 300000 / (4 * 256 * 1.0) = 292.97
+            "must stay below 293.0 Hz",
+        ),
+        (
+            json!({"f0": 600.0, "t60_low": 60.0, "N": 64, "audio_duration": 0.3}),
+            "longer than the bell can hold on the",
+        ),
+    ];
+    for (over, want) in cases {
+        let msg = refusal(&reed(over.clone()));
+        assert!(msg.contains(want), "{over}: {msg}");
+    }
 }

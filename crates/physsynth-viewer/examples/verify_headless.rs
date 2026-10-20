@@ -217,6 +217,13 @@ const CASES: &[(&str, &str)] = &[
     ),
     ("reed_radiating", "model=reed&domain=radiating"),
     ("reed_open", "model=reed&domain=open"),
+    // The reed's musical controls (wind mapping plan §6): the tube searched until the note the
+    // reed plays lands on the pitch, at the page's defaults and on the open end.
+    ("reed_musical", "model=reed&domain=radiating&controls=musical"),
+    (
+        "reed_musical_open",
+        "model=reed&domain=open&controls=musical&f0=196",
+    ),
     ("body", "model=body"),
     ("platebody_free", "model=platebody&domain=free"),
     ("platebody_supported", "model=platebody&domain=supported"),
@@ -712,6 +719,10 @@ fn run_case(
         tuning.contains("Exact at f₀")
             && tuning.contains("EA =")
             && tuning.contains("settles on f₀")
+    } else if query.contains("controls=musical") && query.contains("model=reed") {
+        tuning.contains("the reed plays")
+            && tuning.contains("cents flat")
+            && (query.contains("domain=open") == tuning.contains("no bell"))
     } else if query.contains("controls=musical") && query.contains("model=bore") {
         tuning.contains("L = ")
             && if query.contains("domain=open") {

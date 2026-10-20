@@ -6,8 +6,7 @@ musical controls (`parameter-mapping-plan.md`, `plate-mapping-plan.md`, `membran
 on it (`reed`) — still take raw physics: a tube length, a grid, and the bell's resistance as a
 ratio `R/Z0`. This plan covers both.
 
-**Status: started 2026-10-20.** Slice 1 (the bore) **DONE 2026-10-20** (§5); slice 2 (the reed)
-next.
+**Status: DONE 2026-10-20.** Slice 1 (the bore, §5) and slice 2 (the reed, §6) both built.
 
 ---
 
@@ -124,3 +123,67 @@ energy is a staircase between them.
   cent of the odd series; after a whole number of round trips the air keeps `10^(−6D/T60)` of its
   energy. Plants: the page ignoring the mapped length, or the mapped bell — each red. Browser
   check: `bore_musical`, `bore_musical_open`.
+
+## 6. Slice 2 — the reed (done 2026-10-20)
+
+**The search.** `wind_tuning::tune_reed_length(f0, c0, &ReedSearch, play)` runs the caller's rig
+on a trial length, starting at `c0/4f0`, rescales `L` by the miss, then takes secant steps on
+`ln f` against `ln L`; it lands within 0.1 cents in 2–6 runs (0.01–2 s; ~0.35 s at a 1 s render,
+N = 128). The page's `play` is its own rig run for the render's own step count, with the bell
+rebuilt from each trial length — so the render IS the search's last run, and the page re-reads
+it to prove it (`render_played == played`, to the bit).
+
+**A run counts only as the tube's fundamental**: speaking (the page's `REED_SPEAK_GATE` over its
+`REED_SETTLE_FRAC` tail), settled (the tail's two halves within 1 cent), and at or below the
+tube's own `c0/4L` + 25 cents. Every fundamental the probe saw was flat of the tube's note, and a
+squeak can be perfectly steady (γ = 1.0: +1849 cents in both windows) — "settled" alone would let
+a squeak steer the search (the reviewer's catch).
+
+**The reader took three tries** (`read_played_note`):
+
+| reader | what went wrong |
+|---|---|
+| mean zero crossings | the wave rings at its edges: a note 27 cents flat read +82 cents sharp, called a squeak |
+| Schmitt trigger (±½ rms) | a strong third harmonic crosses the band three times a period: real notes read +1900 cents |
+| **autocorrelation** (kept) | — |
+
+The kept reader searches lags from two octaves above the tube's note to two below on a
+block-averaged copy, takes the *smallest* lag within 0.9 of the best (a period's multiples
+correlate as well), refines at the full rate and reads the period at the largest multiple that
+fits in half the window. A window must hold two periods of a note an octave below the tube's, or
+it is **too short** (a missing lag would let a harmonic stand in). Over the probe's 3,024
+settings it tuned 1,377 (the crossing reader 931) and every disagreement with the spectrum's
+loudest peak was an odd harmonic (3rd/5th/7th/9th) or the grid's top-frequency ripple.
+
+**Another ear.** A Hann-windowed Fourier peak on the same run's tail: within 1 cent at ordinary
+settings on renders of 0.5 s and up; 1–4 cents at the extremes (γ = 1, the onset, ≤ 60 Hz with
+a heavy bell); up to ~9 cents on 0.2 s renders, where the note is still settling. The page says
+so, and warns under 0.5 s.
+
+**Refusals**, each with what to change: silent (blow harder), too short (names the shortest
+audio), aperiodic, squeak (or, near fs/2, the grid's ripple — raise N), unsettled, out of reach
+(the highest note on the 0.1 m tube, the lowest on the 2 m one), no convergence, the step budget
+(before the search, from `fs = 4 N f_tube > 4 N f0`), and a ring time longer than the bell holds
+on the found tube.
+
+**The onset barely moves with the ring time** (γ 0.34–0.43 over T60 0.05–40 s): a short ring time
+does not silence this reed. Defaults D3 and 2 s, as on the bore — the agent's calls.
+
+**Bars.** Core `crates/physsynth-core/tests/reed_tuning.rs` (11): three pitches with every reed
+parameter off default, re-read by the Fourier ear within a cent and flat of the tube; the reader
+under an antiphase third harmonic (a crossing count reads it 3×); silence, shortness and noise at
+the reader; one bar per refusal on a rig the sweep found it on. Plants: no squeak check, no settle
+check, tolerance 30 cents, the best lag instead of the smallest, no reach check — each red.
+Viewer `wind_musical.rs` (7 more): the physical set untouched by musical keys; the audio heard by
+the Fourier ear within a cent, the panel's markers on the played note; the bell recomputed from the
+payload's L with the formula written out (the twin cannot see a bell built for the unpulled tube
+— only this bar went red on that plant); the twin on the found tube (spectrum and beating panels
+excepted: anchored on the played note by design); the open end ignoring the ring time; six
+refusals' wording. Plants: the bell from `c0/4f0`, the page ignoring the found L, the panel on the
+tube's note, the search's bell from `c0/4f0` — each red. Browser: `reed_musical`,
+`reed_musical_open`.
+
+**Seen, not acted on.** The reed page's grid hint reads "λ = 1.00 (implicit scheme — no CFL
+limit)", but the bore under the reed is the explicit leapfrog at its CFL limit; and at a low N on
+a long tube the mouthpiece pressure carries a strong grid-Nyquist ripple that can sit in the
+audible band (fs/2 ≈ 5.7 kHz at N = 64, 1.9 m) — both pre-date this plan.

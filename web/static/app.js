@@ -256,7 +256,11 @@ const MODEL_RANGES = {
   // slider's interesting range, and the point of this model is to show the onset. audio_duration
   // caps at 1.0 (not the bore's 1.5) because the reed needs no ring-down — it settles in ~0.04 s
   // and the window we want is the settled TAIL.
+  // Musical (wind mapping plan §6): the reed plays flat of its tube, so its pitch tops out below
+  // the bore's (a refusal names this reed's reach); D3 and 2 s as on the bore, the agent's calls.
   reed: { N: { min: 32, max: 256, val: 128 }, L: { val: 0.5 },
+          f0: { min: 43, max: 800, step: 0.01, fixed: 2, val: 146.83 },
+          t60_low: { min: 0.05, max: 60, step: 0.05, fixed: 2, val: 2 },
           gamma: { min: 0.05, max: 1.0, step: 0.01, fixed: 2, val: 0.51 },
           f_reed: { min: 1000, max: 3500, step: 50, fixed: 0, val: 2500, unit: "Hz" },
           q_reed: { min: 1, max: 12, step: 0.5, fixed: 1, val: 4 },
@@ -622,6 +626,10 @@ const CONTROL_OPTS = {
   // bell, both exact at every partial. The open end loses nothing, so it takes the pitch alone.
   bore: [["physical", "Physics — L, bell R/Z₀"],
          ["musical", "Musical — pitch, ring time (exact at every partial)"]],
+  // The reed (plan §6): the pitch is the note the reed PLAYS — the tube is searched until it lands
+  // there — and the bell is the tube's ring time, as on the bore.
+  reed: [["physical", "Physics — L, bell R/Z₀"],
+         ["musical", "Musical — the played pitch, the tube's ring time"]],
 };
 
 // The strings whose musical controls are a pitch and ONE ring time (string mapping plan §13).
@@ -643,7 +651,7 @@ const WOODS = ["sitka spruce", "engelmann spruce", "western redcedar", "sugar ma
 function musicalOn(m) {
   if (m === "damped") return domainSel.value === "musical";
   if (m === "plate" || m === "vk" || m === "bow" || m === "stiff" || ONE_RING_MODELS.includes(m)
-      || DRUM_MODELS.includes(m) || COUPLED_MODELS.includes(m) || m === "bore") {
+      || DRUM_MODELS.includes(m) || COUPLED_MODELS.includes(m) || m === "bore" || m === "reed") {
     return !!controlsSel && controlsSel.value === "musical";
   }
   if (m === "tension") {
@@ -848,8 +856,8 @@ function updateVisibility() {
   // the two regimes that detune, the sweep option on the radiating page. Set on every pass, so a
   // ring time switched off here never stays hidden on the next musical page.
   const coupledMusical = COUPLED_MODELS.includes(m) && musical;
-  // The bore's ideal open end loses nothing, so it takes no ring time (wind mapping plan §3).
-  const losslessTube = m === "bore" && musical && domainSel.value === "open";
+  // The wind pages' ideal open end loses nothing, so it takes no ring time (wind mapping plan §3).
+  const losslessTube = (m === "bore" || m === "reed") && musical && domainSel.value === "open";
   showParam("t60_low", (!coupledMusical || $("coupled-ring").checked) && !losslessTube);
   $("coupled-detune-field").hidden = !(coupledMusical && m === "sympathetic"
                                        && domainSel.value !== "normal");
@@ -1332,7 +1340,11 @@ function updateLambdaHint() {
           : gam < 0.40
             ? "right at the ~⅓ onset — the interesting place, and where the bell's loss decides it."
             : "well above threshold: the note speaks and the reed beats shut once a period.")
-        + " f_reed sets p_closing (∝ f²) but barely moves the PITCH — the air column does that.";
+        + (musicalOn(m)
+          // Musical (wind mapping plan §6): the reed pulls the note 8 cents to semitones flat,
+          // so the page re-solves the tube whenever γ or the reed moves.
+          ? " The tube is re-solved for every γ and reed, so the note you hear stays on the pitch."
+          : " f_reed sets p_closing (∝ f²) but barely moves the PITCH — the air column does that.");
       reedHint.style.color = gam < 0.30 ? "var(--warn, #ffcf5c)" : "var(--muted)";
     }
   }
@@ -1661,8 +1673,10 @@ function gatherParams() {
     if (modelSel.value === "sympathetic") p.detune_tuning = $("coupled-detune").value;
     if (modelSel.value === "radbody") p.sweep_grid = $("coupled-sweep").value;
   }
-  // The bore's control set (wind mapping plan §1): its domain select is the far end.
-  if (modelSel.value === "bore" && controlsSel) p.controls = controlsSel.value;
+  // The wind pages' control set (wind mapping plan §1): their domain select is the far end.
+  if ((modelSel.value === "bore" || modelSel.value === "reed") && controlsSel) {
+    p.controls = controlsSel.value;
+  }
   for (const k in sliders) p[k] = +sliders[k].value * (scaleOf[k] || 1);
   if (nonlinearChk) p.nonlinear = nonlinearChk.checked;
   if (seedVelChk) p.seed_velocity = seedVelChk.checked;
@@ -1777,6 +1791,15 @@ function showTuning(data) {
     const series = t.partials.slice(0, 3).map((q) => `${g(q.f)} Hz`).join(", ");
     hint.textContent = `→ L = ${g(t.L)} m, ${bell}; fs = ${fmt(data.fs_sim)} Hz follows the pitch `
       + `so that λ = 1. Sounds ${series}, … ${t.warn ? "⚠ " : ""}${t.message}`;
+    hint.style.color = t.warn ? "var(--accent-2)" : "var(--muted)";
+    return;
+  }
+  // The reed (wind mapping plan §6): the tube the search found, and how far the reed pulls.
+  if (t.kind === "reed") {
+    const bell = t.r_ratio === null ? "no bell"
+      : `bell R/Z₀ = ${Number(t.r_ratio).toExponential(3)}`;
+    hint.textContent = `→ L = ${g(t.L)} m, ${bell}; found in ${t.runs} runs. `
+      + `${t.warn ? "⚠ " : ""}${t.message}`;
     hint.style.color = t.warn ? "var(--accent-2)" : "var(--muted)";
     return;
   }

@@ -19,6 +19,10 @@ use physsynth_core::bore::{self as bore, Bore, End};
 use physsynth_core::fmt::{py_exp, py_float};
 use physsynth_core::pyfloat::scalar_pow;
 use physsynth_core::reed::{self as reed, ReedBore};
+use physsynth_core::wind_tuning::{
+    bell_ratio, bore_t60, read_played_note, tune_reed_length, Heard, ReedSearch, ReedTuning,
+    ReedTuningError,
+};
 use serde_json::{json, Map, Value};
 
 use crate::energy::{energy_block, EnergyOpts};
@@ -69,6 +73,19 @@ pub const REED_PITCH_SECS: f64 = 0.6;
 /// The two reed frequencies of the pitch-leverage pair.
 pub const REED_PITCH_FREEDS: [f64; 2] = [2000.0, 3000.0];
 
+/// The musical pitch's default: D3, as on the bore — the agent's call (wind mapping plan §3).
+pub const REED_F0_DEFAULT: f64 = 146.83;
+/// The musical ring time's default (s), as on the bore — the agent's call (wind mapping plan §6:
+/// the onset barely moves with it, γ 0.34–0.43 over 0.05–40 s).
+pub const REED_T60_DEFAULT: f64 = 2.0;
+
+/// What the musical controls found (wind mapping plan §6).
+pub struct Musical {
+    pub f0: f64,
+    pub t60: Option<f64>,
+    pub tuning: ReedTuning,
+}
+
 /// What `_build_reed` reports beside the reed.
 pub struct Info {
     pub l: f64,
@@ -85,6 +102,7 @@ pub struct Info {
     pub ratio: f64,
     pub radiating: bool,
     pub r_bell: f64,
+    pub musical: Option<Musical>,
 }
 
 /// A `Bore` with the reference's defaults for `rho0` and `c0`.
@@ -128,9 +146,220 @@ fn pf(x: f64) -> String {
     py_float(x)
 }
 
+/// The page's reed on a tube of length `l` with the bell at `r_bell`, run for `steps` steps: its
+/// mouthpiece pressure, sample rate and closing pressure. What the musical search plays, and
+/// the render is the same rig run the same way.
+fn mouthpiece_run(
+    l: f64,
+    n: usize,
+    right: End,
+    r_bell: f64,
+    reed: (f64, f64, f64),
+    steps: usize,
+) -> Result<(Vec<f64>, f64, f64), Refusal> {
+    let fs = C0_AIR / (REED_LAMBDA * (l / n as f64));
+    let mut rb = reed_at_gamma(make_bore(l, fs, n, right, r_bell)?, reed.0, reed.1, reed.2)?;
+    let mut sig = Vec::with_capacity(steps);
+    for _ in 0..steps {
+        rb.step().map_err(|e| Refusal::Internal(format!("{e:?}")))?;
+        sig.push(rb.mouthpiece_pressure());
+    }
+    Ok((sig, fs, rb.params().p_closing))
+}
+
+/// The musical controls (wind mapping plan §3, §6): the tube length at which the reed PLAYS `f0`,
+/// searched on runs of the render's own rig and length, the bell rebuilt from each trial length.
+/// Every way the search can fail is refused in the terms of what to change.
+fn musical_tube(
+    p: &Value,
+    n: usize,
+    radiating: bool,
+    reed: (f64, f64, f64),
+    audio_dur: f64,
+) -> Result<Musical, Refusal> {
+    let f0 = fnum(p, "f0", REED_F0_DEFAULT)?;
+    let t60 = if radiating {
+        Some(fnum(p, "t60_low", REED_T60_DEFAULT)?)
+    } else {
+        None
+    };
+    if let Some(t) = t60 {
+        if !(t > 0.0 && t.is_finite()) {
+            return Err(Refusal::Param(format!(
+                "t60_low must be positive and finite, got {}.",
+                pf(t)
+            )));
+        }
+    }
+    let right = if radiating { End::Radiating } else { End::Open };
+    let z0 = RHO0_AIR * C0_AIR / (PI * REED_RADIUS * REED_RADIUS);
+    // fs = c0 N / L, and the reed plays flat of its tube's c0 / 4L: a pitch whose own tube is
+    // already over the budget cannot fit.
+    if f0 > 0.0 && 4.0 * n as f64 * f0 * audio_dur > REED_WORK_MAX as f64 {
+        return Err(Refusal::Param(format!(
+            "a {} Hz note at N = {n} over {} s needs more than {REED_WORK_MAX} steps (fs = c0 N / \
+             L, and the reed's tube is shorter than c0 / 4f0). At this N and duration the pitch \
+             must stay below {:.1} Hz; lower N or shorten the audio.",
+            pf(f0),
+            pf(audio_dur),
+            REED_WORK_MAX as f64 / (4.0 * n as f64 * audio_dur)
+        )));
+    }
+    let failed = std::cell::RefCell::new(None);
+    let found = tune_reed_length(f0, C0_AIR, &ReedSearch::default(), |l| {
+        // The render's own spelling of fs and of its step count.
+        let steps = round_int(audio_dur * (C0_AIR / (REED_LAMBDA * (l / n as f64)))).max(1);
+        if steps > REED_WORK_MAX {
+            *failed.borrow_mut() = Some(Refusal::Param(format!(
+                "the {l:.3} m tube this pitch needs runs {steps} steps over {} s (budget \
+                 {REED_WORK_MAX}): lower N or shorten the audio.",
+                pf(audio_dur)
+            )));
+            return Err("budget".into());
+        }
+        let r_bell = t60.map_or(0.0, |t| bell_ratio(l, t, C0_AIR) * z0);
+        match mouthpiece_run(l, n, right, r_bell, reed, steps as usize) {
+            Ok((sig, fs, pc)) => Ok(read_played_note(
+                &sig,
+                fs,
+                pc,
+                REED_SETTLE_FRAC,
+                REED_SPEAK_GATE,
+                C0_AIR / (4.0 * l),
+            )),
+            Err(r) => {
+                *failed.borrow_mut() = Some(r);
+                Err("run".into())
+            }
+        }
+    });
+    let tuning = found.map_err(|e| match e {
+        ReedTuningError::Run(_) => failed
+            .borrow_mut()
+            .take()
+            .unwrap_or_else(|| Refusal::Internal("the reed's run failed".into())),
+        e => Refusal::Param(reed_refusal(&e, f0, n, audio_dur)),
+    })?;
+    Ok(Musical { f0, t60, tuning })
+}
+
+/// A failed search, in the terms of what to change (wind mapping plan §6).
+fn reed_refusal(e: &ReedTuningError, f0: f64, n: usize, audio_dur: f64) -> String {
+    let at = |l: f64| format!("on the {l:.3} m tube");
+    match *e {
+        ReedTuningError::NonPositive(name) => format!("{name} must be positive and finite."),
+        ReedTuningError::Silent { l, level } => format!(
+            "the reed does not speak {} at this breath (level {level:.3}, the gate {}): blow \
+             harder (raise gamma).",
+            at(l),
+            pf(REED_SPEAK_GATE)
+        ),
+        ReedTuningError::TooShort { l } => format!(
+            "{} s of audio is too short to read a note this low {}: the last 40 % must hold the \
+             periods the reading needs — at least {:.2} s.",
+            pf(audio_dur),
+            at(l),
+            20.0 * 4.0 * l / C0_AIR
+        ),
+        ReedTuningError::Aperiodic { l } => format!(
+            "the reed sounds {} but nothing it sounds repeats: there is no note to tune. Move \
+             gamma or the reed.",
+            at(l)
+        ),
+        ReedTuningError::Squeak {
+            l,
+            played,
+            tube_note,
+        } => {
+            let fs = C0_AIR * n as f64 / l;
+            let what = if played > 0.4 * fs {
+                format!(
+                    "at the grid's top frequency (fs/2 = {:.0} Hz): a numerical ripple, not a note \
+                     — raise N or blow harder",
+                    0.5 * fs
+                )
+            } else {
+                "a squeak — blow more gently or soften the reed (lower f_reed)".to_owned()
+            };
+            format!(
+                "the reed does not play the tube's note {}: it sounds {played:.1} Hz, above the \
+                 tube's own {tube_note:.1} Hz, {what}.",
+                at(l)
+            )
+        }
+        ReedTuningError::Unsettled {
+            l,
+            played,
+            drift_cents,
+        } => format!(
+            "the note does not settle {} within the render: about {played:.1} Hz, moving \
+             {drift_cents:+.1} cents across its last 40 %. Lengthen the audio, or move gamma \
+             away from the onset.",
+            at(l)
+        ),
+        ReedTuningError::OutOfReach { l, played } => {
+            let (end, way, fix) = if l <= 0.1 + 1e-12 {
+                (
+                    "shortest",
+                    "highest",
+                    "lower the pitch or stiffen the reed (a higher f_reed pulls less)",
+                )
+            } else {
+                ("longest", "lowest", "raise the pitch")
+            };
+            format!(
+                "{} Hz is out of this reed's reach: on the page's {end} tube ({l} m) the {way} \
+                 note it plays is {played:.2} Hz — {fix}.",
+                pf(f0)
+            )
+        }
+        ReedTuningError::NoConvergence { l, played } => format!(
+            "the search did not land on {} Hz: its last run sounded {played:.2} Hz {}.",
+            pf(f0),
+            at(l)
+        ),
+        ReedTuningError::Run(ref msg) => msg.clone(),
+    }
+}
+
+/// The musical read-out (wind mapping plan §6): the tube the search found, the note it plays and
+/// how far the reed pulls it.
+fn tuning_block(m: &Musical, ratio: Option<f64>, audio_dur: f64) -> Value {
+    let t = &m.tuning;
+    let pull = 1200.0 * (t.played / t.tube_note).log2();
+    let short = audio_dur < 0.5;
+    let message = format!(
+        "the reed plays {:.2} Hz on a {:.4} m tube whose own note is {:.2} Hz — pulled {:.1} \
+         cents flat. Read to 0.1 cents on the render's last 40 %; a Fourier reading agrees \
+         within a cent at ordinary settings{}",
+        t.played,
+        t.l,
+        t.tube_note,
+        -pull,
+        if short {
+            ", but a render under 0.5 s catches the note still settling: a few cents."
+        } else {
+            ", a few cents at the extremes (full breath, the onset, very low notes)."
+        }
+    );
+    json!({
+        "kind": "reed",
+        "f0": num(m.f0),
+        "t60": m.t60.map_or(Value::Null, num),
+        "L": num(t.l),
+        "r_ratio": ratio.map_or(Value::Null, num),
+        "played": num(t.played),
+        "tube_note": num(t.tube_note),
+        "pull_cents": num(pull),
+        "runs": int(t.runs as i64),
+        "warn": short,
+        "message": message,
+    })
+}
+
 /// `_build_reed`.
-fn build(p: &Value) -> Result<(ReedBore, Info), Refusal> {
-    let l = fnum(p, "L", 0.5)?;
+fn build(p: &Value, audio_dur: f64) -> Result<(ReedBore, Info), Refusal> {
+    let mut l = fnum(p, "L", 0.5)?;
     let n = float_to_int(fnum(p, "N", 128.0)?).map_err(|e| match e {
         crate::py::IntError::NaN => {
             Refusal::Construction("cannot convert float NaN to integer".into())
@@ -181,7 +410,28 @@ fn build(p: &Value) -> Result<(ReedBore, Info), Refusal> {
             pf(q_reed)
         )));
     }
-    let ratio = scalar_pow(10.0, ratio_exp);
+    let radiating = domain == "radiating";
+    let mut ratio = scalar_pow(10.0, ratio_exp);
+    let mut musical = None;
+    if crate::bore::is_musical(p) {
+        let m = musical_tube(p, n as usize, radiating, (gamma, f_reed, q_reed), audio_dur)?;
+        l = m.tuning.l;
+        if let Some(t) = m.t60 {
+            // The bell from the SOLVED length (plan §6), not from c0 / 4 f0.
+            ratio = bell_ratio(l, t, C0_AIR);
+            if ratio < BORE_R_RATIO_MIN {
+                return Err(Refusal::Param(format!(
+                    "a ring time of {} s is longer than the bell can hold on the {:.3} m tube \
+                     this pitch needs: the longest is {} s (the bell's R/Z0 floor, {}).",
+                    pf(t),
+                    l,
+                    round_nd(bore_t60(l, BORE_R_RATIO_MIN, C0_AIR), 2),
+                    pf(BORE_R_RATIO_MIN)
+                )));
+            }
+        }
+        musical = Some(m);
+    }
     if !(BORE_R_RATIO_MIN..=BORE_R_RATIO_MAX).contains(&ratio) {
         return Err(Refusal::Param(format!(
             "the bell's R/Z0 must be in [{}, {}], got {}.",
@@ -191,7 +441,6 @@ fn build(p: &Value) -> Result<(ReedBore, Info), Refusal> {
         )));
     }
 
-    let radiating = domain == "radiating";
     let n = n as usize;
     let z0 = RHO0_AIR * C0_AIR / (PI * REED_RADIUS * REED_RADIUS);
     let fs = C0_AIR / (REED_LAMBDA * (l / n as f64));
@@ -214,6 +463,7 @@ fn build(p: &Value) -> Result<(ReedBore, Info), Refusal> {
         ratio,
         radiating,
         r_bell,
+        musical,
     };
     Ok((rb, info))
 }
@@ -544,9 +794,12 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
         )));
     }
 
-    let (mut rb, info) = build(p)?;
+    let (mut rb, info) = build(p, audio_dur)?;
     let (fs, l) = (info.fs, info.l);
     let f1 = C0_AIR / (4.0 * l);
+    // The odd-harmonic and beating windows sit on the note PLAYED in musical mode: the reed pulls
+    // it up to semitones flat of the tube's c0 / 4L, out of a window a few bins wide (plan §6).
+    let anchor = info.musical.as_ref().map_or(f1, |m| m.tuning.played);
     let n_steps = round_int(audio_dur * fs).max(1);
     if n_steps > REED_WORK_MAX {
         return Err(Refusal::Param(format!(
@@ -597,7 +850,25 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
         },
     );
     let sweep = sweep_block(&info)?;
-    Ok(json!({
+    let tuning = info.musical.as_ref().map(|m| {
+        let mut t = tuning_block(m, m.t60.map(|_| info.ratio), audio_dur);
+        // The render read the way the search read its runs: the same rig run the same way, so
+        // the same number, to the bit — or the search tuned a rig the page does not play.
+        let heard = read_played_note(
+            &r.pickup[1..],
+            fs,
+            info.p_closing,
+            REED_SETTLE_FRAC,
+            REED_SPEAK_GATE,
+            C0_AIR / (4.0 * l),
+        );
+        t["render_played"] = match heard {
+            Heard::Note { f, .. } => num(f),
+            _ => Value::Null,
+        };
+        t
+    });
+    let mut out = json!({
         "model": "reed",
         "fs_sim": num(round_nd(fs, 3)),
         "lambda": num(round_nd(info.lam, 6)),
@@ -652,9 +923,13 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
             "speaks": spoke,
             "ac_level": num(round_nd(ac_level, 6)),
             "envelope_ratio": num(round_nd(r.env[0] / env_last.max(1e-12), 2)),
-            "beating": beating_block(&r.opening, fs, f1),
-            "spectrum": signature_block(&r.pickup, &r.far, fs, f1, spoke),
+            "beating": beating_block(&r.opening, fs, anchor),
+            "spectrum": signature_block(&r.pickup, &r.far, fs, anchor, spoke),
             "sweep": sweep,
         },
-    }))
+    });
+    if let Some(t) = tuning {
+        out["tuning"] = t;
+    }
+    Ok(out)
 }
