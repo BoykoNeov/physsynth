@@ -1,5 +1,5 @@
-//! Musical controls for the strings on a bridge — the `body`, `radbody` and `sympathetic` pages
-//! (`docs/dev/string-mapping-plan.md` §16–§17).
+//! Musical controls for the strings on a bridge — the `body`, `radbody`, `sympathetic` and
+//! `platebody` pages (`docs/dev/string-mapping-plan.md` §16–§18).
 //!
 //! The pitch slider sets the note the COUPLED instrument plays, and the ring time a loss on the
 //! string, solved together by core's [`tune_coupled`] through the page's own build: the rig the
@@ -24,8 +24,10 @@ pub const COUPLED_T60_DEFAULT: f64 = 3.0;
 
 /// True when a coupled page's request asks for musical controls, on its `controls` select.
 pub fn is_musical(p: &Value) -> bool {
-    matches!(model_of(p).as_str(), "body" | "radbody" | "sympathetic")
-        && p.get("controls").and_then(Value::as_str) == Some("musical")
+    matches!(
+        model_of(p).as_str(),
+        "body" | "radbody" | "sympathetic" | "platebody"
+    ) && p.get("controls").and_then(Value::as_str) == Some("musical")
 }
 
 /// What a coupled page's musical request asks for.
@@ -150,6 +152,51 @@ pub fn over_budget(n_steps: i64, work_max: i64, fs: f64, audio: f64, runs: i64) 
         commas(n_steps),
         commas(work_max),
         runs_note(runs),
+        round_nd(fs, 0),
+        round_nd(audio, 2),
+        round_nd(audio_max, 2),
+    ))
+}
+
+/// [`check_budget_before`] for the plate page, whose budget counts node-steps: every step updates
+/// the plate's `n_live` nodes.
+pub fn check_node_budget_before(
+    f0: f64,
+    n: i64,
+    lam: f64,
+    audio: f64,
+    n_live: i64,
+    work_max: f64,
+) -> Result<(), Refusal> {
+    let fs_min = 2.0 * (f0 / 1.3) * n as f64 / lam;
+    let need = n_live as f64 * steps(audio, fs_min, 1) as f64;
+    if need <= work_max {
+        return Ok(());
+    }
+    let f0_max = 1.3 * work_max / (n_live as f64 * audio) * lam / (2.0 * n as f64);
+    Err(Refusal::Param(format!(
+        "work budget exceeded before tuning: any string that sounds {} Hz on this bridge runs at \
+         {} Hz or more, so the run takes at least ~{:.0}M node-steps > {:.0}M. No pitch above \
+         about {} Hz can fit these settings, and one below can still be refused once tuned, when \
+         its note needs a tighter string. Lower the pitch, shorten the audio, lower N or n_plate, \
+         or raise lambda.",
+        round_nd(f0, 2),
+        round_nd(fs_min, 0),
+        need / 1e6,
+        work_max / 1e6,
+        round_nd(f0_max, 1),
+    )))
+}
+
+/// [`over_budget`] for the plate page, in node-steps.
+pub fn over_node_budget(work: f64, work_max: f64, fs: f64, audio: f64, n_live: i64) -> Refusal {
+    let audio_max = work_max / n_live as f64 / fs;
+    Refusal::Param(format!(
+        "over budget: ~{:.0}M > {:.0}M node-steps: the tuned string runs at {} Hz, so {} s of \
+         audio does not fit. Shorten the audio to {} s or less, lower n_plate or N, raise lambda, \
+         or lower the pitch.",
+        work / 1e6,
+        work_max / 1e6,
         round_nd(fs, 0),
         round_nd(audio, 2),
         round_nd(audio_max, 2),

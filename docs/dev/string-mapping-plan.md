@@ -823,3 +823,112 @@ own rig saw it.
 the pitch, follows its note by the same straight-line nearest-root bracket that confused the
 near-unison pair; a refusal's read-out on a detuned two-string page has not been tested against
 it. Not fixed here.
+
+## 18. Slice 4, Part 3: the plate page — its notes read off its modes (2026-10-20)
+
+**Timed first** (probe `W:\temp\claude\platebody-probe`, the page's defaults: `N = 100`,
+`lambda = 0.9`, `K = 3000`, `kappa = 20`, a 1 m square plate). The plate makes the one-step map
+`2 (N + n_live)` states: 362 at `n_plate = 8`, 778 at the default 16 (free) and 3140 at 24. One
+full spectrum (`eig::general_eigenvalues`) took 0.22 s, 2.7 s and 37 s; the supported plate, with
+fewer live nodes, 0.06 s, 0.8 s and 22 s. The existing solver, run as is on the smallest plate:
+98 Hz pitch-only 20 s (free, 175 builds) and 2.6 s (supported, 52); 220 Hz 201 s (free, 716) and
+53 s (supported, 230); 98 Hz at 3 s 246 s (free, 514) and 93 s (supported, 385). At the default
+plate every spectrum is about twelve times dearer: minutes to tens of minutes a tuning.
+
+**The human's twelfth answer, 2026-10-20: the fast method, pitch and ring time** (not chosen: the
+fast method for the pitch only, the ring time off on this page; the slow solver with the plate
+capped at 8 x 8 in musical mode). Asked with the timings above and with the fast method's check
+against the map (below).
+
+**The method** (`crates/physsynth-core/src/coupled_plate.rs`; its header has the derivation). The
+bridge's step is linear, so its modes solve `P(z) x = 0`,
+`P(z) = (z - 2 + 1/z) M_theta + k^2 K + k (z - 1/z) C`: the plate's θ-scheme puts
+`theta k^2 K_p` on the mass side, the spring is read at time `n`, and each part's loss sits on its
+own mass (the string's end node too, since `end_correction` divides the pull by `1 + sigma k`,
+§16 Part 0). The string and the plate diagonalize separately — their symmetric pencils
+`(K_s, M_s)`, `(K_p, M_p)` also diagonalize `M_theta` and `C` part by part — and neither depends
+on the tension or the timestep, so `PlateModes::of` computes them once per request (4–80 ms at
+8–16, 3 s at the free 24). Mode by mode the scheme is a scalar quadratic `q_i(z)`, the spring
+couples them through rank one, and `det P = prod q_i * (1 + k^2 K z sum v_i^2 / q_i)`. All its
+roots by Aberth's iteration, about ten sweeps: 2–11 ms a spectrum at 8–16, 0.2 s at 24. The string
+share is `sum_string |v_i / q_i|^2` over the whole, the modes being mass-orthonormal. The core's
+`Coupled` trait gained two hooks, `spectrum` and `string_share`, whose defaults are the old code
+(the body, radiating-body and two-string rigs run exactly what they ran).
+
+*Checked before it was built* (probe): the lossless symmetric pencil matched the map's roots to
+1e-11–1e-13; Rayleigh-functional refinement on the sparse `P(z)` matched the lossy map (plate loss
+20–40, string loss 5–250) to 1e-12 in pitch and 1e-11 in decay; the modal roots matched every root
+in the band on both edges, lossless, lossy, the string loss at the cap, `K` 12,000, to about 1e-11.
+On the free 24 x 24 plate two notes differed from the map's by 4e-10; the sparse refinement,
+independent of both, sided with the modal roots, so that is the dense QR's own error at 3140
+states.
+
+*Deflation, which the first build lacked.* Aberth converged two starts onto one root and lost a
+note — the very 98 Hz being tuned, on the free 8 x 8 plate. Two kinds of mode keep their own roots
+and leave the iteration: the rest of a repeated plate eigenvalue (a square plate's `(m, n)` and
+`(n, m)`: one combination carries the group's summed `v^2`, the others are orthogonal to the drive
+point), and a mode the spring moves by less than 1e-14 in `z` (a node at the drive point; every
+mode at `K = 0`). A deflated root's share is its part's alone, 1 or 0.
+
+*Two defects the viewer bar found, not the core bars.* The core bars ran the page's own rig; the
+viewer's runs every setting off its default (`N = 40`, `lambda = 0.85`, `L = 0.8`, `rho = 0.004`,
+the supported 10 x 10 plate at plate loss 5, `K = 4500`):
+
+- an iterate landed on a root to the last bit, the coupling factor `g` was exactly 0, and the
+  step, spelled through `g'/g`, was `0/0` (2656.8 Hz). It is now spelled
+  `g / (g sum q'/q + g')`. Core bar `a_root_hit_exactly_is_a_root` pins that rig.
+- a near-double root by the Nyquist (`z = -0.99984`) is known only to about the square root of
+  roundoff, and its correction wandered at 8e-12 for the whole 200-sweep cap. A root now also
+  settles once its correction is under 1e-9 and has stopped shrinking.
+
+**The page** (`crates/physsynth-viewer/src/platebody.rs`): split into `setup` (the `T` slider
+unread in musical mode) and `assemble(t, sigma)`, as the other coupled pages; the solver builds
+through `assemble` and wraps each build in `ModalPlateBridge`, the modes computed once from the
+request's rig at `K = 0` (they do not depend on the spring, and the guard always passes there).
+The near-nut probe that reads `terminus_f1` now builds the tuned rig, not the slider's. The budget
+counts node-steps (`n_live x steps`, 1e8), so the early refusal has its own form
+(`check_node_budget_before`, at the slackest string that could sound the pitch) and so has the one
+after (`over_node_budget`). The energy panel judges a lossy run when the plate or the string has
+loss.
+
+*The agent's call, for the human to override: the plate page's pitch defaults to 55 Hz.* 98 Hz,
+the other coupled pages' default, is a wolf on both edges of the default plate (free: the note
+carries 24 % of the string's motion and a 66 Hz note 35 %; supported: 36 % against 61 % at
+57 Hz). A scan of ten pitches on the free plate found 55, 65.41, 73.42, 146.83 and 164.81 Hz
+clean; 55 and 146.83 are clean on the supported plate too, and 55 Hz renders in 1.4 s where 146.83
+takes 3–9 s. The free plate is a wolf at most pitches: its modes are dense.
+
+*Timing* (one render at a time, optimised, the whole payload): pitch alone 1.3–5 s at the default
+plate up to about 130 Hz, 8–13 s at 147–247 Hz on the free plate (the run itself grows with the
+tension; 3–4 s on the supported); with a
+ring time 6–20 s; the free 24 x 24 plate at `N = 160` with a ring time 25 s. The "tuning…" notice
+says 5–20 s for this page with the ring time on.
+
+*Bars.* Core, in `tests/coupled_tuning.rs` (CI's optimised-only lane, where the human's eighth
+answer put that file): `the_plate_modes_give_the_maps_notes` (both edges; lossless, lossy, the
+string loss at 0.45 of the cap, `K` 12,000 and 0: every band root's pitch to 1e-10, decay to
+`1e-9 * 2 pi f`, share to 1e-8, against the map's), `a_mode_the_spring_cannot_reach_is_plate_alone`
+(the supported plate driven at its centre, whose `(2, 2)` mode has no twin),
+`a_root_hit_exactly_is_a_root`, `the_plate_instrument_plays_and_rings_its_targets` (the 16 x 16
+plate on both edges and the 8 x 8 with plate loss, played and rung off the run: pitch 1e-9, ring
+1e-6), `the_plate_tuning_through_the_map_agrees` (`f_cl` to 1e-9 against the slow solver), and
+`plate_modes_refuse_another_bridge`. Viewer, in `tests/coupled_musical.rs`: the plate page on both
+edges joins every shared bar (physics untouched by the musical keys, the lossless twin to the
+byte, the note played and rung on the file's own rig, the last energy on it), plus
+`the_plate_page_refuses_over_budget_before_tuning`. Headless check: two new cases (the free page
+lossless at its defaults, the supported page with a ring time); its test for the plate page's own
+read-out matched `model=plate` and so caught `platebody` too, and now matches `model=plate&`.
+62/62.
+
+*Plants* (each red): no deflation — three core bars; the share without the `1/|q|^2` weights —
+two; `theta` dropped from the plate's mass side — three; the plate's loss dropped — two; the
+mismatch check off — its bar; a deflated root's share from the coupled formula — survived at
+first: every unreachable mode of the page's rigs is a twin's other half, where that formula gives
+0 as well, so the centre-driven bar was written for it, and it is red; the step through `g'/g` —
+`a_root_hit_exactly_is_a_root` and two viewer bars; no floor rule — the core's maps-notes bar and
+two viewer bars; no shift deflation — the centre-driven bar.
+
+*Not done:* the dense key over a sweep of pitches and ring times, as §16 ran for the body rigs. The
+search is the same code; what changed is where its spectra and shares come from, and those are
+held to the map's on the rigs above. One full tuning is compared through both
+(`the_plate_tuning_through_the_map_agrees`, supported 8 x 8, lossless).

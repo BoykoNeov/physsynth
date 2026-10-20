@@ -233,6 +233,13 @@ const CASES: &[(&str, &str)] = &[
         "symp_musical_transfer",
         "model=sympathetic&domain=transfer&controls=musical&N=40&detune=1.5&ring_time=false",
     ),
+    // The string on a plate (plan §18): read off the plate's modes, both edges, the ring time
+    // off at the page's default and on, on a coarser grid.
+    ("platebody_musical", "model=platebody&controls=musical&ring_time=false"),
+    (
+        "platebody_musical_ring",
+        "model=platebody&domain=supported&controls=musical&N=48&n_plate=10&ring_time=true&t60_low=1",
+    ),
     ("airload", "model=airload"),
     // The first `dims: 3` field, shipped as a slice set. Plane buffers are C order (nv fastest), and
     // a front-end decoding them u-fastest TRANSPOSES the picture â plausible banding, not an error.
@@ -629,9 +636,14 @@ fn horizon_mark_ok(mark: &Value, horizon: &str) -> (bool, String) {
 /// A musical request on one of the strings on a bridge.
 fn musical_coupled(query: &str) -> bool {
     query.contains("controls=musical")
-        && ["model=body&", "model=radbody&", "model=sympathetic&"]
-            .iter()
-            .any(|m| query.starts_with(m))
+        && [
+            "model=body&",
+            "model=radbody&",
+            "model=sympathetic&",
+            "model=platebody&",
+        ]
+        .iter()
+        .any(|m| query.starts_with(m))
 }
 
 fn first_line(s: &Value) -> String {
@@ -705,7 +717,8 @@ fn run_case(
     // ring times; a free plate's also says how far from exact it is.
     let musical = query.contains("controls=musical");
     let plate_tuning = probe["plateTuning"].as_str().unwrap_or("");
-    let plate_tuning_ok = if musical && query.contains("model=plate") {
+    // `model=plate&`, not `model=plate`: the latter also names the string on a plate (`platebody`).
+    let plate_tuning_ok = if musical && query.contains("model=plate&") {
         plate_tuning.contains(" mm")
             && plate_tuning.contains("κ =")
             && plate_tuning.contains("Ring times")

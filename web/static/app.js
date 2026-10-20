@@ -293,6 +293,9 @@ const MODEL_RANGES = {
   // conservation drift, > 0 -> passivity, no 2σ oracle -- the off-modal coupled decay is multi-rate).
   // Every re-ranged param (bridge_stiffness, n_plate, sigma_plate, distance) resets in _default.
   platebody: { N: { min: 16, max: 160, val: 100 },
+               // Musical (plan §18): 55 Hz plays clean on both edges of the default plate, and
+               // renders fastest (the agent's call); 98 Hz, the other coupled pages', is a wolf here.
+               f0: { val: 55 }, t60_low: { min: 0.05, max: 20, step: 0.05, fixed: 2, val: 3 },
                lambda: { min: 0.5, max: 0.99, step: 0.01, fixed: 2, val: 0.9 },
                bridge_stiffness: { min: 0, max: 12000, step: 250, fixed: 0, val: 3000, unit: "N/m" },
                n_plate: { min: 8, max: 24, step: 1, fixed: 0, val: 16 },
@@ -607,13 +610,15 @@ const CONTROL_OPTS = {
             ["musical", "Musical — the played pitch, ring time"]],
   sympathetic: [["physical", "Physics — T, ρ, λ"],
                 ["musical", "Musical — the played pitch, ring time"]],
+  platebody: [["physical", "Physics — T, ρ, λ"],
+              ["musical", "Musical — the played pitch, ring time"]],
 };
 
 // The strings whose musical controls are a pitch and ONE ring time (string mapping plan §13).
 const ONE_RING_MODELS = ["ideal", "jawari", "juari", "fret"];
 
 // The strings on a bridge, whose musical pitch is solved through the coupling (plan §16–§17).
-const COUPLED_MODELS = ["body", "radbody", "sympathetic"];
+const COUPLED_MODELS = ["body", "radbody", "sympathetic", "platebody"];
 
 // The models whose drum takes the head-and-pitch musical controls (the drum in a room among them).
 const DRUM_MODELS = ["membrane", "mallet", "drumroom"];
@@ -1656,11 +1661,15 @@ function setStatus(text, cls) {
 let rendering = false;
 let renderPending = false;
 
-// What a coupled page's tuning costs, timed at the default N = 100 (plan §17), for the wait notice.
+// What a coupled page's tuning costs, timed at the default N = 100 (plan §17; the plate page's, read
+// off its modes, at its default 16 x 16 plate, plan §18), for the wait notice.
 function tuningNotice() {
   const ring = $("coupled-ring").checked;
   const two = modelSel.value === "sympathetic";
-  const est = ring ? (two ? "about 2 minutes" : "20–30 s") : (two ? "about 15 s" : "a few seconds");
+  const plate = modelSel.value === "platebody";
+  const est = ring
+    ? (two ? "about 2 minutes" : plate ? "5–20 s" : "20–30 s")
+    : (two ? "about 15 s" : "a few seconds");
   return `tuning… solving the tension through the bridge${ring ? " and the string's loss" : ""} `
     + `(${est} at N = 100)`;
 }
@@ -1807,8 +1816,9 @@ function showCoupledTuning(data) {
   let text = `→ T = ${g(t.T)} N (the string alone would sound ${g(t.f_cl)} Hz), `
     + `σ = ${g(t.sigma)} s⁻¹, λ = ${data.lambda}. On the bridge it plays ${g(t.note.f)} Hz and `
     + `${rings(t.note)}, ${pct(t.note.share)} of that note's motion on the string`;
-  text += t.ring_time ? "."
-    : "; the string is lossless, so the ring time is whatever the body and the air give.";
+  // The plate page's far field is a read-out only: its plate's own loss is the only other one.
+  const rest = data.model === "platebody" ? "the plate's loss gives" : "the body and the air give";
+  text += t.ring_time ? "." : `; the string is lossless, so the ring time is whatever ${rest}.`;
   if (t.louder) {
     text += ` ⚠ Split band (a wolf note): a louder note at ${g(t.louder.f)} Hz carries `
       + `${pct(t.louder.share)}.`;

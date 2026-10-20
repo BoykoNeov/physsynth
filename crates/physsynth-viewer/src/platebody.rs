@@ -9,8 +9,14 @@
 //! * the terminus fundamental comes from a DEDICATED near-nut probe, because both the user's pluck
 //!   and the free end mislead once the end pins;
 //! * the `omega²` sanity check divides by the plate's VOLUME displacement, not the driving point.
+//!
+//! With `controls: "musical"` the pitch is the note the coupled instrument plays and the ring time a
+//! loss on the string, solved through this page's own rig ([`crate::coupled`]); the solver reads
+//! the notes off the string's and the plate's modes ([`ModalPlateBridge`]), because the one-step
+//! map's spectrum takes seconds at this page's grids (string mapping plan §18).
 
 use physsynth_core::connection::StringPlateBridge;
+use physsynth_core::coupled_plate::{ModalPlateBridge, PlateModes};
 use physsynth_core::exciter::triangular_pluck;
 use physsynth_core::fmt::py_float;
 use physsynth_core::plate::{self as pl, Boundary as PlateBoundary, Plate, PlateSpec};
@@ -20,6 +26,7 @@ use physsynth_core::string_ideal::{self as ideal, Boundary, IdealString};
 use serde_json::{json, Value};
 
 use crate::body::{np_extreme, omega2_consistency, opt_finite, pooled_spectrum, terminus_f1};
+use crate::coupled;
 use crate::energy::{energy_block, EnergyOpts};
 use crate::membrane::decimate_field_mask;
 use crate::plate::discrete_eigenfreqs;
@@ -108,12 +115,28 @@ struct Info {
     lam: f64,
     k: f64,
     sigma_plate: f64,
+    /// The string's own loss: zero on the physics path, the solved one in musical mode.
+    sigma_string: f64,
     boundary: PlateBoundary,
     n_live: usize,
 }
 
-/// `_build_platebody_bridge`.
-fn build(p: &Value) -> Result<(Bridge, Info), Refusal> {
+/// The request's rig, checked, before the string's tension and loss are chosen.
+struct Setup {
+    boundary: PlateBoundary,
+    l: f64,
+    /// The `T` slider; unread (1) in musical mode, where the pitch sets it.
+    t: f64,
+    rho: f64,
+    lam: f64,
+    k: f64,
+    sigma_plate: f64,
+    n: i64,
+    n_plate: i64,
+}
+
+/// `_build_platebody_bridge`'s checks.
+fn setup(p: &Value, musical: bool) -> Result<Setup, Refusal> {
     let dv = p.get("domain").cloned().unwrap_or(json!("free"));
     let dom = py_str(&dv);
     if dom != "supported" && dom != "free" {
@@ -123,7 +146,7 @@ fn build(p: &Value) -> Result<(Bridge, Info), Refusal> {
         )));
     }
     let l = fnum(p, "L", 1.0)?;
-    let t = fnum(p, "T", 200.0)?;
+    let t = if musical { 1.0 } else { fnum(p, "T", 200.0)? };
     let rho = fnum(p, "rho", 0.005)?;
     let lam = fnum(p, "lambda", PLATEBODY_LAM_DEFAULT)?;
     let k = fnum(p, "bridge_stiffness", PLATEBODY_K_DEFAULT)?;
@@ -174,6 +197,42 @@ fn build(p: &Value) -> Result<(Bridge, Info), Refusal> {
             pf(sigma_plate)
         )));
     }
+    let boundary = if dom == "free" {
+        PlateBoundary::Free
+    } else {
+        PlateBoundary::Supported
+    };
+    Ok(Setup {
+        boundary,
+        l,
+        t,
+        rho,
+        lam,
+        k,
+        sigma_plate,
+        n,
+        n_plate,
+    })
+}
+
+/// `_build_platebody_bridge`'s rig at tension `t` and string loss `sigma`.
+fn assemble(s: &Setup, t: f64, sigma: f64) -> Result<(Bridge, Info), Refusal> {
+    assemble_with(s, t, sigma, s.k)
+}
+
+/// [`assemble`] with bridge spring `k`: the plate's modes are the same at every spring, and at
+/// `K = 0` the guard always passes.
+fn assemble_with(s: &Setup, t: f64, sigma: f64, k: f64) -> Result<(Bridge, Info), Refusal> {
+    let Setup {
+        boundary,
+        l,
+        rho,
+        lam,
+        sigma_plate,
+        n,
+        n_plate,
+        ..
+    } = *s;
     let c = (t / rho).sqrt();
     let fs = c * n as f64 / (l * lam);
     let sp = ideal::Params::new(
@@ -182,17 +241,12 @@ fn build(p: &Value) -> Result<(Bridge, Info), Refusal> {
         rho,
         fs,
         n,
-        0.0,
+        sigma,
         Some((Boundary::Fixed, Boundary::Free)),
     )
     .map_err(construction)?;
     let string = IdealString::new(sp);
     let lam_s = string.params().lam;
-    let boundary = if dom == "free" {
-        PlateBoundary::Free
-    } else {
-        PlateBoundary::Supported
-    };
     // `nu` is passed to the free plate only, as the reference's two constructor calls do.
     let spec = PlateSpec {
         lx: PLATEBODY_SIDE,
@@ -221,6 +275,7 @@ fn build(p: &Value) -> Result<(Bridge, Info), Refusal> {
             lam: lam_s,
             k,
             sigma_plate,
+            sigma_string: sigma,
             boundary,
             n_live,
         },
@@ -235,9 +290,18 @@ fn qvol(plate: &Plate) -> f64 {
     }
 }
 
-/// `_platebody_terminus_f1`: the coupled fundamental from a dedicated near-nut-pluck probe.
-fn terminus_probe(p: &Value, c: f64, l: f64, fs: f64, n_string: i64) -> Result<f64, Refusal> {
-    let (mut bridge, _) = build(p)?;
+/// `_platebody_terminus_f1`: the coupled fundamental from a dedicated near-nut-pluck probe, on a
+/// fresh copy of the page's rig (in musical mode the tuned one).
+fn terminus_probe(
+    s: &Setup,
+    t: f64,
+    sigma: f64,
+    c: f64,
+    l: f64,
+    fs: f64,
+    n_string: i64,
+) -> Result<f64, Refusal> {
+    let (mut bridge, _) = assemble(s, t, sigma)?;
     let x = bridge.string().params().grid();
     let u0 = triangular_pluck(&x, l, PLATEBODY_TERMINUS_PLUCK * l, PLATEBODY_AMP_DEFAULT)
         .map_err(construction)?;
@@ -290,11 +354,47 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
         )));
     }
 
-    let (mut bridge, info) = build(p)?;
+    let musical = coupled::is_musical(p);
+    let s = setup(p, musical)?;
+    let (t_run, (mut bridge, info), tuning) = if musical {
+        // Plan §18: the tension and string loss at which this rig plays the targets, read off the
+        // string's and the plate's modes — the one-step map's spectrum takes seconds here.
+        let tg = coupled::targets(p)?;
+        let t0 = coupled::tension_at(s.rho, s.l, tg.f0);
+        let (at_rest, info0) = assemble_with(&s, t0, 0.0, 0.0)?;
+        coupled::check_node_budget_before(
+            tg.f0,
+            s.n,
+            s.lam,
+            audio_dur,
+            info0.n_live as i64,
+            PLATEBODY_WORK_MAX,
+        )?;
+        let modes = PlateModes::of(&at_rest).map_err(|e| Refusal::Param(e.to_string()))?;
+        let tu = coupled::tune(&tg, |f_cl, sigma| {
+            let t = coupled::tension_at(s.rho, s.l, f_cl);
+            let (b, _) = assemble(&s, t, sigma).ok()?;
+            ModalPlateBridge::new(b, &modes).ok()
+        })?;
+        let t = coupled::tension_at(s.rho, s.l, tu.f_cl);
+        let block = coupled::tuning_block(&tg, &tu, t, json!({}));
+        (t, assemble(&s, t, tu.sigma)?, Some(block))
+    } else {
+        (s.t, assemble(&s, s.t, 0.0)?, None)
+    };
     let (c, l, fs, lam) = (info.c, info.l, info.fs, info.lam);
     let f1_base = c / (2.0 * l);
     let n_steps = round_int(audio_dur * fs).max(1);
     let work = info.n_live as i64 * n_steps;
+    if work as f64 > PLATEBODY_WORK_MAX && musical {
+        return Err(coupled::over_node_budget(
+            work as f64,
+            PLATEBODY_WORK_MAX,
+            fs,
+            audio_dur,
+            info.n_live as i64,
+        ));
+    }
     if work as f64 > PLATEBODY_WORK_MAX {
         return Err(Refusal::Param(format!(
             "over budget: ~{:.0}M > {:.0}M node-steps. Lower the audio duration, n_plate, or N.",
@@ -416,7 +516,10 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
         // `null` when the plate never moves (K = 0): the reference shipped NaN, which its own
         // strict JSON writer refused — the body scene's decision, carried (§23.10).
         "omega2_consistency": opt_finite(round_nd(omega2_consistency(&qaccel, &qv, fs, f_max), 3)),
-        "terminus_f1": opt_finite(round_nd(terminus_probe(p, c, l, fs, info.n)?, 2)),
+        "terminus_f1": opt_finite(round_nd(
+            terminus_probe(&s, t_run, info.sigma_string, c, l, fs, info.n)?,
+            2
+        )),
         "f1_free": num(round_nd(c / (4.0 * l), 2)),
         "f1_clamped": num(round_nd(c / (2.0 * l), 2)),
         "distance": num(round_nd(distance, 3)),
@@ -446,7 +549,8 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
     let (audio48, peak) = resample_normalize(&pressure, fs);
     let time: Vec<f64> = (0..total.len()).map(|i| i as f64 / fs).collect();
     let times: Vec<f64> = frame_steps.iter().map(|&i| i as f64 / fs).collect();
-    Ok(json!({
+    let lossless = info.sigma_plate == 0.0 && info.sigma_string == 0.0;
+    let mut payload = json!({
         "model": "platebody",
         "boundary": boundary,
         "fs_sim": num(round_nd(fs, 3)),
@@ -480,7 +584,7 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
             "peak": num(peak),
             "n": int(audio48.len() as i64),
         },
-        "energy": energy_block(&time, &total, info.sigma_plate == 0.0, 0.0, EnergyOpts {
+        "energy": energy_block(&time, &total, lossless, 0.0, EnergyOpts {
             no_decay_oracle: true,
             ..EnergyOpts::default()
         }),
@@ -496,5 +600,9 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
             "exchange": exchange,
             "spectrum": spectrum,
         },
-    }))
+    });
+    if let Some(b) = tuning {
+        payload["tuning"] = b;
+    }
+    Ok(payload)
 }

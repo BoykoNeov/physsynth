@@ -97,6 +97,7 @@ pub mod bore;
 pub mod bow;
 pub mod collision;
 pub mod connection;
+pub mod coupled_plate;
 pub mod coupled_tuning;
 pub mod dense;
 pub mod eig;

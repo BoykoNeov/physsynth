@@ -1357,6 +1357,25 @@ impl<P: BridgePlate> StringPlateBridge<P> {
 
     // -- helpers -------------------------------------------------------------------------------
 
+    /// Total degrees of freedom, `N + n_live`: the string's nodes `1..=N`, then the plate's live
+    /// nodes.
+    pub fn dofs(&self) -> usize {
+        self.string.params().n + self.plate.linear().n_live
+    }
+
+    /// The diagonal mass in [`StringPlateBridge::dofs`]'s order: `rho h` per interior string
+    /// node, `rho h / 2` at the free end, then the plate's [`PlateParams::node_masses`].
+    pub fn mass_diagonal(&self) -> Vec<f64> {
+        let sp = self.string.params();
+        let mut m = Vec::with_capacity(self.dofs());
+        for i in 0..sp.n {
+            let cell = if i + 1 == sp.n { 0.5 } else { 1.0 };
+            m.push(cell * (sp.rho * sp.h));
+        }
+        m.extend(self.plate.linear().node_masses());
+        m
+    }
+
     /// Spring stretch `eta = u_end - w_dp`, at step `n` or (`prev`) `n - 1`.
     pub fn stretch(&self, prev: bool) -> f64 {
         let s = &self.string;

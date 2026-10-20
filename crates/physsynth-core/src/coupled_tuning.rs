@@ -63,8 +63,9 @@ use std::cell::Cell;
 use std::f64::consts::{LN_10, PI};
 
 use crate::body::ModalBody;
-use crate::connection::{BridgeBody, StringBodyBridge, SympatheticStrings};
+use crate::connection::{BridgeBody, StringBodyBridge, StringPlateBridge, SympatheticStrings};
 use crate::eig;
+use crate::plate::Plate;
 use crate::radiation::RadiatedBody;
 
 /// Points of the scan over `f_cl`, across its range of about 2.4 octaves: a step of 5.3 %, small
@@ -167,6 +168,42 @@ pub trait Coupled {
     fn set_levels(&mut self, x: &[f64]);
     /// One step of the integrator.
     fn advance(&mut self);
+
+    /// Every root of the one-step map, conjugate pairs complete; the solver reads the upper half.
+    ///
+    /// The default builds the map from [`Coupled::advance`] and computes its whole spectrum with
+    /// [`eig::general_eigenvalues`] — what every rig used until the plate: its map is several
+    /// hundred states and that took seconds a spectrum, so a rig may compute the same roots another
+    /// way ([`crate::coupled_plate`]).
+    ///
+    /// # Errors
+    /// [`CoupledError::Unconverged`] when the spectrum does not settle.
+    fn spectrum(&mut self) -> Result<Vec<(f64, f64)>, CoupledError>
+    where
+        Self: Sized,
+    {
+        let (phi, dim) = one_step_map(self);
+        eig::general_eigenvalues(&phi, dim)
+            .map_err(|_| CoupledError::Unconverged("the one-step map's spectrum"))
+    }
+
+    /// The string share of the mode at root `z`: `sum_string m |x^n|^2 / sum m |x^n|^2` over its
+    /// eigenvector, with [`Coupled::masses`] as the weights. The default finds the eigenvector by
+    /// inverse iteration on the one-step map.
+    ///
+    /// # Errors
+    /// [`CoupledError::Unconverged`] when the eigenvector does not settle.
+    fn string_share(&mut self, z: (f64, f64)) -> Result<f64, CoupledError>
+    where
+        Self: Sized,
+    {
+        let (d, ns, m) = (self.n_dofs(), self.n_string_dofs(), self.masses());
+        let (phi, dim) = one_step_map(self);
+        let (_, v) = root_near(&phi, dim, z, None)?;
+        let weight = |i: usize| m[i] * (v[i].0 * v[i].0 + v[i].1 * v[i].1);
+        let total: f64 = (0..d).map(weight).sum();
+        Ok((0..ns).map(weight).sum::<f64>() / total)
+    }
 }
 
 impl<B: LevelBody> Coupled for StringBodyBridge<B> {
@@ -254,6 +291,53 @@ impl Coupled for SympatheticStrings {
     }
     fn advance(&mut self) {
         self.step();
+    }
+}
+
+/// The string-on-plate bridge, read the default way: its spectrum from the one-step map. Seconds
+/// a spectrum at the plate page's grids, so the page tunes through [`ModalPlateBridge`], which
+/// computes the same roots from the modes; this is the reference the bars hold it to.
+///
+/// [`ModalPlateBridge`]: crate::coupled_plate::ModalPlateBridge
+impl Coupled for StringPlateBridge<Plate> {
+    fn k(&self) -> f64 {
+        self.timestep()
+    }
+    fn n_dofs(&self) -> usize {
+        self.dofs()
+    }
+    fn n_string_dofs(&self) -> usize {
+        self.string().params().n
+    }
+    fn masses(&self) -> Vec<f64> {
+        self.mass_diagonal()
+    }
+    fn string_loss(&self) -> f64 {
+        self.string().params().sigma
+    }
+    fn levels(&self) -> Vec<f64> {
+        let (s, p) = (self.string(), self.plate());
+        let mut x = s.u[1..].to_vec();
+        x.extend_from_slice(&p.u);
+        x.extend_from_slice(&s.u_prev[1..]);
+        x.extend_from_slice(&p.u_prev);
+        x
+    }
+    fn set_levels(&mut self, x: &[f64]) {
+        let d = self.dofs();
+        let n = self.string().params().n;
+        let s = self.string_mut();
+        s.u[0] = 0.0;
+        s.u_prev[0] = 0.0;
+        s.u[1..].copy_from_slice(&x[..n]);
+        s.u_prev[1..].copy_from_slice(&x[d..d + n]);
+        // The plate's step reads only `u` and `u_prev`; `accel` is a read-out of the last step.
+        let p = self.plate_mut();
+        p.u.copy_from_slice(&x[n..d]);
+        p.u_prev.copy_from_slice(&x[d + n..]);
+    }
+    fn advance(&mut self) {
+        let Ok(()) = self.step(&mut ());
     }
 }
 
@@ -646,9 +730,7 @@ fn band_roots<R: Coupled>(rig: &mut R, x: f64) -> Result<Vec<Root>, CoupledError
 /// Every root of the one-step map in the upper half-plane (one of each conjugate pair).
 fn all_roots<R: Coupled>(rig: &mut R) -> Result<Vec<Root>, CoupledError> {
     let k = rig.k();
-    let (phi, dim) = one_step_map(rig);
-    let ev = eig::general_eigenvalues(&phi, dim)
-        .map_err(|_| CoupledError::Unconverged("the one-step map's spectrum"))?;
+    let ev = rig.spectrum()?;
     Ok(ev
         .into_iter()
         .filter(|z| z.1 > 0.0)
@@ -690,15 +772,9 @@ fn follow(a: &[Root], b: &[Root]) -> Vec<(Root, Root)> {
     out
 }
 
-/// The string share of the mode at root `z`: its eigenvector by inverse iteration, then
-/// `sum_string m |x^n|^2 / sum m |x^n|^2`.
+/// The string share of the mode at root `z` ([`Coupled::string_share`]).
 fn share_of<R: Coupled>(rig: &mut R, z: C) -> Result<f64, CoupledError> {
-    let (d, ns, m) = (rig.n_dofs(), rig.n_string_dofs(), rig.masses());
-    let (phi, dim) = one_step_map(rig);
-    let (_, v) = root_near(&phi, dim, z, None)?;
-    let weight = |i: usize| m[i] * (v[i].0 * v[i].0 + v[i].1 * v[i].1);
-    let total: f64 = (0..d).map(weight).sum();
-    Ok((0..ns).map(weight).sum::<f64>() / total)
+    rig.string_share(z)
 }
 
 /// The tension and string loss for the damped pitch `f0` and decay rate `a0`, following the note

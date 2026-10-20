@@ -691,6 +691,15 @@ impl Params {
         }
     }
 
+    /// The lumped mass of each live node (kg) — the weights of [`energy`]'s kinetic term: `rho h^2`
+    /// supported, `rho w_i` free (`W` already carries the `h^2`).
+    pub fn node_masses(&self) -> Vec<f64> {
+        match self.boundary {
+            Boundary::Supported => vec![self.rho * (self.h * self.h); self.n_live],
+            Boundary::Free => self.w.iter().map(|w| self.rho * w).collect(),
+        }
+    }
+
     /// Validate, derive, assemble the operators and factor `A`.
     ///
     /// The checks run in the Python original's order, so a call that is wrong in more than one way

@@ -1,5 +1,5 @@
-//! The strings on a bridge — the `body`, `radbody` and `sympathetic` pages — through their musical
-//! controls (`docs/dev/string-mapping-plan.md` §16–§17).
+//! The strings on a bridge — the `body`, `radbody`, `sympathetic` and `platebody` pages — through
+//! their musical controls (`docs/dev/string-mapping-plan.md` §16–§18).
 //!
 //! The tuning is held by core's `tests/coupled_tuning.rs`, which reads every tuned note off a run.
 //! What is held here is the wiring, three ways:
@@ -19,9 +19,10 @@ use std::f64::consts::{LN_10, PI};
 
 use common::{base_params, f, merge, ok, sim};
 use physsynth_core::body::{self as body, ModalBody};
-use physsynth_core::connection::{StringBodyBridge, SympatheticStrings};
+use physsynth_core::connection::{StringBodyBridge, StringPlateBridge, SympatheticStrings};
 use physsynth_core::coupled_tuning::{damped_mode, Coupled};
 use physsynth_core::exciter::triangular_pluck;
+use physsynth_core::plate::{self as pl, Boundary as PlateBoundary, Plate, PlateSpec};
 use physsynth_core::radiation::RadiatedBody;
 use physsynth_core::string_ideal::{Boundary, IdealString, Params};
 use serde_json::{json, Value};
@@ -62,6 +63,17 @@ fn pages() -> Vec<(&'static str, Value)> {
             "weinreich",
             json!({"model": "sympathetic", "domain": "weinreich", "K": 5000.0,
                    "sigma_body": 15.0, "detune": 0.2}),
+        ),
+        // The plate page on both edges, its plate grid and loss off their defaults.
+        (
+            "platebody",
+            json!({"model": "platebody", "domain": "supported", "bridge_stiffness": 4500.0,
+                   "sigma_plate": 5.0, "n_plate": 10}),
+        ),
+        (
+            "platefree",
+            json!({"model": "platebody", "domain": "free", "bridge_stiffness": 2500.0,
+                   "n_plate": 9}),
         ),
     ]
 }
@@ -106,6 +118,7 @@ enum Rig {
     Body(StringBodyBridge<ModalBody>),
     Rad(StringBodyBridge<RadiatedBody>),
     Two(SympatheticStrings),
+    Plate(Box<StringPlateBridge<Plate>>),
 }
 
 fn string(t: f64, sigma: f64, fs: f64) -> IdealString {
@@ -150,6 +163,34 @@ fn rig_of(req: &Value, tuning: &Value) -> Rig {
             )
             .unwrap(),
         ),
+        "platebody" => {
+            let free = req["domain"].as_str() == Some("free");
+            let spec = PlateSpec {
+                lx: 1.0,
+                ly: 1.0,
+                kappa: 20.0,
+                rho: 0.005,
+                fs,
+                n: num(req, "n_plate", 16.0) as i64,
+                sigma: num(req, "sigma_plate", 0.0),
+                boundary: Some(if free {
+                    PlateBoundary::Free
+                } else {
+                    PlateBoundary::Supported
+                }),
+                nu: free.then_some(0.3),
+                ..PlateSpec::default()
+            };
+            Rig::Plate(Box::new(
+                StringPlateBridge::new(
+                    string(t, sigma, fs),
+                    Plate::new(pl::Params::new(&spec).unwrap()),
+                    num(req, "bridge_stiffness", 3000.0),
+                    None,
+                )
+                .unwrap(),
+            ))
+        }
         "radbody" => Rig::Rad(
             StringBodyBridge::new(
                 string(t, sigma, fs),
@@ -197,6 +238,7 @@ fn played(req: &Value, tuning: &Value) -> (f64, f64) {
         Rig::Body(mut r) => note_on(&mut r, tuning),
         Rig::Rad(mut r) => note_on(&mut r, tuning),
         Rig::Two(mut r) => note_on(&mut r, tuning),
+        Rig::Plate(mut r) => note_on(r.as_mut(), tuning),
     }
 }
 
@@ -221,6 +263,14 @@ fn last_energy(req: &Value, tuning: &Value, steps: usize) -> f64 {
             r.string_mut(0).set_state(&u0, &v0);
             for _ in 0..steps {
                 r.step();
+            }
+            r.energy()
+        }
+        Rig::Plate(mut r) => {
+            let (u0, v0) = pluck(&r.string().params().grid());
+            r.string_mut().set_state(&u0, &v0);
+            for _ in 0..steps {
+                let _ = r.step(&mut ());
             }
             r.energy()
         }
@@ -276,7 +326,14 @@ fn a_lossless_musical_page_is_the_physics_page_on_the_tuned_string() {
 /// plays the pitch and rings the time on this file's rig, and the page's run is that rig's run.
 #[test]
 fn the_tuned_note_plays_and_rings_on_the_pages_own_rig() {
-    for name in ["body", "radbody", "normal", "transfer"] {
+    for name in [
+        "body",
+        "radbody",
+        "normal",
+        "transfer",
+        "platebody",
+        "platefree",
+    ] {
         let req = musical(&page(name), json!({}));
         let payload = ok(&req);
         let tuning = &payload["tuning"];
@@ -286,7 +343,7 @@ fn the_tuned_note_plays_and_rings_on_the_pages_own_rig() {
         assert!((t60 - 1.0).abs() < 1e-6, "{name}: rings {t60}");
         // The energy panel judges a lossy run.
         assert_eq!(payload["energy"]["sigma_is_zero"], json!(false), "{name}");
-        if name == "body" || name == "transfer" {
+        if matches!(name, "body" | "transfer" | "platebody") {
             let steps = payload["meta"]["num_steps"].as_i64().unwrap() as usize;
             let values = payload["energy"]["value"].as_array().unwrap();
             let want = last_energy(&req, tuning, steps);
@@ -433,6 +490,24 @@ fn a_run_over_budget_at_any_tension_is_refused_before_tuning() {
         "{msg}"
     );
     assert!(start.elapsed().as_secs_f64() < 1.0, "it tuned first");
+}
+
+/// The plate page counts its budget in node-steps (every step updates the whole plate): at its
+/// largest grids 500 Hz overruns it at any tension, and the page says so before computing the
+/// plate's modes, which take seconds there.
+#[test]
+fn the_plate_page_refuses_over_budget_before_tuning() {
+    let p = musical(
+        &page("platefree"),
+        json!({"N": 160, "n_plate": 24, "f0": 500.0, "audio_duration": 3.0, "lambda": 0.9}),
+    );
+    let start = std::time::Instant::now();
+    let msg = refusal(&p);
+    assert!(
+        msg.contains("before tuning") && msg.contains("node-steps") && msg.contains("n_plate"),
+        "{msg}"
+    );
+    assert!(start.elapsed().as_secs_f64() < 2.0, "it tuned first");
 }
 
 /// 196 Hz on the body at `N = 100`: the slackest string that could sound it fits 3 s, the tuned

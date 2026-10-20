@@ -15,10 +15,12 @@
 use std::f64::consts::{LN_10, PI};
 
 use physsynth_core::body::{self as body, ModalBody};
-use physsynth_core::connection::{StringBodyBridge, SympatheticStrings};
+use physsynth_core::connection::{StringBodyBridge, StringPlateBridge, SympatheticStrings};
+use physsynth_core::coupled_plate::{ModalPlateBridge, PlateModes, PlateModesError};
 use physsynth_core::coupled_tuning::{
     damped_mode, string_sigma, tune_coupled, Coupled, CoupledError, CoupledTuning,
 };
+use physsynth_core::plate::{self, Boundary as PlateBoundary, Plate, PlateSpec};
 use physsynth_core::radiation::RadiatedBody;
 use physsynth_core::string_ideal::{Boundary, IdealString, Params as StringParams};
 
@@ -607,4 +609,291 @@ fn the_hard_cases_tune_and_play() {
             t.note.share
         );
     }
+}
+
+// -- the string on a plate: the notes from the modes (plan §18) ------------------------------------
+
+/// The plate page's rig: the string on a 1 m square plate (`kappa = 20`, `rho = 0.005`, Poisson
+/// 0.3 on the free edge) at the bridge's default drive point.
+fn plate_rig(
+    free: bool,
+    n_plate: i64,
+    k_spring: f64,
+    sigma_plate: f64,
+) -> impl Fn(f64, f64) -> Option<StringPlateBridge<Plate>> {
+    move |f_cl, sigma| {
+        let s = string_at(f_cl, sigma)?;
+        let spec = PlateSpec {
+            lx: 1.0,
+            ly: 1.0,
+            kappa: 20.0,
+            rho: 0.005,
+            fs: fs_at(f_cl),
+            n: n_plate,
+            sigma: sigma_plate,
+            boundary: Some(if free {
+                PlateBoundary::Free
+            } else {
+                PlateBoundary::Supported
+            }),
+            nu: free.then_some(0.3),
+            ..PlateSpec::default()
+        };
+        let plate = Plate::new(plate::Params::new(&spec).ok()?);
+        StringPlateBridge::new(s, plate, k_spring, None).ok()
+    }
+}
+
+/// `(pitch, decay rate)` of each root in the band `(f_cl / 4, 1.3 f_cl)`, ascending.
+fn band_notes(roots: &[(f64, f64)], k: f64, f_cl: f64) -> Vec<(f64, f64)> {
+    let mut v: Vec<(f64, f64)> = roots
+        .iter()
+        .filter(|z| z.1 > 0.0)
+        .map(|z| (z.1.atan2(z.0) / (2.0 * PI * k), -z.0.hypot(z.1).ln() / k))
+        .filter(|n| f_cl / 4.0 < n.0 && n.0 < 1.3 * f_cl)
+        .collect();
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    v
+}
+
+/// The modes give the one-step map's own notes — every root in the band, its pitch, its decay and
+/// its string share — on both edges, lossless and lossy, from a light string loss to near the
+/// scheme's cap `sigma k = 1/2`, at the page's default spring and its ceiling. The free plate at
+/// `f_cl = 146.12` is where an undeflated search lost the 98 Hz note.
+#[test]
+fn the_plate_modes_give_the_maps_notes() {
+    for free in [true, false] {
+        for (k_spring, sigma_plate, f_cl, q) in [
+            (3000.0, 0.0, 146.1158754170798, 0.0),
+            (3000.0, 20.0, 146.12, 1.5e-4),
+            (3000.0, 40.0, 146.12, 0.45),
+            (12000.0, 10.0, 300.0, 0.0),
+            // No spring: every mode is its part's alone, string share 1 or 0.
+            (0.0, 10.0, 146.12, 1e-3),
+        ] {
+            let rig = plate_rig(free, 8, k_spring, sigma_plate);
+            let sigma = q * fs_at(f_cl);
+            let mut dense = rig(f_cl, sigma).expect("the guard passes");
+            let modes = PlateModes::of(&dense).expect("modes");
+            let mut modal = ModalPlateBridge::new(rig(f_cl, sigma).unwrap(), &modes).unwrap();
+            let k = dense.k();
+            let name = format!("free {free}, K {k_spring}, plate loss {sigma_plate}, q {q}");
+            let all = modal.spectrum().expect("the modal roots");
+            assert_eq!(all.len(), 2 * dense.n_dofs(), "{name}: every root");
+            let want = band_notes(&dense.spectrum().unwrap(), k, f_cl);
+            let got = band_notes(&all, k, f_cl);
+            assert_eq!(got.len(), want.len(), "{name}: {got:?} against {want:?}");
+            for (g, w) in got.iter().zip(&want) {
+                assert!(
+                    (g.0 / w.0 - 1.0).abs() < 1e-10,
+                    "{name}: {g:?} against {w:?}"
+                );
+                assert!(
+                    (g.1 - w.1).abs() < 1e-9 * 2.0 * PI * w.0,
+                    "{name}: {g:?} against {w:?}"
+                );
+            }
+            for z in all.iter().filter(|z| z.1 > 0.0) {
+                let f = z.1.atan2(z.0) / (2.0 * PI * k);
+                if !(f_cl / 4.0 < f && f < 1.3 * f_cl) {
+                    continue;
+                }
+                let s_modal = modal.string_share(*z).unwrap();
+                let s_dense = dense.string_share(*z).unwrap();
+                assert!(
+                    (s_modal - s_dense).abs() < 1e-8,
+                    "{name}, {f:.3} Hz: share {s_modal} against {s_dense}"
+                );
+            }
+        }
+    }
+}
+
+/// A mode with a nodal line through the drive point, and no twin to share an eigenvalue with, is
+/// out of the spring's reach: the supported plate's `(2, 2)` driven at the centre. Its note is the
+/// plate's alone — share 0, where the one-step map's is roundoff — and the coupled modes' formula
+/// would give it a share. (Every unreachable mode of the page's own rigs is a twin's other half,
+/// where that formula happens to give 0 as well.)
+#[test]
+fn a_mode_the_spring_cannot_reach_is_plate_alone() {
+    let f_cl = 250.0;
+    let s = string_at(f_cl, 0.0).unwrap();
+    let spec = PlateSpec {
+        lx: 1.0,
+        ly: 1.0,
+        kappa: 20.0,
+        rho: 0.005,
+        fs: fs_at(f_cl),
+        n: 8,
+        boundary: Some(PlateBoundary::Supported),
+        ..PlateSpec::default()
+    };
+    let p = plate::Params::new(&spec).unwrap();
+    let centre = plate::pickup_index_at(0.5, 0.5, &p);
+    let build = || {
+        let plate = Plate::new(plate::Params::new(&spec).unwrap());
+        StringPlateBridge::new(s.clone(), plate, 3000.0, Some(centre)).unwrap()
+    };
+    let mut dense = build();
+    let modes = PlateModes::of(&dense).unwrap();
+    let mut modal = ModalPlateBridge::new(build(), &modes).unwrap();
+    let k = dense.k();
+    let mut alone = 0;
+    for z in modal.spectrum().unwrap().iter().filter(|z| z.1 > 0.0) {
+        let f = z.1.atan2(z.0) / (2.0 * PI * k);
+        if !(f_cl / 4.0 < f && f < 1.3 * f_cl) {
+            continue;
+        }
+        let (s_modal, s_dense) = (
+            modal.string_share(*z).unwrap(),
+            dense.string_share(*z).unwrap(),
+        );
+        assert!(
+            (s_modal - s_dense).abs() < 1e-8,
+            "{f:.3} Hz: share {s_modal} against {s_dense}"
+        );
+        // Deflated, the share is exactly 0; a mode the spring barely reaches keeps its own.
+        if s_modal == 0.0 {
+            assert!(s_dense < 1e-12, "{f:.3} Hz: the map's share {s_dense}");
+            alone += 1;
+        }
+    }
+    assert!(alone > 0, "a mode the spring cannot reach, in the band");
+}
+
+/// The viewer bar's plate rig, at the tension where an iterate landed on a root to the last bit
+/// (2656.8 Hz; the coupling factor was exactly 0 and its derivative over it `0/0`): every root,
+/// and the band's agree with the map's.
+#[test]
+fn a_root_hit_exactly_is_a_root() {
+    let (l, rho, lam, n, t): (f64, f64, f64, i64, f64) = (0.8, 0.004, 0.85, 40, 242.93297389186517);
+    let fs = (t / rho).sqrt() * n as f64 / (l * lam);
+    let build = || {
+        let s = StringParams::new(
+            l,
+            t,
+            rho,
+            fs,
+            n,
+            0.0,
+            Some((Boundary::Fixed, Boundary::Free)),
+        )
+        .unwrap();
+        let spec = PlateSpec {
+            lx: 1.0,
+            ly: 1.0,
+            kappa: 20.0,
+            rho: 0.005,
+            fs,
+            n: 10,
+            sigma: 5.0,
+            boundary: Some(PlateBoundary::Supported),
+            ..PlateSpec::default()
+        };
+        let plate = Plate::new(plate::Params::new(&spec).unwrap());
+        StringPlateBridge::new(IdealString::new(s), plate, 4500.0, None).unwrap()
+    };
+    let mut dense = build();
+    let modes = PlateModes::of(&dense).unwrap();
+    let mut modal = ModalPlateBridge::new(build(), &modes).unwrap();
+    let all = modal.spectrum().expect("every root");
+    assert_eq!(all.len(), 2 * dense.n_dofs());
+    let k = dense.k();
+    let f_cl = (t / rho).sqrt() / (2.0 * l);
+    let (got, want) = (
+        band_notes(&all, k, f_cl),
+        band_notes(&dense.spectrum().unwrap(), k, f_cl),
+    );
+    assert_eq!(got.len(), want.len());
+    for (g, w) in got.iter().zip(&want) {
+        assert!((g.0 / w.0 - 1.0).abs() < 1e-10, "{g:?} against {w:?}");
+    }
+}
+
+/// Tuned through the modes, the plate page's instrument plays the pitch and rings the time, read
+/// off its own integrator — on the page's own 16 x 16 plate, both edges, and with the plate's loss.
+#[test]
+fn the_plate_instrument_plays_and_rings_its_targets() {
+    for (free, n_plate, sigma_plate, f0, t60) in [
+        (true, 16, 0.0, 98.0, None),
+        (true, 16, 0.0, 98.0, Some(3.0)),
+        (false, 16, 0.0, 220.0, Some(1.0)),
+        (true, 8, 20.0, 146.83, Some(0.5)),
+    ] {
+        let rig = plate_rig(free, n_plate, 3000.0, sigma_plate);
+        let modes = PlateModes::of(&rig(f0, 0.0).unwrap()).unwrap();
+        let modal = |x: f64, s: f64| ModalPlateBridge::new(rig(x, s)?, &modes).ok();
+        let t = tune_coupled(f0, t60, modal).expect("tunes");
+        let name = format!("free {free} {n_plate}x{n_plate}, plate loss {sigma_plate}, {f0} Hz");
+        let mut r = rig(t.f_cl, t.sigma).unwrap();
+        let (f, rings, residual) = played(&mut r, t.root, t.note.f, 99, 3000);
+        eprintln!(
+            "{name} {t60:?}: f_cl {:.4}, sigma {:.4}, plays {:+.2e}, share {:.3}, louder {:?}",
+            t.f_cl,
+            t.sigma,
+            f / f0 - 1.0,
+            t.note.share,
+            t.louder_neighbour()
+        );
+        assert!(residual < 1e-9, "{name}: not one mode ({residual:.2e})");
+        assert!(((f - f0) / f0).abs() < 1e-9, "{name}: plays {f} Hz");
+        assert!(
+            ((t.note.f - f0) / f0).abs() < 1e-11,
+            "{name}: reports {}",
+            t.note.f
+        );
+        if let Some(want) = t60 {
+            assert!(
+                ((t.note.t60 - want) / want).abs() < 1e-8,
+                "{name}: {}",
+                t.note.t60
+            );
+            assert!(
+                ((rings - want) / want).abs() < 1e-6,
+                "{name}: rings {rings} s"
+            );
+        }
+    }
+}
+
+/// The search is the same search: tuned through the one-step map instead, the plate rig lands on
+/// the same tension and the same note.
+#[test]
+fn the_plate_tuning_through_the_map_agrees() {
+    let rig = plate_rig(false, 8, 3000.0, 0.0);
+    let modes = PlateModes::of(&rig(98.0, 0.0).unwrap()).unwrap();
+    let modal = |x: f64, s: f64| ModalPlateBridge::new(rig(x, s)?, &modes).ok();
+    let a = tune_coupled(98.0, None, modal).expect("tunes through the modes");
+    let b = tune_coupled(98.0, None, &rig).expect("tunes through the map");
+    assert!(
+        (a.f_cl / b.f_cl - 1.0).abs() < 1e-9,
+        "{} against {}",
+        a.f_cl,
+        b.f_cl
+    );
+    assert!((a.note.share - b.note.share).abs() < 1e-8);
+    assert_eq!(a.others.len(), b.others.len());
+}
+
+/// Modes computed from one bridge refuse another: a different grid, plate or drive point would be
+/// read with the wrong modes, silently.
+#[test]
+fn plate_modes_refuse_another_bridge() {
+    let modes = PlateModes::of(&plate_rig(true, 8, 3000.0, 0.0)(100.0, 0.0).unwrap()).unwrap();
+    for (other, what) in [
+        (
+            plate_rig(false, 8, 3000.0, 0.0)(100.0, 0.0),
+            "the other edge",
+        ),
+        (plate_rig(true, 10, 3000.0, 0.0)(100.0, 0.0), "another grid"),
+    ] {
+        assert_eq!(
+            ModalPlateBridge::new(other.unwrap(), &modes).err(),
+            Some(PlateModesError::Mismatch),
+            "{what}"
+        );
+    }
+    // The tension, the losses and the spring are read off each rig: those may differ.
+    let other = plate_rig(true, 8, 9000.0, 30.0)(250.0, 7.0).unwrap();
+    assert!(ModalPlateBridge::new(other, &modes).is_ok());
 }
