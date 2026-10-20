@@ -126,3 +126,4 @@ pub mod string_ideal;
 pub mod string_nonlinear;
 pub mod string_stiff;
 pub mod string_tuning;
+pub mod wind_tuning;

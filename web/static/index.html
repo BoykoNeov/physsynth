@@ -50,7 +50,7 @@
         </label>
         <!-- The plate's CONTROL SET (plate mapping plan §7). Its own select because the plate's
              domain select already means supported / free / guitar. Filled from CONTROL_OPTS. -->
-        <label class="field" data-show="plate membrane mallet drumroom vk bow tension ideal stiff jawari juari fret body radbody sympathetic" style="margin-top:8px">
+        <label class="field" data-show="plate membrane mallet drumroom vk bow tension ideal stiff jawari juari fret body radbody sympathetic bore" style="margin-top:8px">
           <span>Controls</span>
           <select id="controls"></select>
         </label>
@@ -59,11 +59,11 @@
       <!-- The bore joins this group for L alone. Its medium is AIR — ρ₀ and c₀ are properties of
            the medium, not tunable the way string tension is — so ρ needs an explicit list that
            leaves the bore out, rather than the blanket "every model in this fieldset" it had. -->
-      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk bore reed drumroom" data-hide-musical="plate membrane mallet drumroom vk">
+      <fieldset class="group" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk bore reed drumroom" data-hide-musical="plate membrane mallet drumroom vk bore">
         <legend>Physical</legend>
         <div class="slider" data-param="T"   data-min="20"   data-max="800"  data-step="1"     data-val="200"   data-unit="N" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet drumroom" data-hide-domain="musical" data-hide-musical="bow tension ideal stiff jawari juari fret body radbody sympathetic platebody"></div>
         <div class="slider" data-param="rho" data-min="0.001" data-max="0.02" data-step="0.0005" data-val="0.005" data-unit="kg/m²" data-fixed="4" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox membrane mallet plate vk drumroom" data-hide-musical="plate tension"></div>
-        <div class="slider" data-param="L"   data-min="0.25" data-max="2.0"  data-step="0.05"  data-val="1.0"   data-unit="m" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox bore reed"></div>
+        <div class="slider" data-param="L"   data-min="0.25" data-max="2.0"  data-step="0.05"  data-val="1.0"   data-unit="m" data-show="ideal stiff damped tension bow geometric sympathetic jawari juari fret body platebody radbody airload airbox bore reed" data-hide-musical="bore"></div>
       </fieldset>
 
       <!-- The damped string's musical controls (parameter-mapping plan §6). The server maps them to
@@ -74,7 +74,7 @@
            SHARED with the plate's musical controls (plate mapping plan §7): pitch, both ring times,
            the reference and the sample rate mean the same there. data-musical shows the group only
            when that model's musical controls are on. -->
-      <fieldset class="group" data-musical="damped bow tension ideal stiff jawari juari fret plate membrane mallet drumroom vk body radbody sympathetic platebody">
+      <fieldset class="group" data-musical="damped bow tension ideal stiff jawari juari fret plate membrane mallet drumroom vk body radbody sympathetic platebody bore">
         <legend>Musical controls</legend>
         <div class="slider" data-param="f0" data-min="27.5" data-max="1000" data-step="0.1" data-val="110" data-unit="Hz" data-fixed="1"></div>
         <div class="slider" data-param="inharmonicity" data-min="0" data-max="0.02" data-step="0.0001" data-val="0.0001" data-fixed="4" data-show="damped bow stiff"></div>
@@ -495,7 +495,7 @@
            already provides physically. -->
       <fieldset class="group" data-show="bore reed">
         <legend>Bell</legend>
-        <div class="slider" data-param="bell_ratio_exp" data-min="-4" data-max="1.4" data-step="0.1" data-val="-3.5" data-fixed="1" data-domain="radiating"></div>
+        <div class="slider" data-param="bell_ratio_exp" data-min="-4" data-max="1.4" data-step="0.1" data-val="-3.5" data-fixed="1" data-domain="radiating" data-hide-musical="bore"></div>
         <p class="hint" id="bore-hint"></p>
       </fieldset>
 

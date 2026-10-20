@@ -16,6 +16,7 @@ use physsynth_core::eigs::eigsh_shift_invert;
 use physsynth_core::fmt::py_float;
 use physsynth_core::pyfloat::scalar_pow;
 use physsynth_core::sparse::Csr;
+use physsynth_core::wind_tuning::{bore_partial, bore_t60, tune_bore};
 use serde_json::{json, Value};
 
 use crate::contact::band_spectrum;
@@ -155,11 +156,104 @@ struct Info {
     radiating: bool,
     r_bell: f64,
     resonant: bool,
+    /// The musical targets `(f0, t60)` the tube was built from; `t60` is `None` on the open end.
+    musical: Option<(f64, Option<f64>)>,
+}
+
+/// The musical pitch's default: D3, a B-flat clarinet's lowest sounding note — the agent's call
+/// (wind mapping plan §3).
+pub const BORE_F0_DEFAULT: f64 = 146.83;
+/// The musical ring time's default (s) — the agent's call (wind mapping plan §3).
+pub const BORE_T60_DEFAULT: f64 = 2.0;
+
+/// True when a bore or reed request asks for musical controls (`controls`, because both pages'
+/// `domain` is already the far end).
+pub fn is_musical(p: &Value) -> bool {
+    p.get("controls").and_then(Value::as_str) == Some("musical")
+}
+
+/// The tube length and the bell's `R/Z0` from a pitch and a ring time (wind mapping plan §2): exact
+/// at every partial at `lambda = 1`. The ring time is read only with a bell — the ideal open end
+/// loses nothing (the human's call, plan §3) — and the page's `L` and `R/Z0` ranges are refused in
+/// the musical terms they limit.
+pub fn musical_tube(
+    p: &Value,
+    radiating: bool,
+    f0_default: f64,
+    t60_default: f64,
+) -> Result<(f64, Option<f64>, f64, Option<f64>), Refusal> {
+    let f0 = fnum(p, "f0", f0_default)?;
+    let t60 = if radiating {
+        Some(fnum(p, "t60_low", t60_default)?)
+    } else {
+        None
+    };
+    let tu = tune_bore(f0, t60, C0_AIR).map_err(|e| Refusal::Param(e.to_string()))?;
+    if !(0.1..=2.0).contains(&tu.l) {
+        return Err(Refusal::Param(format!(
+            "f0 must be in [{}, {}] Hz here — the tube is 0.1 to 2 m long at c0 = {} m/s — got {}.",
+            round_nd(C0_AIR / 8.0, 2),
+            round_nd(C0_AIR / 0.4, 2),
+            pf(C0_AIR),
+            pf(f0)
+        )));
+    }
+    if let (Some(t), Some(ratio)) = (t60, tu.r_ratio) {
+        if ratio < BORE_R_RATIO_MIN {
+            return Err(Refusal::Param(format!(
+                "a ring time of {} s is longer than the bell can hold at {} Hz: the longest is \
+                 {} s (the bell's R/Z0 floor, {}). Shorten the ring time or lower the pitch.",
+                pf(t),
+                pf(f0),
+                round_nd(bore_t60(tu.l, BORE_R_RATIO_MIN, C0_AIR), 2),
+                pf(BORE_R_RATIO_MIN)
+            )));
+        }
+    }
+    Ok((tu.l, tu.r_ratio, f0, t60))
+}
+
+/// The musical read-out (wind mapping plan §2): what the targets mapped to and the partials it
+/// sounds, each from the closed form the scheme meets exactly at `lambda = 1`.
+pub fn tuning_block(f0: f64, t60: Option<f64>, l: f64, ratio: Option<f64>) -> Value {
+    let partials: Vec<Value> = (1..=5)
+        .map(|m| {
+            json!({
+                "f": num(bore_partial(m, l, C0_AIR)),
+                "t60": ratio.map_or(Value::Null, |r| num(bore_t60(l, r, C0_AIR))),
+            })
+        })
+        .collect();
+    let warn = ratio.is_some_and(|r| r > BORE_RESONANT_RATIO);
+    let message = match t60 {
+        None => "the ideal open end loses nothing, so the tube rings forever: only the pitch is \
+                 set."
+            .to_owned(),
+        Some(_) if warn => format!(
+            "a ring this short takes a bell past R/Z0 = {}: the tube barely forms a standing wave, \
+             so the odd-harmonic panel does not apply.",
+            pf(BORE_RESONANT_RATIO)
+        ),
+        Some(t) => format!(
+            "every partial sounds on the odd series of f0 and rings {} s — exact at λ = 1.",
+            pf(t)
+        ),
+    };
+    json!({
+        "kind": "bore",
+        "f0": num(f0),
+        "t60": t60.map_or(Value::Null, num),
+        "L": num(l),
+        "r_ratio": ratio.map_or(Value::Null, num),
+        "partials": partials,
+        "warn": warn,
+        "message": message,
+    })
 }
 
 /// `_build_bore`.
 fn build(p: &Value) -> Result<(Bore, Info), Refusal> {
-    let l = fnum(p, "L", 0.5)?;
+    let mut l = fnum(p, "L", 0.5)?;
     let n = int_of(fnum(p, "N", 128.0)?)?;
     let ratio_exp = fnum(p, "bell_ratio_exp", -3.5)?;
     let dv = p.get("domain").cloned().unwrap_or(json!("radiating"));
@@ -169,6 +263,15 @@ fn build(p: &Value) -> Result<(Bore, Info), Refusal> {
             "bore end must be 'radiating' or 'open', got {}.",
             crate::py::repr_str(&domain)
         )));
+    }
+    let mut musical = None;
+    let mut mapped_ratio = None;
+    if is_musical(p) {
+        let (ml, ratio, f0, t60) =
+            musical_tube(p, domain == "radiating", BORE_F0_DEFAULT, BORE_T60_DEFAULT)?;
+        l = ml;
+        mapped_ratio = ratio;
+        musical = Some((f0, t60));
     }
     if !(0.1..=2.0).contains(&l) {
         return Err(Refusal::Param(format!(
@@ -181,7 +284,7 @@ fn build(p: &Value) -> Result<(Bore, Info), Refusal> {
             "N must be in [{BORE_N_MIN}, {BORE_N_MAX}] for the bore, got {n}."
         )));
     }
-    let ratio = scalar_pow(10.0, ratio_exp);
+    let ratio = mapped_ratio.unwrap_or_else(|| scalar_pow(10.0, ratio_exp));
     if !(BORE_R_RATIO_MIN..=BORE_R_RATIO_MAX).contains(&ratio) {
         return Err(Refusal::Param(format!(
             "the bell's R/Z0 must be in [{}, {}], got {} (bell_ratio_exp = {}).",
@@ -207,6 +310,7 @@ fn build(p: &Value) -> Result<(Bore, Info), Refusal> {
         radiating,
         r_bell: b.params().r_bell,
         resonant: !radiating || ratio <= BORE_RESONANT_RATIO,
+        musical,
     };
     Ok((b, info))
 }
@@ -424,10 +528,18 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
     let n_steps = round_int(audio_dur * fs).max(1);
     let n_refl = if info.radiating { n } else { 0 };
     if n_steps + n_refl > BORE_WORK_MAX {
+        // Musical: fs = c0 N / L = 4 N f0, so the pitch spends the budget too — name the highest
+        // that fits at this N and duration.
+        let fits = if info.musical.is_some() {
+            let f_max = (BORE_WORK_MAX - n_refl) as f64 / (4.0 * n as f64 * audio_dur);
+            format!(" At this N and duration the highest pitch that fits is {f_max:.1} Hz.")
+        } else {
+            String::new()
+        };
         return Err(Refusal::Param(format!(
             "this configuration needs {} steps across the render and the reflection run (budget \
              {BORE_WORK_MAX}). At lambda = 1, fs = c0*N/L — so N buys the sample rate, not just \
-             the grid. Shorten audio_duration or lower N.",
+             the grid. Shorten audio_duration or lower N.{fits}",
             n_steps + n_refl
         )));
     }
@@ -489,8 +601,11 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
     let rad_frames: Vec<f64> = frame_rad.iter().map(|v| v / e0).collect();
     let times: Vec<f64> = frame_steps.iter().map(|&i| i as f64 / fs).collect();
     let ends = json!(["closed", if info.radiating { "radiating" } else { "open" }]);
+    let tuning = info
+        .musical
+        .map(|(f0, t60)| tuning_block(f0, t60, l, t60.map(|_| info.ratio)));
 
-    Ok(json!({
+    let mut out = json!({
         "model": "bore",
         "fs_sim": num(round_nd(fs, 3)),
         "lambda": num(round_nd(info.lam, 6)),
@@ -534,5 +649,9 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
             "dispersion": dispersion_block(l)?,
             "spectrum": signature_block(&pickup, fs, &info)?,
         },
-    }))
+    });
+    if let Some(t) = tuning {
+        out["tuning"] = t;
+    }
+    Ok(out)
 }

@@ -240,7 +240,12 @@ const MODEL_RANGES = {
   // audio_duration's min is 0.25 because that is where the odd/even gate is measured (the ratio is
   // set by the FFT window, not by physics). animation_window is re-ranged HARD — the shared 0.3 max
   // is a cost hole: at N = 256 even 0.3 s is 52k animation steps on top of the render.
+  // Its musical pitch spans the tube's 0.1–2 m at c₀ = 343 (c₀/4L), D3 by default (a B♭ clarinet's
+  // lowest note), and its ring time reaches the 60 s a long tube's bell can hold (wind mapping plan
+  // §3: both the agent's calls).
   bore: { N: { min: 32, max: 256, val: 128 }, L: { val: 0.5 },
+          f0: { min: 43, max: 857, step: 0.01, fixed: 2, val: 146.83 },
+          t60_low: { min: 0.05, max: 60, step: 0.05, fixed: 2, val: 2 },
           pickup_position: { val: 0.1 },
           bell_ratio_exp: { min: -4, max: 1.4, step: 0.1, fixed: 1, val: -3.5 },
           audio_duration: { min: 0.25, max: 1.5, step: 0.05, fixed: 2, val: 0.5 },
@@ -422,8 +427,9 @@ const MODEL_RANGES = {
               air_h: { min: 0.02, max: 0.10, step: 0.005, fixed: 3, val: 0.03, unit: "m" },
               wall_zeta: { min: 0.1, max: 50, step: 0.1, fixed: 1, val: 3.0 },
               plate_N: { min: 8, max: 16, step: 1, fixed: 0, val: 16 },
-              // The gong's musical page sets the shared pitch to 100 Hz; index.html's home is 110.
-              f0: { val: 110 },
+              // The gong's musical page sets the shared pitch to 100 Hz, the bore re-ranges it to
+              // its tube's 0.1–2 m; index.html's home.
+              f0: { min: 27.5, max: 1000, step: 0.1, fixed: 1, val: 110 },
               // The coupled pages re-range the ring time to the solver's 0.05 s floor; index.html's home.
               t60_low: { min: 0.1, max: 20, step: 0.1, fixed: 1, val: 3 },
               // The bow's musical page sets the shared sample rate to 22.05 kHz; the home is 44.1.
@@ -612,6 +618,10 @@ const CONTROL_OPTS = {
                 ["musical", "Musical — the played pitch, ring time"]],
   platebody: [["physical", "Physics — T, ρ, λ"],
               ["musical", "Musical — the played pitch, ring time"]],
+  // The bore (wind mapping plan §2): at λ = 1 the pitch sets the length and the ring time the
+  // bell, both exact at every partial. The open end loses nothing, so it takes the pitch alone.
+  bore: [["physical", "Physics — L, bell R/Z₀"],
+         ["musical", "Musical — pitch, ring time (exact at every partial)"]],
 };
 
 // The strings whose musical controls are a pitch and ONE ring time (string mapping plan §13).
@@ -633,7 +643,7 @@ const WOODS = ["sitka spruce", "engelmann spruce", "western redcedar", "sugar ma
 function musicalOn(m) {
   if (m === "damped") return domainSel.value === "musical";
   if (m === "plate" || m === "vk" || m === "bow" || m === "stiff" || ONE_RING_MODELS.includes(m)
-      || DRUM_MODELS.includes(m) || COUPLED_MODELS.includes(m)) {
+      || DRUM_MODELS.includes(m) || COUPLED_MODELS.includes(m) || m === "bore") {
     return !!controlsSel && controlsSel.value === "musical";
   }
   if (m === "tension") {
@@ -838,7 +848,9 @@ function updateVisibility() {
   // the two regimes that detune, the sweep option on the radiating page. Set on every pass, so a
   // ring time switched off here never stays hidden on the next musical page.
   const coupledMusical = COUPLED_MODELS.includes(m) && musical;
-  showParam("t60_low", !coupledMusical || $("coupled-ring").checked);
+  // The bore's ideal open end loses nothing, so it takes no ring time (wind mapping plan §3).
+  const losslessTube = m === "bore" && musical && domainSel.value === "open";
+  showParam("t60_low", (!coupledMusical || $("coupled-ring").checked) && !losslessTube);
   $("coupled-detune-field").hidden = !(coupledMusical && m === "sympathetic"
                                        && domainSel.value !== "normal");
   $("coupled-sweep-field").hidden = !(coupledMusical && m === "radbody");
@@ -1005,7 +1017,8 @@ function updateLambdaHint() {
     // λ is PINNED at 1 here and has no slider, so the hint reports the derived sample rate instead
     // — which is the number that actually bites: fs = c₀N/L, so N buys the sample rate as well as
     // the grid and cost per second of audio goes as N².
-    const N = param("N"), L = param("L");
+    // Musical: the L slider is hidden and the pitch sets the tube, L = c₀/4f₀ (plan §2).
+    const N = param("N"), L = musicalOn(m) ? 343 / (4 * param("f0")) : param("L");
     hint.textContent = `λ = 1 (pinned, dispersionless) → fs = c₀N/L = ${fmt(343 * N / L)} Hz. N `
       + `buys the SAMPLE RATE too, so cost per second of audio ~ N². One transit = L/c₀ = `
       + `${(1e3 * L / 343).toFixed(2)} ms, four times shorter than the period of f₁.`;
@@ -1334,6 +1347,11 @@ function updateLambdaHint() {
       boreHint.textContent = "ideal open end: pressure-release, r = −1. A perfect mirror — nothing "
         + "radiates, so the tube rings forever and the bell panel has nothing to score.";
       boreHint.style.color = "var(--muted)";
+    } else if (musicalOn(m)) {
+      // The bell slider is hidden: the ring time sets R/Z₀, which the musical read-out reports.
+      boreHint.textContent = "the ring time sets the bell here; its R/Z₀ is in the musical "
+        + "read-out above.";
+      boreHint.style.color = "var(--muted)";
     } else {
       const ratio = Math.pow(10, param("bell_ratio_exp"));
       const shed = 0.5 * (1 - Math.pow((ratio - 1) / (ratio + 1), 2));
@@ -1542,7 +1560,7 @@ function updateLambdaHint() {
 
 function onControlChange(name) {
   if (name === "lambda" || name === "mu" || name === "fs") updateLambdaHint();
-  if (name === "amplitude" || name === "EA" || name === "T" || name === "L") updateLambdaHint();
+  if (name === "amplitude" || name === "EA" || name === "T" || name === "L" || name === "f0") updateLambdaHint();
   if (name === "sigma0" || name === "sigma1") updateLambdaHint();
   if (name === "bow_position" || name === "v_bow") updateLambdaHint();
   if (name === "lam_long" || name === "N" || name === "rho") updateLambdaHint();
@@ -1643,6 +1661,8 @@ function gatherParams() {
     if (modelSel.value === "sympathetic") p.detune_tuning = $("coupled-detune").value;
     if (modelSel.value === "radbody") p.sweep_grid = $("coupled-sweep").value;
   }
+  // The bore's control set (wind mapping plan §1): its domain select is the far end.
+  if (modelSel.value === "bore" && controlsSel) p.controls = controlsSel.value;
   for (const k in sliders) p[k] = +sliders[k].value * (scaleOf[k] || 1);
   if (nonlinearChk) p.nonlinear = nonlinearChk.checked;
   if (seedVelChk) p.seed_velocity = seedVelChk.checked;
@@ -1749,6 +1769,17 @@ function showTuning(data) {
   const t = data.tuning;
   if (!t) { hint.textContent = ""; return; }
   const g = (x) => Number(x).toPrecision(4);
+  // The bore (wind mapping plan §2): the length and the bell the targets mapped to, exact at every
+  // partial at λ = 1; the open end takes the pitch alone.
+  if (t.kind === "bore") {
+    const bell = t.r_ratio === null ? "no bell"
+      : `bell R/Z₀ = ${Number(t.r_ratio).toExponential(3)}`;
+    const series = t.partials.slice(0, 3).map((q) => `${g(q.f)} Hz`).join(", ");
+    hint.textContent = `→ L = ${g(t.L)} m, ${bell}; fs = ${fmt(data.fs_sim)} Hz follows the pitch `
+      + `so that λ = 1. Sounds ${series}, … ${t.warn ? "⚠ " : ""}${t.message}`;
+    hint.style.color = t.warn ? "var(--accent-2)" : "var(--muted)";
+    return;
+  }
   // The ideal and flexible strings (plan §13): a pitch and one ring time on the harmonic law.
   if (t.kind === "ideal" || t.kind === "flexible") {
     const how = t.kind === "ideal"

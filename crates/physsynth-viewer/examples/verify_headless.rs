@@ -208,6 +208,13 @@ const CASES: &[(&str, &str)] = &[
     // glow, and the p = 0 node.
     ("bore_radiating", "model=bore&domain=radiating"),
     ("bore_open", "model=bore&domain=open"),
+    // The bore's musical controls (wind mapping plan §2): the page's defaults through the bell, and
+    // the open end, which takes the pitch alone and says why.
+    ("bore_musical", "model=bore&domain=radiating&controls=musical"),
+    (
+        "bore_musical_open",
+        "model=bore&domain=open&controls=musical&f0=220",
+    ),
     ("reed_radiating", "model=reed&domain=radiating"),
     ("reed_open", "model=reed&domain=open"),
     ("body", "model=body"),
@@ -705,6 +712,13 @@ fn run_case(
         tuning.contains("Exact at f₀")
             && tuning.contains("EA =")
             && tuning.contains("settles on f₀")
+    } else if query.contains("controls=musical") && query.contains("model=bore") {
+        tuning.contains("L = ")
+            && if query.contains("domain=open") {
+                tuning.contains("no bell") && tuning.contains("rings forever")
+            } else {
+                tuning.contains("R/Z₀") && tuning.contains("exact at λ = 1")
+            }
     } else if musical_coupled(query) {
         tuning.contains("the string alone would sound")
             && tuning.contains("On the bridge it plays")

@@ -736,6 +736,11 @@ fn every_fixture_file_is_run() {
 ///   musical keys riding along changes no byte (the unnamed requests are frozen in their corpora),
 ///   and the musical set as the physics page on the tuned string, its note read off a rig of the
 ///   file's own.
+/// - `bore`, `controls:physical` / `controls:musical`, are the tube's two control sets (wind
+///   mapping plan §2), held by `wind_musical.rs`: the physical set with musical keys riding along
+///   changes no byte (the unnamed requests are frozen in the bore's corpus), and the musical set
+///   as the physics page on the mapped tube, through its measured partials and the energy it has
+///   shed.
 const BORN_AFTER_THE_FREEZE: &[(&str, &str, &str)] = &[
     ("damped", "physical", "tests/string_musical.rs"),
     ("damped", "musical", "tests/string_musical.rs"),
@@ -817,6 +822,8 @@ const BORN_AFTER_THE_FREEZE: &[(&str, &str, &str)] = &[
     ),
     ("platebody", "controls:physical", "tests/coupled_musical.rs"),
     ("platebody", "controls:musical", "tests/coupled_musical.rs"),
+    ("bore", "controls:physical", "tests/wind_musical.rs"),
+    ("bore", "controls:musical", "tests/wind_musical.rs"),
 ];
 
 /// Whole MODELS born after the Python viewer was deleted, for the same reason as
