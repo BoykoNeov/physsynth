@@ -770,8 +770,12 @@ tests' unison rigs): the swap needs the pair's spacing below its motion per step
 *Fix* (`crossings_between`): every solved crossing must play the pitch to 1e-9 (`ON_PITCH`; a
 solve stops at ~1e-14, a joined pair misses by its gap, ~2 %), and an interval with one that
 misses is scanned again at 9 points (steps of 0.66 %), up to twice, its crossings taken from
-there. An interval whose solutions all land is untouched, so every tuning that was right is
-bit-identical. Parity: a swap of two notes crossing the pitch in the same direction always leaves
+there. An interval whose solutions all land is untouched, so a tuning from such an interval is
+bit-identical by construction (the same computations run; seen on a default-settings case). A right
+tuning that shared an interval with a miss is re-solved from the finer scan and may move in its
+last bits — not measured: the port sweep (`port_final.txt`) was not re-run. (The commit message
+of db135f3 says "every right tuning is bit-identical"; that is this narrower claim.)
+Parity: a swap of two notes crossing the pitch in the same direction always leaves
 a miss; a swap of two crossing in opposite directions would leave none — not seen, the notes rise
 with the tension. Bar: core `two_near_unison_notes_are_not_confused` (lossless and 1 s: reports
 and plays 98 Hz off the run, share > 0.99, `f_cl` 101.06). Plants: accept any solve (`ON_PITCH`
@@ -814,3 +818,8 @@ body loss on the lossless-body regimes (the reviewer's) — three; the air sweep
 ring-time option ignored — the twin. Not a plant but a find: the twin to the byte passed on the
 decay page while its note was wrong (the core defect above) — only the note read off the file's
 own rig saw it.
+
+*Not checked:* `exact_decay`, which solves a ring-time refusal's longest or shortest value onto
+the pitch, follows its note by the same straight-line nearest-root bracket that confused the
+near-unison pair; a refusal's read-out on a detuned two-string page has not been tested against
+it. Not fixed here.

@@ -108,7 +108,9 @@ fn steps(audio: f64, fs: f64, runs: i64) -> i64 {
 /// work budget — before a tuning that can take minutes (the human's tenth answer, plan §17).
 ///
 /// The solver sounds `f0` only with a clamped fundamental above `f0 / 1.3`, and the page's sample
-/// rate is `c N / (L lambda) = 2 f_cl N / lambda`, so that is the cheapest run there can be.
+/// rate is `c N / (L lambda) = 2 f_cl N / lambda`, so that is the cheapest run there can be. A
+/// ceiling, not a promise: the tuning can land on a tighter string (196 Hz on the body page at
+/// `N = 100` passes here and is refused after it).
 pub fn check_budget_before(
     f0: f64,
     n: i64,
@@ -125,8 +127,9 @@ pub fn check_budget_before(
     let f0_max = 1.3 * work_max as f64 / (runs as f64 * audio) * lam / (2.0 * n as f64);
     Err(Refusal::Param(format!(
         "work budget exceeded before tuning: any string that sounds {} Hz on this bridge runs at \
-         {} Hz or more, so the run takes at least {} steps > {}{}. The highest pitch that fits \
-         these settings is about {} Hz; or shorten the audio, lower N, or raise lambda.",
+         {} Hz or more, so the run takes at least {} steps > {}{}. No pitch above about {} Hz \
+         can fit these settings, and one below can still be refused once tuned, when its note \
+         needs a tighter string. Lower the pitch, shorten the audio, lower N, or raise lambda.",
         round_nd(f0, 2),
         round_nd(fs_min, 0),
         commas(need),

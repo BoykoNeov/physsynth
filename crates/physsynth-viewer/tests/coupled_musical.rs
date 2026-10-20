@@ -429,7 +429,7 @@ fn a_run_over_budget_at_any_tension_is_refused_before_tuning() {
     let start = std::time::Instant::now();
     let msg = refusal(&p);
     assert!(
-        msg.contains("before tuning") && msg.contains("highest pitch"),
+        msg.contains("before tuning") && msg.contains("No pitch above"),
         "{msg}"
     );
     assert!(start.elapsed().as_secs_f64() < 1.0, "it tuned first");
