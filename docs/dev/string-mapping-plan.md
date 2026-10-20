@@ -597,3 +597,78 @@ string movement wins; the tension may jump many semitones as the ring time moves
 is slower. (Not chosen: keep the tension the pitch chose and refuse with a hint; keep it and offer
 the tighter tuning behind a button.) The "ring too short" refusal is then only for a ring no
 tension and loss within the scheme's cap can reach.
+
+**Part 1b: the full search, built (2026-10-20).**
+
+*The answer key first* (probe `refsearch`, `W:\temp\claude\coupled-probe`). A dense grid over
+`(f_cl, q = sigma k)` per rig — ratio 1.0257 in `f_cl`, 80 log levels of `q` from 1e-7 to the cap
+0.5, then both doubled — with every cell where one root's pitch error and decay error both change
+sign solved by a 2-D Newton and read back off a run; the largest share wins. On the reduced sweep
+(Soft = 3000 N/m body, Air = radiating body, 47 semitones from 40 Hz, ring times 0.05, 0.3, 1,
+3 s: 376 targets) the old solver agreed with it on all 286 it tuned and wrongly refused 18 — 16
+"too short" (269.09 Hz at 0.05 s among them, to the table's digits), and Air 56.57 and 59.93 Hz
+at 0.05 s, "no note". Doubling the density changed one answer: at the base density the key's own
+Newton missed Air 56.57 Hz at 0.05 s (the tuning sits 0.3 % above the guard's wall, `f_cl` 61.03
+for every loss), which the doubled key and the prototype both found. The answer key is the best
+confirmed tuning any method found.
+
+*Cost, measured* (spectra counted, then timed with ten tunings at once): about 5–8 s a ring-time
+tuning on the body pages (2 s before), up to 25 s; 45–75 s on two strings at N = 100 (20 s
+before), only easy cases measured there.
+
+**The human's sixth answer, 2026-10-20: port it as is.** (Not chosen: first measure hard
+two-string cases; first make it faster.)
+
+*The search as built* (`coupled_tuning.rs` step 4). The continuation runs first; then
+`wide_search` covers the plane — `f_cl` from the wall to `4 f0` in steps of at most 10.7 %, `q` at
+zero and from 1e-7 to the cap in steps of 2.18, eight times coarser each way than the key — and a
+Broyden solve (`wide_solve`) runs from every seed cell. Its note displaces the continuation's only
+when its share is larger by 1e-6, relative, and it is not the same note (`f_cl` within 1e-6,
+`sigma` within 1e-5): the wide search usually re-finds the continuation's note with a share a few
+last bits different, and must not replace it. The loss is searched only up to twice `a0 / share`
+of the note already found: a note decays at least as fast as the string loss times its share (the
+body and the air only add loss; on every tuning found, `sigma share / a0` is at most 1.002). No
+lower limit on the loss — the radiating body's tunings go down to `sigma = 0.016 a0`.
+
+*Refusals.* When a lossless string has a note on the pitch, the continuation's refusal stands,
+exact, and the message says it is about the note with the most string motion (on the radiating
+body at 226.27 Hz that note cannot ring longer than 0.92 s while a quieter one rings 1.2 s; 1 s is
+still refused, rightly: neither can be set to it). When none has, the notes the wide search saw
+crossing the pitch decide — none: no note; all faster than the target: too long; all slower: too
+short — with the extremes solved onto the pitch along their grid edge. Read off a straight line
+across the edge instead, a ring time was 10 % out (50 Hz on the 8000 N/m body: 0.0377 s for
+0.0338 s) and refused rings between the two in the wrong direction.
+
+*Checked, the ported code itself against the old* (probe `port`, twin crate on a worktree of
+cd8b49d): all 376 targets match the key, every tuning plays and rings off the run; of 492 cases
+(those, the lossless column, the tests' 8000 N/m fixtures, the radiating 100 s refusal, 15 on two
+strings) 442 are bit-identical — every lossless one and every one that tuned before — 18 newly
+tune, 31 former "no note" at the slack Air pitches and 50 Hz on the 8000 N/m body now read "too
+long", with the longest ring a note can have there, and the tests' 1e-4 s target meets the floor
+(below). Timed with ten at once: Soft 7.1 s mean, 25 s worst (1.8 s before); Air 9.2 s, 43 s
+worst (1.3 s); two strings 42 s, 51 s (13 s). A second run on a busier machine was up to 2–4×
+slower throughout, the unchanged lossless tunings included. The slowest are refusals, which
+search the whole plane. Unoptimised, `tests/coupled_tuning.rs` took 623 s locally (its slowest
+bar alone took 394 s before), against CI's 113 s for the whole file before.
+
+*Below 0.05 s it is not complete.* A dense key at 0.01, 0.02 and 0.03 s (every fourth semitone,
+both rigs): the search missed 7 of 72 tunings — a ring of one or two cycles, at loss heavy enough
+that the grid's roots move too far between levels.
+
+**The human's seventh answer, 2026-10-20: the solver refuses a ring time under 0.05 s**
+(`RING_FLOOR`, `CoupledError::RingBelowFloor`), and the new pages' ring-time slider starts at
+0.05 s. (Not chosen: a slider floor only; make the search complete below 0.05 s.)
+
+*Bars and plants.* `the_hard_cases_tune_and_play` now tunes 113.1 and 201.6 Hz at 0.05 s (off the
+run, `f_cl` and share as in the table); `the_refusals` asserts 50 Hz lossless "no note", 50 Hz at
+1 s "too long" with the longest in 0.033–0.035 s, and the floor; new
+`a_pitch_only_a_lossy_string_reaches_tunes` (Air 56.57 Hz: lossless "no note", 0.05 s tunes).
+Planted: the wide search off — three bars fail; the extremes left on the straight line —
+`the_refusals` (longest 0.0377); the continuation's refusal always kept — `the_refusals`; no
+floor — `the_refusals`. Survives: the same-note rule removed, which changes a tuning only in its
+last ten bits (~1e-12), inside every tolerance — no bar, as for the bracket plant above. Not
+planted: skipping seeds near a solution and merging duplicates change only the cost. Tried and
+taken out: halving a solve step that crosses a wall, and treating a build refused mid-way like no
+note — no outcome at 0.05 s or more depends on either (both mattered only below the floor). The
+loss limit `2 a0 / share` has no witness: on the sweep the wide search never displaced a note the
+continuation found, so no target tells a tighter limit from it.

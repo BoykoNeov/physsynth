@@ -363,6 +363,26 @@ fn a_decoupled_string_gets_the_single_string_loss() {
     }
 }
 
+/// A pitch no lossless string reaches can still be tuned with a ring time: on the radiating body
+/// the guard refuses every string slacker than about 61 Hz, so nothing plays 56.57 Hz lossless,
+/// but a 0.05 s ring's string loss pulls a mostly-string note down onto it just inside the wall.
+#[test]
+fn a_pitch_only_a_lossy_string_reaches_tunes() {
+    let air = radiating_rig(133.0);
+    let f0 = 40.0 * 2f64.powf(6.0 / 12.0);
+    assert_eq!(tune_coupled(f0, None, &air), Err(CoupledError::NoNote));
+    let t = tune_coupled(f0, Some(0.05), &air).expect("a lossy string reaches it");
+    let mut r = air(t.f_cl, t.sigma).unwrap();
+    let (f, rings, residual) = played(&mut r, t.root, t.note.f, 99, 3000);
+    assert!(
+        residual < 1e-9,
+        "the start was not one mode ({residual:.2e})"
+    );
+    assert!(((f - f0) / f0).abs() < 1e-9, "plays {f} Hz");
+    assert!(((rings - 0.05) / 0.05).abs() < 1e-6, "rings {rings} s");
+    assert!(t.note.share > 0.99, "share {}", t.note.share);
+}
+
 #[test]
 fn the_refusals() {
     let rig = body_rig(8000.0, 0.0);
@@ -383,11 +403,18 @@ fn the_refusals() {
     // Near the wall the search starts at it and still finds the note ...
     let t = tune_coupled(60.0, Some(1.0), &rig).expect("tunes past the wall");
     assert!(((t.note.f - 60.0) / 60.0).abs() < 1e-11);
-    // ... but the slackest string the guard allows already plays above 50 Hz.
-    assert_eq!(
-        tune_coupled(50.0, Some(1.0), &rig),
-        Err(CoupledError::NoNote)
-    );
+    // ... but the slackest string the guard allows already plays above 50 Hz, lossless ...
+    assert_eq!(tune_coupled(50.0, None, &rig), Err(CoupledError::NoNote));
+    // ... and only a heavy string loss pulls a note down to it. The heavier the loss the tighter
+    // the string, so the note rings longest at the guard's wall: 0.0338 s (0.033 s tunes there,
+    // 0.035 s does not, both below the floor). Its ring time is solved onto the pitch: read off
+    // the wide search's grid it was 0.0377 s, 10 % out, which refused 0.035 s as too short.
+    match tune_coupled(50.0, Some(1.0), &rig) {
+        Err(CoupledError::RingTooLong { longest }) => {
+            assert!((0.033..0.035).contains(&longest), "longest {longest} s");
+        }
+        other => panic!("expected RingTooLong, got {other:?}"),
+    }
 
     // The air alone empties the radiating body's note within a few seconds: it cannot ring 100.
     let air = radiating_rig(133.0);
@@ -402,11 +429,19 @@ fn the_refusals() {
         }
         other => panic!("expected RingTooLong, got {other:?}"),
     }
-    // A tenth of a millisecond is beyond any string loss the scheme takes.
-    match tune_coupled(100.0, Some(1e-4), &rig) {
-        Err(CoupledError::RingTooShort { shortest }) => assert!(shortest > 1e-4),
-        other => panic!("expected RingTooShort, got {other:?}"),
-    }
+    // Below the floor the search is not known to find every tuning, so it is not run (the human's
+    // call, plan §16); at the floor it is.
+    assert_eq!(
+        tune_coupled(100.0, Some(1e-4), &rig),
+        Err(CoupledError::RingBelowFloor(1e-4))
+    );
+    // The literal, not the constant: a bar about a constant must not import it.
+    let below = 0.05 * (1.0 - 1e-12);
+    assert_eq!(
+        tune_coupled(100.0, Some(below), &rig),
+        Err(CoupledError::RingBelowFloor(below))
+    );
+    assert!(tune_coupled(100.0, Some(0.05), &rig).is_ok());
 }
 
 /// The notes the scan follows are real notes, read off the run. Two ways of following a root from
@@ -502,21 +537,24 @@ fn the_hard_cases_tune_and_play() {
     let soft = body_rig(3000.0, 0.0);
     // Beside the 110 and 196 Hz resonances the note is mostly body (share about 0.1) and the body
     // is lossless: more string loss pushes its motion further onto the body, so its decay peaks.
-    // A half-second ring is below the peak and tunes; a twentieth is past it, and the scan finds
-    // the peak and refuses rather than a Newton wandering (plan §16).
-    for f0 in [113.1, 201.6] {
+    // A half-second ring is below the peak and tunes. A twentieth is past it for that note, but
+    // not for every note: past a loss threshold another note, mostly string, reaches the pitch at
+    // a string 7 to 9 semitones tighter than the lossless tuning, and rings it (the human's fifth
+    // answer, plan §16).
+    for (f0, f_cl, share) in [(113.1, 134.89, 0.71), (201.6, 294.11, 0.55)] {
         let t = tune_coupled(f0, Some(0.5), &soft).expect("tunes beside a resonance");
         let mut r = soft(t.f_cl, t.sigma).unwrap();
         let got = played(&mut r, t.root, t.note.f, 99, 3000);
         check(&format!("soft body {f0} 0.5 s"), f0, Some(0.5), &t, got);
-        match tune_coupled(f0, Some(0.05), &soft) {
-            Err(CoupledError::RingTooShort { shortest }) => {
-                assert!(
-                    shortest > 0.05 && shortest < 0.5,
-                    "{f0}: shortest {shortest} s"
-                );
-            }
-            other => panic!("{f0}: expected RingTooShort, got {other:?}"),
-        }
+        let t = tune_coupled(f0, Some(0.05), &soft).expect("another note rings a twentieth");
+        let mut r = soft(t.f_cl, t.sigma).unwrap();
+        let got = played(&mut r, t.root, t.note.f, 99, 3000);
+        check(&format!("soft body {f0} 0.05 s"), f0, Some(0.05), &t, got);
+        assert!((t.f_cl / f_cl - 1.0).abs() < 1e-3, "{f0}: f_cl {}", t.f_cl);
+        assert!(
+            (t.note.share - share).abs() < 0.01,
+            "{f0}: share {}",
+            t.note.share
+        );
     }
 }

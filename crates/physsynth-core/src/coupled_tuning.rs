@@ -37,6 +37,16 @@
 //!    targets. The string's loss is solved, not set: the string carries only its share of the note,
 //!    so a loss set for the string alone left a 1.5 s target ringing 3.1 s on the body page's
 //!    default (plan §16, the human's fourth answer).
+//! 4. **Every tension and loss.** Step 3 follows the note step 2 chose, from where it plays the
+//!    pitch with a lossless string. A heavy string loss can put another note on the targets that
+//!    no lossless string has on the pitch — at a much tighter string, eight semitones above the
+//!    lossless tuning at 269.09 Hz with a 0.05 s ring. So a grid over `(f_cl, sigma k)` is searched
+//!    too, and its note displaces step 3's when it has more of the string's motion (the human's
+//!    fifth answer, plan §16: the tension may jump, and the search is slower). Checked against a
+//!    reference search 64 times as dense on 376 targets with ring times from 0.05 to 3 s: it found
+//!    every tuning the reference did. Not below that — at 0.01 and 0.02 s, a ring of one or two
+//!    cycles, it missed 7 of 72 tunings the reference found — so a ring time under
+//!    [`RING_FLOOR`] is refused (the human's call, plan §16).
 //!
 //! **Why not the lossless operator.** A first build selected and followed modes by the guard's
 //! symmetric operator, whose eigenvectors are cheap. On the radiating body at its default air load
@@ -77,6 +87,33 @@ const NEWTON_ITERS: usize = 30;
 /// Points of the scan of the decay along the string's loss, over about six decades.
 const SIGMA_POINTS: usize = 25;
 const INVERSE_ITERS: usize = 60;
+
+/// The shortest ring time (s) [`tune_coupled`] takes. From here to 3 s the wide search found
+/// every tuning a reference 64 times as dense found, on 376 targets; at 0.01 and 0.02 s, a ring of
+/// one or two cycles, it missed 7 of 72. Below it the solver refuses rather than risk calling a
+/// tuning that exists impossible (the human's call, plan §16).
+pub const RING_FLOOR: f64 = 0.05;
+
+/// The wide search's grid (plan §16, the human's fifth answer): a step of at most this ratio in
+/// `f_cl`, 10.7 %, and string-loss levels `q = sigma k` from [`Q_FLOOR`] up to the scheme's cap
+/// `1/2` in steps of [`Q_STEP`], 2.18, plus the lossless string. Eight times coarser along each
+/// axis than the reference search it was checked against, which it matched on all 376 targets of
+/// the probe sweep.
+const X_STEP: f64 = 1.1068;
+const Q_FLOOR: f64 = 1e-7;
+const Q_STEP: f64 = 2.1838;
+/// The wide search's solve: a Broyden on `(ln f_cl, ln q)`. Iteration cap, and how many steps in
+/// a row without a new smallest residual end it (6 lost a tuning at 201.59 Hz that needs 24
+/// steps; 10 lost none).
+const WIDE_ITERS: usize = 40;
+const WIDE_STALL: usize = 10;
+/// Two wide-search solutions are one note when their `f_cl` agree to this, relative, and their
+/// string loss to [`SAME_SIGMA`].
+const SAME_X: f64 = 1e-6;
+const SAME_SIGMA: f64 = 1e-5;
+/// A wide-search note displaces the continuation's only when its string share is larger by
+/// this, relative: the same note re-found has the same share to roundoff, and must not replace it.
+const SHARE_MARGIN: f64 = 1e-6;
 
 /// A body whose whole dynamic state is its two modal time levels — a free-air body with no load
 /// state of its own. The bare [`ModalBody`] and the resistance-loaded [`RadiatedBody`] qualify;
@@ -272,18 +309,31 @@ pub enum CoupledError {
     BadPitch(f64),
     /// The ring time is not positive (a `None` ring time is the lossless string).
     BadRingTime(f64),
+    /// The ring time is below [`RING_FLOOR`], where the search is not known to find every
+    /// tuning.
+    RingBelowFloor(f64),
     /// The stability guard refuses every tension that could sound the target.
     Refused,
-    /// No coupled note reaches the target at any tension the guard allows.
+    /// No coupled note reaches the target at any tension the guard allows — with a ring time, at
+    /// any string loss either.
     NoNote,
-    /// The body's and the air's losses alone make the note die faster than the target.
+    /// The note cannot ring that long: with a lossless string, the body's and the air's losses
+    /// alone end it sooner; or no lossless string has a note on the pitch, and the string loss
+    /// that brings one there ends it sooner.
     RingTooLong {
-        /// The longest ring time (s) the note can have: the one with a lossless string.
+        /// The longest ring time (s): the lossless string's note's, exact — the note with the most
+        /// string motion, so another, quieter note at the pitch may ring longer (on the radiating
+        /// body at 226.27 Hz this is 0.92 s and a quieter note rings 1.2 s; neither can be set to
+        /// 1 s); or, when only a lossy string reaches the pitch, the longest the wide search saw
+        /// there, each extreme solved onto the pitch.
         longest: f64,
     },
-    /// Even the heaviest string loss the scheme allows does not make the note die that fast.
+    /// The note cannot ring that short: the heaviest string loss the scheme allows does not make
+    /// it die that fast, and no other tension and loss put a faster note on the targets.
     RingTooShort {
-        /// The shortest ring time (s) reached, at that loss.
+        /// The shortest ring time (s): the lossless string's note's, at the heaviest loss, exact;
+        /// or, when only a lossy string reaches the pitch, the shortest the wide search saw
+        /// there, each extreme solved onto the pitch.
         shortest: f64,
     },
     /// A solve did not settle; names which.
@@ -295,6 +345,11 @@ impl std::fmt::Display for CoupledError {
         match self {
             CoupledError::BadPitch(p) => write!(f, "the pitch must be positive, got {p}."),
             CoupledError::BadRingTime(t) => write!(f, "the ring time must be positive, got {t}."),
+            CoupledError::RingBelowFloor(t) => write!(
+                f,
+                "the ring time must be at least {RING_FLOOR} s, got {t}: below that the search \
+                 is not known to find every tuning."
+            ),
             CoupledError::Refused => write!(
                 f,
                 "the bridge spring is too stiff for this pitch: the coupled system is unstable at \
@@ -302,18 +357,21 @@ impl std::fmt::Display for CoupledError {
             ),
             CoupledError::NoNote => write!(
                 f,
-                "no coupled note reaches this pitch at any tension the bridge allows; soften the \
-                 spring or raise the pitch."
+                "no coupled note reaches this pitch at any tension the bridge allows, nor at any \
+                 string loss; soften the spring or raise the pitch."
             ),
             CoupledError::RingTooLong { longest } => write!(
                 f,
-                "the body and the air alone make this note die within {longest:.3} s, so it \
-                 cannot ring longer; lower the ring time or the body's loss."
+                "no tension and string loss give a note at this pitch that rings this long: the \
+                 note with the most string motion here cannot ring longer than {longest:.3} s \
+                 (the body's and the air's own losses, or the string loss it takes to bring it to \
+                 this pitch, end it sooner); lower the ring time or the body's loss."
             ),
             CoupledError::RingTooShort { shortest } => write!(
                 f,
-                "even the heaviest string loss leaves this note ringing {shortest:.3} s; raise \
-                 the ring time."
+                "no tension and string loss give a note at this pitch that dies this fast: the \
+                 note with the most string motion here rings at least {shortest:.3} s even at \
+                 the heaviest string loss the scheme allows; raise the ring time."
             ),
             CoupledError::Unconverged(stage) => {
                 write!(f, "the coupled tuning did not converge ({stage}).")
@@ -367,6 +425,9 @@ pub fn tune_coupled<R: Coupled>(
         #[allow(clippy::neg_cmp_op_on_partial_ord)]
         if !(t > 0.0) {
             return Err(CoupledError::BadRingTime(t));
+        }
+        if t < RING_FLOOR {
+            return Err(CoupledError::RingBelowFloor(t));
         }
     }
     // The page's band holds f0 when f_cl / 4 < f0 < 1.3 f_cl; a hair inside, so a hit at either
@@ -430,12 +491,45 @@ pub fn tune_coupled<R: Coupled>(
             }
         }
     }
-    let (x_pitch, root, share) = best.ok_or(CoupledError::NoNote)?;
-
-    // 3. The ring time, following the root from where step 2 left it.
     let (x, sigma, z) = match t60 {
-        None => (x_pitch, 0.0, root.z),
-        Some(t) => pitch_and_ring(f0, 3.0 * LN_10 / t, x_pitch, root, share, &build)?,
+        None => {
+            let (x_pitch, root, _) = best.ok_or(CoupledError::NoNote)?;
+            (x_pitch, 0.0, root.z)
+        }
+        Some(t) => {
+            let a0 = 3.0 * LN_10 / t;
+            // 3. The ring time, following the root from where step 2 left it, and the share the
+            //    note has there.
+            let narrow = best
+                .ok_or(CoupledError::NoNote)
+                .and_then(|(x_pitch, root, share)| {
+                    let (x, sigma, z) = pitch_and_ring(f0, a0, x_pitch, root, share, &build)?;
+                    let mut rig = build(x, sigma).ok_or(CoupledError::Refused)?;
+                    Ok((x, sigma, z, share_of(&mut rig, z)?))
+                });
+            // 4. The wide search, for a note of more share than that (the human's fifth answer).
+            let top = narrow.as_ref().map_or(f64::INFINITY, |n| 2.0 * a0 / n.3);
+            let wide = wide_search(f0, a0, lo, hi, top, &build);
+            let better = wide
+                .notes
+                .iter()
+                .filter(|w| match &narrow {
+                    Ok(n) => {
+                        let same = (w.x / n.0 - 1.0).abs() < SAME_X
+                            && (w.sigma / n.1 - 1.0).abs() < SAME_SIGMA;
+                        !same && w.share > n.3 * (1.0 + SHARE_MARGIN)
+                    }
+                    Err(_) => true,
+                })
+                .max_by(|p, q| p.share.total_cmp(&q.share));
+            match (better, narrow) {
+                (Some(w), _) => (w.x, w.sigma, w.z),
+                (None, Ok((x, sigma, z, _))) => (x, sigma, z),
+                (None, Err(e)) => {
+                    return Err(ring_refusal(e, f0, a0, &wide.crossings, &build));
+                }
+            }
+        }
     };
 
     // What the solution plays: every root in the band, the chosen one nearest the followed root.
@@ -550,8 +644,10 @@ fn share_of<R: Coupled>(rig: &mut R, z: C) -> Result<f64, CoupledError> {
 /// **The decay is not monotone in the string's loss.** A note that is partly body (a hybrid beside
 /// a resonance) decays faster as the string's loss rises only until the loss pushes its motion off
 /// the string and onto the body; past that it decays *slower*. At 113.1 Hz on the 3000 N/m body
-/// (share 0.12) no loss came within a factor of three of a 0.05 s ring, and a Newton that assumed
-/// "more loss, faster decay" wandered instead of saying so (plan §16). So the loss is scanned first:
+/// (share 0.12) no loss came within a factor of three of a 0.05 s ring for this note, and a Newton
+/// that assumed "more loss, faster decay" wandered instead of saying so (plan §16); another note,
+/// at a much tighter string, rings it, and [`wide_search`] finds that one. So the loss is scanned
+/// first:
 ///
 /// 1. The decay along `sigma` at `x0`, from zero to the cap `sigma k = 1/2` (past which one step
 ///    removes a third of the string's motion and the centred loss stops being a damping), the root
@@ -674,6 +770,362 @@ fn pitch_and_ring<R: Coupled>(
         r = resid(u)?;
     }
     Err(CoupledError::Unconverged("the pitch-and-ring Newton"))
+}
+
+/// A note the wide search put on the targets.
+#[derive(Debug, Clone, Copy)]
+struct WideNote {
+    x: f64,
+    sigma: f64,
+    z: C,
+    share: f64,
+}
+
+/// Where a root crosses the pitch along an edge of the wide search's grid: the edge's ends
+/// `(f_cl, q)`, the root at each, and the decay read off the straight line between them.
+#[derive(Debug, Clone, Copy)]
+struct Crossing {
+    from: (f64, f64),
+    to: (f64, f64),
+    r: Root,
+    m: Root,
+    estimate: f64,
+}
+
+/// What the wide search found: the notes on the targets, and where it saw a root cross the pitch
+/// with a lossy string, for the refusal when there are none.
+struct Wide {
+    notes: Vec<WideNote>,
+    crossings: Vec<Crossing>,
+}
+
+/// The root of `v` nearest `(f, a)` in the `(pitch, decay / 2 pi)` plane — [`follow`]'s
+/// measure.
+fn nearest_note(v: &[Root], f: f64, a: f64) -> Option<Root> {
+    let d = |r: &Root| (r.f - f).hypot((r.a - a) / (2.0 * PI));
+    v.iter().copied().min_by(|p, q| d(p).total_cmp(&d(q)))
+}
+
+/// Every note that plays `f0` and decays at `a0` at some tension in `[lo, hi]` and string loss up
+/// to `sigma_top` (the human's fifth answer, plan §16).
+///
+/// The continuation of [`pitch_and_ring`] follows a note from where it reaches `f0` with a
+/// lossless string. Some notes never do: past a loss threshold a *pair* of notes appears on `f0`
+/// at a much tighter string (at 269.09 Hz on the 3000 N/m body, a 0.05 s ring has a note of share
+/// 0.54 at `f_cl = 425.9`, 8 semitones above the lossless tuning). So the grid covers the plane:
+/// `f_cl` from `lo` to `hi` in steps of at most [`X_STEP`], and `q = sigma k` at zero and from
+/// [`Q_FLOOR`] up to the cap in steps of [`Q_STEP`]. A cell is a seed when one root, matched to
+/// its nearest at the other three corners, has its pitch error and its decay error each change
+/// sign across them. Each seed is solved by [`wide_solve`]; a seed whose cell, widened by one
+/// cell each way, already holds a solution is skipped.
+///
+/// `sigma_top` prunes: a note's decay is at least the string's loss times its string share (the
+/// string's loss acts only on the string's part of the motion, and the body and the air only add
+/// to it; on every tuning of the probe sweep `sigma share / a0 <= 1.002`). So a note of more
+/// share than one already found needs less loss than `a0 / share`, and the caller passes twice
+/// that. A refused build or a failed spectrum is a hole in the grid, never an error.
+fn wide_search<R: Coupled>(
+    f0: f64,
+    a0: f64,
+    lo: f64,
+    hi: f64,
+    sigma_top: f64,
+    build: &impl Fn(f64, f64) -> Option<R>,
+) -> Wide {
+    let nx = (((hi / lo).ln() / X_STEP.ln()).ceil() as usize).max(1) + 1;
+    let xs: Vec<f64> = (0..nx)
+        .map(|i| lo * (hi / lo).powf(i as f64 / (nx - 1) as f64))
+        .collect();
+    let mut qs = vec![0.0];
+    let mut q = Q_FLOOR;
+    while q <= 0.5 {
+        qs.push(q);
+        q *= Q_STEP;
+    }
+    let nq = qs.len();
+    // The timestep does not depend on the loss: one lossless build per column.
+    let ks: Vec<Option<f64>> = xs.iter().map(|&x| build(x, 0.0).map(|r| r.k())).collect();
+    let wanted = |i: usize, j: usize| match (ks[i], ks[i + 1]) {
+        // The cell's least loss is at its slack corner, where the timestep is largest.
+        (Some(k), Some(_)) => qs[j] / k <= sigma_top,
+        _ => false,
+    };
+    let mut pts: Vec<Vec<Option<Vec<Root>>>> = vec![vec![None; nq]; nx];
+    let mut done = vec![vec![false; nq]; nx];
+    for i in 0..nx - 1 {
+        for j in 0..nq - 1 {
+            if !wanted(i, j) {
+                continue;
+            }
+            for (a, b) in [(i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)] {
+                if !done[a][b] {
+                    done[a][b] = true;
+                    pts[a][b] = ks[a].and_then(|k| {
+                        let mut rig = build(xs[a], qs[b] / k)?;
+                        band_roots(&mut rig, xs[a]).ok()
+                    });
+                }
+            }
+        }
+    }
+
+    // The seeds, and where a root crosses the pitch along an edge with loss in it.
+    let mut seeds = Vec::new();
+    let mut crossings = Vec::new();
+    for i in 0..nx {
+        for j in 0..nq {
+            let Some(here) = &pts[i][j] else { continue };
+            // The edge to the right on a lossy level, the edge upward on every level.
+            let right = (j > 0 && i + 1 < nx).then(|| (i + 1, j));
+            let up = (j + 1 < nq).then(|| (i, j + 1));
+            for (a, b) in right.into_iter().chain(up) {
+                let Some(there) = &pts[a][b] else { continue };
+                for r in here {
+                    let Some(m) = nearest_note(there, r.f, r.a) else {
+                        continue;
+                    };
+                    if (r.f - f0) * (m.f - f0) < 0.0 {
+                        crossings.push(Crossing {
+                            from: (xs[i], qs[j]),
+                            to: (xs[a], qs[b]),
+                            r: *r,
+                            m,
+                            estimate: r.a + (m.a - r.a) * (f0 - r.f) / (m.f - r.f),
+                        });
+                    }
+                }
+            }
+            if i + 1 == nx || j + 1 == nq || !wanted(i, j) {
+                continue;
+            }
+            let corners = [(i + 1, j), (i, j + 1), (i + 1, j + 1)];
+            if corners.iter().any(|&(a, b)| pts[a][b].is_none()) {
+                continue;
+            }
+            for r in here {
+                let (mut ef, mut ea) = (vec![r.f - f0], vec![r.a - a0]);
+                for &(a, b) in &corners {
+                    if let Some(m) = pts[a][b].as_deref().and_then(|v| nearest_note(v, r.f, r.a)) {
+                        ef.push(m.f - f0);
+                        ea.push(m.a - a0);
+                    }
+                }
+                let spans = |v: &[f64]| v.iter().any(|e| *e <= 0.0) && v.iter().any(|e| *e >= 0.0);
+                if spans(&ef) && spans(&ea) {
+                    let xc = (xs[i] * xs[i + 1]).sqrt();
+                    let qc = if j == 0 {
+                        0.5 * qs[1]
+                    } else {
+                        (qs[j] * qs[j + 1]).sqrt()
+                    };
+                    seeds.push((xc, qc, *r, i, j));
+                }
+            }
+        }
+    }
+
+    let mut found: Vec<(f64, f64, Root)> = Vec::new(); // (x, q, root)
+    for (x, q, r, i, j) in seeds {
+        let (xl, xh) = (xs[i.saturating_sub(1)], xs[(i + 2).min(nx - 1)]);
+        let (ql, qh) = (qs[j.saturating_sub(1)], qs[(j + 2).min(nq - 1)]);
+        if found
+            .iter()
+            .any(|s| xl <= s.0 && s.0 <= xh && ql <= s.1 && s.1 <= qh)
+        {
+            continue;
+        }
+        if let Some(s) = wide_solve(f0, a0, x, q, r, build) {
+            let dup = found
+                .iter()
+                .any(|t| (t.0 / s.0 - 1.0).abs() < SAME_X && (t.1 / s.1 - 1.0).abs() < SAME_SIGMA);
+            if !dup {
+                found.push(s);
+            }
+        }
+    }
+    let notes = found
+        .into_iter()
+        .filter_map(|(x, q, r)| {
+            let k = build(x, 0.0)?.k();
+            let mut rig = build(x, q / k)?;
+            let share = share_of(&mut rig, r.z).ok()?;
+            Some(WideNote {
+                x,
+                sigma: q / k,
+                z: r.z,
+                share,
+            })
+        })
+        .collect();
+    Wide { notes, crossings }
+}
+
+/// A Broyden solve on `(ln f_cl, ln q)` for pitch `f0` and decay `a0`, from `(x, q)` on the root
+/// nearest `start`, followed by nearness: a fresh finite-difference Jacobian at the start and
+/// after a step that made the residual worse, otherwise a rank-one update, so one spectrum per
+/// step. Steps are clamped to 5 % in `f_cl` and a factor 1.65 in `q`. `None` when it leaves the
+/// page's band for `f0` or the loss cap, a build is refused, the note grows, or [`WIDE_STALL`]
+/// steps in a row bring no new smallest residual.
+fn wide_solve<R: Coupled>(
+    f0: f64,
+    a0: f64,
+    x: f64,
+    q: f64,
+    start: Root,
+    build: &impl Fn(f64, f64) -> Option<R>,
+) -> Option<(f64, f64, Root)> {
+    let (xlo, xhi) = (f0 / 1.3, 4.0 * f0);
+    let res = |u: [f64; 2], near: Root| -> Option<([f64; 2], Root)> {
+        let (x, q) = (u[0].exp(), u[1].exp());
+        if !(xlo < x && x < xhi && q <= 0.5) {
+            return None;
+        }
+        let k = build(x, 0.0)?.k();
+        let mut rig = build(x, q / k)?;
+        let r = nearest_note(&band_roots(&mut rig, x).ok()?, near.f, near.a)?;
+        (r.a > 0.0).then_some(([(r.f / f0).ln(), (r.a / a0).ln()], r))
+    };
+    let norm = |r: [f64; 2]| r[0].hypot(r[1]);
+    let mut u = [x.ln(), q.max(Q_FLOOR).ln()];
+    let (mut r, mut root) = res(u, start)?;
+    let mut jac = [[0.0; 2]; 2];
+    let mut fresh = true;
+    let (mut best, mut since) = (norm(r), 0);
+    for _ in 0..WIDE_ITERS {
+        if r[0].abs() < PITCH_TOL && r[1].abs() < RING_TOL {
+            return Some((u[0].exp(), u[1].exp(), root));
+        }
+        if fresh {
+            let h = 1e-7;
+            let (r0, _) = res([u[0] + h, u[1]], root)?;
+            let (r1, _) = res([u[0], u[1] + h], root)?;
+            jac = [
+                [(r0[0] - r[0]) / h, (r1[0] - r[0]) / h],
+                [(r0[1] - r[1]) / h, (r1[1] - r[1]) / h],
+            ];
+        }
+        let det = jac[0][0] * jac[1][1] - jac[0][1] * jac[1][0];
+        if !(det.abs() > 0.0 && det.is_finite()) {
+            return None;
+        }
+        let du = [
+            (-(jac[1][1] * r[0] - jac[0][1] * r[1]) / det).clamp(-0.05, 0.05),
+            (-(-jac[1][0] * r[0] + jac[0][0] * r[1]) / det).clamp(-0.5, 0.5),
+        ];
+        let next = [u[0] + du[0], u[1] + du[1]];
+        let (rn, root_n) = res(next, root)?;
+        let worse = norm(rn) >= norm(r);
+        // The rank-one update: afterwards the Jacobian maps du to the change it made.
+        let dr = [rn[0] - r[0], rn[1] - r[1]];
+        let dd = du[0] * du[0] + du[1] * du[1];
+        for (row, d) in jac.iter_mut().zip(dr) {
+            let e = d - (row[0] * du[0] + row[1] * du[1]);
+            row[0] += e * du[0] / dd;
+            row[1] += e * du[1] / dd;
+        }
+        fresh = worse && !fresh;
+        (u, r, root) = (next, rn, root_n);
+        if norm(r) < best {
+            (best, since) = (norm(r), 0);
+        } else {
+            since += 1;
+            if since >= WIDE_STALL {
+                return None;
+            }
+        }
+    }
+    None
+}
+
+/// The decay of the root at `c`, solved onto the pitch along its edge: a bracketed solve on the
+/// edge's own coordinate (log `f_cl` along a level, log `q` up a column), the root at each point
+/// the nearest to the straight line between the edge's two. `None` when a build or a spectrum on
+/// the edge fails.
+fn exact_decay<R: Coupled>(
+    f0: f64,
+    c: &Crossing,
+    build: &impl Fn(f64, f64) -> Option<R>,
+) -> Option<f64> {
+    let along_x = c.from.1 == c.to.1;
+    // The lossless end of a column is moved to a thousandth of the next level, for the log.
+    let (va, vb) = if along_x {
+        (c.from.0, c.to.0)
+    } else {
+        (c.from.1.max(1e-3 * c.to.1), c.to.1)
+    };
+    let at = |v: f64| -> Result<Root, CoupledError> {
+        let (x, q) = if along_x {
+            (v, c.from.1)
+        } else {
+            (c.from.0, v)
+        };
+        let t = (v / va).ln() / (vb / va).ln();
+        let (f, a) = (c.r.f + t * (c.m.f - c.r.f), c.r.a + t * (c.m.a - c.r.a));
+        let k = build(x, 0.0).ok_or(CoupledError::Refused)?.k();
+        let mut rig = build(x, q / k).ok_or(CoupledError::Refused)?;
+        nearest_note(&band_roots(&mut rig, x)?, f, a).ok_or(CoupledError::NoNote)
+    };
+    let v = bracket(va, vb, |v| at(v).map(|r| r.f - f0)).ok()?;
+    at(v).ok().map(|r| r.a)
+}
+
+/// The refusal when no tension and loss ring `a0` (decay rate) at the pitch.
+///
+/// When a lossless string has a note on the pitch, the continuation's own refusal stands: it is
+/// exact, and still true of the note the lossless string plays there (the wide search found no
+/// other note to put on the targets). When none has, the notes the wide search saw on the pitch
+/// with a lossy string decide: none — no note; all faster than the target — it cannot ring that
+/// long; all slower — it cannot ring that short; some each way and still no solution — the search
+/// did not converge.
+///
+/// The extremes are solved onto the pitch first ([`exact_decay`]): read off a straight line across
+/// a coarse edge, a decay was 10 % out at 50 Hz on the 8000 N/m body (0.0377 s for 0.0338 s),
+/// enough to call a ring between the two too short when the note cannot ring that long. The least
+/// and the most are each re-solved until the extreme is one already solved.
+fn ring_refusal<R: Coupled>(
+    narrow: CoupledError,
+    f0: f64,
+    a0: f64,
+    crossings: &[Crossing],
+    build: &impl Fn(f64, f64) -> Option<R>,
+) -> CoupledError {
+    if narrow != CoupledError::NoNote || crossings.is_empty() {
+        return narrow;
+    }
+    // (decay, solved): a failed solve keeps its estimate, counted as solved so it is not retried.
+    let mut decays: Vec<(f64, bool)> = crossings.iter().map(|c| (c.estimate, false)).collect();
+    let mut extreme = |most: bool| loop {
+        let i = (0..decays.len())
+            .max_by(|&i, &j| {
+                let o = decays[i].0.total_cmp(&decays[j].0);
+                if most {
+                    o
+                } else {
+                    o.reverse()
+                }
+            })
+            .unwrap_or(0);
+        if decays[i].1 {
+            return decays[i].0;
+        }
+        decays[i] = (
+            exact_decay(f0, &crossings[i], build).unwrap_or(decays[i].0),
+            true,
+        );
+    };
+    let least = extreme(false);
+    let most = extreme(true);
+    if least > a0 {
+        CoupledError::RingTooLong {
+            longest: 3.0 * LN_10 / least,
+        }
+    } else if most < a0 {
+        CoupledError::RingTooShort {
+            shortest: 3.0 * LN_10 / most,
+        }
+    } else {
+        CoupledError::Unconverged("the ring-time search")
+    }
 }
 
 /// A bracketed root of `g` on log `x`: bisection-safe regula falsi (Illinois).
