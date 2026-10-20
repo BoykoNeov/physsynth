@@ -327,8 +327,9 @@ lesson: a bound measured where the effect is hidden is worse than no bound).
   hard strike's start and settle read out, and the page guarded where the coupled solve cannot
   settle (`docs/dev/vk-mapping-plan.md`). The other strings followed the same day — the bow, the
   tension string from a cited material and gauge, the ideal string (sample rate following the
-  pitch), the three barrier pages and the stiff string (`docs/dev/string-mapping-plan.md`); the
-  strings on a body or a bridge and the geometric string are still raw. Smoothing stays a
+  pitch), the three barrier pages and the stiff string (`docs/dev/string-mapping-plan.md`), and
+  on 2026-10-20 the strings on a body or a bridge, tuned through the coupling. The geometric
+  string stays raw by the human's choice — its page plays no note. Smoothing stays a
   real-time-stage concern.
 - **CPU budget x polyphony.** A single FDTD plate can saturate a core. *Which* models are polyphonic
   is settled in §11.3a (field models per instance, strings per voice); what remains here is the

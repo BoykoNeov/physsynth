@@ -8,7 +8,8 @@ takes raw physics. This plan covers them, sorted by how much new derivation each
 the three barrier pages and the stiff string all have musical controls. Next batch, per §8.1:
 the four coupled ideal pages (`sympathetic`, `body`, `platebody`, `radbody`); after it, the
 geometric string (§6). **Slice 4 started 2026-10-19 (§16):** the probe overturned §4's premise, and
-the human chose to tune through the coupling.
+the human chose to tune through the coupling. **Slice 4 DONE 2026-10-20** (§16–§18). **The series
+is CLOSED (§19, 2026-10-20):** the human chose to leave the geometric string's page raw.
 
 ---
 
@@ -96,6 +97,9 @@ Its longitudinal Courant number is `sqrt(EA/T)` times the transverse one — 12�
 `EA/T` of 150–600 — so most musical settings land past hurdle §6's Newton wall (`λ_long ≈ 4`). It
 would need a pre-run guard like the gong's. Any shared material helper must mind
 `EA_#9 ↔ (EA − T₀)_#10`.
+
+*Not built — the human's call, §19.* The premise above is the model's, not the page's: the page
+already refuses `λ_long > 1` and pays for it in sample rate, so the wall cannot be reached there.
 
 ## 7. Order of work
 
@@ -1009,3 +1013,34 @@ reference's `f_cl` (1e-6), play the pitch (1e-9) and ring the time (1e-6) off th
 red: the body pages' single pass (403.17 refused); the first pass alone (380.55, "a singular
 Jacobian"); both passes with the Broyden (213.57, "rings at least 1.729 s") — the two-target bar
 had passed that plant, so the third target was added for it.
+
+## 19. The geometric string stays raw — the series closes (2026-10-20)
+
+Started as slice 5 (§6) and stopped before the probe ran, on reading the page
+(`crates/physsynth-viewer/src/geometric.rs`). Nothing below is a simulation result: the figures
+are arithmetic from the page's own formulas, and the phantom one is a paper estimate.
+
+- **There is no note to hear.** The page is a viewer of four physics claims (planar symmetry, the
+  rotating wave, the whirl's Mathieu tongue, phantom partials). Three regimes ship no audio; the
+  phantom regime ships 0.1 s of bridge force, a click. A pitch target would set the string right
+  and stay unheard; a ring time would show only as the energy panel's slope over 0.02–0.1 s.
+- **The wall §6 feared is not on the page.** `build` refuses `λ_long > 1` and sets
+  `fs = c_long N / (L λ_long)`. With a gauge, `c_long = sqrt(E / density)`, so the cost follows
+  the material and the grid, not the pitch: steel at `N = 16`, `L = 1 m` runs at about 88 kHz
+  (gut about 38 kHz) whatever the note. The limit would have been the step budget, not Newton.
+- **A real string fights two regimes.** The whirl forces `κ = 0` and sets `κ_w` from its tongue
+  slider; the rotating wave needs `κ_u = κ_w`. A gauge's own stiffness contradicts the first and
+  must be shared by the second.
+- **The phantom panel would likely never score at a real gauge** (paper estimate): its defect
+  `f₂ − 2f₁ ≈ 3Bf₁` is about 0.1 Hz for a 1 mm steel string at 110 Hz on 1 m, against the 3 Hz
+  the 0.1 s window can resolve. The page's own phantom preset uses `κ = 8` for that reason.
+
+Also seen on the way, recorded rather than acted on: `geo::Params::new` copies the transverse
+`σ₀, σ₁` into the longitudinal pair when they are `None`, as the page passes them, so any loss
+mapping would have set both; and the page's lossless verdict is not told about Newton stalls
+(`EnergyOpts::default()`), the blind band of hurdle §6 — unreachable at `λ_long ≤ 1`, where no
+step was measured to stall.
+
+**The human's fourteenth answer, 2026-10-20: close the series and leave the page raw** (not
+chosen: pitch and a real string only, visual, no ring time; the tension page's full set). The
+page keeps its physics controls; every other string page has musical ones.

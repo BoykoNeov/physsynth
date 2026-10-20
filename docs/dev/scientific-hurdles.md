@@ -29,7 +29,7 @@
 | 9 | The conserved total is blind to a wrong coupling constant; `radiated == injected` is blind to half of them | every coupled scene | Accounted for — three detectors, jointly (§9) |
 | 10 | Aliasing around every nonlinearity | bow, reed, mallet, VK plate, both nonlinear strings | Mitigated by oversampling; no anti-aliased scheme (§10) |
 | 11 | Twenty ARPACK oracles were not bit-reproducible run to run | `analysis/modal.py` | Fixed in §24.9 — kept here as the pattern (§11) |
-| 12 | Raw physics is not a musician's interface (parameter mapping) | `string_tuning`, `plate_tuning`, `membrane_tuning`; the viewer's strings (all but the coupled and geometric ones), plates, drums, gong and cymbal | **Started 2026-10-18** for the damped string (five musical targets, met exactly by the *simulated* string at two partials, the drift of the rest reported and warned) and the same day for the three linear plates (material, thickness or pitch, two ring times — exact on the supported plate, ≤ 0.05 cents on the free ones; a new loss term `σ₁`). The drum followed the same day (a cited head, pitch or tension, two ring times — exact on both shapes; a new loss `σ₁`; a drum-in-a-room page showing the air lower it 2.7–3.9 semitones). The gong and the cymbal followed on 2026-10-19 (a metal, the *settled* pitch or the thickness, two ring times — exact as a strike tends to zero; a hard strike's start and settle read out; the page guarded where the solve cannot settle). The bowed string and the tension string followed the same day (the bow on a tuned string, its bowed pitch read out; the tension string from a cited material and gauge, its *settled* note exact). The ideal string, the stiff string and the three barrier pages followed the same day (the ideal string exact at every partial's ring time, its sample rate following the pitch; the stiff string's anchor stiffness from a one-root quadratic). The strings on a body or a bridge, and the whirling string, are still raw (§12) |
+| 12 | Raw physics is not a musician's interface (parameter mapping) | `string_tuning`, `coupled_tuning`, `coupled_plate`, `plate_tuning`, `membrane_tuning`; the viewer's strings (all but the geometric one), plates, drums, gong and cymbal | **Started 2026-10-18** for the damped string (five musical targets, met exactly by the *simulated* string at two partials, the drift of the rest reported and warned) and the same day for the three linear plates (material, thickness or pitch, two ring times — exact on the supported plate, ≤ 0.05 cents on the free ones; a new loss term `σ₁`). The drum followed the same day (a cited head, pitch or tension, two ring times — exact on both shapes; a new loss `σ₁`; a drum-in-a-room page showing the air lower it 2.7–3.9 semitones). The gong and the cymbal followed on 2026-10-19 (a metal, the *settled* pitch or the thickness, two ring times — exact as a strike tends to zero; a hard strike's start and settle read out; the page guarded where the solve cannot settle). The bowed string and the tension string followed the same day (the bow on a tuned string, its bowed pitch read out; the tension string from a cited material and gauge, its *settled* note exact). The ideal string, the stiff string and the three barrier pages followed the same day (the ideal string exact at every partial's ring time, its sample rate following the pitch; the stiff string's anchor stiffness from a one-root quadratic). The strings on a body or a bridge followed on 2026-10-20, tuned *through* the coupling (the note the coupled system plays; both notes where it splits). **Closed 2026-10-20:** the geometrically exact string stays raw, the human's call — its page plays no note (§12) |
 | 13 | Which models can ever run in real time | engine, room | Deferred, and now decoupled from the language (§13) |
 | 14 | `piston_radiation_resistance`'s `ka < 1e-8` series threshold was about three decades too small: just above it the direct form cancelled catastrophically and was 544% wrong | `core/radiation.py` | **Fixed 2026-09-03** — three Taylor terms below `ka = 3e-2`; worst error 5.24 → 6.7e-13 (§14) |
 | 15 | No model states where its own answer stops being in tune, and the boundary is much lower than anyone assumed | every resonator | **Measured 2026-09-06** — two families with opposite signs (implicit errors compound into a hard floor at ~8% of the grid; explicit errors cancel at the magic Courant number), the plate is space-limited at every `fs` the suite uses, and the membrane's ceiling cancellation is **diagonal-only**; the 2-D plate's band was **derived 2026-09-07** by splitting its spectrum by mode family, the **orthotropic** plate measured the same day — one floor in mode index, per-direction only in hertz — and the **membrane's block** the same day too: the 2-D CFL ceiling **is** the minimum over the spectrum of each mode's own cancellation Courant number, so no mode is ever sharp, and a block's worst corner **flips** below the ceiling for every block — the plate's corner rule is inverted on a membrane, not weakened (§15) |
@@ -651,8 +651,23 @@ same plan, slices 2 and 3). What carries forward:
   fundamental's 6.91/s). There, the musical page against its physics twin on the mapped string,
   to 1e-9, is the bar.
 
-Every other model is still raw: the strings on a body or a bridge (the next batch) and the
-whirling string. Smoothing a moving control belongs to the real-time stage.
+**2026-10-20, the seventh piece: the strings on a body or a bridge** (the same plan, slice 4,
+§16–§18). What carries forward:
+
+- **A body that weighs about what the string does moves the note 2–13 semitones, and near a body
+  mode the note splits in two.** So the string alone could not be tuned and the shift read out
+  (the plan's first premise, overturned by its probe). The human chose to tune through the
+  coupling: the pitch is the note the coupled system plays, found on the rig's own one-step map,
+  and both notes are shown where it splits. A ring time adds a string loss, searched over every
+  tension and loss.
+- **The string on a plate needed its own fast modal solver** — the dense one-step map took minutes
+  per tuning — and a second, finer pass of the ring-time search, which the other body pages do not
+  run.
+
+**The series is closed** (plan §19, the human's call, 2026-10-20). The geometrically exact string
+keeps its physics controls: its page is a viewer of four physics claims whose only sound is a
+0.1 s click, so a pitch or a ring time would be set and never heard. Smoothing a moving control
+belongs to the real-time stage.
 
 ## 13. Which models are real-time — deferred, decoupled
 
