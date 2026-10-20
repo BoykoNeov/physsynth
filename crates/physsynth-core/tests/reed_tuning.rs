@@ -325,11 +325,16 @@ fn a_pitch_past_the_shortest_tube_names_the_highest_note() {
 
 #[test]
 fn a_reed_that_sounds_but_never_repeats_is_refused() {
-    let r = rig(64, 0.3, 1000.0, 4.0, Some(0.3), 1.0);
-    assert!(matches!(
-        tune(&r, 45.0, &ReedSearch::default()),
-        Err(ReedTuningError::Aperiodic { .. })
-    ));
+    // A scripted rig, not a reed: the sweep's aperiodic reeds were decided by whether any lag
+    // stood out at all, a margin no number states (plan §6). The reader's own side of this is
+    // the noise in `the_reader_names_silence_shortness_and_no_repeat`.
+    let mut lengths = Vec::new();
+    let out = tune_reed_length(110.0, C0, &ReedSearch::default(), |l| {
+        lengths.push(l);
+        Ok(Heard::Aperiodic)
+    });
+    assert_eq!(out, Err(ReedTuningError::Aperiodic { l: C0 / 440.0 }));
+    assert_eq!(lengths.len(), 1, "the first aperiodic run ends the search");
 }
 
 #[test]

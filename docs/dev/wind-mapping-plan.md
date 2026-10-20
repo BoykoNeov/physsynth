@@ -24,7 +24,8 @@ Both pages already use their `domain` select for the far end, so the control set
 
 ## 2. Part 0 — what the probe measured (2026-10-20)
 
-Scratch crate `W:\temp\claude\wind-probe` (nothing in the repo).
+Scratch crate `W:\temp\claude\wind-probe` (nothing in the repo; deleted at the batch's cleanup,
+2026-10-20 — its numbers live in this plan).
 
 **The bore is exact, at every partial, in pitch and ring time.** The bore's one-step map, built
 column by column from `Bore::step` and solved with `eig::general_eigenvalues`, over
@@ -182,6 +183,15 @@ excepted: anchored on the played note by design); the open end ignoring the ring
 refusals' wording. Plants: the bell from `c0/4f0`, the page ignoring the found L, the panel on the
 tube's note, the search's bell from `c0/4f0` — each red. Browser: `reed_musical`,
 `reed_musical_open`.
+
+**Margins and named limits, checked after the commit.** The silent fixture's level is 0.0028
+against the 0.02 gate, the squeak 789 cents over a 25-cent line, the wandering note 71 cents
+against 1. The reed-rig *aperiodic* fixture was replaced by a scripted rig: its reed was refused
+because no lag stood out at all, a margin no number states. Two named limits did not play and
+were fixed: the early budget ceiling (named 293 Hz; 280 and 290 Hz were still over budget, because
+the reed's tube is shorter than `c0/4f0` — it now says the highest pitch is lower still) and the
+too-short length (named 0.44 s, itself too short at 0.4446 s — now rounded up from `20 / f0`). A
+bar asks for each named limit and plays it.
 
 **Seen, not acted on.** The reed page's grid hint reads "λ = 1.00 (implicit scheme — no CFL
 limit)", but the bore under the reed is the explicit leapfrog at its CFL limit; and at a low N on

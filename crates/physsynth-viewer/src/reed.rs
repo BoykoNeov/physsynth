@@ -198,8 +198,9 @@ fn musical_tube(
     if f0 > 0.0 && 4.0 * n as f64 * f0 * audio_dur > REED_WORK_MAX as f64 {
         return Err(Refusal::Param(format!(
             "a {} Hz note at N = {n} over {} s needs more than {REED_WORK_MAX} steps (fs = c0 N / \
-             L, and the reed's tube is shorter than c0 / 4f0). At this N and duration the pitch \
-             must stay below {:.1} Hz; lower N or shorten the audio.",
+             L, and the reed's tube is shorter than c0 / 4f0). At this N and duration the tube's \
+             own note must stay below {:.1} Hz, and the reed plays flat of it, so the highest \
+             pitch is lower still; lower N or shorten the audio.",
             pf(f0),
             pf(audio_dur),
             REED_WORK_MAX as f64 / (4.0 * n as f64 * audio_dur)
@@ -259,7 +260,11 @@ fn reed_refusal(e: &ReedTuningError, f0: f64, n: usize, audio_dur: f64) -> Strin
              periods the reading needs — at least {:.2} s.",
             pf(audio_dur),
             at(l),
-            20.0 * 4.0 * l / C0_AIR
+            // Each half of the last 40 % must hold 4 / f_tube s, so D >= 20 / f_tube. The found
+            // tube's own note is above f0 (the reed pulls flat), so 20 / f0 is enough for every
+            // tube the search tries after its first, and it is rounded UP: a named length must
+            // play.
+            (20.0 / f0.min(C0_AIR / (4.0 * l)) * 1.005 * 100.0).ceil() / 100.0
         ),
         ReedTuningError::Aperiodic { l } => format!(
             "the reed sounds {} but nothing it sounds repeats: there is no note to tune. Move \

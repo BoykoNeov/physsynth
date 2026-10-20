@@ -363,9 +363,38 @@ fn a_reed_refusal_says_what_to_change() {
             json!({"f0": 600.0, "t60_low": 60.0, "N": 64, "audio_duration": 0.3}),
             "longer than the bell can hold on the",
         ),
+        // Under the early ceiling, the found tube is still too short for the budget.
+        (
+            json!({"f0": 290.0, "N": 256, "audio_duration": 1.0}),
+            "this pitch needs runs",
+        ),
     ];
     for (over, want) in cases {
         let msg = refusal(&reed(over.clone()));
         assert!(msg.contains(want), "{over}: {msg}");
     }
+}
+
+/// A refusal that names a limit names one the page can play: the highest note out of reach
+/// names, and the audio length a low note asks for.
+#[test]
+fn a_named_reed_limit_is_one_the_page_plays() {
+    let num_after = |msg: &str, key: &str| -> f64 {
+        let rest = &msg[msg.find(key).unwrap_or_else(|| panic!("{msg}")) + key.len()..];
+        let end = rest
+            .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .unwrap();
+        rest[..end].parse().unwrap()
+    };
+    let msg = refusal(&reed(json!({"f0": 800.0})));
+    let highest = num_after(&msg, "the highest note it plays is ");
+    ok(&reed(json!({"f0": highest - 0.5})));
+    let low = json!({"f0": 45.0, "gamma": 0.51, "f_reed": 2500.0});
+    let mut short = low.clone();
+    short["audio_duration"] = json!(0.2);
+    let msg = refusal(&reed(short));
+    let enough = num_after(&msg, "at least ");
+    let mut long = low;
+    long["audio_duration"] = json!(enough);
+    ok(&reed(long));
 }
