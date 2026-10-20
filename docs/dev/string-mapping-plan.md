@@ -649,8 +649,13 @@ long", with the longest ring a note can have there, and the tests' 1e-4 s target
 (below). Timed with ten at once: Soft 7.1 s mean, 25 s worst (1.8 s before); Air 9.2 s, 43 s
 worst (1.3 s); two strings 42 s, 51 s (13 s). A second run on a busier machine was up to 2–4×
 slower throughout, the unchanged lossless tunings included. The slowest are refusals, which
-search the whole plane. Unoptimised, `tests/coupled_tuning.rs` took 623 s locally (its slowest
-bar alone took 394 s before), against CI's 113 s for the whole file before.
+search the whole plane. Unoptimised, `tests/coupled_tuning.rs` took 744 s in CI's debug lane
+(230 s on the commit before; 74 s optimised): 8.5 minutes added, against the human's line of about
+3.
+
+**The human's eighth answer, 2026-10-20: `coupled_tuning` joins CI's optimised-only list**, as ten
+files before it — it asserts tolerances only, and nothing it drives has a `debug_assert!`. (Not
+chosen: cut most ring-time cases from the debug lane; keep the 8.5 minutes.)
 
 *Above 3 s, checked the same way*: the dense key and the port at 6, 10 and 20 s on both rigs (all
 47 semitones, 282 targets, 152 tunings) agree on every one — so the range checked is 0.05–20 s,

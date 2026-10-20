@@ -88,7 +88,10 @@ jobs:
   # percent-level headroom only. `ops2d_airy_large` (the Airy solve's backward error on the five
   # large grids, split from `ops2d_scipy` for this, 116 s unoptimised against ~15 s, the human's
   # call, retirement plan §49) pins no spelling, and the same bar runs on the 16 recorded grids in
-  # both profiles. It is an exclusion on purpose: a new core test file lands
+  # both profiles. `coupled_tuning` (the coupled strings' tension and loss solver; 744 s
+  # unoptimised against 74 s optimised once every ring time searched the whole tension-loss plane,
+  # the human's call, string-mapping plan §16) asserts tolerances only, and nothing it drives has a
+  # `debug_assert!`. It is an exclusion on purpose: a new core test file lands
   # in both profiles by default, and a stale name here fails the step.
   rust-debug:
     name: Rust core, unoptimised (debug asserts, unfolded arithmetic)
@@ -103,6 +106,7 @@ jobs:
         run: |
           release_only="connection_plate mallet_gong plate plate_grain plate_kirchhoff plate_free string_geometric_long"
           release_only="$release_only vk_plate_harness airbox_port_size ops2d_airy_large"
+          release_only="$release_only coupled_tuning"
           for n in $release_only; do
             ls crates/physsynth-core/tests/$n.rs > /dev/null || { echo "no core test $n"; exit 1; }
           done
