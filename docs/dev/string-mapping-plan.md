@@ -631,9 +631,10 @@ body and the air only add loss; on every tuning found, `sigma share / a0` is at 
 lower limit on the loss — the radiating body's tunings go down to `sigma = 0.016 a0`.
 
 *Refusals.* When a lossless string has a note on the pitch, the continuation's refusal stands,
-exact, and the message says it is about the note with the most string motion (on the radiating
-body at 226.27 Hz that note cannot ring longer than 0.92 s while a quieter one rings 1.2 s; 1 s is
-still refused, rightly: neither can be set to it). When none has, the notes the wide search saw
+exact, and the message says it is about the note with the most string motion. (A first version
+reported the longest of all notes seen on the pitch instead, and at 226.27 Hz on the radiating
+body put one at 1.2 s beside the lossless note's 0.92 s. That 1.2 s was a straight-line reading
+across a grid edge: the only lossless crossing there rings 0.92 s.) When none has, the notes the wide search saw
 crossing the pitch decide — none: no note; all faster than the target: too long; all slower: too
 short — with the extremes solved onto the pitch along their grid edge. Read off a straight line
 across the edge instead, a ring time was 10 % out (50 Hz on the 8000 N/m body: 0.0377 s for
@@ -650,6 +651,14 @@ worst (1.3 s); two strings 42 s, 51 s (13 s). A second run on a busier machine w
 slower throughout, the unchanged lossless tunings included. The slowest are refusals, which
 search the whole plane. Unoptimised, `tests/coupled_tuning.rs` took 623 s locally (its slowest
 bar alone took 394 s before), against CI's 113 s for the whole file before.
+
+*Above 3 s, checked the same way*: the dense key and the port at 6, 10 and 20 s on both rigs (all
+47 semitones, 282 targets, 152 tunings) agree on every one — so the range checked is 0.05–20 s,
+the existing sliders' reach.
+
+*The solve's stall limit, planted.* At 6 instead of 10 the port still matches the key on all 376
+targets (four tunings move in their last bits, reached from other seeds): the prototype's loss at 6
+was its shared grid's, so 10 is a margin, not a measured edge.
 
 *Below 0.05 s it is not complete.* A dense key at 0.01, 0.02 and 0.03 s (every fourth semitone,
 both rigs): the search missed 7 of 72 tunings — a ring of one or two cycles, at loss heavy enough

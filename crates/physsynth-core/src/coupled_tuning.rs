@@ -43,7 +43,7 @@
 //!    lossless tuning at 269.09 Hz with a 0.05 s ring. So a grid over `(f_cl, sigma k)` is searched
 //!    too, and its note displaces step 3's when it has more of the string's motion (the human's
 //!    fifth answer, plan §16: the tension may jump, and the search is slower). Checked against a
-//!    reference search 64 times as dense on 376 targets with ring times from 0.05 to 3 s: it found
+//!    reference search 64 times as dense on 658 targets with ring times from 0.05 to 20 s: it found
 //!    every tuning the reference did. Not below that — at 0.01 and 0.02 s, a ring of one or two
 //!    cycles, it missed 7 of 72 tunings the reference found — so a ring time under
 //!    [`RING_FLOOR`] is refused (the human's call, plan §16).
@@ -88,8 +88,8 @@ const NEWTON_ITERS: usize = 30;
 const SIGMA_POINTS: usize = 25;
 const INVERSE_ITERS: usize = 60;
 
-/// The shortest ring time (s) [`tune_coupled`] takes. From here to 3 s the wide search found
-/// every tuning a reference 64 times as dense found, on 376 targets; at 0.01 and 0.02 s, a ring of
+/// The shortest ring time (s) [`tune_coupled`] takes. From here to 20 s the wide search found
+/// every tuning a reference 64 times as dense found, on 658 targets; at 0.01 and 0.02 s, a ring of
 /// one or two cycles, it missed 7 of 72. Below it the solver refuses rather than risk calling a
 /// tuning that exists impossible (the human's call, plan §16).
 pub const RING_FLOOR: f64 = 0.05;
@@ -103,8 +103,10 @@ const X_STEP: f64 = 1.1068;
 const Q_FLOOR: f64 = 1e-7;
 const Q_STEP: f64 = 2.1838;
 /// The wide search's solve: a Broyden on `(ln f_cl, ln q)`. Iteration cap, and how many steps in
-/// a row without a new smallest residual end it (6 lost a tuning at 201.59 Hz that needs 24
-/// steps; 10 lost none).
+/// a row without a new smallest residual end it. 10 is a margin, not a measured edge: the
+/// prototype, on one grid shared by every target, lost a tuning at 201.59 Hz and 0.05 s at 6 (24
+/// steps from its seed); this search, whose grid starts at each target's guard wall, loses none
+/// of the probe sweep's 376 at 6 either.
 const WIDE_ITERS: usize = 40;
 const WIDE_STALL: usize = 10;
 /// Two wide-search solutions are one note when their `f_cl` agree to this, relative, and their
@@ -322,10 +324,9 @@ pub enum CoupledError {
     /// that brings one there ends it sooner.
     RingTooLong {
         /// The longest ring time (s): the lossless string's note's, exact — the note with the most
-        /// string motion, so another, quieter note at the pitch may ring longer (on the radiating
-        /// body at 226.27 Hz this is 0.92 s and a quieter note rings 1.2 s; neither can be set to
-        /// 1 s); or, when only a lossy string reaches the pitch, the longest the wide search saw
-        /// there, each extreme solved onto the pitch.
+        /// string motion, so a quieter note at the pitch, if there is one, is not covered by it;
+        /// or, when only a lossy string reaches the pitch, the longest the wide search saw there,
+        /// each extreme solved onto the pitch.
         longest: f64,
     },
     /// The note cannot ring that short: the heaviest string loss the scheme allows does not make
