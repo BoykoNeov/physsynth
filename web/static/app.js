@@ -1054,7 +1054,7 @@ function updateLambdaHint() {
     // The room sets fs (3-D CFL at 0.9 of 1/√3), as on the drum in a room; the plate has no λ.
     const fs = 343 * Math.sqrt(3) / (0.9 * param("air_h"));
     hint.textContent = `fs = ${fmt(Math.round(fs))} Hz, set by the ROOM (air_h). The plate's `
-      + `Picard solve needs it: air_h is capped at 12.5 mm, coarser stops converging.`;
+      + `solve needs it: air_h is capped at 12.5 mm, coarser was measured not to converge.`;
     hint.style.color = "var(--muted)";
   } else if (m === "sympathetic") {
     const lam = param("lambda");

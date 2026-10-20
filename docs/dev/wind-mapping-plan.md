@@ -227,10 +227,10 @@ branch, meant for the implicit strings, and printed "λ = 1.00 (implicit scheme 
 with a λ read from a slider neither page has. The reed now says its step is explicit at λ = 1,
 gives `fs = c0 N/L` and the reed's `wr·k < 2` in the refusal's own terms (red, naming the N,
 when it fails); in musical mode, where the search picks the tube, only the floor `fs > 4 N f0`
-is stated. The gong in a room names the room's `fs`. `air_h`, `radius` and `f_reed` now refresh
+is stated. The gong in a room names the room's `fs` (and "the plate's solve", not Picard: the default falls back to Newton). `air_h`, `radius` and `f_reed` now refresh
 the hint (the drum in a room's went stale when `air_h` moved). Bar: `verify_headless` reads the
 hint on every case — "implicit scheme" only on the seven models whose step is implicit, the
-reed's and the room's own words on theirs. Planted (both branches removed): 3/3 cases red.
+reed's and the room's own words on theirs. Planted (both branches removed): 3/3 cases red; the whole check, 66/66 green.
 Not covered: the red refusal line, which no case renders (a refused render fails the check).
 
 **The buzz — stays a warning** (the human, 2026-10-20). Its cause: the tube's only loss is
