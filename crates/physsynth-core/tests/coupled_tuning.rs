@@ -312,6 +312,56 @@ fn in_a_split_band_the_target_plays_and_the_louder_neighbour_is_named() {
     assert!(loud.share > 0.5, "neighbour share {}", loud.share);
 }
 
+/// Two strings a fifth of a semitone apart (plan §17), at settings off the file's own: `L = 0.8`,
+/// `rho = 0.004`, `lambda = 0.85`, `N = 40`, 5000 N/m, body loss 15. Their two notes near the
+/// pitch sit 4.5 Hz apart and move 5 Hz a scan step, and the scan's pairing by pitch swapped them:
+/// the solver returned a "tuning" at `f_cl = 102.85` whose note played 99.65 Hz for 98. The note
+/// on the pitch is the near-bridge-still one at `f_cl = 101.06`, 99.9 % string.
+#[test]
+fn two_near_unison_notes_are_not_confused() {
+    let (l, rho, lam, n) = (0.8, 0.004, 0.85, 40);
+    let rig = |f_cl: f64, sigma: f64| {
+        let c = 2.0 * l * f_cl;
+        let fs = c * n as f64 / (l * lam);
+        let s = |t: f64| {
+            StringParams::new(
+                l,
+                t,
+                rho,
+                fs,
+                n,
+                sigma,
+                Some((Boundary::Fixed, Boundary::Free)),
+            )
+            .ok()
+            .map(IdealString::new)
+        };
+        let t = rho * c * c;
+        let strings = vec![s(t)?, s(t * 2f64.powf(-0.2 / 6.0))?];
+        SympatheticStrings::new(strings, modal(&SYMP, fs, 15.0), vec![5000.0, 5000.0]).ok()
+    };
+    for t60 in [None, Some(1.0)] {
+        let t = tune_coupled(98.0, t60, rig).expect("tunes");
+        assert!(
+            ((t.note.f - 98.0) / 98.0).abs() < 1e-11,
+            "reports {} Hz",
+            t.note.f
+        );
+        assert!(t.note.share > 0.99, "share {}", t.note.share);
+        assert!((t.f_cl - 101.06).abs() < 0.01, "f_cl {}", t.f_cl);
+        let mut r = rig(t.f_cl, t.sigma).unwrap();
+        let (f, rings, residual) = played(&mut r, t.root, t.note.f, 39, 3000);
+        assert!(
+            residual < 1e-9,
+            "the start was not one mode ({residual:.2e})"
+        );
+        assert!(((f - 98.0) / 98.0).abs() < 1e-9, "plays {f} Hz");
+        if let Some(want) = t60 {
+            assert!((rings / want - 1.0).abs() < 1e-6, "rings {rings} s");
+        }
+    }
+}
+
 /// On two identical strings the note is the bridge-still mode — all string, no body — and the
 /// symmetric hybrid a pluck also sounds is reported beside it.
 #[test]

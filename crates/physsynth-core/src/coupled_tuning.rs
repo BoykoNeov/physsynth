@@ -68,8 +68,16 @@ use crate::eig;
 use crate::radiation::RadiatedBody;
 
 /// Points of the scan over `f_cl`, across its range of about 2.4 octaves: a step of 5.3 %, small
-/// enough that a root moves less between two points than it is far from its neighbours.
+/// enough that a root moves less between two points than it is far from its neighbours — except
+/// two near-unison strings' pair of notes, which [`crossings_between`] scans again, finer.
 const SCAN_POINTS: usize = 32;
+/// A solved crossing is on the pitch when its root plays `f0` to this, relative. The solve stops
+/// at about 1e-14; a crossing that joined two different notes misses by their gap, about 2 %.
+const ON_PITCH: f64 = 1e-9;
+/// Points of each finer scan of one scan step, both ends included: steps of 0.66 %.
+const REFINE_POINTS: usize = 9;
+/// How many times an interval is scanned again, finer, at most.
+const REFINE_DEPTH: usize = 2;
 /// The pitch's stopping point, relative: 1.7e-8 cents.
 ///
 /// Not tighter, because the damped pitch is not known tighter. One step turns the mode by only
@@ -466,25 +474,8 @@ pub fn tune_coupled<R: Coupled>(
     //    largest string share.
     let mut best: Option<(f64, Root, f64)> = None; // (f_cl, root, share)
     for w in 0..SCAN_POINTS - 1 {
-        for (p, q) in follow(&scan[w], &scan[w + 1]) {
-            let (ga, gb) = (p.f - f0, q.f - f0);
-            if ga != 0.0 && ga.signum() == gb.signum() {
-                continue;
-            }
-            let (xa, xb) = (grid[w], grid[w + 1]);
-            // The root at x, found from its straight-line prediction between the two ends.
-            let at = |x: f64| -> Result<Root, CoupledError> {
-                let t = (x / xa).ln() / (xb / xa).ln();
-                let guess = (p.z.0 + t * (q.z.0 - p.z.0), p.z.1 + t * (q.z.1 - p.z.1));
-                let mut rig = build(x, 0.0).ok_or(CoupledError::Refused)?;
-                nearest_root(&mut rig, guess)
-            };
-            let x = if ga == 0.0 {
-                xa
-            } else {
-                bracket(xa, xb, |x| at(x).map(|r| r.f - f0))?
-            };
-            let root = at(x)?;
+        let ends = ((grid[w], &scan[w][..]), (grid[w + 1], &scan[w + 1][..]));
+        for (x, root) in crossings_between(f0, ends.0, ends.1, REFINE_DEPTH, &build)? {
             let mut rig = build(x, 0.0).ok_or(CoupledError::Refused)?;
             let share = share_of(&mut rig, root.z)?;
             if best.is_none_or(|(_, _, s)| share > s) {
@@ -568,6 +559,77 @@ pub fn tune_coupled<R: Coupled>(
         note: note.ok_or(CoupledError::NoNote)?,
         others,
     })
+}
+
+/// The crossings of `f0` between two scan points, each given as `(f_cl, its band roots)`: every
+/// paired root ([`follow`]) whose pitch changes side of `f0`, solved for its `f_cl`.
+///
+/// Pairing by pitch can swap two notes that sit closer together than they move in one step — two
+/// strings a fifth of a semitone apart on the two-string page, whose notes were 4.5 Hz apart and
+/// moved 5 Hz a step (plan §17) — and a "crossing" then joins the lower note at one end to the
+/// upper at the other. Its solve converges on the tension where the nearest root jumps from one
+/// note to the other: a tuning that is not on the pitch, which the solver returned as one (98 Hz
+/// asked, 99.65 Hz played). So each solution is checked against the pitch ([`ON_PITCH`]), and an
+/// interval with one that misses is scanned again at [`REFINE_POINTS`] points, up to
+/// [`REFINE_DEPTH`] times, its crossings taken from there; a miss at the last depth is dropped.
+/// A swap of two notes that cross the pitch in the same direction always leaves a miss; a swap of
+/// two crossing in opposite directions would leave none, and was not seen: the notes rise with the
+/// tension.
+fn crossings_between<R: Coupled>(
+    f0: f64,
+    (xa, ra): (f64, &[Root]),
+    (xb, rb): (f64, &[Root]),
+    depth: usize,
+    build: &impl Fn(f64, f64) -> Option<R>,
+) -> Result<Vec<(f64, Root)>, CoupledError> {
+    let mut out = Vec::new();
+    let mut missed = false;
+    for (p, q) in follow(ra, rb) {
+        let (ga, gb) = (p.f - f0, q.f - f0);
+        if ga != 0.0 && ga.signum() == gb.signum() {
+            continue;
+        }
+        // The root at x, found from its straight-line prediction between the two ends.
+        let at = |x: f64| -> Result<Root, CoupledError> {
+            let t = (x / xa).ln() / (xb / xa).ln();
+            let guess = (p.z.0 + t * (q.z.0 - p.z.0), p.z.1 + t * (q.z.1 - p.z.1));
+            let mut rig = build(x, 0.0).ok_or(CoupledError::Refused)?;
+            nearest_root(&mut rig, guess)
+        };
+        let x = if ga == 0.0 {
+            xa
+        } else {
+            bracket(xa, xb, |x| at(x).map(|r| r.f - f0))?
+        };
+        let root = at(x)?;
+        if (root.f / f0 - 1.0).abs() <= ON_PITCH {
+            out.push((x, root));
+        } else {
+            missed = true;
+        }
+    }
+    if !missed || depth == 0 {
+        return Ok(out);
+    }
+    let xs: Vec<f64> = (0..REFINE_POINTS)
+        .map(|i| xa * (xb / xa).powf(i as f64 / (REFINE_POINTS - 1) as f64))
+        .collect();
+    let mut scan = Vec::with_capacity(REFINE_POINTS);
+    for &x in &xs {
+        let mut rig = build(x, 0.0).ok_or(CoupledError::Refused)?;
+        scan.push(band_roots(&mut rig, x)?);
+    }
+    let mut out = Vec::new();
+    for w in 0..REFINE_POINTS - 1 {
+        out.extend(crossings_between(
+            f0,
+            (xs[w], &scan[w]),
+            (xs[w + 1], &scan[w + 1]),
+            depth - 1,
+            build,
+        )?);
+    }
+    Ok(out)
 }
 
 /// The one-step map's roots in the page's band `(x / 4, 1.3 x)`, upper half-plane, ascending in
