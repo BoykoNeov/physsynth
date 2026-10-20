@@ -661,6 +661,18 @@ chosen: cut most ring-time cases from the debug lane; keep the 8.5 minutes.)
 47 semitones, 282 targets, 152 tunings) agree on every one — so the range checked is 0.05–20 s,
 the existing sliders' reach.
 
+*Two strings, checked the same way* (a side agent's note, after the commit: the dense check had
+covered only the single-string rigs): the tests' two-string rig at the pages' N = 100 (two
+strings in unison, K 6000, body loss 20), every third semitone from 40 Hz at 0.05, 0.3, 1 and
+3 s — 64 targets, the key at base density. The port agrees on 57; on the other 7 it found a
+better note than the key — the bridge-still mode, share 1.0000, at 56.57 and 67.27 Hz where the
+key's best had 0.995 and 0.988, and at 452.55 Hz (1 and 3 s) where the key found none — every
+one played and rung off the run. So the port never did worse, but on this rig the key itself
+misses notes, and the check is weaker than on the single-string rigs. 45 s a tuning on average,
+63 s at most, eight at once. The plate-body page cannot be checked yet: a plate is not a
+`LevelBody` (the solver reads only bodies whose state is a modal body's two levels), so
+`tune_coupled` does not take it.
+
 *The solve's stall limit, planted.* At 6 instead of 10 the port still matches the key on all 376
 targets (four tunings move in their last bits, reached from other seeds): the prototype's loss at 6
 was its shared grid's, so 10 is a margin, not a measured edge.
