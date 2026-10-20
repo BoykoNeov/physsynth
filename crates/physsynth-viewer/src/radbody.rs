@@ -9,6 +9,10 @@
 //! timestep: the curve does not move under a 4x refinement.
 //!
 //! `R = 0` decouples the air and reproduces the bare body bit-for-bit.
+//!
+//! With `controls: "musical"` the pitch and ring time are solved through this page's rig
+//! ([`crate::coupled`], string mapping plan §16–§17); the sweep then holds the tuned tension, on its
+//! fixed grid or the page's (the `sweep_grid` option), with a lossless string.
 
 use std::f64::consts::PI;
 
@@ -22,6 +26,7 @@ use physsynth_core::radiation::{
 use physsynth_core::string_ideal::{self as ideal, Boundary, IdealString};
 use serde_json::{json, Map, Value};
 
+use crate::coupled;
 use crate::energy::{energy_block, EnergyOpts};
 use crate::py::{
     b64f32, commas, finite_list, geomspace, int, linspace_idx, max_abs, num, opt_num, py_int,
@@ -96,6 +101,22 @@ pub struct Rig {
     pub k: f64,
     pub r: f64,
     pub sigma_body: f64,
+    /// The string's own loss: zero on the physics path, the solved one in musical mode.
+    pub sigma_string: f64,
+}
+
+/// The request's rig, checked, before the string's tension and loss are chosen.
+#[derive(Clone, Copy)]
+pub struct Setup {
+    pub l: f64,
+    /// The `T` slider; unread (1) in musical mode, where the pitch sets it.
+    pub t: f64,
+    pub rho: f64,
+    pub lam: f64,
+    pub k: f64,
+    pub r: f64,
+    pub sigma_body: f64,
+    pub n: i64,
 }
 
 /// `_build_radbody_bridge`: the overrides exist for the sweep, which pins N, R and sigma.
@@ -105,8 +126,20 @@ pub fn build(
     r_override: Option<f64>,
     sigma_override: Option<f64>,
 ) -> Result<Rig, Refusal> {
+    let s = setup(p, n_override, r_override, sigma_override, false)?;
+    assemble(&s, s.t, 0.0)
+}
+
+/// [`build`]'s checks; `musical` leaves the `T` slider unread.
+pub fn setup(
+    p: &Value,
+    n_override: Option<i64>,
+    r_override: Option<f64>,
+    sigma_override: Option<f64>,
+    musical: bool,
+) -> Result<Setup, Refusal> {
     let l = fnum(p, "L", 1.0)?;
-    let t = fnum(p, "T", 200.0)?;
+    let t = if musical { 1.0 } else { fnum(p, "T", 200.0)? };
     let rho = fnum(p, "rho", 0.005)?;
     let lam = fnum(p, "lambda", RADBODY_LAM_DEFAULT)?;
     let k = fnum(p, "bridge_stiffness", RADBODY_K_DEFAULT)?;
@@ -172,7 +205,30 @@ pub fn build(
             pf(sigma_body)
         )));
     }
+    Ok(Setup {
+        l,
+        t,
+        rho,
+        lam,
+        k,
+        r,
+        sigma_body,
+        n,
+    })
+}
 
+/// [`build`]'s rig at tension `t` and string loss `sigma`.
+pub fn assemble(s: &Setup, t: f64, sigma: f64) -> Result<Rig, Refusal> {
+    let Setup {
+        l,
+        rho,
+        lam,
+        k,
+        r,
+        sigma_body,
+        n,
+        ..
+    } = *s;
     let c = (t / rho).sqrt();
     let fs = c * n as f64 / (l * lam);
     let sp = ideal::Params::new(
@@ -181,7 +237,7 @@ pub fn build(
         rho,
         fs,
         n,
-        0.0,
+        sigma,
         Some((Boundary::Fixed, Boundary::Free)),
     )
     .map_err(construction)?;
@@ -209,6 +265,7 @@ pub fn build(
         k,
         r,
         sigma_body,
+        sigma_string: sigma,
     })
 }
 
@@ -223,7 +280,20 @@ fn pluck(rig: &mut Rig, frac: f64, amplitude: f64) -> Result<(), Refusal> {
 
 /// `_radbody_t50`: steps until the radiated channel holds half the pluck's energy; NaN if censored.
 pub fn t50(p: &Value, r: f64, cap_seconds: f64, n: i64) -> Result<(f64, i64), Refusal> {
-    let mut rig = build(p, Some(n), Some(r), Some(0.0))?;
+    t50_at(p, r, cap_seconds, n, None)
+}
+
+/// [`t50`] at tension `t` when given — the musical page's mapped one — on a lossless string, as
+/// the sweep zeroes the body's loss too: the curve is the air's drain, nothing else's.
+pub fn t50_at(
+    p: &Value,
+    r: f64,
+    cap_seconds: f64,
+    n: i64,
+    t: Option<f64>,
+) -> Result<(f64, i64), Refusal> {
+    let s = setup(p, Some(n), Some(r), Some(0.0), t.is_some())?;
+    let mut rig = assemble(&s, t.unwrap_or(s.t), 0.0)?;
     let pluck_frac = fnum(p, "pluck_position", 0.3)?;
     let amplitude = fnum(p, "amplitude", RADBODY_AMP_DEFAULT)?;
     pluck(&mut rig, pluck_frac, amplitude)?;
@@ -243,6 +313,19 @@ pub fn t50(p: &Value, r: f64, cap_seconds: f64, n: i64) -> Result<(f64, i64), Re
 /// `work_max` is [`RADBODY_SWEEP_WORK_MAX`] on the shipped path; a test lowers it to reach the
 /// censoring, which the shipped range cannot.
 pub fn sweep(p: &Value, r_now: f64, k_now: f64, work_max: i64) -> Result<Value, Refusal> {
+    sweep_at(p, r_now, k_now, work_max, None, RADBODY_SWEEP_N)
+}
+
+/// [`sweep`] at `tension` when given (the musical page's mapped one) and grid `sweep_n`: the
+/// fixed [`RADBODY_SWEEP_N`], or the page's own when the musical sweep toggle asks (plan §17).
+pub fn sweep_at(
+    p: &Value,
+    r_now: f64,
+    k_now: f64,
+    work_max: i64,
+    tension: Option<f64>,
+    sweep_n: i64,
+) -> Result<Value, Refusal> {
     let pv = p
         .get("sweep_points")
         .cloned()
@@ -269,7 +352,7 @@ pub fn sweep(p: &Value, r_now: f64, k_now: f64, work_max: i64) -> Result<Value, 
     let mut out = Map::new();
     out.insert("r".into(), finite_list(&grid, Some(4)));
     out.insert("cap_ms".into(), num(round_nd(cap * 1000.0, 1)));
-    out.insert("sweep_n".into(), int(RADBODY_SWEEP_N));
+    out.insert("sweep_n".into(), int(sweep_n));
     out.insert("r_now".into(), num(round_nd(r_now, 3)));
     if k_now <= 0.0 {
         for (k, v) in [
@@ -299,7 +382,7 @@ pub fn sweep(p: &Value, r_now: f64, k_now: f64, work_max: i64) -> Result<Value, 
             t50s.push(f64::NAN);
             continue;
         }
-        let (t, steps) = t50(p, r, cap, RADBODY_SWEEP_N)?;
+        let (t, steps) = t50_at(p, r, cap, sweep_n, tension)?;
         spent += steps;
         t50s.push(t);
     }
@@ -322,7 +405,7 @@ pub fn sweep(p: &Value, r_now: f64, k_now: f64, work_max: i64) -> Result<Value, 
     });
     let mut t50_now = f64::NAN;
     if r_now > 0.0 && spent < work_max {
-        let (t, steps) = t50(p, r_now, cap, RADBODY_SWEEP_N)?;
+        let (t, steps) = t50_at(p, r_now, cap, sweep_n, tension)?;
         t50_now = t;
         spent += steps;
     }
@@ -411,10 +494,42 @@ pub fn build_payload_with(p: &Value, sweep_work_max: i64) -> Result<Value, Refus
         )));
     }
 
-    let mut rig = build(p, None, None, None)?;
+    let musical = coupled::is_musical(p);
+    let s = setup(p, None, None, None, musical)?;
+    // The musical page's tuning, and what its sweep runs: the mapped tension on the sweep's fixed
+    // grid, or on the page's own (the human's toggle, plan §17).
+    let (mut rig, tuning, sweep_string) = if musical {
+        let tg = coupled::targets(p)?;
+        let grid = coupled::select(p, "sweep_grid", &["fixed", "page"])?;
+        coupled::check_budget_before(tg.f0, s.n, s.lam, audio_dur, 1, RADBODY_WORK_MAX)?;
+        let tu = coupled::tune(&tg, |f_cl, sigma| {
+            let t = coupled::tension_at(s.rho, s.l, f_cl);
+            assemble(&s, t, sigma).ok().map(|r| r.bridge)
+        })?;
+        let t = coupled::tension_at(s.rho, s.l, tu.f_cl);
+        let sweep_n = if grid == "page" { s.n } else { RADBODY_SWEEP_N };
+        let block = coupled::tuning_block(
+            &tg,
+            &tu,
+            t,
+            json!({"sweep_grid": grid, "sweep_n": int(sweep_n)}),
+        );
+        (assemble(&s, t, tu.sigma)?, Some(block), (Some(t), sweep_n))
+    } else {
+        (assemble(&s, s.t, 0.0)?, None, (None, RADBODY_SWEEP_N))
+    };
     let (c, l, fs, lam, r) = (rig.c, rig.l, rig.fs, rig.lam, rig.r);
     let f1_base = c / (2.0 * l);
     let n_steps = round_int(audio_dur * fs).max(1);
+    if n_steps > RADBODY_WORK_MAX && musical {
+        return Err(coupled::over_budget(
+            n_steps,
+            RADBODY_WORK_MAX,
+            fs,
+            audio_dur,
+            1,
+        ));
+    }
     if n_steps > RADBODY_WORK_MAX {
         return Err(Refusal::Param(format!(
             "work budget exceeded ({} steps > {}). Lower the audio duration, N, or the tension.",
@@ -512,7 +627,8 @@ pub fn build_payload_with(p: &Value, sweep_work_max: i64) -> Result<Value, Refus
     });
 
     // -- the second panel: the t50-vs-R reference curve
-    let sweep = sweep(p, r, rig.k, sweep_work_max)?;
+    let (sweep_t, sweep_n) = sweep_string;
+    let sweep = sweep_at(p, r, rig.k, sweep_work_max, sweep_t, sweep_n)?;
     let bp = rig.bridge.body().body().params();
     let (a1, m1) = (bp.a[0], bp.m[0]);
     let w1 = 2.0 * PI * BODY_BODY_FREQS[0];
@@ -546,7 +662,8 @@ pub fn build_payload_with(p: &Value, sweep_work_max: i64) -> Result<Value, Refus
     let (audio48, peak) = resample_normalize(&pressure, fs);
     let time: Vec<f64> = (0..total.len()).map(|i| i as f64 / fs).collect();
     let times: Vec<f64> = frame_steps.iter().map(|&i| i as f64 / fs).collect();
-    Ok(json!({
+    let lossless = rig.sigma_body == 0.0 && rig.sigma_string == 0.0;
+    let mut payload = json!({
         "model": "radbody",
         "fs_sim": num(round_nd(fs, 3)),
         "lambda": num(round_nd(lam, 6)),
@@ -567,8 +684,8 @@ pub fn build_payload_with(p: &Value, sweep_work_max: i64) -> Result<Value, Refus
             "peak": num(peak),
             "n": int(audio48.len() as i64),
         },
-        // R > 0 is a booked CHANNEL, not a loss: the gate stays sigma_body alone.
-        "energy": energy_block(&time, &total, rig.sigma_body == 0.0, 0.0, EnergyOpts {
+        // R > 0 is a booked CHANNEL, not a loss: the gate is the body's and the string's losses.
+        "energy": energy_block(&time, &total, lossless, 0.0, EnergyOpts {
             no_decay_oracle: true,
             ..EnergyOpts::default()
         }),
@@ -581,5 +698,9 @@ pub fn build_payload_with(p: &Value, sweep_work_max: i64) -> Result<Value, Refus
             "exchange": exchange,
             "spectrum": spectrum,
         },
-    }))
+    });
+    if let Some(b) = tuning {
+        payload["tuning"] = b;
+    }
+    Ok(payload)
 }

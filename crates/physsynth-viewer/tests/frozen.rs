@@ -731,6 +731,11 @@ fn every_fixture_file_is_run() {
 ///   changes no byte (the unnamed requests are frozen in `strings.json` and `contact.json`), and
 ///   the musical sets through what each page plays — the ideal page's partials, and each barrier
 ///   page against its physics page on the mapped string.
+/// - `body`, `radbody` and `sympathetic`, `controls:physical` / `controls:musical`, are the strings on a
+///   bridge (string mapping plan §16–§17), held by `coupled_musical.rs`: the physical set with
+///   musical keys riding along changes no byte (the unnamed requests are frozen in their corpora),
+///   and the musical set as the physics page on the tuned string, its note read off a rig of the
+///   file's own.
 const BORN_AFTER_THE_FREEZE: &[(&str, &str, &str)] = &[
     ("damped", "physical", "tests/string_musical.rs"),
     ("damped", "musical", "tests/string_musical.rs"),
@@ -796,6 +801,20 @@ const BORN_AFTER_THE_FREEZE: &[(&str, &str, &str)] = &[
         "tests/ideal_contact_musical.rs",
     ),
     ("fret", "controls:musical", "tests/ideal_contact_musical.rs"),
+    ("body", "controls:physical", "tests/coupled_musical.rs"),
+    ("body", "controls:musical", "tests/coupled_musical.rs"),
+    ("radbody", "controls:physical", "tests/coupled_musical.rs"),
+    ("radbody", "controls:musical", "tests/coupled_musical.rs"),
+    (
+        "sympathetic",
+        "controls:physical",
+        "tests/coupled_musical.rs",
+    ),
+    (
+        "sympathetic",
+        "controls:musical",
+        "tests/coupled_musical.rs",
+    ),
 ];
 
 /// Whole MODELS born after the Python viewer was deleted, for the same reason as

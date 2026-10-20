@@ -15,6 +15,10 @@
 //!   aftersound). Its contrast is striking both, the pure symmetric mode: one slope, no floor.
 //!
 //! J is fixed at 2: the validated oracles are two-string.
+//!
+//! With `controls: "musical"` each regime is tuned through its own rig ([`crate::coupled`], string
+//! mapping plan §16–§17); the detune is solved in, or applied after a unison tuning
+//! (`detune_tuning`).
 
 use physsynth_core::body::{self as body, ModalBody};
 use physsynth_core::connection::SympatheticStrings;
@@ -23,6 +27,7 @@ use physsynth_core::pyfloat::scalar_pow;
 use physsynth_core::string_ideal::{self as ideal, Boundary, IdealString};
 use serde_json::{json, Value};
 
+use crate::coupled;
 use crate::energy::{energy_block, lstsq_slope, EnergyOpts};
 use crate::py::{
     b64f32, commas, finite_list, int, linspace_idx, max_abs, np_mean, num, py_int, py_repr, py_str,
@@ -96,10 +101,22 @@ struct Rig {
     lam: f64,
 }
 
-/// `_build_sympathetic`: two strings (the second detuned DOWN) on a shared modal body.
-fn build(p: &Value, detune: f64, k_default: f64, sigma_body: f64) -> Result<Rig, Refusal> {
+/// The request's rig, checked, before string A's tension and the strings' loss are chosen.
+#[derive(Clone, Copy)]
+struct Setup {
+    l: f64,
+    /// The `T` slider; unread (1) in musical mode, where the pitch sets it.
+    t: f64,
+    rho: f64,
+    lam: f64,
+    k: f64,
+    n: i64,
+}
+
+/// `_build_sympathetic`'s checks; `musical` leaves the `T` slider unread.
+fn setup(p: &Value, k_default: f64, musical: bool) -> Result<Setup, Refusal> {
     let l = fnum(p, "L", 1.0)?;
-    let t = fnum(p, "T", 200.0)?;
+    let t = if musical { 1.0 } else { fnum(p, "T", 200.0)? };
     let rho = fnum(p, "rho", 0.005)?;
     let lam = fnum(p, "lambda", SYMP_LAM_DEFAULT)?;
     let k = fnum(p, "K", k_default)?;
@@ -134,7 +151,23 @@ fn build(p: &Value, detune: f64, k_default: f64, sigma_body: f64) -> Result<Rig,
             pf(k)
         )));
     }
+    Ok(Setup {
+        l,
+        t,
+        rho,
+        lam,
+        k,
+        n,
+    })
+}
 
+/// `_build_sympathetic`'s rig: two strings (the second detuned DOWN) on a shared modal body —
+/// string A at tension `t`, B detuned `detune` semitones below it, both with loss
+/// `sigma`, on a body with loss `sigma_body`.
+fn assemble(s: &Setup, t: f64, detune: f64, sigma_body: f64, sigma: f64) -> Result<Rig, Refusal> {
+    let Setup {
+        l, rho, lam, k, n, ..
+    } = *s;
     let c0 = (t / rho).sqrt();
     let fs = c0 * n as f64 / (l * lam);
     // f ~ sqrt(T), so a semitone is a factor 2^(1/6) in tension.
@@ -147,7 +180,7 @@ fn build(p: &Value, detune: f64, k_default: f64, sigma_body: f64) -> Result<Rig,
             rho,
             fs,
             n,
-            0.0,
+            sigma,
             Some((Boundary::Fixed, Boundary::Free)),
         )
         .map_err(construction)?;
@@ -174,6 +207,66 @@ fn build(p: &Value, detune: f64, k_default: f64, sigma_body: f64) -> Result<Rig,
         fs,
         lam: lam0,
     })
+}
+
+/// A regime's `count` rigs and their string loss: from the `T` slider and lossless strings on the
+/// physics path; in musical mode at the tension and loss the coupled tuning solves through THIS
+/// regime's own build — its spring, its body loss, its detune — so that the rig tuned is the rig
+/// run (plan §17). `runs` is how many runs the regime's work budget counts.
+///
+/// The detune toggle (the human's ninth answer): `exact` solves with B detuned, so the note played
+/// is on the pitch; `unison` solves the two strings in unison and detunes B afterwards.
+#[allow(clippy::type_complexity)]
+fn rigs(
+    p: &Value,
+    k_default: f64,
+    detune: f64,
+    sigma_body: f64,
+    audio_dur: f64,
+    runs: i64,
+    count: usize,
+) -> Result<(Vec<Rig>, f64, Option<Value>), Refusal> {
+    let musical = coupled::is_musical(p);
+    let s = setup(p, k_default, musical)?;
+    let mut out = Vec::with_capacity(count);
+    if !musical {
+        for _ in 0..count {
+            out.push(assemble(&s, s.t, detune, sigma_body, 0.0)?);
+        }
+        return Ok((out, 0.0, None));
+    }
+    let tg = coupled::targets(p)?;
+    let mode = coupled::select(p, "detune_tuning", &["exact", "unison"])?;
+    coupled::check_budget_before(tg.f0, s.n, s.lam, audio_dur, runs, SYMP_WORK_MAX)?;
+    let solve_detune = if mode == "exact" { detune } else { 0.0 };
+    let tu = coupled::tune(&tg, |f_cl, sigma| {
+        let t = coupled::tension_at(s.rho, s.l, f_cl);
+        assemble(&s, t, solve_detune, sigma_body, sigma)
+            .ok()
+            .map(|r| r.symp)
+    })?;
+    let t = coupled::tension_at(s.rho, s.l, tu.f_cl);
+    for _ in 0..count {
+        out.push(assemble(&s, t, detune, sigma_body, tu.sigma)?);
+    }
+    let block = coupled::tuning_block(
+        &tg,
+        &tu,
+        t,
+        json!({
+            "detune": num(detune),
+            "detune_tuning": mode,
+            // In unison mode a detuned B moves the note the solve put on the pitch.
+            "off_pitch": mode == "unison" && detune != 0.0,
+        }),
+    );
+    Ok((out, tu.sigma, Some(block)))
+}
+
+/// The work budget's refusal: the musical controls' wording when they are on.
+fn over_budget(p: &Value, need: i64, fs: f64, audio_dur: f64, runs: i64) -> Option<Refusal> {
+    (need > SYMP_WORK_MAX && coupled::is_musical(p))
+        .then(|| coupled::over_budget(need, SYMP_WORK_MAX, fs, audio_dur, runs))
 }
 
 /// Per-step telemetry of one run.
@@ -404,8 +497,8 @@ fn np_max(a: &[f64]) -> f64 {
 /// `_symp_normal`: run BOTH starts and plot both bridge traces.
 fn normal(p: &Value, c: &Common) -> Result<Value, Refusal> {
     let k = fnum(p, "K", SYMP_K_DEFAULT)?;
-    let mut anti = build(p, 0.0, SYMP_K_DEFAULT, 0.0)?;
-    let mut sym = build(p, 0.0, SYMP_K_DEFAULT, 0.0)?;
+    let (built, sigma, tuning) = rigs(p, SYMP_K_DEFAULT, 0.0, 0.0, c.audio_dur, 2, 2)?;
+    let (mut anti, mut sym) = two(built);
     let (c0, l, n, fs, lam) = (anti.c0, anti.l, anti.n, anti.fs, anti.lam);
     let f1 = c0 / (2.0 * l);
     let pickup_idx = pickup_index(c.pickup_frac, n);
@@ -415,6 +508,9 @@ fn normal(p: &Value, c: &Common) -> Result<Value, Refusal> {
     let zeros = vec![0.0; pluck.len()];
 
     let n_steps = round_int(c.audio_dur * fs).max(1);
+    if let Some(r) = over_budget(p, 2 * n_steps, fs, c.audio_dur, 2) {
+        return Err(r);
+    }
     if 2 * n_steps > SYMP_WORK_MAX {
         return Err(Refusal::Param(format!(
             "work budget exceeded ({} steps > {}): the normal-mode regime runs twice \
@@ -458,7 +554,7 @@ fn normal(p: &Value, c: &Common) -> Result<Value, Refusal> {
         "body_frac_sym": num(if e0 > 0.0 { np_max(&run_s.e_body) / e0 } else { 0.0 }),
         "K": num(round_nd(k, 1)),
     });
-    Ok(finish(
+    let mut payload = finish(
         "normal",
         &run_a,
         &run_a.e,
@@ -474,9 +570,11 @@ fn normal(p: &Value, c: &Common) -> Result<Value, Refusal> {
         x[pickup_idx],
         spectrum,
         c.playback_speed,
-        true,
-        true,
-    ))
+        sigma == 0.0,
+        sigma == 0.0,
+    );
+    with_tuning(&mut payload, tuning);
+    Ok(payload)
 }
 
 /// `_symp_transfer`: pluck string A; a tuned neighbour drains it, a detuned one does not.
@@ -489,13 +587,17 @@ fn transfer(p: &Value, c: &Common) -> Result<Value, Refusal> {
             pf(detune)
         )));
     }
-    let mut rig = build(p, detune, SYMP_K_TRANSFER, 0.0)?;
+    let (built, sigma, tuning) = rigs(p, SYMP_K_TRANSFER, detune, 0.0, c.audio_dur, 1, 1)?;
+    let mut rig = single(built);
     let (c0, l, n, fs, lam) = (rig.c0, rig.l, rig.n, rig.fs, rig.lam);
     let f1 = c0 / (2.0 * l);
     let pickup_idx = pickup_index(c.pickup_frac, n);
     let x = rig.symp.strings()[0].params().grid();
 
     let n_steps = round_int(c.audio_dur * fs).max(1);
+    if let Some(r) = over_budget(p, n_steps, fs, c.audio_dur, 1) {
+        return Err(r);
+    }
     if n_steps > SYMP_WORK_MAX {
         return Err(Refusal::Param(format!(
             "work budget exceeded ({} steps > {}). Lower the audio duration, N, or the tension.",
@@ -533,7 +635,7 @@ fn transfer(p: &Value, c: &Common) -> Result<Value, Refusal> {
         "tuned": detune < 0.05,
         "K": num(round_nd(k, 1)),
     });
-    Ok(finish(
+    let mut payload = finish(
         "transfer",
         &r,
         &r.e,
@@ -549,9 +651,35 @@ fn transfer(p: &Value, c: &Common) -> Result<Value, Refusal> {
         x[pickup_idx],
         spectrum,
         c.playback_speed,
-        true,
-        true,
-    ))
+        sigma == 0.0,
+        sigma == 0.0,
+    );
+    with_tuning(&mut payload, tuning);
+    Ok(payload)
+}
+
+/// The one rig of a one-rig regime.
+fn single(built: Vec<Rig>) -> Rig {
+    built
+        .into_iter()
+        .next()
+        .expect("rigs builds the count asked")
+}
+
+/// The two rigs of a two-run regime.
+fn two(built: Vec<Rig>) -> (Rig, Rig) {
+    let mut it = built.into_iter();
+    match (it.next(), it.next()) {
+        (Some(a), Some(b)) => (a, b),
+        _ => unreachable!("rigs builds the count asked"),
+    }
+}
+
+/// A musical payload's `tuning` block, at the top level as on every musical page.
+fn with_tuning(payload: &mut Value, tuning: Option<Value>) {
+    if let Some(b) = tuning {
+        payload["tuning"] = b;
+    }
 }
 
 /// `_neg_log_slope`: `-d/dt log e` over the samples above `1e-9 max(e)`; 0 when too short.
@@ -613,8 +741,8 @@ fn weinreich(p: &Value, c: &Common) -> Result<Value, Refusal> {
             pf(detune)
         )));
     }
-    let mut one = build(p, detune, SYMP_K_WEINREICH, sigma_body)?;
-    let mut both = build(p, detune, SYMP_K_WEINREICH, sigma_body)?;
+    let (built, sigma, tuning) = rigs(p, SYMP_K_WEINREICH, detune, sigma_body, c.audio_dur, 2, 2)?;
+    let (mut one, mut both) = two(built);
     let (c0, l, n, fs, lam) = (one.c0, one.l, one.n, one.fs, one.lam);
     let f1 = c0 / (2.0 * l);
     let pickup_idx = pickup_index(c.pickup_frac, n);
@@ -623,6 +751,9 @@ fn weinreich(p: &Value, c: &Common) -> Result<Value, Refusal> {
     let zeros = vec![0.0; pluck.len()];
 
     let n_steps = round_int(c.audio_dur * fs).max(1);
+    if let Some(r) = over_budget(p, 2 * n_steps, fs, c.audio_dur, 2) {
+        return Err(r);
+    }
     if 2 * n_steps > SYMP_WORK_MAX {
         return Err(Refusal::Param(format!(
             "work budget exceeded ({} steps > {}): the weinreich regime runs twice (strike-one + \
@@ -679,7 +810,7 @@ fn weinreich(p: &Value, c: &Common) -> Result<Value, Refusal> {
         "K": num(round_nd(k, 1)),
         "sigma_zero": sigma_body == 0.0,
     });
-    Ok(finish(
+    let mut payload = finish(
         "weinreich",
         &run_one,
         &run_one.e,
@@ -695,7 +826,9 @@ fn weinreich(p: &Value, c: &Common) -> Result<Value, Refusal> {
         x[pickup_idx],
         spectrum,
         c.playback_speed,
-        sigma_body == 0.0,
+        sigma_body == 0.0 && sigma == 0.0,
         false,
-    ))
+    );
+    with_tuning(&mut payload, tuning);
+    Ok(payload)
 }

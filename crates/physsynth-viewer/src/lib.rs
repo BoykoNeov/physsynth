@@ -30,6 +30,7 @@ pub mod body;
 pub mod bore;
 pub mod bow;
 pub mod contact;
+pub mod coupled;
 pub mod drumroom;
 pub mod energy;
 pub mod geometric;

@@ -7,6 +7,10 @@
 //! volume acceleration, whose shape is exactly distance-invariant, with two honest read-outs: an
 //! `omega²` consistency ratio that is a SANITY check (near-tautological by FFT linearity), and the
 //! terminus fundamental gliding from `c/4L` towards `c/2L` as the spring stiffens.
+//!
+//! With `controls: "musical"` the pitch is the note the coupled instrument plays and the ring time a
+//! loss on the string, solved through this page's own rig ([`crate::coupled`], string mapping plan
+//! §16–§17).
 
 use std::f64::consts::PI;
 
@@ -20,6 +24,7 @@ use physsynth_core::radiation::{AirParams, AirRadiation};
 use physsynth_core::string_ideal::{self as ideal, Boundary, IdealString};
 use serde_json::{json, Value};
 
+use crate::coupled;
 use crate::energy::{energy_block, EnergyOpts};
 use crate::py::{
     b64f32, commas, finite_list, int, linspace_idx, max_abs, np_mean, num, py_int, py_repr,
@@ -72,12 +77,26 @@ struct Rig {
     lam: f64,
     k: f64,
     sigma_body: f64,
+    /// The string's own loss: zero on the physics path, the solved one in musical mode.
+    sigma_string: f64,
 }
 
-/// `_build_body_bridge`: a fixed/free string on a `ModalBody` through a spring.
-fn build(p: &Value) -> Result<Rig, Refusal> {
+/// The request's rig, checked, before the string's tension and loss are chosen.
+struct Setup {
+    l: f64,
+    /// The `T` slider; unread (1) in musical mode, where the pitch sets it.
+    t: f64,
+    rho: f64,
+    lam: f64,
+    k: f64,
+    sigma_body: f64,
+    n: i64,
+}
+
+/// `_build_body_bridge`'s checks: a fixed/free string on a `ModalBody` through a spring.
+fn setup(p: &Value, musical: bool) -> Result<Setup, Refusal> {
     let l = fnum(p, "L", 1.0)?;
-    let t = fnum(p, "T", 200.0)?;
+    let t = if musical { 1.0 } else { fnum(p, "T", 200.0)? };
     let rho = fnum(p, "rho", 0.005)?;
     let lam = fnum(p, "lambda", BODY_LAM_DEFAULT)?;
     let k = fnum(p, "bridge_stiffness", BODY_K_DEFAULT)?;
@@ -120,6 +139,28 @@ fn build(p: &Value) -> Result<Rig, Refusal> {
             pf(sigma_body)
         )));
     }
+    Ok(Setup {
+        l,
+        t,
+        rho,
+        lam,
+        k,
+        sigma_body,
+        n,
+    })
+}
+
+/// `_build_body_bridge`'s rig at tension `t` and string loss `sigma`.
+fn assemble(s: &Setup, t: f64, sigma: f64) -> Result<Rig, Refusal> {
+    let Setup {
+        l,
+        rho,
+        lam,
+        k,
+        sigma_body,
+        n,
+        ..
+    } = *s;
     let c = (t / rho).sqrt();
     let fs = c * n as f64 / (l * lam);
     let sp = ideal::Params::new(
@@ -128,7 +169,7 @@ fn build(p: &Value) -> Result<Rig, Refusal> {
         rho,
         fs,
         n,
-        0.0,
+        sigma,
         Some((Boundary::Fixed, Boundary::Free)),
     )
     .map_err(construction)?;
@@ -154,6 +195,7 @@ fn build(p: &Value) -> Result<Rig, Refusal> {
         lam: lam_s,
         k,
         sigma_body,
+        sigma_string: sigma,
     })
 }
 
@@ -348,10 +390,34 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
         )));
     }
 
-    let mut rig = build(p)?;
+    let musical = coupled::is_musical(p);
+    let s = setup(p, musical)?;
+    let (mut rig, tuning) = if musical {
+        // Plan §16–§17: the tension and string loss at which this rig plays the targets.
+        let tg = coupled::targets(p)?;
+        coupled::check_budget_before(tg.f0, s.n, s.lam, audio_dur, 1, BODY_WORK_MAX)?;
+        let tu = coupled::tune(&tg, |f_cl, sigma| {
+            let t = coupled::tension_at(s.rho, s.l, f_cl);
+            assemble(&s, t, sigma).ok().map(|r| r.bridge)
+        })?;
+        let t = coupled::tension_at(s.rho, s.l, tu.f_cl);
+        let block = coupled::tuning_block(&tg, &tu, t, json!({}));
+        (assemble(&s, t, tu.sigma)?, Some(block))
+    } else {
+        (assemble(&s, s.t, 0.0)?, None)
+    };
     let (c, l, fs, lam) = (rig.c, rig.l, rig.fs, rig.lam);
     let f1_base = c / (2.0 * l);
     let n_steps = round_int(audio_dur * fs).max(1);
+    if n_steps > BODY_WORK_MAX && musical {
+        return Err(coupled::over_budget(
+            n_steps,
+            BODY_WORK_MAX,
+            fs,
+            audio_dur,
+            1,
+        ));
+    }
     if n_steps > BODY_WORK_MAX {
         return Err(Refusal::Param(format!(
             "work budget exceeded ({} steps > {}). Lower the audio duration, N, or the tension.",
@@ -483,7 +549,8 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
     let (audio48, peak) = resample_normalize(&pressure, fs);
     let time: Vec<f64> = (0..total.len()).map(|i| i as f64 / fs).collect();
     let times: Vec<f64> = frame_steps.iter().map(|&i| i as f64 / fs).collect();
-    Ok(json!({
+    let lossless = rig.sigma_body == 0.0 && rig.sigma_string == 0.0;
+    let mut payload = json!({
         "model": "body",
         "fs_sim": num(round_nd(fs, 3)),
         "lambda": num(round_nd(lam, 6)),
@@ -504,7 +571,7 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
             "peak": num(peak),
             "n": int(audio48.len() as i64),
         },
-        "energy": energy_block(&time, &total, rig.sigma_body == 0.0, 0.0, EnergyOpts {
+        "energy": energy_block(&time, &total, lossless, 0.0, EnergyOpts {
             no_decay_oracle: true,
             ..EnergyOpts::default()
         }),
@@ -517,5 +584,9 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
             "exchange": exchange,
             "spectrum": spectrum,
         },
-    }))
+    });
+    if let Some(b) = tuning {
+        payload["tuning"] = b;
+    }
+    Ok(payload)
 }

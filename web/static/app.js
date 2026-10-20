@@ -162,6 +162,7 @@ const MODEL_RANGES = {
   // K is the shared bridge stiffness (the core's exact dense guard rejects an over-stiff one). N ~
   // 100 matches the diagnose rig; audio is the plucked string's pickup over the slosh.
   sympathetic: { N: { min: 16, max: 160, val: 100 }, lambda: { max: 0.99, val: 0.9 },
+                 f0: { val: 98 }, t60_low: { min: 0.05, max: 20, step: 0.05, fixed: 2, val: 3 },
                  K: { val: 8000 }, detune: { val: 0 },
                  pluck_position: { val: 0.3 }, pickup_position: { val: 0.1 },
                  audio_duration: { max: 3, val: 2 } },
@@ -270,7 +271,10 @@ const MODEL_RANGES = {
   // _default, or a body → jawari switch would render a 100× soft jawari bridge with nothing on
   // screen to say so (the recurring leak; the reverse — jawari's 2e6 into the body's 21.5k guard —
   // is caught by this model's override below).
+  // The musical controls (string mapping plan §17, the agent's calls): 98 Hz, because the shared
+  // 110 Hz sits on the body's first mode, a wolf; the ring time from the solver's 0.05 s floor.
   body: { N: { min: 16, max: 160, val: 100 },
+          f0: { val: 98 }, t60_low: { min: 0.05, max: 20, step: 0.05, fixed: 2, val: 3 },
           lambda: { min: 0.5, max: 0.99, step: 0.01, fixed: 2, val: 0.9 },
           bridge_stiffness: { min: 0, max: 19000, step: 500, fixed: 0, val: 8000, unit: "N/m" },
           sigma_body: { val: 0 },
@@ -311,6 +315,7 @@ const MODEL_RANGES = {
   // the rest inherit the body's ranges verbatim, since it IS the body's rig; radiation_R resets in
   // _default like every re-ranged param (gatherParams ships every slider, hidden ones included).
   radbody: { N: { min: 16, max: 160, val: 100 },
+             f0: { val: 98 }, t60_low: { min: 0.05, max: 20, step: 0.05, fixed: 2, val: 3 },
              lambda: { min: 0.5, max: 0.99, step: 0.01, fixed: 2, val: 0.9 },
              bridge_stiffness: { min: 0, max: 19000, step: 500, fixed: 0, val: 8000, unit: "N/m" },
              radiation_R: { min: 0, max: 300, step: 1, fixed: 0, val: 133, unit: "Pa·s/m³" },
@@ -416,6 +421,8 @@ const MODEL_RANGES = {
               plate_N: { min: 8, max: 16, step: 1, fixed: 0, val: 16 },
               // The gong's musical page sets the shared pitch to 100 Hz; index.html's home is 110.
               f0: { val: 110 },
+              // The coupled pages re-range the ring time to the solver's 0.05 s floor; index.html's home.
+              t60_low: { min: 0.1, max: 20, step: 0.1, fixed: 1, val: 3 },
               // The bow's musical page sets the shared sample rate to 22.05 kHz; the home is 44.1.
               sample_rate: { val: 44100 },
               kappa: { min: 0, max: 8, step: 0.05, fixed: 2, val: 1.0 },
@@ -594,10 +601,19 @@ const CONTROL_OPTS = {
   jawari: [["physical", "Physics — T, ρ, λ, σ₀"], ["musical", "Musical — pitch, ring time"]],
   juari: [["physical", "Physics — T, ρ, λ, σ₀"], ["musical", "Musical — pitch, ring time"]],
   fret: [["physical", "Physics — T, ρ, λ, σ₀"], ["musical", "Musical — pitch, ring time"]],
+  // The strings on a bridge (plan §16–§17): the pitch is the note the COUPLED instrument plays.
+  body: [["physical", "Physics — T, ρ, λ"], ["musical", "Musical — the played pitch, ring time"]],
+  radbody: [["physical", "Physics — T, ρ, λ"],
+            ["musical", "Musical — the played pitch, ring time"]],
+  sympathetic: [["physical", "Physics — T, ρ, λ"],
+                ["musical", "Musical — the played pitch, ring time"]],
 };
 
 // The strings whose musical controls are a pitch and ONE ring time (string mapping plan §13).
 const ONE_RING_MODELS = ["ideal", "jawari", "juari", "fret"];
+
+// The strings on a bridge, whose musical pitch is solved through the coupling (plan §16–§17).
+const COUPLED_MODELS = ["body", "radbody", "sympathetic"];
 
 // The models whose drum takes the head-and-pitch musical controls (the drum in a room among them).
 const DRUM_MODELS = ["membrane", "mallet", "drumroom"];
@@ -612,7 +628,7 @@ const WOODS = ["sitka spruce", "engelmann spruce", "western redcedar", "sugar ma
 function musicalOn(m) {
   if (m === "damped") return domainSel.value === "musical";
   if (m === "plate" || m === "vk" || m === "bow" || m === "stiff" || ONE_RING_MODELS.includes(m)
-      || DRUM_MODELS.includes(m)) {
+      || DRUM_MODELS.includes(m) || COUPLED_MODELS.includes(m)) {
     return !!controlsSel && controlsSel.value === "musical";
   }
   if (m === "tension") {
@@ -813,6 +829,14 @@ function updateVisibility() {
   // them regardless of model. Its absorbing walls are fixed at ζ = 1 (the free-field stand-in), so
   // the slider would be a control the server never reads.
   if (m === "drumroom") showParam("wall_zeta", false);
+  // The strings on a bridge (plan §17): the ring time only when it is solved, the detune option on
+  // the two regimes that detune, the sweep option on the radiating page. Set on every pass, so a
+  // ring time switched off here never stays hidden on the next musical page.
+  const coupledMusical = COUPLED_MODELS.includes(m) && musical;
+  showParam("t60_low", !coupledMusical || $("coupled-ring").checked);
+  $("coupled-detune-field").hidden = !(coupledMusical && m === "sympathetic"
+                                       && domainSel.value !== "normal");
+  $("coupled-sweep-field").hidden = !(coupledMusical && m === "radbody");
 }
 
 // Re-range sliders to the current model's caps/defaults (see MODEL_RANGES). Merges _default with the
@@ -1554,7 +1578,8 @@ if (domainSel) domainSel.addEventListener("change", () => {
 });
 // The control set and the plate's and the drum's selects re-gate the panel and re-render.
 for (const sel of [controlsSel, $("plate-material"), $("plate-set-by"), $("plate-grain"),
-                   $("drum-head"), $("drum-set-by"), $("string-material")]) {
+                   $("drum-head"), $("drum-set-by"), $("string-material"),
+                   $("coupled-ring"), $("coupled-split"), $("coupled-detune"), $("coupled-sweep")]) {
   if (sel) sel.addEventListener("change", () => {
     updateVisibility();
     updateLambdaHint();
@@ -1605,6 +1630,14 @@ function gatherParams() {
     p.controls = controlsSel.value;
     if (modelSel.value === "tension") p.string_material = $("string-material").value;
   }
+  // The strings on a bridge: the control set and the four musical options (plan §17).
+  if (COUPLED_MODELS.includes(modelSel.value) && controlsSel) {
+    p.controls = controlsSel.value;
+    p.ring_time = $("coupled-ring").checked;
+    p.split = $("coupled-split").value;
+    if (modelSel.value === "sympathetic") p.detune_tuning = $("coupled-detune").value;
+    if (modelSel.value === "radbody") p.sweep_grid = $("coupled-sweep").value;
+  }
   for (const k in sliders) p[k] = +sliders[k].value * (scaleOf[k] || 1);
   if (nonlinearChk) p.nonlinear = nonlinearChk.checked;
   if (seedVelChk) p.seed_velocity = seedVelChk.checked;
@@ -1616,9 +1649,31 @@ function setStatus(text, cls) {
   statusEl.className = "status" + (cls ? " " + cls : "");
 }
 
+// One render in flight at a time. The server runs a thread per request and a coupled page's tuning
+// takes tens of seconds, so a slider drag used to start several at once, and whichever finished
+// last was drawn, stale or not (string mapping plan §17). A request made while one is running waits
+// and goes when it ends, with the sliders as they are THEN — so only the newest is sent.
+let rendering = false;
+let renderPending = false;
+
+// What a coupled page's tuning costs, timed at the default N = 100 (plan §17), for the wait notice.
+function tuningNotice() {
+  const ring = $("coupled-ring").checked;
+  const two = modelSel.value === "sympathetic";
+  const est = ring ? (two ? "about 2 minutes" : "20–30 s") : (two ? "about 15 s" : "a few seconds");
+  return `tuning… solving the tension through the bridge${ring ? " and the string's loss" : ""} `
+    + `(${est} at N = 100)`;
+}
+
 async function render() {
   clearTimeout(autoTimer);
-  setStatus("computing…", "busy");
+  if (rendering) {
+    renderPending = true;
+    return;
+  }
+  rendering = true;
+  const m = modelSel.value;
+  setStatus(COUPLED_MODELS.includes(m) && musicalOn(m) ? tuningNotice() : "computing…", "busy");
   renderBtn.disabled = true;
   try {
     const resp = await fetch("/simulate", {
@@ -1647,6 +1702,11 @@ async function render() {
     setStatus("network error: " + err, "error");
   } finally {
     renderBtn.disabled = false;
+    rendering = false;
+    if (renderPending) {
+      renderPending = false;
+      render();
+    }
   }
 }
 
@@ -1674,6 +1734,7 @@ function showTuning(data) {
   if (data.model === "plate") { showPlateTuning(data); return; }
   if (data.model === "vk") { showVkTuning(data); return; }
   if (DRUM_MODELS.includes(data.model)) { showDrumTuning(data); return; }
+  if (COUPLED_MODELS.includes(data.model)) { showCoupledTuning(data); return; }
   const hint = $("tuning-hint");
   if (!hint) return;
   const t = data.tuning;
@@ -1729,6 +1790,44 @@ function showTuning(data) {
   hint.textContent = text;
   const stressWarn = !!(t.gauge && t.gauge.warnings && t.gauge.warnings.length);
   hint.style.color = t.warn || stressWarn ? "var(--accent-2)" : "var(--muted)";
+}
+
+// The strings on a bridge (string mapping plan §16–§17): the tension and string loss the coupled
+// tuning solved, the note it put on the pitch, and — in a split band — the louder note beside it.
+function showCoupledTuning(data) {
+  const hint = $("tuning-hint");
+  if (!hint) return;
+  const t = data.tuning;
+  if (!t) { hint.textContent = ""; return; }
+  const g = (x) => Number(x).toPrecision(4);
+  const pct = (s) => `${Math.round(100 * s)} %`;
+  // A lossless note's ring time is roundoff (1e11 s and more), not a number to show.
+  const rings = (n) => (n.t60 === null || n.t60 > 1e5 ? "rings without decay"
+    : `rings ${g(n.t60)} s`);
+  let text = `→ T = ${g(t.T)} N (the string alone would sound ${g(t.f_cl)} Hz), `
+    + `σ = ${g(t.sigma)} s⁻¹, λ = ${data.lambda}. On the bridge it plays ${g(t.note.f)} Hz and `
+    + `${rings(t.note)}, ${pct(t.note.share)} of that note's motion on the string`;
+  text += t.ring_time ? "."
+    : "; the string is lossless, so the ring time is whatever the body and the air give.";
+  if (t.louder) {
+    text += ` ⚠ Split band (a wolf note): a louder note at ${g(t.louder.f)} Hz carries `
+      + `${pct(t.louder.share)}.`;
+  }
+  const others = (t.others || []).filter((o) => !t.louder || o.f !== t.louder.f);
+  if (others.length) text += ` Other notes nearby: ${others.map((o) => g(o.f)).join(", ")} Hz.`;
+  if (t.off_pitch) {
+    text += " ⚠ Tuned as a unison and string B detuned afterwards, so the note has moved off "
+      + "the pitch.";
+  }
+  if (t.sweep_grid === "fixed") {
+    text += ` The air sweep runs on its own fixed grid (N = ${t.sweep_n}) with a lossless string, `
+      + "so its string is slightly off pitch.";
+  } else if (t.sweep_grid === "page") {
+    text += " The air sweep runs on this page's grid with a lossless string; the air load it "
+      + "varies moves the note, so it is in tune only at this page's R.";
+  }
+  hint.textContent = text;
+  hint.style.color = t.louder || t.off_pitch ? "var(--accent-2)" : "var(--muted)";
 }
 
 // The plate's musical read-out (plate mapping plan §7): what the material and targets mapped to,
@@ -4937,7 +5036,7 @@ function drawBodySpectrum(sp) {
   } else {
     terminusStory =
       `— glides free c/4L = ${sp.f1_free} toward clamped c/2L = ${sp.f1_clamped} Hz as the bridge ` +
-      `stiffens (asymptotes below 100: the guard caps K and the body is finite-mass)`;
+      `stiffens (asymptotes below ${sp.f1_clamped}: the guard caps K and the body is finite-mass)`;
   }
   const boostStory = isPB
     ? `boosted near the plate modes [${(sp.body_modes || []).map((f) => Math.round(f)).join(", ")}] `
@@ -6384,7 +6483,9 @@ function applyUrlParams() {
   if (c && controlsSel && [...controlsSel.options].some((o) => o.value === c)) controlsSel.value = c;
   for (const [key, id] of [["material", "plate-material"], ["set_by", setBySelId()],
                            ["grain", "plate-grain"], ["head", "drum-head"],
-                           ["walls", "drumroom-walls"], ["string_material", "string-material"]]) {
+                           ["walls", "drumroom-walls"], ["string_material", "string-material"],
+                           ["split", "coupled-split"], ["detune_tuning", "coupled-detune"],
+                           ["sweep_grid", "coupled-sweep"]]) {
     const v = q.get(key), sel = $(id);
     if (v !== null && sel && [...sel.options].some((o) => o.value === v)) sel.value = v;
   }
@@ -6414,14 +6515,16 @@ function applyUrlSliders() {
     // swallowed (the rule above, for a select).
     const selId = { controls: "controls", material: "plate-material", set_by: setBySelId(),
                     grain: "plate-grain", head: "drum-head", walls: "drumroom-walls",
-                    string_material: "string-material" }[key];
+                    string_material: "string-material", split: "coupled-split",
+                    detune_tuning: "coupled-detune", sweep_grid: "coupled-sweep" }[key];
     if (selId) {
       const sel = $(selId);
       if (!sel || sel.value !== raw) notes.push(`${key}: ${raw} is not an option here`);
       return;
     }
-    if (key === "nonlinear" || key === "seed_velocity") {
-      const chk = key === "nonlinear" ? nonlinearChk : seedVelChk;
+    if (key === "nonlinear" || key === "seed_velocity" || key === "ring_time") {
+      const chk = { nonlinear: nonlinearChk, seed_velocity: seedVelChk,
+                    ring_time: $("coupled-ring") }[key];
       if (!chk) { notes.push(`${key}: no such control`); return; }
       chk.checked = !(raw === "0" || raw === "false");
       return;

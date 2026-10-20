@@ -698,3 +698,119 @@ taken out: halving a solve step that crosses a wall, and treating a build refuse
 note — no outcome at 0.05 s or more depends on either (both mattered only below the floor). The
 loss limit `2 a0 / share` has no witness: on the sweep the wide search never displaced a note the
 continuation found, so no target tells a tighter limit from it.
+
+## 17. Slice 4, Part 2: the coupled pages' viewer — timing, and the human's ninth answer (2026-10-20)
+
+*Timed first* (probe `W:\temp\claude\coupled-viewer-probe`, one tuning at a time, optimised, the
+pages' defaults `N = 100`, `lambda = 0.9`): the body page (8000 N/m) tunes a pitch alone in 2.8 s
+and a pitch with a ring time in 21–30 s (98 Hz at 0.3 and 3 s, 196 Hz at 3 s, 330 Hz at 1 s); the
+radiating body (`R = 133`) 19–20 s with a ring time; the two-string page (8000 N/m, unison) 13 s
+for a pitch alone and 116 s with a ring time (98 Hz, 3 s). Every render of a musical page re-tunes.
+
+**The human's ninth answer, 2026-10-20** (asked with those numbers, and with the three calls §16
+had recorded as the agent's): *make them options.*
+
+1. **Two strings, detuned:** a toggle. Default: the solve builds string B detuned from A by the
+   detune slider, so the note played is exactly on the pitch. The other setting: the tension is
+   solved for the unison and B is detuned afterwards, so the note drifts off the pitch.
+2. **Split bands (wolf notes):** a toggle. Default: render, put one of the coupled notes exactly
+   on the pitch, and name the louder neighbour with each note's share. The other setting: refuse
+   inside a split band.
+3. **The radiating page's air-load sweep:** a toggle. Default: the sweep's fixed grid with the
+   mapped tension, the page saying its string is slightly off pitch there. The other setting: the
+   sweep on the page's own grid, on pitch and slower.
+4. **The wait:** a ring-time on/off toggle (off: a lossless string, only the pitch solved, the ring
+   whatever the body and the air give) and a "tuning…" notice while the server solves. (Not
+   chosen: remembering past tunings on the server.)
+
+**Reviewer's checks before the build, and the human's tenth answer (2026-10-20).**
+
+- *Each two-string regime builds its own rig* — `normal` lossless body and no detune at 8000 N/m,
+  `transfer` lossless body at 1500, `weinreich` the body-loss slider at 6000 — so each is tuned
+  through its own build; tuning through one shared build would tune a lossless page on a lossy
+  body.
+- *The work budget.* `fs = 2 f_cl N / lambda`, so a 2 s run at the pages' `N = 100`, `lambda =
+  0.9` takes 444 `f_cl` steps: the two-string `normal` and `weinreich` regimes (two runs, 130k
+  steps) fit only `f_cl` up to ~146 Hz, `transfer` ~292 Hz, the body pages (200k) ~450 Hz. The
+  tuning (up to 30 s, 2 min on two strings) would run first and the budget refuse after.
+  **Human: refuse early and say what to change** — before tuning, at the slackest tension that
+  could sound the pitch (`f_cl = f0 / 1.3`), naming the highest pitch that fits; after it, naming
+  the audio length, `N` or `lambda` that would fit. (Not chosen: shorten the audio to fit; raise
+  the budget.)
+- *The wolf toggle's refusal.* **Human: name the louder note only** — its pitch and both notes'
+  shares, at once. (Not chosen: search for a nearby pitch that plays cleanly, minutes a refusal.)
+- *The sweep's "page grid" setting is not on pitch everywhere:* the sweep moves the air load, and
+  the air load moves the note; `t50` also runs a lossless string on a lossless body (as before,
+  where it zeroed the body loss). So the setting is labelled "the page's grid", and in tune only
+  at the page's own `R`.
+- *Overlapping renders.* The server runs a thread per request and the page never dropped a stale
+  render, so a slider drag with auto-render on started several tunings at once, the last to
+  finish drawn. The page now keeps one render in flight and sends only the newest request after
+  it.
+
+**The human's eleventh answer, 2026-10-20: the ring-time toggle starts OFF** on all three pages —
+a first render in seconds, the exact ring time a tick away. (Not chosen: on, the agent's first
+call; off on the two-string page only.) **The agent's calls in Part 2** (for the human to
+override): the pitch
+defaults to 98 Hz on all three (the shared 110 Hz sits on the body's first mode, a wolf); the
+ring-time slider runs 0.05–20 s in steps of 0.05 there, default 3 s.
+
+**A core defect the viewer's bar found (2026-10-20): two near-unison notes confused.** The new
+viewer bar reads each tuned note off a rig of its own; on the two-string decay page with every
+setting off its default (`L = 0.8`, `rho = 0.004`, `lambda = 0.85`, `N = 40`, 5000 N/m, body loss
+15, detune 0.2 semitones, ring time off) the page was the physics page to the byte, but the note
+played 99.65 Hz for 98 — and `tune_coupled` had *reported* it at 99.65 Hz too. The two strings'
+notes near the pitch sat 4.5 Hz apart and moved 5 Hz per scan step (5.3 % in tension), so the
+scan's pairing by nearest pitch swapped them: a "crossing" joined the lower note at one end to
+the upper at the other, and the bracketed solve converged on the tension where the nearest root
+jumps between them (`f_cl` 102.85), a note on neither. The real note — 99.9 % string, at
+`f_cl = 101.06` — was never solved. Not seen on the page defaults (`L = 1`, `rho = 0.005`, the
+tests' unison rigs): the swap needs the pair's spacing below its motion per step.
+
+*Fix* (`crossings_between`): every solved crossing must play the pitch to 1e-9 (`ON_PITCH`; a
+solve stops at ~1e-14, a joined pair misses by its gap, ~2 %), and an interval with one that
+misses is scanned again at 9 points (steps of 0.66 %), up to twice, its crossings taken from
+there. An interval whose solutions all land is untouched, so every tuning that was right is
+bit-identical. Parity: a swap of two notes crossing the pitch in the same direction always leaves
+a miss; a swap of two crossing in opposite directions would leave none — not seen, the notes rise
+with the tension. Bar: core `two_near_unison_notes_are_not_confused` (lossless and 1 s: reports
+and plays 98 Hz off the run, share > 0.99, `f_cl` 101.06). Plants: accept any solve (`ON_PITCH`
+1) — red; no finer scan (`REFINE_DEPTH` 0) — red (the miss is dropped and the 95 % hybrid wins).
+
+**Part 2, built (2026-10-20).** `crates/physsynth-viewer/src/coupled.rs` holds what the three
+pages share: the targets (`f0`, the `ring_time` toggle and `t60_low`, the `split` select), the
+tension `rho (2 L f_cl)^2` that both the solver's builds and the page's own go through, the budget
+checks before and after the tuning, the split refusal, and the `tuning` block (`kind: "coupled"`:
+`T`, `f_cl`, `sigma`, the note, its louder neighbour, the other notes, the root). Each page's build
+is split into a check of the request (`setup`, which leaves `T` unread in musical mode) and an
+assembly at a tension and string loss (`assemble`); the physics path assembles at the slider's `T`
+and `sigma = 0`, and the frozen viewer fixtures stay exact. The two-string page tunes through each
+regime's own build (`rigs`): its spring default, its body loss (zero on `normal` and `transfer`),
+its detune. The radiating page's sweep (`sweep_at`, `t50_at`) takes the mapped tension and its
+grid; its string stays lossless, as its body already did. The energy panel judges a lossy run once
+the string has loss. Front-end: `CONTROL_OPTS` and `COUPLED_MODELS`, a "Coupled tuning" group (the
+ring-time checkbox, the split select, the detune select on `transfer`/`weinreich`, the sweep select
+on `radbody`), the ring-time slider re-ranged to 0.05–20 s on these pages, a read-out
+(`showCoupledTuning`), a "tuning…" notice with the measured wait, and one render in flight. The
+deep link and the headless check know the new options.
+
+*Bars* (`crates/physsynth-viewer/tests/coupled_musical.rs`, `N = 40`, every setting off its
+default, a decoy `T` and — on the lossless-body regimes — a decoy body loss): the physics set with
+every musical key riding along is the unnamed request to the byte; with the ring time off the
+musical page is the physics page fed the tuned `T`, to the byte, and its note plays the pitch on a
+rig the file builds itself; with it on the note plays and rings (1e-9, 1e-6) on that rig, and on
+the body and transfer pages the run's last energy is that rig's (1e-12); the decay page on its
+lossy body; the split band played and refused (and a clean note not refused); the detune solved in
+(on the pitch) and after (off it by more than 1e-4, and the same tuning at no detune); the sweep's
+two grids; the floor, the malformed options, and both budget refusals (the early one in under a
+second).
+
+*Plants* (each run against the file with a 15-minute limit; every one red): the body's tuning
+built at the default spring — the twin's played note and the ring bar; at no body loss — the same
+two; the body run on a lossless string — the ring bar (its played ring and last energy); the
+two-string detune left out of the solve — four bars; the two-string tuning reading the request's
+body loss on the lossless-body regimes (the reviewer's) — three; the air sweep at the slider's `T`
+— the twin; the sweep-grid option ignored — its bar; the split option ignored — its bar; the
+ring-time option ignored — the twin. Not a plant but a find: the twin to the byte passed on the
+decay page while its note was wrong (the core defect above) — only the note read off the file's
+own rig saw it.

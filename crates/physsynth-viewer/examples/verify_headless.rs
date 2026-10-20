@@ -214,6 +214,25 @@ const CASES: &[(&str, &str)] = &[
     ("platebody_free", "model=platebody&domain=free"),
     ("platebody_supported", "model=platebody&domain=supported"),
     ("radbody", "model=radbody"),
+    // The strings on a bridge with musical controls (string mapping plan §16–§17): the pitch solved
+    // through the coupling, the ring time off (seconds) and on (the slow path, on a coarse grid), a
+    // split band named, and the two-string page with its detune solved in.
+    (
+        "body_musical",
+        "model=body&controls=musical&N=48&ring_time=false&audio_duration=0.5",
+    ),
+    (
+        "body_musical_wolf",
+        "model=body&controls=musical&N=40&f0=196&ring_time=false&audio_duration=0.5",
+    ),
+    (
+        "radbody_musical",
+        "model=radbody&controls=musical&N=40&ring_time=true&t60_low=1&audio_duration=0.5",
+    ),
+    (
+        "symp_musical_transfer",
+        "model=sympathetic&domain=transfer&controls=musical&N=40&detune=1.5&ring_time=false",
+    ),
     ("airload", "model=airload"),
     // The first `dims: 3` field, shipped as a slice set. Plane buffers are C order (nv fastest), and
     // a front-end decoding them u-fastest TRANSPOSES the picture â plausible banding, not an error.
@@ -607,6 +626,14 @@ fn horizon_mark_ok(mark: &Value, horizon: &str) -> (bool, String) {
     (true, note)
 }
 
+/// A musical request on one of the strings on a bridge.
+fn musical_coupled(query: &str) -> bool {
+    query.contains("controls=musical")
+        && ["model=body&", "model=radbody&", "model=sympathetic&"]
+            .iter()
+            .any(|m| query.starts_with(m))
+}
+
 fn first_line(s: &Value) -> String {
     s.as_str()
         .and_then(|t| t.lines().next())
@@ -666,6 +693,11 @@ fn run_case(
         tuning.contains("Exact at f₀")
             && tuning.contains("EA =")
             && tuning.contains("settles on f₀")
+    } else if musical_coupled(query) {
+        tuning.contains("the string alone would sound")
+            && tuning.contains("On the bridge it plays")
+            && (!query.contains("f0=196") || tuning.contains("Split band"))
+            && (!query.contains("model=radbody") || tuning.contains("air sweep"))
     } else {
         true
     };
