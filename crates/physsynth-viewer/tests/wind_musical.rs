@@ -398,3 +398,64 @@ fn a_named_reed_limit_is_one_the_page_plays() {
     long["audio_duration"] = json!(enough);
     ok(&reed(long));
 }
+
+/// The grid's buzz near fs/2 (plan §7): warned of when it is in hearing and within 30 dB of the
+/// note. Cases far from the line: +9.6 dB (a heavy bell on a 45 Hz note at N = 64), -36.9 dB in
+/// hearing (11.6 kHz), and above hearing at any level.
+#[test]
+fn an_audible_grid_buzz_is_warned_of() {
+    let defaults = json!({"gamma": 0.51, "f_reed": 2500.0, "q_reed": 4.0, "audio_duration": 0.5});
+    let case = |over: Value| {
+        let mut p = reed(defaults.clone());
+        common::merge(&mut p, over);
+        ok(&p)["tuning"].clone()
+    };
+    let loud = case(json!({"f0": 45.0, "N": 64, "t60_low": 0.3}));
+    assert!(
+        f(&loud["buzz_db"]) > -20.0 && f(&loud["buzz_hz"]) < 20_000.0,
+        "{loud}"
+    );
+    assert_eq!(loud["warn"], true);
+    assert!(
+        loud["message"].as_str().unwrap().contains("raise N"),
+        "{loud}"
+    );
+    let quiet = case(json!({"f0": 45.0, "N": 128, "t60_low": 2.0}));
+    assert!(
+        f(&quiet["buzz_db"]) < -35.0 && f(&quiet["buzz_hz"]) < 20_000.0,
+        "{quiet}"
+    );
+    assert_eq!(quiet["warn"], false, "{quiet}");
+    // Loud (-15 dB) but at 31 kHz: the 48 kHz audio's windowed-sinc filter cuts it.
+    let above = case(json!({"f0": 60.0, "N": 256, "t60_low": 0.3}));
+    assert!(
+        f(&above["buzz_db"]) > -25.0 && f(&above["buzz_hz"]) > 25_000.0,
+        "{above}"
+    );
+    assert_eq!(above["warn"], false, "{above}");
+}
+
+/// A grid too coarse for the reed's own vibration names the N and the f_reed that fix it, on
+/// both control sets — and each named value plays.
+#[test]
+fn a_grid_too_coarse_for_the_reed_names_the_n_that_plays() {
+    let physics = json!({"model": "reed", "controls": "physical", "domain": "radiating",
+        "N": 32, "L": 1.9, "gamma": 0.51, "f_reed": 2500.0, "q_reed": 4.0,
+        "bell_ratio_exp": -2.6, "audio_duration": 0.5, "animation_window": 0.02,
+        "playback_speed": 0.02});
+    let msg = refusal(&physics);
+    assert!(
+        msg.contains("raise N to at least 44") && msg.contains("below f_reed = 1838 Hz"),
+        "{msg}"
+    );
+    for over in [json!({"N": 44}), json!({"f_reed": 1838.0})] {
+        let mut p = physics.clone();
+        common::merge(&mut p, over);
+        ok(&p);
+    }
+    let msg = refusal(&reed(json!({"f0": 45.0, "N": 32})));
+    assert!(
+        msg.contains("too coarse for the reed's own vibration"),
+        "{msg}"
+    );
+}

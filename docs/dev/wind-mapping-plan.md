@@ -194,6 +194,28 @@ too-short length (named 0.44 s, itself too short at 0.4446 s — now rounded up 
 bar asks for each named limit and plays it.
 
 **Seen, not acted on.** The reed page's grid hint reads "λ = 1.00 (implicit scheme — no CFL
-limit)", but the bore under the reed is the explicit leapfrog at its CFL limit; and at a low N on
-a long tube the mouthpiece pressure carries a strong grid-Nyquist ripple that can sit in the
-audible band (fs/2 ≈ 5.7 kHz at N = 64, 1.9 m) — both pre-date this plan.
+limit)", but the bore under the reed is the explicit leapfrog at its CFL limit — pre-dates this
+plan. The grid buzz noted here first is §7.
+
+## 7. The grid buzz and the reed's coarse-grid refusal (2026-10-20)
+
+A side note raised the buzz: the reed shakes up the scheme's near-Nyquist mode, and at a low N on
+a long tube `fs/2` is a few kHz. **Measured at the page's musical defaults** (γ 0.51, f_reed
+2500, q 4, 2 s), against the note: 27–32 dB under at 45–60 Hz and N 32–64, 35–46 dB under at
+N 128–256, 50–56 dB under at 220–440 Hz. Louder only at the extremes: +9.6 dB on a 45 Hz note
+with a 0.3 s bell at N = 64.
+
+**The human's two answers:**
+
+1. **Warn when it is audible**: after each render the page reads the strongest peak in the top
+   tenth below `fs/2` against the note (`grid_buzz`); in hearing (`fs/2 < 20 kHz`) and within
+   30 dB of the note, the musical read-out warns and says to raise N. Musical controls only: the
+   physics set's payload is frozen to the byte. Above 20 kHz nothing is said: the 48 kHz audio's
+   windowed-sinc filter passes 20–24 kHz (inaudible) and cuts the rest before it could fold down.
+2. **Reword the coarse-grid refusal** on both control sets: the reed's leapfrog needs
+   `wr k < 2`, and at λ = 1 `k = L/(c0 N)`, so the page names `N > wr L/(2 c0)` and the
+   `f_reed < c0 N/(π L)` that would play (was the core's raw "reed CFL violated: wr*k = …").
+
+Bars (`wind_musical.rs`): a loud buzz warned (+9.6 dB), a quiet one in hearing not (−36.9 dB at
+11.6 kHz), a loud one above hearing not (−15 dB at 31 kHz); the refusal's N and f_reed each
+played. Plants: no hearing check, no level check, N one short — each red.

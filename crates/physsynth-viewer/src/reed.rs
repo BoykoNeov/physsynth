@@ -138,7 +138,23 @@ fn reed_at_gamma(bore: Bore, gamma: f64, f_reed: f64, q_reed: f64) -> Result<Ree
         REED_NEWTON_TOL,
         60,
     )
-    .map_err(construction)?;
+    .map_err(|e| match e {
+        // The human's call (wind mapping plan §7): say what to change. At lambda = 1,
+        // k = L / (c0 N), and the reed's leapfrog needs wr k < 2, so N > wr L / (2 c0).
+        reed::ParamError::CflViolated(wk) => {
+            let p = bore.params();
+            let wr = 2.0 * PI * f_reed;
+            Refusal::Param(format!(
+                "the grid is too coarse for the reed's own vibration on this {:.3} m tube \
+                 (wr·k = {wk:.3}, must stay below 2): raise N to at least {} or soften the reed \
+                 below f_reed = {:.0} Hz.",
+                p.l,
+                (wr * p.l / (2.0 * p.c0)).floor() as i64 + 1,
+                (p.c0 * p.n as f64 / (PI * p.l)).floor()
+            ))
+        }
+        e => construction(e),
+    })?;
     Ok(ReedBore::new(params, bore, gamma * p_closing))
 }
 
@@ -325,6 +341,30 @@ fn reed_refusal(e: &ReedTuningError, f0: f64, n: usize, audio_dur: f64) -> Strin
         ),
         ReedTuningError::Run(ref msg) => msg.clone(),
     }
+}
+
+/// The grid's buzz is warned of when it lies below this frequency (Hz) — in hearing.
+pub const BUZZ_AUDIBLE_HZ: f64 = 20_000.0;
+/// ...and is louder than this against the note (dB) — the human's call (wind mapping plan §7).
+pub const BUZZ_WARN_DB: f64 = -30.0;
+
+/// The grid's own buzz in a reed's tail: the strongest peak in the top tenth below `fs / 2`
+/// against the strongest within 10 % of the played note — `(its frequency, dB)`. The reed shakes
+/// up the scheme's near-Nyquist mode; at a low N on a long tube `fs / 2` is a few kHz.
+fn grid_buzz(tail: &[f64], fs: f64, played: f64) -> (f64, f64) {
+    let mean = np_mean(tail);
+    let ac: Vec<f64> = tail.iter().map(|v| v - mean).collect();
+    let s = spectrum::magnitude_spectrum(&ac, fs, 2);
+    let peak = |lo: f64, hi: f64| {
+        s.freqs
+            .iter()
+            .zip(&s.mag)
+            .filter(|(f, _)| (lo..=hi).contains(*f))
+            .fold((lo, 0.0f64), |b, (&f, &m)| if m > b.1 { (f, m) } else { b })
+    };
+    let (_, note) = peak(0.9 * played, 1.1 * played);
+    let (f, buzz) = peak(0.45 * fs, 0.5 * fs);
+    (f, 20.0 * (buzz / note).log10())
 }
 
 /// The musical read-out (wind mapping plan §6): the tube the search found, the note it plays and
@@ -871,6 +911,20 @@ pub fn build_payload(p: &Value) -> Result<Value, Refusal> {
             Heard::Note { f, .. } => num(f),
             _ => Value::Null,
         };
+        let (buzz_hz, buzz_db) = grid_buzz(&r.pickup[tail0..], fs, m.tuning.played);
+        let audible = 0.5 * fs < BUZZ_AUDIBLE_HZ && buzz_db > BUZZ_WARN_DB;
+        t["buzz_hz"] = num(buzz_hz);
+        t["buzz_db"] = num(buzz_db);
+        if audible {
+            t["warn"] = json!(true);
+            t["message"] = json!(format!(
+                "{} ⚠ The grid adds a buzz near {:.0} Hz only {:.0} dB under the note — the \
+                 numerical method, not the instrument: raise N to move it above hearing.",
+                t["message"].as_str().unwrap_or(""),
+                buzz_hz,
+                -buzz_db
+            ));
+        }
         t
     });
     let mut out = json!({
