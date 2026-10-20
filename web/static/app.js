@@ -1668,7 +1668,7 @@ function tuningNotice() {
   const two = modelSel.value === "sympathetic";
   const plate = modelSel.value === "platebody";
   const est = ring
-    ? (two ? "about 2 minutes" : plate ? "5–20 s" : "20–30 s")
+    ? (two ? "about 2 minutes" : plate ? "5–35 s" : "20–30 s")
     : (two ? "about 15 s" : "a few seconds");
   return `tuning… solving the tension through the bridge${ring ? " and the string's loss" : ""} `
     + `(${est} at N = 100)`;

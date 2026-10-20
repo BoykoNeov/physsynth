@@ -856,6 +856,42 @@ fn the_plate_instrument_plays_and_rings_its_targets() {
     }
 }
 
+/// Three ring-time targets the body pages' wide search refused on the page's 16 x 16 plate though a
+/// tuning exists (plan §18), each found by a reference search on a 4x-finer grid and confirmed on
+/// the one-step map: 403.17 Hz ringing 0.3 s on the supported edge, refused as unable to ring
+/// shorter than 1.45 s; 380.55 Hz ringing 0.05 s on the free edge, which the plate's first pass
+/// alone still refuses; and 213.57 Hz ringing 1 s on the free edge, which both passes still refuse
+/// with the Broyden in place of the damped solve. Each tunes, plays and rings its targets, on the
+/// reference's tension.
+#[test]
+fn the_plate_tunes_where_the_body_pages_search_refused() {
+    for (free, semitones, t60, f_cl_ref) in [
+        (false, 40.0, 0.3, 790.9800),
+        (true, 39.0, 0.05, 718.3977),
+        (true, 29.0, 1.0, 486.3925),
+    ] {
+        let f0: f64 = 40.0 * 2f64.powf(semitones / 12.0);
+        let rig = plate_rig(free, 16, 3000.0, 0.0);
+        let modes = PlateModes::of(&rig(f0, 0.0).unwrap()).unwrap();
+        let modal = |x: f64, s: f64| ModalPlateBridge::new(rig(x, s)?, &modes).ok();
+        let name = format!("free {free}, {f0:.2} Hz, {t60} s");
+        let t = tune_coupled(f0, Some(t60), modal).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(
+            (t.f_cl / f_cl_ref - 1.0).abs() < 1e-6,
+            "{name}: f_cl {}",
+            t.f_cl
+        );
+        let mut r = rig(t.f_cl, t.sigma).unwrap();
+        let (f, rings, residual) = played(&mut r, t.root, t.note.f, 99, 3000);
+        assert!(residual < 1e-9, "{name}: not one mode ({residual:.2e})");
+        assert!(((f - f0) / f0).abs() < 1e-9, "{name}: plays {f} Hz");
+        assert!(
+            ((rings - t60) / t60).abs() < 1e-6,
+            "{name}: rings {rings} s"
+        );
+    }
+}
+
 /// The search is the same search: tuned through the one-step map instead, the plate rig lands on
 /// the same tension and the same note.
 #[test]

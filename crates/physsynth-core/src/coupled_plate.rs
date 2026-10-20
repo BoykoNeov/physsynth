@@ -69,7 +69,7 @@
 //! and an independent solve of `P(z) x = 0` on the sparse matrices sided with this module.
 
 use crate::connection::StringPlateBridge;
-use crate::coupled_tuning::{Coupled, CoupledError};
+use crate::coupled_tuning::{Coupled, CoupledError, WideGrid};
 use crate::eig::{self, EigError};
 use crate::plate::{Boundary, Plate};
 use crate::sparse::Csr;
@@ -92,6 +92,30 @@ const REPEATED: f64 = 1e-13;
 /// is its pole to roundoff, and an iterate converging onto it divides by `q = 0`; at `K = 0` every
 /// mode is one. A mode with a node at the drive point moves by about 1e-30.
 const UNMOVED: f64 = 1e-14;
+
+/// The plate's wide search ([`WideGrid`]): two passes, both on the body pages' tension steps and
+/// with the damped solve — string-loss levels twice as close as the body pages' (a ratio of 1.4778
+/// for their 2.1838), then, only when no note is found yet, four times as close (1.216).
+///
+/// The plate's notes lie a few hertz apart. At a short ring two of them merge and leave the band
+/// between two of the body pages' loss levels, so no seed forms; elsewhere the Broyden's full
+/// steps land on a neighbouring note and stall. On the probe sweep's 352 ring-time targets the
+/// body pages' search refused 24 that a reference search on a 4x-finer grid found, every one
+/// confirmed on the one-step map. Either pass alone still refused some (the finer one, two the
+/// body pages' search solves: the outcome is not monotone in the grid); the two in turn refused
+/// none (plan §18).
+pub const PLATE_WIDE: &[WideGrid] = &[
+    WideGrid {
+        x_step: 1.1068,
+        q_step: 1.4778,
+        damped: true,
+    },
+    WideGrid {
+        x_step: 1.1068,
+        q_step: 1.216,
+        damped: true,
+    },
+];
 
 /// Why [`PlateModes`] cannot describe a bridge.
 #[derive(Debug, Clone, PartialEq)]
@@ -536,5 +560,9 @@ impl Coupled for ModalPlateBridge<'_> {
             total += a;
         }
         Ok(string / total)
+    }
+
+    fn wide_grids(&self) -> &'static [WideGrid] {
+        PLATE_WIDE
     }
 }

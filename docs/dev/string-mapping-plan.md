@@ -902,7 +902,8 @@ takes 3–9 s. The free plate is a wolf at most pitches: its modes are dense.
 plate up to about 130 Hz, 8–13 s at 147–247 Hz on the free plate (the run itself grows with the
 tension; 3–4 s on the supported); with a
 ring time 6–20 s; the free 24 x 24 plate at `N = 160` with a ring time 25 s. The "tuning…" notice
-says 5–20 s for this page with the ring time on.
+said 5–20 s for this page with the ring time on; since the plate's own wide search (below, the
+human's thirteenth answer) it says 5–35 s.
 
 *Bars.* Core, in `tests/coupled_tuning.rs` (CI's optimised-only lane, where the human's eighth
 answer put that file): `the_plate_modes_give_the_maps_notes` (both edges; lossless, lossy, the
@@ -928,7 +929,83 @@ first: every unreachable mode of the page's rigs is a twin's other half, where t
 `a_root_hit_exactly_is_a_root` and two viewer bars; no floor rule — the core's maps-notes bar and
 two viewer bars; no shift deflation — the centre-driven bar.
 
-*Not done:* the dense key over a sweep of pitches and ring times, as §16 ran for the body rigs. The
-search is the same code; what changed is where its spectra and shares come from, and those are
-held to the map's on the rigs above. One full tuning is compared through both
-(`the_plate_tuning_through_the_map_agrees`, supported 8 x 8, lossless).
+One full tuning is compared through both (`the_plate_tuning_through_the_map_agrees`, supported
+8 x 8, lossless).
+
+### 18.1 The sweep against a reference, and the plate's own wide search (2026-10-20)
+
+**The reference.** For each target, a grid search 4x finer than the solver's (the probe's
+`refscan` and `ringref`, in `W:\temp\claude\platebody-probe`), read off the modes, every
+disagreement re-solved to full precision and confirmed on the slow one-step map. That is a strong
+check, not proof that every tuning was found: the solver later found one the reference missed
+(free, 359.19 Hz ringing 0.05 s, `f_cl` 704.9568, share 0.438, confirmed on the map to 7e-12 in
+pitch and 8e-10 in ring time).
+
+**Lossless, the page's 16 x 16 plate, `K = 3000`, every semitone 40–500 Hz** (1000 scan points
+in the reference): free 42 agree and 2 refused by both; supported 44 agree. Three supported
+"misses" in the reference's own output (427.15, 452.55, 479.46 Hz) were its artifacts, not
+crossings: at `f_cl ~ 1618` a root at 404.57 Hz leaves the band's lower edge (`f_cl / 4`) and the
+reference paired it with one at 2106.8 Hz. All three still agree. Unchanged by what follows (the
+lossless path has no wide search), and rerun after it to the same verdicts.
+
+**Ring time, the same 44 pitches x t60 in {0.05, 0.3, 1, 3} s (352 targets).** The body pages'
+search wrongly refused 24 where a tuning exists: 22 at 0.05 s (free: 17 of the 20 semitones from
+40 to 119.86 Hz, and 269.09 and 380.55 Hz; supported 89.80, 285.09 and 320.00 Hz), free 213.57 Hz at 1 s ("cannot ring shorter than 1.73 s") and
+supported 403.17 Hz at 0.3 s ("1.45 s"). Its messages were wrong too: "the bridge spring is too
+stiff", "did not converge", "rings at least ... s". Two causes, both because the plate's notes lie
+a few hertz apart:
+
+- *no seed* — at 40 Hz on the free plate, 0.05 s, the tuning (`f_cl` 93.8, `q` 0.0144) sits where
+  two heavily damped roots (~29 and ~53 Hz) merge and leave the band between two loss levels of
+  the grid (0.0122 and 0.0268), so no cell brackets it;
+- *a stalled solve* — at 213.57 and 403.17 Hz seeds near the tuning exist, but the Broyden's full
+  step lands on a neighbouring plate note and stalls.
+
+**The fix** (`crates/physsynth-core/src/coupled_tuning.rs`, `WideGrid`, `Coupled::wide_grids`,
+`wide_solve_damped`; `crates/physsynth-core/src/coupled_plate.rs`, `PLATE_WIDE`). A rig now names
+its wide-search passes; every rig but the plate keeps the one pass it had, so the body,
+radiating-body and two-string pages run exactly what they ran. The plate runs two, both on the
+body pages' tension steps (1.1068) and both with a damped Newton (a fresh finite-difference
+Jacobian each step, the step halved up to 8 times until the residual falls): loss levels twice as
+close as the body pages' (1.4778 for 2.1838), then — only when neither the continuation nor that
+pass found a note — four times as close (1.216).
+
+The outcome is not monotone in the grid, so each setting was swept, not reasoned (misses against
+the reference, of 176 per edge):
+
+| setting | free | supported |
+|---|---|---|
+| the body pages' (today) | 20 | 4 |
+| 1.4778, damped | 4 (40, 42.38, 44.90, 380.55 Hz at 0.05 s) | 0 |
+| 1.216, damped | 3, two of them new (63.50 Hz at 0.3 s, 253.98 at 0.05) | 1 |
+| 1.216, Broyden then damped | 2, one new (253.98) | 1 |
+| 1.4778, Broyden then damped | 4 | 0 |
+| **1.4778 then 1.216, damped** | **0** | **0** |
+| 1.4778 then 1.216, Broyden | 3 | 3 |
+
+Everywhere else both edges agree with the reference. Of the 7 free targets the reference finds
+nothing for, the two passes tune one (359.19 Hz at 0.05 s, above) and refuse 6.
+
+*Timing* (the solver alone, one at a time, optimised; the page adds 1–5 s): where both searches
+tune, the supported plate 2–3 s became 3–5 s and the free plate 9–15 s became 11–18 s; the free
+plate's hardest notes, which need the second pass, about 28 s (today refused); a refusal on the
+free plate about 5 s became 20–28 s, both passes run.
+
+**The human's thirteenth answer, 2026-10-20: both passes** (not chosen: the first pass alone, 4
+wrong refusals left and nothing over about 20 s; today's search with a higher shortest ring time
+on this page, which leaves the 213.57 Hz / 1 s and 403.17 Hz / 0.3 s refusals). Asked with the
+table and the timings above.
+
+*The messages.* A build refused inside the continuation's Newton is that Newton stepping past the
+guard's wall, not every tension refused: it is now `Unconverged("the pitch-and-ring Newton")`,
+not `Refused` ("the spring is too stiff"). `Unconverged` now adds that a tuning may still exist
+and a slightly different target may find it; `RingTooLong` and `RingTooShort` say "the search
+found no tension and string loss", not "no tension and string loss give". No bar pins these
+texts; no sweep target now reaches the first.
+
+*Bar.* `the_plate_tunes_where_the_body_pages_search_refused` (core, optimised-only lane, 61 s):
+supported 403.17 Hz at 0.3 s, free 380.55 Hz at 0.05 s and free 213.57 Hz at 1 s tune onto the
+reference's `f_cl` (1e-6), play the pitch (1e-9) and ring the time (1e-6) off the run. Plants, each
+red: the body pages' single pass (403.17 refused); the first pass alone (380.55, "a singular
+Jacobian"); both passes with the Broyden (213.57, "rings at least 1.729 s") — the two-target bar
+had passed that plant, so the third target was added for it.

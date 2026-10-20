@@ -126,6 +126,34 @@ const SAME_SIGMA: f64 = 1e-5;
 /// this, relative: the same note re-found has the same share to roundoff, and must not replace it.
 const SHARE_MARGIN: f64 = 1e-6;
 
+/// How the wide search ([`tune_coupled`]'s step 4) covers the `(f_cl, q)` plane and solves its
+/// seeds. A rig picks its own passes through [`Coupled::wide_grids`]; every rig but the plate
+/// keeps the one pass [`WideGrid::DEFAULT`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WideGrid {
+    /// The largest ratio between neighbouring tensions' `f_cl`.
+    pub x_step: f64,
+    /// The ratio between neighbouring string-loss levels `q = sigma k`.
+    pub q_step: f64,
+    /// Solve each seed by a damped Newton — a fresh Jacobian every step, each step halved until
+    /// the residual falls — instead of the Broyden.
+    pub damped: bool,
+}
+
+impl WideGrid {
+    /// The grid checked on the body pages (`f_cl` ratio 1.1068, `q` ratio 2.1838) and the Broyden
+    /// solve.
+    pub const DEFAULT: WideGrid = WideGrid {
+        x_step: X_STEP,
+        q_step: Q_STEP,
+        damped: false,
+    };
+}
+
+/// The damped Newton's halvings of one step before it gives up: a step down to 1/256 of the
+/// Newton's.
+const WIDE_HALVINGS: usize = 8;
+
 /// A body whose whole dynamic state is its two modal time levels — a free-air body with no load
 /// state of its own. The bare [`ModalBody`] and the resistance-loaded [`RadiatedBody`] qualify;
 /// the reactive load (an air mass with its own state) and a room do not, so they cannot be tuned
@@ -203,6 +231,13 @@ pub trait Coupled {
         let weight = |i: usize| m[i] * (v[i].0 * v[i].0 + v[i].1 * v[i].1);
         let total: f64 = (0..d).map(weight).sum();
         Ok((0..ns).map(weight).sum::<f64>() / total)
+    }
+
+    /// How the wide search covers this rig's plane: the passes in order, each run only when
+    /// neither the continuation nor the passes before found a note; the one pass
+    /// [`WideGrid::DEFAULT`] unless the rig says otherwise.
+    fn wide_grids(&self) -> &'static [WideGrid] {
+        &[WideGrid::DEFAULT]
     }
 }
 
@@ -339,6 +374,10 @@ impl Coupled for StringPlateBridge<Plate> {
     fn advance(&mut self) {
         let Ok(()) = self.step(&mut ());
     }
+    /// The plate's own, as its modal twin's: the slow reference searches the same way.
+    fn wide_grids(&self) -> &'static [WideGrid] {
+        crate::coupled_plate::PLATE_WIDE
+    }
 }
 
 /// The ideal string's loss for a ring time, *alone*: every mode of the explicit scheme decays by
@@ -455,19 +494,25 @@ impl std::fmt::Display for CoupledError {
             ),
             CoupledError::RingTooLong { longest } => write!(
                 f,
-                "no tension and string loss give a note at this pitch that rings this long: the \
-                 note with the most string motion here cannot ring longer than {longest:.3} s \
-                 (the body's and the air's own losses, or the string loss it takes to bring it to \
-                 this pitch, end it sooner); lower the ring time or the body's loss."
+                "the search found no tension and string loss giving a note at this pitch that \
+                 rings this long: the note with the most string motion here cannot ring longer \
+                 than {longest:.3} s (the body's and the air's own losses, or the string loss it \
+                 takes to bring it to this pitch, end it sooner); lower the ring time or the \
+                 body's loss."
             ),
             CoupledError::RingTooShort { shortest } => write!(
                 f,
-                "no tension and string loss give a note at this pitch that dies this fast: the \
-                 note with the most string motion here rings at least {shortest:.3} s even at \
-                 the heaviest string loss the scheme allows; raise the ring time."
+                "the search found no tension and string loss giving a note at this pitch that \
+                 dies this fast: the note with the most string motion here rings at least \
+                 {shortest:.3} s even at the heaviest string loss the scheme allows; raise the \
+                 ring time."
             ),
             CoupledError::Unconverged(stage) => {
-                write!(f, "the coupled tuning did not converge ({stage}).")
+                write!(
+                    f,
+                    "the coupled tuning did not converge ({stage}); a tuning may still exist \
+                     here, so a pitch or ring time a little different may find one."
+                )
             }
         }
     }
@@ -527,9 +572,7 @@ pub fn tune_coupled<R: Coupled>(
     // end still lies in it.
     let mut lo = f0 / 1.3 * (1.0 + 1e-9);
     let hi = 4.0 * f0 * (1.0 - 1e-9);
-    if build(hi, 0.0).is_none() {
-        return Err(CoupledError::Refused);
-    }
+    let wide_grids = build(hi, 0.0).ok_or(CoupledError::Refused)?.wide_grids();
     if build(lo, 0.0).is_none() {
         // The guard relaxes as the tension rises (the timestep shrinks with it): find the wall.
         let (mut a, mut b) = (lo, hi);
@@ -583,26 +626,35 @@ pub fn tune_coupled<R: Coupled>(
                     let mut rig = build(x, sigma).ok_or(CoupledError::Refused)?;
                     Ok((x, sigma, z, share_of(&mut rig, z)?))
                 });
-            // 4. The wide search, for a note of more share than that (the human's fifth answer).
+            // 4. The wide search, for a note of more share than that (the human's fifth answer):
+            //    the rig's passes in order, the next only while no note is found at all.
             let top = narrow.as_ref().map_or(f64::INFINITY, |n| 2.0 * a0 / n.3);
-            let wide = wide_search(f0, a0, lo, hi, top, &build);
-            let better = wide
-                .notes
-                .iter()
-                .filter(|w| match &narrow {
-                    Ok(n) => {
-                        let same = (w.x / n.0 - 1.0).abs() < SAME_X
-                            && (w.sigma / n.1 - 1.0).abs() < SAME_SIGMA;
-                        !same && w.share > n.3 * (1.0 + SHARE_MARGIN)
-                    }
-                    Err(_) => true,
-                })
-                .max_by(|p, q| p.share.total_cmp(&q.share));
+            let mut better = None;
+            let mut crossings = Vec::new();
+            for &grid in wide_grids {
+                let wide = wide_search(f0, a0, lo, hi, top, grid, &build);
+                better = wide
+                    .notes
+                    .into_iter()
+                    .filter(|w| match &narrow {
+                        Ok(n) => {
+                            let same = (w.x / n.0 - 1.0).abs() < SAME_X
+                                && (w.sigma / n.1 - 1.0).abs() < SAME_SIGMA;
+                            !same && w.share > n.3 * (1.0 + SHARE_MARGIN)
+                        }
+                        Err(_) => true,
+                    })
+                    .max_by(|p, q| p.share.total_cmp(&q.share));
+                crossings.extend(wide.crossings);
+                if better.is_some() || narrow.is_ok() {
+                    break;
+                }
+            }
             match (better, narrow) {
                 (Some(w), _) => (w.x, w.sigma, w.z),
                 (None, Ok((x, sigma, z, _))) => (x, sigma, z),
                 (None, Err(e)) => {
-                    return Err(ring_refusal(e, f0, a0, &wide.crossings, &build));
+                    return Err(ring_refusal(e, f0, a0, &crossings, &build));
                 }
             }
         }
@@ -817,7 +869,10 @@ fn pitch_and_ring<R: Coupled>(
     // `|z| ~ ((1 - sigma k) / (1 + sigma k))^(share / 2)`.
     let last = Cell::new((root.z, 0.0f64));
     let damped_at = |x: f64, sigma: f64| -> Result<Root, CoupledError> {
-        let mut rig = build(x, sigma).ok_or(CoupledError::Refused)?;
+        // A refusal here is the Newton stepping past the guard's wall, not every tension refused:
+        // reported as Refused, it told the plate page to soften a spring that tunes (plan §18).
+        let mut rig =
+            build(x, sigma).ok_or(CoupledError::Unconverged("the pitch-and-ring Newton"))?;
         let k = rig.k();
         let (z_last, s_last) = last.get();
         let r = |s: f64| {
@@ -952,11 +1007,12 @@ fn nearest_note(v: &[Root], f: f64, a: f64) -> Option<Root> {
 /// lossless string. Some notes never do: past a loss threshold a *pair* of notes appears on `f0`
 /// at a much tighter string (at 269.09 Hz on the 3000 N/m body, a 0.05 s ring has a note of share
 /// 0.54 at `f_cl = 425.9`, 8 semitones above the lossless tuning). So the grid covers the plane:
-/// `f_cl` from `lo` to `hi` in steps of at most [`X_STEP`], and `q = sigma k` at zero and from
-/// [`Q_FLOOR`] up to the cap in steps of [`Q_STEP`]. A cell is a seed when one root, matched to
-/// its nearest at the other three corners, has its pitch error and its decay error each change
-/// sign across them. Each seed is solved by [`wide_solve`]; a seed whose cell, widened by one
-/// cell each way, already holds a solution is skipped.
+/// `f_cl` from `lo` to `hi` in steps of at most `grid.x_step`, and `q = sigma k` at zero and from
+/// [`Q_FLOOR`] up to the cap in steps of `grid.q_step` ([`WideGrid`]; [`X_STEP`] and [`Q_STEP`]
+/// unless the rig asks for finer). A cell is a seed when one root, matched to its nearest at the
+/// other three corners, has its pitch error and its decay error each change sign across them. Each
+/// seed is solved by [`wide_solve`] ([`wide_solve_damped`] when the grid asks); a seed whose cell,
+/// widened by one cell each way, already holds a solution is skipped.
 ///
 /// `sigma_top` prunes: a note's decay is at least the string's loss times its string share (the
 /// string's loss acts only on the string's part of the motion, and the body and the air only add
@@ -969,9 +1025,10 @@ fn wide_search<R: Coupled>(
     lo: f64,
     hi: f64,
     sigma_top: f64,
+    grid: WideGrid,
     build: &impl Fn(f64, f64) -> Option<R>,
 ) -> Wide {
-    let nx = (((hi / lo).ln() / X_STEP.ln()).ceil() as usize).max(1) + 1;
+    let nx = (((hi / lo).ln() / grid.x_step.ln()).ceil() as usize).max(1) + 1;
     let xs: Vec<f64> = (0..nx)
         .map(|i| lo * (hi / lo).powf(i as f64 / (nx - 1) as f64))
         .collect();
@@ -979,7 +1036,7 @@ fn wide_search<R: Coupled>(
     let mut q = Q_FLOOR;
     while q <= 0.5 {
         qs.push(q);
-        q *= Q_STEP;
+        q *= grid.q_step;
     }
     let nq = qs.len();
     // The timestep does not depend on the loss: one lossless build per column.
@@ -1073,7 +1130,12 @@ fn wide_search<R: Coupled>(
         {
             continue;
         }
-        if let Some(s) = wide_solve(f0, a0, x, q, r, build) {
+        let solved = if grid.damped {
+            wide_solve_damped(f0, a0, x, q, r, build)
+        } else {
+            wide_solve(f0, a0, x, q, r, build)
+        };
+        if let Some(s) = solved {
             let dup = found
                 .iter()
                 .any(|t| (t.0 / s.0 - 1.0).abs() < SAME_X && (t.1 / s.1 - 1.0).abs() < SAME_SIGMA);
@@ -1172,6 +1234,71 @@ fn wide_solve<R: Coupled>(
                 return None;
             }
         }
+    }
+    None
+}
+
+/// [`wide_solve`]'s damped alternative, for a rig whose notes crowd ([`WideGrid::damped`]): a
+/// fresh finite-difference Jacobian every step, and the step — clamped as there — halved up to
+/// [`WIDE_HALVINGS`] times until the residual falls, so the note is followed in steps small enough
+/// to stay on it. `None` as there, or when no halving makes the residual fall.
+///
+/// On the plate, whose notes lie a few hertz apart, the Broyden's full steps landed on a
+/// neighbouring note and stalled from every seed of 21 targets where a tuning exists (plan §18).
+fn wide_solve_damped<R: Coupled>(
+    f0: f64,
+    a0: f64,
+    x: f64,
+    q: f64,
+    start: Root,
+    build: &impl Fn(f64, f64) -> Option<R>,
+) -> Option<(f64, f64, Root)> {
+    let (xlo, xhi) = (f0 / 1.3, 4.0 * f0);
+    let res = |u: [f64; 2], near: Root| -> Option<([f64; 2], Root)> {
+        let (x, q) = (u[0].exp(), u[1].exp());
+        if !(xlo < x && x < xhi && q <= 0.5) {
+            return None;
+        }
+        let k = build(x, 0.0)?.k();
+        let mut rig = build(x, q / k)?;
+        let r = nearest_note(&band_roots(&mut rig, x).ok()?, near.f, near.a)?;
+        (r.a > 0.0).then_some(([(r.f / f0).ln(), (r.a / a0).ln()], r))
+    };
+    let norm = |r: [f64; 2]| r[0].hypot(r[1]);
+    let mut u = [x.ln(), q.max(Q_FLOOR).ln()];
+    let (mut r, mut root) = res(u, start)?;
+    for _ in 0..WIDE_ITERS {
+        if r[0].abs() < PITCH_TOL && r[1].abs() < RING_TOL {
+            return Some((u[0].exp(), u[1].exp(), root));
+        }
+        let h = 1e-7;
+        let (r0, _) = res([u[0] + h, u[1]], root)?;
+        let (r1, _) = res([u[0], u[1] + h], root)?;
+        let jac = [
+            [(r0[0] - r[0]) / h, (r1[0] - r[0]) / h],
+            [(r0[1] - r[1]) / h, (r1[1] - r[1]) / h],
+        ];
+        let det = jac[0][0] * jac[1][1] - jac[0][1] * jac[1][0];
+        if !(det.abs() > 0.0 && det.is_finite()) {
+            return None;
+        }
+        let du = [
+            (-(jac[1][1] * r[0] - jac[0][1] * r[1]) / det).clamp(-0.05, 0.05),
+            (-(-jac[1][0] * r[0] + jac[0][0] * r[1]) / det).clamp(-0.5, 0.5),
+        ];
+        let mut t = 1.0;
+        let mut took = None;
+        for _ in 0..=WIDE_HALVINGS {
+            let next = [u[0] + t * du[0], u[1] + t * du[1]];
+            if let Some((rn, root_n)) = res(next, root) {
+                if norm(rn) < norm(r) {
+                    took = Some((next, rn, root_n));
+                    break;
+                }
+            }
+            t *= 0.5;
+        }
+        (u, r, root) = took?;
     }
     None
 }
