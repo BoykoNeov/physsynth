@@ -83,6 +83,9 @@ compute. It shows orbits instead — including one thing no other model here can
 cargo run --release -p physsynth-viewer -- serve    # then open http://127.0.0.1:8000
 ```
 
+On Windows, double-click `start-viewer.cmd` instead: it builds, starts the server and opens the
+browser (or just opens the browser if the viewer is already running). Close its window to stop it.
+
 The physics lives entirely in `crates/physsynth-core`; `crates/physsynth-viewer` is a client of it
 (`src/lib.rs` packs the payload, `src/server.rs` is a thin `std::net` shell serving `web/static/`) and
 never the other way around. `cargo run --release -p physsynth-viewer --example verify_headless`

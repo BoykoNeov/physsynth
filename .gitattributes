@@ -7,3 +7,6 @@
 *.wav binary
 *.npz binary
 *.ipynb -text
+
+# Windows batch files need CRLF, or cmd.exe can mis-run their goto labels.
+*.cmd text eol=crlf
