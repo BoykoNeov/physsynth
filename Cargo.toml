@@ -33,9 +33,18 @@ edition = "2021"
 rust-version = "1.85"
 license = "MIT"
 
-# Release profile is what the acceptance runs use. `debug = true` keeps line numbers in a
-# backtrace without touching codegen; `overflow-checks` costs nothing measurable in FDTD code
+# Release profile is what the acceptance runs use. `debug = "line-tables-only"` keeps line numbers
+# in a backtrace without touching codegen; `overflow-checks` costs nothing measurable in FDTD code
 # (there is no integer arithmetic in the inner loop) and turns a silent index wrap into a panic.
+#
+# Line tables, not full debug info (`debug = true`), in BOTH profiles: on Windows the full info
+# went into `.pdb` files that were 5.2 of the 9 GB `target\` held on 2026-11-22, and a backtrace
+# needs only the line tables. Full info buys variable inspection in a debugger, which nobody here
+# uses; set `debug = true` locally for a debugging session rather than here. The debug profile
+# keeps its point — `debug_assert!` and unfolded arithmetic — because neither depends on this.
 [profile.release]
-debug = true
+debug = "line-tables-only"
 overflow-checks = true
+
+[profile.dev]
+debug = "line-tables-only"

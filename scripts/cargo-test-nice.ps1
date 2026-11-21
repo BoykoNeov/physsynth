@@ -251,6 +251,18 @@ if ($Full) {
         [int]$nTests, $skipScenes.Count
     Write-Host $msg
 }
+# Cargo never deletes an artifact it has superseded: every edit, flag change and toolchain update
+# leaves the old hashed test binaries (and their .pdb files) behind in target\. On 2026-11-22 that
+# had grown to 9 GB, of which a clean release + debug build is ~2.3 GB. Say so past 5 GB.
+$targetDir = Join-Path $repo 'target'
+if (Test-Path $targetDir) {
+    $targetBytes = (Get-ChildItem $targetDir -Recurse -File -Force -ErrorAction SilentlyContinue |
+        Measure-Object Length -Sum).Sum
+    if ($targetBytes -gt 5GB) {
+        Write-Host (("[cargo-test-nice] target\ holds {0:N1} GB, mostly superseded builds (a " +
+            "clean build is ~2.3 GB). Free it with: cargo clean") -f ($targetBytes / 1GB))
+    }
+}
 foreach ($b in $bad) { Write-Host "  FAILED (exit $($b.Code)): $($b.Name)  log: $($b.Log)" }
 if (-not $docOk) { Write-Host '  FAILED: doctests' }
 if ($bad.Count -gt 0 -or -not $docOk) { return 1 }
